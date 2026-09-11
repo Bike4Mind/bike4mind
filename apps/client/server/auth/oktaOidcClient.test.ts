@@ -42,10 +42,12 @@ vi.mock('@bike4mind/observability', () => ({
 }));
 
 // Mock database
+// The login paths read through the *WithSecrets accessors: the plain findById/findAll are
+// select:false and would hand back an IDP with no clientSecret on it.
 vi.mock('@bike4mind/database', () => ({
   identityProviderRepository: {
-    findById: vi.fn(),
-    findAll: vi.fn(),
+    findByIdWithSecrets: vi.fn(),
+    findAllWithSecrets: vi.fn(),
     updateIDP: vi.fn(),
   },
 }));
@@ -111,7 +113,7 @@ describe('oktaOidcClient', () => {
             clientSecret: 'db-client-secret',
           },
         };
-        vi.mocked(identityProviderRepository.findById).mockResolvedValue(mockIdp as any);
+        vi.mocked(identityProviderRepository.findByIdWithSecrets).mockResolvedValue(mockIdp as any);
 
         const result = await getOktaConfigWithFallback('idp-123');
 
@@ -124,7 +126,7 @@ describe('oktaOidcClient', () => {
           useOrgAuthServer: false,
         });
         expect(result.idp).toBe(mockIdp);
-        expect(identityProviderRepository.findById).toHaveBeenCalledWith('idp-123');
+        expect(identityProviderRepository.findByIdWithSecrets).toHaveBeenCalledWith('idp-123');
       });
 
       it('should return database config with useOrgAuthServer when set', async () => {
@@ -137,7 +139,7 @@ describe('oktaOidcClient', () => {
             useOrgAuthServer: true,
           },
         };
-        vi.mocked(identityProviderRepository.findById).mockResolvedValue(mockIdp as any);
+        vi.mocked(identityProviderRepository.findByIdWithSecrets).mockResolvedValue(mockIdp as any);
 
         const result = await getOktaConfigWithFallback('idp-org');
 
@@ -152,7 +154,7 @@ describe('oktaOidcClient', () => {
       });
 
       it('should fallback to SST when IDP not found', async () => {
-        vi.mocked(identityProviderRepository.findById).mockResolvedValue(null);
+        vi.mocked(identityProviderRepository.findByIdWithSecrets).mockResolvedValue(null);
 
         const result = await getOktaConfigWithFallback('non-existent-idp');
 
@@ -168,7 +170,7 @@ describe('oktaOidcClient', () => {
       });
 
       it('should fallback to SST when IDP has incomplete oktaConfig', async () => {
-        vi.mocked(identityProviderRepository.findById).mockResolvedValue({
+        vi.mocked(identityProviderRepository.findByIdWithSecrets).mockResolvedValue({
           id: 'idp-123',
           oktaConfig: {
             audience: 'https://db.okta.com',
@@ -182,7 +184,7 @@ describe('oktaOidcClient', () => {
       });
 
       it('should fallback to SST when database throws error', async () => {
-        vi.mocked(identityProviderRepository.findById).mockRejectedValue(new Error('Database error'));
+        vi.mocked(identityProviderRepository.findByIdWithSecrets).mockRejectedValue(new Error('Database error'));
 
         const result = await getOktaConfigWithFallback('idp-123');
 
@@ -203,7 +205,7 @@ describe('oktaOidcClient', () => {
           authServerId: 'default',
           useOrgAuthServer: false,
         });
-        expect(identityProviderRepository.findById).not.toHaveBeenCalled();
+        expect(identityProviderRepository.findByIdWithSecrets).not.toHaveBeenCalled();
       });
 
       it('should use the org-level auth server when OKTA_USE_ORG_AUTH_SERVER is true', async () => {
@@ -230,7 +232,7 @@ describe('oktaOidcClient', () => {
         const result = await getOktaConfigWithFallback('sst-fallback');
 
         expect(result.source).toBe('sst');
-        expect(identityProviderRepository.findById).not.toHaveBeenCalled();
+        expect(identityProviderRepository.findByIdWithSecrets).not.toHaveBeenCalled();
       });
     });
   });
@@ -874,7 +876,7 @@ describe('oktaOidcClient', () => {
             },
           },
         ];
-        vi.mocked(identityProviderRepository.findAll).mockResolvedValue(mockIdps as any);
+        vi.mocked(identityProviderRepository.findAllWithSecrets).mockResolvedValue(mockIdps as any);
 
         const result = await getOktaConfigStatus();
 
@@ -903,7 +905,7 @@ describe('oktaOidcClient', () => {
             },
           },
         ];
-        vi.mocked(identityProviderRepository.findAll).mockResolvedValue(mockIdps as any);
+        vi.mocked(identityProviderRepository.findAllWithSecrets).mockResolvedValue(mockIdps as any);
 
         const result = await getOktaConfigStatus();
 
@@ -919,7 +921,7 @@ describe('oktaOidcClient', () => {
             isActive: true,
           },
         ];
-        vi.mocked(identityProviderRepository.findAll).mockResolvedValue(mockIdps as any);
+        vi.mocked(identityProviderRepository.findAllWithSecrets).mockResolvedValue(mockIdps as any);
 
         const result = await getOktaConfigStatus();
 
@@ -930,7 +932,7 @@ describe('oktaOidcClient', () => {
 
     describe('with SST config only', () => {
       it('should return sst as effectiveSource when no database IDP exists', async () => {
-        vi.mocked(identityProviderRepository.findAll).mockResolvedValue([]);
+        vi.mocked(identityProviderRepository.findAllWithSecrets).mockResolvedValue([]);
 
         const result = await getOktaConfigStatus();
 
@@ -949,7 +951,7 @@ describe('oktaOidcClient', () => {
       it('should reflect OKTA_USE_ORG_AUTH_SERVER in the SST effectiveConfig', async () => {
         // getOktaConfigStatus drives the system-health / test-oauth call sites, so the
         // org-level flag must flow through here too - not just getOktaConfigWithFallback.
-        vi.mocked(identityProviderRepository.findAll).mockResolvedValue([]);
+        vi.mocked(identityProviderRepository.findAllWithSecrets).mockResolvedValue([]);
         (Config as { OKTA_USE_ORG_AUTH_SERVER?: string }).OKTA_USE_ORG_AUTH_SERVER = 'true';
         try {
           const result = await getOktaConfigStatus();
@@ -969,7 +971,7 @@ describe('oktaOidcClient', () => {
 
     describe('error handling', () => {
       it('should fallback to SST when database throws error', async () => {
-        vi.mocked(identityProviderRepository.findAll).mockRejectedValue(new Error('Database error'));
+        vi.mocked(identityProviderRepository.findAllWithSecrets).mockRejectedValue(new Error('Database error'));
 
         const result = await getOktaConfigStatus();
 

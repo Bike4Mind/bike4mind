@@ -9,6 +9,7 @@
  */
 
 import { buildDevWafRuleJson, getDevWafMeta } from './wafPolicy';
+import { WAF_REDACTED_HEADERS } from './wafRedaction';
 import { secrets } from './secrets';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 
@@ -124,7 +125,7 @@ export const wafWebAcl = isWafEnabled
  * This resource:
  * 1. Enables real-time logging for all traffic evaluated by the WebACL
  * 2. Sends logs to the CloudWatch log group automatically
- * 3. Redacts sensitive headers (authorization, cookie) to protect PII and credentials
+ * 3. Redacts every credential-bearing header listed in infra/wafRedaction.ts
  *
  * The log format is AWS WAF's standard JSON structure containing all fields
  * required by the 4 Security Dashboard graphs:
@@ -163,9 +164,10 @@ export const wafLoggingConfig =
           resourceArn: wafWebAcl.arn,
           // CloudWatch log group destination (AWS requires :* suffix)
           logDestinationConfigs: [wafLogGroup.arn.apply(arn => `${arn}:*`)],
-          // Redact sensitive headers to prevent logging PII/credentials
-          // Values are replaced with 'REDACTED' in logs while keeping field names visible
-          redactedFields: [{ singleHeader: { name: 'authorization' } }, { singleHeader: { name: 'cookie' } }],
+          // Values are replaced with 'REDACTED' in logs while keeping field names visible.
+          // Redaction applies from the moment this configuration is updated; log records already
+          // written keep whatever they captured until the group's retention window expires.
+          redactedFields: WAF_REDACTED_HEADERS.map(name => ({ singleHeader: { name } })),
         },
         {
           // MUST be us-east-1 for CloudFront-scope WAF

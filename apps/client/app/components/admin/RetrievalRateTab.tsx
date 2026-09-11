@@ -40,6 +40,14 @@ const formatRate = (rate: number | null): string => (rate === null ? 'n/a' : `${
 
 const formatDate = (iso: string | null): string => (iso ? new Date(iso).toLocaleString() : 'n/a');
 
+/**
+ * The share of answerable turns where the model did NOT retrieve - the defect the answerability
+ * split exists to isolate. Not derivable as `1 - arm.rate` without care: that expression turns a
+ * null (empty arm) into 1, reporting a 100% miss rate over no turns at all.
+ */
+const missRate = (arm: { turns: number; retrievedTurns: number }): number | null =>
+  arm.turns === 0 ? null : (arm.turns - arm.retrievedTurns) / arm.turns;
+
 function StatCard({ label, value, caption }: { label: string; value: string; caption: string }) {
   return (
     <Card variant="soft" sx={{ flex: '1 1 200px', minWidth: 200 }}>
@@ -57,14 +65,18 @@ function StatCard({ label, value, caption }: { label: string; value: string; cap
 export default function RetrievalRateTab() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [appliedWindow, setAppliedWindow] = useState({ startDate: '', endDate: '' });
+  // Blank means "let the server pick", which pins the cutoff to the live forced-retrieval floor
+  // rather than to a number this component invented. Kept as a string so the field can be cleared.
+  const [answerableMinScore, setAnswerableMinScore] = useState('');
+  const [appliedFilters, setAppliedFilters] = useState({ startDate: '', endDate: '', answerableMinScore: '' });
 
   const { data, isLoading, isFetching, error, refetch } = useQuery<RetrievalRateResponse>({
-    queryKey: ['retrievalRate', appliedWindow],
+    queryKey: ['retrievalRate', appliedFilters],
     queryFn: async () => {
       const params = new URLSearchParams();
-      if (appliedWindow.startDate) params.append('startDate', appliedWindow.startDate);
-      if (appliedWindow.endDate) params.append('endDate', appliedWindow.endDate);
+      if (appliedFilters.startDate) params.append('startDate', appliedFilters.startDate);
+      if (appliedFilters.endDate) params.append('endDate', appliedFilters.endDate);
+      if (appliedFilters.answerableMinScore) params.append('answerableMinScore', appliedFilters.answerableMinScore);
       const response = await api.get(`/api/admin/retrieval-rate?${params.toString()}`);
       return response.data;
     },
@@ -110,9 +122,20 @@ export default function RetrievalRateTab() {
             data-testid="retrieval-rate-end-input"
           />
         </FormControl>
+        <FormControl size="sm">
+          <FormLabel>Answerable cutoff</FormLabel>
+          <Input
+            type="number"
+            slotProps={{ input: { min: 0, max: 1, step: 0.05 } }}
+            placeholder="default"
+            value={answerableMinScore}
+            onChange={e => setAnswerableMinScore(e.target.value)}
+            data-testid="retrieval-rate-cutoff-input"
+          />
+        </FormControl>
         <Button
           size="sm"
-          onClick={() => setAppliedWindow({ startDate, endDate })}
+          onClick={() => setAppliedFilters({ startDate, endDate, answerableMinScore })}
           loading={isFetching}
           data-testid="retrieval-rate-apply-btn"
         >
@@ -176,6 +199,57 @@ export default function RetrievalRateTab() {
               caption="No mode recorded - pre-deploy turns, agent-mode runs, or a tool-only write"
             />
           </Stack>
+
+          {/* The type says this is always present - the fold never omits it - but the client trusts a
+             live HTTP response, not the fold directly, and a response from an API pod one deploy behind
+             the client bundle predates this field. Guard rather than crash the whole tab over it. */}
+          {summary.answerability && (
+            <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'sm' }} data-testid="retrieval-rate-answerability">
+              <Typography level="title-sm">Could the corpus have answered?</Typography>
+              <Typography level="body-xs" textColor="text.secondary" sx={{ mb: 1.5 }}>
+                Offered turns split by whether an offline replay found anything in the corpus at or above a cosine of{' '}
+                {summary.answerability.cutoff.toFixed(2)}. A turn where the model did not retrieve is only a defect if
+                there was something to find.
+              </Typography>
+
+              {summary.answerability.unknown.turns === summary.offeredTurns && summary.offeredTurns > 0 ? (
+                <Alert color="neutral" data-testid="retrieval-rate-answerability-unreplayed">
+                  No turn in this window has been replayed, so the split below is empty. Run the answerability replay
+                  (packages/scripts/retrieval/answerability-replay.ts) over this window to populate it.
+                </Alert>
+              ) : (
+                <Stack direction="row" spacing={2} sx={{ flexWrap: 'wrap' }}>
+                  <StatCard
+                    label="Missed retrievals"
+                    value={formatRate(missRate(summary.answerability.answerable))}
+                    caption={`${(
+                      summary.answerability.answerable.turns - summary.answerability.answerable.retrievedTurns
+                    ).toLocaleString()} of ${summary.answerability.answerable.turns.toLocaleString()} answerable turns where the model did not search`}
+                  />
+                  <StatCard
+                    label="Wasted retrievals"
+                    value={formatRate(summary.answerability.notAnswerable.rate)}
+                    caption={`${summary.answerability.notAnswerable.retrievedTurns.toLocaleString()} of ${summary.answerability.notAnswerable.turns.toLocaleString()} turns with nothing to find where it searched anyway`}
+                  />
+                  <StatCard
+                    label="Not replayed"
+                    value={summary.answerability.unknown.turns.toLocaleString()}
+                    caption={`Excluded from both figures${
+                      summary.answerability.inconclusiveTurns > 0
+                        ? `, including ${summary.answerability.inconclusiveTurns.toLocaleString()} whose scan hit its ceiling below the cutoff`
+                        : ''
+                    }`}
+                  />
+                </Stack>
+              )}
+
+              <Typography level="body-xs" textColor="text.secondary" sx={{ mt: 1 }}>
+                Replayed after the fact, not measured during the turn: the corpus may have moved since, and for turns
+                where retrieval never ran the lake scope is reconstructed from the session as it stands now. Treat a
+                replay run long after the window as weak evidence.
+              </Typography>
+            </Sheet>
+          )}
 
           <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'sm' }}>
             <Typography level="title-sm" sx={{ mb: 1 }}>

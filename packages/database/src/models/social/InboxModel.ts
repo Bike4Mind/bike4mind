@@ -53,9 +53,13 @@ class InboxRepository extends BaseRepository<IInboxDocument> implements IInboxRe
 
       // Aggregation $lookup bypasses Mongoose `select:false`, so a bare lookup
       // would attach the full sender user doc. Project off the shared secret-free
-      // baseline (SAFE_USER_LOOKUP_PROJECT) plus the extra non-secret fields the
-      // inbox SenderInfoModal reads (email/phone/createdAt). Never add credential/
-      // secret fields here. Keep in sync with the SenderInfoModal consumer.
+      // baseline (SAFE_USER_LOOKUP_PROJECT) plus the extra fields the inbox
+      // SenderInfoModal reads. `phone` is deliberately NOT among them: receiving a
+      // message from someone does not entitle you to their phone number, and anyone
+      // could self-serve one by messaging a target. `email` stays because the modal's
+      // reply and add-friend actions are built on it, matching what toSafeUser hands
+      // a correspondent. Never add credential/secret fields here. Keep in sync with
+      // the SenderInfoModal consumer.
       {
         $lookup: {
           from: 'users',
@@ -69,7 +73,6 @@ class InboxRepository extends BaseRepository<IInboxDocument> implements IInboxRe
                 // aggregation result has no Mongoose `id` virtual, only `_id`.
                 id: { $toString: '$_id' },
                 email: 1,
-                phone: 1,
                 createdAt: 1,
               },
             },

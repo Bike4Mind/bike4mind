@@ -1,5 +1,5 @@
 import { AdminSettings } from '@bike4mind/database/infra';
-import { redactSettingSecrets, settingsMap, type AdminSettingDoc } from '@bike4mind/common';
+import { redactSettingSecrets, settingsMap, userReadableSettingKeys, type AdminSettingDoc } from '@bike4mind/common';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensurePublicSettingsArtifactOncePerInstance } from '@server/utils/publicSettingsArtifact';
@@ -12,18 +12,24 @@ const handler = baseApi({ auth: true }).get(async (req, res) => {
   // Only the first call per cold instance does work; later calls resolve instantly.
   const bootstrap = ensurePublicSettingsArtifactOncePerInstance(req.logger);
 
+  // Opt-IN for non-admins. The previous filter was opt-OUT on `isSensitive`, so every
+  // setting nobody remembered to tag reached any authenticated caller (or API key) --
+  // sreAgentConfig, secopsTriageConfig, contextTelemetryAlerts and prReportIdentityMap
+  // among them: operational config and a staff-to-Slack identity map, none of it
+  // `isSensitive`, none of it the caller's business. See userReadableSettingKeys().
   const isAdmin = req.user?.isAdmin === true;
-  const permittedKeys = (Object.values(settingsMap) as Array<{ isSensitive?: boolean; key: string }>)
-    .filter(s => isAdmin || !s.isSensitive)
-    .map(s => s.key);
+  const permittedKeys = isAdmin
+    ? (Object.values(settingsMap) as Array<{ key: string }>).map(s => s.key)
+    : userReadableSettingKeys();
 
   // Only fetch the specific settings that users are allowed to see
   const settings = await AdminSettings.find({ settingName: { $in: permittedKeys } }).lean();
 
-  // isSensitive gates WHO may fetch a setting; it does not by itself keep the value out
-  // of the response. Redact on the way out so a sensitive value never reaches the browser
-  // THROUGH THIS ENDPOINT - admins get a mask and write a replacement, never a round-trip
-  // of the stored secret.
+  // WHO may fetch a setting is decided above; this is the separate question of what the
+  // value looks like on the way out. Redact regardless, so a sensitive value never reaches
+  // the browser THROUGH THIS ENDPOINT - admins get a mask and write a replacement, never a
+  // round-trip of the stored secret. Still needed after the opt-in change: admins read the
+  // full catalog, and a `userReadable` setting can carry a secret SUBFIELD.
   //
   // Scope, deliberately stated: this closes the HTTP read path only. It is NOT a
   // system-wide guarantee. The `adminsettings` WebSocket subscription

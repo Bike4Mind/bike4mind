@@ -173,6 +173,13 @@ const PromptMetaContextSchema = z.object({
   lakeMemory: z
     .object({
       beliefCount: z.number(),
+      // The `lakeMemoryRecallK` budget in force for the turn (#2496). Without it `beliefCount`
+      // is ambiguous on exactly the question the knob exists to answer: a row reading 8 could be
+      // "the cap bound" or "only 8 beliefs qualified", and telling those apart used to mean
+      // knowing what the setting happened to be when the turn ran. beliefCount === beliefBudget
+      // is now a readable saturation signal. Optional: turns recorded before this field existed
+      // have none, and it must not fail their Zod re-parse.
+      beliefBudget: z.number().optional(),
       dataLakeTags: z.array(z.string()),
     })
     .optional(),
@@ -228,7 +235,15 @@ const PromptMetaPerformanceSchema = z.object({
   totalResponseTime: z.number().optional(),
   contextRetrievalTime: z.number().optional(),
   modelInferenceTime: z.number().optional(),
+  /**
+   * Time to First Visible Token: elapsed ms until the first chunk the user can actually
+   * see. Left unset when a turn streamed nothing visible (thinking-only, or a turn that
+   * errored before answering), so absence reads as "never rendered" rather than as fast.
+   * Pair with firstChunkTime to tell a slow model from a long hidden-reasoning window.
+   */
   firstTokenTime: z.number().optional(),
+  /** Elapsed ms until the first chunk of any kind, including a hidden thinking block. */
+  firstChunkTime: z.number().optional(),
   clientFirstTokenTime: z.number().optional(), // Time from client sending prompt to client rendering first token
   streamingPerformance: z
     .object({
@@ -315,11 +330,16 @@ export const CitableSourceSchema = z.object({
  * zero-result retrieval, so a turn that legitimately found nothing is indistinguishable from one
  * where retrieval never ran at all.
  *
- * Deliberately holds NO counts and NO chunk/document identifiers. Counts already exist and are
- * more precise: `citables.filter(c => c.type === 'document')` is deduped by id/url/title in
+ * Holds NO chunk/document identifiers, and no DOCUMENT count. A document count already exists and
+ * is more precise: `citables.filter(c => c.type === 'document')` is deduped by id/url/title in
  * `applyQuestStatusChanges`, while this shape cannot dedupe (no identifiers to dedupe by) and
- * would have to sum - producing a second, disagreeing number for the same question. Similarity
- * scores live on `LakeAccessEvent`, not here.
+ * would have to sum - producing a second, disagreeing number for the same question.
+ *
+ * `injected` below is NOT that number and does not reopen it: it counts PASSAGES and characters,
+ * neither of which `citables` can express - one document contributes many passages, and a turn
+ * that injected nothing emits no citable to count at all. Similarity scores otherwise live on
+ * `LakeAccessEvent`; the single `injected.topScore` is here because that row is written only on a
+ * turn that grounded, so it cannot carry the near-miss score of a turn that grounded on nothing.
  *
  * CAUTION, not a guarantee: the absence of chunk/document identifiers is what keeps this shape
  * OUT of `promptMetaRedaction.ts`'s scope (that helper is a functionCalls-only denylist and would
@@ -376,6 +396,11 @@ export const RetrievalSummarySchema = z.object({
    *   record it without anything throwing). What separates it from 'not_indexed' is the remedy,
    *   not the tempo: fix the outage or the host wiring, never re-index content. An unwired host
    *   reports continuously too, so "chronic" alone does not pick out 'not_indexed'.
+   *   NOT this: a model-supplied argument that is not a well-formed id. knowledgeBaseRetrieve
+   *   shape-checks `file_id` and answers a malformed one as a single-file miss ('ok'), because the
+   *   remedy is for the model to search for the right id - there is nothing for an operator to
+   *   fix. It is logged rather than counted here, so the rate stays observable without this field
+   *   reporting an outage that is not happening.
    * On multiple retrieval calls within one turn, merge priority is failed > not_indexed > ok >
    * no_lakes (see retrievalSummaryMerge.ts's mergeRetrievalSummary): a single failure is never
    * masked by a later success or abstain, an unsearchable corpus outranks a legitimate zero so a
@@ -400,6 +425,24 @@ export const RetrievalSummarySchema = z.object({
    */
   mode: z.enum(['forced', 'optional']).optional(),
   /**
+   * Whether the knowledge-base when-to-retrieve guidance section actually shipped in this turn's
+   * tool prompt. Written only on turns that were OFFERED the knowledge tool, so absence means
+   * "not an offered turn" or "recorded before this field landed" - it never means "cleared".
+   *
+   * `false` is the load-bearing value here, not filler. Clearing the KnowledgeBaseRetrievalPrompt
+   * setting is the section's only off switch, so a turn recording `false` is the CONTROL arm of
+   * the A/B this field exists to make readable. Anything merging or folding this must preserve an
+   * explicit `false` rather than collapse it into absent - see mergeRetrievalSummary, which uses
+   * `??` and deliberately not `||` for that reason.
+   *
+   * MUST STAY IN SYNC with TWO gates, not one. ToolBuilder.buildToolPrompt emits the section iff
+   * the tool is offered AND the guidance string is non-empty; filterByPromptMode then drops the
+   * whole `toolPrompt` source, which no promptMode admits, so an offered tool is not sufficient.
+   * The ChatCompletionProcess seed site conjoins all three, and hands the first two to
+   * buildToolPrompt as the same consts, so the flag and the actual emission cannot drift.
+   */
+  knowledgeBaseGuidanceInjected: z.boolean().optional(),
+  /**
    * Why the forced arm did not run on a turn that had it enabled. Only ever set with
    * `mode: 'forced'`, and only for the deliberate suppressions in
    * ChatCompletionFeatures.getContextMessages - a forced turn that ran and failed reports that
@@ -415,6 +458,178 @@ export const RetrievalSummarySchema = z.object({
   surfaces: z.array(z.string()),
   /** Lakes resolved at the moment retrieval ran, stamped point-in-time (not read live from the session). */
   dataLakeTags: z.array(z.string()),
+  /**
+   * Ids of the lakes whose `systemPrompt` was injected this turn (getAccessibleDataLakePrompts),
+   * across every injection site (forced retrieval and the model-driven knowledge tools). NOT the
+   * prompt text itself - that already reaches the model in the completion, and copying it here
+   * widens exposure for nothing. Absent means no injection site ran; present-and-empty means one
+   * ran but nothing qualified (untrusted, or an empty systemPrompt).
+   */
+  injectedLakePromptIds: z.array(z.string()).optional(),
+  /** mementoCount/mementoIds precedent: mirrors injectedLakePromptIds.length. */
+  injectedLakePromptCount: z.number().optional(),
+  /**
+   * How much retrieved content actually reached the model this turn: `chunks` passages totalling
+   * `chars` characters of retrieved CONTENT (headings and framing excluded, so the number means
+   * the same thing on every surface), plus `topScore`, the best similarity among the compared
+   * passages the reporting surface can SEE - which is not the same population on every surface.
+   * Forced retrieval scores every chunk itself and so reports true near-misses; knowledgeBaseSearch's
+   * semantic arm only ever sees `minScore` survivors, and reports no `topScore` at all on a starve,
+   * so a sub-floor near-miss there is invisible rather than recorded.
+   *
+   * PRESENCE CONTRACT: present if and only if at least one surface COMPLETED a search this turn.
+   * `chunks: 0` is a RECORDED STARVE - the library was searched and nothing was injected, which is
+   * the case this field exists to make visible: without it, a forced-retrieval turn that injected
+   * nothing is byte-identical to one that injected its whole character budget (both `outcome:
+   * 'ok'`). Absence means the volume is UNKNOWN, which is what a turn carries when no surface
+   * completed a search: retrieval was never attempted, nothing was in scope to search
+   * ('no_lakes'), or the one surface that ran broke mid-flight, where a zero would be a lie.
+   * A surface that completed but CANNOT know the turn's passage volume also stays silent rather
+   * than claiming a zero - knowledgeBaseSearch's keyword arm on a hit is the case: it injects
+   * file metadata and hands the model retrieve_knowledge_content, which injects the text and
+   * reports no volume, so its zero would survive the merge as a starve that did not happen.
+   *
+   * KNOWN HOLE in that rule, while retrieve_knowledge_content stays uninstrumented: a recorded zero
+   * is not PROOF of a starve. Forced retrieval and the knowledge tools are not mutually exclusive
+   * (ChatCompletionProcess seeds on `forcedRetrievalEnabled || knowledgeToolOffered`), so the forced
+   * arm can complete empty, write its honest zero, and the model can then ground the same turn
+   * through retrieve_knowledge_content, which contributes no volume to oppose it. The zero is
+   * per-surface-truthful and turn-level-misleading. Any rollup counting starves should treat a zero
+   * as "nothing was injected by a surface that reports volume" and, until that tool reports its own,
+   * cross-check `functionCalls` before calling the turn ungrounded.
+   *
+   * Per SURFACE, not per turn: a surface that breaks contributes nothing while a surface that
+   * completed alongside it still reports its own volume, so a turn CAN read 'failed' next to a
+   * recorded zero. That pairing means "one surface broke, and everything that did finish injected
+   * nothing" - which is exactly what a reader needs, and strictly more than the outcome alone.
+   *
+   * SUMMED across surfaces, so this field and `outcome` can legitimately disagree in tone on a
+   * multi-surface turn: forced retrieval grounding on 12 passages while knowledgeBaseSearch throws
+   * gives `outcome: 'failed'` alongside `chunks: 12`. That is correct - `outcome` is worst-of,
+   * `injected` is sum-of-completions.
+   *
+   * `topScore` is optional because only cosine-similarity surfaces have one to report. Lake
+   * memory's belief `relevance` is a different scale and forced retrieval's pre-scan value is a
+   * -1 sentinel; neither is ever written here, because a `max` across mixed scales, or against a
+   * sentinel, is a number that reads as a similarity and is not one.
+   *
+   * Date-bound any rollup, the same caveat `mode` documents on itself: turns recorded before this
+   * landed carry no volume, and no backfill is possible - the volume of a past turn is gone.
+   *
+   * `preRelativeFloorCandidates` and `postRelativeFloorCandidates` are the ONE pair here that is
+   * not "what reached the model": `ranked.length` and `scored.length` in KnowledgeRetrievalFeature
+   * - the candidates left after the absolute similarity floor, and after the relative floor
+   * trims them. `chunks` is what survived the char budget on top of that, so the three
+   * numbers bracket two independent trimmers:
+   *
+   *   pre -> [relative floor] -> post -> [char budget] -> chunks
+   *
+   * They exist so a low `chunks` is diagnosable - a small corpus and a floor that trimmed a large
+   * pool end in the same `chunks`. `pre - post` is the floor's own effect and nothing else;
+   * `pre - chunks` is NOT, because the budget trims the same walk. Both optional: only forced
+   * retrieval computes a ranked pool, a surface without one (lake memory, the knowledge tools)
+   * never writes either, and absence must not read as zero candidates. SUMMED like `chunks`, with
+   * the same absent-is-not-zero handling as `topScore`.
+   *
+   * COMPARE THE PAIR ONLY TO ITSELF, never to `chunks`, unless `surfaces` is forced retrieval
+   * alone. `chunks` and `chars` sum across ALL surfaces while this pair is forced-only, so a mixed
+   * turn can store `chunks` above `pre` - inverting the relationship the pair exposes. Lake memory
+   * is the common case, not the exotic one: it is enabled inside the same forced-retrieval gate,
+   * so on a lake-memory lake it writes on nearly every forced turn. Its chunks can be backed out
+   * via `context.lakeMemory.beliefCount` (approximately - that count is pre-sanitization); its
+   * CHARS land only inside the shared sum, with no per-surface field to subtract them back out, so
+   * `chars` cannot be decontaminated at all. `pre - post` needs neither, which is the point of
+   * storing both.
+   *
+   * BOTH SATURATE, so `pre` counts what the SCAN REACHED, not what the corpus holds: `pool` is
+   * truncated in-scan at FORCED_RETRIEVAL_MAX_SCORED_CHUNKS (256), over a scan itself bounded by
+   * FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS (4000) across FORCED_RETRIEVAL_MAX_CANDIDATE_FILES (100).
+   * 2000 qualifying chunks and 300 both record 256; above the cap a rollup is a plateau.
+   */
+  injected: z
+    .object({
+      chunks: z.number(),
+      chars: z.number(),
+      topScore: z.number().optional(),
+      preRelativeFloorCandidates: z.number().optional(),
+      postRelativeFloorCandidates: z.number().optional(),
+    })
+    .optional(),
+  /**
+   * Could the corpus in scope have answered this turn, whether or not the model went looking?
+   *
+   * The denominator the optional-path retrieval rate has always been missing (#1394). A rate of
+   * "the model retrieved on 20% of offered turns" cannot say whether the other 80% were misses or
+   * turns with nothing to find, and the two argue for opposite things: the first for routing work,
+   * the second for leaving the optional path alone. Crossing this field with the rate separates
+   * them.
+   *
+   * THE ONLY FIELD IN THIS BLOCK NOT WRITTEN BY THE TURN. Every sibling is stamped point-in-time
+   * while the turn runs; this one is written afterwards by an offline replay
+   * (packages/scripts/retrieval/answerability-replay.ts) that re-scores the recorded prompt against
+   * the corpus. That is deliberate - the population it exists to measure is the turns where
+   * retrieval did NOT run, so computing it live would mean adding a full brute-force chunk scan
+   * (ChatCompletionFeatures' forced path, which has no ANN index) to exactly the turns that pay
+   * nothing for retrieval today. The measurement is not worth that latency on live traffic.
+   *
+   * BEING A RECONSTRUCTION, IT CARRIES TWO DRIFTS THE OTHER FIELDS DO NOT:
+   * 1. Corpus CONTENT moves. A document added or reindexed between the turn and the replay is
+   *    scored as though it had been there. `probedAt` discloses the gap; a replay run long after
+   *    the window is weak evidence, not strong.
+   * 2. Corpus SCOPE is inferred, not recorded. The seed writes `dataLakeTags: []` on a turn where
+   *    retrieval never ran (ChatCompletionProcess), so the replay reconstructs scope from the
+   *    session's lakes as they stand at replay time. A session whose lake selection changed is
+   *    replayed against a corpus the turn never had, and NOTHING here flags that. Recording real
+   *    scope at seed time would fix it for future turns and is not done yet.
+   * 3. The QUESTION can move out from under it. The probe is keyed to the quest, not to the
+   *    prompt text it scored, so a turn whose prompt is later rewritten in place keeps a probe
+   *    describing the question it used to ask. mergeRetrievalSummary preserves the probe across
+   *    a runtime write deliberately - dropping it would erase the backfill - so nothing
+   *    invalidates a stale one. Re-run the replay with --force over a window whose turns were
+   *    edited.
+   *
+   * RAW SCORE, NOT A VERDICT, so the cutoff lives in the reader. summarizeOptionalPathRetrieval
+   * applies it at fold time, which lets the same replay be re-thresholded without re-running -
+   * the point of storing the number, given the two live floors disagree by construction (forced
+   * retrieval's absolute default is 0.75, the knowledge tool's is 0).
+   *
+   * `topScore` is the same raw cosine scale as `injected.topScore` and comparable to it. It is NOT
+   * comparable to lake memory's belief relevance, for the reason `injected` documents at length.
+   *
+   * `scanTruncated` inherits forced retrieval's saturation: the replay bounds its scan the same
+   * way, so a low `topScore` on a truncated scan is not proof the corpus lacked an answer - it is
+   * proof the part that was scanned did. Treat those turns as unknown rather than as negatives.
+   *
+   * Absence means NOT PROBED - never "not answerable". Every turn predating the replay, and every
+   * turn the replay skipped or failed on, is absent, so a fold must keep it as its own arm rather
+   * than letting it fall in with the negatives.
+   */
+  answerability: z
+    .object({
+      /** Best cosine the replay found across the reconstructed corpus. */
+      topScore: z.number(),
+      /** Chunks at or above `floor`. Separates "one lucky match" from "a rich seam". */
+      candidatesAboveFloor: z.number(),
+      /** The absolute floor the replay counted `candidatesAboveFloor` against, as a fraction. */
+      floor: z.number(),
+      /** The scan hit its chunk ceiling, so `topScore` is a floor on the true best, not the best. */
+      scanTruncated: z.boolean(),
+      /** When the replay ran, NOT when the turn ran - the disclosure for content drift above. */
+      probedAt: JsonSafeDate,
+    })
+    .optional(),
+  /**
+   * Which of this turn's injected lake prompt ids were BOTH in the session's pre-authorized (manage-
+   * but-not-member admission) set AND injected on this turn - see unionPreauthorizedLakeAccess and
+   * pages/api/sessions/create.ts. A subset of injectedLakePromptIds, never a superset. Narrows the
+   * session's static `preauthorizedLakeIds` (what was ADMITTED) to what a given turn actually used.
+   *
+   * MEMBERSHIP, NOT CAUSATION. An admitted lake the caller could already reach - its creator, or a
+   * member of its org - injects through the ordinary trust arm and is listed here all the same, so a
+   * non-empty value does not prove the admission is what made the injection possible. Absent means no
+   * admitted id was among this turn's injections, including every turn on a session with none.
+   */
+  preauthorizedLakeIdsUsed: z.array(z.string()).optional(),
 });
 
 /**

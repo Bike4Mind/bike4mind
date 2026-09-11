@@ -9,7 +9,8 @@
     "./migrate/migrationManager": "./migrate/migrationManager.ts",
     "./help/types": "./help/types.ts",
     "./help/utils": "./help/utils.ts",
-    "./help/loadHelpArticles": "./help/loadHelpArticles.ts"
+    "./help/loadHelpArticles": "./help/loadHelpArticles.ts",
+    "./help/ingestHelpDatalake": "./help/ingestHelpDatalake.ts"
   },
   "scripts": {
     "test": "vitest run",
@@ -20,9 +21,12 @@
     "datalake:check-slug-dupes": "tsx migrate/check-datalake-slug-dupes.ts",
     "datalake:check-prefix-overlaps": "tsx migrate/check-datalake-prefix-overlaps.ts",
     "datalake:check-prefix-dupes": "tsx migrate/check-datalake-prefix-dupes.ts",
+    "datalake:check-prefix-whitespace": "tsx migrate/check-datalake-prefix-whitespace.ts",
     "datalake:check-prefix-only-members": "tsx migrate/check-datalake-prefix-only-members.ts",
     "datalake:ingest-pdfs": "tsx datalake/ingest-pdf-datalake.ts",
     "datalake:check-stranded-drive-connections": "tsx datalake/check-stranded-drive-connections.ts",
+    "datalake:check-stale-vector-claims": "tsx datalake/check-stale-vector-claims.ts",
+    "datalake:seed-stranded-member": "tsx datalake/seed-stranded-lake-member.ts",
     "db:create-user": "tsx createUser.ts",
     "db:list-users": "tsx listUsers.ts",
     "db:setup-email-user": "tsx setupTestEmailUser.ts",
@@ -50,7 +54,12 @@
     "backfill:pending-free-credits": "tsx backfillPendingFreeCredits.ts",
     "backfill:fabfile-moderation-status": "tsx src/backfill-fabfile-moderation-status.ts",
     "tavern:upload-icons": "tsx src/uploadTavernIcons.ts",
-    "count-tokens-probe": "tsx count-tokens-probe.ts"
+    "count-tokens-probe": "tsx count-tokens-probe.ts",
+    "retrieval:recall-probe": "tsx retrieval/recall-probe.ts",
+    "retrieval:supersession-probe": "tsx retrieval/supersession-probe.ts",
+    "retrieval:capture-embeddings": "tsx retrieval/capture-embeddings.ts",
+    "retrieval:answerability-replay": "tsx retrieval/answerability-replay.ts",
+    "retrieval:model-comparison": "tsx retrieval/model-comparison.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",

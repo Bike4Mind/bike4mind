@@ -17,20 +17,17 @@
  *    survive. This is the half most worth protecting: on `unavailable` an outage must never reach a
  *    user as "that document is not in here".
  *
- * Cases are graded by `grade.ts`, which is deterministic and unit-tested. The model driver lives in
- * `run.ts` and is env-gated - see the README.
+ * Cases are graded by `grade.ts`, which is deterministic and unit-tested. `run.ts` binds those graders
+ * to the prompt body; the model driver they share with the other evals is `../harness.ts` and
+ * is env-gated - see the README.
  */
 
 import type { ForcedRetrievalNoContextFinding } from '../../forcedRetrievalAbstention';
+import type { PromptEvalCase } from '../harness';
 
-export interface AbstentionCase {
-  id: string;
+export interface AbstentionCase extends PromptEvalCase {
   /** Which no-context finding the turn resolved to. Selects the prompt body under test. */
   finding: ForcedRetrievalNoContextFinding;
-  /** Prior turns, if the case is about a follow-up. Assistant/user alternating. */
-  history?: { role: 'user' | 'assistant'; content: string }[];
-  /** The user message for the turn under test. */
-  message: string;
   expectation:
     | { kind: 'mustNotMentionCoverage'; why: string }
     /**

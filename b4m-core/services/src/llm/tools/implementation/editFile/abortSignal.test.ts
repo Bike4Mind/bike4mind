@@ -39,7 +39,7 @@ describe('editFileTool cancellation handling', () => {
       userId: 'u1',
       user: {},
       logger,
-      db: { fabFiles: { findById: vi.fn(async () => FILE) } },
+      db: { fabfiles: { findByIdAndUserId: vi.fn(async () => FILE) } },
       llm: { complete },
       statusUpdate: vi.fn(),
       model: 'test-model',
@@ -48,10 +48,14 @@ describe('editFileTool cancellation handling', () => {
     return { context, logger };
   }
 
+  // ObjectId-shaped on purpose: `fileId` is shape-checked before the lookup, so a fixture that is
+  // not an id at all is rejected up front and never reaches the LLM call these tests are about.
+  const FILE_ID = '68b0f3a2c1d4e5f60718293a';
+
   function run(context: ToolContext) {
     return editFileTool
       .implementation(context, undefined)
-      .toolFn({ fileId: 'f1', instruction: 'uppercase it' }, {} as never);
+      .toolFn({ fileId: FILE_ID, instruction: 'uppercase it' }, {} as never);
   }
 
   it('passes the live signal through as abortSignal', async () => {

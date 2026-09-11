@@ -10,7 +10,8 @@
 # deploy runner). These dirs aren't needed to build or run the server. NOTE: do not exclude
 # whole workspace members — pnpm needs every package.json for lockfile resolution. The
 # entries below are VCS metadata, build output, mobile shells, tests, and docs-site (which
-# pnpm-workspace.yaml already excludes via `!docs-site`).
+# pnpm-workspace.yaml already excludes via `!docs-site`) - all but the two docs-site
+# categories re-admitted below.
 .git
 **/.next
 **/.open-next
@@ -19,4 +20,10 @@ apps/client/ios
 apps/client/android
 apps/client/e2e
 docs-site
+# ...except the two help categories. apps/client's `prebuild` regenerates the help index
+# and the bundled markdown from them, and refuses to write an empty index, so an image
+# built without these fails loudly instead of shipping a help panel with no content.
+# Must stay in sync with INCLUDED_CATEGORIES in packages/scripts/help/loadHelpArticles.ts.
+!docs-site/docs/features
+!docs-site/docs/admin
 .playwright-mcp

@@ -1,7 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
+  adminSettingsRepository,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   lakeAccessEventRepository,
@@ -35,6 +37,11 @@ import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
  * which is narrower than managing it (see `resolveLakeTransferAuthority`). It rides in `meta`, not in
  * the view, because the view is the exported compliance artifact: a per-viewer capability is not a
  * fact about the lake's access and must not appear in the CSV.
+ *
+ * `meta.readerGrantsEnforced` is there for the same reason and a sharper one: while the
+ * `EnforceLakeReadGrants` platform setting is off, a `reader` grant is RECORDED but admits nobody, so
+ * a table that rendered it like any other row would repeat the half-works trap this surface exists to
+ * expose. It is platform state, not lake state, so it stays out of the CSV artifact too.
  */
 /** `format` is `string[]` for a repeated query param - see firstQueryValue. */
 interface AccessQuery {
@@ -42,7 +49,7 @@ interface AccessQuery {
   format?: string | string[];
 }
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request<{ id: string }, unknown, unknown, AccessQuery>, res) => {
     // Next merges the [id] route param into req.query alongside the ?format= query string, so `id` is
@@ -53,14 +60,11 @@ const handler = baseApi()
     const format = firstQueryValue(req.query.format);
     const ctx = await toAccessContext(req);
 
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+    // Grants read ONCE, by the access gate itself, and applied to both decisions below: the manage
+    // gate and the transfer capability. `resolveCanManageLake` would re-query them for the same
+    // answer, and so would a separate `loadActiveLakeGrants` here.
+    const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
-
-    // Grants read ONCE and applied to both decisions: the manage gate below and the transfer
-    // capability further down. `resolveCanManageLake` would re-query them for the same answer.
-    const grants = await dataLakeService.loadActiveLakeGrants(lake, {
-      db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
     if (!dataLakeService.canManageLake(lake, ctx, grants)) {
       throw new ForbiddenError('You must be able to manage this data lake to view its access.');
@@ -83,7 +87,10 @@ const handler = baseApi()
 
     return res.json({
       data: view,
-      meta: { canTransferOwnership: dataLakeService.resolveLakeTransferAuthority(lake, ctx, grants).allowed },
+      meta: {
+        canTransferOwnership: dataLakeService.resolveLakeTransferAuthority(lake, ctx, grants).allowed,
+        readerGrantsEnforced: await dataLakeService.resolveEnforceReadGrants(adminSettingsRepository, req.logger),
+      },
     });
   });
 

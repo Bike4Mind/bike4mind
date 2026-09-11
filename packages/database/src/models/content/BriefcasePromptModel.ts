@@ -7,6 +7,7 @@ import {
   ExecutionMode,
   CATALOG_SUBQUERY_LIMIT,
   B4MLLMToolsList,
+  PROMPT_TEXT_MAX,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
@@ -114,7 +115,7 @@ const BriefcasePromptSchema = new mongoose.Schema<IBriefcasePromptDocument>(
     type: { type: String, required: true, maxlength: 100 },
     name: { type: String, required: true, maxlength: 200 },
     description: { type: String, maxlength: 500 },
-    promptText: { type: String, required: true, maxlength: 16_000 },
+    promptText: { type: String, required: true, maxlength: PROMPT_TEXT_MAX },
     tags: [{ type: String }],
     // null/absent => system (shared) prompt; set => personal prompt owned by that user.
     userId: { type: String, default: null },

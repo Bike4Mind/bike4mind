@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { DATA_LAKE_STATUSES } from '@bike4mind/common';
 
 // Unit-level test of the connect handler's gate + org-credential capture. The repository layer,
 // AWS/SQS, auth gate, and crypto are mocked; the Drive folder-id validation runs for real.
@@ -75,7 +76,7 @@ const run = (req: unknown, res: unknown) => (handler as (req: unknown, res: unkn
 describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA' });
+    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', status: 'active' });
     h.verifyOrgAccess.mockResolvedValue({ id: 'orgA' });
     h.userFindById.mockResolvedValue({ googleDrive: { refreshToken: 'enc-refresh' } });
     h.isEncrypted.mockReturnValue(true);
@@ -86,7 +87,7 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     h.connRelease.mockResolvedValue(true);
     h.getValidUserDriveAccessToken.mockResolvedValue('user-access-token');
     h.createDriveClient.mockReturnValue({});
-    h.getFolderAccess.mockResolvedValue({ exists: true, isFolder: true, canRead: true });
+    h.getFolderAccess.mockResolvedValue({ ok: true, exists: true, isFolder: true, canRead: true });
   });
 
   it('captures the org-owned credential on the connection and enqueues ingest', async () => {
@@ -112,7 +113,7 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
   it('refuses to claim a folder the connecting user cannot read (anti-squat gate)', async () => {
     // Drive 404s a folder the caller can't see, so getFolderAccess reports it as non-existent - the
     // claim must be refused so a manager can't squat a folder id belonging to another org.
-    h.getFolderAccess.mockResolvedValue({ exists: false, isFolder: false, canRead: false });
+    h.getFolderAccess.mockResolvedValue({ ok: true, exists: false, isFolder: false, canRead: false });
     const { res } = makeRes();
     await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(
       /do not have access/i
@@ -122,8 +123,22 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
+  it('tells the user Drive is throttling us rather than that they lost access to their folder', async () => {
+    // The conflation this guards: a throttled probe used to come back `exists: false`, so the user
+    // was told they had no access to a folder they own and went hunting a permission problem that
+    // did not exist. The claim is still refused - it just says the true reason.
+    h.getFolderAccess.mockResolvedValue({ ok: false, reason: 'rate_limited', detail: '429' });
+    const { res } = makeRes();
+    await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(
+      /rate-limiting/i
+    );
+    expect(h.connFindByDriveFolderId).not.toHaveBeenCalled();
+    expect(h.connCreate).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
   it('rejects a readable id that is a file, not a folder', async () => {
-    h.getFolderAccess.mockResolvedValue({ exists: true, isFolder: false, canRead: true });
+    h.getFolderAccess.mockResolvedValue({ ok: true, exists: true, isFolder: false, canRead: true });
     const { res } = makeRes();
     await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(/not a folder/i);
     expect(h.connCreate).not.toHaveBeenCalled();
@@ -169,12 +184,41 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
   });
 
   it('rejects a personal (org-less) lake before touching auth or credentials', async () => {
-    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: undefined });
+    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: undefined, status: 'active' });
     const { res } = makeRes();
     await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(
       /organization-scoped/i
     );
     expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+  });
+
+  it.each(DATA_LAKE_STATUSES.filter(s => s !== 'draft' && s !== 'active'))(
+    'refuses to connect a folder to a lake in %s status',
+    async status => {
+      // Otherwise the connect door hands a non-writable lake an `enabled: true` connection and the
+      // poll enqueues it forever - work the ingest guard then drops every time - while the UI toasts
+      // a sync that will never happen. Same draft/active rule as the batch-create and presign doors.
+      h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', status });
+      const { res } = makeRes();
+      await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(
+        new RegExp(`'${status}' status`)
+      );
+      // Gated before the credential capture and the Drive read probe, so a refused connect costs
+      // neither; and nothing is written.
+      expect(h.userFindById).not.toHaveBeenCalled();
+      expect(h.getFolderAccess).not.toHaveBeenCalled();
+      expect(h.connCreate).not.toHaveBeenCalled();
+      expect(h.connUpdateCredential).not.toHaveBeenCalled();
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+    }
+  );
+
+  it('connects a draft lake (the first sync of a freshly created lake)', async () => {
+    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', status: 'draft' });
+    const { res, status } = makeRes();
+    await run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res);
+    expect(h.connCreate).toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(202);
   });
 
   it('404s an unknown lake', async () => {
@@ -210,7 +254,9 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     // connectedBy is re-stamped to the re-syncing caller so ingest never runs as a deleted user.
     expect(h.connUpdateCredential).toHaveBeenCalledWith('conn1', 'orgA', 'enc-refresh', 'u1');
     expect(h.connCreate).not.toHaveBeenCalled();
-    expect(h.sendToQueue).toHaveBeenCalledWith('queue-url', { connectionId: 'conn1' });
+    // This IS the "Re-sync everything" surface (#2396): reconnecting an existing connection forces a
+    // full walk rather than trusting its (possibly stale, possibly absent) syncCursor.
+    expect(h.sendToQueue).toHaveBeenCalledWith('queue-url', { connectionId: 'conn1', forceFullWalk: true });
     expect(status).toHaveBeenCalledWith(202);
   });
 

@@ -3,6 +3,7 @@ import { IShareableDocument } from '@bike4mind/common';
 import { fabFileRepository, projectRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
+import { BadRequestError } from '@server/utils/errors';
 import { Request, Response } from 'express';
 
 const revokeBodySchema = z.object({
@@ -10,20 +11,26 @@ const revokeBodySchema = z.object({
   projectId: z.string().optional(),
 });
 
+// Next.js passes query params as string | string[]; widen the interface so the
+// typeof guard below is honest rather than dead per the declared type.
 interface SharingParams {
-  id: string;
-  type: string;
+  id: string | string[];
+  type: string | string[];
 }
 
 // This endpoint is dispatched at different paths depending on the document type.
 const handler = baseApi().use(
   async (req: Request<unknown, {}, IShareableDocument, SharingParams>, res: Response<IShareableDocument>) => {
     const { type, id } = req.query;
+    if (typeof id !== 'string' || !id) {
+      throw new BadRequestError('Invalid document id');
+    }
     const body = revokeBodySchema.parse(req.body);
 
+    // id and type come after the body spread so URL params win over any body field with the same name.
     const document = await sharingService.revoke(
       req.user.id,
-      { id, type: type as 'files' | 'sessions', ...body },
+      { ...body, id, type: type as 'files' | 'sessions' },
       {
         db: {
           sessions: sessionRepository,

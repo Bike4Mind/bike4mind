@@ -10,7 +10,14 @@ import {
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
-import { UNLIMITED_HISTORY_COUNT, FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '@bike4mind/common';
+import {
+  UNLIMITED_HISTORY_COUNT,
+  FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
+  FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+  LAKE_RECALL_K_DEFAULT,
+  SettingScopeLevel,
+} from '@bike4mind/common';
+import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 import type { ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
@@ -618,6 +625,135 @@ describe('KnowledgeRetrievalFeature retrieval exclusion (4th ctor arg)', () => {
     );
     const citables = (quest.promptMeta as { citables?: Array<{ id: string }> }).citables ?? [];
     expect(citables.map(c => c.id).sort()).toEqual(['fileA', 'fileB']);
+  });
+});
+
+describe('KnowledgeRetrievalFeature preauthorizedLakeIds (5th ctor arg)', () => {
+  // `grantee` holds the curator grant the re-check looks for; defaults to the ctx user, so a test
+  // naming someone else exercises revocation on an otherwise identical session.
+  const makeCtx = (findById: ReturnType<typeof vi.fn>, grantee: string = 'u1') => ({
+    logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+    user: { id: 'u1', tags: [] },
+    db: {
+      organizations: {
+        findMembershipOrgIds: vi.fn().mockResolvedValue([]),
+        findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
+      },
+      dataLakeAccessGrants: {
+        listActiveByLakes: vi
+          .fn()
+          .mockResolvedValue([{ dataLakeId: 'managed', principalType: 'user', principalId: grantee, role: 'curator' }]),
+        // Required, not decorative: getDynamicDataLakeAccess resolves its own grant arm through
+        // `listByPrincipal`, so omitting it throws a TypeError into that read's fail-closed catch
+        // and comes back with `lakeViewComplete: false` - these tests would then be asserting on a
+        // deliberately narrowed view while claiming to isolate the pre-authorization arm.
+        listByPrincipal: vi.fn().mockResolvedValue([]),
+      },
+      dataLakes: {
+        findActiveByUserTags: vi.fn().mockResolvedValue([]),
+        findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+        findById,
+      },
+    },
+    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+  });
+
+  /**
+   * The fail-closed grant read in getDynamicDataLakeAccess reports itself ONLY through the logger
+   * this method hands it; `lakeViewComplete: false` is the machine-readable half. This pins that
+   * the logger is actually threaded, because without it both halves of that contract are invisible
+   * from the main chat path and a failed grant read is indistinguishable from "reaches no lakes".
+   */
+  it('surfaces a failed grant read through the logger, not just as a narrowed view', async () => {
+    const findById = vi.fn().mockResolvedValue(MANAGED_LAKE);
+    const ctx = makeCtx(findById);
+    (ctx.db.dataLakeAccessGrants.listByPrincipal as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('grants down')
+    );
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named'
+    );
+
+    const access = await (
+      feature as unknown as {
+        resolveDataLakeAccess: () => Promise<{ lakeViewComplete?: boolean }>;
+      }
+    ).resolveDataLakeAccess();
+
+    expect(access.lakeViewComplete).toBe(false);
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('access-grant lookup failed'),
+      expect.any(Error)
+    );
+  });
+
+  const MANAGED_LAKE = {
+    id: 'managed',
+    name: 'Managed Lake',
+    slug: 'managed-lake',
+    datalakeTag: 'datalake:managed',
+    fileTagPrefix: 'managed:',
+    status: 'active',
+    createdByUserId: 'other-user',
+  };
+
+  // The knowledge tools' resolveSessionLakeAccess and this feature's forced-retrieval door are
+  // two separate call sites into the same union (unionPreauthorizedLakeAccess) - this pins that
+  // the forced-retrieval door actually wires its ctor arg through, not just the tool door.
+  it('unions a pre-authorized lake the ordinary resolver could not reach', async () => {
+    const findById = vi.fn().mockResolvedValue(MANAGED_LAKE);
+    const ctx = makeCtx(findById);
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named',
+      undefined,
+      ['managed']
+    );
+
+    const access = await (
+      feature as unknown as { resolveDataLakeAccess: () => Promise<{ lakes: Array<{ id: string }> }> }
+    ).resolveDataLakeAccess();
+
+    expect(findById).toHaveBeenCalledWith('managed');
+    expect(access.lakes.map(l => l.id)).toEqual(['managed']);
+  });
+
+  // Same session record as above, only the grant's principal differs: the forced-retrieval door
+  // re-derives the manage gate per turn rather than trusting what the session was admitted with.
+  it('drops a pre-authorized lake once the caller no longer manages it', async () => {
+    const findById = vi.fn().mockResolvedValue(MANAGED_LAKE);
+    const ctx = makeCtx(findById, 'someone-else');
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named',
+      undefined,
+      ['managed']
+    );
+
+    const access = await (
+      feature as unknown as {
+        resolveDataLakeAccess: () => Promise<{ lakes: Array<{ id: string }>; dataLakeTags: string[] }>;
+      }
+    ).resolveDataLakeAccess();
+
+    expect(access.lakes).toEqual([]);
+    expect(access.dataLakeTags).not.toContain('datalake:managed');
+  });
+
+  it('does not touch findById when no lakes are pre-authorized', async () => {
+    const findById = vi.fn();
+    const ctx = makeCtx(findById);
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+
+    await (feature as unknown as { resolveDataLakeAccess: () => Promise<unknown> }).resolveDataLakeAccess();
+
+    expect(findById).not.toHaveBeenCalled();
   });
 });
 
@@ -1308,6 +1444,183 @@ describe('KnowledgeRetrievalFeature same-width model mismatch', () => {
 });
 
 /**
+ * Forced retrieval's own supersession collapse. This path does its own candidate scan rather than
+ * routing through semanticDataLakeSearch, so the collapse (and its ORDER relative to the two
+ * partitions before it) has to be asserted here separately.
+ */
+describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => {
+  const OWNER = 'u1';
+  const LAKE = {
+    id: 'lakeX',
+    slug: 'x',
+    name: 'Lake X',
+    fileTagPrefix: 'x:',
+    datalakeTag: 'datalake:x',
+    createdByUserId: OWNER,
+    status: 'active',
+  };
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+  };
+
+  const gen = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    fileName: 'Protocol.pdf',
+    tags: [{ name: 'datalake:x' }],
+    vectorized: true,
+    embeddingModel: 'text-embedding-ada-002',
+    chunkCount: 1,
+    vectorizedChunkCount: 1,
+    ...over,
+  });
+
+  const makeCtx = (files: Array<Record<string, unknown>>, collapseEnabled: boolean) => {
+    const chunksByFile = Object.fromEntries(
+      files.map(f => [f.id, [{ id: `ch-${f.id}`, fabFileId: f.id, text: `content of ${f.id}`, vector: [1, 0] }]])
+    );
+    return {
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+      user: { id: OWNER, tags: [], groups: [] },
+      db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore: false, total: files.length }) },
+        fabfilechunks: {
+          findByFabFileId: vi.fn(),
+          findVectorsByFabFileIds: vi.fn((ids: string[]) => Promise.resolve(ids.flatMap(id => chunksByFile[id] ?? []))),
+        },
+        dataLakes: {
+          findActiveByUserTags: vi.fn(),
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([LAKE]),
+        },
+        adminSettings: {
+          getSettingsValue: vi.fn((key: string) =>
+            Promise.resolve(key === 'EnableRetrievalSupersessionCollapse' ? collapseEnabled : undefined)
+          ),
+        },
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+  };
+
+  const run = async (ctx: ReturnType<typeof makeCtx>, quest = makeQuest()) => {
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const messages = await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    return { content: messages.map(m => (typeof m.content === 'string' ? m.content : '')).join('\n'), quest };
+  };
+
+  const twoGenerations = [
+    gen('old', { createdAt: new Date('2024-01-01') }),
+    gen('new', { createdAt: new Date('2025-01-01') }),
+  ];
+
+  it("grounds on the newest generation only and never loads the older one's chunks", async () => {
+    const ctx = makeCtx(twoGenerations, true);
+    const { content } = await run(ctx);
+    const scanned = (ctx.db.fabfilechunks.findVectorsByFabFileIds as ReturnType<typeof vi.fn>).mock.calls.flatMap(
+      c => c[0] as string[]
+    );
+    expect(scanned).toEqual(['new']);
+    expect(content).toContain('content of new');
+    expect(content).not.toContain('content of old');
+  });
+
+  /**
+   * Prefix-only members of a dynamic lake, which meta-tag attribution alone could never group. This
+   * path builds its own candidate shape rather than reusing `RankableFile`, so it needs its own
+   * proof that the file's `userId` - what the creator-anchored prefix arm is conjoined with -
+   * actually reaches `partitionBySupersession` here.
+   */
+  it('collapses prefix-only generations the lake creator owns', async () => {
+    const prefixOnly = [
+      gen('old', { tags: [{ name: 'x:hr' }], userId: OWNER, createdAt: new Date('2024-01-01') }),
+      gen('new', { tags: [{ name: 'x:hr' }], userId: OWNER, createdAt: new Date('2025-01-01') }),
+    ];
+    const ctx = makeCtx(prefixOnly, true);
+    const { content } = await run(ctx);
+    expect(content).toContain('content of new');
+    expect(content).not.toContain('content of old');
+  });
+
+  // The ownership conjunct is the whole reason a user-chosen prefix is reversible at all, so the
+  // refusal gets asserted at this site too rather than only in the unit suite.
+  it('does not collapse prefix-only files the lake creator does not own', async () => {
+    const notOwned = [
+      gen('old', { tags: [{ name: 'x:hr' }], userId: 'someone-else', createdAt: new Date('2024-01-01') }),
+      gen('new', { tags: [{ name: 'x:hr' }], userId: 'someone-else', createdAt: new Date('2025-01-01') }),
+    ];
+    const { content } = await run(makeCtx(notOwned, true));
+    expect(content).toContain('content of old');
+    expect(content).toContain('content of new');
+  });
+
+  it('reports the collapse in the coverage warning with ids and the matching tier', async () => {
+    const { quest } = await run(makeCtx(twoGenerations, true));
+    const reasons =
+      (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons ?? [];
+    const line = reasons.find(r => r.includes('older document version'));
+    expect(line).toBeDefined();
+    expect(line).toContain('old');
+    expect(line).toContain('new');
+    expect(line).toContain('fileName');
+  });
+
+  it('flag off (the shipped default): both generations still ground the turn', async () => {
+    const ctx = makeCtx(twoGenerations, false);
+    const { content, quest } = await run(ctx);
+    const scanned = (ctx.db.fabfilechunks.findVectorsByFabFileIds as ReturnType<typeof vi.fn>).mock.calls.flatMap(
+      c => c[0] as string[]
+    );
+    expect(scanned.sort()).toEqual(['new', 'old']);
+    expect(content).toContain('content of old');
+    expect(quest.promptMeta?.retrievalCoverage).toBeUndefined();
+  });
+
+  it('collapses AFTER the availability partition: a withheld newest generation cannot suppress the older one', async () => {
+    // The newest generation has chunks but none vectorized - withheld as mid-(re)index upstream.
+    const ctx = makeCtx(
+      [
+        gen('old', { createdAt: new Date('2024-01-01') }),
+        gen('new', { createdAt: new Date('2025-01-01'), vectorizedChunkCount: 0 }),
+      ],
+      true
+    );
+    const { content, quest } = await run(ctx);
+    expect(content).toContain('content of old');
+    const reasons =
+      (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons ?? [];
+    expect(reasons.some(r => r.includes('re-indexed right now'))).toBe(true);
+    expect(reasons.some(r => r.includes('older document version'))).toBe(false);
+  });
+
+  it('collapses AFTER the embedding-model partition: a foreign-model newest generation cannot suppress the older one', async () => {
+    // Two same-model files carry the majority vote, so the third (foreign-model) file is excluded
+    // before the collapse and must not win the Protocol.pdf key.
+    const ctx = makeCtx(
+      [
+        gen('old', { createdAt: new Date('2024-01-01') }),
+        gen('unrelated', { fileName: 'Other.pdf' }),
+        gen('new', { createdAt: new Date('2025-01-01'), embeddingModel: 'voyage-3' }),
+      ],
+      true
+    );
+    const { content, quest } = await run(ctx);
+    expect(content).toContain('content of old');
+    const reasons =
+      (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons ?? [];
+    expect(reasons.some(r => r.includes('embedded with a different model'))).toBe(true);
+    expect(reasons.some(r => r.includes('older document version'))).toBe(false);
+  });
+});
+
+/**
  * Retrieval-scoped lake-prompt injection on the FORCED path (#1108). A lake's operating
  * instructions ride a turn ONLY when that turn actually grounds on the lake's files - identified by
  * the `datalake:` provenance tags on the injected source files. The always-on DataLakePromptFeature
@@ -1339,7 +1652,10 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
   const makeCtx = (
     files: Array<{ id: string; fileName: string; tags: Array<{ name: string }> }>,
     lakes?: Array<Record<string, unknown>>,
-    opts: { dataLakesThrows?: boolean } = {}
+    opts: {
+      dataLakesThrows?: boolean;
+      activeGrants?: Array<{ dataLakeId: string; principalType: string; principalId: string; role: string }>;
+    } = {}
   ) => {
     const chunksByFile = Object.fromEntries(
       files.map(f => [f.id, [{ id: `ch-${f.id}`, fabFileId: f.id, text: `content of ${f.fileName}`, vector: [1, 0] }]])
@@ -1358,7 +1674,28 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
           findVectorsByFabFileIds: vi.fn((ids: string[]) => Promise.resolve(ids.flatMap(id => chunksByFile[id] ?? []))),
         },
         ...(lakes !== undefined || opts.dataLakesThrows
-          ? { dataLakes: { findActiveByUserTags: vi.fn(), findActiveByUserTagsAndEntitlements: findLakes } }
+          ? {
+              dataLakes: {
+                findActiveByUserTags: vi.fn(),
+                findActiveByUserTagsAndEntitlements: findLakes,
+                // getAccessibleDataLakePrompts' pre-authorized branch is guarded on findById, so an
+                // adapter without it skips the manage re-check and admits nothing at all.
+                findById: vi.fn((id: string) => Promise.resolve((lakes ?? []).find(l => String(l.id) === id) ?? null)),
+              },
+            }
+          : {}),
+        // Wiring the grant reader is what lets the re-check trust a rung other than the creator's -
+        // see filterStillManagedLakes, which blanks the creator when this is absent. `listByPrincipal`
+        // resolves EMPTY so these tests keep isolating the pre-authorization arm: the injection
+        // resolver reads it for its own owner/curator grant arm, which would otherwise admit the
+        // same lake for a different reason than the one under test.
+        ...(opts.activeGrants
+          ? {
+              dataLakeAccessGrants: {
+                listActiveByLakes: vi.fn().mockResolvedValue(opts.activeGrants),
+                listByPrincipal: vi.fn().mockResolvedValue([]),
+              },
+            }
           : {}),
       },
       resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
@@ -1445,6 +1782,127 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
     expect(contents[0]).toContain('[Data Lake - Lake X]\nPrefer the 2026 revision.');
     expect(contents[0]).toContain('[Data Lake - Lake Y]\nY rules.');
     expect(contents[0].match(/\[Data Lake Instructions\]/g)).toHaveLength(1);
+  });
+
+  it('records the injected lake id in promptMeta.retrieval when injection fired', async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([lakeFile('fA', 'datalake:x')], [makeLake()]) as unknown as ConstructorParameters<
+        typeof KnowledgeRetrievalFeature
+      >[0]
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual(['lakeX']);
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptCount).toBe(1);
+  });
+
+  it('leaves promptMeta.retrieval unset when no lake-tagged file was grounded on (site never ran)', async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([{ id: 'plain', fileName: 'plain.pdf', tags: [] }], [makeLake()]) as unknown as ConstructorParameters<
+        typeof KnowledgeRetrievalFeature
+      >[0]
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    // No datalake-tagged file was grounded on, so resolveRetrievedLakePromptMessage's own write
+    // never runs (contrast prependRetrievedLakePrompts, whose site runs even when its scoped tags
+    // resolve to no qualifying prompt) - only the coarser outcome-tracking write elsewhere in this
+    // feature touches promptMeta.retrieval here.
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toBeUndefined();
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptCount).toBeUndefined();
+  });
+
+  // The field measures MEMBERSHIP in the admitted set, not causation: a lake the caller could
+  // already reach is listed too. This case is the sharpest form of that - no grant reader is wired,
+  // so the per-turn re-check blanks the creator rung and admits NOTHING, yet the id is still
+  // recorded because the creator arm injected the prompt on its own. A reader who treats a non-empty
+  // value as proof the admission did work would be wrong here.
+  it('records preauthorizedLakeIdsUsed for an admitted lake the caller could already reach anyway', async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([lakeFile('fA', 'datalake:x')], [makeLake()]) as unknown as ConstructorParameters<
+        typeof KnowledgeRetrievalFeature
+      >[0],
+      undefined,
+      'named',
+      undefined,
+      ['lakeX']
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    expect(quest.promptMeta?.retrieval?.preauthorizedLakeIdsUsed).toEqual(['lakeX']);
+  });
+
+  // The causation case the one above cannot show: the caller neither created the lake nor belongs
+  // to its org, so isTrustedForInjection is false and the ordinary arm injects nothing. Only the
+  // admission - re-derived here through a live curator grant - puts the prompt on the turn.
+  it('records preauthorizedLakeIdsUsed when ONLY the admission could have injected the prompt', async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([lakeFile('fA', 'datalake:x')], [makeLake({ createdByUserId: 'someone-else' })], {
+        activeGrants: [{ dataLakeId: 'lakeX', principalType: 'user', principalId: OWNER, role: 'curator' }],
+      }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named',
+      undefined,
+      ['lakeX']
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    expect(quest.promptMeta?.retrieval?.preauthorizedLakeIdsUsed).toEqual(['lakeX']);
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual(['lakeX']);
+  });
+
+  // Same untrusted lake, same admission, but the curator grant is gone: the re-check refuses, the
+  // ordinary trust arm was never available, and nothing is injected. This is what pins the previous
+  // test to the admission rather than to some other arm firing incidentally.
+  it('injects nothing when the admitted lake is untrusted and the manage grant is gone', async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([lakeFile('fA', 'datalake:x')], [makeLake({ createdByUserId: 'someone-else' })], {
+        activeGrants: [],
+      }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named',
+      undefined,
+      ['lakeX']
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    expect(quest.promptMeta?.retrieval?.preauthorizedLakeIdsUsed).toBeUndefined();
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual([]);
+  });
+
+  it('leaves preauthorizedLakeIdsUsed absent when the injected lake was not pre-authorized', async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([lakeFile('fA', 'datalake:x')], [makeLake()]) as unknown as ConstructorParameters<
+        typeof KnowledgeRetrievalFeature
+      >[0]
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    expect(quest.promptMeta?.retrieval?.preauthorizedLakeIdsUsed).toBeUndefined();
   });
 });
 
@@ -1692,6 +2150,268 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
       ([key]) => key === 'forcedRetrievalCharBudget'
     );
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+  };
+
+  /**
+   * A unit vector whose cosine against the query [1, 0] IS `score`, so each fixture states the
+   * score it wants directly instead of leaving it to be derived from coordinates.
+   */
+  const vectorScoring = (score: number) => [score, Math.sqrt(1 - score * score)];
+
+  /** Unique per chunk and long enough to be visible, short enough that the char budget never binds. */
+  const passageText = (index: number) => `PASSAGE_${index}_ ${'detail '.repeat(10)}`;
+
+  const makeCtx = (opts: {
+    scores: number[];
+    platform?: Record<string, string>;
+    orgOverride?: string;
+    /** Omit the scoped overlay to exercise the platform-only read path instead. */
+    withScopedOverlay?: boolean;
+  }) => {
+    const platform = opts.platform ?? {};
+    const rows = opts.scores.map((score, index) => ({
+      id: `ch${index}`,
+      fabFileId: 'fileA',
+      text: passageText(index),
+      vector: vectorScoring(score),
+    }));
+    return {
+      // `debug` is part of the Logger contract and the scoped resolver uses it - a mock without it
+      // makes the resolver throw into its own never-throw guard and silently serve coded defaults,
+      // which looks exactly like a floor that ignores its configuration.
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
+      user: { id: 'u1', organizationId: 'org1', tags: [], groups: [] },
+      db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        fabfiles: {
+          search: vi
+            .fn()
+            .mockResolvedValue({ data: [{ id: 'fileA', fileName: 'Floors.pdf', tags: [] }], hasMore: false, total: 1 }),
+        },
+        fabfilechunks: { findByFabFileId: vi.fn(), findVectorsByFabFileIds: vi.fn(() => Promise.resolve(rows)) },
+        adminSettings: {
+          // Serves the platform-only read path (and the char budget, which is absent from every
+          // fixture here and so stays at its default).
+          getSettingsValue: vi.fn(async (key: string) => platform[key]),
+          findBySettingNames: vi.fn(async (names: string[]) =>
+            names
+              .filter(name => platform[name] != null)
+              .map(name => ({ settingName: name, settingValue: platform[name] }))
+          ),
+          findAll: vi.fn(async () =>
+            Object.entries(platform).map(([settingName, settingValue]) => ({ settingName, settingValue }))
+          ),
+        },
+        ...(opts.withScopedOverlay === false ? {} : { scopedSettings: makeScopedSettings(opts.orgOverride) }),
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+  };
+
+  const makeScopedSettings = (orgOverride?: string) => ({
+    findOverrides: vi.fn(async () =>
+      orgOverride == null
+        ? []
+        : [
+            {
+              scopeLevel: SettingScopeLevel.Organization,
+              scopeId: 'org1',
+              settingName: 'forcedRetrievalRelativeFloorPct',
+              settingValue: orgOverride,
+            },
+          ]
+    ),
+  });
+
+  /** Which fixture passages actually reached the model, by index. */
+  const injectedIndices = (content: string) => {
+    const found: number[] = [];
+    for (let i = 0; i < 12; i++) if (content.includes(`PASSAGE_${i}_`)) found.push(i);
+    return found;
+  };
+
+  const run = async (ctx: ReturnType<typeof makeCtx>) => {
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const quest = makeQuest();
+    const messages = await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'stage III NSCLC treatment'
+    );
+    const content = messages.map(m => m.content).join('\n');
+    return { quest, content, injected: injectedIndices(content) };
+  };
+
+  beforeEach(() => {
+    // Both resolvers memoize per scope; without this a value set by one test leaks into the next.
+    invalidateSettingsCache();
+    invalidateScopedSettingsCache();
+  });
+
+  it('rejects candidates that clear the absolute floor but fall outside the top score band', async () => {
+    // THE point of the issue. All four scores clear the 0.75 absolute floor, so the old code
+    // injected all four and the floor made no ranking decision at all. The relative floor cuts at
+    // 85% of 1.0, so the 0.80 and 0.76 tail is dropped while the head is kept.
+    const { injected } = await run(makeCtx({ scores: [1.0, 0.9, 0.8, 0.76] }));
+    expect(injected).toEqual([0, 1]);
+  });
+
+  it('changes nothing at its shipped default on the band this issue was measured against', async () => {
+    // The safety claim the whole default rests on, pinned end to end rather than as arithmetic in
+    // settings.test.ts. Over 166 injected chunks on a production lake the scores spanned 0.8025 to
+    // 0.9140 and the absolute floor rejected NOTHING, so a behavior-preserving default has to admit
+    // that entire band untouched: 85% of 0.9140 is 0.7769, which 0.8025 clears.
+    //
+    // This is the test that fails if someone tunes the default upward without meaning to - the exact
+    // change that would silently cut production recall on the corpus the issue was filed about.
+    const { injected } = await run(makeCtx({ scores: [0.914, 0.85, 0.8025] }));
+    expect(injected).toEqual([0, 1, 2]);
+  });
+
+  it('a relative floor of 0 disables ranking, leaving the absolute floor as the only gate', async () => {
+    // The pre-#2497 behavior, still expressible - this is what makes the change reversible by
+    // configuration rather than by deploy.
+    const { injected } = await run(
+      makeCtx({ scores: [1.0, 0.9, 0.8, 0.76], platform: { forcedRetrievalRelativeFloorPct: '0' } })
+    );
+    expect(injected).toEqual([0, 1, 2, 3]);
+  });
+
+  it('grades a corpus whose whole band sits below the absolute default, instead of taking none of it', async () => {
+    // The failure the absolute floor cannot express: a corpus scoring 0.30-0.50 is uniformly
+    // rejected by a 0.75 line no matter how well-ranked it is internally. Lowering the absolute
+    // floor to a sanity value and letting the relative rule govern keeps the ranking.
+    const lowBand = [0.5, 0.45, 0.3];
+    const collapsed = await run(makeCtx({ scores: lowBand }));
+    expect(collapsed.injected).toEqual([]);
+
+    // The settings cache is process-wide, so the first run above primed it with an EMPTY platform
+    // map. Without clearing it here the second run silently resolves the coded defaults instead of
+    // its own fixture - which reads as "the relative floor did nothing", the exact false negative
+    // this test exists to rule out. beforeEach only covers the gap BETWEEN tests, not within one.
+    invalidateSettingsCache();
+    invalidateScopedSettingsCache();
+
+    const graded = await run(
+      makeCtx({
+        scores: lowBand,
+        platform: { forcedRetrievalMinSimilarityPct: '20', forcedRetrievalRelativeFloorPct: '85' },
+      })
+    );
+    // 85% of the 0.5 top score is 0.425, so the 0.45 near-miss is kept and the 0.30 tail is not.
+    expect(graded.injected).toEqual([0, 1]);
+  });
+
+  it('never starves a turn: the best candidate always clears its own cutoff', async () => {
+    // The invariant that lets the relative floor be applied without adding a new empty-handed exit.
+    // At 100% only the top score itself survives, but something always does.
+    const { injected } = await run(
+      makeCtx({ scores: [0.9, 0.88, 0.8], platform: { forcedRetrievalRelativeFloorPct: '100' } })
+    );
+    expect(injected).toEqual([0]);
+  });
+
+  it('honors an organization override, so the floor is tunable without a deploy', async () => {
+    // Proves the scoped read path is wired, not just the schema metadata: the platform row says 85
+    // and the org row says 95, and the narrower rung is what the turn resolves to.
+    const { injected } = await run(
+      makeCtx({ scores: [1.0, 0.9, 0.8], platform: { forcedRetrievalRelativeFloorPct: '85' }, orgOverride: '95' })
+    );
+    expect(injected).toEqual([0]);
+  });
+
+  it('records the post-floor volume in promptMeta so the change is measurable', async () => {
+    // The issue's sequencing requirement: without this the floor cannot be shown to have done
+    // anything, because a turn that injected two passages and one that injected four were
+    // byte-identical in promptMeta.
+    const { quest } = await run(makeCtx({ scores: [1.0, 0.9, 0.8, 0.76] }));
+    expect(quest.promptMeta?.retrieval?.injected?.chunks).toBe(2);
+    expect(quest.promptMeta?.retrieval?.injected?.topScore).toBeCloseTo(1.0, 5);
+  });
+
+  it('records the pre/post floor candidate counts so the floor own effect is measurable', async () => {
+    // All four scores clear the 0.75 absolute floor and enter the ranked pool; the relative floor
+    // at its shipped default (85% of top score) keeps two. Without these, the turn is byte-
+    // identical in promptMeta to a corpus that only ever HAD two candidates - the ambiguity this
+    // pair exists to remove. Asserted as a pair, and alongside `chunks`, because the whole point
+    // is that `pre - post` is the floor alone while `pre - chunks` also carries the char budget:
+    // here the budget does not bind, so post === chunks and the two happen to agree.
+    const { quest } = await run(makeCtx({ scores: [1.0, 0.9, 0.8, 0.76] }));
+    expect(quest.promptMeta?.retrieval?.injected?.preRelativeFloorCandidates).toBe(4);
+    expect(quest.promptMeta?.retrieval?.injected?.postRelativeFloorCandidates).toBe(2);
+    expect(quest.promptMeta?.retrieval?.injected?.chunks).toBe(2);
+  });
+
+  it('treats an out-of-range floor percent as unusable and keeps the shipped default', async () => {
+    // Defense-in-depth, NOT a production-reachable path - the same standing as positiveIntOr's own
+    // branches in the #1831 suite above. Both read paths run the setting's schema (`max: 100`)
+    // before this code sees a value, so a stored 2000 is sanitized upstream; this mock injects the
+    // raw shape directly to pin the guard's OWN contract, which is what protects the call if that
+    // sanitization is ever bypassed (a new read path, a relaxed bound).
+    //
+    // Worth guarding because the failure is silent and total: both floors are divided by 100 and
+    // compared against a cosine, so 2000 becomes a floor of 20.0 that no similarity can ever clear,
+    // starving every Data-Lake turn. Falling back to the known-good default preserves behavior;
+    // clamping to 100 would admit only a perfect match - the same starvation by another route.
+    //
+    // withScopedOverlay: false to reach the direct getSettingsValue read, whose mock here returns
+    // the stored string unparsed. The scoped resolver would apply the schema and hand back the
+    // default, so the guard would never be exercised.
+    const ctx = makeCtx({
+      scores: [1.0, 0.9, 0.8, 0.76],
+      platform: { forcedRetrievalMinSimilarityPct: '2000' },
+      withScopedOverlay: false,
+    });
+    const { injected } = await run(ctx);
+    // Absolute floor back at its 75 default, so the relative floor still does the ranking.
+    expect(injected).toEqual([0, 1]);
+    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
+      expect.stringContaining('forcedRetrievalMinSimilarityPct')
+    );
+  });
+
+  it('applies platform values on a host with no scoped overlay wired', async () => {
+    // The overlay is optional on the db contract, so the floors must still be levers without it -
+    // there is simply no override to find. Without this the no-overlay branch is only ever
+    // exercised incidentally by other suites, where a silent fallback to coded defaults would look
+    // like a pass.
+    // 100 rather than 0 deliberately. A configured 0 yields the same injected set as a build with
+    // no relative floor at all, so it cannot tell "the platform row was read" from "the mechanism
+    // is gone" - and it would also match the coded default's set on some bands. 100 is distinct
+    // from both: the shipped 85 default would keep [0, 1] here, and no floor at all would keep all
+    // four.
+    const { injected } = await run(
+      makeCtx({
+        scores: [1.0, 0.9, 0.8, 0.76],
+        platform: { forcedRetrievalRelativeFloorPct: '100' },
+        withScopedOverlay: false,
+      })
+    );
+    expect(injected).toEqual([0]);
+  });
+
+  it('falls back to the shipped defaults, without throwing, when the settings read fails', async () => {
+    const ctx = makeCtx({ scores: [1.0, 0.9, 0.8, 0.76] });
+    ctx.db.adminSettings.findBySettingNames = vi.fn(async () => {
+      throw new Error('settings store unavailable');
+    });
+    ctx.db.adminSettings.findAll = vi.fn(async () => {
+      throw new Error('settings store unavailable');
+    });
+    const { injected } = await run(ctx);
+    // Degrades to FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT rather than to "no floor" or a throw.
+    expect(FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT).toBe(85);
+    expect(injected).toEqual([0, 1]);
   });
 });
 
@@ -2123,6 +2843,189 @@ describe('LakeMemoryFeature personal-corpus skip', () => {
 });
 
 /**
+ * The belief budget is the `lakeMemoryRecallK` admin setting, not the 8 this path used to hardcode
+ * (#2496). Resolution mirrors `resolveForcedRetrievalCharBudget` below, so these pin the same three
+ * properties: a configured value reaches the recall, anything unusable falls back LOUDLY, and a
+ * settings outage costs the turn its budget but never its card.
+ */
+describe('LakeMemoryFeature belief budget (lakeMemoryRecallK)', () => {
+  const LAKE_DOC = {
+    id: 'lake-acme',
+    slug: 'acme',
+    name: 'Acme',
+    datalakeTag: 'datalake:acme',
+    fileTagPrefix: 'acme:',
+    createdByUserId: 'creator-1',
+  };
+
+  const makeCtx = (opts: { getSettingsValue?: () => unknown; lakes?: Array<Record<string, unknown>> } = {}) => ({
+    logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+    user: { id: 'viewer-1', tags: [], groups: [] },
+    personalCorpusOnly: false,
+    db: {
+      organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      dataLakes: {
+        findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue(opts.lakes ?? [LAKE_DOC]),
+      },
+      adminSettings: {
+        getSettingsValue: vi.fn(async (key: string) =>
+          key === 'lakeMemoryRecallK' ? (opts.getSettingsValue ?? (() => undefined))() : undefined
+        ),
+      },
+    },
+    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+    sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    recallLakeMemory: vi.fn().mockResolvedValue([{ fact: 'Acme ships on Fridays', relevance: 0.9, sources: ['f1'] }]),
+  });
+
+  const run = async (ctx: ReturnType<typeof makeCtx>, quest = makeQuest()) => {
+    const feature = new LakeMemoryFeature(ctx as unknown as ConstructorParameters<typeof LakeMemoryFeature>[0], []);
+    const messages = await feature.getContextMessages(
+      quest,
+      undefined as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'when does acme ship'
+    );
+    return { messages, k: ctx.recallLakeMemory.mock.calls[0]?.[0]?.k as number | undefined };
+  };
+
+  const warnedAbout = (ctx: ReturnType<typeof makeCtx>) =>
+    (ctx.logger.warn as unknown as ReturnType<typeof vi.fn>).mock.calls.some(([first]) =>
+      String(first).includes('lakeMemoryRecallK')
+    );
+
+  it('forwards a configured value to the injected recall', async () => {
+    const ctx = makeCtx({ getSettingsValue: () => 40 });
+    const { k } = await run(ctx);
+    expect(k).toBe(40);
+    expect(warnedAbout(ctx)).toBe(false);
+  });
+
+  it('stamps the budget alongside beliefCount so a saturated turn is readable', async () => {
+    // beliefCount on its own cannot say whether the cap bound the turn. Recording the budget that
+    // was in force is what makes `beliefCount === beliefBudget` mean "saturated" on an eval row,
+    // rather than requiring someone to know what the setting was when the turn ran.
+    const ctx = makeCtx({ getSettingsValue: () => 40 });
+    const quest = makeQuest();
+    await run(ctx, quest);
+    expect(quest.promptMeta?.context?.lakeMemory).toEqual({
+      beliefCount: 1,
+      beliefBudget: 40,
+      dataLakeTags: ['datalake:acme'],
+    });
+  });
+
+  it('an unset setting falls back to LAKE_RECALL_K_DEFAULT, silently', async () => {
+    // Unset is the normal state of a fresh deployment, so it must not warn - only a set-but-
+    // unusable value or a failed read does.
+    const ctx = makeCtx({ getSettingsValue: () => undefined });
+    const { k } = await run(ctx);
+    expect(k).toBe(LAKE_RECALL_K_DEFAULT);
+    expect(warnedAbout(ctx)).toBe(false);
+  });
+
+  /**
+   * Defense-in-depth, not a production-reachable path: the real `getSettingsValue` runs the
+   * setting's own schema via `safeParse` first, so an unusable stored shape cannot reach
+   * `positiveIntOr`. This injects the raw shape directly to pin `positiveIntOr`'s OWN contract,
+   * which is what protects the call if that upstream sanitization is ever bypassed.
+   */
+  it('an unusable raw value falls back to the default and warns', async () => {
+    const ctx = makeCtx({ getSettingsValue: () => 'not-a-number' });
+    const { k } = await run(ctx);
+    expect(k).toBe(LAKE_RECALL_K_DEFAULT);
+    expect(warnedAbout(ctx)).toBe(true);
+  });
+
+  it('a settings-read failure costs the turn its budget but not its card', async () => {
+    const ctx = makeCtx({
+      getSettingsValue: () => {
+        throw new Error('settings store unavailable');
+      },
+    });
+    const { messages, k } = await run(ctx);
+    expect(k).toBe(LAKE_RECALL_K_DEFAULT);
+    expect(warnedAbout(ctx)).toBe(true);
+    // The whole point of the inner catch: a settings outage must not route into
+    // getContextMessages' outer catch, which would drop the hot card entirely.
+    expect(messages).toHaveLength(1);
+  });
+
+  it('reads the setting only once, and only after the no-lakes exit', async () => {
+    const grounded = makeCtx({ getSettingsValue: () => 40 });
+    await run(grounded);
+    const reads = (key: string, ctx: ReturnType<typeof makeCtx>) =>
+      (ctx.db.adminSettings.getSettingsValue as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([k]) => k === key
+      );
+    expect(reads('lakeMemoryRecallK', grounded)).toHaveLength(1);
+
+    // A turn with nothing in scope returns before the recall, so it must not spend a settings read
+    // on a budget it will never use.
+    const noLakes = makeCtx({ getSettingsValue: () => 40, lakes: [] });
+    await run(noLakes);
+    expect(reads('lakeMemoryRecallK', noLakes)).toHaveLength(0);
+    expect(noLakes.recallLakeMemory).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Dating the injected facts (#1501 item 4). The write path keeps two documents' disagreeing
+   * claims rather than letting the later one destroy the earlier, so the card owes the model each
+   * claim's document date - and must pair each date with the fact it actually came from.
+   */
+  describe('document dates', () => {
+    const withBeliefs = (
+      beliefs: Array<{ fact: string; relevance: number; sources: string[]; sourceDate?: string }>
+    ) => {
+      const ctx = makeCtx();
+      ctx.recallLakeMemory = vi.fn().mockResolvedValue(beliefs);
+      return ctx;
+    };
+
+    it('renders each belief with the date of the document it came from', async () => {
+      const ctx = withBeliefs([
+        { fact: 'Uptime is 99.9%', relevance: 0.9, sources: ['f1'], sourceDate: '2026-03-14' },
+        { fact: 'Uptime is 99.5%', relevance: 0.8, sources: ['f2'], sourceDate: '2025-01-02' },
+      ]);
+      const { messages } = await run(ctx);
+      expect(messages[0].content).toContain('- Uptime is 99.9% (document dated 2026-03-14)');
+      expect(messages[0].content).toContain('- Uptime is 99.5% (document dated 2025-01-02)');
+      expect(messages[0].content).toMatch(/disagree/i);
+    });
+
+    it('does not shift a date onto the wrong fact when an earlier one sanitizes away', async () => {
+      // The trap the per-belief sanitize exists for: sanitizing the texts en masse DROPS the empty
+      // one, which shifts every later index and silently re-pairs each surviving fact with the
+      // previous belief's date - wrong on exactly the turn this feature exists for.
+      const ctx = withBeliefs([
+        { fact: '   ', relevance: 0.9, sources: ['f0'], sourceDate: '1999-01-01' },
+        { fact: 'Uptime is 99.9%', relevance: 0.8, sources: ['f1'], sourceDate: '2026-03-14' },
+      ]);
+      const { messages } = await run(ctx);
+      expect(messages[0].content).toContain('- Uptime is 99.9% (document dated 2026-03-14)');
+      expect(messages[0].content).not.toContain('1999-01-01');
+      expect((String(messages[0].content).match(/^- /gm) ?? []).length).toBe(1);
+    });
+
+    it('says a date is unknown rather than omitting it', async () => {
+      // Silence would let the model read the undated claim as the older or the newer one.
+      const ctx = withBeliefs([
+        { fact: 'Uptime is 99.9%', relevance: 0.9, sources: ['f1'], sourceDate: '2026-03-14' },
+        { fact: 'Uptime is 99.5%', relevance: 0.8, sources: ['f2'] },
+      ]);
+      const { messages } = await run(ctx);
+      expect(messages[0].content).toContain('- Uptime is 99.5% (document dated unknown)');
+    });
+
+    it('renders exactly as before when the recall supplies no dates at all', async () => {
+      const ctx = withBeliefs([{ fact: 'Acme ships on Fridays', relevance: 0.9, sources: ['f1'] }]);
+      const { messages } = await run(ctx);
+      expect(messages[0].content).not.toMatch(/dated/i);
+      expect(messages[0].content).not.toMatch(/disagree/i);
+    });
+  });
+});
+
+/**
  * Per-turn retrieval summary for the FORCED-retrieval surface. LakeMemoryFeature records its own
  * summary already; this locks the far higher-traffic reader, whose abstain exits used to write
  * nothing at all - a forced-retrieval session with lake memory off carried zero retrieval
@@ -2225,6 +3128,13 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
           forcedSkipReason?: string;
           surfaces: string[];
           dataLakeTags: string[];
+          injected?: {
+            chunks: number;
+            chars: number;
+            topScore?: number;
+            preRelativeFloorCandidates?: number;
+            postRelativeFloorCandidates?: number;
+          };
         };
       }
     )?.retrieval;
@@ -2271,6 +3181,17 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     // on this topic" (so it must outrank 'ok' in the merge severity order), and it collapsing back
     // into 'failed' (the two have opposite remedies - re-vectorize vs retry).
     expect(retrieval?.outcome).toBe('not_indexed');
+    // A recorded zero, not an unknown: the scan ran to completion, so nothing was injected and
+    // that is a fact. `topScore` must be ABSENT - it is still the -1 sentinel here, and persisting
+    // it would read as a real (terrible) similarity rather than as no comparison at all.
+    // Both candidate counts are 0 too - nothing was ever scored, so nothing entered the pool, and
+    // a relative floor over an empty pool leaves it empty.
+    expect(retrieval?.injected).toEqual({
+      chunks: 0,
+      chars: 0,
+      preRelativeFloorCandidates: 0,
+      postRelativeFloorCandidates: 0,
+    });
   });
 
   it('records ok when the library was scanned and nothing cleared the similarity floor', async () => {
@@ -2281,6 +3202,19 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     const { retrieval, messages } = await run(ctx);
     expect(retrieval?.outcome).toBe('ok');
     expect(retrieval?.attempted).toBe(true);
+    // THE case this field exists for: 'ok' alone made a fully-starved turn byte-identical to one
+    // that injected its whole budget. `topScore: 0` is the diagnostic - the best candidate was
+    // compared and scored 0, i.e. it missed the floor rather than never being looked at.
+    // Both counts 0 - the score missed the ABSOLUTE floor, so it never reached the ranked pool at
+    // all and the relative floor never got a candidate to trim. This is the exit whose comment
+    // used to claim it was the trimmed-pool case; a zero pre-count is what proves it is not.
+    expect(retrieval?.injected).toEqual({
+      chunks: 0,
+      chars: 0,
+      topScore: 0,
+      preRelativeFloorCandidates: 0,
+      postRelativeFloorCandidates: 0,
+    });
     // Still abstains to the user; 'ok' describes the retrieval, not the answer.
     expect(messages[0]?.content).toContain('does not cover this');
   });
@@ -2293,6 +3227,18 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     // lakes the answer ended up grounded on - that narrower attribution is the LakeAccessEvent's
     // job (it derives from sourceFileIds and deliberately refuses a full-scope fallback).
     expect(retrieval?.dataLakeTags).toContain('datalake:x');
+    // The other half of the pair: a grounded turn reports the volume it grounded on. `chars` is
+    // the chunk text only ('text fileA'), never the heading, so it is comparable to the knowledge
+    // tools' number. Query and chunk vectors are identical here, hence a topScore of 1.
+    // Both counts 1 - the single candidate cleared both floors, so nothing was trimmed and the
+    // pre-count, post-count and `chunks` all agree.
+    expect(retrieval?.injected).toEqual({
+      chunks: 1,
+      chars: 'text fileA'.length,
+      topScore: 1,
+      preRelativeFloorCandidates: 1,
+      postRelativeFloorCandidates: 1,
+    });
     expect(messages[0]?.content).toContain('### A.pdf (ID: fileA)');
   });
 
@@ -2300,6 +3246,9 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     const { retrieval } = await run(makeCtx({ searchThrows: true }));
     expect(retrieval?.outcome).toBe('failed');
     expect(retrieval?.attempted).toBe(true);
+    // Volume stays ABSENT on a failure: the scan broke mid-flight, so zero would be a lie.
+    // Absent means unknown, and that distinction is the whole presence contract.
+    expect(retrieval?.injected).toBeUndefined();
   });
 
   it('leaves no record when there is no question to retrieve for', async () => {
@@ -2332,6 +3281,8 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
         embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
         'summarize the attached figure'
       );
+      // No `injected` either: a turn that never searched has an unknown volume, not a zero one,
+      // which is what keeps "never asked" distinct from "asked and got nothing".
       expect(retrievalOf(withFiles)).toEqual({
         attempted: false,
         mode: 'forced',
@@ -2461,5 +3412,126 @@ describe('KnowledgeRetrievalFeature chunk-cursor stall coverage', () => {
     // its scan was incomplete rather than presenting a partial result as a complete one.
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('PARTIAL coverage'));
     expect((quest.promptMeta as { warnings?: string[] }).warnings?.join(' ')).toContain('stopped advancing');
+  });
+});
+
+/**
+ * Forced retrieval is the only always-on retrieval channel, so a corpus that disagrees with itself
+ * reaches the model here whether or not the model chose to search. The note is composed by
+ * retrievalConflictNote.ts (unit-tested there); this locks the WIRING and the column-0 placement.
+ */
+describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
+  const CONFLICT_NOTE = 'NOTE: the retrieved documents below may contradict each other';
+
+  const BEGIN = '[Untrusted Retrieved Content - BEGIN]';
+
+  const makeCtx = (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) => {
+    const files = [...new Set(chunks.map(c => c.fabFileId))].map(id => ({ id, fileName: `${id}.pdf`, tags: [] }));
+    return {
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+      user: { id: 'u1', tags: [], groups: [] },
+      db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore, total: files.length }) },
+        fabfilechunks: {
+          findByFabFileId: vi.fn(),
+          findVectorsByFabFileIds: vi.fn(() =>
+            Promise.resolve(
+              chunks.map((c, i) => ({ id: `ch${i}`, fabFileId: c.fabFileId, text: c.text, vector: [1, 0] }))
+            )
+          ),
+        },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+  };
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+  };
+
+  const run = async (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) => {
+    const ctx = makeCtx(chunks, hasMore);
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const messages = await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'uptime'
+    );
+    return messages[0]?.content ?? '';
+  };
+
+  it('keeps the note at column 0, outside the untrusted block', async () => {
+    const content = await run([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: 'Uptime is 95%.' },
+    ]);
+
+    const note = content.indexOf(CONFLICT_NOTE);
+    expect(note).toBeGreaterThanOrEqual(0);
+    expect(note).toBeLessThan(content.indexOf(BEGIN));
+    // Sliced to the note itself, and asserted as the whole clause: the ids also appear in the section
+    // headings, so a looser assertion would pass on a note naming the wrong field entirely.
+    const noteText = content.slice(note, content.indexOf('\n\n', note));
+    expect(noteText).toContain('metric-disagreement');
+    expect(noteText).toContain('across documents fileA, fileB.');
+    // The id the note names is the id the heading renders, so the model can resolve it.
+    expect(content).toContain('(ID: fileA)');
+  });
+
+  it('says nothing when the injected documents agree', async () => {
+    const content = await run([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: 'Uptime is 99.9%.' },
+    ]);
+
+    expect(content).not.toContain(CONFLICT_NOTE);
+  });
+
+  it('renders after the capability note, nearest the content it describes', async () => {
+    const content = await run([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: 'Uptime is 95%.' },
+    ]);
+
+    expect(content.indexOf('About this library:')).toBeLessThan(content.indexOf(CONFLICT_NOTE));
+    expect(content.indexOf(CONFLICT_NOTE)).toBeLessThan(content.indexOf(BEGIN));
+  });
+
+  // The other column-0 note, which only a partial scan emits: `hasMore` is what makes coverage
+  // partial, and the note ordering is unasserted without a fixture that has it.
+  it('renders after the coverage note as well', async () => {
+    const content = await run(
+      [
+        { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+        { fabFileId: 'fileB', text: 'Uptime is 95%.' },
+      ],
+      true
+    );
+
+    expect(content).toContain('Coverage note:');
+    expect(content.indexOf('Coverage note:')).toBeLessThan(content.indexOf(CONFLICT_NOTE));
+    expect(content.indexOf(CONFLICT_NOTE)).toBeLessThan(content.indexOf(BEGIN));
+  });
+
+  // The note must describe the SERVED text, and this is the channel where that bites: the char
+  // budget saturates on most turns here, so detection fed the pre-clip text would routinely assert a
+  // conflict whose evidence the model was never shown. Candidates tie on score and sort by
+  // fabFileId, so fileA is injected whole and fileB's figure is what the budget cuts.
+  it('says nothing about a conflicting figure the char budget clipped away', async () => {
+    const content = await run([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: `${'padding text. '.repeat(1000)} Uptime is 95%.` },
+    ]);
+
+    // Both halves matter: the first proves the padding actually reached the budget (without it the
+    // test passes on a fixture that was never clipped), the second that the surviving half is served.
+    expect(content).not.toContain('Uptime is 95%.');
+    expect(content).toContain('Uptime is 99.9%.');
+    expect(content).not.toContain(CONFLICT_NOTE);
   });
 });

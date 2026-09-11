@@ -141,6 +141,15 @@ export const dispatch = withContext(async (event, context, logger) => {
         const hasActiveImport = await importHistoryJobRepository.hasActiveImport(userId);
         if (hasActiveImport) {
           logger.info(`User ${userId} already has an active import, skipping`);
+          // Hosted relies on an S3 lifecycle rule to reap this abandoned upload; self-host has
+          // no equivalent for this bucket, so it must be deleted here or it sits in MinIO
+          // forever. A failed delete must not fail the webhook - the job never got created, so
+          // there is nothing to mark failed either.
+          try {
+            await s3.delete(key);
+          } catch (deleteErr) {
+            logger.error(`Failed to delete abandoned upload ${key}:`, deleteErr);
+          }
           await inboxRepository.createInboxMessage({
             type: InboxType.COMMON,
             title: 'Import Already in Progress',

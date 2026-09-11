@@ -14,14 +14,28 @@ export * from './assembleLakeAccessView';
 export * from './authorizeLakeWrite';
 // canManageLake + ManageActor are already surfaced via authorizeLakeWrite's re-export; export the
 // rest of the pure decision core (owner resolution) by name to avoid a duplicate-export clash.
-export { isEffectiveOwner, isLakeCreator, resolveEffectiveOwnerIds, type LakeGrant } from './manageRule';
+export {
+  canShredLakeMemory,
+  isEffectiveOwner,
+  isLakeCreator,
+  resolveEffectiveOwnerIds,
+  type LakeGrant,
+} from './manageRule';
 export * from './authorizeLakeManage';
+// The per-turn manage re-check. Exported so the admin key-mint route screens a lake binding
+// with the SAME rule the read path re-derives it with, instead of open-coding a second gate.
+export * from './filterStillManagedLakes';
 export * from './transferLakeOwnership';
+export * from './lakeGrantWriteRule';
+export * from './manageLakeGrant';
 export * from './lakeOwnershipCandidates';
 export * from './authorizeBatchAccess';
 export * from './fallbackLakeTags';
 export * from './lakeMembershipScope';
 export * from './computeLakeHealth';
+export * from './applyAdmissionDecision';
+export * from './detectAdmissionDuplicates';
+export * from './detectLakeInconsistencies';
 export * from './convergeLakePolicy';
 export * from './rebuildLakePassages';
 export * from './tagPrefixCollision';
@@ -41,6 +55,9 @@ export * from './prefixArmMembership';
 export * from './chunkPolicyConflict';
 export * from './admissionContract';
 export * from './lakeAdmissionGate';
+export * from './loadMembershipRepairPlan';
+export * from './recordMembershipDecision';
+export * from './executeLakeMembershipRepair';
 export * from './removeFileFromDataLake';
 export * from './addFileToDataLake';
 export * from './setDataLakeFileTags';
@@ -55,8 +72,10 @@ export * from './dismissTaxonomySuggestion';
 export * from './getDynamicDataLakeTags';
 export * from './embeddingMismatch';
 export * from './retrievalUnavailable';
+export * from './supersession';
 export * from './getDataLakePrompts';
 export * from './semanticDataLakeSearch';
+export * from './dataLakeSearchMetrics';
 export * from './boundedTopK';
 export * from './resolveSearchBudgets';
 export * from './resolveSpendLevers';

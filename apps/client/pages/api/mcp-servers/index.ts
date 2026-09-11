@@ -6,6 +6,8 @@ import { BadRequestError } from '@server/utils/errors';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { encryptEnvVariables, decryptEnvVariables } from '@server/security/tokenEncryption';
+import { mcpServerCreateBodySchema } from '@server/validators/mcpServerValidators';
+import { assertNoForbiddenMcpEnvKeys } from '@server/utils/mcpEnvValidation';
 
 // Skip schema refresh if the server was updated within this TTL (avoids unnecessary Lambda calls
 // on repeated Settings visits). Schemas are always refreshed after TTL expires to pick up newly
@@ -62,7 +64,15 @@ const handler = baseApi()
     res.json(servers);
   })
   .post(async (req, res) => {
-    const { name, envVariables, enabled } = req.body;
+    // Guarded before the findOne below, not just before the write: `name` is part of that
+    // filter, and a filter casts too -- an object or array there throws a `CastError` on the
+    // route's very first statement.
+    const parsedBody = mcpServerCreateBodySchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      throw new BadRequestError('Invalid request body');
+    }
+    const { name, envVariables, enabled } = parsedBody.data;
+    assertNoForbiddenMcpEnvKeys(envVariables);
 
     let server = await mcpServerRepository.findOne({ name, userId: req.user.id });
 
@@ -74,11 +84,17 @@ const handler = baseApi()
         enabled,
       });
     } else {
+      // `enabled` is optional in the request but `required: true` in the schema, and the two
+      // branches differ on what that means: the update above drops `enabled: undefined` from the
+      // `$set` and leaves the stored value alone, while a create has to supply one. Defaulting to
+      // true here matches what the create used to persist -- an omitted `enabled` reached
+      // mongoose as `undefined`, so a request that omitted it failed validation with a 500 rather
+      // than creating a disabled server. Nothing was relying on that.
       server = await mcpServerRepository.create({
         userId: req.user.id,
         name,
         envVariables: encryptedVars,
-        enabled,
+        enabled: enabled ?? true,
         tools: [],
       });
     }

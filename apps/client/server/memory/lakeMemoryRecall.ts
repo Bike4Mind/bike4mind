@@ -1,7 +1,7 @@
 import { adminSettingsRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { recallLakeMemory, type AccessibleLake, type LakeBeliefRecall } from './recallLakeMemory';
-import { createReachableSourcesResolver } from './lakeSourceReachability';
+import { createReachableSourcesResolver, createSourceDatesResolver } from './lakeSourceReachability';
 
 /**
  * App-layer wiring for the `recallLakeMemory` the chat service injects (#1440). Adapts the core
@@ -21,6 +21,8 @@ export async function recallLakeMemoryForSession(input: {
   query: string;
   dataLakeTags: string[];
   retrievalFilter?: RetrievalExclusionOptions;
+  /** Belief budget for the turn (`lakeMemoryRecallK`), resolved by the caller. */
+  k: number;
 }): Promise<LakeBeliefRecall[]> {
   if (input.dataLakeTags.length === 0 || !input.query.trim()) return [];
 
@@ -33,8 +35,11 @@ export async function recallLakeMemoryForSession(input: {
         // active set - otherwise the read would outlive the authorization that granted it.
         // `status` is the lake's lifecycle state: only 'active' is authorized to read (draft, archived,
         // deleting, and deleted all fall out here), matching the authorizing access query.
+        // lakeMemoryEnabled !== true (rather than !lakeMemoryEnabled) is deliberate: this repository
+        // read is unprojected (see DataLakeModel.ts), so a future `.select()` allow-list here would
+        // otherwise fail this check CLOSED for every lake and silently disable the feature outright.
         const lake = await dataLakeRepository.findByDatalakeTag(datalakeTag);
-        if (!lake?.createdByUserId || lake.status !== 'active') return null;
+        if (!lake?.createdByUserId || lake.status !== 'active' || lake.lakeMemoryEnabled !== true) return null;
         return { datalakeTag, ownerUserId: lake.createdByUserId };
       })
     )
@@ -51,5 +56,12 @@ export async function recallLakeMemoryForSession(input: {
     retrievalFilter: input.retrievalFilter,
   });
 
-  return recallLakeMemory({ userId: input.userId, query: input.query, lakes, resolveReachableSources });
+  return recallLakeMemory({
+    userId: input.userId,
+    query: input.query,
+    lakes,
+    resolveReachableSources,
+    resolveSourceDates: createSourceDatesResolver({ fabfiles: fabFileRepository }),
+    k: input.k,
+  });
 }

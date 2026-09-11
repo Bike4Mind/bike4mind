@@ -31,7 +31,7 @@ describe('SessionUpdateRequestSchema', () => {
   });
 
   it.each([null, undefined])(
-    'accepts lastUsedModel: %p (both mean "leave unchanged", matching the service fallback)',
+    'accepts lastUsedModel: %s (both mean "leave unchanged", matching the service fallback)',
     value => {
       const result = SessionUpdateRequestSchema.safeParse({ lastUsedModel: value });
       expect(result.success).toBe(true);

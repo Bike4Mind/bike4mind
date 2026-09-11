@@ -1,6 +1,22 @@
+import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT } from '../constants/forcedRetrieval';
 import type { PromptMeta } from '../types/entities/PromptMetaTypes';
 
 type RetrievalSummary = NonNullable<PromptMeta['retrieval']>;
+
+/**
+ * The `topScore` at which a replayed turn counts as answerable, pinned to the live forced-retrieval
+ * absolute floor rather than being a number of its own. The question the split asks is whether
+ * retrieval would have surfaced something the SYSTEM considers relevant, so the bar has to be the
+ * bar production uses; a bar invented here would measure this file's opinion instead.
+ *
+ * Deliberately not the knowledge tool's floor, which defaults to 0 (KB_SEARCH_MIN_RELEVANCE_PCT_
+ * DEFAULT) and would call every turn with any corpus at all answerable.
+ *
+ * Overridable per call. The replay stores the raw cosine precisely so the cutoff can be swept
+ * without re-running it, which matters because this default is a setting's default, not a law -
+ * an installation that has tuned forcedRetrievalMinSimilarityPct should sweep to its own value.
+ */
+const DEFAULT_ANSWERABLE_MIN_SCORE = FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT / 100;
 
 /**
  * How often the model retrieves when retrieval is OFFERED rather than forced (#1394).
@@ -23,6 +39,61 @@ export type OptionalPathRetrievalRate = {
   retrievedTurns: number;
   /** retrievedTurns / offeredTurns, or null when the denominator is empty - never a phantom 0. */
   rate: number | null;
+  /**
+   * The offered turns above, partitioned by whether the knowledge-base when-to-retrieve guidance
+   * section shipped on the turn. This is the A/B readout: compare `injected.rate` against
+   * `notInjected.rate`, where the second arm is produced by clearing the
+   * KnowledgeBaseRetrievalPrompt setting - the section's only off switch, and one that needs no
+   * deploy to throw.
+   *
+   * `unrecorded` is turns written before the flag existed, or by a path that never passed the
+   * seed. Reported as its own arm rather than folded into either side: crediting them to one arm
+   * would bias the exact comparison this exists to serve, and silently dropping them would make
+   * the arms not sum. The three arms always sum to `offeredTurns`.
+   *
+   * A zero `notInjected.turns` does not mean the section is always on - it means nobody has run
+   * the experiment. The arms describe traffic, not configuration.
+   */
+  guidance: {
+    injected: RateArm;
+    notInjected: RateArm;
+    unrecorded: RateArm;
+  };
+  /**
+   * The same offered turns, partitioned by whether the corpus in scope COULD have answered them.
+   * This is the denominator the headline rate has always been missing (#1394): a turn where the
+   * model did not retrieve is a defect only if there was something to find, and until this split
+   * existed the two were indistinguishable.
+   *
+   * Read it as a 2x2 - each arm's `turns` and `retrievedTurns` give both cells:
+   *
+   *                    retrieved        did not retrieve
+   *   answerable       correct          THE MISS  <- the number that justifies routing work
+   *   notAnswerable    wasted round trip correct abstain
+   *
+   * `unknown` is turns the offline replay never probed, plus turns it probed inconclusively (see
+   * `inconclusiveTurns`). Its own arm for the same reason `guidance.unrecorded` is: folding
+   * unprobed turns into `notAnswerable` would manufacture the conclusion that there was nothing
+   * to retrieve, which is precisely the claim under test. The three arms always sum to
+   * `offeredTurns`.
+   *
+   * A large `unknown` means the replay has not been run over this window, NOT that the corpus is
+   * thin. Check it before reading anything into the other two arms.
+   */
+  answerability: {
+    /** The `topScore` at or above which a turn counts as answerable, as a cosine fraction. */
+    cutoff: number;
+    answerable: RateArm;
+    notAnswerable: RateArm;
+    unknown: RateArm;
+    /**
+     * Of `unknown`, the turns that WERE probed but whose scan hit its chunk ceiling below the
+     * cutoff. Their true best score could be higher, so they are not negatives; counted here so a
+     * big `unknown` can be told apart as "not replayed yet" versus "replayed against a corpus too
+     * large to scan". The rest of `unknown` is turns with no probe at all.
+     */
+    inconclusiveTurns: number;
+  };
   /**
    * Turns where forced retrieval was ON but a rule suppressed it, leaving the model on the
    * optional path. Counted separately rather than folded into the numbers above: they reach the
@@ -58,10 +129,33 @@ export type OptionalPathRetrievalRate = {
   unclassifiedTurns: number;
 };
 
-const emptyRate = (): OptionalPathRetrievalRate => ({
+/**
+ * One arm of a partition of the offered turns - the guidance A/B, or the answerability split.
+ * Same numerator throughout (the model choosing to retrieve), over the subset of offered turns in
+ * that arm, so arms are directly comparable to each other and to the headline `rate`.
+ */
+export type RateArm = {
+  turns: number;
+  retrievedTurns: number;
+  rate: number | null;
+};
+
+const emptyRate = (cutoff: number): OptionalPathRetrievalRate => ({
   offeredTurns: 0,
   retrievedTurns: 0,
   rate: null,
+  guidance: {
+    injected: { turns: 0, retrievedTurns: 0, rate: null },
+    notInjected: { turns: 0, retrievedTurns: 0, rate: null },
+    unrecorded: { turns: 0, retrievedTurns: 0, rate: null },
+  },
+  answerability: {
+    cutoff,
+    answerable: { turns: 0, retrievedTurns: 0, rate: null },
+    notAnswerable: { turns: 0, retrievedTurns: 0, rate: null },
+    unknown: { turns: 0, retrievedTurns: 0, rate: null },
+    inconclusiveTurns: 0,
+  },
   forcedSuppressed: {
     turns: 0,
     retrievedTurns: 0,
@@ -102,13 +196,40 @@ const modelRetrieved = (turn: RetrievalRateInput): boolean =>
   Boolean(turn.attempted) && Boolean(turn.surfaces?.some(surface => MODEL_INITIATED_SURFACES.has(surface)));
 
 /**
+ * Which answerability arm an offered turn belongs to, and the one place `scanTruncated` is
+ * honoured. Mutates `summary.inconclusiveTurns` as a side effect of the truncated case rather than
+ * making the caller re-derive it - the count and the arm assignment are the same decision.
+ *
+ * Ordering is load-bearing: the cutoff test comes BEFORE the truncation test, because a truncated
+ * scan that already cleared the bar is answerable regardless. Truncation only means the true best
+ * score may be HIGHER than recorded, so it can rescue a negative and can never overturn a positive.
+ */
+const classifyAnswerability = (
+  turn: RetrievalRateInput,
+  cutoff: number,
+  summary: OptionalPathRetrievalRate
+): RateArm => {
+  const probe = turn.answerability;
+  if (!probe) return summary.answerability.unknown;
+  if (probe.topScore >= cutoff) return summary.answerability.answerable;
+  if (probe.scanTruncated) {
+    summary.answerability.inconclusiveTurns += 1;
+    return summary.answerability.unknown;
+  }
+  return summary.answerability.notAnswerable;
+};
+
+/**
  * The fields the fold reads. Narrower than the stored summary on purpose: it lets a caller project
  * just these out of Mongo and leave `dataLakeTags` - which lakes a turn touched - in the database
  * rather than egressing lake identity to build a counter (see the redaction CAUTION on
  * RetrievalSummarySchema). `surfaces` names retrieval MECHANISMS, not lakes, so it carries no
  * identity out with it.
  */
-export type RetrievalRateInput = Pick<RetrievalSummary, 'attempted' | 'mode' | 'forcedSkipReason' | 'surfaces'>;
+export type RetrievalRateInput = Pick<
+  RetrievalSummary,
+  'attempted' | 'mode' | 'forcedSkipReason' | 'surfaces' | 'knowledgeBaseGuidanceInjected' | 'answerability'
+>;
 
 /**
  * The projection a caller must select for the fold to read a complete turn, derived from the input
@@ -121,6 +242,10 @@ const RETRIEVAL_RATE_FIELD_SET: Record<keyof RetrievalRateInput, true> = {
   mode: true,
   forcedSkipReason: true,
   surfaces: true,
+  knowledgeBaseGuidanceInjected: true,
+  // Scalar scores and a timestamp only - no lake or file identity, so widening the projection to
+  // reach it does not egress corpus identity the way `dataLakeTags` would (see the type above).
+  answerability: true,
 };
 
 export const RETRIEVAL_RATE_FIELDS = Object.keys(RETRIEVAL_RATE_FIELD_SET) as (keyof RetrievalRateInput)[];
@@ -130,9 +255,11 @@ export const RETRIEVAL_RATE_FIELDS = Object.keys(RETRIEVAL_RATE_FIELD_SET) as (k
  * bounding (see `mode` in RetrievalSummarySchema) and the population it hands over.
  */
 export function summarizeOptionalPathRetrieval(
-  turns: ReadonlyArray<RetrievalRateInput | undefined | null>
+  turns: ReadonlyArray<RetrievalRateInput | undefined | null>,
+  options: { answerableMinScore?: number } = {}
 ): OptionalPathRetrievalRate {
-  const summary = emptyRate();
+  const cutoff = options.answerableMinScore ?? DEFAULT_ANSWERABLE_MIN_SCORE;
+  const summary = emptyRate(cutoff);
 
   for (const turn of turns) {
     if (!turn) continue;
@@ -144,7 +271,22 @@ export function summarizeOptionalPathRetrieval(
 
     if (turn.mode === 'optional') {
       summary.offeredTurns += 1;
-      if (modelRetrieved(turn)) summary.retrievedTurns += 1;
+      const retrieved = modelRetrieved(turn);
+      if (retrieved) summary.retrievedTurns += 1;
+      // Explicit undefined check, not truthiness: `false` is a real arm (the section was gated
+      // off) and must not fall in with turns that never recorded the flag at all.
+      const arm =
+        turn.knowledgeBaseGuidanceInjected === undefined
+          ? summary.guidance.unrecorded
+          : turn.knowledgeBaseGuidanceInjected
+            ? summary.guidance.injected
+            : summary.guidance.notInjected;
+      arm.turns += 1;
+      if (retrieved) arm.retrievedTurns += 1;
+
+      const answerabilityArm = classifyAnswerability(turn, cutoff, summary);
+      answerabilityArm.turns += 1;
+      if (retrieved) answerabilityArm.retrievedTurns += 1;
       continue;
     }
 
@@ -165,6 +307,16 @@ export function summarizeOptionalPathRetrieval(
   }
 
   summary.rate = ratio(summary.retrievedTurns, summary.offeredTurns);
+  for (const arm of [summary.guidance.injected, summary.guidance.notInjected, summary.guidance.unrecorded]) {
+    arm.rate = ratio(arm.retrievedTurns, arm.turns);
+  }
+  for (const arm of [
+    summary.answerability.answerable,
+    summary.answerability.notAnswerable,
+    summary.answerability.unknown,
+  ]) {
+    arm.rate = ratio(arm.retrievedTurns, arm.turns);
+  }
   summary.forcedSuppressed.rate = ratio(summary.forcedSuppressed.retrievedTurns, summary.forcedSuppressed.turns);
   return summary;
 }

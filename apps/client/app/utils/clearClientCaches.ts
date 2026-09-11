@@ -9,7 +9,16 @@ import { premiumLocalStorageKeyPrefixes } from '../premium-generated/premiumLoca
  * 'user-context' is also nulled upstream by setCurrentUser(null), but we remove the key
  * entirely as defense-in-depth for paths where setCurrentUser isn't called (e.g. session expiry).
  */
-const USER_SPECIFIC_LS_KEYS = ['layout-control', 'artifacts', 'artifact_versions', 'user-context'];
+const USER_SPECIFIC_LS_KEYS = [
+  'layout-control',
+  'artifacts',
+  'artifact_versions',
+  'user-context',
+  // Zustand-persisted Help Assistant transcript (app/hooks/useHelpChat.ts, persist name
+  // 'help-chat'). Holds the last 50 messages, so leaving it behind carried one identity's
+  // conversation into the next session on a shared browser.
+  'help-chat',
+];
 
 /**
  * Clears all client-side persistence layers (IndexedDB + localStorage).
