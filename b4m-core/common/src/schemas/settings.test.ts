@@ -578,11 +578,16 @@ describe('forcedRetrievalCharBudget agrees with the forced-retrieval fallback (#
     expect(settingsMap.forcedRetrievalCharBudget.defaultValue).toBe(FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT);
   });
 
-  it('is platform-only: declares no scope, unlike its sibling dataLakeSearchMaxFiles/MaxChunks', () => {
-    // Deliberate, not an oversight - see the setting's own description. This path reads the setting
-    // directly rather than through the scoped-settings resolver, so a settableAt block here would be
-    // inert at best and could arm the resolver's fail-loud owner check at worst.
-    expect(settingsMap.forcedRetrievalCharBudget.scope).toBeUndefined();
+  it('is settable at the org/owner (caller) altitude, but deliberately not at Lake (#2572)', () => {
+    // Same rung set as the two relevance floors it is resolved alongside, and for the same reason
+    // there is no Lake rung: a forced-retrieval turn pools an uncapped SET of lakes, so no single
+    // lake can key a narrower rung. Was platform-only until #2572 pointed the read at
+    // resolveScopedSettingValues - the rungs and the read path have to move together, since
+    // settableAt is metadata only the scoped resolver honors.
+    expect(settingsMap.forcedRetrievalCharBudget.scope?.settableAt).toEqual([
+      SettingScopeLevel.Organization,
+      SettingScopeLevel.Owner,
+    ]);
   });
 
   it('prefaults to the shared constant rather than makeNumberSetting fallback 0', () => {
@@ -698,11 +703,11 @@ describe('forced-retrieval relevance floors are levers (#2497)', () => {
   });
 
   it('declares a scope, so the read path must go through the scoped resolver', () => {
-    // The inverse of forcedRetrievalCharBudget's assertion above. That one is platform-only because
-    // it is read via getSettingsValue, which ignores settableAt; these two are read via
-    // resolveScopedSettingValues, which honors it. A future change that pointed them back at
-    // getSettingsValue would silently drop every override, so the scope block is the signal that
-    // the resolver is required.
+    // These two and forcedRetrievalCharBudget above are read together, in one
+    // resolveScopedSettingValues call, which is what honors settableAt. A future change that
+    // pointed any of them back at getSettingsValue would silently drop every override, so the
+    // scope block is the signal that the resolver is required. lakeMemoryRecallK below is the
+    // live counterexample: no scope block, because its read is still the plain one.
     for (const key of FLOOR_KEYS) {
       expect(settingsMap[key].scope).toBeDefined();
     }
@@ -849,10 +854,12 @@ describe('lakeMemoryRecallK agrees with the lake-memory recall fallback (#2496)'
     expect(settingsMap.lakeMemoryRecallK.defaultValue).toBeGreaterThan(8);
   });
 
-  it('is platform-only, like its sibling forcedRetrievalCharBudget', () => {
+  it('is platform-only, unlike its sibling forcedRetrievalCharBudget', () => {
     // Deliberate, not an oversight - see the setting's own description. LakeMemoryFeature reads it
-    // directly rather than through the scoped-settings resolver, so a settableAt block here would
-    // be inert at best and could arm the resolver's fail-loud owner check at worst.
+    // via getSettingsValue, which ignores settableAt, so a scope block here would be silently
+    // inert: every override written against it would resolve to nothing. Its sibling was in the
+    // same position until #2572 moved BOTH its rungs and its read at once, which is what giving
+    // this one org/owner rungs would also take.
     expect(settingsMap.lakeMemoryRecallK.scope).toBeUndefined();
   });
 

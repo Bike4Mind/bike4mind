@@ -7,6 +7,7 @@ import {
   shouldSummarizeSession,
   SUMMARIZATION_CONFIG,
   LakeMemoryFeature,
+  FORCED_RETRIEVAL_SETTING_KEYS,
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
@@ -2028,10 +2029,15 @@ describe('KnowledgeRetrievalFeature untrusted-content delimiter (#1659)', () => 
 });
 
 /**
- * The forced-retrieval char budget became a lever (bike4mind#1831, resolveForcedRetrievalCharBudget)
+ * The forced-retrieval char budget became a lever (bike4mind#1831, resolveForcedRetrievalConfig)
  * rather than a module constant. This locks the settings-read contract - unset/unusable/outage all
  * fall back to FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT exactly the way resolveEmbeddingModelFallback
  * does above - and that a configured value actually changes injection, not just that it parses.
+ *
+ * Since #2572 the setting also declares Organization/Owner rungs, so the last two cases here pin
+ * the half of that change a `scope` block cannot pin on its own: that the READ honors an override.
+ * A scope block whose read still went through `getSettingsValue` would satisfy every assertion in
+ * settings.test.ts and silently ignore every override an operator wrote.
  */
 describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
   const END = '[Untrusted Retrieved Content - END]';
@@ -2040,9 +2046,22 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
     getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
   };
 
+  /** Stored admin rows for `names`, omitting the unset ones so the coded default wins for those. */
+  const platformRows = (names: string[], read: (key: string) => unknown) =>
+    names
+      .map(settingName => ({ settingName, settingValue: read(settingName) }))
+      .filter(row => row.settingValue != null)
+      .map(row => ({ settingName: row.settingName, settingValue: String(row.settingValue) }));
+
   /** Every chunk shares the query's vector, so every one of `chunkCount` chunks clears the
    * similarity floor - the loop that reads the budget runs multiple iterations per turn. */
-  const makeCtx = (opts: { getSettingsValue: (key: string) => unknown; chunkText?: string; chunkCount?: number }) => {
+  const makeCtx = (opts: {
+    getSettingsValue: (key: string) => unknown;
+    chunkText?: string;
+    chunkCount?: number;
+    /** Wire the scoped overlay, optionally with an Organization-rung char-budget override. */
+    scoped?: { orgOverride?: string };
+  }) => {
     const chunkText = opts.chunkText ?? 'z'.repeat(20_000);
     const chunkCount = opts.chunkCount ?? 1;
     const rows = Array.from({ length: chunkCount }, (_, i) => ({
@@ -2052,9 +2071,26 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
       vector: [1, 0],
     }));
     const getSettingsValue = vi.fn((key: string) => Promise.resolve(opts.getSettingsValue(key)));
+    const scopedSettings = {
+      findOverrides: vi.fn(async () =>
+        opts.scoped?.orgOverride == null
+          ? []
+          : [
+              {
+                scopeLevel: SettingScopeLevel.Organization,
+                scopeId: 'org1',
+                settingName: 'forcedRetrievalCharBudget',
+                settingValue: opts.scoped.orgOverride,
+              },
+            ]
+      ),
+    };
     return {
-      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
-      user: { id: 'u1', tags: [], groups: [] },
+      // `debug` only matters on the scoped path, where the resolver calls it - a mock without it
+      // throws into the resolver's own never-throw guard, which serves coded defaults and looks
+      // exactly like an override being ignored.
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
+      user: { id: 'u1', organizationId: opts.scoped ? 'org1' : undefined, tags: [], groups: [] },
       db: {
         organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
         fabfiles: {
@@ -2063,12 +2099,26 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
             .mockResolvedValue({ data: [{ id: 'fileA', fileName: 'Budget.pdf', tags: [] }], hasMore: false, total: 1 }),
         },
         fabfilechunks: { findByFabFileId: vi.fn(), findVectorsByFabFileIds: vi.fn(() => Promise.resolve(rows)) },
-        adminSettings: { getSettingsValue },
+        // The scoped resolver does NOT reach the platform base through getSettingsValue: it goes
+        // via getSettingsByNames, whose cached path calls findAll (b4m-core/utils/src/settings.ts).
+        // Both are served from the same opts.getSettingsValue so the two read paths cannot disagree.
+        adminSettings: {
+          getSettingsValue,
+          findBySettingNames: vi.fn(async (names: string[]) => platformRows(names, opts.getSettingsValue)),
+          findAll: vi.fn(async () => platformRows([...FORCED_RETRIEVAL_SETTING_KEYS], opts.getSettingsValue)),
+        },
+        ...(opts.scoped ? { scopedSettings } : {}),
       },
       resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
+
+  beforeEach(() => {
+    // Both resolvers memoize per scope; without this a value set by one test leaks into the next.
+    invalidateSettingsCache();
+    invalidateScopedSettingsCache();
+  });
 
   const run = async (ctx: ReturnType<typeof makeCtx>) => {
     const feature = new KnowledgeRetrievalFeature(
@@ -2150,6 +2200,34 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
       ([key]) => key === 'forcedRetrievalCharBudget'
     );
     expect(calls).toHaveLength(1);
+  });
+
+  // Only the budget, so the two floors resolved in the same read stay at their own defaults
+  // instead of reading 2000 as a 2000% floor and warning their way back to the default.
+  const platformBudgetOnly = (value: string) => (key: string) =>
+    key === 'forcedRetrievalCharBudget' ? value : undefined;
+
+  it('an organization override beats the platform value (#2572)', async () => {
+    // The load-bearing assertion for the scope block: injection length must follow the OVERRIDE,
+    // not the platform setting. If the read regressed to getSettingsValue this would inject 2,000
+    // characters and the scope block would be inert metadata.
+    const content = await run(
+      makeCtx({
+        getSettingsValue: platformBudgetOnly('2000'),
+        chunkText: 'z'.repeat(30_000),
+        scoped: { orgOverride: '9000' },
+      })
+    );
+    expect(bodyLen(content)).toBe(9_000);
+  });
+
+  it('falls through to the platform value when the overlay holds no override (#2572)', async () => {
+    // The common case on a scoped-overlay host: an org with nothing overridden must not lose the
+    // platform value, which is what a resolver bug that treated "no override" as "unset" would do.
+    const content = await run(
+      makeCtx({ getSettingsValue: platformBudgetOnly('2000'), chunkText: 'z'.repeat(30_000), scoped: {} })
+    );
+    expect(bodyLen(content)).toBe(2_000);
   });
 });
 
@@ -2844,7 +2922,7 @@ describe('LakeMemoryFeature personal-corpus skip', () => {
 
 /**
  * The belief budget is the `lakeMemoryRecallK` admin setting, not the 8 this path used to hardcode
- * (#2496). Resolution mirrors `resolveForcedRetrievalCharBudget` below, so these pin the same three
+ * (#2496). Resolution mirrors `resolveForcedRetrievalConfig` below, so these pin the same three
  * properties: a configured value reaches the recall, anything unusable falls back LOUDLY, and a
  * settings outage costs the turn its budget but never its card.
  */
