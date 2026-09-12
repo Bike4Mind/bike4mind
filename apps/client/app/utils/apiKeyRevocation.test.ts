@@ -1,10 +1,34 @@
 import { describe, it, expect } from 'vitest';
-import { revocationTooltip } from './apiKeyRevocation';
+import { ApiKeyStatus } from '@bike4mind/common';
+import { isRevoked, revocationTooltip } from './apiKeyRevocation';
 
 // Built from local-time components, not a 'Z' string: the helper formats in local
 // time, so a UTC fixture would render a different calendar day either side of the
 // date line and the assertion below would depend on the host timezone.
 const REVOKED_AT = new Date(2026, 0, 15, 9, 30);
+
+describe('isRevoked', () => {
+  it('is true for a key parked at the disabled status', () => {
+    expect(isRevoked({ status: ApiKeyStatus.DISABLED })).toBe(true);
+  });
+
+  // The other three listed out rather than sampled: expired and rate-limited are
+  // the ones that could plausibly be folded in, and neither is a revocation - the
+  // tables this predicate feeds render them as states of their own.
+  it.each([ApiKeyStatus.ACTIVE, ApiKeyStatus.EXPIRED, ApiKeyStatus.RATE_LIMITED])('is false for %s', status => {
+    expect(isRevoked({ status })).toBe(false);
+  });
+
+  // Revoked-ness is the stored status, never the audit trail: keys disabled
+  // before revocation metadata existed have no revokedAt, and they are still
+  // revoked even though revocationTooltip has nothing to render for them.
+  it('is true for a key disabled before revocation metadata existed', () => {
+    const key = { status: ApiKeyStatus.DISABLED };
+
+    expect(isRevoked(key)).toBe(true);
+    expect(revocationTooltip(key)).toBeNull();
+  });
+});
 
 describe('revocationTooltip', () => {
   it('returns null for a key with no revocation timestamp', () => {

@@ -6,6 +6,7 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin } from '@server/utils/errors';
+import qs from 'qs';
 
 interface IQuery {
   pageSize?: string;
@@ -13,13 +14,30 @@ interface IQuery {
   searchTerm?: string;
 }
 
+// The nested shape the app sends, recovered from the bracket keys in `req.query`.
+interface IParsedQuery extends IQuery {
+  filters?: {
+    search?: unknown;
+  };
+}
+
+// Bracket keys nest arbitrarily (`filters[search][x]=1` parses to an object) and a
+// repeated key parses to an array, so only a plain string is a usable filter value.
+// Anything else is treated as absent rather than reaching `escapeRegex`, which throws
+// on a non-string.
+const filterString = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
+
 const handler = baseApi()
   .get(
     asyncHandler<{}, unknown, IQuery>(async (req, res) => {
-      const queryParams = req.query as IQuery;
+      // The client serializes the filters nested (`filters[search]=...`) through qs, and
+      // Next.js leaves those bracket keys unexpanded in `req.query` - so re-parse before
+      // reading them, the way the sibling `pages/api/business-links/index.ts` does. The
+      // flat `searchTerm` param stays supported for existing API-key callers.
+      const queryParams = qs.parse(req.query as Record<string, string>) as IParsedQuery;
       const pageSize = parseInt(queryParams.pageSize || '10');
       const pageNumber = parseInt(queryParams.pageNumber || '1');
-      const searchTerm = queryParams.searchTerm || '';
+      const searchTerm = filterString(queryParams.filters?.search) ?? filterString(queryParams.searchTerm) ?? '';
 
       const query = searchTerm
         ? {

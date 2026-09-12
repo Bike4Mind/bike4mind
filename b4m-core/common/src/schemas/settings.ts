@@ -2130,7 +2130,7 @@ export const settingsMap = {
     name: 'Data Lakes: Enforce read-time grant resolution',
     defaultValue: true,
     description:
-      'Read-time grant cutover (#1673). ON: a persisted READER or ORG grant is resolved into the read decision, so a principal a lake was shared with can browse it, open it and ground on it. Resolution is purely ADDITIVE (legacy OR grant), so turning it on takes no access away; this arm contains an ORG grant to the granting org, and expired rows never resolve. Turning it OFF returns to report-only: the gate still resolves grants and logs where they WOULD change access ([lakeReadGrantCutover] lines), but the enforced decision falls back to the legacy owner/org/tag/entitlement/public rule. Platform altitude on purpose: a one-time install-wide migration cutover, not a per-lake lever. Tag and entitlement grants always resolve live and are never affected by this flag; only persisted reader/org rows are gated by it.',
+      'Read-time grant resolution (#1673). ON is the shipped default: a persisted READER or ORG grant is resolved into the read decision, so a principal a lake was shared with can browse it, open it and ground on it. Resolution is purely ADDITIVE (legacy OR grant), so it takes no access away; this arm contains an ORG grant to the granting org, and expired rows never resolve. This is the standing KILL SWITCH for that arm, not a migration phase: turning it OFF returns to report-only, where the gate still resolves grants and logs where they WOULD change access ([lakeReadGrantCutover] lines) but the enforced decision falls back to the legacy owner/org/tag/entitlement/public rule - so those log lines are the diagnostic for a lake someone can no longer reach while the switch is off. Platform altitude on purpose: install-wide, not a per-lake lever. Tag and entitlement grants always resolve live and are never affected by this flag; only persisted reader/org rows are gated by it.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 94,
@@ -3425,8 +3425,13 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 2,
-    // A scan budget an org/owner/lake may tighten below the platform ceiling (#1661 org/lake rungs).
-    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
+    // A scan budget an org/owner may tighten below the platform ceiling. No Lake rung (#2624): one
+    // search is not scoped to one lake - resolveRetrievalLakeScope hands the scan EVERY lake the
+    // caller can reach as a single dataLakeTags array and the scan walks that whole set in one pass,
+    // so there is no single lakeId for a narrower rung to key on. The rung was declared here
+    // speculatively and no caller ever resolved it, so a Lake-scoped override was silently inert.
+    // Reinstating it needs per-lake sub-budgets in the scan first, not just this line.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   dataLakeSearchMaxChunks: makeNumberSetting({
     key: 'dataLakeSearchMaxChunks',
@@ -3438,7 +3443,8 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 3,
-    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
+    // Same rungs, and the same reason for no Lake rung, as dataLakeSearchMaxFiles above (#2624).
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   forcedRetrievalCharBudget: makeNumberSetting({
     key: 'forcedRetrievalCharBudget',
@@ -3458,12 +3464,18 @@ export const settingsMap = {
       'saturating on every turn against a 47-document lake, so this is the binding constraint on ' +
       'how much of a corpus reaches the model - not the relevance floor. Raising it admits more ' +
       'passages at the cost of prompt tokens and latency on every Data-Lake turn; it is NOT ' +
-      'automatically better, since more context can dilute ranking. Platform-only for now: this ' +
-      'read does not go through the scoped-settings resolver, so a `settableAt` block here would ' +
-      "be inert metadata at best and could arm the resolver's fail-loud owner check at worst.",
+      'automatically better, since more context can dilute ranking. Overridable per organization ' +
+      'and per owner, the same altitude as the two relevance floors resolved alongside it on the ' +
+      'same turn.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 4,
+    // Same rungs, and the same absent Lake rung, as the two floors below: one turn scans an
+    // uncapped SET of lakes into a single pool, so no single lake can key a narrower rung.
+    // MUST stay in sync with the read path - `settableAt` is metadata only the scoped resolver
+    // honors, so this block is load-bearing only while readForcedRetrievalSettings
+    // (ChatCompletionFeatures.ts) resolves this key through resolveScopedSettingValues (#2572).
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   kbSearchDefaultResults: makeNumberSetting({
     key: 'kbSearchDefaultResults',
@@ -3490,8 +3502,9 @@ export const settingsMap = {
     order: 5,
     // Caller altitude (#1955): a knowledge-base search spans a mixed multi-lake corpus plus the
     // caller's own/shared files (see the "MIXED corpus" comment on trySemanticKbSearch's lakeIds
-    // in knowledgeBaseSearch/index.ts), so there is no single lake for a Lake rung to key on -
-    // unlike dataLakeSearchMaxFiles/MaxChunks below, which scan one lake at a time.
+    // in knowledgeBaseSearch/index.ts), so there is no single lake for a Lake rung to key on. The
+    // same turned out to be true of dataLakeSearchMaxFiles/MaxChunks below, which were believed to
+    // scan one lake at a time and do not: they lost their Lake rung in #2624.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   kbSearchResultTokenBudget: makeNumberSetting({
@@ -3561,9 +3574,10 @@ export const settingsMap = {
       'QUALIFYING beliefs can actually be used, which was pinned at 8 (inherited from personal-' +
       'memento recall) on no evidence beyond that inheritance. The sibling lever on the same turn is ' +
       'Forced Retrieval Char Budget, which governs raw chunk text rather than extracted beliefs. ' +
-      'Platform-only for now, like that sibling: this read does not go through the scoped-settings ' +
-      'resolver, so a settableAt block here would be inert metadata at best and could arm the ' +
-      "resolver's fail-loud owner check at worst.",
+      'Platform-only for now, unlike that sibling: this read goes through plain getSettingsValue, ' +
+      'which ignores settableAt, so a scope block here would be silently inert - every override ' +
+      'written against it would resolve to nothing. Pointing the read at the scoped resolver is ' +
+      'the prerequisite, not extra metadata.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 8,
@@ -3589,10 +3603,11 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 9,
-    // Organization/Owner only, no Lake rung - deliberately matching kbSearchMinRelevancePct rather
-    // than dataLakeSearchMaxChunks. A forced-retrieval turn scans an uncapped SET of lakes into one
-    // pool with one top score, so there is no single lake for a narrower rung to key on, and the
-    // relative floor is a per-turn quantity by construction. See scopeForCaller's doc comment.
+    // Organization/Owner only, no Lake rung - the altitude every retrieval-budget setting settles
+    // at, kbSearchMinRelevancePct and dataLakeSearchMaxFiles/MaxChunks (#2624) included, and for
+    // the same reason. A forced-retrieval turn scans an uncapped SET of lakes into one pool with
+    // one top score, so there is no single lake for a narrower rung to key on, and the relative
+    // floor is a per-turn quantity by construction. See scopeForCaller's doc comment.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   forcedRetrievalMinSimilarityPct: makeNumberSetting({

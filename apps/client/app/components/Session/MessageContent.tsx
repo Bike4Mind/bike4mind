@@ -9,7 +9,7 @@ import UserPrompt from '@client/app/components/Session/UserPrompt';
 import ResearchModeResponseDisplay from '@client/app/components/Session/ResearchModeResponseDisplay';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import { useUser } from '@client/app/contexts/UserContext';
-import { IChatHistoryItem, SettingKey, ELISION_PUBLISH_BODY } from '@bike4mind/common';
+import { IChatHistoryItem, SettingKey, ELISION_PUBLISH_BODY, ANSWER_DIAGNOSIS_TITLE } from '@bike4mind/common';
 import { elidedReplyWarning } from '@client/app/utils/artifactParser';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import { Menu, MenuItem, ListItemDecorator } from '@mui/joy';
@@ -837,7 +837,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                         <ListItemDecorator>
                           <HiveIcon />
                         </ListItemDecorator>
-                        Prompt Meta
+                        {ANSWER_DIAGNOSIS_TITLE}
                       </MenuItem>
                       <MenuItem onClick={() => onPinToggle(messageData)}>
                         <ListItemDecorator>
@@ -996,7 +996,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                         <ListItemDecorator>
                           <HiveIcon />
                         </ListItemDecorator>
-                        Prompt Meta
+                        {ANSWER_DIAGNOSIS_TITLE}
                       </MenuItem>
                       <MenuItem onClick={() => onPinToggle(messageData)}>
                         <ListItemDecorator>

@@ -416,6 +416,21 @@ describe('usableObjectIds', () => {
     const log = logger();
     usableObjectIds([GOOD, JUNK], 'SessionModel.findAllByIds', log);
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('[SessionModel.findAllByIds]'), {
+      received: 2,
+      usable: 1,
+      skipped: [JUNK],
+    });
+  });
+
+  // `usable: 0` is what tells a log reader the caller dropped the arm outright rather than
+  // emitting an `$in: []`; a query result cannot distinguish those two, so the counts are the
+  // only signal. See DataLakeModel.accessArms.test.ts for the arm-shape half of that pin.
+  it('reports usable: 0 when nothing survives, so a suppressed arm is visible in the log', () => {
+    const log = logger();
+    usableObjectIds([JUNK], 'DataLakeModel.orgGrantArms', log);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('[DataLakeModel.orgGrantArms]'), {
+      received: 1,
+      usable: 0,
       skipped: [JUNK],
     });
   });

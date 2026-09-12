@@ -72,6 +72,7 @@ const fullView: LakeAccessView = {
       principalId: 'u2',
       principalName: 'Bob',
       readCount: 7,
+      noResultCount: 2,
       firstAccessedAt: new Date('2026-08-01T00:00:00.000Z'),
       lastAccessedAt: new Date('2026-08-10T00:00:00.000Z'),
       surfaces: ['chat-kb-search'],
@@ -83,6 +84,12 @@ const fullView: LakeAccessView = {
     turnsWithSignal: 9,
     turnsAtCap: 4,
     lastAtCapAt: new Date('2026-08-10T00:00:00.000Z'),
+  },
+  supersessionPressure: {
+    turnsWithSignal: 9,
+    turnsWithSuppression: 3,
+    filesSuppressed: 5,
+    lastSuppressedAt: new Date('2026-08-09T00:00:00.000Z'),
   },
   generatedAt: new Date('2026-08-14T12:00:00.000Z'),
 };
@@ -147,8 +154,11 @@ describe('DataLakeAccessModal', () => {
   it('reports candidate-cap pressure with both counts, qualified as window-scoped', () => {
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     const line = screen.getByTestId('datalake-access-cap-pressure');
-    // Both numbers, never the at-cap count alone: 4 on its own reads as a rate out of every read.
-    expect(line).toHaveTextContent(/4 of 9 reported read/i);
+    // Both numbers, never the at-cap count alone: 4 on its own reads as a rate out of every turn.
+    // TURN, not read: a zero row raises this counter while staying out of readCount, so the label
+    // has to be the wider word or the two numbers cannot be reconciled by the person reading them.
+    expect(line).toHaveTextContent(/4 of 9 reported turn/i);
+    expect(line).not.toHaveTextContent(/reported read/i);
     expect(line).toHaveTextContent(/in this window/i);
     // Attribution wording: the cap is a property of the turn's whole candidate listing, so the
     // contrast is with caps this lake caused - never with reads, which it plainly did cause.
@@ -168,6 +178,49 @@ describe('DataLakeAccessModal', () => {
     viewState = loaded(withoutPressure as LakeAccessView);
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     expect(screen.getByTestId('datalake-access-cap-pressure')).toHaveTextContent(/not reported for this window/i);
+  });
+
+  it('reports supersession pressure with both counts and the total withheld', () => {
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    const line = screen.getByTestId('datalake-access-supersession-pressure');
+    expect(line).toHaveTextContent(/3 of 9 reported turn/i);
+    expect(line).not.toHaveTextContent(/reported read/i);
+    expect(line).toHaveTextContent(/5 withheld in total/i);
+    // Suppression is recoverable, and saying so is the contract the collapse itself states: the
+    // weakest identity tier is a bare file name, so a wrong collapse has to be actionable.
+    expect(line).toHaveTextContent(/still retrievable by id or name/i);
+  });
+
+  it('says not reported for supersession when no read ran the collapse', () => {
+    // The COMMON case, not an edge: the collapse is admin-gated and ships off, so a lake whose
+    // reads never ran it must not read as a lake with no duplicate generations.
+    viewState = loaded({
+      ...fullView,
+      supersessionPressure: { turnsWithSignal: 0, turnsWithSuppression: 0, filesSuppressed: 0 },
+    });
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId('datalake-access-supersession-pressure')).toHaveTextContent(
+      /not reported for this window/i
+    );
+  });
+
+  it('degrades to not-reported when the view carries no supersession object at all', () => {
+    const { supersessionPressure: _omitted, ...withoutPressure } = fullView;
+    viewState = loaded(withoutPressure as LakeAccessView);
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId('datalake-access-supersession-pressure')).toHaveTextContent(
+      /not reported for this window/i
+    );
+  });
+
+  it('shows empty searches beside reads, so a starved lake is visible rather than absent', () => {
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId('datalake-access-history-noresults')).toHaveTextContent('2');
+    // The caveat has to cover BOTH columns: only lake-scoped chat sessions record an empty search,
+    // so a 0 there is a lower bound, not a clean bill of health.
+    expect(screen.getByTestId('datalake-access-history-caveat')).toHaveTextContent(
+      /not proof that every search found something/i
+    );
   });
 
   it('drops the window qualification when the history was not truncated', () => {

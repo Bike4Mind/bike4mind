@@ -18,14 +18,11 @@ interface SurfaceBreadcrumbProps {
   /** Left margin (spacing units or a raw CSS length). Default 0; used to sit the breadcrumb a
    *  fixed distance from a sibling control in a header row. */
   ml?: number | string;
-  /** Vertical padding (spacing units or a raw CSS length). Omitted keeps Joy's own 0.5rem;
-   *  pass 0 inside a header row that already spaces its lines. */
-  py?: number | string;
 }
 
-export function SurfaceBreadcrumb({ segments, mb = 2, ml = 0, py }: SurfaceBreadcrumbProps) {
+export function SurfaceBreadcrumb({ segments, mb = 2, ml = 0 }: SurfaceBreadcrumbProps) {
   return (
-    <Breadcrumbs size="sm" sx={{ px: 0, py, mb, ml }}>
+    <Breadcrumbs size="sm" sx={{ px: 0, mb, ml }}>
       {segments.map((seg, i) => {
         const isLast = i === segments.length - 1;
         if (isLast || !seg.onClick) {

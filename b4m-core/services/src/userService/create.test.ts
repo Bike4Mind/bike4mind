@@ -105,3 +105,29 @@ describe('createUser tags normalization', () => {
     expect(persisted.tags).toEqual(['qa', 'beta']);
   });
 });
+
+// The shape an OAuth signup with no provider-verified email produces; the E2E
+// create-user endpoint mints it deliberately so the state is reachable in QA.
+describe('createUser emailless account', () => {
+  it('writes email as null and checks uniqueness on the username alone', async () => {
+    const db = makeDb();
+
+    await createUser(
+      { username: 'no-email-e2e', record: { password: 'x', hasUsablePassword: true } },
+      { db: db as any }
+    );
+
+    expect(db.users.findByUsernameOrEmail).toHaveBeenCalledWith('no-email-e2e', undefined);
+    const persisted = db.users.create.mock.calls[0][0] as Omit<IUser, 'id'>;
+    expect(persisted.email).toBeNull();
+    expect(persisted.emailVerified).toBe(false);
+    expect(persisted.emailVerifiedAt).toBeNull();
+  });
+
+  it('reports a username clash as Username, not Email, when there is no email to compare', async () => {
+    const db = makeDb();
+    db.users.findByUsernameOrEmail.mockResolvedValue({ username: 'taken', email: null });
+
+    await expect(createUser({ username: 'taken' }, { db: db as any })).rejects.toThrow('Username already in use');
+  });
+});

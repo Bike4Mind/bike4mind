@@ -9,7 +9,7 @@ import {
   type EmbedKeyOwnerRef,
 } from '@server/entitlements/embedKeyEntitlement';
 import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@server/utils/analyticsLog';
 import {
   ApiKeyScope,
   CreditHolderType,
@@ -219,7 +219,7 @@ const handler = baseApi()
       }
     );
 
-    await logEvent(
+    await logEventSafe(
       {
         userId,
         type: UserApiKeyEvents.CREATED,
@@ -233,7 +233,8 @@ const handler = baseApi()
           organizationId: newApiKey.organizationId,
         },
       },
-      { ability: req.ability }
+      { ability: req.ability },
+      req.logger
     );
 
     return res.status(201).json(newApiKey);

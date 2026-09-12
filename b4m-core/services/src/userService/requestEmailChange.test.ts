@@ -170,6 +170,25 @@ describe('requestEmailChange', () => {
     );
   });
 
+  // An account created via OAuth without a provider-verified email has no address on
+  // file and uses this same flow to add its first one - there is nothing to alert.
+  it('skips the change notification for an emailless account but still sends verification', async () => {
+    mockUser.email = null;
+    mockUser.emailVerified = false;
+
+    await requestEmailChange(baseParams, mockAdapters);
+
+    expect(mockAdapters.mailer.sendEmailChangeNotification).not.toHaveBeenCalled();
+    expect(mockAdapters.mailer.sendEmailChangeVerification).toHaveBeenCalledWith(
+      expect.objectContaining({ email: null }),
+      baseParams.newEmail,
+      expect.any(String)
+    );
+    expect(mockAdapters.db.users.update).toHaveBeenCalledWith(
+      expect.objectContaining({ pendingEmail: baseParams.newEmail })
+    );
+  });
+
   it('should not send notification email if silent fail due to email enumeration', async () => {
     mockAdapters.db.users.findByEmail.mockResolvedValue({ id: 'differentUserId', email: baseParams.newEmail });
 

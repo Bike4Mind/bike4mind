@@ -127,6 +127,7 @@ import {
   SYSTEM_PROMPT_RESERVE_TOKENS,
 } from './ChatCompletionProcess';
 import { forcedRetrievalNoContextPrompt, type ForcedRetrievalNoContextFinding } from './forcedRetrievalAbstention';
+import { resolveLakeMemoryScope } from './resolveLakeMemoryScope';
 import { MCPClient } from '@bike4mind/mcp';
 import uniq from 'lodash/uniq.js';
 import { mergeRetrievalSummary, type RetrievalSummary } from './tools/retrievalSummaryMerge';
@@ -148,7 +149,12 @@ interface DatabaseAdapters {
   fabfiles: IFabFileRepository;
   fabfilechunks: Pick<
     IFabFileChunkRepository,
-    'findByFabFileId' | 'findVectorsByFabFileIds' | 'findTextsByFabFileId' | 'countByFabFileId'
+    | 'findByFabFileId'
+    | 'findVectorsByFabFileIds'
+    | 'findTextsByFabFileId'
+    | 'countByFabFileId'
+    // Must stay a superset of ToolContext.db.fabfilechunks - this is what feeds it (ToolBuilder).
+    | 'distinctRetrievalIndexModelsByFabFileIds'
   >;
   mementos: IMementoRepository;
   projects: IProjectRepository;
@@ -341,7 +347,9 @@ export interface IChatCompletionServiceOptions {
      * (this is the only in-tree injection slot), but an added one needs forwarding by hand.
      */
     k: number;
-  }) => Promise<{ fact: string; relevance: number; sources: string[] }[]>;
+    // `sourceDate` (YYYY-MM-DD of the originating document) is optional for the same bivariance
+    // reason called out above: a host that does not supply it renders undated rather than failing.
+  }) => Promise<{ fact: string; relevance: number; sources: string[]; sourceDate?: string }[]>;
   /**
    * Resolve a session-activatable registry prompt's CURRENT content by id (e.g. 'triage_router').
    * Injected so the core takes no dependency on the app-layer prompt registry; the injector also
@@ -709,16 +717,20 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
   private retrievalFilter: RetrievalExclusionOptions;
   /** Session's lake allowlist. When non-empty, scope the card to these tags (mirrors forced retrieval). */
   private retrievalTags: string[];
+  /** `session.lakeScopeExplicit` - see resolveLakeMemoryScope for why an empty list needs it. */
+  private lakeScopeExplicit: boolean | undefined;
 
   constructor(
     chatCompletion: ChatCompletionContext,
     retrievalTags?: string[],
-    retrievalFilter?: RetrievalExclusionOptions
+    retrievalFilter?: RetrievalExclusionOptions,
+    lakeScopeExplicit?: boolean
   ) {
     this.chatCompletion = chatCompletion;
     this.logger = chatCompletion.logger;
     this.user = chatCompletion.user;
     this.retrievalTags = Array.isArray(retrievalTags) ? retrievalTags : [];
+    this.lakeScopeExplicit = lakeScopeExplicit;
     this.retrievalFilter = retrievalFilter ?? {};
   }
 
@@ -736,8 +748,8 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
     message: string
   ): Promise<IMessage[]> {
     // A personal corpus suppresses this card. The two compose badly otherwise: personalCorpusOnly is
-    // only ever true when `retrievalTags` is empty (see resolvePersonalCorpusOnly), which is exactly
-    // the branch below that falls back to the FULL entitled set - so a notebook about its own uploads
+    // only ever true when `retrievalTags` is empty (see resolvePersonalCorpusOnly), which without an
+    // explicit lake scope falls back to the FULL entitled set - so a notebook about its own uploads
     // would get every entitled lake's beliefs injected, the always-on injection this change exists to
     // stop, just through the other surface. Checked FIRST so a suppressed turn also skips the
     // entitlement and prompt resolution below rather than doing that work and discarding it.
@@ -799,13 +811,16 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
         user: this.user,
         entitlementKeys,
       });
-      // SCOPE to the session's selected lakes, mirroring KnowledgeRetrievalFeature (which narrows by
-      // `retrievalTags`). Without this the card would inject EVERY entitled lake's beliefs into every
-      // turn regardless of which lake the session is about - the always-on injection #1108 removed for
-      // lake prompts. Empty `retrievalTags` means "no per-lake scoping" (the session picker sets none
-      // today), so it falls back to the full entitled set, same as forced retrieval.
-      const dataLakeTags =
-        this.retrievalTags.length > 0 ? entitledTags.filter(tag => this.retrievalTags.includes(tag)) : entitledTags;
+      // SCOPE to the session's selected lakes. Without this the card would inject EVERY entitled
+      // lake's beliefs into every turn regardless of which lake the session is about - the always-on
+      // injection #1108 removed for lake prompts. An empty selection still widens to the full
+      // entitled set, but ONLY while the session expressed no scope at all; a scope the user set and
+      // then emptied selects nothing. resolveLakeMemoryScope holds that tri-state.
+      const dataLakeTags = resolveLakeMemoryScope({
+        entitledTags,
+        retrievalTags: this.retrievalTags,
+        lakeScopeExplicit: this.lakeScopeExplicit,
+      });
       attemptedDataLakeTags = dataLakeTags;
       if (dataLakeTags.length === 0) {
         // The single most common real answer to "why did I get nothing from my lake": the user
@@ -854,11 +869,20 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
       // `context.length` would overcount `chars` by the framing preamble and the `- ` bullets -
       // and `chars` is specified as retrieved CONTENT only, so it means the same thing here as on
       // the cosine surfaces, which is what makes the merge's SUM meaningful.
-      const injectedFacts = lakeMemoryFacts(beliefs.map(b => b.fact));
+      // Sanitized one belief at a time rather than as a bare list, because a fact that sanitizes to
+      // empty is DROPPED - sanitizing the texts en masse would shift the indices and silently re-pair
+      // facts with the wrong document's date. Still `lakeMemoryFacts`, so the same helper decides what
+      // renders and what is counted.
+      const injectedFacts = beliefs.flatMap(belief => {
+        const [fact] = lakeMemoryFacts([belief.fact]);
+        return fact ? [{ fact, sourceDate: belief.sourceDate }] : [];
+      });
       const context = buildLakeMemoryContext(injectedFacts);
       recordRetrieval('ok', dataLakeTags, {
+        // Still the facts' own chars: the date suffix is framing, like the preamble and the bullets,
+        // and `chars` means retrieved CONTENT so its sum stays comparable across surfaces.
         chunks: injectedFacts.length,
-        chars: injectedFacts.reduce((total, fact) => total + fact.length, 0),
+        chars: injectedFacts.reduce((total, belief) => total + belief.fact.length, 0),
       });
       return context ? [{ role: 'system' as const, content: context }] : [];
     } catch (error) {
@@ -875,9 +899,11 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
   }
 
   /**
-   * The admin's configured `lakeMemoryRecallK`, or the coded default on anything unusable. Mirrors
-   * `resolveForcedRetrievalCharBudget` in KnowledgeRetrievalFeature below: same try/catch shape,
-   * same loud-fallback policy, resolved once per turn.
+   * The admin's configured `lakeMemoryRecallK`, or the coded default on anything unusable. Same
+   * try/catch shape and loud-fallback policy as `resolveForcedRetrievalConfig` in
+   * KnowledgeRetrievalFeature below, resolved once per turn - but a plain `getSettingsValue` read,
+   * because this setting declares no `scope`. Giving it org/owner rungs means moving this read onto
+   * `resolveScopedSettingValues` in the same change; `settableAt` alone would be inert here (#2572).
    *
    * `positiveIntOr`'s unusable-value branch is defense-in-depth, not a production-reachable path:
    * `getSettingsValue` runs the setting's own schema (`.min(1)`, `.max(LAKE_RECALL_K_MAX)`) via
@@ -1687,14 +1713,20 @@ const FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS = 4000;
 // large configured value could in principle admit more sections than this caps; a corpus of very
 // short chunks could inject fewer than expected regardless of budget.
 const FORCED_RETRIEVAL_MAX_SCORED_CHUNKS = 256;
-// Both relevance floors are levers now (`forcedRetrievalRelativeFloorPct` and
-// `forcedRetrievalMinSimilarityPct`, resolved once per turn by resolveForcedRetrievalFloors below),
-// so neither is a module constant - every former FORCED_RETRIEVAL_MIN_SIMILARITY reference is a
-// resolved local instead. When nothing clears them, no chunk is injected and the turn falls back to
+// The char budget and both relevance floors are levers now (all three resolved once per turn by
+// resolveForcedRetrievalConfig below), so none is a module constant - every former
+// FORCED_RETRIEVAL_CHAR_BUDGET and FORCED_RETRIEVAL_MIN_SIMILARITY reference is a resolved local
+// instead. When nothing clears the floors, no chunk is injected and the turn falls back to
 // forcedRetrievalNoContextPrompt.
-// The char budget is now a lever (`forcedRetrievalCharBudget` setting, resolved once per turn by
-// resolveForcedRetrievalCharBudget below) rather than a module constant - every former reference to
-// a FORCED_RETRIEVAL_CHAR_BUDGET constant is a resolved local variable instead.
+//
+// Exported so a test's admin-settings fixture can serve exactly the keys the read asks for: a
+// fixture that enumerated them itself would keep passing (on coded defaults) if a fourth key were
+// added here, which is the one way these tests could go quiet without failing.
+export const FORCED_RETRIEVAL_SETTING_KEYS = [
+  'forcedRetrievalCharBudget',
+  'forcedRetrievalRelativeFloorPct',
+  'forcedRetrievalMinSimilarityPct',
+] as const;
 
 /**
  * One of the two floor settings as a 0-1 cosine fraction, or `fallback` when the stored value is
@@ -2080,100 +2112,97 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   }
 
   /**
-   * The admin's configured `forcedRetrievalCharBudget`, or the coded default on anything unusable.
-   * Mirrors `resolveEmbeddingModelFallback` above: same try/catch shape, same loud-fallback policy.
+   * The char budget and both relevance floors for this turn, on the CALLER's org/owner scope.
+   *
+   * One read for all three because all three share one scope: each declares the same
+   * Organization/Owner rungs, and `resolveAll` covers any number of keys in one platform read plus
+   * one overlay query. Resolving them in two calls would add a second overlay query to every
+   * Data-Lake-mode turn (the platform half is cache-warm, so that side costs nothing either way)
+   * and buy nothing. No Lake rung on any of them, deliberately: one turn scans an uncapped SET of
+   * lakes into a single pool with a single top score, so there is no lake for a narrower rung to
+   * key on, the same reason `kbSearchMinRelevancePct` stops at owner (see `scopeForCaller`).
+   *
    * Resolved ONCE per turn by the caller and closed over, never re-read inside the per-chunk
    * accumulation loop below.
    *
-   * `positiveIntOr`'s unset/unusable-value branches are defense-in-depth here, not something
-   * normal operation exercises: `getSettingsValue` runs the setting's own schema (`.min(1_000)`,
-   * now also `.max`) via `safeParse` before this ever sees the value, so those branches cannot
-   * fire for any input that reached the DB through the write path OR a direct edit - the schema
-   * check applies to whatever is stored, regardless of how it got there. The only branch that is
-   * genuinely reachable is the outer catch below (a settings-read failure/outage).
-   */
-  private async resolveForcedRetrievalCharBudget(): Promise<number> {
-    try {
-      const configured = await this.chatCompletion.db.adminSettings.getSettingsValue('forcedRetrievalCharBudget');
-      return positiveIntOr(
-        configured as string | number | null | undefined,
-        FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
-        'forcedRetrievalCharBudget',
-        this.logger
-      );
-    } catch (err) {
-      this.logger.warn(
-        `🔒 Forced retrieval: failed to read forcedRetrievalCharBudget; falling back to ${FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT}`,
-        err
-      );
-      return FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT;
-    }
-  }
-
-  /**
-   * Both relevance floors for this turn, on the CALLER's org/owner scope.
-   *
-   * Read via readForcedRetrievalFloorPcts below, which prefers the scoped-settings resolver over the
-   * plain `getSettingsValue` that resolveForcedRetrievalCharBudget uses: these two declare a
-   * `settableAt` block, and that metadata is only honored on the scoped path - a scoped setting read
-   * directly would silently ignore every override. No Lake rung, deliberately: one turn scans an
-   * uncapped SET of lakes into a single pool with a single top score, so there is no lake for a
-   * narrower rung to key on, the same reason `kbSearchMinRelevancePct` stops at owner (see
-   * `scopeForCaller`).
-   *
-   * Percent-to-fraction conversion happens here, once, so every comparison below is against a raw
-   * cosine. `nonNegativeIntOr` rather than `positiveIntOr` because `0` is meaningful for the
-   * RELATIVE floor (a disabled floor) and both floors share this helper. `0` is not meaningful for
-   * the absolute floor, and what keeps it out is the READ path, not the write boundary - scripts
-   * and migrations write this collection raw, but both readers re-parse through the setting's own
-   * schema (`min: 1`) and substitute the coded default on failure. Same mechanism
-   * `forcedRetrievalFloorFraction` relies on for its range check.
+   * Percent-to-fraction conversion happens here, once, so every floor comparison below is against a
+   * raw cosine. `nonNegativeIntOr` inside `forcedRetrievalFloorFraction` rather than `positiveIntOr`
+   * because `0` is meaningful for the RELATIVE floor (a disabled floor) and both floors share that
+   * helper. `0` is not meaningful for the absolute floor, and what keeps it out is the READ path,
+   * not the write boundary - scripts and migrations write this collection raw, but every reader
+   * re-parses through the setting's own schema (`min: 1`) and substitutes the coded default on
+   * failure. The `positiveIntOr` branches for the char budget are defense-in-depth on the same
+   * basis: both read paths run the setting's schema (`.min(1_000)`, `.max`) before this sees a
+   * value, so only a read failure is genuinely reachable here.
    *
    * Never throws, and the catch reaches wider than "no adminSettings adapter": the platform-only
    * path calls `getSettingsValue` unguarded, so a settings or DB outage on an overlay-less host
    * lands here too. (On the scoped path a missing adapter is swallowed inside the resolver and
-   * never reaches this catch.) Same fail-open posture as the char budget, and the defaults it
-   * falls back to are behavior-preserving.
+   * never reaches this catch.) Every default it falls back to is behavior-preserving.
    */
-  private async resolveForcedRetrievalFloors(): Promise<ForcedRetrievalFloors> {
-    const coded: ForcedRetrievalFloors = {
-      relativeFloor: FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT / 100,
-      minSimilarity: FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT / 100,
-    };
+  private async resolveForcedRetrievalConfig(): Promise<{ charBudget: number; floors: ForcedRetrievalFloors }> {
     try {
-      const { relative, absolute } = await this.readForcedRetrievalFloorPcts();
+      const { charBudget, relative, absolute } = await this.readForcedRetrievalSettings();
       return {
-        relativeFloor: forcedRetrievalFloorFraction(
-          relative,
-          FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
-          'forcedRetrievalRelativeFloorPct',
+        charBudget: positiveIntOr(
+          charBudget as string | number | null | undefined,
+          FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
+          'forcedRetrievalCharBudget',
           this.logger
         ),
-        minSimilarity: forcedRetrievalFloorFraction(
-          absolute,
-          FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
-          'forcedRetrievalMinSimilarityPct',
-          this.logger
-        ),
+        floors: {
+          relativeFloor: forcedRetrievalFloorFraction(
+            relative,
+            FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+            'forcedRetrievalRelativeFloorPct',
+            this.logger
+          ),
+          minSimilarity: forcedRetrievalFloorFraction(
+            absolute,
+            FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
+            'forcedRetrievalMinSimilarityPct',
+            this.logger
+          ),
+        },
       };
     } catch (err) {
+      // Names every key, because one read failure degrades all three at once and an operator
+      // reading this line needs to know which levers stopped being honored.
       this.logger.warn(
-        `\u{1F512} Forced retrieval: failed to read the relevance floors; falling back to ` +
+        `\u{1F512} Forced retrieval: failed to read forcedRetrievalCharBudget / ` +
+          `forcedRetrievalRelativeFloorPct / forcedRetrievalMinSimilarityPct; falling back to ` +
+          `${FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT} chars, ` +
           `${FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT}% relative / ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT}% absolute`,
         err
       );
-      return coded;
+      return {
+        charBudget: FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
+        floors: {
+          relativeFloor: FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT / 100,
+          minSimilarity: FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT / 100,
+        },
+      };
     }
   }
 
   /**
-   * The two floor settings as stored (whole-number percents), by whichever read path this host has.
+   * The three forced-retrieval settings as stored (a char count and two whole-number percents), by
+   * whichever read path this host has.
    *
    * A `settableAt` block is only honored by the scoped resolver, so that is the path whenever the
-   * scoped overlay is wired. When it is absent there is no override to find and the platform read is
-   * byte-identical, so this takes the plain `getSettingsValue` route rather than requiring every host
-   * to carry the overlay - the same optionality `scopedSettings` is already documented with on the
-   * db contract above, and the same two-path shape `resolveSearchBudgets` uses.
+   * scoped overlay is wired. All three keys declare one, so all three MUST be read here rather than
+   * via `getSettingsValue` - a scoped setting read directly silently ignores every override, which
+   * is the "lever that does nothing" failure the scope blocks in `settings.ts` warn about. When the
+   * overlay is absent there is no override to find and the platform read is byte-identical, so this
+   * takes the plain route rather than requiring every host to carry the overlay - the same
+   * optionality `scopedSettings` is already documented with on the db contract above, and the same
+   * two-path shape `resolveSearchBudgets` uses.
+   *
+   * Propagation, worth knowing before tuning against it: the scoped path reads the platform base
+   * through `getSettingsByNames`, whose cache is in-process with a 5-minute TTL and no
+   * cross-instance invalidation, so a platform-rung edit lands on a running ChatCompletion
+   * container within one TTL rather than on the next turn. That is the same latency the two floors
+   * already have, and the trade for it is one fewer uncached `findOne` per Data-Lake-mode turn.
    *
    * The scoped branch is wrapped defensively, NOT because production takes the fallback:
    * `resolveScopedSettingValues` documents that it never throws and wraps both of its own reads, so
@@ -2182,17 +2211,22 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * resolves the coded default internally and returns normally, so a settings outage lands on coded
    * defaults whether or not this guard is here.
    */
-  private async readForcedRetrievalFloorPcts(): Promise<{ relative: unknown; absolute: unknown }> {
+  private async readForcedRetrievalSettings(): Promise<{
+    charBudget: unknown;
+    relative: unknown;
+    absolute: unknown;
+  }> {
     const { db, user } = this.chatCompletion;
     if (db.scopedSettings) {
       try {
         const values = await resolveScopedSettingValues(
-          ['forcedRetrievalRelativeFloorPct', 'forcedRetrievalMinSimilarityPct'],
+          FORCED_RETRIEVAL_SETTING_KEYS,
           scopeForCaller({ userId: user.id, organizationId: normalizeId(user.organizationId) }),
           { adminSettings: db.adminSettings, scopedSettings: db.scopedSettings },
           { logger: this.logger }
         );
         return {
+          charBudget: values.forcedRetrievalCharBudget,
           relative: values.forcedRetrievalRelativeFloorPct,
           absolute: values.forcedRetrievalMinSimilarityPct,
         };
@@ -2200,16 +2234,17 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // Fall THROUGH rather than rethrow: the outer catch lands on coded defaults, which would
         // discard a platform-wide override for the duration of a transient scoped-read failure.
         this.logger.warn(
-          '\u{1F512} Forced retrieval: scoped floor read failed; falling back to the platform values',
+          '\u{1F512} Forced retrieval: scoped settings read failed; falling back to the platform values',
           err
         );
       }
     }
-    const [relative, absolute] = await Promise.all([
+    const [charBudget, relative, absolute] = await Promise.all([
+      db.adminSettings.getSettingsValue('forcedRetrievalCharBudget'),
       db.adminSettings.getSettingsValue('forcedRetrievalRelativeFloorPct'),
       db.adminSettings.getSettingsValue('forcedRetrievalMinSimilarityPct'),
     ]);
-    return { relative, absolute };
+    return { charBudget, relative, absolute };
   }
 
   private noContextMessages(finding: ForcedRetrievalNoContextFinding): IMessage[] {
@@ -2358,11 +2393,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       }
 
       // Resolved ONCE here, before the scan - never re-read per chunk in the accumulation loop
-      // below. In parallel because they are independent reads and this is on every lake-mode turn.
-      const [forcedRetrievalCharBudget, floors] = await Promise.all([
-        this.resolveForcedRetrievalCharBudget(),
-        this.resolveForcedRetrievalFloors(),
-      ]);
+      // below. One call for all three because they share a scope, so they share a read.
+      const { charBudget: forcedRetrievalCharBudget, floors } = await this.resolveForcedRetrievalConfig();
 
       // Only a non-lake tag survives: a `datalake:` entry (the shape a lake-created session sets
       // `retrievalTags` to) names the SESSION's lake, which is already applied above via
@@ -2470,15 +2502,24 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // Off unless the admin setting says otherwise - the weakest identity tier is a bare file
       // name, so this ships default-off (see EnableRetrievalSupersessionCollapse).
       const supersessionCollapseEnabled = await this.readSupersessionCollapseSetting();
-      const collapse =
-        supersessionCollapseEnabled && lakes.length > 0
-          ? partitionBySupersession(
-              modelMatchedFiles.map(f => ({ ...f, fileTags: f.tags?.map(t => t.name) ?? [] })),
-              { lakes }
-            )
-          : { servable: modelMatchedFiles, superseded: [] };
+      // Named, rather than inlined into the ternary, because the audit trail needs the RAN /
+      // did-not-run distinction that the count alone cannot carry: `supersession.count` is 0 both
+      // when the collapse ran and suppressed nothing and when it never ran at all, and persisting
+      // the second as 0 would claim the corpus was checked for superseded generations when it
+      // never was - see ILakeAccessEvent.filesSupersededCollapsed's tri-state contract.
+      const collapseRan = supersessionCollapseEnabled && lakes.length > 0;
+      const collapse = collapseRan
+        ? partitionBySupersession(
+            modelMatchedFiles.map(f => ({ ...f, fileTags: f.tags?.map(t => t.name) ?? [] })),
+            { lakes }
+          )
+        : { servable: modelMatchedFiles, superseded: [] };
       const scanCandidates = collapse.servable;
       const supersession = buildSupersessionReport(collapse.superseded);
+      // The audit value, resolved once here and used by every write site below. Deliberately NOT
+      // read off `coverage.filesSupersededCollapsed`, which is the user-facing coverage note's
+      // number and flattens the two zeroes above into one.
+      const auditSupersededCollapsed = collapseRan ? supersession.count : undefined;
       if (supersession.count > 0) {
         this.logger.warn(`🔒 Forced retrieval: suppressed ${supersession.count} superseded document(s) before ranking`);
       }
@@ -2730,6 +2771,62 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           postRelativeFloorCandidates: scored.length,
         });
         this.logger.log(`🔒 Forced retrieval: no chunk cleared the similarity floor (top=${topScore.toFixed(3)})`);
+        // The ZERO ROW. Unlike every other write in this collection it records an ATTEMPT AGAINST A
+        // SCOPE, not a read: nothing was returned, so there is no file tag to reverse into a lake
+        // and `resolvedLakeIds` is the scope that was searched. Written on THIS exit alone - the
+        // corpus was scanned and compared against the query - because a floor starve is the one
+        // empty outcome that says something about the LAKE's coverage rather than about access,
+        // config or corpus health, which the other empty exits report through
+        // `promptMeta.retrieval` instead. See the PRODUCT DECISION block in LakeAccessEventTypes.ts
+        // for the whole rule.
+        //
+        // Gated on `lakeScoped` AND on the session adding no content tag of its own, because both
+        // are needed for "this lake served nothing" to be literally true.
+        //
+        // `lakeScoped` alone is not enough. With it true, `lakes` is exactly the lake(s) the
+        // session named (narrowLakeAccessToSession filters to them) - but `nonLakeRetrievalTags` is
+        // AND'ed into the candidate listing above, so a session scoped to `datalake:alpha` plus a
+        // content tag searches only alpha INTERSECT that tag. Attributing that starve to alpha
+        // would report a coverage gap in a lake that was never searched whole - an OVER-count, and
+        // in a compliance artifact that is the wrong direction to be wrong in. So a session
+        // carrying any non-lake retrieval tag writes no row at all.
+        //
+        // With `lakeScoped` false the lake was one of several mixed sources behind a question that
+        // was not about it, and counting a starve against it would be the same category error the
+        // grounded write below refuses by passing `allowFullScopeFallback: false`.
+        //
+        // `this.retrievalFilter` deliberately does NOT disqualify a row: it excludes files the lake
+        // itself marks unretrievable, so a starve behind it is still a fact about what this lake can
+        // serve. Both gates together keep the per-lake count a deliberate LOWER bound.
+        const attributableToLake = lakeScoped && nonLakeRetrievalTags.length === 0;
+        const searchedLakeIds = attributableToLake ? lakes.map(lake => lake.id) : [];
+        if (searchedLakeIds.length > 0) {
+          recordLakeAccessEvent(
+            this.chatCompletion.db.lakeAccessEvents,
+            {
+              principalKind: 'user',
+              principalId: user.id,
+              organizationId: normalizeId(user.organizationId),
+              resolvedLakeIds: searchedLakeIds,
+              fileIds: [],
+              chunkIds: [],
+              // The marker. NOT inferable from the two empty arrays above - a
+              // data-lake-public-browse row has both empty too and is a real read.
+              servedNothing: true,
+              candidateCapReached: coverage.moreFilesBeyondCap,
+              filesSupersededCollapsed: auditSupersededCollapsed,
+              surface: 'forced-retrieval',
+              // The query that found nothing, subject to the same per-lake opt-in as any other
+              // row. This is the row where the text earns its keep: an unanswered question is the
+              // most actionable thing a lake owner can be shown about their own corpus.
+              queryText: query,
+              questId: quest.id,
+              sessionId: quest.sessionId,
+            },
+            this.logger,
+            this.chatCompletion.db.adminSettings
+          );
+        }
         return this.noContextMessages(partial ? 'no_match_partial' : 'no_match');
       }
       const partialCoverage = this.reportCoverage(quest, coverage, embeddingModel);
@@ -2900,6 +2997,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             chunkIds: injectedChunkIds,
             scores: injectedScores,
             candidateCapReached: coverage.moreFilesBeyondCap,
+            filesSupersededCollapsed: auditSupersededCollapsed,
             surface: 'forced-retrieval',
             queryText: query,
             questId: quest.id,

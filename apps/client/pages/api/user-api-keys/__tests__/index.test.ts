@@ -61,7 +61,8 @@ vi.mock('@bike4mind/database', () => ({
   // Bind-time agent-ownership adapter; overridden per-test where a mint binds one.
   agentRepository: { findById: agentFindById },
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
 
 // The real gateEmbedBrandingWrite AND embedKeyOwnerHasEntitlement run; only the
 // leaf entitlement source (getUserEntitlements) is stubbed, so these tests
@@ -75,6 +76,7 @@ import '@pages/api/user-api-keys/index';
 function post(body: unknown, opts: { isAdmin?: boolean } = {}) {
   const { req, res } = createMocks({ method: 'POST', body });
   (req as any).user = { id: 'u1', isAdmin: opts.isAdmin ?? false };
+  (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return { req, res };
 }
 
@@ -475,5 +477,19 @@ describe('GET /api/user-api-keys - ownerHasWhitelabel (#891)', () => {
     await mockRefs.getHandler!(req, res);
     // Two distinct owners -> two resolutions, not three.
     expect(userRepository.findById).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * The analytics write happens after the key change has committed, so it goes
+ * through the best-effort wrapper with the request logger attached: a failed
+ * counter write gets recorded, not turned into a 5xx the client will retry.
+ */
+describe('POST /api/user-api-keys - analytics is best effort', () => {
+  it('logs the mint through logEventSafe with the request logger', async () => {
+    const { req, res } = post({ name: 'k', scopes: [] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(logEventSafe).toHaveBeenCalledWith(expect.anything(), expect.anything(), req.logger);
   });
 });

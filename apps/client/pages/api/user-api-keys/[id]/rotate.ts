@@ -2,7 +2,7 @@ import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { agentRepository, organizationRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@server/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError } from '@server/utils/errors';
@@ -32,7 +32,7 @@ const handler = baseApi().post(
       }
     );
 
-    await logEvent(
+    await logEventSafe(
       {
         userId,
         type: UserApiKeyEvents.ROTATED,
@@ -44,7 +44,8 @@ const handler = baseApi().post(
           ...(rotatedKey.previousOwnerUserId ? { previousOwnerUserId: rotatedKey.previousOwnerUserId } : {}),
         },
       },
-      { ability: req.ability }
+      { ability: req.ability },
+      req.logger
     );
 
     return res.status(200).json(rotatedKey);

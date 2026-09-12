@@ -130,8 +130,8 @@ describe('methodBlocks splitter', () => {
     const source = [
       'const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })',
       '  .post(async (req, res) => {',
-      '    assertDataLakeWriteScope(req);',
       '    const x = userById.get(id);',
+      '    assertDataLakeWriteScope(req);',
       '  });',
     ].join('\n');
     const blocks = methodBlocks(source);

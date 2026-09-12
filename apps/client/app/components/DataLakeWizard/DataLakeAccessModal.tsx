@@ -67,10 +67,28 @@ const describeCapPressure = (view: LakeAccessView): string => {
   const windowScope = view.historyTruncated ? ' in this window' : '';
   const lastRead = pressure.lastAtCapAt ? `, most recently ${fmtDateTime(pressure.lastAtCapAt)}` : '';
   return (
-    `Candidate-cap pressure: ${pressure.turnsAtCap} of ${pressure.turnsWithSignal} reported read(s)${windowScope} ` +
-    `hit the forced-retrieval candidate cap${lastRead} - a capped read considers only part of the readable library. ` +
-    'The cap applies to the whole candidate listing for a turn, so this counts reads of this lake that hit it, not ' +
-    'caps this lake caused.'
+    `Candidate-cap pressure: ${pressure.turnsAtCap} of ${pressure.turnsWithSignal} reported turn(s)${windowScope} ` +
+    `hit the forced-retrieval candidate cap${lastRead} - a capped turn considers only part of the readable library. ` +
+    'The cap applies to the whole candidate listing for a turn, so this counts turns that searched this lake and hit ' +
+    'it, not caps this lake caused. Turns, not reads: an empty search counts here too.'
+  );
+};
+
+/**
+ * The supersession line, alongside the candidate-cap one and collapsing to the same "not reported"
+ * sentence for the same reason - with one extra way to get there: the collapse is admin-gated and
+ * ships off, so a lake whose reads never ran it is the COMMON case, not a stale-client edge.
+ */
+const describeSupersessionPressure = (view: LakeAccessView): string => {
+  const pressure = view.supersessionPressure;
+  if (!pressure || pressure.turnsWithSignal === 0) return 'Superseded-version pressure: not reported for this window.';
+  const windowScope = view.historyTruncated ? ' in this window' : '';
+  const last = pressure.lastSuppressedAt ? `, most recently ${fmtDateTime(pressure.lastSuppressedAt)}` : '';
+  return (
+    `Superseded-version pressure: ${pressure.turnsWithSuppression} of ${pressure.turnsWithSignal} reported ` +
+    `turn(s)${windowScope} withheld an older version of a document this lake also holds a newer copy of ` +
+    `(${pressure.filesSuppressed} withheld in total)${last}. A withheld version leaves the ranking, not the lake - ` +
+    'it is still retrievable by id or name. Turns, not reads: an empty search counts here too.'
   );
 };
 
@@ -168,6 +186,18 @@ function HistoryRow({ entry }: { entry: LakeAccessHistoryEntry }) {
       </td>
       <td>
         <Typography level="body-sm">{entry.readCount}</Typography>
+      </td>
+      <td>
+        {/* Muted at zero and emphasized otherwise: an empty-search count is a corpus-gap signal, so
+            it should catch the eye only when there is something to look at. `?? 0` covers a
+            response cached from before the field rather than rendering a blank cell. */}
+        <Typography
+          level="body-sm"
+          textColor={entry.noResultCount ? 'text.primary' : 'text.tertiary'}
+          data-testid="datalake-access-history-noresults"
+        >
+          {entry.noResultCount ?? 0}
+        </Typography>
       </td>
       <td>
         <Typography level="body-sm">{fmtDateTime(entry.lastAccessedAt)}</Typography>
@@ -795,10 +825,20 @@ function AccessViewBody({
           data-testid="datalake-access-history-caveat"
         >
           Covers reads through instrumented retrieval surfaces, within the audit retention window. Treat this as a lower
-          bound - an empty list is not proof that no one has read this lake.
+          bound - an empty list is not proof that no one has read this lake. The Empty searches column counts queries
+          that searched this lake and got nothing back; only lake-scoped chat sessions record those, so a 0 there is not
+          proof that every search found something.
         </Typography>
         <Typography level="body-xs" textColor="text.tertiary" sx={{ mb: 1 }} data-testid="datalake-access-cap-pressure">
           {describeCapPressure(view)}
+        </Typography>
+        <Typography
+          level="body-xs"
+          textColor="text.tertiary"
+          sx={{ mb: 1 }}
+          data-testid="datalake-access-supersession-pressure"
+        >
+          {describeSupersessionPressure(view)}
         </Typography>
         {view.historyTruncated && (
           <Alert
@@ -824,6 +864,10 @@ function AccessViewBody({
                 <tr>
                   <th>Reader</th>
                   <th>Reads</th>
+                  {/* Reads is content served; this is searches of the lake that came back empty.
+                      Only forced retrieval on a lake-scoped session records one, so it is a lower
+                      bound - the caveat above the table covers that for both columns. */}
+                  <th>Empty searches</th>
                   <th>Last read</th>
                   <th>Surfaces</th>
                 </tr>

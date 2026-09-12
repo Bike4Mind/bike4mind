@@ -593,7 +593,7 @@ export interface IAuthProviders {
 export interface IUserDocument extends IUser, IMongoDocument {}
 
 export interface IUserRepository extends IBaseRepository<IUserDocument>, ICreditHolderMethods {
-  findByUsernameOrEmail: (username: string, email: string) => Promise<IUserDocument | null>;
+  findByUsernameOrEmail: (username: string, email?: string | null) => Promise<IUserDocument | null>;
   findByEmail: (email: string) => Promise<IUserDocument | null>;
   /**
    * Remove the given group ids from EVERY user's `groups[]` (org-wide blast radius; used when a

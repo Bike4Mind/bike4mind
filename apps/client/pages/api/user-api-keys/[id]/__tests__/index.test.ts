@@ -71,8 +71,8 @@ const userApiKeyRepository = vi.hoisted(() => ({
   findByOrganizationIdsAndId: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository }));
-const logEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent }));
+const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
 
 // The real gateEmbedBrandingWrite AND embedKeyOwnerHasEntitlement run; only the
 // leaf entitlement source (getUserEntitlements) and the owner-doc lookups are
@@ -99,19 +99,21 @@ import '@pages/api/user-api-keys/[id]/index';
 function patch(id: string | undefined, body: unknown) {
   const { req, res } = createMocks({ method: 'PATCH', query: id === undefined ? {} : { id }, body });
   (req as any).user = { id: 'u1', isAdmin: false };
+  (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return { req, res };
 }
 
 function del(id: string | undefined) {
   const { req, res } = createMocks({ method: 'DELETE', query: id === undefined ? {} : { id } });
   (req as any).user = { id: 'u1', isAdmin: false };
+  (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return { req, res };
 }
 
 describe('DELETE /api/user-api-keys/[id] - remove a revoked key', () => {
   beforeEach(() => {
     deleteUserApiKey.mockClear();
-    logEvent.mockClear();
+    logEventSafe.mockClear();
   });
 
   it('forwards the key id with both adapters and logs the DELETED event', async () => {
@@ -126,10 +128,18 @@ describe('DELETE /api/user-api-keys/[id] - remove a revoked key', () => {
       // would have no dependency to resolve with.
       { db: { userApiKeys: userApiKeyRepository, organizations: organizationRepository } }
     );
-    expect(logEvent).toHaveBeenCalledWith(
+    expect(logEventSafe).toHaveBeenCalledWith(
       expect.objectContaining({ metadata: { keyId: 'key-1', name: 'widget' } }),
+      expect.anything(),
       expect.anything()
     );
+  });
+
+  it('logs the deletion through logEventSafe with the request logger', async () => {
+    const { req, res } = del('key-1');
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(logEventSafe).toHaveBeenCalledWith(expect.anything(), expect.anything(), req.logger);
   });
 
   it('rejects a missing key id with 400 and never calls the service', async () => {
@@ -143,14 +153,14 @@ describe('DELETE /api/user-api-keys/[id] - remove a revoked key', () => {
     const { req, res } = del('key-1');
 
     await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow(/Revoke this API key/i);
-    expect(logEvent).not.toHaveBeenCalled();
+    expect(logEventSafe).not.toHaveBeenCalled();
   });
 });
 
 describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
   beforeEach(() => {
     updateEmbedKey.mockClear();
-    logEvent.mockClear();
+    logEventSafe.mockClear();
   });
 
   it('updates the provided fields with normalized origins and returns 200', async () => {
@@ -180,8 +190,9 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
     await mockRefs.patchHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(logEvent).toHaveBeenCalledWith(
+    expect(logEventSafe).toHaveBeenCalledWith(
       expect.objectContaining({ metadata: expect.objectContaining({ updatedFields: ['agentId'] }) }),
+      expect.anything(),
       expect.anything()
     );
   });
@@ -450,5 +461,19 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
       expect.anything(),
       expect.objectContaining({ db: expect.objectContaining({ organizations: organizationRepository }) })
     );
+  });
+});
+
+/**
+ * The analytics write happens after the key change has committed, so it goes
+ * through the best-effort wrapper with the request logger attached: a failed
+ * counter write gets recorded, not turned into a 5xx the client will retry.
+ */
+describe('PATCH /api/user-api-keys/[id] - analytics is best effort', () => {
+  it('logs the update through logEventSafe with the request logger', async () => {
+    const { req, res } = patch('key-1', { agentId: 'agent-2' });
+    await mockRefs.patchHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(logEventSafe).toHaveBeenCalledWith(expect.anything(), expect.anything(), req.logger);
   });
 });

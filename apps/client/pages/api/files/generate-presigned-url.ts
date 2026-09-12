@@ -22,12 +22,13 @@ import {
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { dataLakeService } from '@bike4mind/services';
-import { getSettingsMap, resolveSupportedMimeType } from '@bike4mind/utils';
+import { getSettingsMap, getSettingsValue, resolveSupportedMimeType } from '@bike4mind/utils';
 import { createFabFile } from '@server/managers/fabFileManager';
 import { baseApi } from '@server/middlewares/baseApi';
 import { logEvent } from '@server/utils/analyticsLog';
 import { FileEvents } from '@bike4mind/common';
 import { checkStorageLimit } from '@bike4mind/utils';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
 import { Resource } from 'sst';
 
 const s3Client = createS3Client();
@@ -52,16 +53,7 @@ const handler = baseApi().post(
       }
 
       const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-      let maxFileSize: number = 20 * 1024 * 1024; // Default to 20MB
-      if (settings.MaxFileSize) {
-        try {
-          // Convert the MB setting to bytes
-          maxFileSize = parseInt(settings.MaxFileSize, 10) * 1024 * 1024;
-          console.log(`MaxFileSize set to ${maxFileSize} bytes`);
-        } catch (err) {
-          console.log('Error parsing MaxFileSize setting', err);
-        }
-      }
+      const maxFileSize = getSettingsValue('MaxFileSize', settings, MAX_FILE_SIZE_DEFAULT_MB) * 1024 * 1024;
 
       if (!data.fileSize) throw new BadRequestError('No file size provided');
       if (data.fileSize >= maxFileSize) throw new BadRequestError('File size exceeds maximum file size');

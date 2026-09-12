@@ -22,7 +22,8 @@ import {
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
-import { checkStorageLimit, getSettingsMap, resolveSupportedMimeType } from '@bike4mind/utils';
+import { checkStorageLimit, getSettingsMap, getSettingsValue, resolveSupportedMimeType } from '@bike4mind/utils';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
 import { BadRequestError } from '@server/utils/errors';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
@@ -151,14 +152,7 @@ const handler = baseApi().post(async (req: Request, res) => {
 
   // Check individual file sizes against max file size setting
   const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-  let maxFileSize: number = 20 * 1024 * 1024; // Default to 20MB
-  if (settings.MaxFileSize) {
-    try {
-      maxFileSize = parseInt(settings.MaxFileSize, 10) * 1024 * 1024;
-    } catch {
-      // Fall back to default
-    }
-  }
+  const maxFileSize = getSettingsValue('MaxFileSize', settings, MAX_FILE_SIZE_DEFAULT_MB) * 1024 * 1024;
 
   // Validate every file up front (size + supported type) BEFORE any FabFile is
   // created below, so a single unsupported file can't leave partial lake state.
