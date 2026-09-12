@@ -28,13 +28,14 @@ const OAuthClientSchema = new mongoose.Schema(
     name: { type: String, required: true },
     redirectUris: [{ type: String }],
     allowedScopes: { type: [String], default: ['openid', 'email', 'profile'] },
-    // This script always mints a client_secret, so every client it registers is confidential.
-    // Must be persisted, or the token endpoint treats the client as public and rejects it for
-    // not presenting PKCE (it keys the decision on this field, not on the secret's presence).
+    // Default mirrors the real model (OAuthClientModel.ts): 'none' fails safe. This script always
+    // passes 'client_secret_post' explicitly at create() because it mints a secret, so the default
+    // never fires today; keeping it aligned means a future call that omits it registers a public
+    // client, not a confidential one it cannot authenticate.
     tokenEndpointAuthMethod: {
       type: String,
       enum: ['none', 'client_secret_post'],
-      default: 'client_secret_post',
+      default: 'none',
     },
     isActive: { type: Boolean, default: true },
     federatedIdp: {
