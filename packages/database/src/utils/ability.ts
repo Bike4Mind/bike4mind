@@ -17,6 +17,60 @@ import {
 import { InvitePermission, IUserDocument, Permission, hasDeveloperUserTag } from '@bike4mind/common';
 
 export type Ability = MongoAbility;
+
+/** The `can` of an `AbilityBuilder(createMongoAbility)`, which is what both callers hold. */
+type AllowFn = AbilityBuilder<MongoAbility>['can'];
+
+/**
+ * The shared user/group share arm, applied to every shareable resource.
+ *
+ * Called from BOTH ability builders - this one and apps/client/server/auth/ability.ts - so the two
+ * cannot drift. They previously kept hand-copied duplicates, which is how a cross-entry over-grant
+ * (dotted `users.userId` + `users.permissions` instead of `$elemMatch`) and a missing `Project`
+ * resource each survived in one copy while the other was correct.
+ *
+ * The resource LIST stays with each caller rather than living here, because each builder registers
+ * rules against the model objects it imported and CASL matches subjects by constructor - a shared
+ * list would close over db-core's models and never match the client's. List drift is what the
+ * structural test in ability.test.ts compares; body drift is now impossible.
+ */
+export function applySharedShareableRules(
+  allow: AllowFn,
+  user: Pick<IUserDocument, 'id' | 'groups'>,
+  resources: readonly Parameters<AllowFn>[1][]
+) {
+  const ownDocumentPermission: MongoQuery = { userId: user.id };
+
+  resources.forEach(resource => {
+    allow(Permission.create, resource);
+
+    // Globals apply to every shareable type.
+    allow(Permission.read, resource, { isGlobalRead: true });
+    allow(Permission.update, resource, { isGlobalWrite: true });
+
+    [Permission.read, Permission.update, Permission.delete, Permission.share].forEach(permission => {
+      allow(permission, resource, ownDocumentPermission);
+
+      // $elemMatch on both arms so the id and the permission must hold on the SAME entry. Dotted
+      // `{ 'users.userId': ..., 'users.permissions': ... }` lets the two conditions be satisfied by
+      // different array elements: a doc shared with alice (share only) and bob (read) would grant
+      // alice read. The group arm has the same shape of cross-entry over-grant. Mirrors the
+      // $elemMatch the fabFile search query already uses (fabFileSearchQuery.ts).
+      const userWithPermissions: MongoQuery = {
+        users: { $elemMatch: { userId: user.id, permissions: permission } },
+      };
+      const groupWithPermissions: MongoQuery = {
+        groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: permission } },
+      };
+      allow(permission, resource, userWithPermissions);
+
+      if (user.groups?.length) {
+        allow(permission, resource, groupWithPermissions);
+      }
+    });
+  });
+}
+
 export function defineAbilitiesFor(user: IUserDocument | undefined) {
   const { can: allow, build } = new AbilityBuilder(createMongoAbility);
 
@@ -66,44 +120,8 @@ export function defineAbilitiesFor(user: IUserDocument | undefined) {
       allow<MongoQuery>('read', AdminSettings, { isAdmin: false });
     }
 
-    // Do some loops to handle common patterns:
-    //  -- Users can manage their own stuff (ownDocumentPermission)
-    //  -- Users can do anything shared with their userId
-    //  -- If user is in groups, we check group permissions as well
-    [Session, FabFile, Organization, Project].forEach(resource => {
-      allow(Permission.create, resource);
+    applySharedShareableRules(allow, user, [Session, FabFile, Organization, Project]);
 
-      // Support globals for all document types:
-      allow(Permission.read, resource, { isGlobalRead: true });
-      allow(Permission.update, resource, { isGlobalWrite: true });
-
-      // Support user/group permissions for all document types:
-      [Permission.read, Permission.update, Permission.delete, Permission.share].forEach(permission => {
-        // Add permission for user to manage their own documents:
-        allow(permission, resource, ownDocumentPermission);
-
-        // $elemMatch on both arms so the id and the permission must hold on the SAME
-        // entry. Dotted `{ 'users.userId': ..., 'users.permissions': ... }` lets the two
-        // conditions be satisfied by different array elements: a doc shared with alice
-        // (share only) and bob (read) would grant alice read. The group arm has the same
-        // shape of cross-entry over-grant. Must stay in sync with the HTTP ability
-        // (apps/client/server/auth/ability.ts) and the fabFile search query's $elemMatch.
-        const userWithPermissions: MongoQuery = {
-          users: { $elemMatch: { userId: user.id, permissions: permission } },
-        };
-        const groupWithPermissions: MongoQuery = {
-          groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: permission } },
-        };
-        // Support sharing with specific user IDs:
-        allow(permission, resource, userWithPermissions);
-
-        // If user has any groups, add group permissions:
-        if (user.groups?.length) {
-          // Allow <permission> if any of the user's groups allows <permission>:
-          allow(permission, resource, groupWithPermissions);
-        }
-      });
-    });
     // Additional permissions for specific resources:
     allow('export', Session, ownDocumentPermission);
     allow('clone', Session, ownDocumentPermission);

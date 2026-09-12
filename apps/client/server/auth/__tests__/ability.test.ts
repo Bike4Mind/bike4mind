@@ -1,7 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { IUserDocument } from '@bike4mind/common';
 
-vi.mock('@bike4mind/database', () => ({
+vi.mock('@bike4mind/database', async () => ({
+  // The shared share arm is the REAL implementation - it takes the resource list as a parameter,
+  // so it registers rules against the stub classes below and CASL still matches them.
+  applySharedShareableRules: (
+    await vi.importActual<typeof import('../../../../../packages/database/src/utils/ability')>(
+      '../../../../../packages/database/src/utils/ability'
+    )
+  ).applySharedShareableRules,
   AdminSettings: class AdminSettings {},
   CounterLog: class CounterLog {},
   Session: class Session {

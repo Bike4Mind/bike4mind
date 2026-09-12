@@ -106,7 +106,7 @@ export interface IShareableStaticMethods<DocType> {
    * @param ids - The document IDs
    * @returns The documents
    */
-  findAllAccessibleByIds: (user: IUserDocument, ids: string[]) => Promise<DocType[]>;
+  findAllAccessibleByIds: (user: Pick<IUserDocument, 'id' | 'groups'>, ids: string[]) => Promise<DocType[]>;
 
   /**
    * Find a document with update access by ID

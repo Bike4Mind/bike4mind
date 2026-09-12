@@ -48,6 +48,17 @@ export const deleteProject = async (
     }
   }
 
+  // The owner is never in project.users (create.ts seeds it empty), but addFiles/addSessions mint
+  // the owner a projectId-scoped read+update grant on every file and session a MEMBER contributes.
+  // Those have to go too, or the owner keeps reading member content after deleting the only surface
+  // that could revoke it. Runs last: revokeFromProject prunes fileIds/sessionIds for documents the
+  // target owns, so an earlier owner pass would hide those from the member passes above.
+  try {
+    await revokeFromProject({ project, userIdToRevoke: project.userId }, adapters);
+  } catch (e) {
+    if (!(e instanceof NotFoundError)) throw e;
+  }
+
   project.deletedAt = new Date();
   project.name = `[Deleted] ${project.id}`;
 

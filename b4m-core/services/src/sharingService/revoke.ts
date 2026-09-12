@@ -136,7 +136,9 @@ const revokeSessionKnowledgeFileGrants = async (
     const remaining = file.users.filter(user => !(user.userId.toString() === userIdToRevoke && !user.projectId));
     if (remaining.length === file.users.length) continue;
     file.users = remaining;
-    await db.fabFiles.update(file);
+    // Whole-doc grant write on the revocation path, same reason the main revoke below takes the
+    // guard: a racing guarded write must conflict rather than silently resurrect this grant.
+    await db.fabFiles.updateGuarded!(file);
   }
 };
 

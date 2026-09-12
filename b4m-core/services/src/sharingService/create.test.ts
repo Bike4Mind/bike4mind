@@ -138,13 +138,22 @@ describe('sharingService - createInvite (project arm authority)', () => {
     findShareAccessById = vi.fn();
     db = {
       invites: { create: vi.fn(async (build: unknown) => ({ id: 'invite-2', ...(build as object) })) },
-      users: { findAllByEmailsOrUsernames: vi.fn(async () => []), findByIds: vi.fn(async () => []) },
+      users: {
+        findAllByEmailsOrUsernames: vi.fn(async () => []),
+        findByIds: vi.fn(async () => [{ id: 'member-1', email: 'member@x.com', username: 'member' }]),
+      },
       projects: { shareable: { findShareAccessById } },
     };
   });
 
+  // A Project invite always names someone - there is no link-share form of one - so the fixture
+  // carries a recipient the id resolver can find.
   const create = (user: IUserDocument, id = PROJECT_ID) =>
-    createInvite(user, { id, type: InviteType.Project, permissions: [Permission.read] } as any, { db });
+    createInvite(
+      user,
+      { id, type: InviteType.Project, permissions: [Permission.read], recipients: ['member-1'] } as any,
+      { db }
+    );
 
   it('creates an invite when the caller has share access, scoped to that caller and id', async () => {
     findShareAccessById.mockResolvedValue({ id: PROJECT_ID, name: PROJECT_NAME, userId: 'owner-2' });
@@ -253,6 +262,32 @@ describe('sharingService - createInvite (recipient resolution)', () => {
     db.users.findByIds = vi.fn(async () => []);
 
     await expect(createProject(['user-id-123'])).rejects.toBeInstanceOf(BadRequestError);
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+
+  // isLinkOnly has to agree with isLinkOnlyInvite's legacy inference in @bike4mind/common, which
+  // only ever treats FabFile and Session as link-shareable. A Project invite flagged link-only
+  // would be redeemable by any holder of the id, and acceptProject then pushes a grant onto every
+  // file and session the project holds.
+  it('refuses a recipientless Project invite rather than minting a link-only one', async () => {
+    await expect(
+      createInvite(
+        asUser('owner-4'),
+        { id: PROJECT_ID, type: InviteType.Project, permissions: [Permission.read], recipients: [] } as any,
+        { db }
+      )
+    ).rejects.toBeInstanceOf(BadRequestError);
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a Project invite with no recipients key at all', async () => {
+    await expect(
+      createInvite(
+        asUser('owner-4'),
+        { id: PROJECT_ID, type: InviteType.Project, permissions: [Permission.read] } as any,
+        { db }
+      )
+    ).rejects.toBeInstanceOf(BadRequestError);
     expect(db.invites.create).not.toHaveBeenCalled();
   });
 

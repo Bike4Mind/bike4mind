@@ -31,11 +31,6 @@ export const deleteSession = async (
     throw new NotFoundError('Session not found');
   }
 
-  session.deletedAt = new Date();
-
-  await db.sessions.update(session);
-  await db.projects.removeSession(session.id);
-
   // A shared session can carry files another collaborator uploaded into it - those are theirs,
   // not the session owner's. Deleting the session must only destroy the owner's own files;
   // an attached file owned by someone else just loses the owner's derived grant, mirroring the
@@ -44,11 +39,26 @@ export const deleteSession = async (
   const ownedFiles = fabFiles.filter(file => file.userId === userId);
   const sharedInFiles = fabFiles.filter(file => file.userId !== userId);
 
-  await db.fabFiles.deleteManyInIds(ownedFiles.map(f => f.id));
+  // Cascade BEFORE the tombstone. softDeletePlugin puts `deletedAt: null` on every findOne, and
+  // findByIdAndUserId is a bare findOne, so a session tombstoned first is unreachable on a retry:
+  // the guard above would throw and any grant this loop had not yet reached would stay live with
+  // no surface left to clear it. Nothing here is transactional, so ordering is the whole defence.
   for (const file of sharedInFiles) {
-    file.users = file.users.filter(user => user.userId.toString() !== userId);
-    await db.fabFiles.update(file);
+    // Only the grant this session materialized: an untagged row. A projectId-tagged row is
+    // governed by that project and survives the session going away, matching the same
+    // qualification in sharingService/revoke.ts's knowledge-file cascade.
+    file.users = file.users.filter(user => !(user.userId.toString() === userId && !user.projectId));
+    // Whole-doc grant write on a revocation path, so it takes the version guard for the same
+    // reason sharingService/revoke.ts does: a racing guarded write must conflict, not clobber.
+    await db.fabFiles.updateGuarded!(file);
   }
+
+  session.deletedAt = new Date();
+
+  await db.sessions.update(session);
+  await db.projects.removeSession(session.id);
+
+  await db.fabFiles.deleteManyInIds(ownedFiles.map(f => f.id));
 
   const mostRecent = await db.sessions.findRecentlyUpdatedByUserId(userId);
 

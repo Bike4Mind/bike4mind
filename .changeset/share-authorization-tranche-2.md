@@ -69,6 +69,36 @@ file grant whenever the inviter can share the file, so gating the revocation on 
 path. Both sides now use `heldPermissions`, which returns everything for an owner, so ownership
 still passes.
 
+Deleting a session cascades before it tombstones, and drops only the grant it created. The tombstone
+came first while the per-file grant rewrite came second, and `softDeletePlugin` puts
+`deletedAt: null` on every `findOne` - so a failure mid-cascade left the session unreachable on a
+retry with the remaining grants live and nothing left to clear them. The cascade now runs first.
+It also qualifies on `(userId, projectId)` like its sibling in `sharingService/revoke.ts`: it was
+stripping every row the deleter held, so a file reached through a project the deleter is still a
+member of lost that access too. Both new whole-document grant writes, here and in the session
+knowledge-file cascade, take `updateGuarded` rather than `update`, joining the optimistic-concurrency
+convention the revoke path already uses.
+
+Deleting a project revokes the owner's own derived grants. `addFiles`/`addSessions` mint the project
+owner a `projectId`-scoped read+update grant on content a MEMBER contributes, but the owner is never
+in `project.users`, so the per-member cascade never reached those and they outlived the only surface
+that could revoke them.
+
+A Project or Organization invite can no longer be minted with no recipients. Neither type is
+shareable by link, so an empty list would otherwise persist `isLinkOnly: true` and be redeemable by
+anyone holding the id. The flag is type-aware too, so it agrees with `isLinkOnlyInvite`'s legacy
+inference rather than contradicting it.
+
+The CASL share arm is now one exported function, `applySharedShareableRules`, called by both ability
+builders instead of being hand-copied. Each caller still passes its own resource list, because CASL
+matches subjects by constructor and a shared list would close over db-core's models; list drift is
+what the structural test compares, and body drift is no longer possible. `findAllAccessibleByIds`
+declares the `Pick<IUserDocument, 'id' | 'groups'>` it actually consumes, matching
+`findAllUpdateAccessByIds` and removing two casts at the `createProject` call site.
+`GET /api/invites/[id]` validates the id shape before `findById`, matching its sibling route.
+Migration 20260912000000 backfills `Invite.inviterId` from the username every invite already
+persists, which is the closing move for the legacy propagation fallback in `accept.ts`.
+
 Invite redemption enforces `expiresAt` on both accept and refuse. Declining now affects only the
 decliner's own slot: one recipient declining used to zero the invite for every other recipient, and
 any holder of a link id could do the same. Whole-invite revocation requires the same authority

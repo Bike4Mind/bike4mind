@@ -42,14 +42,14 @@ export const createProject = async (
   // tools expose and share-grant another user's file the moment the project is created.
   let resolvedFileIds: string[] = [];
   if (fileIds && fileIds.length > 0) {
-    const files = await db.fabFiles.shareable.findAllAccessibleByIds(actor as IUserDocument, fileIds);
+    const files = await db.fabFiles.shareable.findAllAccessibleByIds(actor, fileIds);
     if (files.length !== distinctIdCount(fileIds)) throw new BadRequestError('Some files are not accessible');
     resolvedFileIds = files.map(file => file.id);
   }
 
   let resolvedSessionIds: string[] = [];
   if (sessionIds && sessionIds.length > 0) {
-    const sessions = await db.sessions.shareable.findAllAccessibleByIds(actor as IUserDocument, sessionIds);
+    const sessions = await db.sessions.shareable.findAllAccessibleByIds(actor, sessionIds);
     if (sessions.length !== distinctIdCount(sessionIds)) throw new BadRequestError('Some sessions are not accessible');
     resolvedSessionIds = sessions.map(session => session.id);
   }

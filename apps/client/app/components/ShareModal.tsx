@@ -1,4 +1,5 @@
 import React from 'react';
+import { toast } from 'sonner';
 import { Modal, ModalDialog, ModalClose, Button, Stack, Tooltip, Typography } from '@mui/joy';
 import { updateSharingOnServer } from '@client/app/utils/sharingApi';
 import { ShareableEntity, IShareableDocument } from '@bike4mind/common';
@@ -38,6 +39,12 @@ const ShareModal: React.FC<ShareModalProps> = ({ open, onClose, shareableEntity,
         onClose();
         return updatedDocument;
       } catch (error) {
+        // Global read/write is a publish to the whole instance, so the server now gates it on the
+        // SHARE predicate rather than update. Permissions are independently assignable, so an
+        // update-without-share holder is a real grant and this call can legitimately be refused -
+        // swallowing it into console.error left the button looking inert.
+        const message = error instanceof Error ? error.message : 'Could not update sharing';
+        toast.error(message);
         console.error('Error updating sharing status:', error);
       }
     }

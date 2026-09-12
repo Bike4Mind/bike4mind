@@ -35,6 +35,11 @@ describe('projectService - delete', () => {
     mockFabFileRepo = createMockFabFileRepository();
     mockSessionRepo = createMockSessionRepository();
     mockUserRepo = createMockUserRepository();
+    // deleteProject now runs a final cascade pass for the project OWNER (addFiles/addSessions mint
+    // the owner a grant on member-contributed content), so these are reached even by a case with
+    // no members at all.
+    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([]);
+    (mockSessionRepo.findAllByIds as Mock).mockResolvedValue([]);
     adapters = {
       db: {
         projects: mockProjectRepo,
@@ -151,8 +156,43 @@ describe('projectService - delete', () => {
 
       await deleteProject(userId, { id: projectId }, adapters);
 
-      expect(mockFabFileRepo.update).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
-      expect(mockSessionRepo.update).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
+      expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
+      expect(mockSessionRepo.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
+    });
+
+    // addFiles/addSessions mint the project OWNER a projectId-scoped read+update grant on content a
+    // MEMBER contributes, but the owner is never in project.users (create.ts seeds it empty), so the
+    // per-member cascade never reached those. Deleting the project is the last chance to drop them.
+    it('revokes the owners own derived grant on a members file', async () => {
+      const projectId = 'test-project-id';
+      const memberId = 'member-1';
+      const fileId = 'file-owned-by-member';
+
+      const project = {
+        id: projectId,
+        userId,
+        sessionIds: [],
+        fileIds: [fileId],
+        users: [],
+        groups: [],
+      } as unknown as IProjectDocument;
+
+      // Owned by the member, carrying the owner's derived grant and nobody else's.
+      const memberFile = {
+        id: fileId,
+        userId: memberId,
+        users: [{ userId, permissions: ['read', 'update'], projectId }],
+      };
+
+      (mockProjectRepo.findByIdAndUserId as Mock).mockResolvedValue(project);
+      (mockProjectRepo.update as Mock).mockResolvedValue(project);
+      (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([memberFile]);
+      (mockUserRepo.findById as Mock).mockImplementation(async (id: string) => ({ id }));
+      (mockFabFileRepo.shareable.findAccessibleById as Mock).mockResolvedValue(memberFile);
+
+      await deleteProject(userId, { id: projectId }, adapters);
+
+      expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ id: fileId, users: [] }));
     });
 
     // The cascade is not transactional and runs before deletedAt is set, so a member it cannot

@@ -49,6 +49,10 @@ vi.mock('@server/managers/inviteManager', async importOriginal => {
 import { Invite } from '@bike4mind/database';
 import '@pages/api/invites/[id]/index';
 
+// GET validates the id shape before findById (matching pages/api/[type]/[id]), so the fixture
+// id has to be ObjectId-shaped or the handler answers 400 before any of this is exercised.
+const VALID_INVITE_ID = '507f1f77bcf86cd799439011';
+
 describe('DELETE /api/invites/[id]', () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -92,7 +96,7 @@ describe('GET /api/invites/[id] - recipient email strip', () => {
       username: 'inviter',
       recipients: { pending: ['me@x.com', 'other@x.com'], accepted: ['third@x.com'], refused: [] },
     });
-    const { req, res } = createMocks({ method: 'GET', query: { id: 'inv-1' } });
+    const { req, res } = createMocks({ method: 'GET', query: { id: VALID_INVITE_ID } });
     (req as any).user = { id: 'u1', email: 'me@x.com' };
     await mockRefs.getHandler!(req, res);
 
@@ -113,6 +117,15 @@ describe('GET /api/invites/[id] - recipient email strip', () => {
 describe('GET /api/invites/[id] - authorization gate', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('rejects a malformed invite id before it reaches findById', async () => {
+    const { req, res } = createMocks({ method: 'GET', query: { id: 'not-an-object-id' } });
+    (req as any).user = { id: 'u1', email: 'a@x.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(Invite.findById).not.toHaveBeenCalled();
+  });
+
   it('returns 404 (not 403) for a caller who is neither a recipient nor share-authorized', async () => {
     (Invite.findById as any).mockResolvedValue({
       id: 'inv-1',
@@ -122,7 +135,7 @@ describe('GET /api/invites/[id] - authorization gate', () => {
     });
     authorizeByInviteType.mockRejectedValue(new Error('Unauthorized'));
 
-    const { req, res } = createMocks({ method: 'GET', query: { id: 'inv-1' } });
+    const { req, res } = createMocks({ method: 'GET', query: { id: VALID_INVITE_ID } });
     (req as any).user = { id: 'u1', email: 'stranger@x.com' };
     await mockRefs.getHandler!(req, res);
 
@@ -144,7 +157,7 @@ describe('GET /api/invites/[id] - authorization gate', () => {
       recipients: { pending: ['other@x.com'], accepted: [], refused: [] },
     });
 
-    const { req, res } = createMocks({ method: 'GET', query: { id: 'inv-1' } });
+    const { req, res } = createMocks({ method: 'GET', query: { id: VALID_INVITE_ID } });
     (req as any).user = { id: 'owner-1', email: 'owner@x.com' };
     await mockRefs.getHandler!(req, res);
 

@@ -178,6 +178,10 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
               grantPermissions = update.permissions.filter(permission => held.has(permission));
               if (grantPermissions.length === 0) return;
             } else if (fabfile.userId === session.userId) {
+              // Legacy path: invites minted before `inviterId` existed. Strictly narrower than the
+              // gated branch above, so it fails closed. The 20260912000000 backfill populates
+              // inviterId from the username every invite already carries; once that has run
+              // everywhere this arm has no remaining input and should be deleted.
               grantPermissions = update.permissions;
             } else {
               return;

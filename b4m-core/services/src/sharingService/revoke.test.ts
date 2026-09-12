@@ -102,9 +102,9 @@ describe('sharingService - revoke (project-scoped grants)', () => {
     vi.clearAllMocks();
     mockAdapters = {
       db: {
-        sessions: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn() },
-        fabFiles: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn() },
-        projects: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn() },
+        sessions: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
+        fabFiles: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
+        projects: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
         users: { findById: vi.fn() },
       },
     };
@@ -124,7 +124,7 @@ describe('sharingService - revoke (project-scoped grants)', () => {
 
     await revoke(leavingId, { id: fileId, type: 'files', userId: leavingId, projectId }, mockAdapters);
 
-    expect(mockAdapters.db.fabFiles.update).toHaveBeenCalledWith(
+    expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(
       expect.objectContaining({ users: [{ userId: coMemberId, permissions: ['read'], projectId }] })
     );
   });
@@ -143,7 +143,7 @@ describe('sharingService - revoke (project-scoped grants)', () => {
 
     await revoke(ownerId, { id: fileId, type: 'files', userId: leavingId, projectId }, mockAdapters);
 
-    expect(mockAdapters.db.fabFiles.update).toHaveBeenCalledWith(
+    expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(
       expect.objectContaining({ users: [{ userId: leavingId, permissions: ['read', 'update'] }] })
     );
   });
@@ -162,7 +162,7 @@ describe('sharingService - revoke (project-scoped grants)', () => {
 
     await revoke(ownerId, { id: fileId, type: 'files', userId: leavingId, projectId }, mockAdapters);
 
-    expect(mockAdapters.db.fabFiles.update).toHaveBeenCalledWith(
+    expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(
       expect.objectContaining({ users: [{ userId: leavingId, permissions: ['read'], projectId: 'project-other' }] })
     );
   });
@@ -186,9 +186,14 @@ describe('sharingService - revoke (session knowledgeIds cascade)', () => {
     vi.clearAllMocks();
     mockAdapters = {
       db: {
-        sessions: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn() },
-        fabFiles: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), findAllByIds: vi.fn() },
-        projects: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn() },
+        sessions: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
+        fabFiles: {
+          shareable: { findAccessibleById: vi.fn() },
+          update: vi.fn(),
+          updateGuarded: vi.fn(),
+          findAllByIds: vi.fn(),
+        },
+        projects: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
         users: { findById: vi.fn() },
       },
     };
@@ -222,13 +227,15 @@ describe('sharingService - revoke (session knowledgeIds cascade)', () => {
 
     await revoke(ownerId, { id: sessionId, type: 'sessions', userId: sharedUserId }, mockAdapters);
 
-    expect(mockAdapters.db.sessions.update).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
+    expect(mockAdapters.db.sessions.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
     // The plain grant materialized by session acceptance is stripped.
-    expect(mockAdapters.db.fabFiles.update).toHaveBeenCalledWith(
+    expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(
       expect.objectContaining({ id: plainFileId, users: [] })
     );
     // A grant tied to a different project is left untouched, and the file is never even written.
-    expect(mockAdapters.db.fabFiles.update).not.toHaveBeenCalledWith(expect.objectContaining({ id: projectFileId }));
+    expect(mockAdapters.db.fabFiles.updateGuarded).not.toHaveBeenCalledWith(
+      expect.objectContaining({ id: projectFileId })
+    );
   });
 
   // accept.ts propagates a grant whenever the inviter can SHARE the file, not only when they own
@@ -258,7 +265,7 @@ describe('sharingService - revoke (session knowledgeIds cascade)', () => {
 
     await revoke(ownerId, { id: sessionId, type: 'sessions', userId: sharedUserId }, mockAdapters);
 
-    expect(mockAdapters.db.fabFiles.update).toHaveBeenCalledWith(
+    expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(
       expect.objectContaining({ id: foreignFileId, users: [{ userId: ownerId, permissions: ['read', 'share'] }] })
     );
   });
@@ -288,7 +295,7 @@ describe('sharingService - revoke (session knowledgeIds cascade)', () => {
 
     await revoke(ownerId, { id: sessionId, type: 'sessions', userId: sharedUserId }, mockAdapters);
 
-    expect(mockAdapters.db.fabFiles.update).not.toHaveBeenCalled();
+    expect(mockAdapters.db.fabFiles.updateGuarded).not.toHaveBeenCalled();
   });
 });
 
@@ -310,9 +317,9 @@ describe('sharingService - revoke (cross-project grants)', () => {
     vi.clearAllMocks();
     mockAdapters = {
       db: {
-        sessions: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn() },
-        fabFiles: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn() },
-        projects: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn() },
+        sessions: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
+        fabFiles: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
+        projects: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
         users: { findById: vi.fn() },
       },
     };
@@ -364,7 +371,7 @@ describe('sharingService - revoke (cross-project grants)', () => {
 
     await revoke(ownerId, { id: fileId, type: 'files', userId: sharedUserId, projectId: projectAId }, mockAdapters);
 
-    expect(mockAdapters.db.fabFiles.update).toHaveBeenCalledWith(
+    expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(
       expect.objectContaining({
         users: [{ userId: sharedUserId, permissions: [Permission.read], projectId: projectBId }],
       })
@@ -378,7 +385,7 @@ describe('sharingService - revoke (cross-project grants)', () => {
 
     await revoke(ownerId, { id: fileId, type: 'files', userId: sharedUserId, projectId: projectBId }, mockAdapters);
 
-    expect(mockAdapters.db.fabFiles.update).toHaveBeenCalledWith(
+    expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(
       expect.objectContaining({
         users: [{ userId: sharedUserId, permissions: [Permission.read], projectId: projectAId }],
       })
@@ -392,7 +399,7 @@ describe('sharingService - revoke (cross-project grants)', () => {
 
     await revoke(ownerId, { id: fileId, type: 'files', userId: sharedUserId }, mockAdapters);
 
-    expect(mockAdapters.db.fabFiles.update).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
+    expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
   });
 
   it('reports a scoped revoke that matches no grant instead of silently removing nothing', async () => {
@@ -403,6 +410,6 @@ describe('sharingService - revoke (cross-project grants)', () => {
     await expect(
       revoke(ownerId, { id: fileId, type: 'files', userId: sharedUserId, projectId: 'project-C' }, mockAdapters)
     ).rejects.toThrow(NotFoundError);
-    expect(mockAdapters.db.fabFiles.update).not.toHaveBeenCalled();
+    expect(mockAdapters.db.fabFiles.updateGuarded).not.toHaveBeenCalled();
   });
 });

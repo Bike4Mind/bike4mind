@@ -184,48 +184,60 @@ describe('db-core defineAbilitiesFor - user-shared document access', () => {
   });
 });
 
-// This db-core copy and the HTTP copy (apps/client/server/auth/ability.ts) build the same
-// shared user/group permission arm and have to be kept in sync by hand. The HTTP file uses
-// @server/ aliases this package cannot resolve, so both are read as source text and the
-// resource list is extracted from the "[...].forEach(resource => {" arm that builds the
-// userWithPermissions/groupWithPermissions $elemMatch queries - the one-and-only such loop
-// in each file, confirmed by requiring both markers nearby. This tracks the real arm even
-// if the resource list is reordered, and throws (rather than silently comparing nothing)
-// if that loop's shape ever changes enough that the pattern no longer matches.
-function extractSharedPermissionResources(filePath: string): string[] {
-  const content = fs.readFileSync(filePath, 'utf-8');
-  const forEachMatch = content.match(/\[\s*([^\]]+?)\s*\]\.forEach\(resource\s*=>\s*\{/);
-  if (!forEachMatch) {
-    throw new Error(`Could not find a "[...].forEach(resource => {" permission arm in ${filePath}`);
-  }
-  if (!content.includes('userWithPermissions') || !content.includes('groupWithPermissions')) {
-    throw new Error(
-      `Found a forEach(resource) loop in ${filePath}, but no userWithPermissions/groupWithPermissions marker nearby`
-    );
-  }
-  return forEachMatch[1]
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean);
-}
+// The user/group share arm used to be hand-copied into apps/client/server/auth/ability.ts, and the
+// copies drifted twice: a dotted cross-entry over-grant, and a missing Project resource. The BODY
+// is now one exported function both builders call, so it cannot drift and the behavioural tests
+// above cover the HTTP ability too. The resource LIST still lives with each caller - each builder
+// registers rules against the models it imported and CASL matches subjects by constructor - so the
+// list is the one thing left that can diverge, and it is what this compares.
+describe('shared shareable arm', () => {
+  const dbCoreSource = fs.readFileSync(path.resolve(__dirname, './ability.ts'), 'utf-8');
+  const clientSource = fs.readFileSync(
+    path.resolve(__dirname, '../../../../apps/client/server/auth/ability.ts'),
+    'utf-8'
+  );
 
-describe('db-core ability.ts / HTTP ability.ts structural parity', () => {
-  const dbCorePath = path.resolve(__dirname, './ability.ts');
-  const clientPath = path.resolve(__dirname, '../../../../apps/client/server/auth/ability.ts');
+  const resourcesPassedTo = (source: string): string[] => {
+    const match = source.match(/applySharedShareableRules\(allow, user, \[([^\]]+)\]\)/);
+    if (!match) throw new Error('No applySharedShareableRules(allow, user, [...]) call found');
+    return match[1]
+      .split(',')
+      .map(r => r.trim())
+      .filter(Boolean);
+  };
 
-  it('grants the shared user/group permission arm over the same resources in both copies', () => {
-    const dbCoreResources = new Set(extractSharedPermissionResources(dbCorePath));
-    const clientResources = new Set(extractSharedPermissionResources(clientPath));
+  it('is called by both ability builders rather than rebuilt in either', () => {
+    expect(dbCoreSource).toContain('applySharedShareableRules(allow, user, [');
+    expect(clientSource).toContain('applySharedShareableRules(allow, user, [');
+    // Neither may grow a resource loop of its own again.
+    expect(clientSource).not.toMatch(/\]\.forEach\(resource\s*=>/);
+  });
 
-    expect(
-      dbCoreResources,
-      'The two ability copies grant the shared user/group permission arm over different resource ' +
-        `sets. Add the missing resource to whichever copy lacks it.\ndb-core: ${[...dbCoreResources].join(', ')}\n` +
-        `client:  ${[...clientResources].join(', ')}`
-    ).toEqual(clientResources);
+  it('is given the same resource set by both', () => {
+    expect(new Set(resourcesPassedTo(dbCoreSource))).toEqual(new Set(resourcesPassedTo(clientSource)));
   });
 
   it('covers Project, whose absence from db-core made shared projects unreachable in queue handlers', () => {
-    expect(extractSharedPermissionResources(dbCorePath)).toContain('Project');
+    expect(resourcesPassedTo(dbCoreSource)).toContain('Project');
+  });
+
+  it('does not reintroduce the dotted cross-entry filter in either copy', () => {
+    // Comment lines stripped first: both files legitimately *describe* the dotted form as the bug
+    // they exist to avoid, and matching that prose would make this test unfailable-by-design.
+    const codeOnly = (source: string) =>
+      source
+        .split('\n')
+        .filter(line => {
+          const trimmed = line.trim();
+          return !trimmed.startsWith('//') && !trimmed.startsWith('*') && !trimmed.startsWith('/*');
+        })
+        .join('\n');
+
+    for (const source of [clientSource, dbCoreSource]) {
+      const code = codeOnly(source);
+      expect(code).not.toContain("'users.userId'");
+      expect(code).not.toContain("'users.permissions'");
+      expect(code).not.toContain("'groups.groupId'");
+    }
   });
 });

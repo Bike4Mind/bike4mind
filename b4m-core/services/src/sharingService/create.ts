@@ -144,7 +144,10 @@ export const createInvite = async (
   // Persisted so the view and accept gates can tell "names nobody by design" from "named somebody
   // who did not resolve". `recipients` omitted entirely names nobody just as `[]` does, which is
   // why this is not simply isLinkOnlyInvite (that one sizes `available` and is left as it was).
-  const namesNobody = recipientsArray.length === 0;
+  // Type-aware so it agrees with `isLinkOnlyInvite`'s legacy inference in @bike4mind/common: only
+  // FabFile and Session are shareable by link. A recipientless Project/Organization invite is a
+  // mistake, not a share link, and is refused below - this keeps the flag fail-closed regardless.
+  const namesNobody = recipientsArray.length === 0 && (type === InviteType.FabFile || type === InviteType.Session);
 
   // By-Users sharing (FabFile/Session) sends real emails/usernames and must not silently
   // create a share nobody can see. Organization/Project invites send raw user ids through
@@ -177,7 +180,11 @@ export const createInvite = async (
     // Dedupe: two recipient strings (an email and that same person's username) can resolve to
     // the same one user, and pending.length below counts unique resolved users, not raw entries.
     pending = Array.from(new Set(resolved));
-  } else if ((type === InviteType.Project || type === InviteType.Organization) && recipientsArray.length > 0) {
+  } else if (type === InviteType.Project || type === InviteType.Organization) {
+    // Neither type is shareable by link: both always name people. An empty list would otherwise
+    // mint an invite flagged link-only, redeemable ~100 years by anyone holding the id, which for
+    // a Project means pushShareable over every file and session it holds.
+    if (recipientsArray.length === 0) throw new BadRequestError('Recipients are required for this invite type');
     // Project and Organization invites carry raw user ids (the add-members modals send
     // `recipients: [userId]`), which findAllByEmailsOrUsernames cannot resolve - it queries email
     // and username only, never _id. Left unresolved, `pending` stayed empty and every gate keyed
