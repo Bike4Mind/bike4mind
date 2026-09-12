@@ -25,7 +25,11 @@ const CONFIRM_ENV = 'OAUTH_BACKFILL_CONFIRMED';
  *      than silently reclassifying). A stage with no un-classified rows (fresh install, CI) is a
  *      no-op and does not block.
  *   2. Audit `oauthclients` and set `tokenEndpointAuthMethod: 'none'` on any PKCE-only client. The
- *      `{ $exists: false }` filter then leaves those rows untouched.
+ *      `{ $exists: false }` filter then leaves those rows untouched. Classify each client from how it
+ *      actually authenticates today (from the integration/registration owner), NOT from any data
+ *      field. In particular the removed `pkceRequired` field survives on legacy documents as `true`
+ *      on every row, is read by no code path, and is NOT the audit signal - trusting it would stamp
+ *      every client `'none'` and break all confidential integrations. No migration unsets it.
  *   3. Set `${CONFIRM_ENV}=1` on the stage and redeploy. The backfill stamps the remaining
  *      un-classified rows `client_secret_post`. Idempotent - already-classified rows are skipped and
  *      a re-run finds nothing.

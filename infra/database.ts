@@ -13,6 +13,12 @@ const migrator = new sst.aws.Function('DatabaseMigrator', {
   link: [...allSecrets, fabFileBucket, generatedImagesBucket, appFilesBucket],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
+    // Operator opt-in for the fail-closed OAuth token-auth-method backfill migration. Empty by
+    // default; set OAUTH_BACKFILL_CONFIRMED=1 on the stage to confirm the backfill after auditing
+    // oauthclients. Without this line the var never reaches the migrator and a stage with legacy
+    // clients cannot get past the migration's throw. See
+    // packages/scripts/migrate/migrations/*_backfill-oauthclient-token-endpoint-auth-method.ts.
+    OAUTH_BACKFILL_CONFIRMED: process.env.OAUTH_BACKFILL_CONFIRMED || '',
   },
   vpc: lambdaVpc,
 });
