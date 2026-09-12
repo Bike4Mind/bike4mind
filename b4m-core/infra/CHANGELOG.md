@@ -1,5 +1,11 @@
 # @bike4mind/infra
 
+## 0.10.1
+
+### Patch Changes
+
+- [#2660](https://github.com/Bike4Mind/bike4mind/pull/2660) [`2d51605`](https://github.com/Bike4Mind/bike4mind/commit/2d51605cd93522e01150ac428a23b1ac7a4533a5) Thanks [@julsanchez](https://github.com/julsanchez)! - scan imported knowledge files instead of stamping them clean
+
 ## 0.10.0
 
 ### Minor Changes
