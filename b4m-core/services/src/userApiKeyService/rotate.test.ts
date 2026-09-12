@@ -80,9 +80,10 @@ describe('rotateUserApiKey - no escalation by rotation', () => {
 });
 
 /**
- * Re-owning an embed:chat key repoints the embed runtime's agent/BYOK/tool resolution
- * to the rotator, so the bound agent must be owned by the new owner or the rotation is
- * refused rather than allowed to corrupt the public widget.
+ * An embed:chat key's userId is the embed runtime's identity, not just an owner label:
+ * the bound agent's ownership check AND the owner's BYOK LLM keys, tools and KB all
+ * resolve from it. A cross-owner rotation therefore corrupts the public widget, so it is
+ * refused outright - only the owner rotating their own key passes.
  */
 describe('rotateUserApiKey - embed:chat re-ownership binding guard', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -90,10 +91,7 @@ describe('rotateUserApiKey - embed:chat re-ownership binding guard', () => {
   const embedKey = (over: Record<string, unknown> = {}) =>
     key({ scopes: [ApiKeyScope.EMBED_CHAT], agentId: 'agent-1', organizationId: 'org-1', ...over });
 
-  const makeEmbedAdapters = (
-    stored: Record<string, unknown>,
-    agent: { userId?: string; organizationId?: string } | null | undefined
-  ) => ({
+  const makeEmbedAdapters = (stored: Record<string, unknown>) => ({
     db: {
       userApiKeys: {
         findByUserIdAndId: vi.fn().mockResolvedValue(stored),
@@ -101,41 +99,34 @@ describe('rotateUserApiKey - embed:chat re-ownership binding guard', () => {
         update: vi.fn().mockResolvedValue(stored),
       } as never,
       organizations: { findIdsAdministeredBy: vi.fn().mockResolvedValue(['org-1']) },
-      // `undefined` omits the adapter entirely, to prove the fail-closed path.
-      ...(agent === undefined ? {} : { agents: { findById: vi.fn().mockResolvedValue(agent) } as never }),
     },
   });
 
-  it('refuses re-owning to a rotator when the bound agent is not owned by them', async () => {
-    // Agent belongs to the original owner personally; the org-admin rotator does not own it.
-    const adapters = makeEmbedAdapters(embedKey(), { userId: 'owner-1' });
+  it('refuses re-owning an agent-bound embed key when the agent is the owner personal (loud widget break)', async () => {
+    // Re-owning to admin-2 would 403 the widget: the bound agent is owner-1's personal
+    // agent, so isAgentOwnedByEmbedKey fails for the new owner.
+    const adapters = makeEmbedAdapters(embedKey());
 
     await expect(rotateUserApiKey('admin-2', { keyId: 'k1' }, adapters as never)).rejects.toThrow(
-      /bound agent is not owned by you/i
+      /cannot rotate this embed key to a new owner/i
     );
     expect(adapters.db.userApiKeys.update).not.toHaveBeenCalled();
   });
 
-  it('allows re-owning when the bound agent belongs to the org the key bills', async () => {
-    const adapters = makeEmbedAdapters(embedKey(), { organizationId: 'org-1' });
-
-    const result = await rotateUserApiKey('admin-2', { keyId: 'k1' }, adapters as never);
-
-    expect(result.previousOwnerUserId).toBe('owner-1');
-    expect(adapters.db.userApiKeys.update).toHaveBeenCalled();
-  });
-
-  it('fails closed when the agents adapter is absent on a re-owning embed rotation', async () => {
-    const adapters = makeEmbedAdapters(embedKey(), undefined);
+  it('refuses re-owning an agent-bound embed key even when the agent is org-shared (silent BYOK/tool/KB swap)', async () => {
+    // The ownership check still passes for an org-shared agent, so the pre-fix code
+    // re-owned and silently repointed the widget to the rotator's BYOK keys, tools and
+    // KB. The guard no longer inspects the agent - any cross-owner re-own is refused.
+    const adapters = makeEmbedAdapters(embedKey({ organizationId: 'org-1' }));
 
     await expect(rotateUserApiKey('admin-2', { keyId: 'k1' }, adapters as never)).rejects.toThrow(
-      /agents adapter is required/i
+      /cannot rotate this embed key to a new owner/i
     );
     expect(adapters.db.userApiKeys.update).not.toHaveBeenCalled();
   });
 
-  it('skips the guard when the owner rotates their own embed key (no re-owning)', async () => {
-    const adapters = makeEmbedAdapters(embedKey(), undefined);
+  it('allows the owner to rotate their own embed key (no re-owning)', async () => {
+    const adapters = makeEmbedAdapters(embedKey());
 
     const result = await rotateUserApiKey('owner-1', { keyId: 'k1' }, adapters as never);
 
@@ -145,7 +136,7 @@ describe('rotateUserApiKey - embed:chat re-ownership binding guard', () => {
 
   it('does not gate re-owning a non-embed key on the agent binding', async () => {
     // A stray agentId on a non-embed key must not drag in the embed guard.
-    const adapters = makeEmbedAdapters(key({ scopes: [ApiKeyScope.READ_NOTEBOOKS], agentId: 'agent-1' }), undefined);
+    const adapters = makeEmbedAdapters(key({ scopes: [ApiKeyScope.READ_NOTEBOOKS], agentId: 'agent-1' }));
 
     const result = await rotateUserApiKey('admin-2', { keyId: 'k1' }, adapters as never);
 

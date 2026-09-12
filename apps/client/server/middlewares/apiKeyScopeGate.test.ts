@@ -59,11 +59,19 @@ describe('decideScopeGate', () => {
     }
   });
 
-  it('denies a confined key on a route requiring some other scope', () => {
+  it('denies a confined key on a route requiring some other scope, even mid-staging', () => {
+    // NONE staged: the deny could also come from the ordinary-miss path, so this half
+    // alone does not isolate the confinement branch.
     expect(decideScopeGate([ApiKeyScope.AI_CHAT], [ApiKeyScope.EMBED_CHAT], NONE)).toEqual({ outcome: 'deny' });
+    // With that scope staged, only the confinement branch stands between the confined key
+    // and a stagedAllow - so this pins line 119: delete it and this flips to stagedAllow.
+    const staged = new Set<string>([ApiKeyScope.AI_CHAT]);
+    expect(decideScopeGate([ApiKeyScope.AI_CHAT], [ApiKeyScope.EMBED_CHAT], staged)).toEqual({ outcome: 'deny' });
   });
 
   it('allows a confined key on the route that names its scope', () => {
+    // Allow-path control (the explicit-match branch), not a confinement test: confinement
+    // must not over-block a confined key from the one route it is meant for.
     expect(decideScopeGate([ApiKeyScope.EMBED_CHAT], [ApiKeyScope.EMBED_CHAT], NONE)).toEqual({ outcome: 'allow' });
   });
 

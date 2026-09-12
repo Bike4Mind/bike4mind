@@ -1,10 +1,4 @@
-import {
-  ApiKeyScope,
-  IAgentRepository,
-  IOrganizationRepository,
-  isAgentOwnedByEmbedKey,
-  IUserApiKeyRepository,
-} from '@bike4mind/common';
+import { ApiKeyScope, IOrganizationRepository, IUserApiKeyRepository } from '@bike4mind/common';
 import { ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { randomBytes } from 'crypto';
 import bcrypt from 'bcryptjs';
@@ -22,13 +16,6 @@ interface RotateUserApiKeyAdapters {
   db: {
     userApiKeys: IUserApiKeyRepository;
     organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
-    /**
-     * Needed only to re-validate an embed key's agent binding when a rotation would
-     * re-own it (see the guard below). Optional on the TYPE so this published adapter
-     * contract stays additive, but REQUIRED at runtime for that one case, where its
-     * absence throws rather than skipping the check.
-     */
-    agents?: Pick<IAgentRepository, 'findById'>;
   };
   /**
    * Scopes of the API key making the request, when the caller authenticated with one.
@@ -112,22 +99,19 @@ export const rotateUserApiKey = async (
 
   // An embed key's userId is not just an owner label: the embed runtime resolves the
   // bound agent's ownership, the owner's BYOK LLM keys, tool availability and KB access
-  // all from it (embedRoute.ts, embed/serve.ts). Re-owning it to the rotator would 403
-  // the public widget ('Agent is not owned by the embed key') when the agent is the
-  // original owner's personal agent, or silently repoint it to the rotator's BYOK/tools
-  // otherwise. So re-validate the binding against the NEW owner and refuse rather than
-  // corrupt - the operator must share the agent to the org (or rebind) first. Same
-  // predicate as the other consumers of key.agentId (isAgentOwnedByEmbedKey).
+  // all from it (embedRoute.ts, embed/serve.ts). Re-owning it to the rotator either 403s
+  // the public widget ('Agent is not owned by the embed key') when the bound agent is the
+  // original owner's personal agent, or - when the agent is org-shared so the ownership
+  // check still passes - SILENTLY repoints the widget to the rotator's BYOK keys, tools
+  // and KB. An ownership check can't separate those cases: the BYOK/tool/KB surfaces
+  // resolve from userId unconditionally, so any change of owner corrupts them. Refuse
+  // every cross-owner re-own of an agent-bound embed key. The owner rotating their own
+  // key (not re-owned) is unaffected; a leaked teammate key is rotated by its owner, or
+  // the agent is rebound first.
   if (reOwned && apiKey.agentId && (apiKey.scopes ?? []).includes(ApiKeyScope.EMBED_CHAT)) {
-    if (!db.agents) {
-      throw new ForbiddenError('agents adapter is required to rotate an embed:chat key to a new owner');
-    }
-    const agent = await db.agents.findById(apiKey.agentId);
-    if (!agent || !isAgentOwnedByEmbedKey(agent, { organizationId: apiKey.organizationId, userId })) {
-      throw new ForbiddenError(
-        'Cannot rotate this embed key: its bound agent is not owned by you. Share the agent to the organization first.'
-      );
-    }
+    throw new ForbiddenError(
+      'Cannot rotate this embed key to a new owner: its bound agent drives the widget LLM keys, tools and knowledge base access, which are tied to the current owner. Have the owner rotate it, or rebind the agent first.'
+    );
   }
 
   const { key, keyPrefix, keyHash } = generateNewApiKey();
