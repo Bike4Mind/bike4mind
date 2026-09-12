@@ -25,6 +25,10 @@ let sessionUserId = 'me';
 // Keyed so a test can set only the setting it cares about; other keys stay undefined,
 // matching the real useGetSettingsValue's per-key resolution.
 let settingsValues: Record<string, unknown> = {};
+// The SERVER-resolved embedding model, which is what the mismatch badge compares against - not the
+// `defaultEmbeddingModel` setting. The two differ on any stage that fell back to the keyless
+// embedder, and comparing against the setting there flags every healthy file (see the hook).
+let effectiveEmbeddingModel: string | undefined;
 
 vi.mock('@client/app/hooks/useNotebookContextFiles', () => ({
   useNotebookContextFiles: () => ({
@@ -45,7 +49,10 @@ vi.mock('sonner', () => ({ toast: { success: mockToastSuccess, error: vi.fn() } 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { id: currentUserId } }) }));
 vi.mock('@client/app/hooks/useMessageFiles', () => ({ useMessageFiles: () => messageFiles }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({ useModelInfo: () => ({ data: undefined }) }));
-vi.mock('@client/app/hooks/data/settings', () => ({ useGetSettingsValue: (key: string) => settingsValues[key] }));
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useGetSettingsValue: (key: string) => settingsValues[key],
+  useEffectiveEmbeddingModel: () => effectiveEmbeddingModel,
+}));
 // useChunkFile stays mocked even though FilesSection no longer calls it, so a regression that
 // routes reprocess back through the non-resetting /api/files/chunk door fails on the assertion
 // below rather than on a missing-export error.
@@ -89,6 +96,7 @@ describe('FilesSection message-scoped files', () => {
     currentUserId = 'me';
     sessionUserId = 'me';
     settingsValues = {};
+    effectiveEmbeddingModel = undefined;
   });
 
   it('renders when the notebook has ONLY message-scoped files', () => {
@@ -172,7 +180,7 @@ describe('FilesSection message-scoped files', () => {
     // DefaultChunkSize policy resolved server-side (this test previously asserted a clamped
     // client-side chunkSize, which the reprocess door does not and should not accept).
     settingsValues.DefaultChunkSize = 5000;
-    settingsValues.defaultEmbeddingModel = 'model-b';
+    effectiveEmbeddingModel = 'model-b';
     workBenchFiles = [{ ...fab('w1', 'roster.pdf'), embeddingModel: 'model-a' } as IFabFileDocument];
 
     renderPanel();
@@ -184,7 +192,7 @@ describe('FilesSection message-scoped files', () => {
   });
 
   it('reports the rebuild as started and does not mark the file complete off the queue ack', () => {
-    settingsValues.defaultEmbeddingModel = 'model-b';
+    effectiveEmbeddingModel = 'model-b';
     workBenchFiles = [
       { ...fab('w1', 'roster.pdf'), embeddingModel: 'model-a', chunked: true, vectorized: true } as IFabFileDocument,
     ];
@@ -210,7 +218,7 @@ describe('FilesSection message-scoped files', () => {
   });
 
   it('marks a system-scoped file pending in the system-prompt-files cache', () => {
-    settingsValues.defaultEmbeddingModel = 'model-b';
+    effectiveEmbeddingModel = 'model-b';
     systemFiles = [
       { ...fab('sys1', 'policy.pdf'), embeddingModel: 'model-a', chunked: true, vectorized: true } as IFabFileDocument,
     ];
@@ -239,7 +247,7 @@ describe('FilesSection message-scoped files', () => {
     // Locks the fix: handleReprocessFile treats a file as possibly present in both the
     // system and workbench lists, so an unsuffixed testid would collide and getByTestId
     // would throw on more than one match.
-    settingsValues.defaultEmbeddingModel = 'model-b';
+    effectiveEmbeddingModel = 'model-b';
     systemFiles = [{ ...fab('dup1', 'shared.pdf'), embeddingModel: 'model-a' } as IFabFileDocument];
     workBenchFiles = [{ ...fab('dup1', 'shared.pdf'), embeddingModel: 'model-a' } as IFabFileDocument];
 

@@ -171,6 +171,25 @@ export function useGetSettingsValue(key: SettingKey) {
   }, [key, settingsFromServer, settingConfigs]);
 }
 
+/**
+ * The embedding model this deployment will actually embed with, or undefined while it is unknown.
+ *
+ * Use this, NOT `useGetSettingsValue('defaultEmbeddingModel')`, for anything that compares a file's
+ * recorded `embeddingModel` label. The setting is what the deployment ADVERTISES and is deliberately
+ * stage-neutral (it is bundled into this browser build, where no credential is visible); a stage
+ * holding no key for it embeds and stamps with the keyless Bedrock model instead. Comparing labels
+ * to the advertised value therefore reports every correctly-embedded file on such a stage as living
+ * in a foreign vector space. Only the server can resolve this - see `computeEffectiveEmbeddingModel`.
+ *
+ * Undefined means "not resolved yet, or this deployment cannot embed at all". Callers must treat it
+ * as unknown and suppress the comparison rather than falling back to the advertised setting, which
+ * is the substitution that produces the false mismatch in the first place.
+ */
+export function useEffectiveEmbeddingModel(): string | undefined {
+  const { data: config } = useConfig();
+  return config?.effectiveEmbeddingModel || undefined;
+}
+
 // Public hook for branding settings (doesn't require authentication)
 export function useBrandingSettings() {
   return useQuery({

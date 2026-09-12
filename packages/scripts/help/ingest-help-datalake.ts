@@ -58,7 +58,8 @@ async function main(opts: { userId: string; dryRun: boolean }): Promise<number> 
     db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
     getSettingsByNames,
   });
-  console.log(`Embedding model: ${embeddingModel}`);
+  const { embed, model: resolvedEmbeddingModel } = createHelpEmbedder(embeddingModel, apiKeyTable);
+  console.log(`Embedding model: ${resolvedEmbeddingModel}`);
 
   await ingestHelpDatalake(
     {
@@ -67,8 +68,8 @@ async function main(opts: { userId: string; dryRun: boolean }): Promise<number> 
         fabFileChunks: fabFileChunkRepository,
         dataLakes: dataLakeRepository,
       },
-      embed: createHelpEmbedder(embeddingModel, apiKeyTable),
-      embeddingModel,
+      embed,
+      embeddingModel: resolvedEmbeddingModel,
       logger: { info: msg => console.log(msg), warn: msg => console.warn(msg) },
     },
     {

@@ -1,5 +1,6 @@
-import { adminSettingsRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
+import { dataLakeRepository, fabFileRepository } from '@bike4mind/database';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
+import { resolveEffectiveEmbeddingModel } from '../embeddings/effectiveEmbeddingModel';
 import { recallLakeMemory, type AccessibleLake, type LakeBeliefRecall } from './recallLakeMemory';
 import { createReachableSourcesResolver, createSourceDatesResolver } from './lakeSourceReachability';
 
@@ -9,7 +10,9 @@ import { createReachableSourcesResolver, createSourceDatesResolver } from './lak
  * into the principal-generic core read:
  *  1. resolve each tag to its lake's DEK owner (`createdByUserId`);
  *  2. build the FabFile-backed source-reachability resolver, scoped to the FAB chunk vector space
- *     (`defaultEmbeddingModel`) and the session's retrieval filter;
+ *     the corpus was ACTUALLY written in (`defaultEmbeddingModel` resolved through the credential
+ *     table, which is not the same string on a stage that fell back to the keyless embedder) and the
+ *     session's retrieval filter;
  *  3. delegate to `recallLakeMemory`.
  *
  * The query vector space for reachability is the FAB chunk space, NOT the memento space the beliefs
@@ -46,13 +49,18 @@ export async function recallLakeMemoryForSession(input: {
   ).filter((lake): lake is AccessibleLake => lake !== null);
   if (lakes.length === 0) return [];
 
-  const queryEmbeddingModel = await adminSettingsRepository
-    .getSettingsValue('defaultEmbeddingModel')
-    .catch(() => undefined);
+  // Resolved through the credential table, not read raw: on a stage that holds no key for the
+  // configured model the vectorizer stamped its corpus with the keyless model it fell back to, so
+  // comparing source labels against the advertised setting makes EVERY correctly-embedded doc look
+  // like it lives in a foreign vector space - and `isFabFileCitable` then drops every citation, so
+  // recall returns nothing on exactly the stages the fallback exists to keep working. Undefined
+  // means no query vector can be produced at all, which the resolver below already reads as "the
+  // semantic arm cannot run, nothing citable".
+  const queryEmbeddingModel = await resolveEffectiveEmbeddingModel(input.userId);
 
   const resolveReachableSources = createReachableSourcesResolver({
     fabfiles: fabFileRepository,
-    queryEmbeddingModel: typeof queryEmbeddingModel === 'string' ? queryEmbeddingModel : undefined,
+    queryEmbeddingModel,
     retrievalFilter: input.retrievalFilter,
   });
 

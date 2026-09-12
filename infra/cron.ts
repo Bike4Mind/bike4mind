@@ -835,6 +835,16 @@ const helpDatalakeIngestCron = new sst.aws.Cron('helpDatalakeIngest', {
       { from: 'docs-site/docs', to: 'help-corpus/docs' },
       { from: 'apps/client/app/generated/help-index.json', to: 'help-corpus/help-index.json' },
     ],
+    // This cron embeds the whole help corpus through createHelpEmbedder, so it needs the same
+    // Bedrock grant the vectorize subscriber has (infra/queues.ts): an admin can point
+    // defaultEmbeddingModel at Titan, and a stage with no provider key falls back to it. Without
+    // this the first tick AccessDenies on every chunk and retries the whole corpus every 6 hours.
+    permissions: [
+      {
+        actions: ['bedrock:InvokeModel'],
+        resources: ['*'],
+      },
+    ],
     logging: {
       retention: '1 week',
     },

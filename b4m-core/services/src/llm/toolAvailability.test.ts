@@ -99,18 +99,21 @@ describe('resolveToolAvailability - music_generation and audio_generation Eleven
 });
 
 describe('resolveToolAvailability - search_knowledge_base embedding-key gate', () => {
-  const savedSelfHost = process.env.B4M_SELF_HOST;
-  const savedOllama = process.env.OLLAMA_BASE_URL;
+  const saved = {
+    B4M_SELF_HOST: process.env.B4M_SELF_HOST,
+    OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL,
+    // The keyless-Bedrock gate reads this; each case states the runtime it means.
+    AWS_LAMBDA_FUNCTION_NAME: process.env.AWS_LAMBDA_FUNCTION_NAME,
+  };
 
   beforeEach(() => {
-    delete process.env.B4M_SELF_HOST;
-    delete process.env.OLLAMA_BASE_URL;
+    for (const k of Object.keys(saved)) delete process.env[k];
   });
   afterEach(() => {
-    if (savedSelfHost === undefined) delete process.env.B4M_SELF_HOST;
-    else process.env.B4M_SELF_HOST = savedSelfHost;
-    if (savedOllama === undefined) delete process.env.OLLAMA_BASE_URL;
-    else process.env.OLLAMA_BASE_URL = savedOllama;
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
   });
 
   it('is available with a real cloud embedding key', async () => {
@@ -119,12 +122,25 @@ describe('resolveToolAvailability - search_knowledge_base embedding-key gate', (
     expect(availability.search_knowledge_base).toBe(true);
   });
 
-  it('is NOT available when the only cloud key is a placeholder and no local embedder is configured', async () => {
+  it('is NOT available on self-host when the only cloud key is a placeholder and no local embedder is configured', async () => {
     // The bug this guards: a placeholder key used to read as a working cloud embedder, so KB
-    // advertised a provider the vectorizer would 401 on.
+    // advertised a provider the vectorizer would 401 on. Pinned to self-host, the only
+    // environment where it is still observable - a cloud stage always has keyless Bedrock.
+    process.env.B4M_SELF_HOST = 'true';
     getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'sk-oai-dummy-routing-test' });
     const availability = await resolveToolAvailability('user-1', { db });
     expect(availability.search_knowledge_base).toBe(false);
+  });
+
+  it('stays available on a keyless cloud stage (Bedrock needs no provider key)', async () => {
+    // A preview carries no usable OPENAI_API_KEY, but it does reach Bedrock with its own execution
+    // role, so KB must not be greyed out on exactly the stages reviewers verify on. The role has to
+    // be stated: hasKeylessCloudEmbedder wants positive evidence of one, and the test runner has
+    // none - inheriting "not self-host" would have this pass for the wrong reason.
+    process.env.AWS_LAMBDA_FUNCTION_NAME = 'some-stage-chatCompletion';
+    getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'sk-oai-dummy-routing-test' });
+    const availability = await resolveToolAvailability('user-1', { db });
+    expect(availability.search_knowledge_base).toBe(true);
   });
 
   it('stays available on a placeholder key when a local Ollama embedder is configured (fallback)', async () => {
@@ -160,11 +176,28 @@ describe('resolveToolAvailability - injected llmKeys (caller already holds the t
     expect(availability.search_knowledge_base).toBe(true);
   });
 
-  it('honors an injected null (no keys) without falling back to a fetch', async () => {
+  it('honors an injected EMPTY table (a caller who really holds no keys) without falling back to a fetch', async () => {
+    // Pinned to self-host so search_knowledge_base can still discriminate: it is the only
+    // llmKeys-derived tool, and on a cloud stage keyless Bedrock makes it true regardless of the
+    // injected table, which would let this assertion pass for the wrong reason.
+    process.env.B4M_SELF_HOST = 'true';
     getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'sk-1234567890abcdefABCDEF' });
-    const availability = await resolveToolAvailability('user-1', { db }, { llmKeys: null });
+    const availability = await resolveToolAvailability('user-1', { db }, { llmKeys: {} as never });
     expect(getEffectiveLLMApiKeys).not.toHaveBeenCalled();
     expect(availability.search_knowledge_base).toBe(false);
+  });
+
+  it('reads an injected NULL as "nothing to inject" and resolves its own table instead', async () => {
+    // A resolved-but-keyless caller produces an empty OBJECT (the test above); null only ever comes
+    // from a caller whose own lookup FAILED. Injecting that failure is not neutral here, because an
+    // injected value is deliberately exempt from the taint that drives `onLookupError` - so it would
+    // be believed as an authoritative empty table and hide every key-gated tool, turning the
+    // documented fail-OPEN into fail-closed for a caller who merely lost Mongo for a moment.
+    process.env.B4M_SELF_HOST = 'true';
+    getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'sk-1234567890abcdefABCDEF' });
+    const availability = await resolveToolAvailability('user-1', { db }, { llmKeys: null });
+    expect(getEffectiveLLMApiKeys).toHaveBeenCalledTimes(1);
+    expect(availability.search_knowledge_base).toBe(true);
   });
 
   it('still fetches internally when the option is omitted (every other caller)', async () => {

@@ -21,7 +21,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { apiKeyRepository, adminSettingsRepository, sessionRepository } from '@bike4mind/database';
 import { Quest } from '@bike4mind/database/content';
 import { computeCosineSimilarity, getSettingsByNames } from '@bike4mind/utils';
-import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
+import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
 import { isSupportedEmbeddingModel, SupportedEmbeddingModel } from '@bike4mind/common';
 import { apiKeyService, ReRankService, SmallLLMService } from '@bike4mind/services';
 import { OperationsModelService } from '@client/services/operationsModelService';
@@ -144,17 +144,33 @@ const handler = baseApi().post(
         });
       }
 
-      const embeddingModel = defaultEmbeddingModel as SupportedEmbeddingModel;
-
       // STEP 3: Setup embedding service
-      const requiredProvider = getProviderFromModel(embeddingModel);
-      req.logger?.debug?.('Required provider for model:', requiredProvider);
       // A keyless provider (Bedrock, authenticating through the AWS credential chain) resolves
       // to an EMPTY config with nothing missing - that is its ready state. The trailing `else`
       // this replaced treated it as an unsupported provider and 400'd, which was doubly wrong:
       // the admin dropdown offers Bedrock embedders and the vectorize pipeline accepts them,
       // so a corpus ingested fine and then failed on every query.
-      const { config: embeddingConfig, missing } = resolveEmbeddingConfig(requiredProvider, apiKeyTable);
+      //
+      // A cloud stage holding no provider key resolves to Bedrock rather than 400ing, matching
+      // what the vectorizer wrote there. The 400s below stay reachable on self-host, which has
+      // no AWS role to fall back on.
+      const requestedEmbeddingModel = defaultEmbeddingModel as SupportedEmbeddingModel;
+      const {
+        config: embeddingConfig,
+        missing,
+        model: embeddingModel,
+      } = resolveEmbeddingWithKeylessFallback(requestedEmbeddingModel, apiKeyTable);
+      // Say so when the query lands in a different vector space than the admin setting names. The
+      // substitution is correct here (it matches what the vectorizer wrote on the same keyless
+      // stage) but it is not free information: on a stage that HAD a key and lost it, this line is
+      // the only thing distinguishing "no matches" from "searched the wrong corpus".
+      if (embeddingModel !== requestedEmbeddingModel) {
+        req.logger?.warn(
+          `[sessions/semantic-search] no credential resolved for ${requestedEmbeddingModel}; embedding the query with keyless ${embeddingModel} instead`
+        );
+      }
+      const requiredProvider = getProviderFromModel(embeddingModel);
+      req.logger?.debug?.('Required provider for model:', requiredProvider);
       if (missing === 'openai') {
         req.logger?.error?.('OpenAI API key not configured');
         return res.status(400).json({

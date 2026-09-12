@@ -333,7 +333,7 @@ async function resumeVectorizeEnqueue(
   fabFile: {
     id: string;
     batchId?: string;
-    embeddingModel?: string;
+    embeddingModel?: string | null;
     error?: string | null;
     vectorizeEnqueueFailedAt?: Date | null;
   },

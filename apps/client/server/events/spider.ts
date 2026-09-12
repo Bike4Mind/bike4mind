@@ -8,7 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
+import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
 import crypto from 'crypto';
 import {
   ISessionDocument,
@@ -592,15 +592,21 @@ export const handler = withEventContext(async (event, logger) => {
       const defaultEmbeddingModel = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
 
       if (defaultEmbeddingModel && isSupportedEmbeddingModel(defaultEmbeddingModel)) {
-        const embeddingModel = defaultEmbeddingModel as SupportedEmbeddingModel;
-        const requiredProvider = getProviderFromModel(embeddingModel);
-
         // Gate on whether a required credential is MISSING, not on whether the config ended up
         // non-empty. The latter reads "no config fields set" as "no credentials available",
         // which is wrong for a keyless provider: Bedrock authenticates through the AWS
         // credential chain and correctly populates nothing, so spidering silently indexed
         // without vectors on any Bedrock-configured environment.
-        const { config: embeddingConfig, missing } = resolveEmbeddingConfig(requiredProvider, apiKeyTable);
+        //
+        // A cloud stage with no provider key falls back to Bedrock rather than skipping
+        // embeddings; `deps.embeddingModel` below takes the RESOLVED model so the pages this
+        // writes are stamped with the space they were embedded in.
+        const {
+          config: embeddingConfig,
+          missing,
+          model: embeddingModel,
+        } = resolveEmbeddingWithKeylessFallback(defaultEmbeddingModel as SupportedEmbeddingModel, apiKeyTable);
+        const requiredProvider = getProviderFromModel(embeddingModel);
 
         if (!missing) {
           const embeddingFactory = new EmbeddingFactory(embeddingConfig);

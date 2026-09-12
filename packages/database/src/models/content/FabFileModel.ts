@@ -334,8 +334,62 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     return docs.map(d => String(d._id));
   }
 
+  /**
+   * Label this file's still-UNLABELED chunks with the model their vectors were generated under.
+   *
+   * Scoped to unlabeled on purpose - it used to be an unfiltered `updateMany({ fabFileId })`, and a
+   * file's chunks are fanned across several vectorize messages that each resolve their own model
+   * (see resolveEmbeddingWithKeylessFallback). If a credential appears or lapses mid-ingest, one
+   * message writes 1024-dim vectors and a later one 1536-dim, and a blanket `$set` from whichever
+   * message observed the file complete relabeled BOTH halves with its own model - silently
+   * mislabeling half the file's vectors at the wrong dimensionality, undetectably, with no repair
+   * short of a full re-embed. The vectorize handler now labels each chunk in the same transaction
+   * that stores its vector, so this only fills what predates that (legacy chunks, and the
+   * packages/scripts/datalake backfill's whole purpose) and can no longer overwrite a truthful label
+   * with a different one.
+   *
+   * Safe to scope this way because a re-chunk is never an in-place relabel: `commitFabFileChunks`
+   * deletes every chunk of the file and inserts fresh, unlabeled ones (fabFileService/chunk.ts), so
+   * there is no path on which a stale label needs correcting here.
+   *
+   * Scoped to VECTOR-BEARING chunks for the second half of the same reason. The label names the
+   * space a chunk's vector lives in, so a chunk with no vector has no space to name and must stay
+   * blank. Oversized chunks are the ones this bites: they are skipped at embed time yet still count
+   * as terminal in the rollup, so a file made entirely of them reaches completion with nothing
+   * embedded - and an unscoped update stamped every one of them with a model that never touched
+   * them. That is not just cosmetic, because `distinctEmbeddingModelsByFabFileId` reads these
+   * labels back as evidence about the file's vectors.
+   */
   async updateEmbeddingModel(fabFileId: string, embeddingModel: string): Promise<void> {
-    await this.fabFileChunkModel.updateMany({ fabFileId }, { $set: { embeddingModel } });
+    await this.fabFileChunkModel.updateMany(
+      {
+        fabFileId,
+        'vector.0': { $exists: true },
+        $or: [{ embeddingModel: { $exists: false } }, { embeddingModel: null }, { embeddingModel: '' }],
+      },
+      { $set: { embeddingModel } }
+    );
+  }
+
+  /**
+   * Every distinct non-blank `embeddingModel` this file's VECTOR-BEARING chunks declare. More than
+   * one means the file's vectors span two spaces (and so two widths) - the mid-ingest credential
+   * change described on `updateEmbeddingModel`. The vectorize handler reads this at file completion
+   * to decide whether a single file-level label would be a lie.
+   *
+   * Vectorless chunks are excluded because the question is which spaces the file's VECTORS occupy,
+   * and a chunk with no vector occupies none. They should carry no label at all (see
+   * `updateEmbeddingModel`); the filter also keeps rows written before that scoping from voting.
+   * An EMPTY result is meaningful and not the same as a one-model result: it means nothing in this
+   * file has been embedded, so there is no space to name.
+   */
+  async distinctEmbeddingModelsByFabFileId(fabFileId: string): Promise<string[]> {
+    const models = await this.fabFileChunkModel.distinct('embeddingModel', {
+      fabFileId,
+      'vector.0': { $exists: true },
+      embeddingModel: { $nin: [null, ''] },
+    });
+    return models.filter((model): model is string => typeof model === 'string');
   }
 
   /**

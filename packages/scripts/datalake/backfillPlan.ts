@@ -23,7 +23,9 @@ export interface FileBackfillPlan {
  */
 export const planFileBackfills = (
   chunks: MissingEmbeddingChunk[],
-  fileEmbeddingModels: Map<string, string | undefined>
+  // Nullable, not just optional: stampChunkEmbeddingModel clears a FILE label whose chunks span
+  // two embedding spaces, and `??` below already falls through to the width guess for that file.
+  fileEmbeddingModels: Map<string, string | null | undefined>
 ): { plans: FileBackfillPlan[]; unresolved: string[] } => {
   const byFile = new Map<string, MissingEmbeddingChunk[]>();
   for (const chunk of chunks) {

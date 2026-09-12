@@ -293,8 +293,15 @@ export interface IFabFile {
   isVectorizing?: boolean;
   /** Whether this FabFile has completed vectorization. */
   vectorized?: boolean;
-  /** The embedding model used to generate the vectors. */
-  embeddingModel?: string;
+  /**
+   * The embedding model used to generate the vectors, as a FILE-level claim about the whole corpus.
+   * Explicitly nullable: `stampChunkEmbeddingModel` clears it when a file's chunks turn out to span
+   * more than one embedding space, because any single value would then be a lie about half the
+   * vectors and this label is exclusion authority (isForeignEmbeddingModel drops a labeled file from
+   * every search wholesale, but never excludes a blank one). Absent, null and '' are all "unknown",
+   * and every reader must treat them the same way.
+   */
+  embeddingModel?: string | null;
   /**
    * When this file's chunks were last fully re-stamped with their per-chunk `embeddingModel`
    * (see IFabFileChunk.embeddingModel). Atlas $vectorSearch cutover treats a stamp younger than
@@ -558,8 +565,18 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
     embeddedChunkCount: number;
     embeddedCharCount: number;
   }>;
-  /** Bulk-stamp every chunk of a file with the model its vectors were generated under. */
+  /**
+   * Label a file's still-UNLABELED, VECTOR-BEARING chunks with the model their vectors were
+   * generated under. Never overwrites a label already written beside a vector, and never labels a
+   * chunk that has no vector to attribute - see the implementation's notes on the mid-ingest model
+   * split a blanket update used to hide, and on the oversized chunks an unscoped one mislabeled.
+   */
   updateEmbeddingModel(fabFileId: string, embeddingModel: string): Promise<void>;
+  /**
+   * Distinct non-blank `embeddingModel` values across a file's VECTOR-BEARING chunks; >1 means its
+   * vectors span two spaces, and EMPTY means nothing in the file has been embedded at all.
+   */
+  distinctEmbeddingModelsByFabFileId(fabFileId: string): Promise<string[]>;
   /** One page of vector-bearing chunks missing `embeddingModel`, ascending by `_id` - backfill's keyset cursor. */
   findChunksMissingEmbeddingModel(options?: {
     limit?: number;

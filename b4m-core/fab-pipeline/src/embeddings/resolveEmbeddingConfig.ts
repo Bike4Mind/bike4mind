@@ -1,5 +1,12 @@
-import { ModelBackend } from '@bike4mind/common';
+import {
+  BedrockEmbeddingModel,
+  hasKeylessCloudEmbedder,
+  isPlaceholderApiKey,
+  ModelBackend,
+  type SupportedEmbeddingModel,
+} from '@bike4mind/common';
 import type { EmbeddingConfig } from './EmbeddingFactory';
+import { getProviderFromModel } from './getProviderFromModel';
 
 /**
  * Credential fields the embedding providers draw on, as returned by
@@ -41,8 +48,31 @@ type EmbeddingProvider = ModelBackend.OpenAI | ModelBackend.VoyageAI | ModelBack
  * ("OpenAI rejected the embedding request") instead of the actionable missing-credential path.
  */
 const EXPIRED_KEY_SENTINEL = 'expired';
-const usableKey = (value: string | null | undefined): string | null =>
-  value && value !== EXPIRED_KEY_SENTINEL ? value : null;
+/**
+ * A placeholder is rejected for the same reason the sentinel is, and the two sibling answers to
+ * "is this key usable" both already do it (modelDiscoveryService/credentials.ts,
+ * toolAvailability.ts, and defaultEmbeddingModelForEnv's own key test). Keeping a placeholder here
+ * would report `missing: null`, so the keyless fallback would never fire and EmbeddingFactory would
+ * then throw on the placeholder itself - the PR's headline case failing silently rather than
+ * substituting. `.trim()` because a whitespace-only value is no key either.
+ */
+const usableKey = (value: string | null | undefined): string | null => {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed === EXPIRED_KEY_SENTINEL || isPlaceholderApiKey(trimmed)) return null;
+  return trimmed;
+};
+
+/**
+ * The slot is missing because THIS CALLER's key expired, not because the deployment holds none.
+ * Bedrock has no credential and Ollama's base URL carries no expiry, so only the two keyed cloud
+ * providers can be in this state. See the keyless-fallback doc comment for why it matters.
+ */
+const isExpiredCallerKey = (
+  missing: EmbeddingCredential | null,
+  keyTable: EmbeddingKeyTable | null | undefined
+): boolean =>
+  (missing === 'openai' && keyTable?.openai === EXPIRED_KEY_SENTINEL) ||
+  (missing === 'voyageai' && keyTable?.voyageai === EXPIRED_KEY_SENTINEL);
 
 /**
  * Map an embedding provider plus the caller's resolved key table to the config
@@ -63,6 +93,13 @@ const usableKey = (value: string | null | undefined): string | null =>
  *
  * Adding a provider means editing this function and its table test, not auditing
  * every call site.
+ *
+ * `keyTable` is always an ANSWER about the caller's credentials, never a failure channel. `null` /
+ * `undefined` mean "resolved: this caller holds none", and both this function and the keyless
+ * fallback below act on that - substituting the keyless embedder is a real decision with a real
+ * vector space attached. A caller whose own key lookup THREW must therefore not pass the failure in
+ * here; it has to report unknown instead, or an unavailable Mongo becomes a confident Titan on a
+ * fully keyed production stage.
  */
 export function resolveEmbeddingConfig(
   provider: EmbeddingProvider,
@@ -79,14 +116,82 @@ export function resolveEmbeddingConfig(
       return key ? { config: { voyageApiKey: key }, missing: null } : { config: {}, missing: 'voyageai' };
     }
 
-    case ModelBackend.Ollama:
-      return keyTable?.ollama
-        ? { config: { ollamaBaseUrl: keyTable.ollama }, missing: null }
-        : { config: {}, missing: 'ollama' };
+    case ModelBackend.Ollama: {
+      // Trimmed for the same reason the keyed providers are - a whitespace-only OLLAMA_BASE_URL is
+      // no base URL, and passed through it produces a request to a garbage host instead of the
+      // actionable missing-credential path. Not run through `usableKey`: this is a URL, so the
+      // expired-key sentinel and the placeholder-API-key test have nothing to say about it.
+      const baseUrl = keyTable?.ollama?.trim();
+      return baseUrl ? { config: { ollamaBaseUrl: baseUrl }, missing: null } : { config: {}, missing: 'ollama' };
+    }
 
     case ModelBackend.Bedrock:
       // Authenticates through the AWS credential chain on the executing role, so an
       // empty config IS the ready state. Never report a missing credential here.
       return { config: {}, missing: null };
   }
+}
+
+/**
+ * Resolve a config for `model`, falling back to keyless Bedrock when this deployment holds no
+ * credential for the provider `model` needs but can reach Bedrock with its own AWS role.
+ *
+ * WHY THIS EXISTS HERE and not in `defaultEmbeddingModelForEnv`: "does this deployment have a
+ * cloud embedding key" is unanswerable from process.env on a hosted stage - an SST secret arrives
+ * as a linked Resource, so OPENAI_API_KEY is absent on production exactly as it is on a preview.
+ * The key table passed in here is the first point that actually knows, which is why the decision
+ * belongs at this seam.
+ *
+ * Related to but NOT the same as EmbeddingFactory.getDefaultEmbeddingModel, which ranks providers
+ * from scratch (OpenAI > VoyageAI > Ollama > Bedrock). This keeps the model the admin asked for
+ * whenever it is reachable and only substitutes the keyless one otherwise - so a deployment
+ * holding only a Voyage key still falls back to Bedrock here, where the factory would pick
+ * voyage-3. Deliberate: this is a reachability backstop, not a second opinion on the setting.
+ *
+ * ONLY FOR CALLERS FREE TO CHOOSE THE MODEL - i.e. the model came from the `defaultEmbeddingModel`
+ * admin setting. A caller that must hit one specific vector space MUST keep using
+ * `resolveEmbeddingConfig` and fail, because a fallback there would silently compare or write
+ * across incompatible spaces:
+ *   - V2 mementos are pinned to MEMENTO_EMBEDDING_MODEL at 512 truncated dims (see embedding.ts);
+ *   - V1 mementos (mementoEmbedding.ts, getRelevantMementos.ts) read the admin default and so LOOK
+ *     free to choose, but neither live write path stamps `Memento.embeddingModel` - only the
+ *     reembedMementos backfill does. Their vectors are ranked by in-process cosine with no width
+ *     guard and no Atlas index, so a substitution here would drop 1024-dim vectors into a field
+ *     holding 1536-dim ones with nothing recording which is which, and nothing able to tell them
+ *     apart afterwards. Stamping V1 is the prerequisite for including it, not this helper.
+ *   - alternateModelAnn embeds one query per model bucket to match each chunk's recorded stamp.
+ *
+ * Returns the model actually used, so callers stamp what they embedded with rather than what they
+ * asked for - that is what keeps `fabFileChunk`'s recorded `embeddingModel` honest.
+ *
+ * TWO credential states are deliberately NOT treated as "this deployment is keyless":
+ *   - `missing: 'ollama'` - a self-host that set no OLLAMA_BASE_URL has no AWS role either, and
+ *     OPENAI_KEY_MISSING_MESSAGE naming OPENAI_API_KEY / OLLAMA_BASE_URL is the actionable error
+ *     there. `hasKeylessCloudEmbedder()` already excludes self-host; this is belt-and-braces.
+ *   - an EXPIRED caller key. `getEffectiveLLMApiKeys` returns the `'expired'` sentinel instead of
+ *     falling through to the platform demo key, deliberately, so the user is told their key
+ *     expired rather than silently moved onto the platform's (see the reasoning in the
+ *     reactivate-collateral-deactivated-api-keys migration). `usableKey` normalizes that to null
+ *     for the CREDENTIAL check, which is right - but read as "this deployment holds no key" it
+ *     would substitute Titan for that one caller on keyed production, querying a vector space the
+ *     corpus was never written in. The deployment's own key state is unchanged by one expiry, so
+ *     the requested model is returned and the actionable expired-key error stands.
+ */
+export function resolveEmbeddingWithKeylessFallback(
+  model: SupportedEmbeddingModel,
+  keyTable: EmbeddingKeyTable | null | undefined
+): ResolvedEmbeddingConfig & { model: SupportedEmbeddingModel } {
+  const resolved = resolveEmbeddingConfig(getProviderFromModel(model), keyTable);
+  if (
+    !resolved.missing ||
+    resolved.missing === 'ollama' ||
+    isExpiredCallerKey(resolved.missing, keyTable) ||
+    !hasKeylessCloudEmbedder()
+  ) {
+    return { ...resolved, model };
+  }
+  return {
+    ...resolveEmbeddingConfig(ModelBackend.Bedrock, null),
+    model: BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2,
+  };
 }

@@ -17,10 +17,15 @@ import {
   lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { apiKeyService, creditService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
-import { getProviderFromModel } from '@bike4mind/fab-pipeline';
+import {
+  getProviderFromModel,
+  resolveEmbeddingConfig,
+  resolveEmbeddingWithKeylessFallback,
+} from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import {
   getEmbeddingModelCost,
+  hasKeylessCloudEmbedder,
   ModelBackend,
   isSupportedEmbeddingModel,
   insufficientCreditsError,
@@ -281,11 +286,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
         });
       }
 
-      // --- Credit pre-flight: per-member cap, then the pool the charge would land on ---
+      // --- Billing inputs: token count, the bill/enforce pair, and the holder who would pay ---
+      // Gathered here, but the pre-flight gate itself runs further down, after the query's
+      // embedding model is bound - it has to price the model that will actually be embedded with.
       // Gated on the exact pair recordOperationalUsage requires to debit; a deployment that
-      // never bills must not start rejecting searches. This is a CHECK, not the reservation
-      // music/sound-effects do: settlement here runs through recordOperationalUsage, which
-      // moves the balance itself, so reserving would charge the same query twice.
+      // never bills must not start rejecting searches.
       const queryTokens = await countQueryTokens();
       const billingSettings = await getSettingsMap(
         { adminSettings: adminSettingsRepository },
@@ -314,12 +319,120 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
         req.logger?.warn('[semantic-search] failed to resolve user/organization for billing', billingErr);
       }
 
+      // --- Get the embedding-provider API keys, for every provider we have one, not just the
+      // requested model's own provider ---
+      // The mixed-embeddingModel ANN cutover (semanticDataLakeSearch) can attempt an ALTERNATE
+      // model from a different provider than the primary (e.g. a lake re-embedded from ada-002 to
+      // voyage-3); a table scoped to only the primary model's provider means that alternate can
+      // never actually be reached here, regardless of readiness/cap. Mirrors the chat
+      // search_knowledge_base tool's resolveEmbeddingContext, which already resolves the full
+      // multi-provider table this way.
+      const userIdForService = req.user?.id || 'system';
+      const requestedEmbeddingModel = embedding_model as SupportedEmbeddingModel;
+      // A cloud stage reaches Bedrock with its own role, so a missing provider key is not fatal
+      // there: the vectorizer already fell back to Bedrock when it wrote this corpus, and the
+      // query has to be embedded in the space the corpus actually occupies. Three carve-outs keep
+      // the loud error where it is still the right answer:
+      //   - self-host has no AWS role, so there is nothing to fall back TO;
+      //   - a caller who NAMED embedding_model gets the error rather than a silent answer out of
+      //     a different vector space than the one they asked about;
+      //   - an Ollama default with no base URL. Belt-and-braces rather than load-bearing:
+      //     `resolveEmbeddingWithKeylessFallback` already refuses to override `missing: 'ollama'`,
+      //     and the 500 block below now reads that answer directly, so the crafted error naming
+      //     OLLAMA_BASE_URL stands whether or not this clause is here. It stays because
+      //     `mayFallBack` is also what makes `substituted` reachable, and a self-hosted Ollama
+      //     default should never present as a substitution candidate in the first place.
+      const mayFallBack =
+        parsed.data.embedding_model === undefined &&
+        getProviderFromModel(requestedEmbeddingModel) !== ModelBackend.Ollama &&
+        hasKeylessCloudEmbedder();
+      const effectiveKeys = await apiKeyService.getEffectiveLLMApiKeys(
+        userIdForService,
+        { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
+        { logger: req.logger }
+      );
+
+      const embeddingApiKeyTable: { openai?: string | null; voyageai?: string | null; ollama?: string | null } = {
+        openai: effectiveKeys?.openai,
+        voyageai: effectiveKeys?.voyageai,
+        ollama: effectiveKeys?.ollama,
+      };
+
+      // Bind the query's model ONCE, here: the resolved key table is the first thing that can
+      // answer "is that model reachable from this deployment" (an SST secret never lands in
+      // process.env, so no env read can). Everything below keys off the resolved model, so a
+      // substitution is never billed or reported as the model it stood in for.
+      //
+      // `mayFallBack` selects the RESOLVER, rather than being applied to its answer afterwards.
+      // `resolveEmbeddingWithKeylessFallback` substitutes on its own policy - any keyless cloud
+      // stage - so on a request this route has already decided may not fall back, calling it and
+      // then discarding the substitution still leaves `missing: null` behind, and the credential
+      // gate below reads that as "ready" for a caller-named model this deployment cannot embed
+      // with. The 500 is skipped and the request fails a layer down with a vaguer message, which is
+      // the opposite of what naming a model is supposed to get you.
+      //
+      // Where a fallback IS permitted, the resolver still declines for two states it refuses to
+      // read as "this deployment is keyless" - an EXPIRED caller key and `missing: 'ollama'` - so
+      // `substituted` tests whether one ACTUALLY happened rather than whether it was allowed.
+      const requestedProvider = getProviderFromModel(requestedEmbeddingModel);
+      const resolution = mayFallBack
+        ? resolveEmbeddingWithKeylessFallback(requestedEmbeddingModel, embeddingApiKeyTable)
+        : { ...resolveEmbeddingConfig(requestedProvider, embeddingApiKeyTable), model: requestedEmbeddingModel };
+      const substituted = resolution.missing === null && resolution.model !== requestedEmbeddingModel;
+      const searchEmbeddingModel = substituted ? resolution.model : requestedEmbeddingModel;
+      if (substituted) {
+        req.logger?.warn(
+          `[semantic-search] no credential resolved for ${requestedEmbeddingModel}; embedding the query with keyless ${searchEmbeddingModel} instead`
+        );
+      }
+
+      // About the PRIMARY model only - a hard 500 here concerns the model the caller actually asked
+      // for, not a downstream alternate model's coverage, which degrades gracefully via
+      // semanticDataLakeSearch's own missingCredential skip reason instead. `resolution.missing` is
+      // already scoped that way: it is `getProviderFromModel(requestedEmbeddingModel)`'s credential
+      // and nothing else, and a keyless provider reports null because an empty config IS its ready
+      // state.
+      //
+      // Testing `resolution.missing` rather than the raw key slot is the load-bearing part.
+      // `getEffectiveLLMApiKeys` returns the literal sentinel 'expired' for a caller key that has
+      // lapsed, and a seeded placeholder is a non-empty string too - both TRUTHY, so the old
+      // `!effectiveKeys?.openai` form read them as a key present and skipped this route's crafted,
+      // provider-naming error in the two cases that most needed it, leaving the request to fail a
+      // layer down with a vaguer message. `usableKey` already normalizes all three to absent for
+      // the resolver, so reading its answer is what keeps this gate and the embedder agreeing.
+      // Same basis as the sibling route (pages/api/sessions/semantic-search.ts).
+      if (!substituted) {
+        if (resolution.missing === 'ollama') {
+          return res.status(500).json({
+            error: `Ollama base URL not configured. Required for query embedding with model ${embedding_model}.`,
+          });
+        } else if (resolution.missing !== null) {
+          return res.status(500).json({
+            error: `${requestedProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
+          });
+        }
+      }
+
+      const embeddingProvider = getProviderFromModel(searchEmbeddingModel);
+      // Counted under the model that will actually run, and reused by the settlement below so the
+      // pre-flight and the charge can never disagree about the token basis either.
+      const searchQueryTokens =
+        searchEmbeddingModel === embedding_model ? queryTokens : await countQueryTokens(searchEmbeddingModel);
+
+      // --- Credit pre-flight: per-member cap, then the pool the charge would land on ---
+      // Runs AFTER the model is bound, and prices the model that will actually be embedded with.
+      // Pricing the requested one instead leaves a hole rather than a conservative margin: Titan is
+      // only cheaper than SOME of what it stands in for (it ties text-embedding-3-small and
+      // voyage-3-lite), and voyage-finance-3 / voyage-law-3 are offered in the admin dropdown with
+      // no entry in the price table at all - so a request under one of those priced at $0, skipped
+      // the gate entirely, and then settled at Titan's real rate.
+      //
       // Gate on the USD cost, not on usdToCredits' 1-credit floor: a zero-cost embedder
       // (Ollama runs on the operator's own hardware) and any model missing from the price
       // table both settle 0 credits, so there is nothing to be eligible for - flooring first
       // would turn a free search into a 422. See the pricing-table contract in
       // b4m-core/common/src/schemas/embedding.ts.
-      const embeddingCostUsd = getEmbeddingModelCost(embedding_model, queryTokens);
+      const embeddingCostUsd = getEmbeddingModelCost(searchEmbeddingModel, searchQueryTokens);
 
       if (shouldBill && billingUser && embeddingCostUsd > 0) {
         // Deterministic round-up, never the stochastic settlement rounding: eligibility must
@@ -347,47 +460,6 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
         }
       }
 
-      // --- Get the embedding-provider API keys, for every provider we have one, not just the
-      // requested model's own provider ---
-      // The mixed-embeddingModel ANN cutover (semanticDataLakeSearch) can attempt an ALTERNATE
-      // model from a different provider than the primary (e.g. a lake re-embedded from ada-002 to
-      // voyage-3); a table scoped to only the primary model's provider means that alternate can
-      // never actually be reached here, regardless of readiness/cap. Mirrors the chat
-      // search_knowledge_base tool's resolveEmbeddingContext, which already resolves the full
-      // multi-provider table this way.
-      const userIdForService = req.user?.id || 'system';
-      const embeddingProvider = getProviderFromModel(embedding_model as SupportedEmbeddingModel);
-      const effectiveKeys = await apiKeyService.getEffectiveLLMApiKeys(
-        userIdForService,
-        { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
-        { logger: req.logger }
-      );
-
-      // Branch POSITIVELY on the PRIMARY model's own provider only - a hard 500 here is about the
-      // model the caller actually asked for, not about a downstream alternate model's coverage,
-      // which degrades gracefully via semanticDataLakeSearch's own missingCredential skip reason
-      // instead. A keyless provider's ready state is an EMPTY table; semanticDataLakeSearch treats
-      // it as such via resolveEmbeddingConfig. Adding a provider means adding an arm here.
-      if (embeddingProvider === ModelBackend.Ollama && !effectiveKeys?.ollama) {
-        return res.status(500).json({
-          error: `Ollama base URL not configured. Required for query embedding with model ${embedding_model}.`,
-        });
-      } else if (embeddingProvider === ModelBackend.OpenAI && !effectiveKeys?.openai) {
-        return res.status(500).json({
-          error: `${embeddingProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
-        });
-      } else if (embeddingProvider === ModelBackend.VoyageAI && !effectiveKeys?.voyageai) {
-        return res.status(500).json({
-          error: `${embeddingProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
-        });
-      }
-
-      const embeddingApiKeyTable: { openai?: string | null; voyageai?: string | null; ollama?: string | null } = {
-        openai: effectiveKeys?.openai,
-        voyageai: effectiveKeys?.voyageai,
-        ollama: effectiveKeys?.ollama,
-      };
-
       if (isAborted()) return res.end();
 
       // --- Delegate to the shared in-process semantic search service ---
@@ -403,7 +475,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
           tags,
           topK: top_k,
           minScore: min_score,
-          embeddingModel: embedding_model as SupportedEmbeddingModel,
+          embeddingModel: searchEmbeddingModel,
           apiKeyTable: embeddingApiKeyTable,
           dataLakeTags,
           dataLakeTagPrefixes,
@@ -468,7 +540,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
         if (billingUser) {
           const recordEmbeddingUsage = async (model: string, provider: string): Promise<void> => {
             try {
-              const tokens = model === embedding_model ? queryTokens : await countQueryTokens(model);
+              const tokens = model === searchEmbeddingModel ? searchQueryTokens : await countQueryTokens(model);
               await recordOperationalUsage(
                 {
                   requestId: req.user.id,
@@ -498,7 +570,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
           };
 
           await Promise.all([
-            recordEmbeddingUsage(embedding_model, embeddingProvider),
+            recordEmbeddingUsage(searchEmbeddingModel, embeddingProvider),
             // Defensive: the planner (alternateModelAnn.ts) already only ever selects a
             // registry-known model, so this filter should never actually drop anything. Mirrors
             // the same guard in knowledgeBaseSearch/index.ts's recordAllEmbeddingUsage.
