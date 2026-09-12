@@ -2890,6 +2890,10 @@ FabFileSchema.index({ batchId: 1 });
 // Moderation queue / audit lookups
 FabFileSchema.index({ userId: 1, moderationStatus: 1 });
 
+// Serves the moderation rescue sweep's stale-'pending' scan (moderationRescueSweep.ts): seeks the
+// status + deletedAt equality and the createdAt range without touching every non-deleted row.
+FabFileSchema.index({ moderationStatus: 1, deletedAt: 1, createdAt: 1 });
+
 // No index currently serves the `fileName` sort's `_id` tiebreaker (buildFabFileSearchQuery).
 // Two things to know before adding one: (a) any future `fileName` sort index would need
 // `collation: {locale: 'en'}` to be usable at all - buildFabFileSearchQuery sets that collation

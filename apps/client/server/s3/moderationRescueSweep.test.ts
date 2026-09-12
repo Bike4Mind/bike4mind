@@ -38,17 +38,22 @@ describe('runModerationRescueSweep', () => {
     expect(update.$set.moderationStatus).toBe('pending');
   });
 
-  it('selects every stale pending row regardless of prefix, so ordinary uploads recover too', async () => {
+  it('selects imported OR completed-upload pending rows, excluding abandoned presigns', async () => {
     h.lean.mockResolvedValue([]);
     await runModerationRescueSweep({ enabled: true, limit: 50, logger });
     const filter = h.find.mock.calls[0][0];
     expect(filter.moderationStatus).toBe('pending');
     expect(filter.deletedAt).toBe(null);
     expect(filter.createdAt.$lt).toBeInstanceOf(Date);
-    // NOT prefix-scoped: an ordinary (non-knowledge) upload whose scan crashed must be re-scanned too,
-    // or it sits pending -> permanently unservable. The knowledge/ prefix gates only the per-row
-    // missing-object soft-delete (below), never the selection.
-    expect(filter.filePath).toBeUndefined();
+    // filePath must exist and be non-empty (it drives the claim/download and is optional on the schema).
+    expect(filter.filePath).toEqual({ $exists: true, $ne: '' });
+    // Two arms: imported-knowledge keys, OR any completed upload (status 'complete'). An abandoned
+    // presign (bare key, status still 'pending') matches neither, so it is never selected/re-selected.
+    const arms = filter.$or as Array<{ filePath?: RegExp; status?: string }>;
+    const knowledgeArm = arms.find(a => a.filePath instanceof RegExp);
+    expect(knowledgeArm?.filePath?.test('knowledge/u1/abc')).toBe(true);
+    expect(knowledgeArm?.filePath?.test('9f2c-abc.png')).toBe(false);
+    expect(arms).toContainEqual({ status: 'complete' });
   });
 
   it('reclaims stale scanning rows regardless of prefix, so a crashed ordinary upload is not stranded', async () => {

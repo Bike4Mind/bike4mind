@@ -25,17 +25,23 @@ export interface ModerationRescueSweepArgs {
  * Recover FabFiles whose moderation scan never completed. `moderationStatus` defaults to 'pending'
  * and is only ever moved to clean/blocked by a scan (isImageServeable withholds a URL until then), so
  * a stale 'pending' is always a failed or never-run scan - never a terminal-by-design state, and
- * therefore always safe to re-scan. Covers BOTH imported-knowledge rows (whose post-commit import
- * scan can fail with nothing to retry it) and ordinary presigned uploads (whose objectCreated scan
- * can crash mid-claim); re-scanning bytes that exist is exactly what those paths would have done, and
- * for an ordinary upload this sweep is the only recovery there is.
+ * therefore always safe to re-scan.
  *
- * Only ONE decision is prefix-scoped: the missing-object soft-delete (terminalOnMissingObject),
- * passed true per-row for `knowledge/` keys only. A knowledge row past the age floor whose object is
- * gone is a permanent orphan to retire; an ordinary upload's row is created BEFORE its bytes land, so
- * a missing object there may just be an upload that never completed - released as transient, never
- * soft-deleted. Every other outcome (clean/blocked/release) is identical for both. See
- * KNOWLEDGE_KEY_PREFIX.
+ * Selection covers exactly the rows whose bytes are (or should be) present:
+ *   - imported-knowledge rows (`knowledge/` key), whose post-commit import scan can fail with nothing
+ *     to retry it - imports keep the schema-default `status: 'pending'`, so the prefix is their signal;
+ *   - any row whose upload completed (`status: 'complete'`, which objectCreated writes the moment the
+ *     S3 event fires - BEFORE the moderation claim, see objectCreated.ts) - this catches an ordinary
+ *     presigned upload whose objectCreated scan crashed, the only recovery it has.
+ * An abandoned presigned row (bytes never uploaded) keeps `status: 'pending'` and a bare key, so it
+ * matches neither arm and is never selected: it has no bytes to scan, and re-selecting it every run
+ * would starve the genuinely-stranded rows this sweep exists to rescue (reaping such rows is a separate
+ * concern - see issue #2725).
+ *
+ * The missing-object soft-delete (terminalOnMissingObject) is passed true per-row for `knowledge/`
+ * keys only: a knowledge row past the age floor whose object is gone is a permanent orphan to retire.
+ * A selected ordinary row is `status: 'complete'` - its bytes did land - so a missing read there is a
+ * storage blip, released as transient, never soft-deleted. See KNOWLEDGE_KEY_PREFIX.
  *
  * Re-scans in place with the same claim/persist wiring as the import path. Runs from the daily
  * reconcile cron; recovery latency is coarse but the held file is fail-closed (unservable) until it
@@ -79,15 +85,19 @@ export async function runModerationRescueSweep({
     { $set: { moderationStatus: 'pending' } }
   );
 
-  // Select every stale 'pending' row, imported or ordinary: re-scanning a row whose bytes exist is
-  // exactly what the import / objectCreated path would have done, and this sweep is the only thing
-  // that re-scans an ordinary upload once its scan crashed. Prefix only gates the terminal
-  // missing-object soft-delete below, per row - never the selection.
+  // Select stale 'pending' rows whose bytes are (or should be) present: imported-knowledge rows (their
+  // `knowledge/` key is the signal, since imports keep the default status: 'pending'), OR any row whose
+  // upload completed (status: 'complete', set by objectCreated before its scan claim - this catches an
+  // ordinary upload whose scan crashed). An abandoned presigned row (status still 'pending', bare key,
+  // no bytes) matches neither arm and is skipped, so it cannot recirculate and starve real strands.
+  // filePath must exist and be non-empty (it is optional on the schema, and drives the claim/download).
   const stuck = await FabFile.find(
     {
       moderationStatus: 'pending',
       deletedAt: null, // matches missing-or-null; a soft-deleted upload is not stranded, skip it
       createdAt: { $lt: cutoff },
+      filePath: { $exists: true, $ne: '' },
+      $or: [{ filePath: KNOWLEDGE_KEY_PREFIX }, { status: 'complete' }],
     },
     { filePath: 1, userId: 1 }
   )
@@ -103,8 +113,8 @@ export async function runModerationRescueSweep({
   for (const file of stuck) {
     // terminalOnMissingObject only for `knowledge/` keys: a swept import row past the age floor whose
     // object is gone is a permanent orphan, so soft-delete it (a storage-cleanup outcome, NOT a
-    // content-policy block) instead of releasing it to be re-selected forever. An ordinary upload's
-    // row predates its bytes, so a missing object there is released as transient, never retired.
+    // content-policy block). A selected ordinary row is status: 'complete' - its bytes DID land - so a
+    // missing read there is a storage blip; release it as transient rather than retire.
     const { scanned } = await moderateImportedKnowledgeFiles({
       filePaths: [file.filePath],
       userId: file.userId,

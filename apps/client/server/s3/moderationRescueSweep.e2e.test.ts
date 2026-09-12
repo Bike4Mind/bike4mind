@@ -85,7 +85,7 @@ async function seedPending(filePath: string, mimeType: string) {
   return doc;
 }
 
-async function seedScanning(filePath: string, mimeType: string) {
+async function seedScanning(filePath: string, mimeType: string, status?: 'pending' | 'complete') {
   const doc = await FabFile.create({
     userId: 'user1',
     fileName: 'f',
@@ -96,6 +96,7 @@ async function seedScanning(filePath: string, mimeType: string) {
   });
   // Old createdAt + old moderationClaimedAt, but a FRESH updatedAt: the stale-claim reclaim must key
   // on moderationClaimedAt (claim age), so a bumped updatedAt must not keep this crashed row stuck.
+  // `status` mirrors the upload state objectCreated stamps ('complete' once the S3 bytes landed).
   await FabFile.collection.updateOne(
     { _id: doc._id },
     {
@@ -103,6 +104,7 @@ async function seedScanning(filePath: string, mimeType: string) {
         createdAt: new Date(Date.now() - STALE_AGE_MS),
         moderationClaimedAt: new Date(Date.now() - STALE_AGE_MS),
         updatedAt: new Date(),
+        ...(status ? { status } : {}),
       },
     }
   );
@@ -151,13 +153,13 @@ describe('runModerationRescueSweep (DB integration)', () => {
     expect(third).toEqual({ rescanned: 0 });
   });
 
-  it('re-scans an ordinary (non-knowledge) upload whose bytes exist, recovering it to clean', async () => {
+  it('re-scans a completed ordinary (non-knowledge) upload whose scan crashed, recovering it to clean', async () => {
     // Blocker 1: an ordinary presign upload whose objectCreated scan crashed is reclaimed to 'pending',
-    // and the sweep must then actually re-scan it. A knowledge/-scoped selection only relabels it
-    // 'pending' and never picks it back up, leaving it permanently unservable (pending is as unservable
-    // as scanning). Object exists (non-image) -> resolves clean.
+    // and the sweep must then actually re-scan it, or it stays permanently unservable (pending is as
+    // unservable as scanning). objectCreated stamped status 'complete' before the crash (bytes landed),
+    // which is what makes it selectable; object exists (non-image) -> resolves clean.
     store.objects.set('9f2c-recovered.png', Buffer.from('recovered plain text, not an image'));
-    await seedScanning('9f2c-recovered.png', 'text/plain');
+    await seedScanning('9f2c-recovered.png', 'text/plain', 'complete');
 
     await runModerationRescueSweep({ enabled: true, limit: 5, logger });
 
@@ -166,19 +168,20 @@ describe('runModerationRescueSweep (DB integration)', () => {
     expect(row?.deletedAt ?? null).toBe(null);
   });
 
-  it('releases (never soft-deletes) an ordinary upload whose object is missing', async () => {
-    // An abandoned bare-key presign row past the floor whose bytes never landed. It IS now selected and
-    // re-scanned, but terminalOnMissingObject is false for a non-knowledge key: an ordinary upload's row
-    // is created before its bytes land, so a missing object may be an upload that never completed - it
-    // is released as transient, never retired or 'blocked' (Blocker 2 stays fixed). Key absent ->
-    // NoSuchKey.
+  it('never selects an abandoned ordinary presign (status pending, no bytes), so it cannot recirculate', async () => {
+    // Round-6 blocker: an abandoned bare-key presign row keeps status 'pending' and its bytes never
+    // land. It must NOT be selected - it has nothing to scan, and re-selecting it every run would starve
+    // the real strands the sweep exists to rescue. Distinguish "never selected" from "selected and
+    // released": if it were selected, the download would throw NoSuchKey and log a warn - so assert no
+    // warn AND the row is untouched. (seedPending leaves status at the schema default 'pending'.)
     await seedPending('9f2c-abandoned.png', 'image/png');
 
     const res = await runModerationRescueSweep({ enabled: true, limit: 5, logger });
-    expect(res).toEqual({ rescanned: 0 }); // released, so not counted as resolved
+    expect(res).toEqual({ rescanned: 0 });
+    expect(logger.warn).not.toHaveBeenCalled(); // never attempted -> never selected, not merely released
 
     const row = await FabFile.findOne({ filePath: '9f2c-abandoned.png' }).lean();
-    expect(row?.moderationStatus).toBe('pending'); // released, NOT soft-deleted
+    expect(row?.moderationStatus).toBe('pending'); // untouched
     expect(row?.deletedAt ?? null).toBe(null);
     expect(row?.blockReason).toBeFalsy();
   });
