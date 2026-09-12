@@ -76,6 +76,7 @@ export * from './schemas/curation';
 export * from './schemas/imageModerationIncident';
 export * from './utils/artifactHelpers';
 export * from './utils/creditTransactionDisplay';
+export * from './utils/deepLinks';
 export * from './utils/requireEnv';
 export * from './utils/internalStaffDomains';
 export * from './utils/countCodePoints';

@@ -132,6 +132,19 @@ export function defineAbilitiesFor(user: IUserDocument | undefined) {
       userId: user.id,
     });
 
+    // Allow users to read back and retract their own feedback. Every condition here is INVISIBLE
+    // to a by-class `can(action, FeedbackModel)` check, which reports true as soon as any rule for
+    // the action exists - so a feedback route must authorize against the fetched document instance
+    // or narrow the query with accessibleBy(). A by-class check grants every non-admin the admin
+    // view. MUST STAY IN SYNC with the feedback rules in apps/client/server/auth/ability.ts.
+    allow(Permission.read, FeedbackModel, {
+      userId: user.id,
+    });
+
+    allow(Permission.delete, FeedbackModel, {
+      userId: user.id,
+    });
+
     // Allow admins to read and delete any feedback
     if (user.isAdmin) {
       allow(Permission.read, FeedbackModel);

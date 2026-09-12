@@ -17,12 +17,21 @@ const handler = baseApi().delete(
       throw new Error('Ability not found');
     }
 
-    if (!req.ability.can('delete', FeedbackModel)) {
-      throw new Error('Permission denied');
+    // Read before deleting so the ownership condition can be evaluated. Authorizing by class
+    // (`can('delete', FeedbackModel)`) does NOT evaluate the non-admin grant's { userId }
+    // condition, so a by-class check would let any logged-in user hard-delete any reporter's
+    // record. A reporter retracting their own report and an admin deleting any report are the
+    // same route; the ability rules are what separate them.
+    const feedback = await FeedbackModel.findById(id);
+    if (!feedback) throw new NotFoundError('Feedback not found');
+
+    // Same NotFoundError as above: a probe must not be able to distinguish "not yours" from
+    // "does not exist".
+    if (!req.ability.can('delete', feedback)) {
+      throw new NotFoundError('Feedback not found');
     }
 
-    const deletedFeedbackItem = await FeedbackModel.findOneAndDelete({ _id: id });
-    if (!deletedFeedbackItem) throw new NotFoundError('Feedback not found');
+    await FeedbackModel.deleteOne({ _id: id });
 
     // Mongo has no cascade: without this, a deleted report's free text survives up to 90 days,
     // inverting the retention promise. Best-effort - the report is already gone either way.
@@ -32,7 +41,7 @@ const handler = baseApi().delete(
 
     await logEvent({ userId, type: FeedbackEvents.DELETE_FEEDBACK, metadata: { id } }, { ability: req.ability });
 
-    return res.status(200).json(toRedactedFeedback(deletedFeedbackItem));
+    return res.status(200).json(toRedactedFeedback(feedback));
   })
 );
 

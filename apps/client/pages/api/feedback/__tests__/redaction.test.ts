@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { AbilityBuilder, createMongoAbility } from '@casl/ability';
 
 /**
  * A bug report leaves the product entirely (a third-party Slack workspace, unencrypted email).
@@ -32,7 +33,21 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 const savedFeedback = { id: 'fb1' };
 const mockSave = vi.fn().mockResolvedValue(undefined);
-const mockFind = vi.fn();
+// The list route chains .select().sort().skip().limit() before awaiting, so the mock has to be a
+// thenable query rather than a resolved array.
+const mockListDocs = vi.fn<() => unknown[]>(() => []);
+const mockFind = vi.fn(() => {
+  const query = {
+    select: () => query,
+    sort: () => query,
+    skip: () => query,
+    limit: () => query,
+    then: (resolve: (docs: unknown[]) => unknown) => resolve(mockListDocs()),
+  };
+  return query;
+});
+const mockCountDocuments = vi.fn().mockResolvedValue(1);
+const mockDistinct = vi.fn().mockResolvedValue([]);
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function FeedbackModelMock(this: any, data: unknown) {
   Object.assign(this, data, {
@@ -42,6 +57,8 @@ function FeedbackModelMock(this: any, data: unknown) {
   });
 }
 FeedbackModelMock.find = mockFind;
+FeedbackModelMock.countDocuments = mockCountDocuments;
+FeedbackModelMock.distinct = mockDistinct;
 
 vi.mock('@bike4mind/database', () => ({
   FeedbackModel: FeedbackModelMock,
@@ -67,6 +84,7 @@ vi.mock('@server/utils/eventBus', () => ({
 }));
 
 vi.mock('@bike4mind/utils', () => ({
+  escapeRegex: (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
   getSettingsMap: vi.fn().mockResolvedValue({}),
   getSettingsValue: vi.fn((key: string) => {
     if (key === 'EnableFeedBackToSlack') return true;
@@ -93,6 +111,17 @@ vi.mock('@server/utils/cloudwatch', async () => {
 });
 
 import '../index';
+
+/**
+ * Built inline rather than imported from server/auth/ability.ts, which pulls an unresolvable
+ * `tldts` transitive dependency under this vitest setup. MUST STAY IN SYNC with the admin feedback
+ * rules there: an unconditional read grant is what makes accessibleBy narrow to {}.
+ */
+const adminAbility = () => {
+  const { can, build } = new AbilityBuilder(createMongoAbility);
+  can('read', FeedbackModelMock);
+  return build();
+};
 
 const PROMPT_META_WITH_TOOL_OUTPUT = {
   functionCalls: [
@@ -156,13 +185,11 @@ describe('GET /api/feedback - redacts tool output before returning it to an admi
   });
 
   it('strips returnValue from every reporters functionCalls', async () => {
-    mockFind.mockResolvedValue([
-      {
-        toJSON: () => ({ id: 'fb1', promptMeta: PROMPT_META_WITH_TOOL_OUTPUT }),
-      },
-    ]);
+    mockListDocs.mockReturnValue([{ toJSON: () => ({ id: 'fb1', promptMeta: PROMPT_META_WITH_TOOL_OUTPUT }) }]);
     const { req, res } = createMocks({ method: 'GET' });
-    (req as unknown as { ability: { can: () => boolean } }).ability = { can: () => true };
+    // A real ability, not a { can: () => true } stub: the route derives its Mongo scope from the
+    // rules via accessibleBy, which needs the actual CASL instance.
+    (req as unknown as { ability: unknown }).ability = adminAbility();
 
     await mockRefs.getHandler!(req, res);
 

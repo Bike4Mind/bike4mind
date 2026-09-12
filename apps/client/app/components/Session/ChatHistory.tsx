@@ -1,6 +1,6 @@
 import { IChatHistoryItem } from '@bike4mind/common';
 import Box from '@mui/joy/Box';
-import React, { memo, useCallback, useEffect, useMemo } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import MessageContent from '@client/app/components/Session/MessageContent';
 import FallbackModelBadge from './FallbackModelBadge';
@@ -8,6 +8,7 @@ import { SendMessageOptions } from '@client/app/utils/llm';
 import { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
 import { flashMessageHighlight, registerScrollToMessageHandler } from '@client/app/utils/chatScroll';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
+import { useSearch } from '@tanstack/react-router';
 
 // --- Virtuoso context type ---
 // Passed via Virtuoso's `context` prop to stable module-level custom components.
@@ -165,22 +166,49 @@ const ChatHistory: React.FC<ChatHistoryProps> = memo(
 
     const virtuosoContext = useMemo<VirtuosoContext>(() => ({ sessionId, footer }), [sessionId, footer]);
 
-    // Scroll-to-message service for other components (e.g. the QuestMaster
-    // plan board). Virtuoso's index API reaches messages that are currently
-    // virtualized out and have no DOM node.
-    useEffect(() => {
-      return registerScrollToMessageHandler(messageId => {
+    // Virtuoso's index API reaches messages that are currently virtualized out and have no DOM
+    // node, so neither caller below can use a DOM query. Returns false when the turn is not in
+    // the loaded history at all.
+    const scrollToMessage = useCallback(
+      (messageId: string, behavior: 'smooth' | 'auto') => {
         const reversedIndex = reversedHistory.findIndex(item => item.id === messageId);
         if (reversedIndex === -1) return false;
         virtuosoRef.current?.scrollToIndex({
           index: firstItemIndex + reversedIndex,
           align: 'center',
-          behavior: 'smooth',
+          behavior,
         });
         flashMessageHighlight(messageId);
         return true;
-      });
-    }, [reversedHistory, firstItemIndex, virtuosoRef]);
+      },
+      [reversedHistory, firstItemIndex, virtuosoRef]
+    );
+
+    // Scroll-to-message service for other components (e.g. the QuestMaster
+    // plan board).
+    useEffect(() => {
+      return registerScrollToMessageHandler(messageId => scrollToMessage(messageId, 'smooth'));
+    }, [scrollToMessage]);
+
+    // A feedback deep link (/notebooks/<sessionId>?questId=<questId>) names one turn. The turn is
+    // virtualized out on arrival, and the history it lives in may not have loaded yet, so this
+    // retries as `reversedHistory` grows and fires once the turn is actually present. A turn whose
+    // page is never loaded is never scrolled to - the reader stays at the newest message, which is
+    // where they would have landed without the link anyway.
+    //
+    // `auto`, not `smooth`: this competes with Virtuoso's initialTopMostItemIndex jump to the
+    // newest message on mount, and an animated scroll can lose that race. The highlight flash is
+    // what draws the eye instead.
+    const scrolledToDeepLinkRef = useRef<string | null>(null);
+    const { questId: deepLinkedQuestId } = useSearch({ strict: false }) as { questId?: string };
+
+    useEffect(() => {
+      if (!deepLinkedQuestId || scrolledToDeepLinkRef.current === deepLinkedQuestId) return;
+      // Only latch once it actually scrolled, so a later history page can still satisfy the link.
+      if (scrollToMessage(deepLinkedQuestId, 'auto')) {
+        scrolledToDeepLinkRef.current = deepLinkedQuestId;
+      }
+    }, [deepLinkedQuestId, scrollToMessage]);
 
     // Don't mount Virtuoso until data is available - initialTopMostItemIndex
     // only applies on mount, so the component must mount AFTER data loads
