@@ -762,8 +762,8 @@ jobs:
           #               `.gitignore` (which a fold could use to hide its own dropped
           #               -untracked-files warning). Subsumes the root `.npmrc` and
           #               `.dockerignore` the arm above catches at any depth.
-          # The staged paths are enumerated into a file OUTSIDE the substitution below, for
-          # two reasons the `|| true` there makes load-bearing.
+          # BOTH `git` calls are run OUTSIDE the substitution below, into files. The first
+          # reason applies to both; the second is specific to the path enumeration.
           # (1) `|| true` swallows a failure from ANYWHERE in the pipeline it terminates, so
           #     a `git` that exited non-zero used to yield an empty BLOCKED and PASS the guard
           #     - a fail-open on the check that decides whether a fold may push at all. Out
@@ -771,16 +771,26 @@ jobs:
           #     the step, and `|| true` covers only what it is for: grep's exit 1 on no match.
           #     It has to be out here and not merely on its own line inside: bash does NOT
           #     inherit `set -e` into a command substitution, so a failure in there is silent
-          #     (measured on bash 3.2 and 5.x, not assumed).
+          #     (measured on bash 3.2 and 5.x, not assumed). The binary arm is hoisted for the
+          #     same reason but it was NOT fail-open: measured, a failing `--numstat` inside the
+          #     substitution DOES kill the step, because `pipefail` gives the pipeline git's
+          #     status and it was the substitution's LAST command, so that status is the
+          #     assignment's. That is an invariant of ORDERING - move it above another command
+          #     and the same failure yields an empty binary arm at exit 0 (both halves measured).
+          #     Out here it holds wherever it sits.
           # (2) `-z` is the only way to read a path git would otherwise C-quote.
           #     `core.quotePath=false` covers bytes >= 0x80 and nothing else, so a tracked
           #     path holding a control byte, a `"` or a `\` still arrives wrapped in quotes,
           #     and that leading `"` defeats `^(\.github|...)/`, `^[^/.]+$` and `^\.[^/]*$`
           #     at once. A variable cannot hold the result - bash drops NUL bytes in a command
-          #     substitution - hence the file. `mktemp` puts it in $RUNNER_TEMP, which the
-          #     always-on write fence denies the agent.
+          #     substitution - hence the file. Neither file needs a fence to be safe: both are
+          #     created after the agent has exited, under an unpredictable name, and truncated
+          #     by `>` before anything reads them.
           STAGED_PATHS=$(mktemp)
           git -c core.quotePath=false diff --cached --name-only -z > "$STAGED_PATHS"
+          STAGED_NUMSTAT=$(mktemp)
+          git -c core.quotePath=false -c core.attributesFile=/dev/null \
+            diff --cached --numstat > "$STAGED_NUMSTAT"
 
           BLOCKED=$(
             grep -z -E \
@@ -803,8 +813,7 @@ jobs:
             # it never reaches the path guard above (see the note on `.gitignore` there).
             # What closes that route is the write fence - `Edit(.gitattributes)` and
             # `Edit(**/.gitattributes)` are denied for the same reason `.mcp.json` is.
-            git -c core.quotePath=false -c core.attributesFile=/dev/null \
-              diff --cached --numstat | awk -F'\t' '$1 == "-" { print $3 }'
+            awk -F'\t' '$1 == "-" { print $3 }' "$STAGED_NUMSTAT"
           )
           if [ -n "$BLOCKED" ]; then
             echo "::error::fold refused: these staged paths are CI configuration or binaries, so NOTHING was pushed:"

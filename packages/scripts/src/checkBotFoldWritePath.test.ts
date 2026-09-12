@@ -490,13 +490,24 @@ const MULTI_WORD_EXPANSION = 'probe --settings ./probe-settings.json';
  * with the App private key in its env - and `runners` holds the node that executes it, so
  * both are the PROGRAM of a step rather than an input to one. The `_actions` pair is written
  * as a literal because no expression yields that path, which makes it a premise about the
- * hosted image; asserting it here is what forces a self-hosted move to be a deliberate edit.
+ * hosted image.
+ *
+ * Note what asserting it here does and does not buy, because the two are easy to conflate.
+ * It forces an edit to the FENCE to be deliberate. It does not bind the runner: `runs-on`
+ * reads `vars.RUNNER_LABEL`, a repo variable settable in the web UI with no commit and no
+ * diff, and a self-hosted runner with a different work root makes all three specs match
+ * nothing with nothing here going red. `RUNS_ON` below pins the DEFAULT so that half of the
+ * move is a reviewable edit; the variable override is outside what this repo can pin, and a
+ * self-hosted move needs its own fence entries.
  */
 const ALWAYS_ON_EDIT_FENCES = [
   'Edit(/${{ runner.temp }}/**)',
   'Edit(//home/runner/work/_*/**)',
   'Edit(//home/runner/runners/**)',
 ];
+
+/** The runner the two `/home/runner/...` fences above are a premise about. */
+const RUNS_ON = "runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}";
 
 /**
  * The only arguments this job may pass the action. Asserted as a SET, and over the token vector
@@ -857,6 +868,10 @@ describe('bot-fold write path', () => {
         ...ALWAYS_ON_EDIT_FENCES,
       ].sort()
     );
+    // Two of the three fences above are absolute literals for the hosted layout, so they are
+    // only as good as the runner staying that image. Pinned next to them so the pair has to
+    // move together: swapping the default label without revisiting the fences turns this red.
+    expect(src).toContain(RUNS_ON);
     // Every OTHER parenthesised spec, by value, in BOTH arms. `toContain` on the three
     // `Read()` fences left a bucket nothing read: a spec containing `(` that does not start
     // `Edit(` was asserted by neither the set above nor this, so appending one to either arm
@@ -866,9 +881,7 @@ describe('bot-fold write path', () => {
     expect(pathSpecs.filter(spec => !spec.startsWith('Edit(')).sort()).toEqual([...reads].sort());
     // The step's own comment says both branches are spelled out in full by design, so every
     // edit here is a both-arms edit, and a fold-arm-only assertion waves the review arm through.
-    expect(deny.review.filter(spec => spec.includes('(')).sort()).toEqual(
-      [...reads, ...ALWAYS_ON_EDIT_FENCES].sort()
-    );
+    expect(deny.review.filter(spec => spec.includes('(')).sort()).toEqual([...reads, ...ALWAYS_ON_EDIT_FENCES].sort());
     // Single-shot process, so a wakeup can only ever be a lost run. Denied in both arms.
     expect(deny.fold).toContain('ScheduleWakeup');
     expect(deny.review).toContain('ScheduleWakeup');
