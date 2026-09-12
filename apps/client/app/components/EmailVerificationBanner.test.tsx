@@ -18,7 +18,7 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 
 // UserContext mock
-type MockUser = { email?: string; emailVerified?: boolean } | null;
+type MockUser = { email?: string | null; emailVerified?: boolean } | null;
 let mockCurrentUser: MockUser = null;
 
 vi.mock('@client/app/contexts/UserContext', () => ({
@@ -90,6 +90,26 @@ describe('EmailVerificationBanner', () => {
   it('does not render for a verified user', () => {
     mockCurrentUser = { email: 'test@example.com', emailVerified: true };
     renderBanner();
+    expect(screen.queryByTestId('email-verification-banner')).not.toBeInTheDocument();
+  });
+
+  // An account created via OAuth without a provider-verified email has no address on
+  // file. That user needs the nag more than an unverified one, not less - but with
+  // nothing to resend to, the add flow is the only action offered.
+  it('renders an add-an-email nag (no Resend) for an account with no email', () => {
+    mockCurrentUser = { email: null, emailVerified: false };
+    renderBanner();
+    expect(screen.getByTestId('email-verification-banner')).toBeInTheDocument();
+    expect(screen.getByText(/Add an email address/)).toBeInTheDocument();
+    expect(screen.queryByTestId('email-verification-banner-resend-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('email-verification-banner-change-email-btn')).toHaveTextContent('Add email');
+  });
+
+  it('keeps the emailless nag dismissible', () => {
+    mockCurrentUser = { email: null, emailVerified: false };
+    renderBanner();
+    fireEvent.click(screen.getByTestId('email-verification-banner-dont-show-btn'));
+    expect(localStorageMock.getItem(EMAIL_VERIFICATION_PERMANENT_DISMISS_KEY)).toBe('1');
     expect(screen.queryByTestId('email-verification-banner')).not.toBeInTheDocument();
   });
 

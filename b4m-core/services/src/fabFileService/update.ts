@@ -9,6 +9,7 @@ import {
   IScopedSettingsRepository,
   IUserDocument,
   KnowledgeType,
+  LakeAuditPrincipal,
   isImageServeable,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
@@ -78,12 +79,22 @@ interface UpdateFabFileAdapters extends LakeConfigAuditAdapters {
    * the route gate in front of it. Same adapter, for the same reason, as `createFabFile`'s.
    */
   administeredOrgIds?: string[];
+  /**
+   * The resolved audit principal for an API-key caller (undefined for a session caller) - see
+   * `lakeConfigAuditPrincipal`. Rides on the actor into `reconcileLakeTags`' stats recompute, so a
+   * key-driven tag write that flips a draft lake to active attributes the config-change row to the
+   * key rather than to the human it acts for, matching every other audited config-write door
+   * (#1917).
+   */
+  auditPrincipal?: LakeAuditPrincipal;
+  /** Forwarded to `reconcileLakeTags`; see its own adapter for what this is for. */
+  assertWriteScope?: () => void;
 }
 
 export const updateFabFile = async (
   user: IUserDocument,
   parameters: UpdateFabFileParameters,
-  { db, logger, storage, administeredOrgIds }: UpdateFabFileAdapters
+  { db, logger, storage, administeredOrgIds, auditPrincipal, assertWriteScope }: UpdateFabFileAdapters
 ) => {
   const { id, fileContent, ...params } = secureParameters(parameters, updateFabFileSchema);
 
@@ -144,7 +155,7 @@ export const updateFabFile = async (
     params.tags === undefined
       ? undefined
       : await reconcileLakeTags(
-          { userId: user.id, isAdmin: !!user.isAdmin, administeredOrgIds: administeredOrgIds ?? [] },
+          { userId: user.id, isAdmin: !!user.isAdmin, administeredOrgIds: administeredOrgIds ?? [], auditPrincipal },
           id,
           (fabFile.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string'),
           params.tags,
@@ -155,6 +166,7 @@ export const updateFabFile = async (
             // Already in hand, so the admission contract grades this file on the target its chunks
             // WERE built with instead of re-fetching it or predicting from policy.
             fileChunkedPassageTokenTarget: fabFile.chunkedPassageTokenTarget,
+            assertWriteScope,
           }
         );
 

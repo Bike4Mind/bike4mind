@@ -515,12 +515,107 @@ export const RetrievalSummarySchema = z.object({
    *
    * Date-bound any rollup, the same caveat `mode` documents on itself: turns recorded before this
    * landed carry no volume, and no backfill is possible - the volume of a past turn is gone.
+   *
+   * `preRelativeFloorCandidates` and `postRelativeFloorCandidates` are the ONE pair here that is
+   * not "what reached the model": `ranked.length` and `scored.length` in KnowledgeRetrievalFeature
+   * - the candidates left after the absolute similarity floor, and after the relative floor
+   * trims them. `chunks` is what survived the char budget on top of that, so the three
+   * numbers bracket two independent trimmers:
+   *
+   *   pre -> [relative floor] -> post -> [char budget] -> chunks
+   *
+   * They exist so a low `chunks` is diagnosable - a small corpus and a floor that trimmed a large
+   * pool end in the same `chunks`. `pre - post` is the floor's own effect and nothing else;
+   * `pre - chunks` is NOT, because the budget trims the same walk. Both optional: only forced
+   * retrieval computes a ranked pool, a surface without one (lake memory, the knowledge tools)
+   * never writes either, and absence must not read as zero candidates. SUMMED like `chunks`, with
+   * the same absent-is-not-zero handling as `topScore`.
+   *
+   * COMPARE THE PAIR ONLY TO ITSELF, never to `chunks`, unless `surfaces` is forced retrieval
+   * alone. `chunks` and `chars` sum across ALL surfaces while this pair is forced-only, so a mixed
+   * turn can store `chunks` above `pre` - inverting the relationship the pair exposes. Lake memory
+   * is the common case, not the exotic one: it is enabled inside the same forced-retrieval gate,
+   * so on a lake-memory lake it writes on nearly every forced turn. Its chunks can be backed out
+   * via `context.lakeMemory.beliefCount` (approximately - that count is pre-sanitization); its
+   * CHARS land only inside the shared sum, with no per-surface field to subtract them back out, so
+   * `chars` cannot be decontaminated at all. `pre - post` needs neither, which is the point of
+   * storing both.
+   *
+   * BOTH SATURATE, so `pre` counts what the SCAN REACHED, not what the corpus holds: `pool` is
+   * truncated in-scan at FORCED_RETRIEVAL_MAX_SCORED_CHUNKS (256), over a scan itself bounded by
+   * FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS (4000) across FORCED_RETRIEVAL_MAX_CANDIDATE_FILES (100).
+   * 2000 qualifying chunks and 300 both record 256; above the cap a rollup is a plateau.
    */
   injected: z
     .object({
       chunks: z.number(),
       chars: z.number(),
       topScore: z.number().optional(),
+      preRelativeFloorCandidates: z.number().optional(),
+      postRelativeFloorCandidates: z.number().optional(),
+    })
+    .optional(),
+  /**
+   * Could the corpus in scope have answered this turn, whether or not the model went looking?
+   *
+   * The denominator the optional-path retrieval rate has always been missing (#1394). A rate of
+   * "the model retrieved on 20% of offered turns" cannot say whether the other 80% were misses or
+   * turns with nothing to find, and the two argue for opposite things: the first for routing work,
+   * the second for leaving the optional path alone. Crossing this field with the rate separates
+   * them.
+   *
+   * THE ONLY FIELD IN THIS BLOCK NOT WRITTEN BY THE TURN. Every sibling is stamped point-in-time
+   * while the turn runs; this one is written afterwards by an offline replay
+   * (packages/scripts/retrieval/answerability-replay.ts) that re-scores the recorded prompt against
+   * the corpus. That is deliberate - the population it exists to measure is the turns where
+   * retrieval did NOT run, so computing it live would mean adding a full brute-force chunk scan
+   * (ChatCompletionFeatures' forced path, which has no ANN index) to exactly the turns that pay
+   * nothing for retrieval today. The measurement is not worth that latency on live traffic.
+   *
+   * BEING A RECONSTRUCTION, IT CARRIES TWO DRIFTS THE OTHER FIELDS DO NOT:
+   * 1. Corpus CONTENT moves. A document added or reindexed between the turn and the replay is
+   *    scored as though it had been there. `probedAt` discloses the gap; a replay run long after
+   *    the window is weak evidence, not strong.
+   * 2. Corpus SCOPE is inferred, not recorded. The seed writes `dataLakeTags: []` on a turn where
+   *    retrieval never ran (ChatCompletionProcess), so the replay reconstructs scope from the
+   *    session's lakes as they stand at replay time. A session whose lake selection changed is
+   *    replayed against a corpus the turn never had, and NOTHING here flags that. Recording real
+   *    scope at seed time would fix it for future turns and is not done yet.
+   * 3. The QUESTION can move out from under it. The probe is keyed to the quest, not to the
+   *    prompt text it scored, so a turn whose prompt is later rewritten in place keeps a probe
+   *    describing the question it used to ask. mergeRetrievalSummary preserves the probe across
+   *    a runtime write deliberately - dropping it would erase the backfill - so nothing
+   *    invalidates a stale one. Re-run the replay with --force over a window whose turns were
+   *    edited.
+   *
+   * RAW SCORE, NOT A VERDICT, so the cutoff lives in the reader. summarizeOptionalPathRetrieval
+   * applies it at fold time, which lets the same replay be re-thresholded without re-running -
+   * the point of storing the number, given the two live floors disagree by construction (forced
+   * retrieval's absolute default is 0.75, the knowledge tool's is 0).
+   *
+   * `topScore` is the same raw cosine scale as `injected.topScore` and comparable to it. It is NOT
+   * comparable to lake memory's belief relevance, for the reason `injected` documents at length.
+   *
+   * `scanTruncated` inherits forced retrieval's saturation: the replay bounds its scan the same
+   * way, so a low `topScore` on a truncated scan is not proof the corpus lacked an answer - it is
+   * proof the part that was scanned did. Treat those turns as unknown rather than as negatives.
+   *
+   * Absence means NOT PROBED - never "not answerable". Every turn predating the replay, and every
+   * turn the replay skipped or failed on, is absent, so a fold must keep it as its own arm rather
+   * than letting it fall in with the negatives.
+   */
+  answerability: z
+    .object({
+      /** Best cosine the replay found across the reconstructed corpus. */
+      topScore: z.number(),
+      /** Chunks at or above `floor`. Separates "one lucky match" from "a rich seam". */
+      candidatesAboveFloor: z.number(),
+      /** The absolute floor the replay counted `candidatesAboveFloor` against, as a fraction. */
+      floor: z.number(),
+      /** The scan hit its chunk ceiling, so `topScore` is a floor on the true best, not the best. */
+      scanTruncated: z.boolean(),
+      /** When the replay ran, NOT when the turn ran - the disclosure for content drift above. */
+      probedAt: JsonSafeDate,
     })
     .optional(),
   /**

@@ -88,6 +88,7 @@ export * from './utils/shareableAccess';
 export * from './utils/inviteVisibility';
 export * from './utils/stopReasons';
 export * from './utils/retrievalRate';
+export * from './utils/answerDiagnosis';
 export * from './utils/requestId';
 export * from './utils/anonymousSessionId';
 export * from './utils/sanitizeTelemetryError';

@@ -213,6 +213,68 @@ describe('mergeRetrievalSummary', () => {
       expect(merged?.injected && 'topScore' in merged.injected).toBe(false);
     });
 
+    describe('relative-floor candidate counts', () => {
+      it('sums both counts across surfaces, same as chunks', () => {
+        const merged = mergeRetrievalSummary(
+          base({ injected: { chunks: 2, chars: 400, preRelativeFloorCandidates: 4, postRelativeFloorCandidates: 3 } }),
+          base({ injected: { chunks: 1, chars: 200, preRelativeFloorCandidates: 3, postRelativeFloorCandidates: 1 } })
+        );
+        expect(merged?.injected?.preRelativeFloorCandidates).toBe(7);
+        expect(merged?.injected?.postRelativeFloorCandidates).toBe(4);
+      });
+
+      it('passes a one-sided count through without treating the other side as zero', () => {
+        // Only forced retrieval ever writes these - a knowledge-tool surface reporting volume
+        // alongside it must not turn the absent side into a recorded 0.
+        const merged = mergeRetrievalSummary(
+          base({ injected: { chunks: 2, chars: 400, preRelativeFloorCandidates: 4, postRelativeFloorCandidates: 3 } }),
+          base({ injected: { chunks: 1, chars: 200 } })
+        );
+        expect(merged?.injected).toEqual({
+          chunks: 3,
+          chars: 600,
+          preRelativeFloorCandidates: 4,
+          postRelativeFloorCandidates: 3,
+        });
+      });
+
+      it('omits both fields entirely when neither side reports one', () => {
+        // The incoming side must carry an `injected` of its own, or mergeInjected returns at its
+        // `!incoming` guard and the branch under test never runs - the mistake this test is the
+        // fixed version of. Mirrors the `omits topScore` sibling above for the same reason.
+        const merged = mergeRetrievalSummary(
+          base({ injected: { chunks: 1, chars: 100 } }),
+          base({ injected: { chunks: 0, chars: 0 } })
+        );
+        expect(merged?.injected).toEqual({ chunks: 1, chars: 100 });
+        expect(merged?.injected && 'preRelativeFloorCandidates' in merged.injected).toBe(false);
+        expect(merged?.injected && 'postRelativeFloorCandidates' in merged.injected).toBe(false);
+      });
+
+      it('keeps a recorded zero on BOTH sides as a recorded zero, not an absence', () => {
+        // The discriminating fixture: zero on one side only cannot tell summing from a truthy
+        // filter, because dropping a 0 and adding it reach the same number. Both sides zero is
+        // where the two diverge - summing emits the key with 0, a truthy filter omits it.
+        const merged = mergeRetrievalSummary(
+          base({ injected: { chunks: 0, chars: 0, preRelativeFloorCandidates: 0, postRelativeFloorCandidates: 0 } }),
+          base({ injected: { chunks: 0, chars: 0, preRelativeFloorCandidates: 0, postRelativeFloorCandidates: 0 } })
+        );
+        expect(merged?.injected?.preRelativeFloorCandidates).toBe(0);
+        expect(merged?.injected?.postRelativeFloorCandidates).toBe(0);
+        expect(merged?.injected && 'preRelativeFloorCandidates' in merged.injected).toBe(true);
+        expect(merged?.injected && 'postRelativeFloorCandidates' in merged.injected).toBe(true);
+      });
+
+      it('sums a recorded zero into a real count rather than dropping it', () => {
+        const merged = mergeRetrievalSummary(
+          base({ injected: { chunks: 0, chars: 0, preRelativeFloorCandidates: 0, postRelativeFloorCandidates: 0 } }),
+          base({ injected: { chunks: 1, chars: 100, preRelativeFloorCandidates: 2, postRelativeFloorCandidates: 2 } })
+        );
+        expect(merged?.injected?.preRelativeFloorCandidates).toBe(2);
+        expect(merged?.injected?.postRelativeFloorCandidates).toBe(2);
+      });
+    });
+
     it('keeps volume alongside a worse outcome from another surface', () => {
       const merged = mergeRetrievalSummary(
         base({ outcome: 'ok', surfaces: ['forced-retrieval'], injected: { chunks: 12, chars: 4000 } }),
@@ -269,6 +331,32 @@ describe('mergeRetrievalSummary', () => {
     it('survives a side that never asserted the field', () => {
       const merged = mergeRetrievalSummary(base({ preauthorizedLakeIdsUsed: ['lake1'] }), base());
       expect(merged?.preauthorizedLakeIdsUsed).toEqual(['lake1']);
+    });
+  });
+
+  describe('answerability', () => {
+    const probe = {
+      topScore: 0.88,
+      candidatesAboveFloor: 4,
+      floor: 0.75,
+      scanTruncated: false,
+      probedAt: new Date('2026-09-11T00:00:00.000Z'),
+    };
+
+    it('preserves a backfilled probe against a later runtime write that knows nothing about it', () => {
+      // The real hazard: this function returns an object literal, so a field with no case here is
+      // dropped. A regenerate on an already-replayed quest would silently erase the measurement.
+      const merged = mergeRetrievalSummary(base({ answerability: probe }), base({ surfaces: ['knowledgeBaseSearch'] }));
+      expect(merged?.answerability).toEqual(probe);
+    });
+
+    it('stays absent on turns that were never replayed', () => {
+      const merged = mergeRetrievalSummary(base(), base());
+      expect(merged && 'answerability' in merged).toBe(false);
+    });
+
+    it('accepts the probe from either side, since only one writer ever sets it', () => {
+      expect(mergeRetrievalSummary(base(), base({ answerability: probe }))?.answerability).toEqual(probe);
     });
   });
 });

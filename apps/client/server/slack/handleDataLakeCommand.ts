@@ -5,7 +5,7 @@ import {
   type SlackAttachment,
 } from '@bike4mind/slack';
 import { dataLakeService } from '@bike4mind/services';
-import { STATIC_LAKE_IDS } from '@bike4mind/common';
+import { HTTPError, STATIC_LAKE_IDS } from '@bike4mind/common';
 import type { AccessContext, IDataLakeRepository, ManageableDataLakeConfig } from '@bike4mind/common';
 import { buildSlackAccessContext, type SlackIngestActor } from './dataLakeIngestAuthz';
 import { ingestSlackFilesIntoLake, type SlackLakeIngestDeps, type SlackLakeIngestOutcome } from './dataLakeFileIngest';
@@ -95,6 +95,33 @@ export function formatBareDataLakeMentionHint(): string {
 
 /** Rows shown by `list` before a "+N more" tail. Keeps the reply well inside Slack's 40k limit. */
 const LIST_LIMIT = 50;
+
+// Mirrors CommandHandler.ts's cap on the assistant path (#2486): a curated refusal message
+// (see dataLakeIngestAuthz.ts) is always short, so this only bounds an unclassified
+// HTTPError's raw message before it reaches a Slack channel that may not be private.
+const MAX_ERROR_REPLY_LENGTH = 300;
+
+function capErrorReply(reply: string): string {
+  return reply.length > MAX_ERROR_REPLY_LENGTH ? `${reply.slice(0, MAX_ERROR_REPLY_LENGTH)}...` : reply;
+}
+
+/**
+ * `error instanceof HTTPError` is unreliable if `@bike4mind/common` ever resolves as two
+ * distinct module realms across the `@bike4mind/services` -> this file's boundary (same
+ * concern CommandHandler.ts's isHttpError documents for #2486) - every HTTPError subclass
+ * still sets a numeric `statusCode`, a `name` ending in `Error`, and an `additionalInfo` key
+ * (present, even if `undefined`, as a constructor parameter property), so duck-type on that
+ * shape as a fallback instead of trusting the bare instanceof alone.
+ */
+function isHttpError(err: unknown): err is HTTPError {
+  return (
+    err instanceof HTTPError ||
+    (err instanceof Error &&
+      typeof (err as { statusCode?: unknown }).statusCode === 'number' &&
+      err.name.endsWith('Error') &&
+      'additionalInfo' in err)
+  );
+}
 
 export async function handleDataLakeCommand(params: HandleDataLakeCommandParams): Promise<string> {
   const parsed = parseDataLakeCommand(params.command);
@@ -494,12 +521,17 @@ export async function runDataLakeSlackCommand(deps: RunDataLakeSlackCommandDeps)
     deps.logger.error('@datalake command failed', {
       error: err instanceof Error ? err.message : String(err),
     });
+    // dataLakeIngestAuthz.ts's write gates rethrow anything that is not a refusal
+    // (NotFoundError/BadRequestError), so an HTTPError subclass reaching here (e.g.
+    // ForbiddenError, ConflictError) already carries a message written to be shown to the
+    // caller. Anything else stays generic rather than leaking an unreviewed internal error
+    // into a channel that may not be private.
+    const text =
+      isHttpError(err) && err.message
+        ? capErrorReply(err.message)
+        : 'Something went wrong handling that `@datalake` command. Please try again.';
     try {
-      await deps.sendMessage({
-        channel: deps.channel,
-        text: 'Something went wrong handling that `@datalake` command. Please try again.',
-        threadTs: deps.threadTs,
-      });
+      await deps.sendMessage({ channel: deps.channel, text, threadTs: deps.threadTs });
     } catch {
       // Best-effort error reply; ignore a secondary sendMessage failure so we still ack 200.
     }

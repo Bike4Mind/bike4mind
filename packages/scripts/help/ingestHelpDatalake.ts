@@ -13,11 +13,12 @@
  * vectors + file metadata from Mongo (excludeContent), not the file body.
  *
  * DIFFERENTIAL, not delete-and-recreate. Each article's body is fingerprinted into the FabFile's
- * `contentHash`, so a re-run keeps every member whose hash AND `embeddingModel` still match, and
- * only deletes/creates what actually moved. That is what makes an unattended re-run safe on a live
- * retrieval surface: a blanket re-mirror would empty the lake and spend a full re-embed on every
- * tick, leaving a window on each one where `search_knowledge_base` finds no help at all. The
- * steady state here is zero writes and zero embedding calls.
+ * `contentHash`, so a re-run keeps every member whose hash AND `embeddingModel` still match AND
+ * which still has chunk rows behind its vectorized claim (#2583), and only deletes/creates what
+ * actually moved. That is what makes an unattended re-run safe on a live retrieval surface: a
+ * blanket re-mirror would empty the lake and spend a full re-embed on every tick, leaving a window
+ * on each one where `search_knowledge_base` finds no help at all. The steady state here is zero
+ * writes and zero embedding calls.
  *
  * Convergence is still total in both directions - a newly published slug is created, and a slug
  * that left the corpus (or a duplicate member for a slug) is deleted, so it stops being retrievable.
@@ -95,7 +96,7 @@ export interface HelpDatalakeLogger {
 export interface HelpDatalakeIngestDeps {
   db: {
     fabFiles: Pick<IFabFileRepository, 'findIdsByDataLakeTag' | 'findAllInIds' | 'deleteManyInIds' | 'create'>;
-    fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId' | 'bulkInsert'>;
+    fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId' | 'bulkInsert' | 'findFabFileIdsWithChunks'>;
     dataLakes: Pick<IDataLakeRepository, 'findBySlug' | 'create' | 'update'>;
   };
   /** Embeds one chunk with the deployment's `defaultEmbeddingModel`. */
@@ -127,7 +128,7 @@ export interface HelpDatalakeIngestOptions {
 
 export interface HelpDatalakeIngestResult {
   publicEntries: number;
-  /** Members kept as-is: content hash and embedding model both still match. */
+  /** Members kept as-is: hash and embedding model still match, and chunk rows still exist. */
   unchanged: number;
   created: number;
   removed: number;
@@ -180,7 +181,19 @@ async function ensureLake(deps: HelpDatalakeIngestDeps, opts: HelpDatalakeIngest
   return existing.id;
 }
 
-/** Read the index and resolve each public entry's markdown + body fingerprint. */
+/**
+ * Read the index and resolve each public entry's markdown + body fingerprint.
+ *
+ * The `accessLevel === 'public'` filter below is load-bearing. The `system-help` lake declares no
+ * requiredUserTag/requiredEntitlement, so everything ingested here is semantically searchable by
+ * every authenticated user; do NOT widen it to admin articles the way `retrieval.ts` and
+ * `vectorize-help-content.ts` deliberately do.
+ *
+ * It is also the ONLY gate on the scheduled path: that caller passes the raw `docs-site/docs`
+ * tree (`apps/client/server/cron/helpDatalakeIngest.ts`, copied in by `infra/cron.ts`), which
+ * holds `admin/` beside `features/`. The CLI caller's root is the public bundle alone, so there
+ * the filter has a second layer behind it - here it has none.
+ */
 function loadDesiredCorpus(
   opts: HelpDatalakeIngestOptions,
   logger: HelpDatalakeLogger
@@ -230,9 +243,29 @@ export async function ingestHelpDatalake(
   });
   const existing = existingIds.length > 0 ? await deps.db.fabFiles.findAllInIds(existingIds) : [];
 
+  // Reuse is decided against the chunk rows, not only the member's own counters (#2583). A member
+  // left chunkless by an interrupted delete still carries `vectorized: true` and a positive
+  // `vectorizedChunkCount`, so a hash-and-model predicate keeps re-electing it forever while it
+  // answers nothing - which is how 62 of the 113 system-help articles stayed unretrievable across
+  // every 6-hourly tick. Consulting the rows makes the mirror self-healing against ANY source of
+  // that state, not just the delete ordering already fixed below.
+  //
+  // One index-covered $group over the current membership (`{fabFileId:1,_id:1}`, no chunk content
+  // read), so the steady-state tick pays one extra aggregate on ~100 ids and still does zero
+  // writes. Its failure mode is a THROW, not an empty set - the aggregate is uncaught, so a broken
+  // read aborts the run rather than quietly invalidating everyone. A genuinely empty result would
+  // re-create the whole corpus in one tick (`maxCreatesPerRun` is 200 against ~113 articles, so the
+  // cap does not bite at this size) - but creates-before-deletes means no retrieval gap while it
+  // happens, and it is the same shape as a defaultEmbeddingModel change, which already does this.
+  const withChunks =
+    existing.length > 0
+      ? await deps.db.fabFileChunks.findFabFileIdsWithChunks(existing.map(file => file.id))
+      : new Set<string>();
+
   // Diff by slug. A member is reusable only if its body fingerprint AND its embedding model still
-  // match; anything else - a stale body, a re-embedded model, a member whose slug left the corpus,
-  // a second member for a slug, a member with no `help:` tag at all - is removed.
+  // match AND it has chunk rows behind its claim; anything else - a stale body, a re-embedded
+  // model, a chunkless member, a member whose slug left the corpus, a second member for a slug, a
+  // member with no `help:` tag at all - is removed.
   const desiredBySlug = new Map(desired.map(d => [d.entry.slug, d]));
   const keepBySlug = new Map<string, IFabFileDocument>();
   // Carries the slug, not just the id: what makes a member safe to delete is whether the revision
@@ -247,7 +280,8 @@ export async function ingestHelpDatalake(
       !keepBySlug.has(slug) &&
       file.contentHash === want.contentHash &&
       file.embeddingModel === deps.embeddingModel &&
-      !!file.vectorized;
+      !!file.vectorized &&
+      withChunks.has(file.id);
     if (reusable) keepBySlug.set(slug, file);
     else removable.push({ id: file.id, slug });
   }
@@ -369,8 +403,27 @@ export async function ingestHelpDatalake(
       // No self-host OpenSearch mirror needed here: both drivers run against an SST-deployed
       // stage, which never sets B4M_SELF_HOST - so selfHostOpenSearchEnabled() can never be
       // true on a path that reaches this line.
-      for (const id of removeIds) await deps.db.fabFileChunks.deleteManyByFabFileId(id);
+      //
+      // Files go first, chunks after (#2583). This cron has no redelivery on a mid-run failure -
+      // it runs directly in a Lambda, not behind a queue - so it is the least protected of the
+      // sites this ordering matters for. Chunks-then-files used to leave an interruption between
+      // the two steps stranding a FILE with a stale vectorizedChunkCount over zero real chunks -
+      // unretrievable, but every counter-based health surface reported it vectorized.
+      //
+      // `deleteManyInIds` is a SOFT delete (unlike `hardDeleteByIds`, it does not pass
+      // `{ hardDelete: true }`, so the row is tombstoned with `deletedAt`, not removed). That is
+      // deliberate and unchanged here, and it is enough to fix the symptom: a tombstoned row is
+      // filtered out of every read path, so it can no longer report itself vectorized. But it does
+      // change what an interruption costs, and the trade is worth stating plainly. Under
+      // chunks-then-files an interruption was self-healing - the live row re-entered `removable` on
+      // the next run and was re-swept. Under this order the tombstone is final: the next run's
+      // candidate list is plugin-filtered, so the row never re-enters `removable` and its chunks
+      // are never revisited. Those orphans are unreachable without their file and cost storage
+      // rather than recall, and nothing sweeps them today (#2539 is a different population - chunks
+      // whose `fabFileId` is a serialized document, which a cleaner for it would match instead).
+      // A permanently harmless remnant beats a self-healing but actively wrong one.
       await deps.db.fabFiles.deleteManyInIds(removeIds);
+      for (const id of removeIds) await deps.db.fabFileChunks.deleteManyByFabFileId(id);
     }
   }
 

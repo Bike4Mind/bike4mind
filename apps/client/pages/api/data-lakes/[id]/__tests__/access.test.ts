@@ -2,8 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { LakeAccessView } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
-  assertLakeAccess: vi.fn(),
-  loadActiveLakeGrants: vi.fn(),
+  assertLakeAccessWithGrants: vi.fn(),
   canManageLake: vi.fn(),
   resolveLakeTransferAuthority: vi.fn(),
   resolveEnforceReadGrants: vi.fn(async () => false),
@@ -24,8 +23,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
-    assertLakeAccess: h.assertLakeAccess,
-    loadActiveLakeGrants: h.loadActiveLakeGrants,
+    assertLakeAccessWithGrants: h.assertLakeAccessWithGrants,
     canManageLake: h.canManageLake,
     resolveLakeTransferAuthority: h.resolveLakeTransferAuthority,
     resolveEnforceReadGrants: h.resolveEnforceReadGrants,
@@ -68,6 +66,12 @@ const view: LakeAccessView = {
     turnsAtCap: 2,
     lastAtCapAt: new Date('2026-08-13T00:00:00.000Z'),
   },
+  supersessionPressure: {
+    turnsWithSignal: 4,
+    turnsWithSuppression: 1,
+    filesSuppressed: 3,
+    lastSuppressedAt: new Date('2026-08-12T00:00:00.000Z'),
+  },
   generatedAt: new Date('2026-08-14T12:00:00.000Z'),
 };
 
@@ -87,10 +91,12 @@ describe('GET /api/data-lakes/[id]/access', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false, administeredOrgIds: [] });
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', name: 'Sales Intelligence' });
+    h.assertLakeAccessWithGrants.mockResolvedValue({
+      lake: { id: 'lake-oid-1', name: 'Sales Intelligence' },
+      grants: GRANTS,
+    });
     // clearAllMocks keeps implementations, so this must be re-armed or the enforced-true case leaks.
     h.resolveEnforceReadGrants.mockResolvedValue(false);
-    h.loadActiveLakeGrants.mockResolvedValue(GRANTS);
     h.canManageLake.mockReturnValue(true);
     h.resolveLakeTransferAuthority.mockReturnValue({ allowed: false, viaOrgAdminOnly: false });
     h.assembleLakeAccessView.mockResolvedValue(view);
@@ -116,6 +122,12 @@ describe('GET /api/data-lakes/[id]/access', () => {
       turnsAtCap: 2,
       lastAtCapAt: new Date('2026-08-13T00:00:00.000Z'),
     });
+    expect(body.data.supersessionPressure).toEqual({
+      turnsWithSignal: 4,
+      turnsWithSuppression: 1,
+      filesSuppressed: 3,
+      lastSuppressedAt: new Date('2026-08-12T00:00:00.000Z'),
+    });
   });
 
   it('refuses a caller who can read but not manage the lake (403), without assembling', async () => {
@@ -126,7 +138,7 @@ describe('GET /api/data-lakes/[id]/access', () => {
   });
 
   it('never reaches the manage gate when the lake is not accessible at all', async () => {
-    h.assertLakeAccess.mockRejectedValue(new Error('Data lake not found'));
+    h.assertLakeAccessWithGrants.mockRejectedValue(new Error('Data lake not found'));
     const { res } = makeRes();
     await expect(call(req({ id: 'lake1' }), res)).rejects.toThrow(/not found/i);
     expect(h.canManageLake).not.toHaveBeenCalled();
@@ -176,7 +188,9 @@ describe('GET /api/data-lakes/[id]/access', () => {
   it('decides the manage gate and the transfer capability from ONE grants read', async () => {
     const { res } = makeRes();
     await call(req({ id: 'lake1' }), res);
-    expect(h.loadActiveLakeGrants).toHaveBeenCalledTimes(1);
+    // One read, and it is the ACCESS GATE's own: the route no longer loads a second copy of the
+    // grants the gate already read to decide whether the caller may see the lake at all.
+    expect(h.assertLakeAccessWithGrants).toHaveBeenCalledTimes(1);
     // Both rules must see the SAME grant set: re-reading could decide the two against different
     // snapshots, and offering a transfer control the write path then refuses is the drift to avoid.
     expect(h.canManageLake).toHaveBeenCalledWith(expect.anything(), expect.anything(), GRANTS);

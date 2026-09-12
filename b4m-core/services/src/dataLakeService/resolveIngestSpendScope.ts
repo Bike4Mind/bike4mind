@@ -72,7 +72,7 @@ export async function resolveIngestSpendScope(
     // findMemberLakesForFile is built to discard (see the doc comment above).
     const tagNames = (file.tags ?? []).map(t => t?.name);
     const staticTag = extractDataLakeMetaTags(tagNames).filter(isStaticRegistryDatalakeTag)[0];
-    // The prefix arm, matched against the COMPILE-TIME registry so this costs no lakes read and the
+    // The prefix arm, matched against the in-process registry so this costs no lakes read and the
     // zero-reads property above survives. No ownership conjunct, mirroring `registryMembershipScope`
     // - a registry prefix is config rather than a user-chosen tag, so there is no creator to anchor
     // to. Reaching this arm is what keeps the rebuild door's members metered now that it selects

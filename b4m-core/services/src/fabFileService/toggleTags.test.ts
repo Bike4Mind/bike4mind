@@ -71,14 +71,17 @@ const makeAdapters = (files: ReturnType<typeof file>[], lakeDoc: IDataLakeDocume
         find: vi.fn().mockResolvedValue([]),
       },
       users: { findById: vi.fn().mockResolvedValue({ id: 'owner', isAdmin: false }) },
+      // Wired unconditionally so a test can assert on it without rebuilding the fixture; degrades
+      // to "no event recorded" the same way an absent repo would if a caller genuinely omitted it.
+      lakeConfigChangeEvents: { record: vi.fn().mockResolvedValue({}) },
     },
     store,
   };
 };
 
 // real repositories; the mocks implement only the methods under test.
-const run = (adapters: ReturnType<typeof makeAdapters>, params: unknown) =>
-  toggleTags('owner', params, adapters as any);
+const run = (adapters: ReturnType<typeof makeAdapters>, params: unknown, extra?: Record<string, unknown>) =>
+  toggleTags('owner', params, { ...adapters, ...extra } as any);
 
 describe('toggleTags - ordinary tags', () => {
   it('adds an absent tag with the caller casing intact and counts it', async () => {
@@ -212,6 +215,46 @@ describe('toggleTags - data lake meta-tags', () => {
     await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
 
     expect(adapters.db.dataLakes.activateIfDraft).toHaveBeenCalledWith('lake1');
+  });
+
+  // #1964: the one remaining door that could emit an `auto-activate` config-change row without
+  // ever attaching an `auditPrincipal` - the four config-write routes (#1917) and the other
+  // recompute callers (#2124) already do. Mutation-verified: deleting the `auditPrincipal` line
+  // from the actor at toggleTags.ts's actor construction turns the first case red (the fallback
+  // derives `principalKind: 'user'` from `actor.userId` instead).
+  describe('auto-activate audit principal (#1964)', () => {
+    it('names the API key, not the human, when a key-driven toggle activates a draft lake', async () => {
+      const adapters = makeAdapters([file('f1')], lake({ status: 'draft' }));
+      adapters.db.dataLakes.activateIfDraft = vi.fn().mockResolvedValue(true);
+
+      await run(
+        adapters,
+        { ids: ['f1'], tags: ['datalake:lake'] },
+        { auditPrincipal: { principalKind: 'apiKey', principalId: 'key-abc', onBehalfOfUserId: 'owner' } }
+      );
+
+      expect(adapters.db.lakeConfigChangeEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'auto-activate',
+          principalKind: 'apiKey',
+          principalId: 'key-abc',
+          onBehalfOfUserId: 'owner',
+        })
+      );
+    });
+
+    it('still names the session user with no onBehalfOfUserId when no key is involved', async () => {
+      const adapters = makeAdapters([file('f1')], lake({ status: 'draft' }));
+      adapters.db.dataLakes.activateIfDraft = vi.fn().mockResolvedValue(true);
+
+      await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
+
+      expect(adapters.db.lakeConfigChangeEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'auto-activate', principalKind: 'user', principalId: 'owner' })
+      );
+      const [event] = adapters.db.lakeConfigChangeEvents.record.mock.calls[0];
+      expect('onBehalfOfUserId' in event).toBe(false);
+    });
   });
 
   it('recomputes a lake once for the whole batch, not once per file', async () => {
@@ -544,6 +587,36 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
       totalSizeBytes: 99,
       totalChunkedChars: 0,
     });
+  });
+
+  // Pins the API-key scope gate itself, not just the manage-rights gate above: the route's own
+  // scope check never sees this tag (it carries no `datalake:` prefix), so `assertWriteScope` is
+  // the ONLY thing standing between a caller with no data-lake scope and joining a lake this way.
+  it('calls assertWriteScope on a prefix-arm join, and propagates its refusal', async () => {
+    const adapters = makeAdapters([file('f1')]);
+    adapters.db.dataLakes.find = vi.fn().mockResolvedValue([lake()]);
+    const assertWriteScope = vi.fn();
+
+    await run(adapters, { ids: ['f1'], tags: ['lk:invoices'] }, { assertWriteScope });
+    expect(assertWriteScope).toHaveBeenCalledTimes(1);
+
+    assertWriteScope.mockClear();
+    assertWriteScope.mockImplementation(() => {
+      throw new Error('missing scope');
+    });
+    await expect(run(adapters, { ids: ['f1'], tags: ['lk:invoices'] }, { assertWriteScope })).rejects.toThrow(
+      'missing scope'
+    );
+  });
+
+  it('does not call assertWriteScope when a colon-bearing tag resolves to no prefix-arm lake', async () => {
+    const adapters = makeAdapters([file('f1')]);
+    adapters.db.dataLakes.find = vi.fn().mockResolvedValue([]); // no candidate lakes to match
+    const assertWriteScope = vi.fn();
+
+    await run(adapters, { ids: ['f1'], tags: ['other:tag'] }, { assertWriteScope });
+
+    expect(assertWriteScope).not.toHaveBeenCalled();
   });
 
   // MEMBERSHIP needs no gate (the read-side predicate grants it purely on the tag), but the

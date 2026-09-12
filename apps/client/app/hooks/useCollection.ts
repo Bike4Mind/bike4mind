@@ -21,8 +21,7 @@ type QueryableType =
   | { $lte: IndexableType }
   | { $in: IndexableType[] }
   | { $nin: IndexableType[] }
-  | { $exists: boolean }
-  | { $regex: string };
+  | { $exists: boolean };
 
 type QueryBuilderFn<T> = (
   table: Dexie.Table<T, IndexableType>,
@@ -310,8 +309,6 @@ const convertQuery = <T>(
       return table.where(key).noneOf(normalizedOperand);
     case '$exists':
       return table.where(key).notEqual(Math.random().toString(36).substring(2, 9));
-    case '$regex':
-      return table.where(key).startsWith(normalizedOperand);
     default:
       throw new Error(`Unsupported operator ${operator}`);
   }

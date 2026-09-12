@@ -262,21 +262,56 @@ export const purgeDataLakeDocument = async (
   // Nothing destructive until the bytes are gone: a refusal costs zero progress, so the row, its
   // chunks and its rollups stay consistent and a retry converges.
   let deletedByThisCall = false;
+  let sessionsUnlinked = true;
   if (storageObjectDeleted) {
-    await db.fabFileChunks.deleteManyByFabFileId(file.id);
-
+    // The row goes FIRST, its chunks after (#2583). Chunks-then-row used to leave an interruption
+    // between the two stranding the ROW: a stale vectorizedChunkCount over zero real chunk rows -
+    // unretrievable by either read path, while every counter-based health surface reported it
+    // vectorized. This order fails the other, harmless way instead: an interruption here orphans
+    // chunk rows, which are unreachable without their file (no chunk carries a lake or tag field;
+    // both read paths filter by a file-derived id list). They cost storage, not recall - and
+    // nothing sweeps them today. #2539 is a DIFFERENT population, chunks whose `fabFileId` is a
+    // serialized document rather than an id; a cleaner written for it would not match these.
+    //
     // Atomic, and it answers whether THIS call removed the row. Two concurrent purges both find the
     // gates open and both see the object-store delete succeed (deleting an absent key is a no-op),
     // so without this claim both would refund the owner's quota for the same bytes.
     deletedByThisCall = await db.fabFiles.hardDeleteOneById(file.id);
 
-    // Same unlink `deleteFabFile` performs: a chat holding the id in `knowledgeIds` would otherwise
-    // keep pointing at a row that no longer exists, and the confirmation copy promises otherwise.
-    const linkedSessions = await db.sessions.findAllWithKnowledgeId(file.id);
-    for (const session of linkedSessions) {
-      await db.sessions.update({
-        id: session.id,
-        knowledgeIds: (session.knowledgeIds ?? []).filter(knowledgeId => knowledgeId !== file.id),
+    // Once the row is gone there is no retry door left (the file has already vanished from the
+    // owner's Files list), so this must not throw: an uncaught failure here would skip `onPurged`
+    // below and silently cost the owner their quota refund with no symptom to chase. Log and fall
+    // through to the read-back instead, same as the storage-delete failure above - chunksRemaining
+    // and verified report the gap truthfully, and onPurged still runs off `deletedByThisCall`.
+    try {
+      await db.fabFileChunks.deleteManyByFabFileId(file.id);
+    } catch (error) {
+      logger?.error('[dataLake] permanent deletion removed the row but could not delete its chunks', {
+        fabFileId: file.id,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+
+    // Same unlink `deleteFabFile` performs: a chat holding the id in `knowledgeIds` would
+    // otherwise keep pointing at a row that no longer exists, and the confirmation copy promises
+    // otherwise. Its OWN try, not the chunk delete's: a failure here leaves no trace in the
+    // read-back below (nothing re-reads sessions), so without `sessionsUnlinked` a purge whose
+    // chunks went cleanly would file `verified: true` over chats still holding the dead id.
+    // Separate rather than sequential for the same reason the catch exists at all - a chunk-delete
+    // failure must not cost the unlink its attempt.
+    try {
+      const linkedSessions = await db.sessions.findAllWithKnowledgeId(file.id);
+      for (const session of linkedSessions) {
+        await db.sessions.update({
+          id: session.id,
+          knowledgeIds: (session.knowledgeIds ?? []).filter(knowledgeId => knowledgeId !== file.id),
+        });
+      }
+    } catch (error) {
+      sessionsUnlinked = false;
+      logger?.error('[dataLake] permanent deletion removed the row but could not unlink it from sessions', {
+        fabFileId: file.id,
+        error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
   }
@@ -286,7 +321,7 @@ export const purgeDataLakeDocument = async (
   // `T | null` cast, so an equality check here can never see the row as gone.
   const chunksRemaining = await db.fabFileChunks.countByFabFileId(file.id);
   const documentDeleted = !(await db.fabFiles.findById(file.id));
-  const verified = documentDeleted && chunksRemaining === 0 && storageObjectDeleted;
+  const verified = documentDeleted && chunksRemaining === 0 && storageObjectDeleted && sessionsUnlinked;
 
   // The purged lake only. Every OTHER lake the document belonged to is the caller's to rebuild
   // through `onPurged` - resolving a tag back to its lake needs repositories this service does
@@ -325,9 +360,15 @@ export const purgeDataLakeDocument = async (
 
   await onReceipt?.(receipt);
 
-  // Only once the document is genuinely gone: shredding the beliefs of a document that survived a
-  // failed sweep would destroy recall for content still in the lake.
-  if (verified) {
+  // Gated on `documentDeleted`, NOT `verified`: the hazard this guards against is shredding the
+  // beliefs of a document that SURVIVED a failed sweep, which is exactly `documentDeleted === false`
+  // (a storage-delete refusal never reaches `hardDeleteOneById`, so the row stays and the shred
+  // correctly does not fire). Gating on `verified` instead would tie the shred to the chunk count:
+  // a transient failure in the chunk delete above - likeliest on the large documents where this
+  // matters most - would leave the row permanently gone with its beliefs never shredded, and no
+  // retry could reach it (a re-POST 404s, the row no longer resolves). The document would keep
+  // speaking through those beliefs forever.
+  if (documentDeleted) {
     await shredDocumentMemory?.({
       tagNames,
       fabFileId: file.id,

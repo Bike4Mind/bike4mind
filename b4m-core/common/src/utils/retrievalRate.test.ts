@@ -229,4 +229,134 @@ describe('summarizeOptionalPathRetrieval', () => {
     const summary = summarizeOptionalPathRetrieval([undefined, null, offeredRetrieved]);
     expect(summary).toMatchObject({ offeredTurns: 1, retrievedTurns: 1, unclassifiedTurns: 0 });
   });
+
+  describe('answerability split', () => {
+    const probe = (over: Partial<NonNullable<RetrievalSummary['answerability']>> = {}) => ({
+      topScore: 0.9,
+      candidatesAboveFloor: 3,
+      floor: 0.75,
+      scanTruncated: false,
+      probedAt: new Date('2026-09-11T00:00:00.000Z'),
+      ...over,
+    });
+
+    const answerableRetrieved = turn({
+      mode: 'optional',
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseSearch'],
+      answerability: probe(),
+    });
+    const answerableMissed = turn({ mode: 'optional', answerability: probe() });
+    const emptyCorpusNoRetrieval = turn({ mode: 'optional', answerability: probe({ topScore: 0.2 }) });
+    const emptyCorpusRetrieved = turn({
+      mode: 'optional',
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseSearch'],
+      answerability: probe({ topScore: 0.2 }),
+    });
+
+    it('gives the 2x2 the routing decision needs, with the arms summing to the offered population', () => {
+      const summary = summarizeOptionalPathRetrieval([
+        answerableRetrieved,
+        answerableMissed,
+        answerableMissed,
+        answerableMissed,
+        emptyCorpusRetrieved,
+        emptyCorpusNoRetrieval,
+        offeredNoRetrieval,
+      ]);
+
+      // The miss cell: 3 of 4 answerable turns where the model did not search.
+      expect(summary.answerability.answerable).toEqual({ turns: 4, retrievedTurns: 1, rate: 0.25 });
+      // The wasted cell: it searched on 1 of the 2 turns with nothing to find.
+      expect(summary.answerability.notAnswerable).toEqual({ turns: 2, retrievedTurns: 1, rate: 0.5 });
+      expect(summary.answerability.unknown).toEqual({ turns: 1, retrievedTurns: 0, rate: 0 });
+
+      const { answerable, notAnswerable, unknown } = summary.answerability;
+      expect(answerable.turns + notAnswerable.turns + unknown.turns).toBe(summary.offeredTurns);
+    });
+
+    it('keeps an unprobed turn out of the negatives rather than crediting it as nothing-to-find', () => {
+      // The failure this arm exists to prevent: counting a turn nobody replayed as evidence that
+      // the corpus was empty manufactures exactly the conclusion under test.
+      const summary = summarizeOptionalPathRetrieval([offeredNoRetrieval, offeredNoRetrieval]);
+      expect(summary.answerability.unknown.turns).toBe(2);
+      expect(summary.answerability.notAnswerable.turns).toBe(0);
+      expect(summary.answerability.answerable.turns).toBe(0);
+    });
+
+    it('treats a truncated scan below the cutoff as unknown, not as a negative', () => {
+      // The scan stopped early, so the best score it found is a floor on the true best - the
+      // corpus may well hold a better match past the ceiling.
+      const summary = summarizeOptionalPathRetrieval([
+        turn({ mode: 'optional', answerability: probe({ topScore: 0.4, scanTruncated: true }) }),
+      ]);
+      expect(summary.answerability.unknown.turns).toBe(1);
+      expect(summary.answerability.notAnswerable.turns).toBe(0);
+      expect(summary.answerability.inconclusiveTurns).toBe(1);
+    });
+
+    it('still counts a truncated scan that cleared the cutoff as answerable', () => {
+      // Ordering: truncation can only mean the true best is HIGHER, so it rescues a negative and
+      // can never overturn a positive.
+      const summary = summarizeOptionalPathRetrieval([
+        turn({ mode: 'optional', answerability: probe({ topScore: 0.9, scanTruncated: true }) }),
+      ]);
+      expect(summary.answerability.answerable.turns).toBe(1);
+      expect(summary.answerability.inconclusiveTurns).toBe(0);
+    });
+
+    it('defaults the cutoff to the live forced-retrieval floor, inclusive at the boundary', () => {
+      const summary = summarizeOptionalPathRetrieval([
+        turn({ mode: 'optional', answerability: probe({ topScore: 0.75 }) }),
+        turn({ mode: 'optional', answerability: probe({ topScore: 0.7499 }) }),
+      ]);
+      expect(summary.answerability.cutoff).toBe(0.75);
+      expect(summary.answerability.answerable.turns).toBe(1);
+      expect(summary.answerability.notAnswerable.turns).toBe(1);
+    });
+
+    it('re-thresholds the same replayed scores without a second replay', () => {
+      // Why the probe stores a raw score instead of a verdict: sweeping the bar is a re-read.
+      const turns = [
+        turn({ mode: 'optional', answerability: probe({ topScore: 0.62 }) }),
+        turn({ mode: 'optional', answerability: probe({ topScore: 0.81 }) }),
+      ];
+      expect(summarizeOptionalPathRetrieval(turns, { answerableMinScore: 0.6 }).answerability).toMatchObject({
+        cutoff: 0.6,
+        answerable: { turns: 2 },
+        notAnswerable: { turns: 0 },
+      });
+      expect(summarizeOptionalPathRetrieval(turns, { answerableMinScore: 0.9 }).answerability).toMatchObject({
+        cutoff: 0.9,
+        answerable: { turns: 0 },
+        notAnswerable: { turns: 2 },
+      });
+    });
+
+    it('counts the empty-corpus sentinel as not-answerable rather than as unprobed', () => {
+      // The replay writes -1 when nothing came back at all. It is a recorded fact, not missing
+      // data, so it belongs with the negatives - landing it in `unknown` would hide the commonest
+      // honest negative there is and make the corpus look unmeasured.
+      const summary = summarizeOptionalPathRetrieval([
+        turn({ mode: 'optional', answerability: probe({ topScore: -1, candidatesAboveFloor: 0 }) }),
+      ]);
+      expect(summary.answerability.notAnswerable.turns).toBe(1);
+      expect(summary.answerability.unknown.turns).toBe(0);
+    });
+
+    it('classifies only the offered population, leaving forced turns out of the split', () => {
+      // A forced turn retrieved because it was told to, so it says nothing about whether the model
+      // would have chosen to - including it would answer a different question.
+      const summary = summarizeOptionalPathRetrieval([
+        turn({ mode: 'forced', attempted: true, outcome: 'ok', answerability: probe() }),
+        answerableMissed,
+      ]);
+      expect(summary.forcedTurns).toBe(1);
+      expect(summary.answerability.answerable.turns).toBe(1);
+      expect(summary.answerability.unknown.turns).toBe(0);
+    });
+  });
 });

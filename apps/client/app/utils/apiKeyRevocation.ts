@@ -1,3 +1,4 @@
+import { ApiKeyStatus, IUserApiKey } from '@bike4mind/common';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 
@@ -11,6 +12,20 @@ dayjs.extend(relativeTime);
 interface RevocationFields {
   revokedAt?: Date | string;
   revokedReason?: string;
+}
+
+/**
+ * Whether a key has been revoked. `disabled` is the only state any revoke path
+ * writes - revokeUserApiKey, the bulk deactivation and the cc-bridge device
+ * revoke all stamp revokedAt with it - so it reads as "revoked" everywhere, and
+ * it is the only state the delete route accepts.
+ *
+ * Compared against `ApiKeyStatus` rather than the bare string because the server
+ * owns the value - `userApiKeyService/revoke.ts` writes the enum - and a literal
+ * copied onto the client is the one spelling that could silently diverge.
+ */
+export function isRevoked(key: Pick<IUserApiKey, 'status'>): boolean {
+  return key.status === ApiKeyStatus.DISABLED;
 }
 
 /**

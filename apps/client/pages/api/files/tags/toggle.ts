@@ -12,7 +12,9 @@ import {
 } from '@bike4mind/database';
 import { fileTagRepository } from '@bike4mind/database';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { assertDataLakeTagWriteScope, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown>(async (req, res) => {
@@ -32,6 +34,11 @@ const handler = baseApi().post(
     const toggledTags: string[] = Array.isArray((req.body as { tags?: unknown })?.tags)
       ? (req.body as { tags: unknown[] }).tags.filter((t): t is string => typeof t === 'string')
       : [];
+    // This route is not under /api/data-lakes and stays ungated for a plain file-tag toggle, so a
+    // files:write-only key keeps working. But when the payload actually reaches into a lake (a
+    // datalake:* meta-tag), an API-key caller must hold datalake:write - otherwise a key minted for
+    // file tagging alone could add/remove a file from a lake it cannot otherwise write into.
+    await assertDataLakeTagWriteScope(req, toggledTags);
     const settingsStores = { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository };
     // No `members` here on purpose: a toggle is direction-neutral, so this route cannot tell a join
     // from a leave and would refuse removals. The admission contract (#1680) runs inside
@@ -62,6 +69,13 @@ const handler = baseApi().post(
       // wide as the prologue gate above - the org rungs of `canManageLake` cannot be derived from
       // the user document the service is handed.
       administeredOrgIds: ctx.administeredOrgIds,
+      // Covers the fileTagPrefix membership arm the prologue gate above cannot see (it has no
+      // resolved file list) - called only when the service actually finds a prefix-arm join/leave.
+      assertWriteScope: () => assertDataLakeWriteScope(req),
+      // Matches every other audited config-write door (#1917): undefined for a session caller,
+      // the key's principal for a `b4m_live_` caller - so a toggle that auto-activates a draft
+      // lake attributes the History row to the key, not the human.
+      auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
       logger: req.logger,
     });
 

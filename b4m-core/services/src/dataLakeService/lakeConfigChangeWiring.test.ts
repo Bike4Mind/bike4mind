@@ -460,8 +460,8 @@ describe('transferLakeOwnership', () => {
   const orgLake = () => lake({ organizationId: 'org1' });
   const orgOwner = { ...owner, organizationIds: ['org1'] };
   const transferDb = (existing: IDataLakeDocument) => ({
-    dataLakes: { findById: vi.fn().mockResolvedValue(existing), update: echoUpdate(existing) },
-    dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]), upsertGrant: vi.fn().mockResolvedValue({}) },
+    dataLakes: { update: echoUpdate(existing) },
+    dataLakeAccessGrants: { upsertGrant: vi.fn().mockResolvedValue({}) },
     users: { findById: vi.fn().mockResolvedValue({ id: 'newOwner' }) },
     organizations: {
       findById: vi.fn().mockResolvedValue({
@@ -477,7 +477,7 @@ describe('transferLakeOwnership', () => {
   it('records the ownership move on the derived field', async () => {
     const existing = orgLake();
     const audit = auditSpy();
-    await transferLakeOwnership(orgOwner, 'lake1', 'newOwner', { db: { ...transferDb(existing), ...audit.db } });
+    await transferLakeOwnership(orgOwner, existing, [], 'newOwner', { db: { ...transferDb(existing), ...audit.db } });
 
     expect(audit.only()).toMatchObject({
       action: 'transfer-ownership',
@@ -495,15 +495,13 @@ describe('transferLakeOwnership', () => {
     const existing = lake({ organizationId: 'org-1' });
     const audit = auditSpy();
     const db = transferDb(existing);
-    db.dataLakeAccessGrants.listByLake = vi
-      .fn()
-      .mockResolvedValue([{ principalType: 'user', principalId: 'orgAdmin', role: 'curator', status: 'active' }]);
     // An org-owned lake requires the incoming owner to be a member of that org.
     db.organizations.findById = vi.fn().mockResolvedValue({ id: 'org-1', users: [{ userId: 'newOwner' }] });
 
     await transferLakeOwnership(
       { userId: 'orgAdmin', isAdmin: false, administeredOrgIds: ['org-1'] },
-      'lake1',
+      existing,
+      [{ principalType: 'user', principalId: 'orgAdmin', role: 'curator' }],
       'newOwner',
       { db: { ...db, ...audit.db } }
     );
@@ -517,7 +515,7 @@ describe('transferLakeOwnership', () => {
   it('records ownership, not platform-admin, when an admin transfers a lake they own', async () => {
     const existing = lake();
     const audit = auditSpy();
-    await transferLakeOwnership({ userId: 'owner', isAdmin: true }, 'lake1', 'newOwner', {
+    await transferLakeOwnership({ userId: 'owner', isAdmin: true }, existing, [], 'newOwner', {
       db: { ...transferDb(existing), ...audit.db },
     });
 
@@ -527,7 +525,7 @@ describe('transferLakeOwnership', () => {
   it('records platform-admin when an admin transfers a lake they do NOT own', async () => {
     const existing = lake();
     const audit = auditSpy();
-    await transferLakeOwnership({ userId: 'root', isAdmin: true }, 'lake1', 'newOwner', {
+    await transferLakeOwnership({ userId: 'root', isAdmin: true }, existing, [], 'newOwner', {
       db: { ...transferDb(existing), ...audit.db },
     });
 
@@ -537,7 +535,7 @@ describe('transferLakeOwnership', () => {
   it('records nothing when the named owner already solely owns the lake', async () => {
     const existing = orgLake();
     const audit = auditSpy();
-    await transferLakeOwnership(orgOwner, 'lake1', 'owner', { db: { ...transferDb(existing), ...audit.db } });
+    await transferLakeOwnership(orgOwner, existing, [], 'owner', { db: { ...transferDb(existing), ...audit.db } });
     expect(audit.record).not.toHaveBeenCalled();
   });
 });

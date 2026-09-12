@@ -34,10 +34,20 @@ const ctx = (over: Partial<AccessContext> = {}): AccessContext => ({
 
 type Opts = Parameters<typeof buildAccessibleQuery>[1];
 
+// Castable ObjectIds, not placeholders: the grant arms filter unusable ids out (usableObjectIds),
+// so a placeholder would drop the very arm each row below is asserting. Org ids stay plain strings -
+// organizationId is a String field, not an _id.
+const LAKE_1 = '650000000000000000000001';
+const LAKE_2 = '650000000000000000000002';
+const LAKE_3 = '650000000000000000000003';
+// The counterpart. A real-Mongo test cannot tell "no arm" from an `$in: []` arm - both return
+// nothing - so the shape probes below are the only thing that can catch that regression.
+const UNCASTABLE = 'legacy-uuid-not-an-objectid';
+
 const MAXIMAL = {
   name: 'the maximal non-admin caller',
   ctx: ctx({ organizationIds: ['o1'], administeredOrgIds: ['o3'], entitlementKeys: ['e-1'] }),
-  opts: { grantedLakeIds: ['l1'], orgGrantedLakes: { o1: ['l2'] }, includePublic: true } satisfies Opts,
+  opts: { grantedLakeIds: [LAKE_1], orgGrantedLakes: { o1: [LAKE_2] }, includePublic: true } satisfies Opts,
   arms: [...FIND_ACCESSIBLE_ARMS],
 };
 
@@ -59,7 +69,7 @@ const CONTEXTS: { name: string; ctx: AccessContext; opts?: Opts; arms: FindAcces
   {
     name: 'a grant holder',
     ctx: ctx(),
-    opts: { grantedLakeIds: ['l1'] },
+    opts: { grantedLakeIds: [LAKE_1] },
     arms: ['owner', 'public', 'orgGate', 'grant'],
   },
   {
@@ -67,13 +77,13 @@ const CONTEXTS: { name: string; ctx: AccessContext; opts?: Opts; arms: FindAcces
     // assertion below is what keeps the repeat honest.
     name: 'an org-grant holder in two orgs',
     ctx: ctx(),
-    opts: { orgGrantedLakes: { o1: ['l1'], o2: ['l2', 'l3'] } },
+    opts: { orgGrantedLakes: { o1: [LAKE_1], o2: [LAKE_2, LAKE_3] } },
     arms: ['owner', 'public', 'orgGate', 'orgGrant', 'orgGrant'],
   },
   {
     name: 'a management view (includePublic: false) drops the public and org-grant arms',
     ctx: ctx(),
-    opts: { includePublic: false, orgGrantedLakes: { o1: ['l1'] } },
+    opts: { includePublic: false, orgGrantedLakes: { o1: [LAKE_1] } },
     arms: ['owner', 'orgGate'],
   },
   {
@@ -81,6 +91,20 @@ const CONTEXTS: { name: string; ctx: AccessContext; opts?: Opts; arms: FindAcces
     ctx: ctx({ administeredOrgIds: [] }),
     opts: { grantedLakeIds: [], orgGrantedLakes: { o1: [] } },
     arms: ['owner', 'public', 'orgGate'],
+  },
+  {
+    // NON-empty but entirely unusable: the arm must be absent, not present-and-empty. The
+    // `or.length === arms.length` probe below is what distinguishes the two.
+    name: 'a grant list of only uncastable ids adds no arm',
+    ctx: ctx(),
+    opts: { grantedLakeIds: [UNCASTABLE] },
+    arms: ['owner', 'public', 'orgGate'],
+  },
+  {
+    name: 'an org-grant list of only uncastable ids adds no arm for that org',
+    ctx: ctx(),
+    opts: { orgGrantedLakes: { o1: [UNCASTABLE], o2: [UNCASTABLE, LAKE_1] } },
+    arms: ['owner', 'public', 'orgGate', 'orgGrant'],
   },
   MAXIMAL,
   // The isAdmin bypass replaces the whole $or instead of adding a disjunct, so it labels no arm -

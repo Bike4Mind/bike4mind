@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/scripts",
-  "version": "0.1.66",
+  "version": "0.1.67",
   "private": true,
   "type": "module",
   "main": "index.ts",
@@ -21,9 +21,11 @@
     "datalake:check-slug-dupes": "tsx migrate/check-datalake-slug-dupes.ts",
     "datalake:check-prefix-overlaps": "tsx migrate/check-datalake-prefix-overlaps.ts",
     "datalake:check-prefix-dupes": "tsx migrate/check-datalake-prefix-dupes.ts",
+    "datalake:check-prefix-whitespace": "tsx migrate/check-datalake-prefix-whitespace.ts",
     "datalake:check-prefix-only-members": "tsx migrate/check-datalake-prefix-only-members.ts",
     "datalake:ingest-pdfs": "tsx datalake/ingest-pdf-datalake.ts",
     "datalake:check-stranded-drive-connections": "tsx datalake/check-stranded-drive-connections.ts",
+    "datalake:check-stale-vector-claims": "tsx datalake/check-stale-vector-claims.ts",
     "datalake:seed-stranded-member": "tsx datalake/seed-stranded-lake-member.ts",
     "db:create-user": "tsx createUser.ts",
     "db:list-users": "tsx listUsers.ts",
@@ -56,6 +58,7 @@
     "retrieval:recall-probe": "tsx retrieval/recall-probe.ts",
     "retrieval:supersession-probe": "tsx retrieval/supersession-probe.ts",
     "retrieval:capture-embeddings": "tsx retrieval/capture-embeddings.ts",
+    "retrieval:answerability-replay": "tsx retrieval/answerability-replay.ts",
     "retrieval:model-comparison": "tsx retrieval/model-comparison.ts"
   },
   "dependencies": {

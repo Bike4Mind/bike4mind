@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeRepository, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
 import type { IOrgGoogleDriveConnectionDocument } from '@bike4mind/common';
@@ -76,7 +77,7 @@ async function findLakeConnection(lakeId: string, organizationId: string) {
  * lacks org owner/manager access. The connect + ingest trigger lives in POST
  * /api/data-lakes/drive-sync; this route is the per-lake status + disconnect surface.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request, res) => {
     const { id } = req.query as { id: string };
@@ -92,6 +93,7 @@ const handler = baseApi()
     return res.json({ connection: conn ? toSafeConnection(conn) : null });
   })
   .delete(async (req: Request, res) => {
+    assertDataLakeWriteScope(req);
     const { lakeId, organizationId } = await resolveOrgLake(req);
     const conn = await findLakeConnection(lakeId, organizationId);
     if (conn) {

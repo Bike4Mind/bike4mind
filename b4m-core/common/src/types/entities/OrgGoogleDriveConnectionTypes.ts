@@ -114,6 +114,16 @@ export interface IOrgGoogleDriveConnection {
    * also reconciles by modifiedTime. Advance only after a sync batch is durably created.
    */
   syncCursor?: string;
+
+  /**
+   * When this connection last completed a FULL recursive folder walk (as opposed to an incremental
+   * changes pull). Drive's changes feed is per-FILE: moving a folder mutates only that folder's own
+   * `parents` and emits no records for its descendants, so incremental sync alone never notices a
+   * subtree dragged into or out of the connected root. The poll cron re-forces a full walk once this
+   * goes stale (driveLakeResyncPoll), which is the reconcile behind that gap - and the backstop for
+   * any other change an incremental run could not resolve.
+   */
+  lastFullWalkAt?: Date;
 }
 
 export interface IOrgGoogleDriveConnectionDocument extends IOrgGoogleDriveConnection, IMongoDocument {}
@@ -258,8 +268,16 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
     update: IGoogleDriveConnectionHealthUpdate
   ): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
-  /** Advance the incremental-sync cursor after a sync batch is durably created. */
-  updateSyncCursor(id: string, syncCursor: string, polledAt: Date): Promise<IOrgGoogleDriveConnectionDocument | null>;
+  /**
+   * Advance the incremental-sync cursor after a sync batch is durably created. `fullWalk` also stamps
+   * `lastFullWalkAt`, which is what resets the poll cron's forced-re-walk clock.
+   */
+  updateSyncCursor(
+    id: string,
+    syncCursor: string,
+    polledAt: Date,
+    opts?: { fullWalk?: boolean }
+  ): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
   /**
    * Guarded per-connection ingest lock. Atomically flips `status` to 'syncing' (stamping

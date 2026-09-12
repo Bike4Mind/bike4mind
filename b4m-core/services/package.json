@@ -1,7 +1,7 @@
 {
   "name": "@bike4mind/services",
   "description": "This packages contains all the core business logic",
-  "version": "6.1.0",
+  "version": "7.0.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -199,6 +199,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1080.0",
+    "@aws-sdk/client-cloudwatch": "^3.1080.0",
     "@aws-sdk/client-s3": "^3.1080.0",
     "@aws-sdk/client-transcribe": "^3.1080.0",
     "@aws-sdk/credential-provider-node": "^3.972.63",

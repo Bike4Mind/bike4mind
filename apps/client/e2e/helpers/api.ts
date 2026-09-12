@@ -86,7 +86,10 @@ export async function apiCreateTestUser(
   request: APIRequestContext,
   params: {
     username: string;
-    email: string;
+    // Omit to mint an EMAILLESS account (the shape an OAuth signup with no provider-verified
+    // email produces). The username must then end in `-e2e` so cleanup can find it; use the
+    // timestamped `-<digits>-e2e` form for anything the sweep should reclaim.
+    email?: string | null;
     name: string;
     password: string;
     isAdmin?: boolean;

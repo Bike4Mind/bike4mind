@@ -3217,12 +3217,16 @@ describe('ChatCompletionProcess', () => {
           files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
         });
 
-        const quest = { promptMeta: { retrieval } } as any;
-        applyQuestStatusChanges(quest, {
-          promptMeta: {
-            retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
-          },
-        } as any);
+        const quest = { sessionId: 's1', promptMeta: { retrieval } } as any;
+        applyQuestStatusChanges(
+          quest,
+          {
+            promptMeta: {
+              retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+            },
+          } as any,
+          'user-1'
+        );
 
         expect(quest.promptMeta.retrieval).toEqual({
           attempted: true,
@@ -4034,6 +4038,7 @@ describe('ChatCompletionProcess', () => {
       beliefs?: { fact: string; relevance: number; sources: string[] }[];
       recallLakeMemory?: (input: unknown) => Promise<unknown>;
       retrievalTags?: string[];
+      lakeScopeExplicit?: boolean;
     }): Promise<{ systemText: string; retrieval: unknown }> => {
       mockDb.dataLakes = { findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([ownedLake('corpus')]) };
       (service as any).entitlementsResolved = true;
@@ -4041,7 +4046,10 @@ describe('ChatCompletionProcess', () => {
       (service as any).recallLakeMemory = params.recallLakeMemory ?? vi.fn().mockResolvedValue(params.beliefs ?? []);
       // buildOptimizedFeatures is stubbed in beforeEach, so register the real feature under the
       // same key the assembly reads, mirroring the SkillsFeature test above.
-      service.features.set('lakeMemory', new LakeMemoryFeature(service, params.retrievalTags ?? [], {}));
+      service.features.set(
+        'lakeMemory',
+        new LakeMemoryFeature(service, params.retrievalTags ?? [], {}, params.lakeScopeExplicit)
+      );
 
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!'])),
@@ -4189,6 +4197,33 @@ describe('ChatCompletionProcess', () => {
         dataLakeTags: [],
         knowledgeBaseGuidanceInjected: false,
       });
+    });
+
+    it('emits no card when the session scope is explicit and selects no lake', async () => {
+      // The bug this pair pins: an empty selection is ambiguous on its own, so it used to fall back
+      // to the FULL entitled set. With the scope marked explicit it means what it says.
+      const { systemText, retrieval } = await runAndCaptureSystemText({
+        message: 'What is the warranty?',
+        beliefs: [{ fact: 'should never be recalled', relevance: 0.9, sources: ['doc1'] }],
+        retrievalTags: [],
+        lakeScopeExplicit: true,
+      });
+
+      expect(systemText).not.toContain('Background reference facts');
+      expect(retrieval).toMatchObject({ outcome: 'no_lakes', dataLakeTags: [] });
+    });
+
+    it('still spans the entitled lakes when the session expressed no lake scope at all', async () => {
+      // The other half of the tri-state: absence keeps the pre-existing fallback, so no already
+      // deployed session loses its card.
+      const { systemText, retrieval } = await runAndCaptureSystemText({
+        message: 'What is the warranty on the X-200 pump?',
+        beliefs: [{ fact: 'The X-200 pump has a 5-year warranty.', relevance: 0.9, sources: ['doc1'] }],
+        retrievalTags: [],
+      });
+
+      expect(systemText).toContain('The X-200 pump has a 5-year warranty.');
+      expect(retrieval).toMatchObject({ outcome: 'ok', dataLakeTags: ['datalake:corpus'] });
     });
   });
 

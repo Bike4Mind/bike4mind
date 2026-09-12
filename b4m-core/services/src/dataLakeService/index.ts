@@ -75,6 +75,7 @@ export * from './retrievalUnavailable';
 export * from './supersession';
 export * from './getDataLakePrompts';
 export * from './semanticDataLakeSearch';
+export * from './dataLakeSearchMetrics';
 export * from './boundedTopK';
 export * from './resolveSearchBudgets';
 export * from './resolveSpendLevers';

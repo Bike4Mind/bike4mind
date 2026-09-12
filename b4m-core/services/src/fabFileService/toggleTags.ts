@@ -10,6 +10,7 @@ import {
   IFileTagRepository,
   IScopedSettingsRepository,
   IUserDocument,
+  LakeAuditPrincipal,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from '../dataLakeService/assertLakeAccess';
@@ -59,6 +60,26 @@ interface FabFileToggleTagsAdapters extends LakeConfigAuditAdapters {
    * in front of it. Same adapter, for the same reason, as `createFabFile`'s and `updateFabFile`'s.
    */
   administeredOrgIds?: string[];
+  /**
+   * Throws when the caller lacks the API-key scope to write a lake's membership. The route's own
+   * scope gate only sees the RAW requested tags, so it catches a `datalake:*` meta-tag join/leave
+   * before this runs - but a file's ONLY membership signal for a lake can also be a
+   * `fileTagPrefix` content tag, which the route cannot recognize without a resolved file list
+   * (see toggleTags.test.ts / the route's own doc comment). Called here, once, only when a
+   * prefix-arm join or leave was actually found - never on a request that just failed accessibility
+   * or the static-registry gate - so an API-key caller that never touches a lake this way pays
+   * nothing extra. Omitted entirely by a JWT/browser caller's own asserts elsewhere; undefined here
+   * means "no API-key scope gate to run" (mirrors `assertDataLakeWriteScope` letting through a
+   * caller with no `apiKeyInfo`).
+   */
+  assertWriteScope?: () => void;
+  /**
+   * The resolved audit principal for an API-key caller (undefined for a session caller) - see
+   * `lakeConfigAuditPrincipal`. Attached to the actor below so a toggle that auto-activates a
+   * draft lake attributes the resulting config-change row to the key, not the human it acts for,
+   * matching every other audited config-write door (#1917).
+   */
+  auditPrincipal?: LakeAuditPrincipal;
 }
 
 const storedTagNames = (file: Pick<IFabFileDocument, 'tags'>): string[] =>
@@ -115,7 +136,7 @@ const matchingStoredNames = (storedNames: readonly string[], tag: string): strin
 export const toggleTags = async (
   userId: string,
   params: unknown,
-  { db, logger, administeredOrgIds }: FabFileToggleTagsAdapters
+  { db, logger, administeredOrgIds, assertWriteScope, auditPrincipal }: FabFileToggleTagsAdapters
 ): Promise<ToggledFabFile[]> => {
   const { ids, tags: requestedTags } = fabFileToggleTagsSchema.parse(params);
 
@@ -145,7 +166,12 @@ export const toggleTags = async (
     throw new BadRequestError('Some files are not accessible or you do not have permission to edit them');
   }
 
-  const actor = { userId, isAdmin: !!user.isAdmin, administeredOrgIds: administeredOrgIds ?? [] };
+  const actor = {
+    userId,
+    isAdmin: !!user.isAdmin,
+    administeredOrgIds: administeredOrgIds ?? [],
+    auditPrincipal,
+  };
   // Grant-aware manage gates below: consult each lake's active grants so a transferred lake's
   // superseded creator does not still pass. Batched + cached across both prefix-arm gate passes.
   // The org rungs fire only when the caller resolved `administeredOrgIds` for us - the route door
@@ -205,6 +231,9 @@ export const toggleTags = async (
     );
     const gatedLeaveLakes = [...prefixLeavesByFile.values()].flat().map(({ lake }) => lake);
     const gatedJoinLakes = [...prefixJoinsByFile.values()].flat().map(({ lake }) => lake);
+    // Only the prefix arm reaches here with no route-level scope check yet - see
+    // assertWriteScope's own doc comment.
+    if (gatedLeaveLakes.length > 0 || gatedJoinLakes.length > 0) assertWriteScope?.();
     await grantResolver.prime([...gatedLeaveLakes, ...gatedJoinLakes]);
     for (const leaves of prefixLeavesByFile.values()) {
       for (const { lake } of leaves) {

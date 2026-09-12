@@ -92,7 +92,18 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
     await revokeSessionKnowledgeFileGrants({ session: document as ISessionDocument, userIdToRevoke }, adapters);
   }
 
-  await dbModel.update(document);
+  // This filters `document.users` in memory and writes the whole doc back - a lost-update-sensitive
+  // grant path, so it opts in to the version guard (`updateGuarded`). Because the doc carries `__v`, a
+  // racing whole-doc write that ALSO goes through `updateGuarded` throws ConcurrencyConflictError (409,
+  // surfaced by the shared errorHandler) instead of clobbering this revoke, and the route's
+  // `withTransaction` rolls back the `revokeFromProject` side effects above on that conflict. Note the
+  // guard only defends against other *guarded* writers: a plain `update` of the same doc (e.g. some
+  // accept.ts paths) is not conditioned on `__v` and can still resurrect access - guarding those is a
+  // follow-up. (Access *widening* via updateDocumentSharing is a targeted `$set` of
+  // isGlobalRead/isGlobalWrite with no `__v`, so it stays on the unguarded path.)
+  // `updateGuarded` is optional on IBaseRepository (additive for external implementers), but every
+  // in-repo repo is a concrete BaseRepository that provides it.
+  await dbModel.updateGuarded!(document);
 
   return document;
 };

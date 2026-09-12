@@ -41,6 +41,10 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
 FROM deps AS builder
 # Build every workspace package except the client (incl. @bike4mind/resource).
 RUN pnpm turbo:build
+# The client `prebuild` regenerates the help index and bundles the help markdown from
+# docs-site/docs; .dockerignore admits only the two help categories, so this stays small.
+# Copied after turbo:build so a docs edit doesn't invalidate the package build layer.
+COPY docs-site/docs ./docs-site/docs
 # Build the Next.js client in standalone mode; B4M_SELF_HOST (base ENV) turns on
 # both the sst→shim turbopack alias and `output: 'standalone'`.
 RUN NODE_OPTIONS='--max-old-space-size=12288' pnpm --filter @bike4mind/client build
@@ -57,6 +61,9 @@ RUN set -eu; \
     before=$(du -sb apps/client/.next/standalone | cut -f1); \
     find apps/client/.next/standalone -name '*.nft.json' -type f -delete; \
     echo "stripped traces: ${before} -> $(du -sb apps/client/.next/standalone | cut -f1) bytes"
+# Then assert what actually ships: anything beyond the five entries a healthy standalone build
+# emits means file tracing swept the app source tree in behind us.
+RUN node apps/client/scripts/check-standalone-tree.mjs apps/client/.next/standalone/apps/client
 
 # ── Runner: minimal image, standalone output only ───────────────────────────
 FROM node:${NODE_VERSION}-slim AS runner
