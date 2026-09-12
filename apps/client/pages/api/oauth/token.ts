@@ -1,9 +1,10 @@
 /**
  * POST /api/oauth/token
  *
- * OAuth 2.0 token endpoint. Supports:
- * - grant_type=authorization_code  (PKCE)
- * - grant_type=refresh_token       (existing B4M refresh token)
+ * OAuth 2.0 token endpoint. Handles only:
+ * - grant_type=authorization_code  (PKCE for public clients, client_secret_post for confidential)
+ *
+ * Refresh is a separate endpoint (POST /api/oauth/refresh); this one rejects any other grant_type.
  */
 
 import { z } from 'zod';

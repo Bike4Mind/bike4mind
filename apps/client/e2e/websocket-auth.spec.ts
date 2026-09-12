@@ -202,7 +202,7 @@ test.describe('WebSocket token enforcement', () => {
     expect(openAfterUnsubscribe).toBe(true);
   });
 
-  test('a token revoked server-side (force-logout) is refused at connect', async ({ page, request }) => {
+  test('a token revoked server-side (force-logout) can no longer mint a connect ticket', async ({ page, request }) => {
     // Admin so the user can pull the tokenVersion kill switch on itself; see apiForceLogout.
     const user = await createWsUser(request, 'revoked', { isAdmin: true });
     const wsUrl = await getWebsocketUrl(request, user.accessToken);
@@ -214,7 +214,9 @@ test.describe('WebSocket token enforcement', () => {
 
     await apiForceLogout(request, user.accessToken, user.userId);
 
-    // After the bump the token can no longer mint a connect ticket, so it cannot connect.
+    // After the bump the token can no longer mint a connect ticket, so tryWsConnect returns false
+    // before ever opening a socket. The connect-time isTokenVersionCurrent gate is unit-covered in
+    // server/websocket/__tests__/connect.test.ts; this asserts the mint-side half of revocation.
     expect(await tryWsConnect(page, request, wsUrl, user.accessToken)).toBe(false);
   });
 
