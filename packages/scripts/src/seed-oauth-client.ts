@@ -28,7 +28,15 @@ const OAuthClientSchema = new mongoose.Schema(
     name: { type: String, required: true },
     redirectUris: [{ type: String }],
     allowedScopes: { type: [String], default: ['openid', 'email', 'profile'] },
-    pkceRequired: { type: Boolean, default: true },
+    // Default mirrors the real model (OAuthClientModel.ts): 'none' fails safe. This script always
+    // passes 'client_secret_post' explicitly at create() because it mints a secret, so the default
+    // never fires today; keeping it aligned means a future call that omits it registers a public
+    // client, not a confidential one it cannot authenticate.
+    tokenEndpointAuthMethod: {
+      type: String,
+      enum: ['none', 'client_secret_post'],
+      default: 'none',
+    },
     isActive: { type: Boolean, default: true },
     federatedIdp: {
       type: new mongoose.Schema(
@@ -104,7 +112,7 @@ async function main() {
     name: clientName,
     redirectUris,
     allowedScopes: ['openid', 'email', 'profile'],
-    pkceRequired: true,
+    tokenEndpointAuthMethod: 'client_secret_post',
     isActive: true,
     ...(federatedIdp ? { federatedIdp } : {}),
   });

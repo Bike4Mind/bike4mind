@@ -770,7 +770,7 @@ B4M_DOMAIN=chat.example.com
 WEBSOCKET_URL=wss://chat.example.com/ws
 ```
 
-The `WEBSOCKET_URL` path must be `/ws` to match the Caddyfile route: the browser uses `WEBSOCKET_URL` verbatim (plus a `?token=` query), and Caddy proxies `/ws` to the ws gateway, which accepts the upgrade on any path. No app-side change is needed.
+The `WEBSOCKET_URL` path must be `/ws` to match the Caddyfile route: the browser uses `WEBSOCKET_URL` verbatim (plus a `?ticket=` query), and Caddy proxies `/ws` to the ws gateway, which accepts the upgrade on any path. No app-side change is needed.
 
 **4. Bring the stack up with the `proxy` profile:**
 

@@ -42,6 +42,15 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
       .json({ error: 'unauthorized_client', error_description: 'Unknown client or redirect_uri mismatch' });
   }
 
+  // Reject a challenge-less authorization for a public client (RFC 7636 4.4.1)
+  // so the token endpoint never has to redeem a downgraded, PKCE-less code.
+  const isConfidential = client.tokenEndpointAuthMethod === 'client_secret_post';
+  if (!isConfidential && !code_challenge) {
+    return res
+      .status(400)
+      .json({ error: 'invalid_request', error_description: 'code_challenge is required (PKCE) for this client' });
+  }
+
   const requestedScopes = scope.split(' ').filter(s => client.allowedScopes.includes(s));
 
   const code = await generateAuthCode({
