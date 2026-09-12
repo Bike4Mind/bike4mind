@@ -270,13 +270,30 @@ const DATA_ONLY_COMMANDS =
 const unquoteWord = (word: string) => word.replace(/(^|[^\\])['"]/g, '$1');
 
 /**
+ * Tracked repo-root FILES by bare name, read from the index rather than listed here so the set
+ * cannot go stale. Needed because the step's working directory IS the checkout, so `bash dev`
+ * names a tracked file with no slash anywhere in it - and `bash` resolves a script operand
+ * relative to CWD before it consults `$PATH`, and needs no execute bit to run one. 66 of these
+ * exist, so "no slash" was never a safe proxy for "not a checkout path".
+ */
+const rootTrackedFiles = new Set(
+  execFileSync('git', ['ls-tree', 'HEAD'], { cwd: REPO_ROOT, encoding: 'utf8' })
+    .split('\n')
+    .filter(line => / blob /.test(line))
+    .map(line => line.split('\t')[1])
+    .filter(Boolean)
+);
+
+/**
  * A reference into a directory the agent can write: `./x`, `../x`, `dir/file`,
- * `$GITHUB_WORKSPACE` or `$RUNNER_TEMP`. Both of those are named because a bare write-tool
- * grant reaches absolute paths, so the runner temp is as writable as the checkout is.
+ * `$GITHUB_WORKSPACE`, `$RUNNER_TEMP`, or the bare name of a tracked repo-root file. The two
+ * variables are named because a bare write-tool grant reaches absolute paths, so the runner
+ * temp is as writable as the checkout is.
  */
 const referencesCheckout = (text: string) =>
   /(?:^|[\s"'=(:])(?:\.{1,2}\/|[A-Za-z0-9_.@-]+\/[A-Za-z0-9_.@/-])/.test(` ${text}`) ||
-  /GITHUB_WORKSPACE|RUNNER_TEMP/.test(text);
+  /GITHUB_WORKSPACE|RUNNER_TEMP/.test(text) ||
+  rootTrackedFiles.has(text);
 
 /** A command's words with its leading `VAR=value` and shell-keyword prefixes dropped. */
 function commandProgram(words: string[]): string[] {
@@ -331,23 +348,28 @@ function gitCommands(src: string, subcommands: RegExp): string[][] {
 const gitPushes = (src: string) =>
   gitCommands(src, /^push$/).map(words => words.filter(word => !/^\d*[<>]/.test(word)).map(unquoteWord));
 
+/** The one object the job reads out of the store and executes, pinned separately below. */
+const REDACTOR_OBJECT = 'HEAD:.github/scripts/redact-review-transcript.py';
+
 /**
  * True when a command emits bytes the agent can write.
  *
- * `git show HEAD:<path>` reads the object store, which no write tool reaches, and that is the
- * whole reason the transcript redactor is piped from it rather than run from the tree. Every
- * OTHER git subcommand emits metadata (paths, counts, status) rather than file content, so it
- * cannot carry a payload either. Any other program naming a checkout path is reading the
- * working tree, which the agent holds `Edit` on in fold mode.
+ * Reading the object store at exactly `HEAD:<the redactor>` is the one exemption, and it is
+ * spelled as that one path rather than as `HEAD:` because `HEAD` is NOT a synonym for "bytes
+ * no write tool reaches". It is that only until `git commit` - after which, inside this very
+ * step, `HEAD` IS the agent's fold commit, and every path the guard above does not refuse
+ * (`.ts`, `.js`, `.py`, `.mjs`) is in it. The exemption exists for one invocation which its
+ * own test pins verbatim, so it is scoped to that invocation. Every OTHER git subcommand emits
+ * metadata (paths, counts, status) rather than file content, so it cannot carry a payload.
+ * Any other program naming a checkout path is reading the working tree, which the agent holds
+ * `Edit` on in fold mode.
  */
 function readsWritableBytes(words: string[]): boolean {
   const plain = commandProgram(words).map(unquoteWord);
-  if (plain[0] === 'git') {
-    const sub = gitSubcommand(plain);
-    if (sub !== 'show' && sub !== 'cat-file') return false;
-    return !plain.slice(1).every(arg => arg.startsWith('-') || arg === sub || arg.startsWith('HEAD:'));
-  }
-  return plain.some(arg => referencesCheckout(arg));
+  if (plain[0] !== 'git') return plain.some(arg => referencesCheckout(arg));
+  const sub = gitSubcommand(plain);
+  if (sub !== 'show' && sub !== 'cat-file') return false;
+  return !plain.slice(1).every(arg => arg.startsWith('-') || arg === sub || arg === REDACTOR_OBJECT);
 }
 
 /**
@@ -407,7 +429,7 @@ function checkoutCodeReferences(src: string): string[] {
 function withKeys(src: string, name: string): string[] {
   const block = step(src, name).match(/^ {8}with:\n((?: {10}.*\n|\n)+)/m)?.[1];
   expect(block, `${name}: no with: block`).toBeTruthy();
-  return [...(block ?? '').matchAll(/^ {10}([a-z_]+):/gm)].map(m => m[1]);
+  return [...(block ?? '').matchAll(/^ {10}([a-z0-9_-]+):/gm)].map(m => m[1]);
 }
 
 /**
@@ -457,6 +479,24 @@ function claudeArgTokens(src: string, expansion = 'EXPANSION'): string[] {
  * an assertion that reads the spec it smuggles itself in as.
  */
 const MULTI_WORD_EXPANSION = 'probe --settings ./probe-settings.json';
+
+/**
+ * The `Edit()` fences that sit OUTSIDE the mode ternary, so they hold in review mode too.
+ *
+ * All three are absolute, because a bare write-tool grant reaches anywhere on the filesystem
+ * and not only the working directory. `runner.temp` holds the runner's own
+ * `_runner_file_commands` files, i.e. command execution in every later step. `_actions` holds
+ * the unpacked JavaScript of every `uses:` step - including the one that runs after the agent
+ * with the App private key in its env - and `runners` holds the node that executes it, so
+ * both are the PROGRAM of a step rather than an input to one. The `_actions` pair is written
+ * as a literal because no expression yields that path, which makes it a premise about the
+ * hosted image; asserting it here is what forces a self-hosted move to be a deliberate edit.
+ */
+const ALWAYS_ON_EDIT_FENCES = [
+  'Edit(/${{ runner.temp }}/**)',
+  'Edit(//home/runner/work/_*/**)',
+  'Edit(//home/runner/runners/**)',
+];
 
 /**
  * The only arguments this job may pass the action. Asserted as a SET, and over the token vector
@@ -573,7 +613,10 @@ function runStagedGuards(
   home?: { attributes?: string }
 ): { status: number; out: string } {
   const commands = step(src, 'Push fold commit');
-  const region = commands.match(/^ {10}BLOCKED=\$\([\s\S]*?-gt 800 \]; then\n[\s\S]*?^ {10}fi$/m)?.[0];
+  // Lifted from the staged-path enumeration, which sits OUTSIDE `BLOCKED=$( )` precisely so
+  // that a failure in it is fatal - `set -e` is not inherited into a command substitution, so
+  // a region starting at `BLOCKED=` would execute the guard without the half that fails closed.
+  const region = commands.match(/^ {10}STAGED_PATHS=\$\(mktemp\)$[\s\S]*?-gt 800 \]; then\n[\s\S]*?^ {10}fi$/m)?.[0];
   expect(region, 'could not lift the staged-path guard and size bound out of the push step').toBeTruthy();
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-fold-guard-'));
@@ -806,12 +849,12 @@ describe('bot-fold write path', () => {
         'Edit(.git/**)',
         'Edit(.github/**)',
         'Edit(.mcp.json)',
-        'Edit(/${{ runner.temp }}/**)',
         // git honours an UNTRACKED `.gitattributes`, which `git add -u` never stages and the
         // path guard therefore never sees - and it decides what `--numstat` calls binary, so
         // one planted file turns the binary arm and the 800-line bound off together.
         'Edit(.gitattributes)',
         'Edit(**/.gitattributes)',
+        ...ALWAYS_ON_EDIT_FENCES,
       ].sort()
     );
     // Every OTHER parenthesised spec, by value, in BOTH arms. `toContain` on the three
@@ -824,7 +867,7 @@ describe('bot-fold write path', () => {
     // The step's own comment says both branches are spelled out in full by design, so every
     // edit here is a both-arms edit, and a fold-arm-only assertion waves the review arm through.
     expect(deny.review.filter(spec => spec.includes('(')).sort()).toEqual(
-      [...reads, 'Edit(/${{ runner.temp }}/**)'].sort()
+      [...reads, ...ALWAYS_ON_EDIT_FENCES].sort()
     );
     // Single-shot process, so a wakeup can only ever be a lost run. Denied in both arms.
     expect(deny.fold).toContain('ScheduleWakeup');
@@ -932,6 +975,18 @@ describe('bot-fold write path', () => {
       'echo ./scripts/install-hooks.sh | xargs bash',
       'sed -n "1,99p" ./scripts/x.sh | sh',
       'bash <<< "$(cat ./scripts/install-hooks.sh)"',
+      // Out of the object store rather than out of the tree. `HEAD:` used to be exempt for
+      // every path, on the reasoning that the store holds bytes no write tool reaches - true
+      // only until `git commit`, after which HEAD is the agent's own fold commit. `cat-file -p`
+      // is the same read spelled the way anyone actually writes it.
+      'git show HEAD:scripts/check-no-control-bytes.sh | bash',
+      'git cat-file -p HEAD:scripts/check-no-control-bytes.sh | bash',
+      // No slash anywhere. The step's CWD is the checkout and `bash` opens a script operand
+      // relative to CWD before consulting $PATH, so a tracked repo-root file needs neither a
+      // `./` nor an exec bit to be executed.
+      'bash dev',
+      'sh install-hooks.sh',
+      'node commitlint.config.js',
       // `${S}` rather than `"$S"`: the braces used to split the word so that no word carried
       // the reference the taint tracking looks for.
       'S=./scripts/install-hooks.sh ; bash ${S}',
@@ -996,10 +1051,16 @@ describe('bot-fold write path', () => {
     // `git ...` therefore had everything after it skipped as a data-only command's arguments.
     // These are injected INSIDE `Push fold commit` - upstream of the path guard, in the step
     // that holds the push token - which is where it is worth the least to be blind.
-    for (const body of shouldBeCaught) {
-      const injected = src.replace(/^ {10}git add -u$/m, `          git add -u\n          ${body}`);
-      expect(injected, 'the injection anchor moved').not.toBe(src);
-      expect(checkoutCodeReferences(injected), `not caught inside an existing body: ${body}`).not.toEqual([]);
+    // Two positions inside `Push fold commit`, because they differ in what `HEAD` MEANS. Before
+    // `git add -u`, HEAD is the reviewed commit; after the `git commit` below it is the agent's
+    // own fold commit, so a `git show HEAD:<path>` there reads back exactly what the agent just
+    // wrote - which is why the exemption is one object path and not the `HEAD:` prefix.
+    for (const anchor of [/^ {10}git add -u$/m, /^ {12}-m "Workflow run: .*$/m]) {
+      for (const body of shouldBeCaught) {
+        const injected = src.replace(anchor, line => `${line}\n          ${body}`);
+        expect(injected, 'the injection anchor moved').not.toBe(src);
+        expect(checkoutCodeReferences(injected), `not caught inside an existing body: ${body}`).not.toEqual([]);
+      }
     }
     // Composite actions in this repo are tracked files too, and `uses:` is not a `run:`.
     expect(src).not.toMatch(/uses: \.\//);
@@ -1093,6 +1154,15 @@ describe('bot-fold write path', () => {
     expect(ifLine(src, 'Verify a review was actually posted')).toBe(
       "always() && (steps.bot_review.outcome == 'success' || steps.bot_review.outcome == 'failure')"
     );
+
+    // The fixtures above supply both variables the body reads, so the workflow's own bindings
+    // are the one part of this measurement never on the execution path - pinned here for the
+    // reason HEAD_REF is pinned below. The asymmetry is what makes it worth a line: an EMPTY
+    // watermark fails closed and is covered by the fixture above, while a PAST CONSTANT fails
+    // OPEN, and one stale `claude[bot]` review on the PR then reads as this run's.
+    const postedStep = step(src, 'Verify a review was actually posted');
+    expect(postedStep).toMatch(/^ {10}BOT_REVIEW_LOGIN: 'claude\[bot\]'$/m);
+    expect(postedStep).toMatch(/^ {10}SINCE: \$\{\{ steps\.review_start\.outputs\.at \}\}$/m);
   });
 
   it('runs git after the agent with no config the agent could have planted', () => {
@@ -1155,6 +1225,11 @@ describe('bot-fold write path', () => {
   it('mints the fold token with contents: write and no workflow scope', () => {
     const mintStep = step(src, 'Mint fold push token');
     expect(mintStep).toMatch(/^\s*permission-contents: write$/m);
+    // As a SET, like every other permission surface here: a `permission-*` key absent from this
+    // list is a scope on the push token, and two substring assertions cannot see an added one.
+    expect(withKeys(src, 'Mint fold push token').sort()).toEqual(
+      ['client-id', 'owner', 'permission-contents', 'private-key', 'repositories'].sort()
+    );
     // Not the control - the push step's path guard is - but withholding the scope is the
     // defence in depth behind it, and re-adding it widens the blast radius of a guard bug.
     expect(mintStep).not.toMatch(/permission-workflows/);
@@ -1351,6 +1426,30 @@ describe('bot-fold write path', () => {
     // Written as an escape to keep this file ASCII per CLAUDE.md.
     const nonAscii = runStagedGuards(src, [{ path: '.github/workflows/caf\u00e9.yml' }]);
     expect(nonAscii.status, nonAscii.out).toBe(1);
+    // `core.quotePath=false` covers bytes >= 0x80 and stops there. A path holding a control
+    // byte, a `\"` or a `\\` is still C-quoted, and the leading quote defeats all three
+    // anchored arms at once - which is why the staged list is read NUL-delimited instead.
+    for (const hostile of ['.github/workflows/ev"il.yml', 'scripts/ev\\il.sh', 'scripts/ev\u0001il.sh']) {
+      const quoted = runStagedGuards(src, [{ path: hostile }]);
+      expect(quoted.status, `not blocked: ${JSON.stringify(hostile)} ${quoted.out}`).toBe(1);
+    }
+  });
+
+  it('fails closed when the staged-path enumeration itself fails', () => {
+    // `|| true` terminates a PIPELINE, so while the enumeration was piped into grep, a `git`
+    // that exited non-zero produced an empty BLOCKED and the guard PASSED - a fail-open on the
+    // check that decides whether a fold may push at all. The enumeration is a separate command
+    // now, so `set -e` kills the step. Asserted by making that one command fail.
+    const failing = src.replace(
+      /^ {10}git -c core\.quotePath=false diff --cached --name-only -z > "\$STAGED_PATHS"$/m,
+      '          (exit 128) > "$STAGED_PATHS"'
+    );
+    expect(failing, 'the enumeration anchor moved').not.toBe(src);
+    const broken = runStagedGuards(failing, [{ path: '.github/workflows/ci.yml' }]);
+    expect(broken.status, broken.out).not.toBe(0);
+    expect(broken.out).not.toContain('GUARDS_PASSED');
+    // The paired control: the same staged path, shipped bytes, is refused by the guard itself.
+    expect(runStagedGuards(src, [{ path: '.github/workflows/ci.yml' }]).status).toBe(1);
   });
 
   it('ignores a planted git attributes file when deciding what is binary', () => {

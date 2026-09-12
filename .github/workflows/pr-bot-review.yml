@@ -447,6 +447,22 @@ jobs:
             # transcript. The two things there that matter are each also bounded at
             # their point of use below (hash check, `git show | python3 -`), because a
             # permission rule is one version bump from a rename.
+            # `_actions` and `runners` are fenced because an action's PROGRAM is a file
+            # on this disk. The runner unpacks every `uses:` step's JavaScript into
+            # `$RUNNER_WORKSPACE/../_actions` during `Set up job`, before step 1, and runs
+            # it with the node under `/home/runner/runners/<ver>/externals`. Two `uses:`
+            # steps run AFTER the agent - `Mint fold push token`, which holds the App
+            # private key in its env, and `Upload review transcript` - plus the `post`
+            # steps of checkout and claude-code-action. Both directories are owned by the
+            # step user and writable with no `sudo`. The spec is a literal because no
+            # expression yields the `_actions` path (`runner.temp` is its sibling and
+            # expressions have no way to take a parent), so it is a premise about the
+            # HOSTED image, stated the way the $PATH exec-bit premise below is: a
+            # self-hosted runner with a different work root needs its own entry, and
+            # `runs-on` reads a repo variable. `_*` rather than `_actions` so the sibling
+            # kind is covered rather than the one instance of it - `_temp`, `_tool`,
+            # `_diag` and `_runner_file_commands` are all the runner's, and the checkout
+            # (`<work>/<repo>/<repo>`) is the only thing there that is not.
             # `.github/**` is fenced for the same reason at the source level: the tree
             # is what a later `synchronize` run would execute, and the push step's path
             # guard only gates what gets committed on a run that posted a review.
@@ -472,9 +488,15 @@ jobs:
             # far: EVERY PROGRAM A POST-AGENT STEP RUNS MUST HAVE ALL OF ITS IMPLICIT,
             # AGENT-WRITABLE INPUT SOURCES DISABLED IN THAT STEP. Implicit means the
             # program consults it without being asked, so authenticating what the step
-            # passes in says nothing about it. Two kinds qualify, and each has cost a
+            # passes in says nothing about it. Three kinds qualify, and each has cost a
             # round here: STARTUP FILES read out of `$HOME` before the program's own
-            # input, and DEFAULT SEARCH PATHS that resolve into the checkout.
+            # input, DEFAULT SEARCH PATHS that resolve into the checkout, and - the one
+            # this enumeration missed for eight rounds by walking only the programs a
+            # `run:` step names - THE PROGRAM ITSELF, when the step is a `uses:`. An
+            # action is not merely influenced by agent-writable bytes; it IS agent-writable
+            # bytes, unpacked under `_actions` above. That kind is fenced rather than
+            # per-step, because the step that runs it declares no shell to bound.
+            # The per-step bound for the `run:` kinds:
             #   git     - startup file. Reads `~/.gitconfig`, which can set a
             #             `filter.*.clean` command; nulled with GIT_CONFIG_GLOBAL /
             #             GIT_CONFIG_SYSTEM / GIT_CONFIG_NOSYSTEM on both steps that run
@@ -514,7 +536,7 @@ jobs:
             # ScheduleWakeup makes sense only in an interactive session; this
             # process is single-shot, so hard-block the tool call itself
             # rather than relying on the prompt bullet above alone.
-            --disallowedTools "Edit(/${{ runner.temp }}/**),${{ env.FOLD_MODE == 'true' && 'Bash,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**),Edit(.github/**),Edit(.git/**),Edit(.claude/**),Edit(.mcp.json),Edit(.gitattributes),Edit(**/.gitattributes)' || 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**)' }}"
+            --disallowedTools "Edit(/${{ runner.temp }}/**),Edit(//home/runner/work/_*/**),Edit(//home/runner/runners/**),${{ env.FOLD_MODE == 'true' && 'Bash,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**),Edit(.github/**),Edit(.git/**),Edit(.claude/**),Edit(.mcp.json),Edit(.gitattributes),Edit(**/.gitattributes)' || 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**)' }}"
             # 40 was too tight: a normal feature PR (~25 files / ~2k additions)
             # spawns ~8 parallel review agents, and the orchestration overhead
             # (read skill, fetch PR/diff/linked issues, fan-out, classify, post)
@@ -740,15 +762,35 @@ jobs:
           #               `.gitignore` (which a fold could use to hide its own dropped
           #               -untracked-files warning). Subsumes the root `.npmrc` and
           #               `.dockerignore` the arm above catches at any depth.
+          # The staged paths are enumerated into a file OUTSIDE the substitution below, for
+          # two reasons the `|| true` there makes load-bearing.
+          # (1) `|| true` swallows a failure from ANYWHERE in the pipeline it terminates, so
+          #     a `git` that exited non-zero used to yield an empty BLOCKED and PASS the guard
+          #     - a fail-open on the check that decides whether a fold may push at all. Out
+          #     here the enumeration is a plain command under `set -e`, so its failure kills
+          #     the step, and `|| true` covers only what it is for: grep's exit 1 on no match.
+          #     It has to be out here and not merely on its own line inside: bash does NOT
+          #     inherit `set -e` into a command substitution, so a failure in there is silent
+          #     (measured on bash 3.2 and 5.x, not assumed).
+          # (2) `-z` is the only way to read a path git would otherwise C-quote.
+          #     `core.quotePath=false` covers bytes >= 0x80 and nothing else, so a tracked
+          #     path holding a control byte, a `"` or a `\` still arrives wrapped in quotes,
+          #     and that leading `"` defeats `^(\.github|...)/`, `^[^/.]+$` and `^\.[^/]*$`
+          #     at once. A variable cannot hold the result - bash drops NUL bytes in a command
+          #     substitution - hence the file. `mktemp` puts it in $RUNNER_TEMP, which the
+          #     always-on write fence denies the agent.
+          STAGED_PATHS=$(mktemp)
+          git -c core.quotePath=false diff --cached --name-only -z > "$STAGED_PATHS"
+
           BLOCKED=$(
-            git -c core.quotePath=false diff --cached --name-only | grep -E \
+            grep -z -E \
               -e '^(\.github|\.husky|\.claude|\.changeset|scripts|infra|patches)/' \
               -e '(^|/)package\.json$' \
               -e '(^|/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|pnpm-workspace\.yaml|turbo\.json|\.npmrc|\.dockerignore)$' \
               -e '(^|/)Dockerfile(\..*)?$' \
               -e '\.(sh|bash|zsh)$' \
               -e '^[^/.]+$' \
-              -e '^\.[^/]*$' || true
+              -e '^\.[^/]*$' "$STAGED_PATHS" | tr '\0' '\n' || true
             # Refused here rather than by the size bound below, which numstat reports
             # as 0 changed lines for a binary however large the rewrite. A fold
             # applies textual review findings, so a staged binary is not one.
