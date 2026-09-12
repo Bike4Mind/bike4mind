@@ -659,8 +659,10 @@ async function trySemanticKbSearch(
     // fewer than `topK - ceiling` chunks is invisible on this path rather than merely weaker: one
     // chunk at the default 6-ranked/5-served, five under a relevance floor that widens topK to 10.
     // Cheap where it cannot help - with the cap off capChunksPerFile returns the list untouched -
-    // and it never shrinks the set (it backfills). `ceiling` can trail topK even with a token budget
-    // configured: a model-supplied `max_results` sets it on its own path in resolvePassageCeiling.
+    // and at a given ceiling it never returns fewer (it backfills). `ceiling` can trail topK even
+    // with a token budget configured: a model-supplied `max_results` sets it on its own path in
+    // resolvePassageCeiling. Under that budget the swap is not free, though: a promoted chunk that
+    // is larger than the one it displaced can end the budget walk a passage earlier.
     const servedCandidates = capChunksPerFile(search.results, ceiling, budgets.maxChunksPerFile);
 
     // Bound by token budget (the primary lever once configured), with the passage ceiling as a

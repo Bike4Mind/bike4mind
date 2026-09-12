@@ -457,9 +457,8 @@ function compareByScore(a: SemanticChunkResult, b: SemanticChunkResult): number 
  * 300 vs. 300 from six), so the max moves by zero. The SCAN path reads no more rows than it
  * already would (scanAndRank's read volume is bounded by maxChunks, not topK; widening topK here
  * only changes how many of the chunks it was scanning anyway survive into `ranked`). So this is a
- * knob that
- * trades ANN query work and a little CPU for diversity, not scan cost, and it is a constant rather
- * than a setting until an operator has a reason to want a different one.
+ * knob that trades ANN query work and a little CPU for diversity, not scan cost, and it is a
+ * constant rather than a setting until an operator has a reason to want a different one.
  */
 const DIVERSITY_CANDIDATE_POOL_FACTOR = 3;
 
@@ -471,8 +470,10 @@ const DIVERSITY_CANDIDATE_POOL_FACTOR = 3;
  * Two passes (admit under the cap, then backfill from what it held back), because a diversity
  * guard must never cost a caller results it would otherwise have had. So a lake whose only match
  * is one long document still serves a full top-K: the cap changes WHICH chunks win a contested
- * slot, never how many are served. That is what makes it safe to enable on a corpus nobody has
- * measured crowding on.
+ * slot, never how many survive this pass. That is what makes it safe to enable on a corpus nobody
+ * has measured crowding on. One caveat, downstream rather than here: a promoted chunk can be
+ * LARGER than the one it displaced, and a token budget stops at the first passage that would break
+ * it (tokenBudget.ts), so under such a budget the swap can still cost a caller a passage.
  *
  * The survivors are re-sorted because a backfilled chunk can outscore an admitted one, and
  * callers consume a PREFIX of this list (tokenBudget.ts trims from the end, and
@@ -492,14 +493,14 @@ const DIVERSITY_CANDIDATE_POOL_FACTOR = 3;
  * knowledgeBaseSearch/index.ts. Callers whose topK IS their served count need no second pass.
  *
  * This is the only place the cap is IMPLEMENTED (the KB path's second pass calls straight back
- * here), but not the only place it changes: the candidate
- * streams feeding the merge are widened to `topK * DIVERSITY_CANDIDATE_POOL_FACTOR` when the cap
- * can bind, because each of them is bounded independently and a stream that stopped at topK would
- * have discarded the other documents' chunks before the cap could promote them. Enforcement here,
- * headroom upstream - see `candidatePoolK` in `rankChunksForFiles`. Because that headroom is a
- * FIXED multiple of topK rather than a function of the cap, this pass can only redistribute among
- * whatever reached it: a document that fills the widened pool by itself is one the cap cannot
- * touch at all. See `DIVERSITY_CANDIDATE_POOL_FACTOR` for why it is sized that way regardless.
+ * here), but not the only place it changes: the candidate streams feeding the merge are widened
+ * to `topK * DIVERSITY_CANDIDATE_POOL_FACTOR` when the cap can bind, because each of them is
+ * bounded independently and a stream that stopped at topK would have discarded the other
+ * documents' chunks before the cap could promote them. Enforcement here, headroom upstream - see
+ * `candidatePoolK` in `rankChunksForFiles`. Because that headroom is a FIXED multiple of topK
+ * rather than a function of the cap, this pass can only redistribute among whatever reached it:
+ * a document that fills the widened pool by itself is one the cap cannot touch at all. See
+ * `DIVERSITY_CANDIDATE_POOL_FACTOR` for why it is sized that way regardless.
  */
 export function capChunksPerFile(
   candidates: SemanticChunkResult[],
@@ -1123,9 +1124,9 @@ async function rankChunksForFiles(args: {
     // BEFORE the index call on purpose (see IFabFileChunk.retrievalIndexModel - a removal for an
     // index holding nothing is a no-op, a missed one orphans documents), so it over-claims in
     // exactly the indexing-failure case that matters. Absence-keyed rescue is therefore still
-    // load-bearing there and stays, leaving self-host at the old `candidatePoolK / fileCount`
-    // ceiling until a signal that actually confirms residency exists. Atlas's analogue is
-    // transient rather than permanent - during a bulk backfill mongot's indexing lag can exceed
+    // load-bearing there and stays, holding self-host's benefit at `candidatePoolK / fileCount`
+    // until a signal that actually confirms residency exists. Atlas's analogue is transient rather
+    // than permanent - during a bulk backfill mongot's indexing lag can exceed
     // VECTOR_SEARCH_READY_LAG_MS and the already-indexed files will fill the request while the
     // lagging ones wait - which self-heals within one lag window and is accepted.
     const annUsableHits = annResult.hitsReturned - annResult.hitsSkippedUnknownFile;
