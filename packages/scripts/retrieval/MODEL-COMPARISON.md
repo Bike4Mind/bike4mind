@@ -304,10 +304,24 @@ measures them directly off the same fixtures, so the re-tune after the embedding
 repeat the derivation:
 
 ```bash
+# ada-002 arm
+pnpm --filter @bike4mind/scripts retrieval:forced-floor-sweep \
+  --fixture out/text-embedding-ada-002.system-help.fixture.json \
+  --floors 0:0,0:74,85:75,0:76
+
+# 3-small arm
 pnpm --filter @bike4mind/scripts retrieval:forced-floor-sweep \
   --fixture out/text-embedding-3-small.system-help.fixture.json \
-  --floors 0:0,85:75,85:0,90:0,95:0
+  --floors 85:75,0:30,0:35,85:35
 ```
+
+**These two runs are what produced the MEASURED table below, and neither is reproducible from a
+clean clone.** `packages/scripts/out/` is gitignored, so the captures are not committed - 452 chunks
+of vectors per arm is not something to put in git. Re-making them means a staged capture against a
+provider key with real spend (see "Price the candidates, then run them" above). The only committed
+fixture is the synthetic `retrieval/fixtures/tiny-comparison.fixture.json`, which exercises the tool
+but measures no embedding model. `--fixture` is singular, one arm per run, so the table below is a
+hand-merge of these two runs with an `arm` column the tool does not print.
 
 ### MEASURED: the first sweep off a real capture
 
@@ -373,17 +387,42 @@ Caveats, all of which bound how far these numbers travel:
 - **Not the long-document regime.** Median chunk 638 chars against a prod reference of 2182. Floor
   values fitted on short help prose are not fitted for a production lake. Recapture before adopting
   any specific number.
-- **Exact kNN, not the served ANN path.** The 256-chunk pool cap truncated all 30 queries at the low
-  floors, so every `cut @` is a rank within a truncated pool, and prod gates a top-K hit set rather
-  than this full scan (#2526).
+- **A full scan, over a differently-composed pool than prod gates.** The 256-chunk pool cap
+  truncated all 30 queries at the low floors, so every `cut @` is a rank within a truncated pool;
+  that cap is genuinely shared with the served path. The rest is not: forced retrieval does not go
+  through Atlas `$vectorSearch` at all, so the divergence is not ANN vs exact kNN. It is the three
+  narrowings this harness does not model - a 100-file candidate cap ordered `fileName` ASC, a
+  4000-chunk per-turn scan budget, and supersession collapse before scoring. None binds on this
+  51-article fixture; all three bind on a production lake, and they make the served pool differently
+  composed rather than simply shallower.
+- **The budget is charged pre-defang, so `served/q` is optimistic.** This harness spends
+  `countCodePoints(text)`; the served walk spends `defangRetrievedContent(text).length`, which adds
+  one character per line starting `[`, `---`, `###`, `N. **` or `NOTE:`, and counts UTF-16 units
+  rather than code points. Both errors run the same direction, so the real `served/q` and
+  budget-bound rank are slightly below what is printed here - small on prose, systematic on markdown
+  headings and lists. Correcting it means re-capturing: `charLength` is fixture data, the fixture
+  schema carries no version field, and a capture taken under the old definition would load clean and
+  be swept under the new one.
 - 30 hand-authored questions, 5 of them negatives. Enough to separate a dead gate from a live one;
   not enough to pick between two adjacent live values.
 
 Read `bound` before recall. A relative floor showing 0.0% there is the dormant case this section
 describes under ada-002; `cut @` against `budget-bound`, and `accepted/q` against `served/q`, are
-what separate a floor that cuts from one cutting past where the char budget already stopped. It shares the served path's arithmetic (see
-`forcedRetrievalRelativeCutoff`), so the gate it reports is the gate production applies - over a
-deeper candidate pool, since this harness is exact kNN and prod now serves through ANN.
+what separate a floor that cuts from one cutting past where the char budget already stopped.
+
+**The table above is an abridged transcription of the tool's output.** The tool prints
+`relative | absolute | accepted/q | served/q | pre-rel | bound | cut @ | budget-bound | emptied |
+recall | precision | MRR`; the table drops `pre-rel`, `cut @`, `budget-bound` and `MRR`, and strips
+the denominator the tool prints beside precision (`n=`), which matters because that denominator
+moves with the configuration. So the two comparisons the paragraph above tells you to make have to
+be read off a fresh run, not off this table - as does the mean cut rank of 5.2 quoted earlier.
+
+What cannot drift is **the arithmetic**: `compareForcedRetrievalRank` and
+`forcedRetrievalRelativeCutoff` are one implementation with one definition site each, shared with
+the served path. The rest of the gate - the absolute-floor comparison, the `topScore` read, the cap
+application, and the budget walk - is hand-mirrored here and pinned only by comments. It agrees with
+the served scan today, and the budget walk is the one place it knowingly does not (see the
+pre-defang caveat above).
 
 ## Out of scope
 

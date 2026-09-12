@@ -26,11 +26,21 @@
  * the two differ by an order of magnitude, and the baseline row's flattering recall is mostly
  * chunks no turn ever saw.
  *
- * ONE CAVEAT THE WRITE-UP MUST CARRY, inherited from `scoreDistribution.ts`: this is exact kNN over
- * every captured chunk, where prod now serves through Atlas `$vectorSearch` (ANN, #2526). The
- * served pool is a top-K hit set rather than a full scan, so a floor's cut rank measured here is
- * measured over a deeper pool than production gates. The floor arithmetic is shared with the served
- * path and cannot drift from it; the candidate set it runs over is the instrument's own.
+ * ONE CAVEAT THE WRITE-UP MUST CARRY: this is a full scan over every captured chunk, and the served
+ * forced path is not. The divergence is NOT ANN vs exact kNN - forced retrieval never touches Atlas
+ * `$vectorSearch` at all, it keyset-pages `findVectorsByFabFileIds` and scores in JS. That caveat
+ * belongs to `scoreDistribution.ts`, which measures the knowledge-tool path, and carrying it here
+ * contradicts the separation this harness exists to make.
+ *
+ * The real divergence is three narrowings the served path applies and this harness does not model:
+ * the candidate list is capped at FORCED_RETRIEVAL_MAX_CANDIDATE_FILES (100) ordered `fileName`
+ * ASC, so past the cap prod scores the alphabetically-first files rather than the most relevant;
+ * the scan stops at FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS (4000) per turn; and superseded generations
+ * are dropped before scoring. So the served candidate set is not deeper or shallower than this one,
+ * it is differently composed - a floor fitted here is fitted to a pool prod may never assemble.
+ * None of the three binds on the 51-article `system-help` capture; all three bind on a production lake.
+ * The floor arithmetic is shared with the served path and cannot drift from it; the candidate set
+ * it runs over is the instrument's own.
  */
 
 import { readFileSync } from 'node:fs';
@@ -67,8 +77,11 @@ const argv = await yargs(hideBin(process.argv))
   .strict()
   .parse();
 
-if (!Number.isInteger(argv['char-budget']) || argv['char-budget'] < 0) {
-  throw new Error(`--char-budget must be a non-negative integer, got "${argv['char-budget']}"`);
+// Rejects 0, not just negatives: the served resolver's `positiveIntOr` can only yield >= 1, and at
+// 0 the budget walk below records one chunk served where the served walk breaks at the loop top and
+// emits nothing.
+if (!Number.isInteger(argv['char-budget']) || argv['char-budget'] < 1) {
+  throw new Error(`--char-budget must be a positive integer, got "${argv['char-budget']}"`);
 }
 
 // `loadEmbeddingFixture` also checks each query's `questionHash`, which matters here: a floor
