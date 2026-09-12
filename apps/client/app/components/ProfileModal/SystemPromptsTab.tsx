@@ -632,7 +632,7 @@ export function SystemPromptsTab({ user }: SystemPromptsTabProps) {
                       sx={{
                         flex: 1,
                         fontWeight: isAdding ? 'md' : 'sm',
-                        color: isAdding ? 'primary.main' : 'text.primary',
+                        color: isAdding ? 'primary.plainColor' : 'text.primary',
                       }}
                     >
                       {file.fileName}

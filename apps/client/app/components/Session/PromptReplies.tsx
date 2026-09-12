@@ -774,7 +774,7 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
   if (isConfirmed || isCancelled) {
     return (
       <Box sx={{ mt: 2, p: 1.5, borderRadius: 'sm', bgcolor: 'background.level1' }}>
-        <Typography level="body-sm" sx={{ color: result?.success ? 'success.main' : 'danger.main' }}>
+        <Typography level="body-sm" sx={{ color: result?.success ? 'success.plainColor' : 'danger.plainColor' }}>
           {result?.message || (isConfirmed ? 'Action completed' : 'Action cancelled')}
         </Typography>
         {result?.url && (
@@ -791,7 +791,7 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
   if (isExpired) {
     return (
       <Box sx={{ mt: 2, p: 1.5, borderRadius: 'sm', bgcolor: 'warning.softBg' }}>
-        <Typography level="body-sm" sx={{ color: 'warning.main' }}>
+        <Typography level="body-sm" sx={{ color: 'warning.plainColor' }}>
           This confirmation has expired. Please request the action again.
         </Typography>
       </Box>
@@ -1037,7 +1037,7 @@ const AttachmentDownloadButtons: FC<AttachmentDownloadButtonsProps> = ({ attachm
                   {!isDeleted && att.author && ` • by ${att.author}`}
                 </Typography>
                 {errors[att.id] && (
-                  <Typography level="body-xs" sx={{ color: 'danger.main' }}>
+                  <Typography level="body-xs" sx={{ color: 'danger.plainColor' }}>
                     {errors[att.id]}
                   </Typography>
                 )}

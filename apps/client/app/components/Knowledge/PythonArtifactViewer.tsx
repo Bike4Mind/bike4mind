@@ -528,22 +528,22 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
             >
               <Stack direction="row" spacing={2} alignItems="center" sx={{ flex: 1 }}>
                 {!isPersisted && (
-                  <Typography level="body-xs" sx={{ color: 'warning.main' }}>
+                  <Typography level="body-xs" sx={{ color: 'warning.plainColor' }}>
                     Not saved to database
                   </Typography>
                 )}
                 {hasChanges && isPersisted && (
-                  <Typography level="body-xs" sx={{ color: 'warning.main' }}>
+                  <Typography level="body-xs" sx={{ color: 'warning.plainColor' }}>
                     Unsaved changes
                   </Typography>
                 )}
                 {isViewingDifferentVersion && (
-                  <Typography level="body-xs" sx={{ color: 'primary.main', fontStyle: 'italic' }}>
+                  <Typography level="body-xs" sx={{ color: 'primary.plainColor', fontStyle: 'italic' }}>
                     Viewing version {currentVersion}
                   </Typography>
                 )}
                 {isEditMode && (
-                  <Typography level="body-xs" sx={{ color: 'danger.main', fontWeight: 'bold' }}>
+                  <Typography level="body-xs" sx={{ color: 'danger.plainColor', fontWeight: 'bold' }}>
                     Edit mode active
                   </Typography>
                 )}

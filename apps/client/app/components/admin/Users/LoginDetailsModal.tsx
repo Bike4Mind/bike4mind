@@ -41,7 +41,7 @@ const LoginDetailsModal: React.FC<LoginDetailsModalProps> = ({ open, onClose, us
           <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 1 }}>
             <Card variant="outlined" sx={{ flex: { sm: '1 1 30%' } }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, p: 2 }}>
-                <Avatar variant="solid" size="sm" sx={{ bgcolor: 'primary.main' }}>
+                <Avatar variant="solid" size="sm" sx={{ bgcolor: 'primary.solidBg' }}>
                   <PersonIcon />
                 </Avatar>
                 <Box>

@@ -761,9 +761,6 @@ const SessionSidenavItem: FC<{
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              borderRadius: '50%',
-              backgroundColor: 'success.main',
-              color: 'success.contrastText',
               fontSize: '12px',
             }}
           >

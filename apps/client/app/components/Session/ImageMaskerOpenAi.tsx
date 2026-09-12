@@ -210,7 +210,7 @@ const ImageMaskerOpenAi: React.FC<ImageMaskerProps> = ({ imageUrl, onSave, open,
         <ModalDialog>
           <Box
             sx={{
-              backgroundColor: 'background.paper',
+              backgroundColor: 'background.surface',
               padding: 2,
               borderRadius: 2,
               maxWidth: '90vw',
@@ -281,11 +281,6 @@ const ImageMaskerOpenAi: React.FC<ImageMaskerProps> = ({ imageUrl, onSave, open,
                 value={promptMessage}
                 onChange={e => setPromptMessage(e.target.value)}
                 data-testid="image-edit-prompt"
-                sx={{
-                  '& .MuiOutlinedInput-root': {
-                    backgroundColor: 'background.paper',
-                  },
-                }}
               />
             </Box>
 

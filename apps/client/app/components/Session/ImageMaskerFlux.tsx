@@ -173,7 +173,7 @@ const ImageMaskerFlux: React.FC<ImageMaskerProps> = ({ imageUrl, onSave, open, o
               maxWidth: '90vw',
               maxHeight: '90vh',
               overflow: 'auto',
-              backgroundColor: 'background.paper',
+              backgroundColor: 'background.surface',
             }}
           >
             <Typography level="h2" data-testid="image-edit-dialog-title">
@@ -254,11 +254,6 @@ const ImageMaskerFlux: React.FC<ImageMaskerProps> = ({ imageUrl, onSave, open, o
                 value={promptMessage}
                 onChange={e => setPromptMessage(e.target.value)}
                 data-testid="image-edit-prompt"
-                sx={{
-                  '& .MuiOutlinedInput-root': {
-                    backgroundColor: 'background.paper',
-                  },
-                }}
               />
             </Box>
 
