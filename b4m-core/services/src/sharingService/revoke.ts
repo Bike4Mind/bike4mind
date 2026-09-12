@@ -83,7 +83,10 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
   document.users = document.users.filter(user => !isRevoked(user));
 
   if (type === 'projects') {
-    await revokeFromProject({ project: document as IProjectDocument, userIdToRevoke }, adapters);
+    const project = document as IProjectDocument;
+    const pruned = await revokeFromProject({ project, userIdToRevoke }, adapters);
+    project.fileIds = pruned.fileIds;
+    project.sessionIds = pruned.sessionIds;
   } else if (!projectId && type === 'sessions') {
     // accept.ts's Session arm also pushes a plain (non-project) grant onto every file in
     // session.knowledgeIds; mirror that here so revoking the session doesn't leave those file
@@ -142,15 +145,27 @@ const revokeSessionKnowledgeFileGrants = async (
   }
 };
 
+/**
+ * Best-effort per-member cascade over a project's files and sessions.
+ *
+ * Returns the id lists with the target's own documents pruned instead of writing them back onto
+ * `project`. Mutating the caller's document starved deleteProject's owner pass: it runs this once
+ * per member and then once for the owner, and the owner's derived grants sit on exactly the
+ * member-owned documents the member passes had already pruned from the list the owner pass reads.
+ * Callers that want the pruning persisted assign it themselves.
+ */
 export const revokeFromProject = async (
   parameters: { project: IProjectDocument; userIdToRevoke: string },
   adapters: RevokeSharingAdapters
-) => {
+): Promise<{ fileIds: string[]; sessionIds: string[] }> => {
   const { project, userIdToRevoke } = parameters;
   const { db } = adapters;
 
   const files = await db.fabFiles.findAllByIds(project.fileIds);
   const sessions = await db.sessions.findAllByIds(project.sessionIds);
+
+  let fileIds = project.fileIds;
+  let sessionIds = project.sessionIds;
 
   for (const file of files) {
     try {
@@ -166,7 +181,7 @@ export const revokeFromProject = async (
           );
         }
 
-        project.fileIds = project.fileIds.filter(id => id !== file.id);
+        fileIds = fileIds.filter(id => id !== file.id);
       } else {
         await revoke(
           file.userId,
@@ -197,7 +212,7 @@ export const revokeFromProject = async (
           );
         }
 
-        project.sessionIds = project.sessionIds.filter(id => id !== session.id);
+        sessionIds = sessionIds.filter(id => id !== session.id);
       } else {
         await revoke(
           session.userId,
@@ -213,4 +228,6 @@ export const revokeFromProject = async (
       if (!(e instanceof NotFoundError)) throw e;
     }
   }
+
+  return { fileIds, sessionIds };
 };

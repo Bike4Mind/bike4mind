@@ -145,16 +145,26 @@ export const createInvite = async (
   // who did not resolve". `recipients` omitted entirely names nobody just as `[]` does, which is
   // why this is not simply isLinkOnlyInvite (that one sizes `available` and is left as it was).
   // Type-aware so it agrees with `isLinkOnlyInvite`'s legacy inference in @bike4mind/common: only
-  // FabFile and Session are shareable by link. A recipientless Project/Organization invite is a
+  // FabFile and Session are shareable by link. A recipientless invite of any other type is a
   // mistake, not a share link, and is refused below - this keeps the flag fail-closed regardless.
   const namesNobody = recipientsArray.length === 0 && (type === InviteType.FabFile || type === InviteType.Session);
 
+  // Every other type always names people, so a recipientless invite there is a mistake, and one
+  // that persists: it stores isLinkOnly false with an empty `pending`, which both the view gate and
+  // the accept gate then refuse, leaving a row nobody can ever redeem. Refused at mint instead.
+  // Expressed against `namesNobody` rather than a second type list so the flag and the refusal
+  // cannot drift apart. InviteType.Tool has no arm in the switch above and dies on 'Document not
+  // found' long before this.
+  if (recipientsArray.length === 0 && !namesNobody) {
+    throw new BadRequestError('Recipients are required for this invite type');
+  }
+
   // By-Users sharing (FabFile/Session) sends real emails/usernames and must not silently
   // create a share nobody can see. Organization/Project invites send raw user ids through
-  // this same recipients array (Organization resolves them separately via inviteToOrg
-  // above); Group invites do not use recipients at all (membership authority is checked via
-  // assertCanManageOrgGroups above, and the join itself happens on accept - see accept.ts).
-  // None of that is this check's concern, so it stays scoped to FabFile/Session only.
+  // this same recipients array (Organization resolves them separately via inviteToOrg above);
+  // Group invites send emails/usernames but take their authority from assertCanManageOrgGroups,
+  // with the join itself happening on accept - see accept.ts. None of that is this check's
+  // concern, so it stays scoped to FabFile/Session only.
   let pending: string[];
   if ((type === InviteType.FabFile || type === InviteType.Session) && recipientsArray.length > 0) {
     // Per-recipient, not a shared matched-set: (1) a username match with no email is not
@@ -181,10 +191,6 @@ export const createInvite = async (
     // the same one user, and pending.length below counts unique resolved users, not raw entries.
     pending = Array.from(new Set(resolved));
   } else if (type === InviteType.Project || type === InviteType.Organization) {
-    // Neither type is shareable by link: both always name people. An empty list would otherwise
-    // mint an invite flagged link-only, redeemable ~100 years by anyone holding the id, which for
-    // a Project means pushShareable over every file and session it holds.
-    if (recipientsArray.length === 0) throw new BadRequestError('Recipients are required for this invite type');
     // Project and Organization invites carry raw user ids (the add-members modals send
     // `recipients: [userId]`), which findAllByEmailsOrUsernames cannot resolve - it queries email
     // and username only, never _id. Left unresolved, `pending` stayed empty and every gate keyed

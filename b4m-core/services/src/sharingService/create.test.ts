@@ -45,8 +45,12 @@ describe('sharingService - createInvite (group arm authority)', () => {
     };
   });
 
+  // Names a recipient: a Group invite is not shareable by link, so a recipientless one is refused
+  // at mint. These cases are about who may MINT one, not about who it names.
   const create = (user: IUserDocument, id = GROUP_ID) =>
-    createInvite(user, { id, type: InviteType.Group, permissions: [Permission.read] } as any, { db });
+    createInvite(user, { id, type: InviteType.Group, permissions: [Permission.read], recipients: ['x@y.com'] } as any, {
+      db,
+    });
 
   it('allows the billing owner to create a group invite', async () => {
     const invite = await create(asUser(OWNER_ID));
@@ -117,6 +121,20 @@ describe('sharingService - createInvite (group arm authority)', () => {
     db.organizations.findById = vi.fn(async () => null);
 
     await expect(create(asUser(OWNER_ID))).rejects.toThrow(BadRequestError);
+  });
+
+  // Group is the type the two named refusals used to miss. It is not shareable by link either, so a
+  // recipientless one persisted isLinkOnly false with an empty pending and was then refused at both
+  // the view and the accept gate - a row minted successfully that nobody could ever redeem.
+  it('refuses a recipientless Group invite, which no gate downstream would let anyone redeem', async () => {
+    await expect(
+      createInvite(
+        asUser(OWNER_ID),
+        { id: GROUP_ID, type: InviteType.Group, permissions: [Permission.read], recipients: [] } as any,
+        { db }
+      )
+    ).rejects.toSatisfy((e: Error) => e instanceof BadRequestError && /recipients are required/i.test(e.message));
+    expect(db.invites.create).not.toHaveBeenCalled();
   });
 });
 
@@ -269,6 +287,8 @@ describe('sharingService - createInvite (recipient resolution)', () => {
   // only ever treats FabFile and Session as link-shareable. A Project invite flagged link-only
   // would be redeemable by any holder of the id, and acceptProject then pushes a grant onto every
   // file and session the project holds.
+  // The message, not just the class: the unresolvable-recipient refusal a few lines away in
+  // create.ts is also a BadRequestError, so asserting the class alone would pass on either.
   it('refuses a recipientless Project invite rather than minting a link-only one', async () => {
     await expect(
       createInvite(
@@ -276,7 +296,7 @@ describe('sharingService - createInvite (recipient resolution)', () => {
         { id: PROJECT_ID, type: InviteType.Project, permissions: [Permission.read], recipients: [] } as any,
         { db }
       )
-    ).rejects.toBeInstanceOf(BadRequestError);
+    ).rejects.toSatisfy((e: Error) => e instanceof BadRequestError && /recipients are required/i.test(e.message));
     expect(db.invites.create).not.toHaveBeenCalled();
   });
 
@@ -287,7 +307,7 @@ describe('sharingService - createInvite (recipient resolution)', () => {
         { id: PROJECT_ID, type: InviteType.Project, permissions: [Permission.read] } as any,
         { db }
       )
-    ).rejects.toBeInstanceOf(BadRequestError);
+    ).rejects.toSatisfy((e: Error) => e instanceof BadRequestError && /recipients are required/i.test(e.message));
     expect(db.invites.create).not.toHaveBeenCalled();
   });
 

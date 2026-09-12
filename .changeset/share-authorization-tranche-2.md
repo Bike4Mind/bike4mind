@@ -82,12 +82,20 @@ convention the revoke path already uses.
 Deleting a project revokes the owner's own derived grants. `addFiles`/`addSessions` mint the project
 owner a `projectId`-scoped read+update grant on content a MEMBER contributes, but the owner is never
 in `project.users`, so the per-member cascade never reached those and they outlived the only surface
-that could revoke them.
+that could revoke them. Making that pass reachable meant taking a hidden mutation out of
+`revokeFromProject`: it pruned the caller's live `project.fileIds`/`sessionIds` as it went, so by the
+time the owner pass ran, the member-owned documents carrying the owner's grants had already been
+removed from the list it reads. It now returns the pruned ids and leaves the caller's document alone.
+`leaveProject` and the project arm of `revoke` assign the return; `deleteProject` drops it, so a
+tombstoned project still records what it held for restore and audit to read.
 
-A Project or Organization invite can no longer be minted with no recipients. Neither type is
-shareable by link, so an empty list would otherwise persist `isLinkOnly: true` and be redeemable by
-anyone holding the id. The flag is type-aware too, so it agrees with `isLinkOnlyInvite`'s legacy
-inference rather than contradicting it.
+An invite of a type that is not shareable by link can no longer be minted with no recipients. Only
+FabFile and Session are: for Project and Organization an empty list would otherwise persist
+`isLinkOnly: true` and be redeemable by anyone holding the id, and for Group it persisted
+`isLinkOnly: false` against an empty `pending`, which both the view gate and the accept gate then
+refuse - a row that minted successfully and nobody could ever redeem. The refusal is expressed
+against the same predicate that sets the flag, so the two cannot drift apart. `InviteType.Tool` has
+no arm in `createInvite`'s switch and still fails earlier, on `Document not found`.
 
 The CASL share arm is now one exported function, `applySharedShareableRules`, called by both ability
 builders instead of being hand-copied. Each caller still passes its own resource list, because CASL
@@ -96,8 +104,11 @@ what the structural test compares, and body drift is no longer possible. `findAl
 declares the `Pick<IUserDocument, 'id' | 'groups'>` it actually consumes, matching
 `findAllUpdateAccessByIds` and removing two casts at the `createProject` call site.
 `GET /api/invites/[id]` validates the id shape before `findById`, matching its sibling route.
-Migration 20260912000000 backfills `Invite.inviterId` from the username every invite already
-persists, which is the closing move for the legacy propagation fallback in `accept.ts`.
+The `backfill-invite-inviter-id` migration backfills `Invite.inviterId` from the username every
+invite already persists, which is the closing move for the legacy propagation fallback in
+`accept.ts`. It scans on an `_id` cursor rather than loading the whole matching set at once, since
+invites are one of the higher-cardinality collections. `ShareModal` reads the server's reason out of
+the error envelope instead of showing axios's own `Request failed with status code 403`.
 
 Invite redemption enforces `expiresAt` on both accept and refuse. Declining now affects only the
 decliner's own slot: one recipient declining used to zero the invite for every other recipient, and
@@ -115,4 +126,6 @@ once its share is revoked.
 Breaking, in `@bike4mind/services`: `createProject` takes the acting user (`Pick<IUserDocument,
 'id' | 'groups'>`) instead of a bare user id, and requires `fabFiles` and `sessions` adapters;
 `refuseWholeInvite` takes a full `IUserDocument` and the adapters `authorizeByInviteType` needs;
-`deleteProject` requires `sessions`, `fabFiles` and `users` adapters to run its cascade.
+`deleteProject` requires `sessions`, `fabFiles` and `users` adapters to run its cascade;
+`revokeFromProject` returns `{ fileIds, sessionIds }` and no longer writes them back onto the
+`project` it was handed, so a caller that relied on the mutation must assign the return itself.

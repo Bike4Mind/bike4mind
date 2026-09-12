@@ -173,7 +173,9 @@ describe('projectService - delete', () => {
         userId,
         sessionIds: [],
         fileIds: [fileId],
-        users: [],
+        // The member has to be present AND own the file: their own cascade pass is what prunes the
+        // file id, so a fixture with no members cannot tell a starved owner pass from a healthy one.
+        users: [{ userId: memberId, permissions: ['read'], projectId }],
         groups: [],
       } as unknown as IProjectDocument;
 
@@ -186,13 +188,19 @@ describe('projectService - delete', () => {
 
       (mockProjectRepo.findByIdAndUserId as Mock).mockResolvedValue(project);
       (mockProjectRepo.update as Mock).mockResolvedValue(project);
-      (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([memberFile]);
+      // Honours the ids it is handed, for the same reason: a mock that answers with the file no
+      // matter what it is asked for hides the pruning entirely.
+      (mockFabFileRepo.findAllByIds as Mock).mockImplementation(async (ids: string[]) =>
+        [memberFile].filter(file => ids.includes(file.id))
+      );
       (mockUserRepo.findById as Mock).mockImplementation(async (id: string) => ({ id }));
       (mockFabFileRepo.shareable.findAccessibleById as Mock).mockResolvedValue(memberFile);
 
       await deleteProject(userId, { id: projectId }, adapters);
 
       expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ id: fileId, users: [] }));
+      // The tombstone still records what the project held: the cascade's pruning is local to it.
+      expect(project.fileIds).toEqual([fileId]);
     });
 
     // The cascade is not transactional and runs before deletedAt is set, so a member it cannot
