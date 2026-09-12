@@ -2114,10 +2114,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * actionable OPENAI_KEY_MISSING_MESSAGE for an opaque AWS CredentialsProviderError against a
    * Bedrock endpoint none of them can reach.
    *
-   * Deliberately narrow in the other direction too: on a KEYED deployment the configured model is
-   * returned even when it names a different provider than the binding holds, because there it really
-   * is the space the corpus was written in, and quietly querying a different one would turn a loud
-   * credential error into a silent zero-result.
+   * Deliberately narrow in the other direction too, and note it is NOT "the deployment holds a key
+   * somewhere". The binding's `requested` IS the configured model, so `model !== requested` can only
+   * mean the seam substituted - a deployment that resolved the configured model's own credential
+   * therefore returns the setting untouched, by construction. The case worth spelling out is the
+   * third one: where no credential resolved but the resolver DECLINED to substitute (`missing`
+   * non-null - an expired caller key, a self-host with no OLLAMA_BASE_URL), the setting is returned
+   * too, so the loud credential error survives instead of being quietly rerouted into a query
+   * against a space the corpus was never written in.
    */
   private async resolveEmbeddingModelFallback(embeddingFactory: EmbeddingFactory): Promise<SupportedEmbeddingModel> {
     const binding = this.chatCompletion.embeddingBinding;

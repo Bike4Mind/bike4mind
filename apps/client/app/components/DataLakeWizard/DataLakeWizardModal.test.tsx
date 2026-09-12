@@ -50,6 +50,7 @@ vi.mock('@client/app/components/DataLakeWizard/steps/DrivePendingConnectAction',
 // nothing without a resolved spendEnabled/budget/model, which is not what this file tests.
 vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: () => undefined,
+  useEffectiveEmbeddingModel: () => undefined,
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
