@@ -1080,8 +1080,8 @@ async function rankChunksForFiles(args: {
     // similarity RANK (`limit: candidatePoolK`), not by a score threshold. At most that many files
     // can appear in `filesWithHits`, so in any larger file set most ready files are absent from it
     // for the entirely correct reason that they did not rank. Rebucketing on absence alone
-    // therefore rescans nearly every file and makes the ANN path's benefit `topK / fileCount` -
-    // it shrinks as a lake grows, which is backwards from the point of the index.
+    // therefore rescans nearly every file and makes the ANN path's benefit `candidatePoolK /
+    // fileCount` - it shrinks as a lake grows, which is backwards from the point of the index.
     //
     // Saturation separates the two cases, and it is keyed on the limit this query actually ASKED
     // for - `candidatePoolK`, which the per-document cap widens above topK - never on topK itself.
@@ -1106,9 +1106,9 @@ async function rankChunksForFiles(args: {
     // BEFORE the index call on purpose (see IFabFileChunk.retrievalIndexModel - a removal for an
     // index holding nothing is a no-op, a missed one orphans documents), so it over-claims in
     // exactly the indexing-failure case that matters. Absence-keyed rescue is therefore still
-    // load-bearing there and stays, leaving self-host at the old `topK / fileCount` ceiling until
-    // a signal that actually confirms residency exists. Atlas's analogue is transient rather than
-    // permanent - during a bulk backfill mongot's indexing lag can exceed
+    // load-bearing there and stays, leaving self-host at the old `candidatePoolK / fileCount`
+    // ceiling until a signal that actually confirms residency exists. Atlas's analogue is
+    // transient rather than permanent - during a bulk backfill mongot's indexing lag can exceed
     // VECTOR_SEARCH_READY_LAG_MS and the already-indexed files will fill the request while the
     // lagging ones wait - which self-heals within one lag window and is accepted.
     const annUsableHits = annResult.hitsReturned - annResult.hitsSkippedUnknownFile;

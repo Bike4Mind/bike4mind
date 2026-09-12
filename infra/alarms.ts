@@ -130,6 +130,8 @@ export const questProcessingFailureAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('QuestProcessingFailureAlarm')
   : undefined;
 
+// Retained with no alarm pointing at it: the topic is deployed and removing the declaration would
+// destroy it. Unsubscribed, so nothing routes here - see the dlqAlarmTopic note below.
 export const dataLakeStuckBatchesAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('DataLakeStuckBatchesAlarm')
   : undefined;
@@ -138,13 +140,19 @@ export const replSandboxUnavailableAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('ReplSandboxUnavailableAlarm')
   : undefined;
 
-export const dataLakeChunkRescueFailuresAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('DataLakeChunkRescueFailuresAlarm')
-  : undefined;
-
 // --- MetricAlarm definitions (only created for monitored stages) ---
 
 if (isMonitoredStage) {
+  // dlqAlarmTopic is a conditional export from infra/dlqAlarms.ts, gated by that file's OWN copy
+  // of the MONITORED_STAGES + ENABLE_MONITORING expression. The two agree today, but asserting
+  // `dlqAlarmTopic!` across a file boundary on a value another module owns means a future
+  // divergence between the two lists would surface as a bare TypeError at deploy-plan time - this
+  // guard turns that into a readable error instead. Hoisted to the top of the block because every
+  // alarm below may route here: it is the only topic in this file with a Slack subscriber.
+  if (!dlqAlarmTopic) {
+    throw new Error('alarm routing requires dlqAlarmTopic');
+  }
+
   /**
    * Alarm: Agent Checkpoint Depth Warning
    *
@@ -1111,7 +1119,7 @@ if (isMonitoredStage) {
     statistic: 'Maximum',
     threshold: 10,
     treatMissingData: 'notBreaching',
-    alarmActions: [dataLakeStuckBatchesAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'DataLakeBatch',
       Severity: 'Medium',
@@ -1158,7 +1166,7 @@ if (isMonitoredStage) {
     threshold: 0,
     // No emission means no applies ran, which is not a problem. Steady state is zero either way.
     treatMissingData: 'notBreaching',
-    alarmActions: [dataLakeStuckBatchesAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'DataLakeBatch',
       Severity: 'Low',
@@ -1180,8 +1188,10 @@ if (isMonitoredStage) {
    * response is to raise the budget or shard the lake, which is not urgent enough to page -
    * hence Medium, matching deprecatedModelRequest's "silent, needs a human decision" shape.
    *
-   * Reuses the DataLakeStuckBatches topic, as the taxonomy alarm above already does: it is the
-   * de-facto data-lake ops topic, and topics are not subscribed in IaC anyway.
+   * Routed to the shared dlqAlarmTopic, as every data-lake alarm here now is: it is the only
+   * topic in this file carrying a Slack-forwarding subscription (infra/dlqAlarms.ts subscribes it
+   * to the generic alarm notifier). A dedicated topic deploys with no subscriber and alarms into
+   * a void, which is what the data-lake family did until this was corrected.
    *
    * Metric emitted by: b4m-core/services/src/dataLakeService/scanTruncationMetrics.ts ->
    * reportScanTruncation, wired from both public search entrypoints in semanticDataLakeSearch.ts.
@@ -1202,7 +1212,7 @@ if (isMonitoredStage) {
     dimensions: { Stage: $app.stage },
     // No emission means no search truncated, which is the healthy state.
     treatMissingData: 'notBreaching',
-    alarmActions: [dataLakeStuckBatchesAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'DataLakeRetrieval',
       Severity: 'Medium',
@@ -1245,7 +1255,7 @@ if (isMonitoredStage) {
     statistic: 'Sum', // a counter per run, unlike StuckBatches' gauge sample
     threshold: 0, // any failure at all; see the docblock on why a count threshold hides the real case
     treatMissingData: 'notBreaching',
-    alarmActions: [dataLakeChunkRescueFailuresAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'DataLakeBatch',
       Severity: 'Medium',
@@ -1286,21 +1296,12 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 0, // any throw at all
     treatMissingData: 'notBreaching', // a day with no failed run emits no datapoint for this dimension
-    alarmActions: [dataLakeChunkRescueFailuresAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'DataLakeBatch',
       Severity: 'Medium',
     },
   });
-
-  // dlqAlarmTopic is a conditional export from infra/dlqAlarms.ts, gated by that file's OWN copy
-  // of the MONITORED_STAGES + ENABLE_MONITORING expression. The two agree today, but asserting
-  // `dlqAlarmTopic!` across a file boundary on a value another module owns means a future
-  // divergence between the two lists would surface as a bare TypeError at deploy-plan time - this
-  // guard turns that into a readable error instead.
-  if (!dlqAlarmTopic) {
-    throw new Error('feedback delivery alarms require dlqAlarmTopic');
-  }
 
   /**
    * Alarm: Feedback Delivery Failure
