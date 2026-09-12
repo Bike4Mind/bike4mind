@@ -327,13 +327,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // Fetch first, then filter by readability, so droppedQuestCount counts only quests that EXIST
     // but the caller cannot read - not ids the $in never matched (deleted, or a stale subQuest.questId).
     const foundQuests = questIds.length > 0 ? await Quest.find({ _id: { $in: questIds } }).lean() : [];
-    // Keep a quest when the plan owner OR the caller can read its session: gating on the caller
-    // alone dropped the owner's own quests (a session they soft-deleted, or a collaborator's
-    // session the owner cannot reach) from the owner's own export. plan.userId is the owner.
-    const chatItems = await filterReadableQuests(foundQuests, userId, plan.userId);
+    // Keep a quest when the CALLER can read its session. The owner arm is applied ONLY when the
+    // caller IS the owner: an owner exporting their own plan still recovers quests in sessions they
+    // soft-deleted (or a collaborator's session they cannot otherwise reach), but a sharee never gets
+    // the owner arm - passing it for a sharee would leak the owner's private (even soft-deleted)
+    // quests, since a sharee can write subQuest.questId. plan.userId is the owner.
+    const chatItems = await filterReadableQuests(foundQuests, userId, userId === plan.userId ? plan.userId : undefined);
     const droppedQuestCount = foundQuests.length - chatItems.length;
     if (droppedQuestCount > 0) {
-      logger.info(`[questExport] Dropped ${droppedQuestCount} quest(s) readable by neither the owner nor the caller`);
+      logger.info(`[questExport] Dropped ${droppedQuestCount} quest(s) the caller cannot read`);
     }
     const chatItemMap = new Map<string, Record<string, unknown>>();
     for (const item of chatItems) {

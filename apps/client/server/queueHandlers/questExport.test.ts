@@ -162,3 +162,72 @@ describe('questExport image access subject', () => {
     expect(markdown).not.toContain('Image unavailable');
   });
 });
+
+/**
+ * Regression guard for the owner-arm IDOR: filterReadableQuests applies the plan-owner readability
+ * arm ONLY when the caller IS the owner. A plan sharee can write subQuest.questId, so passing the
+ * owner arm for a sharee would let them inject the id of a quest in a session only the owner can read
+ * and exfiltrate the owner's private content. The owner arm must still recover the owner's own quests
+ * (e.g. sessions they soft-deleted) when the owner exports their own plan.
+ *
+ * This drives the REAL dispatch and asserts on the markdown handed to createZipBuffer: a dropped
+ * quest degrades to "_Response content unavailable._"; a kept quest emits its reply.
+ */
+describe('questExport owner-arm readability', () => {
+  const PRIVATE_SESSION_ID = '507f191e810c19729de860ea';
+  const SECRET_REPLY = 'OWNER-PRIVATE-QUEST-CONTENT';
+  const SHAREE_ID = 'sharee-9';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Owner-only session: owner-owned, shared with no one. The mock filters by the ids actually
+    // requested (not a hardcoded echo) so a .lean() regression that mistyped sessionId would surface.
+    h.sessionFindAllByIds.mockImplementation(async (ids: string[]) =>
+      ids.filter(id => id === PRIVATE_SESSION_ID).map(id => ({ id, _id: id, userId: h.OWNER_ID, users: [] }))
+    );
+    h.questFind.mockReturnValue({
+      lean: async () => [{ _id: 'q-secret', sessionId: PRIVATE_SESSION_ID, reply: SECRET_REPLY, images: [] }],
+    });
+  });
+
+  const runExportOf = (callerId: string) => {
+    h.planFindById.mockResolvedValue({
+      userId: h.OWNER_ID,
+      sharedWith: [SHAREE_ID],
+      goal: 'Owner Plan',
+      state: 'active',
+      quests: [
+        {
+          title: 'Q',
+          description: 'd',
+          complexity: 'simple',
+          subQuests: [{ title: 'sq', status: 'completed', questId: 'q-secret' }],
+        },
+      ],
+    });
+    const event = {
+      Records: [{ body: JSON.stringify({ exportJobId: 'job-2', planId: 'plan-2', userId: callerId }) }],
+    };
+    return dispatch(event as never, {} as never, makeLogger() as never);
+  };
+
+  const exportedMarkdown = () => {
+    expect(h.createZipBuffer).toHaveBeenCalledTimes(1);
+    const [markdown] = h.createZipBuffer.mock.calls[0] as unknown as [string];
+    return markdown;
+  };
+
+  it('drops an owner-only quest a sharee injected into subQuest.questId', async () => {
+    await runExportOf(SHAREE_ID);
+    const markdown = exportedMarkdown();
+    expect(markdown).not.toContain(SECRET_REPLY);
+    expect(markdown).toContain('_Response content unavailable._');
+  });
+
+  it('keeps that quest when the owner exports their own plan', async () => {
+    await runExportOf(h.OWNER_ID);
+    const markdown = exportedMarkdown();
+    expect(markdown).toContain(SECRET_REPLY);
+    expect(markdown).not.toContain('_Response content unavailable._');
+  });
+});
