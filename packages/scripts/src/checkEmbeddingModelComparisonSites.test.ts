@@ -121,16 +121,25 @@ const NOT_THIS_RULE: { pattern: RegExp; reason: string }[] = [
       'is involved; a `file.embeddingModel` form still trips the guard.',
   },
   {
-    pattern: /(===|!==)\s*requestedEmbeddingModel\b/,
+    pattern:
+      /(?<![.\w])(corpusResolution\.model|resolvedEmbeddingModel)\s*!==\s*(corpusEmbeddingModel|embeddingModel)\b/,
+    reason:
+      'The same substitution log as the entry below, at the two sites where the requested model is ' +
+      'not spelled `requestedEmbeddingModel`: the ChatCompletion credential seam (`corpusEmbeddingModel`) ' +
+      'and the knowledge-search tool (`embeddingModel`). Both operands are this turn own models and ' +
+      'no FabFile label is read. Pinned on both halves for the reason given below - an open left ' +
+      'operand would exempt `file.embeddingModel !== embeddingModel`, which IS the retrievability rule.',
+  },
+  {
+    pattern: /(?<![.\w])(embeddingModel|resolution\.model)\s*!==\s*requestedEmbeddingModel\b/,
     reason:
       'Compares the model the keyless fallback SETTLED ON to the one the caller asked for - to log ' +
       "the substitution, or to decide whether one happened. Both operands are this request's own " +
-      'query/write model; no FabFile label is read, so it is not the retrievability rule. The ' +
-      'right-hand NAME is the whole marker, and the left operand is deliberately unconstrained: a ' +
-      'site that means the real rule compares against the query model, which cannot be spelled ' +
-      '`requestedEmbeddingModel` - whereas the settled side is spelled differently at each site ' +
-      '(`searchEmbeddingModel`, `resolution.model`), and pinning that half made the exclusion ' +
-      'depend on a local name rather than on what is being compared.',
+      'query/write model; no FabFile label is read, so it is not the retrievability rule. BOTH ' +
+      'halves are pinned, and the lookbehind is the load-bearing part: leaving the left operand ' +
+      'open would exempt `file.embeddingModel !== requestedEmbeddingModel`, which IS the ' +
+      'retrievability rule and is exactly what this guard exists to catch. A new settled-side ' +
+      'spelling trips the guard and has to be added here, which is the guard working.',
   },
   {
     pattern: /(===|!==)\s*[A-Za-z0-9_.]+\s*\?[^:]*:\s*await\s+countQueryTokens\(/,

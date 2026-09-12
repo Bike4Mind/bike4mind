@@ -170,11 +170,38 @@ describe('stampChunkEmbeddingModel', () => {
     });
 
     it('labels the file from what the CHUNKS declare, not from the argument', async () => {
-      const { adapters, update } = makeAdapters(['text-embedding-3-small']);
+      // Non-tautological on purpose: the declared set and the argument name DIFFERENT models that
+      // both resolve to the same file label only because the union is what decides. Here the chunks
+      // declare ada-002 and the argument agrees, so the label is ada-002 - and the sibling test
+      // above, where they disagree, is what proves the argument is not simply being echoed back.
+      const { adapters, update } = makeAdapters(['text-embedding-ada-002']);
 
-      await stampChunkEmbeddingModel('file-1', 'text-embedding-3-small', adapters, { stampFile: true });
+      await stampChunkEmbeddingModel('file-1', 'text-embedding-ada-002', adapters, { stampFile: true });
 
-      expect(update).toHaveBeenCalledWith(expect.objectContaining({ embeddingModel: 'text-embedding-3-small' }));
+      expect(update).toHaveBeenCalledWith(expect.objectContaining({ embeddingModel: 'text-embedding-ada-002' }));
+    });
+  });
+
+  describe('a file that completes with nothing embedded', () => {
+    it('clears the FILE label rather than stamping the model that embedded none of it', async () => {
+      // Reachable, and the argument is pure fiction here. The vectorize handler drops every chunk
+      // whose tokenCount exceeds the resolved model's context window, but `computeChunkVectorRollup`
+      // counts an oversized chunk as TERMINAL - so a file made entirely of them reaches
+      // `isFileVectorized` with an empty embed batch and still asks for the file label. Stamping it
+      // from the argument gives a file with zero vectors a confident vector space, which is
+      // exclusion authority derived from nothing, and it overwrites a truthful blank label to do it.
+      const { adapters, update, warn } = makeAdapters([]);
+
+      await stampChunkEmbeddingModel('empty-file', 'amazon.titan-embed-text-v2:0', adapters, {
+        vectorized: true,
+        vectorizedChunkCount: 4,
+        stampFile: true,
+      });
+
+      expect(update).toHaveBeenCalledWith(expect.objectContaining({ embeddingModel: null }));
+      // Otherwise silent: the handler already logged the per-chunk skips, but nothing says the file
+      // as a whole finished with no vectors.
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('no vector-bearing chunks'));
     });
   });
 });

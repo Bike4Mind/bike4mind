@@ -776,6 +776,24 @@ describe('POST /api/data-lakes/semantic-search keyless embedding providers', () 
     expect(warned).toContain(BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2);
   });
 
+  it('rejects an EXPIRED caller key with the crafted error, not a truthy-sentinel pass-through', async () => {
+    // `getEffectiveLLMApiKeys` returns the literal string 'expired' rather than falling through to
+    // the platform key, deliberately, so the user is told to rotate. It is TRUTHY, so a raw
+    // `!effectiveKeys?.openai` test read it as a key present and skipped this route's crafted
+    // provider-naming 500 - in the one case where the message is the whole point. The resolver
+    // normalizes it to absent AND refuses to substitute for it (one caller's expiry says nothing
+    // about the deployment's keys), so `missing` comes back 'openai' even on a keyless cloud stage.
+    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockGetSettingsValue.mockResolvedValue('text-embedding-3-small');
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'expired' });
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'onboarding' }), res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(mockSemanticSearch).not.toHaveBeenCalled();
+  });
+
   it('still rejects when the CALLER named the model, rather than answering from another space', async () => {
     // A caller who passed embedding_model asked about one specific vector space. Silently
     // answering out of a different one is worse than telling them it is unreachable - the

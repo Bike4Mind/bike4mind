@@ -101,17 +101,33 @@ describe('resolveEffectiveEmbeddingModel', () => {
     expect(resolveEmbeddingWithKeylessFallback).toHaveBeenCalledWith(ADA, { voyageai: 'pa-live' });
   });
 
-  it('honours an injected NULL table as the answer rather than retrying the lookup', async () => {
-    // null is the caller saying "my own lookup already failed". Re-running it here would just fail
-    // again a moment later, and `resolveEmbeddingWithKeylessFallback` treats null like an empty
-    // table anyway - which on a keyless stage is exactly the state that makes it substitute.
+  it('honours an injected table holding no usable key - that is a real answer, not a failure', async () => {
+    // A caller who genuinely has no keys resolves an empty OBJECT, and the substitution it produces
+    // is correct. This is the case the injection exists to carry, and it is why the option is not
+    // nullable: see the next test for the state it must NOT be asked to carry.
     getSettingsValue.mockResolvedValue(ADA);
     resolveEmbeddingWithKeylessFallback.mockReturnValue({ model: TITAN, missing: null, config: {} });
 
-    expect(await resolveEffectiveEmbeddingModel('user-1', { llmKeys: null })).toBe(TITAN);
+    expect(await resolveEffectiveEmbeddingModel('user-1', { llmKeys: {} })).toBe(TITAN);
 
     expect(getEffectiveLLMApiKeys).not.toHaveBeenCalled();
-    expect(resolveEmbeddingWithKeylessFallback).toHaveBeenCalledWith(ADA, null);
+    expect(resolveEmbeddingWithKeylessFallback).toHaveBeenCalledWith(ADA, {});
+  });
+
+  it('re-resolves rather than reading a nullish injection as an empty table', async () => {
+    // The regression this pins. A caller whose own key lookup THREW has nothing to inject, and
+    // handing the failure over is not a cheap way to say "unknown" - `resolveEmbeddingWithKeylessFallback`
+    // reads a nullish table as "this caller holds no credential" and SUBSTITUTES, so an unavailable
+    // Mongo would have reported a confident Titan on a fully keyed production stage and reddened a
+    // mismatch badge on every healthy ada-002 file in the library. The option type forbids it; this
+    // pins the runtime half, because the route is reachable from untyped callers.
+    getSettingsValue.mockResolvedValue(ADA);
+    resolveEmbeddingWithKeylessFallback.mockReturnValue({ model: ADA, missing: null, config: {} });
+
+    await resolveEffectiveEmbeddingModel('user-1', { llmKeys: null } as { llmKeys?: undefined });
+
+    expect(getEffectiveLLMApiKeys).toHaveBeenCalledWith('user-1', expect.anything());
+    expect(resolveEmbeddingWithKeylessFallback).toHaveBeenCalledWith(ADA, { openai: 'sk-live' });
   });
 
   it('passes null for an anonymous caller instead of the string "undefined"', async () => {

@@ -17,7 +17,11 @@ import {
   lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { apiKeyService, creditService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
-import { getProviderFromModel, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
+import {
+  getProviderFromModel,
+  resolveEmbeddingConfig,
+  resolveEmbeddingWithKeylessFallback,
+} from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import {
   getEmbeddingModelCost,
@@ -332,10 +336,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       //   - self-host has no AWS role, so there is nothing to fall back TO;
       //   - a caller who NAMED embedding_model gets the error rather than a silent answer out of
       //     a different vector space than the one they asked about;
-      //   - an Ollama default with no base URL. resolveEmbeddingWithKeylessFallback never
-      //     overrides `missing: 'ollama'`, so gating the block below on mayFallBack alone would
-      //     skip THIS route's crafted 500 naming OLLAMA_BASE_URL and let the request fail one
-      //     layer down in semanticDataLakeSearch with a vaguer message instead.
+      //   - an Ollama default with no base URL. Belt-and-braces rather than load-bearing:
+      //     `resolveEmbeddingWithKeylessFallback` already refuses to override `missing: 'ollama'`,
+      //     and the 500 block below now reads that answer directly, so the crafted error naming
+      //     OLLAMA_BASE_URL stands whether or not this clause is here. It stays because
+      //     `mayFallBack` is also what makes `substituted` reachable, and a self-hosted Ollama
+      //     default should never present as a substitution candidate in the first place.
       const mayFallBack =
         parsed.data.embedding_model === undefined &&
         getProviderFromModel(requestedEmbeddingModel) !== ModelBackend.Ollama &&
@@ -357,15 +363,22 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       // process.env, so no env read can). Everything below keys off the resolved model, so a
       // substitution is never billed or reported as the model it stood in for.
       //
-      // Gated on whether a substitution ACTUALLY HAPPENED, not on whether one was permitted.
-      // `mayFallBack` only says the route allows one, and the resolver then declines to substitute
-      // for two states it refuses to read as "this deployment is keyless" - an EXPIRED caller key,
-      // and `missing: 'ollama'`. On a keyless cloud stage with an expired caller key, `mayFallBack`
-      // is true while `missing` comes back 'openai', so gating the 500 block on `mayFallBack` alone
-      // skipped this route's crafted, provider-naming error in exactly the case that most needed it
-      // and let the request fail a layer down in semanticDataLakeSearch with a vaguer message.
-      const resolution = resolveEmbeddingWithKeylessFallback(requestedEmbeddingModel, embeddingApiKeyTable);
-      const substituted = mayFallBack && resolution.missing === null && resolution.model !== requestedEmbeddingModel;
+      // `mayFallBack` selects the RESOLVER, rather than being applied to its answer afterwards.
+      // `resolveEmbeddingWithKeylessFallback` substitutes on its own policy - any keyless cloud
+      // stage - so on a request this route has already decided may not fall back, calling it and
+      // then discarding the substitution still leaves `missing: null` behind, and the credential
+      // gate below reads that as "ready" for a caller-named model this deployment cannot embed
+      // with. The 500 is skipped and the request fails a layer down with a vaguer message, which is
+      // the opposite of what naming a model is supposed to get you.
+      //
+      // Where a fallback IS permitted, the resolver still declines for two states it refuses to
+      // read as "this deployment is keyless" - an EXPIRED caller key and `missing: 'ollama'` - so
+      // `substituted` tests whether one ACTUALLY happened rather than whether it was allowed.
+      const requestedProvider = getProviderFromModel(requestedEmbeddingModel);
+      const resolution = mayFallBack
+        ? resolveEmbeddingWithKeylessFallback(requestedEmbeddingModel, embeddingApiKeyTable)
+        : { ...resolveEmbeddingConfig(requestedProvider, embeddingApiKeyTable), model: requestedEmbeddingModel };
+      const substituted = resolution.missing === null && resolution.model !== requestedEmbeddingModel;
       const searchEmbeddingModel = substituted ? resolution.model : requestedEmbeddingModel;
       if (substituted) {
         req.logger?.warn(
@@ -373,22 +386,27 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
         );
       }
 
-      // Branch POSITIVELY on the PRIMARY model's own provider only - a hard 500 here is about the
-      // model the caller actually asked for, not about a downstream alternate model's coverage,
-      // which degrades gracefully via semanticDataLakeSearch's own missingCredential skip reason
-      // instead. A keyless provider's ready state is an EMPTY table; semanticDataLakeSearch treats
-      // it as such via resolveEmbeddingConfig. Adding a provider means adding an arm here.
-      const requestedProvider = getProviderFromModel(requestedEmbeddingModel);
+      // About the PRIMARY model only - a hard 500 here concerns the model the caller actually asked
+      // for, not a downstream alternate model's coverage, which degrades gracefully via
+      // semanticDataLakeSearch's own missingCredential skip reason instead. `resolution.missing` is
+      // already scoped that way: it is `getProviderFromModel(requestedEmbeddingModel)`'s credential
+      // and nothing else, and a keyless provider reports null because an empty config IS its ready
+      // state.
+      //
+      // Testing `resolution.missing` rather than the raw key slot is the load-bearing part.
+      // `getEffectiveLLMApiKeys` returns the literal sentinel 'expired' for a caller key that has
+      // lapsed, and a seeded placeholder is a non-empty string too - both TRUTHY, so the old
+      // `!effectiveKeys?.openai` form read them as a key present and skipped this route's crafted,
+      // provider-naming error in the two cases that most needed it, leaving the request to fail a
+      // layer down with a vaguer message. `usableKey` already normalizes all three to absent for
+      // the resolver, so reading its answer is what keeps this gate and the embedder agreeing.
+      // Same basis as the sibling route (pages/api/sessions/semantic-search.ts).
       if (!substituted) {
-        if (requestedProvider === ModelBackend.Ollama && !effectiveKeys?.ollama) {
+        if (resolution.missing === 'ollama') {
           return res.status(500).json({
             error: `Ollama base URL not configured. Required for query embedding with model ${embedding_model}.`,
           });
-        } else if (requestedProvider === ModelBackend.OpenAI && !effectiveKeys?.openai) {
-          return res.status(500).json({
-            error: `${requestedProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
-          });
-        } else if (requestedProvider === ModelBackend.VoyageAI && !effectiveKeys?.voyageai) {
+        } else if (resolution.missing !== null) {
           return res.status(500).json({
             error: `${requestedProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
           });

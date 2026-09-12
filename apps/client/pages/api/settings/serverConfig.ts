@@ -65,15 +65,23 @@ const handler = baseApi({ auth: true }).get(
   asyncHandler(async (req, res) => {
     // One key-table lookup, shared. Both computations below need the caller's effective LLM keys,
     // and this route is hit on every page load - resolving it twice was a second
-    // `findByUserIdAndTypes` per request for an identical answer. A failure here is not fatal: both
-    // consumers accept a null table and degrade the way they would have on their own lookup
-    // failing (tools fail open, the embedding model reports unknown).
+    // `findByUserIdAndTypes` per request for an identical answer.
+    //
+    // `undefined` on failure, NOT null, and that distinction is the whole point. An injected table
+    // is read as an authoritative answer about this caller's credentials, so injecting the failure
+    // hands both consumers a confident "this caller holds no keys": the embedding model would
+    // resolve a keyless Bedrock SUBSTITUTION and report Titan on a fully keyed stage, and
+    // `resolveToolAvailability` would hide every key-gated tool - an injected value cannot be
+    // tainted, so its documented fail-OPEN silently becomes fail-closed. `undefined` means "not
+    // injected", which is the only honest thing a failed lookup can say: each consumer then falls
+    // back to its own lookup and degrades exactly as it does for every other caller. The retry
+    // costs a query on a path that is already failing, which is the cheaper half of the trade.
     const llmKeys = await apiKeyService
       .getEffectiveLLMApiKeys(req.user?.id ?? null, {
         db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
         getSettingsByNames,
       })
-      .catch(() => null);
+      .catch(() => undefined);
     const [toolAvailability, effectiveEmbeddingModel] = await Promise.all([
       computeToolAvailability(req.user?.id, llmKeys),
       computeEffectiveEmbeddingModel(req.user?.id, llmKeys),
@@ -126,14 +134,17 @@ const handler = baseApi({ auth: true }).get(
  */
 export async function computeToolAvailability(
   userId: string | undefined,
-  llmKeys?: LLMApiKeyTable | null
+  /** Only a REAL table, never a failed lookup - see the note at the call site. */
+  llmKeys?: LLMApiKeyTable
 ): Promise<ToolAvailability> {
   return resolveToolAvailability(
     userId,
     { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } },
     // `llmKeys` is the resolver's own injection point, added so a caller holding the table can
-    // share it; omitted, it resolves its own.
-    llmKeys === undefined ? {} : { llmKeys }
+    // share it; omitted, it resolves its own. `== null` so a nullish value from an untyped caller
+    // is omitted rather than injected as an empty table, which would turn the resolver's documented
+    // fail-OPEN into fail-closed.
+    llmKeys == null ? {} : { llmKeys }
   );
 }
 
@@ -158,9 +169,13 @@ export async function computeToolAvailability(
  */
 export async function computeEffectiveEmbeddingModel(
   userId: string | undefined,
-  llmKeys?: LLMApiKeyTable | null
+  /** Only a REAL table, never a failed lookup - see the note at the call site. */
+  llmKeys?: LLMApiKeyTable
 ): Promise<string> {
-  return (await resolveEffectiveEmbeddingModel(userId, llmKeys === undefined ? {} : { llmKeys })) ?? '';
+  // `== null` for the same reason as computeToolAvailability above: a nullish table is a failed
+  // lookup, and injecting it would be read as "this caller is keyless" and answer with a keyless
+  // substitution instead of unknown.
+  return (await resolveEffectiveEmbeddingModel(userId, llmKeys == null ? {} : { llmKeys })) ?? '';
 }
 
 export const config = {

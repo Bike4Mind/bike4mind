@@ -566,12 +566,16 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
     embeddedCharCount: number;
   }>;
   /**
-   * Label a file's still-UNLABELED chunks with the model their vectors were generated under. Never
-   * overwrites a label already written beside a vector - see the implementation's note on the
-   * mid-ingest model split that a blanket update used to hide.
+   * Label a file's still-UNLABELED, VECTOR-BEARING chunks with the model their vectors were
+   * generated under. Never overwrites a label already written beside a vector, and never labels a
+   * chunk that has no vector to attribute - see the implementation's notes on the mid-ingest model
+   * split a blanket update used to hide, and on the oversized chunks an unscoped one mislabeled.
    */
   updateEmbeddingModel(fabFileId: string, embeddingModel: string): Promise<void>;
-  /** Distinct non-blank `embeddingModel` values across a file's chunks; >1 means its vectors span two spaces. */
+  /**
+   * Distinct non-blank `embeddingModel` values across a file's VECTOR-BEARING chunks; >1 means its
+   * vectors span two spaces, and EMPTY means nothing in the file has been embedded at all.
+   */
   distinctEmbeddingModelsByFabFileId(fabFileId: string): Promise<string[]>;
   /** One page of vector-bearing chunks missing `embeddingModel`, ascending by `_id` - backfill's keyset cursor. */
   findChunksMissingEmbeddingModel(options?: {

@@ -2092,12 +2092,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * when the setting is unset, unsupported, or unreadable - the symptom there is an empty result,
    * not an error, so a silent fallback would be a support ticket.
    *
-   * ONE exception to preferring the setting: a deployment that resolved no provider credential at
-   * all, which is `embeddingBinding` (published by ChatCompletionProcess at the credential-table
-   * seam) reporting a Bedrock model with NOTHING missing. Ingestion resolved through that same
-   * seam, so the corpus was WRITTEN with the keyless model too; the setting still reads ada-002
-   * there and is simply stale, and handing it back threw OPENAI_KEY_MISSING_MESSAGE on any lake
-   * whose files had not voted yet (newly created, or still mid-ingest).
+   * ONE exception to preferring the setting: a turn whose credential seam SUBSTITUTED the keyless
+   * embedder, which is `embeddingBinding` (published by ChatCompletionProcess at the
+   * credential-table seam) reporting a Bedrock model it was not asked for, with NOTHING missing.
+   * That happens whenever no credential resolved for the CONFIGURED model's provider - not only on
+   * a stage with no keys at all, so a stage holding a VoyageAI key under an ada-002 setting is
+   * included. Ingestion resolved through that same seam, so the corpus was WRITTEN with the keyless
+   * model too; the setting still reads ada-002 there and is simply stale, and handing it back threw
+   * OPENAI_KEY_MISSING_MESSAGE on any lake whose files had not voted yet (newly created, or still
+   * mid-ingest).
    *
    * Read the BINDING, never `embeddingFactory.getDefaultEmbeddingModel()`. The factory reports
    * Titan for any empty config, and `resolveEmbeddingConfig` returns an empty config for three
@@ -2151,12 +2154,17 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // satisfy the provider check and override the configured model - embedding the query in a space
       // the corpus was never written in, which is exactly the silent zero-result this method exists
       // to prevent.
-      const deploymentIsKeyless =
+      // Named for what it actually tests, which is narrower than "this deployment holds no keys":
+      // the seam substitutes whenever no credential resolved for the CONFIGURED model's provider,
+      // so a stage holding a real VoyageAI key and an ada-002 setting lands here too. That is the
+      // right answer - ingestion resolved through the same seam and wrote the corpus in Titan space
+      // - but reading it as a statement about the stage's whole key inventory is not.
+      const substitutedToKeyless =
         binding !== undefined &&
         binding.missing === null &&
         binding.model !== binding.requested &&
         getProviderFromModel(binding.model) === ModelBackend.Bedrock;
-      if (deploymentIsKeyless && getProviderFromModel(configured) !== ModelBackend.Bedrock) {
+      if (substitutedToKeyless && getProviderFromModel(configured) !== ModelBackend.Bedrock) {
         this.logger.warn(
           `🔒 Forced retrieval: no credential resolved for defaultEmbeddingModel "${configured}"; ` +
             `embedding the query with keyless ${factoryDefault}, which is what this stage ingested with`

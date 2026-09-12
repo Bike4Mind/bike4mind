@@ -72,6 +72,17 @@ describe('computeToolAvailability (thin wrapper over resolveToolAvailability)', 
 
     expect(resolveToolAvailability.mock.calls[0][2]).not.toHaveProperty('llmKeys');
   });
+
+  it('omits a nullish table too, so a failed route lookup cannot flip fail-open to fail-closed', async () => {
+    // The route resolves the key table once and shares it. When that lookup throws there is nothing
+    // to share, and injecting the failure is not neutral: `resolveToolAvailability` documents that
+    // an injected value cannot be tainted, so it would be treated as an authoritative empty table
+    // and every key-gated tool would vanish from the picker - the exact opposite of the fail-open
+    // policy this wrapper exists to apply.
+    await computeToolAvailability('user-1', null as unknown as undefined);
+
+    expect(resolveToolAvailability.mock.calls[0][2]).not.toHaveProperty('llmKeys');
+  });
 });
 
 describe('computeEffectiveEmbeddingModel (wire adapter over the shared resolver)', () => {
@@ -96,13 +107,16 @@ describe('computeEffectiveEmbeddingModel (wire adapter over the shared resolver)
     expect(resolveEffectiveEmbeddingModel).toHaveBeenLastCalledWith('user-1', {});
   });
 
-  it('forwards an injected NULL table instead of letting the resolver retry the lookup', async () => {
-    // null means "the route's own lookup already failed". Re-running it inside the resolver would
-    // just fail again, one request later.
+  it("omits a nullish table rather than forwarding the route's failed lookup as an answer", async () => {
+    // The regression this pins. An injected table is read as authoritative, and a nullish one reads
+    // as "this caller holds no credential" - which makes the resolver SUBSTITUTE and report a
+    // confident keyless Titan on a fully keyed stage, reddening a mismatch badge across an entire
+    // healthy library. The route now catches to `undefined`, which means "not injected", so the
+    // resolver runs its own lookup and degrades the way it does for every other caller.
     resolveEffectiveEmbeddingModel.mockResolvedValue(undefined);
 
-    await computeEffectiveEmbeddingModel('user-1', null);
+    await computeEffectiveEmbeddingModel('user-1', null as unknown as undefined);
 
-    expect(resolveEffectiveEmbeddingModel).toHaveBeenCalledWith('user-1', { llmKeys: null });
+    expect(resolveEffectiveEmbeddingModel).toHaveBeenCalledWith('user-1', {});
   });
 });

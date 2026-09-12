@@ -79,6 +79,11 @@ export interface ResolveToolAvailabilityOptions {
    * `search_knowledge_base` follows `onLookupError`. An injected value cannot be tainted - the
    * caller already awaited it, so a failure there surfaced in the caller instead of here. Both are
    * correct, but they are not the same code path; do not assume one exercises the other.
+   *
+   * Which is exactly why `null` is read as "not injected" and NOT as an empty table: a caller whose
+   * own lookup failed has nothing to inject, and passing the failure through would silently convert
+   * the documented fail-OPEN into fail-closed - every key-gated tool hidden because Mongo blinked.
+   * A genuinely keyless caller resolves an empty OBJECT, never null, so nothing legitimate is lost.
    */
   llmKeys?: Awaited<ReturnType<typeof getEffectiveLLMApiKeys>> | null;
 }
@@ -167,7 +172,7 @@ export async function resolveToolAvailability(
       // Embedding keys (for Knowledge Base) resolve per user; KB uses this same getter,
       // so matching its self-host env fallback here is correct. A caller that already holds the
       // table (see `options.llmKeys`) hands it over rather than paying for the identical read twice.
-      injectedLlmKeys !== undefined
+      injectedLlmKeys != null
         ? Promise.resolve(injectedLlmKeys)
         : userId
           ? getEffectiveLLMApiKeys(userId, dbAdapters)

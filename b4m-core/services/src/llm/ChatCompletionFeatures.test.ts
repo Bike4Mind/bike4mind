@@ -783,7 +783,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
      * What the credential seam resolved for this turn (ChatCompletionProcess publishes it). Undefined
      * models a construction that never reached the seam, which is what every other test here is.
      */
-    embeddingBinding?: { requested: string; model: string; missing: string | null };
+    embeddingBinding?: { requested: string; model: string; missing: string | null; configured?: boolean };
   }) => {
     const files = opts.files ?? [{ id: 'fileA', fileName: 'A.pdf', tags: [] }];
     // Honours limit + afterChunkId like the real repository, so the probe and the within-batch
@@ -1171,7 +1171,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
         files: [{ id: 'f1', fileName: 'F1.pdf', vectorizedChunkCount: 3 }],
         rows: () => [{ id: 'c1', fabFileId: 'f1', text: 'content', vector: [1, 0] }],
         defaultEmbeddingModel: 'text-embedding-ada-002',
-        embeddingBinding: { requested: binding.requested ?? 'text-embedding-ada-002', ...binding },
+        embeddingBinding: { requested: binding.requested ?? 'text-embedding-ada-002', configured: true, ...binding },
       });
 
     it('overrides the stale setting when the DEPLOYMENT resolved no credential at all', async () => {

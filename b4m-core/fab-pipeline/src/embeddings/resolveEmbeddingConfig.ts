@@ -93,6 +93,13 @@ const isExpiredCallerKey = (
  *
  * Adding a provider means editing this function and its table test, not auditing
  * every call site.
+ *
+ * `keyTable` is always an ANSWER about the caller's credentials, never a failure channel. `null` /
+ * `undefined` mean "resolved: this caller holds none", and both this function and the keyless
+ * fallback below act on that - substituting the keyless embedder is a real decision with a real
+ * vector space attached. A caller whose own key lookup THREW must therefore not pass the failure in
+ * here; it has to report unknown instead, or an unavailable Mongo becomes a confident Titan on a
+ * fully keyed production stage.
  */
 export function resolveEmbeddingConfig(
   provider: EmbeddingProvider,
@@ -109,10 +116,14 @@ export function resolveEmbeddingConfig(
       return key ? { config: { voyageApiKey: key }, missing: null } : { config: {}, missing: 'voyageai' };
     }
 
-    case ModelBackend.Ollama:
-      return keyTable?.ollama
-        ? { config: { ollamaBaseUrl: keyTable.ollama }, missing: null }
-        : { config: {}, missing: 'ollama' };
+    case ModelBackend.Ollama: {
+      // Trimmed for the same reason the keyed providers are - a whitespace-only OLLAMA_BASE_URL is
+      // no base URL, and passed through it produces a request to a garbage host instead of the
+      // actionable missing-credential path. Not run through `usableKey`: this is a URL, so the
+      // expired-key sentinel and the placeholder-API-key test have nothing to say about it.
+      const baseUrl = keyTable?.ollama?.trim();
+      return baseUrl ? { config: { ollamaBaseUrl: baseUrl }, missing: null } : { config: {}, missing: 'ollama' };
+    }
 
     case ModelBackend.Bedrock:
       // Authenticates through the AWS credential chain on the executing role, so an

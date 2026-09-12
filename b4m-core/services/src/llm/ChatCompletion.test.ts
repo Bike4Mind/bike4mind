@@ -528,7 +528,7 @@ describe('ChatCompletionProcess', () => {
        * 'model-A' (the model the fixtures are embedded under); pass a non-null `missing` for the
        * expired-caller-key / no-Ollama-URL states, or `null` for a turn that never reached the seam.
        */
-      embeddingBinding?: { model: string; missing: string | null; requested?: string } | null;
+      embeddingBinding?: { model: string; missing: string | null; requested?: string; configured?: boolean } | null;
       retrievalFilter?: RetrievalExclusionOptions;
     }) => {
       // Seed the per-turn access memo directly (getAccessibleDataLakeAccess returns it when set),
@@ -553,6 +553,10 @@ describe('ChatCompletionProcess', () => {
           : {
               embeddingBinding: {
                 requested: opts.embeddingBinding?.requested ?? opts.embeddingBinding?.model ?? 'model-A',
+                // Defaults true: every fixture below is a stage whose `defaultEmbeddingModel` names
+                // a registered model, which is the ordinary case. Pass false for the unset /
+                // unregistered setting.
+                configured: opts.embeddingBinding?.configured ?? true,
                 ...(opts.embeddingBinding ?? { model: 'model-A', missing: null }),
               },
             }),
@@ -769,6 +773,24 @@ describe('ChatCompletionProcess', () => {
       expect(plan.retrievableCount).toBe(0);
     });
 
+    it('defers nothing when defaultEmbeddingModel is unset or unregistered, however well the labels match', async () => {
+      // The seam still resolves a model in this state - it needs one to build a query embedder with
+      // - but it resolves it from the ENV default, and `search_knowledge_base` does not share that
+      // fallback: an unusable setting makes the tool abandon its semantic arm and answer from
+      // keyword search alone. So a file whose stored label happens to equal the env default is NOT
+      // reachable the way the gate would be claiming, and deferring it hands the doc to a search
+      // that cannot vector-match it. `configured: false` is what carries that distinction.
+      const plan = await runPlan({
+        files: lakeFiles(40), // labeled 'model-A', which is also what the env fallback resolved
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000,
+        embeddingBinding: { model: 'model-A', missing: null, configured: false },
+      });
+      expect(plan.deferredToRetrieval).toBe(false);
+      expect(plan.retrievableCount).toBe(0);
+    });
+
     it('defers a corpus whose chunks were embedded by the KEYLESS fallback, not the advertised model', async () => {
       // The headline fix. On a preview with no provider key the corpus is embedded and stamped with
       // the model the seam fell back TO, while `defaultEmbeddingModel` still advertises model-A.
@@ -844,7 +866,7 @@ describe('ChatCompletionProcess', () => {
         skipAutoOffers: false,
         knowledgeSearchDisabled: true,
         retrievalFilter: {},
-        embeddingBinding: { requested: 'model-A', model: 'model-A', missing: null },
+        embeddingBinding: { requested: 'model-A', model: 'model-A', missing: null, configured: true },
         defaultAdminSettings: { CorpusRetrievalMinInlineTokensPerDoc: '500' },
       });
       expect(plan.deferredToRetrieval).toBe(false);

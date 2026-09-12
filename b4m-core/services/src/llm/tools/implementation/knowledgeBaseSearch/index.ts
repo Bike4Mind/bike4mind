@@ -284,6 +284,15 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
     context.logger.warn(`📚 [semantic] falling back to keyword search: no credential for provider "${provider}"`);
     return null;
   }
+  // Otherwise silent, and the symptom is indistinguishable from an empty corpus: the query is
+  // embedded in one space while anything ingested before the credential state changed sits in
+  // another, so the arm runs, matches nothing, and reports a clean zero. Same wording as the
+  // vectorize handler and both semantic-search routes.
+  if (resolvedEmbeddingModel !== embeddingModel) {
+    context.logger.warn(
+      `📚 [semantic] no credential resolved for ${embeddingModel}; embedding the query with keyless ${resolvedEmbeddingModel} instead`
+    );
+  }
 
   const vectorSearchEnabled = (await adminSettings.getSettingsValue('EnableDataLakeVectorSearch')) ?? false;
   const supersessionCollapseEnabled =

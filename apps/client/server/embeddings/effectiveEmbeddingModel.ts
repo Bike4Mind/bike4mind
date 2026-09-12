@@ -20,8 +20,8 @@ type LLMApiKeyTable = Awaited<ReturnType<typeof apiKeyService.getEffectiveLLMApi
  * comparing rather than as a reason to fall back to the advertised setting. It covers three
  * distinct situations, deliberately collapsed here because every caller owes them the same answer:
  * the setting is unset or names an unregistered model; the credential the resolver needs is absent
- * or expired (`missing !== null`), so no query vector can be produced at all; or the lookup itself
- * failed. Never throws - the callers are a config route that also serves the websocket URL and a
+ * or expired (`missing !== null`), so no query vector can be produced at all; or a lookup threw.
+ * Never throws - the callers are a config route that also serves the websocket URL and a
  * memory-recall path, and neither should die over a label comparison.
  *
  * Resolved per CALLER, not per deployment, because `getEffectiveLLMApiKeys` honours a personal key:
@@ -29,21 +29,24 @@ type LLMApiKeyTable = Awaited<ReturnType<typeof apiKeyService.getEffectiveLLMApi
  */
 export async function resolveEffectiveEmbeddingModel(
   userId: string | null | undefined,
-  options: { llmKeys?: LLMApiKeyTable | null } = {}
+  /**
+   * `llmKeys` is a RESOLVED table only. A table with no usable key is a real answer ("this caller
+   * holds none"), and the resolver acts on it by substituting the keyless embedder - so a caller
+   * whose own lookup FAILED must omit it rather than inject the failure, or an unavailable Mongo
+   * turns into a confident Titan on a fully keyed stage. That is why the option is not nullable.
+   */
+  options: { llmKeys?: LLMApiKeyTable } = {}
 ): Promise<SupportedEmbeddingModel | undefined> {
   try {
     const configured = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
     if (typeof configured !== 'string' || !isSupportedEmbeddingModel(configured)) return undefined;
-    // Injected rather than looked up when the caller already has the table - `undefined` means
-    // "not injected", so an injected `null` (the caller's own lookup failed) is honoured as the
-    // answer instead of quietly re-running a lookup that just failed.
+    // Injected rather than looked up when the caller already has the table; omitted -> resolve it.
     const apiKeyTable =
-      options.llmKeys !== undefined
-        ? options.llmKeys
-        : await apiKeyService.getEffectiveLLMApiKeys(userId ?? null, {
-            db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-            getSettingsByNames,
-          });
+      options.llmKeys ??
+      (await apiKeyService.getEffectiveLLMApiKeys(userId ?? null, {
+        db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
+        getSettingsByNames,
+      }));
     const { model, missing } = resolveEmbeddingWithKeylessFallback(configured, apiKeyTable);
     return missing === null ? model : undefined;
   } catch {
