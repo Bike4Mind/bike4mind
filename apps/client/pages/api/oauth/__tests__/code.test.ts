@@ -83,6 +83,20 @@ describe('POST /api/oauth/code PKCE hardening', () => {
     expect(h.generateAuthCode).not.toHaveBeenCalled();
   });
 
+  it('mints a code for a public client that presents a code_challenge', async () => {
+    // Positive control for the guard: dropping the `&& !code_challenge` clause (rejecting every
+    // public client) would fail here while the omit-challenge case above stays green.
+    (h.validateClient as Mock).mockResolvedValue({
+      tokenEndpointAuthMethod: 'none',
+      allowedScopes: ['openid', 'email', 'profile'],
+    });
+
+    const res = await call({ ...baseBody, code_challenge: 'a-challenge', code_challenge_method: 'S256' });
+
+    expect(res.body?.code).toBe('the-code');
+    expect(h.generateAuthCode).toHaveBeenCalledOnce();
+  });
+
   it('mints a code for a confidential client with no code_challenge', async () => {
     (h.validateClient as Mock).mockResolvedValue({
       tokenEndpointAuthMethod: 'client_secret_post',

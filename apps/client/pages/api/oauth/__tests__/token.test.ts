@@ -124,6 +124,22 @@ describe('POST /api/oauth/token authorization_code hardening', () => {
     expect(h.issueSessionForRequest).toHaveBeenCalledOnce();
   });
 
+  it('still verifies a recorded challenge for a confidential client (no verifier -> 400 invalid_grant)', async () => {
+    // A confidential client that authenticated by secret is not exempt from PKCE when a challenge
+    // was recorded at authorization. Narrowing the `if (authCode.codeChallenge)` verify to public
+    // clients only would let this exchange through; it must not.
+    (h.validateClient as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'client_secret_post' });
+    (h.validateClientSecret as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'client_secret_post' });
+    (h.consumeValidCode as Mock).mockResolvedValue(authCode('challenge'));
+
+    const res = await call({ ...baseBody, client_secret: 'right' });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body?.error).toBe('invalid_grant');
+    expect(h.verifyPkce).not.toHaveBeenCalled();
+    expect(h.issueSessionForRequest).not.toHaveBeenCalled();
+  });
+
   it('rejects a public client redeeming a challenge-less code (downgrade -> 400 invalid_grant)', async () => {
     (h.validateClient as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'none' });
     (h.consumeValidCode as Mock).mockResolvedValue(authCode(''));
