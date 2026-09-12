@@ -16,6 +16,12 @@ const monorepoRoot = new URL('../../', import.meta.url).pathname;
 // instead of the SST/AWS runtime. `Resource` is the only symbol the code
 // imports from `sst`, so aliasing the whole module is safe. Gated on
 // B4M_SELF_HOST so the normal SST build (staging/prod) is completely unaffected.
+/**
+ * The two help content roots, as outputFileTracingIncludes globs. Kept as one value because both
+ * consuming routes need both roots and they must not drift. See the comment at the include site.
+ */
+const HELP_CONTENT_ROOTS = ['./public/help-content/**/*', './app/generated/help-content-admin/**/*'];
+
 const selfHostResolveAlias = process.env.B4M_SELF_HOST === 'true' ? { sst: '@bike4mind/resource' } : {};
 
 // NEXT_PUBLIC_CDN_URL is an absolute URL on deployed stages, but on personal
@@ -95,17 +101,33 @@ const nextConfig = {
   // Must match turbopack.root — SST/OpenNext may also inject this value
   outputFileTracingRoot: monorepoRoot,
 
-  // Every route that can construct a REPL sandbox. Missing one does not open a
-  // hole - the caller fails closed, rlm-answer with a 503 and a wake by
-  // dropping code_execute - but it does silently disable the feature there.
+  // outputFileTracingIncludes carries two unrelated concerns and both fail silently when lost.
+  // Resolve any conflict here as a UNION of the two groups below; taking either side alone is a
+  // green build that is broken at runtime. Neither the route keys nor the two consts collide.
   //
-  // The deep-agent wake ALSO runs off deepAgentWakeQueue, which SST bundles
-  // rather than Next; that one is handled in infra/queues.ts. A new sandbox
-  // caller needs an entry in whichever bundler owns it.
+  // Sandbox routes: every route that can construct a REPL sandbox. Missing one does not open a
+  // hole - the caller fails closed, rlm-answer with a 503 and a wake by dropping code_execute -
+  // but it does silently disable the feature there.
+  //
+  // The deep-agent wake ALSO runs off deepAgentWakeQueue, which SST bundles rather than Next;
+  // that one is handled in infra/queues.ts. A new sandbox caller needs an entry in whichever
+  // bundler owns it.
+  //
+  // Help content roots: declared rather than traced. The two server readers
+  // (pages/api/help/content.ts and server/help/retrieval.ts) build their read paths with template
+  // literals and keep the roots out of every path.* call, because @vercel/nft partially evaluates
+  // a path.resolve() whose base it cannot determine statically - a root chosen from a runtime
+  // array is exactly that - then gives up and globs the whole app directory into the bundle. That
+  // measured 47 MB of source, public/, e2e specs and tsconfig.tsbuildinfo against Lambda's hard
+  // 250 MB ceiling. Opaque paths mean nothing traces these files, so they MUST be declared here:
+  // the two halves are a pair, and dropping either one silently 404s every admin help article or
+  // silently re-adds the 47 MB. See server/help/contentPath.ts.
   outputFileTracingIncludes: {
     '/api/data-lakes/rlm-answer': [ISOLATED_VM_PREBUILDS],
     '/api/deep-agent/spin': [ISOLATED_VM_PREBUILDS],
     '/api/agents/[id]/missions': [ISOLATED_VM_PREBUILDS],
+    '/api/help/content': HELP_CONTENT_ROOTS,
+    '/api/help/chat': HELP_CONTENT_ROOTS,
   },
 
   // DORMANT under Turbopack, which is what `next build` uses here: Next only applies these in

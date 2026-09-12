@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_QUERY_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { resolveDefaultEmbeddingModel } from '@server/utils/resolveDefaultEmbeddingModel';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -211,7 +212,7 @@ const SemanticSearchInput = z.object({
     .optional(),
 });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
   .use(
     // Rate limit: prevents a caller from spamming the platform's embedding
     // provider key (used for embedding the query).

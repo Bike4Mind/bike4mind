@@ -21,7 +21,9 @@ import {
   scopedSettingsRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import { checkStorageLimit, getSettingsMap, resolveSupportedMimeType } from '@bike4mind/utils';
+import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { checkStorageLimit, getSettingsMap, getSettingsValue, resolveSupportedMimeType } from '@bike4mind/utils';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
 import { BadRequestError } from '@server/utils/errors';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
@@ -76,8 +78,19 @@ const handler = baseApi().post(async (req: Request, res) => {
   }
 
   // Defense-in-depth: a caller could also smuggle a `datalake:*` meta-tag for a DIFFERENT lake
-  // through per-file tags. Gate every such tag with the same write check.
+  // through per-file tags. Gate every such tag with the same write check. `datalakeTag` itself is
+  // resolved server-side from `dataLakeSlug` and never appears in the client payload, so it must
+  // be added to the asserted set explicitly - checking `clientMetaTags` alone would let a
+  // files:write-only key join a lake via `dataLakeSlug` with no data-lake scope at all.
   const clientMetaTags = data.files.flatMap(f => (f.tags ?? []).map(t => t.name));
+  // Covers both membership signals for these new files: a `datalake:*` meta-tag, and a plain
+  // content tag matching one of the caller's OWN lakes' `fileTagPrefix` (the prefix arm - see
+  // assertDataLakeTagWriteScope's own doc comment). Only the latter needs `userId` - none of
+  // these files exist yet, so it can only ever be a JOIN.
+  await assertDataLakeTagWriteScope(req, datalakeTag ? [...clientMetaTags, datalakeTag] : clientMetaTags, {
+    userId,
+    db: { dataLakes: dataLakeRepository },
+  });
   await dataLakeService.assertCanWriteDataLakeTags(ctx, clientMetaTags, {
     db: {
       dataLakes: dataLakeRepository,
@@ -139,14 +152,7 @@ const handler = baseApi().post(async (req: Request, res) => {
 
   // Check individual file sizes against max file size setting
   const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-  let maxFileSize: number = 20 * 1024 * 1024; // Default to 20MB
-  if (settings.MaxFileSize) {
-    try {
-      maxFileSize = parseInt(settings.MaxFileSize, 10) * 1024 * 1024;
-    } catch {
-      // Fall back to default
-    }
-  }
+  const maxFileSize = getSettingsValue('MaxFileSize', settings, MAX_FILE_SIZE_DEFAULT_MB) * 1024 * 1024;
 
   // Validate every file up front (size + supported type) BEFORE any FabFile is
   // created below, so a single unsupported file can't leave partial lake state.

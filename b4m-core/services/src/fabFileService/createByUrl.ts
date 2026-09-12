@@ -38,7 +38,8 @@ type CreateFabFileByUrlAdapters = {
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
     };
-    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
+    // 'find' is forwarded straight to createFabFile, for its fallback tagger's prefix-overlap check.
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'find'>;
     // Forwarded to createFabFile's lake-tag write gate. Wire it whenever the caller stamps a lake
     // tag on behalf of a principal who may manage that lake by grant rather than by having created
     // it, or the gate silently loses the curator and transferred-owner rungs.

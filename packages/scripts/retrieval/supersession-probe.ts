@@ -364,15 +364,24 @@ async function clearPreviousRun(): Promise<void> {
   const existingIds = await fabFileRepository.findIdsByDataLakeTag({ kind: 'registry', datalakeTag: DATALAKE_TAG });
   if (existingIds.length === 0) return;
   logger.log(`Removing ${existingIds.length} FabFile(s) from a previous run...`);
-  for (const id of existingIds) await fabFileChunkRepository.deleteManyByFabFileId(id);
-  // hardDeleteByIds, NOT deleteManyInIds: `FabFileSchema` carries the soft-delete plugin, whose
+  // Each row goes first and its own chunks immediately after (#2583), the same ordering as the
+  // three production sites. Chunks-then-rows left an interruption between the two stranding a ROW
+  // with a stale vectorizedChunkCount over zero real chunks - unretrievable while every
+  // counter-based health surface reads it as vectorized, which on this probe's own lake is
+  // precisely the corruption it would then go on to measure. Paired per id rather than bulk so an
+  // interrupted clear leaves the ids it has not reached still named by `findIdsByDataLakeTag`.
+  //
+  // hardDelete, NOT deleteManyInIds: `FabFileSchema` carries the soft-delete plugin, whose
   // `deleteMany` override only stamps `deletedAt`, while `findIdsByDataLakeTag` above reads with
   // `includeDeleted`. A soft delete therefore leaves every prior run's rows in that id list forever,
   // so the count logged above becomes an all-time total rather than this clear's work and the probe
   // lake accumulates tombstones on a shared stage. The measurement itself was never at risk - chunks
   // are hard-deleted and the search's scoped-file read is plugin-filtered, so a stale generation has
   // no chunks and is out of scope - but the log line was wrong and the growth was unbounded.
-  await fabFileRepository.hardDeleteByIds(existingIds);
+  for (const id of existingIds) {
+    await fabFileRepository.hardDeleteOneById(id);
+    await fabFileChunkRepository.deleteManyByFabFileId(id);
+  }
 }
 
 /**

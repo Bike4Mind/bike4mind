@@ -39,7 +39,7 @@ const handler = baseApi({ auth: true })
       const body = taskUpdateBodySchema.parse(req.body);
       const result = await researchTaskService.update(
         req.user as any,
-        { id: taskId, ...body },
+        { ...body, id: taskId },
         {
           db: {
             researchTasks: researchTaskRepository,

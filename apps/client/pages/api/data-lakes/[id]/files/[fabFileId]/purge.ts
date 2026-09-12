@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -63,7 +64,7 @@ const auditableReceipt = (receipt: DataLakeDocumentPurgeReceipt) => {
 // that never wrote anything.
 const isValidObjectId = (id: string): boolean => Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .post(async (req: Request<{}, unknown, unknown, { id: string; fabFileId: string }>, res) => {
     const { id, fabFileId } = req.query;
@@ -174,12 +175,12 @@ const handler = baseApi()
           // same helper both file-delete routes call, over the file's pre-delete tags. That lake's
           // own meta-tag is filtered out: it is in `tagNames`, and leaving it in would run a second
           // identical aggregation over the lake the service already rebuilt.
+          //
+          // Same `actor` built above, not a narrowed literal - this rebuild can auto-activate a
+          // draft lake too, and must carry the same attribution.
           const purgedLakeTag = lake.datalakeTag?.toLowerCase();
           const otherLakeTags = tagNames.filter(name => name.toLowerCase() !== purgedLakeTag);
-          await recomputeStatsForLakeTags(otherLakeTags, {
-            logger: req.logger,
-            actor: { userId: ctx.userId, isAdmin: ctx.isAdmin },
-          });
+          await recomputeStatsForLakeTags(otherLakeTags, { logger: req.logger, actor });
         },
         logger: req.logger,
       });

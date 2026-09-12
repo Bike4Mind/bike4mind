@@ -30,6 +30,7 @@ import {
   type EmbeddingMismatchReport,
 } from './embeddingMismatch';
 import { BoundedTopK } from './boundedTopK';
+import { recordDataLakeSearchMetrics } from './dataLakeSearchMetrics';
 import { reportScanTruncation, type ScanTruncationReport, type SearchEntrypoint } from './scanTruncationMetrics';
 import { isVectorSearchReady, partitionByVectorSearchReadiness } from './vectorSearchEligibility';
 import {
@@ -185,6 +186,18 @@ export interface SemanticSearchScanAccounting {
   annFilesQueried: number;
   /** Chunk hits returned by ANN retrieval across all ann-queried files and models, before minScore/scope filtering. */
   annHits: number;
+  /**
+   * Ready files the saturated ANN path deliberately left off the brute-force scan - the index
+   * covered them and they lost on rank. This is the cutover's success signal, and the number
+   * that goes to zero if the ANN path silently stops serving.
+   *
+   * RANK-BOUNDED, not a coverage claim: it counts files absent from a topK-saturated result,
+   * which is not the same as "chunks avoided" and says nothing about whether a file is indexed.
+   * Only an under-saturated result (`hitsReturned < topK`) is evidence about coverage, and that
+   * case rebuckets to the scan path instead of counting here. Atlas only - self-host still
+   * rebuckets on absence alone (see the saturation comment in rankChunksForFiles).
+   */
+  annUnrankedFilesLeftOffScan: number;
   /**
    * Distinct embedding models an ANN query was actually issued under this search: 0 when ANN
    * never ran, 1 for a healthy single-model lake, up to `1 + MAX_ALTERNATE_ANN_MODELS`. Without
@@ -562,6 +575,7 @@ export function emptyScanAccounting(budgets?: SemanticSearchBudgets): SemanticSe
     chunksSkippedDimensionMismatch: 0,
     annFilesQueried: 0,
     annHits: 0,
+    annUnrankedFilesLeftOffScan: 0,
     annModelsQueried: 0,
     capPromotions: 0,
     // A search that never ran asked for nothing; 0 rather than a topK it never used.
@@ -1042,6 +1056,9 @@ async function rankChunksForFiles(args: {
   // an outage that broke the primary model's query almost certainly breaks every other model on
   // the same backend/connection, so there is no point spending alternate-model embeds against it.
   let primaryAnnFailed = false;
+  // Hoisted out of the saturation branch below so it survives into the scan accounting; the
+  // count is only meaningful there (a saturated ANN result is the only case that produces it).
+  let annUnrankedFilesLeftOffScan = 0;
   const primaryAnnQueried = annEligible.length > 0;
   if (annEligible.length > 0) {
     try {
@@ -1129,12 +1146,12 @@ async function rankChunksForFiles(args: {
       // The whole point of the index: these ready files are NOT scanned. Logged because the
       // failure this replaced was silent, and a regression here would be silent again - the
       // count is how much scanning the ANN path actually avoided on this query.
-      const notRescanned = annEligible.filter(f => !annResult.filesWithHits.has(f.id)).length;
-      if (notRescanned > 0) {
+      annUnrankedFilesLeftOffScan = annEligible.filter(f => !annResult.filesWithHits.has(f.id)).length;
+      if (annUnrankedFilesLeftOffScan > 0) {
         logger?.debug?.('[semanticSearch] ANN saturated its limit; unranked ready files left off the scan path', {
           embeddingModel,
           backend: canUseAtlas ? 'atlas' : 'opensearch',
-          fileCount: notRescanned,
+          fileCount: annUnrankedFilesLeftOffScan,
           hitsReturned: annResult.hitsReturned,
         });
       }
@@ -1251,11 +1268,33 @@ async function rankChunksForFiles(args: {
     chunksSkippedDimensionMismatch: scanned.chunksSkippedDimensionMismatch,
     annFilesQueried: annEligible.length + outcomes.reduce((sum, o) => sum + o.filesWithHits.size, 0),
     annHits: annResult.hitsReturned + alternateHitsReturned,
+    annUnrankedFilesLeftOffScan,
     annModelsQueried: (primaryAnnQueried ? 1 : 0) + alternateModelsQueried,
     capPromotions,
     candidatePoolK,
     budgets: { maxFiles: budgets.maxFiles, maxChunks: budgets.maxChunks },
   };
+
+  // Published here rather than at the individual counters' call sites: this is the one point
+  // that sees both the ANN and scan halves of the same search, and it covers both entrypoints
+  // (semanticDataLakeSearch and fileScopedSemanticSearch). No-ops outside a deployed stage.
+  //
+  // Deliberately NOT hoisted to withTruncationReport, which exists to catch the return paths this
+  // point cannot see. Those paths ranked nothing, so they would publish an all-zero datapoint -
+  // and a zero on annUnrankedFilesLeftOffScan is precisely the regression this metric watches for.
+  await recordDataLakeSearchMetrics(
+    {
+      // Three-way, unlike the log lines above: a dimension value partitions the metric
+      // permanently, so "no backend ran" cannot be folded into 'opensearch' the way it can be
+      // shrugged off in a log field read in context.
+      backend: canUseAtlas ? 'atlas' : canUseOpenSearch ? 'opensearch' : 'none',
+      annUnrankedFilesLeftOffScan: scan.annUnrankedFilesLeftOffScan,
+      chunksScanned: scan.chunksScanned,
+      annHits: scan.annHits,
+      annModelsQueried: scan.annModelsQueried,
+    },
+    logger
+  );
 
   // How this cutover failed once already: enabled, every index built, and not one chunk carrying an
   // `embeddingModel`, so the ann path no-opped on every request and nothing anywhere said so. Zero

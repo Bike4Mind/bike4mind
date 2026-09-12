@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeRepository, dataLakeAccessGrantRepository, fallbackLakeSettingsRepository } from '@bike4mind/database';
@@ -22,7 +23,7 @@ import { isSessionActivatablePromptId } from '@server/utils/sessionActivatablePr
  * so a new one cannot land wired for the write but not the audit - which would be silent, since the
  * service treats both audit repos as optional.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .put(async (req: Request, res) => {
     const { id } = req.query as { id: string };

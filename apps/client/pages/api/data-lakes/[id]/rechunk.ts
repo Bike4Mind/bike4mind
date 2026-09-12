@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -47,7 +48,7 @@ const RechunkInput = z.object({
 
 const detectDeps = { db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository } };
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
     const { id } = req.query;
@@ -64,6 +65,7 @@ const handler = baseApi()
     return res.json({ underChunkedCount: underChunked.length, failedCount });
   })
   .post(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
+    assertDataLakeWriteScope(req);
     const { id } = req.query;
     const { limit } = RechunkInput.parse(req.body ?? {});
     const ctx = await toAccessContext(req);
@@ -122,9 +124,11 @@ const handler = baseApi()
       // rescue sweep selects on, so it self-heals on the next pass rather than needing an undo.
       // The cost of routing recovery that way, since the reset above covers the whole wave before
       // any send: the file stays unsearchable until the chunk rescue sweep re-enqueues it - daily
-      // 05:00 UTC hosted (infra/cron.ts), ~60s self-host, and only while `enableAutoChunk` is on,
-      // which is the one condition that can hold it indefinitely. REBUILD_PENDING_STALE_MS (2h) does
-      // not gate that sweep; it gates this door's own stale-pending re-detection
+      // 05:00 UTC hosted (infra/cron.ts), ~60s self-host, and only while `enableAutoChunk` is on and
+      // the lake is not convergence-paused - either can hold it indefinitely. The refusal above is no
+      // protection against the second: it checks at request time, so a pause that lands after this
+      // wave was reset still strands the file. REBUILD_PENDING_STALE_MS (2h) does not gate that
+      // sweep; it gates this door's own stale-pending re-detection
       // (findConvergencePausedFilesByScope).
       //
       // NO `chunkSize` on purpose, unlike /converge which sends `policy.requiredTarget`. This door

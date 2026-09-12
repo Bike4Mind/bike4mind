@@ -17,6 +17,7 @@ let viewState: {
 let candidatesState: { data?: LakeOwnershipCandidateList; isLoading: boolean; isError?: boolean };
 const transferMutate = vi.fn();
 const grantMutate = vi.fn();
+/** `mutateAsync`, because the confirm dialog awaits the DELETE to decide whether to close. */
 const revokeMutate = vi.fn();
 let revokePending = false;
 /** The in-flight DELETE's own input, which is what scopes the pending state to one row. */
@@ -27,12 +28,18 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useLakeOwnershipCandidates: () => candidatesState,
   useTransferLakeOwnership: () => ({ mutateAsync: transferMutate, isPending: false }),
   useGrantLakeAccess: () => ({ mutateAsync: grantMutate, isPending: false }),
-  useRevokeLakeAccess: () => ({ mutate: revokeMutate, isPending: revokePending, variables: revokeVariables }),
+  useRevokeLakeAccess: () => ({ mutateAsync: revokeMutate, isPending: revokePending, variables: revokeVariables }),
   downloadLakeAccessCsv: (...args: unknown[]) => downloadCsv(...args),
 }));
 
 const toastError = vi.fn();
 vi.mock('sonner', () => ({ toast: { error: (...a: unknown[]) => toastError(...a) } }));
+
+/** Open the confirmation for one grant row, which is now the only path to a DELETE. */
+const openRevokeConfirm = async (principalTestId: string) => {
+  await userEvent.click(screen.getByTestId(`datalake-access-revoke-${principalTestId}`));
+  return screen.getByTestId('datalake-revoke-modal');
+};
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => (
@@ -65,6 +72,7 @@ const fullView: LakeAccessView = {
       principalId: 'u2',
       principalName: 'Bob',
       readCount: 7,
+      noResultCount: 2,
       firstAccessedAt: new Date('2026-08-01T00:00:00.000Z'),
       lastAccessedAt: new Date('2026-08-10T00:00:00.000Z'),
       surfaces: ['chat-kb-search'],
@@ -76,6 +84,12 @@ const fullView: LakeAccessView = {
     turnsWithSignal: 9,
     turnsAtCap: 4,
     lastAtCapAt: new Date('2026-08-10T00:00:00.000Z'),
+  },
+  supersessionPressure: {
+    turnsWithSignal: 9,
+    turnsWithSuppression: 3,
+    filesSuppressed: 5,
+    lastSuppressedAt: new Date('2026-08-09T00:00:00.000Z'),
   },
   generatedAt: new Date('2026-08-14T12:00:00.000Z'),
 };
@@ -140,8 +154,11 @@ describe('DataLakeAccessModal', () => {
   it('reports candidate-cap pressure with both counts, qualified as window-scoped', () => {
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     const line = screen.getByTestId('datalake-access-cap-pressure');
-    // Both numbers, never the at-cap count alone: 4 on its own reads as a rate out of every read.
-    expect(line).toHaveTextContent(/4 of 9 reported read/i);
+    // Both numbers, never the at-cap count alone: 4 on its own reads as a rate out of every turn.
+    // TURN, not read: a zero row raises this counter while staying out of readCount, so the label
+    // has to be the wider word or the two numbers cannot be reconciled by the person reading them.
+    expect(line).toHaveTextContent(/4 of 9 reported turn/i);
+    expect(line).not.toHaveTextContent(/reported read/i);
     expect(line).toHaveTextContent(/in this window/i);
     // Attribution wording: the cap is a property of the turn's whole candidate listing, so the
     // contrast is with caps this lake caused - never with reads, which it plainly did cause.
@@ -161,6 +178,49 @@ describe('DataLakeAccessModal', () => {
     viewState = loaded(withoutPressure as LakeAccessView);
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     expect(screen.getByTestId('datalake-access-cap-pressure')).toHaveTextContent(/not reported for this window/i);
+  });
+
+  it('reports supersession pressure with both counts and the total withheld', () => {
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    const line = screen.getByTestId('datalake-access-supersession-pressure');
+    expect(line).toHaveTextContent(/3 of 9 reported turn/i);
+    expect(line).not.toHaveTextContent(/reported read/i);
+    expect(line).toHaveTextContent(/5 withheld in total/i);
+    // Suppression is recoverable, and saying so is the contract the collapse itself states: the
+    // weakest identity tier is a bare file name, so a wrong collapse has to be actionable.
+    expect(line).toHaveTextContent(/still retrievable by id or name/i);
+  });
+
+  it('says not reported for supersession when no read ran the collapse', () => {
+    // The COMMON case, not an edge: the collapse is admin-gated and ships off, so a lake whose
+    // reads never ran it must not read as a lake with no duplicate generations.
+    viewState = loaded({
+      ...fullView,
+      supersessionPressure: { turnsWithSignal: 0, turnsWithSuppression: 0, filesSuppressed: 0 },
+    });
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId('datalake-access-supersession-pressure')).toHaveTextContent(
+      /not reported for this window/i
+    );
+  });
+
+  it('degrades to not-reported when the view carries no supersession object at all', () => {
+    const { supersessionPressure: _omitted, ...withoutPressure } = fullView;
+    viewState = loaded(withoutPressure as LakeAccessView);
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId('datalake-access-supersession-pressure')).toHaveTextContent(
+      /not reported for this window/i
+    );
+  });
+
+  it('shows empty searches beside reads, so a starved lake is visible rather than absent', () => {
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId('datalake-access-history-noresults')).toHaveTextContent('2');
+    // The caveat has to cover BOTH columns: only lake-scoped chat sessions record an empty search,
+    // so a 0 there is a lower bound, not a clean bill of health.
+    expect(screen.getByTestId('datalake-access-history-caveat')).toHaveTextContent(
+      /not proof that every search found something/i
+    );
   });
 
   it('drops the window qualification when the history was not truncated', () => {
@@ -341,8 +401,71 @@ describe('DataLakeAccessModal grant writes', () => {
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
 
     expect(screen.queryByTestId('datalake-access-revoke-user-owner1')).not.toBeInTheDocument();
-    await userEvent.click(screen.getByTestId('datalake-access-revoke-user-cur1'));
+    await openRevokeConfirm('user-cur1');
+    // The control opens the confirmation; nothing reaches the door until it is accepted.
+    expect(revokeMutate).not.toHaveBeenCalled();
+  });
+
+  it('sends the DELETE only once the revoke is confirmed, and nothing at all on cancel', async () => {
+    viewState = loaded({ ...fullView, grants: [{ ...fullView.grants[0]!, principalId: 'cur1', role: 'curator' }] });
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+
+    await openRevokeConfirm('user-cur1');
+    await userEvent.click(screen.getByTestId('datalake-revoke-cancel-btn'));
+    expect(revokeMutate).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('datalake-revoke-modal')).not.toBeInTheDocument();
+
+    await openRevokeConfirm('user-cur1');
+    await userEvent.click(screen.getByTestId('datalake-revoke-confirm-btn'));
     expect(revokeMutate).toHaveBeenCalledWith({ id: 'lake1', principalType: 'user', principalId: 'cur1' });
+    // Closed on success, so the second click of a double-click has no confirm left to hit.
+    expect(screen.queryByTestId('datalake-revoke-modal')).not.toBeInTheDocument();
+  });
+
+  it('keeps the confirmation open when the door refuses, so the toast can be acted on', async () => {
+    revokeMutate.mockRejectedValueOnce(new Error('nope'));
+    viewState = loaded({ ...fullView, grants: [{ ...fullView.grants[0]!, principalId: 'cur1', role: 'curator' }] });
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+
+    await openRevokeConfirm('user-cur1');
+    await userEvent.click(screen.getByTestId('datalake-revoke-confirm-btn'));
+    expect(screen.getByTestId('datalake-revoke-modal')).toBeInTheDocument();
+  });
+
+  it('locks its own confirm while the DELETE is in flight, so one confirmation cannot send two', async () => {
+    viewState = loaded({ ...fullView, grants: [{ ...fullView.grants[0]!, principalId: 'cur1', role: 'curator' }] });
+    const { rerender } = render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    await openRevokeConfirm('user-cur1');
+
+    revokePending = true;
+    revokeVariables = { principalType: 'user', principalId: 'cur1' };
+    rerender(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />);
+    expect(screen.getByTestId('datalake-revoke-confirm-btn')).toBeDisabled();
+  });
+
+  it('names what an organization grant and a curator grant take away, and flags an already-lapsed one', async () => {
+    viewState = loaded({
+      ...fullView,
+      grants: [
+        { ...fullView.grants[0]!, principalType: 'organization', principalId: 'orgA', principalName: 'Acme' },
+        { ...fullView.grants[0]!, principalId: 'cur1', role: 'curator', status: 'active', expiresAt: null },
+      ],
+    });
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+
+    // An org row is the one whose blast radius is invisible from the name on it.
+    await openRevokeConfirm('organization-orgA');
+    expect(screen.getByTestId('datalake-revoke-org-warning')).toHaveTextContent(/everyone in Acme/i);
+    // The seeded row is expired, so the copy must not promise it is cutting off live access.
+    expect(screen.getByTestId('datalake-revoke-expired-note')).toHaveTextContent(/already lapsed/i);
+    expect(screen.queryByTestId('datalake-revoke-effect-note')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('datalake-revoke-cancel-btn'));
+
+    await openRevokeConfirm('user-cur1');
+    // Mirror of the grant form's disclosure: the role carried injection trust, so revoking says so.
+    expect(screen.getByTestId('datalake-revoke-curator-warning')).toHaveTextContent(/system-prompt trust/i);
+    expect(screen.getByTestId('datalake-revoke-effect-note')).toHaveTextContent(/ends immediately/i);
+    expect(screen.queryByTestId('datalake-revoke-org-warning')).not.toBeInTheDocument();
   });
 
   it('grants a reader by email, closing the form on success', async () => {

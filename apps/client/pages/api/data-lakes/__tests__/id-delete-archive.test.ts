@@ -117,7 +117,9 @@ describe("DELETE /api/data-lakes/[id] - the archive door's Drive-connection port
 
   it('attributes a key-driven archive to the KEY', async () => {
     const { res } = makeRes();
-    await run(del({ user: { id: 'owner' }, apiKeyInfo: { keyId: 'key-abc' } }), res);
+    // A real API key always carries scopes; this test is about auditPrincipal attribution, not the
+    // scope gate, so it holds the write scope this door's DELETE handler asserts.
+    await run(del({ user: { id: 'owner' }, apiKeyInfo: { keyId: 'key-abc', scopes: ['datalake:write'] } }), res);
     expect(h.archiveDataLake).toHaveBeenCalledWith(
       expect.objectContaining({
         auditPrincipal: { principalKind: 'apiKey', principalId: 'key-abc', onBehalfOfUserId: 'owner' },

@@ -14,6 +14,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { getFilesStorage } from '@server/utils/storage';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
@@ -60,28 +61,26 @@ const handler = baseApi()
       // this path can't be used to bypass the Send-to-Data-Lake authorization and inject files into
       // a lake the caller only reads. Full actor (ctx) + the grant repo so a transferred owner /
       // curator / org admin can create-into their lake too, matching the presign doors.
-      const ctx = await toAccessContext(req);
-      await dataLakeService.assertCanWriteDataLakeTags(
-        ctx,
-        (params.tags ?? []).map(t => t.name),
-        {
-          db: {
-            dataLakes: dataLakeRepository,
-            dataLakeAccessGrants: dataLakeAccessGrantRepository,
-            adminSettings: adminSettingsRepository,
-            scopedSettings: scopedSettingsRepository,
-          },
-          // This request creates the file, so the caller is its owner-to-be and the admission
-          // contract (#1680) predicts against their chunk policy.
-          members: [{ userId: ctx.userId }],
-          logger: req.logger,
-        }
-      );
-
-      // A file joining a lake must also land under that lake's content prefix, or it is
-      // invisible to tag-counts and to the Explorer's tag tree.
-      const tags = await dataLakeService.reconcileDataLakeFallbackTags(params.tags ?? [], {
+      const requestedTagNames = (params.tags ?? []).map(t => t.name);
+      // Covers both membership signals for this new file: a `datalake:*` meta-tag, and a plain
+      // content tag matching one of the caller's OWN lakes' `fileTagPrefix` (the prefix arm - see
+      // assertDataLakeTagWriteScope's own doc comment). Only the latter needs `user.id` - this
+      // file does not exist yet, so it can only ever be a JOIN.
+      await assertDataLakeTagWriteScope(req, requestedTagNames, {
+        userId: user.id,
         db: { dataLakes: dataLakeRepository },
+      });
+      const ctx = await toAccessContext(req);
+      await dataLakeService.assertCanWriteDataLakeTags(ctx, requestedTagNames, {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          adminSettings: adminSettingsRepository,
+          scopedSettings: scopedSettingsRepository,
+        },
+        // This request creates the file, so the caller is its owner-to-be and the admission
+        // contract (#1680) predicts against their chunk policy.
+        members: [{ userId: ctx.userId }],
         logger: req.logger,
       });
 
@@ -94,45 +93,42 @@ const handler = baseApi()
       }
 
       const result = await withTransaction(async () => {
-        return fabFilesService.createFabFile(
-          user.id,
-          { ...params, ...(tags.length > 0 && { tags }) },
-          {
-            db: {
-              adminSettings: adminSettingsRepository,
-              fabFiles: FabFile,
-              users: User,
-              dataLakes: dataLakeRepository,
-              // The service re-gates the lake tag internally, so its inputs must stay at least as
-              // wide as the route's own prologue above: without the grant repo that re-gate loses
-              // the curator and transferred-owner rungs and refuses a caller this route just
-              // authorized. Same shape as proposalAdmissionDeps.ts / dataLakeIngestDeps.ts.
-              dataLakeAccessGrants: dataLakeAccessGrantRepository,
-              scopedSettings: scopedSettingsRepository,
+        return fabFilesService.createFabFile(user.id, params, {
+          db: {
+            adminSettings: adminSettingsRepository,
+            fabFiles: FabFile,
+            users: User,
+            dataLakes: dataLakeRepository,
+            // The service re-gates the lake tag internally, so its inputs must stay at least as
+            // wide as the route's own prologue above: without the grant repo that re-gate loses
+            // the curator and transferred-owner rungs and refuses a caller this route just
+            // authorized. Same shape as proposalAdmissionDeps.ts / dataLakeIngestDeps.ts.
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            scopedSettings: scopedSettingsRepository,
+          },
+          logger: req.logger,
+          storage: {
+            upload: async (filepath, content, option) => {
+              await getFilesStorage().upload(content, filepath, {
+                ContentType: option?.ContentType || 'text/plain',
+                ContentLength: option?.ContentLength || Buffer.byteLength(content, 'utf8'),
+              });
+              return filepath;
             },
-            storage: {
-              upload: async (filepath, content, option) => {
-                await getFilesStorage().upload(content, filepath, {
-                  ContentType: option?.ContentType || 'text/plain',
-                  ContentLength: option?.ContentLength || Buffer.byteLength(content, 'utf8'),
-                });
-                return filepath;
-              },
-              generateSignedUrl: (filepath: string, expireInSeconds: number) =>
-                getFilesStorage().getSignedUrl(filepath, 'put', {
-                  expiresIn: expireInSeconds,
-                }),
-            },
-            // Admission provenance (#1679): a direct-API upload is a manual door. Passed as the
-            // server-side `provenance` adapter, never from the request body, so the origin cannot be
-            // forged. Not defaulted inside the service - other callers (e.g. research) are not manual.
-            provenance: { sourceType: FabFileSourceType.MANUAL_UPLOAD },
-            // The other half of the same parity: the grant repo restores the grant rungs, but the
-            // org rungs need the actor's administered-org set, which the service cannot read off a
-            // user document.
-            administeredOrgIds: ctx.administeredOrgIds,
-          }
-        );
+            generateSignedUrl: (filepath: string, expireInSeconds: number) =>
+              getFilesStorage().getSignedUrl(filepath, 'put', {
+                expiresIn: expireInSeconds,
+              }),
+          },
+          // Admission provenance (#1679): a direct-API upload is a manual door. Passed as the
+          // server-side `provenance` adapter, never from the request body, so the origin cannot be
+          // forged. Not defaulted inside the service - other callers (e.g. research) are not manual.
+          provenance: { sourceType: FabFileSourceType.MANUAL_UPLOAD },
+          // The other half of the same parity: the grant repo restores the grant rungs, but the
+          // org rungs need the actor's administered-org set, which the service cannot read off a
+          // user document.
+          administeredOrgIds: ctx.administeredOrgIds,
+        });
       });
 
       await logEvent(

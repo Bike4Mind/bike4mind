@@ -57,10 +57,30 @@ const LakeMemorySchema = subSchema({
 // is load-bearing: it means the volume is unknown, which `{ chunks: 0 }` explicitly does not.
 // `default: undefined` on the path below is inert for a single nested subdocument (nothing
 // vivifies it) and kept only for symmetry with the siblings, where it does work.
+//
+// pre/postRelativeFloorCandidates: optional like topScore, and for the same reason - only forced
+// retrieval's ranked pool has a relative floor to trim, so no other surface ever writes them. They
+// are written and absent together, so a rollup over one is a rollup over the same turns as the
+// other. See the pair's own comment in promptMeta.ts for why they are only ever compared to each
+// other and never to `chunks`.
 const InjectedVolumeSchema = subSchema({
   chunks: { type: Number, required: true },
   chars: { type: Number, required: true },
   topScore: { type: Number, required: false },
+  preRelativeFloorCandidates: { type: Number, required: false },
+  postRelativeFloorCandidates: { type: Number, required: false },
+});
+
+// Written by the offline answerability replay, not by the turn - see the field's comment in
+// promptMeta.ts for why the measurement is reconstructed rather than computed live, and for the
+// two drifts that follow from that. Date is stored as a real Date; the Zod side accepts its JSON
+// form too (JsonSafeDate) because promptMeta round-trips through the client.
+const AnswerabilityProbeSchema = subSchema({
+  topScore: { type: Number, required: true },
+  candidatesAboveFloor: { type: Number, required: true },
+  floor: { type: Number, required: true },
+  scanTruncated: { type: Boolean, required: true },
+  probedAt: { type: Date, required: true },
 });
 
 // Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
@@ -88,6 +108,9 @@ const RetrievalSummarySchema = subSchema({
   // preserves the field's presence contract, since a materialized empty object would report
   // "unknown volume" as a recorded one.
   injected: { type: InjectedVolumeSchema, required: false, default: undefined },
+  // default: undefined for the same auto-vivification reason as `injected` above - and here it
+  // also preserves the presence contract that absence means NOT PROBED, never "not answerable".
+  answerability: { type: AnswerabilityProbeSchema, required: false, default: undefined },
   // default: undefined for the same auto-vivification reason as injectedLakePromptIds above.
   preauthorizedLakeIdsUsed: { type: [String], required: false, default: undefined },
 });

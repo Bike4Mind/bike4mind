@@ -131,15 +131,42 @@ describe('resolveSearchBudgets - scoped path', () => {
   it('a narrower override tightens the budget below the platform ceiling', async () => {
     const db = makeDb({ dataLakeSearchMaxFiles: '3000', dataLakeSearchMaxChunks: '50000' }, [
       {
-        scopeLevel: SettingScopeLevel.Lake,
-        scopeId: 'l1',
+        scopeLevel: SettingScopeLevel.Organization,
+        scopeId: 'o1',
         settingName: 'dataLakeSearchMaxFiles',
         settingValue: '1000',
       },
     ]);
     const budgets = await resolveSearchBudgets(db, undefined, scope);
-    expect(budgets.maxFiles).toBe(1000); // lake override
+    expect(budgets.maxFiles).toBe(1000); // org override
     expect(budgets.maxChunks).toBe(50000); // no override -> platform
+  });
+
+  it('a Lake-scoped override of a scan budget is never resolved (#2624)', async () => {
+    // `scope` carries a lakeId and the row is present, so settableAt is the only thing excluding it.
+    // These two budgets advertised a Lake rung nothing resolved: one search spans EVERY lake the
+    // caller can reach (resolveRetrievalLakeScope hands the scan one dataLakeTags array), so there
+    // is no lakeId to key a budget on. Pinned here rather than only in the schema test, because the
+    // schema saying "not settable at Lake" is worth nothing if this resolver honoured the row anyway.
+    //
+    // maxFiles also carries an Organization row: it resolving proves the scoped branch RAN, so the
+    // lake row losing is exclusion rather than a silent degrade to the platform path - and since
+    // Lake is the narrower rung, it would have won outright if settableAt were ignored.
+    const db = makeDb({ dataLakeSearchMaxFiles: '3000', dataLakeSearchMaxChunks: '50000' }, [
+      { scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1', settingName: 'dataLakeSearchMaxFiles', settingValue: '1' },
+      {
+        scopeLevel: SettingScopeLevel.Organization,
+        scopeId: 'o1',
+        settingName: 'dataLakeSearchMaxFiles',
+        settingValue: '900',
+      },
+      { scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1', settingName: 'dataLakeSearchMaxChunks', settingValue: '1' },
+    ]);
+
+    const budgets = await resolveSearchBudgets(db, undefined, scope);
+
+    expect(budgets.maxFiles).toBe(900);
+    expect(budgets.maxChunks).toBe(50000);
   });
 
   it('falls back to the platform path if scoped resolution throws', async () => {
@@ -172,7 +199,12 @@ describe('resolveSearchBudgets - scoped path', () => {
     // 300 tokens derives 1800 chars: a number neither the deleted 1200 constant nor the default
     // policy (3072) can produce, so a scoped branch that hardcoded either one fails here.
     const db = makeDb({ DefaultChunkSize: '300', dataLakeSearchMaxFiles: '3000' }, [
-      { scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1', settingName: 'dataLakeSearchMaxFiles', settingValue: '25' },
+      {
+        scopeLevel: SettingScopeLevel.Organization,
+        scopeId: 'o1',
+        settingName: 'dataLakeSearchMaxFiles',
+        settingValue: '25',
+      },
     ]);
 
     const scoped = await resolveSearchBudgets(db, undefined, scope);
@@ -185,11 +217,18 @@ describe('resolveSearchBudgets - scoped path', () => {
     expect(scoped.maxChunkChars).not.toBe(DEFAULT_SERVE_CHARS);
   });
 
-  it('does not let a lake rung override the chunk policy - that is not a lever yet', async () => {
+  it('does not let a narrower rung override the chunk policy - that is not a lever yet', async () => {
     // DefaultChunkSize declares no scope.settableAt, so an override row for it must be inert:
     // #1661 derives the serve budget, it does not add an org/lake chunk-policy rung (that is #1662).
+    // The row sits at Organization, a rung this resolver demonstrably DOES honour for the scan
+    // budgets above - on a Lake row the assertion would hold even if settableAt were ignored.
     const db = makeDb({ DefaultChunkSize: '300' }, [
-      { scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1', settingName: 'DefaultChunkSize', settingValue: '6554' },
+      {
+        scopeLevel: SettingScopeLevel.Organization,
+        scopeId: 'o1',
+        settingName: 'DefaultChunkSize',
+        settingValue: '6554',
+      },
     ]);
 
     const budgets = await resolveSearchBudgets(db, undefined, scope);

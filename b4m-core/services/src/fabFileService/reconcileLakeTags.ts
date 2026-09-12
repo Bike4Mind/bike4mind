@@ -54,6 +54,17 @@ interface ReconcileLakeTagsAdapters extends LakeConfigAuditAdapters {
    * owner's chunk policy instead.
    */
   fileChunkedPassageTokenTarget?: number | null;
+  /**
+   * Throws when the caller lacks the API-key scope to write a lake's membership. The route's own
+   * scope gate (`assertDataLakeTagWriteScope`) only sees the raw `tags`/`primaryTag` payload, so it
+   * catches a `datalake:*` meta-tag join before this runs - but a file can also join a lake purely
+   * through a `fileTagPrefix` content tag, which the route cannot recognize without the resolved
+   * file owner this function anchors the prefix arm to (mirrors `toggleTags`'s identical gap and
+   * fix). Called here, once, only when a prefix-arm join was actually found, so a caller that never
+   * reaches a lake this way pays nothing extra. Undefined means "no API-key scope gate to run",
+   * same convention as `assertDataLakeWriteScope` letting through a caller with no `apiKeyInfo`.
+   */
+  assertWriteScope?: () => void;
 }
 
 export interface LakeTagReconciliation {
@@ -136,7 +147,7 @@ export const reconcileLakeTags = async (
   fabFileId: string,
   currentTagNames: string[],
   desiredTags: { name: string; strength: number }[],
-  { db, logger, fileOwnerUserId, fileChunkedPassageTokenTarget }: ReconcileLakeTagsAdapters
+  { db, logger, fileOwnerUserId, fileChunkedPassageTokenTarget, assertWriteScope }: ReconcileLakeTagsAdapters
 ): Promise<LakeTagReconciliation> => {
   // `primaryTag` (a separate string field on the route, gated there against `datalake:*` meta-tags
   // alongside `tags`) is deliberately absent from `ordinaryTags`: no lake read arm consults
@@ -258,6 +269,9 @@ export const reconcileLakeTags = async (
     { fileOwnerUserId: owner, currentTagNames, resultingTagNames },
     { db, candidateLakes: prefixArmCandidateLakes }
   );
+  // Only the prefix arm reaches here with no route-level scope check yet - see
+  // assertWriteScope's own doc comment.
+  if (prefixArmJoins.length > 0) assertWriteScope?.();
   // The mirror case: a write that newly satisfies a lake's prefix arm is automatic MEMBERSHIP
   // (today's accepted model for content tags - the read-side predicate grants it purely on the
   // tag, with no permission check either). But recomputeLakeStats's activation side effect is

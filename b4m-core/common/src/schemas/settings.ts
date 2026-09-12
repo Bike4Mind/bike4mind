@@ -274,7 +274,6 @@ export const SettingKeySchema = z.enum([
   'EnableLattice',
   'EnableLatticeDefault',
   'EnableDataLakes',
-  'EnableDataLakesDefault',
   'EnableDataLakeSlackAdd',
   'EnableDataLakeGroundingMode',
   'EnableLakeMemory',
@@ -483,7 +482,6 @@ export const SettingKeySchema = z.enum([
 
   // OPTIHASHI SETTINGS
   'EnableOptiHashi',
-  'EnableOptiHashiDefault',
   'EnableComputeSubmission',
   'EnableFamilyCompute',
   'EnableHybridCompute',
@@ -798,6 +796,16 @@ interface BaseSetting {
    * available-model list, theme). NEVER tag secrets or operational/internal config.
    */
   publicSafe?: boolean;
+  /**
+   * Opt-in: allow a NON-ADMIN authenticated caller to read this setting through
+   * GET /api/settings/fetch. Fail-closed and independent of `isSensitive`: that flag is
+   * opt-OUT, so an operational setting nobody remembered to tag (sreAgentConfig,
+   * secopsTriageConfig, contextTelemetryAlerts, prReportIdentityMap) was served to every
+   * user. Tag a setting here only when non-admin client code actually reads it.
+   * Experimental-group flags and `publicSafe` keys are readable already -- see
+   * `userReadableSettingKeys()` -- and do not need tagging.
+   */
+  userReadable?: boolean;
   /** Parent setting key - this setting is hidden in admin UI when the parent is off. */
   dependsOn?: SettingKey;
   /**
@@ -1742,7 +1750,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableOllamaDefault', order: 71 },
       { key: 'ollamaBackend', order: 72 },
       { key: 'EnableOptiHashi', order: 80 },
-      { key: 'EnableOptiHashiDefault', order: 81 },
       { key: 'EnableComputeSubmission', order: 82 },
       { key: 'EnableFamilyCompute', order: 83 },
       { key: 'optiMaxToolCalls', order: 84 },
@@ -2038,16 +2045,6 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 88,
   }),
-  EnableDataLakesDefault: makeBooleanSetting({
-    key: 'EnableDataLakesDefault',
-    name: 'Data Lakes: On by default for users',
-    defaultValue: false,
-    description: 'When enabled, Data Lakes is active for users who have never explicitly toggled it.',
-    category: 'Experimental',
-    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 89,
-    dependsOn: 'EnableDataLakes',
-  }),
   EnableDataLakeSlackAdd: makeBooleanSetting({
     key: 'EnableDataLakeSlackAdd',
     name: 'Data Lakes: Slack "@datalake add" path',
@@ -2147,7 +2144,7 @@ export const settingsMap = {
     name: 'Data Lakes: Enforce read-time grant resolution',
     defaultValue: true,
     description:
-      'Read-time grant cutover (#1673). ON: a persisted READER or ORG grant is resolved into the read decision, so a principal a lake was shared with can browse it, open it and ground on it. Resolution is purely ADDITIVE (legacy OR grant), so turning it on takes no access away; this arm contains an ORG grant to the granting org, and expired rows never resolve. Turning it OFF returns to report-only: the gate still resolves grants and logs where they WOULD change access ([lakeReadGrantCutover] lines), but the enforced decision falls back to the legacy owner/org/tag/entitlement/public rule. Platform altitude on purpose: a one-time install-wide migration cutover, not a per-lake lever. Tag and entitlement grants always resolve live and are never affected by this flag; only persisted reader/org rows are gated by it.',
+      'Read-time grant resolution (#1673). ON is the shipped default: a persisted READER or ORG grant is resolved into the read decision, so a principal a lake was shared with can browse it, open it and ground on it. Resolution is purely ADDITIVE (legacy OR grant), so it takes no access away; this arm contains an ORG grant to the granting org, and expired rows never resolve. This is the standing KILL SWITCH for that arm, not a migration phase: turning it OFF returns to report-only, where the gate still resolves grants and logs where they WOULD change access ([lakeReadGrantCutover] lines) but the enforced decision falls back to the legacy owner/org/tag/entitlement/public rule - so those log lines are the diagnostic for a lake someone can no longer reach while the switch is off. Platform altitude on purpose: install-wide, not a per-lake lever. Tag and entitlement grants always resolve live and are never affected by this flag; only persisted reader/org rows are gated by it.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 94,
@@ -2423,6 +2420,7 @@ export const settingsMap = {
   }),
   DefaultChunkSize: makeNumberSetting({
     key: 'DefaultChunkSize',
+    userReadable: true,
     name: 'Default Chunk Size',
     // Must equal the chunker's own default, or a reprocess driven through the UI (which sends this
     // as an explicit chunkSize override) produces a different granularity than one driven through
@@ -2555,6 +2553,7 @@ export const settingsMap = {
   }),
   pricePerCredit: makeNumberSetting({
     key: 'pricePerCredit',
+    userReadable: true,
     name: 'Price Per Credit',
     defaultValue: 50,
     description: 'The price per credit for purchasing credits.',
@@ -2641,6 +2640,9 @@ export const settingsMap = {
     defaultValue: 10000,
     description: 'Credits to give to the referred user.',
     category: 'Referrals',
+    // ReferralModal renders this for every non-admin sender - no secret, just the number
+    // displayed in the "invited person gets N credits" line.
+    userReadable: true,
   }),
   EnableReferralToEmail: makeBooleanSetting({
     key: 'EnableReferralToEmail',
@@ -2832,6 +2834,7 @@ export const settingsMap = {
   }),
   MaxFileSize: makeNumberSetting({
     key: 'MaxFileSize',
+    userReadable: true,
     name: 'Max File Size',
     defaultValue: 30,
     min: 1, // clearing the field stores '', which z.coerce.number() reads as 0 - without a floor
@@ -2942,6 +2945,7 @@ export const settingsMap = {
   }),
   enforceCredits: makeBooleanSetting({
     key: 'enforceCredits',
+    userReadable: true,
     name: 'Enforce Credits',
     // Self-host runs on the operator's own LLM keys with no billing stack (Stripe is
     // not part of the open core), so metering defaults OFF there; hosted stays ON.
@@ -2966,6 +2970,7 @@ export const settingsMap = {
   }),
   enableTeamPlan: makeBooleanSetting({
     key: 'enableTeamPlan',
+    userReadable: true,
     name: 'Enable Team Plan',
     defaultValue: false,
     description: 'Whether to enable team plans',
@@ -3075,6 +3080,10 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.OPENAI.id,
     order: 8,
+    // useSystemPromptFiles() reads this by name with no admin guard - it lists file names,
+    // not a secret. The server independently resolves it when composing the prompt, so this
+    // read only affects what the non-admin UI displays.
+    userReadable: true,
   }),
   OpenWeatherKey: makeStringSetting({
     key: 'OpenWeatherKey',
@@ -3235,6 +3244,7 @@ export const settingsMap = {
   }),
   MaxContentLength: makeNumberSetting({
     key: 'MaxContentLength',
+    userReadable: true,
     name: 'Max Content Length',
     defaultValue: 50000,
     description: 'The maximum character length for file content displayed in workbench (truncated if larger).',
@@ -3402,6 +3412,7 @@ export const settingsMap = {
   }),
   defaultEmbeddingModel: makeStringSetting({
     key: 'defaultEmbeddingModel',
+    userReadable: true,
     name: 'Default Embedding Model',
     // Self-host with a local Ollama server and no cloud key defaults to a local embedder so RAG
     // works keyless out of the box; cloud deployments keep the OpenAI default. See embedding.ts.
@@ -3428,8 +3439,13 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 2,
-    // A scan budget an org/owner/lake may tighten below the platform ceiling (#1661 org/lake rungs).
-    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
+    // A scan budget an org/owner may tighten below the platform ceiling. No Lake rung (#2624): one
+    // search is not scoped to one lake - resolveRetrievalLakeScope hands the scan EVERY lake the
+    // caller can reach as a single dataLakeTags array and the scan walks that whole set in one pass,
+    // so there is no single lakeId for a narrower rung to key on. The rung was declared here
+    // speculatively and no caller ever resolved it, so a Lake-scoped override was silently inert.
+    // Reinstating it needs per-lake sub-budgets in the scan first, not just this line.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   dataLakeSearchMaxChunks: makeNumberSetting({
     key: 'dataLakeSearchMaxChunks',
@@ -3441,7 +3457,8 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 3,
-    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
+    // Same rungs, and the same reason for no Lake rung, as dataLakeSearchMaxFiles above (#2624).
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   dataLakeSearchMaxChunksPerFile: makeNumberSetting({
     key: 'dataLakeSearchMaxChunksPerFile',
@@ -3497,12 +3514,18 @@ export const settingsMap = {
       'saturating on every turn against a 47-document lake, so this is the binding constraint on ' +
       'how much of a corpus reaches the model - not the relevance floor. Raising it admits more ' +
       'passages at the cost of prompt tokens and latency on every Data-Lake turn; it is NOT ' +
-      'automatically better, since more context can dilute ranking. Platform-only for now: this ' +
-      'read does not go through the scoped-settings resolver, so a `settableAt` block here would ' +
-      "be inert metadata at best and could arm the resolver's fail-loud owner check at worst.",
+      'automatically better, since more context can dilute ranking. Overridable per organization ' +
+      'and per owner, the same altitude as the two relevance floors resolved alongside it on the ' +
+      'same turn.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 4,
+    // Same rungs, and the same absent Lake rung, as the two floors below: one turn scans an
+    // uncapped SET of lakes into a single pool, so no single lake can key a narrower rung.
+    // MUST stay in sync with the read path - `settableAt` is metadata only the scoped resolver
+    // honors, so this block is load-bearing only while readForcedRetrievalSettings
+    // (ChatCompletionFeatures.ts) resolves this key through resolveScopedSettingValues (#2572).
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   kbSearchDefaultResults: makeNumberSetting({
     key: 'kbSearchDefaultResults',
@@ -3529,8 +3552,9 @@ export const settingsMap = {
     order: 5,
     // Caller altitude (#1955): a knowledge-base search spans a mixed multi-lake corpus plus the
     // caller's own/shared files (see the "MIXED corpus" comment on trySemanticKbSearch's lakeIds
-    // in knowledgeBaseSearch/index.ts), so there is no single lake for a Lake rung to key on -
-    // unlike dataLakeSearchMaxFiles/MaxChunks below, which scan one lake at a time.
+    // in knowledgeBaseSearch/index.ts), so there is no single lake for a Lake rung to key on. The
+    // same turned out to be true of dataLakeSearchMaxFiles/MaxChunks below, which were believed to
+    // scan one lake at a time and do not: they lost their Lake rung in #2624.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   kbSearchResultTokenBudget: makeNumberSetting({
@@ -3600,9 +3624,10 @@ export const settingsMap = {
       'QUALIFYING beliefs can actually be used, which was pinned at 8 (inherited from personal-' +
       'memento recall) on no evidence beyond that inheritance. The sibling lever on the same turn is ' +
       'Forced Retrieval Char Budget, which governs raw chunk text rather than extracted beliefs. ' +
-      'Platform-only for now, like that sibling: this read does not go through the scoped-settings ' +
-      'resolver, so a settableAt block here would be inert metadata at best and could arm the ' +
-      "resolver's fail-loud owner check at worst.",
+      'Platform-only for now, unlike that sibling: this read goes through plain getSettingsValue, ' +
+      'which ignores settableAt, so a scope block here would be silently inert - every override ' +
+      'written against it would resolve to nothing. Pointing the read at the scoped resolver is ' +
+      'the prerequisite, not extra metadata.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 8,
@@ -3628,10 +3653,11 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 9,
-    // Organization/Owner only, no Lake rung - deliberately matching kbSearchMinRelevancePct rather
-    // than dataLakeSearchMaxChunks. A forced-retrieval turn scans an uncapped SET of lakes into one
-    // pool with one top score, so there is no single lake for a narrower rung to key on, and the
-    // relative floor is a per-turn quantity by construction. See scopeForCaller's doc comment.
+    // Organization/Owner only, no Lake rung - the altitude every retrieval-budget setting settles
+    // at, kbSearchMinRelevancePct and dataLakeSearchMaxFiles/MaxChunks (#2624) included, and for
+    // the same reason. A forced-retrieval turn scans an uncapped SET of lakes into one pool with
+    // one top score, so there is no single lake for a narrower rung to key on, and the relative
+    // floor is a per-turn quantity by construction. See scopeForCaller's doc comment.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   forcedRetrievalMinSimilarityPct: makeNumberSetting({
@@ -3720,6 +3746,7 @@ export const settingsMap = {
   // a default - on an unparseable stored value. Rails (max) mirror the MAX_* constants.
   dataLakeEmbeddingSpendEnabled: makeBooleanSetting({
     key: 'dataLakeEmbeddingSpendEnabled',
+    userReadable: true,
     name: 'Data Lake Embedding Spend Enabled',
     defaultValue: true,
     description:
@@ -3730,6 +3757,7 @@ export const settingsMap = {
   }),
   dataLakeEmbeddingBudgetPerRunUsd: makeNumberSetting({
     key: 'dataLakeEmbeddingBudgetPerRunUsd',
+    userReadable: true,
     name: 'Embedding Budget Per Run (USD)',
     defaultValue: DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_DEFAULT,
     min: 0,
@@ -3952,6 +3980,7 @@ export const settingsMap = {
   }),
   enableVoiceSession: makeBooleanSetting({
     key: 'enableVoiceSession',
+    userReadable: true,
     name: 'Enable Voice Session',
     defaultValue: false,
     description: 'Whether to enable the voice session.',
@@ -3961,6 +3990,7 @@ export const settingsMap = {
   }),
   voiceV2Enabled: makeBooleanSetting({
     key: 'voiceV2Enabled',
+    userReadable: true,
     name: 'Enable Voice v2 (Model-Agnostic)',
     defaultValue: false,
     description:
@@ -3982,6 +4012,7 @@ export const settingsMap = {
   }),
   voiceSessionAiVoice: makeStringSetting({
     key: 'voiceSessionAiVoice',
+    userReadable: true,
     name: 'Default Assistant Voice',
     defaultValue: 'alloy',
     description: 'The default voice for the assistant in the voice session.',
@@ -4293,16 +4324,6 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 80,
   }),
-  EnableOptiHashiDefault: makeBooleanSetting({
-    key: 'EnableOptiHashiDefault',
-    name: 'OptiHashi: On by default for users',
-    defaultValue: false,
-    description: 'When enabled, OptiHashi is active for users who have never explicitly toggled it.',
-    category: 'Experimental',
-    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 81,
-    dependsOn: 'EnableOptiHashi',
-  }),
   // [DELETION-FOOTPRINT] LibreOncology launch gate (removed when the product is
   // extracted). When off, the LibreOncology upgrade page shows "coming soon" and
   // the public subscribe endpoint refuses checkout (via the generic
@@ -4554,6 +4575,7 @@ export const settingsMap = {
   }),
   orchestrationDefaults: makeObjectSetting({
     key: 'orchestrationDefaults',
+    userReadable: true,
     name: 'Agent Orchestration Defaults',
     defaultValue: OrchestrationDefaultsSchema.parse({}),
     description:
@@ -4831,6 +4853,34 @@ export const experimentalFeatureSettingKeys: readonly SettingKey[] = (() => {
     .map(s => s.key);
   return Array.from(new Set<SettingKey>([...groupKeys, ...experimentalNonGroupSettingKeys]));
 })();
+
+/**
+ * Setting keys a NON-ADMIN authenticated caller may read via GET /api/settings/fetch.
+ * Opt-in and fail-closed, replacing the opt-OUT `isSensitive` filter that governed this
+ * endpoint. Three sources, unioned:
+ *
+ *  1. The EXPERIMENTAL group (plus `experimentalNonGroupSettingKeys`). `useExperimentalFeatureSettings`
+ *     reads these as a BLOCK by group membership rather than by name, so they are allowed as a
+ *     block too -- omitting one would not crash the client, it would silently fall back to the
+ *     compiled default and drop the admin's configured override.
+ *  2. `publicSafe` keys, which already ship in the unauthenticated CDN artifact.
+ *  3. Anything explicitly tagged `userReadable: true`.
+ *
+ * `isSensitive` then subtracts from the union, so no arm can admit a secret by accident.
+ * Arm 1 is the one that needs it: the EXPERIMENTAL block is allowed wholesale by group, and
+ * `ollamaBackend` sits in that group carrying an internal backend URL. The subtraction is
+ * belt-and-braces next to `redactSettingSecrets` on the response -- that masks the VALUE,
+ * this keeps the key out of a non-admin's payload at all.
+ *
+ * Admins bypass this entirely and read the full catalog.
+ */
+export function userReadableSettingKeys(): string[] {
+  const entries = Object.values(settingsMap) as Array<{ key: string; userReadable?: boolean; isSensitive?: boolean }>;
+  const tagged = entries.filter(s => s.userReadable === true).map(s => s.key);
+  const sensitive = new Set(entries.filter(s => s.isSensitive === true).map(s => s.key));
+  const union = new Set<string>([...experimentalFeatureSettingKeys, ...publicSafeSettingKeys(), ...tagged]);
+  return Array.from(union).filter(k => !sensitive.has(k));
+}
 
 /** A single setting in the public artifact - slimmed to exactly the two fields the client needs. */
 export interface PublicSetting {

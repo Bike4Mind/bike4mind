@@ -86,3 +86,105 @@ describe('recallLakeMemory belief budget', () => {
     expect(opts.minRelevance).toBeUndefined();
   });
 });
+
+/**
+ * Dating the recalled beliefs (#1501 item 4). The write path now keeps two documents' disagreeing
+ * claims instead of letting the later one destroy the earlier, so the card has to tell the model
+ * WHEN each claim was written - otherwise both readings arrive undifferentiated.
+ */
+describe('recallLakeMemory source dates', () => {
+  const sourced = (id: string, sources: string[]) => ({ id, fact: `fact ${id}`, sources, shredded: false });
+
+  const runWith = (input: {
+    beliefs: Array<{ id: string; fact: string; sources: string[] }>;
+    resolveSourceDates?: (sourceIds: string[]) => Promise<Map<string, string>>;
+  }) => {
+    mocks.readProfile.mockResolvedValue({ beliefs: input.beliefs });
+    return recallLakeMemory({
+      userId: 'u1',
+      query: 'what is the uptime',
+      lakes: [{ datalakeTag: 'datalake:acme', ownerUserId: 'creator-1' }],
+      resolveReachableSources: async ids => new Set(ids),
+      resolveSourceDates: input.resolveSourceDates,
+      k: 24,
+    });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.embeddingScorer.mockReturnValue(() => 1);
+    mocks.embedMementoQuery.mockResolvedValue({ vector: [1, 0], model: 'text-embedding-ada-002' });
+    mocks.recall.mockImplementation((beliefs: Array<{ fact: string }>, _q: string, opts: { k: number }) =>
+      beliefs.slice(0, opts.k).map(b => ({ belief: b, relevance: 0.9 }))
+    );
+  });
+
+  it('dates each belief by its source document', async () => {
+    const recalled = await runWith({
+      beliefs: [sourced('b1', ['doc-1']), sourced('b2', ['doc-2'])],
+      resolveSourceDates: async () =>
+        new Map([
+          ['doc-1', '2026-03-14'],
+          ['doc-2', '2025-01-02'],
+        ]),
+    });
+    expect(recalled.map(r => r.sourceDate)).toEqual(['2026-03-14', '2025-01-02']);
+  });
+
+  it('reads dates only for the sources that survived the budget cut', async () => {
+    // The reachability gate scans every source in the profile; dating must not repeat that cost.
+    const resolveSourceDates = vi.fn(async () => new Map([['doc-1', '2026-03-14']]));
+    mocks.recall.mockImplementation((beliefs: Array<{ fact: string }>) =>
+      beliefs.slice(0, 1).map(b => ({ belief: b, relevance: 0.9 }))
+    );
+    await runWith({ beliefs: [sourced('b1', ['doc-1']), sourced('b2', ['doc-2'])], resolveSourceDates });
+    expect(resolveSourceDates).toHaveBeenCalledWith(['doc-1']);
+  });
+
+  it('dates a multi-source belief by its most recent document', async () => {
+    // The latest restatement of a claim is the one a reader weighs, and source order is not
+    // chronological, so the reduce must pick the max rather than the first or the last.
+    const [recalled] = await runWith({
+      beliefs: [sourced('b1', ['doc-old', 'doc-new', 'doc-mid'])],
+      resolveSourceDates: async () =>
+        new Map([
+          ['doc-old', '2024-05-01'],
+          ['doc-new', '2026-03-14'],
+          ['doc-mid', '2025-01-02'],
+        ]),
+    });
+    expect(recalled.sourceDate).toBe('2026-03-14');
+  });
+
+  it('leaves a belief undated when none of its sources resolved', async () => {
+    // A deleted document has no date to report; undated is honest, and the card renders it as
+    // "unknown" rather than inventing one.
+    const [recalled] = await runWith({
+      beliefs: [sourced('b1', ['doc-gone'])],
+      resolveSourceDates: async () => new Map(),
+    });
+    expect(recalled.sourceDate).toBeUndefined();
+    expect(recalled.fact).toBe('fact b1');
+  });
+
+  it('recalls undated when no resolver is wired', async () => {
+    const [recalled] = await runWith({ beliefs: [sourced('b1', ['doc-1'])] });
+    expect(recalled).toEqual({ fact: 'fact b1', relevance: 0.9, sources: ['doc-1'] });
+  });
+
+  it('keeps the facts when the date read fails', async () => {
+    // Dating is a nicety layered on top of the grounding; losing the FabFile read must cost the
+    // dates for the turn, never the beliefs themselves.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const recalled = await runWith({
+      beliefs: [sourced('b1', ['doc-1'])],
+      resolveSourceDates: async () => {
+        throw new Error('fabfiles down');
+      },
+    });
+    expect(recalled).toHaveLength(1);
+    expect(recalled[0].sourceDate).toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});

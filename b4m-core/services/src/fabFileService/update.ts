@@ -87,12 +87,14 @@ interface UpdateFabFileAdapters extends LakeConfigAuditAdapters {
    * (#1917).
    */
   auditPrincipal?: LakeAuditPrincipal;
+  /** Forwarded to `reconcileLakeTags`; see its own adapter for what this is for. */
+  assertWriteScope?: () => void;
 }
 
 export const updateFabFile = async (
   user: IUserDocument,
   parameters: UpdateFabFileParameters,
-  { db, logger, storage, administeredOrgIds, auditPrincipal }: UpdateFabFileAdapters
+  { db, logger, storage, administeredOrgIds, auditPrincipal, assertWriteScope }: UpdateFabFileAdapters
 ) => {
   const { id, fileContent, ...params } = secureParameters(parameters, updateFabFileSchema);
 
@@ -164,6 +166,7 @@ export const updateFabFile = async (
             // Already in hand, so the admission contract grades this file on the target its chunks
             // WERE built with instead of re-fetching it or predicting from policy.
             fileChunkedPassageTokenTarget: fabFile.chunkedPassageTokenTarget,
+            assertWriteScope,
           }
         );
 

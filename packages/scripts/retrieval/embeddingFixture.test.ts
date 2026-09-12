@@ -3,13 +3,17 @@ import {
   corpusRegime,
   deriveArm,
   formatCorpusRegime,
+  hashQuestionText,
   isLongDocumentRegime,
   isTruncatableModel,
   loadEmbeddingFixture,
   PROD_REGIME_REFERENCE,
   type EmbeddingFixture,
 } from './embeddingFixture';
+import { PROBE_QUESTIONS } from './corpus';
 import tinyFixture from './fixtures/tiny-comparison.fixture.json';
+
+const hashOf = (id: string) => hashQuestionText(PROBE_QUESTIONS.find(q => q.id === id)!.question);
 
 const base = (over: Partial<EmbeddingFixture> = {}): unknown => ({
   model: 'text-embedding-3-small',
@@ -21,7 +25,7 @@ const base = (over: Partial<EmbeddingFixture> = {}): unknown => ({
   filesExcluded: 0,
   filesUnreachable: 0,
   chunks: [{ chunkId: 'c1', docId: 'docA', vector: [1, 0, 0, 0], charLength: 2200 }],
-  queries: [{ id: 'q01', vector: [0, 1, 0, 0] }],
+  queries: [{ id: 'q01', vector: [0, 1, 0, 0], questionHash: hashOf('q01') }],
   ...over,
 });
 
@@ -43,7 +47,7 @@ describe('loadEmbeddingFixture', () => {
   });
 
   it('throws on a query vector of the wrong width too, not just a chunk', () => {
-    const bad = base({ queries: [{ id: 'q01', vector: [1, 0, 0] }] } as never);
+    const bad = base({ queries: [{ id: 'q01', vector: [1, 0, 0], questionHash: hashOf('q01') }] } as never);
     expect(() => loadEmbeddingFixture(bad)).toThrow(/query q01:3/);
   });
 
@@ -112,20 +116,61 @@ describe('deriveArm', () => {
 
 describe('isTruncatableModel', () => {
   it('admits only the Matryoshka models the registry ships', () => {
-    expect(isTruncatableModel('text-embedding-3-small')).toBe(true);
-    expect(isTruncatableModel('text-embedding-3-large')).toBe(true);
+    expect(isTruncatableModel({ model: 'text-embedding-3-small' })).toBe(true);
+    expect(isTruncatableModel({ model: 'text-embedding-3-large' })).toBe(true);
   });
 
   it('refuses the pre-MRL and non-OpenAI embedders', () => {
-    expect(isTruncatableModel('text-embedding-ada-002')).toBe(false);
-    expect(isTruncatableModel('voyage-3-large')).toBe(false);
-    expect(isTruncatableModel('nomic-embed-text')).toBe(false);
+    expect(isTruncatableModel({ model: 'text-embedding-ada-002' })).toBe(false);
+    expect(isTruncatableModel({ model: 'voyage-3-large' })).toBe(false);
+    expect(isTruncatableModel({ model: 'nomic-embed-text' })).toBe(false);
   });
 
-  it('admits a model the registry does not know, which only a synthetic fixture can be', () => {
-    // capture-embeddings.ts validates every model against the registry before it spends, so no real
-    // capture can carry an unregistered id - see the docblock.
-    expect(isTruncatableModel('synthetic-eval-embedding')).toBe(true);
+  it('admits an unregistered model only when the fixture declares itself synthetic', () => {
+    expect(isTruncatableModel({ model: 'synthetic-eval-embedding', syntheticMatryoshka: true })).toBe(true);
+    expect(isTruncatableModel({ model: 'synthetic-eval-embedding' })).toBe(false);
+  });
+
+  it("refuses a typo'd model id, which the old registry-miss rule made truncatable", () => {
+    // model-comparison.ts parses a fixture FILE, and the schema validates `model` as a non-empty
+    // string - so a hand-edited typo used to render width arms of a model that never had them.
+    expect(isTruncatableModel({ model: 'text-embedding-ada-oo2' })).toBe(false);
+  });
+
+  it('does not let the synthetic flag promote a model the registry knows is not Matryoshka', () => {
+    expect(isTruncatableModel({ model: 'text-embedding-ada-002', syntheticMatryoshka: true })).toBe(false);
+  });
+});
+
+describe('question-text integrity', () => {
+  it('accepts a capture whose query hashes match the current PROBE_QUESTIONS', () => {
+    expect(() => loadEmbeddingFixture(tinyFixture)).not.toThrow();
+  });
+
+  it('throws when a query vector embeds a question text corpus.ts no longer asks', () => {
+    // The id set is identical, so assertSameQuerySet passes: the two arms are simply scored on
+    // different questions under one label.
+    const reworded = {
+      ...tinyFixture,
+      queries: tinyFixture.queries.map((q, i) => (i === 0 ? { ...q, questionHash: hashQuestionText('reworded') } : q)),
+    };
+    expect(() => loadEmbeddingFixture(reworded)).toThrow(/no longer what corpus.ts asks/);
+    expect(() => loadEmbeddingFixture(reworded)).toThrow(/q01/);
+  });
+
+  it('requires the hash rather than treating its absence as agreement', () => {
+    const { questionHash: _drop, ...noHash } = tinyFixture.queries[0];
+    expect(() =>
+      loadEmbeddingFixture({ ...tinyFixture, queries: [noHash, ...tinyFixture.queries.slice(1)] })
+    ).toThrow();
+  });
+
+  it('leaves an id corpus.ts does not know to resolveQueries, which names it', () => {
+    const unknown = {
+      ...tinyFixture,
+      queries: [...tinyFixture.queries, { id: 'q99', vector: tinyFixture.queries[0].vector, questionHash: 'deadbeef' }],
+    };
+    expect(() => loadEmbeddingFixture(unknown)).not.toThrow();
   });
 });
 

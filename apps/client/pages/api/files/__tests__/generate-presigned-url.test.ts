@@ -1,9 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
+import { getSettingsMap, invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
+import { settingsMap } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   createFabFile: vi.fn(),
   findByDatalakeTag: vi.fn(),
+  // The prefix-arm scope gate's candidate-lake lookup (assertDataLakeTagWriteScope's `newFile`
+  // argument); empty by default so existing tests see no lake to match against.
+  lakeFind: vi.fn(),
   batchFindById: vi.fn(),
   getSettingsValue: vi.fn(),
   findOverrides: vi.fn(),
@@ -36,7 +40,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   // Scoped-override store the admission contract's lever (#1680) resolves through.
   scopedSettingsRepository: { findOverrides: h.findOverrides },
-  dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag },
+  dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag, find: h.lakeFind },
   dataLakeBatchRepository: { findById: h.batchFindById },
   dataLakeAccessGrantRepository: { listByLake: vi.fn().mockResolvedValue([]) },
 }));
@@ -79,16 +83,18 @@ const makeRes = () => {
   return { res, json };
 };
 
-const req = (body: unknown) =>
+const req = (body: unknown, overrides: Record<string, unknown> = {}) =>
   ({
     method: 'POST',
     user: { id: 'u1', isAdmin: false },
     ability: {},
     body,
     logger: { error: vi.fn(), warn: vi.fn() },
+    ...overrides,
   }) as never;
 
-const run = (body: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req(body), res);
+const run = (body: unknown, res: unknown, overrides?: Record<string, unknown>) =>
+  (handler as (req: unknown, res: unknown) => Promise<void>)(req(body, overrides), res);
 
 const body = (overrides: Record<string, unknown> = {}) => ({
   fileName: 'report.txt',
@@ -114,6 +120,7 @@ describe('POST /api/files/generate-presigned-url - data-lake tags', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.findByDatalakeTag.mockResolvedValue(LAKE);
+    h.lakeFind.mockResolvedValue([]);
     h.createFabFile.mockImplementation(async () => ({ id: 'f1' }));
   });
 
@@ -156,6 +163,39 @@ describe('POST /api/files/generate-presigned-url - data-lake tags', () => {
       /only an admin can change this data lake/i
     );
     expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  // Regression test: a plain content tag matching the caller's OWN lake's fileTagPrefix joins
+  // that lake via the prefix arm (no `datalake:*` meta-tag involved), so a scope check keyed only
+  // on meta-tags previously let a files:write-only key join a lake this way with no data-lake
+  // scope at all.
+  it('refuses a files:write-only key applying a tag under its own lake prefix (no meta-tag)', async () => {
+    h.lakeFind.mockResolvedValue([LAKE]);
+    const { res } = makeRes();
+    await expect(
+      run(body({ tags: [{ name: 'acme:legal', strength: 1 }] }), res, { apiKeyInfo: { scopes: ['files:write'] } })
+    ).rejects.toThrow(/datalake:write is required/);
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it('allows a key holding datalake:write to join a lake via its prefix arm alone', async () => {
+    h.lakeFind.mockResolvedValue([LAKE]);
+    const { res } = makeRes();
+    await run(body({ tags: [{ name: 'acme:legal', strength: 1 }] }), res, {
+      apiKeyInfo: { scopes: ['datalake:write'] },
+    });
+
+    expect(h.createFabFile).toHaveBeenCalled();
+  });
+
+  it('does not gate a tag matching no lake the caller owns', async () => {
+    h.lakeFind.mockResolvedValue([{ ...LAKE, createdByUserId: 'someone-else' }]);
+    const { res } = makeRes();
+    await run(body({ tags: [{ name: 'acme:legal', strength: 1 }] }), res, {
+      apiKeyInfo: { scopes: ['files:write'] },
+    });
+
+    expect(h.createFabFile).toHaveBeenCalled();
   });
 });
 
@@ -247,5 +287,47 @@ describe('POST /api/files/generate-presigned-url - batch ownership (IDOR guard)'
 
     await expect(run(body({ batchId: 'b1' }), res)).rejects.toThrow(/batch not found/i);
     expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/files/generate-presigned-url - MaxFileSize resolution', () => {
+  const DEFAULT_MB = settingsMap.MaxFileSize.defaultValue!;
+  const mb = (n: number) => n * 1024 * 1024;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.createFabFile.mockImplementation(async () => ({ id: 'f1' }));
+  });
+
+  // A non-numeric or cleared value must land on the schema default, not disable the cap: the
+  // route used to parseInt the raw setting, and NaN made every `fileSize >= maxFileSize`
+  // comparison false, so an arbitrarily large file sailed through.
+  it.each([
+    ['non-numeric', 'abc'],
+    ['cleared', ''],
+  ])('still caps at the schema default when the stored setting is %s', async (_label, stored) => {
+    vi.mocked(getSettingsMap).mockResolvedValue({ MaxFileSize: stored });
+    const { res } = makeRes();
+
+    await expect(run(body({ fileSize: mb(DEFAULT_MB + 5) }), res)).rejects.toThrow(/maximum file size/i);
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  // Deliberately a cleared value and a size between the old hardcoded 20MB fallback and the
+  // schema default: anything lower passes under both, so it would guard nothing.
+  it('accepts a file the old hardcoded fallback would have refused', async () => {
+    vi.mocked(getSettingsMap).mockResolvedValue({ MaxFileSize: '' });
+    const { res } = makeRes();
+
+    await run(body({ fileSize: mb(DEFAULT_MB - 5) }), res);
+    expect(h.createFabFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('honors a valid stored setting over the schema default', async () => {
+    vi.mocked(getSettingsMap).mockResolvedValue({ MaxFileSize: String(DEFAULT_MB + 20) });
+    const { res } = makeRes();
+
+    await run(body({ fileSize: mb(DEFAULT_MB + 5) }), res);
+    expect(h.createFabFile).toHaveBeenCalledTimes(1);
   });
 });

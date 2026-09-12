@@ -64,3 +64,24 @@ describe('UserModel.findByUsernameOrEmail — regex-injection hardening (#9738)'
     expect(elapsedMs).toBeLessThan(1000);
   });
 });
+
+// Emailless accounts exist (OAuth signup with no provider-verified email), so a lookup that
+// carries no email must not degrade into `{ email: null }` and match all of them.
+describe('UserModel.findByUsernameOrEmail - emailless accounts', () => {
+  it('matches an emailless account by username when no email is supplied', async () => {
+    await User.create({ username: 'ghost', name: 'Ghost' });
+
+    const found = await userRepository.findByUsernameOrEmail('ghost');
+    expect(found?.username).toBe('ghost');
+    expect(found?.email ?? null).toBeNull();
+  });
+
+  it('does not return an unrelated emailless account when only the username misses', async () => {
+    await User.create({ username: 'ghost', name: 'Ghost' });
+    await User.create({ username: 'other-ghost', name: 'Other' });
+
+    expect(await userRepository.findByUsernameOrEmail('nobody')).toBeNull();
+    expect(await userRepository.findByUsernameOrEmail('nobody', null)).toBeNull();
+    expect(await userRepository.findByUsernameOrEmail('nobody', '')).toBeNull();
+  });
+});

@@ -592,9 +592,10 @@ export class NotebookCurationService {
             // back to defaults and the limit check effectively no-ops for curated notebooks (default 1GB).
             users: { findById: async (id: string) => ({ id }) as unknown as IUserDocument },
             // Minimal stub, same reasoning as `users` above: the tag here is always the literal
-            // 'curated-notebook', never a lake meta-tag or a registry prefix, so the gate this
-            // feeds can never actually fire and a real lookup would be dead weight.
-            dataLakes: { findByDatalakeTag: async () => null },
+            // 'curated-notebook', never a lake meta-tag or a registry prefix, so neither this gate
+            // nor the fallback tagger's overlap check can ever actually fire and a real lookup
+            // would be dead weight.
+            dataLakes: { findByDatalakeTag: async () => null, find: async () => [] },
           },
           storage: this.adapters.fileStorageService,
         }

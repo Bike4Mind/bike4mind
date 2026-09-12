@@ -6,28 +6,13 @@ import type {
 } from '@bike4mind/common';
 import { classifyLakeAccess, type LakeAccessArm } from './classifyLakeAccess';
 import type { LakeGrant } from './manageRule';
+import { createScopedAsyncMemo } from './scopedAsyncMemo';
 
-/** The platform cutover flag governing whether read-grant resolution is enforced or report-only. */
+/** The platform kill switch governing whether read-grant resolution is enforced or report-only. */
 export const ENFORCE_LAKE_READ_GRANTS_KEY = 'EnforceLakeReadGrants' as const;
 
-/**
- * Source-level interlock for the ENFORCE transition, now FLIPPED. It existed so an admin toggling
- * `EnforceLakeReadGrants` before the feature was code-complete could not activate a half-wired gate;
- * enforcement requires BOTH the setting ON and this constant true.
- *
- * Both of its stated exit criteria are now met: the retrieval/grounding read arm
- * (`getDynamicDataLakeAccess` resolves grants on the same terms browse does, so a reader who can
- * open a lake can also ground on it), and the member-management WRITE path (`manageLakeGrant`, the
- * first producer of reader/org grants). The resolution stays additive
- * (`resolvedAllowed = legacy || readGrant`), so nobody loses access at the flip. Cross-org
- * containment is held at both ends - `refuseGrantWrite` on the way in, `containedGrants` plus the
- * org-constrained repo arm on the way out.
- *
- * Now vestigial - `resolveEnforceReadGrants` reduces to the setting alone - but retained as the
- * auditable seam the cutover tests branch on, and as the kill switch if enforcement has to be
- * backed out without a settings migration. The premature-toggle warn stays for the same reason.
- */
-export const READ_GRANT_ENFORCEMENT_READY = true;
+/** Backing store for `resolveEnforceReadGrants`' optional per-turn flag read. */
+const enforceFlagByTurn = createScopedAsyncMemo<boolean>();
 
 /** Minimal diagnostic sink - a structural subset of the app Logger, so no dependency is added here. */
 export interface LakeAccessLogger {
@@ -138,10 +123,11 @@ export interface LakeReadAccessDecision {
 }
 
 /**
- * Resolve read access with the ephemeral membership view layered onto the legacy gate. In report-only
- * mode (`enforceReadGrants: false`) the ENFORCED decision stays the legacy one, so nothing changes for
- * users while the cutover is observed; the caller logs `diverges` to build the expected-grant-set diff.
- * Once enforced, a persisted read grant admits the caller. Pure/sync - the same seam as classifyLakeAccess.
+ * Resolve read access with the ephemeral membership view layered onto the legacy gate. When enforcing
+ * (the shipped default) a persisted read grant admits the caller. In report-only mode
+ * (`enforceReadGrants: false` - the kill switch off, or an unwired call site) the ENFORCED decision
+ * stays the legacy one and the caller logs `diverges` instead, so the withheld access is at least
+ * visible. Pure/sync - the same seam as classifyLakeAccess.
  */
 export function resolveLakeReadAccess(
   lake: Pick<
@@ -169,15 +155,16 @@ export function resolveLakeReadAccess(
 }
 
 /**
- * Whether read-grant resolution is ENFORCED right now. Enforcement requires BOTH the platform setting
- * ON and the source-level `READ_GRANT_ENFORCEMENT_READY` interlock (see its doc) - so a premature
- * admin toggle stays report-only until the feature is code-complete. Platform altitude on purpose:
- * the setting is a one-time install-wide migration cutover, not a per-lake lever.
+ * Whether read-grant resolution is ENFORCED right now - the platform setting alone. Two states remain:
+ * ENFORCE (the setting is ON, which includes a missing row, since `getSettingsValue` falls back to
+ * `defaultValue: true`), and report-only (the setting is explicitly OFF, or `settings` is unwired at
+ * this call site). Platform altitude on purpose: the setting is the install-wide read-grant kill
+ * switch, not a per-lake lever.
  *
  * NEVER throws - an unwired repo OR a THROWN read degrades to `false` (report-only / legacy), because
  * a failed read is not a "yes": collapsing it into enforce would silently widen access on a transient
- * glitch. The warns are the diagnostics that tell "flag off" apart from "read failed" apart from
- * "operator enabled it but the interlock is still holding" - all three must be visible to a smoke test.
+ * glitch. The warn is the diagnostic that tells "flag off" apart from "read failed" - both must be
+ * visible to a smoke test.
  *
  * THAT FAIL-SAFE DOES NOT REACH A NON-THROWING FAILURE, and the reason is in `getSettingsValue`: it
  * `safeParse`s the stored value and returns the setting's `defaultValue` on failure rather than
@@ -185,29 +172,32 @@ export function resolveLakeReadAccess(
  * one both resolve to ENFORCE, not to `false`. For the missing row that is the intended cutover
  * default; for a malformed row it is indistinguishable from it here, and the settings layer is where
  * that would have to be told apart.
+ *
+ * Pass `turnScope` from a caller that runs per TOOL CALL to collapse the flag read to one per turn -
+ * see the call site for why the memo wraps the raw read rather than this function's answer.
  */
 export async function resolveEnforceReadGrants(
   settings: Pick<IAdminSettingsRepository, 'getSettingsValue'> | undefined,
-  logger?: LakeAccessLogger
+  logger?: LakeAccessLogger,
+  turnScope?: object
 ): Promise<boolean> {
   if (!settings) return false;
-  let intent = false;
   try {
-    intent = (await settings.getSettingsValue(ENFORCE_LAKE_READ_GRANTS_KEY)) === true;
+    // `getSettingsValue` caches nothing (AdminSettingsModel round-trips to Mongo per call), so a
+    // resolver that runs per TOOL CALL re-reads this flag every time. `turnScope` collapses that to
+    // one read per turn; omitting it keeps the read unmemoized, which is what the once-per-request
+    // browse and manage callers want.
+    //
+    // The MEMO SEES THE RAW READ, deliberately, so the throw below still reaches the catch on every
+    // attempt and the rejection is evicted rather than cached. Memoizing this function's own return
+    // instead would cache the report-only `false` a transient failure produces, holding retrieval
+    // narrowed for the rest of the turn with nothing left to say why.
+    const readFlag = () => settings.getSettingsValue(ENFORCE_LAKE_READ_GRANTS_KEY).then(value => value === true);
+    return turnScope ? await enforceFlagByTurn(turnScope, ENFORCE_LAKE_READ_GRANTS_KEY, readFlag) : await readFlag();
   } catch (err) {
     logger?.warn?.('[lakeReadGrantCutover] enforce-flag read failed; treating as report-only', err);
     return false;
   }
-  // Interlock: the operator asked to enforce, but the feature is not code-ready. Stay report-only and
-  // make the premature toggle loud rather than half-enabling a gate whose arms are not all wired.
-  if (intent && !READ_GRANT_ENFORCEMENT_READY) {
-    logger?.warn?.(
-      '[lakeReadGrantCutover] EnforceLakeReadGrants is ON but enforcement is code-gated off ' +
-        '(the interlock constant is off); staying report-only'
-    );
-    return false;
-  }
-  return intent && READ_GRANT_ENFORCEMENT_READY;
 }
 
 /** Grant-repo slice the id resolution needs: one principal's active grants. */
@@ -246,6 +236,10 @@ export interface LakeGrantReach {
  *    would 404 on open - listing it would be incoherent, so it is excluded until enforce.
  * The org arm keys off MEMBERSHIP (`organizationIds`), distinct from the org-MANAGE rung (admin
  * rights).
+ *
+ * A NEW PARAMETER HERE MUST BE ADDED TO `grantedLakeReachForTurn`'S MEMO KEY, which is built from
+ * this signature's arguments by hand. An argument the key omits merges two call sites that meant to
+ * differ - and the sites that differ, differ on exactly the security floor (see that key's doc).
  */
 export const grantedLakeReachFor = async (
   userId: string,
@@ -290,6 +284,56 @@ export const grantedLakeReachFor = async (
     orgGrantedLakes: Object.fromEntries(Array.from(byOrg, ([orgId, lakeIds]) => [orgId, Array.from(lakeIds)])),
   };
 };
+
+/** Backing store for `grantedLakeReachForTurn` - see its doc for what the key has to cover. */
+const reachByTurn = createScopedAsyncMemo<LakeGrantReach>();
+
+/**
+ * `grantedLakeReachFor`, resolved at most ONCE per turn per distinct argument set. For the callers
+ * that run it repeatedly inside one request: the knowledge tools resolve lake access per TOOL
+ * CALL, so a turn that grounds through forced retrieval and then calls both `search` and
+ * `retrieve` issues this read four times over. `turnScope` must be an object whose lifetime IS
+ * the turn - the shared `ToolContext`, built once per request in `generateTools` and closed over
+ * by every tool. Callers that read once, and every browse/manage caller, keep calling
+ * `grantedLakeReachFor` directly.
+ *
+ * THE REACH IT RETURNS IS SHARED between every caller that hits the entry, so treat it as
+ * read-only: mutating either half would reach the other calls in the turn. Today's consumers copy
+ * the ids out (`grantedLakeIds` into a Set) or hand the whole reach to a query that only reads it.
+ *
+ * THE KEY COVERS `includeReaders` AND `organizationIds`, not just the user. The retrieval and
+ * prompt-injection sites pass deliberately different arguments and are meant to stay diverged:
+ * retrieval follows the enforced cutover, while injection pins `includeReaders: false` forever,
+ * because a reader's READ access must not become authority to write instructions into another
+ * user's system prompt. A user-keyed memo would silently merge two sets whose separation is
+ * exactly the point. Org ids are sorted so caller-side ordering cannot split an entry in two.
+ *
+ * The two sites DO share an entry when their arguments coincide - enforcement off and a caller who
+ * belongs to no org, where both pass `(false, [])`. That is correct rather than a widening: same
+ * function, same arguments, same rows. The floor injection depends on is the arguments it passes,
+ * which the memo cannot change; what the key prevents is one site being handed the OTHER's set.
+ *
+ * The grant repo is NOT in the key - being an object, it cannot be - so `turnScope` has to be the
+ * object that OWNS it (a ToolContext owns `db.dataLakeAccessGrants`). Handing one scope two
+ * different grant repos would share one entry between them.
+ *
+ * The reach is a per-turn SNAPSHOT: `activeAsOf` is captured by the first call, and a grant
+ * revoked or lapsed after it stays honored for the rest of that turn. Deliberate - a turn is
+ * seconds long, the alternative is the repeated read this exists to remove, and the retrieval side
+ * already snapshots this way - `knowledgeBaseRetrieve` holds one resolved lake-access set for the
+ * length of a tool call (`dynamicAccessPromise`). The manage re-check on a session's pre-authorized
+ * ids is NOT part of the snapshot: `filterStillManagedLakes` reads `listActiveByLakes` per call.
+ */
+export const grantedLakeReachForTurn = (
+  turnScope: object,
+  userId: string,
+  organizationIds: string[],
+  grants?: PrincipalGrantLookup,
+  includeReaders = false
+): Promise<LakeGrantReach> =>
+  reachByTurn(turnScope, JSON.stringify([userId, includeReaders, [...organizationIds].sort()]), () =>
+    grantedLakeReachFor(userId, organizationIds, grants, includeReaders)
+  );
 
 /**
  * Lake ids the caller can reach via a MANAGE-conferring active grant - the narrower sibling of

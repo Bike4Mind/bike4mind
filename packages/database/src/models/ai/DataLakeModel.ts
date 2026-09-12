@@ -1,6 +1,9 @@
 import mongoose from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
+// Grant-held ids arrive as plain Strings (DataLakeAccessGrantModel.dataLakeId has no ObjectId
+// validation), so every grant arm below filters them - see usableObjectIds.
+import { usableObjectIds } from '../../utils/mongo';
 import type {
   IDataLakeDocument,
   IDataLakeRepository,
@@ -313,9 +316,12 @@ const requirementConstraint = (userTags: string[], entitlementKeys?: string[]): 
  * Each arm bypasses the requirement gate and Private-by-default, never the org.
  */
 const orgGrantArms = (orgGrantedLakes?: Record<string, string[]>): Record<string, unknown>[] =>
-  Object.entries(orgGrantedLakes ?? {})
-    .filter(([orgId, lakeIds]) => !!orgId && lakeIds.length > 0)
-    .map(([orgId, lakeIds]) => ({ organizationId: orgId, _id: { $in: lakeIds } }));
+  Object.entries(orgGrantedLakes ?? {}).flatMap(([orgId, lakeIds]) => {
+    // Filtered BEFORE the emptiness check, so an org whose every id is unusable emits no arm at
+    // all rather than an `$in: []` that matches nothing.
+    const usable = usableObjectIds(lakeIds, 'DataLakeModel.orgGrantArms');
+    return orgId && usable.length > 0 ? [{ organizationId: orgId, _id: { $in: usable } }] : [];
+  });
 
 const LIST_PROJECTION = '-inconsistencyReport';
 const LIST_PROJECTION_FIELDS = { inconsistencyReport: 0 } as const;
@@ -408,10 +414,10 @@ export const buildAccessibleQuery = (
   // Explicit-grant arm (#1668): a lake the caller holds an active access grant on is reachable by
   // that grant alone - the grant IS the authorization, so it needs none of the org/gate constraints
   // (it is the analog of the createdByUserId owner bypass, extended to a transferred/delegated
-  // owner-curator-reader). The ids are pre-resolved by the caller from listByPrincipal (an empty
-  // list adds no arm). This covers ONLY persisted grant rows; the ephemeral tag/entitlement view is
-  // #1673's separate concern.
-  const grantedLakeIds = opts?.grantedLakeIds ?? [];
+  // owner-curator-reader). The ids are pre-resolved by the caller from listByPrincipal; an empty
+  // list adds no arm, and so does one whose every id is unusable. This covers ONLY persisted grant
+  // rows; the ephemeral tag/entitlement view is #1673's separate concern.
+  const grantedLakeIds = usableObjectIds(opts?.grantedLakeIds, 'DataLakeModel.buildAccessibleQuery');
   if (grantedLakeIds.length > 0) nonOwnerArms.push(['grant', { _id: { $in: grantedLakeIds } }]);
 
   // ORG-principal grant arms, one per granting org (see `orgGrantArms`), so this is the one arm
@@ -486,12 +492,13 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
    * grants query" decision in the service layer instead of hidden inside the data layer.
    */
   async findBySlugAmongIds(slug: string, ids: string[]): Promise<IDataLakeDocument | null> {
-    if (ids.length === 0) return null;
+    const usable = usableObjectIds(ids, 'DataLakeModel.findBySlugAmongIds');
+    if (usable.length === 0) return null;
     // Sorted for the same reason as the own-org arm above: two granted lakes can share a slug
     // across two different non-member orgs (e.g. two independent transferLakeOwnership calls),
     // and an unsorted `$in` match has no ordering guarantee - without a tie-break, which lake
     // wins would be nondeterministic rather than merely unspecified-but-stable.
-    const granted = await this.dataLakeModel.findOne({ slug, _id: { $in: ids } }).sort({ _id: 1 });
+    const granted = await this.dataLakeModel.findOne({ slug, _id: { $in: usable } }).sort({ _id: 1 });
     return (granted?.toJSON() as IDataLakeDocument) ?? null;
   }
 
@@ -594,9 +601,9 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // it needs none of the org/gate constraints (the analog of the createdByUserId owner bypass,
     // extended to a transferred/delegated owner-curator-reader, and it is MEANT to cross orgs).
     // Ids are pre-resolved by the caller from listByPrincipal (grantedLakeReachFor); an empty list
-    // adds no arm. This is what keeps RETRIEVAL in step with browse - without it a transferred
-    // owner can open a lake but not ground on it.
-    const grantedLakeIds = opts?.grantedLakeIds ?? [];
+    // adds no arm, and so does one whose every id is unusable. This is what keeps RETRIEVAL in step
+    // with browse - without it a transferred owner can open a lake but not ground on it.
+    const grantedLakeIds = usableObjectIds(opts?.grantedLakeIds, 'DataLakeModel.findActiveByUserTagsAndEntitlements');
     if (grantedLakeIds.length > 0) accessArms.push({ _id: { $in: grantedLakeIds } });
 
     // The ORG-principal half. Each arm carries its own `organizationId: <granting org>` conjunct, so
@@ -679,7 +686,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       $and: [] as Record<string, unknown>[],
     };
     if (!viewer.isAdmin) {
-      const grantedLakeIds = opts?.grantedLakeIds ?? [];
+      const grantedLakeIds = usableObjectIds(opts?.grantedLakeIds, 'DataLakeModel.findPublicLakes');
       const reachArms: Record<string, unknown>[] = [
         { createdByUserId: viewer.userId },
         requirementConstraint(viewer.userTags, viewer.entitlementKeys),

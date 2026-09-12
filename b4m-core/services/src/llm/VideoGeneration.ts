@@ -18,6 +18,7 @@ import {
   ICreditTransactionRepository,
   IUsageEventRepository,
   CreditHolderType,
+  materializePromptMetaSession,
 } from '@bike4mind/common';
 import {
   aiVideoService,
@@ -235,7 +236,9 @@ export class VideoGenerationService {
 
       quest.type = 'error';
       quest.reply = errorMessage;
-      await this.db.quests.update(quest);
+      // Write only the fields this error path sets, not the whole stale quest: this catch can run
+      // after the success-path update above, and a whole-doc write would clobber that update.
+      await this.db.quests.update({ id: quest.id, type: quest.type, reply: quest.reply });
     }
 
     return quest;
@@ -298,10 +301,8 @@ export class VideoGenerationService {
   /**
    * Add a status update to the quest's status log
    */
-  private addStatusToQuest(quest: IChatHistoryItemDocument, status: string) {
-    if (!quest.promptMeta) {
-      quest.promptMeta = {};
-    }
+  private addStatusToQuest(quest: IChatHistoryItemDocument, status: string, userId: string) {
+    quest.promptMeta = materializePromptMetaSession(quest.promptMeta, { sessionId: quest.sessionId, userId });
     if (!quest.promptMeta.statusLog) {
       quest.promptMeta.statusLog = [];
     }
@@ -385,7 +386,7 @@ export class VideoGenerationService {
         usageCostUsd = usdCost;
       }
 
-      this.addStatusToQuest(quest, 'Preparing to generate video...');
+      this.addStatusToQuest(quest, 'Preparing to generate video...', userId);
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
         action: 'streamed_chat_completion',
         quest: parseQuestToStreamPayload(quest),
@@ -395,7 +396,7 @@ export class VideoGenerationService {
       // Create the video service
       const service = aiVideoService('openai', apiKeyTable.openai, logger);
 
-      this.addStatusToQuest(quest, 'Generating video... This may take several minutes.');
+      this.addStatusToQuest(quest, 'Generating video... This may take several minutes.', userId);
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
         action: 'streamed_chat_completion',
         quest: parseQuestToStreamPayload(quest),
@@ -429,7 +430,7 @@ export class VideoGenerationService {
       );
 
       // Download and store videos to S3
-      this.addStatusToQuest(quest, 'Storing your video...');
+      this.addStatusToQuest(quest, 'Storing your video...', userId);
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
         action: 'streamed_chat_completion',
         quest: parseQuestToStreamPayload(quest),
@@ -471,7 +472,7 @@ export class VideoGenerationService {
         })
       );
 
-      this.addStatusToQuest(quest, 'Adding to the notebook...');
+      this.addStatusToQuest(quest, 'Adding to the notebook...', userId);
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
         action: 'streamed_chat_completion',
         quest: parseQuestToStreamPayload(quest),
@@ -496,7 +497,7 @@ export class VideoGenerationService {
         };
       }
 
-      this.addStatusToQuest(quest, 'Video generation completed');
+      this.addStatusToQuest(quest, 'Video generation completed', userId);
 
       logger.info('[VideoGenerationService] Quest updated', {
         id: quest.id,
@@ -565,7 +566,7 @@ export class VideoGenerationService {
       }
     } catch (error) {
       logger.error('Error processing video generation:', error);
-      this.addStatusToQuest(quest, `Error: ${(error as Error).message}`);
+      this.addStatusToQuest(quest, `Error: ${(error as Error).message}`, userId);
       quest.reply = (error as Error).message;
       quest.type = 'error';
       quest.status = 'done';

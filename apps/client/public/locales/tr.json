@@ -68,7 +68,6 @@
     "no_valid_emails_error": "Lütfen geçerli e-posta adres(ler)i girin",
     "send_referral": "Yönlendirmeyi Gönder",
     "send_referral_success": "Yönlendirme başarıyla gönderildi!",
-    "send_referral_skipped": "{{count}} davet atlandı — bu e-posta adreslerinde zaten hesap var.",
     "send_referral_failed": "{{count}} davet gönderilemedi. Lütfen tekrar deneyin.",
     "send_referral_error": "Yönlendirme gönderilirken bir hata oluştu. Lütfen tekrar deneyin.",
     "slack_notification_default": "USER_NAME:USER_ID kullanıcısı tarafından FRIEND_EMAIL'e yönlendirme gönderildi"

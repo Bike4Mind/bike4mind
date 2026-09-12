@@ -10,7 +10,9 @@ const BaseQuery = z.object({
 export const BusinessLinkCategoriesQuery = BaseQuery.extend({
   filters: z
     .object({
-      name: z.string().optional(),
+      // `search`, not `name`: the route matches the term against both the category
+      // name and its description. Matches the `filters.search` the links query sends.
+      search: z.string().optional(),
     })
     .optional(),
 });

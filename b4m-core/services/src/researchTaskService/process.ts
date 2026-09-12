@@ -59,9 +59,10 @@ interface ResearchTaskProcessAdapters {
     apiKeys: Pick<IApiKeyRepository, 'findByUserIdAndType' | 'findByUserIdAndTypes'>;
     // Widened to match ToolContext.db.dataLakes below (this whole `db` object is passed through
     // to it), not just what the new write-gate call needs.
+    // 'find' is forwarded straight to createFabFile, for its fallback tagger's prefix-overlap check.
     dataLakes: Pick<
       IDataLakeRepository,
-      'findByDatalakeTag' | 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findById'
+      'findByDatalakeTag' | 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findById' | 'find'
     >;
     // Required: this whole `db` object is passed through to ToolContext.db below, whose
     // `organizations` field is itself required (#1674 - the data-lake retrieval resolver reads
@@ -153,7 +154,15 @@ export const process = async (
     researchTask.statusFailedMessage = (e as Error).message;
     researchTask.statusFailedAt = new Date();
 
-    await db.researchTasks.update(researchTask);
+    // Write only the fields this error path sets, not the whole stale researchTask: the success-path
+    // update above (and processScrape/DeepResearch) may have already advanced the doc, and a whole-doc
+    // write would clobber that.
+    await db.researchTasks.update({
+      id: researchTask.id,
+      status: researchTask.status,
+      statusFailedMessage: researchTask.statusFailedMessage,
+      statusFailedAt: researchTask.statusFailedAt,
+    });
 
     try {
       await adapters.jobs.researchTasks.sendToClient(researchTask, {

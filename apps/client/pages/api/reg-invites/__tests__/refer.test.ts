@@ -139,3 +139,37 @@ describe('/api/reg-invites/refer — passwordless email content', () => {
     expect(body).not.toContain('CODE123');
   });
 });
+
+describe('/api/reg-invites/refer - duplicate addresses', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockInviteFindOne.mockResolvedValue(null);
+    mockUserUpdate.mockResolvedValue(undefined);
+    process.env.APP_URL = 'https://app.test.local';
+  });
+
+  it('dedupes a repeated address before charging the quota', async () => {
+    const { req, res } = createMocks({ method: 'POST' });
+    (req as any).body = {
+      userName: 'Sender',
+      friendEmail: ['friend@example.com', 'friend@example.com'],
+      emailTitle: 'Join me',
+      emailBody: 'Come try this',
+    };
+    (req as any).user = {
+      id: 'user-1',
+      emailVerified: true,
+      authProviders: [],
+      numReferralsAvailable: 3,
+    };
+    (req as any).ability = {};
+    (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(201);
+    // One credit for one distinct address, not one per submitted copy.
+    expect(res._getJSONData().sent).toEqual(['friend@example.com']);
+    expect((req as any).user.numReferralsAvailable).toBe(2);
+  });
+});

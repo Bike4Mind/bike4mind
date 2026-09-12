@@ -7,6 +7,7 @@ import {
   shouldSummarizeSession,
   SUMMARIZATION_CONFIG,
   LakeMemoryFeature,
+  FORCED_RETRIEVAL_SETTING_KEYS,
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
@@ -2028,10 +2029,15 @@ describe('KnowledgeRetrievalFeature untrusted-content delimiter (#1659)', () => 
 });
 
 /**
- * The forced-retrieval char budget became a lever (bike4mind#1831, resolveForcedRetrievalCharBudget)
+ * The forced-retrieval char budget became a lever (bike4mind#1831, resolveForcedRetrievalConfig)
  * rather than a module constant. This locks the settings-read contract - unset/unusable/outage all
  * fall back to FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT exactly the way resolveEmbeddingModelFallback
  * does above - and that a configured value actually changes injection, not just that it parses.
+ *
+ * Since #2572 the setting also declares Organization/Owner rungs, so the last two cases here pin
+ * the half of that change a `scope` block cannot pin on its own: that the READ honors an override.
+ * A scope block whose read still went through `getSettingsValue` would satisfy every assertion in
+ * settings.test.ts and silently ignore every override an operator wrote.
  */
 describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
   const END = '[Untrusted Retrieved Content - END]';
@@ -2040,9 +2046,22 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
     getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
   };
 
+  /** Stored admin rows for `names`, omitting the unset ones so the coded default wins for those. */
+  const platformRows = (names: string[], read: (key: string) => unknown) =>
+    names
+      .map(settingName => ({ settingName, settingValue: read(settingName) }))
+      .filter(row => row.settingValue != null)
+      .map(row => ({ settingName: row.settingName, settingValue: String(row.settingValue) }));
+
   /** Every chunk shares the query's vector, so every one of `chunkCount` chunks clears the
    * similarity floor - the loop that reads the budget runs multiple iterations per turn. */
-  const makeCtx = (opts: { getSettingsValue: (key: string) => unknown; chunkText?: string; chunkCount?: number }) => {
+  const makeCtx = (opts: {
+    getSettingsValue: (key: string) => unknown;
+    chunkText?: string;
+    chunkCount?: number;
+    /** Wire the scoped overlay, optionally with an Organization-rung char-budget override. */
+    scoped?: { orgOverride?: string };
+  }) => {
     const chunkText = opts.chunkText ?? 'z'.repeat(20_000);
     const chunkCount = opts.chunkCount ?? 1;
     const rows = Array.from({ length: chunkCount }, (_, i) => ({
@@ -2052,9 +2071,26 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
       vector: [1, 0],
     }));
     const getSettingsValue = vi.fn((key: string) => Promise.resolve(opts.getSettingsValue(key)));
+    const scopedSettings = {
+      findOverrides: vi.fn(async () =>
+        opts.scoped?.orgOverride == null
+          ? []
+          : [
+              {
+                scopeLevel: SettingScopeLevel.Organization,
+                scopeId: 'org1',
+                settingName: 'forcedRetrievalCharBudget',
+                settingValue: opts.scoped.orgOverride,
+              },
+            ]
+      ),
+    };
     return {
-      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
-      user: { id: 'u1', tags: [], groups: [] },
+      // `debug` only matters on the scoped path, where the resolver calls it - a mock without it
+      // throws into the resolver's own never-throw guard, which serves coded defaults and looks
+      // exactly like an override being ignored.
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
+      user: { id: 'u1', organizationId: opts.scoped ? 'org1' : undefined, tags: [], groups: [] },
       db: {
         organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
         fabfiles: {
@@ -2063,12 +2099,26 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
             .mockResolvedValue({ data: [{ id: 'fileA', fileName: 'Budget.pdf', tags: [] }], hasMore: false, total: 1 }),
         },
         fabfilechunks: { findByFabFileId: vi.fn(), findVectorsByFabFileIds: vi.fn(() => Promise.resolve(rows)) },
-        adminSettings: { getSettingsValue },
+        // The scoped resolver does NOT reach the platform base through getSettingsValue: it goes
+        // via getSettingsByNames, whose cached path calls findAll (b4m-core/utils/src/settings.ts).
+        // Both are served from the same opts.getSettingsValue so the two read paths cannot disagree.
+        adminSettings: {
+          getSettingsValue,
+          findBySettingNames: vi.fn(async (names: string[]) => platformRows(names, opts.getSettingsValue)),
+          findAll: vi.fn(async () => platformRows([...FORCED_RETRIEVAL_SETTING_KEYS], opts.getSettingsValue)),
+        },
+        ...(opts.scoped ? { scopedSettings } : {}),
       },
       resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
+
+  beforeEach(() => {
+    // Both resolvers memoize per scope; without this a value set by one test leaks into the next.
+    invalidateSettingsCache();
+    invalidateScopedSettingsCache();
+  });
 
   const run = async (ctx: ReturnType<typeof makeCtx>) => {
     const feature = new KnowledgeRetrievalFeature(
@@ -2150,6 +2200,34 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
       ([key]) => key === 'forcedRetrievalCharBudget'
     );
     expect(calls).toHaveLength(1);
+  });
+
+  // Only the budget, so the two floors resolved in the same read stay at their own defaults
+  // instead of reading 2000 as a 2000% floor and warning their way back to the default.
+  const platformBudgetOnly = (value: string) => (key: string) =>
+    key === 'forcedRetrievalCharBudget' ? value : undefined;
+
+  it('an organization override beats the platform value (#2572)', async () => {
+    // The load-bearing assertion for the scope block: injection length must follow the OVERRIDE,
+    // not the platform setting. If the read regressed to getSettingsValue this would inject 2,000
+    // characters and the scope block would be inert metadata.
+    const content = await run(
+      makeCtx({
+        getSettingsValue: platformBudgetOnly('2000'),
+        chunkText: 'z'.repeat(30_000),
+        scoped: { orgOverride: '9000' },
+      })
+    );
+    expect(bodyLen(content)).toBe(9_000);
+  });
+
+  it('falls through to the platform value when the overlay holds no override (#2572)', async () => {
+    // The common case on a scoped-overlay host: an org with nothing overridden must not lose the
+    // platform value, which is what a resolver bug that treated "no override" as "unset" would do.
+    const content = await run(
+      makeCtx({ getSettingsValue: platformBudgetOnly('2000'), chunkText: 'z'.repeat(30_000), scoped: {} })
+    );
+    expect(bodyLen(content)).toBe(2_000);
   });
 });
 
@@ -2337,6 +2415,19 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
     const { quest } = await run(makeCtx({ scores: [1.0, 0.9, 0.8, 0.76] }));
     expect(quest.promptMeta?.retrieval?.injected?.chunks).toBe(2);
     expect(quest.promptMeta?.retrieval?.injected?.topScore).toBeCloseTo(1.0, 5);
+  });
+
+  it('records the pre/post floor candidate counts so the floor own effect is measurable', async () => {
+    // All four scores clear the 0.75 absolute floor and enter the ranked pool; the relative floor
+    // at its shipped default (85% of top score) keeps two. Without these, the turn is byte-
+    // identical in promptMeta to a corpus that only ever HAD two candidates - the ambiguity this
+    // pair exists to remove. Asserted as a pair, and alongside `chunks`, because the whole point
+    // is that `pre - post` is the floor alone while `pre - chunks` also carries the char budget:
+    // here the budget does not bind, so post === chunks and the two happen to agree.
+    const { quest } = await run(makeCtx({ scores: [1.0, 0.9, 0.8, 0.76] }));
+    expect(quest.promptMeta?.retrieval?.injected?.preRelativeFloorCandidates).toBe(4);
+    expect(quest.promptMeta?.retrieval?.injected?.postRelativeFloorCandidates).toBe(2);
+    expect(quest.promptMeta?.retrieval?.injected?.chunks).toBe(2);
   });
 
   it('treats an out-of-range floor percent as unusable and keeps the shipped default', async () => {
@@ -2578,6 +2669,178 @@ describe('KnowledgeRetrievalFeature access-event audit', () => {
 
     expect(messages[0]?.content).toContain('Handbook.pdf');
     expect(record).toHaveBeenCalled();
+  });
+});
+
+/**
+ * The two audit signals that were computed and then dropped (#2604): the supersession-collapse
+ * count, and the row for a turn that searched a lake and served nothing. Both are only ever
+ * observable in the recorded payload, so every assertion here reads the actual `record()` input
+ * rather than the returned messages.
+ */
+describe('KnowledgeRetrievalFeature access-event audit: supersession count + zero rows (#2604)', () => {
+  const OWNER = 'u1';
+  const LAKE = {
+    id: 'lakeZ',
+    slug: 'z',
+    name: 'Lake Z',
+    fileTagPrefix: 'z:',
+    datalakeTag: 'datalake:z',
+    createdByUserId: OWNER,
+    status: 'active',
+  };
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+  };
+
+  const record = vi.fn().mockResolvedValue(undefined);
+  // recordLakeAccessEvent awaits a retention read before calling record(), so the call lands one
+  // microtask after getContextMessages returns - same flush the sibling audit block uses.
+  const flushAsync = () => new Promise(resolve => setImmediate(resolve));
+  const recordedInput = () => record.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+
+  /**
+   * A unit vector whose cosine against the query [1, 0] IS `score`. The absolute floor defaults to
+   * 75%, so a 0.1 fixture starves the turn without touching any setting - the exit under test.
+   */
+  const vectorScoring = (score: number) => [score, Math.sqrt(1 - score * score)];
+
+  /** Two generations of one document: same file name, so the collapse groups them on the name tier. */
+  const generation = (id: string, createdAt: string) => ({
+    id,
+    fileName: 'Protocol.pdf',
+    tags: [{ name: 'datalake:z' }],
+    vectorized: true,
+    embeddingModel: 'text-embedding-ada-002',
+    chunkCount: 1,
+    vectorizedChunkCount: 1,
+    createdAt: new Date(createdAt),
+  });
+
+  const makeCtx = (opts: { files: Array<Record<string, unknown>>; collapseEnabled?: boolean; score?: number }) => {
+    const vector = vectorScoring(opts.score ?? 1);
+    return {
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
+      user: { id: OWNER, tags: [], groups: [] },
+      db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({ data: opts.files, hasMore: false, total: opts.files.length }),
+        },
+        fabfilechunks: {
+          findByFabFileId: vi.fn(),
+          findVectorsByFabFileIds: vi.fn((ids: string[]) =>
+            Promise.resolve(ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `content of ${id}`, vector })))
+          ),
+        },
+        dataLakes: {
+          findActiveByUserTags: vi.fn().mockResolvedValue([]),
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([LAKE]),
+        },
+        adminSettings: {
+          getSettingsValue: vi.fn(async (key: string) =>
+            key === 'EnableRetrievalSupersessionCollapse' ? (opts.collapseEnabled ?? false) : undefined
+          ),
+        },
+        lakeAccessEvents: { record },
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+  };
+
+  const run = async (ctx: ReturnType<typeof makeCtx>, retrievalTags?: string[]) => {
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      retrievalTags
+    );
+    const messages = await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'what does the protocol say'
+    );
+    await flushAsync();
+    return messages;
+  };
+
+  const twoGenerations = [generation('old', '2024-01-01'), generation('new', '2025-01-01')];
+
+  beforeEach(() => record.mockClear());
+
+  it('records the suppression count on a grounded turn when the collapse ran', async () => {
+    await run(makeCtx({ files: twoGenerations, collapseEnabled: true }));
+    // 1, not 2: the count is what LEFT the ranking, and the winning generation stayed in it.
+    expect(recordedInput()).toMatchObject({ filesSupersededCollapsed: 1, fileIds: ['new'] });
+  });
+
+  it('omits the suppression count entirely when the collapse did not run', async () => {
+    await run(makeCtx({ files: twoGenerations, collapseEnabled: false }));
+    // Undefined, NOT 0. The collapse is admin-gated and off here, so nothing examined this corpus
+    // for superseded generations - and it holds two, which a persisted 0 would deny. This is the
+    // whole reason the write site reads `collapseRan` rather than `supersession.count`.
+    //
+    // Asserted on the VALUE, not on key absence: the payload carries the key with an explicit
+    // `undefined`, and `record()` is where the omit-vs-store decision is made and pinned (see
+    // LakeAccessEventModel.test.ts, which asserts the stored document has no such path).
+    expect(recordedInput()).toBeDefined();
+    expect(recordedInput()?.filesSupersededCollapsed).toBeUndefined();
+  });
+
+  it('records 0, not absence, when the collapse ran over a corpus with nothing to suppress', async () => {
+    await run(makeCtx({ files: [generation('only', '2025-01-01')], collapseEnabled: true }));
+    expect(recordedInput()?.filesSupersededCollapsed).toBe(0);
+  });
+
+  it('writes a zero row when the corpus was searched and nothing cleared the similarity floor', async () => {
+    const ctx = makeCtx({ files: [generation('only', '2025-01-01')], score: 0.1 });
+    const messages = await run(ctx, ['datalake:z']);
+
+    const input = recordedInput();
+    expect(input).toMatchObject({
+      surface: 'forced-retrieval',
+      servedNothing: true,
+      // The scope that was SEARCHED - there is no returned file whose tags could be reversed here.
+      resolvedLakeIds: ['lakeZ'],
+      fileIds: [],
+      chunkIds: [],
+      queryText: 'what does the protocol say',
+      questId: 'quest1',
+      sessionId: 'session1',
+    });
+    // No scores array: nothing was injected, so there is no chunk for a score to be aligned to.
+    expect(input).not.toHaveProperty('scores');
+    // The turn still abstains exactly as before - this row is instrumentation, not behaviour.
+    expect(messages).toHaveLength(1);
+    expect(ctx.db.fabfilechunks.findVectorsByFabFileIds).toHaveBeenCalled();
+  });
+
+  /**
+   * The narrowing that makes attributing to the whole scope honest. Without `lakeScoped` the lake
+   * was one of several mixed sources behind a question that was not about it, and counting a starve
+   * against it is the same category error the grounded write refuses via allowFullScopeFallback.
+   */
+  it('writes no zero row when the session is not scoped to the lake', async () => {
+    await run(makeCtx({ files: [generation('only', '2025-01-01')], score: 0.1 }));
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  /**
+   * `lakeScoped` alone is not enough to attribute a starve. A non-lake retrieval tag is AND'ed into
+   * the candidate listing, so the turn searched the lake INTERSECT that tag - a slice. Recording it
+   * would over-count a coverage gap against a lake that was never searched whole, which is the
+   * wrong direction to be wrong in for a compliance artifact.
+   */
+  it('writes no zero row when the session narrows the lake with a content tag of its own', async () => {
+    await run(makeCtx({ files: [generation('only', '2025-01-01')], score: 0.1 }), ['datalake:z', 'course:bio101']);
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('does not mark an ordinary grounded row as having served nothing', async () => {
+    await run(makeCtx({ files: [generation('only', '2025-01-01')] }), ['datalake:z']);
+    // The grounded write never mentions the flag at all, so key absence is the real assertion here.
+    expect(recordedInput()).not.toHaveProperty('servedNothing');
+    expect(recordedInput()?.fileIds).toEqual(['only']);
   });
 });
 
@@ -2831,7 +3094,7 @@ describe('LakeMemoryFeature personal-corpus skip', () => {
 
 /**
  * The belief budget is the `lakeMemoryRecallK` admin setting, not the 8 this path used to hardcode
- * (#2496). Resolution mirrors `resolveForcedRetrievalCharBudget` below, so these pin the same three
+ * (#2496). Resolution mirrors `resolveForcedRetrievalConfig` below, so these pin the same three
  * properties: a configured value reaches the recall, anything unusable falls back LOUDLY, and a
  * settings outage costs the turn its budget but never its card.
  */
@@ -2953,6 +3216,63 @@ describe('LakeMemoryFeature belief budget (lakeMemoryRecallK)', () => {
     expect(reads('lakeMemoryRecallK', noLakes)).toHaveLength(0);
     expect(noLakes.recallLakeMemory).not.toHaveBeenCalled();
   });
+
+  /**
+   * Dating the injected facts (#1501 item 4). The write path keeps two documents' disagreeing
+   * claims rather than letting the later one destroy the earlier, so the card owes the model each
+   * claim's document date - and must pair each date with the fact it actually came from.
+   */
+  describe('document dates', () => {
+    const withBeliefs = (
+      beliefs: Array<{ fact: string; relevance: number; sources: string[]; sourceDate?: string }>
+    ) => {
+      const ctx = makeCtx();
+      ctx.recallLakeMemory = vi.fn().mockResolvedValue(beliefs);
+      return ctx;
+    };
+
+    it('renders each belief with the date of the document it came from', async () => {
+      const ctx = withBeliefs([
+        { fact: 'Uptime is 99.9%', relevance: 0.9, sources: ['f1'], sourceDate: '2026-03-14' },
+        { fact: 'Uptime is 99.5%', relevance: 0.8, sources: ['f2'], sourceDate: '2025-01-02' },
+      ]);
+      const { messages } = await run(ctx);
+      expect(messages[0].content).toContain('- Uptime is 99.9% (document dated 2026-03-14)');
+      expect(messages[0].content).toContain('- Uptime is 99.5% (document dated 2025-01-02)');
+      expect(messages[0].content).toMatch(/disagree/i);
+    });
+
+    it('does not shift a date onto the wrong fact when an earlier one sanitizes away', async () => {
+      // The trap the per-belief sanitize exists for: sanitizing the texts en masse DROPS the empty
+      // one, which shifts every later index and silently re-pairs each surviving fact with the
+      // previous belief's date - wrong on exactly the turn this feature exists for.
+      const ctx = withBeliefs([
+        { fact: '   ', relevance: 0.9, sources: ['f0'], sourceDate: '1999-01-01' },
+        { fact: 'Uptime is 99.9%', relevance: 0.8, sources: ['f1'], sourceDate: '2026-03-14' },
+      ]);
+      const { messages } = await run(ctx);
+      expect(messages[0].content).toContain('- Uptime is 99.9% (document dated 2026-03-14)');
+      expect(messages[0].content).not.toContain('1999-01-01');
+      expect((String(messages[0].content).match(/^- /gm) ?? []).length).toBe(1);
+    });
+
+    it('says a date is unknown rather than omitting it', async () => {
+      // Silence would let the model read the undated claim as the older or the newer one.
+      const ctx = withBeliefs([
+        { fact: 'Uptime is 99.9%', relevance: 0.9, sources: ['f1'], sourceDate: '2026-03-14' },
+        { fact: 'Uptime is 99.5%', relevance: 0.8, sources: ['f2'] },
+      ]);
+      const { messages } = await run(ctx);
+      expect(messages[0].content).toContain('- Uptime is 99.5% (document dated unknown)');
+    });
+
+    it('renders exactly as before when the recall supplies no dates at all', async () => {
+      const ctx = withBeliefs([{ fact: 'Acme ships on Fridays', relevance: 0.9, sources: ['f1'] }]);
+      const { messages } = await run(ctx);
+      expect(messages[0].content).not.toMatch(/dated/i);
+      expect(messages[0].content).not.toMatch(/disagree/i);
+    });
+  });
 });
 
 /**
@@ -3058,7 +3378,13 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
           forcedSkipReason?: string;
           surfaces: string[];
           dataLakeTags: string[];
-          injected?: { chunks: number; chars: number; topScore?: number };
+          injected?: {
+            chunks: number;
+            chars: number;
+            topScore?: number;
+            preRelativeFloorCandidates?: number;
+            postRelativeFloorCandidates?: number;
+          };
         };
       }
     )?.retrieval;
@@ -3108,7 +3434,14 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     // A recorded zero, not an unknown: the scan ran to completion, so nothing was injected and
     // that is a fact. `topScore` must be ABSENT - it is still the -1 sentinel here, and persisting
     // it would read as a real (terrible) similarity rather than as no comparison at all.
-    expect(retrieval?.injected).toEqual({ chunks: 0, chars: 0 });
+    // Both candidate counts are 0 too - nothing was ever scored, so nothing entered the pool, and
+    // a relative floor over an empty pool leaves it empty.
+    expect(retrieval?.injected).toEqual({
+      chunks: 0,
+      chars: 0,
+      preRelativeFloorCandidates: 0,
+      postRelativeFloorCandidates: 0,
+    });
   });
 
   it('records ok when the library was scanned and nothing cleared the similarity floor', async () => {
@@ -3122,7 +3455,16 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     // THE case this field exists for: 'ok' alone made a fully-starved turn byte-identical to one
     // that injected its whole budget. `topScore: 0` is the diagnostic - the best candidate was
     // compared and scored 0, i.e. it missed the floor rather than never being looked at.
-    expect(retrieval?.injected).toEqual({ chunks: 0, chars: 0, topScore: 0 });
+    // Both counts 0 - the score missed the ABSOLUTE floor, so it never reached the ranked pool at
+    // all and the relative floor never got a candidate to trim. This is the exit whose comment
+    // used to claim it was the trimmed-pool case; a zero pre-count is what proves it is not.
+    expect(retrieval?.injected).toEqual({
+      chunks: 0,
+      chars: 0,
+      topScore: 0,
+      preRelativeFloorCandidates: 0,
+      postRelativeFloorCandidates: 0,
+    });
     // Still abstains to the user; 'ok' describes the retrieval, not the answer.
     expect(messages[0]?.content).toContain('does not cover this');
   });
@@ -3138,7 +3480,15 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     // The other half of the pair: a grounded turn reports the volume it grounded on. `chars` is
     // the chunk text only ('text fileA'), never the heading, so it is comparable to the knowledge
     // tools' number. Query and chunk vectors are identical here, hence a topScore of 1.
-    expect(retrieval?.injected).toEqual({ chunks: 1, chars: 'text fileA'.length, topScore: 1 });
+    // Both counts 1 - the single candidate cleared both floors, so nothing was trimmed and the
+    // pre-count, post-count and `chunks` all agree.
+    expect(retrieval?.injected).toEqual({
+      chunks: 1,
+      chars: 'text fileA'.length,
+      topScore: 1,
+      preRelativeFloorCandidates: 1,
+      postRelativeFloorCandidates: 1,
+    });
     expect(messages[0]?.content).toContain('### A.pdf (ID: fileA)');
   });
 

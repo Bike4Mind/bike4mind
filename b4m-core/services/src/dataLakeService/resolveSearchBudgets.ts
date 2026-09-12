@@ -78,11 +78,14 @@ export type ResolvedSearchBudgets = SemanticSearchBudgets & {
  * because the symptom of a bad value would otherwise be "retrieval quietly covers less than the
  * admin configured", which is indistinguishable from a small corpus.
  *
- * Scope (epic #1658 lane 0 / #1660): callers that know the org/owner/lake a search runs for may pass
- * a `scope` (and the `scopedSettings` overlay repo) to let a narrower rung tighten the budget below
- * the platform ceiling. Omitting both - every caller today - takes the byte-identical platform path
- * below, so this change is additive. Chunk-policy rungs ride this same seam when #1662 gives
- * `DefaultChunkSize` its `scope.settableAt`; the serve budget below picks them up with no edit here.
+ * Scope (epic #1658 lane 0 / #1660): callers that know the org/owner a search runs for may pass a
+ * `scope` (and the `scopedSettings` overlay repo) to let a narrower rung tighten the budget below
+ * the platform ceiling. Org and Owner are the only rungs on offer: every key read here lost or
+ * never had a Lake rung, because one search spans EVERY lake the caller can reach (#2624), so a
+ * `scope.lakeId` reaching this function resolves nothing no matter what is stored against it.
+ * Omitting both - every caller today - takes the byte-identical platform path below, so this
+ * change is additive. Chunk-policy rungs ride this same seam when #1662 gives `DefaultChunkSize`
+ * its `scope.settableAt`; the serve budget below picks them up with no edit here.
  */
 export async function resolveSearchBudgets(
   db: {
