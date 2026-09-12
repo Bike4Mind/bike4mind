@@ -74,44 +74,87 @@ function withoutComments(yaml: string): string {
 /**
  * Every `run:` body in the file, uncommented.
  *
- * YAML spells a block scalar seven ways and an earlier version of this helper read two of
- * them: `run: >` and `run: >-` came back as the bare indicator character, and `|-`, `|+` and
- * `|2` came back as nothing at all, so a step written in any of those styles was invisible to
- * every assertion below while `ci.yml` already uses `>-` elsewhere in this repo. The indicator
- * is therefore `[|>][-+]?\d*`, and the single-line arm's lookahead has to exclude the same set
- * or a block header reads as a one-line body.
+ * The header is PARSED rather than matched against an enumeration of spellings. A YAML block
+ * scalar header is an indicator, then a chomping indicator and an indentation indicator IN
+ * EITHER ORDER, then optional trailing whitespace and a comment - and a `run:` value may also be
+ * a plain scalar that wraps onto the following lines with no indicator at all. Two regex arms
+ * read five of those shapes and missed `| # c`, `|2-`, `|+ # c` and the wrapped plain scalar,
+ * each of which is a real step to a YAML parser. A body this helper misses is invisible to
+ * EVERY sweep below at once, which is how a `git push --force ... HEAD:refs/heads/main` step
+ * stayed green under one of them.
  *
- * Indent is likewise taken from the `run:` line itself by backreference rather than pinned to
- * eight columns: a step at any other nesting is still a step, and pinning the columns made one
- * invisible to the push, `git add` and tree-execution sweeps simultaneously. `name:` is
- * OPTIONAL on a step, so the list-item dash may sit on the `run:` line itself - requiring
- * `run:` to be the first token there blinded all four of those sweeps at once, and prettier
- * does not normalise the shape away because it has no key to invent.
+ * The body is every following line indented past the `run:` KEY, blank lines included, up to
+ * the first line that is not. Taking the indent from the file rather than from the six/eight/ten
+ * columns this workflow happens to use is what makes an oddly-nested step visible; measuring
+ * past the list-item dash is what makes an unnamed step visible; and a last line with no
+ * trailing newline is still a line, which the previous `(?:\1 +.*\n)+` form dropped.
  */
-function runBodies(src: string): string[] {
-  return [
-    ...[...src.matchAll(/^( +)(?:- +)?run: [|>][-+]?\d*\n((?:\1 +.*\n|\n)+)/gm)].map(m => m[2]),
-    ...[...src.matchAll(/^ +(?:- +)?run: (?![|>][-+]?\d*$)(.*)$/gm)].map(m => m[1]),
-  ].map(withoutComments);
+function runBodiesRaw(src: string): string[] {
+  const lines = src.split('\n');
+  const bodies: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const head = lines[i].match(/^( *(?:-\s+)?)run:(.*)$/);
+    if (!head) continue;
+    const keyColumn = head[1].length;
+    const isBlock = /^ *[|>](?:[-+]?\d*|\d*[-+]?) *(?:#.*)?$/.test(head[2]);
+    const body = isBlock ? [] : [head[2].trim()];
+    let j = i + 1;
+    for (; j < lines.length; j++) {
+      if (/^\s*$/.test(lines[j])) {
+        body.push('');
+        continue;
+      }
+      if ((lines[j].match(/^ */) ?? [''])[0].length <= keyColumn) break;
+      body.push(lines[j]);
+    }
+    i = j - 1;
+    bodies.push(body.join('\n'));
+  }
+  return bodies;
 }
 
-/** Every `git push` invocation in the file, backslash continuations included. */
-const gitPushes = (src: string) =>
-  runBodies(src)
-    .join('\n')
-    .match(/git push(?:[^\n\\]*\\\n)*[^\n]*/g) ?? [];
+/** The same bodies with whole-line comments dropped, which is what a shell sweep wants. */
+const runBodies = (src: string) => runBodiesRaw(src).map(withoutComments);
+
+/** One parsed command: its shell words, and the separator that PRECEDED it (`''` for the first). */
+type ShellCommand = { words: string[]; sep: string };
+
+/** The index of the `)` closing the `(` at `open`, quotes honoured. */
+function matchingParen(text: string, open: number): number {
+  let depth = 0;
+  let quote = '';
+  for (let i = open; i < text.length; i++) {
+    const char = text[i];
+    if (quote) {
+      if (char === quote) quote = '';
+      continue;
+    }
+    if (char === '"' || char === "'") quote = char;
+    else if (char === '(') depth++;
+    else if (char === ')' && --depth === 0) return i;
+  }
+  return text.length;
+}
 
 /**
  * One `run:` body split into commands, each an array of shell words, honouring single quotes,
- * double quotes, backslash escapes and `$( )` nesting. Word-splitting has to be quote-aware or
- * the path guard's own `grep -E '^(\.github|...)/'` patterns read as commands.
+ * double quotes, backslash escapes, `${ }` and `$( )` nesting. Word-splitting has to be
+ * quote-aware or the path guard's own `grep -E '^(\.github|...)/'` patterns read as commands.
+ *
+ * A command substitution is parsed RECURSIVELY and its text also stays in the enclosing word,
+ * because both readings matter: the inner commands are commands, and the enclosing command is
+ * handed their output. Flattening it instead - ending the enclosing command at `$(` - meant
+ * `bash <<< "$(cat ./scripts/x.sh)"` produced a `bash` command with no path argument at all.
  */
-function shellCommands(text: string): string[][] {
-  const commands: string[][] = [];
-  const stack: string[] = [];
+function shellCommands(text: string): ShellCommand[] {
+  const commands: ShellCommand[] = [];
+  const nested: ShellCommand[] = [];
   let words: string[] = [];
   let word = '';
   let started = false;
+  let sep = '';
+  let quote = '';
+  let braces = 0;
   const endWord = () => {
     if (started) {
       words.push(word);
@@ -119,17 +162,24 @@ function shellCommands(text: string): string[][] {
       started = false;
     }
   };
-  const endCommand = () => {
+  const endCommand = (next: string) => {
     endWord();
-    if (words.length) commands.push(words);
+    if (words.length) commands.push({ words, sep });
     words = [];
+    sep = next;
   };
   for (let i = 0; i < text.length; i++) {
     const char = text[i];
-    const quote = stack[stack.length - 1];
     if (quote === "'") {
       word += char;
-      if (char === "'") stack.pop();
+      if (char === "'") quote = '';
+      continue;
+    }
+    // A line continuation is REMOVED by bash before it tokenizes, rather than escaping a
+    // character: `git \`+newline+`push` is the one command `git push`, which a sweep matching
+    // the literal text `git push` does not see and which this then reads as two ordinary words.
+    if (char === '\\' && text[i + 1] === '\n') {
+      i++;
       continue;
     }
     if (char === '\\' && text[i + 1]) {
@@ -138,26 +188,47 @@ function shellCommands(text: string): string[][] {
       continue;
     }
     if (char === '$' && text[i + 1] === '(') {
-      endCommand();
-      stack.push('$(');
+      const close = matchingParen(text, i + 1);
+      nested.push(...shellCommands(text.slice(i + 2, close)));
+      word += text.slice(i, close + 1);
+      started = true;
+      i = close;
+      continue;
+    }
+    // `${VAR}` is one word. The braces are separators below, so without this an unquoted
+    // `${S}` split into `$`, `S` and the tail and no word ever carried the `$S` reference the
+    // taint tracking looks for - while the documented `"$S"` form passed.
+    if (char === '$' && text[i + 1] === '{') {
+      word += '${';
+      braces++;
+      started = true;
       i++;
       continue;
     }
-    if (quote === '$(' && char === ')') {
-      endCommand();
-      stack.pop();
+    if (char === '}' && braces > 0) {
+      word += char;
+      braces--;
       continue;
     }
     if (quote === '"') {
-      if (char === '"') stack.pop();
+      if (char === '"') quote = '';
       word += char;
       started = true;
       continue;
     }
     if (char === '"' || char === "'") {
-      stack.push(char);
+      quote = char;
       word += char;
       started = true;
+      continue;
+    }
+    // `||` and `&&` are sequencing, not a pipe, so the two are told apart here: the pipe is
+    // what carries one command's bytes into the next, and that distinction is what lets
+    // `cat ./x.sh | bash` be caught without `grep ... || true` being a false positive.
+    if (char === '|' || char === '&') {
+      const double = text[i + 1] === char;
+      endCommand(double ? char + char : char);
+      if (double) i++;
       continue;
     }
     // Separators BEFORE whitespace, because a newline is both and the command break is
@@ -166,8 +237,8 @@ function shellCommands(text: string): string[][] {
     // whose program was the first word of the body - and a body opening with a data-only
     // word (`set`, `git`, `echo`) then had everything after it skipped wholesale. A real
     // tracked script appended inside `Push fold commit` was invisible that way.
-    if ('\n;|&(){}`'.includes(char)) {
-      endCommand();
+    if ('\n;(){}`'.includes(char)) {
+      endCommand(char === '\n' ? '\n' : char);
       continue;
     }
     if (/\s/.test(char)) {
@@ -177,8 +248,8 @@ function shellCommands(text: string): string[][] {
     word += char;
     started = true;
   }
-  endCommand();
-  return commands;
+  endCommand('');
+  return [...commands, ...nested];
 }
 
 /** Shell keywords and `VAR=value` prefixes, which sit in front of the program rather than being it. */
@@ -207,10 +278,82 @@ const referencesCheckout = (text: string) =>
   /(?:^|[\s"'=(:])(?:\.{1,2}\/|[A-Za-z0-9_.@-]+\/[A-Za-z0-9_.@/-])/.test(` ${text}`) ||
   /GITHUB_WORKSPACE|RUNNER_TEMP/.test(text);
 
+/** A command's words with its leading `VAR=value` and shell-keyword prefixes dropped. */
+function commandProgram(words: string[]): string[] {
+  let rest = words;
+  while (rest.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0]) || SHELL_PREFIX.test(rest[0]))) rest = rest.slice(1);
+  return rest;
+}
+
+/** The subcommand of a `git` invocation, with git's own global options (and their values) skipped. */
+function gitSubcommand(words: string[]): string | undefined {
+  const takesValue = /^(-c|-C|--namespace|--git-dir|--work-tree|--exec-path)$/;
+  for (let i = 1; i < words.length; i++) {
+    const word = unquoteWord(words[i]);
+    if (takesValue.test(word)) {
+      i++;
+      continue;
+    }
+    if (word.startsWith('-')) continue;
+    return word;
+  }
+  return undefined;
+}
+
+/**
+ * Every `git` invocation in the file whose subcommand matches, as parsed word vectors.
+ *
+ * Found in the PARSED command rather than in the text, because `git <subcommand>` with exactly
+ * one space is not how this job writes git: `GIT_CONFIG_GLOBAL` is `/dev/null` in the push
+ * step's env, so identity and every knob is passed per-invocation and the house style is
+ * `git -c <key>=<value> <subcommand>`. A literal matcher missed that, missed two spaces, and
+ * missed a line continuation between the two words.
+ */
+function gitCommands(src: string, subcommands: RegExp): string[][] {
+  const found: string[][] = [];
+  for (const body of runBodies(src)) {
+    for (const { words } of shellCommands(body)) {
+      const rest = commandProgram(words);
+      if (unquoteWord(rest[0] ?? '') !== 'git') continue;
+      const sub = gitSubcommand(rest);
+      if (sub && subcommands.test(sub)) found.push(rest);
+    }
+  }
+  return found;
+}
+
+/**
+ * Every `git push` in the file, as parsed word vectors: quotes stripped, shell redirections
+ * dropped. Pinned by VALUE at the call site rather than scanned for `--force` and a
+ * `refs/heads/` literal - the short refspec `HEAD:main` is an equally valid way to name a
+ * branch and carries neither.
+ */
+const gitPushes = (src: string) =>
+  gitCommands(src, /^push$/).map(words => words.filter(word => !/^\d*[<>]/.test(word)).map(unquoteWord));
+
+/**
+ * True when a command emits bytes the agent can write.
+ *
+ * `git show HEAD:<path>` reads the object store, which no write tool reaches, and that is the
+ * whole reason the transcript redactor is piped from it rather than run from the tree. Every
+ * OTHER git subcommand emits metadata (paths, counts, status) rather than file content, so it
+ * cannot carry a payload either. Any other program naming a checkout path is reading the
+ * working tree, which the agent holds `Edit` on in fold mode.
+ */
+function readsWritableBytes(words: string[]): boolean {
+  const plain = commandProgram(words).map(unquoteWord);
+  if (plain[0] === 'git') {
+    const sub = gitSubcommand(plain);
+    if (sub !== 'show' && sub !== 'cat-file') return false;
+    return !plain.slice(1).every(arg => arg.startsWith('-') || arg === sub || arg.startsWith('HEAD:'));
+  }
+  return plain.some(arg => referencesCheckout(arg));
+}
+
 /**
  * Every place a `run:` body hands a checkout path to something that is not a known data-only
- * reader - as the program itself, or as an argument. Returns a description per hit so a
- * failure names the offending command.
+ * reader - as the program itself, as an argument, or through a pipe. Returns a description per
+ * hit so a failure names the offending command.
  */
 function checkoutCodeReferences(src: string): string[] {
   const hits: string[] = [];
@@ -219,32 +362,43 @@ function checkoutCodeReferences(src: string): string[] {
     // `eval` and `source` turn a data read into code, so in a body that uses either, no
     // command's path argument can be assumed to be data - `eval "$(cat scripts/env.sh)"`
     // executes a tracked file through two commands that are individually harmless.
-    const turnsDataIntoCode = commands.some(words => /^(eval|source|\.)$/.test(unquoteWord(words[0] ?? '')));
+    const turnsDataIntoCode = commands.some(({ words }) => /^(eval|source|\.)$/.test(unquoteWord(words[0] ?? '')));
     // A `VAR=path` prefix used to be discarded whole, which let `S=scripts/x.sh; bash "$S"`
     // name no path at any point an assertion looked. The assignment is tracked instead, so a
     // later `$S` counts as the path it holds.
     const tainted = new Set<string>();
     const namesTainted = (text: string) =>
       [...text.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g)].some(m => tainted.has(m[1]));
-    for (const words of commands) {
+    commands.forEach(({ words, sep }, index) => {
       let rest = words;
       while (rest.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0]) || SHELL_PREFIX.test(rest[0]))) {
         const assignment = rest[0].match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
         if (assignment && referencesCheckout(unquoteWord(assignment[2]))) tainted.add(assignment[1]);
         rest = rest.slice(1);
       }
-      if (!rest.length) continue;
+      if (!rest.length) return;
       const [program, ...args] = rest;
       const name = unquoteWord(program);
       if (referencesCheckout(name) || namesTainted(name)) {
         hits.push(`program is a checkout path: ${words.join(' ')}`);
-        continue;
+        return;
       }
-      if (DATA_ONLY_COMMANDS.test(name) && !turnsDataIntoCode) continue;
+      if (DATA_ONLY_COMMANDS.test(name) && !turnsDataIntoCode) return;
+      // A pipe carries the upstream command's bytes into this one's stdin, so a pair that is
+      // individually harmless - `cat ./scripts/x.sh` and `bash` - is the same execution as
+      // `bash ./scripts/x.sh`. This is the class `turnsDataIntoCode` above exists to catch,
+      // written the other way round, and enumerating INTERPRETERS on this side would be the
+      // same wrong side to enumerate that `DATA_ONLY_COMMANDS` argues against: `xargs bash`
+      // and a `$( )` here-string reach it without naming one.
+      const upstream = index > 0 ? commands[index - 1].words : [];
+      if (sep === '|' && readsWritableBytes(upstream)) {
+        hits.push(`${name} is piped bytes from the checkout: ${upstream.join(' ')} | ${words.join(' ')}`);
+        return;
+      }
       if (args.some(arg => referencesCheckout(unquoteWord(arg)) || namesTainted(arg))) {
         hits.push(`${name} is given a checkout path: ${words.join(' ')}`);
       }
-    }
+    });
   }
   return hits;
 }
@@ -278,13 +432,29 @@ function claudeArgTokens(src: string, expansion = 'EXPANSION'): string[] {
   const block = step(src, 'Run /bot-review').match(/^ {10}claude_args: \|\n((?: {12}.*\n|\n)+)/m)?.[1];
   expect(block, 'no claude_args block').toBeTruthy();
   const text = withoutComments(block ?? '').replace(/\$\{\{[\s\S]*?\}\}/g, expansion);
-  return [...text.matchAll(/(?:"[^"]*"|'[^']*'|\S)+/g)].map(m => m[0]);
+  const tokens = [...text.matchAll(/(?:"[^"]*"|'[^']*'|\S)+/g)].map(m => m[0]);
+  // `shell-quote` treats an unquoted `#` as a comment to the end of the WHOLE STRING, not to
+  // the end of its line - the block is one string by then. An inline `#` on the allow-list line
+  // therefore deletes the deny list and the turn cap, which is a widening that leaves every
+  // surviving token looking exactly as it should. Truncated here the way the consumer does it.
+  const comment = tokens.findIndex(token => token.startsWith('#'));
+  return comment === -1 ? tokens : tokens.slice(0, comment);
 }
 
 /**
  * A probe that is several shell words, one of which is a flag that reaches command execution.
  * Substituted for each `${{ }}` in the block: inside quotes it is one token and changes
  * nothing; unquoted it becomes separate tokens and `--settings` lands on the flag set.
+ *
+ * It deliberately carries no quote character, and that is a statement about what a probe can
+ * prove here rather than an omission. Every value in this block is delimited by `"`, so an
+ * expansion whose CONTENT holds a `"` breaks out of its quotes no matter how the file quotes
+ * the expansion - the committed file would fail such a probe, and the probe would be reporting
+ * only that quoting is necessary and not sufficient. A `'` is the opposite: inside `"..."` the
+ * shell takes it literally, so it can break nothing and would prove nothing either. The
+ * content axis is closed where it belongs instead - `toolFlagValues` refuses an interior `"`
+ * outright, and both tool lists are pinned by value on both arms, so a break-out has to survive
+ * an assertion that reads the spec it smuggles itself in as.
  */
 const MULTI_WORD_EXPANSION = 'probe --settings ./probe-settings.json';
 
@@ -304,7 +474,11 @@ function assertArgSurface(tokens: string[]): void {
   expect(tokens).toHaveLength(ALLOWED_CLAUDE_ARGS.length * 2);
   for (let i = 0; i < tokens.length; i += 2) {
     expect(ALLOWED_CLAUDE_ARGS, `not an allowlisted argument: ${tokens[i]}`).toContain(tokens[i]);
-    expect(tokens[i + 1]?.startsWith('-'), `${tokens[i]} takes no value: ${tokens[i + 1]}`).toBe(false);
+    // Unquoted first: the consumer applies its own `startsWith('-')` test AFTER shell-quote has
+    // stripped the quotes, so `"--dangerously-skip-permissions"` as a value reads as a flag
+    // there and as an ordinary value here.
+    const value = unquoteWord(tokens[i + 1] ?? '');
+    expect(value.startsWith('-'), `${tokens[i]} takes no value: ${tokens[i + 1]}`).toBe(false);
   }
 }
 
@@ -326,7 +500,14 @@ function ifLine(src: string, name: string): string {
 function toolFlagValues(src: string, flag: string): string[] {
   const kebab = flag.replace(/[A-Z]/g, char => `-${char.toLowerCase()}`);
   const spelling = kebab === flag ? flag : `(?:${flag}|${kebab})`;
-  return [...src.matchAll(new RegExp(`^\\s*--${spelling} "(.*)"\\s*$`, 'gm'))].map(m => m[1]);
+  const values = [...src.matchAll(new RegExp(`^\\s*--${spelling} "(.*)"\\s*$`, 'gm'))].map(m => m[1]);
+  // The value is delimited by `"`, so an interior one closes the flag's own quote at the shell
+  // and everything after it lands on argv as separate arguments - `--settings ./x.json` among
+  // them, which is command execution before any permission check has a say. The capture above
+  // is greedy, so it still yields ONE value and the mode ternary still splits: the break-out is
+  // invisible to every assertion downstream unless it is refused here.
+  for (const value of values) expect(value, `--${flag} value breaks out of its quotes`).not.toContain('"');
+  return values;
 }
 
 /**
@@ -386,7 +567,11 @@ type StagedFile = { path: string; lines?: number; binary?: boolean; deleted?: bo
  * `dev` and `LICENSE` became pushable - and this harness reported 21/21 green over it. A comment
  * is part of the program the runner executes, so it is part of the program this runs.
  */
-function runStagedGuards(src: string, files: StagedFile[]): { status: number; out: string } {
+function runStagedGuards(
+  src: string,
+  files: StagedFile[],
+  home?: { attributes?: string }
+): { status: number; out: string } {
   const commands = step(src, 'Push fold commit');
   const region = commands.match(/^ {10}BLOCKED=\$\([\s\S]*?-gt 800 \]; then\n[\s\S]*?^ {10}fi$/m)?.[0];
   expect(region, 'could not lift the staged-path guard and size bound out of the push step').toBeTruthy();
@@ -422,7 +607,21 @@ function runStagedGuards(src: string, files: StagedFile[]): { status: number; ou
       region ?? '',
       'echo GUARDS_PASSED',
     ].join('\n');
-    const run = spawnSync('bash', ['-c', script], { cwd: dir, encoding: 'utf8' });
+    // `core.attributesFile` defaults to a path under $HOME with no config entry behind it, so
+    // the step's `GIT_CONFIG_*` nulling does not reach it and only the per-invocation
+    // `-c core.attributesFile=/dev/null` does. Planting the file here is what makes that flag
+    // behavioural rather than a literal nothing reads: `* binary` turns every text file into
+    // numstat's `-`, which refuses every fold, and `* -diff` turns a real binary into a
+    // countable text file, which turns the binary arm AND the 800-line bound off together.
+    const fakeHome = path.join(dir, 'home');
+    if (home?.attributes !== undefined) {
+      fs.mkdirSync(path.join(fakeHome, '.config', 'git'), { recursive: true });
+      fs.writeFileSync(path.join(fakeHome, '.config', 'git', 'attributes'), `${home.attributes}\n`);
+    }
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: fakeHome };
+    // Or git reads $XDG_CONFIG_HOME/git/attributes from the DEVELOPER's home instead.
+    delete env.XDG_CONFIG_HOME;
+    const run = spawnSync('bash', ['-c', script], { cwd: dir, encoding: 'utf8', env });
     return { status: run.status ?? -1, out: `${run.stdout}${run.stderr}` };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -445,9 +644,7 @@ function runPostedCheck(
   fixture: { since?: string; reviews?: number; inline?: number; issue?: number; apiStatus?: number }
 ): string {
   // Verbatim, comments included, for the reason `runStagedGuards` states.
-  const body = step(src, 'Verify a review was actually posted').match(
-    /^ {8}run: [|>][-+]?\d*\n((?: {10}.*\n|\n)+)/m
-  )?.[1];
+  const body = runBodiesRaw(step(src, 'Verify a review was actually posted'))[0];
   expect(body, 'could not lift the posted measurement out of its step').toBeTruthy();
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-fold-posted-'));
@@ -610,15 +807,25 @@ describe('bot-fold write path', () => {
         'Edit(.github/**)',
         'Edit(.mcp.json)',
         'Edit(/${{ runner.temp }}/**)',
+        // git honours an UNTRACKED `.gitattributes`, which `git add -u` never stages and the
+        // path guard therefore never sees - and it decides what `--numstat` calls binary, so
+        // one planted file turns the binary arm and the 800-line bound off together.
+        'Edit(.gitattributes)',
+        'Edit(**/.gitattributes)',
       ].sort()
     );
-    // Read fences asserted on BOTH arms. The step's own comment says both branches are
-    // spelled out in full by design, so every edit here is a both-arms edit, and a
-    // fold-arm-only assertion waves the review arm through.
-    for (const spec of ['Read(.git/**)', 'Read(//proc/**)', 'Read(//sys/**)']) {
-      expect(deny.fold).toContain(spec);
-      expect(deny.review).toContain(spec);
-    }
+    // Every OTHER parenthesised spec, by value, in BOTH arms. `toContain` on the three
+    // `Read()` fences left a bucket nothing read: a spec containing `(` that does not start
+    // `Edit(` was asserted by neither the set above nor this, so appending one to either arm
+    // was invisible - and appending `Read(/dev/null)" --settings ./ci-settings.json "` put
+    // `--settings` on the real CLI's argv while reading as one more hardening deny.
+    const reads = ['Read(.git/**)', 'Read(//proc/**)', 'Read(//sys/**)'];
+    expect(pathSpecs.filter(spec => !spec.startsWith('Edit(')).sort()).toEqual([...reads].sort());
+    // The step's own comment says both branches are spelled out in full by design, so every
+    // edit here is a both-arms edit, and a fold-arm-only assertion waves the review arm through.
+    expect(deny.review.filter(spec => spec.includes('(')).sort()).toEqual(
+      [...reads, 'Edit(/${{ runner.temp }}/**)'].sort()
+    );
     // Single-shot process, so a wakeup can only ever be a lost run. Denied in both arms.
     expect(deny.fold).toContain('ScheduleWakeup');
     expect(deny.review).toContain('ScheduleWakeup');
@@ -668,8 +875,12 @@ describe('bot-fold write path', () => {
       '--mcp-config /tmp/evil.json',
       '--permission-mode bypassPermissions',
       '--dangerously-skip-permissions',
-      // Not a flag: parseClaudeArgsToExtraArgs appends a bare token to the tool lists, so
-      // this GRANTS Bash without naming a flag at all.
+      // Not a flag. `parseClaudeArgsToExtraArgs` absorbs a bareword into the value run of an
+      // ACCUMULATING flag, and `--max-turns` is not one, so at THIS position the token is
+      // discarded rather than granting anything - move the same token one line up, after
+      // `--allowedTools "..."`, and it joins the allow list. Refused either way, because
+      // which flag a bareword lands on is not a property the surface should have to reason
+      // about.
       'Bash',
     ];
     for (const suffix of appended) {
@@ -715,6 +926,15 @@ describe('bot-fold write path', () => {
       'python3 .github/scripts/redact-review-transcript.py a b c',
       'node "$GITHUB_WORKSPACE/x.js"',
       'npx tsx packages/scripts/src/x.ts',
+      // A pipe is the same execution written as two individually harmless commands, and
+      // reaches it without naming an interpreter at all in the `xargs` form.
+      'cat ./scripts/install-hooks.sh | bash',
+      'echo ./scripts/install-hooks.sh | xargs bash',
+      'sed -n "1,99p" ./scripts/x.sh | sh',
+      'bash <<< "$(cat ./scripts/install-hooks.sh)"',
+      // `${S}` rather than `"$S"`: the braces used to split the word so that no word carried
+      // the reference the taint tracking looks for.
+      'S=./scripts/install-hooks.sh ; bash ${S}',
     ];
     // Every step SHAPE too. YAML does not care how a list item is spaced, so `-   name:` puts
     // the step's keys at column 10 and its body deeper - and every sweep in this file used to
@@ -730,7 +950,12 @@ describe('bot-fold write path', () => {
       (indicator: string, body: string) => `      - run: ${indicator}\n          ${body}`,
     ];
     for (const shape of shapes) {
-      for (const indicator of ['|', '|-', '|+', '>', '>-', '|2']) {
+      // Every block header YAML allows, not the five that were guessed: the chomping and
+      // indentation indicators may appear in EITHER order and a comment may follow either.
+      // `| # c`, `|2-` and `|+ # c` each parse to the same step as `|` and each made the
+      // body invisible to this sweep, the push sweep, the staging pin and the `python3` pin
+      // simultaneously.
+      for (const indicator of ['|', '|-', '|+', '>', '>-', '|2', '| # stage the tree', '|2-', '|+ # c']) {
         for (const body of shouldBeCaught) {
           const injected = src.replace(
             /^ {6}- name: Report skill-fetch failure$/m,
@@ -740,6 +965,19 @@ describe('bot-fold write path', () => {
           expect(checkoutCodeReferences(injected), `not caught under \`run: ${indicator}\`: ${body}`).not.toEqual([]);
         }
       }
+    }
+    // A plain scalar wraps onto the following lines with no indicator at all, and reads as
+    // one value with the line break folded to a space - so the body is split across two lines
+    // and neither of the indicator arms above sees it.
+    for (const body of shouldBeCaught) {
+      const cut = body.indexOf(' ');
+      const wrapped = `      - name: Warm the toolchain\n        run: ${body.slice(0, cut)}\n          ${body.slice(cut + 1)}`;
+      const injected = src.replace(
+        /^ {6}- name: Report skill-fetch failure$/m,
+        `${wrapped}\n      - name: Report skill-fetch failure`
+      );
+      expect(injected, 'the injection anchor moved').not.toBe(src);
+      expect(checkoutCodeReferences(injected), `not caught as a wrapped plain scalar: ${body}`).not.toEqual([]);
     }
     // And the one-line forms, named and not, which take no block indicator at all.
     for (const head of ['      - name: Warm the toolchain\n        run: ', '      - run: ']) {
@@ -895,6 +1133,23 @@ describe('bot-fold write path', () => {
     // unset, means review only") makes a fold run change nothing at all, silently.
     const reviewStep = step(src, 'Run /bot-review');
     expect(reviewStep).toMatch(/FOLD_MODE is '\$\{\{ env\.FOLD_MODE \}\}'/);
+
+    // And what the guard will refuse, which is a DIFFERENT failure: the guard refuses the
+    // whole fixup, so one path the prompt never warned about discards every good change in
+    // the same run. The two lists drifted once already (`.changeset/` was added to the guard
+    // and not to the prompt), and drift is silent on both sides, so the guard's own directory
+    // arm is the source and the prompt and the operator-facing `reason=` string are checked
+    // against it. Read out of the lifted region rather than restated here, or this becomes a
+    // third copy to drift from.
+    const pushBody = runBodiesRaw(step(src, 'Push fold commit')).join('\n');
+    const roots = pushBody.match(/-e '\^\(([^)]*)\)\/'/)?.[1].split('|');
+    expect(roots, 'could not read the path guard directory arm').toBeTruthy();
+    expect(roots?.length).toBeGreaterThan(4);
+    for (const root of roots ?? []) {
+      const name = `${root.replace(/\\/g, '')}/`;
+      expect(reviewStep, `the prompt does not name a directory the guard refuses: ${name}`).toContain(`\`${name}\``);
+      expect(pushBody, `the refusal message does not name: ${name}`).toContain(`\`${name}\``);
+    }
   });
 
   it('mints the fold token with contents: write and no workflow scope', () => {
@@ -962,11 +1217,12 @@ describe('bot-fold write path', () => {
     // is a property of a NAME - any of this can be moved to a step the assertion does not
     // ask for. `update-index --add` and `stage` are the two spellings that stage a path
     // without the word `add` being the subcommand.
-    expect(
-      runBodies(src)
-        .join('\n')
-        .match(/git (?:add|update-index|stage)[^\n]*/g)
-    ).toEqual(['git add -u']);
+    // Found in the PARSED command, not in the text: `git -c core.autocrlf=false add -- .`
+    // appended after `git add -u` reads as a second staging invocation to git and as no
+    // staging invocation at all to a matcher wanting `git add` with one space between.
+    expect(gitCommands(src, /^(add|update-index|stage)$/).map(words => words.map(unquoteWord))).toEqual([
+      ['git', 'add', '-u'],
+    ]);
     // The step must fail rather than fall through: without `-e` a failed `git commit`
     // reaches `git push`, which says "Everything up-to-date" and exits 0, so the step
     // emits pushed=true under a green check with nothing on the branch.
@@ -1097,6 +1353,27 @@ describe('bot-fold write path', () => {
     expect(nonAscii.status, nonAscii.out).toBe(1);
   });
 
+  it('ignores a planted git attributes file when deciding what is binary', () => {
+    // `core.attributesFile` is a default path under $HOME with no config entry behind it, so
+    // the step's GIT_CONFIG_* nulling misses it and only the per-invocation
+    // `-c core.attributesFile=/dev/null` closes it. Asserted by planting the file, because
+    // the flag is otherwise a string nothing reads - deleting it left the suite green.
+    //
+    // `* binary` reclassifies ordinary source as binary: without the flag the binary arm
+    // refuses every fold, so the failure mode is a fold that can never apply anything.
+    const refused = runStagedGuards(src, [{ path: 'apps/client/app/a.ts', lines: 3 }], { attributes: '* binary' });
+    expect(refused.status, refused.out).toBe(0);
+    expect(refused.out).toContain('GUARDS_PASSED');
+    // And the other direction, which is the one that costs something: `* -diff` makes a real
+    // binary countable, so the binary arm stops refusing it AND the 800-line bound scores it
+    // by lines, which a payload with no newline in it passes at any size.
+    const smuggled = runStagedGuards(src, [{ path: 'apps/client/public/logo.png', binary: true }], {
+      attributes: '* -diff',
+    });
+    expect(smuggled.status, smuggled.out).toBe(1);
+    expect(smuggled.out).toContain('apps/client/public/logo.png');
+  });
+
   it('refuses a fixup past the diff-size bound', () => {
     // Same principle as the path guard, on volume: a fold applies review findings, so a
     // sprawling diff means something other than that happened. Run rather than matched -
@@ -1130,25 +1407,30 @@ describe('bot-fold write path', () => {
     // step's own comments quote `git push origin` while explaining why we do not use it,
     // and contain the word `--force` too.
     const commands = runBodies(src).join('\n');
-    // One push in the job, and the force check is scoped to the invocation rather than to
-    // the whole file: `rm -f` elsewhere in the job is not a force-push.
-    const pushes = gitPushes(src);
-    expect(pushes).toHaveLength(1);
-    expect(pushes.join('\n')).not.toMatch(/--force|(?:^|\s)-f(?:\s|$)|\+HEAD/);
-    // One ref, and it is the one the PR came from. The literal alone is not enough:
-    // rebinding HEAD_REF in the step env to `base.ref` (or to `github.ref_name`) leaves
-    // this text untouched and pushes the fold commit to the PR's BASE branch - i.e. to
-    // main. So the binding is pinned too, in the step that holds the token.
-    expect(commands.match(/refs\/heads\/\S+/g)).toEqual(['refs/heads/${HEAD_REF}"']);
+    // The whole invocation, by value. Not `--force` and a `refs/heads/` literal read off the
+    // text: `git -c http.version=HTTP/1.1 push --force origin HEAD:main` carries neither the
+    // one-space `git push` a text matcher wants nor a `refs/heads/` refspec, and `HEAD:main`
+    // names the default branch exactly as well as the long form does. Pinning the argv end to
+    // end makes the destination, the transport URL, the absent `--force` and the absence of a
+    // SECOND push one assertion, and each of those is a way to break the invariant.
+    expect(gitPushes(src)).toEqual([
+      [
+        'git',
+        'push',
+        '--no-verify',
+        'https://x-access-token:${PUSH_TOKEN}@github.com/${REPO}.git',
+        'HEAD:refs/heads/${HEAD_REF}',
+      ],
+    ]);
+    // The ref is the one the PR came from. The refspec alone is not enough: rebinding
+    // HEAD_REF in the step env to `base.ref` (or to `github.ref_name`) leaves the text above
+    // untouched and pushes the fold commit to the PR's BASE branch - i.e. to main. So the
+    // binding is pinned too, in the step that holds the token.
     const pushStep = step(src, 'Push fold commit');
     expect(pushStep).toMatch(/^ {10}HEAD_REF: \$\{\{ github\.event\.pull_request\.head\.ref \}\}$/m);
     expect(pushStep).toMatch(/^ {10}PUSH_TOKEN: \$\{\{ steps\.push_token\.outputs\.token \}\}$/m);
     // And it is the only consumer of the token, for the same reason.
     expect(src.match(/steps\.push_token\.outputs\.token/g)).toHaveLength(1);
-    // The push host is pinned with it: an explicit URL is what keeps the narrowly
-    // scoped token in use instead of the wider one claude-code-action left on origin.
-    expect(commands).toContain('https://x-access-token:${PUSH_TOKEN}@github.com/${REPO}.git');
-    expect(commands).not.toMatch(/git push \S*origin/);
     // --no-verify on the push and on the commit, and --no-gpg-sign on the commit: with the
     // global and system config nulled these are belt to braces, and they are what stops a
     // `core.hooksPath` or `commit.gpgsign` reaching either invocation if that nulling is
@@ -1165,20 +1447,46 @@ describe('bot-fold write path', () => {
     // on a step, so a second push can be written with the list-item dash on the `run:` line
     // itself. That shape was invisible to `runBodies` while the identical body under a
     // `name:` was caught, and prettier leaves it byte-identical - it has no key to invent.
-    const forcePush =
-      'git push --force "https://x-access-token:${PUSH_TOKEN}@github.com/${REPO}.git" HEAD:refs/heads/main';
-    const addedSteps = [
-      `      - name: Publish the fold\n        run: |\n          ${forcePush}`,
-      `      - run: |\n          ${forcePush}`,
-      `      - run: ${forcePush}`,
+    // Two axes, because this sweep has been blind along each of them in turn. STEP SHAPE:
+    // `name:` is OPTIONAL, so a second push can be written with the list-item dash on the
+    // `run:` line itself, and a block header may carry a comment or an indentation indicator -
+    // each of those is a real step to a YAML parser, and prettier returns every one of them
+    // byte-identical. COMMAND SPELLING: `git -c <key>=<value> push` is this job's own house
+    // style, and two spaces or a line continuation between `git` and `push` are the same
+    // command to the shell and a different string to a matcher.
+    const spellings = [
+      'git push --force "https://x-access-token:${PUSH_TOKEN}@github.com/${REPO}.git" HEAD:refs/heads/main',
+      'git -c http.version=HTTP/1.1 push --force origin HEAD:main',
+      'git  push --force origin HEAD:main',
+      'git \\\n            push --force origin HEAD:main',
     ];
-    for (const added of addedSteps) {
-      const injected = src.replace(
-        /^ {6}- name: Report skill-fetch failure$/m,
-        `${added}\n      - name: Report skill-fetch failure`
-      );
+    const shapes = [
+      (body: string) => `      - name: Publish the fold\n        run: |\n          ${body}`,
+      (body: string) => `      - run: |\n          ${body}`,
+      (body: string) => `      - run: ${body}`,
+      (body: string) => `      - name: Publish the fold\n        run: | # publish\n          ${body}`,
+      (body: string) => `      - name: Publish the fold\n        run: |2-\n          ${body}`,
+      (body: string) => `      - name: Publish the fold\n        run: |+ # publish\n          ${body}`,
+    ];
+    for (const spelling of spellings) {
+      for (const shape of shapes) {
+        const added = shape(spelling);
+        const injected = src.replace(
+          /^ {6}- name: Report skill-fetch failure$/m,
+          `${added}\n      - name: Report skill-fetch failure`
+        );
+        expect(injected, 'the injection anchor moved').not.toBe(src);
+        expect(gitPushes(injected).length, `a second push was not seen: ${added}`).toBeGreaterThan(1);
+      }
+    }
+    // And the same for the staging pin, which had the same literal shape.
+    for (const staging of ['git -c core.autocrlf=false add -- .', 'git  add -- .', 'git update-index --add -- .']) {
+      const injected = src.replace(/^ {10}git add -u$/m, `          git add -u\n          ${staging}`);
       expect(injected, 'the injection anchor moved').not.toBe(src);
-      expect(gitPushes(injected).length, `a second push was not seen: ${added}`).toBeGreaterThan(1);
+      expect(
+        gitCommands(injected, /^(add|update-index|stage)$/).length,
+        `a second staging invocation was not seen: ${staging}`
+      ).toBeGreaterThan(1);
     }
   });
 

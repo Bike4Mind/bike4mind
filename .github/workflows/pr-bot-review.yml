@@ -505,14 +505,16 @@ jobs:
             # bit: bash skips a non-executable match and keeps searching, and the agent's
             # write tools create mode 0644. Note the bound precisely - an OVERWRITE
             # preserves the existing mode, so what closes it is that no already-0755 file
-            # named `git`, `gh`, `python3` or `jq` sits on a `$HOME` PATH entry (all four
-            # resolve under `/usr/bin` on the hosted image). Stated rather than assumed,
+            # named `git`, `gh`, `python3` or `jq` sits on a `$HOME` PATH entry. That last
+            # is a premise about the IMAGE, not something this file can pin: `runs-on` reads
+            # a repo variable, and on a self-hosted runner $HOME persists between jobs.
+            # On the hosted image all four resolve under `/usr/bin`. Stated rather than assumed,
             # because the day a fold gains a tool that can chmod, this becomes live.
             #
             # ScheduleWakeup makes sense only in an interactive session; this
             # process is single-shot, so hard-block the tool call itself
             # rather than relying on the prompt bullet above alone.
-            --disallowedTools "Edit(/${{ runner.temp }}/**),${{ env.FOLD_MODE == 'true' && 'Bash,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**),Edit(.github/**),Edit(.git/**),Edit(.claude/**),Edit(.mcp.json)' || 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**)' }}"
+            --disallowedTools "Edit(/${{ runner.temp }}/**),${{ env.FOLD_MODE == 'true' && 'Bash,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**),Edit(.github/**),Edit(.git/**),Edit(.claude/**),Edit(.mcp.json),Edit(.gitattributes),Edit(**/.gitattributes)' || 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**)' }}"
             # 40 was too tight: a normal feature PR (~25 files / ~2k additions)
             # spawns ~8 parallel review agents, and the orchestration overhead
             # (read skill, fetch PR/diff/linked issues, fan-out, classify, post)
@@ -753,10 +755,14 @@ jobs:
             # `core.attributesFile` is `core.excludesFile`'s sibling - another default
             # path under $HOME with no config entry behind it, so the GIT_CONFIG_* nulling
             # misses it too. It decides what numstat calls binary, so a planted
-            # `~/.config/git/attributes` holding `* binary` would refuse every fold. The
-            # in-tree `.gitattributes` is unaffected: it is tracked, and blocked above.
+            # `~/.config/git/attributes` holding `* binary` would refuse every fold.
+            # An in-tree `.gitattributes` is a separate route to the same knob and is NOT
+            # closed here: git honours an UNTRACKED one, which `git add -u` never stages, so
+            # it never reaches the path guard above (see the note on `.gitignore` there).
+            # What closes that route is the write fence - `Edit(.gitattributes)` and
+            # `Edit(**/.gitattributes)` are denied for the same reason `.mcp.json` is.
             git -c core.quotePath=false -c core.attributesFile=/dev/null \
-              diff --cached --numstat | awk '$1 == "-" { print $3 }'
+              diff --cached --numstat | awk -F'\t' '$1 == "-" { print $3 }'
           )
           if [ -n "$BLOCKED" ]; then
             echo "::error::fold refused: these staged paths are CI configuration or binaries, so NOTHING was pushed:"
