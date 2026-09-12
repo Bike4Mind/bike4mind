@@ -195,12 +195,15 @@ describe('notebook import writes knowledge files', () => {
     expect(result.warnings?.[0]).toContain('Failed to import knowledge file');
   });
 
-  it('marks the file servable rather than leaving it for a scan that cannot see it', async () => {
-    await makeService().importNotebooks(USER, payload([knowledgeFile()]) as never, OPTIONS as never);
+  it('leaves an imported file pending for an out-of-band scan, never stamped clean', async () => {
+    const result = await makeService().importNotebooks(USER, payload([knowledgeFile()]) as never, OPTIONS as never);
 
-    // The row is written inside the import's transaction, and the S3 scan that would flip this
-    // gives up ~7.5s later - long before a real import commits. A 'pending' file never recovers.
-    expect((await FabFile.findOne({ userId: USER }))?.moderationStatus).toBe('clean');
+    // Import bytes are attacker-supplied, so they must not be pre-cleared. The row is left at the
+    // schema default ('pending') and the import handler scans it out of band once the transaction
+    // commits (server/s3/moderateImportedKnowledgeFiles.ts). The file's storage key is surfaced on
+    // the result so the handler knows what to scan.
+    expect((await FabFile.findOne({ userId: USER }))?.moderationStatus).toBe('pending');
+    expect(result.importedKnowledgeFilePaths).toHaveLength(1);
   });
 
   it('reports a degraded type as an import, not as a failure', async () => {

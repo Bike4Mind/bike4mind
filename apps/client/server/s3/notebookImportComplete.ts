@@ -17,7 +17,11 @@ import {
   User,
   withTransaction,
   importHistoryJobRepository,
+  adminSettingsRepository,
 } from '@bike4mind/database';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { moderateImportedKnowledgeFiles } from '@server/s3/moderateImportedKnowledgeFiles';
+import { buildKnowledgeModerationDeps } from '@server/s3/knowledgeModerationDeps';
 import { withContext } from '@server/s3/utils';
 import type { ClientSession, FilterQuery } from 'mongoose';
 import type {
@@ -177,7 +181,7 @@ const processNotebookImport = async (
   logger: Logger,
   importHistoryJobId: string
 ) => {
-  return withTransaction(async session => {
+  const result = await withTransaction(async session => {
     const s3 = new S3Storage(bucket);
 
     try {
@@ -318,6 +322,36 @@ const processNotebookImport = async (
       ]);
     }
   });
+
+  // Post-commit: the import stamped every knowledge file 'pending', because the upload-time S3 scan
+  // fires before the row exists inside the still-open import transaction and always bails. Now that
+  // the rows are committed and their bytes are in storage, scan them the same way objectCreated.ts
+  // does. Keyed by filePath. Attacker-supplied bytes, so this is not optional - it is the moderation
+  // gate imports would otherwise skip.
+  const filePaths = result.importedKnowledgeFilePaths ?? [];
+  if (filePaths.length) {
+    // Best-effort and strictly post-commit: the import already succeeded and told the user. A
+    // failure here must NOT propagate - the outer dispatch catch would then flip the committed,
+    // already-reported-successful import to 'failed' and send a contradictory second inbox message.
+    // A file left 'pending' is fail-closed (unservable) and the daily moderation rescue sweep
+    // retries it, so swallowing the throw strands nothing.
+    try {
+      const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+      await moderateImportedKnowledgeFiles({
+        filePaths,
+        userId,
+        enabled: getSettingsValue('ImageModerationEnabled', settings) ?? true,
+        ...buildKnowledgeModerationDeps(logger),
+      });
+    } catch (moderationErr) {
+      logger.error('Post-commit knowledge moderation failed; files left pending for rescue sweep', {
+        userId,
+        error: moderationErr,
+      });
+    }
+  }
+
+  return result;
 };
 
 export const dispatch = withContext(async (event, context, logger) => {
