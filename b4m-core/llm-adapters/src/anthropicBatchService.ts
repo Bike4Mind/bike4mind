@@ -47,7 +47,17 @@ export interface BatchItemResult {
   status: 'done' | 'failed';
   /** Concatenated text content when `status === "done"`. */
   reply?: string;
-  tokenUsage?: { inputTokens: number; outputTokens: number };
+  /**
+   * `inputTokens` counts only what was billed at the full rate - Anthropic
+   * reports cached tokens in their own fields, so a consumer pricing a cached
+   * request needs all three.
+   */
+  tokenUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadInputTokens?: number;
+    cacheCreationInputTokens?: number;
+  };
   /** Reason when `status === "failed"` (error / canceled / expired). */
   error?: string;
 }
@@ -199,6 +209,8 @@ export class AnthropicBatchService {
           tokenUsage: {
             inputTokens: msg.usage?.input_tokens ?? 0,
             outputTokens: msg.usage?.output_tokens ?? 0,
+            cacheReadInputTokens: msg.usage?.cache_read_input_tokens ?? undefined,
+            cacheCreationInputTokens: msg.usage?.cache_creation_input_tokens ?? undefined,
           },
         };
       }

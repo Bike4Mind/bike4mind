@@ -144,6 +144,72 @@ describe('AnthropicBatchService', () => {
       expect(byRef['article-B']).toMatchObject({ clientRef: 'article-B', status: 'failed', error: 'bad' });
     });
 
+    it('carries the cache counters through, since input_tokens excludes them', async () => {
+      // A consumer that prices the request from input_tokens alone would read
+      // a cached batch as nearly free. The multipliers differ per field (a
+      // read bills 0.1x, a write 1.25x), so all three have to come back.
+      const retrieve = vi.fn().mockResolvedValue({
+        processing_status: 'ended',
+        request_counts: { processing: 0, succeeded: 1, errored: 0, canceled: 0, expired: 0 },
+      });
+      const results = vi.fn().mockResolvedValue(
+        asyncIterableOf([
+          {
+            custom_id: 'req_0',
+            result: {
+              type: 'succeeded',
+              message: {
+                content: [{ type: 'text', text: 'ok' }],
+                usage: {
+                  input_tokens: 6882,
+                  output_tokens: 3290,
+                  cache_read_input_tokens: 11367,
+                  cache_creation_input_tokens: 0,
+                },
+              },
+            },
+          },
+        ])
+      );
+      const svc = new AnthropicBatchService(fakeAnthropic({ retrieve, results }));
+
+      const out = await svc.getBatchResults('msgbatch_xyz', customIdMap);
+
+      expect(out.results?.[0].tokenUsage).toEqual({
+        inputTokens: 6882,
+        outputTokens: 3290,
+        cacheReadInputTokens: 11367,
+        cacheCreationInputTokens: 0,
+      });
+    });
+
+    it('leaves the cache counters undefined on an uncached request', async () => {
+      const retrieve = vi.fn().mockResolvedValue({
+        processing_status: 'ended',
+        request_counts: { processing: 0, succeeded: 1, errored: 0, canceled: 0, expired: 0 },
+      });
+      const results = vi.fn().mockResolvedValue(
+        asyncIterableOf([
+          {
+            custom_id: 'req_0',
+            result: {
+              type: 'succeeded',
+              message: {
+                content: [{ type: 'text', text: 'ok' }],
+                usage: { input_tokens: 100, output_tokens: 42, cache_read_input_tokens: null },
+              },
+            },
+          },
+        ])
+      );
+      const svc = new AnthropicBatchService(fakeAnthropic({ retrieve, results }));
+
+      const out = await svc.getBatchResults('msgbatch_xyz', customIdMap);
+
+      expect(out.results?.[0].tokenUsage?.cacheReadInputTokens).toBeUndefined();
+      expect(out.results?.[0].tokenUsage?.cacheCreationInputTokens).toBeUndefined();
+    });
+
     it('marks canceled / expired items as failed with a reason', async () => {
       const retrieve = vi.fn().mockResolvedValue({
         processing_status: 'ended',

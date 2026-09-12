@@ -23,7 +23,13 @@ export interface ITransformBatchResultItem {
   client_ref: string;
   status: 'done' | 'failed';
   reply?: string;
-  tokenUsage?: { actualInputTokens: number; actualOutputTokens: number };
+  tokenUsage?: {
+    actualInputTokens: number;
+    actualOutputTokens: number;
+    /** Present only when the request carried a `cache_control` breakpoint. */
+    cacheReadInputTokens?: number;
+    cacheCreationInputTokens?: number;
+  };
   error?: string;
 }
 

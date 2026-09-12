@@ -56,7 +56,12 @@ const handler = baseApi().get(async (req, res) => {
     status: r.status,
     reply: r.reply,
     tokenUsage: r.tokenUsage
-      ? { actualInputTokens: r.tokenUsage.inputTokens, actualOutputTokens: r.tokenUsage.outputTokens }
+      ? {
+          actualInputTokens: r.tokenUsage.inputTokens,
+          actualOutputTokens: r.tokenUsage.outputTokens,
+          cacheReadInputTokens: r.tokenUsage.cacheReadInputTokens,
+          cacheCreationInputTokens: r.tokenUsage.cacheCreationInputTokens,
+        }
       : undefined,
     error: r.error,
   }));
