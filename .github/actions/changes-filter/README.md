@@ -17,7 +17,7 @@ docs live in `docs-site/` (not `docs/`), `.changeset/` is excluded, and a second
 | Output | Meaning |
 |---|---|
 | `deployable` | `'true'` to run test + deploy, `'false'` to skip. Fails **open** (`true`) when the diff range can't be resolved. |
-| `docs-changed` | `'true'` when the changeset touches `docs-site/`. Fails **open** (`true`) on an unresolved range. Gates the `help-docs` job. |
+| `docs-changed` | `'true'` when the changeset touches `docs-site/` or the help tooling in `packages/scripts/help/`. Fails **open** (`true`) on an unresolved range. Gates the `help-docs` job. |
 
 The two are orthogonal: a docs-only PR is `deployable=false, docs-changed=true`;
 a code+docs PR is `true, true`; a `.changeset` or root-`README` change is
@@ -80,7 +80,7 @@ jobs:
 | Input | Default | Notes |
 |---|---|---|
 | `exclude-paths` | curated docs/config list | Newline-separated **git pathspecs**. If every changed file matches one, `deployable=false`. Blank lines and `#` comments ignored. |
-| `docs-paths` | `docs-site/**` | INCLUDE-form pathspecs defining the docs site for `docs-changed`. |
+| `docs-paths` | `docs-site/**`, `packages/scripts/help/**` | INCLUDE-form pathspecs defining the docs site for `docs-changed`. Includes the help tooling, so a change to those scripts runs the `help-docs` guard that covers them. |
 
 ## Gotchas baked into the default list
 
