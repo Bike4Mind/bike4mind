@@ -1,5 +1,12 @@
 # @bike4mind/client
 
+## 0.1.68
+
+### Patch Changes
+
+- Updated dependencies [[`2d51605`](https://github.com/Bike4Mind/bike4mind/commit/2d51605cd93522e01150ac428a23b1ac7a4533a5)]:
+  - @bike4mind/infra@0.10.1
+
 ## 0.1.67
 
 ### Patch Changes
