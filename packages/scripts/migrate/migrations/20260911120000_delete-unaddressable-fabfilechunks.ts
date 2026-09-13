@@ -1,19 +1,28 @@
-import { FabFile, FabFileChunk, mongoose } from '@bike4mind/database';
+import { FabFileChunk } from '@bike4mind/database';
 import { type MigrationFile } from './index';
+import { scanUnaddressableChunks } from '../unaddressableChunkScan';
 
 /**
  * Delete `fabfilechunks` rows whose `fabFileId` is not an ObjectId string.
  *
  * `fabFileId` is a plain String with a `ref`, so a value that cannot address a FabFile by `_id`
  * stores clean. A batch of rows holding a whole serialized FabFile document got in that way around
- * 2024-10-03; the code responsible is long gone. Every reader reaches a chunk through `fabFileId`
- * (`findVectorsByFabFileIds`, `findByFabFileId`, `$vectorSearch`'s `$in` filter), so such a row is
- * invisible to retrieval, and `deleteManyByFabFileId` matches the same field, so ordinary file
- * deletion never reaped it either. It is unreachable dead weight in both directions.
+ * 2024-10-03; the code responsible is long gone. Every RETRIEVAL AND REAP path reaches a chunk
+ * through `fabFileId` (`findVectorsByFabFileIds`, `findByFabFileId`, `$vectorSearch`'s `$in`
+ * filter), so such a row is invisible to retrieval, and `deleteManyByFabFileId` matches the same
+ * field, so ordinary file deletion never reaped it either. It is unreachable dead weight in both
+ * directions.
+ *
+ * Note the narrowing: collection-wide maintenance scanners DO reach these rows without going
+ * through `fabFileId` (`findChunksMissingEmbeddingModel`, `findChunkIdsMissingCharLength`,
+ * `backfillCharLengthByIds`, and `vectorize`'s `findById` from a queue message). None of them is a
+ * user-facing path, so the unreachability argument survives - but one of them is how these rows
+ * crashed the embedding-model backfill, which is what surfaced them in the first place.
  *
  * A registered migration rather than a hand-run script because a hand-run script does not get run.
  * The schema now carries a format validator on the field (FabFileChunkSchema, packages/database),
- * so this is a one-time sweep, not a recurring one.
+ * so this is a one-time sweep - though not an exhaustive one: the server-side gate uses PCRE `$`
+ * semantics and so leaves a `<24hex>\n` value in place. See unaddressableChunkScan.ts.
  *
  * SHAPE, not a hardcoded id list - the affected set differs per environment. Two gates, and a row
  * has to fail both to be deleted:
@@ -22,97 +31,53 @@ import { type MigrationFile } from './index';
  *     Deliberately scoped to strings: a row with the field absent or of another type is a different
  *     corruption with a different safety argument, and is left for whoever finds it.
  *  2. No ObjectId recoverable FROM that string resolves to a fabfile. The serialized documents
- *     embed the original file's id, so every 24-hex run in the value is looked up; if any hits a
+ *     embed the original file's id, so every 24-hex window in the value is looked up; if any hits a
  *     fabfile row - live OR soft-deleted - the chunk is KEPT and reported, because then someone
  *     could still re-associate it and a delete here would not be recoverable.
  *
- * Dry-run by setting DELETE_UNADDRESSABLE_CHUNKS_DRY_RUN=1, which reports the counts and writes
- * nothing. The default is to execute: the migrator runs `up()` unattended at deploy.
+ * To see the counts before acting, run the READ-ONLY preview against the target stage:
+ *   pnpm --filter scripts db:preview-unaddressable-chunks
+ * There is deliberately no dry-run flag on this migration. The runner writes the ledger row as soon
+ * as `up()` resolves (migrationManager.ts) and `selectPending` then skips the id forever, so a
+ * dry-run that returned normally would permanently foreclose the real pass while reporting success.
+ * Making it throw instead is no better: the migrator Lambda gates the web deploy (infra/web.ts), so
+ * a dry-run at deploy time would fail the deploy and skip every migration queued behind it.
  *
  * NOT REVERSIBLE. `down()` is a no-op - the rows are gone and nothing reconstructs them. That is
  * the whole reason gate 2 errs towards keeping a row.
  */
 
-/** Chunks read per page. Only `_id` and `fabFileId` are projected, but an offending value is a
- *  whole serialized document (~425 characters observed), so the page stays modest. */
-const PAGE_SIZE = 200;
-
-const OBJECT_ID_HEX = /^[0-9a-fA-F]{24}$/;
-
-/** Every 24-hex run in the value, deliberately generous: a false candidate only keeps a row. */
-const EMBEDDED_OBJECT_ID = /[0-9a-fA-F]{24}/g;
-
 const KEPT_ID_LOG_CAP = 50;
+
+/** Pages between progress lines. A timeout inside a multi-minute scan is otherwise undiagnosable. */
+const PROGRESS_EVERY_PAGES = 25;
 
 const migration: MigrationFile = {
   id: 20260911120000,
   name: 'delete-unaddressable-fabfilechunks',
 
   up: async () => {
-    const dryRun = process.env.DELETE_UNADDRESSABLE_CHUNKS_DRY_RUN === '1';
-    // Raw driver collections, not the models: the chunk values this matches are exactly the ones
-    // the schema now rejects, and FabFile's soft-delete middleware would hide the very rows gate 2
-    // needs to see.
     const chunks = FabFileChunk.collection;
-    const fabFiles = FabFile.collection;
-
-    // Keyset paging on `_id` rather than a live cursor: the loop deletes out from under itself, and
-    // a kept row must not be revisited forever.
-    let afterId: mongoose.Types.ObjectId | undefined;
     let deleted = 0;
+    let scanned = 0;
+    let pages = 0;
     const keptIds: string[] = [];
 
-    for (;;) {
-      const page = await chunks
-        .find(
-          {
-            $and: [
-              { fabFileId: { $type: 'string' } },
-              { fabFileId: { $not: OBJECT_ID_HEX } },
-              ...(afterId ? [{ _id: { $gt: afterId } }] : []),
-            ],
-          },
-          { projection: { _id: 1, fabFileId: 1 }, sort: { _id: 1 }, limit: PAGE_SIZE }
-        )
-        .toArray();
-      if (page.length === 0) break;
-      afterId = page[page.length - 1]._id as mongoose.Types.ObjectId;
+    for await (const page of scanUnaddressableChunks()) {
+      scanned += page.scanned;
+      pages += 1;
+      keptIds.push(...page.keptIds);
 
-      const embeddedByRow = new Map(
-        page.map(row => [String(row._id), [...String(row.fabFileId).matchAll(EMBEDDED_OBJECT_ID)].map(m => m[0])])
-      );
-      const candidateIds = new Set([...embeddedByRow.values()].flat());
-
-      // One lookup per page over the union of candidates, including soft-deleted rows - a row whose
-      // file is merely soft-deleted is still re-associable, so it is not this migration's to remove.
-      const resolvable = new Set<string>();
-      if (candidateIds.size > 0) {
-        const found = await fabFiles
-          .find(
-            { _id: { $in: [...candidateIds].map(id => new mongoose.Types.ObjectId(id)) } },
-            { projection: { _id: 1 } }
-          )
-          .toArray();
-        for (const doc of found) resolvable.add(String(doc._id));
+      if (page.deletable.length > 0) {
+        deleted += (await chunks.deleteMany({ _id: { $in: page.deletable } })).deletedCount;
       }
 
-      const deletable: mongoose.Types.ObjectId[] = [];
-      for (const row of page) {
-        const embedded = embeddedByRow.get(String(row._id)) ?? [];
-        if (embedded.some(id => resolvable.has(id))) keptIds.push(String(row._id));
-        else deletable.push(row._id as mongoose.Types.ObjectId);
-      }
-
-      if (deletable.length === 0) continue;
-      if (dryRun) {
-        deleted += deletable.length;
-      } else {
-        deleted += (await chunks.deleteMany({ _id: { $in: deletable } })).deletedCount;
+      if (pages % PROGRESS_EVERY_PAGES === 0) {
+        console.log(`  ... scanned ${scanned} unaddressable row(s), deleted ${deleted}, through _id ${page.lastId}`);
       }
     }
 
-    const prefix = dryRun ? '[dry-run] Would delete' : 'Deleted';
-    console.log(`${prefix} ${deleted} unaddressable fabfilechunk row(s)`);
+    console.log(`Deleted ${deleted} unaddressable fabfilechunk row(s) from ${scanned} scanned`);
     if (keptIds.length > 0) {
       // These need a human: the value is unaddressable but its embedded id still names a real file,
       // so the chunk may be worth re-pointing rather than dropping.

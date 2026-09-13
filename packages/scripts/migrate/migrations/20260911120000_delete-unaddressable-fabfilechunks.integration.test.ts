@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
 
@@ -22,7 +22,10 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await mongoose.connection.dropDatabase();
-  delete process.env.DELETE_UNADDRESSABLE_CHUNKS_DRY_RUN;
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 function raw(name: string) {
@@ -47,6 +50,13 @@ async function insertChunks(fabFileIds: unknown[]) {
 
 async function insertChunk(fabFileId: unknown) {
   const [doc] = await insertChunks([fabFileId]);
+  return doc;
+}
+
+/** The field absent entirely, which `$type: 'string'` deliberately does not claim. */
+async function insertChunkWithoutFabFileId() {
+  const doc = { _id: new mongoose.Types.ObjectId(), text: 't', tokenCount: 1, vector: [0.1] };
+  await raw('fabfilechunks').insertOne(doc);
   return doc;
 }
 
@@ -101,6 +111,28 @@ describe('delete-unaddressable-fabfilechunks migration (real DB)', () => {
     expect(await chunkIds()).toEqual([String(salvageable._id)]);
   });
 
+  it('keeps one whose embedded id is UPPERCASE and resolves', async () => {
+    // The $in lookup normalizes case and finds the file either way, so a gate that compared raw-case
+    // candidates against BSON-rendered ids would confirm the file exists and delete the chunk anyway.
+    const live = await insertFabFile();
+    const salvageable = await insertChunk(serializedDocument(String(live._id).toUpperCase()));
+
+    await migration.up();
+
+    expect(await chunkIds()).toEqual([String(salvageable._id)]);
+  });
+
+  it('keeps one whose embedded id is glued to a misaligned hex run', async () => {
+    // A non-overlapping match is left-greedy: it would yield 'abc' plus the first 21 characters and
+    // never the id itself, clearing gate 2 for a row whose file is right there.
+    const live = await insertFabFile();
+    const salvageable = await insertChunk(`abc${String(live._id)}`);
+
+    await migration.up();
+
+    expect(await chunkIds()).toEqual([String(salvageable._id)]);
+  });
+
   it('leaves well-formed rows alone, including one pointing at a file that no longer exists', async () => {
     const live = await insertFabFile();
     const attached = await insertChunk(String(live._id));
@@ -121,13 +153,22 @@ describe('delete-unaddressable-fabfilechunks migration (real DB)', () => {
     expect(await chunkIds()).toEqual([String(nonString._id)]);
   });
 
-  it('writes nothing in dry-run mode', async () => {
-    process.env.DELETE_UNADDRESSABLE_CHUNKS_DRY_RUN = '1';
-    const orphan = await insertChunk(serializedDocument(String(new mongoose.Types.ObjectId())));
+  it('ignores a row with no fabFileId field at all - a different corruption', async () => {
+    const absent = await insertChunkWithoutFabFileId();
 
     await migration.up();
 
-    expect(await chunkIds()).toEqual([String(orphan._id)]);
+    expect(await chunkIds()).toEqual([String(absent._id)]);
+  });
+
+  it('leaves a 24-hex value with a trailing newline in place', async () => {
+    // Server-side `$` is PCRE and also matches before a trailing newline, so the sweep reads this as
+    // addressable even though the schema validator rejects it. Over-keeping, but not exhaustive.
+    const trailingNewline = await insertChunk(`${String(new mongoose.Types.ObjectId())}\n`);
+
+    await migration.up();
+
+    expect(await chunkIds()).toEqual([String(trailingNewline._id)]);
   });
 
   it('pages past the page size and terminates on a set that is entirely kept', async () => {
@@ -155,5 +196,28 @@ describe('delete-unaddressable-fabfilechunks migration (real DB)', () => {
     await migration.up();
 
     expect(await chunkIds()).toEqual([String(healthy._id)]);
+  });
+
+  it('reports the deleted and scanned counts', async () => {
+    // The operator's only go/no-go signal, and the thing the linked issue verifies on.
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await insertChunks(Array.from({ length: 3 }, () => serializedDocument(String(new mongoose.Types.ObjectId()))));
+    await insertChunk(String(new mongoose.Types.ObjectId()));
+
+    await migration.up();
+
+    expect(log.mock.calls.flat().join('\n')).toContain('Deleted 3 unaddressable fabfilechunk row(s) from 3 scanned');
+  });
+
+  it('caps the kept-id list and says how many it withheld', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const live = await insertFabFile();
+    await insertChunks(Array.from({ length: 60 }, () => serializedDocument(String(live._id))));
+
+    await migration.up();
+
+    const warned = warn.mock.calls.flat().join('\n');
+    expect(warned).toContain('60 row(s) have an unaddressable fabFileId');
+    expect(warned).toContain('... and 10 more (capped at 50)');
   });
 });
