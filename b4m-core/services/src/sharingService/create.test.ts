@@ -36,7 +36,12 @@ describe('sharingService - createInvite (group arm authority)', () => {
   beforeEach(() => {
     db = {
       invites: { create: vi.fn(async (build: unknown) => ({ id: 'invite-1', ...(build as object) })) },
-      users: { findAllByEmailsOrUsernames: vi.fn(async () => []), findByIds: vi.fn(async () => []) },
+      // The recipient every case below names resolves, so these stay tests of minting AUTHORITY
+      // rather than of recipient resolution.
+      users: {
+        findAllByEmailsOrUsernames: vi.fn(async () => [{ email: 'x@y.com', username: 'x' }]),
+        findByIds: vi.fn(async () => []),
+      },
       fabFiles: { findByIdAndUserId: vi.fn(), shareable: { findShareAccessById: vi.fn() } },
       sessions: { findByIdAndUserId: vi.fn() },
       projects: { shareable: { findShareAccessById: vi.fn() } },
@@ -121,6 +126,22 @@ describe('sharingService - createInvite (group arm authority)', () => {
     db.organizations.findById = vi.fn(async () => null);
 
     await expect(create(asUser(OWNER_ID))).rejects.toThrow(BadRequestError);
+  });
+
+  // Named somebody, resolved nobody: the same dead row the Project/Organization arm refuses one
+  // branch up, which the bare Group arm was not covering. Fails closed either way, but the sharer
+  // was told it had worked.
+  it('refuses a Group invite whose recipients all fail to resolve', async () => {
+    db.users.findAllByEmailsOrUsernames = vi.fn(async () => []);
+
+    await expect(
+      createInvite(
+        asUser(OWNER_ID),
+        { id: GROUP_ID, type: InviteType.Group, permissions: [Permission.read], recipients: ['ghost@x.com'] } as any,
+        { db }
+      )
+    ).rejects.toSatisfy((e: Error) => e instanceof BadRequestError && /could not find a user/i.test(e.message));
+    expect(db.invites.create).not.toHaveBeenCalled();
   });
 
   // Group is the type the two named refusals used to miss. It is not shareable by link either, so a

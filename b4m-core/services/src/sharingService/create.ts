@@ -207,6 +207,14 @@ export const createInvite = async (
     if (pending.length === 0) throw new BadRequestError('Could not find a user for any recipient');
   } else {
     pending = users.map(user => user.email).filter((email): email is string => Boolean(email));
+    // Same refusal as the arm above, for the same reason - a Group invite naming only unresolvable
+    // recipients persists isLinkOnly false against an empty `pending`, which both gates then refuse,
+    // so the sharer is told it worked and nobody can ever redeem it. Conditioned on having named
+    // somebody: this arm also carries recipientless FabFile/Session share links, where an empty
+    // `pending` is the point.
+    if (recipientsArray.length > 0 && pending.length === 0) {
+      throw new BadRequestError('Could not find a user for any recipient');
+    }
   }
 
   // No caller sets `available` explicitly today. Defaulting it to a flat 1 regardless of

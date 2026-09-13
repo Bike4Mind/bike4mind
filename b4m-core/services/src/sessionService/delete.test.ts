@@ -28,6 +28,9 @@ describe('sessionService - delete', () => {
     mockSessionRepo = createMockSessionRepository();
     mockProjectRepo = createMockProjectRepository();
     mockFabFileRepo = createMockFabFileRepository();
+    // The cascade now also reaches session.knowledgeIds, since a grant this session minted can sit
+    // on a file uploaded somewhere else entirely.
+    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([]);
     adapters = {
       db: {
         sessions: mockSessionRepo,
@@ -58,17 +61,18 @@ describe('sessionService - delete', () => {
     expect(mockFabFileRepo.updateGuarded).not.toHaveBeenCalled();
   });
 
-  // The grant rows this PR re-keyed are (userId, projectId) pairs. Deleting a session may only
-  // drop the untagged row the session itself materialized; a projectId-tagged row is governed by
-  // that project and outlives the session, matching sharingService/revoke.ts's cascade.
-  it('leaves a projectId-tagged grant alone and drops only the session-derived one', async () => {
+  // A grant row records its source. Deleting a session may drop only the rows tagged with that
+  // session; a projectId-tagged row is governed by its project and an untagged row is a direct
+  // share nobody here has any say over. Matches sharingService/revoke.ts's cascade.
+  it('drops only the rows tagged with this session, whoever holds them', async () => {
     const session = { id: sessionId, userId: ownerId, deletedAt: null };
     const sharedInFile = {
       id: 'file-shared-in',
       userId: otherUserId,
       users: [
         { userId: ownerId, permissions: ['read'], projectId: 'project-a' },
-        { userId: ownerId, permissions: ['read'] },
+        { userId: ownerId, permissions: ['read'], sessionId },
+        { userId: 'third-party', permissions: ['read'], sessionId },
         { userId: 'third-party', permissions: ['read'] },
       ],
     };
@@ -90,6 +94,52 @@ describe('sessionService - delete', () => {
     );
   });
 
+  // The destruction the sessionId tag exists to stop. pushShareable merged a direct share and a
+  // session-derived grant into one untagged row while they shared a key, so deleting the session
+  // took the direct share with it - a grant the file's owner made and the session owner had no
+  // authority over. Separate rows now, and only the tagged one goes.
+  it('leaves a direct share intact when the same user also holds a session-derived grant', async () => {
+    const session = { id: sessionId, userId: ownerId, deletedAt: null };
+    const carolsDirectShare = { userId: 'carol', permissions: ['read'] };
+    const sharedInFile = {
+      id: 'file-shared-in',
+      userId: otherUserId,
+      users: [carolsDirectShare, { userId: 'carol', permissions: ['read'], sessionId }],
+    };
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue([sharedInFile]);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await deleteSession(ownerId, { id: sessionId }, adapters);
+
+    expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'file-shared-in', users: [carolsDirectShare] })
+    );
+  });
+
+  // knowledgeIds, not just files uploaded into the session: accept.ts propagates onto whatever the
+  // session attaches, which can be a file that lives somewhere else entirely.
+  it('reaches a grant it minted on a knowledge file uploaded outside this session', async () => {
+    const session = { id: sessionId, userId: ownerId, deletedAt: null, knowledgeIds: ['file-elsewhere'] };
+    const knowledgeFile = {
+      id: 'file-elsewhere',
+      userId: otherUserId,
+      users: [{ userId: 'carol', permissions: ['read'], sessionId }],
+    };
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue([]);
+    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([knowledgeFile]);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await deleteSession(ownerId, { id: sessionId }, adapters);
+
+    expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'file-elsewhere', users: [] })
+    );
+  });
+
   // softDeletePlugin puts `deletedAt: null` on every findOne and findByIdAndUserId is a bare
   // findOne, so a session tombstoned before the cascade is unreachable on a retry: the guard at
   // the top throws and any grant the loop had not reached stays live with nothing left to clear
@@ -99,7 +149,7 @@ describe('sessionService - delete', () => {
     const sharedInFile = {
       id: 'file-shared-in',
       userId: otherUserId,
-      users: [{ userId: ownerId, permissions: ['read'] }],
+      users: [{ userId: ownerId, permissions: ['read'], sessionId }],
     };
 
     (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
@@ -118,7 +168,7 @@ describe('sessionService - delete', () => {
     const sharedInFile = {
       id: 'file-shared-in',
       userId: otherUserId,
-      users: [{ userId: ownerId, permissions: ['read'] }],
+      users: [{ userId: ownerId, permissions: ['read'], sessionId }],
     };
 
     (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
@@ -129,7 +179,7 @@ describe('sessionService - delete', () => {
 
     // The other user's file must never be hard-deleted...
     expect(mockFabFileRepo.deleteManyInIds).toHaveBeenCalledWith([]);
-    // ...only the session owner's derived grant on it is dropped.
+    // ...only the grant this session minted on it is dropped.
     expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'file-shared-in', users: [] })
     );

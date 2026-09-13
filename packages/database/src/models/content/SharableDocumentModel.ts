@@ -20,6 +20,7 @@ export const UserShareableSchema = new Schema<IUserShare>(
       required: true,
     },
     projectId: { type: String, required: false },
+    sessionId: { type: String, required: false },
 
     extraData: {
       type: Map,

@@ -7,8 +7,8 @@
 Second tranche of the sharing authorization cluster. A grant now means only what it says, and an
 entity that derives grants cleans them up when it goes away.
 
-Re-sharing is capped and gated. An invite can no longer carry a permission its minter does not
-hold, so a sharee with `share` alone cannot mint `update`/`delete` and redeem the link on their own
+Re-sharing is capped and gated at the invite door. An invite can no longer carry a permission its
+minter does not hold, so a sharee with `share` alone cannot mint `update`/`delete` and redeem the link on their own
 account; `@bike4mind/common` exports `heldPermissions` and `grantablePermissions` for that check.
 The cap uses the latter, which treats `share` as conveying `read`: minting an invite already
 requires share authority, and a collaborator granted share alone still has to be able to pass on
@@ -27,7 +27,8 @@ Revoking a session share also removes the file grants acceptance materialized. D
 hard-deletes only the owner's own files; an attached file owned by someone else loses the derived
 grant instead of being destroyed.
 
-A shared entry now records the grant's source. `pushShareable` keyed `users[]` on `userId` alone,
+A shared entry now records the grant's source, for sessions as well as projects. `pushShareable`
+keyed `users[]` on `userId` alone,
 so a file reached through two projects collapsed into one entry tagged with whichever project
 wrote last, while `revoke` filters on that tag: revoking via the earlier project matched nothing
 and returned the document as if it had succeeded, leaving access live, and revoking via the later
@@ -63,19 +64,30 @@ did resolve to emails - so a legacy Project or Organization invite fails closed 
 has to be re-sent. A side effect worth knowing: organization seat accounting counts pending
 recipients, so it was undercounting and now holds.
 
-Revoking a session share cascades on share authority rather than ownership. Acceptance propagates a
-file grant whenever the inviter can share the file, so gating the revocation on the session owner
-*owning* it left grants on shared-but-not-owned files permanently un-revokable through the session
-path. Both sides now use `heldPermissions`, which returns everything for an owner, so ownership
-still passes.
+A session's knowledge propagation now tags the grants it mints, and both cascades key on that tag.
+`IUserShare` gains an optional `sessionId`, the counterpart to `projectId` for the other entity that
+derives grants, and `pushShareable` keys on all three. Untagged, a propagated file grant merged into
+any direct share of the same file to the same user - so unsharing the session deleted the merged row
+whole and destroyed a grant a third party had made. Reaching that row through the session also
+skipped the owner-or-self check a direct `revokeSharing` on the file would have applied, since the
+cascade writes `file.users` itself. Keying on the tag fixes both: a direct share is its own row and
+is never touched, and a tagged row can only have been written by an accept that already required the
+inviter to hold share on the file, so the tag *is* the authorization. That retires the previous
+gate, which asked whether the SESSION OWNER could still share the file while the mint had asked
+about the INVITER - not the same principal whenever a sharee minted the invite, which stranded those
+grants un-revokable through the very path that created them. Grants written before the tag existed
+are untagged and so are no longer reachable from the session path; they remain revocable directly on
+the file, which is the safe direction to fail.
 
 Deleting a session cascades before it tombstones, and drops only the grant it created. The tombstone
 came first while the per-file grant rewrite came second, and `softDeletePlugin` puts
 `deletedAt: null` on every `findOne` - so a failure mid-cascade left the session unreachable on a
 retry with the remaining grants live and nothing left to clear them. The cascade now runs first.
-It also qualifies on `(userId, projectId)` like its sibling in `sharingService/revoke.ts`: it was
-stripping every row the deleter held, so a file reached through a project the deleter is still a
-member of lost that access too. Both new whole-document grant writes, here and in the session
+It also keys on the `sessionId` tag like its sibling in `sharingService/revoke.ts`, and clears every
+grantee's tagged row rather than only the deleter's: it was stripping every untagged row the deleter
+held, which took direct shares with it and left sharees' derived grants behind with no surface left
+to revoke them. It reads `knowledgeIds` as well as files uploaded into the session, since a grant the
+session minted can sit on a file that lives elsewhere. Both new whole-document grant writes, here and in the session
 knowledge-file cascade, take `updateGuarded` rather than `update`, joining the optimistic-concurrency
 convention the revoke path already uses.
 
@@ -89,13 +101,20 @@ removed from the list it reads. It now returns the pruned ids and leaves the cal
 `leaveProject` and the project arm of `revoke` assign the return; `deleteProject` drops it, so a
 tombstoned project still records what it held for restore and audit to read.
 
+The legacy link-only inference reads all three recipient buckets. Accepting and declining both move
+an address out of `pending`, so unioning only `pending` and `accepted` made a pre-flag invite whose
+named recipients had all declined infer as a share link - opening the view gate to any authenticated
+caller and letting anyone redeem it. `refused` is unioned too.
+
 An invite of a type that is not shareable by link can no longer be minted with no recipients. Only
 FabFile and Session are: for Project and Organization an empty list would otherwise persist
 `isLinkOnly: true` and be redeemable by anyone holding the id, and for Group it persisted
 `isLinkOnly: false` against an empty `pending`, which both the view gate and the accept gate then
 refuse - a row that minted successfully and nobody could ever redeem. The refusal is expressed
 against the same predicate that sets the flag, so the two cannot drift apart. `InviteType.Tool` has
-no arm in `createInvite`'s switch and still fails earlier, on `Document not found`.
+no arm in `createInvite`'s switch and still fails earlier, on `Document not found`. A Group invite
+naming only recipients that fail to resolve is refused too, matching the Project/Organization arm
+that already did: it persisted a row both gates then refuse, while telling the sharer it worked.
 
 The CASL share arm is now one exported function, `applySharedShareableRules`, called by both ability
 builders instead of being hand-copied. Each caller still passes its own resource list, because CASL
@@ -107,8 +126,9 @@ declares the `Pick<IUserDocument, 'id' | 'groups'>` it actually consumes, matchi
 The `backfill-invite-inviter-id` migration backfills `Invite.inviterId` from the username every
 invite already persists, which is the closing move for the legacy propagation fallback in
 `accept.ts`. It scans on an `_id` cursor rather than loading the whole matching set at once, since
-invites are one of the higher-cardinality collections. `ShareModal` reads the server's reason out of
-the error envelope instead of showing axios's own `Request failed with status code 403`.
+invites are one of the higher-cardinality collections. `SkillShareDialog`, the surface that actually
+flips `isGlobalRead`/`isGlobalWrite`, reports the server's reason instead of a fixed string, so a
+holder refused by the predicate this change moves can tell that apart from a network failure.
 
 Invite redemption enforces `expiresAt` on both accept and refuse. Declining now affects only the
 decliner's own slot: one recipient declining used to zero the invite for every other recipient, and
@@ -128,4 +148,6 @@ Breaking, in `@bike4mind/services`: `createProject` takes the acting user (`Pick
 `refuseWholeInvite` takes a full `IUserDocument` and the adapters `authorizeByInviteType` needs;
 `deleteProject` requires `sessions`, `fabFiles` and `users` adapters to run its cascade;
 `revokeFromProject` returns `{ fileIds, sessionIds }` and no longer writes them back onto the
-`project` it was handed, so a caller that relied on the mutation must assign the return itself.
+`project` it was handed, so a caller that relied on the mutation must assign the return itself. In
+`@bike4mind/common`, `IUserShare` gains an optional `sessionId`, and any code that reads `users[]`
+must treat a row carrying it as distinct from an untagged row for the same user.

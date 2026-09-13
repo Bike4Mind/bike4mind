@@ -209,7 +209,7 @@ describe('sharingService - revoke (session knowledgeIds cascade)', () => {
     const plainFile = {
       id: plainFileId,
       userId: ownerId,
-      users: [{ userId: sharedUserId, permissions: ['read'] }],
+      users: [{ userId: sharedUserId, permissions: ['read'], sessionId }],
     };
     const projectScopedFile = {
       id: projectFileId,
@@ -217,8 +217,6 @@ describe('sharingService - revoke (session knowledgeIds cascade)', () => {
       users: [{ userId: sharedUserId, permissions: ['read'], projectId: 'some-other-project' }],
     };
 
-    // Id-aware: revoke resolves the revokee, and the cascade resolves the session owner to read
-    // the groups its share-authority check needs.
     mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
       id === ownerId ? { id: ownerId, groups: [] } : { id: sharedUserId, groups: [] }
     );
@@ -228,7 +226,7 @@ describe('sharingService - revoke (session knowledgeIds cascade)', () => {
     await revoke(ownerId, { id: sessionId, type: 'sessions', userId: sharedUserId }, mockAdapters);
 
     expect(mockAdapters.db.sessions.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
-    // The plain grant materialized by session acceptance is stripped.
+    // The grant this session materialized is stripped.
     expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(
       expect.objectContaining({ id: plainFileId, users: [] })
     );
@@ -238,8 +236,40 @@ describe('sharingService - revoke (session knowledgeIds cascade)', () => {
     );
   });
 
-  // accept.ts propagates a grant whenever the inviter can SHARE the file, not only when they own
-  // it, so a revoke gated on ownership alone left those grants permanently un-revokable here.
+  // The destruction the sessionId tag exists to stop, in the shape a reviewer walked it: Alice owns
+  // F and shares it directly with Carol; Bob holds share on F and attaches it to his own session,
+  // which he also shares with Carol. Bob unsharing his session must not take Alice's grant with it,
+  // and note that a direct revokeSharing on F would have refused Bob outright - he owns neither F
+  // nor the grant. While the two rows shared a key they merged, and this path deleted both.
+  it('leaves a direct share intact when the same user also holds a session-derived grant', async () => {
+    const carolId = 'carol';
+    const session = {
+      id: sessionId,
+      userId: ownerId,
+      knowledgeIds: [plainFileId],
+      users: [{ userId: carolId, permissions: ['read'] }],
+    };
+    const alicesDirectShare = { userId: carolId, permissions: ['read'] };
+    const file = {
+      id: plainFileId,
+      userId: 'alice',
+      users: [alicesDirectShare, { userId: carolId, permissions: ['read'], sessionId }],
+    };
+
+    mockAdapters.db.users.findById.mockImplementation(async (id: string) => ({ id, groups: [] }));
+    mockAdapters.db.sessions.shareable.findAccessibleById.mockResolvedValue(session);
+    mockAdapters.db.fabFiles.findAllByIds.mockResolvedValue([file]);
+
+    await revoke(ownerId, { id: sessionId, type: 'sessions', userId: carolId }, mockAdapters);
+
+    expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(
+      expect.objectContaining({ id: plainFileId, users: [alicesDirectShare] })
+    );
+  });
+
+  // accept.ts propagates a grant whenever the INVITER can share the file, which need not be the
+  // session owner at all. The tag records that the mint was authorized, so revocation no longer has
+  // to re-derive authority from a principal it might have guessed wrong.
   it('revokes on a file the session owner can share but does not own', async () => {
     const foreignFileId = 'file-foreign';
     const session = {
@@ -253,7 +283,7 @@ describe('sharingService - revoke (session knowledgeIds cascade)', () => {
       userId: 'someone-else',
       users: [
         { userId: ownerId, permissions: ['read', 'share'] },
-        { userId: sharedUserId, permissions: ['read'] },
+        { userId: sharedUserId, permissions: ['read'], sessionId },
       ],
     };
 
@@ -270,7 +300,9 @@ describe('sharingService - revoke (session knowledgeIds cascade)', () => {
     );
   });
 
-  it('leaves a stranger file alone when the session owner holds only read on it', async () => {
+  // Was a test of the old owner-holds-share gate; the rows here are untagged, which is now the
+  // reason nothing is written.
+  it('leaves a stranger file alone when nothing on it is tagged with this session', async () => {
     const foreignFileId = 'file-foreign';
     const session = {
       id: sessionId,

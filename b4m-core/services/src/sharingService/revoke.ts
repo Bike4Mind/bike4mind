@@ -6,9 +6,6 @@ import {
   ISessionRepository,
   IUserRepository,
   IUserShare,
-  Permission,
-  ShareableAccessShape,
-  heldPermissions,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters, UnauthorizedError } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -119,24 +116,22 @@ const revokeSessionKnowledgeFileGrants = async (
   const { db } = adapters;
 
   const files = await db.fabFiles.findAllByIds(session.knowledgeIds ?? []);
-  // Groups matter: a session owner who reaches a file only through a group still had the share
-  // authority that let acceptance materialize the grant, and an id alone would silently skip it.
-  const sessionOwner = await db.users.findById(session.userId);
   for (const file of files) {
-    // knowledgeIds is client-writable with only shape validation (sessionService/update.ts), and
-    // this function is authorized against the SESSION, not each file. Without a check here anyone
-    // could point their own session at a stranger's file and strip a third party's grant on it.
+    // Only rows this session minted. The tag is the authorization: a row carrying `sessionId` was
+    // written by accept.ts's propagation, which already required the inviter to hold share on the
+    // file, so matching on it cannot reach a grant this session did not create. knowledgeIds is
+    // client-writable (sessionService/update.ts validates shape only), and that is exactly why the
+    // filter keys on the tag rather than on the session owner's present authority - pointing your
+    // session at a stranger's file gives you nothing, because no row on it carries your session id.
     //
-    // The predicate mirrors accept.ts's propagation gate, which materializes a file grant whenever
-    // the inviter can SHARE the file, not only when they own it. Gating revocation on ownership
-    // alone left a grant on a shared-but-not-owned file permanently un-revokable through the
-    // session path. `heldPermissions` returns everything for the owner, so ownership still passes.
-    const ownerCanShare =
-      !!sessionOwner &&
-      heldPermissions(file as ShareableAccessShape, sessionOwner.id, sessionOwner.groups ?? []).has(Permission.share);
-    if (!ownerCanShare) continue;
-
-    const remaining = file.users.filter(user => !(user.userId.toString() === userIdToRevoke && !user.projectId));
+    // Untagged rows are left alone: a direct share of the same file to the same user is a separate
+    // row, and deleting it here destroyed a grant a third party had made and the revoker had no say
+    // over. Tagging also retires the old owner-holds-share gate, which read the session owner while
+    // the mint read the inviter - not the same principal whenever a sharee minted the invite, so a
+    // grant could be stranded un-revokable through the very path that created it.
+    const remaining = file.users.filter(
+      user => !(user.userId.toString() === userIdToRevoke && user.sessionId === session.id)
+    );
     if (remaining.length === file.users.length) continue;
     file.users = remaining;
     // Whole-doc grant write on the revocation path, same reason the main revoke below takes the

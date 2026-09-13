@@ -47,6 +47,15 @@ export interface IUserShare {
   permissions: Permission[];
   /** The project ID if the user is shared from a project */
   projectId?: string;
+  /**
+   * The session ID if the grant was propagated from that session's knowledgeIds.
+   *
+   * Same role projectId plays, for the other entity that derives grants. Without it a
+   * session-propagated file grant is untagged, so it merges into any direct share of the same file
+   * to the same user, and revoking the session then deletes the merged row whole - destroying a
+   * third party's grant the revoker was never authorized to touch.
+   */
+  sessionId?: string;
   extraData?: {
     // Bike4Mind-specific fields
     /** The last time the user exported data */

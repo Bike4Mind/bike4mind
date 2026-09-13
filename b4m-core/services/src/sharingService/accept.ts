@@ -187,7 +187,7 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
               return;
             }
 
-            pushShareable(fabfile, { ...update, permissions: grantPermissions });
+            pushShareable(fabfile, { ...update, permissions: grantPermissions, sessionId: session.id });
             await db.fabFiles.update(fabfile);
           })
         );
@@ -319,20 +319,31 @@ const acceptProject = async (
 
 export const pushShareable = (
   entity: IShareableDocument,
-  data: { userId: string; permissions: Permission[]; projectId?: string }
+  data: { userId: string; permissions: Permission[]; projectId?: string; sessionId?: string }
 ) => {
   entity.users ||= [];
-  // Keyed on (userId, projectId), not userId alone: an entry records a grant's SOURCE, and revoke
-  // filters on that tag. Merging on the user alone collapsed two projects' grants into one entry
-  // carrying whichever projectId was written last, so revoking via the earlier project matched
-  // nothing and reported success while access stayed live, and revoking via the later one tore out
-  // the other project's grant with it. A direct (untagged) share is its own row for the same
-  // reason - that is what lets an untagged revoke drop it without touching project-derived access.
+  // Keyed on (userId, projectId, sessionId), not userId alone: an entry records a grant's SOURCE,
+  // and revoke filters on that tag. Merging on the user alone collapsed two projects' grants into
+  // one entry carrying whichever projectId was written last, so revoking via the earlier project
+  // matched nothing and reported success while access stayed live, and revoking via the later one
+  // tore out the other project's grant with it. sessionId is here for the same reason: a session's
+  // knowledge propagation is the other grant-deriving path, and while it was untagged it merged
+  // into any direct share of the same file to the same user - so revoking the session deleted a
+  // grant a third party had made, which the revoker had no authority over. A direct share is its
+  // own untagged row, which is what lets an untagged revoke drop it and nothing else.
   const userIndex = entity.users.findIndex(
-    user => user.userId === data.userId && (user.projectId ?? undefined) === (data.projectId ?? undefined)
+    user =>
+      user.userId === data.userId &&
+      (user.projectId ?? undefined) === (data.projectId ?? undefined) &&
+      (user.sessionId ?? undefined) === (data.sessionId ?? undefined)
   );
   if (userIndex === -1) {
-    entity.users.push({ userId: data.userId, permissions: data.permissions, projectId: data.projectId });
+    entity.users.push({
+      userId: data.userId,
+      permissions: data.permissions,
+      projectId: data.projectId,
+      sessionId: data.sessionId,
+    });
   } else {
     // Merge, don't replace: pushShareable's callers are this file's own invite-accept arms plus
     // projectService's addFiles/addSessions/addSystemPrompts (propagating a member's current
@@ -344,6 +355,7 @@ export const pushShareable = (
       ...existing,
       userId: data.userId,
       projectId: data.projectId,
+      sessionId: data.sessionId,
       permissions: Array.from(new Set([...(existing.permissions ?? []), ...data.permissions])),
     };
   }

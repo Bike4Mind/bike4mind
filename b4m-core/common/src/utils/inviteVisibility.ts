@@ -15,9 +15,19 @@ export type LinkOnlyInviteShape = Pick<IInvite, 'isLinkOnly' | 'recipients' | 't
  * Rows minted before the flag existed fall back to inferring it, and only for the two types whose
  * recipients always did resolve to emails. A legacy Project/Organization invite therefore reads as
  * named-but-unresolved and fails closed at both the view and accept gates rather than open.
+ *
+ * The inference unions all three recipient buckets, `refused` included. Accepting and declining
+ * both move an address out of `pending`, so reading only `pending` and `accepted` made an invite
+ * whose named recipients had all declined infer as link-only - which opens the view gate to any
+ * authenticated caller and lets anyone redeem it. A declined invite names people; it names them in
+ * a different bucket.
  */
 export const isLinkOnlyInvite = (invite: LinkOnlyInviteShape): boolean => {
   if (typeof invite.isLinkOnly === 'boolean') return invite.isLinkOnly;
-  const named = [...(invite.recipients?.pending ?? []), ...(invite.recipients?.accepted ?? [])];
+  const named = [
+    ...(invite.recipients?.pending ?? []),
+    ...(invite.recipients?.accepted ?? []),
+    ...(invite.recipients?.refused ?? []),
+  ];
   return named.length === 0 && (invite.type === InviteType.FabFile || invite.type === InviteType.Session);
 };
