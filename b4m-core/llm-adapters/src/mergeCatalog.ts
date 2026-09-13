@@ -157,6 +157,15 @@ export function mergeCatalogWithDrops(
     if (seeded.has(modelId)) continue;
 
     const { draft } = mergeRows(bucket, null);
+    // Checked on the draft, ahead of asRenderableRecord: a discovered-but-unpromoted
+    // row can lack a claimed contextWindow by design, and the field check's
+    // "incomplete record" reason would misreport that as a data defect.
+    const status = (draft.lifecycle as { status?: string } | undefined)?.status;
+    const lifecycleReason = inactiveLifecycleReason(status);
+    if (lifecycleReason) {
+      dropped.push({ modelId, reason: lifecycleReason });
+      continue;
+    }
     const parsed = asRenderableRecord(draft);
     if ('reason' in parsed) {
       dropped.push({ modelId, reason: parsed.reason });
@@ -285,10 +294,20 @@ function asRenderableRecord(draft: Record<string, unknown>): { record: Renderabl
   return { record: draft as unknown as RenderableModelRecord };
 }
 
+/**
+ * Why a lifecycle status is not invocable, or null when it is "active". Shared
+ * between invocabilityBlocker and the catalog-only tier's pre-parse check, so
+ * both agree on the exact wording.
+ */
+function inactiveLifecycleReason(status: string | undefined): string | null {
+  if (status !== 'active') return `lifecycle status "${status ?? 'unset'}" is not invocable`;
+  return null;
+}
+
 /** Why a catalog-only record is metadata-only, or null when it is invocable. */
 function invocabilityBlocker(record: RenderableModelRecord): string | null {
-  const status = record.lifecycle?.status;
-  if (status !== 'active') return `lifecycle status "${status ?? 'unset'}" is not invocable`;
+  const lifecycleReason = inactiveLifecycleReason(record.lifecycle?.status);
+  if (lifecycleReason) return lifecycleReason;
   if (!record.adapterFamily) return 'no adapterFamily';
   if (!DISPATCHABLE_ADAPTER_FAMILIES.includes(record.adapterFamily)) {
     return `adapterFamily "${record.adapterFamily}" is not dispatchable by this build`;

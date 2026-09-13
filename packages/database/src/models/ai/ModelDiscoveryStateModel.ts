@@ -33,6 +33,7 @@ const ModelDiscoveryStateSchema = new Schema<IModelDiscoveryStateDocument>(
       ),
       required: false,
     },
+    probeAttempts: { type: Number, required: false },
     suggestion: {
       type: new Schema(
         {
@@ -153,6 +154,15 @@ export class ModelDiscoveryStateRepository
     const doc = await this.model.findOneAndUpdate(
       { modelId },
       { $set: { suggestion: { ...suggestion, suggestedAt } } },
+      { upsert: true, new: true }
+    );
+    return doc.toJSON() as IModelDiscoveryState;
+  }
+
+  async recordProbeAttempt(modelId: string): Promise<IModelDiscoveryState> {
+    const doc = await this.model.findOneAndUpdate(
+      { modelId },
+      { $inc: { probeAttempts: 1 } },
       { upsert: true, new: true }
     );
     return doc.toJSON() as IModelDiscoveryState;

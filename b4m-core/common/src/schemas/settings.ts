@@ -524,6 +524,7 @@ export const SettingKeySchema = z.enum([
   'modelDiscoveryAllowEgress',
   'modelDiscoveryPriceBandPct',
   'modelDiscoveryAutoRemap',
+  'modelDiscoveryProbeNewModels',
   // PR REPORT GENERATOR
   'prReportRepo',
   'prReportIdentityMap',
@@ -1893,6 +1894,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'modelDiscoveryAllowEgress', order: 4 },
       { key: 'modelDiscoveryPriceBandPct', order: 5 },
       { key: 'modelDiscoveryAutoRemap', order: 6 },
+      { key: 'modelDiscoveryProbeNewModels', order: 7 },
     ],
   },
   RATE_LIMITING: {
@@ -4598,6 +4600,16 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
     order: 6,
+  }),
+  modelDiscoveryProbeNewModels: makeBooleanSetting({
+    key: 'modelDiscoveryProbeNewModels',
+    name: 'Probe New Models for Dispatch',
+    defaultValue: true,
+    description:
+      'Lets a write-mode run spend a forced one-tool call on a newly discovered OpenAI model to verify which token parameter and tool transport it takes, and turn its tools on. Off leaves every new OpenAI model with tools withheld until an operator writes the dispatch profile by hand.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 7,
   }),
   prReportRepo: makeStringSetting({
     key: 'prReportRepo',

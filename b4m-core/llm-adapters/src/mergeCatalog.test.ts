@@ -313,6 +313,29 @@ describe('mergeCatalog: catalog-only records and the invocability contract', () 
     expect(dropped).toEqual([{ modelId: 'grok-9', reason: expect.stringContaining('discovered') }]);
   });
 
+  it('drops a discovered record with no claimed context window on the lifecycle reason, not incomplete-record', () => {
+    // Discovery writes a bare identity+lifecycle row before an aggregator join
+    // supplies a context window; that row must read as "not yet promoted", not
+    // as a malformed record.
+    const discoveredRow = row({
+      modelId: 'gpt-6-astra',
+      source: 'discovery',
+      ownedGroups: ['identity', 'lifecycle'],
+      patch: {
+        id: 'gpt-6-astra',
+        vendor: 'openai',
+        backend: ModelBackend.OpenAI,
+        type: 'text',
+        name: 'GPT 6 Astra',
+        lifecycle: { status: 'discovered' },
+      },
+    });
+    const { models, dropped } = mergeCatalogWithDrops([], [discoveredRow], NO_KEYS);
+    expect(models).toEqual([]);
+    expect(dropped).toEqual([{ modelId: 'gpt-6-astra', reason: expect.stringContaining('discovered') }]);
+    expect(dropped[0].reason).not.toContain('incomplete record');
+  });
+
   it('drops and counts a record whose type this build does not narrow on', () => {
     const { models, dropped } = mergeCatalogWithDrops([], [catalogOnly({ ...invocable, type: 'embedding' })], {
       apiKeys: { xai: 'xai-key' },

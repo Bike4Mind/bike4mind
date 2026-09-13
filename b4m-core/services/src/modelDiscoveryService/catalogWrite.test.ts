@@ -7,7 +7,7 @@ import {
 import { resolveCatalogRecords } from '@bike4mind/llm-adapters';
 import { describe, expect, it } from 'vitest';
 import { testCredentials } from './__fixtures__/fakes';
-import { planCatalogWrites, type CatalogWriteInput } from './catalogWrite';
+import { DISCOVERY_CONTRIBUTOR, planCatalogWrites, type CatalogWriteInput } from './catalogWrite';
 import type { DiscoveredModel } from './types';
 
 const RUN_AT = new Date('2026-07-26T10:00:00Z');
@@ -65,6 +65,10 @@ const seedRow = (patch: Record<string, unknown>, ownedGroups: string[]): IModelC
     patch,
     effectiveFrom: SEED_AT,
   }) as unknown as IModelCatalogRow;
+
+/** A curation row, which outranks discovery for the groups it owns and no others. */
+const operatorRow = (patch: Record<string, unknown>, ownedGroups: string[]): IModelCatalogRow =>
+  ({ ...seedRow(patch, ownedGroups), source: 'operator', effectiveFrom: RUN_AT }) as IModelCatalogRow;
 
 describe('planCatalogWrites', () => {
   it('enters a new model as discovered and auto-disabled while it has no trusted price', () => {
@@ -399,15 +403,17 @@ describe('planCatalogWrites', () => {
   });
 
   it('lets an aggregator enrich a model a provider already sighted', () => {
+    // supportsVision rather than supportsTools: an introduced OpenAI model has
+    // its tools withheld deliberately, which is its own case below.
     const result = plan({
       resolveDispatch: dispatchable,
       contributions: [
         { name: 'openai', kind: 'provider', records: [gpt6()] },
-        { name: 'models.dev', kind: 'aggregator', records: [{ modelId: 'gpt-6', patch: { supportsTools: true } }] },
+        { name: 'models.dev', kind: 'aggregator', records: [{ modelId: 'gpt-6', patch: { supportsVision: true } }] },
       ],
     });
 
-    expect(result.rows[0].patch).toMatchObject({ supportsTools: true });
+    expect(result.rows[0].patch).toMatchObject({ supportsVision: true });
     expect(result.rows[0].contributors).toContainEqual({ group: 'modalities', source: 'models.dev' });
     expect(result.rows[0].contributors).toContainEqual({ group: 'identity', source: 'openai' });
   });
@@ -829,5 +835,403 @@ describe('planCatalogWrites', () => {
     });
 
     expect(result.diff[0].blockedBy).toEqual(['no-trusted-price']);
+  });
+
+  describe('introducing a model no source describes fully', () => {
+    /** The openai source's output for a new id whose docs page it read: no window. */
+    const astra = (patch: DiscoveredModel['patch'] = {}): DiscoveredModel => ({
+      modelId: 'gpt-6-astra',
+      patch: {
+        id: 'gpt-6-astra',
+        vendor: 'openai',
+        backend: ModelBackend.OpenAI,
+        type: 'text',
+        name: 'GPT-6 Astra',
+        ...patch,
+      },
+    });
+
+    const introduce = (records: DiscoveredModel[], overrides: Partial<CatalogWriteInput> = {}) =>
+      plan({ contributions: [{ name: 'openai', kind: 'provider', records }], ...overrides });
+
+    /** The listing record alone: what an id whose docs page was never read leaves. */
+    const unnamed = (modelId: string, type: NonNullable<DiscoveredModel['patch']['type']>): DiscoveredModel => ({
+      modelId,
+      patch: { id: modelId, vendor: 'openai', backend: ModelBackend.OpenAI, type },
+    });
+
+    it('refuses an OpenAI introduction no docs page named', () => {
+      const result = introduce([unnamed('gpt-5.7', 'text')]);
+
+      expect(result.rows).toHaveLength(0);
+      // The reason names the cause, so a docs host that moved reads as itself in
+      // the run report instead of as an absence of new models.
+      expect(result.dropped[0].reason).toContain('no docs page supplied a name');
+      expect(result.sightedModelIds.has('gpt-5.7')).toBe(true);
+    });
+
+    it('refuses the legacy pins and non-product ids the chat namespaces classify', () => {
+      // All of these are `type: 'text'` to the OpenAI source, and all of them
+      // sort ahead of a genuinely new id in the probe queue's tie-break.
+      const ids = [
+        'gpt-3.5-turbo-16k',
+        'gpt-3.5-turbo-instruct',
+        'gpt-4-32k',
+        'gpt-4o-search-preview',
+        'chatgpt-4o-latest',
+        'codex-mini-latest',
+      ];
+
+      const result = introduce(ids.map(id => unnamed(id, 'text')));
+
+      expect(result.rows).toHaveLength(0);
+      expect(result.dropped).toHaveLength(ids.length);
+    });
+
+    it('refuses the non-text ids it can classify but nobody names', () => {
+      const result = introduce([
+        unnamed('text-embedding-ada-002', 'embedding'),
+        unnamed('tts-1-hd', 'tts'),
+        unnamed('dall-e-2', 'image'),
+        unnamed('gpt-realtime', 'realtime-voice'),
+      ]);
+
+      expect(result.rows).toHaveLength(0);
+    });
+
+    it('still names a backend with no docs parser off its listed id', () => {
+      // kimi, xai and bfl list the product id itself, so the id IS the label and
+      // the default is the only name available.
+      const result = introduce([
+        {
+          modelId: 'kimi-k3',
+          patch: {
+            id: 'kimi-k3',
+            vendor: 'moonshotai',
+            backend: ModelBackend.Kimi,
+            type: 'text',
+            contextWindow: 256_000,
+          },
+        },
+      ]);
+
+      expect(result.rows[0].patch).toMatchObject({ name: 'kimi-k3' });
+      expect(result.rows[0].ownedGroups).toContain('identity');
+    });
+
+    it('lands the row on the name the docs page supplied', () => {
+      const result = introduce([astra()]);
+
+      expect(result.diff[0]).toMatchObject({ modelId: 'gpt-6-astra', kind: 'added' });
+      expect(result.rows[0].patch).toMatchObject({ name: 'GPT-6 Astra' });
+      expect(result.rows[0].ownedGroups).toContain('identity');
+    });
+
+    it('leaves the context window it had to invent inert on the read path', () => {
+      const result = introduce([astra()]);
+
+      // A zero satisfies the append schema; NOT claiming `limits` is what stops
+      // it beating the real window an aggregator supplies on the next pass.
+      expect(result.rows[0].patch).toMatchObject({ contextWindow: 0 });
+      expect(result.rows[0].ownedGroups).not.toContain('limits');
+      expect(asBase(result.rows).get('gpt-6-astra')?.record).not.toHaveProperty('contextWindow');
+    });
+
+    it('claims the limits group for a window a source did supply', () => {
+      const result = introduce([astra({ contextWindow: 1_050_000 })]);
+
+      expect(result.rows[0].patch).toMatchObject({ contextWindow: 1_050_000 });
+      expect(result.rows[0].ownedGroups).toContain('limits');
+    });
+
+    it('reports the append schema rejection for a record it still cannot complete', () => {
+      // `type` is the one required field that cannot be defaulted honestly: the
+      // OpenAI source omits it for a namespace it does not recognize rather than
+      // labelling a new modality 'text'.
+      const result = introduce([
+        {
+          modelId: 'gpt-audio',
+          patch: { id: 'gpt-audio', vendor: 'openai', backend: ModelBackend.OpenAI, name: 'GPT Audio' },
+        },
+      ]);
+
+      expect(result.rows).toHaveLength(0);
+      expect(result.dropped[0].reason).toContain('record failed the append schema');
+      expect(result.sightedModelIds.has('gpt-audio')).toBe(true);
+    });
+
+    it('drops an output cap it has no window to claim the group alongside', () => {
+      const result = introduce([{ ...astra(), patch: { ...astra().patch, maxOutputTokens: 64_000 } }]);
+
+      expect(result.rows[0].patch).not.toHaveProperty('maxOutputTokens');
+      expect(result.rows[0].ownedGroups).not.toContain('limits');
+      expect(result.dropped.map(drop => drop.reason)).toContain(
+        'maxOutputTokens dropped: no context window to claim the limits group alongside it'
+      );
+    });
+
+    it('appends nothing over a model the catalog already names', () => {
+      const base = asBase(
+        [],
+        [
+          seedRow(
+            {
+              id: 'gpt-6-astra',
+              vendor: 'openai',
+              backend: 'openai',
+              type: 'text',
+              name: 'GPT-6 Astra',
+              contextWindow: 1_050_000,
+            },
+            ['identity', 'limits']
+          ),
+        ]
+      );
+
+      // Introduction-only, so a run over a model the catalog already names has
+      // nothing to change and appends nothing.
+      const result = introduce([astra()], { base });
+
+      expect(result.rows).toHaveLength(0);
+      expect(base.get('gpt-6-astra')?.record).toMatchObject({ name: 'GPT-6 Astra' });
+    });
+
+    it('withholds tools on introduction, over a source that says otherwise', () => {
+      // The pin defers the one dispatch field the id cannot reveal: which of
+      // OpenAI's two tool conventions the model's endpoint takes. A feed's "it
+      // has tools" is not that claim, so it loses.
+      const result = plan({
+        contributions: [
+          { name: 'openai', kind: 'provider', records: [astra()] },
+          {
+            name: 'models.dev',
+            kind: 'aggregator',
+            records: [{ modelId: 'gpt-6-astra', patch: { supportsTools: true } }],
+          },
+        ],
+      });
+
+      expect(result.rows[0].patch).toMatchObject({ supportsTools: false });
+      expect(result.rows[0].ownedGroups).toContain('modalities');
+      expect(result.dropped.map(drop => drop.reason)).toContain(
+        'supportsTools claim refused: tools stay withheld until the toolTransport is verified'
+      );
+    });
+
+    it('withholds tools from a model an operator merely pinned', () => {
+      // operatorOwnedModelIds means "SOME operator row exists" and precedence is
+      // per field group, so a rank or display-name pin owns no `modalities` and
+      // cannot answer which tool transport the model takes.
+      const result = plan({
+        operatorOwnedModelIds: new Set(['gpt-6-astra']),
+        contributions: [
+          { name: 'openai', kind: 'provider', records: [astra()] },
+          {
+            name: 'models.dev',
+            kind: 'aggregator',
+            records: [{ modelId: 'gpt-6-astra', patch: { supportsTools: true } }],
+          },
+        ],
+      });
+
+      expect(result.rows[0].patch).toMatchObject({ supportsTools: false });
+      expect(result.rows[0].patch).not.toHaveProperty('dispatchProfile');
+      expect(result.rows[0].ownedGroups).toContain('modalities');
+    });
+
+    it('lets an operator row that owns modalities carry the tools it claims', () => {
+      const result = plan({
+        operatorOwnedModelIds: new Set(['gpt-6-astra']),
+        contributions: [{ name: 'openai', kind: 'provider', records: [astra()] }],
+      });
+
+      const merged = asBase(result.rows, [operatorRow({ id: 'gpt-6-astra', supportsTools: true }, ['modalities'])]);
+
+      expect(merged.get('gpt-6-astra')?.record.supportsTools).toBe(true);
+    });
+
+    it('leaves the tools of a model already holding them alone', () => {
+      const base = asBase(
+        [],
+        [
+          seedRow(
+            { id: 'gpt-6', vendor: 'openai', backend: 'openai', type: 'text', name: 'GPT-6', contextWindow: 400_000 },
+            ['identity', 'limits']
+          ),
+          seedRow({ id: 'gpt-6', supportsTools: true, lifecycle: { status: 'active' } }, ['modalities', 'lifecycle']),
+        ]
+      );
+
+      const result = plan({
+        base,
+        contributions: [{ name: 'openai', kind: 'provider', records: [gpt6({ contextWindow: 500_000 })] }],
+      });
+
+      expect(result.rows[0].patch).toMatchObject({ supportsTools: true });
+      expect(result.rows[0].ownedGroups).not.toContain('modalities');
+    });
+
+    describe('a probe-verified dispatch group', () => {
+      const RUN_2 = new Date(RUN_AT.getTime() + 60_000);
+      const RUN_3 = new Date(RUN_AT.getTime() + 120_000);
+
+      /** What resolveDispatchForRecord returns for every OpenAI id: a family, no profile. */
+      const familyOnly: CatalogWriteInput['resolveDispatch'] = record =>
+        record.backend === ModelBackend.OpenAI ? { adapterFamily: 'openai-chat' } : null;
+
+      const probedResponses = new Map([
+        [
+          'gpt-6-astra',
+          {
+            adapterFamily: 'openai-responses' as const,
+            dispatchProfile: { maxTokensParam: 'max_completion_tokens' as const, toolTransport: 'responses' as const },
+          },
+        ],
+      ]);
+
+      /**
+       * The catalog as the runtime reads it after a run: rowsInForce keeps ONE
+       * discovery row per model, so the next run diffs against that row alone and
+       * re-claims its groups.
+       */
+      const afterRun = (row: IModelCatalogRowInput): Partial<CatalogWriteInput> => ({
+        base: asBase([row]),
+        priorDiscoveryGroups: new Map([[row.modelId, row.ownedGroups]]),
+      });
+
+      it('overwrites the family the resolver guessed, because the probe verified it', () => {
+        const introduced = introduce([astra()], { resolveDispatch: familyOnly });
+        expect(introduced.rows[0].patch).toMatchObject({ adapterFamily: 'openai-chat' });
+        expect(introduced.rows[0].patch).not.toHaveProperty('dispatchProfile');
+
+        const probed = introduce([astra()], {
+          ...afterRun(introduced.rows[0]),
+          resolveDispatch: familyOnly,
+          probedProfiles: probedResponses,
+          runStartedAt: RUN_2,
+        });
+
+        // Both halves move together or the model dispatches through a family
+        // that contradicts its own transport.
+        expect(probed.rows[0].patch).toMatchObject({
+          adapterFamily: 'openai-responses',
+          dispatchProfile: { maxTokensParam: 'max_completion_tokens', toolTransport: 'responses' },
+          supportsTools: true,
+        });
+        expect(probed.rows[0].ownedGroups).toContain('dispatch');
+        expect(probed.rows[0].ownedGroups).toContain('modalities');
+        // Provenance: verified here, not derived by the seed layer.
+        expect(probed.rows[0].contributors).toContainEqual({ group: 'dispatch', source: DISCOVERY_CONTRIBUTOR });
+      });
+
+      it('keeps those tools on the next run, which does not probe again', () => {
+        const introduced = introduce([astra()], { resolveDispatch: familyOnly });
+        const probed = introduce([astra()], {
+          ...afterRun(introduced.rows[0]),
+          resolveDispatch: familyOnly,
+          probedProfiles: probedResponses,
+          runStartedAt: RUN_2,
+        });
+        expect(probed.rows[0].patch).toMatchObject({ supportsTools: true });
+
+        // A model with a dispatchProfile is no longer a probe candidate, so
+        // `probed` is false here. Without the supportsTools claim in the row
+        // above, the pin re-engages off the withheld introducing row and the
+        // model flip-flops between tools-on and tools-off run after run.
+        const later = plan({
+          ...afterRun(probed.rows[0]),
+          resolveDispatch: familyOnly,
+          runStartedAt: RUN_3,
+          contributions: [
+            { name: 'openai', kind: 'provider', records: [astra()] },
+            {
+              name: 'models.dev',
+              kind: 'aggregator',
+              records: [{ modelId: 'gpt-6-astra', patch: { supportsTools: true } }],
+            },
+          ],
+        });
+
+        expect(later.dropped.map(drop => drop.reason)).not.toContain(
+          'supportsTools claim refused: tools stay withheld until the toolTransport is verified'
+        );
+        expect(later.rows.map(row => (row.patch as Record<string, unknown>).supportsTools)).not.toContain(false);
+      });
+
+      it('leaves the tools of a model this run did not probe withheld', () => {
+        const introduced = introduce([astra()], { resolveDispatch: familyOnly });
+
+        const later = introduce([astra()], {
+          ...afterRun(introduced.rows[0]),
+          resolveDispatch: familyOnly,
+          probedProfiles: new Map(),
+          runStartedAt: RUN_2,
+        });
+
+        expect(later.rows.map(row => (row.patch as Record<string, unknown>).supportsTools)).not.toContain(true);
+      });
+    });
+
+    it('sights a dated snapshot and a fine-tune without introducing either', () => {
+      const result = introduce([
+        astra(),
+        {
+          modelId: 'gpt-6-astra-2026-09-01',
+          patch: { id: 'gpt-6-astra-2026-09-01', vendor: 'openai', backend: ModelBackend.OpenAI, type: 'text' },
+        },
+        {
+          modelId: 'ft:gpt-6-astra:acme::x1',
+          patch: { id: 'ft:gpt-6-astra:acme::x1', vendor: 'openai', backend: ModelBackend.OpenAI, type: 'text' },
+        },
+      ]);
+
+      expect(result.diff.map(entry => entry.modelId)).toEqual(['gpt-6-astra']);
+      expect(result.dropped.filter(drop => drop.reason.includes('not a model to introduce'))).toHaveLength(2);
+      // Still sighted: the absence protocol counts a miss streak per id, and an
+      // id it never hears about looks like one the provider stopped listing.
+      expect([...result.sightedModelIds].sort()).toEqual([
+        'ft:gpt-6-astra:acme::x1',
+        'gpt-6-astra',
+        'gpt-6-astra-2026-09-01',
+      ]);
+    });
+
+    it('keeps updating a snapshot the catalog already holds', () => {
+      const base = asBase(
+        [],
+        [
+          seedRow(
+            {
+              id: 'gpt-6-astra-2026-09-01',
+              vendor: 'openai',
+              backend: 'openai',
+              type: 'text',
+              name: 'GPT-6 Astra (2026-09-01)',
+              contextWindow: 400_000,
+            },
+            ['identity', 'limits']
+          ),
+        ]
+      );
+
+      const result = introduce(
+        [
+          {
+            modelId: 'gpt-6-astra-2026-09-01',
+            patch: {
+              id: 'gpt-6-astra-2026-09-01',
+              vendor: 'openai',
+              backend: ModelBackend.OpenAI,
+              type: 'text',
+              contextWindow: 1_050_000,
+            },
+          },
+        ],
+        { base }
+      );
+
+      expect(result.diff[0]).toMatchObject({ modelId: 'gpt-6-astra-2026-09-01', kind: 'updated' });
+      expect(result.rows[0].patch).toMatchObject({ contextWindow: 1_050_000 });
+    });
   });
 });

@@ -16,6 +16,14 @@ breakpoint is refused unless the page states the model id it was asked for. One
 prose paragraph carrying a curly apostrophe was dropped from each (the repo is
 ASCII-only); it is boilerplate no parser reads.
 
+The same captures are the fixtures for parseOpenAiModelPage, which reads the
+"## Model details" bullets a new model's catalog row needs: the H1 as its display
+name, the stated Model ID, the context window, the max output tokens, the
+input modalities and the reasoning bullet. Two shapes they do NOT carry - a page with no
+reasoning bullet, and a page whose title, id or window bullet is gone - are
+written as literals in openaiDocs.test.ts rather than captured, because a page
+OpenAI does not publish cannot be captured from OpenAI.
+
 parser-broke-pricing.md is CONSTRUCTED: the page restructured so the Standard
 heading and the "Short context" column names are gone. It must parse to a
 failure, never to a partial table.

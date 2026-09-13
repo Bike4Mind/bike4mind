@@ -173,6 +173,7 @@ export class FakeDiscoveryStateRepository {
   readonly misses: string[] = [];
   readonly states = new Map<string, IModelDiscoveryState>();
   readonly suggestions: Array<{ modelId: string; suggestion: ModelLifecycleSuggestionInput; at: Date }> = [];
+  readonly probeAttempts: string[] = [];
 
   async findByModelIds(modelIds: readonly string[]): Promise<IModelDiscoveryState[]> {
     return modelIds.map(modelId => this.states.get(modelId)).filter((state): state is IModelDiscoveryState => !!state);
@@ -200,6 +201,12 @@ export class FakeDiscoveryStateRepository {
   ): Promise<IModelDiscoveryState> {
     this.suggestions.push({ modelId, suggestion, at });
     return this.write(modelId, { suggestion: { ...suggestion, suggestedAt: at } });
+  }
+
+  async recordProbeAttempt(modelId: string): Promise<IModelDiscoveryState> {
+    this.probeAttempts.push(modelId);
+    const held = this.states.get(modelId);
+    return this.write(modelId, { probeAttempts: (held?.probeAttempts ?? 0) + 1 });
   }
 
   private write(modelId: string, patch: Partial<IModelDiscoveryState>): IModelDiscoveryState {

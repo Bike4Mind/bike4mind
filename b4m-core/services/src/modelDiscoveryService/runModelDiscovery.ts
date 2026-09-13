@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  ModelBackend,
   isFieldGroup,
   type FieldGroup,
   type ICatalogContributor,
@@ -37,6 +38,7 @@ import type {
   DiscoveryMode,
   DiscoverySource,
   DiscoverySourceOk,
+  DispatchAnswer,
   DroppedSourceRecord,
   LifecycleDateChange,
   LifecycleSuggestion,
@@ -91,6 +93,18 @@ export const RETRY_DEADLINE_MS = 2_000;
 
 /** Two stages on the same 6h boundary otherwise hit every provider simultaneously. */
 export const DEFAULT_MIN_SOURCE_INTERVAL_MS = 60 * 60_000;
+
+/**
+ * Dispatch probes per run. A cap rather than a queue: the models are ordered by
+ * how often they have been asked, so the leftovers lead the next run.
+ */
+export const PROBE_MAX_MODELS_PER_RUN = 8;
+
+/** Lifetime probes per model, after which the id stops taking a budget slot. */
+export const PROBE_MAX_ATTEMPTS = 5;
+
+export const PROBE_BUDGET_MS = 90_000;
+export const PROBE_CALL_TIMEOUT_MS = 15_000;
 
 /** How far back run reports are read for the interval guard and cached validators. */
 const RUN_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
@@ -205,6 +219,7 @@ interface RunContext {
   autoEnable: DiscoveryAutoEnablePolicy;
   autoRemap: DiscoveryAutoRemapPolicy;
   allowEgress: boolean;
+  probeNewModels: boolean;
   bandPct: number;
   startedAt: Date;
   globalDeadlineMs: number;
@@ -313,6 +328,21 @@ async function executeRun(
     }
     const unauthoritativeSources = new Set(shrunkListings);
 
+    // Before the first pass: planCatalogWrites decides a model's dispatch group
+    // once, and a probe that landed after it would only take effect a run later.
+    // A throw here must not cost the run its writes.
+    const probedProfiles = await runDispatchProbeLeg({
+      adapters,
+      ctx,
+      credentials,
+      succeeded: succeeded(),
+      results,
+      globalSignal: globalDeadline.signal,
+    }).catch(error => {
+      logger.warn(`${LOG_PREFIX} dispatch probe leg failed: ${describe(error)}`);
+      return new Map<string, DispatchAnswer>();
+    });
+
     // The only sources whose answer this run's own writes can change: an
     // aggregator joins against the catalog. One that was skipped or failed in
     // pass 1 stays out - the convergence loop may not become a way around the
@@ -331,6 +361,7 @@ async function executeRun(
         options,
         runId,
         credentials,
+        probedProfiles,
         succeeded: succeeded(),
         results,
         droppedDocsSources,
@@ -498,6 +529,116 @@ async function executeRun(
   };
 }
 
+interface ProbeLegInput {
+  adapters: ModelDiscoveryAdapters;
+  ctx: RunContext;
+  credentials: DiscoveryCredentials;
+  succeeded: readonly DiscoverySource[];
+  results: ReadonlyMap<string, { report: IDiscoverySourceReport; result: SourceResult }>;
+  /** The run's deadline, which bounds both the queue and each call in flight. */
+  globalSignal: AbortSignal;
+}
+
+/**
+ * Verify the dispatch group of the OpenAI models this run would otherwise leave
+ * for a human. Nothing else can: a wrong toolTransport fails silently, so the
+ * only way to know which of OpenAI's two tool conventions a new id takes is to
+ * make the model answer (see dispatchProbe.ts).
+ *
+ * Write mode only, and only for records still 'discovered' with no profile - the
+ * same set planCatalogWrites is still allowed to decide for.
+ */
+async function runDispatchProbeLeg(input: ProbeLegInput): Promise<ReadonlyMap<string, DispatchAnswer>> {
+  const { adapters, ctx, credentials } = input;
+  const answers = new Map<string, DispatchAnswer>();
+  const probe = adapters.probeDispatch;
+  const apiKey = credentials.openai;
+  if (!probe || !apiKey || ctx.mode !== 'write' || !ctx.allowEgress || !ctx.probeNewModels) return answers;
+
+  const sighted = openAiSightings(input.succeeded, input.results);
+  if (sighted.size === 0) return answers;
+
+  const { rows } = await adapters.db.catalog.rowsInForceWithRejects(ctx.startedAt);
+  // An operator row that owns only `presentation` still makes the model theirs:
+  // planCatalogWrites diffs against the non-operator resolution and would hand
+  // it a discovery-authored dispatch row without noticing.
+  const operatorOwned = new Set(rows.filter(row => row.source === 'operator').map(row => row.modelId));
+  const candidates = [...resolveCatalogRecords(rows.filter(row => row.source !== 'operator')).values()]
+    .filter(({ modelId, record }) => sighted.has(modelId) && !operatorOwned.has(modelId) && awaitsDispatch(record))
+    .map(({ modelId }) => modelId);
+  if (candidates.length === 0) return answers;
+
+  const states = new Map(
+    (await adapters.db.discoveryState.findByModelIds(candidates)).map(state => [state.modelId, state] as const)
+  );
+  const attemptsOf = (modelId: string): number => states.get(modelId)?.probeAttempts ?? 0;
+  const queue = candidates
+    .filter(modelId => attemptsOf(modelId) < PROBE_MAX_ATTEMPTS)
+    // Never-attempted first. Without that key one permanently failing id that
+    // sorts early takes a slot every run and new models never reach one.
+    .sort((a, b) => attemptsOf(a) - attemptsOf(b) || a.localeCompare(b))
+    .slice(0, PROBE_MAX_MODELS_PER_RUN);
+
+  // Clamped to the run's deadline, because the budget is checked only BETWEEN
+  // models: the last one could start just inside it and then run two live calls.
+  const until = Math.min(ctx.now().getTime() + PROBE_BUDGET_MS, ctx.startedAt.getTime() + ctx.globalDeadlineMs);
+  for (const [index, modelId] of queue.entries()) {
+    if (ctx.now().getTime() >= until) {
+      ctx.logger.info(`${LOG_PREFIX} dispatch probe budget spent; ${queue.length - index} model(s) wait for next run`);
+      break;
+    }
+
+    const result = await probe(modelId, {
+      apiKey,
+      fetch: (url, init) => fetch(url, init),
+      timeoutMs: PROBE_CALL_TIMEOUT_MS,
+      signal: input.globalSignal,
+    });
+    if (result.answer) {
+      answers.set(modelId, result.answer);
+      const profile = result.answer.dispatchProfile;
+      ctx.logger.info(
+        `${LOG_PREFIX} probed ${modelId}: ${profile?.toolTransport} tool transport, ${profile?.maxTokensParam}`
+      );
+      continue;
+    }
+
+    await adapters.db.discoveryState.recordProbeAttempt(modelId);
+    if (result.retryable) {
+      // The upstream, not the model: probing the rest of the queue against a
+      // rate-limited or unhealthy endpoint buys nothing and costs the budget.
+      ctx.logger.warn(`${LOG_PREFIX} dispatch probe of ${modelId} hit a retryable upstream; leg stopped for this run`);
+      break;
+    }
+  }
+
+  return answers;
+}
+
+/** Ids a provider source listed as OpenAI-backed THIS run. */
+function openAiSightings(
+  succeeded: readonly DiscoverySource[],
+  results: ReadonlyMap<string, { report: IDiscoverySourceReport; result: SourceResult }>
+): ReadonlySet<string> {
+  const sighted = new Set<string>();
+  for (const source of succeeded) {
+    if (source.kind !== 'provider') continue;
+    const ok = results.get(source.name)?.result as DiscoverySourceOk;
+    for (const record of ok.records ?? []) {
+      if (record.patch?.backend === ModelBackend.OpenAI) sighted.add(record.modelId);
+    }
+  }
+  return sighted;
+}
+
+/** A record the catalog holds but cannot dispatch, and that discovery may still decide. */
+function awaitsDispatch(record: Record<string, unknown>): boolean {
+  if (record.backend !== ModelBackend.OpenAI || record.type !== 'text' || record.dispatchProfile) return false;
+  const lifecycle = record.lifecycle;
+  const status = typeof lifecycle === 'object' && lifecycle !== null ? (lifecycle as { status?: unknown }).status : '';
+  return status === 'discovered';
+}
+
 interface PassInput {
   adapters: ModelDiscoveryAdapters;
   ctx: RunContext;
@@ -507,6 +648,8 @@ interface PassInput {
   /** The sources whose fetch succeeded, in registration order. */
   succeeded: readonly DiscoverySource[];
   results: ReadonlyMap<string, { report: IDiscoverySourceReport; result: SourceResult }>;
+  /** Dispatch groups the probe leg verified this run, keyed by model id. */
+  probedProfiles: ReadonlyMap<string, DispatchAnswer>;
   /** Sources whose docs-derived signals this run drops, decided from pass 1. */
   droppedDocsSources: ReadonlySet<string>;
   /** Sources whose listing shrank this run; they enrich but claim no backend. */
@@ -600,6 +743,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
   const catalog = planCatalogWrites({
     contributions: signals.contributions,
     resolveDispatch: adapters.resolveDispatch,
+    probedProfiles: input.probedProfiles,
     base,
     coveredBackends,
     priorDiscoveryGroups,
@@ -1164,15 +1308,17 @@ async function readMode(adapters: ModelDiscoveryAdapters): Promise<{
   autoEnable: DiscoveryAutoEnablePolicy;
   autoRemap: DiscoveryAutoRemapPolicy;
   allowEgress: boolean;
+  probeNewModels: boolean;
   bandPct: number;
 }> {
   const settings = adapters.db.adminSettings;
-  const [enabled, mode, autoEnable, autoRemap, allowEgress, bandPct] = await Promise.all([
+  const [enabled, mode, autoEnable, autoRemap, allowEgress, probeNewModels, bandPct] = await Promise.all([
     settings.getSettingsValue('enableModelDiscovery'),
     settings.getSettingsValue('modelDiscoveryMode'),
     settings.getSettingsValue('modelDiscoveryAutoEnable'),
     settings.getSettingsValue('modelDiscoveryAutoRemap'),
     settings.getSettingsValue('modelDiscoveryAllowEgress'),
+    settings.getSettingsValue('modelDiscoveryProbeNewModels'),
     settings.getSettingsValue('modelDiscoveryPriceBandPct'),
   ]);
   return {
@@ -1182,6 +1328,10 @@ async function readMode(adapters: ModelDiscoveryAdapters): Promise<{
     autoEnable: autoEnable === 'manual' || autoEnable === 'all' ? autoEnable : 'priced',
     autoRemap: autoRemap === 'apply' ? 'apply' : 'suggest',
     allowEgress: allowEgress !== false,
+    // On unless an operator turns it off: this replaces a human hand-writing
+    // the profile, so off by default would leave every new OpenAI model
+    // tool-less forever. The setting is the kill switch, not the opt-in.
+    probeNewModels: probeNewModels !== false,
     // A band of 0 is legitimate ("flag every move"), so only an unusable value
     // falls back; NaN or a negative one would let every move through.
     bandPct: typeof bandPct === 'number' && Number.isFinite(bandPct) && bandPct >= 0 ? bandPct : DEFAULT_PRICE_BAND_PCT,

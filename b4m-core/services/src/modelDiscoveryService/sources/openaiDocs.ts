@@ -203,3 +203,74 @@ export function parseOpenAiLongContextBreakpoint(markdown: string): number | und
   const match = /prompts with\s*>\s*([\d.,]+\s*[km]?)\s*input tokens/i.exec(markdown);
   return match ? parseTokenCount(match[1] ?? '') : undefined;
 }
+
+/**
+ * A model's own page, as the facts a NEW model's catalog row needs.
+ *
+ * The page also carries a one-line description and a knowledge cutoff, both
+ * deliberately absent here: they are `presentation`-group fields and
+ * FEED_FORBIDDEN_GROUPS (catalogWrite.ts) refuses every feed's contribution to
+ * that group, so parsing them would only produce values the write path drops.
+ */
+export interface OpenAiModelPage {
+  /** The H1, which is the display name OpenAI publishes: "GPT-5.6 Luna". */
+  name: string;
+  /** The id the page states, which is what proves the page is this model's. */
+  modelId: string;
+  contextWindow: number;
+  maxOutputTokens?: number;
+  /** Lowercased as the page lists them: "text", "image", "audio". */
+  inputModalities?: string[];
+  /** Set only by the "Reasoning token support" bullet; its absence is not a published negative. */
+  reasoning?: boolean;
+}
+
+/** "- 1,050,000 context window": the count LEADS the label, unlike "Maximum input tokens: 922,000". */
+const CONTEXT_WINDOW_BULLET = /^-\s*([\d.,]+\s*[km]?)\s+context window\s*$/im;
+const MAX_OUTPUT_BULLET = /^-\s*([\d.,]+\s*[km]?)\s+max output tokens\s*$/im;
+const MODEL_ID_LINE = /^Model ID:\s*`([^`]+)`\s*$/m;
+const TITLE = /^#\s+(.+)$/m;
+const INPUT_MODALITIES_BULLET = /^-\s*Input modalities:\s*(.+)$/im;
+const REASONING_BULLET = /^-\s*Reasoning token support\s*$/im;
+
+/**
+ * One model page's facts, in the ParseResult shape the pricing table uses so a
+ * restructure reads as a parser failure rather than as a partial row. The title,
+ * the stated id and the context window are the three a row cannot be read
+ * without.
+ */
+export function parseOpenAiModelPage(markdown: string): ParseResult<OpenAiModelPage> {
+  const name = plain(TITLE.exec(markdown)?.[1] ?? '');
+  if (!name) return { ok: false, error: 'model page has no title' };
+
+  const modelId = MODEL_ID_LINE.exec(markdown)?.[1]?.trim();
+  if (!modelId) return { ok: false, error: `${name}'s page states no "Model ID:" line` };
+
+  const contextWindow = tokenBullet(markdown, CONTEXT_WINDOW_BULLET);
+  if (contextWindow === undefined) return { ok: false, error: `${modelId}'s page states no context window` };
+
+  const row: OpenAiModelPage = { name, modelId, contextWindow };
+  const maxOutputTokens = tokenBullet(markdown, MAX_OUTPUT_BULLET);
+  if (maxOutputTokens !== undefined) row.maxOutputTokens = maxOutputTokens;
+  const inputModalities = modalityBullet(markdown, INPUT_MODALITIES_BULLET);
+  if (inputModalities) row.inputModalities = inputModalities;
+  if (REASONING_BULLET.test(markdown)) row.reasoning = true;
+
+  return { ok: true, rows: [row] };
+}
+
+const tokenBullet = (markdown: string, pattern: RegExp): number | undefined => {
+  const match = pattern.exec(markdown);
+  return match ? parseTokenCount(match[1] ?? '') : undefined;
+};
+
+/** "text, image" -> ["text", "image"]. A modality is one word on this page. */
+function modalityBullet(markdown: string, pattern: RegExp): string[] | undefined {
+  const match = pattern.exec(markdown);
+  if (!match) return undefined;
+  const values = plain(match[1] ?? '')
+    .split(',')
+    .map(value => value.trim().toLowerCase())
+    .filter(value => /^[a-z][a-z-]*$/.test(value));
+  return values.length > 0 ? values : undefined;
+}
