@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { KnowledgeType } from '@bike4mind/common';
 import { FabFile, FabFileChunk, fabFileChunkRepository, fabFileRepository } from './FabFileModel';
-import { setupMongoTest } from '../../__test__/utils';
+import { setupMongoTest, testFabFileId as fid } from '../../__test__/utils';
 
 const makeChunk = (fabFileId: string, text: string, charLength?: number) =>
   FabFileChunk.create({
@@ -18,9 +18,9 @@ describe('charLength backfill primitives', () => {
   setupMongoTest();
 
   it('pages chunk ids still missing charLength, ascending by _id', async () => {
-    const a = await makeChunk('f1', 'aaa');
-    await makeChunk('f1', 'stamped', 7);
-    const c = await makeChunk('f2', 'cc');
+    const a = await makeChunk(fid('f1'), 'aaa');
+    await makeChunk(fid('f1'), 'stamped', 7);
+    const c = await makeChunk(fid('f2'), 'cc');
 
     const ids = await fabFileChunkRepository.findChunkIdsMissingCharLength();
     expect(ids).toEqual([String(a._id), String(c._id)]);
@@ -34,7 +34,7 @@ describe('charLength backfill primitives', () => {
 
   it('stamps charLength server-side in CODE POINTS and reruns find nothing (idempotent)', async () => {
     const emoji = '\u{1F600}';
-    const chunk = await makeChunk('f1', `four${emoji}`); // 5 code points, 6 UTF-16 units
+    const chunk = await makeChunk(fid('f1'), `four${emoji}`); // 5 code points, 6 UTF-16 units
 
     const ids = await fabFileChunkRepository.findChunkIdsMissingCharLength();
     const modified = await fabFileChunkRepository.backfillCharLengthByIds(ids);
@@ -48,13 +48,13 @@ describe('charLength backfill primitives', () => {
   });
 
   it('sums a file chunks charLength treating an unstamped chunk as 0', async () => {
-    await makeChunk('f1', 'aaa', 3);
-    await makeChunk('f1', 'bbbb', 4);
-    await makeChunk('f1', 'not-yet-stamped');
-    await makeChunk('f2', 'other-file', 100);
+    await makeChunk(fid('f1'), 'aaa', 3);
+    await makeChunk(fid('f1'), 'bbbb', 4);
+    await makeChunk(fid('f1'), 'not-yet-stamped');
+    await makeChunk(fid('f2'), 'other-file', 100);
 
-    expect(await fabFileChunkRepository.sumChunkCharLengthByFabFileId('f1')).toBe(7);
-    expect(await fabFileChunkRepository.sumChunkCharLengthByFabFileId('missing')).toBe(0);
+    expect(await fabFileChunkRepository.sumChunkCharLengthByFabFileId(fid('f1'))).toBe(7);
+    expect(await fabFileChunkRepository.sumChunkCharLengthByFabFileId(fid('missing'))).toBe(0);
   });
 
   it('pages files that have chunks but no chunkedCharCount, and setChunkedCharCount removes them', async () => {

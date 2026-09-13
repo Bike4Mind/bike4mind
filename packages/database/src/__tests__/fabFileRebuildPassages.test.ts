@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { FabFile, FabFileChunk, fabFileRepository, fabFileChunkRepository } from '../models/content/FabFileModel';
 import { REBUILD_PENDING_STALE_MS } from '@bike4mind/common';
-import { setupMongoTest } from '../__test__/utils';
+import { setupMongoTest, testFabFileId as fid } from '../__test__/utils';
 
 const TAG = 'datalake:rebuild-test';
 // Meta-tag-only scope (fileTagPrefix null => buildDataLakeMembershipFilter returns the meta arm),
@@ -33,35 +33,38 @@ describe('FabFileChunkRepository.findUnderChunkedFabFileIds', () => {
     // (f-big 6000 > f-mid 2000). That makes the $sort load-bearing: without it the aggregation
     // would return f-mid first and this assertion would fail, so it can't silently regress.
     await FabFileChunk.create([
-      { fabFileId: 'f-mid', text: 'c', tokenCount: 2000 },
-      { fabFileId: 'f-big', text: 'a', tokenCount: 6000 },
-      { fabFileId: 'f-big', text: 'b', tokenCount: 400 },
-      { fabFileId: 'f-ok', text: 'd', tokenCount: 500 },
-      { fabFileId: 'f-ok', text: 'e', tokenCount: 480 },
+      { fabFileId: fid('f-mid'), text: 'c', tokenCount: 2000 },
+      { fabFileId: fid('f-big'), text: 'a', tokenCount: 6000 },
+      { fabFileId: fid('f-big'), text: 'b', tokenCount: 400 },
+      { fabFileId: fid('f-ok'), text: 'd', tokenCount: 500 },
+      { fabFileId: fid('f-ok'), text: 'e', tokenCount: 480 },
     ]);
 
-    const ids = await fabFileChunkRepository.findUnderChunkedFabFileIds(['f-big', 'f-mid', 'f-ok'], 1500);
+    const ids = await fabFileChunkRepository.findUnderChunkedFabFileIds(
+      [fid('f-big'), fid('f-mid'), fid('f-ok')],
+      1500
+    );
 
-    expect(ids).toEqual(['f-big', 'f-mid']); // worst-first (NOT insertion order), f-ok excluded
+    expect(ids).toEqual([fid('f-big'), fid('f-mid')]); // worst-first (NOT insertion order), f-ok excluded
   });
 
   it('never returns a file outside the provided id set', async () => {
     await FabFileChunk.create([
-      { fabFileId: 'in', text: 'x', tokenCount: 5000 },
-      { fabFileId: 'out', text: 'y', tokenCount: 5000 },
+      { fabFileId: fid('in'), text: 'x', tokenCount: 5000 },
+      { fabFileId: fid('out'), text: 'y', tokenCount: 5000 },
     ]);
 
-    expect(await fabFileChunkRepository.findUnderChunkedFabFileIds(['in'], 1500)).toEqual(['in']);
+    expect(await fabFileChunkRepository.findUnderChunkedFabFileIds([fid('in')], 1500)).toEqual([fid('in')]);
   });
 
   it('an empty id list returns nothing (no scan)', async () => {
-    await FabFileChunk.create([{ fabFileId: 'anything', text: 'z', tokenCount: 9000 }]);
+    await FabFileChunk.create([{ fabFileId: fid('anything'), text: 'z', tokenCount: 9000 }]);
     expect(await fabFileChunkRepository.findUnderChunkedFabFileIds([], 1500)).toEqual([]);
   });
 
   it('a file exactly at the threshold is NOT flagged (strictly greater than)', async () => {
-    await FabFileChunk.create([{ fabFileId: 'edge', text: 'z', tokenCount: 1500 }]);
-    expect(await fabFileChunkRepository.findUnderChunkedFabFileIds(['edge'], 1500)).toEqual([]);
+    await FabFileChunk.create([{ fabFileId: fid('edge'), text: 'z', tokenCount: 1500 }]);
+    expect(await fabFileChunkRepository.findUnderChunkedFabFileIds([fid('edge')], 1500)).toEqual([]);
   });
 });
 

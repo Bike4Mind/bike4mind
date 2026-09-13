@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { KnowledgeType } from '@bike4mind/common';
 import { FabFile, FabFileChunk, fabFileChunkRepository, fabFileRepository } from './FabFileModel';
-import { setupMongoTest } from '../../__test__/utils';
+import { setupMongoTest, testFabFileId as fid } from '../../__test__/utils';
 
 const makeFile = (fileName: string, extra: Record<string, unknown> = {}) =>
   FabFile.create({ userId: 'u1', fileName, type: KnowledgeType.TEXT, status: 'complete', ...extra });
@@ -49,10 +49,10 @@ describe('stale vector claim detection (#2583)', () => {
   });
 
   it('findFabFileIdsWithChunks returns exactly the candidate ids that have a chunk row', async () => {
-    await FabFileChunk.create({ fabFileId: 'has-chunks', text: 't', tokenCount: 1 });
+    await FabFileChunk.create({ fabFileId: fid('has-chunks'), text: 't', tokenCount: 1 });
 
-    const withChunks = await fabFileChunkRepository.findFabFileIdsWithChunks(['has-chunks', 'chunkless']);
-    expect(withChunks).toEqual(new Set(['has-chunks']));
+    const withChunks = await fabFileChunkRepository.findFabFileIdsWithChunks([fid('has-chunks'), fid('chunkless')]);
+    expect(withChunks).toEqual(new Set([fid('has-chunks')]));
     expect(await fabFileChunkRepository.findFabFileIdsWithChunks([])).toEqual(new Set());
   });
 
