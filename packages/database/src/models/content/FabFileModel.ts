@@ -233,6 +233,45 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
   }
 
   /**
+   * One deterministic page of chunk fields for the given files, `vector` excluded. See
+   * IFabFileChunkRepository.findChunkFieldsByFabFileIds for what it is for.
+   *
+   * Unlike `findVectorsByFabFileIds` there is no `vector: { $exists: true, $ne: [] }` filter: a
+   * planner reading a whole lake has to see the vectorless chunks too, or it plans over a corpus
+   * smaller than the one it is describing. Same keyset contract, same $in caveat - batch the file
+   * ids rather than passing a whole lake's worth.
+   *
+   * A paging caller MUST pass the same number as its pager's page size: `readAllPages` stops on a
+   * short page, so a `limit` below that size looks like the end of the corpus and truncates it.
+   */
+  async findChunkFieldsByFabFileIds(fabFileIds: string[], options: { limit?: number; afterChunkId?: string } = {}) {
+    if (fabFileIds.length === 0) return [];
+    const { limit = 10_000, afterChunkId } = options;
+    const docs = await this.fabFileChunkModel
+      .find(
+        {
+          fabFileId: { $in: fabFileIds },
+          ...(afterChunkId ? { _id: { $gt: afterChunkId } } : {}),
+        },
+        // The mapper below returns a fixed literal, so no caller can observe whether `vector`
+        // crossed the wire - excluding it here is the entire point of this read.
+        { _id: 1, fabFileId: 1, text: 1, tokenCount: 1, embeddingModel: 1 }
+      )
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean();
+    return docs.map(d => ({
+      id: String(d._id),
+      fabFileId: String(d.fabFileId),
+      text: d.text ?? '',
+      // Deliberately not defaulted to 0: an absent count means "unknown", and a caller planning a
+      // spend has to substitute its own overestimate rather than quote a chunk as free.
+      tokenCount: d.tokenCount,
+      embeddingModel: d.embeddingModel,
+    }));
+  }
+
+  /**
    * One deterministic page of chunk TEXT for a single file, ascending by `_id`.
    *
    * Deliberately separate from `findVectorsByFabFileIds`: that reader filters

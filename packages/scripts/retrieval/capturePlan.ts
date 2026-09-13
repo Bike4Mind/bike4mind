@@ -373,3 +373,43 @@ export function modalLength(lengths: readonly number[]): number | undefined {
   }
   return best;
 }
+
+/**
+ * Split a list into reads small enough for the planner.
+ *
+ * `findVectorsByFabFileIds`' docblock is the reason there is a number here at all: up to a couple
+ * hundred ids the `{ fabFileId: 1, _id: 1 }` index serves an `$in` as a non-blocking SORT_MERGE, and
+ * past the planner's $in-explosion limit it falls back to an `_id` range scan. A whole production
+ * lake in one `$in` is exactly that fallback.
+ */
+export function toBatches<T>(items: readonly T[], size: number): T[][] {
+  if (size < 1) throw new Error(`Batch size must be at least 1, got ${size}.`);
+  const batches: T[][] = [];
+  for (let i = 0; i < items.length; i += size) batches.push([...items.slice(i, i + size)]);
+  return batches;
+}
+
+/**
+ * Drain a keyset-paged read to completion.
+ *
+ * Lives here rather than in the entrypoint because a paging bug is a RESULT-corrupting bug of the
+ * kind this module exists to hold: a cursor that stops early drops chunks from the corpus silently,
+ * and the capture would report the smaller number as if it were the lake. The non-advancing-cursor
+ * throw covers the other half - a reader that returns a full page without moving the cursor would
+ * otherwise spin forever on a credentialed run.
+ */
+export async function readAllPages<T extends { id: string }>(
+  readPage: (afterId?: string) => Promise<T[]>,
+  pageSize: number
+): Promise<T[]> {
+  const all: T[] = [];
+  let after: string | undefined;
+  for (;;) {
+    const page = await readPage(after);
+    all.push(...page);
+    if (page.length < pageSize) return all;
+    const last = page[page.length - 1].id;
+    if (last === after) throw new Error(`Paged read returned a full page without advancing past ${last}.`);
+    after = last;
+  }
+}
