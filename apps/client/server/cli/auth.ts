@@ -12,6 +12,7 @@ import { User, userApiKeyRepository, cacheRepository } from '@bike4mind/database
 import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '@server/auth/consentGate';
+import { UnauthorizedError, ForbiddenError } from '@server/utils/errors';
 import { z } from 'zod';
 
 export interface VerifiedUser {
@@ -103,6 +104,12 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
       throw new Error('Policy acceptance required: accept the AUP/ToS and confirm 18+ before using this endpoint');
     }
 
+    // Account state (ban / chargeback / suspension) lands AFTER this JWT was minted and does
+    // not bump tokenVersion, so a still-valid session JWT would otherwise sail through. The
+    // WS/CLI completion surfaces fall back to this primitive, so apply the same gate
+    // verifyApiKey applies via assertOwnerAccountUsable - user is already loaded here.
+    assertAccountStateUsable(user);
+
     return {
       id: user.id,
       email: user.email,
@@ -126,6 +133,14 @@ export interface VerifyApiKeyOptions {
   requiredScopes?: ApiKeyScope[];
 }
 
+/**
+ * This file is the SECOND place API-key scopes are decided; the first is
+ * `server/middlewares/apiKeyScopeGate.ts`, which the baseApi chain uses. Requests
+ * arriving here (CLI, Fargate, WebSocket, embed) never traverse that gate, so
+ * CONFINED_SCOPES is not applied to them - safe only because none of these defaults
+ * name a confined scope. Adding one here, or widening this list, needs the
+ * confinement rule brought across too.
+ */
 const DEFAULT_COMPLETION_SCOPES: ApiKeyScope[] = [ApiKeyScope.AI_GENERATE, ApiKeyScope.AI_CHAT];
 
 /**
@@ -162,8 +177,52 @@ function toApiKeyInfo(v: {
 }
 
 /**
+ * The account-state gates `apiKeyAuth` applies on the `baseApi` surface, mirrored
+ * for the contract/CLI/Fargate/WebSocket paths, which reach a key without ever
+ * touching that middleware. Without this a banned, charged-back or suspended
+ * owner's key kept working on exactly the surfaces that spend money.
+ *
+ * MUST STAY IN SYNC with the equivalent block in
+ * apps/client/server/middlewares/apiKeyAuth.ts - same lookup, same order, same
+ * messages.
+ *
+ * This is the `User.findById` the consent gate above deliberately declines to pay
+ * on the api-key path. Account state is not the same trade: consent can be proven
+ * at mint time and never changes underneath a key, whereas a ban, chargeback or
+ * suspension lands *after* the key exists and must take effect on the surfaces
+ * that spend money.
+ */
+async function assertOwnerAccountUsable(userId: string): Promise<void> {
+  const user = await User.findById(userId);
+  if (!user) {
+    throw new UnauthorizedError('User not found or banned');
+  }
+  assertAccountStateUsable(user);
+}
+
+/**
+ * The account-state checks of {@link assertOwnerAccountUsable} against an already-loaded
+ * user, so the JWT path (verifyJwtToken, which already holds the user) can apply the same
+ * gate without a second lookup. One helper so the two entry points can't drift.
+ */
+function assertAccountStateUsable(user: IUserDocument): void {
+  if (user.isBanned) {
+    throw new UnauthorizedError('User not found or banned');
+  }
+  if (user.disputePending) {
+    throw new ForbiddenError('Account suspended pending dispute resolution. Please contact support.');
+  }
+  if (user.moderation?.status === 'suspended') {
+    throw new ForbiddenError(
+      'Your account is suspended for repeated content-policy violations. Please contact support to appeal.'
+    );
+  }
+}
+
+/**
  * Verify API key from headers
- * @throws Error if API key is invalid, expired, or missing required scope
+ * @throws Error if API key is invalid, expired, missing required scope, or owned by
+ * a banned/disputed/suspended account
  */
 export async function verifyApiKey(
   headers: Record<string, string | undefined>,
@@ -191,6 +250,8 @@ export async function verifyApiKey(
       const list = requiredScopes.join(' or ');
       throw new Error(`API key does not have permission for this endpoint (requires ${list})`);
     }
+
+    await assertOwnerAccountUsable(validation.userId);
 
     return toApiKeyInfo(validation);
   } catch (error) {
@@ -264,6 +325,7 @@ export async function verifyEmbedKeyById(keyId: string): Promise<ApiKeyInfo> {
 
   const info = toApiKeyInfo(validation);
   assertEmbedCredential(info);
+  await assertOwnerAccountUsable(info.userId);
   return info;
 }
 

@@ -1,9 +1,9 @@
 import { emailJobRepository, emailSendAttemptRepository } from '@bike4mind/database';
-import { EmailJobStatus, EmailJobOverallStatus } from '@bike4mind/common';
+import { ApiKeyScope, EmailJobOverallStatus, EmailJobStatus } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
   }

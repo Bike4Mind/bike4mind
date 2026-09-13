@@ -2,8 +2,9 @@ import { emailTemplateRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import mailer from '@server/utils/mailer';
+import { ApiKeyScope } from '@bike4mind/common';
 
-const handler = baseApi({ auth: true }).post(async (req, res) => {
+const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
   }

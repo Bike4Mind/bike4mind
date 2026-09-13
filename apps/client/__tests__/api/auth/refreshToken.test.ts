@@ -47,7 +47,7 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/database/infra', () => ({
   secretRotationRepository: {
-    findByKeyName: vi.fn().mockResolvedValue(null),
+    findByKeyNameWithSecret: vi.fn().mockResolvedValue(null),
   },
 }));
 

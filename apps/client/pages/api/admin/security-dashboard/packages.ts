@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { isPlaceholderValue } from '@bike4mind/common';
+import { ApiKeyScope, isPlaceholderValue } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { Resource } from 'sst';
@@ -10,7 +10,7 @@ import { computeCategoryScoreAndCounts, computeDeterministicStatus } from '@serv
 
 import type { Request, Response } from 'express';
 
-const handler = baseApi<Request, Response>()
+const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req: Request, res: Response) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Admin access required');

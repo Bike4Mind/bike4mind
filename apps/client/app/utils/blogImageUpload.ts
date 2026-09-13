@@ -1,90 +1,50 @@
-import { getBlogHost } from './blogConfig';
+import { isAxiosError } from 'axios';
+import { api } from '@client/app/contexts/ApiContext';
 
 export interface BlogImageUploadResult {
   url: string;
   key: string;
 }
 
+interface PresignImageUploadResponse {
+  uploadUrl: string;
+  imageUrl: string;
+  key?: string;
+}
+
+const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+
 /**
- * Upload an image to the configured blog's S3 bucket using the presigned URL workflow.
- * @param file - The image file to upload
- * @param blogApiKey - User's blog API key from blogIntegration.apiKey
- * @param postId - Optional post ID to organize images by post
- * @param baseUrl - Blog host to target (from blogIntegration.baseUrl). Falls back to the
- *   operator default (NEXT_PUBLIC_BLOG_HOST); empty for an unbranded fork.
- * @returns Upload result with URL
+ * Upload an image to the user's configured blog via the presigned-URL workflow.
+ *
+ * The presign request carries the blog API key, so it runs SERVER-SIDE:
+ * `/api/blog/presign-image-upload` reads `user.blogIntegration` and holds the key. The
+ * browser never receives it (the identify response redacts it). Only the second step -
+ * the keyless PUT to the returned S3 URL - stays in the browser. Host selection and the
+ * CSP allow-list also move server-side with the presign.
+ *
+ * @param file - The image file to upload.
+ * @param postId - Optional post ID to organize images by post.
  */
-export async function uploadBlogImage(
-  file: File,
-  blogApiKey: string,
-  postId?: string,
-  baseUrl?: string
-): Promise<BlogImageUploadResult> {
-  // File type validation
-  const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
-  if (!allowedTypes.includes(file.type)) {
+export async function uploadBlogImage(file: File, postId?: string): Promise<BlogImageUploadResult> {
+  if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
     throw new Error('Invalid file type. Only JPEG, PNG, GIF, and WebP are allowed.');
   }
 
-  // The upload targets the user's saved blog host (`baseUrl`, from
-  // blogIntegration.baseUrl) and falls back to the operator default
-  // (`getBlogHost()` <- NEXT_PUBLIC_BLOG_HOST). Supported-host contract: the proxy
-  // CSP `connect-src`/`img-src` allow-lists the operator default host only, so a
-  // user-configured `baseUrl` that diverges from NEXT_PUBLIC_BLOG_HOST will have
-  // this presign POST blocked by CSP. The operator-default host is the supported
-  // blog-integration target; custom per-user hosts require adding them to the CSP
-  // (per-response override), a known limitation.
-  const host = (baseUrl || getBlogHost()).replace(/\/+$/, '');
-  if (!host) {
-    throw new Error('No blog host configured. Set your blog URL in Settings → Blog Integration.');
-  }
-
-  // Step 1: Request presigned URL from blog API
-  const presignedResponse = await fetch(`${host}/api/posts/images/presigned-url`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-API-Key': blogApiKey,
-    },
-    body: JSON.stringify({
-      fileName: file.name,
-      fileSize: file.size,
-      mimeType: file.type,
-      postId: postId,
-    }),
+  // Step 1: the server mints a presigned upload URL using the blog key it holds.
+  const { data } = await api.post<PresignImageUploadResponse>('/api/blog/presign-image-upload', {
+    fileName: file.name,
+    fileSize: file.size,
+    mimeType: file.type,
+    postId,
   });
 
-  if (!presignedResponse.ok) {
-    // Try to get error details from response
-    let errorData: any = {};
-    const contentType = presignedResponse.headers.get('content-type');
-
-    if (contentType?.includes('application/json')) {
-      errorData = await presignedResponse.json().catch(() => ({}));
-    } else {
-      // Response might be text/html or other format
-      const text = await presignedResponse.text().catch(() => '');
-      errorData = { error: text.substring(0, 200) };
-    }
-
-    throw new Error(
-      errorData.message || errorData.error || `Presigned URL request failed with status ${presignedResponse.status}`
-    );
-  }
-
-  const presignedData = await presignedResponse.json();
-
-  // The upload URL might be under different field names
-  const uploadUrl = presignedData.uploadUrl || presignedData.presignedUrl || presignedData.url;
-  const imageUrl = presignedData.imageUrl || presignedData.publicUrl;
-
-  if (!uploadUrl || !imageUrl) {
+  if (!data.uploadUrl || !data.imageUrl) {
     throw new Error('Invalid presigned URL response: missing uploadUrl or imageUrl');
   }
 
-  // Step 2: Upload directly to S3 using presigned URL
-
-  const uploadResponse = await fetch(uploadUrl, {
+  // Step 2: upload the bytes directly to S3 with the presigned URL (no key needed).
+  const uploadResponse = await fetch(data.uploadUrl, {
     method: 'PUT',
     headers: {
       'Content-Type': file.type,
@@ -97,9 +57,27 @@ export async function uploadBlogImage(
   }
 
   return {
-    url: imageUrl,
-    key: presignedData.key || file.name,
+    url: data.imageUrl,
+    key: data.key || file.name,
   };
+}
+
+/**
+ * Pull a human-readable message out of an upload failure. The presign step goes through
+ * axios, whose interceptor rethrows the AxiosError untouched, so `error.message` is the
+ * generic "Request failed with status code 400" - the real reason lives in the server's
+ * `{ error }` envelope. Read that first, then fall back to a plain Error's message, then
+ * the caller's default. Callers must NOT use `error instanceof Error` first: an AxiosError
+ * IS an Error, so that branch would swallow the server text.
+ */
+export function getBlogUploadErrorMessage(error: unknown, fallback: string): string {
+  if (isAxiosError(error)) {
+    const data = error.response?.data as { error?: string; message?: string } | undefined;
+    if (typeof data?.error === 'string' && data.error) return data.error;
+    if (typeof data?.message === 'string' && data.message) return data.message;
+  }
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
 }
 
 /**

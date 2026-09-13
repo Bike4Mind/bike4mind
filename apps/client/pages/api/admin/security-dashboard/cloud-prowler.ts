@@ -5,14 +5,14 @@ import { securityDashboardSnapshotRepository } from '@bike4mind/database';
 import { resolveStage } from '@server/security/resolveStage';
 import { Resource } from 'sst';
 import { Logger } from '@bike4mind/observability';
-import { isPlaceholderValue } from '@bike4mind/common';
+import { ApiKeyScope, isPlaceholderValue } from '@bike4mind/common';
 import axios from 'axios';
 
 const logger = new Logger({ metadata: { service: 'cloud-prowler-api' } });
 
 const WORKFLOW_FILE = 'prowler-only.yml';
 
-const handler = baseApi<Request, Response>()
+const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req: Request, res: Response) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Admin access required');

@@ -18,6 +18,7 @@ export interface ISecretRotationDocument extends ISecretRotation, IMongoDocument
 
 export interface ISecretRotationRepository extends IBaseRepository<ISecretRotationDocument> {
   findByKeyName(keyName: string): Promise<ISecretRotationDocument | null>;
+  /** `findByKeyName` with `previousKey` included; grace-window verifiers only. */
+  findByKeyNameWithSecret(keyName: string): Promise<ISecretRotationDocument | null>;
   findActiveKeys(): Promise<ISecretRotationDocument[]>;
-  rotateKey(keyName: string, previousKey: string, rotatedBy: string): Promise<ISecretRotationDocument | null>;
 }

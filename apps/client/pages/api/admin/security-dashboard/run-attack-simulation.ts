@@ -7,6 +7,7 @@ import { Logger } from '@bike4mind/observability';
 import { securityFindingRunRepository } from '@bike4mind/database';
 import { getCooldownStatus } from '@server/security/cooldown';
 import { logAuditEvent, AdminConfigAuditEvents } from '@server/utils/auditLog';
+import { ApiKeyScope } from '@bike4mind/common';
 
 const logger = new Logger({ metadata: { service: 'run-attack-simulation' } });
 
@@ -17,7 +18,7 @@ const COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes between manual runs
  * Invokes the attackSimulationFunction Lambda asynchronously and returns immediately
  * with the runId so the UI can poll for results.
  */
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Admin access required');
   }

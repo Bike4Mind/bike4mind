@@ -3,6 +3,7 @@ import {
   EMBED_BRANDING_DISPLAY_NAME_MAX,
   EMBED_BRANDING_LOGO_URL_MAX,
   EmbedBrandingSchema,
+  isAgentOwnedByEmbedKey,
   parseBrandingColor,
   parseBrandingDisplayName,
   parseBrandingLogoUrl,
@@ -126,5 +127,27 @@ describe('parseBrandingColor', () => {
 
   it('returns null for a non-string', () => {
     expect(parseBrandingColor(undefined)).toBeNull();
+  });
+});
+
+describe('isAgentOwnedByEmbedKey', () => {
+  // Guards four boundaries (mint, update, embed chat route, embed serve), so pin the
+  // truth table. Ownership is org-match OR user-match; a null on either side of a
+  // comparison never counts as a match (so a system/global agent with no owner fails).
+  it.each([
+    ['org match', { organizationId: 'org-1' }, { organizationId: 'org-1', userId: 'u2' }, true],
+    ['user match', { userId: 'u1' }, { organizationId: 'org-2', userId: 'u1' }, true],
+    [
+      'org and user both differ',
+      { organizationId: 'org-1', userId: 'u1' },
+      { organizationId: 'org-2', userId: 'u2' },
+      false,
+    ],
+    ['agent has neither (system/global agent)', {}, { organizationId: 'org-1', userId: 'u1' }, false],
+    ['key has neither', { organizationId: 'org-1', userId: 'u1' }, {}, false],
+    ['both sides null org must not match as equal', { organizationId: null }, { organizationId: null }, false],
+    ['both sides null user must not match as equal', { userId: null }, { userId: null }, false],
+  ])('%s -> %s', (_label, agent, key, expected) => {
+    expect(isAgentOwnedByEmbedKey(agent, key)).toBe(expected);
   });
 });

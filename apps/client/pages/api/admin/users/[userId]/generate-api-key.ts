@@ -1,6 +1,7 @@
 import { userApiKeyService, dataLakeService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import {
+  agentRepository,
   dataLakeAccessGrantRepository,
   dataLakeRepository,
   organizationRepository,
@@ -13,7 +14,7 @@ import { ForbiddenError } from '@server/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { toObjectIdString } from '@server/utils/objectId';
-import { UserApiKeyEvents } from '@bike4mind/common';
+import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
 import { ADMIN_ONLY_API_KEY_SCOPES, USER_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
 
 // Scopes this admin endpoint may mint: the standard self-service set plus the
@@ -160,7 +161,7 @@ async function screenPreauthorizedLakeIds(
  * Admin-only endpoint to generate an API key on behalf of any user.
  * Useful for creating service account keys without logging in as the target user.
  */
-const handler = baseApi({ auth: true })
+const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {
@@ -222,19 +223,25 @@ const handler = baseApi({ auth: true })
             clientIP: req.ip,
             userAgent: req.headers['user-agent'],
             createdFrom: 'dashboard' as const,
+            // Without this the key is indistinguishable from one the target user
+            // minted themselves - `userId` is the target, not the actor.
+            createdByUserId: req.user.id,
           },
         },
         {
           db: {
             userApiKeys: userApiKeyRepository,
+            agents: agentRepository,
           },
         }
       );
 
-      // Log analytics event attributed to the target user. The lake binding rides along because it
-      // is the one part of this mint that reaches another tenant's asset and it is invisible on the
-      // lake side - it grants nothing there, so it appears in no grant listing. Recording it here
-      // makes "which keys are bound to this lake" answerable without grepping logs.
+      // Attributed to the target user, since the key is theirs - but the acting admin is recorded
+      // alongside (createdBy*), so the event is not readable as a self-service mint by that user.
+      // The lake binding rides along because it is the one part of this mint that reaches another
+      // tenant's asset and is invisible on the lake side - it grants nothing there, so it appears in
+      // no grant listing. Recording it here makes "which keys are bound to this lake" answerable
+      // without grepping logs.
       await logEvent(
         {
           userId: targetUserId,
@@ -245,6 +252,8 @@ const handler = baseApi({ auth: true })
             scopes: newApiKey.scopes,
             expiresAt: newApiKey.expiresAt?.toISOString(),
             createdFrom: 'dashboard',
+            createdByUserId: req.user.id,
+            createdByUsername: req.user.username,
             preauthorizedLakeIds: lakeBinding,
           },
         },

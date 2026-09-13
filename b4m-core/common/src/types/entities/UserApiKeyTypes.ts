@@ -83,6 +83,23 @@ export enum ApiKeyScope {
   DATALAKE_QUERY = 'datalake:query',
 }
 
+/**
+ * Scopes bound to a single dedicated flow: bridge pairing, the embed widget,
+ * Overwatch ingest. A key carrying ANY of these is *confined* and both ends of the
+ * system say the same thing about it in the same words:
+ *  - at mint (createUserApiKey): a confined scope must be the key's only scope, so
+ *    a confined key is never persisted alongside reach it would then lose;
+ *  - at runtime (apiKeyScopeGate `isConfinedKey`/`decideScopeGate`): it authorizes
+ *    only routes that explicitly name one of these, never the scope-less default.
+ *
+ * `admin:*` is deliberately absent - it is broad by design.
+ */
+export const CONFINED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
+  ApiKeyScope.CC_BRIDGE,
+  ApiKeyScope.EMBED_CHAT,
+  ApiKeyScope.OVERWATCH_INGEST_WRITE,
+];
+
 export enum ApiKeyStatus {
   ACTIVE = 'active',
   DISABLED = 'disabled',

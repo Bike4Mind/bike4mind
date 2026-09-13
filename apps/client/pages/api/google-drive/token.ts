@@ -6,7 +6,17 @@ import dayjs from 'dayjs';
 import { getAuthUrl, refreshAccessToken } from '@server/integrations/google/drive/common';
 import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
 
-const handler = baseApi().get(
+/**
+ * Hand the browser the caller's live Google Drive access token, refreshing it first
+ * when it has expired.
+ *
+ * `auth: 'jwtOnly'` keeps this OFF the api-key surface, matching the sibling
+ * `list-folder.ts`: the response body *is* a third-party OAuth credential, so an
+ * unrelated `b4m_live_` key must not be able to fetch or silently refresh it. It is
+ * an internal/UI surface, not a public contract endpoint, so a key-bearing request is
+ * rejected outright.
+ */
+const handler = baseApi({ auth: 'jwtOnly' }).get(
   asyncHandler(async (req, res) => {
     const userId = req.user.id;
     const user = await User.findById(userId, 'googleDrive');

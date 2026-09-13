@@ -2,7 +2,9 @@ import {
   ApiKeyScope,
   EmbedBrandingSchema,
   EmbedOriginsSchema,
+  IAgentRepository,
   IOrganizationRepository,
+  isAgentOwnedByEmbedKey,
   IUserApiKeyRepository,
 } from '@bike4mind/common';
 import { secureParameters, BadRequestError, NotFoundError } from '@bike4mind/utils';
@@ -26,6 +28,13 @@ interface UpdateEmbedKeyAdapters {
   db: {
     userApiKeys: IUserApiKeyRepository;
     organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
+    /**
+     * Needed only to verify the agent when a rebind is requested (`agentId` provided).
+     * Optional on the TYPE so this published adapter contract (@bike4mind/services) stays
+     * additive for out-of-repo callers, but REQUIRED at runtime for a rebind - the guard
+     * below throws rather than silently skipping the ownership check. See createUserApiKey.
+     */
+    agents?: Pick<IAgentRepository, 'findById'>;
   };
 }
 
@@ -71,12 +80,21 @@ export const updateEmbedKey = async (
     throw new BadRequestError('Only embed:chat keys can be configured with embed settings');
   }
 
-  // Agent-ownership/access enforcement (does the caller own/can reach this
-  // agentId?) is deferred to the Phase C runtime endpoint (#571), where the
-  // binding is first consumed - it is enforced there, not at bind time. The
-  // admin UI only offers owned agents; the create path applies the same
-  // deferral. Do not treat this rebind as an access boundary.
-  if (params.agentId !== undefined) apiKey.agentId = params.agentId;
+  // Agent-ownership IS enforced at bind time: the agent must belong to the org the
+  // key bills or to its owner. This used to be deferred to the runtime consumer,
+  // which left a key rebindable to another tenant's agent. The runtime checks stay
+  // (a bound agent can change hands afterwards) but this is now an access boundary.
+  if (params.agentId !== undefined) {
+    // Fail closed: an absent agents adapter must never let the ownership check be skipped.
+    if (!db.agents) {
+      throw new BadRequestError('agents adapter is required to configure an embed:chat key');
+    }
+    const agent = await db.agents.findById(params.agentId);
+    if (!agent || !isAgentOwnedByEmbedKey(agent, apiKey)) {
+      throw new BadRequestError('agentId must reference an agent owned by the billing organization or the key owner');
+    }
+    apiKey.agentId = params.agentId;
+  }
   if (params.allowedOrigins !== undefined) apiKey.allowedOrigins = params.allowedOrigins;
   if (params.branding !== undefined) apiKey.branding = params.branding;
 

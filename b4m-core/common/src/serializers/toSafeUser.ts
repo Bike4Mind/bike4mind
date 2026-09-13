@@ -58,6 +58,7 @@ export const USER_SECRET_FIELDS = [
  * `USER_SECRET_FIELDS`.
  */
 export const USER_SUBFIELD_REDACTED_FIELDS = [
+  'authProviders',
   'mfa',
   'googleDrive',
   'atlassianConnect',
@@ -201,6 +202,7 @@ export function redactUserSecretsForSelf(
       writeEnabled: n.writeEnabled,
       accessMode: n.accessMode,
       allowedPages: n.allowedPages,
+      excludedPageIds: n.excludedPageIds,
       rootPageId: n.rootPageId,
       connectedAt: n.connectedAt,
       disconnectReason: n.disconnectReason,
@@ -210,6 +212,14 @@ export function redactUserSecretsForSelf(
   if (user.slackSettings) {
     const { slackUserToken: _drop, ...rest } = user.slackSettings;
     u.slackSettings = rest;
+  }
+  // Auth providers -> allowlist, like every other block here, so a field added to the
+  // provider type (it already carries samlNameId/samlSessionIndex/oktaIdentityProviderId/
+  // encrypted) does not reach the browser until named on purpose. The settings UI
+  // (ConnectedAppsSection) reads only `strategy`; `id` is kept as a stable identity.
+  // An array, unlike every other entry here, so map rather than reshape once.
+  if (user.authProviders) {
+    u.authProviders = user.authProviders.map(provider => ({ id: provider.id, strategy: provider.strategy }));
   }
   // Blog -> keep display/config, drop the API key.
   if (user.blogIntegration) {

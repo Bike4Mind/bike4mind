@@ -263,7 +263,7 @@ describe('POST /api/overwatch/v1/events (integration — real middleware chain)'
       expect(mockSendBatch).not.toHaveBeenCalled();
     });
 
-    it('rejects a valid key lacking the ingest scope (403) at the handler', async () => {
+    it('rejects a valid key lacking the ingest scope (403) at the scope gate', async () => {
       mockValidate.mockResolvedValue({
         isValid: true,
         keyId: 'k2',
@@ -275,7 +275,11 @@ describe('POST /api/overwatch/v1/events (integration — real middleware chain)'
       const { req, res } = fire();
       await handler(req, res);
       expect(res._getStatusCode()).toBe(403);
-      expect(res._getJSONData().error).toMatch(/scope/i);
+      // `requiredScopes` on baseApi now rejects here, ahead of the handler's own
+      // check - pin the gate's exact message, not a loose /insufficient/ that the
+      // handler's own 'Insufficient scope' also satisfies (so deleting requiredScopes
+      // from events.ts would still pass a looser assertion).
+      expect(res._getJSONData().error).toBe('Insufficient API key permissions');
       expect(mockSendBatch).not.toHaveBeenCalled();
     });
 

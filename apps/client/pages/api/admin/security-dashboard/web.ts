@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { isPlaceholderValue } from '@bike4mind/common';
+import { ApiKeyScope, isPlaceholderValue } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { Resource } from 'sst';
@@ -12,7 +12,7 @@ import { getTargetUrlForStage } from '@server/integrations/github/githubWorkflow
 
 export interface WebSecuritySnapshotResponse extends ISecurityDashboardSnapshotDocument {}
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req: Request, res: Response) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Admin access required');

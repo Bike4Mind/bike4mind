@@ -1,8 +1,9 @@
 import { identityProviderRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { ApiKeyScope } from '@bike4mind/common';
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
     try {
       if (!req.user?.isAdmin) {

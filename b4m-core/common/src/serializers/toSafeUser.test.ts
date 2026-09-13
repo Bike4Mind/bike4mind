@@ -39,6 +39,8 @@ const fullUser = {
     workspaceId: 'w',
     workspaceName: 'WS',
     botId: 'b',
+    allowedPages: [{ id: 'p1', title: 'Page 1' }],
+    excludedPageIds: ['ex1', 'ex2'],
     connectedAt: new Date(),
   },
   slackSettings: { slackUserId: 'U1', slackUserToken: 'SLACK-TOKEN', defaultNotebookId: 'n1' },
@@ -146,10 +148,11 @@ describe('toSafeUser', () => {
 describe('redactUserSecretsForSelf', () => {
   it('drops pure-secret fields entirely', () => {
     const self = redactUserSecretsForSelf(fullUser)!;
+    // `authProviders` is NOT here: it moved to USER_SUBFIELD_REDACTED_FIELDS, since the
+    // settings UI needs its strategy names. Its token subfields are covered below.
     for (const f of [
       'password',
       'oauthCredentials',
-      'authProviders',
       'resetPasswordToken',
       'emailVerificationToken',
       'pendingEmailToken',
@@ -191,6 +194,10 @@ describe('redactUserSecretsForSelf', () => {
     const notion = self.notionConnect as Record<string, unknown>;
     expect(notion.workspaceName).toBe('WS');
     expect('accessToken' in notion).toBe(false);
+    // Page-scoping config (not a token) must survive: the settings UI reads these back
+    // and PATCHes them on save, so redacting them wipes the user's exclusions.
+    expect(notion.allowedPages).toEqual([{ id: 'p1', title: 'Page 1' }]);
+    expect(notion.excludedPageIds).toEqual(['ex1', 'ex2']);
 
     const slack = self.slackSettings as Record<string, unknown>;
     expect(slack.slackUserId).toBe('U1');
@@ -300,5 +307,54 @@ describe('toSafeUser <-> safeUserResponseSchema contract', () => {
   it('fails loud when a required field is missing or the wrong type', () => {
     expect(() => safeUserResponseSchema.parse({ id: 'u1', username: 'jane' })).toThrow();
     expect(() => safeUserResponseSchema.parse({ id: 1, name: 'J', username: 'j', photoUrl: null })).toThrow();
+  });
+});
+
+describe('redactUserSecretsForSelf - authProviders', () => {
+  const providers = [
+    {
+      id: 'okta-sub-1',
+      strategy: 'okta',
+      accessToken: 'at-secret',
+      refreshToken: 'rt-secret',
+      oktaIdentityProviderId: 'idp-1',
+    },
+    { id: 'local-1', strategy: 'local' },
+  ];
+
+  it('keeps the linked strategies the settings UI reads', () => {
+    // Dropping the array whole made the Okta-linked indicator read false for everyone.
+    const out = redactUserSecretsForSelf({ authProviders: providers } as never);
+
+    expect(out?.authProviders).toHaveLength(2);
+    expect((out?.authProviders as Array<{ strategy: string }>).map(p => p.strategy)).toEqual(['okta', 'local']);
+  });
+
+  it('drops the tokens off every provider', () => {
+    const out = redactUserSecretsForSelf({ authProviders: providers } as never);
+
+    for (const provider of out?.authProviders as Array<Record<string, unknown>>) {
+      expect(provider).not.toHaveProperty('accessToken');
+      expect(provider).not.toHaveProperty('refreshToken');
+    }
+    expect(JSON.stringify(out)).not.toContain('at-secret');
+    expect(JSON.stringify(out)).not.toContain('rt-secret');
+  });
+
+  it('allowlists id and strategy only, dropping provider-growth metadata', () => {
+    const out = redactUserSecretsForSelf({ authProviders: providers } as never);
+    const okta = (out?.authProviders as Array<Record<string, unknown>>)[0];
+
+    // Allowlist like every other block in the serializer: a field added to the provider
+    // type does not reach the browser until named here. oktaIdentityProviderId (and the
+    // SAML metadata) are no longer serialized.
+    expect(okta).toEqual({ id: 'okta-sub-1', strategy: 'okta' });
+    expect(okta).not.toHaveProperty('oktaIdentityProviderId');
+  });
+
+  it('stays a strict subset of USER_SECRET_FIELDS', () => {
+    for (const f of USER_SUBFIELD_REDACTED_FIELDS) {
+      expect(USER_SECRET_FIELDS).toContain(f);
+    }
   });
 });
