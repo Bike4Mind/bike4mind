@@ -8,6 +8,7 @@ interface StampChunkEmbeddingModelAdapters {
     fabFileChunks: {
       updateEmbeddingModel: (fabFileId: string, embeddingModel: string) => Promise<void>;
       distinctEmbeddingModelsByFabFileId: (fabFileId: string) => Promise<string[]>;
+      countUnlabeledVectorChunksByFabFileId: (fabFileId: string) => Promise<number>;
     };
   };
   logger?: Pick<Logger, 'warn'>;
@@ -47,11 +48,13 @@ interface StampChunkEmbeddingModelAdapters {
  * the two deliberately-stricter readers (the corpus defer gate and `isFabFileCitable`) treat blank
  * as unreachable and simply decline to optimize - a performance cost in both directions.
  *
- * It is NOT a guarantee that nothing is lost, and the difference matters for a genuinely split
- * file: the Atlas arm filters by each chunk's own label and stays exact, but the in-process cosine
- * arm ranks whatever it loaded, and two spaces means two vector WIDTHS. A blank file label is the
- * safest available answer to a state that should not exist; consolidating the file by re-embedding
- * it is the actual repair, which is what the warning says.
+ * It is NOT a guarantee that nothing is lost, but both retrieval arms match each chunk on its OWN
+ * label rather than the file's: the Atlas arm through its `filter` clause, the in-process cosine arm
+ * through `classifyLoadedChunk`. Width is no substitute for either - voyage-3 and Titan v2 are both
+ * 1024 wide, so a blank file label with no chunk-level check left a split file's two halves scoring
+ * against each other as though they shared a space. A blank file label is the safest available
+ * answer to a state that should not exist; consolidating the file by re-embedding it is the actual
+ * repair, which is what the warning says.
  *
  * `chunkEmbeddingModelStampedAt` is the readiness signal the Atlas `$vectorSearch` cutover reads
  * (see atlasSearchIndex.ts / vectorSearchEligibility.ts) - it must be set AFTER the chunk stamp
@@ -85,9 +88,9 @@ export const stampChunkEmbeddingModel = async (
   // transaction only on an unsharded collection, and `transactionAsyncLocalStorage` would attach
   // this session to it automatically - so running it inside would start throwing the day
   // fabfilechunks is sharded, in the one place that has no test against a real mongod. And it is
-  // not needed inside: the only write between this read and the file write is the stamp below,
-  // which can add exactly one value (`embeddingModel`) and remove none, so the post-stamp set is
-  // this set unioned with it - which is what resolveFileLabel computes.
+  // not needed inside: the only write between these reads and the file write is the stamp below,
+  // which can add exactly one value (`embeddingModel`), to exactly the rows the unlabeled count
+  // identifies, and remove none - which is what resolveFileLabel computes.
   const fileLabel = stampFile ? await resolveFileLabel(fabFileId, embeddingModel, { db, logger }) : undefined;
   await withTransaction(async () => {
     await db.fabFileChunks.updateEmbeddingModel(fabFileId, embeddingModel);
@@ -104,18 +107,31 @@ export const stampChunkEmbeddingModel = async (
  * The one model this file's VECTORS are all in, or null when they span several - see the divergence
  * paragraph above for why null rather than a pick.
  *
- * Null also when the file holds no vectors at all, and that case is the reason this cannot simply
+ * Null also when the file holds no vectors AT ALL, and that case is the reason this cannot simply
  * return `embeddingModel`. `embeddingModel` is what the CALLER resolved, which is evidence about
  * the vectors this message wrote and about nothing else - and a message can reach file completion
  * having written none: every chunk over the model's context window is skipped at embed time yet
  * still counts as terminal in the rollup, so an all-oversized file completes with an empty batch.
  * Labeling it from the argument there stamps a file whose every chunk is vectorless with a
  * confident space, which is exclusion authority derived from nothing, and it overwrites a truthful
- * blank label to do it. An empty declared set is the one honest answer: unknown.
+ * blank label to do it.
  *
- * When the set is non-empty, `embeddingModel` is unioned in rather than returned directly, because
- * it is what the pending stamp will write onto any still-unlabeled vector-bearing chunk. Returning
- * it directly would let the caller's model become the file label even when every existing chunk
+ * "No vectors at all" is NOT the same as an empty DECLARED set, which is why the unlabeled count is
+ * read beside it. The distinct query only sees chunks that already carry a label, so it comes back
+ * empty both for a file with nothing embedded and for one whose vectors are merely unlabeled so far
+ * - a legacy file, or the chunk-model backfill's whole input. Those want opposite answers, and
+ * reading the empty set alone gave them the same one: a truthful label withheld from a healthy file,
+ * plus a warning telling the operator to re-upload it.
+ *
+ * The count also decides whether `embeddingModel` joins the set at all. It is unioned in because it
+ * is what the pending stamp will write onto any still-unlabeled vector-bearing chunk - so where
+ * there is no such chunk the stamp writes nothing, and the argument is then evidence about no vector
+ * in this file. Unioning it anyway invents a second space out of a message that embedded nothing,
+ * and a second entry clears the label: a file whose vectors are uniformly voyage-3 would lose its
+ * label to a later pass that had only oversized chunks to show for itself.
+ *
+ * When the set is non-empty, `embeddingModel` is unioned rather than returned directly, because
+ * returning it would let the caller's model become the file label even when every existing chunk
  * declares a DIFFERENT one - the same mislabel arrived at from the other side. Unioning is also why
  * the one-model answer is the declared value and not the argument: they are equal in every ordinary
  * ingest, and where they differ the chunks are the ones holding the vectors.
@@ -125,7 +141,12 @@ const resolveFileLabel = async (
   embeddingModel: string,
   { db, logger }: StampChunkEmbeddingModelAdapters
 ): Promise<string | null> => {
-  const declared = new Set(await db.fabFileChunks.distinctEmbeddingModelsByFabFileId(fabFileId));
+  const [declaredModels, unlabeledVectorChunks] = await Promise.all([
+    db.fabFileChunks.distinctEmbeddingModelsByFabFileId(fabFileId),
+    db.fabFileChunks.countUnlabeledVectorChunksByFabFileId(fabFileId),
+  ]);
+  const declared = new Set(declaredModels);
+  if (unlabeledVectorChunks > 0) declared.add(embeddingModel);
   if (declared.size === 0) {
     logger?.warn(
       `[embeddings] FabFile ${fabFileId} reached completion with no vector-bearing chunks; leaving ` +
@@ -134,7 +155,6 @@ const resolveFileLabel = async (
     );
     return null;
   }
-  declared.add(embeddingModel);
   if (declared.size === 1) return [...declared][0];
   logger?.warn(
     `[embeddings] FabFile ${fabFileId} has chunks in ${declared.size} embedding spaces ` +

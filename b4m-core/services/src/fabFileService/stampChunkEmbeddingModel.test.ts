@@ -9,9 +9,11 @@ vi.mock('@bike4mind/db-core', () => ({
 
 /**
  * Adapters with the chunk-label read stubbed to whatever the file's chunks declare. Defaults to the
- * single-model case, which is every ordinary ingest.
+ * single-model case, which is every ordinary ingest - and to ZERO still-unlabeled vector-bearing
+ * chunks, because the vectorize handler labels each chunk in the transaction that stores its vector,
+ * so only legacy chunks and the backfill's input come back unlabeled.
  */
-const makeAdapters = (declaredModels: string[] = ['text-embedding-3-small']) => {
+const makeAdapters = (declaredModels: string[] = ['text-embedding-3-small'], unlabeledVectorChunks = 0) => {
   const calls: string[] = [];
   const updateEmbeddingModel = vi.fn(async () => {
     calls.push('chunks');
@@ -21,15 +23,24 @@ const makeAdapters = (declaredModels: string[] = ['text-embedding-3-small']) => 
     return null;
   });
   const distinctEmbeddingModelsByFabFileId = vi.fn(async () => declaredModels);
+  const countUnlabeledVectorChunksByFabFileId = vi.fn(async () => unlabeledVectorChunks);
   const warn = vi.fn();
   return {
     calls,
     updateEmbeddingModel,
     update,
     distinctEmbeddingModelsByFabFileId,
+    countUnlabeledVectorChunksByFabFileId,
     warn,
     adapters: {
-      db: { fabFiles: { update }, fabFileChunks: { updateEmbeddingModel, distinctEmbeddingModelsByFabFileId } },
+      db: {
+        fabFiles: { update },
+        fabFileChunks: {
+          updateEmbeddingModel,
+          distinctEmbeddingModelsByFabFileId,
+          countUnlabeledVectorChunksByFabFileId,
+        },
+      },
       logger: { warn },
     },
   };
@@ -106,7 +117,8 @@ describe('stampChunkEmbeddingModel', () => {
       // default, and ten registered models share 1024 dims - so the guess is frequently wrong.
       // Left on the chunks a wrong guess is harmless (a blank file label is never foreign); promoted
       // to the file level it would drop a healthy file from every search wholesale.
-      const { adapters, update, distinctEmbeddingModelsByFabFileId } = makeAdapters();
+      const { adapters, update, distinctEmbeddingModelsByFabFileId, countUnlabeledVectorChunksByFabFileId } =
+        makeAdapters();
 
       await stampChunkEmbeddingModel('legacy-file', 'amazon.titan-embed-text-v2:0', adapters);
 
@@ -115,18 +127,20 @@ describe('stampChunkEmbeddingModel', () => {
         chunkEmbeddingModelStampedAt: expect.any(Date),
       });
       expect(update.mock.calls[0][0]).not.toHaveProperty('embeddingModel');
-      // Not even read: no file label is being decided, so the divergence query is pure cost.
+      // Not even read: no file label is being decided, so the divergence queries are pure cost.
       expect(distinctEmbeddingModelsByFabFileId).not.toHaveBeenCalled();
+      expect(countUnlabeledVectorChunksByFabFileId).not.toHaveBeenCalled();
     });
   });
 
   describe('a file whose chunks span two embedding spaces', () => {
     it('clears the FILE label rather than picking one of them, and says so', async () => {
       // A file's chunks fan across several vectorize messages that each resolve their own model, so
-      // a credential appearing or lapsing mid-ingest genuinely splits the file across two models AND
-      // two vector widths. Any single file label is then a lie about half the vectors; a blank one is
-      // the only safe answer, because isForeignEmbeddingModel never excludes it and each chunk is
-      // still matched on its own truthful label.
+      // a credential appearing or lapsing mid-ingest genuinely splits the file across two models -
+      // not necessarily two WIDTHS, since voyage-3 and Titan v2 are both 1024. Any single file label
+      // is then a lie about half the vectors; a blank one is the only safe answer, because
+      // isForeignEmbeddingModel never excludes it and each chunk is still matched on its own
+      // truthful label (classifyLoadedChunk on the cosine arm, the filter clause on the Atlas one).
       const { adapters, update, warn } = makeAdapters(['text-embedding-ada-002', 'amazon.titan-embed-text-v2:0']);
 
       await stampChunkEmbeddingModel('split-file', 'amazon.titan-embed-text-v2:0', adapters, {
@@ -156,17 +170,32 @@ describe('stampChunkEmbeddingModel', () => {
       expect(calls).toEqual(['read', 'chunks', 'file']);
     });
 
-    it("clears the label when every chunk declares a model OTHER than the caller's", async () => {
-      // The mirror of the divergence case, and the reason the declared set is unioned rather than
-      // the argument returned. If this message resolved Titan but had no embeddable chunks of its
-      // own while the file's existing chunks all declare ada-002, stamping the file Titan would
-      // label a file whose every vector is ada-002 - a wrong FILE label is exclusion authority, so
-      // it strands the whole file. Clearing it keeps every chunk matched on its own truthful label.
-      const { adapters, update } = makeAdapters(['text-embedding-ada-002']);
+    it("labels the file ada-002 when every chunk declares it and the caller's model embedded nothing", async () => {
+      // The mirror of the divergence case, and the reason the argument is not simply returned. This
+      // message resolved Titan but wrote no vector its stamp will label (no unlabeled vector-bearing
+      // chunk remains), while the file's existing chunks all declare ada-002 - so every vector in
+      // this file IS ada-002 and saying so is the truth, not a guess. Voting Titan in anyway would
+      // manufacture a second space from a message that embedded nothing, and the resulting split
+      // would clear a perfectly good label.
+      const { adapters, update, warn } = makeAdapters(['text-embedding-ada-002'], 0);
+
+      await stampChunkEmbeddingModel('file-1', 'amazon.titan-embed-text-v2:0', adapters, { stampFile: true });
+
+      expect(update).toHaveBeenCalledWith(expect.objectContaining({ embeddingModel: 'text-embedding-ada-002' }));
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("DOES vote the caller's model in when the pending stamp will actually write a row", async () => {
+      // The other side of the same rule: an unlabeled vector-bearing chunk is one the stamp below is
+      // about to label Titan, so after it commits the file genuinely holds both spaces and the label
+      // must clear. Without this the union would be unreachable and a real mid-ingest credential
+      // change would keep a label that is a lie about half the vectors.
+      const { adapters, update, warn } = makeAdapters(['text-embedding-ada-002'], 3);
 
       await stampChunkEmbeddingModel('file-1', 'amazon.titan-embed-text-v2:0', adapters, { stampFile: true });
 
       expect(update).toHaveBeenCalledWith(expect.objectContaining({ embeddingModel: null }));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('2 embedding spaces'));
     });
 
     it('labels the file from what the CHUNKS declare, not from the argument', async () => {
@@ -190,7 +219,7 @@ describe('stampChunkEmbeddingModel', () => {
       // `isFileVectorized` with an empty embed batch and still asks for the file label. Stamping it
       // from the argument gives a file with zero vectors a confident vector space, which is
       // exclusion authority derived from nothing, and it overwrites a truthful blank label to do it.
-      const { adapters, update, warn } = makeAdapters([]);
+      const { adapters, update, warn } = makeAdapters([], 0);
 
       await stampChunkEmbeddingModel('empty-file', 'amazon.titan-embed-text-v2:0', adapters, {
         vectorized: true,
@@ -202,6 +231,25 @@ describe('stampChunkEmbeddingModel', () => {
       // Otherwise silent: the handler already logged the per-chunk skips, but nothing says the file
       // as a whole finished with no vectors.
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('no vector-bearing chunks'));
+    });
+
+    it('distinguishes "no vectors" from "vectors not labelled yet" and labels the second', async () => {
+      // Both come back as an EMPTY declared set - the distinct query only sees chunks that already
+      // carry a label - and they want opposite answers. A legacy file, or the chunk-model backfill's
+      // input, has real vectors that the stamp below is about to label; clearing the file label there
+      // withholds a truthful one from a healthy file and tells the operator to re-upload it.
+      const { adapters, update, warn } = makeAdapters([], 12);
+
+      await stampChunkEmbeddingModel('legacy-file', 'amazon.titan-embed-text-v2:0', adapters, {
+        vectorized: true,
+        vectorizedChunkCount: 12,
+        stampFile: true,
+      });
+
+      expect(update).toHaveBeenCalledWith(
+        expect.objectContaining({ embeddingModel: 'amazon.titan-embed-text-v2:0' })
+      );
+      expect(warn).not.toHaveBeenCalled();
     });
   });
 });

@@ -174,8 +174,10 @@ export interface EmbeddingLabeledFile {
  *    `string`, so it is the callers - the vectorize handler and the chunk-model backfill script
  *    (packages/scripts/datalake) - that owe a canonical id. The system-help lake mirror
  *    (packages/scripts/help/ingestHelpDatalake.ts) writes it on create from its own resolved model.
- *    Chunk labels come from the same value stampChunkEmbeddingModel writes on the file, which is what
- *    keeps the two levels agreeing.
+ *    The two levels are NOT guaranteed to agree, and the file level is the weaker of them: the
+ *    vectorize handler labels each chunk with the model that embedded it, while the file label is a
+ *    summary that stampChunkEmbeddingModel deliberately leaves BLANK once the chunks disagree. So a
+ *    chunk-level reader must prefer the chunk's own label - see classifyLoadedChunk.
  *
  * Folding here would therefore mask a malformed label without buying anything, and a malformed
  * label is exactly what should stay visible. An unrecognized id also already fails CLOSED one
@@ -328,6 +330,14 @@ export function resolveMajorityEmbeddingModel(
  * Pure and total - it must never throw. Both ranking loops sit inside catch blocks that fall back
  * to silent behavior, which is the very bug this module exists to remove.
  *
+ * The CHUNK's own label decides the model check whenever it has one, and the file label is only the
+ * fallback. The chunk label is written in the same transaction as the vector sitting beside it,
+ * where the file label is a summary of them all - and that summary is deliberately BLANK for a file
+ * whose chunks span two spaces (see stampChunkEmbeddingModel). Blank is never foreign, so reading
+ * the file label alone leaves exactly the split file with no cross-model guard, and width cannot
+ * stand in: voyage-3 and Titan v2 are both 1024 wide, so the two halves of such a file compare
+ * cleanly against either query and score as though they were in one space.
+ *
  * Check order is deliberate:
  *  1. no parent file: the model check needs one, and an orphan cannot be attributed to any model.
  *  2. foreign model before width: it is the actionable diagnostic (it names the model to re-embed)
@@ -335,16 +345,22 @@ export function resolveMajorityEmbeddingModel(
  *  3. missing vector before width, or `0 !== queryDim` would swallow it into the width bucket.
  *  4. width last, so it means "the label agrees (or is unset) but the vector still cannot be
  *     compared" - i.e. the label lies or the vector is truncated.
+ *
+ * `chunkModel` is required rather than optional on purpose: a caller that simply forgot it would
+ * silently get the weaker file-only guard back, which is the defect this parameter exists to close.
+ * Pass `null` where the reader genuinely has no chunk label to offer.
  */
 export function classifyLoadedChunk(args: {
   vector: number[] | null | undefined;
   queryDim: number;
   parentFile: { embeddingModel?: string | null } | undefined;
   queryModel: string;
+  chunkModel: string | null | undefined;
 }): ChunkSkipReason | null {
-  const { vector, queryDim, parentFile, queryModel } = args;
+  const { vector, queryDim, parentFile, queryModel, chunkModel } = args;
   if (!parentFile) return 'unknownFile';
-  if (isForeignEmbeddingModel(parentFile.embeddingModel, queryModel)) return 'modelMismatch';
+  const declaredModel = chunkModel?.trim() ? chunkModel : parentFile.embeddingModel;
+  if (isForeignEmbeddingModel(declaredModel, queryModel)) return 'modelMismatch';
   if (!vector || vector.length === 0) return 'missingVector';
   if (vector.length !== queryDim) return 'dimensionMismatch';
   return null;

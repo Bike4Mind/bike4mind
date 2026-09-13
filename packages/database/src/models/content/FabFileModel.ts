@@ -202,6 +202,12 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
    * Vectorless chunks are filtered at the DB layer and only the fields semantic search needs
    * are projected; `.lean()` skips Mongoose hydration.
    *
+   * The chunk's OWN `embeddingModel` is one of those fields. The in-process cosine scans classify
+   * each row against the query's model, and the FILE label they would otherwise read alone is
+   * deliberately blank for a file whose chunks span two spaces (see stampChunkEmbeddingModel) -
+   * blank is never foreign, so without this a split file reaches the ranker with no cross-model
+   * guard at all, and width cannot stand in for one when ten registered models share 1024 dims.
+   *
    * `_id` is unique, so sorting on it is a TOTAL order and `_id > afterChunkId` is an exact
    * keyset cursor - no rows skipped or duplicated across pages regardless of the query plan.
    * That is what lets a caller walk a corpus larger than memory and still get a reproducible
@@ -220,7 +226,7 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
         vector: { $exists: true, $ne: [] },
         ...(afterChunkId ? { _id: { $gt: afterChunkId } } : {}),
       })
-      .select({ _id: 1, fabFileId: 1, text: 1, vector: 1 })
+      .select({ _id: 1, fabFileId: 1, text: 1, vector: 1, embeddingModel: 1 })
       .sort({ _id: 1 })
       .limit(limit)
       .lean();
@@ -229,6 +235,7 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
       fabFileId: String(d.fabFileId),
       text: d.text ?? '',
       vector: (d.vector as number[]) ?? [],
+      embeddingModel: (d.embeddingModel as string | null | undefined) ?? null,
     }));
   }
 
@@ -390,6 +397,24 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
       embeddingModel: { $nin: [null, ''] },
     });
     return models.filter((model): model is string => typeof model === 'string');
+  }
+
+  /**
+   * How many of this file's VECTOR-BEARING chunks still carry no `embeddingModel` - exactly the
+   * rows `updateEmbeddingModel` is about to fill, and the same predicate, so the two cannot drift.
+   *
+   * `distinctEmbeddingModelsByFabFileId` alone cannot answer the question the file label needs:
+   * it returns an empty set both for a file with no vectors at all and for one whose vectors are
+   * all unlabeled, and those want OPPOSITE labels (unknown vs. the model about to be stamped).
+   * This count is what separates them. It also says whether the pending stamp will write anything,
+   * which is what stops a message that embedded nothing from voting its own model into the set.
+   */
+  async countUnlabeledVectorChunksByFabFileId(fabFileId: string): Promise<number> {
+    return this.fabFileChunkModel.countDocuments({
+      fabFileId,
+      'vector.0': { $exists: true },
+      $or: [{ embeddingModel: { $exists: false } }, { embeddingModel: null }, { embeddingModel: '' }],
+    });
   }
 
   /**

@@ -2653,13 +2653,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             coverage.chunksScanned++;
             // Width alone cannot separate two 1536-dim models (ada-002 vs text-embedding-3-small),
             // and a cross-space score from those looks real enough to outrank a genuine hit, so the
-            // parent file's recorded model is consulted as well.
+            // recorded model is consulted as well - the chunk's own first, since the file label is
+            // blank precisely when the file's chunks span two spaces.
             const parentFile = fileById.get(row.fabFileId);
             const skipReason = classifyLoadedChunk({
               vector: row.vector,
               queryDim: queryVector.length,
               parentFile,
               queryModel: embeddingModel,
+              chunkModel: row.embeddingModel,
             });
             if (skipReason === 'modelMismatch' || skipReason === 'dimensionMismatch') {
               // Previously these scored 0 and were laundered out by the similarity floor with
