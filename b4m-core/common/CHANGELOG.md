@@ -1,5 +1,11 @@
 # @bike4mind/common
 
+## 7.1.1
+
+### Patch Changes
+
+- [#2723](https://github.com/Bike4Mind/bike4mind/pull/2723) [`7958ee1`](https://github.com/Bike4Mind/bike4mind/commit/7958ee13d277295ed9877a24686aa266265a727f) Thanks [@vinchi777](https://github.com/vinchi777)! - harden the embedding-comparison harness before the credentialed run
+
 ## 7.1.0
 
 ### Minor Changes

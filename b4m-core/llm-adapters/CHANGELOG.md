@@ -1,5 +1,16 @@
 # @bike4mind/llm-adapters
 
+## 0.13.0
+
+### Minor Changes
+
+- [#2741](https://github.com/Bike4Mind/bike4mind/pull/2741) [`0e11dab`](https://github.com/Bike4Mind/bike4mind/commit/0e11dab88d9141c364c2f9192681fd94023050d3) Thanks [@biletskiy6](https://github.com/biletskiy6)! - let a batch request carry a cache breakpoint
+
+### Patch Changes
+
+- Updated dependencies [[`7958ee1`](https://github.com/Bike4Mind/bike4mind/commit/7958ee13d277295ed9877a24686aa266265a727f)]:
+  - @bike4mind/common@7.1.1
+
 ## 0.12.2
 
 ### Patch Changes
