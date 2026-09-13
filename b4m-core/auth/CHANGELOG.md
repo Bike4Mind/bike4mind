@@ -1,5 +1,12 @@
 # @bike4mind/auth
 
+## 0.7.5
+
+### Patch Changes
+
+- Updated dependencies [[`576f59f`](https://github.com/Bike4Mind/bike4mind/commit/576f59f9cb237c473c2793e72cd33e1648f12327)]:
+  - @bike4mind/common@7.1.0
+
 ## 0.7.4
 
 ### Patch Changes
