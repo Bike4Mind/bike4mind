@@ -23,7 +23,23 @@ export interface ITransformBatchResultItem {
   client_ref: string;
   status: 'done' | 'failed';
   reply?: string;
-  tokenUsage?: { actualInputTokens: number; actualOutputTokens: number };
+  tokenUsage?: {
+    actualInputTokens: number;
+    actualOutputTokens: number;
+    /**
+     * Relayed from Anthropic's usage block. A request that carried a
+     * `cache_control` breakpoint reports 0 rather than omitting the field, so
+     * treat absent as "not reported" and 0 as "no cache activity".
+     *
+     * The two write fields split `cacheCreationInputTokens`, which is their
+     * sum: a 5-minute write bills 1.25x base input, a 1-hour write 2x, so the
+     * sum alone cannot be priced when a request mixes them.
+     */
+    cacheReadInputTokens?: number;
+    cacheCreationInputTokens?: number;
+    cacheWrite5mInputTokens?: number;
+    cacheWrite1hInputTokens?: number;
+  };
   error?: string;
 }
 
