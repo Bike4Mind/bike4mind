@@ -5,6 +5,7 @@ import {
   apiKeyRepository,
   rapidReplyMappingRepository,
   rapidReplyResultRepository,
+  questRepository,
   Connection,
 } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
@@ -12,7 +13,8 @@ import { StatusManager } from '@bike4mind/services';
 import { ClientMessageSender, getSettingsByNames } from '@bike4mind/utils';
 import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
 import { resolveRapidModel } from '@server/rapidReply/resolveRapidModel';
-import { ChatModels } from '@bike4mind/common';
+import { assertSessionAccess } from '@server/utils/sessionAccess';
+import { ChatModels, NotFoundError } from '@bike4mind/common';
 import { Resource } from 'sst';
 
 // OptiHashi sessions get the instant ack even when RapidReply is globally off. When no DB
@@ -54,6 +56,32 @@ const handler = baseApi()
     const isOpti = isOptiHint === true && hasOptiAccess;
 
     req.logger.info(`🚀 [RapidReply] Endpoint invoked for quest ${questId || 'new quest'}${isOpti ? ' (opti)' : ''}`);
+
+    // Object-level authz: bind the caller-supplied ids to the caller before we persist a
+    // rapid-reply row or stream it over the websocket. Resolve the quest first so a supplied
+    // questId is always validated - even when sessionId is omitted, because the row persisted below
+    // is keyed on questId and a spoofed one would otherwise be a cross-tenant write. The session
+    // gate falls back to the quest's own session, so dropping sessionId from the body cannot skip
+    // it. Outside the try below so a cross-tenant attempt surfaces as a real 403/404 rather than a
+    // soft {success:false}.
+    const quest = questId ? await questRepository.findById(questId) : null;
+    if (questId && !quest) {
+      // Uniform message with the session gate below: quest existence must not be an oracle (a
+      // nonexistent vs an existing-but-forbidden questId would otherwise return different bodies).
+      throw new NotFoundError('Session not found');
+    }
+    // Write-level: this persists a rapid-reply row keyed on questId that surfaces in the session's
+    // history, so a read-only sharee (or any user on an isGlobalRead session) must not reach it -
+    // matching the update-level gate the main completion path uses (canUpdateShareable). Skip the
+    // gate ONLY for the genuinely id-less blank ack (a brand-new session with no questId): with
+    // neither id there is nothing to bind, and no persisted row that could be cross-tenant.
+    const boundSessionId = sessionId ?? quest?.sessionId;
+    if (boundSessionId || questId) {
+      await assertSessionAccess(boundSessionId, userId, 'write', req.user.groups ?? []);
+    }
+    if (quest && sessionId && quest.sessionId !== sessionId) {
+      throw new NotFoundError('Session not found');
+    }
 
     try {
       // 1. Feature toggle - OptiHashi sessions bypass the global toggle (scoped enablement)

@@ -3,11 +3,16 @@ import { redactSessionForClient } from '@bike4mind/common';
 import { sessionService } from '@bike4mind/services';
 import { InternalServerError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertSessionAccess } from '@server/utils/sessionAccess';
 import { OperationsModelService } from '@client/services/operationsModelService';
 import { Request } from 'express';
 
 const handler = baseApi().post<Request<unknown, unknown, unknown, { id: string }>>(async (req, res) => {
   const { id } = req.query;
+
+  // Bind the caller-supplied session id to the caller before renaming. Outside the try
+  // below so a 403/404 surfaces as-is instead of being remapped to a 500.
+  await assertSessionAccess(id, req.user!.id, 'write', req.user!.groups ?? []);
 
   try {
     // Get operations model

@@ -83,7 +83,12 @@ export function useQuestExport() {
         const url = msg.downloadUrl;
         const filename = msg.filename || 'quest-export.zip';
         triggerDownload(url, filename);
-        toast.success(`Export complete: ${filename}`, {
+        const dropped = msg.droppedQuestCount ?? 0;
+        const message =
+          dropped > 0
+            ? `Export complete, ${dropped} response${dropped === 1 ? '' : 's'} not included`
+            : `Export complete: ${filename}`;
+        toast.success(message, {
           duration: 10000,
           action: {
             label: 'Download Again',

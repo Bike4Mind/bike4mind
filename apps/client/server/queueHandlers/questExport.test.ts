@@ -17,19 +17,33 @@ const h = vi.hoisted(() => {
   const OWNER_FILE_ID = 'file-owner';
   const OWNER_IMAGE_URL = 'https://test-bucket.s3.amazonaws.com/uploads/owner-fig.png';
   const OWNER_IMAGE_KEY = 'uploads/owner-fig.png';
+  // The quest lives in this session; filterReadableQuests keeps it only if the CALLER can read the
+  // session, so the collaborator is user-shared on it. (Session ids must be ObjectId-shaped.) The
+  // embedded image is then separately authorized against the OWNER - the behavior under test.
+  const SESSION_ID = '507f1f77bcf86cd799439011';
   return {
     OWNER_ID,
     COLLABORATOR_ID,
     OWNER_FILE_ID,
     OWNER_IMAGE_URL,
     OWNER_IMAGE_KEY,
+    SESSION_ID,
     findAccessibleById: vi.fn(async (user: { id?: string } | null, fileId: string) =>
       user?.id === OWNER_ID ? { id: fileId } : null
     ),
     findUserById: vi.fn(async (id: string) => ({ id, _id: id })),
+    sessionFindById: vi.fn(async (id: string) =>
+      id === SESSION_ID ? { _id: SESSION_ID, userId: OWNER_ID, users: [{ userId: COLLABORATOR_ID }] } : null
+    ),
+    // filterReadableQuests resolves sessions in bulk and keys readability by `session.id`.
+    sessionFindAllByIds: vi.fn(async (ids: string[]) =>
+      ids
+        .filter(id => id === SESSION_ID)
+        .map(id => ({ id, _id: id, userId: OWNER_ID, users: [{ userId: COLLABORATOR_ID }] }))
+    ),
     planFindById: vi.fn(),
     questFind: vi.fn(() => ({
-      lean: async () => [{ _id: 'q1', reply: `![fig](${OWNER_IMAGE_URL})`, images: [] }],
+      lean: async () => [{ _id: 'q1', sessionId: SESSION_ID, reply: `![fig](${OWNER_IMAGE_URL})`, images: [] }],
     })),
     fabFileFindOne: vi.fn(async ({ filePath }: { filePath: string }) =>
       filePath === OWNER_IMAGE_KEY ? { id: OWNER_FILE_ID, filePath, moderationStatus: 'clean' } : null
@@ -60,6 +74,7 @@ vi.mock('@bike4mind/database', () => ({
   FabFile: { findOne: h.fabFileFindOne },
   fabFileRepository: { shareable: { findAccessibleById: h.findAccessibleById } },
   userRepository: { findById: h.findUserById },
+  sessionRepository: { findById: h.sessionFindById, findAllByIds: h.sessionFindAllByIds },
   apiKeyRepository: {},
   adminSettingsRepository: {},
 }));
@@ -145,5 +160,74 @@ describe('questExport image access subject', () => {
     const [markdown, imageBuffers] = h.createZipBuffer.mock.calls[0] as unknown as [string, unknown[]];
     expect(imageBuffers).toHaveLength(1);
     expect(markdown).not.toContain('Image unavailable');
+  });
+});
+
+/**
+ * Regression guard for the owner-arm IDOR: filterReadableQuests applies the plan-owner readability
+ * arm ONLY when the caller IS the owner. A plan sharee can write subQuest.questId, so passing the
+ * owner arm for a sharee would let them inject the id of a quest in a session only the owner can read
+ * and exfiltrate the owner's private content. The owner arm must still recover the owner's own quests
+ * (e.g. sessions they soft-deleted) when the owner exports their own plan.
+ *
+ * This drives the REAL dispatch and asserts on the markdown handed to createZipBuffer: a dropped
+ * quest degrades to "_Response content unavailable._"; a kept quest emits its reply.
+ */
+describe('questExport owner-arm readability', () => {
+  const PRIVATE_SESSION_ID = '507f191e810c19729de860ea';
+  const SECRET_REPLY = 'OWNER-PRIVATE-QUEST-CONTENT';
+  const SHAREE_ID = 'sharee-9';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Owner-only session: owner-owned, shared with no one. The mock filters by the ids actually
+    // requested (not a hardcoded echo) so a .lean() regression that mistyped sessionId would surface.
+    h.sessionFindAllByIds.mockImplementation(async (ids: string[]) =>
+      ids.filter(id => id === PRIVATE_SESSION_ID).map(id => ({ id, _id: id, userId: h.OWNER_ID, users: [] }))
+    );
+    h.questFind.mockReturnValue({
+      lean: async () => [{ _id: 'q-secret', sessionId: PRIVATE_SESSION_ID, reply: SECRET_REPLY, images: [] }],
+    });
+  });
+
+  const runExportOf = (callerId: string) => {
+    h.planFindById.mockResolvedValue({
+      userId: h.OWNER_ID,
+      sharedWith: [SHAREE_ID],
+      goal: 'Owner Plan',
+      state: 'active',
+      quests: [
+        {
+          title: 'Q',
+          description: 'd',
+          complexity: 'simple',
+          subQuests: [{ title: 'sq', status: 'completed', questId: 'q-secret' }],
+        },
+      ],
+    });
+    const event = {
+      Records: [{ body: JSON.stringify({ exportJobId: 'job-2', planId: 'plan-2', userId: callerId }) }],
+    };
+    return dispatch(event as never, {} as never, makeLogger() as never);
+  };
+
+  const exportedMarkdown = () => {
+    expect(h.createZipBuffer).toHaveBeenCalledTimes(1);
+    const [markdown] = h.createZipBuffer.mock.calls[0] as unknown as [string];
+    return markdown;
+  };
+
+  it('drops an owner-only quest a sharee injected into subQuest.questId', async () => {
+    await runExportOf(SHAREE_ID);
+    const markdown = exportedMarkdown();
+    expect(markdown).not.toContain(SECRET_REPLY);
+    expect(markdown).toContain('_Response content unavailable._');
+  });
+
+  it('keeps that quest when the owner exports their own plan', async () => {
+    await runExportOf(h.OWNER_ID);
+    const markdown = exportedMarkdown();
+    expect(markdown).toContain(SECRET_REPLY);
+    expect(markdown).not.toContain('_Response content unavailable._');
   });
 });

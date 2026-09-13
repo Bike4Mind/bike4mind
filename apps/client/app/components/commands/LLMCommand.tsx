@@ -268,8 +268,10 @@ export async function handleLLMCommand(
           `🚀 [RapidReply] Firing rapid reply request (complexity: ${queryComplexity}, opti: ${isOptiSession}, questId: ${questId || 'none'})`
         );
 
-        // Fire and forget - don't await, catch errors silently
-        // Server will skip gracefully if questId is missing (new quests)
+        // Fire and forget - don't await, catch errors silently. The server authorizes the bound
+        // session on every call carrying a sessionId or questId, and skips only the id-less blank
+        // ack (a brand-new session with neither), so a forbidden session surfaces as a 404 here
+        // (swallowed by the .catch) rather than being silently skipped.
         api
           .post('/api/ai/rapid-reply', {
             questId: questId,
