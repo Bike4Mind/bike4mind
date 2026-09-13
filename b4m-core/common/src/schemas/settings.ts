@@ -385,6 +385,7 @@ export const SettingKeySchema = z.enum([
   'defaultEmbeddingModel',
   'dataLakeSearchMaxFiles',
   'dataLakeSearchMaxChunks',
+  'dataLakeSearchMaxChunksPerFile',
   'forcedRetrievalCharBudget',
   'lakeMemoryRecallK',
   'kbSearchDefaultResults',
@@ -851,6 +852,18 @@ function makeStringSetting(
  */
 export const DATA_LAKE_SEARCH_MAX_FILES_DEFAULT = 5_000;
 export const DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT = 100_000;
+
+/**
+ * Most chunks one SOURCE DOCUMENT may contribute to a search's top-K. Unlike the two scan budgets
+ * above this is a diversity guard, not a cost rail: it bounds who occupies the result slots, not
+ * how far the query scans.
+ *
+ * `0` is a real, silent value meaning "no cap" - byte-identical to behavior before this setting
+ * existed - not "unset, use some other default". It ships disabled deliberately: crowding was
+ * measured absent on a 47-document corpus, so this is a lever for corpora large enough to show
+ * the problem, not a change to how retrieval behaves today.
+ */
+export const DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT = 0;
 
 /**
  * Data-lake embedding SPEND levers: defaults and hard rails, shared by the admin-settings
@@ -1544,6 +1557,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'lakeMemoryRecallK', order: 8 },
       { key: 'forcedRetrievalRelativeFloorPct', order: 9 },
       { key: 'forcedRetrievalMinSimilarityPct', order: 10 },
+      { key: 'dataLakeSearchMaxChunksPerFile', order: 11 },
     ],
   },
   DATA_LAKE_COST: {
@@ -3444,6 +3458,42 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 3,
     // Same rungs, and the same reason for no Lake rung, as dataLakeSearchMaxFiles above (#2624).
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+  }),
+  dataLakeSearchMaxChunksPerFile: makeNumberSetting({
+    key: 'dataLakeSearchMaxChunksPerFile',
+    name: 'Data Lake Search Max Chunks Per Document',
+    defaultValue: DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
+    min: 0,
+    description:
+      'Most chunks from any ONE source document a data-lake semantic search may return in its ' +
+      'top-K. A diversity guard for CONTESTED slots: where several documents answer the question, ' +
+      'it stops the best-scoring one from taking slots the others could have filled. It is NOT a ' +
+      'fix for severe crowding - the cap redistributes only among the candidates retrieval ' +
+      'already returned, so a document that supplies enough of the top-scoring chunks to fill ' +
+      'that pool on its own is one the cap cannot change at all. On a corpus of book-length ' +
+      'documents, expect enabling this to change little beyond widening the vector-search ' +
+      'request. 0 (default) disables the cap, ' +
+      'byte-identical to behavior before this setting existed. The cap never SHRINKS a result set - ' +
+      'once the spread-out picks are in, any slots still open are backfilled with the highest-' +
+      'scoring chunks the cap held back, so a lake whose only match is one document still returns ' +
+      'a full top-K. A value at or above the result count is also a no-op, since nothing can ever ' +
+      "be held back. Below it, each retrieval stream's candidate pool is widened to a fixed " +
+      'multiple of the result count so the cap has a spread to choose from. The scanned corpus ' +
+      'itself does not grow (that is bounded separately), but the vector-search backends are ' +
+      'asked for that many more matches, and a larger in-memory ranking pool costs some CPU. 2-3 ' +
+      'is the useful range; 1 serves one passage per document, which suits a corpus of many short ' +
+      'documents and starves a question whose answer spans one long one. The chat knowledge-base ' +
+      'path ranks more passages than it serves, so it applies the cap a second time at the count ' +
+      'it actually serves - otherwise the spread-out picks, which are by definition the lowest-' +
+      'scoring ones admitted, would land in the passages that path discards.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 11,
+    // Organization/Owner only, no Lake rung - same reason as dataLakeSearchMaxFiles/MaxChunks
+    // (#2624). The cap is enforced at a merge whose pool spans EVERY lake the caller can reach in
+    // one pass, so there is no single lakeId for a narrower rung to key on and a Lake-scoped
+    // override would be silently inert. Reinstating it needs per-lake sub-budgets in the scan.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   forcedRetrievalCharBudget: makeNumberSetting({

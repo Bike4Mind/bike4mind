@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   recordForced: vi.fn(),
   recordGauge: vi.fn(),
   recordRun: vi.fn(),
+  recordRescue: vi.fn(),
   enqueueTaxonomyAnalysisIfWanted: vi.fn(),
   getSettingsValue: vi.fn(),
   getSettingsMap: vi.fn(),
@@ -21,7 +22,7 @@ const h = vi.hoisted(() => ({
   // Spied (not a bare stub) so a test can assert the cron passes BOTH the age cutoff and the
   // stale-claim cutoff: a one-arg call silently turns the stale-claim rescue arm back off. The third
   // parameter is here for the same reason - dropping it silently strands paused files (#2120).
-  runSweep: vi.fn(async () => ({ enqueued: 0, failed: 0 })),
+  runSweep: vi.fn(async () => ({ outcome: 'swept' as const, enqueued: 0, failed: 0 })),
   runModerationSweep: vi.fn(async () => ({ rescanned: 0 })),
   buildStrandedFilter: vi.fn((cutoff: Date, _staleClaimBefore?: Date) => ({
     vectorizeEnqueueFailedAt: { $lt: cutoff },
@@ -91,6 +92,7 @@ vi.mock('@server/utils/cloudwatch', () => ({
   recordReconcilerForcedTerminal: (...a: unknown[]) => h.recordForced(...a),
   recordStuckBatchGauge: (...a: unknown[]) => h.recordGauge(...a),
   recordReconcileRun: (...a: unknown[]) => h.recordRun(...a),
+  recordChunkRescueSweep: (...a: unknown[]) => h.recordRescue(...a),
 }));
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   enqueueTaxonomyAnalysisIfWanted: (...a: unknown[]) => h.enqueueTaxonomyAnalysisIfWanted(...a),
@@ -113,6 +115,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
     h.recordRun.mockResolvedValue(undefined);
     h.recordForced.mockResolvedValue(undefined);
     h.recordGauge.mockResolvedValue(undefined);
+    h.recordRescue.mockResolvedValue(undefined);
     h.findStuckTaxonomy.mockResolvedValue([]);
     h.reconcileTaxonomy.mockResolvedValue([]);
     h.enqueueTaxonomyAnalysisIfWanted.mockResolvedValue(undefined);
@@ -125,7 +128,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
     // Same reason as sendToQueue above, and the same leak: a test that makes the un-chunked sweep
     // reject otherwise leaves that rejection in place for every test after it in file order, which
     // shows up as a stray 'un-chunked rescue sweep failed' line in an unrelated test's log assertions.
-    h.runSweep.mockResolvedValue({ enqueued: 0, failed: 0 });
+    h.runSweep.mockResolvedValue({ outcome: 'swept', enqueued: 0, failed: 0 });
     h.fabFileFind.mockReturnValue({
       select: () => ({ limit: () => ({ lean: async () => [] }) }),
     });
@@ -174,6 +177,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
       rescuedChunkFiles: 0,
       rescuedVectorizeFiles: 0,
       rescueFailures: 0,
+      rescueOutcome: 'swept',
       rescannedModerationFiles: 0,
     });
   });
@@ -191,6 +195,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
       rescuedChunkFiles: 0,
       rescuedVectorizeFiles: 0,
       rescueFailures: 0,
+      rescueOutcome: 'swept',
       rescannedModerationFiles: 0,
     });
   });
@@ -228,7 +233,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
     beforeEach(() => {
       h.findStuck.mockResolvedValue([]);
       h.reconcile.mockResolvedValue([]);
-      h.runSweep.mockResolvedValue({ enqueued: 0, failed: 0 });
+      h.runSweep.mockResolvedValue({ outcome: 'swept', enqueued: 0, failed: 0 });
     });
 
     it('calls the shared sweep with the hosted per-run budget', async () => {
@@ -258,6 +263,51 @@ describe('dataLakeBatchReconcile cron handler', () => {
       expect(body.rescuedChunkFiles).toBe(0);
       expect(body.rescueFailures).toBe(0);
       expect(h.recordRun).toHaveBeenCalled();
+    });
+
+    it('emits the counts as metrics alongside the outcome that explains them', async () => {
+      h.runSweep.mockResolvedValue({ outcome: 'swept', enqueued: 2, failed: 3 });
+
+      await handler();
+
+      expect(h.recordRescue).toHaveBeenCalledWith('swept', 2, 3);
+    });
+
+    it('reports a GATED-OFF sweep as disabled, not as a clean idle run', async () => {
+      // The whole point of the outcome field: enableAutoChunk being off, the sweep finding nothing,
+      // and the sweep throwing all enqueue zero. Without a discriminator an operator watching the
+      // counters cannot tell a switched-off rescue from a healthy one with no backlog.
+      h.runSweep.mockResolvedValue({ outcome: 'disabled', enqueued: 0, failed: 0 });
+
+      const body = JSON.parse((await handler()).body);
+
+      expect(h.recordRescue).toHaveBeenCalledWith('disabled', 0, 0);
+      expect(body.rescueOutcome).toBe('disabled');
+    });
+
+    it('reports a THROWN sweep as failed, distinct from both disabled and swept', async () => {
+      h.runSweep.mockRejectedValue(new Error('mongo down'));
+
+      const body = JSON.parse((await handler()).body);
+
+      expect(h.recordRescue).toHaveBeenCalledWith('failed', 0, 0);
+      expect(body.rescueOutcome).toBe('failed');
+    });
+
+    it('a swept-but-idle tick still emits, so absence of data means the cron itself stopped', async () => {
+      h.runSweep.mockResolvedValue({ outcome: 'swept', enqueued: 0, failed: 0 });
+
+      await handler();
+
+      expect(h.recordRescue).toHaveBeenCalledWith('swept', 0, 0);
+    });
+
+    it('a rejecting rescue-metric helper never breaks the run', async () => {
+      h.recordRescue.mockRejectedValue(new Error('cloudwatch down'));
+
+      const res = await handler();
+
+      expect(res.statusCode).toBe(200);
     });
   });
 

@@ -145,7 +145,10 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
   it('does no work at all when auto-chunk is disabled', async () => {
     h.getSettingsValue.mockResolvedValue(false);
 
-    await expect(runSweep()).resolves.toEqual({ enqueued: 0, failed: 0 });
+    // 'disabled', not 'swept': this assertion and the "nothing to rescue" one below used to expect
+    // the SAME value, which is precisely why the reconciler's metrics could not tell a switched-off
+    // rescue from an idle one. The outcome is the only thing separating them.
+    await expect(runSweep()).resolves.toEqual({ outcome: 'disabled', enqueued: 0, failed: 0 });
 
     // The gate is before the QUERY, not just before the send: a disabled install must not pay for
     // an indexed scan of every complete-but-unchunked file once a minute, forever.
@@ -180,7 +183,7 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
       { _id: 'ff2', userId: 'u2' },
     ]);
 
-    await expect(runSweep()).resolves.toEqual({ enqueued: 2, failed: 0 });
+    await expect(runSweep()).resolves.toEqual({ outcome: 'swept', enqueued: 2, failed: 0 });
 
     // A scheduled rescue is background work whatever its batchId. Stamping only batch files let an
     // un-stamped re-enqueue default to `user` in isConvergenceHalted, so a file the chunk handler
@@ -215,7 +218,7 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
       if (msg.fabFileId === 'ff2' || msg.fabFileId === 'ff3') throw new Error('SQS throttled');
     });
 
-    await expect(runSweep()).resolves.toEqual({ enqueued: 2, failed: 2 });
+    await expect(runSweep()).resolves.toEqual({ outcome: 'swept', enqueued: 2, failed: 2 });
 
     // All four attempted - the ones behind a failure are not abandoned.
     expect(h.sendToQueue).toHaveBeenCalledTimes(4);
@@ -242,14 +245,14 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
     withCandidates([{ _id: 'ff1', userId: 'u1' }]);
     h.sendToQueue.mockRejectedValue(new Error('queue unreachable'));
 
-    await expect(runSweep()).resolves.toEqual({ enqueued: 0, failed: 1 });
+    await expect(runSweep()).resolves.toEqual({ outcome: 'swept', enqueued: 0, failed: 1 });
 
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('enqueued 0 un-chunked file(s), 1 failed'));
   });
 
   it('stays quiet when there is nothing to rescue', async () => {
     // Runs once a minute on every self-host install; a per-tick log line would bury the real ones.
-    await expect(runSweep()).resolves.toEqual({ enqueued: 0, failed: 0 });
+    await expect(runSweep()).resolves.toEqual({ outcome: 'swept', enqueued: 0, failed: 0 });
 
     expect(logger.info).not.toHaveBeenCalled();
     expect(logger.error).not.toHaveBeenCalled();
@@ -261,7 +264,7 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
     const candidates = Array.from({ length: 25 }, (_, i) => ({ _id: `ff${i}`, userId: `u${i}` }));
     withCandidates(candidates);
 
-    await expect(runSweep()).resolves.toEqual({ enqueued: 25, failed: 0 });
+    await expect(runSweep()).resolves.toEqual({ outcome: 'swept', enqueued: 25, failed: 0 });
 
     expect(h.sendToQueue).toHaveBeenCalledTimes(25);
   });
@@ -273,7 +276,7 @@ describe('runChunkRescueSweep (self-host chunk rescue)', () => {
     withCandidates(Array.from({ length: 25 }, (_, i) => ({ _id: `ff${i}`, userId: `u${i}` })));
     const peak = trackSendConcurrency();
 
-    await expect(runSweep()).resolves.toEqual({ enqueued: 25, failed: 0 });
+    await expect(runSweep()).resolves.toEqual({ outcome: 'swept', enqueued: 25, failed: 0 });
 
     expect(peak()).toBe(10);
   });

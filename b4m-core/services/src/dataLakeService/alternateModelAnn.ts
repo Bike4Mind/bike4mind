@@ -205,7 +205,7 @@ export async function runAlternateModelAnn(args: {
   query: string;
   candidate: AlternateAnnCandidate<{ id: string }>;
   apiKeyTable: SemanticDataLakeSearchParams['apiKeyTable'];
-  // Already bakes in fileById/topK/minScore - see the closure built in rankChunksForFiles.
+  // Already bakes in fileById/candidatePoolK/minScore - see the closure in rankChunksForFiles.
   runAnn: (a: { fileIds: string[]; queryVector: number[]; model: string }) => Promise<AnnVectorSearchResult>;
   logger?: Logger;
 }): Promise<AlternateAnnOutcome> {

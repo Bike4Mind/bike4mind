@@ -28,7 +28,13 @@ import { dataLakeService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
-import { recordReconcilerForcedTerminal, recordStuckBatchGauge, recordReconcileRun } from '@server/utils/cloudwatch';
+import {
+  recordReconcilerForcedTerminal,
+  recordStuckBatchGauge,
+  recordReconcileRun,
+  recordChunkRescueSweep,
+  type ChunkRescueOutcome,
+} from '@server/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
 import { runChunkRescueSweep } from '@server/worker/chunkRescueSweep';
 import { runModerationRescueSweep } from '@server/s3/moderationRescueSweep';
@@ -165,14 +171,18 @@ export async function handler() {
     logger,
   });
 
-  // Isolated so a rescue failure never blocks the batch reconciliation above.
-  const { enqueued: rescuedChunkFiles, failed: rescueFailures } = await runChunkRescueSweep({
+  // Isolated so a rescue failure never blocks the batch reconciliation above. The sweep names its
+  // own outcome ('disabled' | 'swept'); a throw never gets that far, so 'failed' is ours to report
+  // - without it this catch would return the same zeroes as a healthy idle tick.
+  const chunkRescue: { outcome: ChunkRescueOutcome; enqueued: number; failed: number } = await runChunkRescueSweep({
     limit: CHUNK_RESCUE_MAX_PER_RUN,
     logger,
   }).catch(err => {
     logger.error(`[DataLakeBatchReconcile] un-chunked rescue sweep failed: ${err}`);
-    return { enqueued: 0, failed: 0 };
+    return { outcome: 'failed' as const, enqueued: 0, failed: 0 };
   });
+  const { outcome: rescueOutcome, enqueued: rescuedChunkFiles, failed: rescueFailures } = chunkRescue;
+  await recordChunkRescueSweep(rescueOutcome, rescuedChunkFiles, rescueFailures).catch(() => {});
   const rescuedVectorizeFiles = await rescueStrandedVectorizeFiles().catch(err => {
     logger.error(`[DataLakeBatchReconcile] stranded-vectorize rescue sweep failed: ${err}`);
     return 0;
@@ -208,6 +218,7 @@ export async function handler() {
     rescuedChunkFiles,
     rescuedVectorizeFiles,
     rescueFailures,
+    rescueOutcome,
     rescannedModerationFiles,
   });
   return {
@@ -220,6 +231,7 @@ export async function handler() {
       rescuedChunkFiles,
       rescuedVectorizeFiles,
       rescueFailures,
+      rescueOutcome,
       rescannedModerationFiles,
     }),
   };

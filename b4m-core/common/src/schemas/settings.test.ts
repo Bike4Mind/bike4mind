@@ -16,6 +16,7 @@ import {
   ABSTENTION_PROMPT,
   WEB_SEARCH_FRESHNESS_PROMPT,
   KNOWLEDGE_BASE_RETRIEVAL_PROMPT,
+  DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
 } from './settings';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
@@ -915,12 +916,56 @@ describe('lakeMemoryRecallK agrees with the lake-memory recall fallback (#2496)'
   });
 });
 
+describe('dataLakeSearchMaxChunksPerFile (#1422)', () => {
+  it('ships DISABLED, so enabling the diversity cap is an operator decision', () => {
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.defaultValue).toBe(DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT);
+    // Pin the literal too: 0 here means "no cap", matching pre-#1422 retrieval exactly. Crowding
+    // was measured absent on a 47-document corpus, so a default that changed what installs serve
+    // would be a behavior change nobody asked for.
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.defaultValue).toBe(0);
+  });
+
+  it('accepts 0 at write time - the schema must not treat the disabled value as invalid', () => {
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.min).toBe(0);
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.schema.parse(0)).toBe(0);
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.schema.parse(3)).toBe(3);
+    expect(() => settingsMap.dataLakeSearchMaxChunksPerFile.schema.parse(-1)).toThrow();
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback', () => {
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.schema.parse(undefined)).toBe(
+      DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT
+    );
+  });
+
+  it('is settable at org and owner but NOT per lake, like the scan budgets it sits with', () => {
+    // A per-lake cap reads as the natural shape - one lake of long documents wants it, the rest of
+    // an org does not - but it is unkeyable: the cap is enforced at a merge whose pool spans EVERY
+    // lake the caller can reach in one pass, so there is no lakeId to resolve an override against.
+    // dataLakeSearchMaxFiles/MaxChunks shipped that rung on the same intuition and it resolved
+    // nothing (#2624). Pinned so restoring Lake is a deliberate decision, not silent drift.
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.scope?.settableAt).toEqual([
+      SettingScopeLevel.Organization,
+      SettingScopeLevel.Owner,
+    ]);
+  });
+});
+
 describe('EMBEDDING settings group registration (#1955)', () => {
   it('lists kbSearchDefaultResults, kbSearchResultTokenBudget and kbSearchMinRelevancePct with unique order values', () => {
     const keys = ['kbSearchDefaultResults', 'kbSearchResultTokenBudget', 'kbSearchMinRelevancePct'];
     const entries = API_SERVICE_GROUPS.EMBEDDING.settings.filter(s => keys.includes(s.key));
     expect(entries.map(s => s.key).sort()).toEqual([...keys].sort());
     expect(new Set(entries.map(s => s.order)).size).toBe(entries.length);
+  });
+
+  it('registers dataLakeSearchMaxChunksPerFile in the group, with an order no sibling reuses', () => {
+    // A setting absent from the group renders nowhere in the admin UI - it resolves correctly and
+    // is simply unreachable, which is the failure mode this pins.
+    const entry = API_SERVICE_GROUPS.EMBEDDING.settings.find(s => s.key === 'dataLakeSearchMaxChunksPerFile');
+    expect(entry).toBeDefined();
+    const orders = API_SERVICE_GROUPS.EMBEDDING.settings.map(s => s.order);
+    expect(new Set(orders).size).toBe(orders.length);
   });
 });
 

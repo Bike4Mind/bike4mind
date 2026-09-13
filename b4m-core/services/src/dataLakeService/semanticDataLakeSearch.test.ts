@@ -734,6 +734,161 @@ describe('semanticDataLakeSearch determinism', () => {
   });
 });
 
+describe('semanticDataLakeSearch per-document cap', () => {
+  // Three documents, four chunks each, scores descending strictly by chunk index across the
+  // whole corpus: dA beats every dB chunk, which beats every dC chunk. Uncapped, dA alone owns
+  // the entire top-4 - the crowding the cap exists to break.
+  const THREE_DOCS = [
+    { id: 'dA', fileName: 'A.pdf', tags: [] },
+    { id: 'dB', fileName: 'B.pdf', tags: [] },
+    { id: 'dC', fileName: 'C.pdf', tags: [] },
+  ];
+  const rankedCorpus = [...chunkRows('dA', 4), ...chunkRows('dB', 4), ...chunkRows('dC', 4)].map((row, i) => ({
+    ...row,
+    vector: [1, (100 - i) / 1000],
+  }));
+
+  const runCapped = async (maxChunksPerFile: number | undefined, topK = 4) => {
+    mockCosine.mockImplementation((_q: unknown, v: unknown) => (v as number[])[1]);
+    const result = await semanticDataLakeSearch({ ...baseParams(), topK, budgets: { maxChunksPerFile } }, {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: THREE_DOCS, hasMore: false, total: 3 }]) },
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(rankedCorpus as never) },
+      },
+    } as never);
+    return result.results;
+  };
+
+  it('is off by default: one document may still own the whole top-K', async () => {
+    // Pins the pre-cap behavior as the DEFAULT, so enabling the cap is opt-in and this change
+    // cannot quietly alter what every existing install serves.
+    expect((await runCapped(undefined)).map(r => r.fileId)).toEqual(['dA', 'dA', 'dA', 'dA']);
+  });
+
+  it('caps a crowding document and admits the next documents instead', async () => {
+    const capped = await runCapped(2);
+
+    expect(capped.map(r => r.fileId)).toEqual(['dA', 'dA', 'dB', 'dB']);
+    // Still exactly topK, and still best-first: the cap changed WHICH chunks won the contested
+    // slots, not how many were served or the order they are served in.
+    expect(capped).toHaveLength(4);
+    expect(capped.map(r => r.score)).toEqual([...capped.map(r => r.score)].sort((a, b) => b - a));
+  });
+
+  it('never serves fewer results than the uncapped search would', async () => {
+    // The backfill pass. A lake whose only match is one long document has no diversity to offer,
+    // and a cap that shrank the result set there would be a straight quality regression - the
+    // reason this can ship enabled on a corpus nobody has measured crowding on.
+    mockCosine.mockImplementation((_q: unknown, v: unknown) => (v as number[])[1]);
+    const oneDoc = [{ id: 'dA', fileName: 'A.pdf', tags: [] }];
+    const rows = chunkRows('dA', 4).map((row, i) => ({ ...row, vector: [1, (100 - i) / 1000] }));
+
+    const result = await semanticDataLakeSearch({ ...baseParams(), topK: 4, budgets: { maxChunksPerFile: 2 } }, {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: oneDoc, hasMore: false, total: 1 }]) },
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(rows as never) },
+      },
+    } as never);
+
+    expect(result.results).toHaveLength(4);
+    expect(result.results.map(r => r.chunkId)).toEqual(['dA-c0000', 'dA-c0001', 'dA-c0002', 'dA-c0003']);
+  });
+
+  it('a cap of 1 reaches every document before serving any document twice', async () => {
+    const capped = await runCapped(1);
+
+    // Three distinct documents in four slots, where the uncapped search reaches exactly one.
+    expect(new Set(capped.map(r => r.fileId)).size).toBe(3);
+    // The fourth slot is a backfill (only three documents exist), and the re-sort puts it back in
+    // score order rather than at the end - which is why this asserts the SET reached plus the
+    // ordering, not a positional sequence that would just re-encode the sort.
+    expect(capped.map(r => r.chunkId)).toEqual(['dA-c0000', 'dA-c0001', 'dB-c0000', 'dC-c0000']);
+    expect(capped.map(r => r.score)).toEqual([...capped.map(r => r.score)].sort((a, b) => b - a));
+  });
+
+  it('a zero cap is disabled, not a cap of zero', async () => {
+    // The trap in threading this through: a budget resolver that clamps to "at least 1" turns
+    // the disabled value into the most aggressive one, and a `|| fallback` turns it back into
+    // the default. Either way the operator's setting means the opposite of what it says.
+    expect((await runCapped(0)).map(r => r.fileId)).toEqual(['dA', 'dA', 'dA', 'dA']);
+  });
+
+  it('cannot promote a document whose chunks never survived the widened candidate pool', async () => {
+    // The documented residual limitation, made concrete: with topK 2 and a cap of 1, the widened
+    // pool is 2 * DIVERSITY_CANDIDATE_POOL_FACTOR (3) = 6. dA alone contributes 8 chunks, all
+    // scoring above dB's single chunk - so the pool fills entirely with dA before dB's chunk is
+    // ever offered to it, and the cap never gets a chance to see dB at all. Enforcement at the
+    // merge only chooses among whatever reached the merge; it cannot recover a document a stream
+    // upstream of it already discarded.
+    mockCosine.mockImplementation((_q: unknown, v: unknown) => (v as number[])[1]);
+    const twoDocs = [
+      { id: 'dA', fileName: 'A.pdf', tags: [] },
+      { id: 'dB', fileName: 'B.pdf', tags: [] },
+    ];
+    const corpus = [
+      ...chunkRows('dA', 8).map((row, i) => ({ ...row, vector: [1, (90 - i) / 100] })), // 0.90..0.83
+      ...chunkRows('dB', 1).map(row => ({ ...row, vector: [1, 0.01] })), // far below every dA chunk
+    ];
+
+    const result = await semanticDataLakeSearch({ ...baseParams(), topK: 2, budgets: { maxChunksPerFile: 1 } }, {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: twoDocs, hasMore: false, total: 2 }]) },
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(corpus as never) },
+      },
+    } as never);
+
+    expect(result.results.map(r => r.fileId)).toEqual(['dA', 'dA']);
+    expect(result.results.some(r => r.fileId === 'dB')).toBe(false);
+  });
+
+  // The cap widens every candidate stream, so `ann hits` in this line jumps by
+  // DIVERSITY_CANDIDATE_POOL_FACTOR whenever it is on. Without the promotion count beside it,
+  // nothing in the log separates a cap that redistributed slots from one that was enabled and
+  // inert, and the jump has no visible cause.
+  const cappedSearchLog = async (maxChunksPerFile: number | undefined) => {
+    mockCosine.mockImplementation((_q: unknown, v: unknown) => (v as number[])[1]);
+    const logger = makeLogger();
+    await semanticDataLakeSearch({ ...baseParams(), topK: 4, budgets: { maxChunksPerFile }, logger: logger as never }, {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: THREE_DOCS, hasMore: false, total: 3 }]) },
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(rankedCorpus as never) },
+      },
+    } as never);
+    return logger.debug.mock.calls.map(call => String(call[0])).find(line => line.includes('[semanticSearch]')) ?? '';
+  };
+
+  it('reports the cap, its pool and how many slots it actually redistributed', async () => {
+    // Two of the four slots go to dB chunks the uncapped top-4 would not have held.
+    expect(await cappedSearchLog(2)).toContain('cap 2/file over a pool of 12 promoted 2');
+  });
+
+  it('says nothing about the cap when it is off, so quiet installs read as before', async () => {
+    expect(await cappedSearchLog(undefined)).not.toContain('cap ');
+  });
+
+  // The log line above cannot be read on any deployed stage (LOG_LEVEL never leaves 'info'), so
+  // the same two numbers ride the scan accounting, which the route serializes. These pin that
+  // surface rather than the log's wording.
+  const cappedSearchScan = async (maxChunksPerFile: number | undefined) => {
+    mockCosine.mockImplementation((_q: unknown, v: unknown) => (v as number[])[1]);
+    const result = await semanticDataLakeSearch({ ...baseParams(), topK: 4, budgets: { maxChunksPerFile } }, {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: THREE_DOCS, hasMore: false, total: 3 }]) },
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(rankedCorpus as never) },
+      },
+    } as never);
+    return result.scan;
+  };
+
+  it('reports the redistributed slots and the widened pool on the scan accounting', async () => {
+    expect(await cappedSearchScan(2)).toMatchObject({ capPromotions: 2, candidatePoolK: 12 });
+  });
+
+  it('reports zero promotions and an unwidened pool with the cap off', async () => {
+    expect(await cappedSearchScan(undefined)).toMatchObject({ capPromotions: 0, candidatePoolK: 4 });
+  });
+});
+
 /**
  * Per-lake supersession collapse at the lake-scoped entrypoint. Both halves of the opt-in are
  * exercised - the admin flag AND the resolved lakes - because either alone must leave today's
@@ -1260,6 +1415,44 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
     expect(result.results.map(r => r.fileId).sort()).toEqual(['fresh', 'ready']);
   });
 
+  describe("the per-document cap's widened ANN limit", () => {
+    // Every other cap test drives the SCAN path, where the widening is invisible (scanAndRank's
+    // read volume is bounded by maxChunks, not topK). The ANN backends are the only place the
+    // widened pool becomes a bigger request, so this is the one asserting the limit they receive.
+    const annLimitFor = async (budgets: { maxChunksPerFile?: number } | undefined, topK: number) => {
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files: [annFile('f1')],
+        annHits: [{ id: 'f1-c0', fabFileId: 'f1', text: 'ann hit', score: 0.95 }],
+      });
+
+      await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true, topK, budgets }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never);
+
+      return (vectorSearch.mock.calls[0][3] as { limit: number }).limit;
+    };
+
+    it('asks for exactly topK when the cap is off', async () => {
+      expect(await annLimitFor(undefined, 4)).toBe(4);
+      expect(await annLimitFor({ maxChunksPerFile: 0 }, 4)).toBe(4);
+    });
+
+    it('asks for topK * DIVERSITY_CANDIDATE_POOL_FACTOR when the cap can bind', async () => {
+      // The factor is 3, so a topK of 4 becomes 12 - the headroom capChunksPerFile needs before it
+      // can promote anything. A stream still bounded at topK would have discarded the other
+      // documents' chunks upstream of the cap.
+      expect(await annLimitFor({ maxChunksPerFile: 2 }, 4)).toBe(12);
+    });
+
+    it('stays at topK for a cap that cannot bind, rather than tripling the request for nothing', async () => {
+      // A cap at or above topK never holds a chunk back (the admit pass fills topK before any one
+      // document reaches the cap), and the setting declares no max, so this is reachable config -
+      // it must not cost a 3x ANN request for a provably identical result.
+      expect(await annLimitFor({ maxChunksPerFile: 4 }, 4)).toBe(4);
+      expect(await annLimitFor({ maxChunksPerFile: 20 }, 4)).toBe(4);
+    });
+  });
+
   it('does not warn "nothing could be compared" when Atlas served every rankable file', async () => {
     // A foreign (off-model) file elsewhere in scope makes mismatchReport.partial true; the ready
     // file goes entirely through Atlas, so scanAndRank never runs and scores 0 chunks. Without the
@@ -1568,12 +1761,13 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
   /**
    * The rebucket keys off SATURATION, not bare absence from `filesWithHits`.
    *
-   * The ANN query is bounded by similarity rank (`limit: topK`), so at most topK files can appear
-   * in `filesWithHits` and every other ready file is absent for the correct reason that it did not
-   * rank. Rebucketing on absence alone made the ANN path's benefit `topK / fileCount`, shrinking
-   * as a lake grows - backwards from the point of the index. These two tests pin the boundary in
-   * both directions; the pair matters more than either alone, since a fix that simply stopped
-   * rebucketing would pass the first and lose the un-indexed-file safety net the second guards.
+   * The ANN query is bounded by similarity rank (`limit: candidatePoolK`, which is topK unless the
+   * per-document cap widens it), so at most that many files can appear in `filesWithHits` and every
+   * other ready file is absent for the correct reason that it did not rank. Rebucketing on absence
+   * alone made the ANN path's benefit `candidatePoolK / fileCount`, shrinking as a lake grows -
+   * backwards from the point of the index. These tests pin the boundary in both directions at both
+   * limits; the set matters more than any one, since a fix that simply stopped rebucketing would
+   * pass the saturated cases and lose the un-indexed-file safety net the short ones guard.
    */
   it('does not rescan an unranked ready file when ANN saturated its limit', async () => {
     const logger = makeLogger();
@@ -1652,6 +1846,94 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
       expect.stringContaining('returned no hits for ready files'),
       expect.objectContaining({ fileCount: 1, hitsReturned: 1, hitsUsable: 1, limit: 2 })
     );
+  });
+
+  // The per-document cap widens the ANN request to topK * DIVERSITY_CANDIDATE_POOL_FACTOR, so
+  // "did the backend fill what we asked for" has to be measured against THAT limit, not topK. A
+  // response landing between the two reads as saturated on a topK comparison and silently
+  // suppresses the rescue - a regression the widening itself introduces, not a pre-existing one.
+  it('reads a response short of the WIDENED limit as unsaturated when the per-document cap is on', async () => {
+    const logger = makeLogger();
+    const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+      files: [annFile('covered'), annFile('unranked')],
+      scanChunks: chunkRows('unranked', 3),
+      // A full topK of 2, but well short of the 6 (topK 2 x 3) this capped query actually asked
+      // for: the backend exhausted its index, so 'unranked' is absent for a real reason.
+      annHits: [
+        { id: 'covered-c0', fabFileId: 'covered', text: 'ann hit', score: 0.95 },
+        { id: 'covered-c1', fabFileId: 'covered', text: 'ann hit', score: 0.94 },
+      ],
+    });
+
+    const result = await semanticDataLakeSearch(
+      {
+        ...baseParams(),
+        vectorSearchEnabled: true,
+        topK: 2,
+        budgets: { maxChunksPerFile: 1 },
+        logger: logger as never,
+      },
+      {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never
+    );
+
+    expect(result.scan.chunksScanned).toBe(3);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('returned no hits for ready files'),
+      expect.objectContaining({ fileCount: 1, hitsReturned: 2, hitsUsable: 2, limit: 6 })
+    );
+    // The rescued file reaching the served top-K is the point of not suppressing it; comparing
+    // against topK instead serves ['covered', 'covered'].
+    expect(result.results.map(r => r.fileId)).toEqual(['unranked', 'covered']);
+  });
+
+  // The other side of the test above, and the one the widened comparison could have broken: a
+  // response that genuinely fills the WIDENED limit must still suppress the rescue. Without this
+  // the gate could be moved to any value above topK and the cap-on suite would stay green.
+  it('still treats a response that fills the widened limit as saturated with the cap on', async () => {
+    const logger = makeLogger();
+    const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+      files: [annFile('covered'), annFile('unranked')],
+      // Available to the scan if anything asked for them - the assertion is that nothing does.
+      scanChunks: chunkRows('unranked', 3),
+      // Exactly the 6 (topK 2 x 3) this capped query asked for: the backend hit its limit, so
+      // 'unranked' is absent because it lost on rank, not because it is missing from the index.
+      annHits: Array.from({ length: 6 }, (_, i) => ({
+        id: `covered-c${i}`,
+        fabFileId: 'covered',
+        text: 'ann hit',
+        score: 0.95 - i / 100,
+      })),
+    });
+
+    const result = await semanticDataLakeSearch(
+      {
+        ...baseParams(),
+        vectorSearchEnabled: true,
+        topK: 2,
+        budgets: { maxChunksPerFile: 1 },
+        logger: logger as never,
+      },
+      {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never
+    );
+
+    expect(result.scan.chunksScanned).toBe(0);
+    expect(findVectorsByFabFileIds).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('returned no hits for ready files'),
+      expect.anything()
+    );
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.stringContaining('saturated its limit'),
+      expect.objectContaining({ fileCount: 1, hitsReturned: 6 })
+    );
+    // 'covered' is the only document in the pool, so the cap holds chunks back and then backfills
+    // the same ones - a full top-K, unchanged. The cap redistributes contested slots; it cannot
+    // invent a second document.
+    expect(result.results.map(r => r.fileId)).toEqual(['covered', 'covered']);
   });
 
   it('does not read a full response as saturated when every hit was out of scope', async () => {

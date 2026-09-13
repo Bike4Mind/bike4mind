@@ -133,6 +133,8 @@ vi.mock('@bike4mind/services', async () => ({
       annFilesQueried: 0,
       annHits: 0,
       annModelsQueried: 0,
+      capPromotions: 0,
+      candidatePoolK: 0,
       budgets: { maxFiles: b?.maxFiles ?? 20000, maxChunks: b?.maxChunks ?? 100000 },
     }),
   },
@@ -832,6 +834,20 @@ describe('POST /api/data-lakes/semantic-search mixed-model payload shape', () =>
       files: 2,
       models: ['text-embedding-3-small'],
     });
+  });
+
+  it('serializes the per-document cap counters, which no log level can surface', async () => {
+    mockSemanticSearch.mockResolvedValue({
+      ...EMPTY_RESULT,
+      scan: { ...FULL_SCAN, annHits: 18, capPromotions: 2, candidatePoolK: 18 },
+    });
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'onboarding' }), res);
+
+    const body = res.json.mock.calls[0][0];
+    // cap_pool is what explains the ann_hits beside it: a wider ask, not a retrieval change.
+    expect(body.scan).toMatchObject({ cap_promotions: 2, cap_pool: 18, ann_hits: 18 });
   });
 
   it('empty-scope short-circuit still carries the new fields at their zero state', async () => {
