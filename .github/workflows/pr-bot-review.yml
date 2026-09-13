@@ -536,7 +536,7 @@ jobs:
             # ScheduleWakeup makes sense only in an interactive session; this
             # process is single-shot, so hard-block the tool call itself
             # rather than relying on the prompt bullet above alone.
-            --disallowedTools "Edit(/${{ runner.temp }}/**),Edit(//home/runner/work/_*/**),Edit(//home/runner/runners/**),${{ env.FOLD_MODE == 'true' && 'Bash,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**),Edit(.github/**),Edit(.git/**),Edit(.claude/**),Edit(.mcp.json),Edit(.gitattributes),Edit(**/.gitattributes)' || 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**)' }}"
+            --disallowedTools "Edit(/${{ runner.temp }}/**),Edit(//home/runner/work/_*/**),Edit(//home/runner/runners/**),${{ env.FOLD_MODE == 'true' && 'Bash,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**),Edit(.github/**),Edit(.git/**),Edit(.claude/**),Edit(.mcp.json),Edit(.gitattributes),Edit(**/.gitattributes),Edit(.gitignore),Edit(**/.gitignore)' || 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**)' }}"
             # 40 was too tight: a normal feature PR (~25 files / ~2k additions)
             # spawns ~8 parallel review agents, and the orchestration overhead
             # (read skill, fetch PR/diff/linked issues, fan-out, classify, post)
@@ -813,12 +813,17 @@ jobs:
             # it never reaches the path guard above (see the note on `.gitignore` there).
             # What closes that route is the write fence - `Edit(.gitattributes)` and
             # `Edit(**/.gitattributes)` are denied for the same reason `.mcp.json` is.
+            # `.gitignore` is fenced on both spellings for the same reason and needs both:
+            # the path guard's root-dotfile arm reaches a TRACKED root one only, while
+            # `--exclude-standard` honours an untracked one at any depth, so a nested or
+            # untracked `.gitignore` holding `*` silences the dropped-file report below
+            # without ever being staged.
             awk -F'\t' '$1 == "-" { print $3 }' "$STAGED_NUMSTAT"
           )
           if [ -n "$BLOCKED" ]; then
             echo "::error::fold refused: these staged paths are CI configuration or binaries, so NOTHING was pushed:"
             echo "$BLOCKED"
-            echo 'reason=the fixup touched CI configuration (anything under `.github/`, `.husky/`, `.claude/`, `.changeset/`, `scripts/`, `infra/` or `patches/`, a `package.json`, a lockfile, a `Dockerfile` of any suffix or `.dockerignore`, a `*.sh`/`*.bash`/`*.zsh`, or any extensionless repo-root file or repo-root dotfile), or a binary file, which fold mode never pushes. Nothing was committed, so the branch is untouched. Those findings need a human.' >> "$GITHUB_OUTPUT"
+            echo 'reason=the fixup touched CI configuration (anything under `.github/`, `.husky/`, `.claude/`, `.changeset/`, `scripts/`, `infra/` or `patches/`, a `package.json`, a lockfile, `pnpm-workspace.yaml`, `turbo.json`, `.npmrc`, a `Dockerfile` of any suffix or `.dockerignore`, a `*.sh`/`*.bash`/`*.zsh`, or any extensionless repo-root file or repo-root dotfile), or a binary file, which fold mode never pushes. Nothing was committed, so the branch is untouched. Those findings need a human.' >> "$GITHUB_OUTPUT"
             emit blocked
             exit 1
           fi

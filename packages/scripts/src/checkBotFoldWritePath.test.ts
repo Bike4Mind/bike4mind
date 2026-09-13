@@ -348,6 +348,34 @@ function gitCommands(src: string, subcommands: RegExp): string[][] {
 const gitPushes = (src: string) =>
   gitCommands(src, /^push$/).map(words => words.filter(word => !/^\d*[<>]/.test(word)).map(unquoteWord));
 
+/**
+ * Every distinct git subcommand invoked anywhere in the file, sorted.
+ *
+ * Pinned as a whole SET at the call site because the staging assertion below is a denylist of
+ * spellings (`add`, `update-index`, `stage`), and a denylist only ever bounds the spellings
+ * someone thought of: `git apply --cached` stages arbitrary content and is none of the three.
+ * An allowlist of the subcommands this job uses at all means a new one has to be justified
+ * here rather than merely not guessed at.
+ */
+const gitSubcommands = (src: string) =>
+  [...new Set(gitCommands(src, /./).map(words => gitSubcommand(words) ?? ''))].sort();
+
+/**
+ * The job-level `if:`, split into conjuncts. The step-scoped `ifConjuncts` cannot reach it -
+ * it is two indent levels shallower - and it is the gate every other bound in this file is
+ * downstream of, so it was the one `if:` nothing asserted.
+ */
+function jobIfConjuncts(src: string): string[] {
+  const block = withoutComments(src).match(/^ {4}if: \|\n((?: {6}.*\n)+)/m)?.[1];
+  expect(block, 'no block-scalar job-level if:').toBeTruthy();
+  return (block ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split('&&')
+    .map(conjunct => conjunct.trim())
+    .filter(Boolean);
+}
+
 /** The one object the job reads out of the store and executes, pinned separately below. */
 const REDACTOR_OBJECT = 'HEAD:.github/scripts/redact-review-transcript.py';
 
@@ -627,8 +655,14 @@ function runStagedGuards(
   // Lifted from the staged-path enumeration, which sits OUTSIDE `BLOCKED=$( )` precisely so
   // that a failure in it is fatal - `set -e` is not inherited into a command substitution, so
   // a region starting at `BLOCKED=` would execute the guard without the half that fails closed.
-  const region = commands.match(/^ {10}STAGED_PATHS=\$\(mktemp\)$[\s\S]*?-gt 800 \]; then\n[\s\S]*?^ {10}fi$/m)?.[0];
-  expect(region, 'could not lift the staged-path guard and size bound out of the push step').toBeTruthy();
+  const regions = [
+    ...commands.matchAll(/^ {10}STAGED_PATHS=\$\(mktemp\)$[\s\S]*?-gt 800 \]; then\n[\s\S]*?^ {10}fi$/gm),
+  ];
+  // Exactly one, not the first of several. Lifting by first match means a DECOY copy of the
+  // guard placed above the real one is what this harness executes, while the code the step
+  // actually reaches sits below it unmeasured and green.
+  expect(regions, 'expected exactly one staged-path guard and size bound in the push step').toHaveLength(1);
+  const region = regions[0]?.[0];
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-fold-guard-'));
   try {
@@ -682,6 +716,18 @@ function runStagedGuards(
   }
 }
 
+/** One API entry the `posted` measurement will see. `at: null` models a PENDING review. */
+type PostedEntry = { login?: string; at?: string | null };
+type PostedFixture = {
+  since?: string;
+  reviews?: PostedEntry[];
+  inline?: PostedEntry[];
+  issue?: PostedEntry[];
+  apiStatus?: number;
+};
+const BOT_LOGIN = 'claude[bot]';
+const DEFAULT_SINCE = '2026-01-01T00:00:00Z';
+
 /**
  * Runs the `posted` measurement, lifted verbatim out of the committed YAML, against fixture API
  * responses, and returns what it wrote to `$GITHUB_OUTPUT`.
@@ -693,31 +739,47 @@ function runStagedGuards(
  * `gh` is a stub on PATH, so the real `count_since`, the real string time compare and the real
  * fail-closed arms all run.
  */
-function runPostedCheck(
-  src: string,
-  fixture: { since?: string; reviews?: number; inline?: number; issue?: number; apiStatus?: number }
-): string {
+function runPostedCheck(src: string, fixture: PostedFixture): string {
   // Verbatim, comments included, for the reason `runStagedGuards` states.
-  const body = runBodiesRaw(step(src, 'Verify a review was actually posted'))[0];
-  expect(body, 'could not lift the posted measurement out of its step').toBeTruthy();
+  const bodies = runBodiesRaw(step(src, 'Verify a review was actually posted'));
+  // One `run:`, for the reason the staged-guard lift states: a second body in the same step
+  // would leave whichever one this executes unrepresentative of what the runner runs.
+  expect(bodies, 'expected exactly one run: body in the posted-review step').toHaveLength(1);
+  const body = bodies[0];
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-fold-posted-'));
   try {
     const bin = path.join(dir, 'bin');
     fs.mkdirSync(bin);
-    // argv is `api --paginate <path> --jq <selector>`, so $3 is the endpoint.
+    const payload = (entries: PostedEntry[] | undefined, at: 'submitted_at' | 'created_at') =>
+      JSON.stringify(
+        (entries ?? []).map((entry, i) => ({
+          id: `id${i}`,
+          user: { login: entry.login ?? BOT_LOGIN },
+          [at]: entry.at === null ? null : (entry.at ?? fixture.since ?? DEFAULT_SINCE),
+        }))
+      );
+    fs.writeFileSync(path.join(dir, 'reviews.json'), payload(fixture.reviews, 'submitted_at'));
+    fs.writeFileSync(path.join(dir, 'inline.json'), payload(fixture.inline, 'created_at'));
+    fs.writeFileSync(path.join(dir, 'issue.json'), payload(fixture.issue, 'created_at'));
+    fs.writeFileSync(path.join(dir, 'empty.json'), '[]');
+    // argv is `api --paginate <path> --jq <selector>`, so $3 is the endpoint and $5 the
+    // selector. The selector is handed to the REAL jq over a real response shape: stubbing it
+    // out - counting entries and discarding `--jq` - meant the login filter, the `submitted_at
+    // != null` arm and the watermark compare, which are the entire substance of this
+    // measurement, never ran, and a selector that matched everything read as correct.
     fs.writeFileSync(
       path.join(bin, 'gh'),
       [
         '#!/bin/sh',
         'if [ "$FAKE_GH_STATUS" -ne 0 ]; then echo "api error" >&2; exit "$FAKE_GH_STATUS"; fi',
         'case "$3" in',
-        '  */pulls/*/reviews) n=$FAKE_REVIEWS ;;',
-        '  */pulls/*/comments) n=$FAKE_INLINE ;;',
-        '  */issues/*/comments) n=$FAKE_ISSUE ;;',
-        '  *) n=0 ;;',
+        '  */pulls/*/reviews) f=reviews.json ;;',
+        '  */pulls/*/comments) f=inline.json ;;',
+        '  */issues/*/comments) f=issue.json ;;',
+        '  *) f=empty.json ;;',
         'esac',
-        'i=0; while [ "$i" -lt "$n" ]; do echo "id$i"; i=$((i + 1)); done',
+        'exec jq -r "$5" < "$FIXTURE_DIR/$f"',
       ].join('\n'),
       { mode: 0o755 }
     );
@@ -731,18 +793,18 @@ function runPostedCheck(
         PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
         GITHUB_OUTPUT: outputs,
         GH_TOKEN: 'stub',
-        BOT_REVIEW_LOGIN: 'claude[bot]',
+        BOT_REVIEW_LOGIN: BOT_LOGIN,
         REPO: 'owner/repo',
         PR: '1',
-        SINCE: fixture.since ?? '2026-01-01T00:00:00Z',
-        FAKE_REVIEWS: String(fixture.reviews ?? 0),
-        FAKE_INLINE: String(fixture.inline ?? 0),
-        FAKE_ISSUE: String(fixture.issue ?? 0),
+        SINCE: fixture.since ?? DEFAULT_SINCE,
+        FIXTURE_DIR: dir,
         FAKE_GH_STATUS: String(fixture.apiStatus ?? 0),
       },
     });
     const written = fs.readFileSync(outputs, 'utf8');
-    const posted = written.match(/^posted=(\S*)$/m)?.[1];
+    // LAST match, the way Actions reads a step output file: an earlier `posted=` is overwritten
+    // by a later one, so reading the first would report a value the consumers never see.
+    const posted = [...written.matchAll(/^posted=(\S*)$/gm)].pop()?.[1];
     expect(posted, `no posted= emitted (${run.stdout}${run.stderr})`).toBeTruthy();
     return posted ?? '';
   } finally {
@@ -750,7 +812,11 @@ function runPostedCheck(
   }
 }
 
-describe('bot-fold write path', () => {
+// Several of these EXECUTE the lifted shell against a scratch git repo, so their cost is
+// process spawns rather than CPU. Under a full-package run that is ~10x the isolated wall
+// clock, which put the heaviest one past the 30s default; the headroom is for contention,
+// not for a slow assertion.
+describe('bot-fold write path', { timeout: 180_000 }, () => {
   const src = fs.readFileSync(WORKFLOW, 'utf8');
 
   it('derives FOLD_MODE from the bot-fold label and nothing else', () => {
@@ -759,6 +825,38 @@ describe('bot-fold write path', () => {
     // gives every `bot-review` label the write tools, a write token and a push to the PR head.
     expect(src).toMatch(/^ {6}FOLD_MODE: \$\{\{ github\.event\.label\.name == 'bot-fold' \}\}$/m);
     expect(src.match(/^ *FOLD_MODE:/gm)).toHaveLength(1);
+  });
+
+  it('runs on a trigger and under a job gate that cannot be widened', () => {
+    // Everything else in this file asserts something at or below `steps:`, which left the four
+    // lines the whole job hangs off unmeasured: the trigger, the fork gate, the rest of the job
+    // `if:` and the GITHUB_TOKEN scope were each wideable one token at a time with the suite
+    // green. They are the antecedent of every bound below, so they are pinned by VALUE.
+    const top = withoutComments(src);
+
+    // `pull_request_target` is the single swap that voids every other bound here: it runs with
+    // the base repo's secrets while this job checks out and runs an agent over the untrusted PR
+    // head. The workflow's own comment forbids it in prose; this is the part that enforces it.
+    expect(top).toMatch(/^on:\n {2}pull_request:\n {4}types: \[labeled\]\n/m);
+    expect(top).not.toMatch(/pull_request_target/);
+
+    // `contents: read` on GITHUB_TOKEN. Not the fold push's authority - that is the separately
+    // minted App token - but widening this hands write to every OTHER step in the job,
+    // including the ones that run after the agent.
+    expect(top).toMatch(
+      /^permissions:\n {2}contents: read\n {2}pull-requests: write\n {2}issues: write\n {2}actions: read\n {2}id-token: write.*\n/m
+    );
+
+    expect(jobIfConjuncts(src)).toEqual([
+      // Fork PRs get no secrets and a read-only token, so this would fail on every one of them;
+      // it is also what keeps `pull_request` safe to check out and run an agent over.
+      'github.event.pull_request.head.repo.full_name == github.repository',
+      'github.event.pull_request.draft == false',
+      "github.event.pull_request.base.ref != 'prod'",
+      "github.event.pull_request.head.ref != 'prod'",
+      "!startsWith(github.event.pull_request.head.ref, 'changeset-release/')",
+      "(github.event.label.name == 'bot-review' || github.event.label.name == 'bot-fold')",
+    ]);
   });
 
   it('denies Bash in every mode, and grants it in none', () => {
@@ -865,6 +963,12 @@ describe('bot-fold write path', () => {
         // one planted file turns the binary arm and the 800-line bound off together.
         'Edit(.gitattributes)',
         'Edit(**/.gitattributes)',
+        // Both spellings, and for a reason the twin above does not carry on its own: the path
+        // guard's root-dotfile arm reaches a TRACKED root `.gitignore` only, while
+        // `--exclude-standard` honours an UNTRACKED one at any depth. A nested or untracked
+        // one holding `*` silences the dropped-untracked-file report without being staged.
+        'Edit(.gitignore)',
+        'Edit(**/.gitignore)',
         ...ALWAYS_ON_EDIT_FENCES,
       ].sort()
     );
@@ -1153,14 +1257,28 @@ describe('bot-fold write path', () => {
     // dropping the outcome conjunct from the `if:`) make it unconditionally true while every
     // consumer gate stays correctly spelled. Nothing else in the repo can see that.
     expect(runPostedCheck(src, {})).toBe('false');
-    expect(runPostedCheck(src, { reviews: 1 })).toBe('true');
-    expect(runPostedCheck(src, { inline: 3 })).toBe('true');
-    expect(runPostedCheck(src, { issue: 1 })).toBe('true');
+    expect(runPostedCheck(src, { reviews: [{}] })).toBe('true');
+    expect(runPostedCheck(src, { inline: [{}, {}, {}] })).toBe('true');
+    expect(runPostedCheck(src, { issue: [{}] })).toBe('true');
+    // The two halves of the selector, run through the real jq rather than asserted as text.
+    // Someone ELSE's review on the PR is not this run's review...
+    expect(runPostedCheck(src, { reviews: [{ login: 'someone-else' }] })).toBe('false');
+    expect(runPostedCheck(src, { issue: [{ login: 'dependabot[bot]' }] })).toBe('false');
+    // ...nor is the bot's own review from before this run started. This is the arm a widened
+    // watermark disarms, and it passes for the wrong reason unless the compare actually runs.
+    expect(runPostedCheck(src, { reviews: [{ at: '2025-12-31T23:59:59Z' }] })).toBe('false');
+    // Both selectors, because they are separate strings comparing separate timestamp fields:
+    // widening only the comment one left the review fixture above green on its own.
+    expect(runPostedCheck(src, { issue: [{ at: '2025-12-31T23:59:59Z' }] })).toBe('false');
+    expect(runPostedCheck(src, { inline: [{ at: '2025-12-31T23:59:59Z' }] })).toBe('false');
+    // A review the bot OPENED but never submitted has `submitted_at: null`, which is `>= SINCE`
+    // in neither jq nor this shell; the selector's explicit null arm is what makes that so.
+    expect(runPostedCheck(src, { reviews: [{ at: null }] })).toBe('false');
     // No watermark means no way to tell this run's review from an older one: not posted.
-    expect(runPostedCheck(src, { since: '', reviews: 5 })).toBe('false');
+    expect(runPostedCheck(src, { since: '', reviews: [{}, {}, {}, {}, {}] })).toBe('false');
     // An API failure must not read as a review. This is the arm that turns a transient
     // outage into a push on a run that reviewed nothing.
-    expect(runPostedCheck(src, { apiStatus: 1, reviews: 5 })).toBe('false');
+    expect(runPostedCheck(src, { apiStatus: 1, reviews: [{}, {}, {}, {}, {}] })).toBe('false');
     // And the measurement has to happen on the runs that need measuring - a step-level
     // gate that skips it leaves `posted` empty, which the consumers read as not-posted,
     // but one that WIDENS it lets a size-guard-skipped run be measured as reviewed.
@@ -1176,6 +1294,13 @@ describe('bot-fold write path', () => {
     const postedStep = step(src, 'Verify a review was actually posted');
     expect(postedStep).toMatch(/^ {10}BOT_REVIEW_LOGIN: 'claude\[bot\]'$/m);
     expect(postedStep).toMatch(/^ {10}SINCE: \$\{\{ steps\.review_start\.outputs\.at \}\}$/m);
+    // And the watermark's own PRODUCER, which is the last unpinned link in that chain: widening
+    // `1 second ago` to `30 days ago` leaves every assertion above green while making one stale
+    // `claude[bot]` review anywhere on the PR read as this run's, i.e. fail-open at the
+    // antecedent of the whole write path.
+    expect(withoutComments(step(src, 'Record review start time'))).toMatch(
+      /^ {10}echo "at=\$\(date -u -d '1 second ago' \+%Y-%m-%dT%H:%M:%SZ\)" >> "\$GITHUB_OUTPUT"$/m
+    );
   });
 
   it('runs git after the agent with no config the agent could have planted', () => {
@@ -1311,6 +1436,23 @@ describe('bot-fold write path', () => {
     expect(gitCommands(src, /^(add|update-index|stage)$/).map(words => words.map(unquoteWord))).toEqual([
       ['git', 'add', '-u'],
     ]);
+    // That sweep is a denylist of the three subcommands whose NAME says "stage", so it bounds
+    // only the spellings it enumerates: `git apply --cached` writes arbitrary content straight
+    // into the index and is none of them, and placed between the path guard and the commit it
+    // stages CI configuration the guard has already finished looking at. Pinned here as the
+    // whole set of git subcommands the file uses, so the next one has to be justified rather
+    // than merely not guessed at.
+    expect(gitSubcommands(src)).toEqual([
+      'add',
+      'cat-file',
+      'commit',
+      'diff',
+      'log',
+      'ls-files',
+      'push',
+      'rev-parse',
+      'show',
+    ]);
     // The step must fail rather than fall through: without `-e` a failed `git commit`
     // reaches `git push`, which says "Everything up-to-date" and exits 0, so the step
     // emits pushed=true under a green check with nothing on the branch.
@@ -1318,6 +1460,32 @@ describe('bot-fold write path', () => {
     // And both bounds run before the commit, not after it.
     expect(commands.indexOf('BLOCKED=')).toBeLessThan(commands.indexOf('git -c user.name'));
     expect(commands.indexOf('CHANGED=')).toBeLessThan(commands.indexOf('git -c user.name'));
+
+    // Every exit out of this step, as an (emit argument, next command) vector. `emit` here does
+    // NOT exit - unlike its namesake in the posted step - so the explicit `exit` after each
+    // call is what makes the step's OUTCOME agree with the value it just reported. Dropping the
+    // `exit 1` after the last one leaves a failed push exiting 0, which is
+    // `steps.fold_push.outcome == 'success'`, which skips `Report fold failure`: a green check,
+    // no commit on the branch and no comment saying so. The whole region the harness below
+    // executes stops at the size bound, so nothing else in this file can see that.
+    const KEYWORD_ONLY = /^(then|fi|else|elif|do|done|esac|in)$/;
+    const sequence = shellCommands(runBodies(step(src, 'Push fold commit'))[0] ?? '')
+      .map(command => command.words.map(unquoteWord))
+      .filter(words => !(words.length === 1 && KEYWORD_ONLY.test(words[0])));
+    // `emit() { ... }` parses as a bare `emit` with no argument, which is how the DEFINITION
+    // is told from a call. Pinned by value, because the pairing below only means anything while
+    // emit itself does not exit - the posted step's namesake does.
+    expect(commands).toMatch(/^ {10}emit\(\) \{ echo "fold_push: \$1"; echo "pushed=\$1" >> "\$GITHUB_OUTPUT"; \}$/m);
+    const exits = sequence.flatMap((words, i) =>
+      words[0] === 'emit' && words.length === 2 ? [[words[1], (sequence[i + 1] ?? []).join(' ')]] : []
+    );
+    expect(exits).toEqual([
+      ['none', 'exit 0'],
+      ['blocked', 'exit 1'],
+      ['blocked', 'exit 1'],
+      ['true', 'exit 0'],
+      ['false', 'exit 1'],
+    ]);
   });
 
   it('refuses the whole fixup when a staged path is CI configuration', () => {
