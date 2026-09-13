@@ -137,6 +137,11 @@ vi.mock('@bike4mind/services', async () => ({
     }),
   },
   recordOperationalUsage: mockRecordOperationalUsage,
+  // Real gate, so the settings-driven billing behaviour these tests assert stays the behaviour
+  // the route actually gets - it reads through the mocked getSettingsMap/getSettingsValue above.
+  isOperationalBillingEnabled: (
+    await import('../../../../../../b4m-core/services/src/billing/isOperationalBillingEnabled')
+  ).isOperationalBillingEnabled,
   // Real per-member cap predicate - it is the shared billing decision under test, so a
   // reimplementation here would prove nothing.
   creditService: await import('../../../../../../b4m-core/services/src/creditService/memberCreditCap'),
