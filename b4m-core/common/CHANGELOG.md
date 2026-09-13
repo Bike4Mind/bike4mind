@@ -1,5 +1,11 @@
 # @bike4mind/common
 
+## 7.1.0
+
+### Minor Changes
+
+- [#2465](https://github.com/Bike4Mind/bike4mind/pull/2465) [`576f59f`](https://github.com/Bike4Mind/bike4mind/commit/576f59f9cb237c473c2793e72cd33e1648f12327) Thanks [@onoya](https://github.com/onoya)! - per-document search cap + rescue sweep metrics ([#1422](https://github.com/Bike4Mind/bike4mind/issues/1422))
+
 ## 7.0.0
 
 ### Major Changes
