@@ -95,8 +95,9 @@ describe('FabFileChunkRepository.findChunkFieldsByFabFileIds', () => {
   // returns a fixed literal, so every other test passes unchanged if the projection is dropped and
   // a whole lake's embeddings start crossing the wire.
   //
-  // Read off mongoose's debug hook rather than a spy on the model's `find`: mongoose re-binds that
-  // static on first exec, so a spy silently records zero calls and the assertion never fires.
+  // Read off mongoose's debug hook rather than a spy on the model's `find`: a spy sees only what
+  // this repository passed, so it goes blind the moment the projection moves to a chained
+  // `.select()`. The hook sees what mongoose actually sent to the driver, which is the claim here.
   it('asks Mongo for the planning fields only, never the vector', async () => {
     await makeChunk(fileA, 'a passage');
 

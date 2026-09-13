@@ -253,7 +253,6 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
           fabFileId: { $in: fabFileIds },
           ...(afterChunkId ? { _id: { $gt: afterChunkId } } : {}),
         },
-        // Passed as `find`'s projection rather than a chained `.select()` so a test can assert it.
         // The mapper below returns a fixed literal, so no caller can observe whether `vector`
         // crossed the wire - excluding it here is the entire point of this read.
         { _id: 1, fabFileId: 1, text: 1, tokenCount: 1, embeddingModel: 1 }

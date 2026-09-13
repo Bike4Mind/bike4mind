@@ -7,7 +7,10 @@ import path from 'node:path';
 /**
  * Guards the SITES holding the lake reachability rule ("live, not retrieval-excluded, fully
  * vectorized"), by tracking which files carry its fully-vectorized comparison and how many copies
- * each holds - so a fourth copy, anywhere, fails this test.
+ * each holds - so a fourth copy fails this test, within two limits. It scans `apps/client`,
+ * `b4m-core` and `packages` only, so a copy under `infra/`, the repo-root `scripts/` or the premium
+ * mount is invisible to it; and FULLY_VECTORIZED needs one of the two counters spelled on the
+ * comparison line, so a copy destructuring BOTH operands to locals first slips past even in scope.
  *
  * It does NOT yet lock the clause SET. The detector is line-oriented (grep -rn, then a per-line
  * regex), and the live and retrieval-excluded clauses sit on their own lines - and as a bare

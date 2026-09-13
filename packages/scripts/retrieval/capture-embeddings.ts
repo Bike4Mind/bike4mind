@@ -133,8 +133,9 @@ if (fileIds.length === 0) throw new Error(`Lake "${argv.lake}" holds no files.`)
 // path needs a token count, a text length and an embedding label, so reading the vectors would pull a
 // whole lake's embeddings over the wire - under --dry-run, to print a cost table that does not use
 // them. The saving is one-directional: splitting the read costs this arm a second copy of every
-// chunk's text, since the vector reader projects text too. Bytes only, and against a per-file read
-// of fully hydrated documents it still comes out ahead.
+// chunk's text, since the vector reader projects text too. That is a real loss on bytes against the
+// per-file read this replaced; what it buys back is hydration and round trips - N per-file queries
+// returning whole mongoose documents become two paged, lean reads.
 const needStoredVectors = argv['reuse-stored-vectors'];
 
 // Batched, not per file. The lake read hands back every candidate id at once; reading them one at a
