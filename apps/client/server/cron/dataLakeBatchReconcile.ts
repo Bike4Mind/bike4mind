@@ -21,9 +21,11 @@ import {
   dataLakeBatchRepository,
   dataLakeRepository,
   fabFileRepository,
+  adminSettingsRepository,
   FabFile,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import {
@@ -35,6 +37,7 @@ import {
 } from '@server/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
 import { runChunkRescueSweep } from '@server/worker/chunkRescueSweep';
+import { runModerationRescueSweep } from '@server/s3/moderationRescueSweep';
 import {
   buildStrandedVectorizeScanFilter,
   CHUNK_CLAIM_STALE_MS,
@@ -49,6 +52,8 @@ const logger = new Logger({ metadata: { service: 'dataLakeBatchReconcile' } });
 const MAX_PER_RUN = 500;
 /** Cap per daily run for the un-chunked rescue sweep; a large backlog drains gradually. */
 const CHUNK_RESCUE_MAX_PER_RUN = 500;
+/** Cap per daily run for the moderation rescue sweep; stranded files are rare so this is a safety net. */
+const MODERATION_RESCUE_MAX_PER_RUN = 200;
 
 /**
  * How many stranded-vectorize sends are in flight at once, matching the bound the un-chunked sweep
@@ -183,6 +188,25 @@ export async function handler() {
     return 0;
   });
 
+  // Isolated like the sweeps above: re-scan FabFiles whose moderation scan never completed (a
+  // transient import-scan failure, or an upload whose objectCreated scan exhausted its retries),
+  // so a stranded 'pending' file does not stay unservable forever.
+  const { rescanned: rescannedModerationFiles } = await runModerationRescueSweep({
+    enabled:
+      getSettingsValue(
+        'ImageModerationEnabled',
+        // Guard the settings read itself: it is awaited as an ARGUMENT to the sweep, evaluated
+        // before the .catch() below is attached, so a settings/DB blip here would otherwise reject
+        // out of the whole tick. Default to moderation ON (fail-closed) if the read fails.
+        await getSettingsMap({ adminSettings: adminSettingsRepository }).catch(() => ({}))
+      ) ?? true,
+    limit: MODERATION_RESCUE_MAX_PER_RUN,
+    logger,
+  }).catch(err => {
+    logger.error(`[DataLakeBatchReconcile] moderation rescue sweep failed: ${err}`);
+    return { rescanned: 0 };
+  });
+
   // Heartbeat every run (even zero-work) so a stopped/broken cron alarms on absence of data.
   await recordReconcileRun().catch(() => {});
 
@@ -195,6 +219,7 @@ export async function handler() {
     rescuedVectorizeFiles,
     rescueFailures,
     rescueOutcome,
+    rescannedModerationFiles,
   });
   return {
     statusCode: 200,
@@ -207,6 +232,7 @@ export async function handler() {
       rescuedVectorizeFiles,
       rescueFailures,
       rescueOutcome,
+      rescannedModerationFiles,
     }),
   };
 }

@@ -648,9 +648,10 @@ const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
     // dataLakeTaxonomyQueue + websocketApi: the stuck-batch backstop calls
     // enqueueTaxonomyAnalysisIfWanted, which needs Resource.dataLakeTaxonomyQueue.url to
     // enqueue and, on a rate-limited batch, Resource.websocket.managementEndpoint to push the
-    // live status update. fabFileChunkQueue: the un-chunked rescue sweep (#1420) re-enqueues
-    // complete-but-never-chunked files for chunking.
-    link: [...allSecrets, dataLakeTaxonomyQueue, websocketApi, fabFileChunkQueue],
+    // live status update. fabFileChunkQueue: the un-chunked rescue sweep re-enqueues
+    // complete-but-never-chunked files for chunking. fabFileBucket: the moderation rescue sweep
+    // downloads stranded files to re-run the image scan.
+    link: [...allSecrets, dataLakeTaxonomyQueue, websocketApi, fabFileChunkQueue, fabFileBucket],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -660,6 +661,11 @@ const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
     permissions: [
       {
         actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+      // The moderation rescue sweep re-runs the image scan on stranded files.
+      {
+        actions: ['rekognition:DetectModerationLabels'],
         resources: ['*'],
       },
     ],

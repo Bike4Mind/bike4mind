@@ -56,8 +56,11 @@ import {
   buildLakeMemoryContext,
   lakeMemoryFacts,
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
+  FORCED_RETRIEVAL_MAX_SCORED_CHUNKS,
   FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+  compareForcedRetrievalRank,
+  forcedRetrievalRelativeCutoff,
   LAKE_RECALL_K_DEFAULT,
   DATALAKE_TAG_PREFIX,
   PROMPT_TEXT_MAX,
@@ -1704,15 +1707,6 @@ const FORCED_RETRIEVAL_FILE_BATCH_SIZE = 10;
 const FORCED_RETRIEVAL_BATCH_CHUNK_CAP = 1000;
 // Hard ceiling on chunks scored in one turn, so a few huge documents cannot stall a turn.
 const FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS = 4000;
-// Candidates above the ABSOLUTE floor retained for the char-budget walk, so resident chunk text
-// stays bounded. The relative floor narrows this pool further, after the scan (it needs the turn's
-// final top score), so this cap bounds memory on its own and does not depend on either floor.
-// The budget can only fit this many sections while the mean retained chunk exceeds
-// (configured char budget)/256 chars - ~47 at the 12,000-char default, which real chunking always
-// clears. Since the char budget became a setting (see `forcedRetrievalCharBudget` below), a very
-// large configured value could in principle admit more sections than this caps; a corpus of very
-// short chunks could inject fewer than expected regardless of budget.
-const FORCED_RETRIEVAL_MAX_SCORED_CHUNKS = 256;
 // The char budget and both relevance floors are levers now (all three resolved once per turn by
 // resolveForcedRetrievalConfig below), so none is a module constant - every former
 // FORCED_RETRIEVAL_CHAR_BUDGET and FORCED_RETRIEVAL_MIN_SIMILARITY reference is a resolved local
@@ -1820,11 +1814,15 @@ interface ForcedRetrievalCoverage {
  * Total order: score desc, then fabFileId, then chunk id. The explicit tiebreaker matters now
  * that chunks arrive in batches - otherwise equal scores would be ordered by fetch order and the
  * citation numbering could differ between two identical turns.
+ *
+ * Delegates so the offline floor sweep can rank by the same order; see `compareForcedRetrievalRank`
+ * for why an independent tiebreak there would measure a cut this path does not make.
  */
 function compareForcedRetrievalCandidates(a: ForcedRetrievalCandidate, b: ForcedRetrievalCandidate): number {
-  if (b.score !== a.score) return b.score - a.score;
-  if (a.fabFileId !== b.fabFileId) return a.fabFileId < b.fabFileId ? -1 : 1;
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  return compareForcedRetrievalRank(
+    { score: a.score, fileId: a.fabFileId, chunkId: a.id },
+    { score: b.score, fileId: b.fabFileId, chunkId: b.id }
+  );
 }
 
 /**
@@ -2664,20 +2662,19 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // corpus or an embedding model lands the scores in, where a fixed absolute line either admits
       // everything or nothing.
       //
-      // Skipped when the top score is not positive. `topScore` is not derived from `pool` - it is
-      // updated one line BEFORE the absolute-floor `continue`, so it tracks every finite scored
-      // candidate while `pool` holds only those that cleared the floor, and can therefore be
-      // negative here. The guard is inert either way: a non-positive `topScore` makes the product
-      // non-positive, so the `> 0` test below takes the unfiltered branch with or without it. Kept
-      // as documentation that a multiplicative floor inverts across zero (0.85 * -0.2 = -0.17,
-      // ABOVE the score it came from), which would matter if a future absolute floor admitted
-      // negatives.
+      // Skipped when the top score is not positive - that guard now lives in
+      // `forcedRetrievalRelativeCutoff`, along with the inversion-across-zero reasoning behind it.
+      // `topScore` is not derived from `pool`: it is updated one line BEFORE the absolute-floor
+      // `continue`, so it tracks every finite scored candidate while `pool` holds only those that
+      // cleared the floor, and can therefore be negative here. The guard is inert on THIS path (a
+      // non-positive `topScore` makes the product non-positive, so the unfiltered branch is taken
+      // either way) and load-bearing on the sweep's, which is handed arbitrary floor pairs.
       //
       // Cannot starve a turn: the fraction is at most 1 (the setting caps at 100) and `topScore`
       // equals the head of `ranked` whenever it is non-empty - the global maximum always clears the
       // absolute floor if anything does, and the in-scan trim retains the highest scores - so the
       // best candidate always survives its own cutoff. No new empty-handed exit is introduced.
-      const relativeCutoff = floors.relativeFloor > 0 && topScore > 0 ? topScore * floors.relativeFloor : 0;
+      const relativeCutoff = forcedRetrievalRelativeCutoff(topScore, floors.relativeFloor);
       const scored = relativeCutoff > 0 ? ranked.filter(c => c.score >= relativeCutoff) : ranked;
       if (scored.length < ranked.length) {
         this.logger.log(

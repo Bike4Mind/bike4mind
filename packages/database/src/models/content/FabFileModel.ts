@@ -2922,6 +2922,11 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // confirmed-explicit match from a format the scanner structurally couldn't process
     // (e.g. 'unsupported_format'), so ops can tell the two apart without CloudWatch.
     blockReason: { type: String, required: false },
+    // Stamped when a moderation scan claim flips this row pending -> scanning, so the rescue sweep
+    // can reclaim a crashed 'scanning' row by CLAIM age. updatedAt is unusable for that: timestamps
+    // bumps it on any write, so an unrelated edit would reset the staleness clock. Only meaningful
+    // while moderationStatus === 'scanning'.
+    moderationClaimedAt: { type: Date, required: false },
     error: { type: String, required: false },
     presignedUrl: { type: String },
     fileUrl: { type: String },
@@ -3076,6 +3081,10 @@ FabFileSchema.index({ batchId: 1 });
 
 // Moderation queue / audit lookups
 FabFileSchema.index({ userId: 1, moderationStatus: 1 });
+
+// Serves the moderation rescue sweep's stale-'pending' scan (moderationRescueSweep.ts): seeks the
+// status + deletedAt equality and the createdAt range without touching every non-deleted row.
+FabFileSchema.index({ moderationStatus: 1, deletedAt: 1, createdAt: 1 });
 
 // No index currently serves the `fileName` sort's `_id` tiebreaker (buildFabFileSearchQuery).
 // Two things to know before adding one: (a) any future `fileName` sort index would need

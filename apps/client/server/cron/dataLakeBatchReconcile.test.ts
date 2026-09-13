@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   recordRescue: vi.fn(),
   enqueueTaxonomyAnalysisIfWanted: vi.fn(),
   getSettingsValue: vi.fn(),
+  getSettingsMap: vi.fn(),
   fabFileFind: vi.fn(),
   sendToQueue: vi.fn(),
   // Hoisted rather than left inside the observability mock's closure: an SST cron's return value is
@@ -22,6 +23,7 @@ const h = vi.hoisted(() => ({
   // stale-claim cutoff: a one-arg call silently turns the stale-claim rescue arm back off. The third
   // parameter is here for the same reason - dropping it silently strands paused files (#2120).
   runSweep: vi.fn(async () => ({ outcome: 'swept' as const, enqueued: 0, failed: 0 })),
+  runModerationSweep: vi.fn(async () => ({ rescanned: 0 })),
   buildStrandedFilter: vi.fn((cutoff: Date, _staleClaimBefore?: Date) => ({
     vectorizeEnqueueFailedAt: { $lt: cutoff },
   })),
@@ -77,6 +79,9 @@ vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendTo
 vi.mock('@server/worker/chunkRescueSweep', () => ({
   runChunkRescueSweep: (...a: unknown[]) => h.runSweep(...(a as [])),
 }));
+vi.mock('@server/s3/moderationRescueSweep', () => ({
+  runModerationRescueSweep: (...a: unknown[]) => h.runModerationSweep(...(a as [])),
+}));
 // Only the stranded-vectorize filter is stubbed (so the call args are assertable); the real
 // age/stale cutoff constants stay real so these tests pin the actual windows the cron uses.
 vi.mock('@server/worker/chunkScan', async importActual => ({
@@ -91,6 +96,12 @@ vi.mock('@server/utils/cloudwatch', () => ({
 }));
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   enqueueTaxonomyAnalysisIfWanted: (...a: unknown[]) => h.enqueueTaxonomyAnalysisIfWanted(...a),
+}));
+// Keep the real getSettingsValue (spread), stub only getSettingsMap - so a test can fault the
+// moderation-enabled settings read and prove it degrades (P2) instead of aborting the tick.
+vi.mock('@bike4mind/utils', async importActual => ({
+  ...(await importActual<typeof import('@bike4mind/utils')>()),
+  getSettingsMap: (...a: unknown[]) => h.getSettingsMap(...a),
 }));
 
 import { handler } from './dataLakeBatchReconcile';
@@ -112,6 +123,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
     // explicitly because clearAllMocks() clears calls but NOT implementations - without this a test
     // that makes sendToQueue reject leaks that into every test after it in file order.
     h.getSettingsValue.mockResolvedValue(false);
+    h.getSettingsMap.mockResolvedValue({});
     h.sendToQueue.mockResolvedValue(undefined);
     // Same reason as sendToQueue above, and the same leak: a test that makes the un-chunked sweep
     // reject otherwise leaves that rejection in place for every test after it in file order, which
@@ -166,6 +178,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
       rescuedVectorizeFiles: 0,
       rescueFailures: 0,
       rescueOutcome: 'swept',
+      rescannedModerationFiles: 0,
     });
   });
 
@@ -183,6 +196,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
       rescuedVectorizeFiles: 0,
       rescueFailures: 0,
       rescueOutcome: 'swept',
+      rescannedModerationFiles: 0,
     });
   });
 
@@ -439,6 +453,32 @@ describe('dataLakeBatchReconcile cron handler', () => {
       expect(body.rescuedChunkFiles).toBe(0);
       expect(body.rescueFailures).toBe(0);
       expect(body.rescuedVectorizeFiles).toBe(0);
+    });
+  });
+
+  describe('moderation rescue sweep settings read (P2 isolation)', () => {
+    beforeEach(() => {
+      h.findStuck.mockResolvedValue([]);
+      h.reconcile.mockResolvedValue([]);
+    });
+
+    it('defaults ImageModerationEnabled to on when the setting is absent', async () => {
+      h.getSettingsMap.mockResolvedValue({}); // no ImageModerationEnabled key
+      await handler();
+      expect(h.runModerationSweep).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }));
+    });
+
+    it('a settings-read failure degrades instead of aborting the tick', async () => {
+      // The read is awaited as an ARGUMENT to the sweep; without the .catch(() => ({})) guard its
+      // rejection propagates before the sweep is even called and takes the whole tick down.
+      h.getSettingsMap.mockRejectedValueOnce(new Error('settings/db blip'));
+
+      const res = await handler();
+
+      expect(h.runModerationSweep).toHaveBeenCalledTimes(1);
+      expect(h.runModerationSweep).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }));
+      expect(res.statusCode).toBe(200);
+      expect(h.recordRun).toHaveBeenCalled();
     });
   });
 });
