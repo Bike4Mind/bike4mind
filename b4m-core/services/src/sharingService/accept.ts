@@ -1,4 +1,5 @@
 import {
+  grantablePermissions,
   IFabFileRepository,
   IGroupDocument,
   IInvite,
@@ -10,6 +11,8 @@ import {
   IShareableDocument,
   IUserDocument,
   Permission,
+  ShareableAccessShape,
+  isLinkOnlyInvite,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -66,6 +69,11 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
   const invite = await db.invites.findById(id);
   if (!invite) throw new NotFoundError('Invite not found');
 
+  // createInvite defaults expiresAt 100 years out, so this only bites a real expiration.
+  if (invite.expiresAt && invite.expiresAt < new Date()) {
+    throw new UnprocessableEntityError('Invite has expired');
+  }
+
   if (invite.remaining <= 0) {
     throw new UnprocessableEntityError('Invite has no remaining users');
   }
@@ -78,13 +86,17 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
     throw new UnprocessableEntityError('User has already accepted the invite');
   }
 
-  // A By-Users invite names specific recipients in `pending`; only they may consume a slot,
-  // or `remaining` (now sized to the recipient count, not a flat 1) lets an unintended
-  // accepter claim a share meant for someone else while a named recipient still hasn't
-  // accepted. A link-only invite never populates `pending`, so this never applies to one -
-  // and once every named recipient has accepted, `pending` is empty and `remaining <= 0`
-  // above already blocks further accepts regardless of who is asking.
-  if ((invite.recipients?.pending?.length ?? 0) > 0 && !invite.recipients?.pending?.includes(user.email)) {
+  // A named invite names specific recipients in `pending`; only they may consume a slot, or
+  // `remaining` (now sized to the recipient count, not a flat 1) lets an unintended accepter claim
+  // a share meant for someone else while a named recipient still hasn't accepted.
+  //
+  // Keyed on isLinkOnly rather than `pending.length > 0`, which fell open in exactly the case that
+  // needed it most: Project and Organization invites carry raw user ids that createInvite could not
+  // resolve, so `pending` was empty and a stranger holding the id could accept and join. Rows
+  // minted before the flag and before that resolution landed have no recipients to check against,
+  // so they now fail closed here and have to be re-sent. Once every named recipient has accepted,
+  // `pending` is empty and the `remaining <= 0` check above blocks further accepts anyway.
+  if (!isLinkOnlyInvite(invite) && !invite.recipients?.pending?.includes(user.email)) {
     throw new ForbiddenError('This invite was not sent to your account');
   }
 
@@ -142,15 +154,41 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
       const session = await db.sessions.findById(invite.documentId);
       if (!session) throw new NotFoundError('Session not found');
 
-      // If session has files, share these as well
+      // A session's knowledgeIds can point at files the inviter neither owns nor holds
+      // share on (e.g. attached from someone else's shared session), so accepting must
+      // not launder access to those files through the invite. Cap each file's grant at
+      // what the INVITER actually holds on it, not the invite's face-value permissions.
+      // A legacy invite with no inviterId falls back to the conservative case: only
+      // propagate to files the session owner themselves owns.
+      const inviter = invite.inviterId ? await db.users.findById(invite.inviterId) : null;
+
       if (session.knowledgeIds && session.knowledgeIds.length > 0) {
         await Promise.all(
           session.knowledgeIds.map(async knowledgeId => {
             const fabfile = await db.fabFiles.findById(knowledgeId);
-            if (fabfile) {
-              pushShareable(fabfile, update);
-              await db.fabFiles.update(fabfile);
+            if (!fabfile) return;
+
+            let grantPermissions: Permission[];
+            if (inviter) {
+              // Gate THEN cap. Propagating a file grant is a re-share of that file, so the inviter
+              // must hold share on it, not merely hold the permission being passed on; without the
+              // gate a read-only sharee could launder read onto everyone they invite to a session.
+              const held = grantablePermissions(fabfile as ShareableAccessShape, inviter.id, inviter.groups ?? []);
+              if (!held.has(Permission.share)) return;
+              grantPermissions = update.permissions.filter(permission => held.has(permission));
+              if (grantPermissions.length === 0) return;
+            } else if (fabfile.userId === session.userId) {
+              // Legacy path: invites minted before `inviterId` existed. Strictly narrower than the
+              // gated branch above, so it fails closed. The backfill-invite-inviter-id migration populates
+              // inviterId from the username every invite already carries; once that has run
+              // everywhere this arm has no remaining input and should be deleted.
+              grantPermissions = update.permissions;
+            } else {
+              return;
             }
+
+            pushShareable(fabfile, { ...update, permissions: grantPermissions, sessionId: session.id });
+            await db.fabFiles.update(fabfile);
           })
         );
       }
@@ -281,23 +319,43 @@ const acceptProject = async (
 
 export const pushShareable = (
   entity: IShareableDocument,
-  data: { userId: string; permissions: Permission[]; projectId?: string }
+  data: { userId: string; permissions: Permission[]; projectId?: string; sessionId?: string }
 ) => {
   entity.users ||= [];
-  const userIndex = entity.users.findIndex(user => user.userId === data.userId);
+  // Keyed on (userId, projectId, sessionId), not userId alone: an entry records a grant's SOURCE,
+  // and revoke filters on that tag. Merging on the user alone collapsed two projects' grants into
+  // one entry carrying whichever projectId was written last, so revoking via the earlier project
+  // matched nothing and reported success while access stayed live, and revoking via the later one
+  // tore out the other project's grant with it. sessionId is here for the same reason: a session's
+  // knowledge propagation is the other grant-deriving path, and while it was untagged it merged
+  // into any direct share of the same file to the same user - so revoking the session deleted a
+  // grant a third party had made, which the revoker had no authority over. A direct share is its
+  // own untagged row, which is what lets an untagged revoke drop it and nothing else.
+  const userIndex = entity.users.findIndex(
+    user =>
+      user.userId === data.userId &&
+      (user.projectId ?? undefined) === (data.projectId ?? undefined) &&
+      (user.sessionId ?? undefined) === (data.sessionId ?? undefined)
+  );
   if (userIndex === -1) {
-    entity.users.push({ userId: data.userId, permissions: data.permissions, projectId: data.projectId });
+    entity.users.push({
+      userId: data.userId,
+      permissions: data.permissions,
+      projectId: data.projectId,
+      sessionId: data.sessionId,
+    });
   } else {
     // Merge, don't replace: pushShareable's callers are this file's own invite-accept arms plus
     // projectService's addFiles/addSessions/addSystemPrompts (propagating a member's current
     // project access onto a newly-added file/session) - every one of them grants or refreshes
     // access, none narrows it, so an update here must never silently drop the existing entry's
-    // projectId/extraData or narrow permissions it already carries down to just this grant.
+    // extraData or narrow permissions it already carries down to just this grant.
     const existing = entity.users[userIndex];
     entity.users[userIndex] = {
       ...existing,
       userId: data.userId,
-      projectId: data.projectId ?? existing.projectId,
+      projectId: data.projectId,
+      sessionId: data.sessionId,
       permissions: Array.from(new Set([...(existing.permissions ?? []), ...data.permissions])),
     };
   }

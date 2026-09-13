@@ -82,6 +82,19 @@ export const InviteSchema = new Schema<IInviteDocument>(
       type: String,
       required: false,
     },
+    // Who minted the invite, distinct from `username` (a display label, not an id).
+    // Absent on invites created before this field existed; accept.ts falls back to
+    // conservative behavior for those.
+    inviterId: {
+      type: String,
+      required: false,
+    },
+    // Names nobody by design (a redeemable share link), as opposed to a named invite whose
+    // recipients did not resolve. Absent on invites created before this field existed.
+    isLinkOnly: {
+      type: Boolean,
+      required: false,
+    },
     accepted: {
       type: Number,
       required: true,
@@ -211,6 +224,8 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
         documentId: 1,
         remaining: 1,
         recipients: 1,
+        isLinkOnly: 1,
+        expiresAt: 1,
         accepted: 1,
         createdAt: 1,
         updatedAt: 1,

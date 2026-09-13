@@ -56,8 +56,17 @@ export type IBaseInvite = {
   // How remaining times this invite can be used:
   remaining: number;
 
+  // True when the invite names nobody BY DESIGN - a share link anyone holding the id may redeem.
+  // An empty `recipients.pending` cannot stand in for this: Project and Organization invites carry
+  // raw user ids, so a named invite whose recipients failed to resolve looks identical to a link
+  // invite. Absent on invites created before this field existed; see inviteManager.canViewInvite
+  // for how those are inferred.
+  isLinkOnly?: boolean;
+
   name?: string;
   username?: string;
+  // Who minted the invite. Absent on invites created before this field existed.
+  inviterId?: string;
 
   expiresAt: undefined | Date;
 };

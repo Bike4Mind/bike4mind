@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Permission, ProjectEvents } from '@bike4mind/common';
-import { Project, projectRepository } from '@bike4mind/database';
+import { fabFileRepository, Project, projectRepository, sessionRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import qs from 'qs';
@@ -35,9 +35,11 @@ const handler = baseApi()
   .post(async (req, res) => {
     const body = createProjectBodySchema.parse(req.body);
     try {
-      const project = await projectService.createProject(req.user.id, body, {
+      const project = await projectService.createProject(req.user, body, {
         db: {
           projects: projectRepository,
+          fabFiles: fabFileRepository,
+          sessions: sessionRepository,
         },
       });
 

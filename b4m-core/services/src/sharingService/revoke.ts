@@ -2,8 +2,10 @@ import {
   IFabFileRepository,
   IProjectDocument,
   IProjectRepository,
+  ISessionDocument,
   ISessionRepository,
   IUserRepository,
+  IUserShare,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters, UnauthorizedError } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -58,18 +60,36 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
     throw new UnauthorizedError('Only the document owner or the shared user themselves can revoke sharing');
   }
 
-  const userIndex = document.users.findIndex(user => user.userId.toString() === userIdToRevoke);
-  if (userIndex === -1) throw new NotFoundError(`User not found in document`);
+  // Matches the TARGET user's entries and nobody else's. The project-scoped arm used
+  // `userId !== target && projectId !== scope`, which also deleted every co-member's
+  // project-derived grant, so one member leaving stripped the whole project's access.
+  // Scoped, it matches on the (userId, projectId) pair pushShareable keys entries by: dropping
+  // only the grant this project materialized, leaving a direct share or another project's intact.
+  const isRevoked = (user: IUserShare) =>
+    user.userId.toString() === userIdToRevoke && (type === 'projects' || !projectId || user.projectId === projectId);
+
+  // Scope-aware, so a scoped revoke that matches no entry says so instead of removing nothing and
+  // returning the document as if it had succeeded. Worth being honest about the reach: the only
+  // caller that passes a projectId today is revokeFromProject's cascade below, which swallows
+  // NotFoundError by design, and the HTTP route never sends one - so this currently guards a
+  // future scoped caller rather than surfacing an error anyone sees now. Entries written before
+  // pushShareable keyed on the pair carry only the last project's tag, so a scoped revoke against
+  // an earlier project can land here; revoking without a projectId still clears every entry.
+  if (!document.users.some(isRevoked)) throw new NotFoundError(`User not found in document`);
+
+  document.users = document.users.filter(user => !isRevoked(user));
 
   if (type === 'projects') {
-    document.users = document.users.filter(user => user.userId.toString() !== userIdToRevoke && user.projectId !== id);
-    await revokeFromProject({ project: document as IProjectDocument, userIdToRevoke }, adapters);
-  } else if (projectId) {
-    document.users = document.users.filter(
-      user => user.userId.toString() !== userIdToRevoke && user.projectId !== projectId
-    );
-  } else {
-    document.users = document.users.filter(user => user.userId.toString() !== userIdToRevoke);
+    const project = document as IProjectDocument;
+    const pruned = await revokeFromProject({ project, userIdToRevoke }, adapters);
+    project.fileIds = pruned.fileIds;
+    project.sessionIds = pruned.sessionIds;
+  } else if (!projectId && type === 'sessions') {
+    // accept.ts's Session arm also pushes a plain (non-project) grant onto every file in
+    // session.knowledgeIds; mirror that here so revoking the session doesn't leave those file
+    // grants live. A projectId-tagged entry is independently governed by that project, so it is
+    // left alone here exactly as the scoped branch leaves other grants alone.
+    await revokeSessionKnowledgeFileGrants({ session: document as ISessionDocument, userIdToRevoke }, adapters);
   }
 
   // This filters `document.users` in memory and writes the whole doc back - a lost-update-sensitive
@@ -88,15 +108,59 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
   return document;
 };
 
+const revokeSessionKnowledgeFileGrants = async (
+  parameters: { session: ISessionDocument; userIdToRevoke: string },
+  adapters: RevokeSharingAdapters
+) => {
+  const { session, userIdToRevoke } = parameters;
+  const { db } = adapters;
+
+  const files = await db.fabFiles.findAllByIds(session.knowledgeIds ?? []);
+  for (const file of files) {
+    // Only rows this session minted. The tag is the authorization: a row carrying `sessionId` was
+    // written by accept.ts's propagation, which already required the inviter to hold share on the
+    // file, so matching on it cannot reach a grant this session did not create. knowledgeIds is
+    // client-writable (sessionService/update.ts validates shape only), and that is exactly why the
+    // filter keys on the tag rather than on the session owner's present authority - pointing your
+    // session at a stranger's file gives you nothing, because no row on it carries your session id.
+    //
+    // Untagged rows are left alone: a direct share of the same file to the same user is a separate
+    // row, and deleting it here destroyed a grant a third party had made and the revoker had no say
+    // over. Tagging also retires the old owner-holds-share gate, which read the session owner while
+    // the mint read the inviter - not the same principal whenever a sharee minted the invite, so a
+    // grant could be stranded un-revokable through the very path that created it.
+    const remaining = file.users.filter(
+      user => !(user.userId.toString() === userIdToRevoke && user.sessionId === session.id)
+    );
+    if (remaining.length === file.users.length) continue;
+    file.users = remaining;
+    // Whole-doc grant write on the revocation path, same reason the main revoke below takes the
+    // guard: a racing guarded write must conflict rather than silently resurrect this grant.
+    await db.fabFiles.updateGuarded!(file);
+  }
+};
+
+/**
+ * Best-effort per-member cascade over a project's files and sessions.
+ *
+ * Returns the id lists with the target's own documents pruned instead of writing them back onto
+ * `project`. Mutating the caller's document starved deleteProject's owner pass: it runs this once
+ * per member and then once for the owner, and the owner's derived grants sit on exactly the
+ * member-owned documents the member passes had already pruned from the list the owner pass reads.
+ * Callers that want the pruning persisted assign it themselves.
+ */
 export const revokeFromProject = async (
   parameters: { project: IProjectDocument; userIdToRevoke: string },
   adapters: RevokeSharingAdapters
-) => {
+): Promise<{ fileIds: string[]; sessionIds: string[] }> => {
   const { project, userIdToRevoke } = parameters;
   const { db } = adapters;
 
   const files = await db.fabFiles.findAllByIds(project.fileIds);
   const sessions = await db.sessions.findAllByIds(project.sessionIds);
+
+  let fileIds = project.fileIds;
+  let sessionIds = project.sessionIds;
 
   for (const file of files) {
     try {
@@ -112,7 +176,7 @@ export const revokeFromProject = async (
           );
         }
 
-        project.fileIds = project.fileIds.filter(id => id !== file.id);
+        fileIds = fileIds.filter(id => id !== file.id);
       } else {
         await revoke(
           file.userId,
@@ -121,7 +185,11 @@ export const revokeFromProject = async (
         );
       }
     } catch (e) {
-      if (e instanceof NotFoundError && e.message !== 'User not found in document') throw e;
+      // Every NotFoundError, not just the 'not in document' one: a member holding update/share
+      // but not read is invisible to findAccessibleById's ['read','write'] predicate and lands on
+      // a different message. This cascade is best-effort, so a row it cannot reach is a row with
+      // nothing to revoke, never a reason to abort the whole revoke.
+      if (!(e instanceof NotFoundError)) throw e;
     }
   }
 
@@ -139,7 +207,7 @@ export const revokeFromProject = async (
           );
         }
 
-        project.sessionIds = project.sessionIds.filter(id => id !== session.id);
+        sessionIds = sessionIds.filter(id => id !== session.id);
       } else {
         await revoke(
           session.userId,
@@ -148,7 +216,13 @@ export const revokeFromProject = async (
         );
       }
     } catch (e) {
-      if (e instanceof NotFoundError && e.message !== 'User not found in document') throw e;
+      // Every NotFoundError, not just the 'not in document' one: a member holding update/share
+      // but not read is invisible to findAccessibleById's ['read','write'] predicate and lands on
+      // a different message. This cascade is best-effort, so a row it cannot reach is a row with
+      // nothing to revoke, never a reason to abort the whole revoke.
+      if (!(e instanceof NotFoundError)) throw e;
     }
   }
+
+  return { fileIds, sessionIds };
 };

@@ -50,14 +50,18 @@ export const leaveProject = async (
     }
 
     project.users = project.users.filter(u => u.userId !== userIdToRemove);
-    await revokeFromProject({ project, userIdToRevoke: userIdToRemove }, adapters);
+    const pruned = await revokeFromProject({ project, userIdToRevoke: userIdToRemove }, adapters);
+    project.fileIds = pruned.fileIds;
+    project.sessionIds = pruned.sessionIds;
   } else {
     // User is leaving voluntarily
     if (project.userId === user.id) {
       throw new UnauthorizedError('Project owner cannot leave their own project');
     }
     project.users = project.users.filter(u => u.userId !== user.id);
-    await revokeFromProject({ project, userIdToRevoke: user.id }, adapters);
+    const pruned = await revokeFromProject({ project, userIdToRevoke: user.id }, adapters);
+    project.fileIds = pruned.fileIds;
+    project.sessionIds = pruned.sessionIds;
   }
 
   await adapters.db.projects.update(project);

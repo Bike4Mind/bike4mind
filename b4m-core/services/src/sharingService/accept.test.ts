@@ -335,6 +335,39 @@ describe('sharingService - acceptInvite (FabFile recipient membership)', () => {
     },
   });
 
+  // The gate used to short-circuit on `pending.length === 0`, which is precisely the state a
+  // Project or Organization invite was always in: its recipients are raw user ids that
+  // createInvite could not resolve. Any authenticated caller holding the invite id could accept
+  // and join, picking up grants on every file and session the project contains.
+  it('rejects a stranger accepting a named Project invite whose recipients did not resolve', async () => {
+    const adapters = makeAdapters();
+    adapters.db.users.findById.mockResolvedValue(makeUser('stranger@x.com'));
+    adapters.db.invites.findById.mockResolvedValue({
+      ...makeInvite([], 1),
+      type: InviteType.Project,
+      isLinkOnly: false,
+    });
+
+    await expect(acceptInvite(userId, { id: inviteId }, adapters as any)).rejects.toThrow(ForbiddenError);
+    expect(adapters.db.invites.update).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on a legacy named invite minted before the link-only flag existed', async () => {
+    const adapters = makeAdapters();
+    adapters.db.users.findById.mockResolvedValue(makeUser('stranger@x.com'));
+    adapters.db.invites.findById.mockResolvedValue({ ...makeInvite([], 1), type: InviteType.Project });
+
+    await expect(acceptInvite(userId, { id: inviteId }, adapters as any)).rejects.toThrow(ForbiddenError);
+  });
+
+  it('still lets anyone redeem a genuine link invite', async () => {
+    const adapters = makeAdapters();
+    adapters.db.users.findById.mockResolvedValue(makeUser('anyone@x.com'));
+    adapters.db.invites.findById.mockResolvedValue({ ...makeInvite([], 5), isLinkOnly: true });
+
+    await expect(acceptInvite(userId, { id: inviteId }, adapters as any)).resolves.toBeDefined();
+  });
+
   it('rejects an accepter who is not among the still-pending named recipients', async () => {
     const adapters = makeAdapters();
     adapters.db.users.findById.mockResolvedValue(makeUser('uninvited@x.com'));
@@ -379,5 +412,223 @@ describe('sharingService - acceptInvite (FabFile recipient membership)', () => {
       'User has already accepted the invite'
     );
     expect(adapters.db.invites.update).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The Invite schema's `expiresAt` was never checked on redemption, so an expired share
+ * link or email invite stayed redeemable forever. createInvite defaults expiresAt 100
+ * years out, so a normal invite is never affected by this check.
+ */
+describe('sharingService - acceptInvite (expiry)', () => {
+  const userId = 'user-1';
+  const fileId = 'file-1';
+  const inviteId = 'invite-1';
+
+  const makeUser = () => ({ id: userId, email: 'a@x.com', username: 'a' });
+
+  const makeInvite = (expiresAt: Date | undefined) => ({
+    id: inviteId,
+    type: InviteType.FabFile,
+    documentId: fileId,
+    permissions: [Permission.read],
+    remaining: 1,
+    accepted: 0,
+    expiresAt,
+    recipients: { pending: [], refused: [], accepted: [] },
+  });
+
+  const makeAdapters = () => ({
+    db: {
+      invites: { findById: vi.fn(), update: vi.fn() },
+      fabFiles: { findById: vi.fn(async () => ({ id: fileId, users: [] })), update: vi.fn() },
+      sessions: { findById: vi.fn(), update: vi.fn() },
+      projects: { findById: vi.fn(), update: vi.fn() },
+      groups: { findById: vi.fn() },
+      organization: { findById: vi.fn(), update: vi.fn(), ensureUserDetails: vi.fn() },
+      users: { findById: vi.fn(), update: vi.fn() },
+    },
+  });
+
+  it('rejects redemption of an invite whose expiresAt has passed', async () => {
+    const adapters = makeAdapters();
+    adapters.db.users.findById.mockResolvedValue(makeUser());
+    adapters.db.invites.findById.mockResolvedValue(makeInvite(new Date(Date.now() - 1000)));
+
+    await expect(acceptInvite(userId, { id: inviteId }, adapters as any)).rejects.toThrow('Invite has expired');
+    expect(adapters.db.invites.update).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.update).not.toHaveBeenCalled();
+  });
+
+  it('allows redemption of an invite whose expiresAt is in the future', async () => {
+    const adapters = makeAdapters();
+    adapters.db.users.findById.mockResolvedValue(makeUser());
+    adapters.db.invites.findById.mockResolvedValue(makeInvite(new Date(Date.now() + 1000 * 60 * 60)));
+
+    await acceptInvite(userId, { id: inviteId }, adapters as any);
+
+    expect(adapters.db.invites.update).toHaveBeenCalled();
+  });
+
+  it('allows redemption of an invite with no expiresAt set', async () => {
+    const adapters = makeAdapters();
+    adapters.db.users.findById.mockResolvedValue(makeUser());
+    adapters.db.invites.findById.mockResolvedValue(makeInvite(undefined));
+
+    await acceptInvite(userId, { id: inviteId }, adapters as any);
+
+    expect(adapters.db.invites.update).toHaveBeenCalled();
+  });
+});
+
+/**
+ * A session's knowledgeIds can name files the inviter neither owns nor holds share on
+ * (e.g. attached from someone else's shared session). Accepting a Session invite must
+ * not launder access to those files through the invite - the propagated grant on each
+ * attached file is capped at what the INVITER actually holds on it.
+ */
+describe('sharingService - acceptInvite (Session knowledgeId propagation)', () => {
+  const userId = 'user-1';
+  const inviterId = 'inviter-1';
+  const sessionId = 'session-1';
+  const inviteId = 'invite-1';
+
+  const makeUser = () => ({ id: userId, email: 'accepter@x.com', username: 'accepter' });
+
+  const makeInvite = (overrides: Record<string, unknown> = {}) => ({
+    id: inviteId,
+    type: InviteType.Session,
+    documentId: sessionId,
+    permissions: [Permission.read, Permission.update, Permission.share],
+    remaining: 1,
+    accepted: 0,
+    inviterId,
+    recipients: { pending: [], refused: [], accepted: [] },
+    ...overrides,
+  });
+
+  const makeSession = (knowledgeIds: string[], sessionOwnerId = inviterId) => ({
+    id: sessionId,
+    userId: sessionOwnerId,
+    knowledgeIds,
+  });
+
+  const makeAdapters = () => ({
+    db: {
+      invites: { findById: vi.fn(), update: vi.fn() },
+      fabFiles: { findById: vi.fn(), update: vi.fn() },
+      sessions: { findById: vi.fn(), update: vi.fn() },
+      projects: { findById: vi.fn(), update: vi.fn() },
+      groups: { findById: vi.fn() },
+      organization: { findById: vi.fn(), update: vi.fn(), ensureUserDetails: vi.fn() },
+      users: { findById: vi.fn(), update: vi.fn() },
+    },
+  });
+
+  it('skips a file the inviter has no share on, without failing the accept', async () => {
+    const adapters = makeAdapters();
+    adapters.db.invites.findById.mockResolvedValue(makeInvite());
+    adapters.db.sessions.findById.mockResolvedValue(makeSession(['file-untouchable']));
+    // The inviter is looked up separately from the accepter (findById is used for both).
+    adapters.db.users.findById.mockImplementation(async (id: string) =>
+      id === inviterId ? { id: inviterId, groups: [] } : makeUser()
+    );
+    adapters.db.fabFiles.findById.mockResolvedValue({
+      id: 'file-untouchable',
+      userId: 'someone-else',
+      users: [],
+      groups: [],
+    });
+
+    await acceptInvite(userId, { id: inviteId }, adapters as any);
+
+    expect(adapters.db.fabFiles.update).not.toHaveBeenCalled();
+    // The session share itself still goes through - only the file grant is skipped.
+    expect(adapters.db.sessions.update).toHaveBeenCalled();
+  });
+
+  it('propagates nothing when the inviter cannot share the file, even if they can read it', async () => {
+    const adapters = makeAdapters();
+    adapters.db.invites.findById.mockResolvedValue(makeInvite());
+    adapters.db.sessions.findById.mockResolvedValue(makeSession(['file-shared']));
+    adapters.db.users.findById.mockImplementation(async (id: string) =>
+      id === inviterId ? { id: inviterId, groups: [] } : { id: userId, email: 'accepter@x.com', username: 'accepter' }
+    );
+    // Inviter holds only `read` on this file. Passing that read on is still a re-share of a file
+    // they were never given authority to share, so nothing propagates.
+    adapters.db.fabFiles.findById.mockResolvedValue({
+      id: 'file-shared',
+      userId: 'owner',
+      users: [{ userId: inviterId, permissions: [Permission.read] }],
+      groups: [],
+    });
+
+    await acceptInvite(userId, { id: inviteId }, adapters as any);
+
+    expect(adapters.db.fabFiles.update).not.toHaveBeenCalled();
+  });
+
+  it("caps the propagated grant at the inviter's held permissions once the share gate passes", async () => {
+    const adapters = makeAdapters();
+    adapters.db.invites.findById.mockResolvedValue(makeInvite());
+    adapters.db.sessions.findById.mockResolvedValue(makeSession(['file-shared']));
+    adapters.db.users.findById.mockImplementation(async (id: string) =>
+      id === inviterId ? { id: inviterId, groups: [] } : { id: userId, email: 'accepter@x.com', username: 'accepter' }
+    );
+    // Inviter holds read and share, so the gate opens, but not update - the invite's face-value
+    // permissions (read/update/share) must still be trimmed to what they actually hold.
+    adapters.db.fabFiles.findById.mockResolvedValue({
+      id: 'file-shared',
+      userId: 'owner',
+      users: [{ userId: inviterId, permissions: [Permission.read, Permission.share] }],
+      groups: [],
+    });
+
+    await acceptInvite(userId, { id: inviteId }, adapters as any);
+
+    const written = adapters.db.fabFiles.update.mock.calls[0][0];
+    const entry = written.users.find((u: { userId: string }) => u.userId === userId);
+    expect(entry.permissions).toEqual([Permission.read, Permission.share]);
+  });
+
+  it('propagates the invite permissions when the inviter owns the file', async () => {
+    const adapters = makeAdapters();
+    adapters.db.invites.findById.mockResolvedValue(makeInvite());
+    adapters.db.sessions.findById.mockResolvedValue(makeSession(['file-owned']));
+    adapters.db.users.findById.mockImplementation(async (id: string) =>
+      id === inviterId ? { id: inviterId, groups: [] } : { id: userId, email: 'accepter@x.com', username: 'accepter' }
+    );
+    adapters.db.fabFiles.findById.mockResolvedValue({ id: 'file-owned', userId: inviterId, users: [], groups: [] });
+
+    await acceptInvite(userId, { id: inviteId }, adapters as any);
+
+    expect(adapters.db.fabFiles.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        users: expect.arrayContaining([
+          expect.objectContaining({
+            userId,
+            permissions: expect.arrayContaining([Permission.read, Permission.update, Permission.share]),
+          }),
+        ]),
+      })
+    );
+  });
+
+  it('falls back to the session-owner-only rule for a legacy invite with no inviterId', async () => {
+    const adapters = makeAdapters();
+    adapters.db.invites.findById.mockResolvedValue(makeInvite({ inviterId: undefined }));
+    // Session owned by the inviter; one attached file it owns, one it does not.
+    adapters.db.sessions.findById.mockResolvedValue(makeSession(['file-owned', 'file-foreign'], inviterId));
+    adapters.db.users.findById.mockResolvedValue({ id: userId, email: 'accepter@x.com', username: 'accepter' });
+    adapters.db.fabFiles.findById.mockImplementation(async (id: string) =>
+      id === 'file-owned'
+        ? { id: 'file-owned', userId: inviterId, users: [], groups: [] }
+        : { id: 'file-foreign', userId: 'someone-else', users: [], groups: [] }
+    );
+
+    await acceptInvite(userId, { id: inviteId }, adapters as any);
+
+    expect(adapters.db.fabFiles.update).toHaveBeenCalledTimes(1);
+    expect(adapters.db.fabFiles.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'file-owned' }));
   });
 });

@@ -71,7 +71,7 @@ beforeEach(() => {
   } as unknown as ISessionDocument;
 
   (sessions.shareable.findAllAccessibleByIds as ReturnType<typeof vi.fn>).mockResolvedValue([session]);
-  (projects.shareable.findAccessibleById as ReturnType<typeof vi.fn>).mockResolvedValue(project);
+  (projects.shareable.findUpdateAccessById as ReturnType<typeof vi.fn>).mockResolvedValue(project);
   (sessions.update as ReturnType<typeof vi.fn>).mockResolvedValue(session);
   (projects.update as ReturnType<typeof vi.fn>).mockResolvedValue(project);
   // What the guarded repository actually returns: the junk id is dropped by usableObjectIds and

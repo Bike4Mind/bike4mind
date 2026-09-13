@@ -6,6 +6,13 @@ export type ShareableDocWithUserId = Omit<IShareableDocument, 'id'> & {
   id?: string;
 };
 
+// A user can hold more than one users[] entry on the same document: pushShareable keys entries by
+// (userId, projectId), so a direct share and each project that materialized access are separate
+// rows. Any single entry carrying the permission grants it, which is the same union semantics the
+// server-side $elemMatch predicates and heldPermissions apply.
+const holdsPermission = (doc: ShareableDocWithUserId, userId: string, permission: Permission): boolean =>
+  (doc.users ?? []).some(share => share.userId === userId && share.permissions?.includes(permission));
+
 export const userCanUpdateDoc = (user: IUserDocument | null, doc: ShareableDocWithUserId | null): boolean => {
   if (!user || !doc) return false;
   if (user.id === doc.userId) return true;
@@ -18,8 +25,7 @@ export const userCanUpdateDoc = (user: IUserDocument | null, doc: ShareableDocWi
     console.log(`UserId: ${user.id} Doc's userID ${doc.userId} doc.id ${doc.id} has no users!`);
   }
 
-  const userShare = doc.users.find(userShare => userShare.userId === user.id);
-  if (userShare && userShare.permissions?.includes(Permission.update)) {
+  if (holdsPermission(doc, user.id, Permission.update)) {
     return true;
   }
 
@@ -35,8 +41,7 @@ export const userCanReadDoc = (user: IUserDocument | null, doc: ShareableDocWith
     return true;
   }
 
-  const userShare = doc.users.find(userShare => userShare.userId === user.id);
-  if (userShare && userShare.permissions?.includes(Permission.read)) {
+  if (holdsPermission(doc, user.id, Permission.read)) {
     return true;
   }
 
@@ -47,8 +52,7 @@ export const userCanDeleteDoc = (user: IUserDocument | null, doc: ShareableDocWi
   if (!user || !doc) return false;
   if (user.id === doc.userId) return true;
 
-  const userShare = doc.users.find(userShare => userShare.userId === user.id);
-  if (userShare && userShare.permissions?.includes(Permission.delete)) {
+  if (holdsPermission(doc, user.id, Permission.delete)) {
     return true;
   }
 
@@ -69,8 +73,7 @@ export const userCanShareDoc = (user: IUserDocument | null, doc: ShareableDocWit
   if (!user || !doc) return false;
   if (user.id === doc.userId) return true;
 
-  const userShare = doc.users.find(userShare => userShare.userId === user.id);
-  if (userShare && userShare.permissions?.includes(Permission.share)) {
+  if (holdsPermission(doc, user.id, Permission.share)) {
     return true;
   }
 

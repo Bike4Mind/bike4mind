@@ -6,21 +6,21 @@ describe('sharingService - updateDocumentSharing', () => {
   const user = { id: 'user-1' } as any;
 
   let db: {
-    sessions: { shareable: { findUpdateAccessById: Mock }; update: Mock };
-    fabFiles: { shareable: { findUpdateAccessById: Mock }; update: Mock };
+    sessions: { shareable: { findShareAccessById: Mock }; update: Mock };
+    fabFiles: { shareable: { findShareAccessById: Mock }; update: Mock };
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
     db = {
-      sessions: { shareable: { findUpdateAccessById: vi.fn() }, update: vi.fn() },
-      fabFiles: { shareable: { findUpdateAccessById: vi.fn() }, update: vi.fn() },
+      sessions: { shareable: { findShareAccessById: vi.fn() }, update: vi.fn() },
+      fabFiles: { shareable: { findShareAccessById: vi.fn() }, update: vi.fn() },
     };
   });
 
   it('updates a session and returns the re-read persisted flags', async () => {
     // pre-write read (auth), then the post-write re-read reflecting the persisted flags
-    db.sessions.shareable.findUpdateAccessById
+    db.sessions.shareable.findShareAccessById
       .mockResolvedValueOnce({ id: 's1', isGlobalRead: false, isGlobalWrite: false })
       .mockResolvedValueOnce({ id: 's1', isGlobalRead: true, isGlobalWrite: false });
 
@@ -37,7 +37,7 @@ describe('sharingService - updateDocumentSharing', () => {
 
   it('falls back to the pre-write doc but still returns the written flags when the re-read races to null', async () => {
     // pre-write read (auth) returns the stale doc; the post-write re-read returns null
-    db.sessions.shareable.findUpdateAccessById
+    db.sessions.shareable.findShareAccessById
       .mockResolvedValueOnce({ id: 's1', isGlobalRead: false, isGlobalWrite: false })
       .mockResolvedValueOnce(null);
 
@@ -53,7 +53,7 @@ describe('sharingService - updateDocumentSharing', () => {
   });
 
   it('keeps fileUrl for an image-serveable file', async () => {
-    db.fabFiles.shareable.findUpdateAccessById.mockResolvedValue({
+    db.fabFiles.shareable.findShareAccessById.mockResolvedValue({
       id: 'f1',
       mimeType: 'image/png',
       moderationStatus: 'clean',
@@ -71,7 +71,7 @@ describe('sharingService - updateDocumentSharing', () => {
   });
 
   it('strips fileUrl from the response for a non-serveable file (targeted write never touches it)', async () => {
-    db.fabFiles.shareable.findUpdateAccessById.mockResolvedValue({
+    db.fabFiles.shareable.findShareAccessById.mockResolvedValue({
       id: 'f1',
       mimeType: 'image/png',
       moderationStatus: 'pending',
@@ -106,7 +106,7 @@ describe('sharingService - updateDocumentSharing', () => {
         fileUrlExpireAt: 123,
       }),
     };
-    db.fabFiles.shareable.findUpdateAccessById.mockResolvedValue(hydrated);
+    db.fabFiles.shareable.findShareAccessById.mockResolvedValue(hydrated);
 
     const result: any = await updateDocumentSharing(
       user,
@@ -120,8 +120,8 @@ describe('sharingService - updateDocumentSharing', () => {
     expect(result.fileUrlExpireAt).toBeUndefined();
   });
 
-  it('throws NotFoundError when the caller lacks write access', async () => {
-    db.sessions.shareable.findUpdateAccessById.mockResolvedValue(null);
+  it('throws NotFoundError when the caller lacks share access', async () => {
+    db.sessions.shareable.findShareAccessById.mockResolvedValue(null);
     await expect(
       updateDocumentSharing(user, { id: 's1', type: 'sessions', isGlobalRead: true, isGlobalWrite: true }, {
         db,

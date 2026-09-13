@@ -6,7 +6,14 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
 import { sendToClient } from '@server/websocket/utils';
 import { sharingService } from '@bike4mind/services';
-import { inviteRepository } from '@bike4mind/database';
+import {
+  inviteRepository,
+  fabFileRepository,
+  sessionRepository,
+  projectRepository,
+  organizationRepository,
+  Group,
+} from '@bike4mind/database';
 import { Resource } from 'sst';
 
 const handler = baseApi().post(
@@ -18,8 +25,23 @@ const handler = baseApi().post(
     }
 
     // Public-ness (link vs email invite) is derived from invite state in the service;
-    // no client-supplied flag is trusted for the recipient check.
-    const invite = await sharingService.refuseWholeInvite(req.user, { id }, { db: { invites: inviteRepository } });
+    // no client-supplied flag is trusted for the recipient check. Revoking the whole
+    // invite (rather than just the caller's own slot) needs the share-authority
+    // adapters the service checks via authorizeByInviteType.
+    const invite = await sharingService.refuseWholeInvite(
+      req.user,
+      { id },
+      {
+        db: {
+          invites: inviteRepository,
+          fabFiles: fabFileRepository,
+          sessions: sessionRepository,
+          projects: projectRepository,
+          organizations: organizationRepository,
+          groups: Group,
+        },
+      }
+    );
 
     if (!invite) {
       return res.status(404).json({ message: 'Invite not found' });
