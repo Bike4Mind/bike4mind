@@ -170,19 +170,19 @@ describe('stampChunkEmbeddingModel', () => {
       expect(calls).toEqual(['read', 'chunks', 'file']);
     });
 
-    it("labels the file ada-002 when every chunk declares it and the caller's model embedded nothing", async () => {
-      // The mirror of the divergence case, and the reason the argument is not simply returned. This
-      // message resolved Titan but wrote no vector its stamp will label (no unlabeled vector-bearing
-      // chunk remains), while the file's existing chunks all declare ada-002 - so every vector in
-      // this file IS ada-002 and saying so is the truth, not a guess. Voting Titan in anyway would
-      // manufacture a second space from a message that embedded nothing, and the resulting split
-      // would clear a perfectly good label.
+    it('clears the label when every chunk declares a model this message never wrote', async () => {
+      // This message resolved Titan and its stamp will write nothing (no unlabeled vector-bearing
+      // chunk remains), so every vector here came from an earlier writer declaring ada-002. That
+      // those labels AGREE is not evidence they are RIGHT - the chunk-model backfill guesses a
+      // legacy file's model from vector width - and promoting a guess to the file level is what
+      // turns a harmless wrong label into a wholesale exclusion. Blank leaves the decision with the
+      // per-chunk labels, which both cosine scans now read.
       const { adapters, update, warn } = makeAdapters(['text-embedding-ada-002'], 0);
 
       await stampChunkEmbeddingModel('file-1', 'amazon.titan-embed-text-v2:0', adapters, { stampFile: true });
 
-      expect(update).toHaveBeenCalledWith(expect.objectContaining({ embeddingModel: 'text-embedding-ada-002' }));
-      expect(warn).not.toHaveBeenCalled();
+      expect(update).toHaveBeenCalledWith(expect.objectContaining({ embeddingModel: null }));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('did not write'));
     });
 
     it("DOES vote the caller's model in when the pending stamp will actually write a row", async () => {
@@ -198,11 +198,10 @@ describe('stampChunkEmbeddingModel', () => {
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('2 embedding spaces'));
     });
 
-    it('labels the file from what the CHUNKS declare, not from the argument', async () => {
-      // Non-tautological on purpose: the declared set and the argument name DIFFERENT models that
-      // both resolve to the same file label only because the union is what decides. Here the chunks
-      // declare ada-002 and the argument agrees, so the label is ada-002 - and the sibling test
-      // above, where they disagree, is what proves the argument is not simply being echoed back.
+    it('labels the file when the chunks and this message name the same space', async () => {
+      // The redelivery case: a file already fully embedded in this message's own model, so the
+      // stamp has nothing left to write. The label is still this message's to vouch for, so it must
+      // be produced rather than falling through to the cannot-vouch branch the sibling above covers.
       const { adapters, update } = makeAdapters(['text-embedding-ada-002']);
 
       await stampChunkEmbeddingModel('file-1', 'text-embedding-ada-002', adapters, { stampFile: true });

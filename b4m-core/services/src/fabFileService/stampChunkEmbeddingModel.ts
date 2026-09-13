@@ -132,9 +132,16 @@ export const stampChunkEmbeddingModel = async (
  *
  * When the set is non-empty, `embeddingModel` is unioned rather than returned directly, because
  * returning it would let the caller's model become the file label even when every existing chunk
- * declares a DIFFERENT one - the same mislabel arrived at from the other side. Unioning is also why
- * the one-model answer is the declared value and not the argument: they are equal in every ordinary
- * ingest, and where they differ the chunks are the ones holding the vectors.
+ * declares a DIFFERENT one - the same mislabel arrived at from the other side.
+ *
+ * A one-model set still only becomes the file label when that model is THIS message's own, which is
+ * why the label returned here is always either `embeddingModel` or null. A chunk label is only as
+ * good as whatever wrote it, and not every writer observed an embedding: the chunk-model backfill
+ * guesses a legacy file's model from vector WIDTH, which cannot separate the ten registered models
+ * sharing 1024 dims. Promoting a guess is exactly the move the opening paragraph rules out - a
+ * blank file label costs nothing now that both cosine scans fall through to the chunk labels, while
+ * a wrong file label excludes the whole file and tells the operator to re-embed a healthy one.
+ * Vectors this message did not write are evidence about the chunks, never about the file.
  */
 const resolveFileLabel = async (
   fabFileId: string,
@@ -155,7 +162,17 @@ const resolveFileLabel = async (
     );
     return null;
   }
-  if (declared.size === 1) return [...declared][0];
+  if (declared.size === 1) {
+    const [only] = [...declared];
+    if (only === embeddingModel) return only;
+    logger?.warn(
+      `[embeddings] FabFile ${fabFileId} holds only vectors this message did not write, all ` +
+        `declaring ${only} while this message resolved ${embeddingModel}. Leaving the file label ` +
+        `unset: a chunk label is only as good as whatever wrote it, and promoting a wrong one here ` +
+        `would drop the whole file from search instead of costing nothing.`
+    );
+    return null;
+  }
   logger?.warn(
     `[embeddings] FabFile ${fabFileId} has chunks in ${declared.size} embedding spaces ` +
       `(${[...declared].join(', ')}); a credential almost certainly changed mid-ingest. Leaving the ` +

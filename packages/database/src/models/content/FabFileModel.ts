@@ -112,6 +112,19 @@ interface IFabFileChunkModel extends Model<IFabFileChunkDocument> {}
 
 export interface IFabFileModel extends Model<IFabFileDocument> {}
 
+/**
+ * The vector-bearing chunks of one file that carry no `embeddingModel` yet, however the blank is
+ * spelled. Shared rather than copied so `updateEmbeddingModel` (which fills these rows) and
+ * `countUnlabeledVectorChunksByFabFileId` (which counts them) cannot drift into describing
+ * different row sets - the file label derived from the count assumes the update is about to fill
+ * exactly those rows. A fresh object per call because callers hand it straight to Mongoose.
+ */
+const unlabeledVectorChunkFilter = (fabFileId: string) => ({
+  fabFileId,
+  'vector.0': { $exists: true },
+  $or: [{ embeddingModel: { $exists: false } }, { embeddingModel: null }, { embeddingModel: '' }],
+});
+
 export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument> implements IFabFileChunkRepository {
   constructor(private fabFileChunkModel: IFabFileChunkModel) {
     super(fabFileChunkModel);
@@ -202,11 +215,15 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
    * Vectorless chunks are filtered at the DB layer and only the fields semantic search needs
    * are projected; `.lean()` skips Mongoose hydration.
    *
-   * The chunk's OWN `embeddingModel` is one of those fields. The in-process cosine scans classify
-   * each row against the query's model, and the FILE label they would otherwise read alone is
-   * deliberately blank for a file whose chunks span two spaces (see stampChunkEmbeddingModel) -
-   * blank is never foreign, so without this a split file reaches the ranker with no cross-model
-   * guard at all, and width cannot stand in for one when ten registered models share 1024 dims.
+   * The chunk's OWN `embeddingModel` is one of those fields, read by the two data-lake cosine scans
+   * (semanticDataLakeSearch and ChatCompletionFeatures) to classify each row against the query's
+   * model. NOT by every caller: the attachment scan, `cosineSearch` in b4m-core/utils/src/llm,
+   * pages through this same method and still guards on vector WIDTH alone.
+   *
+   * For the two that do read it, the FILE label they would otherwise fall back on is deliberately
+   * blank for a file whose chunks span two spaces (see stampChunkEmbeddingModel) - blank is never
+   * foreign, so without this a split file reaches the ranker with no cross-model guard at all, and
+   * width cannot stand in for one when ten registered models share 1024 dims.
    *
    * `_id` is unique, so sorting on it is a TOTAL order and `_id > afterChunkId` is an exact
    * keyset cursor - no rows skipped or duplicated across pages regardless of the query plan.
@@ -368,14 +385,7 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
    * labels back as evidence about the file's vectors.
    */
   async updateEmbeddingModel(fabFileId: string, embeddingModel: string): Promise<void> {
-    await this.fabFileChunkModel.updateMany(
-      {
-        fabFileId,
-        'vector.0': { $exists: true },
-        $or: [{ embeddingModel: { $exists: false } }, { embeddingModel: null }, { embeddingModel: '' }],
-      },
-      { $set: { embeddingModel } }
-    );
+    await this.fabFileChunkModel.updateMany(unlabeledVectorChunkFilter(fabFileId), { $set: { embeddingModel } });
   }
 
   /**
@@ -401,7 +411,8 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
 
   /**
    * How many of this file's VECTOR-BEARING chunks still carry no `embeddingModel` - exactly the
-   * rows `updateEmbeddingModel` is about to fill, and the same predicate, so the two cannot drift.
+   * rows `updateEmbeddingModel` is about to fill, through the one shared filter so the two cannot
+   * drift apart into answering about different rows.
    *
    * `distinctEmbeddingModelsByFabFileId` alone cannot answer the question the file label needs:
    * it returns an empty set both for a file with no vectors at all and for one whose vectors are
@@ -410,11 +421,7 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
    * which is what stops a message that embedded nothing from voting its own model into the set.
    */
   async countUnlabeledVectorChunksByFabFileId(fabFileId: string): Promise<number> {
-    return this.fabFileChunkModel.countDocuments({
-      fabFileId,
-      'vector.0': { $exists: true },
-      $or: [{ embeddingModel: { $exists: false } }, { embeddingModel: null }, { embeddingModel: '' }],
-    });
+    return this.fabFileChunkModel.countDocuments(unlabeledVectorChunkFilter(fabFileId));
   }
 
   /**

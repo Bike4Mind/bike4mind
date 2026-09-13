@@ -507,8 +507,9 @@ export interface FabFileChunkVector {
   vector: number[];
   /**
    * The chunk's OWN model label, written beside its vector rather than summarized from the file.
-   * The cosine scans prefer it over `FabFile.embeddingModel` because the file label is blank for a
-   * file whose chunks span two spaces, and a blank label excludes nothing.
+   * The two data-lake cosine scans prefer it over `FabFile.embeddingModel` because the file label
+   * is blank for a file whose chunks span two spaces, and a blank label excludes nothing. The
+   * attachment scan (`cosineSearch`) does not read it and guards on vector width alone.
    */
   embeddingModel?: string | null;
 }

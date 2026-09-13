@@ -151,6 +151,18 @@ const NOT_THIS_RULE: { pattern: RegExp; reason: string }[] = [
       'see. The countQueryTokens false-branch is the marker: a site that means the retrievability ' +
       'rule cannot resolve to a token count.',
   },
+  {
+    pattern: /(?<![.\w])only\s*===\s*embeddingModel\b/,
+    reason:
+      'The file-label stamp asking whether the one model its chunks declare is the model THIS ' +
+      'message just resolved, before it promotes that label to the file. Both operands describe ' +
+      'what was WRITTEN - a chunk label and this pass own embedding model - so no FabFile label is ' +
+      'read against a query and nothing is excluded from search. It is a provenance rule (did this ' +
+      'pass write the label it is being asked to promote) rather than the foreignness rule, and it ' +
+      'is deliberately one-directional: a mismatch withholds the file label, never sets it. Pinned ' +
+      'on both halves for the reason the entries above give - an open left operand would exempt ' +
+      '`file.embeddingModel === embeddingModel`, which IS the retrievability rule.',
+  },
 ];
 
 // This file's own path relative to REPO_ROOT, so it excludes itself by exact match rather than by
