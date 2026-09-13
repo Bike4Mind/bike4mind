@@ -61,6 +61,8 @@ const handler = baseApi().get(async (req, res) => {
           actualOutputTokens: r.tokenUsage.outputTokens,
           cacheReadInputTokens: r.tokenUsage.cacheReadInputTokens,
           cacheCreationInputTokens: r.tokenUsage.cacheCreationInputTokens,
+          cacheWrite5mInputTokens: r.tokenUsage.cacheWrite5mInputTokens,
+          cacheWrite1hInputTokens: r.tokenUsage.cacheWrite1hInputTokens,
         }
       : undefined,
     error: r.error,

@@ -46,7 +46,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
 
 import '@pages/api/transforms/batch';
 
-const PREFIX = 'You are a senior analytical editor at BedrockNews.';
+const PREFIX = 'You are a senior analytical editor. Follow these rules.';
 const TAIL = 'ARTICLE:\nCentral bank holds rates steady';
 
 function post(body: unknown) {
@@ -58,7 +58,7 @@ function post(body: unknown) {
   return { req, res };
 }
 
-/** The exact shape BedrockNews's submitBatch sends with the breakpoint on. */
+/** The exact shape a batch consumer sends with the breakpoint on. */
 const splitRequest = {
   client_ref: 'art-1',
   model: 'claude-opus-4-6',
