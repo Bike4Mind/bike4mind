@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
 import { FabFileChunk } from '@bike4mind/database';
-import { createMongoServer } from '../../../database/src/__test__/createMongoServer';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
 
 // At least one real core migration imports ../../utils/config, which evaluates SST Resource
 // bindings at module load time and throws outside an SST-linked process - see index.test.ts.
@@ -10,6 +10,10 @@ vi.mock('../../utils/config', () => ({ Config: {} }));
 
 import migration from './20260810000000_drop-legacy-fabfilechunk-indexes';
 import { AvailableMigrations } from './index';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 // Real mongod, not mocks: safeDropIndex's swallow-on-not-found behavior and the index-name/
 // key-pattern derivation this migration relies on are Mongo server behavior, not something a
@@ -43,9 +47,7 @@ describe('drop-legacy-fabfilechunk-indexes migration (real DB)', () => {
 
     const after = (await FabFileChunk.collection.indexes()).map(index => index.name).sort();
     expect(after).toEqual(['_id_', 'fabFileId_1__id_1']);
-    // Four real index builds plus two drops exceeded the 15s default under the shared "misc" CI
-    // shard's load; real-world-validation.test.ts uses the same 30s bump for similarly-heavy cases.
-  }, 30000);
+  });
 
   it('refuses to drop when the keyset compound is missing', async () => {
     await FabFileChunk.collection.createIndex({ _id: 1, fabFileId: 1 });
@@ -69,7 +71,7 @@ describe('drop-legacy-fabfilechunk-indexes migration (real DB)', () => {
 
     const after = (await FabFileChunk.collection.indexes()).map(index => index.name).sort();
     expect(after).toEqual(['_id_', 'fabFileId_1__id_1']);
-  }, 30000); // Same real-index-build cost as the happy-path test above; same 30s bump.
+  }); // Same real-index-build cost as the happy-path test above; same 30s bump.
 
   it('refuses to drop when the keyset compound is hidden (present but unusable)', async () => {
     await FabFileChunk.collection.createIndex({ fabFileId: 1, _id: 1 }, { hidden: true });
