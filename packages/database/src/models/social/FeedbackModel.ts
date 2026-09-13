@@ -21,6 +21,8 @@ const feedbackSchema = new Schema<IFeedbackDocument>(
     // from client-supplied promptMeta, since these become authorization keys for scoped readers.
     sessionId: { type: String, required: false },
     questId: { type: String, required: false },
+    // Context, not subject: the turn in view when a session-subject report was written.
+    contextQuestId: { type: String, required: false },
     organizationId: { type: Schema.Types.ObjectId, ref: 'Organization', required: false, default: null },
     subject: { type: String, enum: FEEDBACK_SUBJECTS, required: true, default: 'product' },
     contentStored: { type: Boolean, required: true, default: false },

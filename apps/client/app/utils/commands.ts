@@ -21,6 +21,8 @@ type CommandArgs = CommandArgExtra & ImageGenerationCommandArgs & ImageEditComma
 
 export type CommandArgExtra = {
   userId: string;
+  username?: string;
+  userEmail?: string;
   command: string;
   params: string;
   currentSession: ISessionDocument | null;
@@ -59,7 +61,7 @@ export type CommandArgExtra = {
 };
 
 export type CommandKey =
-  '/llm' | '/roll' | '/key' | '/models' | '/gen_image' | '/gen_video' | '/edit_image' | '/create_agent';
+  '/llm' | '/roll' | '/key' | '/models' | '/gen_image' | '/gen_video' | '/edit_image' | '/create_agent' | '/feedback';
 
 export type CommandHandlers = {
   [key in CommandKey]?: (args: any) => Promise<void | { session: ISessionDocument; quest: IChatHistoryItemDocument }>;
@@ -98,6 +100,7 @@ export const extractCommandAndParams = (
   // Check if input starts with a known command - if so, don't modify it
   const knownCommands = [
     '/create_agent',
+    '/feedback',
     '/llm',
     '/roll',
     '/key',

@@ -94,7 +94,7 @@ const ctx = (overrides: Partial<AccessContext> = {}): AccessContext => ({
   ...overrides,
 });
 
-describe('canAccessLake — the single access gate rule', () => {
+describe('canAccessLake - the single access gate rule', () => {
   it('grants the owner', () => {
     expect(canAccessLake(lake(), ctx({ userId: 'owner' }))).toBe(true);
   });
@@ -156,7 +156,7 @@ describe('canAccessLake — the single access gate rule', () => {
     expect(canAccessLake(pub, ctx({ userId: 'stranger', organizationIds: ['orgB'] }))).toBe(true);
   });
 
-  it('Public + a (post-publish) gate still enforces the gate — defense in depth', () => {
+  it('Public + a (post-publish) gate still enforces the gate - defense in depth', () => {
     // Publishing a gated lake is refused by setLakeVisibility, but if a gate is added AFTER
     // publishing, the read gate must still hold: only a key-holder reads it, and org is bypassed.
     const pubGated = lake({ isPublic: true, requiredEntitlement: 'product:pro', createdByUserId: 'alice' });
@@ -168,7 +168,7 @@ describe('canAccessLake — the single access gate rule', () => {
     ).toBe(true);
   });
 
-  it('an entitlement-gated lake is NOT swept up as private — the private rule keys off field PRESENCE', () => {
+  it('an entitlement-gated lake is NOT swept up as private - the private rule keys off field PRESENCE', () => {
     // The private-by-default rule denies only lakes with NO org and NO gate. A lake declaring
     // requiredEntitlement has a gate, so the private rule never touches it: a key-holder is
     // granted, while a non-holder is denied by the entitlement gate (lakeMatchesAccess) - NOT
@@ -181,8 +181,8 @@ describe('canAccessLake — the single access gate rule', () => {
 
 // Generic placeholder keys (product:pro / medlib) - no product literals, to keep this core
 // test boundary-clean (the same convention as getAccessibleDataLakes' tests).
-describe('canAccessLake — entitlement-aware any-of (tag-retirement)', () => {
-  it('grants a non-owner via requiredEntitlement (no tag held — the tag-less subscriber)', () => {
+describe('canAccessLake - entitlement-aware any-of (tag-retirement)', () => {
+  it('grants a non-owner via requiredEntitlement (no tag held - the tag-less subscriber)', () => {
     const l = lake({ requiredEntitlement: 'product:pro' });
     expect(canAccessLake(l, ctx({ entitlementKeys: ['product:pro'] }))).toBe(true);
   });
@@ -282,7 +282,7 @@ describe('canAccessLake - lake org id shape parity with the casting collection q
   });
 });
 
-describe('assertLakeAccess — not-found-style denial', () => {
+describe('assertLakeAccess - not-found-style denial', () => {
   it('throws a not-found-style error for a denied non-member (does not disclose existence)', async () => {
     const l = lake({ organizationId: 'orgA', requiredUserTag: 'Opti' });
     const db = {
@@ -302,7 +302,7 @@ describe('assertLakeAccess — not-found-style denial', () => {
   });
 });
 
-describe('assertLakeAccess — hardcoded fallback lakes (no backing document)', () => {
+describe('assertLakeAccess - hardcoded fallback lakes (no backing document)', () => {
   // The DB knows nothing: both lookups miss, as they do for the seeded opti-knowledge lake. No
   // dataLakeAccessGrants wired, so the #2425 grant-fallback arm never calls findBySlugAmongIds -
   // it's mocked only to satisfy the adapter type.
@@ -351,7 +351,7 @@ describe('assertLakeAccess — hardcoded fallback lakes (no backing document)', 
     await expect(assertLakeAccess('opti-knowledge', ctx({ userId: 'owner' }), { db })).resolves.toBe(dbLake);
   });
 
-  it('a denied DB lake shadowing a fallback slug is FINAL — no fallback retry around the denial', async () => {
+  it('a denied DB lake shadowing a fallback slug is FINAL - no fallback retry around the denial', async () => {
     const dbLake = lake({ id: 'real-id', slug: 'opti-knowledge', createdByUserId: 'owner', organizationId: 'orgA' });
     const db = {
       dataLakes: {
@@ -575,7 +575,7 @@ describe('assertLakeAccess - foreign-org grant resolves by slug (#2425)', () => 
   });
 });
 
-describe('assertLakeWritable / isFallbackLake — fallback lakes are read-only', () => {
+describe('assertLakeWritable / isFallbackLake - fallback lakes are read-only', () => {
   it('identifies a fallback lake by config id and refuses the write with a clear read-only error', () => {
     expect(isFallbackLake({ id: 'opti-knowledge' })).toBe(true);
     expect(() => assertLakeWritable({ id: 'opti-knowledge' })).toThrow(/read-only/i);
@@ -597,7 +597,7 @@ describe('assertLakeGrantable - fallback lakes cannot hold access grants (#1667 
   });
 });
 
-describe('canManageLake — the single write/manage rule (creator or admin)', () => {
+describe('canManageLake - the single write/manage rule (creator or admin)', () => {
   it('grants the creator', () => {
     expect(canManageLake(lake({ createdByUserId: 'owner' }), { userId: 'owner', isAdmin: false })).toBe(true);
   });
@@ -606,14 +606,14 @@ describe('canManageLake — the single write/manage rule (creator or admin)', ()
     expect(canManageLake(lake({ createdByUserId: 'owner' }), { userId: 'other', isAdmin: true })).toBe(true);
   });
 
-  it('denies a non-creator non-admin — even one who can READ via a tag grant', () => {
+  it('denies a non-creator non-admin - even one who can READ via a tag grant', () => {
     // The read gate (canAccessLake) would grant this caller, but write must not.
     const gated = lake({ createdByUserId: 'owner', requiredUserTag: 'Opti' });
     expect(canAccessLake(gated, ctx({ userId: 'reader', userTags: ['opti'] }))).toBe(true);
     expect(canManageLake(gated, { userId: 'reader', isAdmin: false })).toBe(false);
   });
 
-  it('denies a stranger on a PUBLIC lake — the read-can-write asymmetry now that public grants read', () => {
+  it('denies a stranger on a PUBLIC lake - the read-can-write asymmetry now that public grants read', () => {
     // A public lake grants READ to any caller (canAccessLake true), but managing it stays
     // owner/admin only. Pins the asymmetry for the new public surface.
     const pub = lake({ createdByUserId: 'alice', isPublic: true });
@@ -1623,7 +1623,7 @@ describe("management views - an org grant on another org's lake discloses nothin
   });
 });
 
-describe('assertLakeWriteAccess — read-then-manage gate for the upload doors', () => {
+describe('assertLakeWriteAccess - read-then-manage gate for the upload doors', () => {
   it('returns the lake for the creator', async () => {
     const l = lake({ createdByUserId: 'owner' });
     const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn() } };
@@ -1646,7 +1646,7 @@ describe('assertLakeWriteAccess — read-then-manage gate for the upload doors',
     ).rejects.toThrow(/do not have permission to add files/i);
   });
 
-  it('manage-denied for a stranger on a PUBLIC lake — read passes the gate, write must not', async () => {
+  it('manage-denied for a stranger on a PUBLIC lake - read passes the gate, write must not', async () => {
     const l = lake({ createdByUserId: 'owner', isPublic: true });
     const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn() } };
     await expect(assertLakeWriteAccess('lake1', ctx({ userId: 'stranger' }), { db })).rejects.toThrow(
@@ -1836,7 +1836,7 @@ describe('updateDataLake - now delegates the manage gate to canManageLake (#1153
   });
 });
 
-describe('updateDataLake — gate-after-publish guardrail', () => {
+describe('updateDataLake - gate-after-publish guardrail', () => {
   it('refuses adding a required tag or entitlement to a public lake (mirrors setLakeVisibility)', async () => {
     const l = lake({ createdByUserId: 'owner', isPublic: true });
     const update = vi.fn();
@@ -1903,7 +1903,7 @@ describe('updateDataLake - config-write actor stamp', () => {
   });
 });
 
-describe('updateDataLake — per-lake systemPrompt (#843)', () => {
+describe('updateDataLake - per-lake systemPrompt (#843)', () => {
   it('persists a systemPrompt set by the lake creator', async () => {
     const l = lake({ createdByUserId: 'owner' });
     const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
@@ -1943,7 +1943,7 @@ describe('updateDataLake — per-lake systemPrompt (#843)', () => {
   });
 });
 
-describe('updateDataLake — clearing an access gate', () => {
+describe('updateDataLake - clearing an access gate', () => {
   const gated = () => lake({ createdByUserId: 'owner', requiredUserTag: 'Opti', requiredEntitlement: 'product:pro' });
   const makeDb = (l: IDataLakeDocument) => {
     const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
@@ -2080,7 +2080,7 @@ describe('updateDataLake - lake memory platform kill-switch is retain-but-inert'
   });
 });
 
-describe('UpdateDataLakeRequestInput — gate clear sentinel', () => {
+describe('UpdateDataLakeRequestInput - gate clear sentinel', () => {
   it('accepts the empty string for both gate fields', () => {
     const parsed = UpdateDataLakeRequestInput.parse({ requiredUserTag: '', requiredEntitlement: '' });
     expect(parsed).toEqual({ requiredUserTag: '', requiredEntitlement: '' });
@@ -2091,7 +2091,7 @@ describe('UpdateDataLakeRequestInput — gate clear sentinel', () => {
   });
 });
 
-describe('assertCanWriteDataLakeTags — gate on the file-tag write paths', () => {
+describe('assertCanWriteDataLakeTags - gate on the file-tag write paths', () => {
   const makeDb = (found: IDataLakeDocument | null) => ({
     dataLakes: { findByDatalakeTag: vi.fn().mockResolvedValue(found) },
   });
@@ -2132,7 +2132,7 @@ describe('assertCanWriteDataLakeTags — gate on the file-tag write paths', () =
     ).rejects.toThrow(/do not have permission to change/i);
   });
 
-  it('tolerates malformed (non-string) tag entries — fails closed as 400, never a TypeError', async () => {
+  it('tolerates malformed (non-string) tag entries - fails closed as 400, never a TypeError', async () => {
     const db = makeDb(lake({ createdByUserId: 'owner', datalakeTag: 'datalake:lake' }));
     // A raw, un-validated payload with null/number/object entries must not crash the guard.
     await expect(
@@ -2301,7 +2301,7 @@ describe('unarchiveDataLake - now delegates the manage gate to canManageLake (#1
   });
 });
 
-describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
+describe('unarchiveDataLake - dedup pass (live re-upload wins)', () => {
   it('discards archived duplicates and restores the rest', async () => {
     const archived = [
       { id: 'a1', contentHash: 'h1' },
@@ -2527,7 +2527,7 @@ describe('restoreDeletedDataLake - now delegates the manage gate to canManageLak
   });
 });
 
-describe('restoreDeletedDataLake — deleted→active with dedup', () => {
+describe('restoreDeletedDataLake - deleted→active with dedup', () => {
   it('rejects a lake that is not soft-deleted', async () => {
     const dataLakes = {
       findById: vi.fn().mockResolvedValue(lake({ status: 'active' })),
@@ -3661,7 +3661,7 @@ describe('cleanupDeletedDataLake - now delegates the manage gate to canManageLak
   });
 });
 
-describe('cleanupDeletedDataLake — phase 2 sweep', () => {
+describe('cleanupDeletedDataLake - phase 2 sweep', () => {
   const makeAdapters = (status: IDataLakeDocument['status']) => ({
     db: {
       dataLakes: {
@@ -3907,7 +3907,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
   });
 });
 
-describe('reconcileStuckBatches — guarded read-time reconciliation', () => {
+describe('reconcileStuckBatches - guarded read-time reconciliation', () => {
   const batch = (overrides: Partial<IDataLakeBatchDocument> = {}): IDataLakeBatchDocument =>
     ({
       id: 'b1',
@@ -4027,7 +4027,7 @@ describe('reconcileStuckBatches — guarded read-time reconciliation', () => {
   });
 });
 
-describe('removeFileFromDataLake — single-file removal', () => {
+describe('removeFileFromDataLake - single-file removal', () => {
   // A wizard-ingested file as it really looks: the lake meta-tag AND a folder tag under the
   // lake's fileTagPrefix (both are membership signals the read path ORs). Also in a second
   // lake, and carrying that lake's prefixed tag, to prove removal is lake-scoped.
@@ -4173,7 +4173,7 @@ describe('removeFileFromDataLake — single-file removal', () => {
     ).resolves.toMatchObject({ success: true });
   });
 
-  it('removing the file from its ONLY lake still just pulls the tag — never cascade-deletes the file', async () => {
+  it('removing the file from its ONLY lake still just pulls the tag - never cascade-deletes the file', async () => {
     // Guards the invariant that a file's existence is independent of any lake: even when this
     // is the last lake it belongs to, removal drops the tag and leaves the FabFile intact.
     const fileInOnlyThisLake = { id: 'f1', tags: [{ name: 'datalake:lake', strength: 1 }] };
@@ -4247,7 +4247,7 @@ describe('setLakeVisibility - now delegates the manage gate to canManageLake (#1
   });
 });
 
-describe('setLakeVisibility — personal ↔ org promotion', () => {
+describe('setLakeVisibility - personal ↔ org promotion', () => {
   const makeDb = (existing: Partial<IDataLakeDocument> = {}, clashes: IDataLakeDocument[] = []) => ({
     dataLakes: {
       findById: vi.fn().mockResolvedValue(lake(existing)),
@@ -4256,7 +4256,7 @@ describe('setLakeVisibility — personal ↔ org promotion', () => {
     },
   });
 
-  it('promotes a personal lake to the actor’s org (org from principal, not the body)', async () => {
+  it("promotes a personal lake to the actor's org (org from principal, not the body)", async () => {
     const db = makeDb(); // existing lake is org-less (private)
     await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'organization', {
       db,
@@ -4346,7 +4346,7 @@ describe('setLakeVisibility — personal ↔ org promotion', () => {
     expect(db.dataLakes.update).not.toHaveBeenCalled();
   });
 
-  it('blocks a non-owner admin from PROMOTING (no cross-org steal into the admin’s org)', async () => {
+  it("blocks a non-owner admin from PROMOTING (no cross-org steal into the admin's org)", async () => {
     const db = makeDb(); // lake owned by 'owner'
     await expect(
       setLakeVisibility({ userId: 'admin', isAdmin: true, organizationId: 'orgZ' }, 'lake1', 'organization', {
@@ -4356,7 +4356,7 @@ describe('setLakeVisibility — personal ↔ org promotion', () => {
     expect(db.dataLakes.update).not.toHaveBeenCalled();
   });
 
-  it('lets a non-owner admin DEMOTE a lake to private (removes scope, writes null — no steal)', async () => {
+  it('lets a non-owner admin DEMOTE a lake to private (removes scope, writes null - no steal)', async () => {
     const db = makeDb({ organizationId: 'orgA' });
     await setLakeVisibility({ userId: 'admin', isAdmin: true, organizationId: 'orgZ' }, 'lake1', 'private', {
       db,
@@ -4409,7 +4409,7 @@ describe('setLakeVisibility — personal ↔ org promotion', () => {
     const db = makeDb({ requiredUserTag: 'Opti' });
     await expect(
       setLakeVisibility({ userId: 'owner', isAdmin: false }, 'lake1', 'public', { db } as any)
-    ).rejects.toThrow(/can’t be made public/i);
+    ).rejects.toThrow(/can\u2019t be made public/i);
     expect(db.dataLakes.update).not.toHaveBeenCalled();
   });
 
@@ -4417,11 +4417,11 @@ describe('setLakeVisibility — personal ↔ org promotion', () => {
     const db = makeDb({ requiredEntitlement: 'product:pro' });
     await expect(
       setLakeVisibility({ userId: 'owner', isAdmin: false }, 'lake1', 'public', { db } as any)
-    ).rejects.toThrow(/can’t be made public/i);
+    ).rejects.toThrow(/can\u2019t be made public/i);
     expect(db.dataLakes.update).not.toHaveBeenCalled();
   });
 
-  it('blocks a non-owner admin from PUBLISHING (no exposing someone else’s lake app-wide)', async () => {
+  it("blocks a non-owner admin from PUBLISHING (no exposing someone else's lake app-wide)", async () => {
     const db = makeDb(); // lake owned by 'owner'
     await expect(
       setLakeVisibility({ userId: 'admin', isAdmin: true, organizationId: 'orgZ' }, 'lake1', 'public', { db } as any)
@@ -4450,7 +4450,7 @@ describe('browsePublicDataLakes - canManage now delegates to canManageLake (#115
   });
 });
 
-describe('browsePublicDataLakes — public discover catalog projection', () => {
+describe('browsePublicDataLakes - public discover catalog projection', () => {
   const publicLake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
     lake({
       id: 'pub1',
@@ -4506,7 +4506,7 @@ describe('browsePublicDataLakes — public discover catalog projection', () => {
     expect(JSON.stringify(data)).not.toContain('@example.com');
   });
 
-  it('marks the caller’s own lake and grants manage to owner and admin', async () => {
+  it("marks the caller's own lake and grants manage to owner and admin", async () => {
     const db = makeDb([publicLake({ createdByUserId: 'owner1' })]);
     const asOwner = await browsePublicDataLakes(ctx({ userId: 'owner1' }), {}, { db } as any);
     expect(asOwner.data[0]).toMatchObject({ isOwn: true, canManage: true });

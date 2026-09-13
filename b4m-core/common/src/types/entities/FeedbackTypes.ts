@@ -39,6 +39,10 @@ export interface IFeedback {
    * `promptMeta`'s copy of these for authorization (see the create handler). */
   sessionId?: string;
   questId?: string;
+  /** The turn that was on screen when a session-subject report was written - context only, never
+   * the subject, so it does not promote `subject` to 'turn'. Server-derived like the keys above,
+   * and only kept when the quest belongs to the resolved `sessionId`. */
+  contextQuestId?: string;
   organizationId?: IOrganizationDocument['id'] | null;
   subject: FeedbackSubject;
   /** True iff the sibling `IFeedbackText` document was successfully written - lets a reader tell
