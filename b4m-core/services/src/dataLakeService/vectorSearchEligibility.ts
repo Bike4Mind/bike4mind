@@ -36,3 +36,25 @@ export function partitionByVectorSearchReadiness<T extends VectorSearchReadiness
   }
   return { annReady, scanOnly };
 }
+
+/**
+ * Second gate for a retrieval store that lives OUTSIDE Mongo (self-host OpenSearch): of the files
+ * the readiness stamp already cleared, which are confirmed to be IN that store right now.
+ *
+ * The stamp cannot answer this - it is written on the Mongo side and knows nothing about the
+ * separate cluster, whose dual-write is fail-open and has no backfill for files predating it. A
+ * file can therefore be permanently stamped-ready and permanently absent from the index. Splitting
+ * it off here (rather than excluding it) keeps it on the brute-force scan, where it is still
+ * findable. Atlas needs no equivalent: mongot indexes the chunk collection itself.
+ */
+export function partitionByIndexResidency<T extends { id: string }>(
+  files: T[],
+  residentFileIds: ReadonlySet<string>
+): { resident: T[]; absent: T[] } {
+  const resident: T[] = [];
+  const absent: T[] = [];
+  for (const file of files) {
+    (residentFileIds.has(file.id) ? resident : absent).push(file);
+  }
+  return { resident, absent };
+}

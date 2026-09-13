@@ -168,6 +168,33 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     return byFile;
   }
 
+  async confirmRetrievalIndexed(chunkIds: string[], model: string): Promise<void> {
+    if (chunkIds.length === 0) return;
+    await this.fabFileChunkModel.updateMany(
+      { _id: { $in: chunkIds } },
+      { $set: { retrievalIndexConfirmedModel: model } }
+    );
+  }
+
+  async annResidentFabFileIds(fabFileIds: string[], model: string): Promise<string[]> {
+    if (fabFileIds.length === 0) return [];
+    // Rides the { fabFileId: 1, _id: 1 } compound index below for the filter half of the scan,
+    // and touches no `vector` field - this runs on the retrieval hot path, unlike the removal
+    // resolver above.
+    const rows = await this.fabFileChunkModel.aggregate<{ _id: string; dispatched: number; confirmed: number }>([
+      { $match: { fabFileId: { $in: fabFileIds }, retrievalIndexModel: model } },
+      {
+        $group: {
+          _id: '$fabFileId',
+          dispatched: { $sum: 1 },
+          confirmed: { $sum: { $cond: [{ $eq: ['$retrievalIndexConfirmedModel', model] }, 1, 0] } },
+        },
+      },
+      { $match: { $expr: { $eq: ['$confirmed', '$dispatched'] } } },
+    ]);
+    return rows.map(row => String(row._id));
+  }
+
   async bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]) {
     const result = await this.fabFileChunkModel.insertMany(chunks);
 
@@ -511,6 +538,8 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
     // Index residency, NOT readiness - see IFabFileChunk.retrievalIndexModel for why the two
     // cannot be the same field.
     retrievalIndexModel: { type: String, required: false },
+    // Confirmed residency, written after the index write - see IFabFileChunk.retrievalIndexConfirmedModel.
+    retrievalIndexConfirmedModel: { type: String, required: false },
   },
   {
     timestamps: true,
