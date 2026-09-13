@@ -13,11 +13,12 @@
  * vectors + file metadata from Mongo (excludeContent), not the file body.
  *
  * DIFFERENTIAL, not delete-and-recreate. Each article's body is fingerprinted into the FabFile's
- * `contentHash`, so a re-run keeps every member whose hash AND `embeddingModel` still match, and
- * only deletes/creates what actually moved. That is what makes an unattended re-run safe on a live
- * retrieval surface: a blanket re-mirror would empty the lake and spend a full re-embed on every
- * tick, leaving a window on each one where `search_knowledge_base` finds no help at all. The
- * steady state here is zero writes and zero embedding calls.
+ * `contentHash`, so a re-run keeps every member whose hash AND `embeddingModel` still match AND
+ * which still has chunk rows behind its vectorized claim (#2583), and only deletes/creates what
+ * actually moved. That is what makes an unattended re-run safe on a live retrieval surface: a
+ * blanket re-mirror would empty the lake and spend a full re-embed on every tick, leaving a window
+ * on each one where `search_knowledge_base` finds no help at all. The steady state here is zero
+ * writes and zero embedding calls.
  *
  * Convergence is still total in both directions - a newly published slug is created, and a slug
  * that left the corpus (or a duplicate member for a slug) is deleted, so it stops being retrievable.
@@ -95,7 +96,7 @@ export interface HelpDatalakeLogger {
 export interface HelpDatalakeIngestDeps {
   db: {
     fabFiles: Pick<IFabFileRepository, 'findIdsByDataLakeTag' | 'findAllInIds' | 'deleteManyInIds' | 'create'>;
-    fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId' | 'bulkInsert'>;
+    fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId' | 'bulkInsert' | 'findFabFileIdsWithChunks'>;
     dataLakes: Pick<IDataLakeRepository, 'findBySlug' | 'create' | 'update'>;
   };
   /** Embeds one chunk with the deployment's `defaultEmbeddingModel`. */
@@ -127,7 +128,7 @@ export interface HelpDatalakeIngestOptions {
 
 export interface HelpDatalakeIngestResult {
   publicEntries: number;
-  /** Members kept as-is: content hash and embedding model both still match. */
+  /** Members kept as-is: hash and embedding model still match, and chunk rows still exist. */
   unchanged: number;
   created: number;
   removed: number;
@@ -242,9 +243,29 @@ export async function ingestHelpDatalake(
   });
   const existing = existingIds.length > 0 ? await deps.db.fabFiles.findAllInIds(existingIds) : [];
 
+  // Reuse is decided against the chunk rows, not only the member's own counters (#2583). A member
+  // left chunkless by an interrupted delete still carries `vectorized: true` and a positive
+  // `vectorizedChunkCount`, so a hash-and-model predicate keeps re-electing it forever while it
+  // answers nothing - which is how 62 of the 113 system-help articles stayed unretrievable across
+  // every 6-hourly tick. Consulting the rows makes the mirror self-healing against ANY source of
+  // that state, not just the delete ordering already fixed below.
+  //
+  // One index-covered $group over the current membership (`{fabFileId:1,_id:1}`, no chunk content
+  // read), so the steady-state tick pays one extra aggregate on ~100 ids and still does zero
+  // writes. Its failure mode is a THROW, not an empty set - the aggregate is uncaught, so a broken
+  // read aborts the run rather than quietly invalidating everyone. A genuinely empty result would
+  // re-create the whole corpus in one tick (`maxCreatesPerRun` is 200 against ~113 articles, so the
+  // cap does not bite at this size) - but creates-before-deletes means no retrieval gap while it
+  // happens, and it is the same shape as a defaultEmbeddingModel change, which already does this.
+  const withChunks =
+    existing.length > 0
+      ? await deps.db.fabFileChunks.findFabFileIdsWithChunks(existing.map(file => file.id))
+      : new Set<string>();
+
   // Diff by slug. A member is reusable only if its body fingerprint AND its embedding model still
-  // match; anything else - a stale body, a re-embedded model, a member whose slug left the corpus,
-  // a second member for a slug, a member with no `help:` tag at all - is removed.
+  // match AND it has chunk rows behind its claim; anything else - a stale body, a re-embedded
+  // model, a chunkless member, a member whose slug left the corpus, a second member for a slug, a
+  // member with no `help:` tag at all - is removed.
   const desiredBySlug = new Map(desired.map(d => [d.entry.slug, d]));
   const keepBySlug = new Map<string, IFabFileDocument>();
   // Carries the slug, not just the id: what makes a member safe to delete is whether the revision
@@ -259,7 +280,8 @@ export async function ingestHelpDatalake(
       !keepBySlug.has(slug) &&
       file.contentHash === want.contentHash &&
       file.embeddingModel === deps.embeddingModel &&
-      !!file.vectorized;
+      !!file.vectorized &&
+      withChunks.has(file.id);
     if (reusable) keepBySlug.set(slug, file);
     else removable.push({ id: file.id, slug });
   }

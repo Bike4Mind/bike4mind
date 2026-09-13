@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { getSettingsMap } from '@bike4mind/utils';
+import { settingsMap } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   createFabFile: vi.fn(),
@@ -455,6 +457,42 @@ describe('POST /api/files/generate-presigned-urls-batch - lake targeting', () =>
       res
     );
 
+    expect(h.createFabFile).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('POST /api/files/generate-presigned-urls-batch - MaxFileSize resolution', () => {
+  const DEFAULT_MB = settingsMap.MaxFileSize.defaultValue!;
+  const mb = (n: number) => n * 1024 * 1024;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.createFabFile.mockImplementation(async () => ({ id: 'f1' }));
+    h.lakeFind.mockResolvedValue([]);
+  });
+
+  // The cap is checked once for the whole batch, so an unusable setting used to lift it for
+  // every file at once: parseInt('abc') is NaN and `fileSize >= NaN` is always false.
+  it.each([
+    ['non-numeric', 'abc'],
+    ['cleared', ''],
+  ])('still caps at the schema default when the stored setting is %s', async (_label, stored) => {
+    vi.mocked(getSettingsMap).mockResolvedValue({ MaxFileSize: stored });
+    const { res } = makeRes();
+
+    await expect(run({ files: [file({ fileSize: mb(DEFAULT_MB + 5) })] }, res)).rejects.toThrow(
+      /exceeds maximum file size/i
+    );
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  // Deliberately a cleared value and a size between the old hardcoded 20MB fallback and the
+  // schema default: anything lower passes under both, so it would guard nothing.
+  it('accepts a file the old hardcoded fallback would have refused', async () => {
+    vi.mocked(getSettingsMap).mockResolvedValue({ MaxFileSize: '' });
+    const { res } = makeRes();
+
+    await run({ files: [file({ fileSize: mb(DEFAULT_MB - 5) })] }, res);
     expect(h.createFabFile).toHaveBeenCalledTimes(1);
   });
 });

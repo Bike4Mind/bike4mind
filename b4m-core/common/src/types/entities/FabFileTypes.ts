@@ -351,6 +351,13 @@ export interface IFabFile {
   blockReason?: string;
 
   /**
+   * Stamped when a moderation scan claim flips this row `pending` -> `scanning`, so the rescue
+   * sweep can reclaim a crashed `scanning` row by CLAIM age rather than `updatedAt` (which any
+   * write bumps). Only meaningful while `moderationStatus === 'scanning'`.
+   */
+  moderationClaimedAt?: Date;
+
+  /**
    * Error message for the file.
    * This is set when the file is not processed successfully, such as when the file is corrupted or unsupported.
    */

@@ -335,6 +335,10 @@ const notebookImportFunction = new sst.aws.Function('NotebookImportCompleteFunct
   },
   timeout: '5 minutes', // Longer timeout for large imports
   memory: '1024 MB', // More memory for processing
+  // Imported knowledge files are moderated post-commit inside this handler; like every other
+  // moderation-calling Lambda it needs Rekognition access, or the scan AccessDenies and the
+  // file is released back to pending unservable.
+  permissions: [{ actions: ['rekognition:DetectModerationLabels'], resources: ['*'] }],
 });
 
 // Now use the created functions in bucket notifications

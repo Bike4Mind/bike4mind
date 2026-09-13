@@ -1,7 +1,7 @@
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { baseApi } from '@server/middlewares/baseApi';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@server/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
@@ -46,7 +46,7 @@ const handler = baseApi()
         { db: { userApiKeys: userApiKeyRepository } }
       );
 
-      await logEvent(
+      await logEventSafe(
         {
           userId,
           type: UserApiKeyEvents.UPDATED,
@@ -59,7 +59,8 @@ const handler = baseApi()
             ],
           },
         },
-        { ability: req.ability }
+        { ability: req.ability },
+        req.logger
       );
 
       return res.status(200).json(updated);

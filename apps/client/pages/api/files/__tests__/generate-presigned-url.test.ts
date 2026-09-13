@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
+import { getSettingsMap, invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
+import { settingsMap } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   createFabFile: vi.fn(),
@@ -286,5 +287,47 @@ describe('POST /api/files/generate-presigned-url - batch ownership (IDOR guard)'
 
     await expect(run(body({ batchId: 'b1' }), res)).rejects.toThrow(/batch not found/i);
     expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/files/generate-presigned-url - MaxFileSize resolution', () => {
+  const DEFAULT_MB = settingsMap.MaxFileSize.defaultValue!;
+  const mb = (n: number) => n * 1024 * 1024;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.createFabFile.mockImplementation(async () => ({ id: 'f1' }));
+  });
+
+  // A non-numeric or cleared value must land on the schema default, not disable the cap: the
+  // route used to parseInt the raw setting, and NaN made every `fileSize >= maxFileSize`
+  // comparison false, so an arbitrarily large file sailed through.
+  it.each([
+    ['non-numeric', 'abc'],
+    ['cleared', ''],
+  ])('still caps at the schema default when the stored setting is %s', async (_label, stored) => {
+    vi.mocked(getSettingsMap).mockResolvedValue({ MaxFileSize: stored });
+    const { res } = makeRes();
+
+    await expect(run(body({ fileSize: mb(DEFAULT_MB + 5) }), res)).rejects.toThrow(/maximum file size/i);
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  // Deliberately a cleared value and a size between the old hardcoded 20MB fallback and the
+  // schema default: anything lower passes under both, so it would guard nothing.
+  it('accepts a file the old hardcoded fallback would have refused', async () => {
+    vi.mocked(getSettingsMap).mockResolvedValue({ MaxFileSize: '' });
+    const { res } = makeRes();
+
+    await run(body({ fileSize: mb(DEFAULT_MB - 5) }), res);
+    expect(h.createFabFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('honors a valid stored setting over the schema default', async () => {
+    vi.mocked(getSettingsMap).mockResolvedValue({ MaxFileSize: String(DEFAULT_MB + 20) });
+    const { res } = makeRes();
+
+    await run(body({ fileSize: mb(DEFAULT_MB + 5) }), res);
+    expect(h.createFabFile).toHaveBeenCalledTimes(1);
   });
 });

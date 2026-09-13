@@ -10,7 +10,9 @@ import { FabFile, fabFileRepository } from './FabFileModel';
  * collections are ObjectId-keyed, so every consumer that resolves them by `_id` inherits whatever
  * this file pins down. `db-core/src/utils/mongo.ts` `usableObjectIds` guards those consumers with
  * `isObjectIdOrHexString`; the service-layer unit tests around it use stubs, which encode an
- * assumption about Mongo rather than checking it. This is where that assumption is checked.
+ * assumption about Mongo rather than checking it. This file pins the PREDICATE (which strings
+ * cast); ../ai/DataLakeModel.objectIdCasting.integration.test.ts pins that dropping an id narrows
+ * access rather than widening it.
  */
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });

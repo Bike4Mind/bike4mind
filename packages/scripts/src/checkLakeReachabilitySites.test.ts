@@ -5,7 +5,16 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 /**
- * Guards the lake REACHABILITY clause set: "live, not retrieval-excluded, and fully vectorized".
+ * Guards the SITES holding the lake reachability rule ("live, not retrieval-excluded, fully
+ * vectorized"), by tracking which files carry its fully-vectorized comparison and how many copies
+ * each holds - so a fourth copy, anywhere, fails this test.
+ *
+ * It does NOT yet lock the clause SET. The detector is line-oriented (grep -rn, then a per-line
+ * regex), and the live and retrieval-excluded clauses sit on their own lines - and as a bare
+ * conjunction in one of the three copies rather than an early return. Deleting either leaves the
+ * matched line byte-identical and every assertion here green. Closing that needs a region- or
+ * AST-scoped check, not a wider regex; a file-scoped symbol search would be vacuous, since two of
+ * the three sites mention these symbols outside the predicate.
  *
  * Sibling of checkEmbeddingModelComparisonSites, and deliberately a second test rather than a wider
  * one. That guard watches the `embeddingModel` exact-match clause; `isCapturableFile` omits that

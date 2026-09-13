@@ -54,3 +54,22 @@ export const FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT = 75;
  * the distribution any value chosen today would have been fitted to.
  */
 export const FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT = 85;
+
+/**
+ * Candidates above the ABSOLUTE floor retained for the char-budget walk, so resident chunk text
+ * stays bounded. The relative floor narrows this pool further, after the scan (it needs the turn's
+ * final top score), so this cap bounds memory on its own and does not depend on either floor.
+ *
+ * The budget can only fit this many sections while the mean retained chunk exceeds
+ * (configured char budget)/256 chars - ~47 at the 12,000-char default, which real chunking always
+ * clears. Since the char budget became a setting (`forcedRetrievalCharBudget`, defaulted by
+ * `FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT` above), a very large configured value could in principle
+ * admit more sections than this caps; a corpus of very short chunks could inject fewer than expected
+ * regardless of budget.
+ *
+ * Lives here rather than beside the scan it bounds because the offline floor sweep
+ * (`packages/scripts/retrieval/forcedFloorSweep.ts`) has to apply the same cap: the floors are
+ * measured over the pool that survives it, so a harness using a different ceiling would measure a
+ * cut the served path does not make.
+ */
+export const FORCED_RETRIEVAL_MAX_SCORED_CHUNKS = 256;

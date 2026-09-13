@@ -385,6 +385,7 @@ export const SettingKeySchema = z.enum([
   'defaultEmbeddingModel',
   'dataLakeSearchMaxFiles',
   'dataLakeSearchMaxChunks',
+  'dataLakeSearchMaxChunksPerFile',
   'forcedRetrievalCharBudget',
   'lakeMemoryRecallK',
   'kbSearchDefaultResults',
@@ -851,6 +852,18 @@ function makeStringSetting(
  */
 export const DATA_LAKE_SEARCH_MAX_FILES_DEFAULT = 5_000;
 export const DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT = 100_000;
+
+/**
+ * Most chunks one SOURCE DOCUMENT may contribute to a search's top-K. Unlike the two scan budgets
+ * above this is a diversity guard, not a cost rail: it bounds who occupies the result slots, not
+ * how far the query scans.
+ *
+ * `0` is a real, silent value meaning "no cap" - byte-identical to behavior before this setting
+ * existed - not "unset, use some other default". It ships disabled deliberately: crowding was
+ * measured absent on a 47-document corpus, so this is a lever for corpora large enough to show
+ * the problem, not a change to how retrieval behaves today.
+ */
+export const DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT = 0;
 
 /**
  * Data-lake embedding SPEND levers: defaults and hard rails, shared by the admin-settings
@@ -1544,6 +1557,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'lakeMemoryRecallK', order: 8 },
       { key: 'forcedRetrievalRelativeFloorPct', order: 9 },
       { key: 'forcedRetrievalMinSimilarityPct', order: 10 },
+      { key: 'dataLakeSearchMaxChunksPerFile', order: 11 },
     ],
   },
   DATA_LAKE_COST: {
@@ -2130,7 +2144,7 @@ export const settingsMap = {
     name: 'Data Lakes: Enforce read-time grant resolution',
     defaultValue: true,
     description:
-      'Read-time grant cutover (#1673). ON: a persisted READER or ORG grant is resolved into the read decision, so a principal a lake was shared with can browse it, open it and ground on it. Resolution is purely ADDITIVE (legacy OR grant), so turning it on takes no access away; this arm contains an ORG grant to the granting org, and expired rows never resolve. Turning it OFF returns to report-only: the gate still resolves grants and logs where they WOULD change access ([lakeReadGrantCutover] lines), but the enforced decision falls back to the legacy owner/org/tag/entitlement/public rule. Platform altitude on purpose: a one-time install-wide migration cutover, not a per-lake lever. Tag and entitlement grants always resolve live and are never affected by this flag; only persisted reader/org rows are gated by it.',
+      'Read-time grant resolution (#1673). ON is the shipped default: a persisted READER or ORG grant is resolved into the read decision, so a principal a lake was shared with can browse it, open it and ground on it. Resolution is purely ADDITIVE (legacy OR grant), so it takes no access away; this arm contains an ORG grant to the granting org, and expired rows never resolve. This is the standing KILL SWITCH for that arm, not a migration phase: turning it OFF returns to report-only, where the gate still resolves grants and logs where they WOULD change access ([lakeReadGrantCutover] lines) but the enforced decision falls back to the legacy owner/org/tag/entitlement/public rule - so those log lines are the diagnostic for a lake someone can no longer reach while the switch is off. Platform altitude on purpose: install-wide, not a per-lake lever. Tag and entitlement grants always resolve live and are never affected by this flag; only persisted reader/org rows are gated by it.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 94,
@@ -3446,6 +3460,42 @@ export const settingsMap = {
     // Same rungs, and the same reason for no Lake rung, as dataLakeSearchMaxFiles above (#2624).
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
+  dataLakeSearchMaxChunksPerFile: makeNumberSetting({
+    key: 'dataLakeSearchMaxChunksPerFile',
+    name: 'Data Lake Search Max Chunks Per Document',
+    defaultValue: DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
+    min: 0,
+    description:
+      'Most chunks from any ONE source document a data-lake semantic search may return in its ' +
+      'top-K. A diversity guard for CONTESTED slots: where several documents answer the question, ' +
+      'it stops the best-scoring one from taking slots the others could have filled. It is NOT a ' +
+      'fix for severe crowding - the cap redistributes only among the candidates retrieval ' +
+      'already returned, so a document that supplies enough of the top-scoring chunks to fill ' +
+      'that pool on its own is one the cap cannot change at all. On a corpus of book-length ' +
+      'documents, expect enabling this to change little beyond widening the vector-search ' +
+      'request. 0 (default) disables the cap, ' +
+      'byte-identical to behavior before this setting existed. The cap never SHRINKS a result set - ' +
+      'once the spread-out picks are in, any slots still open are backfilled with the highest-' +
+      'scoring chunks the cap held back, so a lake whose only match is one document still returns ' +
+      'a full top-K. A value at or above the result count is also a no-op, since nothing can ever ' +
+      "be held back. Below it, each retrieval stream's candidate pool is widened to a fixed " +
+      'multiple of the result count so the cap has a spread to choose from. The scanned corpus ' +
+      'itself does not grow (that is bounded separately), but the vector-search backends are ' +
+      'asked for that many more matches, and a larger in-memory ranking pool costs some CPU. 2-3 ' +
+      'is the useful range; 1 serves one passage per document, which suits a corpus of many short ' +
+      'documents and starves a question whose answer spans one long one. The chat knowledge-base ' +
+      'path ranks more passages than it serves, so it applies the cap a second time at the count ' +
+      'it actually serves - otherwise the spread-out picks, which are by definition the lowest-' +
+      'scoring ones admitted, would land in the passages that path discards.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 11,
+    // Organization/Owner only, no Lake rung - same reason as dataLakeSearchMaxFiles/MaxChunks
+    // (#2624). The cap is enforced at a merge whose pool spans EVERY lake the caller can reach in
+    // one pass, so there is no single lakeId for a narrower rung to key on and a Lake-scoped
+    // override would be silently inert. Reinstating it needs per-lake sub-budgets in the scan.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+  }),
   forcedRetrievalCharBudget: makeNumberSetting({
     key: 'forcedRetrievalCharBudget',
     name: 'Forced Retrieval Char Budget',
@@ -3464,12 +3514,18 @@ export const settingsMap = {
       'saturating on every turn against a 47-document lake, so this is the binding constraint on ' +
       'how much of a corpus reaches the model - not the relevance floor. Raising it admits more ' +
       'passages at the cost of prompt tokens and latency on every Data-Lake turn; it is NOT ' +
-      'automatically better, since more context can dilute ranking. Platform-only for now: this ' +
-      'read does not go through the scoped-settings resolver, so a `settableAt` block here would ' +
-      "be inert metadata at best and could arm the resolver's fail-loud owner check at worst.",
+      'automatically better, since more context can dilute ranking. Overridable per organization ' +
+      'and per owner, the same altitude as the two relevance floors resolved alongside it on the ' +
+      'same turn.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 4,
+    // Same rungs, and the same absent Lake rung, as the two floors below: one turn scans an
+    // uncapped SET of lakes into a single pool, so no single lake can key a narrower rung.
+    // MUST stay in sync with the read path - `settableAt` is metadata only the scoped resolver
+    // honors, so this block is load-bearing only while readForcedRetrievalSettings
+    // (ChatCompletionFeatures.ts) resolves this key through resolveScopedSettingValues (#2572).
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   kbSearchDefaultResults: makeNumberSetting({
     key: 'kbSearchDefaultResults',
@@ -3568,9 +3624,10 @@ export const settingsMap = {
       'QUALIFYING beliefs can actually be used, which was pinned at 8 (inherited from personal-' +
       'memento recall) on no evidence beyond that inheritance. The sibling lever on the same turn is ' +
       'Forced Retrieval Char Budget, which governs raw chunk text rather than extracted beliefs. ' +
-      'Platform-only for now, like that sibling: this read does not go through the scoped-settings ' +
-      'resolver, so a settableAt block here would be inert metadata at best and could arm the ' +
-      "resolver's fail-loud owner check at worst.",
+      'Platform-only for now, unlike that sibling: this read goes through plain getSettingsValue, ' +
+      'which ignores settableAt, so a scope block here would be silently inert - every override ' +
+      'written against it would resolve to nothing. Pointing the read at the scoped resolver is ' +
+      'the prerequisite, not extra metadata.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 8,

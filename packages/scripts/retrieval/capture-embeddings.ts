@@ -58,7 +58,13 @@ import {
   totalExcluded,
   type StoredChunk,
 } from './capturePlan';
-import { corpusRegime, formatCorpusRegime, isLongDocumentRegime, loadEmbeddingFixture } from './embeddingFixture';
+import {
+  corpusRegime,
+  formatCorpusRegime,
+  hashQuestionText,
+  isLongDocumentRegime,
+  loadEmbeddingFixture,
+} from './embeddingFixture';
 
 /** The ingest tags each help file `help:<slug>`; that slug is what corpus.ts's ground truth names. */
 const HELP_TAG_PREFIX = 'help:';
@@ -126,7 +132,9 @@ if (fileIds.length === 0) throw new Error(`Lake "${argv.lake}" holds no files.`)
 // Stored vectors are only read by the --reuse-stored-vectors arm, and on that arm only. Every other
 // path needs a token count, a text length and an embedding label, so reading the vectors would pull a
 // whole lake's embeddings over the wire - under --dry-run, to print a cost table that does not use
-// them.
+// them. The saving is one-directional: splitting the read costs this arm a second copy of every
+// chunk's text, since the vector reader projects text too. Bytes only, and against a per-file read
+// of fully hydrated documents it still comes out ahead.
 const needStoredVectors = argv['reuse-stored-vectors'];
 
 // Batched, not per file. The lake read hands back every candidate id at once; reading them one at a
@@ -163,6 +171,12 @@ for (const batch of toBatches(fileIds, FILE_ID_BATCH)) {
 const stored: StoredChunk[] = [];
 const tokenCounts: number[] = [];
 const capturedDocs = new Set<string>();
+// Counted as FILES, not read off `capturedDocs`: docId is the help slug for `system-help`, so two
+// files sharing a slug are one document but two files, and a capturable file with no chunk rows is
+// no document at all. Only a real file counter makes the printed line add up to fileIds.
+const capturableFiles = capturedFiles.length;
+let filesWithoutChunks = 0;
+
 for (const fileBatch of toBatches(capturedFiles, FILE_ID_BATCH)) {
   const batch = fileBatch.map(f => f.fileId);
   const fields = await readAllPages(
@@ -190,6 +204,7 @@ for (const fileBatch of toBatches(capturedFiles, FILE_ID_BATCH)) {
 
   for (const { fileId, docId, embeddingModel } of fileBatch) {
     const fileChunks = chunksByFile.get(fileId) ?? [];
+    if (fileChunks.length === 0) filesWithoutChunks++;
     // The parent's label is a fallback for a WHOLE file, never for a single chunk. A file with no
     // chunk-level stamps predates the field, and its parent label is the only truth there is. But once
     // any chunk in the file is stamped, an unstamped sibling is genuinely unknown - and lending it the
@@ -216,12 +231,15 @@ if (stored.length === 0) {
       `(${filesUnreachable} unreachable: archived, deleted, not fully vectorized or retrieval-excluded).`
   );
 }
-console.log(`\nfiles: ${capturedDocs.size} capturable, ${filesUnreachable} unreachable of ${fileIds.length}`);
+console.log(
+  `\nfiles: ${capturableFiles} capturable (${filesWithoutChunks} with no chunk rows, ` +
+    `${capturedDocs.size} distinct documents), ${filesUnreachable} unreachable of ${fileIds.length}`
+);
 
 // --- Corpus-regime gate: is this the long-document case the model question is about? ---
 const regime = corpusRegime(
   stored.map(c => ({ docId: c.docId, charLength: countCodePoints(c.text) })),
-  capturedDocs.size
+  capturableFiles
 );
 console.log(`\n${formatCorpusRegime(regime)}\n`);
 if (!isLongDocumentRegime(regime)) {
@@ -341,12 +359,16 @@ for (const model of models) {
     dims,
     corpus: argv.lake,
     capturedAt,
-    filesInScope: capturedDocs.size,
+    filesInScope: capturableFiles,
     chunksExcluded,
     filesExcluded,
     filesUnreachable,
     chunks,
-    queries: PROBE_QUESTIONS.map((q, i) => ({ id: q.id, vector: queryVectors[i] })),
+    queries: PROBE_QUESTIONS.map((q, i) => ({
+      id: q.id,
+      vector: queryVectors[i],
+      questionHash: hashQuestionText(q.question),
+    })),
   };
 
   // Validate before writing, not on the next read: `dims` is taken from chunks[0] alone, so a
