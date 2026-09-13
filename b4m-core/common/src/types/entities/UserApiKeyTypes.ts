@@ -81,6 +81,22 @@ export enum ApiKeyScope {
    * read-gated routes (e.g. GET /api/data-lakes/articles) with the caller's own credential.
    */
   DATALAKE_QUERY = 'datalake:query',
+  /**
+   * Read the Overwatch analytics surface - the cross-product overview, product
+   * inventory and config, first-party metrics, product-stat history, funnel,
+   * and pipeline freshness. Exists so an agent can be handed a credential that
+   * can only *look*: it is deliberately NOT the read half of
+   * {@link OVERWATCH_INGEST_WRITE}, which is a per-product ingest credential
+   * bound to one `productId` and able to write that product's numbers. Handing
+   * an explorer the ingest key would let it fabricate the very stats it reports
+   * on, so the two are separate scopes rather than a read/write pair.
+   *
+   * Like every scope, it authorizes but never entitles - the Overwatch access
+   * check (`requestHasOverwatchAccess`: admin OR developer OR `overwatch:pro`)
+   * still runs against the key's owner and can refuse on its own. A key minted
+   * with this scope by a user who does not hold Overwatch access opens nothing.
+   */
+  OVERWATCH_READ = 'overwatch:read',
 }
 
 export enum ApiKeyStatus {

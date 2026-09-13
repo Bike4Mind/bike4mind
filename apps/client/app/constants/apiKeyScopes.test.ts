@@ -62,4 +62,24 @@ describe('apiKeyScopes catalog', () => {
       expect(scope.endsWith(':write'), `${scope} must not end in :write`).toBe(false);
     }
   });
+
+  it('makes overwatch:read user-mintable and lands it in the read-only preset', () => {
+    // The `:read` suffix is what puts a scope in the Read-only preset (UserApiKeysTab),
+    // which is the default selection for a new key - so every key minted through the
+    // profile UI will carry this one. That is deliberate and safe: the scope authorizes
+    // but does not entitle, and `requestHasOverwatchAccess` still refuses a key whose
+    // owner holds neither admin, the developer tag, nor `overwatch:pro`. Same bargain
+    // `hearth:read` and `optihashi:read` already take.
+    expect(genericValues).toContain(ApiKeyScope.OVERWATCH_READ);
+    expect(ApiKeyScope.OVERWATCH_READ.endsWith(':read')).toBe(true);
+  });
+
+  it('keeps the Overwatch read scope distinct from the ingest write scope', () => {
+    // Not a read/write pair: the ingest scope is a per-product credential bound to one
+    // productId that can write that product's stats, and is admin-provisioned only.
+    // An explorer that could also report would be able to fabricate what it reports on.
+    expect(ApiKeyScope.OVERWATCH_READ).not.toBe(ApiKeyScope.OVERWATCH_INGEST_WRITE);
+    expect(genericValues).not.toContain(ApiKeyScope.OVERWATCH_INGEST_WRITE);
+    expect(ADMIN_ONLY_API_KEY_SCOPES.map(s => s.value)).toContain(ApiKeyScope.OVERWATCH_INGEST_WRITE);
+  });
 });

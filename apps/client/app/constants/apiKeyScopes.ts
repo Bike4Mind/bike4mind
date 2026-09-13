@@ -146,6 +146,19 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'Change who can reach a lake - its visibility and its ownership. Not implied by write: grant only to keys that must re-share',
     endpoints: ['POST /api/data-lakes/:id/visibility', 'POST /api/data-lakes/:id/transfer-ownership'],
   },
+  {
+    value: ApiKeyScope.OVERWATCH_READ,
+    label: 'Overwatch: Read',
+    description:
+      'Explore the Overwatch analytics surface read-only - overview, products, metrics, funnel, pipeline freshness. Grants no ability to report stats or publish anything',
+    endpoints: [
+      'GET /api/premium-overwatch/agent/overview',
+      'GET /api/premium-overwatch/agent/products',
+      'GET /api/premium-overwatch/agent/products/:productId',
+      'GET /api/premium-overwatch/agent/timeseries',
+      'POST /api/premium-overwatch/agent/mcp',
+    ],
+  },
 ];
 
 /** All user-selectable scope values, e.g. for a "Select All" action. */
