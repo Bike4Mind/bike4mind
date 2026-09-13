@@ -533,10 +533,23 @@ jobs:
             # On the hosted image all four resolve under `/usr/bin`. Stated rather than assumed,
             # because the day a fold gains a tool that can chmod, this becomes live.
             #
+            # That enumeration covers the programs THIS file's `run:` steps name, and the
+            # action's own steps are outside it: `claude-code-action`'s trailing
+            # `Post buffered inline comments` step (`if: always()`, and
+            # `classify_inline_comments` defaults to "true", which this job does not
+            # override) resolves `bun` by bare name, because the copy it would otherwise
+            # use under `_actions` is only made when `allowed_non_write_users` is set,
+            # which this job does not pass. `oven-sh/setup-bun` installs an already-0755
+            # `bun` to `$HOME/.bun/bin` and adds it to PATH, so the exec-bit argument does
+            # not reach it and the step runs after the agent with GITHUB_TOKEN and
+            # ANTHROPIC_API_KEY in its env. Fenced above rather than argued about: the
+            # only thing that would otherwise stop an overwrite is ETXTBSY on the binary
+            # currently hosting the CLI, which is process lifetime, not a control.
+            #
             # ScheduleWakeup makes sense only in an interactive session; this
             # process is single-shot, so hard-block the tool call itself
             # rather than relying on the prompt bullet above alone.
-            --disallowedTools "Edit(/${{ runner.temp }}/**),Edit(//home/runner/work/_*/**),Edit(//home/runner/runners/**),${{ env.FOLD_MODE == 'true' && 'Bash,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**),Edit(.github/**),Edit(.git/**),Edit(.claude/**),Edit(.mcp.json),Edit(.gitattributes),Edit(**/.gitattributes),Edit(.gitignore),Edit(**/.gitignore)' || 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**)' }}"
+            --disallowedTools "Edit(/${{ runner.temp }}/**),Edit(//home/runner/work/_*/**),Edit(//home/runner/runners/**),Edit(//home/runner/.bun/**),${{ env.FOLD_MODE == 'true' && 'Bash,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**),Edit(.github/**),Edit(.git/**),Edit(.claude/**),Edit(.mcp.json),Edit(.gitattributes),Edit(**/.gitattributes),Edit(.gitignore),Edit(**/.gitignore)' || 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**)' }}"
             # 40 was too tight: a normal feature PR (~25 files / ~2k additions)
             # spawns ~8 parallel review agents, and the orchestration overhead
             # (read skill, fetch PR/diff/linked issues, fan-out, classify, post)

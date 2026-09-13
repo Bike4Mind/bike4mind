@@ -516,9 +516,11 @@ const MULTI_WORD_EXPANSION = 'probe --settings ./probe-settings.json';
  * `_runner_file_commands` files, i.e. command execution in every later step. `_actions` holds
  * the unpacked JavaScript of every `uses:` step - including the one that runs after the agent
  * with the App private key in its env - and `runners` holds the node that executes it, so
- * both are the PROGRAM of a step rather than an input to one. The `_actions` pair is written
- * as a literal because no expression yields that path, which makes it a premise about the
- * hosted image.
+ * both are the PROGRAM of a step rather than an input to one. `.bun` is the same kind: the
+ * action's own trailing `Post buffered inline comments` step resolves `bun` by bare name off
+ * a `$HOME` PATH entry, so the exec-bit argument the workflow makes for `git`/`gh`/`python3`/
+ * `jq` does not reach it. The `_actions` pair is written as a literal because no expression
+ * yields that path, which makes it a premise about the hosted image.
  *
  * Note what asserting it here does and does not buy, because the two are easy to conflate.
  * It forces an edit to the FENCE to be deliberate. It does not bind the runner: `runs-on`
@@ -532,6 +534,7 @@ const ALWAYS_ON_EDIT_FENCES = [
   'Edit(/${{ runner.temp }}/**)',
   'Edit(//home/runner/work/_*/**)',
   'Edit(//home/runner/runners/**)',
+  'Edit(//home/runner/.bun/**)',
 ];
 
 /** The runner the two `/home/runner/...` fences above are a premise about. */
@@ -834,18 +837,35 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // green. They are the antecedent of every bound below, so they are pinned by VALUE.
     const top = withoutComments(src);
 
+    // Both blocks are compared by VALUE, not matched by prefix. A prefix match sees a
+    // SUBSTITUTION (`pull_request` -> `pull_request_target`, `read` -> `write`) but is blind to
+    // an ADDITION that reaches the same end state without disturbing the matched text: a sixth
+    // `permissions:` key, or a second trigger appended below `types: [labeled]`, sits outside
+    // the match and leaves it green. Lifting the whole block up to the next column-0 key is
+    // what makes the two shapes indistinguishable to the assertion.
+    const topLevelBlock = (key: string) =>
+      top
+        .match(new RegExp(`^${key}:\\n(?: +.*\\n|\\n)*`, 'm'))?.[0]
+        .replace(/\s+#.*$/gm, '')
+        .trimEnd();
+
     // `pull_request_target` is the single swap that voids every other bound here: it runs with
     // the base repo's secrets while this job checks out and runs an agent over the untrusted PR
     // head. The workflow's own comment forbids it in prose; this is the part that enforces it.
-    expect(top).toMatch(/^on:\n {2}pull_request:\n {4}types: \[labeled\]\n/m);
+    expect(topLevelBlock('on')).toBe('on:\n  pull_request:\n    types: [labeled]');
     expect(top).not.toMatch(/pull_request_target/);
 
     // `contents: read` on GITHUB_TOKEN. Not the fold push's authority - that is the separately
     // minted App token - but widening this hands write to every OTHER step in the job,
     // including the ones that run after the agent.
-    expect(top).toMatch(
-      /^permissions:\n {2}contents: read\n {2}pull-requests: write\n {2}issues: write\n {2}actions: read\n {2}id-token: write.*\n/m
+    expect(topLevelBlock('permissions')).toBe(
+      'permissions:\n  contents: read\n  pull-requests: write\n  issues: write\n  actions: read\n  id-token: write'
     );
+
+    // A JOB-level `permissions:` replaces the workflow-level block wholesale rather than
+    // merging with it, so it reaches `contents: write` for every step in the job without
+    // touching the lines pinned just above. Exactly one `permissions:` key, at column 0.
+    expect(top.match(/^ *permissions:$/gm)).toEqual(['permissions:']);
 
     expect(jobIfConjuncts(src)).toEqual([
       // Fork PRs get no secrets and a read-only token, so this would fail on every one of them;
