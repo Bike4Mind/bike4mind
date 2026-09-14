@@ -2113,6 +2113,11 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
       expect(result.embeddingMismatch.alternateModelServed).toEqual({ files: 1, models: [SMALL_3] });
       expect(result.alternateModelsEmbedded).toEqual([SMALL_3]);
       expect(result.scan.annModelsQueried).toBe(2);
+      // Plumbed end to end: a search that actually queried a backend reports a duration, which is
+      // what the dataLakeAnnQuerySlow alarm reads. The max-vs-sum rule itself is pinned in
+      // annVectorSearch.test.ts; this only proves the number survives the trip from the adapter
+      // call to the scan accounting, which is where a rename or a dropped field would break it.
+      expect(result.scan.annSlowestQueryMs).toEqual(expect.any(Number));
       // The alternate model's file is served entirely via its own ANN index, never the scan path.
       expect(findVectorsByFabFileIds).not.toHaveBeenCalled();
     });
@@ -2908,6 +2913,11 @@ describe('semanticDataLakeSearch ANN/scan ranking parity', () => {
     // comparison below is trivially true.
     expect(viaScan.scan.annModelsQueried).toBe(0);
     expect(viaAnn.scan.annModelsQueried).toBeGreaterThan(0);
+    // The other half of the duration contract, end to end: a pure-scan search never touched an
+    // ANN backend and so has no latency to report. null rather than 0 is what keeps it out of
+    // the alarm's population entirely instead of entering it as an instantaneous query.
+    expect(viaScan.scan.annSlowestQueryMs).toBeNull();
+    expect(viaAnn.scan.annSlowestQueryMs).toEqual(expect.any(Number));
 
     expect(viaAnn.results).toHaveLength(TOP_K);
     expect(viaAnn.results.map(r => r.chunkId)).toEqual(viaScan.results.map(r => r.chunkId));

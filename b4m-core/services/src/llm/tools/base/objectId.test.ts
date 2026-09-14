@@ -43,9 +43,9 @@ describe('isObjectIdShaped', () => {
   });
 
   // Guards the collapse of imageEdit's hand-rolled regex onto this helper: the two agreed on
-  // every class above, so that swap was behaviour-preserving. lattice's `/^[a-f0-9]{24}$/` is
-  // NOT equivalent - it rejects the uppercase and mixed-case ids asserted above - so it is
-  // deliberately left on its own regex rather than widened as a drive-by.
+  // every class above, so that swap was behaviour-preserving. lattice's `/^[a-f0-9]{24}$/` was
+  // NOT equivalent - it rejected the uppercase and mixed-case ids asserted above - so it was
+  // widened onto this helper separately (#2544) instead of riding along as a drive-by here.
   it('agrees with the case-insensitive 24-hex regex that callers used to hand-roll', () => {
     const handRolled = /^[0-9a-fA-F]{24}$/;
     const cases = [

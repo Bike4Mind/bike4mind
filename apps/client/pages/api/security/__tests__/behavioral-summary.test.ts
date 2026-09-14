@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 /**
@@ -125,5 +125,65 @@ describe('GET /api/security/behavioral-summary - emailless callers', () => {
 
     expect(res._getStatusCode()).toBe(401);
     expect(repos.authFailLogRepository.getUserFailedLogins).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The suspicious-pattern aggregation buckets by IP, so a pattern's `usernames` array carries
+ * every other user targeted from the same IP. That context is serialized into a prompt sent to
+ * a third-party model, so only the caller's own identifiers may reach it (the same rule
+ * user-summary and user-recent apply to their response bodies).
+ */
+describe('GET /api/security/behavioral-summary - co-targeted usernames in the prompt', () => {
+  const CO_TARGETED_PATTERN = {
+    ip: '1.2.3.4',
+    attempts: 5,
+    usernames: ['me', 'victim'],
+    emails: ['me@example.com', 'victim@example.com'],
+    lastAttempt: new Date('2026-01-01').toISOString(),
+    firstAttempt: new Date('2026-01-01').toISOString(),
+    riskLevel: 'high',
+  };
+
+  beforeEach(() => {
+    llmComplete.fn.mockClear();
+    repos.authFailLogRepository.getSuspiciousPatternsTargetingUser.mockResolvedValue([CO_TARGETED_PATTERN]);
+  });
+
+  afterEach(() => {
+    repos.authFailLogRepository.getSuspiciousPatternsTargetingUser.mockResolvedValue([]);
+  });
+
+  // The handler swallows failures into a canned fallback, so read the prompt the model actually
+  // received rather than the response body - a broken mock would otherwise pass silently.
+  const promptContext = () => {
+    const messages = llmComplete.fn.mock.calls[0][1] as Array<{ role: string; content: string }>;
+    const userPrompt = messages.find(m => m.role === 'user')!.content;
+    return {
+      userPrompt,
+      context: JSON.parse(userPrompt.slice(userPrompt.indexOf('{'), userPrompt.lastIndexOf('}') + 1)),
+    };
+  };
+
+  it("sends only the caller's own usernames to the model", async () => {
+    const { req, res } = createMocks({ method: 'GET', query: {} });
+    (req as any).user = { ...EMAILLESS_USER, email: 'me@example.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    const { userPrompt, context } = promptContext();
+    expect(context.suspiciousPatterns.items[0].usernames).toEqual(['me']);
+    expect(userPrompt).not.toContain('victim');
+  });
+
+  it('filters on username alone for an emailless caller', async () => {
+    const { req, res } = createMocks({ method: 'GET', query: {} });
+    (req as any).user = EMAILLESS_USER;
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    const { userPrompt, context } = promptContext();
+    expect(context.suspiciousPatterns.items[0].usernames).toEqual(['me']);
+    expect(userPrompt).not.toContain('victim');
   });
 });

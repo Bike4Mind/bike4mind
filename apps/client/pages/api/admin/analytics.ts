@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { Quest } from '@bike4mind/database';
 import { ForbiddenError } from '@server/utils/errors';
+import { resolveQuestModelType } from '@server/utils/questModelType';
 import { IChatHistoryItemDocument } from '@bike4mind/common';
 
 interface AnalyticsMetricResponse {
@@ -66,7 +67,7 @@ function mapQuestToAnalyticsMetric(quest: IChatHistoryItemDocument): AnalyticsMe
     timestamp: quest.timestamp?.toISOString() || new Date().toISOString(),
     model: {
       name: quest.promptMeta?.model?.name || 'Unknown',
-      type: quest.promptMeta?.model?.type || (quest.images || []).length ? 'image' : 'text',
+      type: resolveQuestModelType(quest),
       backend: quest.promptMeta?.model?.backend,
       parameters: {
         temperature: quest.promptMeta?.model?.parameters?.temperature,

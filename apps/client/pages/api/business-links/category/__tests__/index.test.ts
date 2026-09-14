@@ -79,6 +79,9 @@ describe('GET /api/business-links/category - nested filters from the client', ()
 
     expect(res._getStatusCode()).toBe(200);
     expect(regexOperands(mockRefs.findQuery)).toEqual(['acme', 'acme']);
+    // Reads the sent body, so a route that answers with nothing reds this test; `0` is
+    // the mocked countDocuments result, pinning that the count reaches the envelope.
+    expect(res._getJSONData().meta.pagination.total).toBe(0);
     // The count must be filtered too, or the pagination total disagrees with the rows.
     expect(regexOperands(mockRefs.countQuery)).toEqual(['acme', 'acme']);
   });
@@ -102,7 +105,7 @@ describe('GET /api/business-links/category - nested filters from the client', ()
       expect(operand).not.toBe(REDOS_PAYLOAD);
     }
 
-    // Sanity: escaping neutralizes the catastrophic-backtracking pattern.
+    // The operand is now a literal, not a pattern; escapeRegex's own suite covers completeness.
     expect(new RegExp(escaped).test('aaaaaaaaaaaaaaaaaaaa')).toBe(false);
   });
 
@@ -111,6 +114,7 @@ describe('GET /api/business-links/category - nested filters from the client', ()
     await mockRefs.getHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().meta.pagination.total).toBe(0);
     expect(mockRefs.findQuery).toEqual({});
   });
 

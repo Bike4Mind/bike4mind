@@ -68,11 +68,15 @@ function sanitizeSummary(summary: string): string {
 }
 
 /**
- * Same `topK` / `minSimilarity` as `MementoFeature.getContextMessages` so
- * agent-mode and chat-mode show the same set of mementos for the same prompt.
+ * Same `topK` as `MementoFeature.getContextMessages` so agent-mode and chat-mode show the same set
+ * of mementos for the same prompt.
+ *
+ * The matching `minSimilarity` used to live here as a second, independent 0.75 - the kind of
+ * parity that holds only until someone edits one copy. It is now resolved inside
+ * `getRelevantMementos` from the embedding space it just embedded in, so both modes share a floor
+ * by construction rather than by a comment asking them to.
  */
 const MEMENTO_TOP_K = 10;
-const MEMENTO_MIN_SIMILARITY = 0.75;
 
 export interface MementosPreambleResult {
   preamble: string;
@@ -132,7 +136,6 @@ export async function getFirstIterationMementosPreamble(
       execution.query,
       {
         topK: MEMENTO_TOP_K,
-        minSimilarity: MEMENTO_MIN_SIMILARITY,
         logger,
       },
       { db: adapters.db }

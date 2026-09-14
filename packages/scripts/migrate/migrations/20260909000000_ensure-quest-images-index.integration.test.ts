@@ -1,13 +1,17 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
 import { Quest, safeDropIndex } from '@bike4mind/database';
-import { createMongoServer } from '../../../database/src/__test__/createMongoServer';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
 
 // A core migration imported transitively via '@bike4mind/database' need not evaluate SST config,
 // but mirror the sibling ensure-*-index tests' guard so this stays robust if that changes.
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
 import migration from './20260909000000_ensure-quest-images-index';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const INDEX_NAME = 'images';
 
@@ -46,7 +50,7 @@ describe('ensure-quest-images-index migration (real DB)', () => {
     expect(idx?.key).toEqual({ images: 1 });
     // Sparse keeps the index off the quests that carry no images (most of them).
     expect(idx?.sparse).toBe(true);
-  }, 30000);
+  });
 
   it('is idempotent on re-run', async () => {
     await migration.up();
@@ -54,5 +58,5 @@ describe('ensure-quest-images-index migration (real DB)', () => {
 
     const idx = (await Quest.collection.indexes()).find(i => i.name === INDEX_NAME);
     expect(idx).toBeDefined();
-  }, 30000);
+  });
 });

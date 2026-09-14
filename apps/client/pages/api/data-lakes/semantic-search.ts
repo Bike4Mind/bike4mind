@@ -99,7 +99,7 @@ function getSharedTokenizer(logger: Logger): ITokenizer {
  *   - total_chunks_searched: number
  *   - files_in_scope: number
  *   - embedding_model: string
- *   - latency_ms: number
+ *   - latency_ms: number (whole request; `scan.ann_slowest_query_ms` is the ANN share of it)
  *   - scan: coverage accounting. When `scan.truncated` is true a budget stopped the walk, so the
  *     results rank only part of the corpus - do not read an absence of hits as an absence of
  *     content. `scan.budgets` echoes the limits in force so a caller can explain the truncation.
@@ -194,6 +194,12 @@ const toScanPayload = (scan: dataLakeService.SemanticSearchScanAccounting) => ({
   ann_files_queried: scan.annFilesQueried,
   ann_hits: scan.annHits,
   ann_models_queried: scan.annModelsQueried,
+  // The ANN share of latency_ms, so a slow search can be attributed from the response itself
+  // rather than from CloudWatch minutes later. The counters above cannot tell a 49s search from a
+  // 2s one, and this route runs under a 60s Lambda ceiling - a first production search spent 45.4s
+  // of 49.2s somewhere after the query embedding, and this is the field that says whether that
+  // somewhere was the ANN query. null when none reached a backend, which is not an instant one.
+  ann_slowest_query_ms: scan.annSlowestQueryMs,
   // Per-document cap: whether it actually bound, and the ANN limit that was requested. `cap_pool`
   // is why ann_hits can step by a factor of 3 with the cap on - a wider ask, not a retrieval
   // change - and cap_promotions is the only signal that separates a cap that redistributed slots

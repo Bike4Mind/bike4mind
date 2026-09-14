@@ -1,8 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { FabFile, Session } from '@bike4mind/database';
-import { createMongoServer } from '../../../database/src/__test__/createMongoServer';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
 import { findOwnerMismatches } from './20260806000000_audit-fabfile-session-owner-mismatch';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 // Proves the real Mongo query semantics a mocked unit test cannot: soft-delete
 // default-scoping on FabFile.find, and that a real Session._id round-trips through String()

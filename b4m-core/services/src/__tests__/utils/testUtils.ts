@@ -107,6 +107,8 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
     fullyVectorizedFiles: 0,
     failedFiles: 0,
     inFlightFiles: 0,
+    unmeasuredFiles: 0,
+    retrievalOnlyFiles: 0,
     totalChunks: 0,
     totalEmbeddedChunks: 0,
   }),

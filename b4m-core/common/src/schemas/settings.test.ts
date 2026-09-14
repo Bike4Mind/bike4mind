@@ -33,6 +33,7 @@ import {
   FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
 } from '../constants/forcedRetrieval';
+import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE } from '../constants/embeddingSpaceFloors';
 import { LAKE_RECALL_K_DEFAULT, LAKE_RECALL_K_MAX } from '../constants/lakeMemory';
 import {
   KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
@@ -270,6 +271,7 @@ describe('public settings projection (M2.5 security boundary)', () => {
         'anthropicDemoKey',
         'xaiApiKey',
         'moonshotApiKey',
+        'deepseekApiKey',
         'geminiDemoKey',
         'voyageApiKey',
       ]) {
@@ -644,6 +646,17 @@ describe('forced-retrieval relevance floors are levers (#2497)', () => {
   it('defaults to the shared constants rather than hand-copied literals', () => {
     expect(settingsMap.forcedRetrievalRelativeFloorPct.defaultValue).toBe(FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT);
     expect(settingsMap.forcedRetrievalMinSimilarityPct.defaultValue).toBe(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT);
+  });
+
+  it('describes the per-space floors from the table rather than restating them in prose', () => {
+    // The description tells operators which floor actually applies per space, and those numbers are
+    // expected to move (35 is provisional until re-derived against a production lake). Hand-written
+    // prose would become a wrong number in the admin UI with nothing failing, so assert the
+    // description carries every value the table holds - and would catch a new space added without it.
+    const { description } = settingsMap.forcedRetrievalMinSimilarityPct;
+    for (const [space, pct] of Object.entries(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE)) {
+      expect(description).toContain(`${pct} for ${space}`);
+    }
   });
 
   it('keeps the absolute floor percent in step with the cosine fraction it replaced', () => {
