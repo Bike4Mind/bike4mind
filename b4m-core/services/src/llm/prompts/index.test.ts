@@ -42,6 +42,24 @@ describe('GROUNDED_NO_INVENTION_RULE', () => {
     expect(GROUNDED_NO_INVENTION_RULE).toMatch(/A register or approved list bounds what you may cite/);
   });
 
+  // The anti-denial clause above was measured to produce its own over-correction: told to leave the
+  // claim open, the model stopped ruling on it and started elaborating instead. "Leave it open" is
+  // silent about what fills that space, so these pin the sentences that define the act and name the
+  // licensed alternative - the same act-not-vocabulary shape as the clauses above, for the same
+  // reason. Text only; the behaviour is measured in evals/groundedNoInvention.
+  it('defines leaving a claim open as not answering it, and names what may be offered instead', () => {
+    expect(GROUNDED_NO_INVENTION_RULE).toContain('Leaving it open means not answering it');
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(
+      /do not explain how the asserted result was reached, what it was measured against, or what figures it involved/
+    );
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(
+      /not supply any of that from general knowledge, published results, or what is typically the case/
+    );
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(
+      /may offer instead is what the retrieved content does cover and where the claim could be confirmed/
+    );
+  });
+
   // Guards the round-2 fix for the multi-turn laundering loophole: grounding is scoped to labeled
   // Memory/Reference facts, and an earlier conversation claim (including the user's own) is explicitly
   // NOT such a fact - so a reword can't silently reopen "user asserted it a turn ago, so it's grounded."

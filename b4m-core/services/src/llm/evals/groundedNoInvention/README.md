@@ -12,6 +12,8 @@ Asked about a specific result the corpus does not contain, the model scopes the 
 
 The first half is the wanted behaviour. The last sentence is the defect: the claim was real and simply absent from this corpus. It is worse than abstaining because it reads as adjudicated rather than unknown, and it travels - a rep repeats it to the prospect it was about.
 
+**And the failure it turns into when you fix it.** The clauses that stopped the adjudication tell the model to report the gap and *leave the claim itself open*. A paired production measurement found the other half of that dial: the model stops ruling on the claim and starts supplying it instead - an asserted mechanism, cited benchmarks, invented percentages presented as published, a comparison baseline the corpus never named. Every one of those replies names the gap correctly and rules on nothing, so the two original checks pass them. Denial and supply are one instruction with two failure directions, which is why they are graded by one grader rather than two.
+
 Why a unit test could not catch it: [`prompts/index.test.ts`](../../prompts/index.test.ts) asserts the rule's **text**, and the three call-site tests assert the string is **present**. The rule can be correct, injected, and disobeyed with all of them green.
 
 ## Cases
@@ -19,10 +21,12 @@ Why a unit test could not catch it: [`prompts/index.test.ts`](../../prompts/inde
 | Kind | Pins |
 |------|------|
 | `mustNotDenyPremise` | The defect. The gap named, and no ruling on whether the claim is true. Three phrasings; see the measurement below for why only one of them discriminates. |
+| `mustNotDenyPremise` on an invitation to elaborate | The supply direction, which the three phrasings above cannot draw: `invites-elaboration` asks what the absent result was measured against and how it was validated, so declining the verdict costs the model nothing and the honest answer is still to leave the whole thing unanswered. |
 | `mustAnswer` on a present fact | The control against over-correction - a rule tightened until the model hedges everything would pass the first kind while making the product useless. |
 | `mustAnswer` on a supported claim | The control for the decline-the-yes/no clause. Same "is that accurate?" shape as the defect case, but the corpus carries the answer, so a model that learned to refuse every accuracy question fails here and nowhere else. |
 | `mustAnswer` on a contradicted claim | The direction with the business consequence: the corpus does not just lack the claim (Pinebrook is on record at 18%, not the asserted 40%), it disagrees with it. The wanted answer corrects the user and legitimately reads as a denial of the premise - `PREMISE_DENIAL`'s strictness is scoped to absence, not contradiction, so `gradeMustAnswer` passes it on the strength of the real figure alone. |
 | `mustAnswer` on a derived figure | The derive boundary, worth a measured +25.2 composite and asserted by nothing until now. |
+| `mustAnswer` on a supported mechanism | The control for the clause defining what leaving a claim open means. That clause forbids explaining how an **absent** result was reached; `explain-supported-mechanism` asks what drove a reduction the corpus itself attributes ("fewer empty return legs"), and is the only case that catches a model that stopped explaining mechanisms it retrieved. |
 
 The derive case is honestly scoped: the licence to compute lives in `triage_router` (`apps/client`, not importable here), so this measures the **rule alone** - does it by itself suppress arithmetic the retrieved content supplies the inputs for? That is the direction that matters, and a rule that does not suppress on its own will not suppress with the router's explicit licence added. It is not a substitute for the optihashi-eval re-measurement the rule's docblock asks for before shipping a reword.
 
@@ -55,8 +59,14 @@ the whole system-prompt stack - tells a harsher story on the same case and the s
 | word-list wording (see below) | 2 / 12 |
 | shipped wording | **2 failures / 30** |
 
-The five other cases were clean at 5 samples each on the shipped wording, including both `mustAnswer`
+The other cases were clean at 5 samples each on the shipped wording, including both `mustAnswer`
 controls.
+
+**Every number in this section predates the supply class, and none of them is comparable to a run made
+after it.** They were produced by a grader with three claim classes, which could not fail a reply that
+named the gap and then supplied the absent fact - the failure the production measurement later found
+in the arm this table calls "shipped wording". Treat them as the record of what the denial half
+measured, and re-run BOTH arms before putting a post-change number beside them.
 
 **Read the gap between the two harnesses as a warning about this eval, not about the stack.** The
 minimal harness scored the shipped rule perfect while the real one still fails it 1 turn in 15. A
@@ -104,5 +114,9 @@ GROUNDED_EVAL_SAMPLES=3 \
 Prompt behaviour is stochastic; a single sample per case reads noise as signal. The suite prints a per-case pass rate and the first failing reason - that report, not the pass/fail, is the deliverable. The assertion gates on a per-case floor (`MIN_PASS_RATE`, two samples in three) rather than full marks, so ordinary sampling noise does not read as a regression.
 
 Grading is lexical, not semantic: the failure is a model reaching for a blunt verdict word ("fabricated", "invented", "no such"), and that failure is lexical. Add patterns to `grade.ts` when a run surfaces one, and add the fixture to `grade.test.ts` in the same change.
+
+The supply class (`suppliedTheClaim`) is read by `gradeMustNotDenyPremise` alone, on two signals: a **percentage** appearing in neither the fixture corpus nor the user's own question, and a **general-knowledge frame** ("published benchmarks show", "gains like that are typically ..."). `gradeMustAnswer` stays blind to it by construction - a derived figure and a corrected one are both specifics the closed-world check cannot license, so reading it there would fail all three `mustAnswer` controls for doing the right thing.
+
+It is narrow on purpose, and the narrowings cost reach. Only percentages are scanned, so a fabricated dollar value or duration is not caught; the allowlist is every number the corpus states rather than only its percentages, so quoting "15 to 20%" does not read as inventing the 15; and the frame signal is suppressed inside a gap-naming sentence, so a confirmation pointer does not fail - at the cost of missing a supply that rides in the same sentence as the gap report. **A purely qualitative supply carrying neither signal grades clean**, and two of the four measured turns were that shape. Reaching those needs a semantic check of whether an assertion is corpus-backed, which no pattern does.
 
 Denials are detected per sentence, and a denial the same sentence disclaims ("that does not mean it did not happen") does not count - the wanted answer reaches for the same words the defect does, one sentence later and negated.

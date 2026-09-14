@@ -57,6 +57,20 @@
  * to a result the content does not contain, and evals/groundedNoInvention has a case for each of those
  * two over-corrections (`derive/`, `grounded-answer/confirm-supported-claim`).
  *
+ * A THIRD direction was not anticipated, and a paired measurement found it: told to leave the claim
+ * open, the model stopped adjudicating and started ELABORATING instead - asserting a mechanism, citing
+ * benchmarks, inventing percentages and a comparison baseline for a result the corpus never contained.
+ * Same instruction, opposite half. The two anticipated over-corrections held; this one was simply not
+ * named, because "leave the claim open" says nothing about what fills the space that leaves. Hence the
+ * sentences defining the act and naming the licensed alternative - what the content DOES cover, and
+ * where the claim could be confirmed - on the same reasoning as the clauses above: a ban with nowhere
+ * to go is what sends the model looking for a workaround.
+ *
+ * That addition is a CHARACTERISATION AND ELABORATION ban, not a computation ban, and it is scoped to
+ * the absent claim: explaining a mechanism the retrieved content itself supplies is still wanted, and
+ * `grounded-answer/explain-supported-mechanism` is the case that catches a model that stopped.
+ * NOT another entry on the word list - see the paragraph below for why that road is closed.
+ *
  * A MEASURED BEHAVIOUR DEPENDS ON THIS RULE'S SCOPE. `triage_router` STEP 1 (apps/client/server/utils/
  * systemPrompts/defaults.ts) tells the model to DERIVE figures the request supplies the inputs for -
  * size a problem, carry the arithmetic - and to label them as derived. That is deliberately outside
@@ -83,7 +97,11 @@ export const GROUNDED_NO_INVENTION_RULE =
   'retrieved content (and, where useful, where it might be confirmed) rather than denying it. ' +
   'That holds for a claim the question itself asserts. When the user asks about a specific result, ' +
   'engagement, or event the retrieved content does not contain, report that it is not in the retrieved ' +
-  'content and leave the claim itself open. If they ask whether such a claim is accurate, true, or ' +
+  'content and leave the claim itself open. Leaving it open means not answering it: do not explain how ' +
+  'the asserted result was reached, what it was measured against, or what figures it involved, and do ' +
+  'not supply any of that from general knowledge, published results, or what is typically the case. ' +
+  'What you may offer instead is what the retrieved content does cover and where the claim could be ' +
+  'confirmed. If they ask whether such a claim is accurate, true, or ' +
   'correct, do not answer yes or no. Report what the retrieved content does and does not show: you ' +
   'may say the claim is unsupported, uncited, or not approved for external use, but never that it is ' +
   'false, inaccurate, fabricated, invented, or made up, and do not reach that verdict in other words. ' +

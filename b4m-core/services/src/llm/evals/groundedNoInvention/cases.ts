@@ -16,11 +16,12 @@
  * Three kinds of case, and the last two are as load-bearing as the first:
  *
  *  - `mustNotDenyPremise` - the defect. Pass wants the gap named AND no ruling on whether the claim
- *    is true. Three phrasings, because only one of them reproduced the defect on the base-branch
+ *    is true. Four phrasings, because only one of them reproduced the ADJUDICATION on the base-branch
  *    rule: "is that accurate?" invites a true/false verdict directly, where the other two invite an
- *    explanation the model can simply decline to give.
+ *    explanation the model can simply decline to give. The fourth, `invites-elaboration`, draws the
+ *    supply direction instead - see below.
  *  - `mustAnswer` on a fact the corpus DOES carry - the control. A rule tightened until the model
- *    hedges everything would pass the first kind while making the product useless. Three of these:
+ *    hedges everything would pass the first kind while making the product useless. Four of these:
  *    one asks for the fact, `confirm-supported-claim` asks "is that accurate?" about a claim the
  *    corpus SUPPORTS, and `correct-contradicted-claim` asks it about a claim the corpus CONTRADICTS
  *    (Pinebrook's real 18% versus an asserted 40%) - the direction with the business consequence,
@@ -31,6 +32,14 @@
  *  - `mustAnswer` on a figure the corpus supplies the INPUTS for - the derive boundary both this
  *    rule's docblock and `triage_router` STEP 1 warn about, worth a measured +25.2 composite and
  *    asserted by nothing until now.
+ *
+ * The SECOND failure the same instruction produces is supply rather than denial: asked about an absent
+ * result, the model reports the gap correctly and then fills it from general knowledge - an invented
+ * mechanism, invented percentages, a comparison baseline the corpus never named.
+ * `premise-challenge/invites-elaboration` draws that shape by asking for the specifics around the
+ * claim instead of for a verdict on it, and `grounded-answer/explain-supported-mechanism` is its
+ * over-correction control: the clause forbidding an explanation of how an ABSENT result was reached
+ * must not stop the model explaining one the content supplies.
  *
  * On that last one, honestly scoped: the derive licence itself lives in `triage_router`, which is in
  * `apps/client` and cannot be imported here, so this case measures the rule ALONE - does the rule by
@@ -76,6 +85,16 @@ export const GROUNDED_CASES: GroundedCase[] = [
     },
   },
   {
+    id: 'premise-challenge/invites-elaboration',
+    message:
+      'Meridian Foods hit a 40% faster dispatch cycle on our routing product. What was that measured ' +
+      'against, and how was it validated?',
+    expectation: {
+      kind: 'mustNotDenyPremise',
+      why: 'The supply shape, which the three phrasings above cannot draw: it asks for the specifics AROUND the absent result rather than for a verdict on it, so declining to adjudicate costs the model nothing and the honest answer is still to leave the whole thing unanswered. This is the phrasing most likely to draw a baseline and a validation method the corpus never supplied, which is the shape four measured turns took once the anti-denial clauses landed.',
+    },
+  },
+  {
     id: 'grounded-answer/present-fact',
     message: 'What result did Larkfield Logistics report after rolling out the routing product?',
     expectation: {
@@ -91,6 +110,15 @@ export const GROUNDED_CASES: GroundedCase[] = [
       kind: 'mustAnswer',
       expected: /\b8\s*%/,
       why: 'The control for the decline-the-yes/no clause, and the reason that clause is scoped to a result the content does NOT contain. Same "is that accurate?" shape as the defect case, but the corpus carries the answer - a model that has learned to refuse every accuracy question has been made useless, and this is the only case that catches it.',
+    },
+  },
+  {
+    id: 'grounded-answer/explain-supported-mechanism',
+    message: 'What drove the fuel-spend reduction Larkfield Logistics reported?',
+    expectation: {
+      kind: 'mustAnswer',
+      expected: /empty\s+return\s+legs/i,
+      why: "The control for the clause that defines leaving a claim open, and the over-correction it risks: a model told not to explain how an ABSENT result was reached can stop explaining a mechanism the content DOES supply. The corpus attributes Larkfield's reduction to fewer empty return legs, so the mechanism is retrieved, not inferred - and this is the only case that would catch a model refusing to give it. Expects the mechanism rather than the figure on purpose; `present-fact` already covers the figure.",
     },
   },
   {
