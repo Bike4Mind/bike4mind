@@ -21,6 +21,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { cacheRepository, organizationRepository } from '@bike4mind/database';
 import {
   oauthClientRepository,
+  oauthGrantRepository,
   userApiKeyRepository,
   userRepository,
   UserApiKeyAuditLog,
@@ -131,6 +132,30 @@ const handler = baseApi({ auth: false })
       return res
         .status(401)
         .json({ error: 'invalid_grant', error_description: 'Token subject does not resolve to a B4M user' });
+    }
+
+    // 5.5. Grant gate (SECURITY). Require the durable (user, client) authorization grant
+    //      recorded by the authorize flow (code.ts). Closes the core hole: a pool-signed
+    //      token - including a forged identities[] entry from a compromised pool - for a
+    //      user who never authorized this client. The pool cannot forge a B4M grant row.
+    //      Reads the SAME OAuthGrant that token.ts enforces, per that model's contract.
+    //
+    //      Defaults to GRACE (log-only): unlike the interactive token.ts flow (where the
+    //      user consents moments earlier in the same round-trip), this server-to-server
+    //      exchange may present a token minted before grants existed. Logging a would-reject
+    //      lets grants self-heal as users re-authorize before enforcement. Set
+    //      OAUTH_AI_TOKEN_ENFORCE_GRANT=true to enforce.
+    const grant = await oauthGrantRepository.findGrant(b4mUserId, client_id);
+    if (!grant) {
+      if (process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT === 'true') {
+        return res
+          .status(403)
+          .json({ error: 'access_denied', error_description: 'User has not authorized this client' });
+      }
+      req.logger.warn(
+        `[OAUTH_AI_TOKEN] would-reject: no grant for user ${b4mUserId} via client ${client_id} ` +
+          `(grace mode; set OAUTH_AI_TOKEN_ENFORCE_GRANT=true to enforce)`
+      );
     }
 
     // 6. Consent gate (SECURITY-CRITICAL). This endpoint mints outside the gated REST
