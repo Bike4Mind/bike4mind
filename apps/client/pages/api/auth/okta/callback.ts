@@ -234,16 +234,34 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       );
     }
 
-    // Build query conditions for user lookup (escape regex chars to prevent injection)
-    // Email is guaranteed to exist at this point; username is optional
-    const conditions: { [field: string]: { $regex: string; $options: string } }[] = [
-      { email: { $regex: `^${escapeRegex(email)}$`, $options: 'i' } },
-    ];
-    if (username) {
-      conditions.push({ username: { $regex: `^${escapeRegex(username)}$`, $options: 'i' } });
-    }
+    // Stage 1: match by immutable provider identity (sub, oktaIdentityProviderId).
+    // This keeps an account created for an unverified-email user - which carries no
+    // email login identity - findable on re-login. Without it Stage 2 misses (the
+    // email was dropped and the stored username is the display name, not
+    // preferred_username), the create branch runs again, and the deterministic
+    // username E11000s on its unique index -> callback_error. Mirrors
+    // verifyCallback.ts:153. The sub guard stops $elemMatch matching legacy falsy-id
+    // rows; idpScope is omitted (not queried as null) for the unbound SST fallback,
+    // matching the shape the create branch writes.
+    const idpScope = idp?.id ? { oktaIdentityProviderId: idp.id } : {};
+    let user = userInfo.sub
+      ? await User.findOne({
+          authProviders: { $elemMatch: { strategy: AuthStrategy.Okta, id: userInfo.sub, ...idpScope } },
+        })
+      : null;
 
-    let user = await User.findOne({ $or: conditions });
+    // Stage 2: fall back to the mutable email/username match only when Stage 1 missed
+    // (escape regex chars to prevent injection). Email is guaranteed to exist at this
+    // point; username is optional.
+    if (!user) {
+      const conditions: { [field: string]: { $regex: string; $options: string } }[] = [
+        { email: { $regex: `^${escapeRegex(email)}$`, $options: 'i' } },
+      ];
+      if (username) {
+        conditions.push({ username: { $regex: `^${escapeRegex(username)}$`, $options: 'i' } });
+      }
+      user = await User.findOne({ $or: conditions });
+    }
 
     // Reject system user accounts before touching any data
     if (user) requireNonSystemUser(user);

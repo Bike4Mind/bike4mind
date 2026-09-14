@@ -314,6 +314,68 @@ describe('/api/auth/okta/callback - new-account email verification gate', () => 
   });
 });
 
+describe('/api/auth/okta/callback - re-login finds the emailless account by sub (regression)', () => {
+  it('re-finds an unverified-email account on the second sign-in instead of re-creating', async () => {
+    // Unverified email + only a `name` claim (no preferred_username): the normal
+    // Okta case. The email is dropped on create, so the account has no email login
+    // identity and its username is the display name.
+    mockFetchUserInfo.mockResolvedValue({
+      sub: 'okta-relogin',
+      email: 'unverified@example.com',
+      email_verified: false,
+      name: 'Re Login',
+    });
+
+    // Model the DB: create seeds the account; Stage 1 (sub) then finds it, while
+    // Stage 2 (email/username $or) never matches an emailless account whose display
+    // name is not queried. This is what makes the test fail before the fix - without
+    // the Stage-1 sub lookup only Stage 2 runs, misses, and re-enters create.
+    let account: any = null;
+    mockFindOne.mockImplementation(async (query: any) => {
+      if (query?.authProviders?.$elemMatch) return account;
+      return null;
+    });
+    mockCreate.mockImplementation(async (doc: any) => {
+      account = {
+        id: 'created-1',
+        _id: 'created-1',
+        tokenVersion: 0,
+        isBanned: false,
+        authProviders: [
+          {
+            strategy: AuthStrategy.Okta,
+            id: doc.oauthCredentials.id,
+            oktaIdentityProviderId: doc.oauthCredentials.oktaIdentityProviderId,
+          },
+        ],
+      };
+      return account;
+    });
+
+    // First sign-in: no existing account -> create, with no email persisted.
+    const first = makeReqRes();
+    await handler(first.req, first.res);
+    expect(first.res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(mockCreate.mock.calls[0][0].email).toBeUndefined();
+
+    // Second sign-in: re-found by sub, signed into the SAME account, no second create.
+    const second = makeReqRes();
+    await handler(second.req, second.res);
+    expect(second.res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(mockAuthFailCreate).not.toHaveBeenCalled();
+    // The Stage-1 lookup keys on the immutable provider identity.
+    expect(mockFindOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProviders: {
+          $elemMatch: { strategy: AuthStrategy.Okta, id: 'okta-relogin', oktaIdentityProviderId: 'idp-1' },
+        },
+      })
+    );
+  });
+});
+
 describe('/api/auth/okta/callback - IDP email-domain bind', () => {
   const victim = {
     id: 'victim-1',
