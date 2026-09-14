@@ -5,6 +5,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
 import { getAppFilesStorage } from '@server/utils/storage';
+import { isValidObjectId } from '@server/utils/objectId';
 import type { Request, Response } from 'express';
 
 /**
@@ -35,7 +36,7 @@ const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES }).put(
     }
 
     const appFileId = String((req.query as { id?: string }).id ?? '');
-    const appFile = await AppFile.findById(appFileId);
+    const appFile = isValidObjectId(appFileId) ? await AppFile.findById(appFileId) : null;
     // Same 404 for missing and not-owned so the route doesn't leak which files exist.
     if (!appFile || appFile.userId !== req.user.id) {
       return res.status(404).json({ error: 'File not found' });
