@@ -165,12 +165,21 @@ const OPENAI_BARE_MODEL_ALIASES: ReadonlyMap<string, ChatModels> = new Map([
 ]);
 
 /**
+ * Exported so callers that do their own catalog lookup against the raw request model
+ * (logCompletionAnalytics' credit-estimate lookup) resolve the same alias executeCompletion
+ * does, rather than independently missing it once the request itself starts succeeding.
+ */
+export function resolveOpenAiBareModelAlias(modelId: string): string {
+  return OPENAI_BARE_MODEL_ALIASES.get(modelId) ?? modelId;
+}
+
+/**
  * Shared LLM completion logic
  * Used by Next.js API route, Lambda function, and available for 3rd party integrations
  */
 export async function executeCompletion(params: CompletionParams): Promise<void> {
   const { userId, messages, options, db, logger, onChunk, apiKeyInfo } = params;
-  const model = OPENAI_BARE_MODEL_ALIASES.get(params.model) ?? params.model;
+  const model = resolveOpenAiBareModelAlias(params.model);
   const source: CompletionSource = params.source ?? 'api';
   const completionStartTime = Date.now();
 
