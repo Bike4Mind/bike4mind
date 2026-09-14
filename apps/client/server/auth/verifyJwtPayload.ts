@@ -10,6 +10,15 @@ export interface JwtPayloadClaims {
   /** AuthSession id this token belongs to (present on session-store tokens; absent on legacy
    *  and mfaPending tokens). Surfaced on req.user so per-device logout can revoke THIS session. */
   sid?: string;
+  /** 'oauth' marks a relying-party OAuth access token (see oauth/token.ts). Present only on those;
+   *  its presence is what the route gate keys default-deny on. Absent on first-party sessions. */
+  kind?: string;
+  /** OAuth client the token was issued to; present iff kind==='oauth'. */
+  client_id?: string;
+  /** Space-delimited granted scopes (RFC 9068 sec 2.2.3); present iff kind==='oauth'. */
+  scope?: string;
+  /** Resource audience (RFC 9068); present iff kind==='oauth'. */
+  aud?: string;
 }
 
 /**
@@ -49,6 +58,16 @@ export async function verifyJwtPayload(
       // Surface the session id so per-device logout can revoke exactly THIS session
       // (see logout.ts + users/me/sessions.ts) without re-decoding the token.
       (user as any).sid = jwt_payload.sid;
+      // An OAuth (relying-party) access token is recognized here but NOT rejected: first-party
+      // sessions carry no `kind` and must still pass. The marker is surfaced so the route gate
+      // (oauthRouteGate) can default-deny it everywhere except OAuth-reachable routes.
+      if (jwt_payload.kind === 'oauth') {
+        (user as any).oauthGrant = {
+          clientId: jwt_payload.client_id,
+          scopes: (jwt_payload.scope ?? '').split(' ').filter(Boolean),
+          aud: jwt_payload.aud,
+        };
+      }
       return done(null, user);
     } else {
       return done(null, false);

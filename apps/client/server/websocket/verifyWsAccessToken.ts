@@ -28,6 +28,14 @@ export async function verifyWsAccessToken(accessToken: string | undefined) {
     throw new UnauthorizedError('Invalid token type');
   }
 
+  // A relying-party OAuth access token is scope/audience-bound to OAuth-reachable REST routes
+  // (see oauthRouteGate); it is NOT a session credential for the realtime socket. Default-deny it
+  // here - the route gate does not cover this surface, so without this check the token would ride
+  // the socket as a full session.
+  if ((decoded as { kind?: string }).kind === 'oauth') {
+    throw new UnauthorizedError('OAuth access tokens are not accepted on the realtime socket');
+  }
+
   const user = await User.findById(decoded.id);
   if (!user) throw new NotFoundError('User not found');
 

@@ -1,0 +1,45 @@
+import type { NextFunction, Request, Response } from 'express';
+
+export interface OAuthRoutePolicy {
+  /**
+   * OAuth reachability for this route:
+   * - undefined (default): first-party-only. A relying-party OAuth token is rejected (403).
+   * - [] : reachable by any OAuth token, no specific scope required.
+   * - ['profile', ...] : reachable only when the token's grant includes ALL listed scopes.
+   */
+  oauthScopes?: string[];
+}
+
+/**
+ * Default-deny gate for relying-party OAuth access tokens. Runs after `auth` sets req.user.
+ *
+ * First-party sessions carry no oauthGrant marker (verifyJwtPayload only sets it for kind==='oauth'
+ * tokens), so this is a no-op for them and for API-key callers - they are never affected. An OAuth
+ * token reaches only routes that opt in via `oauthScopes`, and only when the token's granted scopes
+ * satisfy the route's requirement. This is the one choke point that contains the blast radius of an
+ * OAuth token (which is otherwise a valid Bearer for every JWT-authed route).
+ */
+export function oauthRouteGate(policy?: OAuthRoutePolicy) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const grant = (req.user as { oauthGrant?: { scopes: string[] } } | undefined)?.oauthGrant;
+    if (!grant) return next(); // not an OAuth token; unaffected
+
+    if (!policy?.oauthScopes) {
+      return res
+        .status(403)
+        .json({
+          error: 'insufficient_scope',
+          error_description: 'This route is not accessible with an OAuth access token',
+        });
+    }
+
+    const missing = policy.oauthScopes.filter(s => !grant.scopes.includes(s));
+    if (missing.length) {
+      return res
+        .status(403)
+        .json({ error: 'insufficient_scope', error_description: `Requires OAuth scope(s): ${missing.join(' ')}` });
+    }
+
+    next();
+  };
+}

@@ -7,7 +7,9 @@
 
 import { baseApi } from '@server/middlewares/baseApi';
 
-const handler = baseApi({ auth: true }).get(async (req, res) => {
+// OIDC identity endpoint: the one route a relying-party OAuth token is meant to reach. Requires
+// the openid scope; every other JWT-authed route stays first-party-only by default (oauthRouteGate).
+const handler = baseApi({ auth: true, oauthScopes: ['openid'] }).get(async (req, res) => {
   const user = (req as any).user;
 
   if (!user) {
