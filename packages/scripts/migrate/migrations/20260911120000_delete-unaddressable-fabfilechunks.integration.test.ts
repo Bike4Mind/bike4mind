@@ -76,6 +76,15 @@ async function insertFabFile(overrides: Record<string, unknown> = {}) {
 const serializedDocument = (embeddedId: string) =>
   `{ _id: new ObjectId("${embeddedId}"), userId: 'user-1', fileName: 'contract.pdf', status: 'complete' }`;
 
+/**
+ * An unbroken hex run of `length`, built so every 24-character window is distinct - a repeating run
+ * would collapse under the extractor's `Set` and never reach the cap. Windows number `length - 23`.
+ */
+const hexRun = (length: number) =>
+  Array.from({ length: Math.ceil(length / 4) }, (_, i) => i.toString(16).padStart(4, '0'))
+    .join('')
+    .slice(0, length);
+
 const chunkIds = async () =>
   (
     await raw('fabfilechunks')
@@ -153,6 +162,17 @@ describe('delete-unaddressable-fabfilechunks migration (real DB)', () => {
     expect(await chunkIds()).toEqual([String(nonString._id)]);
   });
 
+  it('ignores a row whose fabFileId is an ARRAY of strings', async () => {
+    // `$type: 'string'` matches an array if ANY element is a string, so without the array exclusion
+    // this clears gate 1 and is then judged on a comma-joined stringification of the whole array -
+    // which embeds no id, so it would be deleted.
+    const arrayValued = await insertChunk(['not-an-id', 'also-not']);
+
+    await migration.up();
+
+    expect(await chunkIds()).toEqual([String(arrayValued._id)]);
+  });
+
   it('ignores a row with no fabFileId field at all - a different corruption', async () => {
     const absent = await insertChunkWithoutFabFileId();
 
@@ -186,6 +206,26 @@ describe('delete-unaddressable-fabfilechunks migration (real DB)', () => {
     await migration.up();
 
     expect(await raw('fabfilechunks').countDocuments()).toBe(0);
+  });
+
+  it('keeps a row whose value yields more candidates than the per-row cap', async () => {
+    // The cap is fail-SAFE: over it, the row is kept UNCHECKED rather than checked on a truncated
+    // candidate list. No fabfile exists here, so gate 2 resolves nothing and a missing cap would
+    // delete this row.
+    const overCap = await insertChunk(hexRun(280)); // 257 windows, cap is 256
+
+    await migration.up();
+
+    expect(await chunkIds()).toEqual([String(overCap._id)]);
+  });
+
+  it('still evaluates a row one candidate under the cap', async () => {
+    // The other side of the boundary, so the cap cannot be satisfied by keeping everything.
+    await insertChunk(hexRun(279)); // 256 windows
+
+    await migration.up();
+
+    expect(await chunkIds()).toEqual([]);
   });
 
   it('is idempotent - a second run deletes nothing further', async () => {

@@ -1,5 +1,7 @@
 import { connectDB, whenCatalogSeeded, mongoose } from '@bike4mind/database';
 import { Resource } from 'sst';
+import { realpathSync } from 'fs';
+import { pathToFileURL } from 'url';
 import { Config } from '../utils/config';
 import { scanUnaddressableChunks } from './unaddressableChunkScan';
 
@@ -29,7 +31,7 @@ const sample = (ids: string[]) =>
     ? ids.join(', ')
     : `${ids.slice(0, SAMPLE_CAP).join(', ')} ... and ${ids.length - SAMPLE_CAP} more`;
 
-async function main(): Promise<number> {
+export async function main(): Promise<number> {
   const dbUri = Config.MONGODB_URI;
   if (!dbUri) throw new Error('MONGODB_URI is required');
   const stage = Resource.App.stage;
@@ -69,21 +71,33 @@ async function main(): Promise<number> {
   return exitCode;
 }
 
+// realpath-resolved, not the naive `file://${process.argv[1]}` comparison: Node canonicalizes
+// import.meta.url but argv[1] is the raw string, so an invocation through a symlink (macOS's
+// /tmp -> /private/tmp) would silently skip the block and exit 0 having done nothing.
+const isMainModule = (() => {
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+})();
+
 /**
  * `process.exitCode` + an explicit disconnect, never `process.exit()`. Node's stdout is asynchronous
  * when it is a pipe - which the documented `sst shell`/`pnpm` invocation guarantees - and
  * `process.exit()` does not drain it, truncating exactly the summary this script exists to produce.
  */
-void (async () => {
-  try {
-    process.exitCode = await main();
-  } catch (e) {
-    console.error(e);
-    process.exitCode = 1;
-  } finally {
-    // connectDB (priceCatalogBootstrap) kicks off a fire-and-forget catalog seed. Disconnecting
-    // under it throws MongoExpiredSessionError and dumps a stack trace after the report.
-    await whenCatalogSeeded().catch(() => {});
-    await mongoose.disconnect().catch(() => {});
-  }
-})();
+if (isMainModule)
+  void (async () => {
+    try {
+      process.exitCode = await main();
+    } catch (e) {
+      console.error(e);
+      process.exitCode = 1;
+    } finally {
+      // connectDB (priceCatalogBootstrap) kicks off a fire-and-forget catalog seed. Disconnecting
+      // under it throws MongoExpiredSessionError and dumps a stack trace after the report.
+      await whenCatalogSeeded().catch(() => {});
+      await mongoose.disconnect().catch(() => {});
+    }
+  })();

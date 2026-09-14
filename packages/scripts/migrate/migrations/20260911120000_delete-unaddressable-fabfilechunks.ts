@@ -35,8 +35,10 @@ import { scanUnaddressableChunks } from '../unaddressableChunkScan';
  *     fabfile row - live OR soft-deleted - the chunk is KEPT and reported, because then someone
  *     could still re-associate it and a delete here would not be recoverable.
  *
- * To see the counts before acting, run the READ-ONLY preview against the target stage:
- *   pnpm --filter scripts db:preview-unaddressable-chunks
+ * To see the counts before acting, run the READ-ONLY preview against the target stage. It needs the
+ * stage's linked MONGODB_URI, so it has to run inside `sst shell` - the bare pnpm invocation has no
+ * database to reach:
+ *   ./for-env <env> pnpm sst shell --stage <stage> -- pnpm --filter scripts db:preview-unaddressable-chunks
  * There is deliberately no dry-run flag on this migration. The runner writes the ledger row as soon
  * as `up()` resolves (migrationManager.ts) and `selectPending` then skips the id forever, so a
  * dry-run that returned normally would permanently foreclose the real pass while reporting success.

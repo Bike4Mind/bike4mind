@@ -16,8 +16,22 @@ export const PAGE_SIZE = 200;
  * Server-side cap PER PAGE. The predicate's `$not`-regex arm produces no index bounds, so the plan
  * is an `_id` IXSCAN plus a FETCH of every document in the collection - vectors included - to
  * evaluate the residual. Measured on mongod 8.2: an explicit `hint` on `{fabFileId: 1, _id: 1}`
- * with an index-order sort still reports `docsExamined` equal to the full collection, so this cost
- * is intrinsic to the predicate and cannot be indexed away. Do not spend effort on a query rewrite.
+ * with an index-order sort still reports `docsExamined` equal to the full collection, so the cost
+ * cannot be indexed away for this predicate as written.
+ *
+ * It CAN be removed by taking the regex off the server. `{fabFileId: {$type: 'string'}}` alone is
+ * covered by that index, and applying the regex to the returned keys reports `docsExamined` 0 for
+ * the same result set; it also closes the PCRE gap noted below, since JS `$` does not match before
+ * a trailing newline. Two traps if anyone takes it: the keyset must advance on the compound
+ * `(fabFileId, _id)`, because paging on `_id` under a `fabFileId` sort silently skips most of the
+ * collection and reports success, and the page size wants to be far larger, since the covered form
+ * reads every string-valued row rather than only the matching ones. Not taken here because one
+ * full pass completes well inside the budget below. Re-measure before assuming that still holds if
+ * the collection grows by an order of magnitude.
+ *
+ * The budget is per page, and a complete pass over the largest deployment measured finished with
+ * several times that much room, so it is a guard against a pathological plan rather than a limit
+ * the normal path approaches.
  *
  * Timing out THROWS rather than returning short, and that is deliberate: migrationManager writes
  * the ledger row only after `up()` resolves, so a throw leaves the migration pending and re-runnable
@@ -65,6 +79,11 @@ export async function* scanUnaddressableChunks(): AsyncGenerator<ChunkScanPage> 
         {
           $and: [
             { fabFileId: { $type: 'string' } },
+            // `$type: 'string'` alone does NOT mean "the field is a string": on an array it matches
+            // if ANY element does, so an array value would clear gate 1 and then be stringified into
+            // a comma-joined blob. This is the only form that excludes arrays - `$type: 2` is an
+            // alias for `'string'`, not a narrowing.
+            { fabFileId: { $not: { $type: 'array' } } },
             // Server-side this is PCRE, where an unanchored `$` also matches before a trailing
             // newline - so a `<24hex>\n` value reads as addressable here and is left alone, while
             // the schema validator and `isObjectIdOrHexString` both reject it. Over-keeping, which
