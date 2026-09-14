@@ -97,6 +97,40 @@ export interface PremiumNavDescriptor {
 export type PremiumNotebookSidenav = ComponentType | null;
 
 /**
+ * A premium overlay's crawler policy for the routes it contributes, consumed by
+ * core's `app/robots.ts` and `app/sitemap.ts` via `premiumRouteIndexing.generated.ts`.
+ *
+ * Core cannot derive this. Which of an overlay's routes are publicly crawlable and
+ * which sit behind a gate is the overlay's own knowledge, and core must not name an
+ * overlay's surface in this repo. Contributed via `b4mContributions.routeIndexingExport`
+ * (a module exporting `routeIndexing`), with the same annotate-both-forms rule as
+ * routes/nav so the consumers typecheck identically with no overlay installed.
+ *
+ * DATA ONLY, and deliberately not the route descriptors: `PremiumRouteDescriptor`
+ * carries `lazyImport` thunks, so deriving the policy from `premiumRoutes` would pull
+ * the overlay's lazy component graph into a server-rendered route.
+ *
+ * Both fields are origin-relative paths beginning with `/`. Entries that are not are
+ * dropped by `app/seo/crawlPolicy.ts` rather than trusted into a served file.
+ */
+export interface PremiumRouteIndexing {
+  /**
+   * Paths safe to publish in the sitemap. Concrete URLs only: a router param segment
+   * is not a URL, so a parameterised route either stays out or is expanded by the
+   * overlay itself. An overlay whose routes are gated or client-only contributes an
+   * empty list - an indexed empty shell is a thin-content signal, and a sitemap full
+   * of login redirects is worse than no sitemap.
+   */
+  sitemapPaths: string[];
+  /**
+   * `Disallow:` patterns for everything else the overlay owns. A trailing `/` makes
+   * the entry a subtree prefix, which is how a parameterised route is expressed
+   * (robots.txt has no notion of a router param).
+   */
+  disallowPaths: string[];
+}
+
+/**
  * localStorage key prefixes a premium overlay owns, contributed as literal data in
  * `b4mContributions.localStorageKeyPrefixes` and swept by `clearClientCaches()` on
  * every identity change.
