@@ -52,7 +52,7 @@ describe('MODEL_ALIASES', () => {
     it('should map short Gemini aliases', () => {
       expect(MODEL_ALIASES['gemini']).toBe('gemini-2.5-pro');
       expect(MODEL_ALIASES['gemini-pro']).toBe('gemini-2.5-pro');
-      expect(MODEL_ALIASES['gemini-flash']).toBe('gemini-2.5-flash');
+      expect(MODEL_ALIASES['gemini-flash']).toBe('gemini-3.5-flash');
     });
 
     it('should map version-specific Gemini aliases', () => {
@@ -72,7 +72,8 @@ describe('MODEL_ALIASES', () => {
 
   describe('Other model aliases', () => {
     it('should map DeepSeek aliases', () => {
-      expect(MODEL_ALIASES['deepseek']).toBe('deepseek-r1:latest');
+      // Bare `deepseek` names the hosted model; `deepseek-r1` stays the Ollama tag.
+      expect(MODEL_ALIASES['deepseek']).toBe('deepseek-flash');
       expect(MODEL_ALIASES['deepseek-r1']).toBe('deepseek-r1:latest');
     });
 
@@ -117,7 +118,7 @@ describe('resolveModelAlias', () => {
 
     it('should resolve Gemini aliases', () => {
       expect(resolveModelAlias('gemini', testAgent, testPath).model).toBe('gemini-2.5-pro');
-      expect(resolveModelAlias('gemini-flash', testAgent, testPath).model).toBe('gemini-2.5-flash');
+      expect(resolveModelAlias('gemini-flash', testAgent, testPath).model).toBe('gemini-3.5-flash');
     });
   });
 

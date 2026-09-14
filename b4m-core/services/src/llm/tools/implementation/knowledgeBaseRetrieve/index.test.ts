@@ -24,7 +24,13 @@ import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
 
 const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), info: vi.fn() } as never;
 
-const FILE_ID = 'file-1';
+// ObjectId-shaped on purpose: `file_id` reaches Mongoose's `_id` cast, so a fixture that is not
+// an ObjectId cannot exercise the real Path A at all (it now stops at the shape guard). The
+// malformed pair below is what production actually saw - a trailing token of a corpus filename,
+// and an arXiv id whose dot the model turned into a space.
+const FILE_ID = '68b0f3a2c1d4e5f60718293a';
+const MALFORMED_FILE_ID = 'w7154539641';
+const MALFORMED_FILE_ID_FROM_CHUNK_TEXT = '2506 07866';
 
 function makeFile(overrides: Record<string, unknown> = {}) {
   return {
@@ -177,16 +183,27 @@ describe('retrieve_knowledge_content — by-id (Path A) retrieval exclusion', ()
 // caller who passes the lake gate (not only the lake's creator). Without this membership arm,
 // retrieve_knowledge_content would deny exactly the file search just returned.
 describe('retrieve_knowledge_content - by-id (Path A) dynamic-lake membership arm (#2243)', () => {
-  const LAKE_SCOPE = { datalakeTag: 'datalake:org1:acme', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' };
-  const lakesWith = (scope: typeof LAKE_SCOPE | undefined) => [
+  const LAKE_SCOPE = {
+    kind: 'owned' as const,
+    datalakeTag: 'datalake:org1:acme',
+    fileTagPrefix: 'acme:',
+    creatorUserId: 'creator-1',
+  };
+  /** The same lake under a registry scope: same tags, but an UNANCHORED prefix arm. */
+  const REGISTRY_SCOPE = {
+    kind: 'registry' as const,
+    datalakeTag: LAKE_SCOPE.datalakeTag,
+    fileTagPrefix: LAKE_SCOPE.fileTagPrefix,
+  };
+  const lakesWith = (scope: typeof LAKE_SCOPE | typeof REGISTRY_SCOPE) => [
     {
       id: 'lake1',
       name: 'Acme Docs',
       slug: 'acme',
       datalakeTag: LAKE_SCOPE.datalakeTag,
       fileTagPrefix: LAKE_SCOPE.fileTagPrefix,
-      source: 'dynamic' as const,
-      ...(scope ? { membership: scope } : {}),
+      membership: scope,
+      source: scope.kind === 'owned' ? ('dynamic' as const) : ('registry' as const),
     },
   ];
 
@@ -226,12 +243,15 @@ describe('retrieve_knowledge_content - by-id (Path A) dynamic-lake membership ar
     expect(out).toContain(`No document found with ID "${FILE_ID}"`);
   });
 
-  it('a registry lake (no membership scope) grants no membership access on its own', async () => {
+  it('a registry lake grants no membership access on its own, scope present or not', async () => {
+    // This case used to be expressed as a lake with NO membership scope. Registry lakes carry one
+    // now (#2265), so the guard being tested is no longer "the field is absent" but "its `kind` is
+    // not creator-anchored, so `lakeMembershipsFrom` drops it". Same denial, live reason.
     getDynamicDataLakeAccessMock.mockResolvedValueOnce({
       dataLakeTags: [LAKE_SCOPE.datalakeTag],
       dataLakeTagPrefixes: [],
       scopedTagPrefixes: [],
-      lakes: lakesWith(undefined),
+      lakes: lakesWith(REGISTRY_SCOPE),
     });
     const ctx = makeContext();
     (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(null);
@@ -842,6 +862,149 @@ describe('retrieve_knowledge_content retrieval summary (#1867)', () => {
 });
 
 /**
+ * A model composes `file_id` from conversation text, so it routinely supplies something that is
+ * not an ObjectId. Before the shape guard, Mongoose raised a CastError that the outer catch turned
+ * into `outcome: 'failed'` - reporting a bad tool argument as a retrieval OUTAGE, which is the one
+ * telemetry field operators would page on (#2530).
+ */
+describe('retrieve_knowledge_content rejects a malformed file_id without reporting an outage (#2530)', () => {
+  const retrievalOf = (ctx: ToolContext) => {
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const call = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    return (call?.[0] as { promptMeta: { retrieval: unknown } } | undefined)?.promptMeta.retrieval;
+  };
+
+  const castError = (value: unknown) =>
+    Object.assign(new Error(`Cast to ObjectId failed for value "${String(value)}" at path "_id"`), {
+      name: 'CastError',
+      value,
+    });
+
+  /**
+   * Mongoose casts `_id`, so the real repository THROWS on a non-ObjectId rather than returning
+   * null. A mock that just resolves undefined cannot reproduce the production failure at all,
+   * which is why the previous fixture (a plain 'file-1' id) never caught this.
+   */
+  const withCastingRepo = (ctx: ToolContext) => {
+    const cast = async (id: string) => {
+      if (!/^[0-9a-fA-F]{24}$/.test(id)) throw castError(id);
+      return null;
+    };
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockImplementation(cast);
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockImplementation(cast);
+    return ctx;
+  };
+
+  it.each([
+    ['a filename token', MALFORMED_FILE_ID],
+    ['an id lifted from chunk text', MALFORMED_FILE_ID_FROM_CHUNK_TEXT],
+  ])('%s is answered as not-found and never reaches the database', async (_label, badId) => {
+    const ctx = withCastingRepo(makeContext());
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    const out = (await tool.toolFn({ file_id: badId })) as string;
+
+    expect(out).toContain(`No document found with ID "${badId}"`);
+    expect(out).toContain('Try using search_knowledge_base to find the correct file ID');
+    expect(ctx.db.fabfiles!.findByIdAndUserId).not.toHaveBeenCalled();
+    expect(ctx.db.fabfiles!.findById).not.toHaveBeenCalled();
+  });
+
+  it('records outcome:ok, not failed - a bad argument is a single-file miss, not a retrieval outage', async () => {
+    const ctx = withCastingRepo(makeContext());
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    await tool.toolFn({ file_id: MALFORMED_FILE_ID });
+
+    expect(retrievalOf(ctx)).toEqual({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseRetrieve'],
+      dataLakeTags: [],
+    });
+  });
+
+  it('answers a malformed id exactly as it answers a well-formed missing one (no existence oracle)', async () => {
+    const malformed = makeContext();
+    const missing = makeContext();
+    (missing.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (missing.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    const malformedOut = (await knowledgeBaseRetrieveTool
+      .implementation(malformed, undefined)
+      .toolFn({ file_id: MALFORMED_FILE_ID })) as string;
+    const missingOut = (await knowledgeBaseRetrieveTool
+      .implementation(missing, undefined)
+      .toolFn({ file_id: FILE_ID })) as string;
+
+    // Same sentence, same outcome - the only difference is the id each quotes back.
+    expect(malformedOut.replace(MALFORMED_FILE_ID, FILE_ID)).toBe(missingOut);
+    expect(retrievalOf(malformed)).toEqual(retrievalOf(missing));
+  });
+
+  it('the agent-scoped branch also stops at the shape guard, before the scope membership check', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, kbScope: { fileIds: [FILE_ID] } });
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    const out = (await tool.toolFn({ file_id: MALFORMED_FILE_ID })) as string;
+
+    expect(out).toContain(`No document found with ID "${MALFORMED_FILE_ID}"`);
+    expect(ctx.db.fabfiles!.findById).not.toHaveBeenCalled();
+    expect(retrievalOf(ctx)).toMatchObject({ outcome: 'ok' });
+  });
+
+  it('a well-formed id is unaffected and still retrieves', async () => {
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Current Protocol.pdf' })
+    );
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('chunk body');
+    expect(ctx.db.fabfiles!.findByIdAndUserId).toHaveBeenCalledWith(FILE_ID, 'u1');
+  });
+
+  describe('catch backstop, for a cast that gets past the shape guard', () => {
+    it("a CastError on the MODEL's own file_id is reclassified as a miss, not an outage", async () => {
+      const ctx = makeContext();
+      (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockRejectedValue(castError(FILE_ID));
+      // `logger` is shared across this file, so clear it or a prior test satisfies the assertion.
+      (logger.error as ReturnType<typeof vi.fn>).mockClear();
+
+      const out = await runById(ctx);
+
+      expect(out).toContain(`No document found with ID "${FILE_ID}"`);
+      expect(retrievalOf(ctx)).toMatchObject({ outcome: 'ok' });
+      // Reclassified, never silenced - the throw is still logged so the rate stays greppable.
+      expect(logger.error).toHaveBeenCalledTimes(1);
+    });
+
+    it('a CastError on a SERVER-side id still reports failed', async () => {
+      const ctx = makeContext();
+      (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockRejectedValue(
+        castError('some-corrupt-row-id')
+      );
+
+      const out = await runById(ctx);
+
+      expect(out).toContain('An error occurred while retrieving document content');
+      expect(retrievalOf(ctx)).toMatchObject({ outcome: 'failed' });
+    });
+
+    it('a non-cast fault still reports failed', async () => {
+      const ctx = makeContext();
+      (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('db down'));
+
+      const out = await runById(ctx);
+
+      expect(out).toContain('An error occurred while retrieving document content');
+      expect(retrievalOf(ctx)).toMatchObject({ outcome: 'failed' });
+    });
+  });
+});
+
+/**
  * The two guards on the paged read that no other test reaches: the page cap, and the cursor that
  * fails to advance. Both were added with the paging and neither would fail if it were deleted.
  */
@@ -975,12 +1138,12 @@ describe('retrieve_knowledge_content untrusted-content delimiter (#1659)', () =>
    */
   it('heads the document with its date, and omits the clause when it has none', async () => {
     const dated = await runById(retrievableCtx('body', { createdAt: new Date('2026-08-14T09:30:00.000Z') }));
-    expect(dated).toContain('### Handbook.pdf (ID: file-1) - dated 2026-08-14');
+    expect(dated).toContain(`### Handbook.pdf (ID: ${FILE_ID}) - dated 2026-08-14`);
     // The suffix must not create a second header or defang ours.
     expect(dated.match(/^### /gm)).toHaveLength(1);
 
     const undated = await runById(retrievableCtx('body'));
-    expect(undated).toContain('### Handbook.pdf (ID: file-1)\n');
+    expect(undated).toContain(`### Handbook.pdf (ID: ${FILE_ID})\n`);
     expect(undated).not.toContain(' - dated');
   });
 
@@ -1223,12 +1386,20 @@ describe('retrieve_knowledge_content narrows lake access to the session lake', (
     dataLakeTagPrefixes: ['mine:', 'unrel:'],
     scopedTagPrefixes: [],
     lakes: [
-      { id: 'l1', name: 'mine', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:', source: 'registry' },
+      {
+        id: 'l1',
+        name: 'mine',
+        datalakeTag: 'datalake:mine',
+        fileTagPrefix: 'mine:',
+        membership: { kind: 'registry', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:' },
+        source: 'registry',
+      },
       {
         id: 'l2',
         name: 'Unrelated-Product-KB',
         datalakeTag: 'datalake:unrelated',
         fileTagPrefix: 'unrel:',
+        membership: { kind: 'registry', datalakeTag: 'datalake:unrelated', fileTagPrefix: 'unrel:' },
         source: 'registry',
       },
     ],
@@ -1263,5 +1434,81 @@ describe('retrieve_knowledge_content narrows lake access to the session lake', (
     await runById(ctx);
 
     expect(record).toHaveBeenCalled();
+  });
+});
+
+/**
+ * This channel returns whole documents the caller named, so a conflict here is lower-signal than on
+ * the ranked paths - but two explicitly-requested documents disagreeing is still a disagreement the
+ * user should hear. The note is composed by retrievalConflictNote.ts (unit-tested there); this locks
+ * the WIRING and the column-0 placement.
+ */
+describe('retrieve_knowledge_content cross-document conflict note', () => {
+  const BEGIN = '[Untrusted Retrieved Content - BEGIN]';
+  const CONFLICT_NOTE = 'NOTE: the retrieved documents below may contradict each other';
+
+  /** Per-file chunk text, unlike pagedTextChunkRepo above, which serves one document. */
+  function multiFileChunkRepo(byFileId: Record<string, string>) {
+    return {
+      findTextsByFabFileId: vi.fn(async (id: string, opts?: { afterChunkId?: string }) =>
+        opts?.afterChunkId ? [] : [{ id: `${id}-c1`, text: byFileId[id] ?? '' }]
+      ),
+      countByFabFileId: vi.fn(async () => 1),
+    };
+  }
+
+  async function runQuery(byFileId: Record<string, string>) {
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: { findByIdAndUserId: vi.fn(), findById: vi.fn(), search: vi.fn() },
+        fabfilechunks: multiFileChunkRepo(byFileId),
+      } as never,
+    });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: Object.keys(byFileId).map(id => makeFile({ id, fileName: `${id}.pdf` })),
+    });
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    return (await tool.toolFn({ query: 'uptime' })) as string;
+  }
+
+  it('keeps the note at column 0, outside the untrusted block', async () => {
+    const out = await runQuery({ 'file-a': 'Uptime is 99.9%.', 'file-b': 'Uptime is 95%.' });
+
+    const note = out.indexOf(CONFLICT_NOTE);
+    expect(note).toBeGreaterThanOrEqual(0);
+    expect(note).toBeLessThan(out.indexOf(BEGIN));
+    // Last of our column-0 framing, nearest the content it describes - as the source comment claims
+    // and as the other two channels already pin.
+    expect(out.indexOf(GROUNDED_NO_INVENTION_RULE)).toBeLessThan(note);
+    // Sliced to the note itself, and asserted as the whole clause: the ids also appear in the
+    // `### ... (ID: ...)` headings, so a looser assertion would pass on a note naming the wrong
+    // field entirely - this channel's chunk ids are `${file.id}-c1`.
+    const noteText = out.slice(note, out.indexOf('\n\n', note));
+    expect(noteText).toContain('metric-disagreement');
+    expect(noteText).toContain('across documents file-a, file-b.');
+    expect(out).toContain('(ID: file-a)');
+  });
+
+  it('says nothing when the documents agree', async () => {
+    const out = await runQuery({ 'file-a': 'Uptime is 99.9%.', 'file-b': 'Uptime is 99.9%.' });
+
+    expect(out).not.toContain(CONFLICT_NOTE);
+  });
+
+  // The note must describe the SERVED text. The char budget is spent across files in key order, so
+  // file-a arrives whole and file-b's figure is past the cut - a note naming it would be a claim
+  // about content the model cannot check.
+  it('says nothing about a conflicting figure the char budget clipped away', async () => {
+    const out = await runQuery({
+      'file-a': 'Uptime is 99.9%.',
+      'file-b': `${'padding text. '.repeat(1000)} Uptime is 95%.`,
+    });
+
+    // Both halves matter: the first proves the padding actually reached the budget (without it the
+    // test passes on a fixture that was never clipped), the second that the surviving half is served.
+    expect(out).not.toContain('Uptime is 95%.');
+    expect(out).toContain('Uptime is 99.9%.');
+    expect(out).not.toContain(CONFLICT_NOTE);
   });
 });

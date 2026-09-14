@@ -135,8 +135,11 @@ const OrganizationProfile: React.FC<OrganizationProfileProps> = ({ org, onClose,
         organizationId: org.id,
         fileInfo: {
           fileName: file.name,
-          mimeType: file.type,
-          fileSize: file.size,
+          // Bind the post-compression bytes: the PUT sends compressedFile.type, and the presign
+          // binds ContentType, so declaring the original type 403s when compressorjs changes it
+          // (e.g. png -> jpeg). Mirrors AdminLogoUpload.
+          mimeType: compressedFile.type || file.type,
+          fileSize: compressedFile.size,
         },
         file: compressedFile,
       });

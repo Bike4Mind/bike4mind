@@ -23,14 +23,36 @@ const clampStrength = (value: unknown, fallback: number): number =>
   typeof value === 'number' && Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : fallback;
 
 /**
+ * THE raw-vs-normalized contract for every tag name this module builds.
+ *
+ * Callers hand these builders a lake's STORED `fileTagPrefix`, which is not guaranteed to equal
+ * its `normalizeTagPrefix` form: the create schema trims it (schemas/dataLake.ts) but rows
+ * predating that trim can still hold edge whitespace. The write doors gate on the NORMALIZED
+ * prefix (`decideStampPrefix` -> `decision.prefix`), and every read arm - `satisfiesTagPrefix`,
+ * the tag-tree roots, the tag-count aggregates - normalizes too. So a builder that appended a
+ * suffix to the raw value would write ` acme:legal`, a name all of those read straight past.
+ *
+ * Normalizing HERE rather than at each call site is what keeps the lake to one namespace: the
+ * upload pipeline's folder tag (dataLakeUploadPipeline.ts), `applyTaxonomySuggestions`, and the
+ * analyze job's suffix derivation all reach a prefixed name through this function, so they cannot
+ * land on opposite sides of the trim. It appends the colon itself rather than delegating to
+ * `normalizeTagPrefix`, which rejects the colon-less form outright: these builders are specified
+ * to apply whatever prefix they are given, colon or not.
+ */
+const ensureColon = (prefix: string): string => {
+  const trimmed = prefix.trim();
+  return trimmed.endsWith(':') ? trimmed : `${trimmed}:`;
+};
+
+/**
  * The editable suffix is the tag name with its inferred prefix stripped, so the prefix is
  * never stored per-tag (it lives once in the caller's tagPrefix). A name that does not carry
  * the inferred prefix keeps its whole text as the suffix.
  */
 const deriveSuffix = (fullName: string, sourcePrefix: string): string => {
   const trimmed = fullName.trim();
-  if (!sourcePrefix) return trimmed;
-  const p = sourcePrefix.endsWith(':') ? sourcePrefix : `${sourcePrefix}:`;
+  if (!sourcePrefix.trim()) return trimmed;
+  const p = ensureColon(sourcePrefix);
   return trimmed.toLowerCase().startsWith(p.toLowerCase()) ? trimmed.slice(p.length) : trimmed;
 };
 
@@ -105,8 +127,6 @@ export function sanitizeFileAssignments(
  * only - the folder tag is added on top, so a file can carry this many + 1.
  */
 const MAX_TAXONOMY_TAGS_PER_FILE = 8;
-
-const ensureColon = (prefix: string): string => (prefix.endsWith(':') ? prefix : `${prefix}:`);
 
 /**
  * One normalization shared by the folder tag and folder matching. Both sides must agree:

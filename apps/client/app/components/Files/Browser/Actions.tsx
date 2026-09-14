@@ -1,4 +1,5 @@
 import { IFileTag } from '@bike4mind/common';
+import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
 import {
   Add,
   Close,
@@ -25,6 +26,9 @@ interface FileBrowserActionsProps {
   addButtonLabelKey?: string;
   onShare: () => void;
   onTag: (tag: IFileTag) => Promise<void>;
+  /** Data lakes the current user can manage (write into) - the only valid "Add to lake" targets. */
+  lakes?: { id: string; name: string; datalakeTag: string }[];
+  onAddToLake?: (lake: { id: string; name: string; datalakeTag: string }) => Promise<void>;
   className?: string;
   // Pagination props
   currentPage?: number;
@@ -44,18 +48,34 @@ const FileBrowserActions: FC<FileBrowserActionsProps> = ({
   addButtonLabelKey,
   onShare,
   onTag,
+  lakes = [],
+  onAddToLake,
   currentPage = 1,
   totalPages = 1,
   onPageChange,
   isLoadingPage = false,
 }) => {
   const [loading, setLoading] = useState(false);
+  const [lakeLoading, setLakeLoading] = useState(false);
   const { t } = useTranslation();
 
   async function handleTagging(tag: IFileTag) {
     setLoading(true);
-    await onTag(tag);
-    setLoading(false);
+    try {
+      await onTag(tag);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleAddToLake(lake: { id: string; name: string; datalakeTag: string }) {
+    if (!onAddToLake) return;
+    setLakeLoading(true);
+    try {
+      await onAddToLake(lake);
+    } finally {
+      setLakeLoading(false);
+    }
   }
 
   return (
@@ -333,6 +353,94 @@ const FileBrowserActions: FC<FileBrowserActionsProps> = ({
                   {tag.icon}
                 </Box>
                 <Box>{tag.name}</Box>
+              </MenuItem>
+            ))}
+          </Menu>
+        </Dropdown>
+      )}
+
+      {/* Add to Lake Button - attaches already-uploaded files to a data lake without
+          re-uploading them through the wizard. Only lakes the caller can manage are
+          offered; the same gate the server enforces on the underlying tag toggle. */}
+      {selectedCount > 0 && lakes.length > 0 && onAddToLake && (
+        <Dropdown>
+          <MenuButton
+            data-testid="file-browser-lake-menu-btn"
+            variant="outlined"
+            color="neutral"
+            sx={{
+              maxHeight: '32px',
+              width: { xs: '32px', md: 'auto' },
+              minWidth: { xs: '32px', md: 'auto' },
+              padding: { xs: 0, md: '0 12px' },
+              borderRadius: '8px',
+              fontSize: '14px',
+              fontWeight: '400',
+              color: 'text.primary',
+              '& .MuiSvgIcon-root, & svg': {
+                width: '16px',
+                height: '16px',
+                marginRight: { xs: 0, md: '6px' },
+                color: 'text.primary',
+              },
+              '&.MuiButton-root': {
+                minHeight: '32px !important',
+                maxHeight: '32px !important',
+                height: '32px !important',
+              },
+              '&.MuiMenuButton-root': {
+                minHeight: '32px !important',
+                maxHeight: '32px !important',
+                height: '32px !important',
+              },
+              '&:hover': {
+                backgroundColor: theme => theme.palette.notebooklist.hoverBg,
+              },
+            }}
+            disabled={lakeLoading}
+          >
+            <DataLakeIcon />
+            <Box component="span" sx={{ display: { xs: 'none', md: 'inline' } }}>
+              {lakeLoading ? t('file_browser.adding_to_lake') : t('file_browser.add_to_lake')}
+            </Box>
+          </MenuButton>
+          <Menu
+            data-testid="file-browser-lake-menu"
+            sx={theme => ({
+              zIndex: 1400,
+              maxHeight: '300px',
+              overflowY: 'scroll',
+              p: '8px 4px',
+              '& .MuiMenuItem-root + .MuiMenuItem-root': {
+                mt: 0.5,
+              },
+              '&::-webkit-scrollbar-thumb': {
+                backgroundColor: theme.palette.background.scrollbar,
+                border: `2px solid ${theme.palette.background.scrollbarTrack}`,
+                borderRadius: '20px',
+              },
+              '&::-webkit-scrollbar': {
+                width: '8px',
+              },
+              '&::-webkit-scrollbar-track': {
+                backgroundColor: theme.palette.background.scrollbarTrack,
+              },
+            })}
+            placement="top-start"
+            modifiers={[
+              { name: 'flip', enabled: false },
+              { name: 'preventOverflow', options: { altAxis: true, tether: false } },
+            ]}
+          >
+            {lakes.map(lake => (
+              <MenuItem
+                data-testid="file-browser-lake-menu-item"
+                key={lake.id}
+                onClick={() => handleAddToLake(lake)}
+                sx={{ display: 'flex', alignItems: 'center', gap: '12px' }}
+              >
+                <DataLakeIcon sx={{ fontSize: 18 }} />
+                <Box>{lake.name}</Box>
               </MenuItem>
             ))}
           </Menu>

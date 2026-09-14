@@ -27,8 +27,10 @@ import { getFilesStorage } from '@server/utils/storage';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { Request } from 'express';
-import { Types } from 'mongoose';
+import { isValidObjectId } from '@server/utils/objectId';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { assertDataLakeTagWriteScope, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 
 const handler = baseApi()
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
@@ -105,9 +107,8 @@ const handler = baseApi()
 
     req.logger.updateMetadata({ userId, fileId: fabFileId });
 
-    // Same guard the DELETE branch below carries. The round trip matters on top of isValid():
-    // isValid() also accepts any 12-character string, which then coerces to an unrelated id.
-    if (!Types.ObjectId.isValid(fabFileId) || new Types.ObjectId(fabFileId).toString() !== fabFileId) {
+    // Same guard the DELETE branch below carries.
+    if (!isValidObjectId(fabFileId)) {
       return res.status(404).json({ msg: 'File not found' });
     }
 
@@ -124,11 +125,16 @@ const handler = baseApi()
       ...(req.body.tags?.map(t => t.name) ?? []),
       ...(req.body.primaryTag ? [req.body.primaryTag] : []),
     ];
+    await assertDataLakeTagWriteScope(req, candidateTagNames);
     // No `members` here: this is a whole-array write, so the payload cannot distinguish a join
     // from a resend, and `reconcileLakeTags` (inside `updateFabFile` below) runs the admission
     // contract over every lake this write actually JOINS - meta-tag and prefix-arm alike - with the
     // file already in hand. Naming members here would re-read the file to check a strict subset.
-    await dataLakeService.assertCanWriteDataLakeTags({ userId, isAdmin: !!req.user.isAdmin }, candidateTagNames, {
+    // Full actor, not a `{ userId, isAdmin }` literal: `canManageLake`'s org-admin rung reads
+    // `administeredOrgIds`, which cannot be derived from the user document, so a literal here
+    // makes this gate strictly narrower than every other lake-management gate in the app.
+    const ctx = await toAccessContext(req);
+    await dataLakeService.assertCanWriteDataLakeTags(ctx, candidateTagNames, {
       db: {
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
@@ -168,6 +174,17 @@ const handler = baseApi()
               ...lakeConfigAuditDb,
               scopedSettings: scopedSettingsRepository,
             },
+            // `reconcileLakeTags` re-gates every lake this write JOINS, so its actor has to stay as
+            // wide as the prologue gate above - the org rungs of `canManageLake` cannot be derived
+            // from the user document this service is handed.
+            administeredOrgIds: ctx.administeredOrgIds,
+            // Same reason the DELETE handler below attaches one: a tag write here can flip a draft
+            // lake to active, and this route accepts a `b4m_live_` key.
+            auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
+            // Covers the fileTagPrefix membership arm the prologue gate above cannot see (it has no
+            // resolved file owner) - called only when reconcileLakeTags actually finds a prefix-arm
+            // join. Mirrors the toggle route's identical gate.
+            assertWriteScope: () => assertDataLakeWriteScope(req),
             logger: req.logger,
             storage: {
               upload: (filepath, content, option) => {
@@ -204,7 +221,7 @@ const handler = baseApi()
 
     req.logger.updateMetadata({ userId, fileId: fabFileId });
 
-    if (!Types.ObjectId.isValid(fabFileId) || new Types.ObjectId(fabFileId).toString() !== fabFileId) {
+    if (!isValidObjectId(fabFileId)) {
       return res.status(404).json({ msg: 'File not found' });
     }
 

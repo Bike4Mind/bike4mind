@@ -160,7 +160,7 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger 
 
           Object.entries(pathFiles).forEach(([modalId, filePath]) => {
             data.forEach(url => {
-              if (url.includes(filePath)) {
+              if (url && url.includes(filePath)) {
                 pathFilesImages[modalId] = url;
               }
             });

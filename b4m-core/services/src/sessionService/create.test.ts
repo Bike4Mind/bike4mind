@@ -1,7 +1,76 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// createSession imports projectService from the services barrel ('..'); stub it so the
+// heavy barrel is not loaded. addSessions is only reached when a projectId resolves, which
+// these tests never do.
+vi.mock('..', () => ({
+  projectService: { addSessions: vi.fn() },
+}));
+
 import { createSession } from './create';
 import type { CreateSessionAdapters } from './create';
 import type { IUserDocument } from '@bike4mind/common';
+
+describe('createSession - agent object-level authz', () => {
+  const user = { id: 'attacker' } as IUserDocument;
+
+  // ObjectId-shaped on purpose: createSession drops non-ObjectId agentIds (usableSessionIds) before
+  // the authz filter, so placeholder ids would be stripped ahead of findAllAccessibleByIds.
+  const OWN_AGENT = '507f1f77bcf86cd799439101';
+  const VICTIM_AGENT = '507f1f77bcf86cd799439102';
+  const GROUP_SHARED_AGENT = '507f1f77bcf86cd799439103';
+
+  // accessibleAgentIds: what shareable.findAllAccessibleByIds returns (owner + shares).
+  const makeAdapters = (accessibleAgentIds: string[]) => {
+    const create = vi.fn().mockResolvedValue({ id: 'session-1' });
+    const findAllAccessibleByIds = vi.fn().mockResolvedValue(accessibleAgentIds.map(id => ({ id })));
+    return {
+      create,
+      findAllAccessibleByIds,
+      adapters: {
+        db: {
+          sessions: { create },
+          projects: {},
+          fabFiles: {},
+          agents: { shareable: { findAllAccessibleByIds } },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape for this unit test
+        } as any,
+      },
+    };
+  };
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('drops an agent id the caller cannot access, storing only accessible ones', async () => {
+    // Caller supplies their own agent plus a victim's; only their own is accessible.
+    const { create, adapters } = makeAdapters([OWN_AGENT]);
+
+    await createSession(user, { name: 'S', agentIds: [OWN_AGENT, VICTIM_AGENT] }, adapters);
+
+    expect(create).toHaveBeenCalledOnce();
+    expect(create.mock.calls[0][0].agentIds).toEqual([OWN_AGENT]);
+  });
+
+  it('keeps a group-shared agent (no over-denial) while dropping a foreign one beside it', async () => {
+    // findAllAccessibleByIds honors owner + user-shares + group-shares, so a group-shared
+    // agent the caller does not own still resolves and is attached; a foreign id supplied
+    // alongside it is filtered out.
+    const { create, adapters } = makeAdapters([GROUP_SHARED_AGENT]);
+
+    await createSession(user, { name: 'S', agentIds: [GROUP_SHARED_AGENT, VICTIM_AGENT] }, adapters);
+
+    expect(create.mock.calls[0][0].agentIds).toEqual([GROUP_SHARED_AGENT]);
+  });
+
+  it('does not query the agents repo when no agentIds are supplied', async () => {
+    const { create, findAllAccessibleByIds, adapters } = makeAdapters([]);
+
+    await createSession(user, { name: 'S' }, adapters);
+
+    expect(findAllAccessibleByIds).not.toHaveBeenCalled();
+    expect(create.mock.calls[0][0].agentIds).toEqual([]);
+  });
+});
 
 /**
  * Lake-scope derivation at create time. The behavior under test is why an empty `retrievalTags` is
@@ -25,6 +94,7 @@ describe('createSession lake-scope derivation', () => {
           sessions: { create: vi.fn(async (d: unknown) => ({ id: 's1', ...(d as object) })) },
           projects: {} as never,
           fabFiles: { shareable: { findAllAccessibleByIds } } as never,
+          agents: { shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue([]) } } as never,
         },
       },
       findAllAccessibleByIds,
@@ -58,6 +128,20 @@ describe('createSession lake-scope derivation', () => {
     );
     expect(session.retrievalTags).toEqual(['datalake:chosen']);
     // Not merely overridden - the derivation must not run at all, or it costs a DB read per create.
+    expect(findAllAccessibleByIds).not.toHaveBeenCalled();
+  });
+
+  it('derives nothing for an explicit scope that selected no lake', async () => {
+    // A deliberate "no lakes" must survive the files the session is born holding - otherwise the
+    // attachment hands back a scope the caller just cleared.
+    const { adapters, findAllAccessibleByIds } = makeAdapters([lakeFile]);
+    const session = await createSession(
+      user,
+      { name: 'n', knowledgeIds: [FILE_A], lakeScopeExplicit: true },
+      adapters as never
+    );
+    expect(session.retrievalTags).toBeUndefined();
+    expect(session.lakeScopeExplicit).toBe(true);
     expect(findAllAccessibleByIds).not.toHaveBeenCalled();
   });
 
@@ -97,6 +181,11 @@ describe('createSession knowledgeIds validation', () => {
         },
         projects: {},
         fabFiles: { shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue([]) } },
+        // Authz pass-through: this suite isolates the usableSessionIds drop, so treat every
+        // surviving agentId as accessible.
+        agents: {
+          shareable: { findAllAccessibleByIds: vi.fn(async (_u: unknown, ids: string[]) => ids.map(id => ({ id }))) },
+        },
       },
     } as unknown as CreateSessionAdapters;
     return { adapters, created };
@@ -130,5 +219,26 @@ describe('createSession knowledgeIds validation', () => {
     const { adapters, created } = makeAdapters();
     await createSession(user, { name: 'ok', artifactIds: ['artifact_1756000000_ab12cd'] }, adapters);
     expect(created[0].artifactIds).toEqual(['artifact_1756000000_ab12cd']);
+  });
+
+  // Phase 3, regression case 4: preauthorizedLakeIds (manage-but-not-member admission) must never
+  // enter createSession's own input - it is authorized and written as a SEPARATE call by the create
+  // route, strictly after createSession returns (see pages/api/sessions/create.ts). A caller that
+  // tries to pass it here - fork/snip/clone included, though none of them do today; they build their
+  // own db.sessions.create() literal and never call this function at all - must not be able to
+  // smuggle it in via a future refactor that forwards a source session's fields wholesale.
+  //
+  // The COMPILE-time half of this guarantee lives in create.ts
+  // (CreateSessionParametersOmitPreauthorizedLakeIds), because tsconfig.json excludes test files:
+  // a `@ts-expect-error` here would be in no typecheck program and could never fail. What this test
+  // pins is the RUNTIME half - secureParameters strips the unknown key, so it never reaches the doc.
+  it('strips preauthorizedLakeIds instead of persisting it', async () => {
+    const { adapters, created } = makeAdapters();
+    await createSession(
+      user,
+      { name: 'ok', preauthorizedLakeIds: ['lake1'] } as unknown as Parameters<typeof createSession>[1],
+      adapters
+    );
+    expect(created[0].preauthorizedLakeIds).toBeUndefined();
   });
 });

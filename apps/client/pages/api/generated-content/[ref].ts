@@ -2,6 +2,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { getGeneratedImageStorage } from '@server/utils/storage';
+import { userCanAccessGeneratedImage } from '@server/utils/generatedImageAccess';
 import { z } from 'zod';
 
 const refSchema = z
@@ -27,6 +28,14 @@ const handler = baseApi({ exemptReadsFromDailyRateLimit: true }).get(
         throw new BadRequestError(err.issues[0]?.message ?? 'Invalid ref parameter');
       }
       throw err;
+    }
+
+    // Object-level authz: generated-image keys are owner-less, so any authenticated caller could
+    // otherwise read another user's image by supplying its key. Only serve an image the caller
+    // created (or one shared with them via the source chat). Return 404 (not 403) so a foreign key
+    // is indistinguishable from a nonexistent one and existence itself is not confirmed.
+    if (!req.user?.id || !(await userCanAccessGeneratedImage(ref, req.user.id))) {
+      throw new NotFoundError(`Content not found: ${ref}`);
     }
 
     // Verify the object exists and get metadata

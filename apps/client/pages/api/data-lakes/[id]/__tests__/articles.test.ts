@@ -159,6 +159,41 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     expect(h.lakeMembershipScope).not.toHaveBeenCalled();
   });
 
+  it('narrows to the Uncategorized bucket on ?uncategorized=true, using the RESOLVED lake prefix', async () => {
+    // The bucket is the lake's members carrying no tag under its own prefix - what the picker
+    // counted but the prefix-keyed tree had no branch for (#2031). The prefix comes from the
+    // lake this request already resolved, never from the query string, so the flag can only ever
+    // REMOVE files from one lake's list.
+    const { res } = makeRes();
+    const req = { ...makeReq(), query: { id: 'lake1', uncategorized: 'true' } };
+
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+
+    const [, params, , serverOptions] = h.search.mock.calls[0];
+    expect(serverOptions.lacksContentPrefixTags).toEqual(['acme:']);
+    // Still scoped to the one lake: the flag narrows, it does not replace the membership arm.
+    expect(serverOptions.restrictToDataLake).toBe(true);
+    expect(serverOptions.lakeMemberships).toHaveLength(1);
+    // Out of the parsed params with the rest of the scope, so nothing here is forgeable.
+    expect(params.options).not.toHaveProperty('lacksContentPrefixTags');
+  });
+
+  it('leaves the browse unnarrowed without the flag, and for any value other than true', async () => {
+    for (const query of [
+      { id: 'lake1' },
+      { id: 'lake1', uncategorized: 'false' },
+      { id: 'lake1', uncategorized: '1' },
+    ]) {
+      h.search.mockClear();
+      const { res } = makeRes();
+
+      await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)({ ...makeReq(), query }, res);
+
+      const [, , , serverOptions] = h.search.mock.calls[0];
+      expect(serverOptions).not.toHaveProperty('lacksContentPrefixTags');
+    }
+  });
+
   it('still returns an empty page for a lake with no meta-tag, without searching', async () => {
     h.assertLakeAccess.mockResolvedValue({ ...LAKE, datalakeTag: '' });
     const { res, json } = makeRes();
@@ -167,6 +202,30 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
 
     expect(json).toHaveBeenCalledWith({ data: [], total: 0, hasMore: false });
     expect(h.search).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/data-lakes/:id/articles membership arm', () => {
+  it('stamps each returned file with which membership arm made it a member', async () => {
+    h.search.mockResolvedValue({
+      data: [
+        { id: 'meta-only', tags: [{ name: LAKE.datalakeTag }] },
+        { id: 'prefix-only', userId: LAKE.createdByUserId, tags: [{ name: 'acme:draft' }] },
+        { id: 'both', userId: LAKE.createdByUserId, tags: [{ name: LAKE.datalakeTag }, { name: 'acme:draft' }] },
+      ],
+      total: 3,
+      hasMore: false,
+    });
+    const { res, json } = makeRes();
+
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
+
+    const payload = json.mock.calls[0][0];
+    expect(payload.data.map((f: { id: string; membershipArm?: string }) => [f.id, f.membershipArm])).toEqual([
+      ['meta-only', 'meta'],
+      ['prefix-only', 'prefix'],
+      ['both', 'both'],
+    ]);
   });
 });
 

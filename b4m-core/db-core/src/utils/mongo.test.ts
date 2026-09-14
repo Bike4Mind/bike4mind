@@ -5,6 +5,7 @@ import {
   compareMongoIds,
   convertId,
   convertIds,
+  usableObjectIds,
   mongoExportedRecordConverter,
   isTransientTransactionError,
   withTransaction,
@@ -381,5 +382,62 @@ describe('MongoDB Utility Functions', () => {
       expect(delays[1]).toBeGreaterThanOrEqual(200);
       expect(delays[1]).toBeLessThanOrEqual(250);
     });
+  });
+});
+
+describe('usableObjectIds', () => {
+  const GOOD = '507f1f77bcf86cd799439011';
+  const JUNK = 'legacy-uuid-not-an-objectid';
+  const logger = () => ({ warn: vi.fn() });
+
+  it('keeps only the ids that can address a row', () => {
+    expect(usableObjectIds([GOOD, JUNK, '0123456789ab'], 'FabFileModel', logger())).toEqual([GOOD]);
+  });
+
+  it('accepts uppercase hex, a valid ObjectId rendering', () => {
+    const upper = GOOD.toUpperCase();
+    expect(usableObjectIds([upper], 'FabFileModel', logger())).toEqual([upper]);
+  });
+
+  /**
+   * These are optional document fields, so a caller can hand over `undefined`. Before the guard
+   * existed, `_id: { $in: undefined }` returned nothing; it must not start throwing a TypeError.
+   */
+  it.each([
+    ['an undefined field', undefined],
+    ['an empty array', [] as string[]],
+  ])('returns nothing and stays quiet for %s', (_label, input) => {
+    const log = logger();
+    expect(usableObjectIds(input, 'FabFileModel', log)).toEqual([]);
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it('names what it skipped, and the label of the caller that skipped it', () => {
+    const log = logger();
+    usableObjectIds([GOOD, JUNK], 'SessionModel.findAllByIds', log);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('[SessionModel.findAllByIds]'), {
+      received: 2,
+      usable: 1,
+      skipped: [JUNK],
+    });
+  });
+
+  // `usable: 0` is what tells a log reader the caller dropped the arm outright rather than
+  // emitting an `$in: []`; a query result cannot distinguish those two, so the counts are the
+  // only signal. See DataLakeModel.accessArms.test.ts for the arm-shape half of that pin.
+  it('reports usable: 0 when nothing survives, so a suppressed arm is visible in the log', () => {
+    const log = logger();
+    usableObjectIds([JUNK], 'DataLakeModel.orgGrantArms', log);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('[DataLakeModel.orgGrantArms]'), {
+      received: 1,
+      usable: 0,
+      skipped: [JUNK],
+    });
+  });
+
+  it('stays quiet when every id is usable', () => {
+    const log = logger();
+    usableObjectIds([GOOD], 'FabFileModel', log);
+    expect(log.warn).not.toHaveBeenCalled();
   });
 });

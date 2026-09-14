@@ -11,6 +11,7 @@
  *   pages/api/<stub>.ts (per-package)                  - Next.js API stubs
  *   server/premium-generated/<stub>.ts (per-package)   - SST Lambda handler stubs
  *   server/premium-generated/premiumLlmTools.generated.ts - LLM tool contributions
+ *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
  *
  * Two distinct "empty" forms when no premium packages are present:
  *   SPA/nav   -> emit the file with an empty exported array
@@ -132,6 +133,23 @@ function assertModuleSpecifier(value, pkgName, field) {
   }
 }
 
+// A localStorage key prefix contributed as literal data (b4mContributions.
+// localStorageKeyPrefixes). Interpolated raw into a generated string literal, so the
+// charset is deliberately narrow - the punctuation real keys use as separators, and
+// nothing that could terminate the literal or inject code.
+const LS_KEY_PREFIX_RE = /^[a-z0-9][a-z0-9:_.-]*$/i;
+
+function assertLocalStorageKeyPrefix(value, pkgName) {
+  // An empty prefix matches every key, turning the sweep into localStorage.clear()
+  // and taking core's own keys with it. Reject loudly rather than at 3am.
+  if (typeof value !== 'string' || !LS_KEY_PREFIX_RE.test(value)) {
+    throw new Error(
+      `[codegen] invalid localStorageKeyPrefixes entry from package "${pkgName}": ` +
+        `${JSON.stringify(value)} is not a non-empty key prefix of [A-Za-z0-9:_.-]`
+    );
+  }
+}
+
 // --- Generate SPA routes ---
 
 function generateSpaRoutes(packages) {
@@ -245,6 +263,43 @@ export const premiumNotebookSidenav: PremiumNotebookSidenav = dynamic(
   { ssr: false }
 );
 `
+  );
+}
+
+// --- Generate localStorage key prefixes ---
+
+// Overlays own localStorage keys core cannot name without naming their surface, so
+// they declare the PREFIXES instead (b4mContributions.localStorageKeyPrefixes) and
+// clearClientCaches sweeps them on every identity change. Unlike the other
+// contributions this one is pure data lifted out of package.json: nothing here
+// imports overlay code, which is what lets the sweep run in a tab that never loaded
+// the overlay's routes - and why it needs no node_modules link.
+function generateLocalStorageKeyPrefixes(packages) {
+  const outPath = join(GENERATED_DIR, 'premiumLocalStorageKeys.generated.ts');
+  const typeImport = `import type { PremiumLocalStorageKeyPrefixes } from '../premiumContract';`;
+
+  const prefixes = [];
+  for (const pkg of packages) {
+    const declared = pkg.contributions.localStorageKeyPrefixes;
+    if (declared === undefined) continue;
+    if (!Array.isArray(declared)) {
+      throw new Error(
+        `[codegen] invalid localStorageKeyPrefixes from package "${pkg.name}": ` +
+          `expected an array of key prefixes, got ${JSON.stringify(declared)}`
+      );
+    }
+    for (const prefix of declared) {
+      assertLocalStorageKeyPrefix(prefix, pkg.name);
+      if (!prefixes.includes(prefix)) prefixes.push(prefix);
+    }
+  }
+
+  const entries = prefixes.map(prefix => `  '${prefix}'`).join(',\n');
+  const body = prefixes.length === 0 ? '[]' : `[\n${entries},\n]`;
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumLocalStorageKeyPrefixes: PremiumLocalStorageKeyPrefixes = ${body};\n`
   );
 }
 
@@ -699,5 +754,8 @@ generateLlmTools(linkedPackages);
 // Any NEW generator goes in whichever group matches how it imports the overlay.
 generateMigrations(packages);
 generateInfraGlue(packages);
+// No-import glue: pure data copied out of package.json, so it imports the overlay
+// not at all and is link-independent for an even simpler reason than the group above.
+generateLocalStorageKeyPrefixes(packages);
 
 console.log('[codegen] done.');

@@ -25,9 +25,16 @@ interface CatalogView {
   targets: JoinTarget[];
   /** Ids already 'active', so Bedrock skips their per-model availability call. */
   activeModelIds: Set<string>;
+  /**
+   * This view is not a picture of the catalog: the read threw, or it returned
+   * nothing. An empty view always means "unknown", never "the catalog is empty",
+   * and a zero-row read is exactly what an install whose seeding failed has
+   * (priceCatalogBootstrap catches that and boots anyway).
+   */
+  degraded?: true;
 }
 
-const EMPTY_VIEW: CatalogView = { targets: [], activeModelIds: new Set() };
+const EMPTY_VIEW: CatalogView = { targets: [], activeModelIds: new Set(), degraded: true };
 
 interface CatalogViewReader {
   read: () => Promise<CatalogView>;
@@ -43,8 +50,10 @@ interface CatalogViewReader {
  * operator row that retires a model must not leave it in the "active, skip the
  * availability check" set because a discovery row underneath still says active.
  *
- * A failed read degrades to an empty view, which costs coverage (every id
- * unmatched, every Bedrock model probed) rather than correctness.
+ * A read that fails OR comes back empty degrades to an empty view, which costs
+ * coverage (every id unmatched, every Bedrock model probed) rather than
+ * correctness. For the OpenAI new-model docs leg an empty view is NOT safe - it
+ * would make every listed id look new - so that one reads `degraded` and stays off.
  */
 function readCatalogView(logger: Logger): CatalogViewReader {
   // Memoized per convergence pass: three sources ask for this and none of them
@@ -64,7 +73,11 @@ function readCatalogView(logger: Logger): CatalogViewReader {
         const lifecycle = record.lifecycle as { status?: string } | undefined;
         if (lifecycle?.status === 'active') activeModelIds.add(modelId);
       }
-      return { targets, activeModelIds };
+      // A clean read of zero rows is indistinguishable from a failed one for
+      // every consumer here, and it is reachable: boot continues after a seeding
+      // failure. Reporting it as a healthy empty catalog would hand the docs leg
+      // an empty Set and make every listed OpenAI id look new.
+      return targets.length === 0 ? EMPTY_VIEW : { targets, activeModelIds };
     } catch (error) {
       logger.warn(
         `[model-discovery] catalog read failed; joining against nothing this run: ${
@@ -92,10 +105,16 @@ function buildSources(catalogView: CatalogViewReader): ModelDiscoveryAdapters['s
   const targets = async () => (await catalogView.read()).targets;
 
   return [
-    modelDiscoveryService.createOpenAiSource(),
+    modelDiscoveryService.createOpenAiSource({
+      knownModelIds: async () => {
+        const view = await catalogView.read();
+        return view.degraded ? undefined : new Set(view.targets.map(target => target.modelId));
+      },
+    }),
     modelDiscoveryService.createAnthropicSource(),
     modelDiscoveryService.createXaiSource(),
     modelDiscoveryService.createKimiSource(),
+    modelDiscoveryService.createDeepSeekSource(),
     modelDiscoveryService.createGeminiSource(),
     modelDiscoveryService.createOllamaSource(),
     modelDiscoveryService.createBflSource(),
@@ -112,10 +131,10 @@ function buildSources(catalogView: CatalogViewReader): ModelDiscoveryAdapters['s
 }
 
 /**
- * A linked SST secret, read by name. Three of these (OPENAI_API_KEY,
- * XAI_API_KEY, MOONSHOT_API_KEY) postdate the original secret set and the
- * generated sst-env.d.ts only learns about them on the next deploy, so a
- * compile-time `Resource.X` access
+ * A linked SST secret, read by name. Four of these (OPENAI_API_KEY,
+ * XAI_API_KEY, MOONSHOT_API_KEY, DEEPSEEK_API_KEY) postdate the original secret
+ * set and the generated sst-env.d.ts only learns about them on the next
+ * deploy, so a compile-time `Resource.X` access
  * would break the build on a fresh checkout. Indexing a Record view keeps
  * secrets linked rather than copied into the lambda environment, which is the
  * repo's convention, without depending on the generated declaration. Any
@@ -143,6 +162,7 @@ export function discoveryEnv(): DiscoveryEnv {
     GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? linkedSecret('GEMINI_API_KEY'),
     XAI_API_KEY: process.env.XAI_API_KEY ?? linkedSecret('XAI_API_KEY'),
     MOONSHOT_API_KEY: process.env.MOONSHOT_API_KEY ?? linkedSecret('MOONSHOT_API_KEY'),
+    DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY ?? linkedSecret('DEEPSEEK_API_KEY'),
   });
 }
 
@@ -179,6 +199,9 @@ export function buildModelDiscoveryAdapters(logger: Logger): ModelDiscoveryAdapt
     // Seed-side derivation of the dispatch group: without it a newly discovered
     // model has no adapterFamily and stays metadata-only forever.
     resolveDispatch: resolveDispatchForRecord,
+    // What turns tools on for a new OpenAI model without a human: the resolver
+    // cannot tell which tool transport an id takes, so the probe asks it.
+    probeDispatch: modelDiscoveryService.probeOpenAiDispatch,
     logger,
     env,
   };

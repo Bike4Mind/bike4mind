@@ -183,6 +183,27 @@ describe('POST /api/work-items', () => {
     ).rejects.toThrow(/invalid work item id/);
   });
 
+  // Stored lowercase, not verbatim: `dependencies` is a [String] field, and every
+  // consumer compares it against the lowercase `id` virtual, so an uppercase entry would
+  // read as a deleted dependency and quietly unblock the item.
+  it('accepts an uppercase-hex dependency id and stores the canonical lowercase form', async () => {
+    repo.findManyByIdsForUser.mockResolvedValue([item({ id: OID_B })]);
+
+    await call('collection', 'post', { body: { title: 'Ship it', dependencies: [OID_B.toUpperCase()] } }).result;
+
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ dependencies: [OID_B] }));
+  });
+
+  it('dedupes dependency ids that differ only in hex casing', async () => {
+    repo.findManyByIdsForUser.mockResolvedValue([item({ id: OID_B })]);
+
+    await call('collection', 'post', {
+      body: { title: 'Ship it', dependencies: [OID_B, OID_B.toUpperCase()] },
+    }).result;
+
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ dependencies: [OID_B] }));
+  });
+
   it('rejects dependencies the caller does not own', async () => {
     repo.findManyByIdsForUser.mockResolvedValue([]);
 

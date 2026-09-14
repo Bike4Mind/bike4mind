@@ -95,3 +95,26 @@ export interface PremiumNavDescriptor {
  * appears, so core never statically imports an absent package (the fork build stays green).
  */
 export type PremiumNotebookSidenav = ComponentType | null;
+
+/**
+ * localStorage key prefixes a premium overlay owns, contributed as literal data in
+ * `b4mContributions.localStorageKeyPrefixes` and swept by `clearClientCaches()` on
+ * every identity change.
+ *
+ * Core clears a fixed allowlist of its own keys; it cannot name an overlay's keys
+ * without naming the overlay's surface in the open-core repo. A prefix is the
+ * narrowest thing an overlay can declare that stays generic here and still lets
+ * core clear per-identity keys it has never heard of (`<prefix><userId>` and
+ * friends). Matching is `startsWith`, so declare the longest prefix that still
+ * covers every key you own.
+ *
+ * Unlike every other contribution, this one is DATA, not a module specifier: core
+ * reads it straight out of package.json and never imports overlay code for it. That
+ * is the whole point - the sweep has to work in a tab that never loaded the
+ * overlay's routes, which is exactly the tab a lazily-loaded contribution misses.
+ * It also means the glue needs no node_modules link (see the generator's grouping).
+ *
+ * Declaring a prefix here is a promise that core may delete those keys at any
+ * identity change. Never declare one that also matches a core key.
+ */
+export type PremiumLocalStorageKeyPrefixes = string[];

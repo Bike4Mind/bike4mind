@@ -1,12 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Types } from 'mongoose';
 import { BadRequestError, ForbiddenError, NotFoundError, UnauthorizedError } from '@bike4mind/common';
-import {
-  verifyQuestPlanReadAccess,
-  verifyQuestPlanWriteAccess,
-  isValidObjectId,
-  QUEST_ID_PATTERN,
-} from './questMasterPlanAccess';
+import { verifyQuestPlanReadAccess, verifyQuestPlanWriteAccess, QUEST_ID_PATTERN } from './questMasterPlanAccess';
 
 const mockFindById = vi.fn();
 const mockUpdate = vi.fn();
@@ -29,18 +24,6 @@ describe('questMasterPlanAccess', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  describe('isValidObjectId', () => {
-    it('accepts valid ObjectId strings', () => {
-      expect(isValidObjectId(new Types.ObjectId().toString())).toBe(true);
-    });
-
-    it('rejects invalid strings', () => {
-      expect(isValidObjectId('not-an-id')).toBe(false);
-      expect(isValidObjectId('')).toBe(false);
-      expect(isValidObjectId('123')).toBe(false);
-    });
   });
 
   describe('QUEST_ID_PATTERN', () => {
@@ -77,6 +60,15 @@ describe('questMasterPlanAccess', () => {
       mockFindById.mockResolvedValue(plan);
 
       const result = await verifyQuestPlanWriteAccess(validUserId, validPlanId);
+
+      expect(result).toBe(plan);
+    });
+
+    it('accepts an uppercase-hex plan id, which names the same plan', async () => {
+      const plan = { userId: validUserId, sharedWith: [] };
+      mockFindById.mockResolvedValue(plan);
+
+      const result = await verifyQuestPlanWriteAccess(validUserId, validPlanId.toUpperCase());
 
       expect(result).toBe(plan);
     });

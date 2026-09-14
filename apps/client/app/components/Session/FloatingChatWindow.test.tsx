@@ -31,4 +31,37 @@ describe('FloatingChatWindow', () => {
 
     expect(useSessionLayout.getState().layout).toBe('hide');
   });
+
+  // The other half of DockedChatPanel's "Hide chat": the pill is a waypoint back to the
+  // dock, so expanding it must not strand the chat in a floating window.
+  it.each(['dockRight', 'dockBottom'] as const)('expands back into the %s that hid the chat here', dock => {
+    setSessionLayout({ layout: 'floatingChat', floatingChatMinimized: true, hiddenFromLayout: dock });
+    render(
+      <Wrapper>
+        <FloatingChatWindow>chat</FloatingChatWindow>
+      </Wrapper>
+    );
+
+    fireEvent.click(screen.getByTestId('floating-chat-minimized'));
+
+    const state = useSessionLayout.getState();
+    expect(state.layout).toBe(dock);
+    expect(state.floatingChatMinimized).toBe(false);
+    expect(state.hiddenFromLayout).toBeUndefined();
+  });
+
+  it('stays floating when the pill was minimized rather than hidden from a dock', () => {
+    setSessionLayout({ layout: 'floatingChat', floatingChatMinimized: true, hiddenFromLayout: undefined });
+    render(
+      <Wrapper>
+        <FloatingChatWindow>chat</FloatingChatWindow>
+      </Wrapper>
+    );
+
+    fireEvent.click(screen.getByTestId('floating-chat-minimized'));
+
+    const state = useSessionLayout.getState();
+    expect(state.layout).toBe('floatingChat');
+    expect(state.floatingChatMinimized).toBe(false);
+  });
 });

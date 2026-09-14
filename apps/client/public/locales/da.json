@@ -68,7 +68,6 @@
     "no_valid_emails_error": "Indtast venligst gyldige e-mailadresser",
     "send_referral": "Send henvisning",
     "send_referral_success": "Henvisning sendt succesfuldt!",
-    "send_referral_skipped": "{{count}} invitation(er) sprunget over — de pågældende e-mailadresser har allerede en konto.",
     "send_referral_failed": "{{count}} invitation(er) kunne ikke sendes. Prøv venligst igen.",
     "send_referral_error": "Fejl ved sending af henvisning. Prøv venligst igen.",
     "slack_notification_default": "Henvisning sendt af bruger USER_NAME:USER_ID til FRIEND_EMAIL"

@@ -372,6 +372,7 @@ describe('SreErrorTrackingModel — recurrence queries', () => {
     function makeTrackingDoc(overrides: Record<string, unknown> = {}) {
       return SreErrorTrackingModel.create({
         errorFingerprint: 'fp-revision',
+        repoSlug: 'acme/widgets',
         source: 'GITHUB_ISSUE',
         sourceRef: 'https://github.com/owner/repo/issues/1',
         status: 'fixed',
@@ -390,7 +391,7 @@ describe('SreErrorTrackingModel — recurrence queries', () => {
 
     it('claims from wont_fix status and increments revisionCount', async () => {
       const doc = await makeTrackingDoc({ status: 'wont_fix' });
-      const result = await sreErrorTrackingRepository.claimRevision(doc.id, 3);
+      const result = await sreErrorTrackingRepository.claimRevision(doc.id, 'acme/widgets', 3);
       expect(result).not.toBeNull();
       expect(result?.status).toBe('revision_requested');
       expect(result?.revisionCount).toBe(1);
@@ -398,7 +399,7 @@ describe('SreErrorTrackingModel — recurrence queries', () => {
 
     it('claims from fixed status (normal flow)', async () => {
       const doc = await makeTrackingDoc({ status: 'fixed' });
-      const result = await sreErrorTrackingRepository.claimRevision(doc.id, 3);
+      const result = await sreErrorTrackingRepository.claimRevision(doc.id, 'acme/widgets', 3);
       expect(result).not.toBeNull();
       expect(result?.status).toBe('revision_requested');
       expect(result?.revisionCount).toBe(1);
@@ -406,22 +407,75 @@ describe('SreErrorTrackingModel — recurrence queries', () => {
 
     it('returns null when wont_fix doc has reached revisionCount cap', async () => {
       const doc = await makeTrackingDoc({ status: 'wont_fix', revisionCount: 3 });
-      const result = await sreErrorTrackingRepository.claimRevision(doc.id, 3);
+      const result = await sreErrorTrackingRepository.claimRevision(doc.id, 'acme/widgets', 3);
       expect(result).toBeNull();
     });
 
     it('returns null when fixMergedAt is set (PR already merged)', async () => {
       const doc = await makeTrackingDoc({ status: 'fixed', fixMergedAt: new Date() });
-      const result = await sreErrorTrackingRepository.claimRevision(doc.id, 3);
+      const result = await sreErrorTrackingRepository.claimRevision(doc.id, 'acme/widgets', 3);
       expect(result).toBeNull();
     });
 
     it('returns null for non-claimable statuses', async () => {
       for (const status of ['analyzing', 'fixing', 'revision_requested', 'dismissed'] as const) {
         const doc = await makeTrackingDoc({ status, errorFingerprint: `fp-${status}` });
-        const result = await sreErrorTrackingRepository.claimRevision(doc.id, 3);
+        const result = await sreErrorTrackingRepository.claimRevision(doc.id, 'acme/widgets', 3);
         expect(result, `should not claim from ${status}`).toBeNull();
       }
+    });
+
+    it('returns null when the document belongs to a different repo', async () => {
+      const doc = await makeTrackingDoc({ status: 'fixed' });
+      const result = await sreErrorTrackingRepository.claimRevision(doc.id, 'other/repo', 3);
+      expect(result).toBeNull();
+      const untouched = await SreErrorTrackingModel.findById(doc.id);
+      expect(untouched?.status).toBe('fixed');
+      expect(untouched?.revisionCount).toBe(0);
+    });
+  });
+
+  describe('repo binding on tracking mutations', () => {
+    function makeDoc(overrides: Record<string, unknown> = {}) {
+      return SreErrorTrackingModel.create({
+        errorFingerprint: 'fp-repo-binding',
+        repoSlug: 'acme/widgets',
+        source: 'GITHUB_ISSUE',
+        sourceRef: 'https://github.com/acme/widgets/issues/1',
+        status: 'fixing',
+        ciRetryCount: 0,
+        ...overrides,
+      });
+    }
+
+    it('atomicTransition leaves the document alone when repoSlug does not match', async () => {
+      const doc = await makeDoc();
+      const result = await sreErrorTrackingRepository.atomicTransition(doc.id, 'other/repo', 'fixing', 'fixed');
+      expect(result).toBeNull();
+      const untouched = await SreErrorTrackingModel.findById(doc.id);
+      expect(untouched?.status).toBe('fixing');
+    });
+
+    it('atomicTransition applies when repoSlug matches', async () => {
+      const doc = await makeDoc({ errorFingerprint: 'fp-repo-binding-ok' });
+      const result = await sreErrorTrackingRepository.atomicTransition(doc.id, 'acme/widgets', 'fixing', 'fixed');
+      expect(result?.status).toBe('fixed');
+    });
+
+    it('claimCiRetry leaves the document alone when repoSlug does not match', async () => {
+      const doc = await makeDoc({ errorFingerprint: 'fp-repo-binding-ci' });
+      const result = await sreErrorTrackingRepository.claimCiRetry(doc.id, 'other/repo', 3);
+      expect(result).toBeNull();
+      const untouched = await SreErrorTrackingModel.findById(doc.id);
+      expect(untouched?.status).toBe('fixing');
+      expect(untouched?.ciRetryCount).toBe(0);
+    });
+
+    it('claimCiRetry applies when repoSlug matches', async () => {
+      const doc = await makeDoc({ errorFingerprint: 'fp-repo-binding-ci-ok' });
+      const result = await sreErrorTrackingRepository.claimCiRetry(doc.id, 'acme/widgets', 3);
+      expect(result?.status).toBe('revision_requested');
+      expect(result?.ciRetryCount).toBe(1);
     });
   });
 

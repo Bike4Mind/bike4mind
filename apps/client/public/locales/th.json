@@ -68,7 +68,6 @@
     "no_valid_emails_error": "โปรดป้อนที่อยู่อีเมลที่ถูกต้อง",
     "send_referral": "ส่งการอ้างอิง",
     "send_referral_success": "ส่งการอ้างอิงสำเร็จ!",
-    "send_referral_skipped": "ข้ามคำเชิญ {{count}} รายการ — ที่อยู่อีเมลเหล่านั้นมีบัญชีแล้ว",
     "send_referral_failed": "ไม่สามารถส่งคำเชิญ {{count}} รายการได้ กรุณาลองอีกครั้ง",
     "send_referral_error": "เกิดข้อผิดพลาดในการส่งการอ้างอิง โปรดลองอีกครั้ง",
     "slack_notification_default": "การอ้างอิงถูกส่งโดยผู้ใช้ USER_NAME:USER_ID ไปยัง FRIEND_EMAIL"

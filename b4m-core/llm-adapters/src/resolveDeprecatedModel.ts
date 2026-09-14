@@ -54,6 +54,12 @@ export const DEPRECATED_MODEL_MAP: Record<string, string> = {
   // one must be upgraded here to avoid a hard API failure.
   'gpt-5-chat-latest': 'gpt-5.5',
   'gpt-5.1-chat-latest': 'gpt-5.5',
+  // Gemini 2.5 Flash was retired upstream by Google and 404s ("no longer available to new
+  // users"), so a pinned session hard-fails without this. Not gemini-3.5-flash, the capability
+  // successor: at $1.50/$9.00 per 1M against 2.5 Flash's $0.075/$0.60 it would raise a user's
+  // bill 20x on input. Gemini 3.1 Flash Lite is the cheapest current Gemini that keeps the
+  // original's intent (thinking, vision, tools, 1M context) at $0.25/$1.50.
+  'gemini-2.5-flash': 'gemini-3.1-flash-lite',
   // xAI models superseded by Grok 4.5. These all still resolve upstream, so nothing here
   // prevents an API failure -- they are mapped because Grok 4.5 is cheaper AND strictly more
   // capable (reasoning, vision, 500K context, cache reads) than every one of them. Grok 3 in
@@ -65,6 +71,11 @@ export const DEPRECATED_MODEL_MAP: Record<string, string> = {
   'grok-2-vision-1212': 'grok-4.5',
   'grok-beta': 'grok-4.5',
   'grok-vision-beta': 'grok-4.5',
+  // Discontinued upstream by Moonshot: api.moonshot.ai no longer serves kimi-k2.5, so a pinned
+  // session hard-fails without this. K2.6 is the capability successor and the cheapest current
+  // direct Kimi ($0.95/$4 against k2.5's $0.60/$3 per 1M) - a modest increase, and the only
+  // option that keeps the family, the 256K context, vision and tools.
+  'kimi-k2.5': 'kimi-k2.6',
   // Not grok-4.5: Grok 3 Mini Fast is the budget reasoning tier ($0.60/$4), and Grok 4.5 would
   // be a cost increase. Grok 3 Mini is both current and cheaper ($0.30/$0.50) while keeping
   // can_think, so it preserves intent without raising the bill.

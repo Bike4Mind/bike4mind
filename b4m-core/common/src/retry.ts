@@ -1,3 +1,15 @@
+// The upstream retry implementation. `@bike4mind/utils` re-exports it (utils/src/index.ts) rather
+// than defining its own.
+//
+// MUST STAY IN SYNC with the deliberate copy in @bike4mind/fab-pipeline's dataLake/retry.ts. That copy
+// cannot import this `withRetry`: it returns `Promise<T>` where this one returns
+// `Promise<RetryResult<T>>`, and it takes a caller-injected Retry-After extractor where this one calls
+// its own. Only the loop is copied - `retryAfterHintOrNull` below is imported by that side.
+//
+// The copy carries a note pointing here; this is the reciprocal, and it is the one that matters more:
+// the edit that silently breaks the pair is an edit to THIS file by someone who has never seen the
+// other one.
+
 import { isAxiosError } from 'axios';
 
 /**
@@ -145,7 +157,26 @@ export function isUserInitiatedAbort(error: Error, userSignal?: AbortSignal): bo
 }
 
 /**
- * Extract retry delay from error response (e.g., Retry-After header)
+ * A Retry-After hint is only useful if it asks us to wait. `Retry-After: 0`, a negative value, or an
+ * HTTP date that has already passed all carry no timing information - and every `withRetry` in this
+ * repo treats a non-null hint as authoritative *over* its exponential backoff, so returning 0 does
+ * not mean "wait a moment", it means "abandon the backoff entirely and retry immediately".
+ *
+ * That inverts the retry budget exactly when it matters: a server sends Retry-After when it is
+ * already struggling, so honouring a zero turns the remaining attempts into an instant burst against
+ * a service asking for room. Null instead, so the caller falls through to its own backoff.
+ *
+ * Exported because the rule, not the code, is the thing worth sharing: `Retry-After` is parsed in
+ * more than one package (fab-pipeline's `getOpenSearchRetryAfterMs`), and a four-token predicate
+ * copied around is a rule that drifts. Feed it a delay already converted to ms.
+ */
+export function retryAfterHintOrNull(ms: number): number | null {
+  return ms > 0 ? ms : null;
+}
+
+/**
+ * Extract retry delay from error response (e.g., Retry-After header). Returns null when the header is
+ * absent, unparseable, or does not ask us to wait - see retryAfterHintOrNull.
  */
 export function getRetryAfterMs(error: Error): number | null {
   if (!isAxiosError(error)) {
@@ -160,13 +191,13 @@ export function getRetryAfterMs(error: Error): number | null {
   // Retry-After can be a number of seconds or an HTTP date
   const seconds = parseInt(retryAfter, 10);
   if (!isNaN(seconds)) {
-    return seconds * 1000;
+    return retryAfterHintOrNull(seconds * 1000);
   }
 
   // Try parsing as HTTP date
   const date = Date.parse(retryAfter);
   if (!isNaN(date)) {
-    return Math.max(0, date - Date.now());
+    return retryAfterHintOrNull(date - Date.now());
   }
 
   return null;

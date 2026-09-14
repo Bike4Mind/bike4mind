@@ -2,6 +2,7 @@ import { Logger } from '@bike4mind/observability';
 import { Client } from '@opensearch-project/opensearch';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws-v3';
+import { retryAfterHintOrNull } from '@bike4mind/common';
 import { withRetry } from './retry';
 
 /** Per-request timeout (ms) so a stalled OpenSearch call fails fast instead of hanging. */
@@ -82,6 +83,14 @@ export function isIndexNotFoundError(error: Error): boolean {
  * Extract a `Retry-After` delay (ms) from an opensearch-js `ResponseError`, if the cluster
  * sent one. opensearch-js exposes response headers on `error.headers` (and `error.meta.headers`).
  * `Retry-After` is either a number of seconds or an HTTP date. Returns null when absent/unparseable.
+ *
+ * A hint that does not ask us to wait is also null - `retryAfterHintOrNull` owns that rule, imported
+ * from @bike4mind/common rather than restated here so the two `Retry-After` parsers in this repo
+ * cannot drift on it. Read its doc for why a zero is worse than no header at all; the local stake is
+ * that the chunk-removal path fans out at REMOVAL_CHUNK_SIZE, so a zero honoured here is an instant
+ * burst from every worker at once against a node that is already circuit-breaking. The elapsed-date
+ * case needs no misbehaving cluster: clock skew, or seconds of queueing between the header being
+ * written and this code reading it, is enough.
  */
 export function getOpenSearchRetryAfterMs(error: Error): number | null {
   const e = error as { headers?: Record<string, unknown>; meta?: { headers?: Record<string, unknown> } };
@@ -92,12 +101,12 @@ export function getOpenSearchRetryAfterMs(error: Error): number | null {
 
   const seconds = parseInt(String(raw), 10);
   if (!Number.isNaN(seconds)) {
-    return seconds * 1000;
+    return retryAfterHintOrNull(seconds * 1000);
   }
 
   const dateMs = Date.parse(String(raw));
   if (!Number.isNaN(dateMs)) {
-    return Math.max(0, dateMs - Date.now());
+    return retryAfterHintOrNull(dateMs - Date.now());
   }
 
   return null;

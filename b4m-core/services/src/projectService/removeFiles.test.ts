@@ -19,6 +19,8 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
   const OWNER_ID = 'owner-1';
   const PROJECT_ID = 'project-1';
   const FILE_ID = 'file-1';
+  // A real hex id, needed by the case-normalisation test below.
+  const FILE_ID_HEX = '67dbe18a7f9cf1fa5d968600';
 
   const asUser = (id: string, email?: string) => ({ id, username: 'u', isAdmin: false, email }) as IUserDocument;
 
@@ -50,6 +52,46 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
   });
 
   const call = () => removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [FILE_ID] }, { db });
+
+  it('removes an id that cannot address a row instead of rejecting the request', async () => {
+    // The read guards skip such an entry rather than throwing, so rejecting here made a legacy
+    // id unremovable: it stayed in the project and warned on every read.
+    const JUNK_ID = 'legacy-uuid-not-an-objectid';
+    project.fileIds = [FILE_ID, JUNK_ID];
+    db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => []);
+
+    await removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [JUNK_ID] }, { db });
+
+    expect(project.fileIds).toEqual([FILE_ID]);
+    expect(db.projects.update).toHaveBeenCalled();
+  });
+
+  it('accepts an uppercase hex id, which resolves the same row', async () => {
+    // isObjectIdOrHexString accepts either case and Mongo resolves both to the same document, but
+    // the resolved doc's `id` is always canonical lowercase. Comparing raw strings rejected a
+    // request that worked before the set comparison landed.
+    const UPPER = FILE_ID_HEX.toUpperCase();
+    project.fileIds = [FILE_ID_HEX];
+    db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => [
+      { id: FILE_ID_HEX, userId: OWNER_ID, users: [] },
+    ]);
+
+    await removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [UPPER] }, { db });
+
+    // Asserting the file is GONE, not merely that the call returned: a case-sensitive filter
+    // answered 200 having removed nothing, which a status-only assertion happily accepts.
+    expect(project.fileIds).toEqual([]);
+    expect(db.projects.update).toHaveBeenCalled();
+  });
+
+  it('still rejects a castable id that did not resolve, which is an access failure', async () => {
+    const UNREACHABLE_ID = '67dbe18a7f9cf1fa5d968600';
+    db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => []);
+
+    await expect(removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [UNREACHABLE_ID] }, { db })).rejects.toThrow(
+      'Some files are not accessible'
+    );
+  });
 
   it('drops a user whose only access to the file came from this project', async () => {
     file.users = [{ userId: 'member-1', permissions: [Permission.read], projectId: PROJECT_ID }];

@@ -215,6 +215,7 @@ const PROVIDER_LABELS: Record<ApiKeyType, string | null> = {
   [ApiKeyType.gemini]: 'Google Gemini',
   [ApiKeyType.xai]: 'xAI',
   [ApiKeyType.kimi]: 'Moonshot (Kimi)',
+  [ApiKeyType.deepseek]: 'DeepSeek',
   [ApiKeyType.bfl]: 'Black Forest Labs',
   [ApiKeyType.voyageai]: 'Voyage AI',
   [ApiKeyType.elevenlabs]: 'ElevenLabs',

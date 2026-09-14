@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CreditHolderType,
   DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
+  DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
   DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
   DEFAULT_PASSAGE_TOKEN_TARGET,
   IScopedSetting,
@@ -19,11 +20,17 @@ import {
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 import { resetServeCeilingWarnLimiter, resolveSearchBudgets } from './resolveSearchBudgets';
 
-/** The three #1955 kb* fields at their coded, behavior-preserving defaults. */
-const KB_DEFAULTS = {
+/**
+ * Every resolved field OTHER than the scan budgets, at its coded behavior-preserving default: the
+ * three #1955 kb* fields plus the per-document cap. Spread into the exhaustive `toEqual` assertions
+ * below, which is what makes a newly-added field that some resolution path forgot to set show up
+ * as a failure here rather than as a setting that silently does nothing on that path.
+ */
+const NON_SCAN_DEFAULTS = {
   kbDefaultResults: KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
   kbResultTokenBudget: KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
   kbMinRelevance: KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT / 100,
+  maxChunksPerFile: DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
 };
 
 function makeDb(
@@ -89,7 +96,7 @@ describe('resolveSearchBudgets - platform path (unchanged behavior)', () => {
       maxFiles: DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
       maxChunks: DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
       maxChunkChars: DEFAULT_SERVE_CHARS,
-      ...KB_DEFAULTS,
+      ...NON_SCAN_DEFAULTS,
     });
   });
 
@@ -97,7 +104,7 @@ describe('resolveSearchBudgets - platform path (unchanged behavior)', () => {
     const budgets = await resolveSearchBudgets(
       makeDb({ dataLakeSearchMaxFiles: '10', dataLakeSearchMaxChunks: '200' })
     );
-    expect(budgets).toEqual({ maxFiles: 10, maxChunks: 200, maxChunkChars: DEFAULT_SERVE_CHARS, ...KB_DEFAULTS });
+    expect(budgets).toEqual({ maxFiles: 10, maxChunks: 200, maxChunkChars: DEFAULT_SERVE_CHARS, ...NON_SCAN_DEFAULTS });
   });
 
   it('floors a non-integer and ignores an unusable value with a warning', async () => {
@@ -124,31 +131,80 @@ describe('resolveSearchBudgets - scoped path', () => {
   it('a narrower override tightens the budget below the platform ceiling', async () => {
     const db = makeDb({ dataLakeSearchMaxFiles: '3000', dataLakeSearchMaxChunks: '50000' }, [
       {
-        scopeLevel: SettingScopeLevel.Lake,
-        scopeId: 'l1',
+        scopeLevel: SettingScopeLevel.Organization,
+        scopeId: 'o1',
         settingName: 'dataLakeSearchMaxFiles',
         settingValue: '1000',
       },
     ]);
     const budgets = await resolveSearchBudgets(db, undefined, scope);
-    expect(budgets.maxFiles).toBe(1000); // lake override
+    expect(budgets.maxFiles).toBe(1000); // org override
     expect(budgets.maxChunks).toBe(50000); // no override -> platform
+  });
+
+  it('a Lake-scoped override of a scan budget is never resolved (#2624)', async () => {
+    // `scope` carries a lakeId and the row is present, so settableAt is the only thing excluding it.
+    // These two budgets advertised a Lake rung nothing resolved: one search spans EVERY lake the
+    // caller can reach (resolveRetrievalLakeScope hands the scan one dataLakeTags array), so there
+    // is no lakeId to key a budget on. Pinned here rather than only in the schema test, because the
+    // schema saying "not settable at Lake" is worth nothing if this resolver honoured the row anyway.
+    //
+    // maxFiles also carries an Organization row: it resolving proves the scoped branch RAN, so the
+    // lake row losing is exclusion rather than a silent degrade to the platform path - and since
+    // Lake is the narrower rung, it would have won outright if settableAt were ignored.
+    const db = makeDb({ dataLakeSearchMaxFiles: '3000', dataLakeSearchMaxChunks: '50000' }, [
+      { scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1', settingName: 'dataLakeSearchMaxFiles', settingValue: '1' },
+      {
+        scopeLevel: SettingScopeLevel.Organization,
+        scopeId: 'o1',
+        settingName: 'dataLakeSearchMaxFiles',
+        settingValue: '900',
+      },
+      { scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1', settingName: 'dataLakeSearchMaxChunks', settingValue: '1' },
+    ]);
+
+    const budgets = await resolveSearchBudgets(db, undefined, scope);
+
+    expect(budgets.maxFiles).toBe(900);
+    expect(budgets.maxChunks).toBe(50000);
   });
 
   it('falls back to the platform path if scoped resolution throws', async () => {
     const logger = loggerStub();
-    const db = makeDb({ dataLakeSearchMaxFiles: '3000' }, [], { throwOverrides: true });
+    // Every kb* field is set to a NON-default platform value: the degrade must carry the platform
+    // read, and a coded default would be indistinguishable from carrying it if these matched.
+    const db = makeDb(
+      {
+        dataLakeSearchMaxFiles: '3000',
+        kbSearchDefaultResults: '7',
+        kbSearchResultTokenBudget: '4000',
+        kbSearchMinRelevancePct: '25',
+      },
+      [],
+      { throwOverrides: true }
+    );
     const budgets = await resolveSearchBudgets(db, logger, scope);
     expect(budgets.maxFiles).toBe(3000);
     // The fallback must carry the serve budget too, or the scoped path degrades into an unclipped one.
     expect(budgets.maxChunkChars).toBe(DEFAULT_SERVE_CHARS);
+    // Same for the #1955 kb* fields - a degrade that silently reverted the floor or the token budget
+    // to its coded default would widen retrieval on an outage, which no caller could tell from a
+    // deliberate config change.
+    expect(budgets.kbDefaultResults).toBe(7);
+    expect(budgets.kbResultTokenBudget).toBe(4000);
+    expect(budgets.kbMinRelevance).toBeCloseTo(0.25);
   });
 
   it('carries the same derived serve budget as the platform path', async () => {
     // 300 tokens derives 1800 chars: a number neither the deleted 1200 constant nor the default
     // policy (3072) can produce, so a scoped branch that hardcoded either one fails here.
     const db = makeDb({ DefaultChunkSize: '300', dataLakeSearchMaxFiles: '3000' }, [
-      { scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1', settingName: 'dataLakeSearchMaxFiles', settingValue: '25' },
+      {
+        scopeLevel: SettingScopeLevel.Organization,
+        scopeId: 'o1',
+        settingName: 'dataLakeSearchMaxFiles',
+        settingValue: '25',
+      },
     ]);
 
     const scoped = await resolveSearchBudgets(db, undefined, scope);
@@ -161,11 +217,18 @@ describe('resolveSearchBudgets - scoped path', () => {
     expect(scoped.maxChunkChars).not.toBe(DEFAULT_SERVE_CHARS);
   });
 
-  it('does not let a lake rung override the chunk policy - that is not a lever yet', async () => {
+  it('does not let a narrower rung override the chunk policy - that is not a lever yet', async () => {
     // DefaultChunkSize declares no scope.settableAt, so an override row for it must be inert:
     // #1661 derives the serve budget, it does not add an org/lake chunk-policy rung (that is #1662).
+    // The row sits at Organization, a rung this resolver demonstrably DOES honour for the scan
+    // budgets above - on a Lake row the assertion would hold even if settableAt were ignored.
     const db = makeDb({ DefaultChunkSize: '300' }, [
-      { scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1', settingName: 'DefaultChunkSize', settingValue: '6554' },
+      {
+        scopeLevel: SettingScopeLevel.Organization,
+        scopeId: 'o1',
+        settingName: 'DefaultChunkSize',
+        settingValue: '6554',
+      },
     ]);
 
     const budgets = await resolveSearchBudgets(db, undefined, scope);
@@ -262,7 +325,7 @@ describe('resolveSearchBudgets - serve budget', () => {
       maxFiles: 10,
       maxChunks: 250,
       maxChunkChars: deriveServeCharBudget(512).maxChunkChars,
-      ...KB_DEFAULTS,
+      ...NON_SCAN_DEFAULTS,
     });
   });
 
@@ -287,7 +350,7 @@ describe('resolveSearchBudgets - serve budget', () => {
       maxFiles: DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
       maxChunks: DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
       maxChunkChars: deriveServeCharBudget(undefined).maxChunkChars,
-      ...KB_DEFAULTS,
+      ...NON_SCAN_DEFAULTS,
     });
     expect(logger.warn).toHaveBeenCalled();
   });
@@ -398,6 +461,69 @@ describe('resolveSearchBudgets - kb* fields (#1955)', () => {
     expect(budgets.kbMinRelevance).toBeCloseTo(0.4);
   });
 
+  it('resolves a configured per-document cap', async () => {
+    expect((await resolveSearchBudgets(makeDb({ dataLakeSearchMaxChunksPerFile: '3' }))).maxChunksPerFile).toBe(3);
+  });
+
+  it('honors an explicit 0 as disabled, with no warning', async () => {
+    // Its own test rather than a second call in the one above: this resolver reads through a
+    // process-wide settings cache, so two resolutions in a single test would have the first db's
+    // rows silently answer the second, and the assertion would pass or fail on cache order.
+    // 0 is the disabled value, not an unusable one: warning on it would fire on every search for
+    // every install that leaves the cap off, which is all of them by default.
+    const logger = loggerStub();
+    expect((await resolveSearchBudgets(makeDb({ dataLakeSearchMaxChunksPerFile: '0' }), logger)).maxChunksPerFile).toBe(
+      0
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('warns and falls back to disabled for a negative or non-numeric per-document cap', async () => {
+    // Falling back to DISABLED rather than to some positive cap matters: a bad row must not start
+    // silently dropping passages that retrieval used to serve.
+    const logger = loggerStub();
+    const budgets = await resolveSearchBudgets(makeDb({ dataLakeSearchMaxChunksPerFile: 'three' }), logger);
+    expect(budgets.maxChunksPerFile).toBe(DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('dataLakeSearchMaxChunksPerFile'));
+  });
+
+  it('the scoped path resolves an org-rung override for the per-document cap', async () => {
+    // The scoped path is a SECOND resolution path with its own key list and its own return object.
+    // A key added to one and not the other is invisible at runtime: the search just never sees the
+    // operator's cap on whichever path it took. That is what this pins.
+    //
+    // Org rather than Lake: the cap is enforced at a merge whose pool spans EVERY lake the caller
+    // can reach in one pass, so there is no lakeId for an override to key on - the same finding
+    // that took the rung off dataLakeSearchMaxFiles/MaxChunks (#2624).
+    const orgScope: SettingScope = { organizationId: 'org-1' };
+    const db = makeDb({ dataLakeSearchMaxChunksPerFile: '0' }, [
+      {
+        scopeLevel: SettingScopeLevel.Organization,
+        scopeId: 'org-1',
+        settingName: 'dataLakeSearchMaxChunksPerFile',
+        settingValue: '2',
+      },
+    ]);
+    expect((await resolveSearchBudgets(db, undefined, orgScope)).maxChunksPerFile).toBe(2);
+  });
+
+  it('a stored lake-rung override for the per-document cap stays inert', async () => {
+    // A row can exist from any path that wrote one; the guarantee is that the resolver does not
+    // honor it, so re-declaring the rung is a deliberate decision rather than silent drift. This
+    // is the failure mode #2624 found on the sibling scan budgets: an operator saves a Lake-scoped
+    // override, sees it in the admin UI, and every search keeps using the platform value.
+    const lakeScope: SettingScope = { organizationId: 'org-1', lakeId: 'lake-1' };
+    const db = makeDb({ dataLakeSearchMaxChunksPerFile: '0' }, [
+      {
+        scopeLevel: SettingScopeLevel.Lake,
+        scopeId: 'lake-1',
+        settingName: 'dataLakeSearchMaxChunksPerFile',
+        settingValue: '2',
+      },
+    ]);
+    expect((await resolveSearchBudgets(db, undefined, lakeScope)).maxChunksPerFile).toBe(0);
+  });
+
   it('two-way drift guard: the resolver falls back to each setting-schema default, not a hand-copied literal', async () => {
     // settings.test.ts pins the schema side (defaultValue === the same imported constant); this
     // pins the RESOLVER side against the setting's declared defaultValue directly, so the two
@@ -407,5 +533,6 @@ describe('resolveSearchBudgets - kb* fields (#1955)', () => {
     expect(budgets.kbDefaultResults).toBe(settingsMap.kbSearchDefaultResults.defaultValue);
     expect(budgets.kbResultTokenBudget).toBe(settingsMap.kbSearchResultTokenBudget.defaultValue);
     expect(budgets.kbMinRelevance).toBe((settingsMap.kbSearchMinRelevancePct.defaultValue as number) / 100);
+    expect(budgets.maxChunksPerFile).toBe(settingsMap.dataLakeSearchMaxChunksPerFile.defaultValue);
   });
 });

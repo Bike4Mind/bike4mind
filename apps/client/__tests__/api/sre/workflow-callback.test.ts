@@ -127,6 +127,9 @@ describe('workflow-callback handler', () => {
     });
     mockDecryptSecret.mockReturnValue('valid-token');
     mockResolveFullConfig.mockReturnValue({ slack: { approverIds: '' } });
+    // The handler confirms the tracking doc belongs to the authenticated repo
+    // before doing anything, so every case needs an owned doc by default.
+    mockFindFullById.mockResolvedValue({ id: 'track-1', repoSlug: 'MillionOnMars/lumina5', status: 'fixing' });
   });
 
   describe('auth', () => {
@@ -164,6 +167,71 @@ describe('workflow-callback handler', () => {
     });
   });
 
+  describe('tracking document ownership', () => {
+    it('rejects a trackingId belonging to another repo without touching state', async () => {
+      mockFindFullById.mockResolvedValue({ id: 'track-1', repoSlug: 'other-owner/other-repo', status: 'fixing' });
+
+      const { req, res } = createMockReqRes({
+        fingerprint: 'fp-123',
+        trackingId: 'track-1',
+        repoSlug: 'MillionOnMars/lumina5',
+        status: 'success',
+        prNumber: 10,
+        prUrl: 'https://github.com/org/repo/pull/10',
+      });
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(res.json).toHaveBeenCalledWith({ error: 'Not found' });
+      expect(mockAtomicTransition).not.toHaveBeenCalled();
+      expect(mockClaimCiRetry).not.toHaveBeenCalled();
+      expect(mockUpsertFromFix).not.toHaveBeenCalled();
+      expect(mockSendToQueue).not.toHaveBeenCalled();
+      expect(mockPostSreFixSuccessMessage).not.toHaveBeenCalled();
+      expect(mockAddIssueComment).not.toHaveBeenCalled();
+    });
+
+    it('rejects a recoverable CI callback for another repo without escalating', async () => {
+      mockFindFullById.mockResolvedValue({ id: 'track-1', repoSlug: 'other-owner/other-repo', status: 'fixing' });
+      mockResolveFullConfig.mockReturnValue({ slack: { approverIds: '' }, maxCiRetries: 2 });
+
+      const { req, res } = createMockReqRes({
+        fingerprint: 'fp-123',
+        trackingId: 'track-1',
+        repoSlug: 'MillionOnMars/lumina5',
+        status: 'failure',
+        recoverable: true,
+        failureReason: 'typecheck failed',
+      });
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(mockClaimCiRetry).not.toHaveBeenCalled();
+      expect(mockAtomicTransition).not.toHaveBeenCalled();
+      expect(mockPostSreFixFailureMessage).not.toHaveBeenCalled();
+      expect(mockAddIssueComment).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unknown trackingId', async () => {
+      mockFindFullById.mockResolvedValue(null);
+
+      const { req, res } = createMockReqRes({
+        fingerprint: 'fp-123',
+        trackingId: 'nope',
+        status: 'success',
+        prNumber: 10,
+        prUrl: 'https://github.com/org/repo/pull/10',
+      });
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(mockAtomicTransition).not.toHaveBeenCalled();
+    });
+  });
+
   describe('success callback', () => {
     it('should transition fixing → fixed and return ok', async () => {
       const transitionedDoc = {
@@ -189,7 +257,7 @@ describe('workflow-callback handler', () => {
 
       await handler(req, res);
 
-      expect(mockAtomicTransition).toHaveBeenCalledWith('track-1', 'fixing', 'fixed', {
+      expect(mockAtomicTransition).toHaveBeenCalledWith('track-1', 'MillionOnMars/lumina5', 'fixing', 'fixed', {
         fixPrNumber: 42,
         workflowRunUrl: 'https://github.com/MillionOnMars/lumina5/actions/runs/1',
       });
@@ -279,7 +347,7 @@ describe('workflow-callback handler', () => {
 
       await handler(req, res);
 
-      expect(mockAtomicTransition).toHaveBeenCalledWith('track-1', 'fixing', 'failed', {
+      expect(mockAtomicTransition).toHaveBeenCalledWith('track-1', 'MillionOnMars/lumina5', 'fixing', 'failed', {
         workflowRunUrl: undefined,
         errorMessage: 'Build failed',
       });
@@ -340,7 +408,7 @@ describe('workflow-callback handler', () => {
     it('does not dispatch when the CI retry cap is exhausted', async () => {
       mockResolveFullConfig.mockReturnValue({ slack: {}, defaultBranch: 'main', maxCiRetries: 3 });
       mockClaimCiRetry.mockResolvedValue(null); // claim failed
-      mockFindFullById.mockResolvedValue({ status: 'fixing', errorMessage: 'boom' }); // still fixing -> cap exhausted
+      mockFindFullById.mockResolvedValue({ repoSlug: 'MillionOnMars/lumina5', status: 'fixing', errorMessage: 'boom' }); // still fixing -> cap exhausted
 
       const { req, res } = createMockReqRes({
         fingerprint: 'fp-123',
@@ -366,6 +434,7 @@ describe('workflow-callback handler', () => {
       // claimCiRetry returns null (cap reached) and the doc is still 'fixing' -> cap-exhausted path.
       mockClaimCiRetry.mockResolvedValue(null);
       mockFindFullById.mockResolvedValue({
+        repoSlug: 'MillionOnMars/lumina5',
         status: 'fixing',
         errorMessage: 'tests failing',
         githubIssueNumber: 777,
@@ -386,6 +455,7 @@ describe('workflow-callback handler', () => {
 
       expect(mockAtomicTransition).toHaveBeenCalledWith(
         'track-1',
+        'MillionOnMars/lumina5',
         'fixing',
         'failed',
         expect.objectContaining({ errorMessage: expect.stringContaining('CI retry cap reached') })
@@ -410,6 +480,7 @@ describe('workflow-callback handler', () => {
       // and a githubIssueNumber. The escalation comment should land on the PR, not the issue.
       mockClaimCiRetry.mockResolvedValue(null);
       mockFindFullById.mockResolvedValue({
+        repoSlug: 'MillionOnMars/lumina5',
         status: 'fixing',
         errorMessage: 'tests failing',
         githubIssueNumber: 777,
@@ -438,7 +509,11 @@ describe('workflow-callback handler', () => {
 
     it('skips the GH comment when there is no source issue (CloudWatch-only)', async () => {
       mockClaimCiRetry.mockResolvedValue(null);
-      mockFindFullById.mockResolvedValue({ status: 'fixing', errorMessage: 'tests failing' }); // no githubIssueNumber
+      mockFindFullById.mockResolvedValue({
+        repoSlug: 'MillionOnMars/lumina5',
+        status: 'fixing',
+        errorMessage: 'tests failing',
+      }); // no githubIssueNumber
       mockAtomicTransition.mockResolvedValue({ id: 'track-1' });
 
       const { req, res } = createMockReqRes({
@@ -570,7 +645,7 @@ describe('workflow-callback handler', () => {
 
       await handler(req, res);
 
-      expect(mockAtomicTransition).toHaveBeenCalledWith('track-1', 'fixing', 'already_fixed', {
+      expect(mockAtomicTransition).toHaveBeenCalledWith('track-1', 'MillionOnMars/lumina5', 'fixing', 'already_fixed', {
         workflowRunUrl: 'https://github.com/MillionOnMars/lumina5/actions/runs/1',
       });
       expect(res.status).toHaveBeenCalledWith(200);
@@ -740,7 +815,7 @@ describe('workflow-callback handler', () => {
 
       await handler(req, res);
 
-      expect(mockAtomicTransition).toHaveBeenCalledWith('track-1', 'fixing', 'failed', {
+      expect(mockAtomicTransition).toHaveBeenCalledWith('track-1', 'MillionOnMars/lumina5', 'fixing', 'failed', {
         workflowRunUrl: undefined,
         errorMessage: 'Workflow failed',
       });

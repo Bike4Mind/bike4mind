@@ -4,6 +4,7 @@ import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database';
 import { decryptToken } from '@server/security/tokenEncryption';
+import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
 import pLimit from 'p-limit';
 import {
   isSlackUserValidationError,
@@ -588,7 +589,7 @@ const handler = baseApi().post(async (req, res) => {
     });
 
     res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', buildContentDisposition(filename));
     // Add custom header to indicate partial export (useful for client-side handling)
     if (exportStatus === 'partial') {
       res.setHeader('X-Export-Status', 'partial');

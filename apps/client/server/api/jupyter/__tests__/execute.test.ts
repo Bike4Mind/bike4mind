@@ -233,9 +233,11 @@ describe('/api/jupyter/execute', () => {
       const { default: handler } = await import('@client/pages/api/jupyter/execute');
       await handler(mockReq as any, mockRes as any);
 
-      // Uses findOneAndUpdate with userId filter for ownership check
+      // Ownership predicate is `promptMeta.session.userId` - the Quest schema declares no
+      // top-level `userId`, so the filter this used to assert could never match a real document
+      // and the route 403'd every caller. The mock made it look correct.
       expect(Quest.findOneAndUpdate).toHaveBeenCalledWith(
-        { _id: 'quest-456', userId: 'user-123' },
+        { _id: 'quest-456', 'promptMeta.session.userId': 'user-123' },
         expect.objectContaining({
           $set: expect.objectContaining({
             'jupyterNotebook.status': 'executing',

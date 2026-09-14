@@ -7,8 +7,14 @@ import { SENSITIVE_SETTING_MASK, settingsMap } from '@bike4mind/common';
 const mutate = vi.fn();
 // Read at render time, so a test can put the mutation into its rejected state.
 let updateError: unknown;
+// A factory mock replaces the whole module, so every hook the component tree imports from it has
+// to be listed here - ScopedSettingOverrides (rendered for any setting declaring `scope`) reaches
+// the three scoped-override hooks, and a missing one fails this file at import time.
 vi.mock('@client/app/hooks/data/settings', () => ({
   useUpdateSettings: () => ({ mutate, isPending: false, error: updateError }),
+  useScopedSettingOverrides: () => ({ data: [] }),
+  useSetScopedSettingOverride: () => ({ mutate: vi.fn(), isPending: false, error: undefined }),
+  useClearScopedSettingOverride: () => ({ mutate: vi.fn(), isPending: false, error: undefined }),
 }));
 
 import AdminSettingInputField from './AdminSettingInputField';

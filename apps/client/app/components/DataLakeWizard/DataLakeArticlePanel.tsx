@@ -5,8 +5,10 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import StorageIcon from '@mui/icons-material/Storage';
 import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
-import { useReprocessFabFile } from '@client/app/hooks/data/dataLakes';
+import { useReprocessFabFile, type DataLakeMemberFile } from '@client/app/hooks/data/dataLakes';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
+import MembershipArmBadge from '@client/app/components/datalake/MembershipArmBadge';
+import PurgeLakeDocumentAction from '@client/app/components/DataLakeWizard/PurgeLakeDocumentAction';
 import RemoveFileFromLakeDialog from './RemoveFileFromLakeDialog';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { describePipelineStall } from '@bike4mind/common';
@@ -21,7 +23,7 @@ function getMeaningfulTags(file: IFabFileDocument): string[] {
 }
 
 interface DataLakeArticlePanelProps {
-  file: IFabFileDocument | null;
+  file: DataLakeMemberFile | null;
   dataLakeId: string;
   lakeName: string;
   /**
@@ -30,6 +32,14 @@ interface DataLakeArticlePanelProps {
    * read-only public lakes. Absent -> read-only (fail-safe).
    */
   canManage?: boolean;
+  /**
+   * Whether the caller may DESTROY this document - one rung narrower than `canManage`: a curator or
+   * org admin manages membership, but permanent deletion needs lake ownership AND ownership of the
+   * file itself (or platform admin), which is exactly what `purgeDataLakeDocument` enforces. Separate
+   * prop rather than reusing `canManage`, so nobody meets a red button that 400s after the
+   * confirmation. Absent -> no purge door (fail-safe).
+   */
+  canPurge?: boolean;
   onAskAbout?: (prompt: string) => void;
   onRemoved?: () => void;
 }
@@ -44,10 +54,16 @@ export default function DataLakeArticlePanel({
   dataLakeId,
   lakeName,
   canManage,
+  canPurge,
   onAskAbout,
   onRemoved,
 }: DataLakeArticlePanelProps) {
-  const { data: content, isLoading } = useGetFabFileContent(file);
+  // A purged file is unreadable the instant the receipt comes back, but the selection only clears
+  // when the owner dismisses it. Without this the pane re-fetches the signed URL of an object that
+  // no longer exists and logs a 404 behind the dialog.
+  const [purgedFileId, setPurgedFileId] = useState<string | null>(null);
+  const readableFile = file && file.id === purgedFileId ? null : file;
+  const { data: content, isLoading } = useGetFabFileContent(readableFile);
   const reprocess = useReprocessFabFile(dataLakeId);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const stallNotice = file ? describePipelineStall(file) : null;
@@ -92,8 +108,9 @@ export default function DataLakeArticlePanel({
           <Typography level="h4" sx={{ flex: 1, minWidth: 0 }}>
             {title}
           </Typography>
-          {/* Re-process and Remove mutate lake content, so they are owner-or-admin only
-              (the backend enforces the same). Hidden when viewing a read-only lake. */}
+          {/* These mutate lake content, so they are owner-or-admin only (the backend enforces the
+              same). Hidden when viewing a read-only lake. Remove unpicks lake membership and is
+              reversible; Delete permanently destroys the document everywhere and is not. */}
           {canManage && (
             <>
               <Tooltip title="Re-run chunking + vectorization" size="sm">
@@ -123,6 +140,15 @@ export default function DataLakeArticlePanel({
                   Remove
                 </Button>
               </Tooltip>
+              {canPurge && (
+                <PurgeLakeDocumentAction
+                  file={file}
+                  title={title}
+                  dataLakeId={dataLakeId}
+                  onPurgeComplete={() => setPurgedFileId(file.id)}
+                  onPurged={onRemoved}
+                />
+              )}
             </>
           )}
         </Box>
@@ -138,8 +164,9 @@ export default function DataLakeArticlePanel({
             {file.notes}
           </Typography>
         )}
-        {tags.length > 0 && (
+        {(tags.length > 0 || file.membershipArm) && (
           <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+            <MembershipArmBadge arm={file.membershipArm} />
             {tags.map(tag => (
               <Chip key={tag} size="sm" variant="soft" color="neutral" sx={{ fontSize: '11px' }}>
                 {tag}
@@ -150,7 +177,11 @@ export default function DataLakeArticlePanel({
       </Box>
 
       <Box sx={{ flex: 1, overflow: 'auto', px: 3, py: 2 }}>
-        {isLoading ? (
+        {readableFile === null ? (
+          <Typography level="body-sm" data-testid="datalake-article-purged" sx={{ color: 'text.tertiary' }}>
+            This document has been permanently deleted.
+          </Typography>
+        ) : isLoading ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
             <Skeleton variant="text" level="h4" sx={{ width: '60%' }} />
             <Skeleton variant="text" level="body-md" sx={{ width: '100%' }} />

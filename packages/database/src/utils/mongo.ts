@@ -11,5 +11,6 @@ export {
   convertId,
   convertIds,
   compareMongoIds,
+  usableObjectIds,
   safeDropIndex,
 } from '@bike4mind/db-core';

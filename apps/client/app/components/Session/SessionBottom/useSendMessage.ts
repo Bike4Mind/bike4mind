@@ -324,6 +324,9 @@ export function useSendMessage({
         ...prev,
         completed: true,
         statusMessage: 'Generation cancelled by user',
+        // Same reason as the send-time reset: a cancelled turn keeps the streaming
+        // slot, so its acknowledgement would outlive it.
+        rapidReply: undefined,
       }));
     } catch (error) {
       console.error('Error stopping chat message:', error);
@@ -370,6 +373,7 @@ export function useSendMessage({
       currentUser,
       effectiveCredits,
       enforceCredits,
+      selectedModel: model,
     });
     if (errorMessage) {
       console.error(errorMessage);
@@ -1087,6 +1091,10 @@ export function useSendMessage({
         completed: false,
         stopped: false,
         statusMessage: OPTIMISTIC_GENERATING_STATUS,
+        // The previous turn's acknowledgement must not survive into this one. It is
+        // rendered against whichever quest holds the streaming slot, and a stopped
+        // quest is never handed off, so a leftover would be drawn under it.
+        rapidReply: undefined,
       }));
     }
 

@@ -19,6 +19,7 @@ const appendMock = vi.fn();
 const claimLakeMemoryExtractionMock = vi.fn();
 const releaseLakeMemoryExtractionMock = vi.fn();
 const setLakeMemoryCursorMock = vi.fn();
+const setLakeMemoryCursorIfFenceUnmovedMock = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
@@ -28,6 +29,10 @@ vi.mock('@bike4mind/database', () => ({
     claimLakeMemoryExtraction: (...a: unknown[]) => claimLakeMemoryExtractionMock(...a),
     releaseLakeMemoryExtraction: (...a: unknown[]) => releaseLakeMemoryExtractionMock(...a),
     setLakeMemoryCursor: (...a: unknown[]) => setLakeMemoryCursorMock(...a),
+    setLakeMemoryCursorIfFenceUnmoved: (...a: unknown[]) => setLakeMemoryCursorIfFenceUnmovedMock(...a),
+    // Never-purged, never-deleted: the purge fence is inert for these tests, which are about the
+    // clock. Its own behaviour lives in extractLakeMemoryPurgeFence.test.ts.
+    getLakeMemoryFence: async () => ({ exists: true, purgedAt: null }),
   },
   fabFileChunkRepository: { findTextsByFabFileId: (...a: unknown[]) => findTextsByFabFileIdMock(...a) },
   fabFileRepository: {
@@ -47,6 +52,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/common', () => ({
   MEMENTO_EMBEDDING_MODEL: 'text-embedding-3-small',
   toMementoVector: (v: number[]) => v,
+  LAKE_MEMORY_EXTRACTION_LEASE_MS: 15 * 60_000,
 }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) },
@@ -105,6 +111,10 @@ describe('extractLakeMemoryForBatch deadline guard (#1440)', () => {
     // release/setCursor return promises - the producer awaits (and .catch-es) them.
     releaseLakeMemoryExtractionMock.mockResolvedValue(undefined);
     setLakeMemoryCursorMock.mockResolvedValue(undefined);
+    setLakeMemoryCursorIfFenceUnmovedMock.mockResolvedValue(true);
+    // The ledger seals by default. Left undefined this reads as a shred-fence refusal on the first
+    // fact, which stops the run - see the refusal test in extractLakeMemoryPurgeFence.test.ts.
+    appendMock.mockResolvedValue(true);
   });
 
   it('processes every doc when there is plenty of time left', async () => {
@@ -143,7 +153,7 @@ describe('extractLakeMemoryForBatch deadline guard (#1440)', () => {
     expect(appendMock).toHaveBeenCalledTimes(2);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('ran out of time after 2/10 docs'));
     // The cursor resumes from the last doc ATTEMPTED (doc index 1), not the cap boundary.
-    expect(setLakeMemoryCursorMock).toHaveBeenCalledWith('lake-1', 'doc-001');
+    expect(setLakeMemoryCursorIfFenceUnmovedMock).toHaveBeenCalledWith('lake-1', 'doc-001', null);
   });
 
   it('falls back to the wall clock when the Lambda clock reports a non-finite value', async () => {
@@ -212,6 +222,10 @@ describe('extractLakeMemoryForBatch continuation + concurrency guard (#1501)', (
     claimLakeMemoryExtractionMock.mockResolvedValue(true);
     releaseLakeMemoryExtractionMock.mockResolvedValue(undefined);
     setLakeMemoryCursorMock.mockResolvedValue(undefined);
+    setLakeMemoryCursorIfFenceUnmovedMock.mockResolvedValue(true);
+    // The ledger seals by default. Left undefined this reads as a shred-fence refusal on the first
+    // fact, which stops the run - see the refusal test in extractLakeMemoryPurgeFence.test.ts.
+    appendMock.mockResolvedValue(true);
   });
 
   it('skips the run entirely when another run already holds the lease', async () => {
@@ -224,7 +238,7 @@ describe('extractLakeMemoryForBatch continuation + concurrency guard (#1501)', (
       logger as never
     );
 
-    expect(result).toEqual({ docsProcessed: 0, factsWritten: 0, hasMore: false });
+    expect(result).toEqual({ docsProcessed: 0, factsWritten: 0, factsRefused: 0, hasMore: false });
     expect(evaluateMock).not.toHaveBeenCalled();
     // Nothing to release - it never won the claim.
     expect(releaseLakeMemoryExtractionMock).not.toHaveBeenCalled();
@@ -241,7 +255,7 @@ describe('extractLakeMemoryForBatch continuation + concurrency guard (#1501)', (
 
     expect(result.docsProcessed).toBe(100);
     expect(result.hasMore).toBe(true);
-    expect(setLakeMemoryCursorMock).toHaveBeenCalledWith('lake-1', 'doc-099');
+    expect(setLakeMemoryCursorIfFenceUnmovedMock).toHaveBeenCalledWith('lake-1', 'doc-099', null);
     expect(releaseLakeMemoryExtractionMock).toHaveBeenCalledTimes(1);
     // The 101st row is the probe that reported "more remain"; it is never processed.
     expect(evaluateMock).toHaveBeenCalledTimes(100);
@@ -267,6 +281,45 @@ describe('extractLakeMemoryForBatch continuation + concurrency guard (#1501)', (
     expect(findLakeMemoryExtractionMembersMock).toHaveBeenCalledWith('datalake:test', { after: 'doc-004', limit: 101 });
   });
 
+  /**
+   * A manual rebuild discards the parked cursor and starts from the top - but it does so HERE, under
+   * the lease, not at the API door. The door used to clear the cursor and then enqueue, which both
+   * made an in-flight build read as idle (the health state derives `building` from a lease OR a
+   * non-null cursor) and, if the enqueue then failed, threw away a continuation's position with
+   * nothing queued to redo it.
+   */
+  it('discards a parked cursor and scans from the top when restart is set', async () => {
+    seedLake(150);
+    findByIdMock.mockResolvedValue({
+      id: 'lake-1',
+      createdByUserId: 'owner-1',
+      datalakeTag: 'datalake:test',
+      lakeMemoryCursor: 'doc-004',
+    });
+
+    await extractLakeMemoryForBatch(
+      { dataLakeId: 'lake-1', restart: true, getRemainingTimeInMillis: () => 10 * 60_000 },
+      makeLogger() as never
+    );
+
+    expect(setLakeMemoryCursorMock).toHaveBeenCalledWith('lake-1', null);
+    expect(findLakeMemoryExtractionMembersMock).toHaveBeenCalledWith('datalake:test', { after: null, limit: 101 });
+  });
+
+  it('leaves the cursor alone when restart is set but nothing is parked', async () => {
+    seedLake(5);
+    const logger = makeLogger();
+
+    await extractLakeMemoryForBatch(
+      { dataLakeId: 'lake-1', restart: true, getRemainingTimeInMillis: () => 10 * 60_000 },
+      logger as never
+    );
+
+    // No parked cursor to discard, and the whole-scan-covered branch only clears one that exists - so
+    // a restart on an idle lake must not issue a pointless write.
+    expect(setLakeMemoryCursorMock).not.toHaveBeenCalled();
+  });
+
   it('does not ask for a continuation when the slice fills the cap exactly and the lake ends there', async () => {
     // The probe row is what tells these apart. Without it, a lake of exactly 100 live docs would look
     // identical to a truncated one and chain a continuation run that finds nothing - and, because the
@@ -281,7 +334,7 @@ describe('extractLakeMemoryForBatch continuation + concurrency guard (#1501)', (
 
     expect(result.docsProcessed).toBe(100);
     expect(result.hasMore).toBe(false);
-    expect(setLakeMemoryCursorMock).not.toHaveBeenCalledWith('lake-1', 'doc-099');
+    expect(setLakeMemoryCursorIfFenceUnmovedMock).not.toHaveBeenCalledWith('lake-1', 'doc-099', null);
   });
 
   it('resumes from the persisted cursor and clears it once the scan reaches the end', async () => {

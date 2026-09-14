@@ -1,16 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
-import { buildChunkScanQueuePayload, buildFabFileChunkScanFilter } from './chunkScan';
-import { CHUNK_STALL_NOTICES, provenancePayloadShape, shouldHaltConvergence } from '@bike4mind/common';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import {
+  buildConvergencePauseExclusion,
+  buildFabFileChunkScanFilter,
+  buildStrandedVectorizeScanFilter,
+} from './chunkScan';
+import { CHUNK_STALL_NOTICES, CHUNK_STALL_REASONS, LEGACY_CHUNK_STALL_NOTES } from '@bike4mind/common';
 
 // Minimal evaluator for the subset of Mongo operators the scan filter uses, so we can assert
 // which documents the filter would (not) select without a live Mongo.
 type Doc = Record<string, unknown>;
-const MODELLED_OPERATORS = new Set(['$ne', '$lt', '$not', '$in', '$nin']);
+const MODELLED_OPERATORS = new Set(['$ne', '$lt', '$type', '$not', '$in', '$nin']);
 const matches = (doc: Doc, filter: Record<string, unknown>): boolean =>
   Object.entries(filter).every(([key, cond]) => {
     if (key === '$or') return (cond as Record<string, unknown>[]).some(sub => matches(doc, sub));
     if (key === '$and') return (cond as Record<string, unknown>[]).every(sub => matches(doc, sub));
+    // The pause exclusion is a top-level `$nor` (#2157) and nests a second one for the running-lake
+    // exemption, so this has to recurse rather than negate a single level.
+    if (key === '$nor') return !(cond as Record<string, unknown>[]).some(sub => matches(doc, sub));
     const value = doc[key];
     if (cond === null) return value === null || value === undefined;
     if (cond instanceof RegExp) return typeof value === 'string' && cond.test(value);
@@ -32,6 +40,15 @@ const matches = (doc: Doc, filter: Record<string, unknown>): boolean =>
       // would coerce instead, agreeing with Mongo by luck on the fixtures here and diverging on any
       // fixture that ever carries a non-Date.
       if ('$lt' in ops) checks.push(value instanceof Date && ops.$lt instanceof Date && value < ops.$lt);
+      // `$type` is what pins buildStrandedVectorizeScanFilter to its partial index (chunkScan.ts),
+      // so it has to be modelled or the throw below fires on that filter's own tests. Only the
+      // 'date' alias is used; another alias would quietly pass, so name it instead.
+      if ('$type' in ops) {
+        if (ops.$type !== 'date') {
+          throw new Error(`chunkScan.test matches(): unmodelled $type alias '${String(ops.$type)}' on '${key}'`);
+        }
+        checks.push(value instanceof Date);
+      }
       if ('$not' in ops) checks.push(!matches({ [key]: value }, { [key]: ops.$not }));
       // Mongo $in with null also matches a missing field.
       if ('$in' in ops)
@@ -59,7 +76,9 @@ const matches = (doc: Doc, filter: Record<string, unknown>): boolean =>
 describe('buildFabFileChunkScanFilter', () => {
   const cutoff = new Date('2026-01-01T00:00:00Z');
   const old = new Date('2025-12-31T00:00:00Z'); // before cutoff
-  const filter = buildFabFileChunkScanFilter(cutoff, undefined, { excludeConvergencePaused: false });
+  const filter = buildFabFileChunkScanFilter(cutoff, undefined, {
+    convergencePause: { platformPaused: false, paused: [], running: [] },
+  });
 
   it("requires status 'complete' so a never-completed upload is skipped", () => {
     expect(filter.status).toBe('complete');
@@ -116,11 +135,34 @@ describe('buildFabFileChunkScanFilter', () => {
     expect(matches(doc, filter)).toBe(true);
   });
 
-  it('KNOWN STRAND: does NOT re-select a paused MEDIA file - the halt write destroyed its only selection door', () => {
-    // Known one-way door, documented on buildChunkScanQueuePayload: a media file reaches this filter
-    // only through chunkRebuildRequestedAt, and the halt write nulls it in the same statement that
-    // records the stall reason. Asserted rather than left implicit so the strand is visible to
-    // whoever closes it - the switch-OFF block below covers the non-media file, which does come back.
+  it('re-selects a paused MEDIA file once the switch clears, via the stall reason the halt left behind', () => {
+    // This was a permanent strand. A media file reaches this filter only through
+    // `chunkRebuildRequestedAt`, and the halt write nulls it in the same statement that records the
+    // stall reason - so clearing the switch did not bring the file back and only a second manual
+    // reprocess did. `rechunkPaused` is the durable record of the same fact: that write picks it
+    // precisely when the stamp was set.
+    const pausedMedia = (mimeType: string) => ({
+      status: 'complete',
+      chunkCount: 0,
+      isChunking: false,
+      createdAt: old,
+      deletedAt: null,
+      error: null,
+      noExtractableTextAt: null,
+      mimeType,
+      chunkStallReason: 'rechunkPaused',
+      chunkRebuildRequestedAt: null,
+    });
+
+    for (const mimeType of ['audio/mpeg', 'image/png', 'video/mp4']) {
+      expect(matches(pausedMedia(mimeType), filter)).toBe(true);
+    }
+  });
+
+  it('does NOT re-select a paused media file that was never rebuilding', () => {
+    // `unchunkedPaused` means the file reached the handler already empty - no producer removed its
+    // passages, so there is no rebuild to resume. Media with 0 chunks is its steady state, and
+    // admitting it here would sweep every paused image in the install forever.
     const doc = {
       status: 'complete',
       chunkCount: 0,
@@ -128,11 +170,30 @@ describe('buildFabFileChunkScanFilter', () => {
       createdAt: old,
       deletedAt: null,
       error: null,
+      noExtractableTextAt: null,
       mimeType: 'audio/mpeg',
-      chunkStallReason: 'rechunkPaused',
+      chunkStallReason: 'unchunkedPaused',
       chunkRebuildRequestedAt: null,
     };
     expect(matches(doc, filter)).toBe(false);
+  });
+
+  it('stops re-selecting a recovered media file once its run clears the reason', () => {
+    // The termination half of the arm above: a successful run clears `chunkStallReason`
+    // unconditionally and a zero-chunk commit stamps `noExtractableTextAt`. Either alone drops the
+    // file back out, so it cannot be swept every pass forever.
+    const recovered = {
+      status: 'complete',
+      chunkCount: 0,
+      isChunking: false,
+      createdAt: old,
+      deletedAt: null,
+      error: null,
+      mimeType: 'audio/mpeg',
+      chunkRebuildRequestedAt: null,
+    };
+    expect(matches({ ...recovered, chunkStallReason: null, noExtractableTextAt: null }, filter)).toBe(false);
+    expect(matches({ ...recovered, chunkStallReason: 'rechunkPaused', noExtractableTextAt: old }, filter)).toBe(false);
   });
 
   it('skips a file whose chunking already failed (error persisted by the chunk handler)', () => {
@@ -199,85 +260,120 @@ describe('buildFabFileChunkScanFilter', () => {
   });
 });
 
-describe('buildFabFileChunkScanFilter - convergence-paused exclusion (#2120)', () => {
+describe('buildFabFileChunkScanFilter - convergence-paused exclusion (#2120/#2157)', () => {
   const cutoff = new Date('2026-01-01T00:00:00Z');
   const old = new Date('2025-12-31T00:00:00Z');
-  // chunkRebuildRequestedAt is left UNSET rather than null: only the chunk-handler path clears it,
-  // the vectorize path (fabFileVectorize.ts) writes its marker without touching it, so a fixture
-  // that pins it to null would only reproduce one of the two marker paths.
-  const candidate = (overrides: Doc = {}) => ({
+  const stalled = (reason: string, extra: Record<string, unknown> = {}) => ({
     status: 'complete',
     chunkCount: 0,
     isChunking: false,
     createdAt: old,
     deletedAt: null,
-    ...overrides,
+    noExtractableTextAt: null,
+    chunkStallReason: reason,
+    ...extra,
   });
-  const paused = (reason: string) => candidate({ chunkStallReason: reason });
-  /** A pre-#2016 row: the marker is still prose in `notes` and no `chunkStallReason` exists yet. */
-  const legacyPaused = (note: string) => candidate({ notes: note });
 
-  describe('while the kill switch is ON', () => {
-    const filter = buildFabFileChunkScanFilter(cutoff, undefined, { excludeConvergencePaused: true });
+  // Stand-in membership predicates. The REAL ones come from buildDataLakeMembershipFilter and use a
+  // dotted `tags.name` path plus a `$regex`, neither of which this evaluator models - so their
+  // composition with the clause below is pinned against a live server in chunkScan.e2e.test.ts, and
+  // what these cases pin is which SIDE of the override set gates the exclusion.
+  const inLake = (id: string) => ({ lakeMarker: id });
+
+  describe('while the platform switch is ON', () => {
+    const filter = (running: Record<string, unknown>[] = []) =>
+      buildFabFileChunkScanFilter(cutoff, undefined, {
+        convergencePause: { platformPaused: true, paused: [], running },
+      });
+
+    it('skips a stalled MEDIA file, so the recovery arm cannot re-enqueue what an operator paused', () => {
+      // The safety half of the rechunkPaused media door. The case below does NOT cover it: its
+      // `stalled()` fixture sets no mimeType, so the doc is admitted by the non-media arm and then
+      // excluded by the `$nor` - it exercises the non-media door. What holds a paused media file
+      // here is the pause exclusion, which is mime-independent, NOT the new arm.
+      expect(matches(stalled('rechunkPaused', { mimeType: 'audio/mpeg' }), filter())).toBe(false);
+    });
 
     it.each([
-      ['the chunk-handler marker', 'rechunkPaused'],
-      ['the vectorize marker', 'vectorizePaused'],
-    ])('skips a paused file - %s', (_label, reason) => {
-      // A paused file matches every OTHER clause (the reset zeroed chunkCount, the pause writes no
+      ['the chunk-handler reason', 'rechunkPaused'],
+      ['the never-chunked reason', 'unchunkedPaused'],
+      ['the vectorize reason', 'vectorizePaused'],
+    ])('skips a stalled file - %s', (_label, reason) => {
+      // A stalled file matches every OTHER clause (the reset zeroed chunkCount, the pause writes no
       // error), so without the exclusion it is re-selected every pass and consumes the rescue cap,
       // starving genuine lost-webhook candidates while the sweep still reports a healthy count.
-      expect(matches(paused(reason), filter)).toBe(false);
+      expect(matches(stalled(reason), filter())).toBe(false);
     });
 
-    it.each([
-      ['the chunk-handler marker', CHUNK_STALL_NOTICES.rechunkPaused],
-      ['the vectorize marker', CHUNK_STALL_NOTICES.vectorizePaused],
-    ])('skips a pre-migration paused file carrying the marker as prose - %s', (_label, note) => {
-      // #2016's migration and this code do not deploy atomically, so the transitional `notes` arm is
-      // what keeps the exclusion working through the window. Delete with the rest of the legacy reads.
-      expect(matches(legacyPaused(note), filter)).toBe(false);
+    it('still selects a file with no stall reason at all', () => {
+      const { chunkStallReason, ...noReason } = stalled('rechunkPaused');
+      expect(matches(noReason, filter())).toBe(true);
     });
 
-    it('still selects an ordinary un-chunked file, so the exclusion is not over-broad', () => {
-      expect(matches(legacyPaused('quarterly report for the board deck'), filter)).toBe(true);
+    it('still selects a file whose stall reason is explicitly null', () => {
+      // `$in` does not match a null/missing field, so the $nor lets it through. Pinned because
+      // getting this wrong would silently drop every un-stalled file from the sweep - the opposite,
+      // and far worse, failure than the churn this exclusion fixes.
+      expect(matches(stalled('rechunkPaused', { chunkStallReason: null }), filter())).toBe(true);
     });
 
-    it('still selects a file with no stall reason and no notes at all', () => {
-      expect(matches(candidate(), filter)).toBe(true);
+    it('still excludes a PRE-MIGRATION row carrying the reason as prose in notes', () => {
+      // #2016's migration and this code do not deploy atomically; the legacy arm is what covers the
+      // window. Dropping it would re-admit every not-yet-migrated paused file to the sweep.
+      const legacy = { ...stalled('rechunkPaused'), chunkStallReason: null, notes: CHUNK_STALL_NOTICES.rechunkPaused };
+      expect(matches(legacy, filter())).toBe(false);
     });
 
-    it('still selects a file whose stall reason and notes are explicitly null', () => {
-      // $nin matches a null/missing field. Pinned because getting this wrong would silently drop
-      // every unstalled file from the sweep - the opposite, and far worse, failure than the churn
-      // this exclusion fixes.
-      expect(matches(candidate({ chunkStallReason: null, notes: null }), filter)).toBe(true);
+    it('EXEMPTS a stalled file whose lake overrides the platform pause back OFF (#2157)', () => {
+      // The scoped direction the platform-only exclusion could not express: an operator paused
+      // everything but told this one lake to keep running, so its files must keep sweeping.
+      expect(matches(stalled('rechunkPaused', inLake('l1')), filter([inLake('l1')]))).toBe(true);
+    });
+
+    it('does not exempt a stalled file belonging to a DIFFERENT running lake', () => {
+      expect(matches(stalled('rechunkPaused', inLake('l2')), filter([inLake('l1')]))).toBe(false);
     });
   });
 
-  describe('while the kill switch is OFF', () => {
-    const filter = buildFabFileChunkScanFilter(cutoff, undefined, { excludeConvergencePaused: false });
+  describe('while the platform switch is OFF', () => {
+    const filter = (pausedLakes: Record<string, unknown>[] = []) =>
+      buildFabFileChunkScanFilter(cutoff, undefined, {
+        convergencePause: { platformPaused: false, paused: pausedLakes, running: [] },
+      });
 
     it.each([
-      ['the chunk-handler marker', 'rechunkPaused'],
-      ['the vectorize marker', 'vectorizePaused'],
-    ])('SELECTS a paused file so it is rebuilt - %s', (_label, reason) => {
-      // The regression this conditionality prevents. This sweep is the only AUTOMATIC exit a paused
-      // file has: the other two recovery paths are human-driven and lake-scoped, so neither reaches a
-      // file outside every lake - exactly what the sweep exists to catch. And the re-enqueue really
-      // does rebuild it: a batchId-less file is sent without an `origin`, and isConvergenceHalted
-      // defaults a missing origin to 'user' and returns false, so it is genuinely re-chunked rather
-      // than bounced. Excluding it unconditionally would break the marker's user-visible promise
-      // that passages are "rebuilt when convergence resumes".
-      expect(matches(paused(reason), filter)).toBe(true);
+      ['the chunk-handler reason', 'rechunkPaused'],
+      ['the never-chunked reason', 'unchunkedPaused'],
+      ['the vectorize reason', 'vectorizePaused'],
+    ])('SELECTS a stalled file so it is rebuilt - %s', (_label, reason) => {
+      // The regression this conditionality prevents. This sweep is the only AUTOMATIC exit a stalled
+      // file has - every other recovery path needs a human to start it: the two lake-scoped ones
+      // (findConvergencePausedFilesByScope, and convergence's own paused-member arm) plus the
+      // per-file POST /api/files/reprocess, which is NOT lake-scoped and does reach a file outside
+      // every lake. None of them fires on its own, which is the property that matters here.
+      // Excluding unconditionally would break the stall notice's user-visible promise that passages
+      // are "rebuilt when convergence resumes".
+      expect(matches(stalled(reason), filter())).toBe(true);
     });
 
-    it('SELECTS a pre-migration paused file too, so the legacy arm is gated the same way', () => {
-      expect(matches(legacyPaused(CHUNK_STALL_NOTICES.rechunkPaused), filter)).toBe(true);
+    it('EXCLUDES a stalled file whose own lake is paused by a scoped override (#2157)', () => {
+      // The leak this ticket is about, from the selection side: with the platform switch off, a
+      // per-lake pause used to be invisible here, so that lake's stalled files were swept back in and
+      // spent the rescue cap on every pass.
+      expect(matches(stalled('rechunkPaused', inLake('l1')), filter([inLake('l1')]))).toBe(false);
     });
 
-    it('still excludes a zero-chunk file, which is terminal either way', () => {
-      expect(matches(candidate({ noExtractableTextAt: new Date('2026-01-02T00:00:00Z') }), filter)).toBe(false);
+    it('leaves a stalled file in an UNRELATED lake selectable', () => {
+      expect(matches(stalled('rechunkPaused', inLake('l2')), filter([inLake('l1')]))).toBe(true);
+    });
+
+    it('leaves an un-stalled file in a paused lake selectable, so the handler can mark it', () => {
+      // Only STALLED files are excluded. An un-stalled file in a paused lake still has to reach the
+      // handler, which is what writes the stall reason - excluding it here would leave the state
+      // invisible, the exact failure the marker exists to prevent. This is also what the $and (rather
+      // than a spread) protects: a clobbered stall test would exclude every member of a paused lake.
+      const { chunkStallReason, ...unstalled } = stalled('rechunkPaused', inLake('l1'));
+      expect(matches(unstalled, filter([inLake('l1')]))).toBe(true);
     });
   });
 });
@@ -286,7 +382,9 @@ describe('buildFabFileChunkScanFilter - stale-claim recovery arm', () => {
   const cutoff = new Date('2026-01-01T00:00:00Z');
   const staleClaimBefore = new Date('2026-01-01T00:00:00Z'); // a claim older than this is stranded
   const old = new Date('2025-12-31T00:00:00Z'); // before both cutoffs
-  const filter = buildFabFileChunkScanFilter(cutoff, staleClaimBefore, { excludeConvergencePaused: false });
+  const filter = buildFabFileChunkScanFilter(cutoff, staleClaimBefore, {
+    convergencePause: { platformPaused: false, paused: [], running: [] },
+  });
   const base = { status: 'complete', chunkCount: 0, createdAt: old, deletedAt: null };
 
   it('still selects a normal not-in-progress file', () => {
@@ -315,29 +413,185 @@ describe('buildFabFileChunkScanFilter - stale-claim recovery arm', () => {
   });
 });
 
-describe('buildChunkScanQueuePayload', () => {
-  it('stamps convergence origin even when the file has no batch, so the kill switch can halt it', () => {
-    // A paused file carries no batchId, and an un-stamped message reads as `user` work
-    // (isConvergenceHalted fails soft) - which is how a paused file used to get re-chunked.
-    expect(buildChunkScanQueuePayload({ fabFileId: 'ff1', userId: 'u1' })).toEqual({
-      fabFileId: 'ff1',
-      userId: 'u1',
-      origin: 'convergence',
+describe('buildStrandedVectorizeScanFilter', () => {
+  // The state this rescues: chunks committed, `chunked: true`, zero vectors and a failed
+  // vectorize hand-off. buildFabFileChunkScanFilter cannot see it (it requires chunkCount: 0).
+  const cutoff = new Date('2026-01-01T00:00:00Z');
+  const stale = new Date('2025-12-31T00:00:00Z');
+  const fresh = new Date('2026-01-01T00:00:01Z');
+  const filter = buildStrandedVectorizeScanFilter(cutoff);
+
+  it('selects a chunked file whose vectorize enqueue failed past the grace period', () => {
+    const doc = { chunked: true, chunkCount: 12, vectorizeEnqueueFailedAt: stale, isChunking: false, deletedAt: null };
+    expect(matches(doc, filter)).toBe(true);
+  });
+
+  it('skips a file with no stamp - the ordinary case, so the sweep costs nothing', () => {
+    const doc = { chunked: true, chunkCount: 12, isChunking: false, deletedAt: null };
+    expect(matches(doc, filter)).toBe(false);
+  });
+
+  it('skips a file whose stamp is the schema default null ($lt is type-bracketed)', () => {
+    const doc = { chunked: true, chunkCount: 12, vectorizeEnqueueFailedAt: null, isChunking: false, deletedAt: null };
+    expect(matches(doc, filter)).toBe(false);
+  });
+
+  it('skips a stamp inside the grace period, so it cannot race the handler own SQS retries', () => {
+    const doc = { chunked: true, vectorizeEnqueueFailedAt: fresh, isChunking: false, deletedAt: null };
+    expect(matches(doc, filter)).toBe(false);
+  });
+
+  it('skips a file that is actively chunking', () => {
+    const doc = { chunked: true, vectorizeEnqueueFailedAt: stale, isChunking: true, deletedAt: null };
+    expect(matches(doc, filter)).toBe(false);
+  });
+
+  describe('stale-claim arm', () => {
+    // resumeVectorizeEnqueue holds the claim across real work (a vectorless-chunk read plus N
+    // sends), so a hard-killed worker leaves isChunking:true with no finally to clear it. Every
+    // other automatic door is shut on that file - hence the same three arms the un-chunked sweep
+    // carries, with the same chunkClaimedAt cutoff.
+    const claimCutoff = new Date('2026-01-01T00:00:00Z');
+    const withStale = buildStrandedVectorizeScanFilter(cutoff, claimCutoff);
+    const base = { chunked: true, vectorizeEnqueueFailedAt: stale, deletedAt: null };
+
+    it('still selects a file that is not claimed at all', () => {
+      expect(matches({ ...base, isChunking: false }, withStale)).toBe(true);
+    });
+
+    it('selects a claim older than the stale cutoff', () => {
+      expect(matches({ ...base, isChunking: true, chunkClaimedAt: stale }, withStale)).toBe(true);
+    });
+
+    it('selects an in-flight file with no claim stamp - the pre-chunkClaimedAt backfill', () => {
+      expect(matches({ ...base, isChunking: true, chunkClaimedAt: null }, withStale)).toBe(true);
+      expect(matches({ ...base, isChunking: true }, withStale)).toBe(true);
+    });
+
+    it('leaves a genuinely in-flight claim alone', () => {
+      expect(matches({ ...base, isChunking: true, chunkClaimedAt: fresh }, withStale)).toBe(false);
+    });
+
+    it('uses the same claim cutoff the un-chunked sweep does', () => {
+      const claimed = { isChunking: true, chunkClaimedAt: fresh };
+      expect(matches({ ...base, ...claimed }, withStale)).toBe(
+        matches(
+          {
+            status: 'complete',
+            chunkCount: 0,
+            createdAt: stale,
+            deletedAt: null,
+            mimeType: 'application/pdf',
+            ...claimed,
+          },
+          buildFabFileChunkScanFilter(cutoff, claimCutoff, {
+            convergencePause: { platformPaused: false, paused: [], running: [] },
+          })
+        )
+      );
     });
   });
 
-  it('sends no lakeId: a global sweep is halted by the platform switch, not a per-lake pause', () => {
-    expect(buildChunkScanQueuePayload({ fabFileId: 'ff1', userId: 'u1' })).not.toHaveProperty('lakeId');
+  it('skips a deleted file', () => {
+    const doc = { chunked: true, vectorizeEnqueueFailedAt: stale, isChunking: false, deletedAt: new Date() };
+    expect(matches(doc, filter)).toBe(false);
   });
 
-  it('is halted by the shape the chunk handler actually parses, not just by carrying an origin key', () => {
-    // Binds the stamp to the vocabulary the switch actually decides on, rather than to the string
-    // 'convergence': a value outside WORK_ORIGINS parses to undefined, defaults to 'user' and stops
-    // being haltable. The consumer's own suite (fabFileChunk.test.ts) covers the handler's half of
-    // the contract; this covers the producer's.
-    const parsed = z
-      .object(provenancePayloadShape)
-      .parse(buildChunkScanQueuePayload({ fabFileId: 'ff1', userId: 'u1' }));
-    expect(shouldHaltConvergence(parsed.origin ?? 'user', true)).toBe(true);
+  it('skips a file that was re-chunked, whose reset cleared chunked and the stamp with it', () => {
+    // resetChunkStateByIds clears vectorizeEnqueueFailedAt, so this shape should not occur - the
+    // `chunked: true` clause is what makes the two sweeps' domains disjoint by construction rather
+    // than by whichever writer cleared the marker. An un-chunked file is the other sweep's business.
+    const doc = { chunked: false, chunkCount: 0, vectorizeEnqueueFailedAt: stale, isChunking: false, deletedAt: null };
+    expect(matches(doc, filter)).toBe(false);
+  });
+
+  it('is disjoint from the un-chunked sweep: a stranded file matches only this filter', () => {
+    const doc = {
+      status: 'complete',
+      chunked: true,
+      chunkCount: 12,
+      vectorizeEnqueueFailedAt: stale,
+      isChunking: false,
+      createdAt: stale,
+      deletedAt: null,
+      mimeType: 'application/pdf',
+    };
+    expect(
+      matches(
+        doc,
+        buildFabFileChunkScanFilter(cutoff, undefined, {
+          convergencePause: { platformPaused: false, paused: [], running: [] },
+        })
+      )
+    ).toBe(false);
+    expect(matches(doc, filter)).toBe(true);
+  });
+});
+
+describe('production call sites pass the stale-claim cutoff', () => {
+  // Source-shape guard, because the regression is silent: staleClaimBefore is optional (the arm is
+  // opt-in), so dropping it type-checks, passes every other test, and just quietly turns the
+  // recovery arm back off. The cron's call is covered behaviourally in dataLakeBatchReconcile.test.ts;
+  // the self-host worker's call lives in chunkRescueSweep.ts (exported so it's independently
+  // testable - see chunkRescueSweep.test.ts), so this is what watches its source shape.
+  const sources = {
+    'server/worker/chunkRescueSweep.ts': 'chunkRescueSweep.ts',
+    'server/cron/dataLakeBatchReconcile.ts': '../cron/dataLakeBatchReconcile.ts',
+  } as const;
+
+  for (const [label, rel] of Object.entries(sources)) {
+    it(`${label} calls buildStrandedVectorizeScanFilter with both cutoffs`, async () => {
+      const src = await readFile(resolve(__dirname, rel), 'utf8');
+      const call = src.match(/buildStrandedVectorizeScanFilter\(([^)]*)\)/);
+      expect(call, 'call site vanished - move or delete this guard with it').not.toBeNull();
+      expect(
+        call![1]
+          .split(',')
+          .map(a => a.trim())
+          .filter(Boolean)
+      ).toHaveLength(2);
+    });
+  }
+});
+
+describe('buildConvergencePauseExclusion (the four platform x override shapes)', () => {
+  // From the shared constants, never a hand-written pair: the point of CHUNK_STALL_REASONS is that
+  // this query and `isChunkStalled` cannot drift, and re-listing them here would let the test agree
+  // with a stale copy.
+  const STALLED = {
+    $or: [{ chunkStallReason: { $in: [...CHUNK_STALL_REASONS] } }, { notes: { $in: [...LEGACY_CHUNK_STALL_NOTES] } }],
+  };
+  const lakeA = { 'tags.name': 'datalake:a' };
+
+  it('platform OFF + no override: NOTHING is excluded, so no clause is emitted', () => {
+    // Emitting the stall test here would be the pre-#2120 regression in reverse: it would strand
+    // every paused file with no automatic rebuild.
+    expect(buildConvergencePauseExclusion({ platformPaused: false, paused: [], running: [] })).toBeUndefined();
+  });
+
+  it('platform ON + no override: every stalled file is excluded, the #2120 shape', () => {
+    expect(buildConvergencePauseExclusion({ platformPaused: true, paused: [], running: [] })).toEqual(STALLED);
+  });
+
+  it("platform OFF + a paused lake: only that lake's stalled members are excluded", () => {
+    // ANDed, not spread: STALLED already owns a top-level `$or`, and so does the lake arm - as
+    // siblings the second would silently win and the stall test would vanish entirely.
+    expect(buildConvergencePauseExclusion({ platformPaused: false, paused: [lakeA], running: [] })).toEqual({
+      $and: [STALLED, { $or: [lakeA] }],
+    });
+  });
+
+  it("platform ON + a running lake: stalled files are excluded EXCEPT that lake's members", () => {
+    expect(buildConvergencePauseExclusion({ platformPaused: true, paused: [], running: [lakeA] })).toEqual({
+      $and: [STALLED, { $nor: [lakeA] }],
+    });
+  });
+
+  it('ignores the arm the platform direction does not use', () => {
+    // Deliberate, and why the two arms are separate fields: with the switch ON, a lake that merely
+    // agrees it is paused adds nothing (it is already covered), and enumerating every such lake would
+    // put an unbounded `$or` in the query. Only the DISAGREEING side is ever material.
+    expect(buildConvergencePauseExclusion({ platformPaused: true, paused: [lakeA], running: [] })).toEqual(STALLED);
+    expect(buildConvergencePauseExclusion({ platformPaused: false, paused: [], running: [lakeA] })).toBeUndefined();
   });
 });

@@ -43,7 +43,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
     id: 'opti.root',
     section: 'opti',
     label: 'OptiHashi Home',
-    description: 'The OptiHashi Optimizer landing page showing all 8 pattern family cards',
+    description: 'The OptiHashi Optimizer landing page showing the pattern family cards',
     navigationType: 'route',
     target: '/opti',
     keywords: ['optimization', 'canvasser', 'home', 'patterns', 'families'],

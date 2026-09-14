@@ -97,6 +97,7 @@ export enum AdminTab {
   ModelLifecycle = 58,
   PrReport = 59,
   RetrievalRate = 60,
+  ApiKeyScopePreflight = 61,
 }
 
 /**
@@ -189,6 +190,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: BugReportIcon, tab: AdminTab.SreAgent, label: 'SRE Agent', testid: 'admin-sre-agent-btn' },
       { Icon: QueueIcon, tab: AdminTab.DlqReplay, label: 'DLQ Management', testid: 'admin-dlq-replay-btn' },
       { Icon: SpeedIcon, tab: AdminTab.RateLimits, label: 'Rate Limits', testid: 'admin-rate-limits-btn' },
+      {
+        Icon: SecurityIcon,
+        tab: AdminTab.ApiKeyScopePreflight,
+        label: 'API Key Scope Preflight',
+        testid: 'admin-scope-preflight-btn',
+      },
       { Icon: MonitorHeartIcon, tab: AdminTab.SystemHealth, label: 'System Health' },
       { Icon: QueryStatsIcon, tab: AdminTab.EventMetrics, label: 'Event Metrics' },
     ],

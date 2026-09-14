@@ -468,6 +468,9 @@ export interface IUser extends ICreditHolder {
     excludedPageIds?: string[];
   };
 
+  /** Single-use nonce for Notion OAuth; set at connect, consumed at callback. */
+  pendingNotionOAuthNonce?: string | null;
+
   /**
    * This field is used to track the last time the user was active.
    * This is set using websockets upon connection and disconnection.
@@ -593,7 +596,7 @@ export interface IAuthProviders {
 export interface IUserDocument extends IUser, IMongoDocument {}
 
 export interface IUserRepository extends IBaseRepository<IUserDocument>, ICreditHolderMethods {
-  findByUsernameOrEmail: (username: string, email: string) => Promise<IUserDocument | null>;
+  findByUsernameOrEmail: (username: string, email?: string | null) => Promise<IUserDocument | null>;
   findByEmail: (email: string) => Promise<IUserDocument | null>;
   /**
    * Remove the given group ids from EVERY user's `groups[]` (org-wide blast radius; used when a

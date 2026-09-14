@@ -65,7 +65,13 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
     }
   }
 
-  const updated = await Quest.findOneAndUpdate({ _id: questId, userId }, { $set: updateData }, { new: true });
+  // `promptMeta.session.userId`, not `userId`: the Quest schema declares no top-level owner
+  // field, so the filter this used to carry could never match and the route always 403'd.
+  const updated = await Quest.findOneAndUpdate(
+    { _id: questId, 'promptMeta.session.userId': userId },
+    { $set: updateData },
+    { new: true }
+  );
 
   if (!updated) {
     return res.status(403).json({ error: 'Quest not found or access denied' });

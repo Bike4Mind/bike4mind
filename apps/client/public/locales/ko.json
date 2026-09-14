@@ -68,7 +68,6 @@
     "no_valid_emails_error": "유효한 이메일 주소를 입력해주세요",
     "send_referral": "추천 보내기",
     "send_referral_success": "추천이 성공적으로 보내졌습니다!",
-    "send_referral_skipped": "{{count}} 초대가 생략되었습니다 — 해당 이메일 주소는 이미 계정을 가지고 있습니다.",
     "send_referral_failed": "{{count}} 초대를 보낼 수 없습니다. 다시 시도해 주세요.",
     "send_referral_error": "추천을 보내는 데 오류가 발생했습니다. 다시 시도해주세요.",
     "slack_notification_default": "USER_NAME:USER_ID 사용자가 FRIEND_EMAIL에게 보낸 추천"

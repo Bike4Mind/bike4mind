@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { KnowledgeType } from '@bike4mind/common';
+import { CHUNKLESS_STALL_REASONS, KnowledgeType } from '@bike4mind/common';
 import { FabFile, FabFileChunk, fabFileChunkRepository, fabFileRepository } from './FabFileModel';
-import { setupMongoTest } from '../../__test__/utils';
+import { setupMongoTest, testFabFileId as fid } from '../../__test__/utils';
 
 const makeChunk = (fabFileId: string, over: { charLength?: number; vector?: number[] } = {}) =>
   FabFileChunk.create({ fabFileId, text: 't', tokenCount: 1, ...over });
@@ -14,18 +14,18 @@ describe('lake-health rollup primitives (#1666)', () => {
 
   it('computeChunkVectorRollup: terminal = vector OR oversized; embedded = vector-bearing only', async () => {
     const contextWindow = 100;
-    await makeChunk('f1', { charLength: 100, vector: [0.1, 0.2], tokenCount: 5 }); // vector-bearing
-    await makeChunk('f1', { charLength: 200, vector: [0.3, 0.4], tokenCount: 5 }); // vector-bearing
-    await makeChunk('f1', { charLength: 999, tokenCount: 500 }); // oversized, no vector: terminal, NOT embedded
-    await makeChunk('f1', { charLength: 40, tokenCount: 5 }); // in-window, no vector: neither
-    await makeChunk('f2', { charLength: 50, vector: [0.5], tokenCount: 5 });
+    await makeChunk(fid('f1'), { charLength: 100, vector: [0.1, 0.2], tokenCount: 5 }); // vector-bearing
+    await makeChunk(fid('f1'), { charLength: 200, vector: [0.3, 0.4], tokenCount: 5 }); // vector-bearing
+    await makeChunk(fid('f1'), { charLength: 999, tokenCount: 500 }); // oversized, no vector: terminal, NOT embedded
+    await makeChunk(fid('f1'), { charLength: 40, tokenCount: 5 }); // in-window, no vector: neither
+    await makeChunk(fid('f2'), { charLength: 50, vector: [0.5], tokenCount: 5 });
 
-    expect(await fabFileChunkRepository.computeChunkVectorRollup('f1', contextWindow)).toEqual({
+    expect(await fabFileChunkRepository.computeChunkVectorRollup(fid('f1'), contextWindow)).toEqual({
       terminalChunkCount: 3, // 2 vector-bearing + 1 oversized-unembeddable
       embeddedChunkCount: 2, // only vector-bearing
       embeddedCharCount: 300, // 100 + 200
     });
-    expect(await fabFileChunkRepository.computeChunkVectorRollup('missing', contextWindow)).toEqual({
+    expect(await fabFileChunkRepository.computeChunkVectorRollup(fid('missing'), contextWindow)).toEqual({
       terminalChunkCount: 0,
       embeddedChunkCount: 0,
       embeddedCharCount: 0,
@@ -33,11 +33,11 @@ describe('lake-health rollup primitives (#1666)', () => {
   });
 
   it('computeFileChunkRollups returns all four rollups, max over all chunks, embedded over vector-bearing', async () => {
-    await makeChunk('f1', { charLength: 100, vector: [0.1] });
-    await makeChunk('f1', { charLength: 4000 }); // largest, but unvectorized
-    await makeChunk('f1', { charLength: 300, vector: [0.2] });
+    await makeChunk(fid('f1'), { charLength: 100, vector: [0.1] });
+    await makeChunk(fid('f1'), { charLength: 4000 }); // largest, but unvectorized
+    await makeChunk(fid('f1'), { charLength: 300, vector: [0.2] });
 
-    expect(await fabFileChunkRepository.computeFileChunkRollups('f1')).toEqual({
+    expect(await fabFileChunkRepository.computeFileChunkRollups(fid('f1'))).toEqual({
       chunkedCharCount: 4400,
       maxChunkCharLength: 4000,
       embeddedChunkCount: 2,
@@ -74,6 +74,8 @@ describe('lake-health rollup primitives (#1666)', () => {
       maxChunkCharLength: 3000,
       embeddedChunkCount: 3,
       embeddedCharCount: 9000,
+      fileSize: 42,
+      serverTextHash: 'abc123',
       tags: [{ name: tag, strength: 1 }],
     });
     await makeFile('unmeasured.txt', {
@@ -102,7 +104,12 @@ describe('lake-health rollup primitives (#1666)', () => {
       chunkedCharCount: 9000,
       maxChunkCharLength: 3000,
       embeddedChunkCount: 3,
+      fileSize: 42,
+      serverTextHash: 'abc123',
     });
+    // No fileSize/serverTextHash stamped: projected as null, not coerced (feeds findDuplicateMembers).
+    expect(byName['unmeasured.txt'].fileSize).toBeNull();
+    expect(byName['unmeasured.txt'].serverTextHash).toBeNull();
     // The terminal-failure marker is projected so the evaluator can grade a failed file (not hide it).
     expect(byName['failed.txt'].error).toBe('embedding provider rejected the request');
     // Unmeasured file: the #1666 CHAR rollups come back as null, NOT coerced to 0.
@@ -184,6 +191,34 @@ describe('lake-health rollup primitives (#1666)', () => {
 
       const converge = await fabFileRepository.findLakeConvergenceMembers(scope);
       expect(converge.map(m => m.fileName).sort()).toEqual(['mine-by-prefix-paused.txt', 'mine-paused.txt']);
+    });
+
+    // The other dimension of that same `$or` arm: WHICH reasons it admits. Driven from the shared
+    // subset because an `$in` that drifts back to a single literal fails SILENTLY - it just selects
+    // the wrong set, with no type error and no runtime error, which is how a chunkless member
+    // disappears from health and from the convergence plan at once.
+    it('admits every chunk-arm reason into both reads, and no chunkless member of the vectorize arm', async () => {
+      for (const chunkStallReason of CHUNKLESS_STALL_REASONS) {
+        await makeFile(`mine-${chunkStallReason}.txt`, {
+          chunkCount: 0,
+          chunkStallReason,
+          tags: [{ name: tag, strength: 1 }],
+        });
+      }
+      // A vectorize-paused file still HAS its passages, so `chunkCount > 0` is what admits it and this
+      // arm must not: folding the arms together here would grade it as chunkless.
+      await makeFile('mine-vectorize-paused.txt', {
+        chunkCount: 0,
+        chunkStallReason: 'vectorizePaused',
+        tags: [{ name: tag, strength: 1 }],
+      });
+
+      const expected = CHUNKLESS_STALL_REASONS.map(reason => `mine-${reason}.txt`).sort();
+      const health = await fabFileRepository.findDataLakeHealthMembers(scope);
+      expect(health.map(m => m.fileName).sort()).toEqual(expected);
+
+      const converge = await fabFileRepository.findLakeConvergenceMembers(scope);
+      expect(converge.map(m => m.fileName).sort()).toEqual(expected);
     });
 
     // #1939's arm of the same `$or`, with the same scoping obligation. A member mid-rebuild is

@@ -1,16 +1,21 @@
 import { logEvent } from '@server/utils/analyticsLog';
 import { AuthEvents } from '@bike4mind/common';
-import { AdminConfigAuditEvents, AdminOrgAuditEvents, EmailAuditEvents } from '@server/utils/auditLogEvents';
+import {
+  AdminConfigAuditEvents,
+  AdminOrgAuditEvents,
+  DataLakeAuditEvents,
+  EmailAuditEvents,
+} from '@server/utils/auditLogEvents';
 
 // Re-export so existing call sites continue to import these names from `auditLog`.
 // The canonical definitions live in `auditLogEvents.ts` to avoid an import cycle
 // between this module and `analytics/index.ts` (which registers them in
 // `ANALYTICS_EVENTS`).
-export { AdminConfigAuditEvents, AdminOrgAuditEvents, EmailAuditEvents };
+export { AdminConfigAuditEvents, AdminOrgAuditEvents, DataLakeAuditEvents, EmailAuditEvents };
 
 export interface AuditLogMetadata {
   userId: string;
-  action: EmailAuditEvents | AuthEvents | AdminConfigAuditEvents | AdminOrgAuditEvents;
+  action: EmailAuditEvents | AuthEvents | AdminConfigAuditEvents | AdminOrgAuditEvents | DataLakeAuditEvents;
   ip?: string;
   userAgent?: string;
   oldEmail?: string;

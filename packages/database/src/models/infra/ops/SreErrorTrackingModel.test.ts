@@ -15,14 +15,15 @@ describe('SreErrorTrackingRepository', () => {
       (sreErrorTrackingRepository as any).model.findOneAndUpdate = mockFindOneAndUpdate;
     });
 
-    it('queries with correct filter (status in [fixed, failed], has PR, revisionCount < max, not merged)', async () => {
+    it('queries with correct filter (repoSlug, status in [fixed, failed], has PR, revisionCount < max, not merged)', async () => {
       mockFindOneAndUpdate.mockResolvedValue(null);
 
-      await sreErrorTrackingRepository.claimRevision('doc-1', 2);
+      await sreErrorTrackingRepository.claimRevision('doc-1', 'acme/widgets', 2);
 
       expect(mockFindOneAndUpdate).toHaveBeenCalledWith(
         {
           _id: 'doc-1',
+          repoSlug: 'acme/widgets',
           status: { $in: ['fixed', 'failed', 'wont_fix'] },
           fixPrNumber: { $exists: true },
           revisionCount: { $lt: 2 },
@@ -50,7 +51,7 @@ describe('SreErrorTrackingRepository', () => {
       };
       mockFindOneAndUpdate.mockResolvedValue(doc);
 
-      const result = await sreErrorTrackingRepository.claimRevision('doc-1', 2);
+      const result = await sreErrorTrackingRepository.claimRevision('doc-1', 'acme/widgets', 2);
 
       expect(result).toEqual({
         id: 'doc-1',
@@ -62,7 +63,7 @@ describe('SreErrorTrackingRepository', () => {
     it('returns null when claim fails (status not fixed)', async () => {
       mockFindOneAndUpdate.mockResolvedValue(null);
 
-      const result = await sreErrorTrackingRepository.claimRevision('doc-1', 2);
+      const result = await sreErrorTrackingRepository.claimRevision('doc-1', 'acme/widgets', 2);
 
       expect(result).toBeNull();
     });
@@ -70,7 +71,7 @@ describe('SreErrorTrackingRepository', () => {
     it('returns null when revision cap is reached', async () => {
       mockFindOneAndUpdate.mockResolvedValue(null);
 
-      const result = await sreErrorTrackingRepository.claimRevision('doc-1', 2);
+      const result = await sreErrorTrackingRepository.claimRevision('doc-1', 'acme/widgets', 2);
 
       // The $lt filter in the query prevents matching when revisionCount >= 2
       expect(result).toBeNull();
@@ -79,7 +80,7 @@ describe('SreErrorTrackingRepository', () => {
     it('resets githubRunDispatched in the update', async () => {
       mockFindOneAndUpdate.mockResolvedValue(null);
 
-      await sreErrorTrackingRepository.claimRevision('doc-1', 3);
+      await sreErrorTrackingRepository.claimRevision('doc-1', 'acme/widgets', 3);
 
       const updateArg = mockFindOneAndUpdate.mock.calls[0][1];
       expect(updateArg.$set.githubRunDispatched).toBe(false);
@@ -88,7 +89,7 @@ describe('SreErrorTrackingRepository', () => {
     it('increments revisionCount atomically', async () => {
       mockFindOneAndUpdate.mockResolvedValue(null);
 
-      await sreErrorTrackingRepository.claimRevision('doc-1', 3);
+      await sreErrorTrackingRepository.claimRevision('doc-1', 'acme/widgets', 3);
 
       const updateArg = mockFindOneAndUpdate.mock.calls[0][1];
       expect(updateArg.$inc.revisionCount).toBe(1);
@@ -97,7 +98,7 @@ describe('SreErrorTrackingRepository', () => {
     it('respects different maxRevisions values', async () => {
       mockFindOneAndUpdate.mockResolvedValue(null);
 
-      await sreErrorTrackingRepository.claimRevision('doc-1', 5);
+      await sreErrorTrackingRepository.claimRevision('doc-1', 'acme/widgets', 5);
 
       const filterArg = mockFindOneAndUpdate.mock.calls[0][0];
       expect(filterArg.revisionCount.$lt).toBe(5);

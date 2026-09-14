@@ -178,6 +178,10 @@ class SreErrorPatternRepository extends BaseRepository<ISreErrorPattern> {
   /**
    * Create or update a pattern from a successful fix.
    * Uses upsert - if the fingerprint already exists, updates the diagnosis.
+   *
+   * Because it upserts, repoSlug decides which repo's pattern library is written,
+   * not just which one is searched. Callers driven by an authenticated request must
+   * pass the repo that authenticated it, never one read off a caller-named document.
    */
   async upsertFromFix(
     fingerprint: string,

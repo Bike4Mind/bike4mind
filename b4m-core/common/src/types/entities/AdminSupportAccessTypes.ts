@@ -140,6 +140,7 @@ export interface IAdminSupportSession {
   disableUserIntegrations?: boolean;
   forceKnowledgeRetrieval?: boolean;
   retrievalTags?: string[];
+  lakeScopeExplicit?: boolean;
   retrievalExcludeFilenameMarkers?: string[];
   retrievalVectorizedOnly?: boolean;
 

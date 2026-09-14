@@ -1,10 +1,10 @@
-import { Types } from 'mongoose';
 import { z } from 'zod';
 import type { Request } from 'express';
 import { AdminSupportAccessAction, ISessionDocument } from '@bike4mind/common';
 import { adminSupportAccessAuditLogRepository, sessionRepository } from '@bike4mind/database';
 import { ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { getClientIp } from '@server/utils/ip';
+import { isValidObjectId } from '@server/utils/objectId';
 
 /**
  * Shared gate for the admin support READ endpoints (`/api/admin/sessions/...`).
@@ -83,7 +83,7 @@ export async function authorizeSupportRead(req: SupportReadRequest): Promise<Sup
 
   // An id that isn't an ObjectId would make findById throw a CastError (500);
   // treat it as "no such session" instead.
-  if (!Types.ObjectId.isValid(id)) {
+  if (!isValidObjectId(id)) {
     throw new NotFoundError('Session not found');
   }
 

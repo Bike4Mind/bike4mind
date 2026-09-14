@@ -68,7 +68,6 @@
     "no_valid_emails_error": "Будь ласка, введіть дійсну електронну адресу",
     "send_referral": "Надіслати реферал",
     "send_referral_success": "Реферал успішно надіслано!",
-    "send_referral_skipped": "{{count}} запрошення пропущено — ці електронні адреси вже мають обліковий запис.",
     "send_referral_failed": "Не вдалося надіслати {{count}} запрошення(нь). Будь ласка, спробуйте ще раз.",
     "send_referral_error": "Помилка при відправленні реферала. Будь ласка, спробуйте знову.",
     "slack_notification_default": "Реферал відправлений користувачем USER_NAME:USER_ID до FRIEND_EMAIL"

@@ -4,14 +4,10 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { Types } from 'mongoose';
+import { isValidObjectId, toObjectIdString } from '@server/utils/objectId';
 import { z } from 'zod';
 
 const MAX_SHARED_WITH_USERS = 50;
-
-const isValidObjectId = (id: string): boolean => {
-  return Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
-};
 
 // Regex for safe tag characters (alphanumeric, spaces, hyphens, underscores)
 const SAFE_TAG_PATTERN = /^[a-zA-Z0-9\s\-_]+$/;
@@ -34,9 +30,9 @@ const UpdateQuestPlanSchema = z.object({
   sharedWith: z.array(z.string()).max(MAX_SHARED_WITH_USERS).optional(),
 });
 
-const getRateLimit = rateLimit({ limit: 100, windowMs: 60000 });
-const updateRateLimit = rateLimit({ limit: 30, windowMs: 60000 });
-const deleteRateLimit = rateLimit({ limit: 10, windowMs: 60000 });
+const getRateLimit = rateLimit({ limit: 100, windowMs: 60000, bucket: 'quest-plans/get' });
+const updateRateLimit = rateLimit({ limit: 30, windowMs: 60000, bucket: 'quest-plans/update' });
+const deleteRateLimit = rateLimit({ limit: 10, windowMs: 60000, bucket: 'quest-plans/delete' });
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableQuestMaster'))
@@ -64,8 +60,10 @@ const handler = baseApi()
         return res.status(403).json({ error: 'Access denied' });
       }
 
+      // Read-triggered touch: persist only lastAccessedAt, never the whole snapshot,
+      // so a concurrent owner revocation or visibility change is not reverted.
       plan.lastAccessedAt = new Date();
-      await questMasterPlanRepository.update(plan);
+      await questMasterPlanRepository.update({ id: planId, lastAccessedAt: plan.lastAccessedAt });
 
       res.json(plan);
     } catch (error) {
@@ -104,18 +102,23 @@ const handler = baseApi()
       }
       const { goal, state, visibility, tags, priority, sharedWith } = bodyResult.data;
 
+      // Canonicalized: sharedWith is a [String] field that questMasterPlanAccess later
+      // reads as an authz list via `includes(userId)` against the lowercase `id` virtual,
+      // so an uppercase entry would be a permanently broken grant.
+      let sharedUserIds = sharedWith;
+
       // Validate sharedWith user IDs if provided (batch query to avoid N+1)
       if (sharedWith !== undefined && sharedWith.length > 0) {
-        const invalidFormatIds = sharedWith.filter(uid => !isValidObjectId(uid));
-        if (invalidFormatIds.length > 0) {
+        sharedUserIds = sharedWith.map(uid => toObjectIdString(uid)).filter((uid): uid is string => uid !== undefined);
+        if (sharedUserIds.length !== sharedWith.length) {
           return res.status(400).json({
             error: 'One or more user IDs in sharedWith have invalid format',
           });
         }
 
-        const validUsers = await userRepository.findByIds(sharedWith);
+        const validUsers = await userRepository.findByIds(sharedUserIds);
         const validUserIds = new Set(validUsers.map(u => u.id));
-        const hasInvalidUsers = sharedWith.some(uid => !validUserIds.has(uid));
+        const hasInvalidUsers = sharedUserIds.some(uid => !validUserIds.has(uid));
         if (hasInvalidUsers) {
           // Rate limiting, not a constant-time delay, is the defense against user enumeration
           // here: network latency (10-500ms) already dwarfs any artificial delay we could add.
@@ -125,7 +128,11 @@ const handler = baseApi()
         }
       }
 
-      if (goal !== undefined) plan.goal = goal;
+      // Persist only the fields this request changed, never a spread of the read
+      // snapshot - a whole-document write would revert any concurrent atomic write
+      // (e.g. a share change) that landed during this handler.
+      const changes: Partial<typeof plan> & { id: string } = { id: planId };
+      if (goal !== undefined) changes.goal = goal;
       if (state !== undefined) {
         const currentState = plan.state || 'active';
         if (!questMasterPlanRepository.isValidStateTransition(currentState, state)) {
@@ -133,16 +140,16 @@ const handler = baseApi()
             error: `Invalid state transition from '${currentState}' to '${state}'`,
           });
         }
-        plan.state = state;
+        changes.state = state;
       }
-      if (visibility !== undefined) plan.visibility = visibility;
-      if (tags !== undefined) plan.tags = tags;
-      if (priority !== undefined) plan.priority = priority;
-      if (sharedWith !== undefined) plan.sharedWith = sharedWith;
+      if (visibility !== undefined) changes.visibility = visibility;
+      if (tags !== undefined) changes.tags = tags;
+      if (priority !== undefined) changes.priority = priority;
+      if (sharedUserIds !== undefined) changes.sharedWith = sharedUserIds;
 
-      plan.lastAccessedAt = new Date();
+      changes.lastAccessedAt = new Date();
 
-      const updated = await questMasterPlanRepository.update(plan);
+      const updated = await questMasterPlanRepository.update(changes);
       res.json(updated);
     } catch (error) {
       console.error('Error updating quest plan:', error);
@@ -173,9 +180,8 @@ const handler = baseApi()
         return res.status(403).json({ error: 'Only owner can archive quest plan' });
       }
 
-      // Soft delete by archiving
-      plan.state = 'archived';
-      await questMasterPlanRepository.update(plan);
+      // Soft delete by archiving - targeted write so it cannot revert a concurrent change.
+      await questMasterPlanRepository.update({ id: planId, state: 'archived' });
 
       res.status(204).end();
     } catch (error) {

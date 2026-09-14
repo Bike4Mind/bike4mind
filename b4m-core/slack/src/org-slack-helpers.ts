@@ -38,11 +38,12 @@ export async function getSystemSlackAppCredentials() {
  * Generate a JWT state token for org Slack connect OAuth flow.
  * Token expires in 10 minutes.
  */
-export function generateOrgSlackConnectStateToken(organizationId: string, userId: string): string {
+export function generateOrgSlackConnectStateToken(organizationId: string, userId: string, nonceHash?: string): string {
   const { jwtStateStore } = getSlackDeps();
   return jwtStateStore.createStateToken<{ organizationId: string; userId: string }>(
     { audience: ORG_SLACK_CONNECT_AUDIENCE, expiresIn: '10m' },
-    { organizationId, userId }
+    { organizationId, userId },
+    nonceHash
   );
 }
 
@@ -50,12 +51,15 @@ export function generateOrgSlackConnectStateToken(organizationId: string, userId
  * Verify and decode an org Slack connect state token.
  */
 export function verifyOrgSlackConnectStateToken(
-  state: string
+  state: string,
+  expectedNonceHash?: string | null
 ): { valid: true; payload: OrgSlackConnectStatePayload } | { valid: false; error: string } {
   const { jwtStateStore } = getSlackDeps();
-  const result = jwtStateStore.verifyStateToken<OrgSlackConnectStatePayload>(state, {
-    audience: ORG_SLACK_CONNECT_AUDIENCE,
-  });
+  const result = jwtStateStore.verifyStateToken<OrgSlackConnectStatePayload>(
+    state,
+    { audience: ORG_SLACK_CONNECT_AUDIENCE },
+    expectedNonceHash
+  );
 
   if (result.valid) {
     return { valid: true, payload: result.payload };

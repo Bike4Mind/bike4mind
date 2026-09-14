@@ -14,7 +14,7 @@ import {
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@server/utils/errors';
 import { z } from 'zod';
-import { Types } from 'mongoose';
+import { isValidObjectId } from '@server/utils/objectId';
 import { validateTemplate } from '@server/services/liveopsTriagePrompt';
 import type { ILiveopsTriageConfigFieldChange } from '@bike4mind/database/infra';
 
@@ -74,13 +74,6 @@ const UpdateConfigSchema = z.object({
   autoCreateIssues: z.boolean().optional(),
   postWhenNoErrors: z.boolean().optional(),
 });
-
-/**
- * Validate ObjectId format
- */
-function isValidObjectId(id: string): boolean {
-  return Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
-}
 
 const handler = baseApi()
   .get(async (req, res) => {

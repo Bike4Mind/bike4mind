@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { ModelInfo } from '@bike4mind/common';
+import { isModelDeprecated, type ModelInfo } from '@bike4mind/common';
 import {
   DEPRECATED_MODEL_MAP,
   buildSupersededIndex,
@@ -8,7 +8,15 @@ import {
   resolveDeprecatedModelId,
   updateReplacedByOverlay,
 } from './resolveDeprecatedModel';
+import { AnthropicBackend } from './anthropicBackend';
+import { AWSBackend } from './awsBackend';
+import { UndifferentiatedBedrockBackend } from './bedrockBackend/undifferentiated';
+import { BFLBackend } from './bflBackend';
+import { DeepSeekBackend } from './deepseekBackend';
+import { KimiBackend } from './kimiBackend';
+import { OpenAIBackend } from './openaiBackend';
 import { XAIBackend } from './xaiBackend';
+import { GeminiBackend } from './geminiBackend';
 import { recordDeprecatedModelRequest } from './modelSunsetMetrics';
 
 vi.mock('./modelSunsetMetrics', () => ({
@@ -121,43 +129,136 @@ describe('resolveDeprecatedModelId', () => {
  * Grok 4.5 shipped, with no mapping, so every session pinned to it silently kept running a
  * non-reasoning, non-vision model at 1.5x the price of the current one. Hiding a model from
  * the picker is not enough -- a session's `lastUsedModel` still reaches it.
+ *
+ * Every backend with a static table, not just xAI: scoping the guard to one adapter is how
+ * `kimi-k2.5` shipped hidden with no successor at all, which is worse than the grok-3 case.
+ * That id 404s upstream, so the lookup in ChatCompletionProcess missed and the run died with
+ * "Invalid LLM backend specified" before the fallback loop could rescue it.
+ *
+ * The static map is what this asserts on, not `lifecycle.replacedBy`: replacedBy reaches the
+ * resolver through the catalog overlay, so it redirects nothing until the seed has been
+ * loaded, while the map is the cold-start table that always holds.
  */
-describe('DEPRECATED_MODEL_MAP invariants (xAI catalog)', () => {
-  // getModelInfo() returns a static array, so this key is never used for a network call.
-  it('maps every deprecated xAI model so pinned sessions cannot be stranded', async () => {
-    const models = await new XAIBackend('test-key-not-used').getModelInfo();
-    const unmapped = models.filter(m => m.deprecationDate && !DEPRECATED_MODEL_MAP[m.id]).map(m => m.id);
+/**
+ * Deprecated models that predate this guard, exempted so it can be turned on at all. Every
+ * one of these is the same latent bug as kimi-k2.5 - a session pinned to it has no successor
+ * to land on - and mapping one is a per-model pricing decision (see the "must not silently
+ * raise a user's cost" rule in resolveDeprecatedModel), not a mechanical fix. Shrink this
+ * list, never grow it: a NEW deprecated model has to carry a mapping, which is what the guard
+ * below is for. The paired test fails on an entry that has stopped exempting anything.
+ */
+const UNMAPPED_LEGACY: ReadonlySet<string> = new Set<string>([
+  'gpt-4',
+  'gpt-4-turbo',
+  'gpt-4.1-nano-2025-04-14',
+  'gpt-4.5-preview-2025-02-27',
+  'gpt-5.2-chat-latest',
+  'o1-2024-12-17',
+  'o1-mini-2024-09-12',
+  'o1-preview-2024-09-12',
+  'o3-2025-04-16',
+  'o3-mini-2025-01-31',
+  'o4-mini-2025-04-16',
+  'gpt-image-1',
+  'gpt-image-1-mini',
+  'gpt-image-1.5',
+  'sora-2',
+  'sora-2-pro',
+  'claude-3-5-haiku-20241022',
+  'us.anthropic.claude-3-5-haiku-20241022-v1:0',
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-8b',
+  'gemini-1.5-pro',
+  'gemini-2.0-flash-exp',
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-flash-preview-09-25',
+  'gemini-2.5-pro',
+  'gemini-2.5-pro-preview-05-06',
+  'gemini-3-pro-preview',
+  'flux-pro',
+]);
+
+describe('DEPRECATED_MODEL_MAP invariants', () => {
+  // Every getModelInfo() here returns a static array, so these keys never reach the network.
+  // Ollama and LocalImage are absent because their listings are live server calls.
+  const staticCatalog = async () => {
+    const backends = [
+      new OpenAIBackend('test-key-not-used'),
+      new AnthropicBackend('test-key-not-used'),
+      new UndifferentiatedBedrockBackend(),
+      new GeminiBackend('test-key-not-used'),
+      new XAIBackend('test-key-not-used'),
+      new KimiBackend('test-key-not-used'),
+      new DeepSeekBackend('test-key-not-used'),
+      new AWSBackend(),
+      new BFLBackend('test-key-not-used'),
+    ];
+    const models = (await Promise.all(backends.map(b => b.getModelInfo()))).flat();
+    return {
+      ids: new Set(models.map(m => String(m.id))),
+      deprecated: new Set(models.filter(m => m.deprecationDate).map(m => String(m.id))),
+    };
+  };
+
+  it('maps every deprecated model so pinned sessions cannot be stranded', async () => {
+    const { deprecated } = await staticCatalog();
+    const unmapped = [...deprecated].filter(id => !DEPRECATED_MODEL_MAP[id] && !UNMAPPED_LEGACY.has(id));
 
     expect(
       unmapped,
-      `xAI models carrying a deprecationDate with no DEPRECATED_MODEL_MAP entry: ${unmapped.join(', ')}`
+      `models carrying a deprecationDate with no DEPRECATED_MODEL_MAP entry: ${unmapped.join(', ')}`
     ).toEqual([]);
   });
 
-  it('never maps a deprecated model to another deprecated model', async () => {
-    const models = await new XAIBackend('test-key-not-used').getModelInfo();
-    const deprecated = new Set(models.filter(m => m.deprecationDate).map(m => m.id));
-    const xaiIds = new Set(models.map(m => m.id));
+  it('keeps the legacy exemption list honest', async () => {
+    const { deprecated } = await staticCatalog();
+    // An entry that has since been mapped, or whose model has left the tables,
+    // is an exemption covering nothing - and a silent widening of the guard's
+    // blind spot for whatever id is added next.
+    const stale = [...UNMAPPED_LEGACY].filter(id => DEPRECATED_MODEL_MAP[id] || !deprecated.has(id));
 
-    // Only check targets we can see in this catalog; cross-backend targets are out of scope.
+    expect(stale, `UNMAPPED_LEGACY entries that no longer exempt anything: ${stale.join(', ')}`).toEqual([]);
+  });
+
+  it('never maps a deprecated model to another deprecated model', async () => {
+    const { deprecated } = await staticCatalog();
+
     const badTargets = Object.entries(DEPRECATED_MODEL_MAP)
-      .filter(([, target]) => xaiIds.has(target) && deprecated.has(target))
+      .filter(([, target]) => deprecated.has(target))
       .map(([from, target]) => `${from} -> ${target}`);
 
     expect(badTargets, `mappings pointing at a deprecated model: ${badTargets.join(', ')}`).toEqual([]);
   });
 
   it('maps only to models that exist in the catalog', async () => {
-    const models = await new XAIBackend('test-key-not-used').getModelInfo();
-    const xaiIds = new Set(models.map(m => m.id));
+    const { ids } = await staticCatalog();
 
-    // Scoped to xAI sources so Anthropic/OpenAI targets are not flagged as missing.
     const dangling = Object.entries(DEPRECATED_MODEL_MAP)
-      .filter(([from]) => from.startsWith('grok-'))
-      .filter(([, target]) => !xaiIds.has(target))
+      .filter(([, target]) => !ids.has(target))
       .map(([from, target]) => `${from} -> ${target}`);
 
-    expect(dangling, `xAI mappings whose target is not in the catalog: ${dangling.join(', ')}`).toEqual([]);
+    expect(dangling, `mappings whose target is not in any adapter table: ${dangling.join(', ')}`).toEqual([]);
+  });
+});
+
+describe('Gemini 2.5 Flash retirement', () => {
+  // getModelInfo() returns a static array, so this key is never used for a network call.
+  const geminiModels = () => new GeminiBackend('test-key-not-used').getModelInfo();
+
+  it('keeps gemini-2.5-flash out of the picker', async () => {
+    const model = (await geminiModels()).find(m => m.id === 'gemini-2.5-flash');
+
+    expect(model).toBeDefined();
+    expect(isModelDeprecated(model as ModelInfo)).toBe(true);
+  });
+
+  it('resolves a pinned gemini-2.5-flash to a model the picker still offers', async () => {
+    const resolved = resolveDeprecatedModelId('gemini-2.5-flash');
+    const replacement = (await geminiModels()).find(m => m.id === resolved);
+
+    expect(resolved).not.toBe('gemini-2.5-flash');
+    expect(replacement).toBeDefined();
+    expect(isModelDeprecated(replacement as ModelInfo)).toBe(false);
   });
 });
 

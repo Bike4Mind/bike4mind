@@ -38,6 +38,7 @@ describe('useSessionLayout - LRU Cache Functions', () => {
       recentArtifacts: [],
       maxRecentArtifacts: 10,
       selectedArtifactVersions: {},
+      hiddenFromLayout: undefined,
     });
   });
 
@@ -260,6 +261,24 @@ describe('useSessionLayout - LRU Cache Functions', () => {
 
       // Should still hide (explicit hide request)
       expect(useSessionLayout.getState().layout).toBe('hide');
+    });
+
+    // The store owns the rule, not the two chat components: any layout write ends the hide
+    // episode, so the dock a hidden chat remembers cannot outlive the user moving it.
+    it('clears hiddenFromLayout on a layout write that does not set it', () => {
+      useSessionLayout.setState({ hiddenFromLayout: 'dockBottom' });
+
+      setSessionLayout({ layout: 'vertical' });
+
+      expect(useSessionLayout.getState().hiddenFromLayout).toBeUndefined();
+    });
+
+    it('leaves hiddenFromLayout alone when the write carries no layout', () => {
+      useSessionLayout.setState({ hiddenFromLayout: 'dockBottom' });
+
+      setSessionLayout({ floatingChatMinimized: true });
+
+      expect(useSessionLayout.getState().hiddenFromLayout).toBe('dockBottom');
     });
   });
 

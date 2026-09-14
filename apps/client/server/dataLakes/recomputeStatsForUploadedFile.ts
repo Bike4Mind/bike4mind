@@ -1,5 +1,4 @@
-import type { dataLakeService } from '@bike4mind/services';
-import { recomputeStatsForLakeTags } from './recomputeStatsForLakeTags';
+import { recomputeStatsForLakeTags, type AttributedActor } from './recomputeStatsForLakeTags';
 
 /** The file fields this needs; a lean projection or a hydrated document both satisfy it. */
 type UploadedFile = { batchId?: string | null; tags?: ({ name?: string | null } | null)[] | null };
@@ -38,7 +37,7 @@ export const recomputeStatsForUploadedFile = async (
      * Only the self-host upload proxy has one - the S3 event and the MinIO webhook arrive with no
      * request behind them. Omitted, a draft -> active flip records under a `system` principal.
      */
-    actor?: dataLakeService.ManageActor;
+    actor?: AttributedActor;
   }
 ): Promise<void> => {
   if (file.batchId) return;

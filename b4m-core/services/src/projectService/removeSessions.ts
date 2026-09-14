@@ -1,6 +1,13 @@
-import { IProjectRepository, ISessionRepository, IUserRepository } from '@bike4mind/common';
-import { secureParameters } from '@bike4mind/utils';
+import {
+  IProjectRepository,
+  ISessionRepository,
+  IUserRepository,
+  secureParameters,
+  BadRequestError,
+} from '@bike4mind/common';
 import { z } from 'zod';
+import { canonicalId } from '../utils/objectIds';
+import { usableObjectIds } from '@bike4mind/db-core';
 
 const removeProjectSessionsSchema = z.object({
   projectId: z.string(),
@@ -32,12 +39,29 @@ export const removeSessions = async (
   if (!project) throw new Error('Project not found');
 
   const sessions = await db.sessions.shareable.findAllAccessibleByIds(user, sessionIds);
-  if (sessions.length !== sessionIds.length) throw new Error('Some sessions are not accessible');
+  // BadRequestError, not a bare Error - see addFiles.
+  // Asked for by id, not by count, so a duplicate cannot read as a miss. An id that cannot
+  // address a row is EXCLUDED rather than rejected: it is what the caller wants gone, the read
+  // guards skip it, and rejecting left it in the project permanently, warning on every read.
+  // The filter below still removes it. A castable id that did not resolve is still an access
+  // failure and still a 400.
+  // Compared canonically - hex folded to lowercase, non-hex left exactly as stored. A hex id is
+  // accepted in either case and resolves the same row, but `s.id` is always canonical lowercase,
+  // so matching raw strings would reject an uppercase id that Mongo resolved perfectly well.
+  // Non-hex is NOT folded: two legacy entries differing only in case are different rows.
+  const resolvedIds = new Set(sessions.map(s => canonicalId(String(s.id))));
+  const addressable = new Set(usableObjectIds(sessionIds, 'projectService.removeSessions').map(canonicalId));
+  if (sessionIds.some(id => addressable.has(canonicalId(id)) && !resolvedIds.has(canonicalId(id)))) {
+    throw new BadRequestError('Some sessions are not accessible');
+  }
   if (project.userId !== userId && sessions.some(s => s.userId !== userId)) {
     throw new Error('You are not authorized to remove sessions from this project');
   }
 
-  project.sessionIds = project.sessionIds.filter(id => !sessionIds.includes(id));
+  // Canonical on both sides here too: a stored id is lowercase, so an uppercase request id
+  // would match nothing and the call would answer 200 having removed nothing at all.
+  const removing = new Set(sessionIds.map(canonicalId));
+  project.sessionIds = project.sessionIds.filter(id => !removing.has(canonicalId(id)));
   project.updatedAt = new Date();
 
   // Revoke all project users access to the session

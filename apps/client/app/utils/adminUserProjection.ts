@@ -65,3 +65,15 @@ export type AdminUserListItem = Omit<Pick<IUserDocument, (typeof ADMIN_USER_LIST
 };
 
 export const PUBLIC_USER_LIST_PROJECTION: Record<string, 1> = { _id: 1, username: 1, name: 1, email: 1 };
+
+// $sort runs before $project in the GET /api/users pipeline, so an unvalidated sortField lets a
+// caller rank on attributes their own projection strips -- `sortField=isAdmin` turns the public
+// member picker into an admin-roster oracle. Derive the allowlists from the projections
+// themselves so a field can never be sortable without also being returned.
+export const ADMIN_USER_SORT_FIELDS: ReadonlySet<string> = new Set(Object.keys(ADMIN_USER_PROJECTION));
+export const PUBLIC_USER_SORT_FIELDS: ReadonlySet<string> = new Set(Object.keys(PUBLIC_USER_LIST_PROJECTION));
+
+// createdAt is projected for admins but not for public callers, so the two paths need
+// different fallbacks for an out-of-allowlist sortField.
+export const ADMIN_DEFAULT_SORT_FIELD = 'createdAt';
+export const PUBLIC_DEFAULT_SORT_FIELD = 'username';

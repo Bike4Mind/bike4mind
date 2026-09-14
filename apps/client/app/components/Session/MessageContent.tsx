@@ -2,17 +2,19 @@ import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
 import CopyTextButton from '@client/app/components/Session/CopyTextButton';
 import DownloadMenu from '../common/DownloadMenu';
 import PromptReplies from '@client/app/components/Session/PromptReplies';
+import RapidReplyBubble from '@client/app/components/Session/RapidReplyBubble';
 import ReasoningDisclosure from '@client/app/components/Session/AgentExecution/ReasoningDisclosure';
 import AutoRouteBadge from '@client/app/components/Session/AgentExecution/AutoRouteBadge';
 import UserPrompt from '@client/app/components/Session/UserPrompt';
 import ResearchModeResponseDisplay from '@client/app/components/Session/ResearchModeResponseDisplay';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import { useUser } from '@client/app/contexts/UserContext';
-import { IChatHistoryItem, SettingKey, ELISION_PUBLISH_BODY } from '@bike4mind/common';
+import { IChatHistoryItem, SettingKey, ELISION_PUBLISH_BODY, ANSWER_DIAGNOSIS_TITLE } from '@bike4mind/common';
 import { elidedReplyWarning } from '@client/app/utils/artifactParser';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import { Menu, MenuItem, ListItemDecorator } from '@mui/joy';
 import Box from '@mui/joy/Box';
+import Button from '@mui/joy/Button';
 import Divider from '@mui/joy/Divider';
 import Dropdown from '@mui/joy/Dropdown';
 import IconButton from '@mui/joy/IconButton';
@@ -549,6 +551,9 @@ const MessageContent: React.FC<ContentProps> = memo(
             messageId={messageData.id}
           />
         )}
+        {/* Rapid reply - the instant acknowledgement, above the streaming reply body
+            it precedes. Only the streaming message is handed a chatCompletion. */}
+        {chatCompletion && <RapidReplyBubble chatCompletion={chatCompletion} />}
         {/* Auto-route notice. Sits above the reply body (not in the footer chip
             row) so the user reads it before internalizing the agent-style answer -
             false-positive remediation via Dismiss is more discoverable that way.
@@ -788,6 +793,24 @@ const MessageContent: React.FC<ContentProps> = memo(
                     content={extractedReplies ? extractedReplies[0] : ''}
                     fileName={`${messageData.id}.md`}
                   />
+                  {hasShareableReply && (
+                    <Button
+                      data-testid="message-publish-share-btn"
+                      variant="outlined"
+                      color="neutral"
+                      size="sm"
+                      startDecorator={<ShareIcon sx={{ fontSize: 16 }} />}
+                      onClick={handleShareReply}
+                      sx={{
+                        minHeight: '28px',
+                        flexShrink: '0',
+                        borderRadius: '6px',
+                        fontSize: '13px',
+                      }}
+                    >
+                      Publish &amp; Share
+                    </Button>
+                  )}
 
                   {/* Advanced actions in menu */}
                   <Dropdown>
@@ -833,7 +856,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                         <ListItemDecorator>
                           <HiveIcon />
                         </ListItemDecorator>
-                        Prompt Meta
+                        {ANSWER_DIAGNOSIS_TITLE}
                       </MenuItem>
                       <MenuItem onClick={() => onPinToggle(messageData)}>
                         <ListItemDecorator>
@@ -902,14 +925,6 @@ const MessageContent: React.FC<ContentProps> = memo(
                           Send to {DATA_LAKE}
                         </MenuItem>
                       )}
-                      {hasShareableReply && (
-                        <MenuItem onClick={handleShareReply} data-testid="message-share-reply">
-                          <ListItemDecorator>
-                            <ShareIcon />
-                          </ListItemDecorator>
-                          Share
-                        </MenuItem>
-                      )}
                       <MenuItem onClick={() => handleDelete(messageData)} color="danger">
                         <ListItemDecorator sx={{ color: 'inherit' }}>
                           <DeleteOutline />
@@ -947,6 +962,25 @@ const MessageContent: React.FC<ContentProps> = memo(
                     content={extractedReplies ? extractedReplies[0] : ''}
                     fileName={`${messageData.id}.md`}
                   />
+                  {hasShareableReply && (
+                    <Tooltip title="Publish & Share">
+                      <IconButton
+                        data-testid="message-publish-share-btn"
+                        variant="outlined"
+                        color="neutral"
+                        size="sm"
+                        onClick={handleShareReply}
+                        sx={{
+                          width: '28px',
+                          height: '28px',
+                          flexShrink: '0',
+                          borderRadius: '6px',
+                        }}
+                      >
+                        <ShareIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                    </Tooltip>
+                  )}
 
                   {/* Advanced actions in menu */}
                   <Dropdown>
@@ -992,7 +1026,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                         <ListItemDecorator>
                           <HiveIcon />
                         </ListItemDecorator>
-                        Prompt Meta
+                        {ANSWER_DIAGNOSIS_TITLE}
                       </MenuItem>
                       <MenuItem onClick={() => onPinToggle(messageData)}>
                         <ListItemDecorator>
@@ -1059,14 +1093,6 @@ const MessageContent: React.FC<ContentProps> = memo(
                             <DataLakeIcon />
                           </ListItemDecorator>
                           Send to {DATA_LAKE}
-                        </MenuItem>
-                      )}
-                      {hasShareableReply && (
-                        <MenuItem onClick={handleShareReply} data-testid="message-share-reply">
-                          <ListItemDecorator>
-                            <ShareIcon />
-                          </ListItemDecorator>
-                          Share
                         </MenuItem>
                       )}
                       <MenuItem onClick={() => handleDelete(messageData)} color="danger">

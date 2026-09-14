@@ -122,7 +122,7 @@ export const MODEL_ALIASES: Record<string, string> = {
   // Google Gemini Models
   gemini: ChatModels.GEMINI_2_5_PRO,
   'gemini-pro': ChatModels.GEMINI_2_5_PRO,
-  'gemini-flash': ChatModels.GEMINI_2_5_FLASH,
+  'gemini-flash': ChatModels.GEMINI_3_5_FLASH,
   'gemini-flash-lite': ChatModels.GEMINI_2_5_FLASH_LITE,
 
   // Gemini 3 (preview)
@@ -153,7 +153,9 @@ export const MODEL_ALIASES: Record<string, string> = {
   'grok-2-vision': ChatModels.GROK_2_VISION,
 
   // DeepSeek Models
-  deepseek: ChatModels.DEEPSEEK_R1,
+  // Bare `deepseek` points at the hosted first-party model; `deepseek-r1` keeps
+  // resolving to the local Ollama tag it has always named.
+  deepseek: ChatModels.DEEPSEEK_FLASH,
   'deepseek-r1': ChatModels.DEEPSEEK_R1,
 
   // Llama Models (Ollama local)

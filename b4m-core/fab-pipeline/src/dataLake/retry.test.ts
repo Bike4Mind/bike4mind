@@ -66,6 +66,28 @@ describe('withRetry', () => {
       // initialDelay * 2^0 with zero jitter = 200ms calculated backoff
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 200);
     });
+
+    // #2118: this option is caller-INJECTED, so the consumer cannot assume the extractor carries the
+    // non-positive rule. A zero is not null, so without this guard it wins over the backoff and
+    // Math.min(0, maxDelayMs) collapses every remaining attempt into an immediate burst.
+    it.each([
+      ['zero', 0],
+      ['a negative delay', -5_000],
+    ])('ignores %s from an injected extractor and uses the calculated backoff', async (_label, value) => {
+      const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+      const fn = vi.fn().mockRejectedValueOnce(new Error('429')).mockResolvedValueOnce('ok');
+      const promise = withRetry(fn, {
+        isRetryable: alwaysRetry,
+        initialDelayMs: 200,
+        jitterFactor: 0,
+        getRetryAfterMs: () => value,
+      });
+      await vi.runAllTimersAsync();
+      await expect(promise).resolves.toBe('ok');
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 200);
+      // The point of the guard: never a zero-delay sleep, which is what the burst looked like.
+      expect(setTimeoutSpy).not.toHaveBeenCalledWith(expect.any(Function), 0);
+    });
   });
 
   describe('abortSignal', () => {

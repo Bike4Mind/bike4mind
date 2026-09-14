@@ -5,7 +5,7 @@
  * Used by the UI to show "Issue Closed" chip and disable retry.
  */
 
-import mongoose from 'mongoose';
+import { isValidObjectId } from '@server/utils/objectId';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError, NotFoundError, BadRequestError } from '@server/utils/errors';
@@ -20,7 +20,7 @@ const handler = baseApi().get(
     if (!req.user.isAdmin) throw new ForbiddenError('Permission denied');
 
     const { id } = req.query as Record<string, string>;
-    if (typeof id !== 'string' || !mongoose.Types.ObjectId.isValid(id)) {
+    if (typeof id !== 'string' || !isValidObjectId(id)) {
       throw new NotFoundError('Invalid tracking ID');
     }
 

@@ -68,6 +68,13 @@ export interface SearchFabFilesServerOptions {
   dataLakeTagPrefixes?: string[];
   restrictToDataLake?: boolean;
   lakeMemberships?: DataLakeMembershipScope[];
+  /**
+   * Narrow to the lake members carrying no tag under ANY of these prefixes - the "Uncategorized"
+   * bucket. Server-supplied with the rest of the scope because it only means "one lake's bucket"
+   * next to the `restrictToDataLake` + lake arms that fix the population; alone it would narrow
+   * the caller's whole file list instead.
+   */
+  lacksContentPrefixTags?: string[];
 }
 
 export const search = async (
@@ -116,6 +123,7 @@ export const search = async (
       dataLakeTagPrefixes: serverOptions?.dataLakeTagPrefixes,
       restrictToDataLake: serverOptions?.restrictToDataLake,
       lakeMemberships: serverOptions?.lakeMemberships,
+      lacksContentPrefixTags: serverOptions?.lacksContentPrefixTags,
     }
   );
 

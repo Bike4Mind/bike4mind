@@ -21,6 +21,20 @@ describe('FEATURE_PATH_PREFIXES', () => {
   });
 });
 
+describe('VIEW_REGISTRY descriptions', () => {
+  // Every description is spliced verbatim into the navigate_view system prompt by
+  // getViewSummaryForLLM, so a stale one misinforms the model with nothing to catch it.
+  // Counts of things this repo cannot count are the drift-prone case: the catalogues they
+  // quantify live in packages this one does not import, so no build error ever fires.
+  // opti.root carried such a count until it had gone badly stale. Describe, do not tally.
+  const INVENTORY_COUNT = /\b\d+\b[^.]*\b(famil|pattern|solver|card)/i;
+
+  it('quantify no catalogue this package cannot count', () => {
+    const offenders = VIEW_REGISTRY.filter(v => INVENTORY_COUNT.test(v.description)).map(v => v.id);
+    expect(offenders).toEqual([]);
+  });
+});
+
 describe('getCurrentPathFromContext', () => {
   it('returns null for undefined or empty input', () => {
     expect(getCurrentPathFromContext(undefined)).toBeNull();

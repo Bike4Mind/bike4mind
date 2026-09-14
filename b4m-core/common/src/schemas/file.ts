@@ -1,6 +1,40 @@
 import z from 'zod';
 import { IFabFile, KnowledgeType } from '../types';
 
+/**
+ * Content types a browser executes as an active document on the origin that serves them.
+ * Uploaded bytes are served from S3/CDN with no per-file CSP, so any of these declared as
+ * the stored Content-Type is stored XSS when the file is opened. Rejected at every upload
+ * boundary; presign routes must also bind ContentType so the declared type cannot be
+ * swapped for one of these at PUT time.
+ */
+export const EXECUTABLE_UPLOAD_MIME_TYPES: readonly string[] = ['text/html', 'application/xhtml+xml', 'image/svg+xml'];
+
+/** Normalize `type/subtype; charset=...` to a bare lowercased `type/subtype`. */
+const bareMimeType = (mimeType: string): string => mimeType.split(';')[0].trim().toLowerCase();
+
+export const isExecutableUploadMimeType = (mimeType: string): boolean =>
+  EXECUTABLE_UPLOAD_MIME_TYPES.includes(bareMimeType(mimeType));
+
+/**
+ * Raster/vector image types accepted for image-only uploads (org logos, avatars).
+ * image/svg+xml is deliberately excluded - see EXECUTABLE_UPLOAD_MIME_TYPES.
+ */
+export const ALLOWED_IMAGE_MIME_TYPES: readonly string[] = [
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/avif',
+  'image/bmp',
+  'image/x-icon',
+  'image/vnd.microsoft.icon',
+  'image/tiff',
+];
+
+export const isAllowedImageMimeType = (mimeType: string): boolean =>
+  ALLOWED_IMAGE_MIME_TYPES.includes(bareMimeType(mimeType));
+
 export const FileGeneratePresignedUrlRequestInput = z.object({
   fileName: z.string(),
   mimeType: z.string(),

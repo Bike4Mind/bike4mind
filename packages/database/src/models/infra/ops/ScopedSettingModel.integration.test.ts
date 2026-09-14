@@ -122,6 +122,55 @@ describe('ScopedSettingModel unique index + soft delete', () => {
   });
 });
 
+describe('ScopedSettingsRepository.findBySettingName (#2157)', () => {
+  const OTHER_KEY = 'DefaultChunkSize';
+
+  it('returns every LIVE rung holding this setting, and nothing for another setting', async () => {
+    // The whole point of this read: a global consumer asking "which scopes have an opinion at all",
+    // across rungs it could not have enumerated in advance.
+    await scopedSettingsRepository.upsertOverride({
+      scopeLevel: SettingScopeLevel.Lake,
+      scopeId: 'l1',
+      settingName: KEY,
+      settingValue: '1000',
+    });
+    await scopedSettingsRepository.upsertOverride({
+      scopeLevel: SettingScopeLevel.Owner,
+      scopeId: 'u1',
+      settingName: KEY,
+      settingValue: '2000',
+    });
+    await scopedSettingsRepository.upsertOverride({
+      scopeLevel: SettingScopeLevel.Organization,
+      scopeId: 'o1',
+      settingName: OTHER_KEY,
+      settingValue: '512',
+    });
+
+    const rows = await scopedSettingsRepository.findBySettingName(KEY);
+
+    expect(rows.map(r => [r.scopeLevel, r.scopeId]).sort()).toEqual([
+      [SettingScopeLevel.Lake, 'l1'],
+      [SettingScopeLevel.Owner, 'u1'],
+    ]);
+    expect(await scopedSettingsRepository.findBySettingName(OTHER_KEY)).toHaveLength(1);
+  });
+
+  it('excludes soft-deleted rows', async () => {
+    // The claim the implementation comment makes about softDeletePlugin's find hook. If a tombstone
+    // came back, the sweep would grade a lake against a lever an operator had already cleared.
+    const addr = { scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1', settingName: KEY };
+    await scopedSettingsRepository.upsertOverride({ ...addr, settingValue: '1000' });
+    await scopedSettingsRepository.clearOverride(addr);
+
+    expect(await scopedSettingsRepository.findBySettingName(KEY)).toHaveLength(0);
+  });
+
+  it('returns [] when the setting is not overridden anywhere - the consumer fast path', async () => {
+    expect(await scopedSettingsRepository.findBySettingName(KEY)).toEqual([]);
+  });
+});
+
 describe('ScopedSettingsRepository.upsertOverride / clearOverride (#1728)', () => {
   it('creates a live row readable via findOverrides', async () => {
     const addr = { scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1', settingName: KEY };

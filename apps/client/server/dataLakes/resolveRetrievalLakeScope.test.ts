@@ -12,12 +12,24 @@ const { mockGetDynamicDataLakeAccess, mockGetRequestEntitlements, mockGetUserEnt
 
 // The services barrel is mocked with a factory rather than vi.spyOn: under ESM a spy on a
 // re-exported binding does not reliably intercept the consumer's reference.
-vi.mock('@bike4mind/services', () => ({
-  dataLakeService: { getDynamicDataLakeAccess: mockGetDynamicDataLakeAccess },
-}));
+//
+// Only `getDynamicDataLakeAccess` is replaced; the rest of `dataLakeService` comes from the real
+// module. `withStaticRegistryBypass` calls `registryMembershipScope`, and a hand-written stand-in
+// for it here would be a second copy of the very predicate this file's assertions claim parity
+// with - the drift #2265 removed. Keep new helpers coming from importOriginal, not from a literal.
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = (await importOriginal()) as typeof import('@bike4mind/services');
+  return {
+    ...actual,
+    dataLakeService: { ...actual.dataLakeService, getDynamicDataLakeAccess: mockGetDynamicDataLakeAccess },
+  };
+});
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { __marker: 'dataLakeRepository' },
+  dataLakeAccessGrantRepository: { __marker: 'dataLakeAccessGrantRepository' },
   organizationRepository: { __marker: 'organizationRepository', findMembershipOrgIds: mockFindMembershipOrgIds },
+  dataLakeAccessGrantRepository: { __marker: 'dataLakeAccessGrantRepository' },
+  adminSettingsRepository: { __marker: 'adminSettingsRepository' },
 }));
 vi.mock('@server/entitlements', () => ({
   getRequestEntitlements: mockGetRequestEntitlements,
@@ -29,7 +41,12 @@ import {
   resolveRetrievalLakeScopeForUser,
   withStaticRegistryBypass,
 } from './resolveRetrievalLakeScope';
-import { dataLakeRepository, organizationRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  dataLakeAccessGrantRepository,
+  dataLakeRepository,
+  organizationRepository,
+} from '@bike4mind/database';
 import type { EntitlementRequest } from '@server/entitlements';
 
 type Scope = Parameters<typeof withStaticRegistryBypass>[0];
@@ -133,12 +150,18 @@ describe('withStaticRegistryBypass', () => {
     const out = withStaticRegistryBypass(scopeOf(), REGISTRY);
 
     expect(out.lakes.map(l => l.datalakeTag)).toEqual(['datalake:opti-knowledge', 'datalake:house-kb']);
-    // Registry-sourced entries carry no membership scope - they have no creator to anchor one to.
-    // A fourth pinned property (#2243): since lakeMembershipsFrom (getDynamicDataLakeTags.ts) is
-    // exactly `lakes.flatMap(l => l.membership ? [l.membership] : [])`, "no lake here has a
-    // membership" IS "lakeMembershipsFrom(out.lakes) === []" - the injected lakes contribute no
-    // retrieval arm at all, unanchored or otherwise.
-    expect(out.lakes.every(l => l.source === 'registry' && !l.membership)).toBe(true);
+    // Each injected entry carries a REGISTRY membership scope, built off the registry config
+    // (property 1 above): the whole-lake count needs a scope for these lakes, or a privileged
+    // caller can search a registry lake and not count it.
+    expect(out.lakes.map(l => l.membership)).toEqual([
+      { kind: 'registry', datalakeTag: 'datalake:opti-knowledge', fileTagPrefix: 'opti:' },
+      { kind: 'registry', datalakeTag: 'datalake:house-kb', fileTagPrefix: 'house:' },
+    ]);
+    // The property #2243 actually needs, restated now that presence proves nothing: an unanchored
+    // arm must not reach a MULTI-lake retrieval query. `lakeMembershipsFrom` allow-lists `owned`,
+    // so the injected lakes still contribute no retrieval arm - which is what this asserts
+    // directly rather than via the absence of the field.
+    expect(out.lakes.every(l => l.source === 'registry' && l.membership.kind === 'registry')).toBe(true);
   });
 
   it('keeps a lake the scope already resolved, rather than replacing it with a registry entry', () => {
@@ -150,7 +173,12 @@ describe('withStaticRegistryBypass', () => {
       slug: 'opti-knowledge',
       datalakeTag: 'datalake:opti-knowledge',
       fileTagPrefix: 'opti:',
-      membership: { datalakeTag: 'datalake:opti-knowledge', fileTagPrefix: 'opti:', creatorUserId: 'owner1' },
+      membership: {
+        kind: 'owned' as const,
+        datalakeTag: 'datalake:opti-knowledge',
+        fileTagPrefix: 'opti:',
+        creatorUserId: 'owner1',
+      },
       source: 'dynamic' as const,
     };
 
@@ -193,7 +221,13 @@ describe('resolveRetrievalLakeScope', () => {
     expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
       db: {
         dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
         organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
+        // The grant rung. Both adapters are optional on the resolver, so an unthreaded one is not
+        // a type error - it just silently drops a grant-reached lake out of retrieval, which is
+        // exactly the divergence this deep-equality assertion exists to catch.
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        adminSettings: adminSettingsRepository,
       },
       user: { id: 'u1', tags: ['Opti'] },
       entitlementKeys: ['optihashi:pro'],
@@ -246,7 +280,10 @@ describe('resolveRetrievalLakeScope', () => {
     expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
       db: {
         dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
         organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        adminSettings: adminSettingsRepository,
       },
       user: { id: 'u1', tags: [] },
       entitlementKeys: [],
@@ -264,7 +301,10 @@ describe('resolveRetrievalLakeScope', () => {
     expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
       db: {
         dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
         organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        adminSettings: adminSettingsRepository,
       },
       user: { id: 'u1', tags: ['Opti'] },
       entitlementKeys: [],

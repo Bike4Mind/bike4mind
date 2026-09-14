@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'vitest';
-import { createResource, type Manifest } from './index';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { createResource, toEnvKey, type Manifest } from './index';
+import { DEFAULT_MANIFEST } from './manifest';
 
 describe('createResource — self-host Resource shim', () => {
   test('App.stage reflects APP_STAGE env', () => {
@@ -122,5 +125,71 @@ describe('DEFAULT_MANIFEST — the self-host manifest contract', () => {
     // videoGenerationQueue is a real dlqRegistry source queue with no self-host counterpart
     // (no manifest entry, no elasticmq.conf declaration, no .env.selfhost.example var).
     expect(map.videoGenerationQueue).toBeUndefined();
+  });
+});
+
+/**
+ * The self-host queue wiring lives in three hand-maintained files that must agree, and nothing
+ * compared them until a queue went missing from two of them at once. A queue the code reads via
+ * `Resource.<name>.url` needs an entry in all three: the manifest (or the read throws), the
+ * ElasticMQ config (or the broker has nowhere to put the message) and the env template (or no
+ * operator ever sets the URL).
+ *
+ * These run in one direction only - manifest and broker config outward to the env template. The
+ * reverse is legitimately allowed: `selfHostEventQueue` is read straight from its env var rather
+ * than through `Resource`, and `tavernHeartbeatQueue` is served by a premium overlay, so neither
+ * belongs in the manifest. Directional checks keep this honest without an exemption list to rot.
+ */
+const REPO_ROOT = join(__dirname, '../../..');
+
+const manifestQueues = (): string[] =>
+  Object.entries(DEFAULT_MANIFEST)
+    .filter(([, entry]) => entry.kind === 'queue')
+    .map(([name]) => name);
+
+const brokerQueues = (): string[] => {
+  const conf = readFileSync(join(REPO_ROOT, 'elasticmq.conf'), 'utf8');
+  // Bounded at the block's closing brace, not sliced to EOF: `queues { }` merely happens to be
+  // the last block today, and a config gaining a trailing section would start harvesting it.
+  // Only top-level entries count - a nested `deadLettersQueue { }` inside a queue is that
+  // queue's DLQ setting, not a queue of its own. Underscores and hyphens are legal in a name.
+  const block = conf.slice(conf.indexOf('queues {')).split(/\n\}/)[0];
+  return [...block.matchAll(/^ {2}([a-zA-Z][a-zA-Z0-9_-]*)\s*\{/gm)].map(m => m[1]).filter(n => n !== 'queues');
+};
+
+/** The shim's OWN name-to-env-key mapping, imported rather than restated: a local copy silently
+ *  dropped its SCREAMING_SNAKE passthrough branch while still claiming to match. */
+const envKey = toEnvKey;
+
+const templateEnvKeys = (): Set<string> => {
+  const template = readFileSync(join(REPO_ROOT, '.env.selfhost.example'), 'utf8');
+  return new Set([...template.matchAll(/^([A-Z0-9_]+)=/gm)].map(m => m[1]));
+};
+
+describe('self-host queue wiring stays consistent across its three files', () => {
+  test('the parsers actually see something (guards against a silently empty scan)', () => {
+    expect(manifestQueues().length).toBeGreaterThan(10);
+    expect(brokerQueues().length).toBeGreaterThan(10);
+    expect(templateEnvKeys().has('FAB_FILE_CHUNK_QUEUE')).toBe(true);
+  });
+
+  test('every queue in the manifest is declared in elasticmq.conf', () => {
+    const declared = new Set(brokerQueues());
+    const missing = manifestQueues().filter(q => !declared.has(q));
+    expect(missing, `in the manifest but not declared in elasticmq.conf: ${missing.join(', ')}`).toEqual([]);
+  });
+
+  test('every queue in the manifest has a URL in .env.selfhost.example', () => {
+    const keys = templateEnvKeys();
+    const missing = manifestQueues().filter(q => !keys.has(envKey(q)));
+    expect(missing, `in the manifest but absent from .env.selfhost.example: ${missing.join(', ')}`).toEqual([]);
+  });
+
+  test('every queue declared in elasticmq.conf has a URL in .env.selfhost.example', () => {
+    const keys = templateEnvKeys();
+    const missing = brokerQueues().filter(q => !keys.has(envKey(q)));
+    expect(missing, `declared in elasticmq.conf but absent from .env.selfhost.example: ${missing.join(', ')}`).toEqual(
+      []
+    );
   });
 });

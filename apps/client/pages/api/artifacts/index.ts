@@ -1,8 +1,15 @@
 import { ArtifactTypeSchema, queryBool } from '@bike4mind/common';
 import { artifactService } from '@bike4mind/services';
-import { artifactRepository, artifactContentRepository, artifactVersionRepository } from '@bike4mind/database';
+import {
+  artifactRepository,
+  artifactContentRepository,
+  artifactVersionRepository,
+  sessionRepository,
+  questRepository,
+} from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertArtifactSourceRefsAccessible } from '@server/utils/assertArtifactSourceRefsAccessible';
 import { z } from 'zod';
 import qs from 'qs';
 
@@ -83,6 +90,29 @@ const handler = baseApi()
       }
 
       const validatedData = CreateArtifactSchema.parse(req.body);
+
+      // The refs below are written verbatim onto the new artifact, so a caller must be entitled to
+      // any it supplies - otherwise it could claim another user's session/quest/artifact as its
+      // source. Sessions are shareable and stamping a session is a write into its graph, so the bar
+      // is update access (owner or update-shared), matching the collaborator-in-a-shared-session
+      // flow; artifacts are not shareable, so parent stays owner-only.
+      await assertArtifactSourceRefsAccessible(
+        userId,
+        {
+          sessionId: validatedData.sessionId,
+          sourceQuestId: validatedData.sourceQuestId,
+          parentArtifactId: validatedData.parentArtifactId,
+        },
+        {
+          // Include the global-write share arm: a global-write sharee may write into the session
+          // graph (stamp an artifact with its id), matching the CASL update ability. Owner and
+          // update/group-update shares still pass; read-only sharees and strangers still 403.
+          canUpdateSession: async id =>
+            !!(await sessionRepository.shareable.findUpdateAccessById(req.user!, id, { includeGlobalWrite: true })),
+          getQuestSessionId: async id => (await questRepository.findById(id))?.sessionId ?? null,
+          getArtifactOwner: async id => (await artifactRepository.findOne({ id }))?.userId ?? null,
+        }
+      );
 
       const result = await artifactService.create(userId, validatedData, {
         db: {

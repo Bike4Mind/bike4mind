@@ -1,5 +1,6 @@
 import {
   IAdminSettingsRepository,
+  IDataLakeAccessGrantRepository,
   IScopedSettingsRepository,
   IUserDocument,
   IUserRepository,
@@ -58,14 +59,22 @@ interface ResearchTaskProcessAdapters {
     apiKeys: Pick<IApiKeyRepository, 'findByUserIdAndType' | 'findByUserIdAndTypes'>;
     // Widened to match ToolContext.db.dataLakes below (this whole `db` object is passed through
     // to it), not just what the new write-gate call needs.
+    // 'find' is forwarded straight to createFabFile, for its fallback tagger's prefix-overlap check.
     dataLakes: Pick<
       IDataLakeRepository,
-      'findByDatalakeTag' | 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements'
+      'findByDatalakeTag' | 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findById' | 'find'
     >;
     // Required: this whole `db` object is passed through to ToolContext.db below, whose
     // `organizations` field is itself required (#1674 - the data-lake retrieval resolver reads
     // `findMembershipOrgIds` off it).
-    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds'>;
+    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds' | 'findIdsWithAdminRights'>;
+    // Optional, but wire it for the same reason as scopedSettings above: this `db` reaches
+    // ToolContext.db, and without it a grant-reached lake drops out of the research tools'
+    // retrieval while browse still shows it. All three methods, because the same object serves
+    // three readers: retrieval's grant arm (`listByPrincipal`), `createFabFile`'s admission
+    // contract (`listByLake`) and the per-turn manage re-check ToolContext.db requires
+    // (`listActiveByLakes`).
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listByLake' | 'listActiveByLakes'>;
   };
   llm: Pick<ICompletionBackend, 'complete' | 'currentModel'>;
   storage: CreateFabFileAdapters['storage'];
@@ -145,7 +154,15 @@ export const process = async (
     researchTask.statusFailedMessage = (e as Error).message;
     researchTask.statusFailedAt = new Date();
 
-    await db.researchTasks.update(researchTask);
+    // Write only the fields this error path sets, not the whole stale researchTask: the success-path
+    // update above (and processScrape/DeepResearch) may have already advanced the doc, and a whole-doc
+    // write would clobber that.
+    await db.researchTasks.update({
+      id: researchTask.id,
+      status: researchTask.status,
+      statusFailedMessage: researchTask.statusFailedMessage,
+      statusFailedAt: researchTask.statusFailedAt,
+    });
 
     try {
       await adapters.jobs.researchTasks.sendToClient(researchTask, {

@@ -660,6 +660,8 @@ Direct access to AI capabilities outside the chat flow.
 POST /api/ai/llm
 \`\`\`
 
+**Required API-key scope:** \`ai:chat\`.
+
 **Request Body:**
 
 | Field | Type | Required | Description |
@@ -818,7 +820,7 @@ Structured multi-step plans created by the QuestMaster agent.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | /api/feedback | List feedback |
+| GET | /api/feedback | List feedback (paginated; filters: page, limit, status, organization, organizationId, userId, sessionId, questId, subject, search, sort) |
 | POST | /api/feedback | Submit feedback |
 | GET | /api/feedback/[id]/read | Mark as read |
 | PUT | /api/feedback/[id]/update | Update feedback |

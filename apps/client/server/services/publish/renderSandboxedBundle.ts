@@ -2,6 +2,7 @@ import * as cheerio from 'cheerio';
 import type { PublishVisibility } from '@bike4mind/common';
 import { BLESSED_SCRIPT_PATHS, PUBLISH_HOST } from './validateBundle';
 import { buildFragmentNavScriptTag } from './fragmentNav';
+import { buildPrintBridgeTag } from './printBridge';
 
 /**
  * Publish - sandboxed-bundle serializer.
@@ -39,6 +40,11 @@ import { buildFragmentNavScriptTag } from './fragmentNav';
  *
  * Off-origin `<a href>`s are retargeted to a new tab (see `retargetOffOriginLinks`),
  * which is the only outbound navigation the viewer sandbox permits.
+ *
+ * Every render also carries the print bridge (see `printBridge.ts`) - the wrapper's
+ * "Save as PDF" prints THIS document rather than the frame-clipping wrapper, so the
+ * trigger has to live in the bundle. Unconditional, so the saved `?export=html` file
+ * and the isolated-origin render print the same way the wrapper does.
  */
 
 export interface SandboxAsset {
@@ -153,14 +159,16 @@ export function renderSandboxedBundle(input: RenderSandboxedBundleInput): Render
   if (input.pagePaths?.length) {
     // After author content so author click handlers run first (the helper skips
     // defaultPrevented events); the pin bridge appends after this, order-independent.
-    const tag = buildFragmentNavScriptTag({
-      origins: [origin, PUBLISH_HOST ? `https://${PUBLISH_HOST}` : ''],
-      paths: input.pagePaths,
-    });
-    const body = $('body');
-    if (body.length) body.append(tag);
-    else $.root().append(tag);
+    appendToBody(
+      $,
+      buildFragmentNavScriptTag({
+        origins: [origin, PUBLISH_HOST ? `https://${PUBLISH_HOST}` : ''],
+        paths: input.pagePaths,
+      })
+    );
   }
+
+  appendToBody($, buildPrintBridgeTag());
 
   return { srcdoc: $.html(), droppedAssets };
 }
@@ -190,6 +198,13 @@ function retargetOffOriginLinks($: cheerio.CheerioAPI, origin: string): void {
     rel.add('noopener');
     $(el).attr('rel', [...rel].join(' '));
   });
+}
+
+/** Append markup after the author's content, tolerating a bundle with no `<body>`. */
+function appendToBody($: cheerio.CheerioAPI, markup: string): void {
+  const body = $('body');
+  if (body.length) body.append(markup);
+  else $.root().append(markup);
 }
 
 /** Insert (or update) a single `<base href>` as the first child of `<head>`. */

@@ -109,6 +109,14 @@ export interface DataLakeTreeViewProps {
    */
   uncategorized?: {
     files: IFabFileDocument[];
+    /**
+     * How many files the bucket holds, when the host knows that before it holds them. Hosts
+     * that already have the lake's whole file list omit it and `files.length` stands in; the
+     * chat tree fetches `files` only once the bucket is OPENED, so without this the row would
+     * advertise 0 and hide itself - the very "counted but unreachable" gap the bucket exists
+     * to close. Drives the row's number and whether it renders at all.
+     */
+    count?: number;
     renderRow: (count: number, onOpen: () => void) => ReactNode;
   };
   /** Slots above the toolbar / below the scroll pane (the chat tree's header and footer). */
@@ -236,6 +244,7 @@ export default function DataLakeTreeView({
     !isUncategorized && breadcrumb.length > leafMinDepth && currentNodes.length === 0 ? breadcrumb.join(':') : null;
   const showFiles = isUncategorized || !!leafTag;
   const bucketFiles = uncategorized?.files;
+  const bucketCount = uncategorized ? (uncategorized.count ?? uncategorized.files.length) : 0;
   const files = useMemo(() => {
     const scoped = isUncategorized
       ? bucketFiles!
@@ -285,7 +294,7 @@ export default function DataLakeTreeView({
 
   // A ceiling, matching isUncategorized above: the bucket belongs at the seeded root, and a
   // breadcrumb shallower than leafMinDepth is still that root as far as the host is concerned.
-  const showBucketRow = !!uncategorized && breadcrumb.length <= leafMinDepth && !searchQuery && bucketFiles!.length > 0;
+  const showBucketRow = !!uncategorized && breadcrumb.length <= leafMinDepth && !searchQuery && bucketCount > 0;
   // The bucket / own-files rows standing in for an empty node list are still content, and a
   // pending/matched article search might still fill the pane - none of that should flash
   // "No categories"/"No matches" while it's about to be superseded.
@@ -395,9 +404,7 @@ export default function DataLakeTreeView({
                 ))}
                 {/* Single conditional child, not a .map element - a key here would be inert. */}
                 {showBucketRow &&
-                  uncategorized!.renderRow(uncategorized!.files.length, () =>
-                    onNavigate([...breadcrumb, UNCATEGORIZED_KEY])
-                  )}
+                  uncategorized!.renderRow(bucketCount, () => onNavigate([...breadcrumb, UNCATEGORIZED_KEY]))}
                 {showOwnFiles &&
                   ownFiles.map(f => (
                     <Fragment key={f.id}>
