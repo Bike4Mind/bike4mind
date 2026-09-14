@@ -4,6 +4,8 @@ import { styled } from '@mui/system';
 import { profileTabListSx } from '@client/app/routes/profile/profileTabListSx';
 import HelpCenterOutlinedIcon from '@mui/icons-material/HelpCenterOutlined';
 import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
+import TutorialCard from './TutorialCard';
+import { tutorialItemsFor, type TutorialsTabKey } from './tutorialCatalog';
 
 /**
  * Tutorials - the feature-discovery surface.
@@ -17,8 +19,6 @@ import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
  * not to a page you can browse. Reading the static presentation map keeps this
  * surface inert by construction rather than by a flag.
  */
-
-export type TutorialsTabKey = 'getting-started' | 'advanced' | 'developers' | 'achievements';
 
 const TABS: { key: TutorialsTabKey; label: string }[] = [
   { key: 'getting-started', label: 'Getting Started' },
@@ -34,9 +34,11 @@ const TutorialsPage = () => {
     <Box
       sx={{
         height: '100%',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
+        // The page is the only scroller: the frame grows to its content and this
+        // container scrolls it. Padding (not centring) sets the gap above the
+        // frame, so the same gap is there when scrolled back to the top - a
+        // centred frame would collapse that space as soon as content overflowed.
+        overflowY: 'auto',
         // Side gutters keep the frame off the viewport edges once it is narrower
         // than its 1400px cap; the vertical padding stays tighter so the 80vh
         // frame is not squeezed on short screens.
@@ -50,9 +52,11 @@ const TutorialsPage = () => {
         sx={theme => ({
           width: '100%',
           maxWidth: '1400px',
-          // Fixed frame rather than a growing one: the card grid scrolls inside it,
-          // so the header and tabs stay put however many cards a category holds.
-          height: '80vh',
+          mx: 'auto',
+          // Fills the viewport when a tab is short, grows past it when a tab is
+          // long. Subtracts this container's own vertical padding so the frame
+          // ends exactly where the bottom gap begins.
+          minHeight: { xs: 'calc(100vh - 32px)', md: 'calc(100vh - 48px)' },
           display: 'flex',
           flexDirection: 'column',
           borderRadius: '12px',
@@ -118,7 +122,7 @@ const TutorialsPage = () => {
         <Tabs
           value={tab}
           onChange={(_, value) => setTab(value as TutorialsTabKey)}
-          sx={{ mt: '32px', flex: 1, minHeight: 0 }}
+          sx={{ mt: '32px' }}
           aria-label="Tutorial categories"
         >
           <TabList data-testid="tutorials-tablist" sx={tabListSx}>
@@ -132,8 +136,23 @@ const TutorialsPage = () => {
           </TabList>
 
           {TABS.map(({ key }) => (
-            <TabPanel key={key} value={key} sx={{ px: 0, pt: '24px', pb: 0, overflowY: 'auto', minHeight: 0 }}>
-              <Box data-testid={`tutorials-panel-${key}`} />
+            <TabPanel key={key} value={key} sx={{ px: 0, pt: '24px', pb: 0 }}>
+              <Box
+                data-testid={`tutorials-panel-${key}`}
+                sx={{
+                  display: 'grid',
+                  // Cards size themselves; the column count follows the frame width
+                  // rather than the viewport, so the grid reflows with the sidenav
+                  // open or closed without a media query.
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+                  gap: '16px',
+                  alignItems: 'stretch',
+                }}
+              >
+                {tutorialItemsFor(key).map(item => (
+                  <TutorialCard key={item.key} item={item} />
+                ))}
+              </Box>
             </TabPanel>
           ))}
         </Tabs>
@@ -153,6 +172,10 @@ const TutorialsPage = () => {
 const tabListSx = {
   ...profileTabListSx,
   '--List-radius': '0px',
+  // Tabs is a flex column, so the strip is a flex item and would shrink below its
+  // own height on a short frame. profileTabListSx only pins the tabs INSIDE the
+  // strip (the horizontal axis); this pins the strip itself.
+  flexShrink: 0,
 } as const;
 
 // StyledTab from /profile, used as-is minus its icon rules (these tabs are text only).
