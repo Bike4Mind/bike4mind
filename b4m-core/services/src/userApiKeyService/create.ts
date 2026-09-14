@@ -74,13 +74,13 @@ interface CreateUserApiKeyAdapters {
   db: {
     userApiKeys: IUserApiKeyRepository;
     /**
-     * Needed so an `embed:chat` mint can verify the agent it binds. Optional on the
-     * TYPE so this published adapter contract (@bike4mind/services) stays additive for
-     * out-of-repo callers, but REQUIRED at runtime for an embed mint - the guard below
-     * throws rather than silently skipping the ownership check on the one key class that
-     * ships in public HTML.
+     * Needed so an `embed:chat` mint can verify the agent it binds. REQUIRED: an embed key
+     * ships in public HTML, so the ownership check must never be skippable. Typing it
+     * optional-but-throwing let an out-of-repo @bike4mind/services consumer compile clean and
+     * break at runtime, so the requirement is enforced at compile time. The runtime guard
+     * below stays as defense in depth against a caller that bypasses the type.
      */
-    agents?: Pick<IAgentRepository, 'findById'>;
+    agents: Pick<IAgentRepository, 'findById'>;
   };
   systemUserId?: string;
 }
@@ -174,8 +174,8 @@ export const createUserApiKey = async (
   // Enforced here so an incoherent key is never persisted; the runtime checks stay,
   // since a bound agent can change hands after the mint.
   if (isEmbedKey && params.agentId) {
-    // Fail closed: an absent agents adapter must never let the ownership check be skipped
-    // on the one key class shipped in public HTML (the type is optional only for semver).
+    // Fail closed: the type requires `agents`, so this only fires for a caller that bypassed
+    // the type. The ownership check must never be skipped on the one key class shipped in public HTML.
     if (!db.agents) {
       throw new BadRequestError('agents adapter is required to mint an embed:chat key');
     }

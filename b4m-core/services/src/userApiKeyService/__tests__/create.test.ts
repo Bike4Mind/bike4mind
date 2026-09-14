@@ -172,6 +172,15 @@ describe('createUserApiKey — embed keys (epic #41)', () => {
     expect(repo.create).not.toHaveBeenCalled();
   });
 
+  it('fails closed when the agents adapter is absent, even though the type now requires it', async () => {
+    // The type requires `agents`; this pins the runtime guard for a caller that bypasses the
+    // type (as-cast). An embed key ships in public HTML, so the ownership check must never be
+    // skippable - a missing adapter throws rather than minting a key with an unverified agent.
+    const noAgents = { db: { userApiKeys: repo as any } } as any;
+    await expect(createUserApiKey('user1', embedParams, noAgents)).rejects.toThrow(/agents adapter is required/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
   it('persists agentId, normalized origins, and branding', async () => {
     const result = await createUserApiKey(
       'user1',

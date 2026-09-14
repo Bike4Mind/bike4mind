@@ -124,6 +124,17 @@ describe('userApiKeyService - updateEmbedKey', () => {
     expect(repo.update).not.toHaveBeenCalled();
   });
 
+  it('fails closed on a rebind when the agents adapter is absent, even though the type now requires it', async () => {
+    // The type requires `agents`; this pins the runtime guard for a caller that bypasses the type
+    // (as-cast). A rebind must never skip the agent-ownership check, so a missing adapter throws.
+    const repo = makeRepo(embedKey());
+    const noAgents = { db: { userApiKeys: repo, organizations: makeOrgs() } } as any;
+    await expect(updateEmbedKey('user1', { keyId: 'key-1', agentId: 'agent-2' }, noAgents)).rejects.toThrow(
+      /agents adapter is required/i
+    );
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
   it('throws NotFound when the key does not belong to the user', async () => {
     const repo = makeRepo(null);
 

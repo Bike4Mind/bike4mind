@@ -29,12 +29,12 @@ interface UpdateEmbedKeyAdapters {
     userApiKeys: IUserApiKeyRepository;
     organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
     /**
-     * Needed only to verify the agent when a rebind is requested (`agentId` provided).
-     * Optional on the TYPE so this published adapter contract (@bike4mind/services) stays
-     * additive for out-of-repo callers, but REQUIRED at runtime for a rebind - the guard
-     * below throws rather than silently skipping the ownership check. See createUserApiKey.
+     * Needed to verify the agent when a rebind is requested (`agentId` provided). REQUIRED so
+     * the ownership check can never be skipped: an optional-but-throwing type let an out-of-repo
+     * @bike4mind/services consumer compile clean and break at runtime. The runtime guard below
+     * stays as defense in depth against a caller that bypasses the type. See createUserApiKey.
      */
-    agents?: Pick<IAgentRepository, 'findById'>;
+    agents: Pick<IAgentRepository, 'findById'>;
   };
 }
 
@@ -85,7 +85,8 @@ export const updateEmbedKey = async (
   // which left a key rebindable to another tenant's agent. The runtime checks stay
   // (a bound agent can change hands afterwards) but this is now an access boundary.
   if (params.agentId !== undefined) {
-    // Fail closed: an absent agents adapter must never let the ownership check be skipped.
+    // Fail closed: the type requires `agents`, so this only fires for a caller that bypassed the
+    // type. The ownership check must never be skipped on a rebind.
     if (!db.agents) {
       throw new BadRequestError('agents adapter is required to configure an embed:chat key');
     }
