@@ -60,6 +60,7 @@ import {
   FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE,
   FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+  FORCED_RETRIEVAL_SETTING_KEYS,
   compareForcedRetrievalRank,
   cosineFloorPctForSpace,
   forcedRetrievalRelativeCutoff,
@@ -1740,16 +1741,9 @@ const FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS = 4000;
 // resolveForcedRetrievalConfig below), so none is a module constant - every former
 // FORCED_RETRIEVAL_CHAR_BUDGET and FORCED_RETRIEVAL_MIN_SIMILARITY reference is a resolved local
 // instead. When nothing clears the floors, no chunk is injected and the turn falls back to
-// forcedRetrievalNoContextPrompt.
-//
-// Exported so a test's admin-settings fixture can serve exactly the keys the read asks for: a
-// fixture that enumerated them itself would keep passing (on coded defaults) if a fourth key were
-// added here, which is the one way these tests could go quiet without failing.
-export const FORCED_RETRIEVAL_SETTING_KEYS = [
-  'forcedRetrievalCharBudget',
-  'forcedRetrievalRelativeFloorPct',
-  'forcedRetrievalMinSimilarityPct',
-] as const;
+// forcedRetrievalNoContextPrompt. The key list itself lives in @bike4mind/common
+// (FORCED_RETRIEVAL_SETTING_KEYS) so the scoped-settings guard can loop it - `common` cannot import
+// from `services`, and a guard that re-enumerated the keys would not cover a fourth one.
 
 /**
  * One of the two floor settings as a 0-1 cosine fraction, or `fallback` when the stored value is

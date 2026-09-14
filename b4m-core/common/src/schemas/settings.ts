@@ -4743,8 +4743,8 @@ export type SettingValue<K extends SettingKey> = z.infer<(typeof settingsMap)[K]
 
 /**
  * Every setting the data-lake SEARCH budget merge resolves, in one list. The forced-retrieval merge
- * is a separate read with its own list (`FORCED_RETRIEVAL_SETTING_KEYS`, b4m-core/services), which
- * this does not cover.
+ * is a separate read with its own list ({@link FORCED_RETRIEVAL_SETTING_KEYS}), which this does not
+ * cover; the Lake-rung guard loops both.
  *
  * `resolveSearchBudgets` (b4m-core/services) reads exactly these on both its scoped and its platform
  * path, and the guard in settings.test.ts loops this same list to assert none of them declares a
@@ -4771,6 +4771,24 @@ export const SEARCH_BUDGET_SETTING_KEYS = [
   'kbSearchResultTokenBudget',
   'kbSearchMinRelevancePct',
   'dataLakeSearchMaxChunksPerFile',
+] as const satisfies readonly SettingKey[];
+
+/**
+ * Every setting the forced-retrieval merge resolves, in one list - the sibling of
+ * {@link SEARCH_BUDGET_SETTING_KEYS} for the other read that resolves settings for one retrieval
+ * turn. `readForcedRetrievalSettings` (ChatCompletionFeatures.ts, b4m-core/services) resolves these
+ * through `resolveScopedSettingValues`, and the guard in settings.test.ts loops this list to assert
+ * none of them declares a Lake rung: one turn scans an uncapped SET of lakes into a single pool, so
+ * no single lake can key a narrower rung (#2572).
+ *
+ * Lives here rather than beside that read so the guard can reach it - `common` cannot import from
+ * `services`. A test fixture that enumerated these keys itself would keep passing on coded defaults
+ * if a fourth were added, which is the one way those tests could go quiet without failing.
+ */
+export const FORCED_RETRIEVAL_SETTING_KEYS = [
+  'forcedRetrievalCharBudget',
+  'forcedRetrievalRelativeFloorPct',
+  'forcedRetrievalMinSimilarityPct',
 ] as const satisfies readonly SettingKey[];
 
 // ============================================================================

@@ -85,8 +85,9 @@ export type ResolvedSearchBudgets = SemanticSearchBudgets & {
  * never had a Lake rung, because one search spans EVERY lake the caller can reach (#2624), so a
  * `scope.lakeId` reaching this function resolves nothing no matter what is stored against it.
  * Omitting both - every caller today - takes the byte-identical platform path below, so this
- * change is additive. Chunk-policy rungs ride this same seam when #1662 gives `DefaultChunkSize`
- * its `scope.settableAt`; the serve budget below picks them up with no edit here.
+ * change is additive. The chunk-policy rung rides this same seam and is already live -
+ * `DefaultChunkSize` has been settable at Organization/Owner since #1722 - so the serve budget
+ * below follows a narrower rung with no edit here.
  */
 export async function resolveSearchBudgets(
   db: {
