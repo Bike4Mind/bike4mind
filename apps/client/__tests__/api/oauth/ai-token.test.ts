@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 // Unwrap the handler: baseApi().use(...).post(fn) => fn
@@ -33,8 +33,10 @@ const mockVerifyClientSecret = vi.fn();
 const mockFindByUserId = vi.fn();
 const mockUserFindById = vi.fn();
 const mockAuditCreate = vi.fn();
+const mockFindActiveGrant = vi.fn();
 vi.mock('@bike4mind/database/auth', () => ({
   oauthClientRepository: { verifyClientSecret: (...a: any[]) => mockVerifyClientSecret(...a) },
+  oauthGrantRepository: { findActiveGrant: (...a: any[]) => mockFindActiveGrant(...a) },
   userApiKeyRepository: { findByUserId: (...a: any[]) => mockFindByUserId(...a) },
   userRepository: { findById: (...a: any[]) => mockUserFindById(...a) },
   UserApiKeyAuditLog: { create: (...a: any[]) => mockAuditCreate(...a) },
@@ -98,6 +100,12 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     mockCreateUserApiKey.mockResolvedValue({ id: 'key-1', key: 'b4m_live_deadbeef', scopes: ['ai:generate'] });
     mockAuditCreate.mockResolvedValue({});
     mockRevokeUserApiKey.mockResolvedValue(undefined);
+    // Default: user has an active grant for the client (realistic happy path).
+    mockFindActiveGrant.mockResolvedValue({ userId: 'b4m-user-1', clientId: 'client-1', status: 'active' });
+  });
+
+  afterEach(() => {
+    delete process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT;
   });
 
   it('AC1/AC9: mints a scoped, short-lived key and returns it once', async () => {
@@ -230,6 +238,38 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     expect(res._getStatusCode()).toBe(429);
     expect(mockVerifyCognitoIdToken).not.toHaveBeenCalled();
     expect(mockCreateUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('grant gate (enforce): valid token but no grant for this client -> 403 access_denied, no mint', async () => {
+    process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT = 'true';
+    mockFindActiveGrant.mockResolvedValue(null);
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().error).toBe('access_denied');
+    expect(mockFindActiveGrant).toHaveBeenCalledWith('b4m-user-1', 'client-1');
+    expect(mockCreateUserApiKey).not.toHaveBeenCalled();
+    expect(mockAuditCreate).not.toHaveBeenCalled();
+  });
+
+  it('grant gate (enforce): active grant -> mints normally', async () => {
+    process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT = 'true';
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockCreateUserApiKey).toHaveBeenCalledTimes(1);
+  });
+
+  it('grant gate (grace, default): no grant still mints but logs a would-reject warning', async () => {
+    mockFindActiveGrant.mockResolvedValue(null);
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockCreateUserApiKey).toHaveBeenCalledTimes(1);
+    expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('would-reject'));
   });
 
   it('rejects a malformed body → 400 invalid_request', async () => {

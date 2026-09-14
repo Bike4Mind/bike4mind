@@ -9,6 +9,7 @@
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { generateAuthCode, validateClient } from '@server/auth/oauthServer';
+import { oauthGrantRepository } from '@bike4mind/database';
 
 const RequestSchema = z.object({
   client_id: z.string(),
@@ -43,6 +44,12 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
   }
 
   const requestedScopes = scope.split(' ').filter(s => client.allowedScopes.includes(s));
+
+  // Record the durable (user, client) authorization grant. This is the moment a
+  // live, B4M-authenticated user directs this client; the federated AI-token
+  // exchange later requires this grant to exist before minting a key. Idempotent
+  // upsert - re-authorizing just refreshes it.
+  await oauthGrantRepository.upsertGrant(user.id, client_id, requestedScopes);
 
   const code = await generateAuthCode({
     clientId: client_id,
