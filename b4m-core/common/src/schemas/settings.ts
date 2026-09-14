@@ -23,6 +23,7 @@ import {
   FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
 } from '../constants/forcedRetrieval';
+import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE } from '../constants/embeddingSpaceFloors';
 import { LAKE_RECALL_K_DEFAULT, LAKE_RECALL_K_MAX } from '../constants/lakeMemory';
 import {
   KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
@@ -41,6 +42,18 @@ import {
 import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } from '../types/entities/SreTypes';
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
 import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/ScopedSettingTypes';
+
+/**
+ * The measured per-space floors, rendered for an admin-facing description (e.g. "75 for
+ * text-embedding-ada-002, 35 for text-embedding-3-small").
+ *
+ * Rendered rather than written out in prose because these numbers are expected to move - 35 is
+ * provisional until it is re-derived against a production lake - and a description that restates
+ * the table is a wrong number shown to operators the moment it drifts, with nothing failing.
+ */
+const forcedRetrievalFloorsBySpaceSummary = Object.entries(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE)
+  .map(([space, pct]) => `${pct} for ${space}`)
+  .join(', ');
 
 /**
  * Default text for the artifact-emission system prompt. Single source of truth used BOTH as the
@@ -3686,7 +3699,7 @@ export const settingsMap = {
       `gate - the relative floor above does the ranking. LEAVE IT AT ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} UNLESS YOU HAVE MEASURED ` +
       'YOUR OWN CORPUS: a raw cosine means nothing outside the embedding model it was fitted to, so ' +
       `while this reads ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} the server ignores it and applies the floor measured for whichever model ` +
-      'your documents are actually embedded with (75 for ada-002, 35 for text-embedding-3-small, ' +
+      `your documents are actually embedded with (${forcedRetrievalFloorsBySpaceSummary}, ` +
       'and no absolute floor at all for a model nobody has measured - the relative floor still ' +
       'applies). Set any other value and the server uses exactly that, in every space, which is ' +
       'yours to get right: 75 against text-embedding-3-small sits above that band entirely and ' +

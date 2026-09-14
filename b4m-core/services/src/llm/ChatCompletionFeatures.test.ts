@@ -22,6 +22,16 @@ import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mi
 import type { ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
+// Partial mock: ChatCompletionFeatures pulls only `getRelevantMementos` from this module, and the V1
+// assertions below are about the ARGUMENTS it receives rather than what it returns. Spreading the
+// original keeps every other export real, so adding an import to the module under test does not
+// silently break this file.
+const getRelevantMementosMock = vi.hoisted(() => vi.fn());
+vi.mock('../mementoService', async importOriginal => ({
+  ...(await importOriginal<typeof import('../mementoService')>()),
+  getRelevantMementos: getRelevantMementosMock,
+}));
+
 const makeQuest = (overrides: Partial<IChatHistoryItemDocument> = {}): IChatHistoryItemDocument =>
   ({
     id: 'quest1',
@@ -235,7 +245,11 @@ describe('MementoFeature - Mementos V2 injection', () => {
 
   // Default WRITE flags for constructions that only exercise the READ path.
   const READ_ONLY = { writeV1: false, writeV2: true };
-  beforeEach(() => invokeCreateMemento.mockClear());
+  beforeEach(() => {
+    invokeCreateMemento.mockClear();
+    // Re-armed per test so one test's mockResolvedValue cannot leak into the next.
+    getRelevantMementosMock.mockReset().mockResolvedValue([]);
+  });
 
   const call = (feature: MementoFeature) =>
     feature.getContextMessages(
@@ -281,6 +295,39 @@ describe('MementoFeature - Mementos V2 injection', () => {
     await call(feature).catch(() => []); // V1 path may fail on the stub db; we only care about the gate
 
     expect(recallMementosV2).not.toHaveBeenCalled();
+  });
+
+  it('resolves the V1 embedding space inside getRelevantMementos, never from the credential factory', async () => {
+    // The P1 this pins: chat mode used to pass `embeddingFactory.getDefaultEmbeddingModel()`, which
+    // resolves by CREDENTIAL PRIORITY (an OpenAI key alone returns ada-002) and never reads the
+    // `defaultEmbeddingModel` setting. Agent mode (getFirstIterationMementosPreamble) passes neither
+    // and resolves from the setting, so the two disagreed whenever setting and credentials did.
+    //
+    // That argument picks the space the QUERY is embedded in, not just which floor applies: with the
+    // setting on 3-small and an OpenAI key present, chat embedded the query in ada-002, scored it
+    // against 3-small memento vectors, and gated the resulting cross-space noise on ada-002's 75 -
+    // memory went dark. Both call sites must now pass NEITHER argument.
+    getRelevantMementosMock.mockClear().mockResolvedValue([]);
+    const getDefaultEmbeddingModel = vi.fn().mockReturnValue('text-embedding-ada-002');
+    const feature = new MementoFeature(makeCtx(vi.fn().mockResolvedValue([]), v2User(false)), READ_ONLY);
+
+    await feature.getContextMessages(
+      makeQuest(),
+      { getDefaultEmbeddingModel } as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'what do i like',
+      undefined as unknown as Parameters<typeof feature.getContextMessages>[3],
+      1000
+    );
+
+    expect(getRelevantMementosMock).toHaveBeenCalledTimes(1);
+    const options = getRelevantMementosMock.mock.calls[0][1];
+    // `not.toHaveProperty` rather than checking for undefined: passing the key explicitly as
+    // undefined would still be a call site that thinks it owns the decision.
+    expect(options).not.toHaveProperty('embeddingModel');
+    expect(options).not.toHaveProperty('minSimilarity');
+    // The factory must not even be consulted - reaching for it here is the defect, whatever is done
+    // with the answer.
+    expect(getDefaultEmbeddingModel).not.toHaveBeenCalled();
   });
 
   it('onComplete forwards the RESOLVED write flags, so the subscriber cannot re-default V1 on', async () => {
@@ -1053,9 +1100,13 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     const { content } = await run(ctx);
     expect(content).toContain('weakly related content');
     expect(content).not.toContain('does not cover this');
-    expect((ctx.logger as unknown as { error: ReturnType<typeof vi.fn> }).error).toHaveBeenCalledWith(
-      expect.stringContaining('text-embedding-3-large')
-    );
+    // warn, not error, and asserted as NOT error on purpose - see the same pairing in
+    // getRelevantMementos.test.ts. An unmeasured space is the designed resolution for any model
+    // outside the table, so "loud" here means visible to an operator reading logs, not an alert on a
+    // condition nobody can clear from the console.
+    const logger = ctx.logger as unknown as { warn: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn> };
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('text-embedding-3-large'));
+    expect(logger.error).not.toHaveBeenCalled();
   });
 
   it('an operator-configured absolute floor is honored verbatim, not replaced by the by-space table', async () => {

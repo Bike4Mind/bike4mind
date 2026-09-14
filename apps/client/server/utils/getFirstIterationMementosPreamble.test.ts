@@ -83,15 +83,21 @@ describe('getFirstIterationMementosPreamble', () => {
     // is a property of the embedding space, so `getRelevantMementos` resolves it from the model it
     // embedded in - passing one here would pin agent mode to a number chat mode had stopped using,
     // which is the drift the two independent 0.75 literals had already produced once.
+    // `embeddingModel` is asserted absent for the same reason and MUST STAY IN SYNC with the mirror
+    // assertion in ChatCompletionFeatures.test.ts: that argument decides which space the QUERY is
+    // embedded in, so a call site that supplies one makes its mode compare vectors across spaces
+    // while the other compares within one. Chat mode passed the credential-derived default here and
+    // did exactly that.
     const [userId, prompt, options] = getRelevantMementosMock.mock.calls[0] as unknown as [
       string,
       string,
-      { topK: number; minSimilarity?: number },
+      { topK: number; minSimilarity?: number; embeddingModel?: string },
     ];
     expect(userId).toBe('user-1');
     expect(prompt).toBe('what hobbies do I have');
     expect(options.topK).toBe(10);
     expect(options.minSimilarity).toBeUndefined();
+    expect(options).not.toHaveProperty('embeddingModel');
 
     // V1 keeps its legacy KNOWN-FACTS preamble with per-memento relevance scores. (The friend-who-
     // remembers framing is the V2 path, asserted separately below.)

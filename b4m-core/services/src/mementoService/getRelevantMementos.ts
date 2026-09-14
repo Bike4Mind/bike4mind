@@ -195,9 +195,25 @@ export async function getRelevantMementos(
   // of embedding model: above the new band it rejects every memento in existence, which reads to
   // the user as the assistant having forgotten them. An unmeasured space keeps the top K by
   // similarity with no floor - less precise, but recoverable, where a blackout is not.
+  //
+  // WHY NO RELATIVE RUNG HERE, unlike forced retrieval. That path degrades to
+  // `forcedRetrievalRelativeFloorPct` (a fraction of the turn's top score) rather than to nothing, so
+  // the obvious symmetry would be to do the same with these. It would not buy what it looks like it
+  // buys. A relative floor is scale-free WITHIN a turn, so it cannot tell a turn whose best memento
+  // scores 0.91 from one whose best scores 0.25 - and the failure worth preventing here is the second
+  // one, where nothing is topical and the top K are injected as KNOWN FACTS anyway. At 85% of a 0.25
+  // top, everything from 0.21 up still lands: fewer unrelated facts asserted, same failure. It trims
+  // the tail while reading like a fix for the head.
+  //
+  // So the decision, deliberately and not by omission: an unmeasured space gets no gate, the damage
+  // stays bounded by MEMENTO_V1_TOP_K (a handful of lines, not a corpus), and the real remedy is
+  // measuring a floor into MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE. The forced path differs because
+  // its relative floor also does its RANKING over a large candidate pool; here top-K is the ranking.
   const spaceFloorPct = cosineFloorPctForSpace(MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE, embeddingModel);
   if (providedMinSimilarity === undefined && spaceFloorPct === undefined) {
-    logger?.error?.(
+    // warn, not error: an unmeasured space is the designed resolution for any model outside the
+    // table, not a fault, and no operator can clear it from the console.
+    logger?.warn?.(
       `[getRelevantMementos] no measured topicality floor for embedding space "${embeddingModel}"; ` +
         `returning the top ${topK} by similarity with no floor. Measure one into ` +
         `MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE rather than borrowing another space's number.`

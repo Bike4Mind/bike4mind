@@ -288,8 +288,13 @@ describe('the topicality floor follows the embedding space, not a literal', () =
     // 3-small's whole measured band tops out at 0.5588 - and the user would read that as the
     // assistant having forgotten them.
     expect(found.map(({ memento }) => memento.summary)).toEqual(['above the ada-002 floor', 'below the ada-002 floor']);
-    expect(logger.error).toHaveBeenCalledTimes(1);
-    expect(String(logger.error.mock.calls[0][0])).toContain('text-embedding-3-small');
+    // warn, not error, and asserted as NOT error on purpose: an unmeasured space is the designed
+    // resolution for any model outside the table, and self-host hits it every turn. At error level
+    // this is per-turn noise in whatever reads error logs for a condition no operator can clear,
+    // which is how a channel gets ignored.
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(String(logger.warn.mock.calls[0][0])).toContain('text-embedding-3-small');
+    expect(logger.error).not.toHaveBeenCalled();
   });
 
   it('honors an explicit floor without complaining, in any space', async () => {
@@ -297,7 +302,9 @@ describe('the topicality floor follows the embedding space, not a literal', () =
 
     expect(found.map(({ memento }) => memento.summary)).toEqual(['above the ada-002 floor']);
     // A caller that passed a floor has asserted it knows the space; nothing is unresolved, so
-    // there is nothing to warn about.
+    // there is nothing to warn about. `warn` is the channel the unmeasured-space notice now uses,
+    // so assert on that one - checking only `error` would pass no matter what this path logged.
+    expect(logger.warn).not.toHaveBeenCalled();
     expect(logger.error).not.toHaveBeenCalled();
   });
 });
