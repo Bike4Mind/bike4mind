@@ -105,7 +105,6 @@ import {
   getDynamicDataLakeAccess,
   lakeMembershipsFrom,
   warnIfManyLakeMemberships,
-  type ResolvedLakeAccess,
 } from '../dataLakeService/getDynamicDataLakeTags';
 import {
   buildElisionStamp,
@@ -163,6 +162,7 @@ import {
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
 import { vetPreauthorizedLakeIds } from './vetPreauthorizedLakeIds';
 import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
+import { narrowLakeAccessToSession, type ResolvedLakeAccessSet } from '../dataLakeService/narrowLakeAccessToSession';
 import { renderCallerPromptMessages } from './renderCallerPromptBlock';
 import { buildInsufficientCreditsMessage, buildMemberCreditCapMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
@@ -846,16 +846,11 @@ export class ChatCompletionProcess {
   private entitlementsResolved = false;
   /**
    * Per-turn memo for the caller's resolved data-lake access. Shared by the tool-offer check
-   * (userHasAccessibleKnowledgeLake) and the corpus inline-defer plan (resolveCorpusInlinePlan) so
-   * the two can never disagree - it is the SAME access the knowledge tool resolves with.
+   * (userHasAccessibleKnowledgeLake), the corpus inline-defer plan (resolveCorpusInlinePlan) and
+   * the retrieval seed's `lakeScope`, so none of them can disagree - it is the SAME access the
+   * knowledge tool resolves with.
    */
-  private accessibleDataLakeAccessMemo:
-    | {
-        dataLakeTags: string[];
-        dataLakeTagPrefixes: string[];
-        lakes: ResolvedLakeAccess[];
-      }
-    | undefined;
+  private accessibleDataLakeAccessMemo: ResolvedLakeAccessSet | undefined;
   /**
    * This turn's VETTED `session.preauthorizedLakeIds` (see vetPreauthorizedLakeIds), captured on a
    * field because `getAccessibleDataLakeAccess` is a session-less private method and its consumers
@@ -990,11 +985,7 @@ export class ChatCompletionProcess {
    * tool-offer and the inline-defer decisions can never disagree. Fail-safe: any error degrades to
    * empty access (treated as "no lake"), never breaks the turn.
    */
-  private async getAccessibleDataLakeAccess(): Promise<{
-    dataLakeTags: string[];
-    dataLakeTagPrefixes: string[];
-    lakes: ResolvedLakeAccess[];
-  }> {
+  private async getAccessibleDataLakeAccess(): Promise<ResolvedLakeAccessSet> {
     if (this.accessibleDataLakeAccessMemo === undefined) {
       try {
         const entitlementKeys = await this.resolveEntitlementKeys();
@@ -1019,6 +1010,7 @@ export class ChatCompletionProcess {
         this.accessibleDataLakeAccessMemo = {
           dataLakeTags: [],
           dataLakeTagPrefixes: [],
+          scopedTagPrefixes: [],
           lakes: [],
         };
       }
@@ -2871,11 +2863,27 @@ export class ChatCompletionProcess {
       const knowledgeBaseGuidanceInjected =
         toolPromptAdmitted && knowledgeToolOffered && Boolean(knowledgeBaseGuidance);
       if (quest.promptMeta && (forcedRetrievalEnabled || knowledgeToolOffered)) {
+        // The scope a retrieval surface WOULD have searched this turn, recorded whether or not one
+        // ran - the point of the seed. `dataLakeTags` below stays empty because it means "what
+        // retrieval used", and on a not-attempted turn that is nothing; `lakeScope` is the other
+        // question, and recording it here is what lets the offline answerability replay probe the
+        // turn's real corpus instead of rebuilding one from the session's tags as they stand at
+        // replay time (see RetrievalSummarySchema.lakeScope).
+        //
+        // Mirrors resolveSessionLakeAccess, the one implementation every knowledge tool runs on:
+        // owner-wide access narrowed to the session, and nothing at all where the corpus is
+        // personal and the lake arms are suppressed. Fail direction is inherited from
+        // getAccessibleDataLakeAccess, which degrades to empty access rather than throwing, so a
+        // lake-resolution outage records an empty scope and the replay skips the turn.
+        const lakeScope = this.personalCorpusOnly
+          ? []
+          : narrowLakeAccessToSession(await this.getAccessibleDataLakeAccess(), session.retrievalTags).dataLakeTags;
         quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
           attempted: false,
           mode: forcedRetrievalEnabled ? 'forced' : 'optional',
           surfaces: [],
           dataLakeTags: [],
+          lakeScope,
           // Recorded only when the tool was offered: a forced-only turn never had a section to
           // ship, and writing `false` there would pad the A/B's control arm with turns that were
           // never in the experiment.

@@ -459,6 +459,31 @@ export const RetrievalSummarySchema = z.object({
   /** Lakes resolved at the moment retrieval ran, stamped point-in-time (not read live from the session). */
   dataLakeTags: z.array(z.string()),
   /**
+   * The lake scope the turn's retrieval surfaces WOULD have searched, resolved at the seed site
+   * whether or not any of them ran: the caller's accessible lakes narrowed to the session
+   * (narrowLakeAccessToSession), or empty where the corpus is personal and the lake arms are
+   * suppressed. `dataLakeTags` is the other half of the pair and answers a different question -
+   * which lakes retrieval ACTUALLY used - so on a turn where retrieval never ran that one is empty
+   * while this one still names whatever was in scope.
+   *
+   * EXISTS FOR THE OFFLINE REPLAY. `answerability` is reconstructed after the fact, and without a
+   * recorded scope the replay had to rebuild one from the session's `retrievalTags` as they stand
+   * at replay time - a session whose lake selection had since changed was replayed against a
+   * corpus its turn never had, with nothing to flag it. Recording it here removes that drift for
+   * every turn seeded after this landed; `probedAt` still discloses the content drift, which no
+   * amount of recording can fix.
+   *
+   * Absence means NOT RECORDED (a turn predating this, or one whose `retrieval` was written only
+   * by a surface rather than by the seed) - never "no lakes in scope", which is present-and-empty.
+   * The replay must keep those apart: probing an unrecorded turn would mean inventing a scope,
+   * which is the approximation this field exists to end.
+   *
+   * Only the seed writes it, so mergeRetrievalSummary carries it first-writer-wins rather than
+   * unioning: a later surface write asserting a narrower scope must not be able to widen the
+   * recorded one, and a union across the two would mean neither.
+   */
+  lakeScope: z.array(z.string()).optional(),
+  /**
    * Ids of the lakes whose `systemPrompt` was injected this turn (getAccessibleDataLakePrompts),
    * across every injection site (forced retrieval and the model-driven knowledge tools). NOT the
    * prompt text itself - that already reaches the model in the completion, and copying it here
@@ -572,15 +597,15 @@ export const RetrievalSummarySchema = z.object({
    * (ChatCompletionFeatures' forced path, which has no ANN index) to exactly the turns that pay
    * nothing for retrieval today. The measurement is not worth that latency on live traffic.
    *
-   * BEING A RECONSTRUCTION, IT CARRIES TWO DRIFTS THE OTHER FIELDS DO NOT:
+   * BEING A RECONSTRUCTION, IT CARRIES DRIFTS THE OTHER FIELDS DO NOT:
    * 1. Corpus CONTENT moves. A document added or reindexed between the turn and the replay is
    *    scored as though it had been there. `probedAt` discloses the gap; a replay run long after
    *    the window is weak evidence, not strong.
-   * 2. Corpus SCOPE is inferred, not recorded. The seed writes `dataLakeTags: []` on a turn where
-   *    retrieval never ran (ChatCompletionProcess), so the replay reconstructs scope from the
-   *    session's lakes as they stand at replay time. A session whose lake selection changed is
-   *    replayed against a corpus the turn never had, and NOTHING here flags that. Recording real
-   *    scope at seed time would fix it for future turns and is not done yet.
+   * 2. Corpus SCOPE no longer drifts: the seed records the turn's resolved scope in `lakeScope`
+   *    and the replay probes that, so a session whose lake selection has since changed is still
+   *    scored against the lakes its turn actually had. The cost is coverage rather than accuracy -
+   *    a turn with no recorded scope is skipped instead of approximated, so every turn predating
+   *    the field is outside the measurement.
    * 3. The QUESTION can move out from under it. The probe is keyed to the quest, not to the
    *    prompt text it scored, so a turn whose prompt is later rewritten in place keeps a probe
    *    describing the question it used to ask. mergeRetrievalSummary preserves the probe across

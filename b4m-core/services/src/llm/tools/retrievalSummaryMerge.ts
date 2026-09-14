@@ -87,6 +87,13 @@ function mergeInjected(
  * - knowledgeBaseGuidanceInjected: first-writer-wins pass-through. Only the seed writes it, and
  *   `??` rather than `||` because an explicit `false` is a real value (the A/B control arm) that
  *   a boolean OR against an absent incoming side would silently discard.
+ * - lakeScope: first-writer-wins pass-through, and like `answerability` it is here to PRESERVE
+ *   rather than to combine. Only the seed writes it, so a two-sided merge is not reachable; what
+ *   IS reachable is a later surface write on a seeded turn, and since this function returns an
+ *   explicit object literal, a field with no case here is DROPPED. Not unioned: a surface
+ *   asserting its own narrower scope must not widen the recorded one. `??` rather than `||` so a
+ *   recorded empty scope - "the session had no lake" - survives instead of falling through to the
+ *   other side.
  * - answerability: existing-wins pass-through, and it is here to PRESERVE rather than to combine.
  *   Nothing in a turn writes it - the offline replay backfills it straight to Mongo - so a
  *   two-sided merge is not reachable. What IS reachable is a later runtime write on a quest that
@@ -129,6 +136,7 @@ export function mergeRetrievalSummary(
   const knowledgeBaseGuidanceInjected =
     existing.knowledgeBaseGuidanceInjected ?? incoming.knowledgeBaseGuidanceInjected;
   const answerability = existing.answerability ?? incoming.answerability;
+  const lakeScope = existing.lakeScope ?? incoming.lakeScope;
   const injectedLakePromptIds =
     existing.injectedLakePromptIds || incoming.injectedLakePromptIds
       ? [...new Set([...(existing.injectedLakePromptIds ?? []), ...(incoming.injectedLakePromptIds ?? [])])]
@@ -148,6 +156,7 @@ export function mergeRetrievalSummary(
     ...(forcedSkipReason !== undefined ? { forcedSkipReason } : {}),
     ...(knowledgeBaseGuidanceInjected !== undefined ? { knowledgeBaseGuidanceInjected } : {}),
     ...(answerability !== undefined ? { answerability } : {}),
+    ...(lakeScope !== undefined ? { lakeScope } : {}),
     surfaces: [...new Set([...existing.surfaces, ...incoming.surfaces])],
     dataLakeTags: [...new Set([...existing.dataLakeTags, ...incoming.dataLakeTags])],
     ...(injectedLakePromptIds ? { injectedLakePromptIds, injectedLakePromptCount: injectedLakePromptIds.length } : {}),

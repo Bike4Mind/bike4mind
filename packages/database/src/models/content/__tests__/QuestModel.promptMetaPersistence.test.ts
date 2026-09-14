@@ -119,6 +119,10 @@ const FULL_PROMPT_META = {
     outcome: 'ok',
     surfaces: ['knowledgeBaseSearch', 'lake-memory'],
     dataLakeTags: ['datalake:x'],
+    // The seed's recorded scope, which the offline replay reads as the corpus to probe. Distinct
+    // from dataLakeTags on purpose - that one is what retrieval used, this one is what was in
+    // scope - so a round trip that collapsed the two would go unnoticed with a shared value.
+    lakeScope: ['datalake:x', 'datalake:y'],
     // The parity test only checks that a Zod path has a Mongoose declaration; this round trip is
     // what covers the BSON-type half, so a Number-vs-String slip on any of these five fails here
     // rather than shipping as a field that saves and then fails its Zod re-parse on read.
