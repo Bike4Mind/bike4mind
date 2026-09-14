@@ -136,7 +136,10 @@ describe('fabfilechunks indexes', () => {
     await FabFileChunk.createIndexes();
 
     const plan = await FabFileChunk.collection
-      .find({ fabFileId: fid('lake'), embeddingModel: 'model-a' })
+      .find(
+        { fabFileId: fid('lake'), embeddingModel: 'model-a' },
+        { projection: { _id: 0, retrievalIndexConfirmedModel: 1 } }
+      )
       .explain('executionStats');
 
     expect(plan.executionStats.totalDocsExamined).toBe(0);

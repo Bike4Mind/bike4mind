@@ -488,8 +488,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           // A chunk dispatched but NOT confirmed (rejected by mapDocument, or rolled back by
           // indexChunks' own per-batch cleanup) must not keep a stale confirm from an earlier
           // delivery of this same message.
-          const dispatchedIds = indexedChunkIds;
-          const notIndexed = embeddableChunks.map(chunk => chunk.id).filter(id => !dispatchedIds.includes(id));
+          const notIndexed = embeddableChunks.map(chunk => chunk.id).filter(id => !indexedChunkIds.includes(id));
           if (notIndexed.length > 0) {
             await fabFileChunkRepository.clearRetrievalIndexConfirmed(notIndexed, embeddingModel);
           }
