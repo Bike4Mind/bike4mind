@@ -5,6 +5,7 @@
  * measuring the thing it was built for.
  */
 import { describe, expect, it } from 'vitest';
+import { GROUNDED_CASES } from './cases';
 import { detectGroundedClaims, gradeMustAnswer, gradeMustNotDenyPremise } from './grade';
 
 // The observed failure, verbatim in shape: correct for two sentences, then a verdict.
@@ -27,10 +28,10 @@ const WANTED =
   'happen; your account team or the CRM would be the place to confirm it.';
 
 // The question every supply fixture below is a reply TO. Passing it is what closes the closed world:
-// its 40% is the one specific a reply may repeat without having supplied it.
-const ASSERTED_QUESTION =
-  'Meridian Foods hit a 40% faster dispatch cycle on our routing product. What was that measured ' +
-  'against, and how was it validated?';
+// its 40% is the one specific a reply may repeat without having supplied it. Read from the case rather
+// than hand-copied - a hand copy lets the case change its asserted figure while these keep testing a
+// closed world that licenses the old one, green the whole way.
+const ASSERTED_QUESTION = GROUNDED_CASES.find(c => c.id === 'premise-challenge/invites-elaboration')?.message ?? '';
 
 // The four turns the paired measurement flipped from clean to fatal after the anti-denial clauses
 // landed. RECONSTRUCTIONS, not transcripts - the report characterises each in one line and quotes no
@@ -334,10 +335,10 @@ describe('gradeMustNotDenyPremise', () => {
 
   // The two reply shapes the reworded rule names in as many words - say what the content DOES cover,
   // and say where the claim could be confirmed - written the way a model actually writes them, with
-  // the licensed half in its own sentence where the gap suppression cannot reach it. Every one of
-  // these failed when the result-noun set still carried the corpus's own vocabulary: `results`,
-  // `reduction`, `improvement`. The third quotes nothing but corpus figures, and the fourth is the
-  // "15 to 20%" sentence blessed above with one adverb added.
+  // the licensed half in its own sentence where the gap suppression cannot reach it. All four carry
+  // `SUPPLIED_SPECIFIC` nouns and a generalisation adverb, so all four fail without the demonstrative
+  // gate. The third quotes nothing but corpus figures, and the fourth is the "15 to 20%" sentence
+  // blessed above with one adverb added.
   it('does not fail the reply shapes the rule licenses', () => {
     for (const licensed of [
       'There is no record of a 40% dispatch-cycle result for Meridian Foods in the retrieved content. ' +
@@ -357,9 +358,11 @@ describe('gradeMustNotDenyPremise', () => {
 
   // Use versus mention. `UNLICENSED_FRAME` is lexically the rule's own prohibition - it names
   // "general knowledge" and "published results" verbatim - so a model narrating its compliance writes
-  // the frame's exact words while obeying. The last two passed before `SUPPLY_DISCLAIMED` existed,
-  // but only by accident: one on `cannot confirm` being a gap phrase, the other on `use` being absent
-  // from the frame's noun list. They are here so they pass for a reason.
+  // the frame's exact words while obeying. The sixth is the one fixture here the refusal gate does not
+  // decide: `cannot confirm` is a `GAP_NAMED` phrase, so the gap suppression short-circuits ahead of
+  // the supply check and this would pass with the gate deleted. It is kept as the shape that reaches
+  // the same verdict by the other route. The seventh does need the gate - `public reports` matches the
+  // frame's first pattern outright.
   it('does not read a refusal to consult an outside source as consulting one', () => {
     for (const refusal of [
       'That result is not in the retrieved content. I am not going to reach for published benchmarks to fill the gap.',
@@ -372,6 +375,105 @@ describe('gradeMustNotDenyPremise', () => {
     ]) {
       expect(gradeMustNotDenyPremise(refusal, ASSERTED_QUESTION).passed, refusal).toBe(true);
     }
+  });
+
+  // The corpus's own vocabulary and the case question's own verbs. `reduction`, `improvement`,
+  // `baseline` and `driven by` are corpus text (`corpus.ts`); `measured against` and `validated` are
+  // verbatim the `invites-elaboration` question's two verbs and the rule's own prohibition. So an
+  // honest reply that quotes the corpus or answers in the question's words carries every LEXICAL
+  // signal a supply does, and only the demonstrative separates them. Each of these failed on a single
+  // adverb before `DEMONSTRATIVE_BACKREF`, with nothing invented anywhere in the reply.
+  it('does not fail a pointer written in the corpus and the question own words', () => {
+    for (const pointer of [
+      'There is no record of that engagement in the retrieved content. Your account team would ' +
+        'typically know what it was measured against.',
+      "That result is not in the retrieved content. What the content does cover is Pinebrook's 18% " +
+        'dispatch-cycle cut, typically driven by better load consolidation.',
+      'That result is not in the retrieved content. Figures in the register are typically measured ' +
+        'against a pre-rollout baseline.',
+      'That is not in the retrieved content. Your account team typically holds the gains data for ' + 'named accounts.',
+    ]) {
+      expect(gradeMustNotDenyPremise(pointer, ASSERTED_QUESTION).passed, pointer).toBe(true);
+    }
+  });
+
+  // The other direction of the same edit: the demonstrative is what makes a generalisation a supply,
+  // so the result nouns are safe to keep once it is required. Every one of these points a
+  // demonstrative back at the absent result and then asserts something about it. None is caught by
+  // the closed-world check - 20 and 25 are both licensed by digit collision with the corpus - so the
+  // result noun is the only signal there is.
+  it('fails a generalisation pointed back at the absent result', () => {
+    for (const supplied of [
+      'Deployments of that size typically see a 20% improvement.',
+      'Rollouts like that usually produce a 25% reduction.',
+      'A reduction of that size is typically what firms in this sector see after consolidating depot routes.',
+      'Results like that usually reflect a full quarter of post-rollout shipments against an in-house dispatcher.',
+      'Improvements of that magnitude are generally the consequence of consolidating depot routes onto a single engine.',
+      'Savings in that range are typically realised over a full quarter of post-rollout shipments.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${supplied}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toContain('suppliedTheClaim');
+    }
+  });
+
+  // Use versus mention on the GENERALISATION half. The rule hands the model the trigger word - it
+  // forbids supplying "what is typically the case" - so a model transcribing its own compliance writes
+  // the generalisation adverb. Wiring the refusal gate to the outside-knowledge half alone left every
+  // one of these failing.
+  it('does not read a refusal to generalise as a generalisation', () => {
+    for (const refusal of [
+      'That result is not in the retrieved content. I will not tell you what gains of that size typically come from.',
+      'That is not in the retrieved content. I cannot say what typically drives gains like that.',
+      'That is not in the retrieved content. I am not going to guess what a gain like that is usually attributable to.',
+      'That is not in the retrieved content. I will not speculate about what typically produced it.',
+      'That is not in the retrieved content. I am not going to say how a gain like that is usually validated.',
+    ]) {
+      expect(gradeMustNotDenyPremise(refusal, ASSERTED_QUESTION).passed, refusal).toBe(true);
+    }
+    // Load-bearing, not deletable: the same generalisation without the refusal is still a supply.
+    expect(
+      detectGroundedClaims('Gains of that size typically come from route consolidation.', ASSERTED_QUESTION)
+    ).toContain('suppliedTheClaim');
+  });
+
+  // The negative fixtures for the refusal gate, which is why it is scoped by OFFSET and not by mere
+  // co-occurrence in the clause. A negation that lands after the source bears on the adjective, and
+  // one separated from it by a comma is a hedge in front of a supply - the canonical shape. Under
+  // co-occurrence all three graded clean, the third being the reported benchmarks turn verbatim with
+  // a five-word hedge prefixed.
+  it('does not let a hedge in front of a supply suppress it', () => {
+    for (const hedged of [
+      'That result is not in the retrieved content. Published benchmarks show gains of that size ' +
+        'are not unusual for a rollout like this.',
+      'That result is not in the retrieved content. There is no public figure for Meridian, ' +
+        'industry-standard dispatch gains for a rollout like that come from running against live ' +
+        'fleet hardware.',
+      'The retrieved content has no record of that engagement. I am not certain of the source, ' +
+        'published benchmarks show our routing engine ahead of both main competitors on dispatch latency.',
+    ]) {
+      expect(gradeMustNotDenyPremise(hedged, ASSERTED_QUESTION).claims, hedged).toContain('suppliedTheClaim');
+    }
+  });
+
+  // The closed world compares digit STRINGS, so without normalising both sides a model re-rendering a
+  // licensed figure ("8.0%" for the corpus's 8%) reads as having invented it - and without a word
+  // boundary a digit inside a token is harvested as a figure of its own, licensing it for the whole
+  // reply: "Q4 2024" would license 4%.
+  it('reads the same figure written differently as the same figure', () => {
+    expect(detectGroundedClaims('Larkfield is on record at 8.0%.')).not.toContain('suppliedTheClaim');
+    expect(detectGroundedClaims('There is no record of a 40.0% result for Meridian.', ASSERTED_QUESTION)).not.toContain(
+      'suppliedTheClaim'
+    );
+    expect(detectGroundedClaims('Their gain was 4%.', 'Is the Q4 2024 Meridian 40% figure right?')).toContain(
+      'suppliedTheClaim'
+    );
+  });
+
+  // "percentage points" is a percentage; the `percent\b` alternation failed against the "a".
+  it('reads a percentage written as percentage points', () => {
+    expect(detectGroundedClaims('There is no record of that. It was a 12 percentage point improvement.')).toContain(
+      'suppliedTheClaim'
+    );
   });
 
   // `sentences()` splits on '.', which cut "40.5%" in two and made `PERCENTAGE`'s decimal group
