@@ -132,6 +132,24 @@ describe('POST /api/secret-rotations/renewed', () => {
     expect(captured.length).toBeGreaterThan(0);
   });
 
+  it('ignores a caller-supplied previousKey and captures the server-held secret instead', async () => {
+    const { configureSecretsAtRest, decryptAtRest, generateEncryptionKey } = await import('@bike4mind/utils/security');
+    configureSecretsAtRest(generateEncryptionKey());
+    try {
+      mockFindById.mockResolvedValue({ id: 's1', keyName: 'JWT_SECRET', rotationIntervalDays: 30 });
+      const { req, res } = request({ id: 's1', previousKey: 'attacker-chosen' });
+      await mockRefs.postHandler!(req, res);
+
+      // The renew schema strips previousKey and the value is recaptured from Config.JWT_SECRET,
+      // so a caller can never plant the secret the grace-window verifier will later trust.
+      const stored = mockUpdate.mock.calls[0][0].previousKey as string;
+      expect(stored).not.toBe('attacker-chosen');
+      expect(decryptAtRest(stored)).toBe('server-held-jwt-secret');
+    } finally {
+      configureSecretsAtRest(undefined);
+    }
+  });
+
   it('re-captures on every renew, so the grace window advances rather than extending a stale key', async () => {
     mockFindById.mockResolvedValue({ id: 's1', keyName: 'JWT_SECRET', rotationIntervalDays: 30 });
     const first = request({ id: 's1' });

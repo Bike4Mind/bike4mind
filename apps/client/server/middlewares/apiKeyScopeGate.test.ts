@@ -65,6 +65,8 @@ describe('decideScopeGate', () => {
     expect(decideScopeGate([ApiKeyScope.AI_CHAT], [ApiKeyScope.EMBED_CHAT], NONE)).toEqual({ outcome: 'deny' });
     // With that scope staged, only the confinement branch stands between the confined key
     // and a stagedAllow - so this pins line 119: delete it and this flips to stagedAllow.
+    // The staged branch warns-and-passes for grandfathered keys, but a confined credential
+    // was never grandfathered, so a rollout window must not become a way in.
     const staged = new Set<string>([ApiKeyScope.AI_CHAT]);
     expect(decideScopeGate([ApiKeyScope.AI_CHAT], [ApiKeyScope.EMBED_CHAT], staged)).toEqual({ outcome: 'deny' });
   });
@@ -85,13 +87,6 @@ describe('decideScopeGate', () => {
     expect(decideScopeGate(undefined, mixed, NONE)).toEqual({ outcome: 'deny' });
     // It keeps whatever a route explicitly names, though - this is a gate, not a revocation.
     expect(decideScopeGate([ApiKeyScope.AI_CHAT], mixed, NONE)).toEqual({ outcome: 'allow' });
-  });
-
-  it("denies a confined key even while the route's scope is staged", () => {
-    // The staged branch warns-and-passes for grandfathered keys. A confined credential
-    // was never grandfathered, so a rollout window must not become a way in.
-    const staged = new Set<string>([ApiKeyScope.AI_CHAT]);
-    expect(decideScopeGate([ApiKeyScope.AI_CHAT], [ApiKeyScope.EMBED_CHAT], staged)).toEqual({ outcome: 'deny' });
   });
 
   it('still stages normally for an ordinary key', () => {
