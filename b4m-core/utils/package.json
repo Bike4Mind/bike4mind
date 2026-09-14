@@ -79,6 +79,16 @@
         "default": "./dist/escapeRegex.cjs"
       }
     },
+    "./safeObjectKey": {
+      "import": {
+        "types": "./dist/safeObjectKey.d.mts",
+        "default": "./dist/safeObjectKey.mjs"
+      },
+      "require": {
+        "types": "./dist/safeObjectKey.d.cts",
+        "default": "./dist/safeObjectKey.cjs"
+      }
+    },
     "./contentDisposition": {
       "import": {
         "types": "./dist/contentDisposition.d.mts",

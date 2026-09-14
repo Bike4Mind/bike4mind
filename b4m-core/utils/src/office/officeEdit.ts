@@ -1,5 +1,6 @@
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
 import { BadRequestError } from '../errors';
+import { isForbiddenObjectKey } from '../safeObjectKey';
 
 /**
  * Round-trip AI editing for Office documents (.docx, .xlsx). The AI edit flow works on a
@@ -257,6 +258,13 @@ async function applyXlsxText(originalBuffer: Buffer, editedText: string): Promis
   }
 
   for (const { name, csv } of splitXlsxSheets(editedText)) {
+    // The sheet name comes from the edited text (`### Sheet: <name>`). A reserved key like
+    // `__proto__` would make `workbook.Sheets[name]` resolve to Object.prototype (truthy),
+    // so a cell write or book_append_sheet mutates the prototype process-wide. Reject it.
+    if (isForbiddenObjectKey(name)) {
+      throw new BadRequestError(`Invalid sheet name "${name}"`);
+    }
+
     const rows = parse(csv.replace(/\s+$/, ''), { relax_column_count: true, skip_empty_lines: false }) as string[][];
 
     const sheet = workbook.Sheets[name];

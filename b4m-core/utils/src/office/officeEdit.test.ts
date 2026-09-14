@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
@@ -159,5 +159,18 @@ describe('unsupported mime', () => {
   it('throws on extract and apply for a non-office mime', async () => {
     await expect(extractEditableText(Buffer.from('x'), 'text/plain')).rejects.toThrow();
     await expect(applyEditedText(Buffer.from('x'), 'y', 'text/plain')).rejects.toThrow();
+  });
+});
+
+describe('xlsx sheet-name prototype-pollution guard', () => {
+  afterEach(() => {
+    delete (Object.prototype as Record<string, unknown>).polluted;
+  });
+
+  it('rejects a reserved sheet name and leaves Object.prototype untouched', async () => {
+    const buffer = makeXlsx();
+    const edited = '### Sheet: __proto__\nA,polluted\nx,y';
+    await expect(applyEditedText(buffer, edited, XLSX_MIME)).rejects.toThrow(/sheet name/i);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 });
