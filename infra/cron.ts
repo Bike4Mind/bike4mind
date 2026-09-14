@@ -648,9 +648,10 @@ const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
     // dataLakeTaxonomyQueue + websocketApi: the stuck-batch backstop calls
     // enqueueTaxonomyAnalysisIfWanted, which needs Resource.dataLakeTaxonomyQueue.url to
     // enqueue and, on a rate-limited batch, Resource.websocket.managementEndpoint to push the
-    // live status update. fabFileChunkQueue: the un-chunked rescue sweep (#1420) re-enqueues
-    // complete-but-never-chunked files for chunking.
-    link: [...allSecrets, dataLakeTaxonomyQueue, websocketApi, fabFileChunkQueue],
+    // live status update. fabFileChunkQueue: the un-chunked rescue sweep re-enqueues
+    // complete-but-never-chunked files for chunking. fabFileBucket: the moderation rescue sweep
+    // downloads stranded files to re-run the image scan.
+    link: [...allSecrets, dataLakeTaxonomyQueue, websocketApi, fabFileChunkQueue, fabFileBucket],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -660,6 +661,11 @@ const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
     permissions: [
       {
         actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+      // The moderation rescue sweep re-runs the image scan on stranded files.
+      {
+        actions: ['rekognition:DetectModerationLabels'],
         resources: ['*'],
       },
     ],
@@ -834,6 +840,16 @@ const helpDatalakeIngestCron = new sst.aws.Cron('helpDatalakeIngest', {
     copyFiles: [
       { from: 'docs-site/docs', to: 'help-corpus/docs' },
       { from: 'apps/client/app/generated/help-index.json', to: 'help-corpus/help-index.json' },
+    ],
+    // This cron embeds the whole help corpus through createHelpEmbedder, so it needs the same
+    // Bedrock grant the vectorize subscriber has (infra/queues.ts): an admin can point
+    // defaultEmbeddingModel at Titan, and a stage with no provider key falls back to it. Without
+    // this the first tick AccessDenies on every chunk and retries the whole corpus every 6 hours.
+    permissions: [
+      {
+        actions: ['bedrock:InvokeModel'],
+        resources: ['*'],
+      },
     ],
     logging: {
       retention: '1 week',

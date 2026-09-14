@@ -62,9 +62,16 @@ inputs:
       Newline-separated git pathspecs (INCLUDE form) defining the docs site.
       docs-changed=true when the run's changeset touches any of these. Used to
       gate the help-docs job independently of the deploy gate.
+
+      Covers the help TOOLING as well as the corpus: help-docs is the only job
+      that runs packages/scripts/help/**, so listing docs-site alone let a change
+      to those scripts skip the very guard that covers them. A test there then
+      came to import a package the job never built, and the break surfaced on an
+      unrelated docs-site PR rather than on the change that caused it.
     required: false
     default: |
       docs-site/**
+      packages/scripts/help/**
 
 outputs:
   deployable:

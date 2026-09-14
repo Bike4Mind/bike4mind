@@ -19,8 +19,9 @@ import { DATA_LAKE_RETRIEVAL_NAMESPACE } from './scanTruncationMetrics';
  * ChunksScanned spike needs ScanTruncated on the same graph to tell "bigger corpus" from
  * "budgeted prefix" apart.
  *
- * Keep the names below in sync with infra/dataLakeSearchDashboard.ts; the tests pin the literals
- * because infra/ cannot import them.
+ * Keep the names below in sync with infra/dataLakeSearchDashboard.ts and with the
+ * dataLakeAnnQuerySlow alarm in infra/alarms.ts; the tests pin the literals because infra/ cannot
+ * import them.
  */
 
 /**
@@ -35,6 +36,16 @@ export const CHUNKS_SCANNED_METRIC = 'ChunksScanned';
 export const ANN_HITS_METRIC = 'AnnHits';
 /** Distinct embedding models queried - cap pressure on MAX_ALTERNATE_ANN_MODELS. */
 export const ANN_MODELS_QUERIED_METRIC = 'AnnModelsQueried';
+/**
+ * Slowest single backend ANN query in one search, in ms. The only Milliseconds metric in this
+ * namespace - everything else here counts things, this one is read against a timeout.
+ *
+ * Exists because the counters above cannot see a latency regression at all: a search that takes
+ * 49s and one that takes 2s publish identical AnnHits/ChunksScanned. The frontend server Lambda
+ * caps at 60s (infra/web.ts), so a slow first-touch index page-in is a correctness cliff, not
+ * just a slow page - see the dataLakeAnnQuerySlow alarm in infra/alarms.ts.
+ */
+export const ANN_QUERY_DURATION_METRIC = 'AnnQueryDurationMs';
 
 /**
  * Which retrieval backend served the search. Dimension value - keep stable.
@@ -52,6 +63,13 @@ export interface DataLakeSearchMetrics {
   chunksScanned: number;
   annHits: number;
   annModelsQueried: number;
+  /**
+   * Omitted from the datapoint set entirely when null (no ANN query reached a backend). A 0 would
+   * be invisible to the alarm, which reads Maximum, and wrong everywhere else: the dashboard's
+   * Average and any percentile read over a population padded with zeros describe a system faster
+   * than the one that ran, and CloudWatch cannot relabel published datapoints afterwards.
+   */
+  annSlowestQueryMs: number | null;
 }
 
 /**
@@ -91,25 +109,43 @@ export async function recordDataLakeSearchMetrics(metrics: DataLakeSearchMetrics
     // comparable. They are separate metrics to CloudWatch, so neither double-counts the other.
     const withBackend = [...stageOnly, { Name: 'Backend', Value: metrics.backend }];
 
+    const countData = (
+      [
+        [ANN_UNRANKED_FILES_LEFT_OFF_SCAN_METRIC, metrics.annUnrankedFilesLeftOffScan],
+        [CHUNKS_SCANNED_METRIC, metrics.chunksScanned],
+        [ANN_HITS_METRIC, metrics.annHits],
+        [ANN_MODELS_QUERIED_METRIC, metrics.annModelsQueried],
+      ] as const
+    ).flatMap(([MetricName, Value]) =>
+      [stageOnly, withBackend].map(Dimensions => ({
+        MetricName,
+        Value,
+        Unit: StandardUnit.Count,
+        Timestamp: timestamp,
+        Dimensions,
+      }))
+    );
+
+    // Milliseconds rather than Count so CloudWatch computes percentiles natively, and skipped
+    // rather than zero-filled when no query ran - see the field's contract above.
+    // Read into a local so the null check narrows it; a property access would not narrow inside
+    // the closure below, and the alternative is a cast that would outlive the reason for it.
+    const slowestQueryMs = metrics.annSlowestQueryMs;
+    const durationData =
+      slowestQueryMs === null
+        ? []
+        : [stageOnly, withBackend].map(Dimensions => ({
+            MetricName: ANN_QUERY_DURATION_METRIC,
+            Value: slowestQueryMs,
+            Unit: StandardUnit.Milliseconds,
+            Timestamp: timestamp,
+            Dimensions,
+          }));
+
     await client.send(
       new PutMetricDataCommand({
         Namespace: DATA_LAKE_RETRIEVAL_NAMESPACE,
-        MetricData: (
-          [
-            [ANN_UNRANKED_FILES_LEFT_OFF_SCAN_METRIC, metrics.annUnrankedFilesLeftOffScan],
-            [CHUNKS_SCANNED_METRIC, metrics.chunksScanned],
-            [ANN_HITS_METRIC, metrics.annHits],
-            [ANN_MODELS_QUERIED_METRIC, metrics.annModelsQueried],
-          ] as const
-        ).flatMap(([MetricName, Value]) =>
-          [stageOnly, withBackend].map(Dimensions => ({
-            MetricName,
-            Value,
-            Unit: StandardUnit.Count,
-            Timestamp: timestamp,
-            Dimensions,
-          }))
-        ),
+        MetricData: [...countData, ...durationData],
       })
     );
   } catch (error) {

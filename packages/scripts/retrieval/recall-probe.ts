@@ -10,13 +10,17 @@
  * ticket inherited that wording - but forced retrieval is a different code path with different
  * budgets (`ChatCompletionFeatures.ts` states it is NOT routed through semanticDataLakeSearch; it
  * uses `forcedRetrievalCharBudget` plus its own two relevance floors,
- * `forcedRetrievalRelativeFloorPct` and `forcedRetrievalMinSimilarityPct`, which this probe does not
- * sweep). The three kb* knobs
- * are consumed in exactly one file, `knowledgeBaseSearch/index.ts`. A forced-retrieval probe would
- * have returned identical numbers at every configuration. Invoking the tool directly also removes
- * model tool-choice variance entirely, which is the variable forced retrieval was chosen to control,
+ * `forcedRetrievalRelativeFloorPct` and `forcedRetrievalMinSimilarityPct`). The three kb* knobs are
+ * consumed in exactly one file, `knowledgeBaseSearch/index.ts`. A forced-retrieval probe would have
+ * returned identical numbers at every configuration. Invoking the tool directly also removes model
+ * tool-choice variance entirely, which is the variable forced retrieval was chosen to control,
  * while still exercising the shipped ranking, ceiling, floor and token-budget code rather than a
  * reimplementation that could drift from it.
+ *
+ * WHICH IS WHY IT DOES NOT SWEEP THE TWO FORCED FLOORS. Doing so here would write settings the
+ * probed path never reads and print rows that differ only by noise. They are swept offline instead,
+ * over captured embedding fixtures, by `forced-floor-sweep.ts`: both floors are pure arithmetic over
+ * one turn's ranked pool, so measuring them needs neither a tool call nor a stage.
  *
  * HOW IT SEES WHAT WAS SERVED. The tool already reports every read to the lake audit trail
  * (`recordLakeAccessEvent`, `knowledgeBaseSearch/index.ts:974`) carrying the deduped file ids, chunk

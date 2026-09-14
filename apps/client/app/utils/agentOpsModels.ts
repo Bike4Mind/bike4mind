@@ -44,13 +44,15 @@ const BACKEND_LABELS: Partial<Record<ModelBackend, string>> = {
   [ModelBackend.Ollama]: 'Ollama',
   [ModelBackend.XAI]: 'xAI',
   [ModelBackend.Kimi]: 'Kimi',
+  [ModelBackend.DeepSeek]: 'DeepSeek',
   [ModelBackend.VoyageAI]: 'Voyage AI',
   [ModelBackend.AWS]: 'AWS',
   [ModelBackend.BFL]: 'BFL',
   [ModelBackend.LocalImage]: 'Local',
 };
 
-const backendLabel = (backend: ModelBackend): string => BACKEND_LABELS[backend] ?? backend;
+/** Display label for a backend enum value. Shared with admin surfaces that group models by backend. */
+export const backendLabel = (backend: ModelBackend): string => BACKEND_LABELS[backend] ?? backend;
 
 /**
  * Display label per model id, disambiguating names shared across backends. Two catalog models can

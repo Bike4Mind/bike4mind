@@ -2,6 +2,30 @@ import { DATALAKE_TAG_PREFIX, effectiveTagPrefixArm, type DataLakeMembershipScop
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 
 /**
+ * The FabFile `status` value that lake REPORTING excludes and lake RETRIEVAL does not (#2737).
+ *
+ * A presigned FabFile row is tagged into a lake before a byte is sent, so lake reporting excludes
+ * this status on top of `buildDataLakeMembershipFilter` - without it an upload that never completed
+ * would count toward "the lake has a member" and one-way-activate a draft lake (see
+ * `computeDataLakeStats`). Retrieval's own filter is exactly `{ deletedAt: null, archivedAt: null }`
+ * (fabFileSearchQuery's `baseFilter`) over this SAME membership predicate, so this status conjunct
+ * is the ONLY thing that makes the two corpora differ.
+ *
+ * Both sides are deliberate and stay as they are. What is not acceptable is the difference being
+ * invisible - two readers derived 84 and 74 members for one lake (#2737). So a reporting surface
+ * that quotes a corpus size must be able to say how many members retrieval serves that it did not
+ * count: `summarizeDataLakeIndexingHealth` admits pending rows in its `$match` and counts them as
+ * `retrievalOnlyFiles`, while `computeDataLakeStats` and `countDataLakeTopicTags` still exclude
+ * them outright, because their numbers are persisted and drive activation rather than being
+ * narrated to a caller.
+ *
+ * NOT yet the single definition of this clause: the rest of the FabFileModel family (the hash-keyed
+ * reads, the lake writes) still spells `status: { $ne: 'pending' }` inline. Point new lake-scoped
+ * reads here rather than adding another literal.
+ */
+export const LAKE_REPORTING_EXCLUDED_STATUS = 'pending';
+
+/**
  * The ONE membership predicate: a file belongs to a lake on an exact meta-tag match OR on a
  * `fileTagPrefix` match against a file the lake's CREATOR OWNS. Shared by the single-lake browse
  * and every whole-lake lifecycle write, so all of them agree on who is a member - they used to

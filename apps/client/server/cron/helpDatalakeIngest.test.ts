@@ -58,7 +58,25 @@ describe('helpDatalakeIngest cron', () => {
     h.findBySlug.mockResolvedValue({ id: 'lake-1', createdByUserId: 'system-user' });
     h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
     h.getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'sk-test' });
+    // Returns the model it settled on, so a keyless stage's Bedrock fallback reaches the corpus
+    // stamp rather than the requested model - see createHelpEmbedder.
+    h.createHelpEmbedder.mockReturnValue({ embed: vi.fn(), model: 'text-embedding-3-small' });
     h.ingestHelpDatalake.mockResolvedValue(CLEAN_RESULT);
+  });
+
+  it('stamps the corpus with the model the embedder resolved, not the one requested', async () => {
+    // A keyless cloud stage falls back to Bedrock. deps.embeddingModel is both the stamp and the
+    // re-ingest invalidation key, so echoing the requested model here would label Titan vectors
+    // as ada-002 and re-invalidate every member on each 6-hour tick.
+    h.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+    h.createHelpEmbedder.mockReturnValue({ embed: vi.fn(), model: 'amazon.titan-embed-text-v2:0' });
+
+    await handler();
+
+    expect(h.ingestHelpDatalake).toHaveBeenCalledWith(
+      expect.objectContaining({ embeddingModel: 'amazon.titan-embed-text-v2:0' }),
+      expect.anything()
+    );
   });
 
   it('does not bootstrap: with no lake it no-ops instead of creating one under a guessed owner', async () => {

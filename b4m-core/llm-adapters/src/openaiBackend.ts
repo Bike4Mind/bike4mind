@@ -162,7 +162,7 @@ export class OpenAIBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         logoFile: 'OpenAI_Logo.svg',
-        rank: 0,
+        rank: 4,
         trainingCutoff: '2024-06-01',
         description:
           'Reliable for general-purpose text generation and analysis with a standard context window, suitable for a wide range of applications.',
@@ -187,7 +187,7 @@ export class OpenAIBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         logoFile: 'OpenAI_Logo.svg',
-        rank: 0,
+        rank: 4,
         trainingCutoff: '2024-06-01',
         description:
           "OpenAI's balanced GPT-4.1 model offering optimal price-performance ratio. Ideal for tasks requiring intelligence and cost efficiency.",
@@ -212,7 +212,7 @@ export class OpenAIBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         logoFile: 'OpenAI_Logo.svg',
-        rank: 0,
+        rank: 4,
         trainingCutoff: '2024-06-01',
         deprecationDate: '2026-10-23', // Deprecated as per https://platform.openai.com/docs/deprecations
         description:
@@ -233,7 +233,7 @@ export class OpenAIBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         logoFile: 'OpenAI_Logo.svg',
-        rank: 0, // Highest rank as it's the most capable model
+        rank: 0,
         trainingCutoff: '2023-10',
         deprecationDate: '2025-08-01', // Deprecated as per https://platform.openai.com/docs/deprecations
         description:
@@ -276,7 +276,7 @@ export class OpenAIBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         logoFile: 'OpenAI_Logo.svg',
-        rank: 0,
+        rank: 3,
         trainingCutoff: '2024-06-01',
         deprecationDate: '2026-12-11', // Deprecated as per https://platform.openai.com/docs/deprecations
         description:
@@ -436,7 +436,7 @@ export class OpenAIBackend implements ICompletionBackend {
         supportsImageVariation: false,
         supportsTools: true,
         logoFile: 'OpenAI_Logo.svg',
-        rank: 1,
+        rank: 2,
         trainingCutoff: '2026-01-01',
         releaseDate: '2026-06-23',
         description:
@@ -506,7 +506,7 @@ export class OpenAIBackend implements ICompletionBackend {
         supportsImageVariation: false,
         supportsTools: true,
         logoFile: 'OpenAI_Logo.svg',
-        rank: 1,
+        rank: 2,
         trainingCutoff: '2025-08-31',
         releaseDate: '2026-03-17',
         description:
@@ -528,7 +528,7 @@ export class OpenAIBackend implements ICompletionBackend {
         supportsImageVariation: false,
         supportsTools: true,
         logoFile: 'OpenAI_Logo.svg',
-        rank: 1,
+        rank: 2,
         trainingCutoff: '2025-08-31',
         releaseDate: '2026-03-17',
         description:
