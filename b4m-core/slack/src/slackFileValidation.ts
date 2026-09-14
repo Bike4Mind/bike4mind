@@ -1,5 +1,5 @@
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
-import { getFileExtension, hasFileExtension, resolveSupportedMimeType } from '@bike4mind/utils';
+import { getFileExtension, resolveSupportedMimeType } from '@bike4mind/utils';
 import type { SlackEventData } from './SlackEvent';
 
 export type SlackAttachment = NonNullable<SlackEventData['files']>[number];
@@ -83,11 +83,10 @@ export function validateSlackFileForIngest(file: SlackAttachment): SlackFileVali
     extensionlessFallback: SupportedFabFileMimeTypes.TXT_PLAIN,
   });
   if (!supported) {
-    // Name what actually decided the rejection - the resolved (extension-based) type, or the
-    // raw extension if it looks like one - never `file.mimetype` (only the client's claim, which
-    // can name a type that IS on the allow-list) and never a bare digit fragment `path.extname`
-    // can grab out of a date or version suffix, which reads as gibberish rather than a type.
-    const reportedType = resolvedMimeType || (hasFileExtension(file.name) ? ext : '');
+    // Name what actually decided the rejection - the resolved (extension-based) type, or the raw
+    // extension when nothing resolved - never `file.mimetype` (only the client's claim, which can
+    // name a type that IS on the allow-list).
+    const reportedType = resolvedMimeType || ext;
     return {
       ok: false,
       reason: 'unsupported_type',

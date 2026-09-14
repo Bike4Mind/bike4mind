@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { SupportedFabFileMimeTypes, isStorableFabFileMimeType } from '@bike4mind/common';
-import { resolveSupportedMimeType, hasFileExtension, isExtensionlessFileName, getMimeTypeByExtension } from './file';
+import { resolveSupportedMimeType, getMimeTypeByExtension } from './file';
 
 // resolveSupportedMimeType is the shared ingest allow-list gate: it
 // decides whether an uploaded file is supported and what MIME type to persist.
@@ -81,48 +81,52 @@ describe('resolveSupportedMimeType', () => {
   });
 });
 
-describe('hasFileExtension', () => {
+// The extension/extension-less rule is module-private, so it is pinned through the resolver:
+// only a name carrying no extension at all earns a door's plain-text fallback.
+describe('resolveSupportedMimeType extension-less rule', () => {
+  const opts = { extensionlessFallback: SupportedFabFileMimeTypes.TXT_PLAIN };
+
   it.each(['LICENSE', 'Dockerfile', 'Makefile'])('reads dotless name %s as extension-less', name => {
-    expect(hasFileExtension(name)).toBe(false);
+    expect(resolveSupportedMimeType(name, '', opts)).toEqual({
+      mimeType: SupportedFabFileMimeTypes.TXT_PLAIN,
+      supported: true,
+    });
   });
 
   it.each(['.env', '.eslintrc', '.prettierrc', '.exe'])('reads dotfile %s as extension-less', name => {
-    expect(hasFileExtension(name)).toBe(false);
+    expect(resolveSupportedMimeType(name, '', opts)).toEqual({
+      mimeType: SupportedFabFileMimeTypes.TXT_PLAIN,
+      supported: true,
+    });
   });
 
-  it.each(['Meeting notes 2026.09.07', 'My Report v1.2', 'sheet.123'])(
-    'treats an all-digit tail as a date/version fragment, not an extension (%s)',
+  // A digit tail used to be exempted as a date/version fragment, which let any binary in under a
+  // rename ('payload.1'). A dot-tail is an extension like any other now: resolve or be refused.
+  it.each(['Meeting notes 2026.09.07', 'My Report v1.2', 'sheet.123', 'payload.1', 'backup.001', 'disk.386'])(
+    'refuses digit-tail name %s rather than falling back to plain text',
     name => {
-      expect(hasFileExtension(name)).toBe(false);
+      expect(resolveSupportedMimeType(name, '', opts)).toEqual({ mimeType: '', supported: false });
     }
   );
 
-  // The regression this rule exists for: a digit-LED tail is still a real extension.
-  it.each(['archive.7z', 'clip.3gp', 'model.3ds'])('reads digit-led tail in %s as a real extension', name => {
-    expect(hasFileExtension(name)).toBe(true);
+  it.each(['archive.7z', 'clip.3gp', 'model.3ds'])('refuses digit-led tail in %s', name => {
+    expect(resolveSupportedMimeType(name, '', opts)).toEqual({ mimeType: '', supported: false });
   });
 
-  it.each(['app.properties', 'movie.mkv', 'setup.exe', 'notes.pdf'])('reads %s as having an extension', name => {
-    expect(hasFileExtension(name)).toBe(true);
+  it.each(['app.properties', 'movie.mkv', 'setup.exe'])('refuses unresolvable extension in %s', name => {
+    expect(resolveSupportedMimeType(name, '', opts)).toEqual({ mimeType: '', supported: false });
   });
 
-  it('reads a trailing dot as no extension', () => {
-    expect(hasFileExtension('payload.')).toBe(false);
-  });
-});
-
-describe('isExtensionlessFileName', () => {
-  it.each(['LICENSE', '.env', 'Meeting notes 2026.09.07'])('accepts %s for the plain-text fallback', name => {
-    expect(isExtensionlessFileName(name)).toBe(true);
+  it('still resolves a known extension when the fallback is offered', () => {
+    expect(resolveSupportedMimeType('notes.pdf', '', opts)).toEqual({
+      mimeType: SupportedFabFileMimeTypes.PDF,
+      supported: true,
+    });
   });
 
   // Malformed rather than extension-less, so it gets no fallback on either door.
   it('refuses the fallback to a trailing-dot name', () => {
-    expect(isExtensionlessFileName('payload.')).toBe(false);
-  });
-
-  it.each(['archive.7z', 'movie.mkv'])('refuses the fallback to %s', name => {
-    expect(isExtensionlessFileName(name)).toBe(false);
+    expect(resolveSupportedMimeType('payload.', '', opts)).toEqual({ mimeType: '', supported: false });
   });
 });
 
@@ -132,6 +136,12 @@ describe('getMimeTypeByExtension', () => {
   // of them exercise this lookup on its own.
   it('resolves md to the canonical markdown MIME type', () => {
     expect(getMimeTypeByExtension('md')).toBe(SupportedFabFileMimeTypes.TXT_MARKDOWN);
+  });
+
+  // A prototype-bearing lookup table answers these with an inherited member (the Object
+  // function itself), which is truthy and so escapes as a non-string mimeType.
+  it.each(['constructor', '__proto__', 'toString'])('resolves inherited key %s to nothing', key => {
+    expect(getMimeTypeByExtension(key)).toBe('');
   });
 });
 
@@ -145,8 +155,24 @@ describe('resolveSupportedMimeType extension precedence', () => {
     });
   });
 
-  it('still falls back to the claim when the extension resolves to nothing', () => {
+  // An extension we cannot resolve is the loophole this door exists to close: a supported claim
+  // must not rescue it, or any binary is admitted under a renamed-away extension.
+  it.each([
+    ['malware.exe', 'text/plain'],
+    ['archive.rar', 'application/pdf'],
+    ['notes.unknownext', SupportedFabFileMimeTypes.HTML],
+  ])('refuses %s even though it claims the supported type %s', (name, claim) => {
+    expect(resolveSupportedMimeType(name, claim)).toEqual({ mimeType: '', supported: false });
+  });
+
+  // Audio resolves by extension now (MIME_TO_EXT carries the audio types), so the predicate is
+  // the only thing deciding it - the claim is never reached.
+  it('keeps audio supported under the storable predicate', () => {
     expect(resolveSupportedMimeType('speech.mp3', 'audio/mpeg', { isAcceptable: isStorableFabFileMimeType })).toEqual({
+      mimeType: 'audio/mpeg',
+      supported: true,
+    });
+    expect(resolveSupportedMimeType('speech.mp3', undefined, { isAcceptable: isStorableFabFileMimeType })).toEqual({
       mimeType: 'audio/mpeg',
       supported: true,
     });
@@ -156,7 +182,7 @@ describe('resolveSupportedMimeType extension precedence', () => {
   // this helper are not widened to accept audio.
   it('does not accept an audio claim under the default predicate', () => {
     expect(resolveSupportedMimeType('speech.mp3', 'audio/mpeg')).toEqual({
-      mimeType: '',
+      mimeType: 'audio/mpeg',
       supported: false,
     });
   });
@@ -186,12 +212,10 @@ describe('resolveSupportedMimeType extension precedence', () => {
     expect(resolveSupportedMimeType('LICENSE', null)).toEqual({ mimeType: '', supported: false });
   });
 
-  // The extension resolves to nothing here, so this only passes if the claim
-  // fallback fires under the default (isSupportedFabFileMimeType) predicate -
-  // proving that branch is reachable, not just the isStorableFabFileMimeType path
-  // exercised above.
+  // Under extension-first the claim is only consulted for a name carrying no extension at all;
+  // an unresolvable extension is refused above rather than handed to the claim.
   it('reaches a supported type through the claim path alone under the default predicate', () => {
-    expect(resolveSupportedMimeType('notes.unknownext', SupportedFabFileMimeTypes.HTML)).toEqual({
+    expect(resolveSupportedMimeType('LICENSE', SupportedFabFileMimeTypes.HTML)).toEqual({
       mimeType: SupportedFabFileMimeTypes.HTML,
       supported: true,
     });
@@ -232,6 +256,25 @@ describe('resolveSupportedMimeType precedence option', () => {
     });
   });
 
+  // What copy-generated-image relies on: a trusted claim keeps its type whatever the caller
+  // named the file.
+  it('claim-first keeps a trusted image claim over a mismatched name', () => {
+    expect(resolveSupportedMimeType('notes.txt', 'image/png', { precedence: 'claim-first' })).toEqual({
+      mimeType: SupportedFabFileMimeTypes.PNG,
+      supported: true,
+    });
+  });
+
+  // And the hazard it guards at the door: a generic claim is not acceptable, so claim-first
+  // silently falls through to the filename - which is why that route maps octet-stream to PNG
+  // before calling in rather than passing it on.
+  it('claim-first falls through to the filename when the claim is a generic octet-stream', () => {
+    expect(resolveSupportedMimeType('notes.txt', 'application/octet-stream', { precedence: 'claim-first' })).toEqual({
+      mimeType: SupportedFabFileMimeTypes.TXT_PLAIN,
+      supported: true,
+    });
+  });
+
   it('composes precedence with a custom isAcceptable predicate', () => {
     expect(
       resolveSupportedMimeType('speech.mp3', 'audio/mpeg', {
@@ -251,7 +294,7 @@ describe('resolveSupportedMimeType precedence option', () => {
 describe('resolveSupportedMimeType extensionlessFallback option', () => {
   const opts = { extensionlessFallback: SupportedFabFileMimeTypes.TXT_PLAIN };
 
-  it.each(['LICENSE', '.env', 'Meeting notes 2026.09.07'])('falls back to plain text for %s', name => {
+  it.each(['LICENSE', '.env', 'Dockerfile'])('falls back to plain text for %s', name => {
     expect(resolveSupportedMimeType(name, '', opts)).toEqual({
       mimeType: SupportedFabFileMimeTypes.TXT_PLAIN,
       supported: true,

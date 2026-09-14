@@ -81,12 +81,15 @@ describe('validateSlackFileForIngest', () => {
     expect(result.message).toBe('File "payload." has no recognized file type.');
   });
 
+  // Inverted deliberately: a digit tail was exempted as a date/version suffix, which also let
+  // any binary in once renamed to 'payload.1'. A dot-tail is an extension that must resolve, and
+  // the rejection names the raw tail because nothing resolved from it.
   it.each(['Meeting notes 2026.09.07', 'My Report v1.2'])(
-    'accepts %s as extension-less - a date/version suffix is not an extension, even though `path.extname` finds a dot (regression: main accepts these)',
+    'rejects %s - a dot-tail is an extension, not an extension-less name',
     name => {
       const result = validateSlackFileForIngest(attachment({ name, mimetype: 'text/plain' }));
 
-      expect(result.ok).toBe(true);
+      expect(result).toMatchObject({ ok: false, reason: 'unsupported_type' });
     }
   );
 

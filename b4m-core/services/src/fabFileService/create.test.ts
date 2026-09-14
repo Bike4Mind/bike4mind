@@ -46,7 +46,7 @@ describe('createFabFile — unsupported file-type gating', () => {
     ).rejects.toThrow(/not supported/i);
   });
 
-  it('rejects an all-digit-tail name whose claimed MIME type is unsupported', async () => {
+  it('rejects a digit-tail name whose claimed MIME type is unsupported', async () => {
     await expect(
       createFabFile('u1', { ...base, fileName: 'backup.001', mimeType: 'application/octet-stream' }, adapters())
     ).rejects.toThrow(/not supported/i);
@@ -78,14 +78,13 @@ describe('createFabFile - extension-first MIME resolution', () => {
     expect(created.mimeType).toBe(SupportedFabFileMimeTypes.SH);
   });
 
-  it('accepts a date-suffixed name as plain text', async () => {
-    const created = await createFabFile(
-      'u1',
-      { ...base, fileName: 'Meeting notes 2026.09.07', mimeType: '' },
-      resolvingAdapters()
-    );
-
-    expect(created.mimeType).toBe(SupportedFabFileMimeTypes.TXT_PLAIN);
+  // Inverted deliberately: a digit tail used to be exempted as a date/version fragment, which
+  // meant renaming any binary to 'payload.1' got it admitted as plain text. Every dot-tail is
+  // an extension now, so it must resolve or the file is refused.
+  it('refuses a date-suffixed name rather than reading it as plain text', async () => {
+    await expect(
+      createFabFile('u1', { ...base, fileName: 'Meeting notes 2026.09.07', mimeType: '' }, resolvingAdapters())
+    ).rejects.toThrow(BadRequestError);
   });
 
   it('still accepts a dotless name with no claim as plain text', async () => {
@@ -107,9 +106,9 @@ describe('createFabFile - extension-first MIME resolution', () => {
     ).rejects.toThrow(BadRequestError);
   });
 
-  // Audio is storable but not ingestable, and MIME_TO_EXT has no audio entries,
-  // so it survives only via the claim under the storable predicate.
-  it('keeps accepting an audio claim', async () => {
+  // Audio is storable but not ingestable: .mp3 resolves by extension, and the storable
+  // predicate this door passes is what keeps it accepted.
+  it('keeps accepting an audio file', async () => {
     const created = await createFabFile(
       'u1',
       { ...base, fileName: 'speech.mp3', mimeType: 'audio/mpeg' },

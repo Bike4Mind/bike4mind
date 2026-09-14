@@ -1,7 +1,7 @@
 import path from 'path';
 import { fileTypeFromBuffer } from 'file-type';
 import invert from 'lodash/invert.js';
-import { SupportedFabFileMimeTypes, isSupportedFabFileMimeType } from '@bike4mind/common';
+import { AudioMimeType, SupportedFabFileMimeTypes, isSupportedFabFileMimeType } from '@bike4mind/common';
 
 /**
  * Detect a file's extension and MIME type: sniff the buffer first, then fall
@@ -89,21 +89,15 @@ export const getFileExtension = (fileName: string) => {
   return path.extname(fileName).toLowerCase().slice(1);
 };
 
-// An all-digit tail is a date or version fragment ("Meeting notes 2026.09.07",
-// "My Report v1.2"), not an extension. Anything else that parses as a tail IS an
-// extension - an unknown one must be refused, never coerced to text/plain. This is
-// not a length or character-class check: "properties" is a long, real, unsupported
-// extension and must still be refused the same way.
-export const hasFileExtension = (fileName: string) => {
-  const ext = getFileExtension(fileName);
-  return ext !== '' && !/^[0-9]+$/.test(ext);
-};
+// Any dot-tail is an extension that must resolve to a known type or be refused - a digit tail
+// ("payload.1", "backup.001") is no exemption, or renaming a binary is enough to get it in.
+const hasFileExtension = (fileName: string) => getFileExtension(fileName) !== '';
 
 // A trailing dot ("payload.") is malformed rather than extension-less, so it gets
 // no plain-text fallback: this is deliberately NOT the complement of hasFileExtension,
 // which is false for such a name too. Shared by the Slack and web ingest doors so the
 // two cannot drift apart again.
-export const isExtensionlessFileName = (fileName: string) => !hasFileExtension(fileName) && !fileName.endsWith('.');
+const isExtensionlessFileName = (fileName: string) => !hasFileExtension(fileName) && !fileName.endsWith('.');
 
 /**
  * Returns the MIME type corresponding to a given file extension.
@@ -148,30 +142,20 @@ export const getMimeTypeByExtension = (ext: string) => {
 };
 
 /**
- * Resolve the effective, supported MIME type for an uploaded file.
- *
- * Precedence between the filename extension and the claimed MIME type is the
- * caller's choice, not a global rule: trust which one is worth more differs by
- * door. Default is `'extension-first'` - right whenever the claim is an
- * untrusted client assertion (Slack, presigned-URL uploads), since preferring
- * it is how a shell script ends up stored and chunked as prose. Pick
- * `'claim-first'` when the claim instead comes from a trusted server-side
- * source rather than a client (e.g. Google Drive's stored metadata), so a
- * user-renamed file's extension can't outrank it. The returned `mimeType` is
- * what should be persisted (so the chunker keys on a type it can actually
- * process), and `supported` gates ingest so unsupported/binary files (e.g.
- * `setup.exe`) are rejected.
+ * Resolve the effective MIME type for an uploaded file: `mimeType` is what to persist (so the
+ * chunker keys on a type it can process) and `supported` gates ingest. Under the default
+ * `'extension-first'` a name whose extension does not resolve is refused outright, claim or no
+ * claim. `'claim-first'` exists for a claim that comes from a trusted server-side source rather
+ * than a client (Google Drive's stored metadata), where the user-renamable filename is worth less.
  *
  * @param fileName - Original file name (used to derive the extension).
- * @param claimedMimeType - The browser/client-provided MIME type, if any.
- * @param opts.isAcceptable - Predicate gating both extension- and
- * claim-derived types; defaults to `isSupportedFabFileMimeType`.
- * @param opts.precedence - Which of extension/claim is consulted first;
- * defaults to `'extension-first'`.
- * @param opts.extensionlessFallback - Type to fall back to for a genuinely
- * extension-less name (`LICENSE`, `.env`, a date suffix) that resolved nothing and
- * carried no claim at all. A supplied-but-unsupported claim stays refused, so this
- * cannot become a route around the rejection. Omit it to keep a door strict.
+ * @param claimedMimeType - The claimed MIME type, if any.
+ * @param opts.isAcceptable - Predicate gating both extension- and claim-derived types; defaults
+ * to `isSupportedFabFileMimeType`.
+ * @param opts.precedence - Which of extension/claim is consulted first; defaults to
+ * `'extension-first'`.
+ * @param opts.extensionlessFallback - Type for a name carrying no extension at all (`LICENSE`,
+ * `.env`) that also carried no claim. Omit it to keep a door strict.
  */
 export function resolveSupportedMimeType(
   fileName: string,
@@ -183,10 +167,19 @@ export function resolveSupportedMimeType(
   } = {}
 ): { mimeType: string; supported: boolean } {
   const { isAcceptable = isSupportedFabFileMimeType, precedence = 'extension-first', extensionlessFallback } = opts;
-  const byExtension = getMimeTypeByExtension(getFileExtension(fileName));
+  const ext = getFileExtension(fileName);
+  const byExtension = getMimeTypeByExtension(ext);
   // The `byExtension ?` guard is load-bearing: an unresolved extension has to yield null, or the
   // truthy `{ mimeType: '', supported: false }` wins the `??` chain and the claim is never read.
   const extensionResult = byExtension ? { mimeType: byExtension, supported: isAcceptable(byExtension) } : null;
+
+  // An extension we do not know is refused outright rather than handed to the claim: letting it
+  // through is how `malware.exe` claiming text/plain got admitted. A claim-first door trusts its
+  // server-side claim over the filename by construction, so it is exempt.
+  if (!extensionResult && ext !== '' && precedence !== 'claim-first') {
+    return { mimeType: '', supported: false };
+  }
+
   // `isAcceptable` is a plain predicate, so it cannot narrow `string | null | undefined` -
   // the truthiness check on `claimedMimeType` is what narrows it before the call.
   const claimResult =
@@ -195,9 +188,9 @@ export function resolveSupportedMimeType(
   const resolved = precedence === 'claim-first' ? (claimResult ?? extensionResult) : (extensionResult ?? claimResult);
   if (resolved) return resolved;
 
-  // Narrow by construction: a name whose real extension simply did not resolve fails
-  // isExtensionlessFileName, and a claim that was supplied and rejected above stays rejected -
-  // coercing either is how an unsupported binary gets stored and chunked as prose.
+  // Only a name carrying no extension at all reaches the fallback, and a claim that was supplied
+  // and rejected above stays rejected - coercing either is how an unsupported binary gets stored
+  // and chunked as prose.
   if (extensionlessFallback && !claimedMimeType && isExtensionlessFileName(fileName)) {
     return { mimeType: extensionlessFallback, supported: isAcceptable(extensionlessFallback) };
   }
@@ -255,8 +248,21 @@ const MIME_TO_EXT = {
   // Shell scripts
   [SupportedFabFileMimeTypes.SH]: 'sh',
   [SupportedFabFileMimeTypes.BASH]: 'bash',
+
+  // Audio: storable but never ingestable, so these resolve by extension and are then
+  // refused or kept by the caller's predicate (isStorableFabFileMimeType accepts them).
+  [AudioMimeType.MP3]: 'mp3',
+  [AudioMimeType.WAV]: 'wav',
+  [AudioMimeType.OPUS]: 'opus',
+  [AudioMimeType.AAC]: 'aac',
+  [AudioMimeType.FLAC]: 'flac',
+  [AudioMimeType.PCM]: 'pcm',
+  [AudioMimeType.OGG]: 'ogg',
+  [AudioMimeType.WEBM]: 'webm',
 } as const;
 
 // Declared after the literal above, not beside its consumer: `MIME_TO_EXT` is a const, so an
 // earlier invert() would hit its temporal dead zone at module load.
-const EXT_TO_MIME = invert(MIME_TO_EXT);
+// Null-prototype: a plain object would resolve 'constructor'/'__proto__' to an inherited
+// member, and the truthy result skips the `?? ''` in getMimeTypeByExtension.
+const EXT_TO_MIME: Record<string, string> = Object.assign(Object.create(null), invert(MIME_TO_EXT));

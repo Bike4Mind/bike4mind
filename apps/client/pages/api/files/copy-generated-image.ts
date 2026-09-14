@@ -52,7 +52,14 @@ const handler = baseApi()
       const imageBuffer = await getGeneratedImageStorage().download(imageS3Key);
 
       const metadata = await getGeneratedImageStorage().getMetadata(imageS3Key);
-      const contentType = metadata.contentType || SupportedFabFileMimeTypes.PNG;
+      // An octet-stream (what S3 reports for objects written without an explicit ContentType)
+      // carries no type at all, and claim-first would then fall through to the caller-supplied
+      // fileName - storing PNG bytes as whatever "notes.txt" claims. Treat it as absent.
+      const storedType = metadata.contentType;
+      const contentType =
+        !storedType || storedType === 'application/octet-stream' || storedType === 'binary/octet-stream'
+          ? SupportedFabFileMimeTypes.PNG
+          : storedType;
 
       // Derive the extension via the shared reverse lookup so structured types (e.g. Excel's
       // spreadsheetml) map to ".xlsx" instead of a bogus ".sheet".

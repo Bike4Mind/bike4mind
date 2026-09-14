@@ -85,9 +85,9 @@ describe('POST /api/files/copy-generated-image object-level authz', () => {
     expect(json).toHaveBeenCalledWith({ id: 'file-1' });
   });
 
-  // The name is the caller's, the contentType is the stored object's: the route declares the
-  // trust order instead of rewriting the name to make extension-first resolution come out right.
-  it('keeps a mismatched caller-supplied name and persists the trusted contentType', async () => {
+  // createFabFile is mocked here, so this pins only the wiring - which type and precedence the
+  // route hands over. What that precedence then resolves to is covered in utils/file.test.ts.
+  it('hands createFabFile the stored contentType and claim-first precedence, keeping the caller name', async () => {
     h.findSessionIdsByImage.mockResolvedValue(['s1']);
     h.findAllByIds.mockResolvedValue([{ userId: 'me', users: [] }]);
 
@@ -100,4 +100,24 @@ describe('POST /api/files/copy-generated-image object-level authz', () => {
       expect.objectContaining({ mimeTypePrecedence: 'claim-first' })
     );
   });
+
+  // A generic type is no type at all: passed on, claim-first would fall through to the caller's
+  // filename and store the image bytes as text/plain.
+  it.each(['application/octet-stream', 'binary/octet-stream', undefined])(
+    'substitutes PNG for a stored contentType of %s',
+    async contentType => {
+      h.findSessionIdsByImage.mockResolvedValue(['s1']);
+      h.findAllByIds.mockResolvedValue([{ userId: 'me', users: [] }]);
+      h.getMetadata.mockResolvedValue({ contentType });
+
+      const { res } = makeRes();
+      await handler(req('me', { fileName: 'notes.txt' }), res);
+
+      expect(h.createFabFile).toHaveBeenCalledWith(
+        'me',
+        expect.objectContaining({ mimeType: 'image/png' }),
+        expect.anything()
+      );
+    }
+  );
 });
