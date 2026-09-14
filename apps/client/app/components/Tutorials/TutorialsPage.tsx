@@ -5,7 +5,8 @@ import { profileTabListSx } from '@client/app/routes/profile/profileTabListSx';
 import HelpCenterOutlinedIcon from '@mui/icons-material/HelpCenterOutlined';
 import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
 import TutorialCard from './TutorialCard';
-import { tutorialItemsFor, type TutorialsTabKey } from './tutorialCatalog';
+import TutorialDetailView from './TutorialDetailView';
+import { tabOpensDetail, tutorialItemsFor, type TutorialsTabKey } from './tutorialCatalog';
 
 /**
  * Tutorials - the feature-discovery surface.
@@ -29,6 +30,9 @@ const TABS: { key: TutorialsTabKey; label: string }[] = [
 
 const TutorialsPage = () => {
   const [tab, setTab] = useState<TutorialsTabKey>('getting-started');
+  // Which card is expanded, per tab. Cleared on tab change so switching away and
+  // back lands on the list rather than reopening whatever was last read.
+  const [openKey, setOpenKey] = useState<string | null>(null);
 
   return (
     <Box
@@ -121,7 +125,10 @@ const TutorialsPage = () => {
 
         <Tabs
           value={tab}
-          onChange={(_, value) => setTab(value as TutorialsTabKey)}
+          onChange={(_, value) => {
+            setTab(value as TutorialsTabKey);
+            setOpenKey(null);
+          }}
           sx={{ mt: '32px' }}
           aria-label="Tutorial categories"
         >
@@ -137,26 +144,49 @@ const TutorialsPage = () => {
 
           {TABS.map(({ key }) => (
             <TabPanel key={key} value={key} sx={{ px: 0, pt: '24px', pb: 0 }}>
-              <Box
-                data-testid={`tutorials-panel-${key}`}
-                sx={{
-                  display: 'grid',
-                  // Cards size themselves; the column count follows the frame width
-                  // rather than the viewport, so the grid reflows with the sidenav
-                  // open or closed without a media query.
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
-                  gap: '16px',
-                  alignItems: 'stretch',
-                }}
-              >
-                {tutorialItemsFor(key).map(item => (
-                  <TutorialCard key={item.key} item={item} />
-                ))}
-              </Box>
+              <TutorialsPanel tab={key} openKey={openKey} onOpen={setOpenKey} />
             </TabPanel>
           ))}
         </Tabs>
       </Sheet>
+    </Box>
+  );
+};
+
+/** A tab's body: the card grid, or the detail view of whichever card is open. */
+const TutorialsPanel = ({
+  tab,
+  openKey,
+  onOpen,
+}: {
+  tab: TutorialsTabKey;
+  openKey: string | null;
+  onOpen: (key: string | null) => void;
+}) => {
+  const items = tutorialItemsFor(tab);
+  const opensDetail = tabOpensDetail(tab);
+  const open = opensDetail && openKey ? items.find(item => item.key === openKey) : undefined;
+
+  if (open) {
+    return <TutorialDetailView item={open} onBack={() => onOpen(null)} />;
+  }
+
+  return (
+    <Box
+      data-testid={`tutorials-panel-${tab}`}
+      sx={{
+        display: 'grid',
+        // Cards size themselves; the column count follows the frame width rather
+        // than the viewport, so the grid reflows with the sidenav open or closed
+        // without a media query.
+        gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+        gap: '16px',
+        alignItems: 'stretch',
+      }}
+    >
+      {items.map(item => (
+        <TutorialCard key={item.key} item={item} onOpen={opensDetail ? () => onOpen(item.key) : undefined} />
+      ))}
     </Box>
   );
 };
