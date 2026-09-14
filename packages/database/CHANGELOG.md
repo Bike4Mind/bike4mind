@@ -1,5 +1,27 @@
 # @bike4mind/database
 
+## 0.2.2
+
+### Patch Changes
+
+- Updated dependencies [[`7958ee1`](https://github.com/Bike4Mind/bike4mind/commit/7958ee13d277295ed9877a24686aa266265a727f), [`0e11dab`](https://github.com/Bike4Mind/bike4mind/commit/0e11dab88d9141c364c2f9192681fd94023050d3)]:
+  - @bike4mind/common@7.1.1
+  - @bike4mind/llm-adapters@0.13.0
+  - @bike4mind/db-core@0.5.2
+  - @bike4mind/fab-pipeline@1.3.2
+  - @bike4mind/utils@5.0.2
+
+## 0.2.1
+
+### Patch Changes
+
+- Updated dependencies [[`576f59f`](https://github.com/Bike4Mind/bike4mind/commit/576f59f9cb237c473c2793e72cd33e1648f12327)]:
+  - @bike4mind/common@7.1.0
+  - @bike4mind/db-core@0.5.1
+  - @bike4mind/fab-pipeline@1.3.1
+  - @bike4mind/llm-adapters@0.12.2
+  - @bike4mind/utils@5.0.1
+
 ## 0.2.0
 
 ### Minor Changes

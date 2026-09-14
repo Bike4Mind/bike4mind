@@ -163,6 +163,9 @@ export class NotebookImportService {
   /** Attachments actually persisted, as opposed to the count the export file claims. */
   private attachmentsWritten = 0;
 
+  /** S3 keys of imported knowledge files, surfaced so the caller can scan them post-commit. */
+  private importedKnowledgeFilePaths: string[] = [];
+
   /**
    * The store assigns the id; anything else records a reference that resolves to nothing.
    * `normalizeId` rather than `String()`: these adapters may hand back a populated document,
@@ -209,6 +212,7 @@ export class NotebookImportService {
 
       this.attachmentWarnings = [];
       this.attachmentsWritten = 0;
+      this.importedKnowledgeFilePaths = [];
 
       // Process each notebook
       for (const notebook of parsedData.notebooks) {
@@ -234,6 +238,7 @@ export class NotebookImportService {
 
       result.importedAttachments = this.attachmentsWritten;
       result.warnings!.push(...this.attachmentWarnings);
+      result.importedKnowledgeFilePaths = this.importedKnowledgeFilePaths;
 
       // Determine overall success
       result.success = result.errors!.length === 0 || result.importedNotebooks > 0;
@@ -490,15 +495,17 @@ export class NotebookImportService {
           fileSize: measuredSize,
           filePath,
           type: toKnowledgeType(file.type),
-          // The S3 scan that would flip this cannot see the row: it is written inside the import's
-          // transaction and the scan gives up after ~7.5s, long before a real import commits, so a
-          // 'pending' file would be unservable forever. Safe to mark clean here because the export
-          // only emits content for a file that was already clean at source.
-          moderationStatus: 'clean',
+          // Leave moderationStatus at the schema default ('pending'). The bytes are attacker-supplied
+          // (this content came straight off an uploaded import payload, not a trusted export), so they
+          // must be scanned before serving. The upload-time S3 scan cannot see this row - it is
+          // written inside the import transaction and gives up ~7.5s before a real import commits - so
+          // the caller re-scans every imported file out of band once this transaction commits, keyed
+          // by the filePath recorded below. See server/s3/moderateImportedKnowledgeFiles.ts.
         };
         // No `uploadedAt`/`metadata`: not paths on FabFileSchema, so strict mode drops them silently.
 
         importedIds.push(this.takeStoreId(await this.adapters.knowledgeRepository.create(knowledgeData), 'knowledge'));
+        this.importedKnowledgeFilePaths.push(filePath);
 
         // After the write, not before: the file has to have landed for "imported as FILE" to be
         // true, and a file that then failed would otherwise be reported twice. Absent is expected

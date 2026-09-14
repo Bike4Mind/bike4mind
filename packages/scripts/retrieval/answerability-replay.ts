@@ -15,14 +15,14 @@
  * pay nothing for retrieval today. That is a latency regression on the majority of traffic in
  * exchange for a metric. Run here instead, close to the window being measured.
  *
- * WHAT IT IS NOT. Not a measurement of the turn as it happened. Two drifts, both documented on
- * RetrievalSummarySchema.answerability and neither fixable here:
+ * WHAT IT IS NOT. Not a measurement of the turn as it happened. See
+ * RetrievalSummarySchema.answerability for the full set of drifts; the two that matter here:
  *   1. The corpus CONTENT has moved since the turn. `probedAt` is stamped so a reader can see how
  *      far. A replay long after the window is weak evidence.
- *   2. The corpus SCOPE is reconstructed, because the seed writes `dataLakeTags: []` on a turn
- *      where retrieval never ran. Scope here is the session's `retrievalTags` intersected with the
- *      owner's CURRENT lake access, so a session whose lakes changed is replayed against a corpus
- *      the turn never had.
+ *   2. The corpus SCOPE no longer drifts - it is read from the turn's own
+ *      `promptMeta.retrieval.lakeScope`, stamped by the seed. A turn that carries none (anything
+ *      seeded before that field existed) is skipped as `no_lake_scope` rather than probed against
+ *      a scope invented here.
  *
  * IT UNDER-COUNTS ANSWERABLE TURNS, AND THAT IS THE SAFE DIRECTION. The knowledge tool's corpus is
  * the session's lakes plus the caller's own files; this sees only the lakes. A lake reachable at
@@ -91,7 +91,9 @@ const SEARCH_MIN_SCORE = 0;
 type ApiKeyTable = { openai?: string | null; voyageai?: string | null; ollama?: string | null };
 
 type OwnerScope = {
-  dataLakeTags: string[];
+  // No `dataLakeTags` here on purpose: the tag scope comes off the TURN (`lakeScope`), and keeping
+  // an owner-wide bucket beside it is how a future edit quietly reintroduces the owner's whole
+  // library as the probed corpus.
   dataLakeTagPrefixes: string[];
   lakeMemberships: ReturnType<typeof dataLakeService.lakeMembershipsFrom>;
   lakes: Awaited<ReturnType<typeof dataLakeService.getDynamicDataLakeAccess>>['lakes'];
@@ -122,7 +124,6 @@ async function resolveOwnerScope(userId: string, cache: Map<string, OwnerScope |
   });
 
   const scope: OwnerScope = {
-    dataLakeTags: access.dataLakeTags,
     dataLakeTagPrefixes: access.dataLakeTagPrefixes,
     lakeMemberships: dataLakeService.lakeMembershipsFrom(access.lakes),
     lakes: access.lakes,
@@ -163,7 +164,9 @@ async function main(opts: Options): Promise<number> {
     'promptMeta.retrieval.mode': 'optional',
     ...(opts.start || opts.end ? { timestamp } : {}),
   })
-    .select('prompt sessionId userId promptMeta.retrieval.mode promptMeta.retrieval.answerability')
+    .select(
+      'prompt sessionId userId promptMeta.retrieval.mode promptMeta.retrieval.lakeScope promptMeta.retrieval.answerability'
+    )
     .sort({ timestamp: -1 })
     .limit(opts.limit)
     .lean()) as unknown as (Omit<ReplayRow, '_id'> & { _id: unknown; userId?: string })[];
@@ -200,14 +203,13 @@ async function main(opts: Options): Promise<number> {
       continue;
     }
 
+    // Read only to tell an orphaned turn from a probeable one - the scope comes off the turn, not
+    // off the session. Tallied apart from `no_lake_scope` because the remedies differ: a turn whose
+    // session record is gone never becomes probeable, while an unrecorded scope just means the
+    // window predates the field.
     const session = await sessionRepository.findById(target.sessionId);
-    const sessionTags = session?.retrievalTags ?? [];
-    // The turn's own lakes, not everything the owner can reach now: a session is scoped to what
-    // was selected in it, and searching the owner's whole library would answer a question no turn
-    // ever asked.
-    const dataLakeTags = scope.dataLakeTags.filter(tag => sessionTags.includes(tag));
-    if (dataLakeTags.length === 0) {
-      tally.skipped.no_lake_scope += 1;
+    if (!session) {
+      tally.skipped.no_session_record += 1;
       continue;
     }
 
@@ -220,7 +222,10 @@ async function main(opts: Options): Promise<number> {
           minScore: SEARCH_MIN_SCORE,
           embeddingModel,
           apiKeyTable: scope.apiKeyTable,
-          dataLakeTags,
+          // The turn's recorded scope, verbatim. A lake it names that the owner can no longer
+          // reach simply matches nothing through the current membership and prefix arms below,
+          // which undercounts - the safe direction this script's header commits to.
+          dataLakeTags: target.lakeScope,
           dataLakeTagPrefixes: scope.dataLakeTagPrefixes,
           lakeMemberships: scope.lakeMemberships,
           lakes: scope.lakes,
@@ -262,7 +267,11 @@ const argv = yargs(hideBin(process.argv))
   .option('floor', {
     type: 'number',
     default: FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT / 100,
-    describe: 'Cosine floor for candidatesAboveFloor; defaults to the forced-retrieval floor',
+    // Not "the" forced-retrieval floor any more: that resolves per embedding space
+    // (FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE), so this default is only the ada-002 rung.
+    // Replaying a corpus embedded with another model MUST pass --floor for that space, or it grades
+    // cosines from one vector space against a bar fitted to a different one.
+    describe: 'Cosine floor for candidatesAboveFloor; defaults to the ada-002 forced-retrieval floor',
   })
   .option('dry-run', { type: 'boolean', default: false, describe: 'Probe and report without writing' })
   .option('force', { type: 'boolean', default: false, describe: 'Re-probe turns that already carry a probe' })

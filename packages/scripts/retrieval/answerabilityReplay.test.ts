@@ -10,7 +10,7 @@ const row = (over: Partial<ReplayRow> = {}): ReplayRow => ({
   _id: 'quest1',
   prompt: 'what is our refund window',
   sessionId: 'session1',
-  promptMeta: { retrieval: { mode: 'optional' } },
+  promptMeta: { retrieval: { mode: 'optional', lakeScope: ['datalake:acme:handbook'] } },
   ...over,
 });
 
@@ -21,8 +21,15 @@ describe('selectReplayTargets', () => {
       row({ _id: 'b', promptMeta: { retrieval: { mode: 'forced' } } }),
       row({ _id: 'c', prompt: '   ' }),
       row({ _id: 'd', sessionId: null }),
-      row({ _id: 'e', promptMeta: { retrieval: { mode: 'optional', answerability: { topScore: 0.4 } } } }),
+      row({
+        _id: 'e',
+        promptMeta: { retrieval: { mode: 'optional', lakeScope: ['datalake:x'], answerability: { topScore: 0.4 } } },
+      }),
       row({ _id: 'f', promptMeta: {} }),
+      // Seeded before `lakeScope` existed, and one recorded with no lake in scope. Both are
+      // unprobeable for the same reason and share the reason's slot.
+      row({ _id: 'g', promptMeta: { retrieval: { mode: 'optional' } } }),
+      row({ _id: 'h', promptMeta: { retrieval: { mode: 'optional', lakeScope: [] } } }),
     ]);
 
     expect(selection.targets.map(target => target.questId)).toEqual(['a']);
@@ -31,13 +38,16 @@ describe('selectReplayTargets', () => {
       no_prompt: 1,
       no_session: 1,
       already_probed: 1,
-      // Never set here - the runner assigns it once the session is loaded.
-      no_lake_scope: 0,
+      no_lake_scope: 2,
+      // Never set here - the runner assigns it once it has tried to load the session.
+      no_session_record: 0,
     });
   });
 
   it('leaves an already-probed turn alone by default, since a re-probe widens the drift', () => {
-    const probed = row({ promptMeta: { retrieval: { mode: 'optional', answerability: { topScore: 0.4 } } } });
+    const probed = row({
+      promptMeta: { retrieval: { mode: 'optional', lakeScope: ['datalake:x'], answerability: { topScore: 0.4 } } },
+    });
     expect(selectReplayTargets([probed]).targets).toHaveLength(0);
     expect(selectReplayTargets([probed], { force: true }).targets).toHaveLength(1);
   });
@@ -45,6 +55,14 @@ describe('selectReplayTargets', () => {
   it('trims the prompt it hands on, so a padded turn is not embedded with its padding', () => {
     const [target] = selectReplayTargets([row({ prompt: '  what is our refund window  ' })]).targets;
     expect(target.prompt).toBe('what is our refund window');
+  });
+
+  it("hands on the turn's own recorded scope, which is the only corpus the replay may probe", () => {
+    const recorded = ['datalake:acme:handbook', 'datalake:acme:policies'];
+    const [target] = selectReplayTargets([
+      row({ promptMeta: { retrieval: { mode: 'optional', lakeScope: recorded } } }),
+    ]).targets;
+    expect(target.lakeScope).toEqual(recorded);
   });
 });
 
@@ -87,12 +105,38 @@ describe('formatReplaySummary', () => {
       probed: 10,
       written: 0,
       failed: 0,
-      skipped: { not_optional: 3, no_prompt: 0, no_session: 0, already_probed: 0, no_lake_scope: 0 },
+      skipped: {
+        not_optional: 3,
+        no_prompt: 0,
+        no_session: 0,
+        already_probed: 0,
+        no_lake_scope: 0,
+        no_session_record: 0,
+      },
     });
     expect(summary).toContain('probed:  10');
     expect(summary).toContain('written: 0');
     expect(summary).toContain('  not_optional: 3');
     // Reasons that did not fire stay out of the block rather than padding it with zeroes.
     expect(summary).not.toContain('no_prompt');
+  });
+
+  it('tallies a missing session record apart from a missing scope - their remedies differ', () => {
+    const summary = formatReplaySummary({
+      probed: 0,
+      written: 0,
+      failed: 0,
+      skipped: {
+        not_optional: 0,
+        no_prompt: 0,
+        no_session: 0,
+        already_probed: 0,
+        no_lake_scope: 7,
+        no_session_record: 2,
+      },
+    });
+    expect(summary).toContain('skipped: 9');
+    expect(summary).toContain('  no_lake_scope: 7');
+    expect(summary).toContain('  no_session_record: 2');
   });
 });

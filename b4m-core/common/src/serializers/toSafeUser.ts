@@ -44,6 +44,7 @@ export const USER_SECRET_FIELDS = [
   'pendingEmailToken',
   'pendingEmailSentAt',
   'pendingEmailExpires',
+  'pendingNotionOAuthNonce',
   'securityQuestions',
   'loginRecords',
   'userNotes',

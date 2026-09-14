@@ -521,7 +521,14 @@ describe('ChatCompletionProcess', () => {
       attachedFileTokenBudget: number;
       skipAutoOffers?: boolean;
       knowledgeSearchDisabled?: boolean;
-      queryEmbeddingModel?: string;
+      /**
+       * The credential binding this turn resolved, which is what the gate queries with - NOT the
+       * advertised `defaultEmbeddingModel` setting, which on a keyless stage names a model the turn
+       * cannot embed with. `missing === null` is the only settled state. Defaults to a settled
+       * 'model-A' (the model the fixtures are embedded under); pass a non-null `missing` for the
+       * expired-caller-key / no-Ollama-URL states, or `null` for a turn that never reached the seam.
+       */
+      embeddingBinding?: { model: string; missing: string | null; requested?: string; configured?: boolean } | null;
       retrievalFilter?: RetrievalExclusionOptions;
     }) => {
       // Seed the per-turn access memo directly (getAccessibleDataLakeAccess returns it when set),
@@ -540,13 +547,21 @@ describe('ChatCompletionProcess', () => {
         skipAutoOffers: opts.skipAutoOffers ?? false,
         knowledgeSearchDisabled: opts.knowledgeSearchDisabled ?? false,
         retrievalFilter: opts.retrievalFilter ?? {},
+        // `embeddingBinding: null` omits the key entirely, reproducing a caller that never set it.
+        ...(opts.embeddingBinding === null
+          ? {}
+          : {
+              embeddingBinding: {
+                requested: opts.embeddingBinding?.requested ?? opts.embeddingBinding?.model ?? 'model-A',
+                // Defaults true: every fixture below is a stage whose `defaultEmbeddingModel` names
+                // a registered model, which is the ordinary case. Pass false for the unset /
+                // unregistered setting.
+                configured: opts.embeddingBinding?.configured ?? true,
+                ...(opts.embeddingBinding ?? { model: 'model-A', missing: null }),
+              },
+            }),
         defaultAdminSettings: {
           ...(opts.threshold ? { CorpusRetrievalMinInlineTokensPerDoc: opts.threshold } : {}),
-          // The query embedding model; a doc is retrievable only if embedded under the same one.
-          // Defaults to the model the fixtures embed under ('model-A') unless a test overrides it.
-          ...(opts.queryEmbeddingModel === undefined
-            ? { defaultEmbeddingModel: 'model-A' }
-            : { defaultEmbeddingModel: opts.queryEmbeddingModel }),
         },
       });
     };
@@ -709,22 +724,87 @@ describe('ChatCompletionProcess', () => {
         dataLakeTags: ['datalake:corpus'],
         threshold: '500',
         attachedFileTokenBudget: 4000,
-        queryEmbeddingModel: 'model-A',
       });
       expect(plan.deferredToRetrieval).toBe(false);
       expect(plan.retrievableCount).toBe(0);
     });
 
-    it('defers nothing when the query embedding model is unresolvable (semantic arm cannot run)', async () => {
+    // The three states below all leave the turn unable to embed a query, so the semantic arm cannot
+    // run and NOTHING is deferrable - the corpus is inlined instead of stranded behind a tool that
+    // would return zero hits. They are separate tests because `config` alone cannot tell them apart
+    // (resolveEmbeddingWithKeylessFallback returns an empty config for all three), which is exactly
+    // the collapse that made a keyed stage query Bedrock.
+    it('defers nothing when the caller key is present but expired (missing is non-null)', async () => {
       const plan = await runPlan({
-        files: lakeFiles(40), // vectorized under 'model-A', but the query has no model
+        files: lakeFiles(40), // vectorized under 'model-A', but this turn cannot embed a query
         dataLakeTags: ['datalake:corpus'],
         threshold: '500',
         attachedFileTokenBudget: 4000,
-        queryEmbeddingModel: '',
+        embeddingBinding: { model: 'model-A', missing: 'openai' },
       });
       expect(plan.deferredToRetrieval).toBe(false);
       expect(plan.retrievableCount).toBe(0);
+    });
+
+    it('defers nothing when no embedder is reachable at all (self-host with no Ollama base URL)', async () => {
+      const plan = await runPlan({
+        files: lakeFiles(40),
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000,
+        embeddingBinding: { model: 'model-A', missing: 'ollama' },
+      });
+      expect(plan.deferredToRetrieval).toBe(false);
+      expect(plan.retrievableCount).toBe(0);
+    });
+
+    it('defers nothing when the binding is absent, which means NOT-YET-RESOLVED rather than keyless', async () => {
+      // An unset binding must never be read as "this deployment is keyless": that is the reading
+      // that routed a keyed production stage to Bedrock. Absent means unknown, and unknown defers
+      // nothing.
+      const plan = await runPlan({
+        files: lakeFiles(40),
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000,
+        embeddingBinding: null,
+      });
+      expect(plan.deferredToRetrieval).toBe(false);
+      expect(plan.retrievableCount).toBe(0);
+    });
+
+    it('defers nothing when defaultEmbeddingModel is unset or unregistered, however well the labels match', async () => {
+      // The seam still resolves a model in this state - it needs one to build a query embedder with
+      // - but it resolves it from the ENV default, and `search_knowledge_base` does not share that
+      // fallback: an unusable setting makes the tool abandon its semantic arm and answer from
+      // keyword search alone. So a file whose stored label happens to equal the env default is NOT
+      // reachable the way the gate would be claiming, and deferring it hands the doc to a search
+      // that cannot vector-match it. `configured: false` is what carries that distinction.
+      const plan = await runPlan({
+        files: lakeFiles(40), // labeled 'model-A', which is also what the env fallback resolved
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000,
+        embeddingBinding: { model: 'model-A', missing: null, configured: false },
+      });
+      expect(plan.deferredToRetrieval).toBe(false);
+      expect(plan.retrievableCount).toBe(0);
+    });
+
+    it('defers a corpus whose chunks were embedded by the KEYLESS fallback, not the advertised model', async () => {
+      // The headline fix. On a preview with no provider key the corpus is embedded and stamped with
+      // the model the seam fell back TO, while `defaultEmbeddingModel` still advertises model-A.
+      // Comparing against the advertised value made every one of these docs look foreign, so the
+      // gate deferred nothing and the whole corpus was inlined on every turn.
+      const plan = await runPlan({
+        files: lakeFiles(40, 'datalake:corpus', { embeddingModel: 'amazon.titan-embed-text-v2:0' }),
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000,
+        embeddingBinding: { model: 'amazon.titan-embed-text-v2:0', missing: null },
+      });
+      expect(plan.deferredToRetrieval).toBe(true);
+      expect(plan.retrievableCount).toBe(40);
     });
 
     it('keeps a small corpus inlined (per-doc share stays above the floor)', async () => {
@@ -786,7 +866,8 @@ describe('ChatCompletionProcess', () => {
         skipAutoOffers: false,
         knowledgeSearchDisabled: true,
         retrievalFilter: {},
-        defaultAdminSettings: { CorpusRetrievalMinInlineTokensPerDoc: '500', defaultEmbeddingModel: 'model-A' },
+        embeddingBinding: { requested: 'model-A', model: 'model-A', missing: null, configured: true },
+        defaultAdminSettings: { CorpusRetrievalMinInlineTokensPerDoc: '500' },
       });
       expect(plan.deferredToRetrieval).toBe(false);
       expect(plan.deferredKnowledgeIds).toHaveLength(0);
@@ -2820,6 +2901,7 @@ describe('ChatCompletionProcess', () => {
       files?: Array<Partial<{ id: string; fileName: string; vectorized: boolean; chunkCount: number }>>;
       getAccessibleFilesImpl?: () => Promise<unknown>;
       dataLakeTags?: string[];
+      retrievalTags?: string[];
       promptMode?: 'raw' | 'grounded' | 'surface';
       requestTools?: string[];
       skipAutoOffers?: boolean;
@@ -2827,6 +2909,7 @@ describe('ChatCompletionProcess', () => {
       fabFileNotices?: FabFileNotice[];
     }) => {
       mockSession.knowledgeIds = opts.knowledgeIds ?? [];
+      mockSession.retrievalTags = opts.retrievalTags ?? [];
       const getAccessibleFiles = opts.getAccessibleFilesImpl
         ? vi.fn().mockImplementation(opts.getAccessibleFilesImpl)
         : vi.fn().mockResolvedValue(opts.files ?? []);
@@ -3132,6 +3215,10 @@ describe('ChatCompletionProcess', () => {
           mode: 'optional',
           surfaces: [],
           dataLakeTags: [],
+          // Present-and-empty, not absent: the seed resolved a scope and this caller's corpus is
+          // attachments only, so there was no lake in it. Absence would mean "never recorded",
+          // which is what makes the offline replay skip a turn instead of probing it.
+          lakeScope: [],
           // false: this suite stubs getSettingsValue to undefined, so no guidance string resolves
           // and the section does not ship. The populated case is its own test below.
           knowledgeBaseGuidanceInjected: false,
@@ -3194,6 +3281,33 @@ describe('ChatCompletionProcess', () => {
         });
       });
 
+      /**
+       * The scope the offline answerability replay probes. Before this the seed wrote nothing, and
+       * the replay rebuilt a scope from the session's tags as they stood at replay time - so a
+       * session whose lake selection had since changed was scored against a corpus its turn never
+       * had. These pin that the recorded value is the turn's own resolved scope, not a constant.
+       */
+      describe("records the turn's resolved lake scope", () => {
+        it('records the accessible lakes when the session expresses no lake opinion', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:acme:handbook'],
+            retrievalTags: [],
+          });
+          expect(retrieval).toMatchObject({ mode: 'optional', lakeScope: ['datalake:acme:handbook'] });
+        });
+
+        it('records nothing when the session names a lake this caller cannot reach', async () => {
+          // narrowLakeAccessToSession's narrow-to-nothing, which is a different state from its
+          // no-op above: the session asked for a lake and retained none of it, so the turn had no
+          // corpus - and the replay must skip it rather than probe the owner's whole library.
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:acme:handbook'],
+            retrievalTags: ['datalake:not-mine'],
+          });
+          expect(retrieval).toMatchObject({ mode: 'optional', lakeScope: [] });
+        });
+      });
+
       it('writes no retrieval record at all when there was nothing to retrieve from', async () => {
         // A turn with no knowledge in scope belongs in NO denominator. If it were seeded, every
         // ordinary chat turn would dilute the rate toward zero.
@@ -3234,6 +3348,10 @@ describe('ChatCompletionProcess', () => {
           mode: 'optional',
           surfaces: ['knowledgeBaseSearch'],
           dataLakeTags: [],
+          // Survives the same way, and for a sharper reason: the replay reads it off a turn whose
+          // `retrieval` a surface has since rewritten, so a merge that dropped it would leave the
+          // measurement with no corpus to probe.
+          lakeScope: [],
           // Survives the tool arm's later write, which never sets it - the flag is seeded once
           // and must reach the fold intact or the A/B loses the turn. False here for the same
           // stubbed-settings reason as above; what this pins is survival, not the value.
@@ -4109,6 +4227,9 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
+        // The seed's resolved scope, which survives the feature's later write - see the field's
+        // own comment in promptMeta.ts for why it is recorded separately from dataLakeTags.
+        lakeScope: ['datalake:corpus'],
         // One belief recalled and rendered. No `topScore`: belief relevance is a different scale
         // from the cosine similarities the other surfaces report, so a max across the two would
         // be a number that looks like a similarity and is not one.
@@ -4147,6 +4268,7 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
+        lakeScope: ['datalake:corpus'],
         // Recall completed, so the zero is RECORDED rather than unknown - the same distinction
         // 'ok' draws for the outcome, now drawn for the volume.
         injected: { chunks: 0, chars: 0 },
@@ -4172,6 +4294,8 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
+        // Survives a surface that broke: the scope was in scope whether or not recall reached it.
+        lakeScope: ['datalake:corpus'],
         knowledgeBaseGuidanceInjected: false,
       });
     });
@@ -4195,6 +4319,9 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: [],
+        // The pair pulling apart, which is the point of recording both: the feature searched no
+        // lake, and a lake was nonetheless in scope for the turn.
+        lakeScope: ['datalake:corpus'],
         knowledgeBaseGuidanceInjected: false,
       });
     });

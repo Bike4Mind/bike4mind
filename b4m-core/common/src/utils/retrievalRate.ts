@@ -12,9 +12,16 @@ type RetrievalSummary = NonNullable<PromptMeta['retrieval']>;
  * Deliberately not the knowledge tool's floor, which defaults to 0 (KB_SEARCH_MIN_RELEVANCE_PCT_
  * DEFAULT) and would call every turn with any corpus at all answerable.
  *
- * Overridable per call. The replay stores the raw cosine precisely so the cutoff can be swept
- * without re-running it, which matters because this default is a setting's default, not a law -
- * an installation that has tuned forcedRetrievalMinSimilarityPct should sweep to its own value.
+ * Overridable per call, and now MUST be overridden outside ada-002. The served floor stopped being
+ * one global number: it resolves per embedding space from FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_
+ * SPACE, so this constant is the ada-002 rung of that table and nothing more. Replaying a corpus
+ * embedded with another model against it grades cosines from one vector space with a bar fitted to
+ * a different one - exactly the mistake the table exists to prevent, just committed offline, and it
+ * would report a turn as unanswerable when production would have answered it.
+ *
+ * The replay stores the raw cosine precisely so the cutoff can be swept without re-running it,
+ * which matters because this default is a setting's default, not a law - an installation that has
+ * tuned forcedRetrievalMinSimilarityPct should sweep to its own value.
  */
 const DEFAULT_ANSWERABLE_MIN_SCORE = FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT / 100;
 

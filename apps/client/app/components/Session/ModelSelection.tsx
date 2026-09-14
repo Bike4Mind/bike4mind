@@ -763,7 +763,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
       {} as Record<string, ModelInfo[]>
     );
 
-    // Sort within each backend: newly released first, then curated rank, then recency
+    // Sort within each backend by curated rank, then recency (see modelRanking.ts)
     Object.keys(grouped).forEach(backend => {
       grouped[backend] = sortModelsForPicker(grouped[backend]);
     });

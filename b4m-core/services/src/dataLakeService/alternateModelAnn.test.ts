@@ -275,6 +275,8 @@ describe('runAlternateModelAnn', () => {
       filesUnranked: [],
       embedded: false,
       failed: true,
+      // No query reached the backend, so there is no latency to report - null, not 0.
+      backendQueryMs: null,
     });
   });
 

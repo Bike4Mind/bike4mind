@@ -23,6 +23,7 @@ import {
   FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
 } from '../constants/forcedRetrieval';
+import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE } from '../constants/embeddingSpaceFloors';
 import { LAKE_RECALL_K_DEFAULT, LAKE_RECALL_K_MAX } from '../constants/lakeMemory';
 import {
   KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
@@ -41,6 +42,18 @@ import {
 import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } from '../types/entities/SreTypes';
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
 import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/ScopedSettingTypes';
+
+/**
+ * The measured per-space floors, rendered for an admin-facing description (e.g. "75 for
+ * text-embedding-ada-002, 35 for text-embedding-3-small").
+ *
+ * Rendered rather than written out in prose because these numbers are expected to move - 35 is
+ * provisional until it is re-derived against a production lake - and a description that restates
+ * the table is a wrong number shown to operators the moment it drifts, with nothing failing.
+ */
+const forcedRetrievalFloorsBySpaceSummary = Object.entries(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE)
+  .map(([space, pct]) => `${pct} for ${space}`)
+  .join(', ');
 
 /**
  * Default text for the artifact-emission system prompt. Single source of truth used BOTH as the
@@ -385,6 +398,7 @@ export const SettingKeySchema = z.enum([
   'defaultEmbeddingModel',
   'dataLakeSearchMaxFiles',
   'dataLakeSearchMaxChunks',
+  'dataLakeSearchMaxChunksPerFile',
   'forcedRetrievalCharBudget',
   'lakeMemoryRecallK',
   'kbSearchDefaultResults',
@@ -524,6 +538,7 @@ export const SettingKeySchema = z.enum([
   'modelDiscoveryAllowEgress',
   'modelDiscoveryPriceBandPct',
   'modelDiscoveryAutoRemap',
+  'modelDiscoveryProbeNewModels',
   // PR REPORT GENERATOR
   'prReportRepo',
   'prReportIdentityMap',
@@ -851,6 +866,18 @@ function makeStringSetting(
  */
 export const DATA_LAKE_SEARCH_MAX_FILES_DEFAULT = 5_000;
 export const DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT = 100_000;
+
+/**
+ * Most chunks one SOURCE DOCUMENT may contribute to a search's top-K. Unlike the two scan budgets
+ * above this is a diversity guard, not a cost rail: it bounds who occupies the result slots, not
+ * how far the query scans.
+ *
+ * `0` is a real, silent value meaning "no cap" - byte-identical to behavior before this setting
+ * existed - not "unset, use some other default". It ships disabled deliberately: crowding was
+ * measured absent on a 47-document corpus, so this is a lever for corpora large enough to show
+ * the problem, not a change to how retrieval behaves today.
+ */
+export const DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT = 0;
 
 /**
  * Data-lake embedding SPEND levers: defaults and hard rails, shared by the admin-settings
@@ -1544,6 +1571,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'lakeMemoryRecallK', order: 8 },
       { key: 'forcedRetrievalRelativeFloorPct', order: 9 },
       { key: 'forcedRetrievalMinSimilarityPct', order: 10 },
+      { key: 'dataLakeSearchMaxChunksPerFile', order: 11 },
     ],
   },
   DATA_LAKE_COST: {
@@ -1893,6 +1921,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'modelDiscoveryAllowEgress', order: 4 },
       { key: 'modelDiscoveryPriceBandPct', order: 5 },
       { key: 'modelDiscoveryAutoRemap', order: 6 },
+      { key: 'modelDiscoveryProbeNewModels', order: 7 },
     ],
   },
   RATE_LIMITING: {
@@ -3401,9 +3430,19 @@ export const settingsMap = {
     userReadable: true,
     name: 'Default Embedding Model',
     // Self-host with a local Ollama server and no cloud key defaults to a local embedder so RAG
-    // works keyless out of the box; cloud deployments keep the OpenAI default. See embedding.ts.
+    // works keyless out of the box; every cloud stage keeps the OpenAI default. Deliberately
+    // stage-neutral on cloud: this value is bundled into the browser too, and a keyless stage's
+    // Bedrock fallback is resolved at the embedding seam instead. See embedding.ts.
     defaultValue: defaultEmbeddingModelForEnv(),
-    description: 'The default embedding model to use',
+    description:
+      'The default embedding model to use. Changing it changes the SCALE of every similarity score ' +
+      'in the system, so relevance floors do not carry across: a floor tuned for one model can sit ' +
+      'above the entire range of another and reject everything. The server handles this for you ' +
+      'on the floors it ships, applying the value measured for whichever model your documents are ' +
+      'actually embedded with - but if you have set Forced Retrieval Absolute Floor by hand, ' +
+      're-measure it after changing this. Existing documents keep their old vectors and are only ' +
+      'comparable to a query embedded the same way, so a change here needs a re-embed to take full ' +
+      'effect; until then each set of documents is searched with the model it was indexed under.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     options: [
@@ -3444,6 +3483,42 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 3,
     // Same rungs, and the same reason for no Lake rung, as dataLakeSearchMaxFiles above (#2624).
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+  }),
+  dataLakeSearchMaxChunksPerFile: makeNumberSetting({
+    key: 'dataLakeSearchMaxChunksPerFile',
+    name: 'Data Lake Search Max Chunks Per Document',
+    defaultValue: DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
+    min: 0,
+    description:
+      'Most chunks from any ONE source document a data-lake semantic search may return in its ' +
+      'top-K. A diversity guard for CONTESTED slots: where several documents answer the question, ' +
+      'it stops the best-scoring one from taking slots the others could have filled. It is NOT a ' +
+      'fix for severe crowding - the cap redistributes only among the candidates retrieval ' +
+      'already returned, so a document that supplies enough of the top-scoring chunks to fill ' +
+      'that pool on its own is one the cap cannot change at all. On a corpus of book-length ' +
+      'documents, expect enabling this to change little beyond widening the vector-search ' +
+      'request. 0 (default) disables the cap, ' +
+      'byte-identical to behavior before this setting existed. The cap never SHRINKS a result set - ' +
+      'once the spread-out picks are in, any slots still open are backfilled with the highest-' +
+      'scoring chunks the cap held back, so a lake whose only match is one document still returns ' +
+      'a full top-K. A value at or above the result count is also a no-op, since nothing can ever ' +
+      "be held back. Below it, each retrieval stream's candidate pool is widened to a fixed " +
+      'multiple of the result count so the cap has a spread to choose from. The scanned corpus ' +
+      'itself does not grow (that is bounded separately), but the vector-search backends are ' +
+      'asked for that many more matches, and a larger in-memory ranking pool costs some CPU. 2-3 ' +
+      'is the useful range; 1 serves one passage per document, which suits a corpus of many short ' +
+      'documents and starves a question whose answer spans one long one. The chat knowledge-base ' +
+      'path ranks more passages than it serves, so it applies the cap a second time at the count ' +
+      'it actually serves - otherwise the spread-out picks, which are by definition the lowest-' +
+      'scoring ones admitted, would land in the passages that path discards.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 11,
+    // Organization/Owner only, no Lake rung - same reason as dataLakeSearchMaxFiles/MaxChunks
+    // (#2624). The cap is enforced at a merge whose pool spans EVERY lake the caller can reach in
+    // one pass, so there is no single lakeId for a narrower rung to key on and a Lake-scoped
+    // override would be silently inert. Reinstating it needs per-lake sub-budgets in the scan.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   forcedRetrievalCharBudget: makeNumberSetting({
@@ -3623,13 +3698,17 @@ export const settingsMap = {
     description:
       'Absolute minimum cosine similarity, as a percent, a chunk must clear to be injected on a ' +
       'Data-Lake-mode turn. This is a sanity floor for genuinely unrelated content, NOT the ranking ' +
-      'gate - the relative floor above does the ranking. Measured over 166 injected chunks on a ' +
-      'production lake the 75 default never once bound (the whole band sat between 80 and 91), so ' +
-      'it currently reads like a quality gate while providing no protection. Lowering it toward ' +
-      '30-40 is the intended companion to raising the relative floor: it lets the relative rule ' +
-      'govern a corpus whose band sits low, which a 75 line would otherwise reject wholesale. ' +
-      'Cosine similarity is not comparable across embedding models, so a value tuned for one model ' +
-      'does not transfer to another.',
+      `gate - the relative floor above does the ranking. LEAVE IT AT ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} UNLESS YOU HAVE MEASURED ` +
+      'YOUR OWN CORPUS: a raw cosine means nothing outside the embedding model it was fitted to, so ' +
+      `while this reads ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} the server ignores it and applies the floor measured for whichever model ` +
+      `your documents are actually embedded with (${forcedRetrievalFloorsBySpaceSummary}, ` +
+      'and no absolute floor at all for a model nobody has measured - the relative floor still ' +
+      'applies). Set any other value and the server uses exactly that, in every space, which is ' +
+      'yours to get right: 75 against text-embedding-3-small sits above that band entirely and ' +
+      'returns nothing on every query. Where this floor lands inside your band decides a lot - on ' +
+      'one measured corpus 74 / 75 / 76 swung recall 91% / 65% / 40% - and the same 75 that is a ' +
+      'cliff on one lake rejects nothing at all on another. Re-measure after changing the ' +
+      'embedding model; the sweep tool is packages/scripts/retrieval/forcedFloorSweep.ts.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 10,
@@ -4598,6 +4677,16 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
     order: 6,
+  }),
+  modelDiscoveryProbeNewModels: makeBooleanSetting({
+    key: 'modelDiscoveryProbeNewModels',
+    name: 'Probe New Models for Dispatch',
+    defaultValue: true,
+    description:
+      'Lets a write-mode run spend a forced one-tool call on a newly discovered OpenAI model to verify which token parameter and tool transport it takes, and turn its tools on. Off leaves every new OpenAI model with tools withheld until an operator writes the dispatch profile by hand.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 7,
   }),
   prReportRepo: makeStringSetting({
     key: 'prReportRepo',
