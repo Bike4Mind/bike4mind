@@ -100,6 +100,7 @@
     "@lexical/rich-text": "^0.47.0",
     "@lexical/utils": "^0.47.0",
     "@mendable/firecrawl-js": "^1.29.3",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "@mui/icons-material": "^5.14.9",
     "@mui/joy": "^5.0.0-beta.52",
     "@mui/material-nextjs": "^7.3.9",
