@@ -31,16 +31,27 @@ export const THINKING_ANSWER_HEADROOM_TOKENS = 1000;
 
 /**
  * Reasoning-inside-the-budget ids that none of the shape checks below can infer.
+ *
  * Bedrock's Kimi always reasons, but it is not Anthropic-adaptive, does not take
  * `reasoning_effort`, and sends plain `max_tokens` - so it looks like an ordinary
  * model at every seam we can inspect. Bedrock copies the monologue inline into
  * `content` (see bedrockBackend/moonshot.ts) and caps output at 16K, so the floor
  * resolves to that entire cap, which is the only value leaving room for an answer
  * after a long trace.
+ *
+ * DeepSeek Flash misses every clause for its own set of reasons: no
+ * `thinkingStyle` (that field is Anthropic's), absent from the OpenAI-only
+ * REASONING_SUPPORTED_MODELS, and DEEPSEEK_PROFILE declares plain `max_tokens`
+ * rather than `max_completion_tokens` because that is the parameter DeepSeek
+ * takes. It reasons on every turn by default at effort 'high', spends those
+ * tokens inside `max_tokens`, and a 4096 budget against a 393K cap is consumed
+ * by the monologue alone: the turn comes back `finish_reason: 'length'` with no
+ * content and deepseekBackend throws.
  */
 const REASONS_WITHIN_OUTPUT_BUDGET_IDS: ReadonlySet<string> = new Set<string>([
   ChatModels.KIMI_K2_THINKING_BEDROCK,
   ChatModels.KIMI_K2_5_BEDROCK,
+  ChatModels.DEEPSEEK_FLASH,
 ]);
 
 /**

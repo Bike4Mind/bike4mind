@@ -26,6 +26,7 @@ const DISCOVERY_ENV_KEYS = {
   gemini: 'GEMINI_API_KEY',
   xai: 'XAI_API_KEY',
   kimi: 'MOONSHOT_API_KEY',
+  deepseek: 'DEEPSEEK_API_KEY',
 } as const;
 
 export type LLMKeyResolver = typeof getEffectiveLLMApiKeys;
@@ -79,6 +80,7 @@ export async function getDiscoveryCredentials(
     gemini: usable(env[DISCOVERY_ENV_KEYS.gemini]) ?? usable(keys.gemini),
     xai: usable(env[DISCOVERY_ENV_KEYS.xai]) ?? usable(keys.xai),
     kimi: usable(env[DISCOVERY_ENV_KEYS.kimi]) ?? usable(keys.kimi),
+    deepseek: usable(env[DISCOVERY_ENV_KEYS.deepseek]) ?? usable(keys.deepseek),
     bfl: usable(keys.bfl),
     voyageai: usable(keys.voyageai),
     ollama: usable(keys.ollama),

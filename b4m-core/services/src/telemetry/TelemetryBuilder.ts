@@ -108,6 +108,9 @@ export function mapBackendToProvider(backend: ModelBackend | string): ModelTelem
     case ModelBackend.Kimi:
     case 'kimi':
       return 'moonshot';
+    case ModelBackend.DeepSeek:
+    case 'deepseek':
+      return 'deepseek';
     default:
       // Default to anthropic for unknown backends. This is a reporting hazard, not
       // a safe fallback: a backend missing a case above is silently counted as

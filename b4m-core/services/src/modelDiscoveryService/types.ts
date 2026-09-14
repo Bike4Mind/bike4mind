@@ -42,6 +42,7 @@ export interface DiscoveryCredentials {
   xai: string | null;
   /** Moonshot AI, which serves the Kimi models. */
   kimi: string | null;
+  deepseek: string | null;
   voyageai: string | null;
   /** Base URL, not a key. */
   ollama: string | null;

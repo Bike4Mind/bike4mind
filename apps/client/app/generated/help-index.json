@@ -3992,6 +3992,16 @@
         },
         {
           "level": 3,
+          "text": "DeepSeek Models (Direct API)",
+          "anchor": "deepseek-models-direct-api"
+        },
+        {
+          "level": 3,
+          "text": "Moonshot Models (Kimi)",
+          "anchor": "moonshot-models-kimi"
+        },
+        {
+          "level": 3,
           "text": "Meta Llama Models (AWS Bedrock)",
           "anchor": "meta-llama-models-aws-bedrock"
         },
@@ -3999,6 +4009,11 @@
           "level": 3,
           "text": "DeepSeek Models (AWS Bedrock)",
           "anchor": "deepseek-models-aws-bedrock"
+        },
+        {
+          "level": 3,
+          "text": "Moonshot Models (AWS Bedrock)",
+          "anchor": "moonshot-models-aws-bedrock"
         },
         {
           "level": 3,
@@ -13651,6 +13666,16 @@
             },
             {
               "level": 3,
+              "text": "DeepSeek Models (Direct API)",
+              "anchor": "deepseek-models-direct-api"
+            },
+            {
+              "level": 3,
+              "text": "Moonshot Models (Kimi)",
+              "anchor": "moonshot-models-kimi"
+            },
+            {
+              "level": 3,
               "text": "Meta Llama Models (AWS Bedrock)",
               "anchor": "meta-llama-models-aws-bedrock"
             },
@@ -13658,6 +13683,11 @@
               "level": 3,
               "text": "DeepSeek Models (AWS Bedrock)",
               "anchor": "deepseek-models-aws-bedrock"
+            },
+            {
+              "level": 3,
+              "text": "Moonshot Models (AWS Bedrock)",
+              "anchor": "moonshot-models-aws-bedrock"
             },
             {
               "level": 3,
@@ -19309,5 +19339,5 @@
       "accessLevel": "public"
     }
   ],
-  "version": "7a529418680017c8"
+  "version": "a3a4fc43041833aa"
 }

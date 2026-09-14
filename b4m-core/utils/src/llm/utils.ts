@@ -1465,7 +1465,9 @@ export async function processFabFilesServer(
           // here rather than given its own case because the payload is identical;
           // without it every Kimi model advertising supportsVision would accept
           // an attachment, drop it at `default`, and answer as if blind.
-          case ModelBackend.Kimi: {
+          case ModelBackend.Kimi:
+          // Same OpenAI base64 block; DeepSeek Flash is natively multimodal.
+          case ModelBackend.DeepSeek: {
             // Download image from S3 and send as base64 data URL.
             // Presigned S3 URLs cause timeouts when OpenAI/XAI servers try to fetch them.
             const openaiImageBuffer = await storage.download(file.filePath!);

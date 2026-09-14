@@ -12,6 +12,7 @@ export const DEFAULT_MANIFEST = {
   // Shared-secret bearer for the frontend -> ChatCompletion /process dispatch. Required:
   // chat dispatch fails closed (401) without it. Distinct from SECRET_ENCRYPTION_KEY.
   CHAT_COMPLETION_INTERNAL_SECRET: { kind: 'secret' },
+  DEEPSEEK_API_KEY: { kind: 'secret', optional: true },
   E2E_CLEANUP_SECRET: { kind: 'secret', optional: true },
   EMERGENCY_LOGIN_ENABLED: { kind: 'secret', optional: true },
   GEMINI_API_KEY: { kind: 'secret', optional: true },
