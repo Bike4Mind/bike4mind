@@ -14,6 +14,7 @@ import { S3Storage } from '@bike4mind/fab-pipeline';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { sendToClient } from '@server/websocket/utils';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { filterReadableQuests } from '@server/utils/sessionAccess';
 import { apiKeyService } from '@bike4mind/services';
 import { ChatModels, isImageServeable } from '@bike4mind/common';
 import { getSubQuestStatusIcon } from '@client/app/utils/subQuestStatusPresentation';
@@ -44,7 +45,7 @@ async function sendProgress(
   status: ExportStatus,
   progress: number,
   detail?: string,
-  extras?: { downloadUrl?: string; filename?: string; errorMessage?: string }
+  extras?: { downloadUrl?: string; filename?: string; errorMessage?: string; droppedQuestCount?: number }
 ) {
   await sendToClient(userId, endpoint, {
     action: 'quest_export_progress',
@@ -319,8 +320,23 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     await sendProgress(userId, websocketEndpoint, exportJobId, planId, 'assembling', 20, 'Loading responses...');
 
-    // Batch fetch all ChatHistoryItems
-    const chatItems = questIds.length > 0 ? await Quest.find({ _id: { $in: questIds } }).lean() : [];
+    // Batch fetch all ChatHistoryItems, then drop any whose session the CALLER cannot read: a
+    // doctored subQuest.questId could otherwise pull another user's quest into this export. Gating
+    // by the caller (not the plan owner) means a sharee sees their own quests, and never the owner's
+    // quests in sessions the sharee cannot reach.
+    // Fetch first, then filter by readability, so droppedQuestCount counts only quests that EXIST
+    // but the caller cannot read - not ids the $in never matched (deleted, or a stale subQuest.questId).
+    const foundQuests = questIds.length > 0 ? await Quest.find({ _id: { $in: questIds } }).lean() : [];
+    // Keep a quest when the CALLER can read its session. The owner arm is applied ONLY when the
+    // caller IS the owner: an owner exporting their own plan still recovers quests in sessions they
+    // soft-deleted (or a collaborator's session they cannot otherwise reach), but a sharee never gets
+    // the owner arm - passing it for a sharee would leak the owner's private (even soft-deleted)
+    // quests, since a sharee can write subQuest.questId. plan.userId is the owner.
+    const chatItems = await filterReadableQuests(foundQuests, userId, userId === plan.userId ? plan.userId : undefined);
+    const droppedQuestCount = foundQuests.length - chatItems.length;
+    if (droppedQuestCount > 0) {
+      logger.info(`[questExport] Dropped ${droppedQuestCount} quest(s) the caller cannot read`);
+    }
     const chatItemMap = new Map<string, Record<string, unknown>>();
     for (const item of chatItems) {
       chatItemMap.set((item._id as { toString(): string }).toString(), item as Record<string, unknown>);
@@ -531,10 +547,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       ResponseContentDisposition: `attachment; filename="${filename}"`,
     });
 
-    // Phase 4: Complete
+    // Phase 4: Complete. Surface droppedQuestCount so a sharee holding a partial export (owner-authored
+    // quests filtered out because their sessions were never shared) has a signal it is incomplete.
     await sendProgress(userId, websocketEndpoint, exportJobId, planId, 'completed', 100, 'Export complete!', {
       downloadUrl,
       filename,
+      ...(droppedQuestCount > 0 ? { droppedQuestCount } : {}),
     });
 
     logger.info(
