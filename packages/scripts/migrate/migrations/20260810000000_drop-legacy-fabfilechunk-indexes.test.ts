@@ -37,12 +37,18 @@ describe('drop-legacy-fabfilechunk-indexes migration (real DB)', () => {
     await FabFileChunk.collection.createIndex({ fabFileId: 1 });
 
     const before = (await FabFileChunk.collection.indexes()).map(index => index.name).sort();
-    expect(before).toEqual(['_id_', '_id_1_fabFileId_1', 'fabFileId_1', 'fabFileId_1__id_1']);
+    expect(before).toEqual([
+      '_id_',
+      '_id_1_fabFileId_1',
+      'fabFileId_1',
+      'fabFileId_1__id_1',
+      'fabFileId_1_embeddingModel_1_retrievalIndexConfirmedModel_1',
+    ]);
 
     await migration.up();
 
     const after = (await FabFileChunk.collection.indexes()).map(index => index.name).sort();
-    expect(after).toEqual(['_id_', 'fabFileId_1__id_1']);
+    expect(after).toEqual(['_id_', 'fabFileId_1__id_1', 'fabFileId_1_embeddingModel_1_retrievalIndexConfirmedModel_1']);
     // Four real index builds plus two drops exceeded the 15s default under the shared "misc" CI
     // shard's load; real-world-validation.test.ts uses the same 30s bump for similarly-heavy cases.
   }, 30000);
@@ -68,7 +74,7 @@ describe('drop-legacy-fabfilechunk-indexes migration (real DB)', () => {
     await migration.up();
 
     const after = (await FabFileChunk.collection.indexes()).map(index => index.name).sort();
-    expect(after).toEqual(['_id_', 'fabFileId_1__id_1']);
+    expect(after).toEqual(['_id_', 'fabFileId_1__id_1', 'fabFileId_1_embeddingModel_1_retrievalIndexConfirmedModel_1']);
   }, 30000); // Same real-index-build cost as the happy-path test above; same 30s bump.
 
   it('refuses to drop when the keyset compound is hidden (present but unusable)', async () => {
