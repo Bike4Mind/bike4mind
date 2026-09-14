@@ -317,14 +317,18 @@ describe('gradeMustNotDenyPremise', () => {
     expect(result.claims).toEqual(['namedTheGap']);
   });
 
-  // The generalisation frame is suppressed inside a gap-naming sentence, so a pointer to where the
-  // claim could be confirmed - the behaviour the rule now explicitly licenses - does not fail.
+  // The generalisation frame is suppressed inside a gap-naming sentence, AND needs a result noun or
+  // an attribution verb alongside it. Both halves are load-bearing: a pointer at where the claim
+  // could be confirmed is the behaviour the rule now licenses in as many words, and the last two of
+  // these put that pointer in its own sentence where the gap suppression cannot reach it.
   it('does not read a confirmation pointer as a general-knowledge frame', () => {
     for (const pointer of [
       'That is not in the retrieved content, and it is usually the account team who can confirm it.',
       'The register has no entry for that, so the CRM is generally the place to check.',
+      'Your account team would typically have the figure for that.',
+      'The CRM is usually where a pilot like that gets recorded.',
     ]) {
-      expect(detectGroundedClaims(pointer, ASSERTED_QUESTION)).not.toContain('suppliedTheClaim');
+      expect(detectGroundedClaims(pointer, ASSERTED_QUESTION), pointer).not.toContain('suppliedTheClaim');
     }
   });
 });
