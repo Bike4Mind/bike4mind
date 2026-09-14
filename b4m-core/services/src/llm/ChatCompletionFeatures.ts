@@ -65,6 +65,7 @@ import {
   DATALAKE_TAG_PREFIX,
   PROMPT_TEXT_MAX,
   materializePromptMetaSession,
+  effectiveTagPrefixArm,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import {
@@ -2374,6 +2375,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const { dataLakeTags, dataLakeTagPrefixes, lakes } = access;
       const lakeMemberships = lakeMembershipsFrom(lakes);
       warnIfManyLakeMemberships(lakeMemberships, this.logger, 'forced-retrieval');
+      this.logger.log(
+        '🔒 Forced retrieval: resolved membership arms',
+        lakeMemberships.map(scope => ({
+          datalakeTag: scope.datalakeTag,
+          prefixArm: effectiveTagPrefixArm(scope) ?? 'none',
+          hasCreatorAnchor: scope.kind === 'owned' && !!scope.creatorUserId,
+        }))
+      );
       attemptedDataLakeTags = dataLakeTags;
 
       // The session named a lake and narrowing retained none of it: a revoked grant, an archived

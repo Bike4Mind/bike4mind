@@ -19,6 +19,12 @@ export interface LakeSessionDefaults {
    * Scopes forced retrieval to THIS lake (its `datalakeTag`). This is also what makes the router's
    * step-1 SEARCH real rather than "retrieval-flavoured prose with nothing behind it": the session
    * can demonstrably reach the lake it was created for.
+   *
+   * A NARROWING KEY, not the membership predicate. Forced retrieval re-resolves each lake's full
+   * membership per turn (meta-tag OR creator-owned `fileTagPrefix`) through
+   * narrowLakeAccessToSession and buildDataLakeMembershipFilter, so a prefix-only member is served
+   * even though no prefix appears in this list. Reading this field as the whole retrieval scope has
+   * produced a bug report against behavior that works.
    */
   retrievalTags?: string[];
   /**
