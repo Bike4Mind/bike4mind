@@ -20,9 +20,10 @@ export const PAGE_SIZE = 200;
  * cannot be indexed away for this predicate as written.
  *
  * It CAN be removed by taking the regex off the server. `{fabFileId: {$type: 'string'}}` alone is
- * covered by that index, and applying the regex to the returned keys reports `docsExamined` 0 for
- * the same result set; it also closes the PCRE gap noted below, since JS `$` does not match before
- * a trailing newline. Two traps if anyone takes it: the keyset must advance on the compound
+ * covered by that index, and applying the regex to the returned keys reports `docsExamined` 0. The
+ * result set is not the same, though - it is strictly larger, because JS `$` does not match before
+ * a trailing newline, so the covered form also catches the `<24hex>\n` values the PCRE gap below
+ * leaves behind. Two traps if anyone takes it: the keyset must advance on the compound
  * `(fabFileId, _id)`, because paging on `_id` under a `fabFileId` sort silently skips most of the
  * collection and reports success, and the page size wants to be far larger, since the covered form
  * reads every string-valued row rather than only the matching ones. Not taken here because one
