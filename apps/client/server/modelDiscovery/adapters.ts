@@ -25,7 +25,12 @@ interface CatalogView {
   targets: JoinTarget[];
   /** Ids already 'active', so Bedrock skips their per-model availability call. */
   activeModelIds: Set<string>;
-  /** The read failed, so an empty view means "unknown", never "the catalog is empty". */
+  /**
+   * This view is not a picture of the catalog: the read threw, or it returned
+   * nothing. An empty view always means "unknown", never "the catalog is empty",
+   * and a zero-row read is exactly what an install whose seeding failed has
+   * (priceCatalogBootstrap catches that and boots anyway).
+   */
   degraded?: true;
 }
 
@@ -45,10 +50,10 @@ interface CatalogViewReader {
  * operator row that retires a model must not leave it in the "active, skip the
  * availability check" set because a discovery row underneath still says active.
  *
- * A failed read degrades to an empty view, which costs coverage (every id
- * unmatched, every Bedrock model probed) rather than correctness. For the OpenAI
- * new-model docs leg an empty view is NOT safe - it would make every listed id
- * look new - so that one reads `degraded` and stays off.
+ * A read that fails OR comes back empty degrades to an empty view, which costs
+ * coverage (every id unmatched, every Bedrock model probed) rather than
+ * correctness. For the OpenAI new-model docs leg an empty view is NOT safe - it
+ * would make every listed id look new - so that one reads `degraded` and stays off.
  */
 function readCatalogView(logger: Logger): CatalogViewReader {
   // Memoized per convergence pass: three sources ask for this and none of them
@@ -68,7 +73,11 @@ function readCatalogView(logger: Logger): CatalogViewReader {
         const lifecycle = record.lifecycle as { status?: string } | undefined;
         if (lifecycle?.status === 'active') activeModelIds.add(modelId);
       }
-      return { targets, activeModelIds };
+      // A clean read of zero rows is indistinguishable from a failed one for
+      // every consumer here, and it is reachable: boot continues after a seeding
+      // failure. Reporting it as a healthy empty catalog would hand the docs leg
+      // an empty Set and make every listed OpenAI id look new.
+      return targets.length === 0 ? EMPTY_VIEW : { targets, activeModelIds };
     } catch (error) {
       logger.warn(
         `[model-discovery] catalog read failed; joining against nothing this run: ${

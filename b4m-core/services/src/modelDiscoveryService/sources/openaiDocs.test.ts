@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_PLAUSIBLE_TOKENS,
   OPENAI_PRICING_URL,
   openAiModelDocUrl,
   parseOpenAiLongContextBreakpoint,
@@ -216,6 +217,26 @@ describe('openai model page', () => {
 
   it('fails on the pricing page, which is not a model page', () => {
     expect(parseOpenAiModelPage(pricingMarkdown).ok).toBe(false);
+  });
+
+  it('refuses a token figure past what any model ships, in either field', () => {
+    // A reformat that puts a stray figure before the label is the realistic way
+    // this happens. Nothing downstream can correct it: this source is a provider,
+    // so its window outranks every aggregator's, and it lands in the send budget.
+    const head = '# GPT-5.6 Wide\n\nModel ID: `gpt-5.6-wide`\n\n';
+    const window = parseOpenAiModelPage(`${head}- ${MAX_PLAUSIBLE_TOKENS + 1} context window\n`);
+    expect(window).toMatchObject({ ok: false, error: expect.stringContaining('past what any model ships') });
+
+    const output = parseOpenAiModelPage(
+      `${head}- 400,000 context window\n- ${MAX_PLAUSIBLE_TOKENS + 1} max output tokens\n`
+    );
+    expect(output.ok).toBe(false);
+
+    // The bound is a ceiling, not a limit anyone is near.
+    expect(page(`${head}- 1.05M context window\n- 128,000 max output tokens\n`)).toMatchObject({
+      contextWindow: 1_050_000,
+      maxOutputTokens: 128_000,
+    });
   });
 });
 

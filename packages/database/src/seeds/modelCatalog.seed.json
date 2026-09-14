@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-09-10T02:37:05.550Z",
-  "notice": "Fallback defaults last maintained on 2026-09-10. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-09-14T06:28:42.150Z",
+  "notice": "Fallback defaults last maintained on 2026-09-14. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "ai21.j2-mid-v1",
@@ -1256,7 +1256,7 @@
         },
         "description": "Google's Gemini 3 Flash preview for fast, low-latency multimodal understanding, delivering richer visuals and deeper interactivity, built on a foundation of state-of-the-art reasoning.",
         "logoFile": "Google_logo.png",
-        "rank": 5,
+        "rank": 6,
         "trainingCutoff": "2025-01-31",
         "releaseDate": "2025-11-30"
       }

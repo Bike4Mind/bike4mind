@@ -61,6 +61,19 @@ export interface OpenAiPriceRow extends OpenAiRates {
 }
 
 /**
+ * Upper plausibility bound for a window or an output cap read off the docs,
+ * roughly 20x the largest context window anyone ships.
+ *
+ * Nothing downstream can correct an overstatement: this source is a provider, so
+ * its contextWindow outranks every aggregator's, ModelRecordFields only requires
+ * a non-negative integer, and catalogWrite guards the opposite direction alone
+ * (an output cap that starves the window). The figure reaches the send budget
+ * through safeInputWindow in utils/src/llm/contextBudget.ts, where a window
+ * orders of magnitude too large means every request overflows the real model.
+ */
+export const MAX_PLAUSIBLE_TOKENS = 20_000_000;
+
+/**
  * "272K" -> 272000, "1.05M" -> 1050000, "272,000" -> 272000. Integers only.
  *
  * Anchored, and commas must be thousands separators: both callers hand it an
@@ -248,10 +261,24 @@ export function parseOpenAiModelPage(markdown: string): ParseResult<OpenAiModelP
 
   const contextWindow = tokenBullet(markdown, CONTEXT_WINDOW_BULLET);
   if (contextWindow === undefined) return { ok: false, error: `${modelId}'s page states no context window` };
+  if (contextWindow > MAX_PLAUSIBLE_TOKENS) {
+    return {
+      ok: false,
+      error: `${modelId}'s page states a ${contextWindow}-token context window, past what any model ships`,
+    };
+  }
 
   const row: OpenAiModelPage = { name, modelId, contextWindow };
   const maxOutputTokens = tokenBullet(markdown, MAX_OUTPUT_BULLET);
-  if (maxOutputTokens !== undefined) row.maxOutputTokens = maxOutputTokens;
+  if (maxOutputTokens !== undefined) {
+    if (maxOutputTokens > MAX_PLAUSIBLE_TOKENS) {
+      return {
+        ok: false,
+        error: `${modelId}'s page states a ${maxOutputTokens}-token output cap, past what any model ships`,
+      };
+    }
+    row.maxOutputTokens = maxOutputTokens;
+  }
   const inputModalities = modalityBullet(markdown, INPUT_MODALITIES_BULLET);
   if (inputModalities) row.inputModalities = inputModalities;
   if (REASONING_BULLET.test(markdown)) row.reasoning = true;

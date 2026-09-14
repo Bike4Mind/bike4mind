@@ -75,6 +75,7 @@ describe('probeOpenAiDispatch', () => {
       answer: {
         adapterFamily: 'openai-chat',
         dispatchProfile: { maxTokensParam: 'max_completion_tokens', toolTransport: 'chat' },
+        maxTokensParamVerified: true,
       },
       retryable: false,
     });
@@ -113,6 +114,8 @@ describe('probeOpenAiDispatch', () => {
       answer: {
         adapterFamily: 'openai-responses',
         dispatchProfile: { maxTokensParam: 'max_completion_tokens', toolTransport: 'responses' },
+        // The chat call was a 200, so it did validate the parameter it sent.
+        maxTokensParamVerified: true,
       },
       retryable: false,
     });
@@ -132,6 +135,9 @@ describe('probeOpenAiDispatch', () => {
 
     expect(result.answer?.dispatchProfile.toolTransport).toBe('responses');
     expect(calls[1].url).toBe('https://api.openai.com/v1/responses');
+    // No 200 ever came back from the chat endpoint, so maxTokensParam is still
+    // predictMaxTokensParam's guess and the write path must not promote it.
+    expect(result.answer?.maxTokensParamVerified).toBe(false);
   });
 
   it('authors no profile when neither endpoint emits a call', async () => {

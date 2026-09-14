@@ -236,6 +236,18 @@ export type DispatchResolver = (record: ModelRecord) => Pick<ModelRecord, 'adapt
 /** A resolver's answer, in the shape the probe can substitute for one. */
 export type DispatchAnswer = NonNullable<ReturnType<DispatchResolver>>;
 
+/**
+ * A probed answer plus how much of it a call actually proved. `dispatchProfile`
+ * always carries a maxTokensParam because the write schema requires one, so the
+ * flag is the only thing separating a value a 200 confirmed from
+ * predictMaxTokensParam's guess - and the guess reaches production on the chat
+ * path even for a responses-transport model (openaiBackend), so the write path
+ * has to be able to tell them apart.
+ */
+export interface ProbedDispatchAnswer extends DispatchAnswer {
+  maxTokensParamVerified: boolean;
+}
+
 /** The slice of `fetch` the probe uses, narrow so a test can stub it. */
 export type DispatchProbeFetch = (
   url: string,
@@ -256,7 +268,7 @@ export interface DispatchProbeDeps {
 
 /** `retryable` is a transient upstream (429, 5xx, timeout), not a verdict about the model. */
 export interface DispatchProbeResult {
-  answer?: DispatchAnswer;
+  answer?: ProbedDispatchAnswer;
   retryable: boolean;
 }
 

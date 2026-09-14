@@ -109,6 +109,30 @@ describe('sortModelsForPicker', () => {
     expect(names(sortModelsForPicker([b, a]))).toEqual(['alpha', 'beta']);
   });
 
+  it('orders a two-backend twin by id, the only key left that separates them', () => {
+    // A real pair: Anthropic authors Claude 4.8 Opus and bedrockBackend authors it again,
+    // under one display name with the same rank and release date (14 such pairs in the
+    // seed). Every earlier key ties, so without the id the order is whatever the catalog
+    // happened to declare - and the picker shows both copies in one maker section.
+    const direct = createModel({ id: 'claude-opus-4-8', name: 'Claude 4.8 Opus', rank: 1, releaseDate: STALE });
+    const viaBedrock = createModel({
+      id: 'global.anthropic.claude-opus-4-8',
+      name: 'Claude 4.8 Opus',
+      backend: ModelBackend.Bedrock,
+      rank: 1,
+      releaseDate: STALE,
+    });
+
+    expect(sortModelsForPicker([viaBedrock, direct]).map(m => m.id)).toEqual([
+      'claude-opus-4-8',
+      'global.anthropic.claude-opus-4-8',
+    ]);
+    expect(sortModelsForPicker([direct, viaBedrock]).map(m => m.id)).toEqual([
+      'claude-opus-4-8',
+      'global.anthropic.claude-opus-4-8',
+    ]);
+  });
+
   it('breaks a tie between unranked, undated models by derived generation', () => {
     const pointRelease = createModel({ name: 'Nimbus 4.5' });
     const flagship = createModel({ name: 'Nimbus 4' });
@@ -158,6 +182,32 @@ describe('sortModelsForPicker', () => {
     // would let the new release claim rank 0 and jump straight to the top instead.
     const result = sortModelsForPicker([best, mid, worst, unranked]);
     expect(names(result)).toEqual(['Comet Prime', 'Comet Nova', 'Comet Core', 'Comet Lite']);
+  });
+
+  it('cohorts a hyphenated family name, which is what the real catalog ships', () => {
+    // Real seed names. Splitting on whitespace keyed these to 'gpt-5.5', 'gpt-5.4' and
+    // 'gpt-6-astra', so no two catalog models ever shared a cohort and every discovered
+    // model fell through to the section median - here 2, not the GPT cohort's 1.
+    const flagship = createModel({ name: 'GPT-5.5', rank: 0, releaseDate: STALE });
+    const gpt54 = createModel({ name: 'GPT-5.4', rank: 1, releaseDate: STALE });
+    const luna = createModel({ name: 'GPT-5.6 Luna', rank: 2, releaseDate: STALE });
+    const o3 = createModel({ name: 'O3', rank: 3, releaseDate: STALE });
+    const o4mini = createModel({ name: 'O4 Mini', rank: 10, releaseDate: STALE });
+    // Discovery names an introduced model by its raw id, and no feed may supply rank or
+    // releaseDate - both are presentation - so it reaches the picker with neither.
+    const discovered = createModel({ name: 'gpt-6-astra' });
+
+    // Cohort ranks [0, 1, 2] -> median 1, which ties it with GPT-5.4 and puts it above
+    // GPT-5.6 Luna; undated, it sits under GPT-5.4 inside that tier. The section median
+    // (2) would instead have tied it with GPT-5.6 Luna, one tier further down.
+    expect(names(sortModelsForPicker([o4mini, luna, discovered, gpt54, o3, flagship]))).toEqual([
+      'GPT-5.5',
+      'GPT-5.4',
+      'gpt-6-astra',
+      'GPT-5.6 Luna',
+      'O3',
+      'O4 Mini',
+    ]);
   });
 
   it('falls back to the type-section median when no family cohort matches', () => {

@@ -24,6 +24,7 @@ import type {
   DispatchAnswer,
   DispatchResolver,
   DroppedSourceRecord,
+  ProbedDispatchAnswer,
   SourceContribution,
 } from './types';
 
@@ -85,7 +86,7 @@ export interface CatalogWriteInput {
    * Beats resolveDispatch for the models it covers, and is what releases the
    * OpenAI tools pin below.
    */
-  probedProfiles?: ReadonlyMap<string, DispatchAnswer>;
+  probedProfiles?: ReadonlyMap<string, ProbedDispatchAnswer>;
   /** Belief per model from the NON-operator rows in force. */
   base: ReadonlyMap<string, ResolvedCatalogRecord>;
   /**
@@ -426,8 +427,20 @@ function planOne(
     draft.contextWindow = 0;
   }
 
-  const probed = input.probedProfiles?.get(candidate.modelId);
-  if (withholdsOpenAiTools(draft, base, introducing, probed !== undefined)) {
+  const probedAnswer = input.probedProfiles?.get(candidate.modelId);
+  // A probe that reached /v1/responses through a 400 verified the transport and
+  // NOT maxTokensParam, which is still predictMaxTokensParam's guess. The
+  // terminal no-tools turn of a responses model sends that parameter on the chat
+  // path (openaiBackend), so the guess is never written: the verified family
+  // stands, the profile waits, and the model stays a probe candidate for the
+  // next run (awaitsDispatch in runModelDiscovery.ts).
+  const profileVerified = probedAnswer?.maxTokensParamVerified === true;
+  const probed: DispatchAnswer | undefined = !probedAnswer
+    ? undefined
+    : profileVerified
+      ? probedAnswer
+      : { adapterFamily: probedAnswer.adapterFamily };
+  if (withholdsOpenAiTools(draft, base, introducing, profileVerified)) {
     if (contributed.get('supportsTools') === true) {
       dropped.push({
         source: candidate.sourceOfField.get('supportsTools') ?? candidate.sourceNames.join('+'),
@@ -476,7 +489,7 @@ function planOne(
       record = { ...record, dispatchProfile: derived.dispatchProfile };
       ownedGroups.add('dispatch');
     }
-    if (probed) {
+    if (profileVerified) {
       // Has to land in the same row as the profile: the pin below reads
       // base.supportsTools on every later run, and the probe runs only once.
       record = { ...record, supportsTools: true };

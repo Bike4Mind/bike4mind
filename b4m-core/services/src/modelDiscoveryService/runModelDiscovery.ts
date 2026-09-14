@@ -38,7 +38,6 @@ import type {
   DiscoveryMode,
   DiscoverySource,
   DiscoverySourceOk,
-  DispatchAnswer,
   DroppedSourceRecord,
   LifecycleDateChange,
   LifecycleSuggestion,
@@ -49,6 +48,7 @@ import type {
   PriceFlag,
   PriceOverride,
   PriceSkip,
+  ProbedDispatchAnswer,
   RunModelDiscoveryOptions,
   SourceResult,
   SourceSkipReason,
@@ -340,7 +340,7 @@ async function executeRun(
       globalSignal: globalDeadline.signal,
     }).catch(error => {
       logger.warn(`${LOG_PREFIX} dispatch probe leg failed: ${describe(error)}`);
-      return new Map<string, DispatchAnswer>();
+      return new Map<string, ProbedDispatchAnswer>();
     });
 
     // The only sources whose answer this run's own writes can change: an
@@ -548,9 +548,9 @@ interface ProbeLegInput {
  * Write mode only, and only for records still 'discovered' with no profile - the
  * same set planCatalogWrites is still allowed to decide for.
  */
-async function runDispatchProbeLeg(input: ProbeLegInput): Promise<ReadonlyMap<string, DispatchAnswer>> {
+async function runDispatchProbeLeg(input: ProbeLegInput): Promise<ReadonlyMap<string, ProbedDispatchAnswer>> {
   const { adapters, ctx, credentials } = input;
-  const answers = new Map<string, DispatchAnswer>();
+  const answers = new Map<string, ProbedDispatchAnswer>();
   const probe = adapters.probeDispatch;
   const apiKey = credentials.openai;
   if (!probe || !apiKey || ctx.mode !== 'write' || !ctx.allowEgress || !ctx.probeNewModels) return answers;
@@ -580,7 +580,9 @@ async function runDispatchProbeLeg(input: ProbeLegInput): Promise<ReadonlyMap<st
     .slice(0, PROBE_MAX_MODELS_PER_RUN);
 
   // Clamped to the run's deadline, because the budget is checked only BETWEEN
-  // models: the last one could start just inside it and then run two live calls.
+  // models: the last one could start just inside it and then run three live
+  // calls (chat, the wrong-token-param retry, then responses), so the overshoot
+  // is 3 x PROBE_CALL_TIMEOUT_MS.
   const until = Math.min(ctx.now().getTime() + PROBE_BUDGET_MS, ctx.startedAt.getTime() + ctx.globalDeadlineMs);
   for (const [index, modelId] of queue.entries()) {
     if (ctx.now().getTime() >= until) {
@@ -588,26 +590,49 @@ async function runDispatchProbeLeg(input: ProbeLegInput): Promise<ReadonlyMap<st
       break;
     }
 
-    const result = await probe(modelId, {
-      apiKey,
-      fetch: (url, init) => fetch(url, init),
-      timeoutMs: PROBE_CALL_TIMEOUT_MS,
-      signal: input.globalSignal,
-    });
-    if (result.answer) {
-      answers.set(modelId, result.answer);
-      const profile = result.answer.dispatchProfile;
-      ctx.logger.info(
-        `${LOG_PREFIX} probed ${modelId}: ${profile?.toolTransport} tool transport, ${profile?.maxTokensParam}`
-      );
-      continue;
-    }
+    // Per model, because the leg's own boundary returns NO answers: one throw
+    // from the probe or from the attempt write would otherwise discard every
+    // model this run already paid live calls for.
+    try {
+      const result = await probe(modelId, {
+        apiKey,
+        fetch: (url, init) => fetch(url, init),
+        timeoutMs: PROBE_CALL_TIMEOUT_MS,
+        signal: input.globalSignal,
+      });
 
-    await adapters.db.discoveryState.recordProbeAttempt(modelId);
-    if (result.retryable) {
-      // The upstream, not the model: probing the rest of the queue against a
-      // rate-limited or unhealthy endpoint buys nothing and costs the budget.
-      ctx.logger.warn(`${LOG_PREFIX} dispatch probe of ${modelId} hit a retryable upstream; leg stopped for this run`);
+      if (result.retryable) {
+        // The upstream, not the model: probing the rest of the queue against a
+        // rate-limited or unhealthy endpoint buys nothing and costs the budget.
+        // No attempt is charged for it either - PROBE_MAX_ATTEMPTS is a lifetime
+        // budget the state model only ever increments, so a 429 or a truncated
+        // reasoning reply would otherwise exclude the model after five runs.
+        ctx.logger.warn(
+          `${LOG_PREFIX} dispatch probe of ${modelId} hit a retryable upstream; leg stopped for this run`
+        );
+        break;
+      }
+
+      if (result.answer) {
+        answers.set(modelId, result.answer);
+        const profile = result.answer.dispatchProfile;
+        const verified = result.answer.maxTokensParamVerified;
+        ctx.logger.info(
+          `${LOG_PREFIX} probed ${modelId}: ${profile?.toolTransport} tool transport, ${profile?.maxTokensParam}${
+            verified ? '' : ' (unverified, not written)'
+          }`
+        );
+        if (verified) continue;
+      }
+
+      // A verdict about the model, usable or not: no answer at all, or one whose
+      // maxTokensParam no call confirmed. Both leave the model without a profile
+      // and back in next run's queue, so the attempt budget is what bounds it.
+      await adapters.db.discoveryState.recordProbeAttempt(modelId);
+    } catch (error) {
+      ctx.logger.warn(
+        `${LOG_PREFIX} dispatch probe of ${modelId} failed: ${describe(error)}; leg stopped for this run`
+      );
       break;
     }
   }
@@ -649,7 +674,7 @@ interface PassInput {
   succeeded: readonly DiscoverySource[];
   results: ReadonlyMap<string, { report: IDiscoverySourceReport; result: SourceResult }>;
   /** Dispatch groups the probe leg verified this run, keyed by model id. */
-  probedProfiles: ReadonlyMap<string, DispatchAnswer>;
+  probedProfiles: ReadonlyMap<string, ProbedDispatchAnswer>;
   /** Sources whose docs-derived signals this run drops, decided from pass 1. */
   droppedDocsSources: ReadonlySet<string>;
   /** Sources whose listing shrank this run; they enrich but claim no backend. */

@@ -1,12 +1,15 @@
 import type { ModelDispatchProfile } from '@bike4mind/common';
-import type { DispatchAnswer, DispatchProbeDeps, DispatchProbeResult } from './types';
+import type { DispatchAnswer, DispatchProbeDeps, DispatchProbeResult, ProbedDispatchAnswer } from './types';
 
 const DEFAULT_BASE_URL = 'https://api.openai.com';
 
 /**
  * Reasoning tokens count against this cap, so it is sized for a reasoning burst
  * on a trivial forced call rather than for cost. A reply that truncates anyway
- * is retried, never read as a refusal to call the tool.
+ * reads as retryable rather than as a refusal to call the tool, and a retryable
+ * outcome costs no attempt: runModelDiscovery charges PROBE_MAX_ATTEMPTS only
+ * for a verdict about the model, so a model that truncates every run keeps its
+ * lifetime budget instead of being excluded by one.
  */
 const PROBE_MAX_TOKENS = 8_192;
 
@@ -20,7 +23,13 @@ const PROBE_PROMPT = `Call the ${PROBE_TOOL_NAME} function.`;
  */
 const LEGACY_MAX_TOKENS_NAMESPACES: readonly RegExp[] = [/^gpt-3/, /^gpt-4/, /^chatgpt-/];
 
-/** Transient or environmental. 408 and 422 are request timeouts, not verdicts about the model. */
+/**
+ * Transient or environmental, none of them a verdict about the model: 401 and
+ * 403 are the deployment's credential, 408 and 429 are the upstream asking for
+ * a retry. 422 is a semantic rejection of the request BODY rather than a
+ * timeout, and stays here because the body is the probe's own - a gateway that
+ * refuses the forced tool_choice has said nothing about what the model takes.
+ */
 const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([401, 403, 408, 422, 429]);
 
 const isRetryableStatus = (status: number): boolean => RETRYABLE_STATUSES.has(status) || status >= 500;
@@ -56,6 +65,11 @@ type ChatOutcome =
  *
  * Returns no answer unless a call verified one. `toolTransport` has no "off"
  * member, so an unverified model is left exactly as it is.
+ *
+ * The two fields are verified separately, and the answer says which: only a 200
+ * proves maxTokensParam, so the route that reaches /v1/responses through a 400
+ * carries `maxTokensParamVerified: false` and the write path declines the guess
+ * (see planOne in catalogWrite.ts).
  */
 export async function probeOpenAiDispatch(modelId: string, deps: DispatchProbeDeps): Promise<DispatchProbeResult> {
   let maxTokensParam = predictMaxTokensParam(modelId);
@@ -65,26 +79,38 @@ export async function probeOpenAiDispatch(modelId: string, deps: DispatchProbeDe
     outcome = await callChat(modelId, maxTokensParam, deps);
   }
 
-  if (outcome === 'tool-call') return { answer: answerFor('openai-chat', maxTokensParam, 'chat'), retryable: false };
+  if (outcome === 'tool-call') {
+    return { answer: answerFor('openai-chat', maxTokensParam, 'chat', true), retryable: false };
+  }
   if (outcome === 'retryable') return { retryable: true };
   if (outcome === 'gone' || outcome === 'wrong-token-param') return { retryable: false };
 
   // The chat endpoint said no in one of the two ways that leave /v1/responses
   // open. maxTokensParam rides along either way: completeViaResponses sends
   // max_output_tokens, but the terminal no-tools turn of a responses-transport
-  // model falls back to the chat path, which reads this field.
+  // model falls back to the chat path, which reads this field. Only the 200
+  // ('no-tool-call') proves the parameter - the 400 was about something else
+  // and left it untested - so the answer carries which of the two happened.
   const responses = await callResponses(modelId, deps);
   if (responses === 'retryable') return { retryable: true };
   return responses === 'function-call'
-    ? { answer: answerFor('openai-responses', maxTokensParam, 'responses'), retryable: false }
+    ? {
+        answer: answerFor('openai-responses', maxTokensParam, 'responses', outcome === 'no-tool-call'),
+        retryable: false,
+      }
     : { retryable: false };
 }
 
 const answerFor = (
   adapterFamily: NonNullable<DispatchAnswer['adapterFamily']>,
   maxTokensParam: MaxTokensParam,
-  toolTransport: ModelDispatchProfile['toolTransport']
-): DispatchAnswer => ({ adapterFamily, dispatchProfile: { maxTokensParam, toolTransport } });
+  toolTransport: ModelDispatchProfile['toolTransport'],
+  maxTokensParamVerified: boolean
+): ProbedDispatchAnswer => ({
+  adapterFamily,
+  dispatchProfile: { maxTokensParam, toolTransport },
+  maxTokensParamVerified,
+});
 
 async function callChat(
   modelId: string,

@@ -8,8 +8,14 @@ const hasAdminRank = (model: ModelInfo): boolean => {
   return model.rank !== undefined && model.rank >= 0;
 };
 
-const firstWord = (name: string): string => name.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
+/**
+ * Family key: the leading run of letters, so it survives the punctuation real names carry.
+ * "GPT-5.4" and "gpt-6-astra" both key to "gpt"; splitting on whitespace instead keyed them
+ * to "gpt-5.4" and to the whole raw id, and no two catalog models ever shared a cohort.
+ */
+const familyKey = (name: string): string => /^[a-z]+/i.exec(name.trim())?.[0]?.toLowerCase() ?? '';
 
+/** Upper-middle element on an even cohort, which is the conservative half of a rank scale. */
 const median = (values: number[]): number => {
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.floor(sorted.length / 2)] as number;
@@ -27,7 +33,7 @@ const median = (values: number[]): number => {
 export const provisionalRank = <T extends ModelInfo>(model: T, models: T[]): number => {
   const ranked = models.filter(hasAdminRank);
 
-  const cohort = ranked.filter(m => m.type === model.type && firstWord(m.name) === firstWord(model.name));
+  const cohort = ranked.filter(m => m.type === model.type && familyKey(m.name) === familyKey(model.name));
   if (cohort.length > 0) return median(cohort.map(m => m.rank as number));
 
   const section = ranked.filter(m => m.type === model.type);
@@ -51,7 +57,11 @@ const derivedGeneration = (name: string): number => {
 
 /**
  * Order models as the picker presents them, within one provider group:
- * effective rank, then release date, then generation, then name.
+ * effective rank, then release date, then generation, then name, then id.
+ *
+ * Id is last because it has to be: a model served by two backends is authored twice under
+ * one display name with the same rank and release date (14 such twins in the seed today),
+ * so without it the comparator is not total and those pairs fall back to input order.
  *
  * Generation must stay below rank and date. Promoting it reintroduces the bug this
  * replaces, where a same-family point release outranks its generation's flagship.
@@ -78,6 +88,9 @@ export const sortModelsForPicker = <T extends ModelInfo>(models: T[]): T[] => {
     const generationDelta = derivedGeneration(b.name) - derivedGeneration(a.name);
     if (generationDelta !== 0) return generationDelta;
 
-    return a.name.localeCompare(b.name);
+    const nameDelta = a.name.localeCompare(b.name);
+    if (nameDelta !== 0) return nameDelta;
+
+    return a.id.localeCompare(b.id);
   });
 };

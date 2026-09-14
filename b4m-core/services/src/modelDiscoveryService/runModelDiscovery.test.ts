@@ -1322,7 +1322,11 @@ describe('runModelDiscovery', () => {
     const responsesAnswer = {
       adapterFamily: 'openai-responses' as const,
       dispatchProfile: { maxTokensParam: 'max_completion_tokens' as const, toolTransport: 'responses' as const },
+      maxTokensParamVerified: true,
     };
+
+    /** The same transport, reached through a 400 that left maxTokensParam untested. */
+    const unverifiedParamAnswer = { ...responsesAnswer, maxTokensParamVerified: false };
 
     type ProbeAnswer = Awaited<ReturnType<NonNullable<ModelDiscoveryAdapters['probeDispatch']>>>;
 
@@ -1409,13 +1413,21 @@ describe('runModelDiscovery', () => {
       ['egress is off', { modelDiscoveryAllowEgress: false }],
       ['the run is reporting', { modelDiscoveryMode: 'report' }],
     ])('makes no probe call when %s', async (_case, settingsAfter) => {
-      const { probed } = await probeRuns(() => ({ answer: responsesAnswer, retryable: false }), { settingsAfter });
+      const { bench, probed } = await probeRuns(() => ({ answer: responsesAnswer, retryable: false }), {
+        settingsAfter,
+      });
 
       expect(probed).toEqual([]);
+      // Positively gated, not merely broken: the model is still a candidate the
+      // probe would have answered, so it kept the row the first run gave it and
+      // spent none of its attempt budget.
+      expect(newestPatch(bench, 'gpt-6')).toMatchObject({ adapterFamily: 'openai-chat', supportsTools: false });
+      expect(newestPatch(bench, 'gpt-6')).not.toHaveProperty('dispatchProfile');
+      expect(bench.state.states.get('gpt-6')?.probeAttempts ?? 0).toBe(0);
     });
 
     it('never probes a model an operator owns, whatever the row claims', async () => {
-      const { probed } = await probeRuns(() => ({ answer: responsesAnswer, retryable: false }), {
+      const { bench, probed } = await probeRuns(() => ({ answer: responsesAnswer, retryable: false }), {
         // Owns `presentation` only, so the non-operator resolution the plan
         // diffs against still reads as a model discovery may decide.
         between: bench =>
@@ -1430,6 +1442,12 @@ describe('runModelDiscovery', () => {
       });
 
       expect(probed).toEqual([]);
+      // The operator row is what held it back, not a candidate list that came out
+      // empty for some other reason: the discovery row is untouched and unbilled.
+      const discoveryRows = bench.catalog.rows.filter(row => row.modelId === 'gpt-6' && row.source !== 'operator');
+      expect(discoveryRows).toHaveLength(1);
+      expect(discoveryRows[0].patch).not.toHaveProperty('dispatchProfile');
+      expect(bench.state.states.get('gpt-6')?.probeAttempts ?? 0).toBe(0);
     });
 
     it('asks the never-attempted model first and gives up on one at the cap', async () => {
@@ -1454,8 +1472,8 @@ describe('runModelDiscovery', () => {
       const probed: string[] = [];
       bench.adapters.probeDispatch = async modelId => {
         probed.push(modelId);
-        // Two live calls per model, which is what the leg's own budget does not
-        // see: it is checked between models, never during one.
+        // Up to three live calls per model, which is what the leg's own budget
+        // does not see: it is checked between models, never during one.
         bench.advance(20_000);
         return { retryable: false };
       };
@@ -1467,28 +1485,57 @@ describe('runModelDiscovery', () => {
       expect(probed).toEqual(['gpt-6']);
     });
 
-    it('stops the leg at a retryable upstream instead of spending the queue on it', async () => {
+    it('spends neither the queue nor the attempt budget on a retryable upstream', async () => {
       const { bench, probed } = await probeRuns(() => ({ retryable: true }), { records: [gpt6, gpt6mini] });
 
       expect(probed).toEqual(['gpt-6']);
-      expect(bench.state.states.get('gpt-6')).toMatchObject({ probeAttempts: 1 });
+      // probeAttempts is a LIFETIME budget the state model only increments, so a
+      // 429 or a truncated reasoning reply that cost one would exclude the model
+      // after five runs for something the model never said.
+      expect(bench.state.states.get('gpt-6')?.probeAttempts ?? 0).toBe(0);
       expect(bench.state.states.get('gpt-6-mini')?.probeAttempts).toBeUndefined();
       expect(bench.warnings.some(message => message.includes('retryable upstream'))).toBe(true);
     });
 
-    it('keeps the run when the probe throws', async () => {
-      const bench = harness([openaiSource()]);
+    it('keeps the answers it already paid for when a later model throws', async () => {
+      const bench = harness([openaiSource([gpt6, gpt6mini])]);
       bench.adapters.resolveDispatch = familyOnly;
       await runModelDiscovery(bench.adapters, bench.options);
-      bench.adapters.probeDispatch = async () => {
-        throw new Error('probe exploded');
+      bench.adapters.probeDispatch = async modelId => {
+        // The queue is ordered by attempt count then id, so gpt-6 answers first.
+        if (modelId === 'gpt-6-mini') throw new Error('probe exploded');
+        return { answer: responsesAnswer, retryable: false };
       };
       bench.advance(60_000);
 
       const result = await runModelDiscovery(bench.adapters, bench.options);
 
       expect(result.outcome).toBe('ok');
-      expect(bench.warnings.some(message => message.includes('dispatch probe leg failed'))).toBe(true);
+      expect(bench.warnings.some(message => message.includes('dispatch probe of gpt-6-mini failed'))).toBe(true);
+      // The whole point of containing the throw: a live call was billed for this
+      // answer, and the leg's outer boundary would have discarded it.
+      expect(newestPatch(bench, 'gpt-6')).toMatchObject({
+        adapterFamily: 'openai-responses',
+        dispatchProfile: { toolTransport: 'responses' },
+      });
+    });
+
+    it('writes no profile for a transport whose token parameter no call verified', async () => {
+      const { bench, probed } = await probeRuns(() => ({ answer: unverifiedParamAnswer, retryable: false }));
+
+      expect(probed).toEqual(['gpt-6']);
+      // The family stands - the responses endpoint answered - but maxTokensParam
+      // is still a guess, and the terminal no-tools turn would send it on the
+      // chat path. So no profile, tools still withheld, and no promotion.
+      expect(newestPatch(bench, 'gpt-6')).toMatchObject({
+        adapterFamily: 'openai-responses',
+        supportsTools: false,
+        lifecycle: { status: 'discovered' },
+      });
+      expect(newestPatch(bench, 'gpt-6')).not.toHaveProperty('dispatchProfile');
+      // Charged, unlike a retryable upstream: the model answered, and without the
+      // charge it would be re-probed with live calls every run forever.
+      expect(bench.state.states.get('gpt-6')).toMatchObject({ probeAttempts: 1 });
     });
   });
 });

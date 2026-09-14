@@ -1085,9 +1085,15 @@ describe('planCatalogWrites', () => {
           {
             adapterFamily: 'openai-responses' as const,
             dispatchProfile: { maxTokensParam: 'max_completion_tokens' as const, toolTransport: 'responses' as const },
+            maxTokensParamVerified: true,
           },
         ],
       ]);
+
+      /** The same answer off the route that never got a 200 out of the chat endpoint. */
+      const probedUnverifiedParam = new Map(
+        [...probedResponses].map(([modelId, answer]) => [modelId, { ...answer, maxTokensParamVerified: false }])
+      );
 
       /**
        * The catalog as the runtime reads it after a run: rowsInForce keeps ONE
@@ -1156,6 +1162,23 @@ describe('planCatalogWrites', () => {
           'supportsTools claim refused: tools stay withheld until the toolTransport is verified'
         );
         expect(later.rows.map(row => (row.patch as Record<string, unknown>).supportsTools)).not.toContain(false);
+      });
+
+      it('declines the profile when no call verified its token parameter', () => {
+        const introduced = introduce([astra()], { resolveDispatch: familyOnly });
+
+        const probed = introduce([astra()], {
+          ...afterRun(introduced.rows[0]),
+          resolveDispatch: familyOnly,
+          probedProfiles: probedUnverifiedParam,
+          runStartedAt: RUN_2,
+        });
+
+        // The family is the responses endpoint's own answer, but maxTokensParam
+        // is still a guess and the terminal no-tools turn sends it on the chat
+        // path. Writing it would promote a row that 400s in production.
+        expect(probed.rows[0].patch).toMatchObject({ adapterFamily: 'openai-responses', supportsTools: false });
+        expect(probed.rows[0].patch).not.toHaveProperty('dispatchProfile');
       });
 
       it('leaves the tools of a model this run did not probe withheld', () => {
