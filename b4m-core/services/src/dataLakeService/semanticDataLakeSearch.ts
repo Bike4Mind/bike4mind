@@ -675,15 +675,22 @@ async function scanAndRank(args: {
 
       for (const chunk of usable as FabFileChunkVector[]) {
         chunksScanned++;
-        // Resolve the parent first: it carries the embedding model, and an orphan chunk cannot be
-        // attributed to any model. Width alone cannot separate two 1536-dim models, so the
-        // classifier reads the recorded label too and reports WHY a chunk was withheld.
+        // Resolve the parent first: an orphan chunk cannot be attributed to any model. Width alone
+        // cannot separate two 1536-dim models, so the classifier reads the recorded label too -
+        // preferring the chunk's own over the file's, which is blank for a split file - and reports
+        // WHY a chunk was withheld.
         const file = fileById.get(chunk.fabFileId);
         if (!file) {
           mismatch.skip('unknownFile');
           continue;
         }
-        const skipReason = classifyLoadedChunk({ vector: chunk.vector, queryDim, parentFile: file, queryModel });
+        const skipReason = classifyLoadedChunk({
+          vector: chunk.vector,
+          queryDim,
+          parentFile: file,
+          queryModel,
+          chunkModel: chunk.embeddingModel,
+        });
         // The vector check is redundant with the classifier's missingVector case; it is here so
         // the type narrows without an assertion.
         if (skipReason || !chunk.vector) {

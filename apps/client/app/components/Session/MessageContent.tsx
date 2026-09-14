@@ -14,6 +14,7 @@ import { elidedReplyWarning } from '@client/app/utils/artifactParser';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import { Menu, MenuItem, ListItemDecorator } from '@mui/joy';
 import Box from '@mui/joy/Box';
+import Button from '@mui/joy/Button';
 import Divider from '@mui/joy/Divider';
 import Dropdown from '@mui/joy/Dropdown';
 import IconButton from '@mui/joy/IconButton';
@@ -792,6 +793,24 @@ const MessageContent: React.FC<ContentProps> = memo(
                     content={extractedReplies ? extractedReplies[0] : ''}
                     fileName={`${messageData.id}.md`}
                   />
+                  {hasShareableReply && (
+                    <Button
+                      data-testid="message-publish-share-btn"
+                      variant="outlined"
+                      color="neutral"
+                      size="sm"
+                      startDecorator={<ShareIcon sx={{ fontSize: 16 }} />}
+                      onClick={handleShareReply}
+                      sx={{
+                        minHeight: '28px',
+                        flexShrink: '0',
+                        borderRadius: '6px',
+                        fontSize: '13px',
+                      }}
+                    >
+                      Publish &amp; Share
+                    </Button>
+                  )}
 
                   {/* Advanced actions in menu */}
                   <Dropdown>
@@ -906,14 +925,6 @@ const MessageContent: React.FC<ContentProps> = memo(
                           Send to {DATA_LAKE}
                         </MenuItem>
                       )}
-                      {hasShareableReply && (
-                        <MenuItem onClick={handleShareReply} data-testid="message-share-reply">
-                          <ListItemDecorator>
-                            <ShareIcon />
-                          </ListItemDecorator>
-                          Share
-                        </MenuItem>
-                      )}
                       <MenuItem onClick={() => handleDelete(messageData)} color="danger">
                         <ListItemDecorator sx={{ color: 'inherit' }}>
                           <DeleteOutline />
@@ -951,6 +962,25 @@ const MessageContent: React.FC<ContentProps> = memo(
                     content={extractedReplies ? extractedReplies[0] : ''}
                     fileName={`${messageData.id}.md`}
                   />
+                  {hasShareableReply && (
+                    <Tooltip title="Publish & Share">
+                      <IconButton
+                        data-testid="message-publish-share-btn"
+                        variant="outlined"
+                        color="neutral"
+                        size="sm"
+                        onClick={handleShareReply}
+                        sx={{
+                          width: '28px',
+                          height: '28px',
+                          flexShrink: '0',
+                          borderRadius: '6px',
+                        }}
+                      >
+                        <ShareIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                    </Tooltip>
+                  )}
 
                   {/* Advanced actions in menu */}
                   <Dropdown>
@@ -1063,14 +1093,6 @@ const MessageContent: React.FC<ContentProps> = memo(
                             <DataLakeIcon />
                           </ListItemDecorator>
                           Send to {DATA_LAKE}
-                        </MenuItem>
-                      )}
-                      {hasShareableReply && (
-                        <MenuItem onClick={handleShareReply} data-testid="message-share-reply">
-                          <ListItemDecorator>
-                            <ShareIcon />
-                          </ListItemDecorator>
-                          Share
                         </MenuItem>
                       )}
                       <MenuItem onClick={() => handleDelete(messageData)} color="danger">

@@ -14,7 +14,7 @@
  * same name) so b4m-core/services can filter the model-facing tool list by availability, not just
  * the Tools-picker UI hint - see sharedToolBuilder.ts's use of `isToolOfferable`.
  */
-import { ApiKeyType, isPlaceholderApiKey, type B4MLLMTools } from '@bike4mind/common';
+import { ApiKeyType, hasKeylessCloudEmbedder, isPlaceholderApiKey, type B4MLLMTools } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { getSettingsByNames } from '@bike4mind/utils';
 import {
@@ -79,6 +79,11 @@ export interface ResolveToolAvailabilityOptions {
    * `search_knowledge_base` follows `onLookupError`. An injected value cannot be tainted - the
    * caller already awaited it, so a failure there surfaced in the caller instead of here. Both are
    * correct, but they are not the same code path; do not assume one exercises the other.
+   *
+   * Which is exactly why `null` is read as "not injected" and NOT as an empty table: a caller whose
+   * own lookup failed has nothing to inject, and passing the failure through would silently convert
+   * the documented fail-OPEN into fail-closed - every key-gated tool hidden because Mongo blinked.
+   * A genuinely keyless caller resolves an empty OBJECT, never null, so nothing legitimate is lost.
    */
   llmKeys?: Awaited<ReturnType<typeof getEffectiveLLMApiKeys>> | null;
 }
@@ -167,7 +172,7 @@ export async function resolveToolAvailability(
       // Embedding keys (for Knowledge Base) resolve per user; KB uses this same getter,
       // so matching its self-host env fallback here is correct. A caller that already holds the
       // table (see `options.llmKeys`) hands it over rather than paying for the identical read twice.
-      injectedLlmKeys !== undefined
+      injectedLlmKeys != null
         ? Promise.resolve(injectedLlmKeys)
         : userId
           ? getEffectiveLLMApiKeys(userId, dbAdapters)
@@ -220,7 +225,8 @@ export async function resolveToolAvailability(
     // A placeholder/dummy key is not a working key: reject it here so this stays in lock-step
     // with embedding.ts defaultEmbeddingModelForEnv (which treats a placeholder as no cloud key
     // and falls back to the local Ollama embedder) - otherwise KB would report a working cloud
-    // embedder that the vectorizer can't actually use.
+    // embedder that the vectorizer can't actually use. NOTE: this rejection only decides the
+    // answer on self-host; a cloud stage is keyless-capable below regardless of this key.
     const hasRealEmbeddingKey = (key: string | null | undefined) => usable(key) && !isPlaceholderApiKey(key);
     const hasEmbeddingKey = hasRealEmbeddingKey(llmKeys?.openai) || hasRealEmbeddingKey(llmKeys?.voyageai);
 
@@ -255,8 +261,19 @@ export async function resolveToolAvailability(
       ),
       // Only search_knowledge_base needs an embeddings key; retrieve_knowledge_content
       // is a direct file/keyword lookup that needs no external key, so it isn't gated.
-      // Available with a cloud embeddings key OR a self-hosted local Ollama embedder (keyless).
-      search_knowledge_base: maybeFailOpen(hasEmbeddingKey || isLocalEmbedderAvailable(), taint.llmKeys),
+      // Available with a cloud embeddings key OR a keyless embedder: a self-hosted local Ollama
+      // server, or Bedrock on a cloud stage (reached with the role's AWS credentials). The last
+      // term is what keeps KB offered on a keyless cloud stage, where the search path falls back
+      // to Bedrock (resolveEmbeddingWithKeylessFallback) rather than losing semantic search -
+      // without it the tool would stay hidden on exactly the stages that can still answer.
+      // It also makes the two preceding terms non-decisive on a hosted stage, which is correct.
+      // They stay decisive wherever there is no execution role to reach Bedrock with, and that is
+      // three environments, not one: self-host, plain `next dev`, and CI (see the positive
+      // execution-role evidence hasKeylessCloudEmbedder requires - embedding.ts).
+      search_knowledge_base: maybeFailOpen(
+        hasEmbeddingKey || isLocalEmbedderAvailable() || hasKeylessCloudEmbedder(),
+        taint.llmKeys
+      ),
     };
   } catch (err) {
     // Last-resort safety net for anything outside the per-lookup Promise.allSettled above (this
