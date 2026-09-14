@@ -252,9 +252,28 @@ function shellCommands(text: string): ShellCommand[] {
   return [...commands, ...nested];
 }
 
-/** Shell keywords and `VAR=value` prefixes, which sit in front of the program rather than being it. */
+/**
+ * Words that sit in FRONT of the program rather than being it: shell keywords, the builtins
+ * that take a command as their argument, and `VAR=value`. Membership is decided by "does the
+ * real program follow this word", not by "is this a keyword" - `command`, `env`, `time` and
+ * `sudo` are none of them keywords, and leaving any one out makes every program-shaped sweep
+ * in this file read the prefix as the program. `sudo` was the gap: `sudo git push --force`
+ * put `sudo` in command position, so `gitPushes` found no push at all while the otherwise
+ * identical `command git push --force` and `env git push --force` were both refused.
+ */
 const SHELL_PREFIX =
-  /^(if|then|elif|else|fi|for|while|until|do|done|case|esac|in|!|time|command|env|local|return|exit)$/;
+  /^(if|then|elif|else|fi|for|while|until|do|done|case|esac|in|!|time|command|env|sudo|local|return|exit)$/;
+
+/**
+ * The `SHELL_PREFIX` words a COMMAND follows, as against the ones a variable name (`for`,
+ * `local`), a word list (`in`, `case`) or an exit status (`exit`, `return`) follows. Only this
+ * subset may be stripped when the question is "what program runs here": strip `for` and the
+ * loop variable is reported as a program.
+ */
+const COMMAND_PREFIX = /^(if|then|elif|else|while|until|do|!|time|command|env|sudo)$/;
+
+/** `SHELL_PREFIX` words that head a command no program is part of. */
+const NON_COMMAND_HEAD = /^(fi|for|done|case|esac|in|local|return|exit)$/;
 
 /**
  * Commands whose path arguments are DATA and never a program. This is the whole of the
@@ -377,7 +396,7 @@ function commandsNamed(src: string, name: RegExp): string[][] {
 }
 
 /**
- * Every distinct program a `run:` body invokes, sorted, shell keywords included.
+ * Every distinct program a `run:` body invokes, sorted.
  *
  * Pinned as a whole SET at the call site for the reason `gitSubcommands` is: every bound in
  * this file is written in terms of the program it bounds, so an INDIRECTION reaches the bounded
@@ -392,10 +411,19 @@ function invokedPrograms(src: string): string[] {
   const names = new Set<string>();
   for (const body of runBodies(src)) {
     for (const { words } of shellCommands(body)) {
+      // Read the program THROUGH the prefix words, not as the command's first word. A prefix
+      // hides the program after it: with only `VAR=` stripped, `if jq ...` and `if sudo
+      // apt-get ...` both reported `if`, so `jq` and `apt-get` ran in the shipped file named
+      // by no assertion at all, and `if sh -c 'git apply --cached ...'` was green while the
+      // bare `sh -c` form was refused. A keyword is never the answer to "what program runs".
       let rest = words;
-      while (rest.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0])) rest = rest.slice(1);
+      while (rest.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0]) || COMMAND_PREFIX.test(unquoteWord(rest[0])))) {
+        rest = rest.slice(1);
+      }
       const name = unquoteWord(rest[0] ?? '');
-      if (!name) continue;
+      // `for`/`local`/`exit` and friends head a command that contains no program, so the word
+      // after them is a variable or a status and must not be reported as one.
+      if (!name || NON_COMMAND_HEAD.test(name)) continue;
       // Four shapes this parser reports in command position that are not programs, dropped so
       // the pinned set stays readable rather than because they are safe: a redirection operand;
       // a `case` arm pattern (`|` and `)` are command separators, so every arm parses as a
@@ -588,47 +616,43 @@ const MULTI_WORD_EXPANSION = 'probe --settings ./probe-settings.json';
  * Every program a `run:` body in this workflow may invoke. See `invokedPrograms` for why this is
  * an allowlist. Absent, and deliberately so: `sh`, `bash`, `xargs`, `eval`, `trap`, `source`,
  * `curl` and `python` (only `python3` runs here, and only as `-I -`).
+ *
+ * Shell keywords and command prefixes are NOT entries. They used to be, which is what let a
+ * program named after one hide: `if jq ...` and `if sudo apt-get ...` reported `if`, so the two
+ * programs this list now names last ran unpinned by anything. `sudo` is a prefix rather than an
+ * entry for the same reason - it is transparent to this sweep now, so `sudo <anything>` reports
+ * `<anything>`.
+ *
+ * One entry's ARGUMENT is itself a program: `awk`. It is bounded by pinning its invocations by
+ * value at the call site, not by this list.
  */
 const PROGRAMS = [
   '[',
+  // `sudo apt-get` installs bubblewrap before the agent runs, so nothing it could be pointed
+  // at is agent-writable.
+  'apt-get',
   'awk',
   'base64',
   'break',
-  'case',
   'cat',
   'count_since',
   'cut',
   'date',
-  'do',
-  'done',
   'echo',
-  'elif',
-  'else',
   'emit',
-  'esac',
-  'exit',
-  'fi',
-  'for',
   'gh',
   'git',
   'grep',
-  'if',
-  'local',
+  'jq',
   'mktemp',
   'printf',
   'python3',
   'read',
-  'return',
   'rm',
   'set',
   'sha256sum',
   'sleep',
-  // `sudo apt-get` installs bubblewrap before the agent runs. It is the one entry whose
-  // ARGUMENT is not bounded by this set, and it is upstream of the agent, so nothing it
-  // could be pointed at is agent-writable.
-  'sudo',
   'tail',
-  'then',
   'tr',
   'true',
   'wc',
@@ -843,6 +867,15 @@ type PushOutcome = {
   remoteLog: string[];
   /** Paths the remote's tip commit changed, or [] while the tip is still the base commit. */
   remoteChanged: string[];
+  /**
+   * Every ref the remote holds. The PR head is the only ref this step may put anything on, and
+   * every other field here reads that one ref - so a push to any OTHER ref arrived unobserved.
+   * Asserted as a set because the thing to bound is the class: `git push --force origin
+   * HEAD:main` reached through `awk 'BEGIN{system(...)}'`, `sudo`, a shell, or anything else
+   * that runs a command is the same end state however it is spelled, and end state is the only
+   * side of this with a finite number of cases.
+   */
+  remoteRefs: string[];
 };
 
 const PUSH_HEAD_REF = 'feature/fold-target';
@@ -971,6 +1004,7 @@ function runPushStep(src: string, fixture: PushFixture): PushOutcome {
       reason: [...written.matchAll(/^reason=(.*)$/gm)].pop()?.[1],
       remoteLog,
       remoteChanged,
+      remoteRefs: git(remote, 'for-each-ref', '--format=%(refname)').split('\n').filter(Boolean),
     };
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -1784,13 +1818,7 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     const commits = gitCommands(src, /^commit$/).map(words => words.map(unquoteWord));
     expect(commits).toHaveLength(1);
     const commitArgv = commits[0].slice(commits[0].indexOf('commit') + 1);
-    expect(commitArgv.filter(word => word.startsWith('-'))).toEqual([
-      '--no-verify',
-      '--no-gpg-sign',
-      '-m',
-      '-m',
-      '-m',
-    ]);
+    expect(commitArgv.filter(word => word.startsWith('-'))).toEqual(['--no-verify', '--no-gpg-sign', '-m', '-m', '-m']);
     // Three operands, which are the three `-m` values. A fourth would be a pathspec.
     expect(commitArgv.filter(word => !word.startsWith('-'))).toHaveLength(3);
     // `set` by value, everywhere in the file. `set +e` in this step turns a failed `git commit`
@@ -1802,6 +1830,23 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       ['set', '-uo', 'pipefail'],
       ['set', '-euo', 'pipefail'],
       ['set', '-uo', 'pipefail'],
+    ]);
+    // `awk` by value, everywhere in the file, PROGRAM TEXT INCLUDED. It is the one entry in
+    // `PROGRAMS` whose argument is itself a program: `awk 'BEGIN{system("git push --force
+    // origin HEAD:main")}' /dev/null` is arbitrary execution in the step holding the push
+    // token, and it names no guard - every git-detecting sweep here requires the PARSED
+    // program to be `git`, and awk's is a single quoted word. The shape is idiomatic in this
+    // step, which already runs awk twice. Pinning the invocations rather than scanning their
+    // text for `system`/`print | "sh"`/`|&` keeps this an allowlist: a new awk program is a
+    // deliberate edit here, whatever it is spelled as. `sudo` is the only other entry whose
+    // argument is unbounded, and it runs upstream of the agent; `python3` runs only as `-I -`
+    // fed from the object store, pinned separately.
+    // Quotes are stripped by the parser, so two spellings of one program text collapse to the
+    // same entry here. That merges `-F'\t'` with `-F"\t"` and nothing else: inserting quote
+    // characters cannot introduce a `system(` or a `print | "sh"` that was not already there.
+    expect(commandsNamed(src, /^awk$/)).toEqual([
+      ['awk', '-F\\t', '$1 == - { print $3 }', '$STAGED_NUMSTAT'],
+      ['awk', '{ n += ($1 == - ? 0 : $1) + ($2 == - ? 0 : $2) } END { print n + 0 }'],
     ]);
     // Every program any `run:` body invokes, as a whole SET. See `invokedPrograms`: the sweeps
     // in this file are each written in terms of the program they bound, so `sh -c 'git apply
@@ -2090,6 +2135,14 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     expect(raced.pushed).toEqual(['false']);
     expect(raced.reason).toContain('the branch moved while the review ran');
     expect(raced.remoteLog).toEqual(['the author pushed while the review ran', 'base']);
+
+    // The PR head is the only ref the step may put anything on, in any of these outcomes.
+    // Every assertion above reads that one ref, so a push to a DIFFERENT one - which is what
+    // `git push --force origin HEAD:main` is, however it is reached - landed on the remote
+    // with nothing here looking at it. Bounding the refs bounds the class.
+    for (const [label, outcome] of Object.entries({ edited, ciConfig, untouched, oversized, raced })) {
+      expect(outcome.remoteRefs, label).toEqual([`refs/heads/${PUSH_HEAD_REF}`]);
+    }
   });
 
   it('pushes non-force to the PR head ref, with a token the checkout never held', () => {
