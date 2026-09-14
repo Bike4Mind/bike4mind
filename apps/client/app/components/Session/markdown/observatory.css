@@ -27,8 +27,8 @@
   --b4m-md-line: rgba(16, 38, 56, 0.11);
   --b4m-md-line-2: rgba(16, 38, 56, 0.22);
   --b4m-md-ink: #141f28;
-  --b4m-md-ink-2: #425663;
-  --b4m-md-ink-3: #5b6c7a;
+  --b4m-md-ink-2: #364a58;
+  --b4m-md-ink-3: #506271;
   --b4m-md-accent: #0b6bcb;
   --b4m-md-accent-soft: rgba(11, 107, 203, 0.07);
   --b4m-md-accent-line: rgba(11, 107, 203, 0.32);
@@ -47,8 +47,8 @@
   --b4m-md-line: rgba(190, 215, 235, 0.085);
   --b4m-md-line-2: rgba(190, 215, 235, 0.17);
   --b4m-md-ink: #e8edf2;
-  --b4m-md-ink-2: #a6b5c1;
-  --b4m-md-ink-3: #8090a0;
+  --b4m-md-ink-2: #b6c4ce;
+  --b4m-md-ink-3: #8ea0b0;
   --b4m-md-accent: #5aaaea;
   --b4m-md-accent-soft: rgba(90, 170, 234, 0.11);
   --b4m-md-accent-line: rgba(90, 170, 234, 0.34);
@@ -340,7 +340,10 @@
    checkbox replaces the dash, so suppress the marker on exactly those rows. */
 .b4m-md li:has(> input[type='checkbox']) {
   list-style: none;
-  padding-left: 0.1em;
+  /* The box is absolutely positioned against this li's padding box, so this
+     indent moves the text without moving the box: it is what sets the gap
+     between them. Raised from 0.1em when the box grew to 14px. */
+  padding-left: 0.3em;
 }
 
 .b4m-md li:has(> input[type='checkbox'])::before {
@@ -350,13 +353,16 @@
 .b4m-md li > input[type='checkbox'] {
   appearance: none;
   position: absolute;
+  /* Box, tick and both offsets are one proportional set: the left offset keeps
+     a constant gap to the text, and the top offset keeps the box optically
+     centred on the first line. Resizing the box means rescaling all of them. */
   left: -1.35em;
-  top: 0.42em;
-  width: 11px;
-  height: 11px;
+  top: 0.45em;
+  width: 14px;
+  height: 14px;
   margin: 0;
   border: 1px solid var(--b4m-md-line-2);
-  border-radius: 3px;
+  border-radius: 4px;
   background: transparent;
 }
 
@@ -368,12 +374,12 @@
 .b4m-md li > input[type='checkbox']:checked::after {
   content: '';
   position: absolute;
-  left: 3px;
-  top: 0;
-  width: 3px;
-  height: 7px;
+  left: 4px;
+  top: 0.6px;
+  width: 3.4px;
+  height: 7.8px;
   border: solid var(--b4m-md-accent);
-  border-width: 0 1.5px 1.5px 0;
+  border-width: 0 1.7px 1.7px 0;
   transform: rotate(42deg);
 }
 
@@ -385,7 +391,12 @@
    A rule and a shift of register, not a tinted box: the quote is a different
    voice, not a different importance. */
 .b4m-md blockquote {
-  margin: 0 0 1.3em;
+  /* A heading's bottom margin collapses against this one, so only a value above
+     it has any effect. Prose gets ~5px of free optical relief from its own
+     half-leading; a blockquote draws its rule at the box edge and a table sets
+     its head flush, so both read tighter than a paragraph at the same box gap.
+     1.1em restores parity. */
+  margin: 1.1em 0 1.3em;
   padding: 0.1em 0 0.1em 1.15em;
   border-left: 1px solid var(--b4m-md-line-2);
   color: var(--b4m-md-ink-3);
@@ -418,7 +429,11 @@
    The per-column classes are set in markdownComponents.tsx, which is where the
    numeric analysis has to live (CSS cannot look across rows). */
 .b4m-md .b4m-md-table-wrap {
-  margin: 0 0 1.5em;
+  /* Same reasoning as the blockquote's top margin, but a step wider: the head
+     row sets its cells flush to the box top (no padding-top), and they are the
+     smallest type in the file, so a table reads tighter than a quote at an
+     identical gap. */
+  margin: 1.6em 0 1.5em;
   overflow-x: auto;
   max-width: 100%;
 }
@@ -462,13 +477,23 @@
 }
 
 /* A column every body cell of which parses to exactly one number: right-align,
-   tabular figures, and a magnitude bar under the value. */
+   tabular figures, and a magnitude bar under the value.
+
+   analyseTable sets these classes on the head cell as well, so the label sits
+   over its own column. Alignment is the only thing a label should take from
+   them: the face, the figures and the ink are how a datum is presented, and a
+   head cell holds a word. Left unscoped they also outrank `.b4m-md thead th`
+   on specificity (0,2,0 against 0,1,2), which rendered a single head row in
+   two typefaces, two inks and - via numtext's own font-size - two sizes. */
 .b4m-md .b4m-md-num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.b4m-md tbody td.b4m-md-num {
   font-family: var(--b4m-md-font-mono);
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum' 1;
-  text-align: right;
-  white-space: nowrap;
   color: var(--b4m-md-ink);
 }
 
@@ -488,16 +513,19 @@
   opacity: 0.42;
 }
 
-/* Numeric but long enough to be read as prose (the >24-character guard): keep
-   the mono face and the tabular figures, drop the right-alignment and the bar
-   so a wrapped cell does not ladder away from its neighbours. */
+/* Numeric, but long enough that the >24-character guard classes it as prose.
+   Prose is what it then gets: the body face, no right-alignment and no bar, so
+   a wrapped cell does not ladder away from its neighbours. The mono face is
+   deliberately not carried over - a sentence set in mono reads worse, and it
+   would put a third typeface in a table that otherwise uses two. Tabular
+   figures are kept, since the cell does still hold exactly one number. */
 .b4m-md .b4m-md-numtext {
-  font-family: var(--b4m-md-font-mono);
-  font-size: 0.93em;
-  font-variant-numeric: tabular-nums;
   text-align: left;
   white-space: normal;
-  color: var(--b4m-md-ink-2);
+}
+
+.b4m-md tbody td.b4m-md-numtext {
+  font-variant-numeric: tabular-nums;
 }
 
 /* The total row is ruled, not filled: a fill reads as a highlight, and a total
