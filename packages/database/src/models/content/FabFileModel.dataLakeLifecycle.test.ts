@@ -470,6 +470,30 @@ describe('FabFile data lake lifecycle membership', () => {
       });
     });
 
+    it('counts a pending-and-unmeasured member only as retrieval-only, never also as unmeasured', async () => {
+      // Every bucket gates on the same `reported` flag, but this is the one row that would expose
+      // a drift if `unmeasuredFiles` used a different guard than its siblings: not reported, AND
+      // it would have been unmeasured had it been reported.
+      await makeFile({
+        fileName: 'never-uploaded-legacy.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        status: 'pending',
+        chunkCount: 5,
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      expect(health).toMatchObject({
+        chunkedFiles: 0,
+        unmeasuredFiles: 0,
+        inFlightFiles: 0,
+        retrievalOnlyFiles: 1,
+        totalChunks: 0,
+        totalEmbeddedChunks: 0,
+      });
+    });
+
     it('scopes to lake members only, on the same predicate as computeDataLakeStats', async () => {
       await makeFile({
         fileName: 'member.txt',
