@@ -52,6 +52,10 @@ type MenuListOpts = {
  * two agree by construction only at the default (see menuListSx).
  */
 export const menuSurfaceSx = (theme: Theme, radius: PxLength = MENU_SURFACE_RADIUS) => ({
+  // Load-bearing on every popup, not a preference: Joy grounds a Select listbox and a Menu in
+  // background.popup, which this theme never sets, so it falls through to Joy's own default -
+  // common.white in light and, the trap, common.black in DARK. A popup that skips this recipe is
+  // a pure black panel on an app whose surfaces never go fully black.
   backgroundColor: theme.palette.background.surface,
   border: `1px solid ${theme.palette.divider}`,
   borderRadius: radius,
@@ -95,8 +99,10 @@ export const menuListSx = ({ gap = '4px', radius = MENU_SURFACE_RADIUS }: MenuLi
 });
 
 /**
- * A Select's listbox on a menuSurfaceSx ground: menuListSx plus the option rows' hover, selected
- * and focus states, so every Select in the app marks a row the same way.
+ * A Select's listbox on a menuSurfaceSx ground: menuListSx plus the app's row scale and ink and
+ * the option rows' hover, selected and focus states, so every Select in the app marks a row the
+ * same way. A caller owns only what is genuinely its own - the popper placement and offsets, and a
+ * minWidth where the anchor is narrower than the list wants to be.
  *
  * Joy paints an Option's hover, its keyboard-highlighted row and its press from
  * --variant-plain*Bg, so pointing those variables at the colour is what wins - a bare `&:hover`
@@ -118,27 +124,45 @@ export const menuListSx = ({ gap = '4px', radius = MENU_SURFACE_RADIUS }: MenuLi
  * role="menuitem" and take menuItemListSx, or menuRowSx per item where a row wants the fixed
  * icon + label geometry (and the danger variant) too.
  *
- * Not every Select in the app belongs here: the model-filter, file-browser and upload dropdowns
- * (Session/ModelSelection, Files/Browser/MobileSearchFilter, Files/Browser/UploadActionsSelect)
- * deliberately sit on background.body with no border, which is a different surface, not a
- * drifted copy of this one.
+ * The model-filter, file-browser, upload and research-model dropdowns each used to hand-roll a
+ * borderless `background.body` variant of this, and it turned out not to be a second surface:
+ * dark mode gives background.body and background.surface the same value, Joy's listbox slot has no
+ * border for their `border: none` to remove (variant styles never reach it - Select.js:217, and
+ * passing the slot a `variant` does not change that), and what they were really doing was
+ * overriding the same black popup ground menuSurfaceSx overrides. Put a Select on this recipe
+ * rather than re-deriving that.
+ *
+ * The app's other Select listboxes are a separate open set, not exceptions to this one: most set
+ * only a maxHeight and so still take Joy's popup ground, and Credits/AccountSelector grounds
+ * itself from its own palette token.
  */
 export const selectListboxSx = (theme: Theme, opts?: MenuListOpts) => ({
   ...menuListSx(opts),
+  // Joy's List paints itself with `body-${size}` typography (List.js:115), so a default-size
+  // Select's listbox comes out at fontSize.md while every dropdown control in this app is a 14px
+  // one. Pinned here so a caller does not have to size the listbox slot apart from its trigger,
+  // and it reaches the rows on its own: an Option's own fontSize is `inherit`
+  // (ListItemButton.js:86).
+  fontSize: theme.fontSize.sm,
   '& [role="option"]': {
     // No borderRadius here: an Option is a StyledListItemButton, whose own
     // `borderRadius: var(--ListItem-radius)` (ListItemButton.js:83) already takes the corner
     // menuListSx pins above.
     transition: 'background 0.15s',
+    // Joy paints EVERY row's ink from --variant-plainColor, which falls through to its own
+    // un-themed neutral scale (neutral.700 in light) - this theme tints text.primary and leaves
+    // `neutral` at Joy's defaults, so a row left to Joy reads grey among brand-tinted siblings.
+    // Declaring it on the row also covers the SELECTED row, which Joy otherwise repaints from
+    // --variant-outlinedColor: one ink throughout, so the weight below is what marks the row.
+    color: theme.palette.text.primary,
     '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
     '--variant-plainActiveBg': theme.palette.notebooklist.hoverBg,
     '&[aria-selected="true"]': {
       backgroundColor: theme.palette.notebooklist.focusedBackground,
+      // The weight is load-bearing, not decoration, for the reason menuItemListSx spells out: in
+      // dark mode notebooklist.hoverBg and focusedBackground are the SAME value, so a hovered
+      // sibling paints the selected row's exact ground and the ground alone marks nothing.
       fontWeight: 600,
-      // Joy's base plain variant paints EVERY Option's ink from --variant-plainColor; `inherit`
-      // drops the selected row back to the listbox's own ink, so the bold weight marks it rather
-      // than a different colour. (Nothing repaints on press - plainActive carries no `color`.)
-      color: 'inherit',
     },
     '&:focus-visible': {
       outline: `2px solid ${theme.palette.primary[500]}`,
