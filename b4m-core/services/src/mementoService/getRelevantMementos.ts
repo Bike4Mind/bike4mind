@@ -136,7 +136,7 @@ export interface GetRelevantMementosAdapters {
  * const mementos = await getRelevantMementos(
  *   'user123',
  *   'How do I use React hooks?',
- *   { topK: 5, minSimilarity: 0.7 },
+ *   { topK: 5 },
  *   { db: { mementos, apiKeys, adminSettings } }
  * );
  *

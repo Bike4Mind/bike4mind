@@ -8,10 +8,11 @@ import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT } from './forcedRetrieval';
 import { OpenAIEmbeddingModel, OllamaEmbeddingModel, VoyageAIEmbeddingModel } from '../schemas/embedding';
 
 /**
- * The top of each space's MEASURED cosine band, as whole-number percents, from the two captures in
- * `packages/scripts/retrieval/MODEL-COMPARISON.md`. A floor at or above one of these rejects every
- * chunk on every query in that space - the silent outage this module exists to make impossible -
- * so these are the numbers every shipped floor is checked against below.
+ * The top of each space's MEASURED cosine band over the FILE corpus, as whole-number percents, from
+ * the two captures in `packages/scripts/retrieval/MODEL-COMPARISON.md`. A floor at or above one of
+ * these rejects every chunk on every query in that space - the silent outage this module exists to
+ * make impossible - so these are the numbers every shipped FORCED-RETRIEVAL floor is checked
+ * against below. They say nothing about the memento corpus; see the check itself for why.
  *
  * The captures are not reproducible from a clean clone (`packages/scripts/out/` is gitignored and
  * re-making it costs real provider spend), which is exactly why the result is pinned here rather
@@ -70,11 +71,13 @@ describe('cosineFloorPctForSpace', () => {
 });
 
 describe('shipped floors sit inside the band they gate', () => {
-  it.each([
-    ['forced retrieval', FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE],
-    ['V1 mementos', MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE],
-  ])('%s: no floor is at or above its space band max', (_label, table) => {
-    for (const [space, floorPct] of Object.entries(table)) {
+  // ONLY the forced-retrieval table. The bands above were measured over the FILE corpus, and
+  // checking the memento floors against them would be the same category error this module exists
+  // to name: a memento is one sentence and a chunk is a passage, so they do not share a band even
+  // inside one vector space. No memento-corpus band has been captured, so those entries cannot be
+  // checked this way - asserting them here would pass by luck and read as coverage.
+  it('no forced-retrieval floor is at or above its space band max', () => {
+    for (const [space, floorPct] of Object.entries(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE)) {
       const bandMaxPct = MEASURED_BAND_MAX_PCT[space];
       // A space with no recorded band max cannot be checked; it should not be carrying a floor
       // either, so failing here is the intended outcome rather than a skip.

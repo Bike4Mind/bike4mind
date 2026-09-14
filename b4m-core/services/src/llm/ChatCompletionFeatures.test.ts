@@ -784,6 +784,12 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
      * models a construction that never reached the seam, which is what every other test here is.
      */
     embeddingBinding?: { requested: string; model: string; missing: string | null; configured?: boolean };
+    /**
+     * Per-setting-name overrides for `adminSettings.getSettingsValue`, keyed exactly as production
+     * calls it (e.g. 'forcedRetrievalMinSimilarityPct'). Absent keys fall back to the pre-existing
+     * behavior of returning `defaultEmbeddingModel` for every setting name.
+     */
+    settings?: Record<string, unknown>;
   }) => {
     const files = opts.files ?? [{ id: 'fileA', fileName: 'A.pdf', tags: [] }];
     // Honours limit + afterChunkId like the real repository, so the probe and the within-batch
@@ -809,7 +815,11 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
             .mockResolvedValue({ data: files, hasMore: opts.hasMore ?? false, total: opts.total ?? files.length }),
         },
         fabfilechunks: { findByFabFileId: vi.fn(), findVectorsByFabFileIds },
-        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(opts.defaultEmbeddingModel) },
+        adminSettings: {
+          getSettingsValue: vi.fn(async (name: string) =>
+            opts.settings && name in opts.settings ? opts.settings[name] : opts.defaultEmbeddingModel
+          ),
+        },
       },
       resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
@@ -1026,6 +1036,45 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     const { content } = await run(ctx);
     expect(content).toContain('borderline relevant content');
     expect(content).not.toContain('does not cover this');
+  });
+
+  it('an unmeasured embedding space never blacks out retrieval - it fails loud instead', async () => {
+    // 3-large has a measured BAND but deliberately no entry in the by-space table: the natural
+    // unmeasured case. A floor fitted to one vector space must never silently empty every query in
+    // another, so the fallback is the relative floor alone (never a 0.75 ada-002 guess) plus a loud
+    // operator-facing log, not a quiet abstention.
+    const ctx = makeCtx({
+      files: [
+        { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-3-large', vectorizedChunkCount: 1 },
+      ],
+      // cosine([1,4],[1,0]) = 1/sqrt(17) = 0.243 - well under both the 75% default and 3-small's 35%.
+      rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'weakly related content', vector: [1, 4] }],
+    });
+    const { content } = await run(ctx);
+    expect(content).toContain('weakly related content');
+    expect(content).not.toContain('does not cover this');
+    expect((ctx.logger as unknown as { error: ReturnType<typeof vi.fn> }).error).toHaveBeenCalledWith(
+      expect.stringContaining('text-embedding-3-large')
+    );
+  });
+
+  it('an operator-configured absolute floor is honored verbatim, not replaced by the by-space table', async () => {
+    // 3-small's table entry is 35%, which this chunk's 0.707 cosine clears easily. But the operator
+    // explicitly dialed the setting to 90%, and that value must win outright - substituting the
+    // table's 35% here would silently discard a value someone deliberately tuned.
+    const ctx = makeCtx({
+      files: [
+        { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-3-small', vectorizedChunkCount: 1 },
+      ],
+      rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'borderline relevant content', vector: [1, 1] }],
+      settings: { forcedRetrievalMinSimilarityPct: 90 },
+    });
+    const { content } = await run(ctx);
+    expect(content).toContain('does not cover this');
+    expect(content).not.toContain('borderline relevant content');
+    // An explicit value is not an unresolved one - nothing here warrants the loud error the
+    // unmeasured-space case above logs.
+    expect((ctx.logger as unknown as { error: ReturnType<typeof vi.fn> }).error).not.toHaveBeenCalled();
   });
 
   it('a no-match over a PARTIALLY scanned library must not harden into "no coverage"', async () => {

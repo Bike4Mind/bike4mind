@@ -3683,9 +3683,9 @@ export const settingsMap = {
     description:
       'Absolute minimum cosine similarity, as a percent, a chunk must clear to be injected on a ' +
       'Data-Lake-mode turn. This is a sanity floor for genuinely unrelated content, NOT the ranking ' +
-      'gate - the relative floor above does the ranking. LEAVE IT AT 75 UNLESS YOU HAVE MEASURED ' +
+      `gate - the relative floor above does the ranking. LEAVE IT AT ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} UNLESS YOU HAVE MEASURED ` +
       'YOUR OWN CORPUS: a raw cosine means nothing outside the embedding model it was fitted to, so ' +
-      'while this reads 75 the server ignores it and applies the floor measured for whichever model ' +
+      `while this reads ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} the server ignores it and applies the floor measured for whichever model ` +
       'your documents are actually embedded with (75 for ada-002, 35 for text-embedding-3-small, ' +
       'and no absolute floor at all for a model nobody has measured - the relative floor still ' +
       'applies). Set any other value and the server uses exactly that, in every space, which is ' +
