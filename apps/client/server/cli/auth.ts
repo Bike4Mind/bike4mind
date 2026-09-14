@@ -183,8 +183,11 @@ function toApiKeyInfo(v: {
  * owner's key kept working on exactly the surfaces that spend money.
  *
  * MUST STAY IN SYNC with the equivalent block in
- * apps/client/server/middlewares/apiKeyAuth.ts - same lookup, same order, same
- * messages.
+ * apps/client/server/middlewares/apiKeyAuth.ts - same lookup, same order, same thrown error
+ * classes. The thrown STATUS is not observable end to end on these paths, though: the
+ * Function-URL adapter (defineLambdaRoute) reports any auth throw as 401, and the apiKeyOrJwt
+ * resolver swallows a key failure to fall through to JWT - so a 403 raised here can surface as
+ * 401 downstream. Keep the messages aligned, but do not rely on the status code reaching the caller.
  *
  * This is the `User.findById` the consent gate above deliberately declines to pay
  * on the api-key path. Account state is not the same trade: consent can be proven
