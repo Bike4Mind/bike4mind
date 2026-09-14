@@ -83,6 +83,13 @@ async function resolveIdentity(
     if (!isTokenTypeAcceptable(decoded?.typ, 'access')) {
       throw new UnauthorizedError('Invalid token type');
     }
+    // Reject a relying-party OAuth access token: it is signed with the same secret and
+    // stamped typ:'access', so only this kind claim confines it to the OAuth REST scope.
+    // MUST stay in sync with verifyWsAccessToken.ts and cli/auth.ts. Thrown, not returned,
+    // so the API-key fallback below still runs.
+    if ((decoded as { kind?: string })?.kind === 'oauth') {
+      throw new UnauthorizedError('OAuth access tokens are not accepted on the realtime socket');
+    }
     // JWT connections are always version-gated. A legacy token issued before
     // this field existed carries no version and normalizes to 0, mirroring the
     // REST path (auth.ts) so the kill switch still fires for it once the user's

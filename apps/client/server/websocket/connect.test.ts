@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 /**
- * Covers the connect-time token gates only: `typ` and the tokenVersion kill switch.
+ * Covers the connect-time token gates: `typ`, the `kind:'oauth'` rejection, and the
+ * tokenVersion kill switch.
  * These must agree with the REST strategy (auth/verifyJwtPayload.ts) and the
  * subscribe/unsubscribe path (verifyWsAccessToken.ts). The JWT is delivered on the
  * Sec-WebSocket-Protocol header (the CLI transport) since the `?token=` query path
@@ -58,6 +59,13 @@ describe('websocket connect - token gates', () => {
 
   it('refuses a refresh token presented as a connect token', async () => {
     mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'refresh' });
+
+    await expect(connect()).rejects.toThrow('Invalid authentication token');
+    expect(mockConnectionCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a relying-party OAuth access token on the realtime socket', async () => {
+    mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'access', kind: 'oauth' });
 
     await expect(connect()).rejects.toThrow('Invalid authentication token');
     expect(mockConnectionCreate).not.toHaveBeenCalled();
