@@ -38,7 +38,8 @@ import BugReportModal from '@client/app/components/BugReportModal';
 import { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useGetFabFilesByQuestId } from '@client/app/hooks/data/fabFiles';
-import { useGetFeedbackBySessionId } from '@client/app/hooks/data/feedback';
+import { feedbackSessionQueryKey, useGetFeedbackBySessionId } from '@client/app/hooks/data/feedback';
+import { isOptimisticId } from '@client/app/utils/llm';
 import { Save as SaveIcon, Add as AddIcon } from '@mui/icons-material';
 import { DataLakeIcon, DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
@@ -164,13 +165,19 @@ const MessageContent: React.FC<ContentProps> = memo(
     const { data: questFiles = [] } = useGetFabFilesByQuestId(messageData.id!, {
       enabled: !!messageData.fabFileIds?.length,
     });
+    // A turn whose send failed keeps its optimistic id (createOptimisticQuest rewrites the bubble
+    // to status 'done' without ever persisting it), so the action row renders for a message the
+    // server has no row for. The report itself is still worth filing - it just cannot be anchored
+    // to a quest, so it is submitted and labelled as a notebook-level report instead of silently
+    // sending a questId that resolveFeedbackContext drops (feedbackContext.ts).
+    const isPersistedMessage = !isOptimisticId(messageData.id);
     // Backs the persistent Report button's "already reported" state and the in-thread
     // "Reported" annotation - see hooks/data/feedback.ts for why this is safe to call once per
     // rendered message.
     const { data: sessionFeedback = [] } = useGetFeedbackBySessionId(sessionId);
     const isReported = useMemo(
-      () => sessionFeedback.some(item => item.questId === messageData.id),
-      [sessionFeedback, messageData.id]
+      () => isPersistedMessage && sessionFeedback.some(item => item.questId === messageData.id),
+      [isPersistedMessage, sessionFeedback, messageData.id]
     );
     const researchMode = useLLM(state => state.researchMode);
     const setLLM = useLLM(state => state.setLLM);
@@ -292,8 +299,38 @@ const MessageContent: React.FC<ContentProps> = memo(
     // Refreshes the session-scoped feedback read so the "Reported" annotation appears without
     // waiting for staleTime to elapse.
     const handleReportSubmitted = useCallback(() => {
-      queryClient.invalidateQueries({ queryKey: ['feedback', 'session', sessionId] });
-    }, [queryClient, sessionId]);
+      queryClient.invalidateQueries({ queryKey: feedbackSessionQueryKey(sessionId, currentUser?.id) });
+    }, [queryClient, sessionId, currentUser?.id]);
+
+    // One element rendered into both the desktop and mobile action rows. They were byte-identical
+    // copies; keeping them as one is what stops the next edit from landing on only one of them.
+    const reportButton = (
+      <Tooltip
+        title={
+          isReported
+            ? 'You already reported this message'
+            : isPersistedMessage
+              ? 'Report an issue with this message'
+              : 'Report an issue with this notebook'
+        }
+      >
+        <IconButton
+          data-testid="message-report-btn"
+          variant="outlined"
+          color={isReported ? 'warning' : 'neutral'}
+          size="sm"
+          onClick={handleOpenBugReportModal}
+          sx={{
+            width: '28px',
+            height: '28px',
+            flexShrink: '0',
+            borderRadius: '6px',
+          }}
+        >
+          <BugReportIcon sx={{ fontSize: 16 }} />
+        </IconButton>
+      </Tooltip>
+    );
 
     useEffect(() => {
       // Check if the device is mobile
@@ -822,25 +859,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                     content={extractedReplies ? extractedReplies[0] : ''}
                     fileName={`${messageData.id}.md`}
                   />
-                  <Tooltip
-                    title={isReported ? 'You already reported this message' : 'Report an issue with this message'}
-                  >
-                    <IconButton
-                      data-testid="message-report-btn"
-                      variant="outlined"
-                      color={isReported ? 'warning' : 'neutral'}
-                      size="sm"
-                      onClick={handleOpenBugReportModal}
-                      sx={{
-                        width: '28px',
-                        height: '28px',
-                        flexShrink: '0',
-                        borderRadius: '6px',
-                      }}
-                    >
-                      <BugReportIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
+                  {reportButton}
                   {hasShareableReply && (
                     <Button
                       data-testid="message-publish-share-btn"
@@ -983,7 +1002,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                     onClose={handleCloseBugReportModal}
                     promptMeta={messageData.promptMeta || null}
                     sessionId={sessionId}
-                    questId={messageData.id}
+                    questId={isPersistedMessage ? messageData.id : undefined}
                     onSubmitted={handleReportSubmitted}
                   />
                   <ContentPreviewModal
@@ -1007,25 +1026,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                     content={extractedReplies ? extractedReplies[0] : ''}
                     fileName={`${messageData.id}.md`}
                   />
-                  <Tooltip
-                    title={isReported ? 'You already reported this message' : 'Report an issue with this message'}
-                  >
-                    <IconButton
-                      data-testid="message-report-btn"
-                      variant="outlined"
-                      color={isReported ? 'warning' : 'neutral'}
-                      size="sm"
-                      onClick={handleOpenBugReportModal}
-                      sx={{
-                        width: '28px',
-                        height: '28px',
-                        flexShrink: '0',
-                        borderRadius: '6px',
-                      }}
-                    >
-                      <BugReportIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
+                  {reportButton}
                   {hasShareableReply && (
                     <Tooltip title="Publish & Share">
                       <IconButton
@@ -1169,7 +1170,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                     onClose={handleCloseBugReportModal}
                     promptMeta={messageData.promptMeta || null}
                     sessionId={sessionId}
-                    questId={messageData.id}
+                    questId={isPersistedMessage ? messageData.id : undefined}
                     onSubmitted={handleReportSubmitted}
                   />
                   <ContentPreviewModal

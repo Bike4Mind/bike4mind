@@ -97,6 +97,11 @@ const ListFeedbackQuerySchema = z.object({
   // Capped: the value reaches a Mongo regex, so an unbounded pattern is a CPU sink even escaped.
   search: z.string().min(1).max(200).optional(),
   sort: z.enum(['asc', 'desc']).prefault('desc'),
+  // Opt-in because the facet is a `distinct` over the caller's WHOLE accessible set, which for an
+  // admin is the unindexed full collection - and every caller but the admin org-filter menu throws
+  // the result away (the paged list, the CSV export loop, the per-session "Reported" read).
+  // An explicit enum rather than z.coerce.boolean(), which reads the string "false" as true.
+  includeOrganizations: z.enum(['true', 'false']).optional(),
 });
 
 /** `qs.parse` hands back a lone value or an array depending on how many times a key repeats. */
@@ -234,8 +239,9 @@ const handler = baseApi()
       FeedbackModel.countDocuments(filter),
       // Facet options come from the caller's whole accessible set, NOT from `filter` - otherwise
       // selecting an organization would prune every other option out of the dropdown that
-      // selected it.
-      FeedbackModel.distinct('organization', readable),
+      // selected it. Which is also why it is opt-in: `readable` is `{}` for an admin, so this is a
+      // full-collection scan on an unindexed field and must not ride along on unrelated reads.
+      query.includeOrganizations === 'true' ? FeedbackModel.distinct('organization', readable) : undefined,
     ]);
 
     return res.json({
@@ -243,9 +249,13 @@ const handler = baseApi()
       total,
       page: query.page,
       limit: query.limit,
-      organizations: organizationFacet
-        .filter((name): name is string => typeof name === 'string' && name.length > 0)
-        .sort((a, b) => a.localeCompare(b)),
+      // Omitted rather than [] when not requested: an empty array is indistinguishable from "no
+      // organizations have any feedback", which would empty the filter menu.
+      ...(organizationFacet && {
+        organizations: organizationFacet
+          .filter((name): name is string => typeof name === 'string' && name.length > 0)
+          .sort((a, b) => a.localeCompare(b)),
+      }),
     });
   })
   .post(async (req, res) => {

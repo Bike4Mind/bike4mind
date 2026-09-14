@@ -54,6 +54,12 @@ export interface FeedbackListFilterParams {
 export type FeedbackListParams = FeedbackListFilterParams & {
   page: number;
   limit: number;
+  /**
+   * Ask the server to compute the `organizations` facet. Opt-in because it is a `distinct` over
+   * the caller's entire accessible set - for an admin, the whole collection on an unindexed field
+   * - and only the org filter menu's dedicated query consumes it.
+   */
+  includeOrganizations?: boolean;
 };
 
 /** Response envelope of GET /api/feedback. */
@@ -62,8 +68,11 @@ export interface FeedbackListResponse {
   total: number;
   page: number;
   limit: number;
-  /** Distinct organization labels across the caller's whole accessible set, for the filter menu. */
-  organizations: string[];
+  /**
+   * Distinct organization labels across the caller's whole accessible set, for the filter menu.
+   * Present only when the request asked for it (`includeOrganizations`).
+   */
+  organizations?: string[];
 }
 
 // Hook return types

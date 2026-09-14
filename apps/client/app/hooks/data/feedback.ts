@@ -1,7 +1,17 @@
 import { useQuery } from '@tanstack/react-query';
 import { FEEDBACK_LIST_MAX_LIMIT } from '@bike4mind/common';
 import { getFeedbackFromServer } from '@client/app/utils/feedbackAPICalls';
+import { useUser } from '@client/app/contexts/UserContext';
 import { isOptimisticId } from '@client/app/utils/llm';
+
+/**
+ * Cache key for the session-scoped feedback read. Exported so the post-submit invalidation in
+ * MessageContent builds the same key rather than re-spelling it. `userId` is part of the key, not
+ * just the request: the read is per-caller, so a key without it would serve one account's
+ * annotations to the next account signed in on the same tab.
+ */
+export const feedbackSessionQueryKey = (sessionId: string, userId: string | undefined) =>
+  ['feedback', 'session', sessionId, userId] as const;
 
 /**
  * Session-scoped feedback reads that back the in-thread "Reported" annotation on
@@ -9,19 +19,30 @@ import { isOptimisticId } from '@client/app/utils/llm';
  * session- or product-level feedback - and capped at FEEDBACK_LIST_MAX_LIMIT since a single
  * session is expected to carry at most a handful of reports, never enough to paginate.
  *
- * The endpoint is CASL-scoped to the caller's own reports (see GET /api/feedback), so this is a
- * read of "did I report this turn", not a cross-user signal - nothing in the LLM/ChatCompletion
- * path reads this collection either way.
+ * `userId` is sent explicitly and is NOT redundant with the endpoint's CASL scope: an admin holds
+ * an unconditional `read` grant on FeedbackModel (`server/auth/ability.ts`), so for them the CASL
+ * clause narrows to `{}` and an unfiltered session read would return OTHER users' reports - which
+ * this annotation would then render as "You reported this message", carrying that reporter's
+ * content and identity with it. The filter is what makes this a read of "did I report this turn".
+ * Same reason `memoryV2.ts` keys its principal-scoped read on the user id.
  *
  * Every message rendered in a session calls this with the same `sessionId`; react-query dedupes
  * identical query keys to one request, the same pattern `useGetQuest`/`useModelInfo` already rely
  * on when called once per message.
  */
 export function useGetFeedbackBySessionId(sessionId: string, options: { enabled?: boolean } = {}) {
+  const { currentUser } = useUser();
+  const userId = currentUser?.id;
+
   return useQuery({
-    queryKey: ['feedback', 'session', sessionId],
+    queryKey: feedbackSessionQueryKey(sessionId, userId),
     queryFn: async () => {
+      // Guard rather than an optional param: omitting `userId` does not narrow to nothing, it
+      // widens to every report the caller can read. Fail loudly instead of silently broadening.
+      if (!userId) throw new Error('Session feedback read requires an authenticated user');
+
       const response = await getFeedbackFromServer({
+        userId,
         sessionId,
         subject: 'turn',
         sort: 'desc',
@@ -31,6 +52,6 @@ export function useGetFeedbackBySessionId(sessionId: string, options: { enabled?
       return response.items;
     },
     staleTime: 1000 * 30,
-    enabled: (options.enabled ?? true) && !isOptimisticId(sessionId),
+    enabled: (options.enabled ?? true) && Boolean(userId) && !isOptimisticId(sessionId),
   });
 }

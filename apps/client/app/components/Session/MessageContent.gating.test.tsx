@@ -52,6 +52,12 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({
 }));
 vi.mock('@client/app/hooks/data/feedback', () => ({
   useGetFeedbackBySessionId: () => ({ data: mocks.sessionFeedback }),
+  feedbackSessionQueryKey: (sessionId: string, userId: string | undefined) => [
+    'feedback',
+    'session',
+    sessionId,
+    userId,
+  ],
 }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({
   useModelInfo: () => ({ data: [] }),
@@ -408,6 +414,44 @@ describe('MessageContent report action - persistent affordance (#1869)', () => {
     expect(screen.queryByTestId('message-reported-chip')).not.toBeInTheDocument();
   });
 
+  // A send that failed leaves the bubble on its optimistic id with status 'done', so the action
+  // row renders for a message the server has no row for. Sending that id as `questId` is a claim
+  // resolveFeedbackContext drops on the floor; the report is a notebook-level one, and the button
+  // has to say so rather than promising a per-message annotation that can never appear.
+  const optimisticMessageData = {
+    id: 'optimistic-quest-abc',
+    prompt: 'hello',
+    replies: ['**Error:** something went wrong'],
+    status: 'done',
+  } as unknown as IChatHistoryItem;
+
+  it('sends no questId for a message that was never persisted', () => {
+    renderMessageContent(optimisticMessageData);
+
+    fireEvent.click(screen.getByTestId('message-report-btn'));
+
+    const modal = screen.getByTestId('bug-report-modal-mock');
+    expect(modal).toHaveAttribute('data-session-id', 'session-1');
+    expect(modal).not.toHaveAttribute('data-quest-id');
+  });
+
+  it('labels the report as notebook-level on a message that was never persisted', () => {
+    renderMessageContent(optimisticMessageData);
+
+    expect(screen.getByTestId('message-report-btn')).toHaveAttribute(
+      'aria-label',
+      'Report an issue with this notebook'
+    );
+  });
+
+  it('never annotates an unpersisted message, even if the session carries a matching report', () => {
+    mocks.sessionFeedback = [{ questId: 'optimistic-quest-abc' }];
+
+    renderMessageContent(optimisticMessageData);
+
+    expect(screen.queryByTestId('message-reported-chip')).not.toBeInTheDocument();
+  });
+
   it('invalidates the session-scoped feedback cache once the modal reports a successful submit', () => {
     const queryClient = new QueryClient();
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
@@ -416,7 +460,7 @@ describe('MessageContent report action - persistent affordance (#1869)', () => {
     fireEvent.click(screen.getByTestId('message-report-btn'));
     fireEvent.click(screen.getByTestId('bug-report-modal-mock-submit'));
 
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['feedback', 'session', 'session-1'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['feedback', 'session', 'session-1', 'user-1'] });
   });
 
   describe('mobile action bar', () => {
