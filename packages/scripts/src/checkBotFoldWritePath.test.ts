@@ -304,7 +304,8 @@ function commandProgram(words: string[]): string[] {
 
 /** The subcommand of a `git` invocation, with git's own global options (and their values) skipped. */
 function gitSubcommand(words: string[]): string | undefined {
-  const takesValue = /^(-c|-C|--namespace|--git-dir|--work-tree|--exec-path)$/;
+  const takesValue =
+    /^(-c|-C|--namespace|--git-dir|--work-tree|--exec-path|--config-env|--super-prefix|--attr-source)$/;
   for (let i = 1; i < words.length; i++) {
     const word = unquoteWord(words[i]);
     if (takesValue.test(word)) {
@@ -361,14 +362,67 @@ const gitSubcommands = (src: string) =>
   [...new Set(gitCommands(src, /./).map(words => gitSubcommand(words) ?? ''))].sort();
 
 /**
+ * Every invocation of a program matching `name` anywhere in a `run:` body, as parsed word
+ * vectors: quotes stripped, a leading `VAR=value` prefix dropped.
+ */
+function commandsNamed(src: string, name: RegExp): string[][] {
+  const found: string[][] = [];
+  for (const body of runBodies(src)) {
+    for (const { words } of shellCommands(body)) {
+      const rest = commandProgram(words).map(unquoteWord);
+      if (rest.length && name.test(rest[0])) found.push(rest);
+    }
+  }
+  return found;
+}
+
+/**
+ * Every distinct program a `run:` body invokes, sorted, shell keywords included.
+ *
+ * Pinned as a whole SET at the call site for the reason `gitSubcommands` is: every bound in
+ * this file is written in terms of the program it bounds, so an INDIRECTION reaches the bounded
+ * thing while naming nothing any of them looks for. `sh -c 'git apply --cached ...'` and
+ * `xargs git apply --cached` both write arbitrary content into the index while `git` is the
+ * program of no command at all, and `trap 'exit 0' ERR` converts the push step's fail-closed
+ * contract into a fail-silent one while naming no guard. Enumerating the indirections is the
+ * wrong side to enumerate; enumerating the programs this job runs means a new one has to be
+ * justified here before it can be handed anything.
+ */
+function invokedPrograms(src: string): string[] {
+  const names = new Set<string>();
+  for (const body of runBodies(src)) {
+    for (const { words } of shellCommands(body)) {
+      let rest = words;
+      while (rest.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0])) rest = rest.slice(1);
+      const name = unquoteWord(rest[0] ?? '');
+      if (!name) continue;
+      // Four shapes this parser reports in command position that are not programs, dropped so
+      // the pinned set stays readable rather than because they are safe: a redirection operand;
+      // a `case` arm pattern (`|` and `)` are command separators, so every arm parses as a
+      // command) and any other word carrying a glob character; an ALL-CAPS identifier, which is
+      // a shell VARIABLE reached through `$(( ))` arithmetic; and a bare integer, which falls
+      // out of the same arithmetic and of `awk`'s field references. Nothing an indirection
+      // would be spelled as is excluded - `sh`, `bash`, `xargs`, `eval`, `trap` and a `./path`
+      // are all still reported, which is what this set exists to refuse.
+      if (/^\d*[<>]/.test(name) || /[*?]/.test(name) || /^[A-Z_][A-Z0-9_]*$|^\d+$/.test(name)) continue;
+      names.add(name);
+    }
+  }
+  return [...names].sort();
+}
+
+/**
  * The job-level `if:`, split into conjuncts. The step-scoped `ifConjuncts` cannot reach it -
  * it is two indent levels shallower - and it is the gate every other bound in this file is
  * downstream of, so it was the one `if:` nothing asserted.
  */
 function jobIfConjuncts(src: string): string[] {
-  const block = withoutComments(src).match(/^ {4}if: \|\n((?: {6}.*\n)+)/m)?.[1];
-  expect(block, 'no block-scalar job-level if:').toBeTruthy();
-  return (block ?? '')
+  // Exactly one, not the first of several. A DECOY job block carrying its own `if:` lets the
+  // real fork and draft gates be deleted from the job that runs while this assertion still
+  // finds A matching gate above it and passes.
+  const blocks = [...withoutComments(src).matchAll(/^ {4}if: \|\n((?: {6}.*\n)+)/gm)];
+  expect(blocks, 'expected exactly one block-scalar job-level if:').toHaveLength(1);
+  return (blocks[0]?.[1] ?? '')
     .replace(/\s+/g, ' ')
     .trim()
     .split('&&')
@@ -525,11 +579,61 @@ const MULTI_WORD_EXPANSION = 'probe --settings ./probe-settings.json';
  * Note what asserting it here does and does not buy, because the two are easy to conflate.
  * It forces an edit to the FENCE to be deliberate. It does not bind the runner: `runs-on`
  * reads `vars.RUNNER_LABEL`, a repo variable settable in the web UI with no commit and no
- * diff, and a self-hosted runner with a different work root makes all three specs match
- * nothing with nothing here going red. `RUNS_ON` below pins the DEFAULT so that half of the
+ * diff, and a self-hosted runner with a different work root or home makes the three absolute
+ * specs match nothing with nothing here going red. `RUNS_ON` below pins the DEFAULT so that half of the
  * move is a reviewable edit; the variable override is outside what this repo can pin, and a
  * self-hosted move needs its own fence entries.
  */
+/**
+ * Every program a `run:` body in this workflow may invoke. See `invokedPrograms` for why this is
+ * an allowlist. Absent, and deliberately so: `sh`, `bash`, `xargs`, `eval`, `trap`, `source`,
+ * `curl` and `python` (only `python3` runs here, and only as `-I -`).
+ */
+const PROGRAMS = [
+  '[',
+  'awk',
+  'base64',
+  'break',
+  'case',
+  'cat',
+  'count_since',
+  'cut',
+  'date',
+  'do',
+  'done',
+  'echo',
+  'elif',
+  'else',
+  'emit',
+  'esac',
+  'exit',
+  'fi',
+  'for',
+  'gh',
+  'git',
+  'grep',
+  'if',
+  'local',
+  'mktemp',
+  'printf',
+  'python3',
+  'read',
+  'return',
+  'rm',
+  'set',
+  'sha256sum',
+  'sleep',
+  // `sudo apt-get` installs bubblewrap before the agent runs. It is the one entry whose
+  // ARGUMENT is not bounded by this set, and it is upstream of the agent, so nothing it
+  // could be pointed at is agent-writable.
+  'sudo',
+  'tail',
+  'then',
+  'tr',
+  'true',
+  'wc',
+];
+
 const ALWAYS_ON_EDIT_FENCES = [
   'Edit(/${{ runner.temp }}/**)',
   'Edit(//home/runner/work/_*/**)',
@@ -537,7 +641,7 @@ const ALWAYS_ON_EDIT_FENCES = [
   'Edit(//home/runner/.bun/**)',
 ];
 
-/** The runner the two `/home/runner/...` fences above are a premise about. */
+/** The runner the three `/home/runner/...` fences above are a premise about. */
 const RUNS_ON = "runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}";
 
 /**
@@ -712,10 +816,164 @@ function runStagedGuards(
     const env: NodeJS.ProcessEnv = { ...process.env, HOME: fakeHome };
     // Or git reads $XDG_CONFIG_HOME/git/attributes from the DEVELOPER's home instead.
     delete env.XDG_CONFIG_HOME;
-    const run = spawnSync('bash', ['-c', script], { cwd: dir, encoding: 'utf8', env });
+    const run = spawnSync('bash', ['-c', script], { cwd: dir, encoding: 'utf8', env, timeout: 120_000 });
     return { status: run.status ?? -1, out: `${run.stdout}${run.stderr}` };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+type PushFixture = {
+  /** Post-agent state of a TRACKED file: its new line count, or a binary rewrite. */
+  edits?: StagedFile[];
+  /** Files the agent dropped that were never tracked. `git add -u` must leave these behind. */
+  untracked?: string[];
+  /** Move the remote's head on after the base push, so the fold push is a non-fast-forward. */
+  diverge?: boolean;
+};
+
+/** What the push step did: what it REPORTED, and what actually arrived on the remote. */
+type PushOutcome = {
+  status: number;
+  out: string;
+  /** Every `pushed=` the step wrote, in order. More than one means it took two exits. */
+  pushed: string[];
+  reason: string | undefined;
+  /** Subjects on the remote's head ref, newest first. */
+  remoteLog: string[];
+  /** Paths the remote's tip commit changed, or [] while the tip is still the base commit. */
+  remoteChanged: string[];
+};
+
+const PUSH_HEAD_REF = 'feature/fold-target';
+const PUSH_TRACKED = ['README.md', 'src/a.ts', '.github/workflows/ci.yml', 'scripts/x.sh'];
+
+/**
+ * Runs the WHOLE `Push fold commit` body, lifted verbatim out of the committed YAML, against a
+ * scratch repo with a real bare remote, and reports the END STATE: exit status, every value the
+ * step claimed for `pushed`, and what the remote ended up holding.
+ *
+ * Why the whole body and not the guard region `runStagedGuards` lifts. Every other assertion
+ * over this step is either a pattern over its text or an execution of the two bounds in the
+ * middle of it, which left the relationship between what the step REPORTS and what it DOES
+ * asserted nowhere - and that gap is a class, not an instance. Five one-line edits (`set +e`, a
+ * `trap 'exit 0' ERR`, wrapping the body in a subshell, `emit false || exit 1`, moving the
+ * success `exit 0` into an `else`) each reach the exact "reported success, pushed nothing" end
+ * state the step's own comment says `-e` prevents. And a staging route composed entirely of
+ * subcommands the allowlist already permits - a redirection writing a `git show` into
+ * `.github/workflows/ci.yml` in the WORKING TREE, then `commit -a` - puts CI configuration on
+ * the branch while the path guard, which reads the INDEX, correctly saw only the tracked edit.
+ * None of that is visible to a matcher over the file; all of it is visible here.
+ *
+ * The one thing not real is the network: a `git` shim on PATH swaps the
+ * `https://...@github.com/...` argument for the scratch bare repo and execs the real git with
+ * every other argument untouched. So the add, both bounds, the commit, the refspec, the absence
+ * of --force and the failure classifier are all shipped bytes running under real git.
+ */
+function runPushStep(src: string, fixture: PushFixture): PushOutcome {
+  // Verbatim, comments included, for the reason `runStagedGuards` states.
+  const bodies = runBodiesRaw(step(src, 'Push fold commit'));
+  // One `run:`, for the same reason: a second body in the step would leave whichever one this
+  // executes unrepresentative of what the runner runs.
+  expect(bodies, 'expected exactly one run: body in the push step').toHaveLength(1);
+  const body = bodies[0] ?? '';
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-fold-push-'));
+  try {
+    const remote = path.join(root, 'remote.git');
+    const work = path.join(root, 'work');
+    const home = path.join(root, 'home');
+    const bin = path.join(root, 'bin');
+    for (const dir of [work, home, bin]) fs.mkdirSync(dir);
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], {
+        encoding: 'utf8',
+        stdio: 'pipe',
+      });
+    execFileSync('git', ['init', '-q', '--bare', remote], { stdio: 'pipe' });
+    git(work, 'init', '-q', '.');
+    // Content DERIVED FROM THE PATH, not a constant. With every file holding the same bytes, a
+    // mutation that copies one tracked file over another (`git show HEAD:README.md >
+    // .github/workflows/ci.yml`, which is F1's route) writes identical bytes, so `commit -a` has
+    // nothing extra to stage and the commit-contents assertion below cannot see it. Measured: with
+    // a constant the F1 mutation cost one failing test, with this it costs two.
+    const writeFile = (file: StagedFile) => {
+      const abs = path.join(work, file.path);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      const text = [...Array(file.lines ?? 1)].map((_, i) => `${file.path}:${i}`).join('\n') + '\n';
+      fs.writeFileSync(abs, file.binary ? Buffer.from([0x1f, 0x8b, 0x00, 0x41]) : text);
+    };
+    for (const tracked of PUSH_TRACKED) writeFile({ path: tracked });
+    git(work, 'add', '-A');
+    git(work, 'commit', '-q', '-m', 'base');
+    git(work, 'push', '-q', remote, `HEAD:refs/heads/${PUSH_HEAD_REF}`);
+    // The author pushing while the review ran, which is the only push failure this step can
+    // produce without a network: it is what makes the fail-closed contract observable.
+    if (fixture.diverge) {
+      writeFile({ path: 'README.md', lines: 3 });
+      git(work, 'commit', '-q', '-a', '-m', 'the author pushed while the review ran');
+      git(work, 'push', '-q', remote, `HEAD:refs/heads/${PUSH_HEAD_REF}`);
+      git(work, 'reset', '-q', '--hard', 'HEAD~1');
+    }
+    for (const edit of fixture.edits ?? []) writeFile(edit);
+    for (const dropped of fixture.untracked ?? []) writeFile({ path: dropped });
+
+    // The remote URL, and nothing else about the invocation. `for arg` iterates the argv
+    // snapshot, so append-and-shift rotates the list exactly once.
+    fs.writeFileSync(
+      path.join(bin, 'git'),
+      [
+        '#!/bin/sh',
+        'for arg; do',
+        '  case "$arg" in',
+        '    https://*github.com/*) set -- "$@" "$FOLD_TEST_REMOTE" ;;',
+        '    *) set -- "$@" "$arg" ;;',
+        '  esac',
+        '  shift',
+        'done',
+        'exec "$FOLD_TEST_GIT" "$@"',
+      ].join('\n'),
+      { mode: 0o755 }
+    );
+    const outputs = path.join(root, 'outputs');
+    fs.writeFileSync(outputs, '');
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
+      FOLD_TEST_REMOTE: remote,
+      FOLD_TEST_GIT: execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim(),
+      HOME: home,
+      GITHUB_OUTPUT: outputs,
+      // The step's own `env:` block, which is what makes the git calls below the ones it ships.
+      PUSH_TOKEN: 'x-fold-test-token',
+      HEAD_REF: PUSH_HEAD_REF,
+      REPO: 'owner/repo',
+      SERVER_URL: 'https://github.com',
+      RUN_ID: '1',
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CONFIG_SYSTEM: '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1',
+    };
+    // Or git reads the DEVELOPER's attributes and ignore files instead of this scratch $HOME.
+    delete env.XDG_CONFIG_HOME;
+    const run = spawnSync('bash', ['-c', body], { cwd: work, encoding: 'utf8', env, timeout: 120_000 });
+    const written = fs.readFileSync(outputs, 'utf8');
+    const remoteLog = git(remote, 'log', '--format=%s', PUSH_HEAD_REF).split('\n').filter(Boolean);
+    const baseCommits = fixture.diverge ? 2 : 1;
+    const remoteChanged =
+      remoteLog.length > baseCommits
+        ? git(remote, 'show', '--name-only', '--format=', PUSH_HEAD_REF).split('\n').filter(Boolean)
+        : [];
+    return {
+      status: run.status ?? -1,
+      out: `${run.stdout}${run.stderr}`,
+      pushed: [...written.matchAll(/^pushed=(\S*)$/gm)].map(m => m[1]),
+      reason: [...written.matchAll(/^reason=(.*)$/gm)].pop()?.[1],
+      remoteLog,
+      remoteChanged,
+    };
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
@@ -791,6 +1049,7 @@ function runPostedCheck(src: string, fixture: PostedFixture): string {
     const run = spawnSync('bash', ['-c', body ?? ''], {
       cwd: dir,
       encoding: 'utf8',
+      timeout: 120_000,
       env: {
         ...process.env,
         PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
@@ -843,11 +1102,13 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // `permissions:` key, or a second trigger appended below `types: [labeled]`, sits outside
     // the match and leaves it green. Lifting the whole block up to the next column-0 key is
     // what makes the two shapes indistinguishable to the assertion.
-    const topLevelBlock = (key: string) =>
-      top
-        .match(new RegExp(`^${key}:\\n(?: +.*\\n|\\n)*`, 'm'))?.[0]
-        .replace(/\s+#.*$/gm, '')
-        .trimEnd();
+    const topLevelBlock = (key: string) => {
+      const blocks = [...top.matchAll(new RegExp(`^${key}:\\n(?: +.*\\n|\\n)*`, 'gm'))];
+      // Exactly one, not the first of several, for the reason `jobIfConjuncts` states: a decoy
+      // copy above the real key leaves this comparing text the workflow never uses.
+      expect(blocks, `expected exactly one top-level ${key}:`).toHaveLength(1);
+      return blocks[0][0].replace(/\s+#.*$/gm, '').trimEnd();
+    };
 
     // `pull_request_target` is the single swap that voids every other bound here: it runs with
     // the base repo's secrets while this job checks out and runs an agent over the untrusted PR
@@ -865,7 +1126,11 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // A JOB-level `permissions:` replaces the workflow-level block wholesale rather than
     // merging with it, so it reaches `contents: write` for every step in the job without
     // touching the lines pinned just above. Exactly one `permissions:` key, at column 0.
-    expect(top.match(/^ *permissions:$/gm)).toEqual(['permissions:']);
+    // The WHOLE LINE, at any indent: `^ *permissions:$` required end-of-line right after the
+    // colon, so it saw the block form only. A job-level `permissions: {contents: write}` (a
+    // flow mapping is valid YAML and GitHub accepts it), `permissions: write-all`, or the key
+    // with one trailing space each left it green.
+    expect(top.match(/^ *permissions\b.*$/gm)).toEqual(['permissions:']);
 
     expect(jobIfConjuncts(src)).toEqual([
       // Fork PRs get no secrets and a read-only token, so this would fail on every one of them;
@@ -877,6 +1142,39 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       "!startsWith(github.event.pull_request.head.ref, 'changeset-release/')",
       "(github.event.label.name == 'bot-review' || github.event.label.name == 'bot-fold')",
     ]);
+
+    // The key SETS, at both levels, for the reason the two blocks above are compared by value:
+    // a bound that is a property of which keys are present cannot be stated by pinning the ones
+    // someone already thought of. `defaults: { run: { shell: ... } }` at column 0 changes the
+    // program every `run:` body below is executed BY, and a job-level `container:` moves every
+    // step into an image the three absolute `/home/runner/...` write fences are not a premise
+    // about - each reaching past every other assertion in this file without disturbing one.
+    const jobs = top.slice(top.indexOf('\njobs:'));
+    expect([...top.matchAll(/^([a-z][a-z-]*):/gm)].map(m => m[1])).toEqual([
+      'name',
+      'on',
+      'permissions',
+      'concurrency',
+      'jobs',
+    ]);
+    // One job, so the decoy `jobIfConjuncts` refuses cannot arrive as a second job either.
+    expect([...jobs.matchAll(/^ {2}([a-z][a-z0-9-]*):/gm)].map(m => m[1])).toEqual(['review']);
+    expect([...jobs.matchAll(/^ {4}([a-z][a-z-]*):/gm)].map(m => m[1])).toEqual([
+      'if',
+      'runs-on',
+      'timeout-minutes',
+      'env',
+      'steps',
+    ]);
+    // The job env, by value. `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` strips the Anthropic key and
+    // the runner's own Actions credentials out of every subprocess the agent's tools spawn and
+    // pins the permission mode to `default`; it is the second line of the no-shell posture, and
+    // deleting it turned nothing in this file red.
+    expect([...jobs.matchAll(/^ {6}([A-Z][A-Z0-9_]*):/gm)].map(m => m[1])).toEqual([
+      'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB',
+      'FOLD_MODE',
+    ]);
+    expect(jobs).toMatch(/^ {6}CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1'$/m);
   });
 
   it('denies Bash in every mode, and grants it in none', () => {
@@ -992,8 +1290,8 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
         ...ALWAYS_ON_EDIT_FENCES,
       ].sort()
     );
-    // Two of the three fences above are absolute literals for the hosted layout, so they are
-    // only as good as the runner staying that image. Pinned next to them so the pair has to
+    // Three of the four fences above are absolute literals for the hosted layout, so they are
+    // only as good as the runner staying that image. Pinned next to them so the two have to
     // move together: swapping the default label without revisiting the fences turns this red.
     expect(src).toContain(RUNS_ON);
     // Every OTHER parenthesised spec, by value, in BOTH arms. `toContain` on the three
@@ -1284,6 +1582,9 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // Someone ELSE's review on the PR is not this run's review...
     expect(runPostedCheck(src, { reviews: [{ login: 'someone-else' }] })).toBe('false');
     expect(runPostedCheck(src, { issue: [{ login: 'dependabot[bot]' }] })).toBe('false');
+    // All three endpoints, because each is a separate selector string: the inline one had no
+    // negative-login fixture, so a login filter dropped from it alone stayed green.
+    expect(runPostedCheck(src, { inline: [{ login: 'someone-else' }] })).toBe('false');
     // ...nor is the bot's own review from before this run started. This is the arm a widened
     // watermark disarms, and it passes for the wrong reason unless the compare actually runs.
     expect(runPostedCheck(src, { reviews: [{ at: '2025-12-31T23:59:59Z' }] })).toBe('false');
@@ -1473,6 +1774,52 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       'rev-parse',
       'show',
     ]);
+    // `commit`'s own argv, by value, because `show` and `commit` are both on that allowlist,
+    // both legitimate, and the pair still composes into a complete path-guard bypass:
+    // `git show HEAD:README.md > .github/workflows/ci.yml` writes into the WORKING TREE, which
+    // the guard never looks at because it reads the index, and `commit -a` then re-stages it
+    // after the guard has finished. `-a`, `--all`, `--include`, `--only` and a trailing
+    // pathspec all re-stage at commit time, so the flags and the operand COUNT are pinned
+    // rather than searched for. The end state is asserted behaviourally below as well.
+    const commits = gitCommands(src, /^commit$/).map(words => words.map(unquoteWord));
+    expect(commits).toHaveLength(1);
+    const commitArgv = commits[0].slice(commits[0].indexOf('commit') + 1);
+    expect(commitArgv.filter(word => word.startsWith('-'))).toEqual([
+      '--no-verify',
+      '--no-gpg-sign',
+      '-m',
+      '-m',
+      '-m',
+    ]);
+    // Three operands, which are the three `-m` values. A fourth would be a pathspec.
+    expect(commitArgv.filter(word => !word.startsWith('-'))).toHaveLength(3);
+    // `set` by value, everywhere in the file. `set +e` in this step turns a failed `git commit`
+    // into a fall-through to a push that says `Everything up-to-date` and exits 0 - the exact
+    // end state the `-e` comment above says it prevents - and it is a one-character edit to a
+    // line every assertion here was content merely to FIND.
+    expect(commandsNamed(src, /^set$/)).toEqual([
+      ['set', '-euo', 'pipefail'],
+      ['set', '-uo', 'pipefail'],
+      ['set', '-euo', 'pipefail'],
+      ['set', '-uo', 'pipefail'],
+    ]);
+    // Every program any `run:` body invokes, as a whole SET. See `invokedPrograms`: the sweeps
+    // in this file are each written in terms of the program they bound, so `sh -c 'git apply
+    // --cached ...'`, `xargs git apply --cached` and `trap 'exit 0' ERR` reach what they bound
+    // while naming none of it. A new entry here is a deliberate edit; `sh`, `bash`, `xargs`,
+    // `eval`, `trap`, `curl` and `python` are not entries.
+    expect(invokedPrograms(src)).toEqual(PROGRAMS);
+    // `gh` is treated as data-only by the sweeps above because every call in the file reads.
+    // It does not have to be: `GH_TOKEN="$PUSH_TOKEN" gh api --method PUT
+    // repos/$REPO/contents/<path>` commits a file through the API, routing around the staging
+    // sweep, the path guard, the size bound, the non-force and the refspec restriction at once.
+    // Read calls only, so the sweeps' treatment of it stays true.
+    const ghWrites = commandsNamed(src, /^gh$/)
+      .filter(words => words.some(word => /^(-X|--method|--input|-f|-F|--field|--raw-field)$/.test(word)))
+      .map(words => words.join(' '));
+    expect(ghWrites).toEqual([]);
+    // And no `gh` at all in the step that holds PUSH_TOKEN.
+    expect(commandsNamed(step(src, 'Push fold commit'), /^gh$/)).toEqual([]);
     // The step must fail rather than fall through: without `-e` a failed `git commit`
     // reaches `git push`, which says "Everything up-to-date" and exits 0, so the step
     // emits pushed=true under a green check with nothing on the branch.
@@ -1490,21 +1837,27 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // executes stops at the size bound, so nothing else in this file can see that.
     const KEYWORD_ONLY = /^(then|fi|else|elif|do|done|esac|in)$/;
     const sequence = shellCommands(runBodies(step(src, 'Push fold commit'))[0] ?? '')
-      .map(command => command.words.map(unquoteWord))
-      .filter(words => !(words.length === 1 && KEYWORD_ONLY.test(words[0])));
+      .map(command => ({ words: command.words.map(unquoteWord), sep: command.sep }))
+      .filter(entry => !(entry.words.length === 1 && KEYWORD_ONLY.test(entry.words[0])));
     // `emit() { ... }` parses as a bare `emit` with no argument, which is how the DEFINITION
     // is told from a call. Pinned by value, because the pairing below only means anything while
     // emit itself does not exit - the posted step's namesake does.
     expect(commands).toMatch(/^ {10}emit\(\) \{ echo "fold_push: \$1"; echo "pushed=\$1" >> "\$GITHUB_OUTPUT"; \}$/m);
-    const exits = sequence.flatMap((words, i) =>
-      words[0] === 'emit' && words.length === 2 ? [[words[1], (sequence[i + 1] ?? []).join(' ')]] : []
+    // The SEPARATOR on each side, not only the ordering. A pair's index adjacency says nothing
+    // about what the `exit` means: `emit false || exit 1` never reaches the exit (emit succeeds),
+    // and `( emit false; exit 1 )` exits only the subshell. Both are index-adjacent and both
+    // reach the end state the comment above names.
+    const exits = sequence.flatMap((entry, i) =>
+      entry.words[0] === 'emit' && entry.words.length === 2
+        ? [[entry.words[1], entry.sep, (sequence[i + 1]?.words ?? []).join(' '), sequence[i + 1]?.sep ?? '']]
+        : []
     );
     expect(exits).toEqual([
-      ['none', 'exit 0'],
-      ['blocked', 'exit 1'],
-      ['blocked', 'exit 1'],
-      ['true', 'exit 0'],
-      ['false', 'exit 1'],
+      ['none', '\n', 'exit 0', '\n'],
+      ['blocked', '\n', 'exit 1', '\n'],
+      ['blocked', '\n', 'exit 1', '\n'],
+      ['true', '\n', 'exit 0', '\n'],
+      ['false', '\n', 'exit 1', '\n'],
     ]);
   });
 
@@ -1696,6 +2049,47 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     const deletion = runStagedGuards(src, [{ path: 'apps/client/app/b.ts', lines: 801, deleted: true }]);
     expect(deletion.status, deletion.out).toBe(1);
     expect(deletion.out).toContain('past the 800-line bound');
+  });
+
+  it('puts on the remote exactly what the guards allowed, and nothing otherwise', () => {
+    // END STATE, not spelling. Everything else about this step is either a pattern over its
+    // text or an execution of the two bounds in the middle of it, which left the relation
+    // between what it REPORTS and what it DOES unasserted - see `runPushStep` for the five
+    // one-line edits and the one allowlisted-subcommand pair that live in exactly that gap.
+    const edited = runPushStep(src, { edits: [{ path: 'src/a.ts', lines: 4 }], untracked: ['src/dropped.ts'] });
+    expect(edited.status, edited.out).toBe(0);
+    expect(edited.pushed).toEqual(['true']);
+    expect(edited.remoteLog[0]).toBe('chore(bot-fold): apply review findings from the automated review');
+    // The COMMIT's contents, not the index the guard read. This is the assertion a
+    // working-tree write plus `commit -a` fails, and the one that makes `git add -u`'s
+    // tracked-files-only bound behavioural: the dropped untracked file is not here.
+    expect(edited.remoteChanged).toEqual(['src/a.ts']);
+
+    const ciConfig = runPushStep(src, { edits: [{ path: '.github/workflows/ci.yml', lines: 4 }] });
+    expect(ciConfig.status).toBe(1);
+    expect(ciConfig.pushed).toEqual(['blocked']);
+    expect(ciConfig.remoteLog).toEqual(['base']);
+
+    const untouched = runPushStep(src, {});
+    expect(untouched.status, untouched.out).toBe(0);
+    expect(untouched.pushed).toEqual(['none']);
+    expect(untouched.remoteLog).toEqual(['base']);
+
+    const oversized = runPushStep(src, { edits: [{ path: 'src/a.ts', lines: 900 }] });
+    expect(oversized.status).toBe(1);
+    expect(oversized.pushed).toEqual(['blocked']);
+    expect(oversized.remoteLog).toEqual(['base']);
+
+    // The fail-closed contract as an OUTCOME. A failed push must leave a non-zero status, one
+    // report of `false`, and a reason the failure reporter can print.
+    const raced = runPushStep(src, { diverge: true, edits: [{ path: 'src/a.ts', lines: 4 }] });
+    expect(raced.status).toBe(1);
+    // EXACTLY one report. Moving the success `exit 0` into an `else`, or wrapping the body in a
+    // subshell where `exit 0` leaves only the subshell, both let the classifier run as well and
+    // show up here as two values rather than as a wrong one.
+    expect(raced.pushed).toEqual(['false']);
+    expect(raced.reason).toContain('the branch moved while the review ran');
+    expect(raced.remoteLog).toEqual(['the author pushed while the review ran', 'base']);
   });
 
   it('pushes non-force to the PR head ref, with a token the checkout never held', () => {

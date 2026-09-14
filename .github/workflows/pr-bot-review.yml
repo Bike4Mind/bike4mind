@@ -387,8 +387,9 @@ jobs:
               extensionless repo-root file, any repo-root dotfile, and any binary
               file. Findings in those files belong in the review body for a human
               to apply; do not edit them,
-              or you lose the whole fixup. `.github/`, `.git/`, `.claude/` and
-              `.mcp.json` are denied to your write tools outright, so an edit there
+              or you lose the whole fixup. `.github/`, `.git/`, `.claude/`,
+              `.mcp.json`, `.gitattributes` and `.gitignore` (at any depth for the
+              last two) are denied to your write tools outright, so an edit there
               fails on the spot rather than costing you the fold.
             - When FOLD_MODE is 'true', never submit the review as APPROVE.
               The fold commit is pushed right after your review lands, and this
@@ -479,6 +480,12 @@ jobs:
             # server is the execution and the allow list never gets a say. The CLI's own
             # sensitive-file list refuses both writes today; that list is exactly the
             # thing a rename can move, so the fence is stated here rather than assumed.
+            # Read the bound precisely: what it stops is the AGENT WRITING either file. It
+            # says nothing about a PR head that already SHIPS one - the checkout above is
+            # `head.sha`, and the CLI loads a project-root `.mcp.json` at startup, before any
+            # permission rule is consulted. What covers that case is the job's fork gate:
+            # `head.repo.full_name == github.repository` means the branch is in this repo, so
+            # anyone who could ship such a file could edit this workflow directly.
             # NOT fenced, and stated rather than left to be discovered: `$HOME`, and the
             # process CWD, which on a hosted runner is the checkout. A blanket deny is
             # not available for either - the checkout itself lives under `$HOME`
