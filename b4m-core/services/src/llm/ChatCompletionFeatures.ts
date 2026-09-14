@@ -2440,6 +2440,18 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // Authoritative post-filter: the DB clause above is a best-effort pre-filter; re-apply the
       // exclusion in memory so correctness never depends on the DB regex engine or fileNameLower.
       const files = filterRetrievalExcluded(fileResults.data, this.retrievalFilter);
+      // [TEMP-PROBE] remove before merge
+      this.logger.log('[TEMP-PROBE] Forced retrieval: candidate set', {
+        totalCandidates: files.length,
+        files: files.slice(0, 20).map(f => {
+          const tagNames = f.tags?.map(t => t.name) ?? [];
+          return {
+            id: f.id,
+            hasMetaTag: tagNames.some(name => name.startsWith(DATALAKE_TAG_PREFIX)),
+            hasNonMetaTag: tagNames.some(name => !name.startsWith(DATALAKE_TAG_PREFIX)),
+          };
+        }),
+      });
       if (files.length === 0) {
         // No readable documents is an access/config state, not evidence about the topic.
         // 'no_lakes' is the abstain bucket for "nothing was in scope to search". The stamped tags
@@ -2492,7 +2504,18 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         fallbackModel
       );
       const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
-      const queryVector = await embeddingService.generateEmbedding(query);
+      // [TEMP-PROBE] remove before merge
+      this.logger.log(`[TEMP-PROBE] Forced retrieval: resolved embedding model ${embeddingModel}`);
+      let queryVector: number[];
+      try {
+        queryVector = await embeddingService.generateEmbedding(query);
+      } catch (err) {
+        this.logger.log(
+          `[TEMP-PROBE] Forced retrieval: generateEmbedding threw: ${err instanceof Error ? err.message : String(err)}`
+        );
+        throw err;
+      }
+      this.logger.log(`[TEMP-PROBE] Forced retrieval: embedding vector length=${queryVector.length}`);
 
       // Withhold foreign-model files before any chunk is loaded, mirroring the shared ranking
       // core: their vectors never enter memory and never spend the per-turn chunk budget below,
@@ -2849,6 +2872,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // trimmers summed - and `chunks` sums across surfaces while this pair is forced-only.
         preRelativeFloorCandidates: ranked.length,
         postRelativeFloorCandidates: scored.length,
+      });
+      // [TEMP-PROBE] remove before merge
+      this.logger.log('[TEMP-PROBE] Forced retrieval: injection provenance', {
+        injectedFileIds: sourceFileIds.slice(0, 20),
+        chunks: sections.length,
+        chars: used,
       });
 
       // Emit citation chips for the distinct source files so the UI shows "Sources (N)".
