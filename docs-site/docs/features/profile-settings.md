@@ -307,14 +307,14 @@ Each row shows a status of **Active**, **Expired**, or **Revoked**.
 
 ### Revoked Keys
 
-Revoked keys are hidden from the table by default, so it lists only the keys you can still use. A **Show revoked (N)** checkbox appears beside **Refresh** whenever you have at least one revoked key, with N being how many are revoked; tick it to bring those rows back so you can review or delete them.
+Revoked keys are hidden from the table by default, so it lists only the keys you can still use. A **Show revoked (N)** checkbox appears beside the refresh button whenever you have at least one revoked key, with N being how many are revoked; tick it to bring those rows back so you can review or delete them.
 
 With the toggle off and every key revoked, the table says so and points you at the checkbox, rather than showing the "no API keys yet" empty state.
 
 :::note Revoke before you delete
-Deleting is list housekeeping, not a security step - revoking is what stops the credential working. Delete therefore accepts only a key that is already revoked: the button stays disabled until then, and the server refuses the request with a 409 Conflict if the two are done out of order.
+Deleting is list housekeeping, not a security step - revoking is what stops the credential working. Delete therefore accepts only a key that is already revoked: the button stays disabled until then, and the server refuses the request with a 409 Conflict if the two are done out of order. Once it is enabled its tooltip reads **Delete permanently**; what that removes is the row from your list, the credential itself having already been stopped by the revoke.
 
-Status is not read from the clock, so a key shown as **Expired** has not been revoked, and still has to be revoked before you can delete it.
+Expiry is not revocation. **Expired** is worked out from the key's expiry date, while **Revoked** is a separate stored flag - so a key shown as **Expired** has still not been revoked, and has to be revoked before you can delete it.
 :::
 
 Deleting a key keeps the usage it recorded while active, but those rows lose the key's name.
