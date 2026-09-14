@@ -35,6 +35,7 @@ import {
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import { clearClientCaches } from '@client/app/utils/clearClientCaches';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { useAccessToken } from '../useAccessToken';
 
 export const useGetIdentify = () => {
@@ -194,7 +195,7 @@ export function useUserRevokeSharing(
       if (type === InviteType.Session) {
         updateAllQueryData(queryClient, 'sessions', 'write', document as ISessionDocument);
       } else if (type === InviteType.FabFile) {
-        queryClient.setQueryData(['fabFiles', id], document);
+        queryClient.setQueryData(fabFileKeys.doc(id), document);
       } else if (type === InviteType.Project) {
         queryClient.setQueryData(['projects', id], document);
         queryClient.invalidateQueries({
