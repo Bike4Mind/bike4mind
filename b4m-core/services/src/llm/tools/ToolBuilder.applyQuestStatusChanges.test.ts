@@ -14,34 +14,34 @@ describe('applyQuestStatusChanges', () => {
       // sending only its own image through statusUpdate. Wholesale overwrite
       // collapsed this to "Image 1 of 1"; merge-append must keep all four.
       const quest = makeQuest();
-      applyQuestStatusChanges(quest, { images: ['a.jpg'] });
-      applyQuestStatusChanges(quest, { images: ['b.jpg'] });
-      applyQuestStatusChanges(quest, { images: ['c.jpg'] });
-      applyQuestStatusChanges(quest, { images: ['d.jpg'] });
+      applyQuestStatusChanges(quest, { images: ['a.jpg'] }, 'user-1');
+      applyQuestStatusChanges(quest, { images: ['b.jpg'] }, 'user-1');
+      applyQuestStatusChanges(quest, { images: ['c.jpg'] }, 'user-1');
+      applyQuestStatusChanges(quest, { images: ['d.jpg'] }, 'user-1');
       expect(quest.images).toEqual(['a.jpg', 'b.jpg', 'c.jpg', 'd.jpg']);
     });
 
     it('appends a multi-image batch from a single call', () => {
       const quest = makeQuest({ images: ['a.jpg'] });
-      applyQuestStatusChanges(quest, { images: ['b.jpg', 'c.jpg'] });
+      applyQuestStatusChanges(quest, { images: ['b.jpg', 'c.jpg'] }, 'user-1');
       expect(quest.images).toEqual(['a.jpg', 'b.jpg', 'c.jpg']);
     });
 
     it('dedupes already-present paths (idempotent with onToolFinish append)', () => {
       const quest = makeQuest({ images: ['a.jpg'] });
-      applyQuestStatusChanges(quest, { images: ['a.jpg'] });
+      applyQuestStatusChanges(quest, { images: ['a.jpg'] }, 'user-1');
       expect(quest.images).toEqual(['a.jpg']);
     });
 
     it('initializes images when the quest has none', () => {
       const quest = makeQuest();
-      applyQuestStatusChanges(quest, { images: ['a.jpg'] });
+      applyQuestStatusChanges(quest, { images: ['a.jpg'] }, 'user-1');
       expect(quest.images).toEqual(['a.jpg']);
     });
 
     it('leaves images untouched when the change set has none', () => {
       const quest = makeQuest({ images: ['a.jpg'] });
-      applyQuestStatusChanges(quest, { reply: 'hi' } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, { reply: 'hi' } as Partial<IChatHistoryItemDocument>, 'user-1');
       expect(quest.images).toEqual(['a.jpg']);
     });
   });
@@ -51,23 +51,58 @@ describe('applyQuestStatusChanges', () => {
       const quest = makeQuest({
         promptMeta: { citables: [{ id: '1', url: 'u1', title: 't1' }] },
       } as Partial<IChatHistoryItemDocument>);
-      applyQuestStatusChanges(quest, {
-        promptMeta: {
-          citables: [
-            { id: '1', url: 'u1', title: 't1' },
-            { id: '2', url: 'u2', title: 't2' },
-          ],
-        },
-      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(
+        quest,
+        {
+          promptMeta: {
+            citables: [
+              { id: '1', url: 'u1', title: 't1' },
+              { id: '2', url: 'u2', title: 't2' },
+            ],
+          },
+        } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
       expect(quest.promptMeta?.citables?.map(c => c.id)).toEqual(['1', '2']);
     });
 
     it('sets promptMeta when the quest had none', () => {
       const quest = makeQuest();
-      applyQuestStatusChanges(quest, {
-        promptMeta: { citables: [{ id: '1', url: 'u1', title: 't1' }] },
-      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(
+        quest,
+        {
+          promptMeta: { citables: [{ id: '1', url: 'u1', title: 't1' }] },
+        } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
       expect(quest.promptMeta?.citables?.map(c => c.id)).toEqual(['1']);
+    });
+  });
+
+  describe('promptMeta.session (bike4mind#2004)', () => {
+    it('seeds session on the no-existing-meta branch instead of leaving it absent', () => {
+      // This is the exact shape the issue reports on disk: promptMeta materialized with no
+      // session block, which passes silently through update() (no validators) but fails
+      // ValidationError the moment the quest is copied via create() (fork/snip/clone).
+      const quest = makeQuest();
+      applyQuestStatusChanges(quest, { promptMeta: { warnings: ['partial'] } }, 'user-1');
+      expect(quest.promptMeta?.session).toEqual({ id: 's1', userId: 'user-1' });
+    });
+
+    it('seeds session on the merge branch when the existing promptMeta predates the fix', () => {
+      // A legacy row can have promptMeta (with other fields) but still no session - the merge
+      // branch below only guards on `quest.promptMeta` being truthy, so it can hit this shape too.
+      const quest = makeQuest({ promptMeta: { warnings: ['keep me'] } } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, { promptMeta: { citables: [{ id: '1', url: 'u1', title: 't1' }] } }, 'user-1');
+      expect(quest.promptMeta?.session).toEqual({ id: 's1', userId: 'user-1' });
+    });
+
+    it('re-asserts session even when the existing promptMeta already had one', () => {
+      const quest = makeQuest({
+        promptMeta: { session: { id: 's1', userId: 'user-1' } },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, { promptMeta: { warnings: ['more'] } }, 'user-1');
+      expect(quest.promptMeta?.session).toEqual({ id: 's1', userId: 'user-1' });
     });
   });
 
@@ -78,9 +113,13 @@ describe('applyQuestStatusChanges', () => {
       const quest = makeQuest({
         promptMeta: { warnings: ['Response was truncated against the output-token limit.'] },
       } as Partial<IChatHistoryItemDocument>);
-      applyQuestStatusChanges(quest, {
-        promptMeta: { warnings: ['Partial knowledge-base results: 1 file(s) were excluded.'] },
-      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(
+        quest,
+        {
+          promptMeta: { warnings: ['Partial knowledge-base results: 1 file(s) were excluded.'] },
+        } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
       expect(quest.promptMeta?.warnings).toEqual([
         'Response was truncated against the output-token limit.',
         'Partial knowledge-base results: 1 file(s) were excluded.',
@@ -89,7 +128,11 @@ describe('applyQuestStatusChanges', () => {
 
     it('dedupes an identical warning reported twice', () => {
       const quest = makeQuest({ promptMeta: { warnings: ['same'] } } as Partial<IChatHistoryItemDocument>);
-      applyQuestStatusChanges(quest, { promptMeta: { warnings: ['same'] } } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(
+        quest,
+        { promptMeta: { warnings: ['same'] } } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
       expect(quest.promptMeta?.warnings).toEqual(['same']);
     });
 
@@ -97,15 +140,19 @@ describe('applyQuestStatusChanges', () => {
       // Already held before the merge was added (spreading an object without the key cannot
       // delete it); locked here so the new merge does not regress it.
       const quest = makeQuest({ promptMeta: { warnings: ['keep me'] } } as Partial<IChatHistoryItemDocument>);
-      applyQuestStatusChanges(quest, {
-        promptMeta: { citables: [{ id: '1', url: 'u1', title: 't1' }] },
-      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(
+        quest,
+        {
+          promptMeta: { citables: [{ id: '1', url: 'u1', title: 't1' }] },
+        } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
       expect(quest.promptMeta?.warnings).toEqual(['keep me']);
     });
 
     it('adds no warnings key when neither side has one', () => {
       const quest = makeQuest({ promptMeta: { citables: [] } } as Partial<IChatHistoryItemDocument>);
-      applyQuestStatusChanges(quest, { promptMeta: { citables: [] } } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, { promptMeta: { citables: [] } } as Partial<IChatHistoryItemDocument>, 'user-1');
       expect(quest.promptMeta && 'warnings' in quest.promptMeta).toBe(false);
     });
   });
@@ -117,11 +164,15 @@ describe('applyQuestStatusChanges', () => {
           retrieval: { attempted: true, outcome: 'ok', surfaces: ['lake-memory'], dataLakeTags: ['lake-a'] },
         },
       } as Partial<IChatHistoryItemDocument>);
-      applyQuestStatusChanges(quest, {
-        promptMeta: {
-          retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-b'] },
-        },
-      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(
+        quest,
+        {
+          promptMeta: {
+            retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-b'] },
+          },
+        } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
       expect(quest.promptMeta?.retrieval).toEqual({
         attempted: true,
         outcome: 'ok',
@@ -136,11 +187,15 @@ describe('applyQuestStatusChanges', () => {
           retrieval: { attempted: true, outcome: 'failed', surfaces: ['lake-memory'], dataLakeTags: [] },
         },
       } as Partial<IChatHistoryItemDocument>);
-      applyQuestStatusChanges(quest, {
-        promptMeta: {
-          retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-a'] },
-        },
-      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(
+        quest,
+        {
+          promptMeta: {
+            retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-a'] },
+          },
+        } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
       expect(quest.promptMeta?.retrieval?.outcome).toBe('failed');
     });
 
@@ -153,11 +208,15 @@ describe('applyQuestStatusChanges', () => {
           retrieval: { attempted: true, outcome: 'no_lakes', surfaces: ['lake-memory'], dataLakeTags: [] },
         },
       } as Partial<IChatHistoryItemDocument>);
-      applyQuestStatusChanges(quest, {
-        promptMeta: {
-          retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-a'] },
-        },
-      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(
+        quest,
+        {
+          promptMeta: {
+            retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-a'] },
+          },
+        } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
       expect(quest.promptMeta?.retrieval?.outcome).toBe('ok');
     });
 
@@ -167,11 +226,15 @@ describe('applyQuestStatusChanges', () => {
           retrieval: { attempted: true, outcome: 'no_lakes', surfaces: ['lake-memory'], dataLakeTags: [] },
         },
       } as Partial<IChatHistoryItemDocument>);
-      applyQuestStatusChanges(quest, {
-        promptMeta: {
-          retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
-        },
-      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(
+        quest,
+        {
+          promptMeta: {
+            retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+          },
+        } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
       expect(quest.promptMeta?.retrieval?.outcome).toBe('failed');
     });
 
@@ -188,11 +251,15 @@ describe('applyQuestStatusChanges', () => {
           retrieval: { attempted: true, outcome: 'not_indexed', surfaces: ['forced-retrieval'], dataLakeTags: [] },
         },
       } as Partial<IChatHistoryItemDocument>);
-      applyQuestStatusChanges(forcedFirst, {
-        promptMeta: {
-          retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-a'] },
-        },
-      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(
+        forcedFirst,
+        {
+          promptMeta: {
+            retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-a'] },
+          },
+        } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
       expect(forcedFirst.promptMeta?.retrieval?.outcome).toBe('not_indexed');
 
       const searchFirst = makeQuest({
@@ -200,11 +267,15 @@ describe('applyQuestStatusChanges', () => {
           retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['lake-a'] },
         },
       } as Partial<IChatHistoryItemDocument>);
-      applyQuestStatusChanges(searchFirst, {
-        promptMeta: {
-          retrieval: { attempted: true, outcome: 'not_indexed', surfaces: ['forced-retrieval'], dataLakeTags: [] },
-        },
-      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(
+        searchFirst,
+        {
+          promptMeta: {
+            retrieval: { attempted: true, outcome: 'not_indexed', surfaces: ['forced-retrieval'], dataLakeTags: [] },
+          },
+        } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
       expect(searchFirst.promptMeta?.retrieval?.outcome).toBe('not_indexed');
     });
 
@@ -216,11 +287,15 @@ describe('applyQuestStatusChanges', () => {
           retrieval: { attempted: true, outcome: 'not_indexed', surfaces: ['forced-retrieval'], dataLakeTags: [] },
         },
       } as Partial<IChatHistoryItemDocument>);
-      applyQuestStatusChanges(quest, {
-        promptMeta: {
-          retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
-        },
-      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(
+        quest,
+        {
+          promptMeta: {
+            retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseSearch'], dataLakeTags: [] },
+          },
+        } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
       expect(quest.promptMeta?.retrieval?.outcome).toBe('failed');
     });
 
@@ -240,16 +315,20 @@ describe('applyQuestStatusChanges', () => {
           },
         },
       } as Partial<IChatHistoryItemDocument>);
-      applyQuestStatusChanges(quest, {
-        promptMeta: {
-          retrieval: {
-            attempted: true,
-            outcome: 'ok',
-            surfaces: ['knowledgeBaseSearch', 'knowledgeBaseRetrieve'],
-            dataLakeTags: ['lake-a', 'lake-b'],
+      applyQuestStatusChanges(
+        quest,
+        {
+          promptMeta: {
+            retrieval: {
+              attempted: true,
+              outcome: 'ok',
+              surfaces: ['knowledgeBaseSearch', 'knowledgeBaseRetrieve'],
+              dataLakeTags: ['lake-a', 'lake-b'],
+            },
           },
-        },
-      } as Partial<IChatHistoryItemDocument>);
+        } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
       expect(quest.promptMeta?.retrieval?.surfaces).toEqual([
         'knowledgeBaseSearch',
         'lake-memory',
@@ -264,9 +343,13 @@ describe('applyQuestStatusChanges', () => {
           retrieval: { attempted: true, outcome: 'ok', surfaces: ['lake-memory'], dataLakeTags: ['lake-a'] },
         },
       } as Partial<IChatHistoryItemDocument>);
-      applyQuestStatusChanges(quest, {
-        promptMeta: { citables: [{ id: '1', url: 'u1', title: 't1' }] },
-      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(
+        quest,
+        {
+          promptMeta: { citables: [{ id: '1', url: 'u1', title: 't1' }] },
+        } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
       expect(quest.promptMeta?.retrieval).toEqual({
         attempted: true,
         outcome: 'ok',
@@ -279,17 +362,21 @@ describe('applyQuestStatusChanges', () => {
   describe('other fields', () => {
     it('overwrites non-accreting fields wholesale', () => {
       const quest = makeQuest({ status: 'running' } as Partial<IChatHistoryItemDocument>);
-      applyQuestStatusChanges(quest, { status: 'done', reply: 'final' } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, { status: 'done', reply: 'final' } as Partial<IChatHistoryItemDocument>, 'user-1');
       expect(quest.status).toBe('done');
       expect(quest.reply).toBe('final');
     });
 
     it('applies images and other fields together in one call', () => {
       const quest = makeQuest({ images: ['a.jpg'] });
-      applyQuestStatusChanges(quest, {
-        images: ['b.jpg'],
-        status: 'done',
-      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(
+        quest,
+        {
+          images: ['b.jpg'],
+          status: 'done',
+        } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
       expect(quest.images).toEqual(['a.jpg', 'b.jpg']);
       expect(quest.status).toBe('done');
     });

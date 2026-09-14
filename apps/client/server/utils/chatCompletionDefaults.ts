@@ -28,6 +28,7 @@ import {
   skillRepository,
   usageEventRepository,
   userRepository,
+  dataLakeAccessGrantRepository,
   dataLakeRepository,
   fallbackLakeSettingsRepository,
 } from '@bike4mind/database';
@@ -137,6 +138,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       fabfiles: fabFileRepository,
       fabfilechunks: fabFileChunkRepository,
       dataLakes: dataLakeRepository,
+      dataLakeAccessGrants: dataLakeAccessGrantRepository,
       fallbackLakeSettings: fallbackLakeSettingsRepository,
       mementos: mementoRepository,
       projects: projectRepository,

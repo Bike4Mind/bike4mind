@@ -2,6 +2,12 @@
   "$schema": "https://turbo.build/schema.json",
   "globalEnv": ["CI"],
   "globalPassThroughEnv": ["NODE_OPTIONS"],
+  // dataLakeSearchMetrics.test.ts reads infra/dataLakeSearchDashboard.ts to pin the metric names
+  // the dashboard graphs, because infra/ cannot import the constants. That file sits outside every
+  // package, so without it here a dashboard-only edit is a cache hit for the very test meant to
+  // catch it. Global rather than a task input: package-relative escapes resolve differently for
+  // the depth-3 overlay packages, and this file changes rarely enough that the blunt key is cheap.
+  "globalDependencies": ["infra/dataLakeSearchDashboard.ts"],
   "tasks": {
     "codegen": {
       // Not cacheable: output depends on node_modules link state (which overlay

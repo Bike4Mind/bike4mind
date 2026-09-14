@@ -10,7 +10,7 @@ vi.mock('../settings/resolveScopedSetting', async orig => ({
   resolveScopedSetting,
 }));
 
-import { computeLakeHealth } from './computeLakeHealth';
+import { computeLakeHealth, computeLakeMemoryHealth } from './computeLakeHealth';
 
 // Mirrors IFabFileRepository.findDataLakeHealthMembers' row shape EXACTLY (incl. vectorizedChunkCount,
 // error, fileSize, serverTextHash) - if this drifts from the interface, the in-flight/errored gate or
@@ -63,11 +63,34 @@ const lake = {
   requiredPassageTokenTarget: undefined as number | null | undefined,
 };
 
-const makeAdapters = (members: Member[]) => ({
+type MembershipRow = {
+  fabFileId: string;
+  fileName?: string;
+  serverTextHash: string | null;
+  fileSize: number | null;
+  createdAt: Date | null;
+  userId: string | null;
+  arm: 'meta-tag' | 'prefix';
+};
+
+const makeAdapters = (members: Member[], membershipRows: MembershipRow[] = []) => ({
   db: {
-    fabFiles: { findDataLakeHealthMembers: vi.fn(async () => members) },
-    adminSettings: { findBySettingNames: vi.fn(), findAll: vi.fn() },
+    fabFiles: {
+      findDataLakeHealthMembers: vi.fn(async () => members),
+      // A SEPARATE read from the health one, and the tests keep them separate too: the two admit
+      // different populations on purpose (health drops chunkless members, membership keeps them),
+      // so reusing one fixture for both would hide exactly that difference.
+      findDataLakeMembershipMembers: vi.fn(async () => membershipRows),
+    },
+    adminSettings: {
+      findBySettingNames: vi.fn(),
+      findAll: vi.fn(),
+      getSettingsValue: vi.fn(async () => false),
+    },
     scopedSettings: { findOverrides: vi.fn() },
+    memoryLedger: {
+      aggregateLakeMemoryCoverage: vi.fn(async () => ({ lastBuiltAt: null, factCount: 0, sourceDocumentCount: 0 })),
+    },
   },
   logger: { warn: vi.fn() },
 });
@@ -250,5 +273,491 @@ describe('computeLakeHealth', () => {
     const big = health.duplicateMembers.groups.find(g => g.fileName === 'big.txt');
     expect(big?.memberCount).toBe(25);
     expect(big?.members).toHaveLength(20);
+  });
+});
+
+describe('computeLakeHealth membership dimension (#2245)', () => {
+  const row = (over: Partial<MembershipRow> = {}): MembershipRow => ({
+    fabFileId: 'f1',
+    fileName: 'report.pdf',
+    serverTextHash: null,
+    fileSize: 100,
+    createdAt: new Date('2026-01-01T00:00:00Z'),
+    userId: 'u1',
+    arm: 'meta-tag',
+    ...over,
+  });
+
+  it('reads membership from its OWN query, not from the health rows', async () => {
+    // The two populations differ deliberately - health excludes chunkless members, membership keeps
+    // them - so a "reuse the rows we already have" refactor is the regression this pins.
+    const adapters = makeAdapters([], [row(), row({ fabFileId: 'f2' })]);
+
+    const result = await computeLakeHealth(lake, adapters as never);
+
+    expect(adapters.db.fabFiles.findDataLakeMembershipMembers).toHaveBeenCalledTimes(1);
+    expect(result.membership.totalMembers).toBe(2);
+    expect(result.membership.duplicateNameCount).toBe(1);
+  });
+
+  it('scopes the membership read to the same lake scope health uses', async () => {
+    const adapters = makeAdapters([], []);
+
+    await computeLakeHealth(lake, adapters as never);
+
+    expect(adapters.db.fabFiles.findDataLakeMembershipMembers).toHaveBeenCalledWith(
+      expect.objectContaining({ datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:', creatorUserId: 'u1' }),
+      expect.any(Number)
+    );
+  });
+
+  it('discloses the principal every membership number was computed as', async () => {
+    // #2243's lesson: a membership count with no principal attached is the defect, not a
+    // presentation gap - "Reachable 100%" was true as the creator and said so nowhere.
+    const result = await computeLakeHealth(lake, makeAdapters([], [row()]) as never);
+
+    expect(result.membership.scope).toEqual({ creatorUserId: 'u1', fileTagPrefix: 'acme:' });
+  });
+
+  it('returns a well-formed membership section on the null-datalakeTag guard', async () => {
+    // That guard returns early WITHOUT querying; a consumer must still get a real section rather
+    // than undefined, or every reader needs its own optional-chaining.
+    const adapters = makeAdapters([], [row()]);
+
+    const result = await computeLakeHealth({ ...lake, datalakeTag: '' } as never, adapters as never);
+
+    expect(adapters.db.fabFiles.findDataLakeMembershipMembers).not.toHaveBeenCalled();
+    expect(result.membership.totalMembers).toBe(0);
+    expect(result.membership.duplicateGroups).toEqual([]);
+    expect(result.membership.scope).toEqual({ creatorUserId: 'u1', fileTagPrefix: 'acme:' });
+  });
+
+  it('scopes a REGISTRY lake as registry, and discloses the arm that actually ran', async () => {
+    // The defect this pins: a hardcoded DATA_LAKES lake has no backing document, so its synthetic
+    // one carries createdByUserId ''. An `owned` scope therefore fails closed to meta-tag-only in
+    // buildDataLakeMembershipFilter - dropping the prefix arm, which on a registry lake is the OPEN
+    // one those lakes are largely made of - while a disclosure read off the lake document still
+    // named `opti:`. The report then read as "there is a prefix arm and nothing came through it".
+    const registryLake = {
+      ...lake,
+      id: 'opti-knowledge',
+      datalakeTag: 'datalake:opti-knowledge',
+      fileTagPrefix: 'opti:',
+      createdByUserId: '',
+    };
+    const adapters = makeAdapters([], [row({ arm: 'prefix' })]);
+
+    const result = await computeLakeHealth(registryLake, adapters as never);
+
+    for (const read of [
+      adapters.db.fabFiles.findDataLakeMembershipMembers,
+      adapters.db.fabFiles.findDataLakeHealthMembers,
+    ]) {
+      expect(read).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'registry', datalakeTag: 'datalake:opti-knowledge', fileTagPrefix: 'opti:' }),
+        expect.any(Number)
+      );
+    }
+    // '' is neither documented state for creatorUserId; a registry lake has no creator to anchor to.
+    expect(result.membership.scope).toEqual({ creatorUserId: null, fileTagPrefix: 'opti:' });
+  });
+
+  it('discloses no prefix arm when the membership filter would drop the one the lake carries', async () => {
+    // A reserved-namespace prefix is dropped by buildDataLakeMembershipFilter because it would match
+    // every OTHER lake's membership tag. Deriving the disclosure from the lake document would claim
+    // an arm that never ran - the same class of lie as the registry case, reached a different way.
+    const reservedPrefixLake = { ...lake, fileTagPrefix: 'datalake:' };
+
+    const result = await computeLakeHealth(reservedPrefixLake, makeAdapters([], [row()]) as never);
+
+    expect(result.membership.scope).toEqual({ creatorUserId: 'u1', fileTagPrefix: null });
+  });
+
+  it('runs the health and membership reads concurrently', async () => {
+    // Independent reads over one scope; sequencing them doubled the wall clock on a lake near the
+    // scan bound. Pinned by observing that the second read starts before the first resolves.
+    let healthStarted = false;
+    let membershipStartedBeforeHealthResolved = false;
+    const adapters = makeAdapters([], []);
+    adapters.db.fabFiles.findDataLakeHealthMembers = vi.fn(async () => {
+      healthStarted = true;
+      await new Promise(resolve => setTimeout(resolve, 5));
+      return [];
+    });
+    adapters.db.fabFiles.findDataLakeMembershipMembers = vi.fn(async () => {
+      membershipStartedBeforeHealthResolved = healthStarted;
+      return [];
+    });
+
+    await computeLakeHealth(lake, adapters as never);
+
+    expect(membershipStartedBeforeHealthResolved).toBe(true);
+  });
+
+  it('strips the per-member fingerprint and owner from the response', async () => {
+    // This handler's read gate admits `public`, and serverTextHash is a stable global content
+    // identifier - a confirmation oracle over any document a reader already holds, and a way to
+    // correlate one document across lakes under different names. Both fields exist for the repair
+    // arm, which reads the report in-process; neither has ever had a client reader.
+    const result = await computeLakeHealth(
+      lake,
+      makeAdapters([], [row({ serverTextHash: 'aaa' }), row({ fabFileId: 'f2', serverTextHash: 'aaa' })]) as never
+    );
+
+    const [member] = result.membership.duplicateGroups[0].members;
+    expect(member).not.toHaveProperty('serverTextHash');
+    expect(member).not.toHaveProperty('userId');
+    // The derived verdict survives, which is the part a client needs from the hash comparison.
+    expect(result.membership.duplicateGroups[0].bucket).toBe('proven-identical');
+  });
+
+  it('caps a duplicate group members array but keeps an exact memberCount', async () => {
+    // maxGroups bounds the group LIST; without a per-group cap one shared file name could ship up to
+    // MEMBER_SCAN_LIMIT member objects. The sibling drill-down (affectedMembers) already caps at 200
+    // with an exact count beside it, and this must not imply fewer members than there are.
+    const rows = Array.from({ length: 250 }, (_, i) =>
+      row({ fabFileId: `f${i}`, createdAt: new Date(2026, 0, 1, 0, 0, i) })
+    );
+
+    const result = await computeLakeHealth(lake, makeAdapters([], rows) as never);
+
+    const group = result.membership.duplicateGroups[0];
+    expect(group.members).toHaveLength(200);
+    expect(group.memberCount).toBe(250);
+    expect(result.membership.duplicateMemberCount).toBe(250);
+  });
+
+  it('flags membership.scanTruncated and logs which end was cut when the scan is bounded', async () => {
+    // The membership truncation path had no coverage: the existing truncation test passes HEALTH
+    // members while membershipRows defaults to [], so membership.scanTruncated was false everywhere.
+    const rows = Array.from({ length: 25_001 }, (_, i) => row({ fabFileId: `f${i}`, fileName: `f${i}.pdf` }));
+    const adapters = makeAdapters([], rows);
+
+    const result = await computeLakeHealth(lake, adapters as never);
+
+    expect(result.membership.scanTruncated).toBe(true);
+    expect(result.membership.totalMembers).toBe(25_000);
+    // The bias is directional and adverse, so the warning has to say so - the members outside an
+    // _id-ascending window are the newest, which is the generation a re-upload creates.
+    expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('OLDEST'));
+  });
+
+  it('never auto-collapses two chunkless members carrying null hashes', async () => {
+    // End-to-end guard on the trap: two images share serverTextHash null, and they are also exactly
+    // the members health drops. If membership ever reused the health rows OR compared nulls, this
+    // pair would be reported as safe to collapse.
+    const result = await computeLakeHealth(
+      lake,
+      makeAdapters(
+        [],
+        [row({ fabFileId: 'a', serverTextHash: null }), row({ fabFileId: 'b', serverTextHash: null })]
+      ) as never
+    );
+
+    expect(result.membership.duplicateGroups[0].bucket).toBe('unverified');
+    expect(result.membership.bucketCounts['proven-identical']).toBe(0);
+  });
+});
+
+describe('computeLakeHealth inconsistency surface (#2242)', () => {
+  const storedReport = {
+    findings: [
+      {
+        kind: 'relationship-conflict',
+        // Lifted verbatim from a member document - an organization name, not a system value.
+        subject: 'northwind logistics',
+        evidence: [
+          { fabFileId: 'f1', fileName: 'deck.pdf', excerpt: 'Northwind Logistics is a customer in production.' },
+          { fabFileId: 'f2', fileName: 'crm.pdf', excerpt: 'Northwind Logistics is a prospect evaluating us.' },
+        ],
+      },
+    ],
+    countsByKind: {
+      'superlative-conflict': 0,
+      'metric-disagreement': 0,
+      'relationship-conflict': 1,
+      'expired-claim': 0,
+    },
+    sampled: true,
+    truncated: false,
+    memberSampled: false,
+    memberCount: 2,
+    documentCount: 2,
+  } as never;
+
+  const withReport = (over: Record<string, unknown> = {}) =>
+    ({
+      ...lake,
+      inconsistencyReport: storedReport,
+      inconsistencyComputedAt: new Date('2026-06-01T00:00:00Z'),
+      ...over,
+    }) as never;
+
+  it('carries NO document prose onto the read-gated health response', async () => {
+    // The P0 this fixes. GET /health is read-gated (org and public-lake readers reach it) and applies
+    // no redaction, while the report is manage-only - redactLakeForActor withholds the stored fields
+    // and POST /inconsistencies is write-gated for that reason. Serializing the whole response and
+    // searching it is the assertion that survives someone adding a new prose-bearing field later; a
+    // per-field check would pass while the new field leaked.
+    const result = await computeLakeHealth(withReport(), makeAdapters([], []) as never);
+
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain('Northwind Logistics');
+    expect(serialized).not.toContain('northwind logistics');
+    expect(serialized).not.toContain('deck.pdf');
+    expect(serialized).not.toContain('excerpt');
+    expect(serialized).not.toContain('findings');
+  });
+
+  it('still reports the counts, so the surface can say something happened', async () => {
+    const result = await computeLakeHealth(withReport(), makeAdapters([], []) as never);
+
+    expect(result.inconsistency).toEqual({
+      computedAt: new Date('2026-06-01T00:00:00Z'),
+      sampled: true,
+      memberSampled: false,
+      memberCount: 2,
+      findingCount: 1,
+      truncated: false,
+      countsByKind: {
+        'superlative-conflict': 0,
+        'metric-disagreement': 0,
+        'relationship-conflict': 1,
+        'expired-claim': 0,
+      },
+    });
+  });
+
+  it('reports findingCount from the EXACT counts, not the length of a capped list', async () => {
+    // The stored list is capped and the counts are not, so reading the array's length put a saturated
+    // number beside exact per-kind figures that summed higher. A surface rendering both showed
+    // arithmetic that did not add up, and one trusting findingCount under-reported.
+    const truncatedReport = {
+      findings: [{ kind: 'metric-disagreement', subject: 'uptime', evidence: [], documentCount: 2 }],
+      countsByKind: {
+        'superlative-conflict': 3,
+        'metric-disagreement': 40,
+        'relationship-conflict': 7,
+        'expired-claim': 200,
+      },
+      sampled: true,
+      truncated: true,
+      memberSampled: true,
+      memberCount: 200,
+    } as never;
+
+    const result = await computeLakeHealth(
+      withReport({ inconsistencyReport: truncatedReport }),
+      makeAdapters([], []) as never
+    );
+
+    expect(result.inconsistency?.findingCount).toBe(250);
+    expect(result.inconsistency?.truncated).toBe(true);
+  });
+
+  it('carries memberCount so a pass that scanned nothing does not read as a clean lake', async () => {
+    const neverScanned = {
+      findings: [],
+      countsByKind: {
+        'superlative-conflict': 0,
+        'metric-disagreement': 0,
+        'relationship-conflict': 0,
+        'expired-claim': 0,
+      },
+      sampled: true,
+      truncated: false,
+      memberSampled: false,
+      memberCount: 0,
+    } as never;
+
+    const result = await computeLakeHealth(
+      withReport({ inconsistencyReport: neverScanned }),
+      makeAdapters([], []) as never
+    );
+
+    // findingCount 0 AND memberCount 0: nothing was read, which is not the same answer as "clean".
+    expect(result.inconsistency?.findingCount).toBe(0);
+    expect(result.inconsistency?.memberCount).toBe(0);
+  });
+
+  it('reports null when detection has never run, which is NOT the same as clean', async () => {
+    const result = await computeLakeHealth(lake, makeAdapters([], []) as never);
+
+    expect(result.inconsistency).toBeNull();
+  });
+
+  it('carries a stored report with no timestamp as computedAt null rather than dropping it', async () => {
+    const result = await computeLakeHealth(
+      withReport({ inconsistencyComputedAt: undefined }),
+      makeAdapters([], []) as never
+    );
+
+    expect(result.inconsistency?.computedAt).toBeNull();
+    expect(result.inconsistency?.findingCount).toBe(1);
+  });
+
+  it('reads the STORED report rather than computing one', async () => {
+    // Detection reads chunk text and this function may not (#1665), so health is a reader here.
+    const adapters = makeAdapters([], []);
+
+    await computeLakeHealth(withReport(), adapters as never);
+
+    expect(adapters.db.fabFiles.findDataLakeMembershipMembers).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('computeLakeMemoryHealth', () => {
+  const memoryLake = {
+    datalakeTag: 'datalake:acme',
+    createdByUserId: 'u1',
+    lakeMemoryEnabled: true,
+    lakeMemoryExtractionAt: null as Date | null,
+    lakeMemoryCursor: null as string | null,
+    lastSyncAt: undefined as Date | undefined,
+  };
+
+  const memoryDb = (
+    coverage: { lastBuiltAt: string | null; factCount: number; sourceDocumentCount: number },
+    platformEnabled = true
+  ) => ({
+    adminSettings: { getSettingsValue: vi.fn(async () => platformEnabled) },
+    memoryLedger: { aggregateLakeMemoryCoverage: vi.fn(async () => coverage) },
+  });
+
+  const NO_COVERAGE = { lastBuiltAt: null, factCount: 0, sourceDocumentCount: 0 };
+
+  it('returns platform-off even when the lake is enabled and has a profile', async () => {
+    const db = memoryDb({ lastBuiltAt: '2026-09-01T00:00:00.000Z', factCount: 5, sourceDocumentCount: 2 }, false);
+    const health = await computeLakeMemoryHealth(memoryLake, db as never);
+    expect(health.state).toBe('platform-off');
+  });
+
+  it('returns lake-off when the platform is enabled but the lake opted out', async () => {
+    const db = memoryDb(NO_COVERAGE);
+    const health = await computeLakeMemoryHealth({ ...memoryLake, lakeMemoryEnabled: false }, db as never);
+    expect(health.state).toBe('lake-off');
+  });
+
+  // `running` is what the UI needs to tell "wait, work is happening" from "a run stopped part-way and
+  // needs restarting" - both of which report state 'building'. Collapsing the two passed every other
+  // test in this file, so these two assertions are the only thing pinning the distinction.
+  it('reports running alongside building when the extraction lease is currently held', async () => {
+    const db = memoryDb(NO_COVERAGE);
+    const health = await computeLakeMemoryHealth({ ...memoryLake, lakeMemoryExtractionAt: new Date() }, db as never);
+    expect(health).toMatchObject({ state: 'building', running: true });
+  });
+
+  it('reports running false for a parked continuation cursor, which still reads as building', async () => {
+    // A stalled run: the lease has expired but the cursor survives. The state is honest (work is
+    // outstanding) and the UI must still offer a rebuild rather than an indefinite spinner.
+    const db = memoryDb(NO_COVERAGE);
+    const health = await computeLakeMemoryHealth(
+      { ...memoryLake, lakeMemoryExtractionAt: null, lakeMemoryCursor: 'cursor-1' },
+      db as never
+    );
+    expect(health).toMatchObject({ state: 'building', running: false });
+  });
+
+  it('returns building when the extraction lease is currently held', async () => {
+    const db = memoryDb(NO_COVERAGE);
+    const health = await computeLakeMemoryHealth({ ...memoryLake, lakeMemoryExtractionAt: new Date() }, db as never);
+    expect(health.state).toBe('building');
+  });
+
+  it('returns building when a continuation cursor is set even though no lease is currently held', async () => {
+    const db = memoryDb(NO_COVERAGE);
+    const health = await computeLakeMemoryHealth({ ...memoryLake, lakeMemoryCursor: 'cursor-1' }, db as never);
+    expect(health.state).toBe('building');
+  });
+
+  it('returns never-built when nothing is building and the ledger has no surviving facts', async () => {
+    const db = memoryDb(NO_COVERAGE);
+    const health = await computeLakeMemoryHealth(memoryLake, db as never);
+    expect(health.state).toBe('never-built');
+  });
+
+  it('returns stale when the lake has synced since the ledger profile was last built', async () => {
+    const db = memoryDb({ lastBuiltAt: '2026-09-01T00:00:00.000Z', factCount: 5, sourceDocumentCount: 2 });
+    const health = await computeLakeMemoryHealth(
+      { ...memoryLake, lastSyncAt: new Date('2026-09-02T00:00:00.000Z') },
+      db as never
+    );
+    expect(health.state).toBe('stale');
+  });
+
+  it('returns current when a profile exists and the lake has not synced since', async () => {
+    const db = memoryDb({ lastBuiltAt: '2026-09-02T00:00:00.000Z', factCount: 5, sourceDocumentCount: 2 });
+    const health = await computeLakeMemoryHealth(
+      { ...memoryLake, lastSyncAt: new Date('2026-09-01T00:00:00.000Z') },
+      db as never
+    );
+    expect(health.state).toBe('current');
+  });
+
+  it('passes factCount, sourceDocumentCount and lastBuiltAt through from the ledger coverage unmodified', async () => {
+    const db = memoryDb({ lastBuiltAt: '2026-09-01T12:00:00.000Z', factCount: 42, sourceDocumentCount: 7 });
+    const health = await computeLakeMemoryHealth(memoryLake, db as never);
+    expect(health.factCount).toBe(42);
+    expect(health.sourceDocumentCount).toBe(7);
+    expect(health.lastBuiltAt).toEqual(new Date('2026-09-01T12:00:00.000Z'));
+  });
+
+  it('never derives the profile from lakeMemoryExtractionAt: a null lease with ledger facts still reports built', async () => {
+    // The steady state of a successfully-built lake is lakeMemoryExtractionAt === null - this is the
+    // regression case for treating that field as a completion stamp instead of a concurrency lease.
+    const db = memoryDb({ lastBuiltAt: '2026-09-01T00:00:00.000Z', factCount: 3, sourceDocumentCount: 1 });
+    const health = await computeLakeMemoryHealth({ ...memoryLake, lakeMemoryExtractionAt: null }, db as never);
+    expect(health.state).toBe('current');
+    expect(health.factCount).toBe(3);
+  });
+
+  it('short-circuits to empty coverage without calling the ledger when datalakeTag is empty', async () => {
+    const db = memoryDb({ lastBuiltAt: '2026-09-01T00:00:00.000Z', factCount: 5, sourceDocumentCount: 2 });
+    const health = await computeLakeMemoryHealth({ ...memoryLake, datalakeTag: '' }, db as never);
+    expect(db.memoryLedger.aggregateLakeMemoryCoverage).not.toHaveBeenCalled();
+    expect(health.factCount).toBe(0);
+    expect(health.sourceDocumentCount).toBe(0);
+    expect(health.lastBuiltAt).toBeNull();
+    expect(health.state).toBe('never-built');
+  });
+
+  it('short-circuits to empty coverage without calling the ledger when createdByUserId is empty', async () => {
+    const db = memoryDb({ lastBuiltAt: '2026-09-01T00:00:00.000Z', factCount: 5, sourceDocumentCount: 2 });
+    const health = await computeLakeMemoryHealth({ ...memoryLake, createdByUserId: '' }, db as never);
+    expect(db.memoryLedger.aggregateLakeMemoryCoverage).not.toHaveBeenCalled();
+    expect(health.factCount).toBe(0);
+  });
+
+  it('treats a rejected platform-settings read as platform-disabled rather than throwing', async () => {
+    const db = {
+      adminSettings: { getSettingsValue: vi.fn(async () => Promise.reject(new Error('settings unavailable'))) },
+      memoryLedger: { aggregateLakeMemoryCoverage: vi.fn(async () => NO_COVERAGE) },
+    };
+    const health = await computeLakeMemoryHealth(memoryLake, db as never);
+    expect(health.state).toBe('platform-off');
+  });
+});
+
+describe('computeLakeHealth lakeMemory pass-through', () => {
+  it('carries the memory-service lakeMemory section and overwrites memberCount with the scanned member count', async () => {
+    const adapters = makeAdapters([healthyMember('a'), healthyMember('b')]);
+    adapters.db.memoryLedger.aggregateLakeMemoryCoverage = vi.fn(async () => ({
+      lastBuiltAt: '2026-09-01T00:00:00.000Z',
+      factCount: 10,
+      sourceDocumentCount: 2,
+    }));
+
+    const health = await computeLakeHealth({ ...lake, lakeMemoryEnabled: true }, adapters as never);
+
+    expect(health.lakeMemory.factCount).toBe(10);
+    expect(health.lakeMemory.sourceDocumentCount).toBe(2);
+    expect(health.lakeMemory.memberCount).toBe(2);
+  });
+
+  it('reports lakeMemory with memberCount 0 on the null-datalakeTag empty-lake guard', async () => {
+    const adapters = makeAdapters([]);
+    const health = await computeLakeHealth({ ...lake, datalakeTag: '', lakeMemoryEnabled: true }, adapters as never);
+
+    expect(health.lakeMemory.memberCount).toBe(0);
   });
 });

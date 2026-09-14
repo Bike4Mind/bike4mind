@@ -7,6 +7,10 @@ const lake = (id: string, source: 'registry' | 'dynamic') => ({
   slug: id,
   datalakeTag: `datalake:${id}`,
   fileTagPrefix: `${id}:`,
+  membership:
+    source === 'dynamic'
+      ? { kind: 'owned' as const, datalakeTag: `datalake:${id}`, fileTagPrefix: `${id}:`, creatorUserId: `${id}-owner` }
+      : { kind: 'registry' as const, datalakeTag: `datalake:${id}`, fileTagPrefix: `${id}:` },
   source,
 });
 

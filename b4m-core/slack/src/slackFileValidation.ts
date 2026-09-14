@@ -1,12 +1,16 @@
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { getFileExtension, getMimeTypeByExtension } from '@bike4mind/utils';
 import type { SlackEventData } from './SlackEvent';
 
 export type SlackAttachment = NonNullable<SlackEventData['files']>[number];
 
-/** A Slack attachment carrying every field an ingest path needs to download and store it. */
+/**
+ * A Slack attachment carrying every field an ingest path needs to download and store it.
+ * `mimetype` stays whatever Slack sent (possibly absent) - it is never validated or read past
+ * this point; type resolution is fully extension-based (see `resolvedMimeType`).
+ */
 export type CompleteSlackAttachment = SlackAttachment & {
   name: string;
-  mimetype: string;
   url_private_download: string;
   size: number;
 };
@@ -47,7 +51,8 @@ export const SUPPORTED_SLACK_FILE_MIME_TYPES: readonly string[] = [
 export type SlackFileRejectionReason = 'incomplete' | 'unsupported_type' | 'too_large';
 
 export type SlackFileValidation =
-  { ok: true; file: CompleteSlackAttachment } | { ok: false; reason: SlackFileRejectionReason; message: string };
+  | { ok: true; file: CompleteSlackAttachment; resolvedMimeType: string }
+  | { ok: false; reason: SlackFileRejectionReason; message: string };
 
 /**
  * Validate one Slack attachment for ingest. On success the returned `file` is narrowed so callers
@@ -55,7 +60,10 @@ export type SlackFileValidation =
  * trailing disposition ("Skipping.") so each caller frames it in its own voice.
  */
 export function validateSlackFileForIngest(file: SlackAttachment): SlackFileValidation {
-  if (!file.mimetype || !file.name || !file.url_private_download || file.size === undefined) {
+  // `file.mimetype` is not checked here - nothing below reads it, type resolution is fully
+  // extension-based (see resolvedMimeType). Requiring it would silently drop a well-formed
+  // attachment whose client-reported mimetype happens to be empty.
+  if (!file.name || !file.url_private_download || file.size === undefined) {
     return {
       ok: false,
       reason: 'incomplete',
@@ -63,15 +71,45 @@ export function validateSlackFileForIngest(file: SlackAttachment): SlackFileVali
     };
   }
 
-  if (!SUPPORTED_SLACK_FILE_MIME_TYPES.includes(file.mimetype)) {
+  // Gate on the extension's OWN mimetype, not `file.mimetype` - that field is whatever the
+  // Slack client reported, and Slack labels most plain-text files `text/plain` regardless of
+  // extension, so a `.sh`/`.srt`/`.yaml` file claiming `text/plain` used to sail through. The
+  // resolved value also decides the size cap below, so a claimed `image/png` on a non-image
+  // file no longer gets the looser cap either.
+  const ext = getFileExtension(file.name);
+  // `path.extname` grabs a tail off ANY dot in the name, even one that isn't extension-shaped -
+  // a date ("2026.09.07") or a version ("v1.2") resolves to "07" or "2", which looks like it has
+  // an extension when the name actually has none. Checking the shape FIRST (rather than just
+  // "did path.extname find a dot") is what keeps those genuinely extension-less names on the
+  // same plain-text fallback as LICENSE/Dockerfile, instead of being judged against an extension
+  // that was never really there.
+  // Not a length/character-class check - a real extension can be longer than 8 chars
+  // (`properties`) or contain digits anywhere but the front (`7z` doesn't apply here since
+  // it's not on the allow-list, but a longer one like `properties` is a real, if unsupported,
+  // extension and must still be REFUSED, not silently coerced to plain text). Excluding only
+  // a digit-led tail is what keeps a date/version fragment ("07", "2") extension-less without
+  // also exempting a merely-long unsupported extension.
+  const looksLikeExtension = ext !== '' && !/^[0-9]/.test(ext);
+  // A trailing dot ("payload.") also fails `looksLikeExtension`, but it's malformed rather than
+  // extension-less, so it stays refused below instead of being coerced to plain text.
+  const hasNoExtension = !looksLikeExtension && !file.name.endsWith('.');
+  const resolvedMimeType = hasNoExtension ? SupportedFabFileMimeTypes.TXT_PLAIN : getMimeTypeByExtension(ext);
+  if (!resolvedMimeType || !SUPPORTED_SLACK_FILE_MIME_TYPES.includes(resolvedMimeType)) {
+    // Name what actually decided the rejection - the resolved (extension-based) type, or the
+    // raw extension if it looks like one - never `file.mimetype` (only the client's claim, which
+    // can name a type that IS on the allow-list) and never a bare digit fragment `path.extname`
+    // can grab out of a date or version suffix, which reads as gibberish rather than a type.
+    const reportedType = resolvedMimeType || (looksLikeExtension ? ext : '');
     return {
       ok: false,
       reason: 'unsupported_type',
-      message: `File "${file.name}" has unsupported type ${file.mimetype}.`,
+      message: reportedType
+        ? `File "${file.name}" has unsupported type ${reportedType}.`
+        : `File "${file.name}" has no recognized file type.`,
     };
   }
 
-  const maxSize = file.mimetype.startsWith('image/') ? SLACK_MAX_IMAGE_SIZE_BYTES : SLACK_MAX_FILE_SIZE_BYTES;
+  const maxSize = resolvedMimeType.startsWith('image/') ? SLACK_MAX_IMAGE_SIZE_BYTES : SLACK_MAX_FILE_SIZE_BYTES;
   if (file.size > maxSize) {
     const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
     const maxMB = (maxSize / (1024 * 1024)).toFixed(0);
@@ -84,5 +122,5 @@ export function validateSlackFileForIngest(file: SlackAttachment): SlackFileVali
     };
   }
 
-  return { ok: true, file: file as CompleteSlackAttachment };
+  return { ok: true, file: file as CompleteSlackAttachment, resolvedMimeType };
 }

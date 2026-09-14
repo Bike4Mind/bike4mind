@@ -1,5 +1,6 @@
 import {
   DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
+  DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
   DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
   DEFAULT_PASSAGE_TOKEN_TARGET,
   IAdminSettingsRepository,
@@ -41,6 +42,16 @@ export type ResolvedSearchBudgets = SemanticSearchBudgets & {
    * the /100 conversion lives here so exactly one place owns it. `0` = today's behavior.
    */
   kbMinRelevance: number;
+  /**
+   * Most chunks one source document may contribute to a search's top-K; `0` = no cap. Enforced
+   * at whatever count the CALLER serves, which is not always the topK it asked for: the engine
+   * applies it at its own topK, and a caller that ranks wider than it serves (the chat KB tool)
+   * applies it a second time at its served ceiling. Declared
+   * REQUIRED here even though `SemanticSearchBudgets` has it optional: the intersection narrows it,
+   * so a resolution path that forgot to set it fails to compile instead of silently ignoring an
+   * operator's configured cap - the failure mode a purely optional field would have hidden.
+   */
+  maxChunksPerFile: number;
 };
 
 /**
@@ -48,9 +59,14 @@ export type ResolvedSearchBudgets = SemanticSearchBudgets & {
  * a matched chunk to SERVE, and (#1955) how many passages and how relevant they must be for
  * `search_knowledge_base` specifically.
  *
- * Shared by every entrypoint (the search route, the chat KB tool, forced retrieval) so one
- * surface cannot end up scanning further than another. Uses the CACHED settings accessor, so
- * this costs no round-trip on a warm cache.
+ * Shared by every entrypoint (the search route, the chat KB tool, forced retrieval) so no surface
+ * derives its budget by hand. That guarantees one DERIVATION, not one number: the KB tool resolves
+ * through the scoped path below while the search route (data-lakes/semantic-search) still resolves
+ * platform-only, so once an org/owner override is written the two surfaces legitimately scan to
+ * different depths for the same caller. Widening the guarantee back to one number means giving the
+ * remaining platform-only callers a scope, not narrowing this resolver.
+ *
+ * Uses the CACHED settings accessor, so this costs no round-trip on a warm cache.
  *
  * The serve budget is DERIVED from the chunk-size policy (`DefaultChunkSize`, the same row the
  * chunker reads as its passage target) rather than being a lever of its own. Two independently-set
@@ -62,11 +78,14 @@ export type ResolvedSearchBudgets = SemanticSearchBudgets & {
  * because the symptom of a bad value would otherwise be "retrieval quietly covers less than the
  * admin configured", which is indistinguishable from a small corpus.
  *
- * Scope (epic #1658 lane 0 / #1660): callers that know the org/owner/lake a search runs for may pass
- * a `scope` (and the `scopedSettings` overlay repo) to let a narrower rung tighten the budget below
- * the platform ceiling. Omitting both - every caller today - takes the byte-identical platform path
- * below, so this change is additive. Chunk-policy rungs ride this same seam when #1662 gives
- * `DefaultChunkSize` its `scope.settableAt`; the serve budget below picks them up with no edit here.
+ * Scope (epic #1658 lane 0 / #1660): callers that know the org/owner a search runs for may pass a
+ * `scope` (and the `scopedSettings` overlay repo) to let a narrower rung tighten the budget below
+ * the platform ceiling. Org and Owner are the only rungs on offer: every key read here lost or
+ * never had a Lake rung, because one search spans EVERY lake the caller can reach (#2624), so a
+ * `scope.lakeId` reaching this function resolves nothing no matter what is stored against it.
+ * Omitting both - every caller today - takes the byte-identical platform path below, so this
+ * change is additive. Chunk-policy rungs ride this same seam when #1662 gives `DefaultChunkSize`
+ * its `scope.settableAt`; the serve budget below picks them up with no edit here.
  */
 export async function resolveSearchBudgets(
   db: {
@@ -93,6 +112,7 @@ export async function resolveSearchBudgets(
           'kbSearchDefaultResults',
           'kbSearchResultTokenBudget',
           'kbSearchMinRelevancePct',
+          'dataLakeSearchMaxChunksPerFile',
         ],
         scope,
         db,
@@ -122,6 +142,12 @@ export async function resolveSearchBudgets(
           logger
         ),
         kbMinRelevance: resolveRelevancePct(values.kbSearchMinRelevancePct, logger),
+        maxChunksPerFile: nonNegativeIntOr(
+          values.dataLakeSearchMaxChunksPerFile,
+          DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
+          'dataLakeSearchMaxChunksPerFile',
+          logger
+        ),
       };
     } catch (err) {
       logger?.warn?.('[semanticSearch] scoped budget resolution failed; falling back to platform', err);
@@ -138,6 +164,7 @@ export async function resolveSearchBudgets(
         'kbSearchDefaultResults',
         'kbSearchResultTokenBudget',
         'kbSearchMinRelevancePct',
+        'dataLakeSearchMaxChunksPerFile',
       ],
       db,
       { logger }
@@ -164,6 +191,12 @@ export async function resolveSearchBudgets(
         logger
       ),
       kbMinRelevance: resolveRelevancePct(values.kbSearchMinRelevancePct, logger),
+      maxChunksPerFile: nonNegativeIntOr(
+        values.dataLakeSearchMaxChunksPerFile,
+        DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
+        'dataLakeSearchMaxChunksPerFile',
+        logger
+      ),
     };
   } catch (err) {
     logger?.warn?.('[semanticSearch] could not read scan-budget settings; using defaults', err);
@@ -175,6 +208,7 @@ export async function resolveSearchBudgets(
       kbDefaultResults: KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
       kbResultTokenBudget: KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
       kbMinRelevance: KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT / 100,
+      maxChunksPerFile: DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
     };
   }
 }

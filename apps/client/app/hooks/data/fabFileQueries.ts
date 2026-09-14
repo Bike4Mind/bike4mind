@@ -153,10 +153,10 @@ export function useGetFabFileContent(fabFile: IFabFileDocument | null | undefine
       let fileUrl = fabFile.fileUrl;
       if (!fileUrl && fabFile.filePath) {
         try {
-          const response = await api.get<{ urls: string[] }>('/api/files/presigned-url', {
+          const response = await api.get<{ urls: (string | null)[] }>('/api/files/presigned-url', {
             params: { 'filePaths[]': fabFile.filePath },
           });
-          fileUrl = response.data.urls?.[0];
+          fileUrl = response.data.urls?.[0] ?? undefined;
         } catch (err) {
           console.error('Failed to fetch signed URL for fab file content', err);
         }

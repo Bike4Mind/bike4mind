@@ -55,6 +55,27 @@ export function isLakeCreator(
 }
 
 /**
+ * May this actor DESTROY the lake's memory profile? Deliberately NARROWER than `canManageLake`.
+ *
+ * Reading a lake is org-shared and managing one is grant-aware, but an irreversible crypto-shred of
+ * what the whole org reads is creator-or-platform-admin only. No grants and no org rung: a curator or
+ * org admin may build the profile and may not erase it.
+ *
+ * Named and exported so the API gate and the UI's button flag consult ONE predicate. They were two
+ * open-coded expressions - the button rendered on the grant-aware `canManage` while the endpoint
+ * called `canManageLake` with neither grants nor `organizationId`, which silently reduces it to this
+ * - so curator-grant holders, org admins and transferred owners were all offered a button the
+ * endpoint answered with a 403.
+ */
+export function canShredLakeMemory(
+  lake: Pick<IDataLakeDocument, 'createdByUserId'>,
+  actor: Pick<ManageActor, 'userId' | 'isAdmin'>
+): boolean {
+  if (actor.isAdmin) return true;
+  return isLakeCreator(lake, actor);
+}
+
+/**
  * The lake's EFFECTIVE owner ids: the holders of an `owner`-role USER grant if any exist, otherwise
  * the immutable creator. This is the one place "who owns this lake" is resolved, so a transfer
  * (which upserts an owner grant) supersedes the creator everywhere without ever mutating
@@ -86,6 +107,23 @@ export function isEffectiveOwner(
 }
 
 /**
+ * Is an ORGANIZATION-principal grant contained to the lake it is granted on? True for an org-less
+ * lake (nothing to cross) or when the granted org IS the lake's own org; false for a lake belonging
+ * to a DIFFERENT org. Both sides are normalized because `lake.organizationId` may arrive as an
+ * ObjectId while `principalId` is always a string.
+ *
+ * Factored out rather than inlined twice: `canManageLake` and `resolveLakeManageRung` must agree on
+ * the org-grant rung, and a shared conjunct cannot drift between them.
+ *
+ * Org membership never crosses orgs (epic decision 12). The read arm enforces that at grant-WRITE
+ * time (see resolveReadGrant's sync note); the MANAGE rung enforces it here, at decision time, so an
+ * admin of orgA holding an org grant cannot manage - and therefore cannot read - an orgB lake.
+ */
+function isGrantOrgContained(grant: LakeGrant, lakeOrg: string | undefined): boolean {
+  return !lakeOrg || normalizeId(grant.principalId) === lakeOrg;
+}
+
+/**
  * The single WRITE/MANAGE decision for a lake, in ascending rungs (none weakens the gate; each only
  * ADDS a manager):
  *   1. platform admin;
@@ -94,7 +132,8 @@ export function isEffectiveOwner(
  *      ownership transfer and the visibility expose gate, which stay effective-owner-only;
  *   4. an admin of the lake's org (`lake.organizationId in actor.administeredOrgIds`) - the
  *      org-manageable rung: org lakes survive their creator because org admins manage them by role;
- *   5. an `owner`/`curator` ORG grant for an org the actor administers.
+ *   5. an `owner`/`curator` ORG grant for an org the actor administers, where that org is the
+ *      lake's OWN org (or the lake has none) - an org grant never reaches across orgs.
  *
  * Deliberately narrower than `canAccessLake` (read): a tag/entitlement/org-READ grant lets a member
  * read a lake but not write into it. `canAccessLake` calls THIS first, so every rung here also
@@ -125,7 +164,8 @@ export function canManageLake(
     g =>
       g.principalType === 'organization' &&
       (g.role === 'owner' || g.role === 'curator') &&
-      administeredOrgIds.includes(g.principalId)
+      administeredOrgIds.includes(g.principalId) &&
+      isGrantOrgContained(g, lakeOrg)
   );
 }
 
@@ -176,7 +216,8 @@ export function resolveLakeManageRung(
     g =>
       g.principalType === 'organization' &&
       (g.role === 'owner' || g.role === 'curator') &&
-      administeredOrgIds.includes(g.principalId)
+      administeredOrgIds.includes(g.principalId) &&
+      isGrantOrgContained(g, lakeOrg)
   );
   if (hasOrgGrant) return 'org-grant';
 

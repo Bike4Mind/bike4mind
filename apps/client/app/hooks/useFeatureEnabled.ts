@@ -1,16 +1,23 @@
 import { useCallback } from 'react';
+import type { SettingKey } from '@bike4mind/common';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useAdminSettingsCache } from './useAdminSettingsCache';
 import type { ExperimentalFeature } from '@client/app/contexts/UserSettingsContext';
 
 interface FeatureMeta {
   /** Admin key that gates the feature. Absent means no admin gate - feature is user-controlled only. */
-  adminKey?: string;
+  adminKey?: SettingKey;
   /** Admin-settable default key. Absent means this feature has no admin default. */
-  defaultKey?: string;
+  defaultKey?: SettingKey;
 }
 
-const featureMeta: Record<ExperimentalFeature, FeatureMeta> = {
+/**
+ * The wiring table between an admin `Enable<Feature>Default` setting and the per-user
+ * preference it seeds. Exported because it is the ONLY consumer of that setting family:
+ * an `Enable<Feature>Default` row absent from here is a lever admins can flip with no
+ * effect, so `useFeatureEnabled.test.ts` asserts the two stay in parity.
+ */
+export const featureMeta: Record<ExperimentalFeature, FeatureMeta> = {
   enableArtifacts: { adminKey: 'EnableArtifacts', defaultKey: 'EnableArtifactsDefault' },
   enableAgents: { adminKey: 'EnableAgents', defaultKey: 'EnableAgentsDefault' },
   enableRapidReply: { adminKey: 'EnableRapidReply', defaultKey: 'EnableRapidReplyDefault' },

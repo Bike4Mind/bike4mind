@@ -23,6 +23,7 @@ import {
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { assertCanWriteDataLakeTags, assertCanWriteStaticRegistryTags } from '../dataLakeService/authorizeLakeWrite';
+import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
 
 export const createFabFileSchema = z.object({
   fileName: z.string(),
@@ -63,7 +64,9 @@ export interface CreateFabFileAdapters {
     organizations?: {
       findById: (id: string) => Promise<IOrganizationDocument | null>;
     };
-    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
+    // 'find' is for the fallback tagger's prefix-overlap check (decideStampPrefix), not the write
+    // gate above - the two happen to share this adapter.
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'find'>;
     // Optional, but WIRE IT on any door that stamps a lake tag on behalf of someone who may manage
     // that lake by grant or by org role. Absent, loadActiveLakeGrants returns [] and
     // assertCanWriteDataLakeTags degrades to the createdByUserId + org rungs only - which is
@@ -96,6 +99,8 @@ export interface CreateFabFileAdapters {
     sourceType: FabFileSourceType;
     sourceMetadata?: Record<string, unknown>;
   };
+  /** Forwarded to the fallback tagger's skip-path diagnostics; never fails the write on its own. */
+  logger?: { warn?: (msg: string, ...args: unknown[]) => void };
   /**
    * The acting principal's org-admin set, when the caller has already resolved it (toAccessContext
    * does). It cannot be read off the user document, so omitting it silently drops the two org rungs
@@ -108,7 +113,12 @@ export interface CreateFabFileAdapters {
   administeredOrgIds?: string[];
 }
 
-const DEFAULT_MAX_FILE_SIZE = 20;
+// Only reached when the `MaxFileSize` settings row exists but fails the schema (a non-numeric
+// stored value, or a cleared field - stored as '', which coerces to 0 and fails the schema's
+// `min: 1`) - a missing row never gets here, since the schema's own `.prefault(30)` already
+// resolves `getSettingsValue` to 30 before this default arg is consulted. Matches that prefault
+// value so the two cases can't diverge if the schema changes.
+const DEFAULT_MAX_FILE_SIZE = 30;
 const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
 
 /**
@@ -119,11 +129,18 @@ const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
  * `fabFileRepository.create()`/a direct model call) gets NO such gate; today's few such bypasses
  * only ever set hardcoded or no tags, never a caller-controlled name, but a future one gaining a
  * caller-supplied `tags` field must route through here instead.
+ *
+ * The tags this persists also run through `reconcileDataLakeFallbackTags` (#2397), the same
+ * fallback stamper `updateFabFile` runs on every whole-array tag write: a file created with only
+ * a `datalake:*` meta-tag and no content tag under that lake's prefix gets its
+ * `<prefix>uncategorized` stamp here, rather than being invisible to `tag-counts` and the
+ * Explorer's tag tree until some later edit happens to trigger it. `previousTags` is deliberately
+ * omitted - a create has no prior state to retract a stamp against.
  */
 export const createFabFile = async (
   userId: string,
   parameters: CreateFabFileParameters,
-  { db, storage, provenance, administeredOrgIds }: CreateFabFileAdapters
+  { db, storage, provenance, administeredOrgIds, logger }: CreateFabFileAdapters
 ) => {
   const params = secureParameters(parameters, createFabFileSchema);
   const user = await db.users.findById(userId);
@@ -139,6 +156,11 @@ export const createFabFile = async (
   // The file is created under `userId`, so it is its own owner-to-be for the admission contract.
   await assertCanWriteDataLakeTags(actor, tagNames, { db, members: [{ userId }] });
   assertCanWriteStaticRegistryTags(actor, tagNames);
+
+  // A file joining a lake here must also land under that lake's content prefix, or it
+  // contributes nothing to tag-counts and appears nowhere in the Explorer's tag tree (#2397).
+  // No-ops (no `dataLakes` round trip) when `params.tags` carries no `datalake:*` meta-tag.
+  const tags = params.tags === undefined ? undefined : await reconcileDataLakeFallbackTags(params.tags, { db, logger });
 
   const ext = getFileExtension(params.fileName);
   let mimeType = params.mimeType || getMimeTypeByExtension(ext);
@@ -170,6 +192,7 @@ export const createFabFile = async (
   const buildData: Omit<IFabFileDocument, 'id'> = {
     userId,
     ...params,
+    ...(tags !== undefined && { tags }),
     ...(provenance && {
       sourceType: provenance.sourceType,
       ...(provenance.sourceMetadata && { sourceMetadata: provenance.sourceMetadata }),

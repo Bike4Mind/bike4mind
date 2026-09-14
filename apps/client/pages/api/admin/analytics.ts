@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { Quest } from '@bike4mind/database';
 import { ForbiddenError } from '@server/utils/errors';
+import { resolveQuestModelType } from '@server/utils/questModelType';
 import { IChatHistoryItemDocument } from '@bike4mind/common';
 
 interface AnalyticsMetricResponse {
@@ -27,7 +28,10 @@ interface AnalyticsMetricResponse {
     totalResponseTime?: number;
     contextRetrievalTime?: number;
     modelInferenceTime?: number;
+    /** Unset when the turn never rendered anything visible. */
     firstTokenTime?: number;
+    /** First chunk of any kind, hidden reasoning included. */
+    firstChunkTime?: number;
     clientFirstTokenTime?: number;
     processPickupTime?: number;
     streamingPerformance?: {
@@ -63,7 +67,7 @@ function mapQuestToAnalyticsMetric(quest: IChatHistoryItemDocument): AnalyticsMe
     timestamp: quest.timestamp?.toISOString() || new Date().toISOString(),
     model: {
       name: quest.promptMeta?.model?.name || 'Unknown',
-      type: quest.promptMeta?.model?.type || (quest.images || []).length ? 'image' : 'text',
+      type: resolveQuestModelType(quest),
       backend: quest.promptMeta?.model?.backend,
       parameters: {
         temperature: quest.promptMeta?.model?.parameters?.temperature,
@@ -83,6 +87,7 @@ function mapQuestToAnalyticsMetric(quest: IChatHistoryItemDocument): AnalyticsMe
       contextRetrievalTime: quest.promptMeta?.performance?.contextRetrievalTime,
       modelInferenceTime: quest.promptMeta?.performance?.modelInferenceTime,
       firstTokenTime: quest.promptMeta?.performance?.firstTokenTime,
+      firstChunkTime: quest.promptMeta?.performance?.firstChunkTime,
       processPickupTime: getProcessPickupTime(quest),
       streamingPerformance: quest.promptMeta?.performance?.streamingPerformance
         ? {

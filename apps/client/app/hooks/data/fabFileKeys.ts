@@ -12,9 +12,9 @@
  * - `doc(id)` is the per-document cache entry - list and search hooks seed it via
  *   seedFabFileDocCache (fabFileQueries.ts) - and a prefix of `content(id)`.
  */
-// Type-only: keeps this module runtime-free (no cycle with the fabFiles barrel, whose
-// modules value-import us).
-import type { ISearchFabFilesParams } from '@client/app/hooks/data/fabFiles';
+// Type-only, and pointed at the defining module rather than the fabFiles barrel: this module
+// stays runtime-free, with no cycle back through the barrel whose modules value-import us.
+import type { ISearchFabFilesParams } from '@client/app/hooks/data/fabFileSearch';
 
 /** Filters accepted by the paged own-files list (GET /api/files). */
 export interface FabFileListFilters {

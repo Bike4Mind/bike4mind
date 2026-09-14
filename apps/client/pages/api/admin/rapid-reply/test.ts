@@ -8,6 +8,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
 import { sessionRepository } from '@bike4mind/database';
+import { ttfvtState } from '@bike4mind/common';
 import { Types } from 'mongoose';
 import { SQSService } from '@bike4mind/utils';
 
@@ -107,6 +108,10 @@ const handler = baseApi()
     let rapidReplyStartTime = 0;
     let rapidReplyEndTime = 0;
     let rapidReplyTtfvt = 0; // Time to first visible token
+    // 0 means "not measured" as well as "measured as 0", and the recommendation below gates on
+    // `> 0` - so a turn that streamed only a thinking block scored 0 and silently skipped the
+    // check that exists to catch exactly that turn. The state says which case a 0 is.
+    let rapidReplyTtfvtState: ReturnType<typeof ttfvtState> = 'unknown';
 
     let rapidReplyResponse = null;
     const actualTokensUsed = 0;
@@ -322,6 +327,10 @@ const handler = baseApi()
         // Use the latency from rapid reply results, not the total test time
         const rapidReplyLatency = rapidReplyResults.rapidResponse.latency || 0;
         rapidReplyTtfvt = rapidReplyLatency; // TTFVT is the same as latency for rapid reply
+        // rapidReplyTtfvtState is deliberately left at its initializer: reaching this branch means
+        // the rapid model produced content, so there is nothing frozen to report. Deriving it from
+        // questPromptMeta here would grade the MAIN model's stamps and report them as the rapid
+        // model's - that model's own timing is rapidResponse.ttfvt.
 
         console.log(`🧪 Rapid reply test completed successfully`);
         console.log(`🧪 TTFVT: ${rapidReplyTtfvt}ms`);
@@ -335,6 +344,10 @@ const handler = baseApi()
         // Try to get rapid reply metrics from quest promptMeta
         const questPromptMeta = completedQuest.promptMeta as any;
         rapidReplyTtfvt = questPromptMeta?.rapidTtfvt || questPromptMeta?.performance?.firstTokenTime || 0;
+        rapidReplyTtfvtState = ttfvtState(
+          questPromptMeta?.performance?.firstTokenTime,
+          questPromptMeta?.performance?.firstChunkTime
+        );
 
         // Calculate latency from the rapid reply timing if available
         const rapidReplyLatency = questPromptMeta?.rapidLatency || (rapidReplyTtfvt > 0 ? rapidReplyTtfvt : 0);
@@ -470,7 +483,11 @@ const handler = baseApi()
         );
       }
 
-      if (rapidReplyTtfvt > 0 && rapidReplyTtfvt > 1000) {
+      if (rapidReplyTtfvtState === 'never-rendered') {
+        recommendations.push(
+          'The model streamed but nothing ever became visible to the user. This is a frozen turn, not a slow one - check the system prompt for a response the model hides entirely.'
+        );
+      } else if (rapidReplyTtfvt > 1000) {
         recommendations.push(
           `TTFVT (${rapidReplyTtfvt}ms) is high. Consider using a faster rapid model or optimizing the system prompt`
         );

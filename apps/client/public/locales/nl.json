@@ -68,7 +68,6 @@
     "no_valid_emails_error": "Voer geldige e-mailadressen in",
     "send_referral": "Verwijzing verzenden",
     "send_referral_success": "Verwijzing succesvol verzonden!",
-    "send_referral_skipped": "{{count}} uitnoding(en) overgeslagen — die e-mailadressen hebben al een account.",
     "send_referral_failed": "{{count}} uitnoding(en) konden niet worden verzonden. Probeer het opnieuw.",
     "send_referral_error": "Fout bij het verzenden van verwijzing. Probeer het opnieuw.",
     "slack_notification_default": "Verwijzing verzonden door gebruiker USER_NAME:USER_ID naar FRIEND_EMAIL"

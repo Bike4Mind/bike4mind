@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
 vi.mock('@bike4mind/database/content', () => ({
   Quest: {
     findOne: vi.fn(),
-    findByIdAndUpdate: vi.fn(),
+    findOneAndUpdate: vi.fn(),
   },
 }));
 
@@ -111,6 +111,28 @@ describe('jupyterNotebookProgress WebSocket handler', () => {
     });
   });
 
+  describe('scope validation', () => {
+    it('drops the frame when the socket was opened with a bridge-only key', async () => {
+      // cc-bridge:connect is enough to pass $connect, so this socket is authenticated - it just
+      // has no authority to mutate notebook execution state.
+      mockEvent.body = createCellOutputBody();
+      (Connection.findOne as Mock).mockResolvedValue({
+        connectionId: 'conn-123',
+        userId: 'user-456',
+        scopes: ['cc-bridge:connect'],
+      });
+
+      const { func } = await import('../jupyterNotebookProgress');
+      const result = await func(mockEvent as any, mockContext as any, mockLogger as any);
+
+      expect(result).toEqual({ statusCode: 200 });
+      expect(Quest.findOne).not.toHaveBeenCalled();
+      expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(sendToClient).not.toHaveBeenCalled();
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('notebooks:write'));
+    });
+  });
+
   describe('progress handling', () => {
     beforeEach(() => {
       (Connection.findOne as Mock).mockResolvedValue({
@@ -135,7 +157,7 @@ describe('jupyterNotebookProgress WebSocket handler', () => {
           cellCount: 5,
         },
       });
-      (Quest.findByIdAndUpdate as Mock).mockResolvedValue({});
+      (Quest.findOneAndUpdate as Mock).mockResolvedValue({});
 
       const { func } = await import('../jupyterNotebookProgress');
       const result = await func(mockEvent as any, mockContext as any, mockLogger as any);
@@ -143,8 +165,8 @@ describe('jupyterNotebookProgress WebSocket handler', () => {
       expect(result).toEqual({ statusCode: 200 });
 
       // Should update Quest with progress
-      expect(Quest.findByIdAndUpdate).toHaveBeenCalledWith(
-        'quest-789',
+      expect(Quest.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'quest-789', 'promptMeta.session.userId': 'user-456' },
         expect.objectContaining({
           $set: expect.objectContaining({
             'jupyterNotebook.executedCells': 3, // cellIndex + 1 for complete
@@ -184,14 +206,14 @@ describe('jupyterNotebookProgress WebSocket handler', () => {
         _id: 'quest-789',
         jupyterNotebook: { status: 'executing', cellCount: 3 },
       });
-      (Quest.findByIdAndUpdate as Mock).mockResolvedValue({});
+      (Quest.findOneAndUpdate as Mock).mockResolvedValue({});
 
       const { func } = await import('../jupyterNotebookProgress');
       await func(mockEvent as any, mockContext as any, mockLogger as any);
 
       // Should record error in Quest and set status to 'failed'
-      expect(Quest.findByIdAndUpdate).toHaveBeenCalledWith(
-        'quest-789',
+      expect(Quest.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'quest-789', 'promptMeta.session.userId': 'user-456' },
         expect.objectContaining({
           $set: expect.objectContaining({
             'jupyterNotebook.lastError': "NameError: name 'x' is not defined",
@@ -224,14 +246,14 @@ describe('jupyterNotebookProgress WebSocket handler', () => {
         _id: 'quest-789',
         jupyterNotebook: { status: 'executing', cellCount: 3 },
       });
-      (Quest.findByIdAndUpdate as Mock).mockResolvedValue({});
+      (Quest.findOneAndUpdate as Mock).mockResolvedValue({});
 
       const { func } = await import('../jupyterNotebookProgress');
       await func(mockEvent as any, mockContext as any, mockLogger as any);
 
       // Should set status to completed
-      expect(Quest.findByIdAndUpdate).toHaveBeenCalledWith(
-        'quest-789',
+      expect(Quest.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'quest-789', 'promptMeta.session.userId': 'user-456' },
         expect.objectContaining({
           $set: expect.objectContaining({
             'jupyterNotebook.status': 'completed',
@@ -253,14 +275,14 @@ describe('jupyterNotebookProgress WebSocket handler', () => {
         _id: 'quest-789',
         jupyterNotebook: { status: 'executing', cellCount: 3 },
       });
-      (Quest.findByIdAndUpdate as Mock).mockResolvedValue({});
+      (Quest.findOneAndUpdate as Mock).mockResolvedValue({});
 
       const { func } = await import('../jupyterNotebookProgress');
       await func(mockEvent as any, mockContext as any, mockLogger as any);
 
       // Should update executedCells without incrementing (isComplete=false)
-      expect(Quest.findByIdAndUpdate).toHaveBeenCalledWith(
-        'quest-789',
+      expect(Quest.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'quest-789', 'promptMeta.session.userId': 'user-456' },
         expect.objectContaining({
           $set: expect.objectContaining({
             'jupyterNotebook.executedCells': 0, // cellIndex + 0 because not complete
@@ -279,6 +301,25 @@ describe('jupyterNotebookProgress WebSocket handler', () => {
       );
     });
 
+    it('scopes the Quest lookup to the connection owner', async () => {
+      // sessionId is caller-supplied; without the owner predicate this frame drives another
+      // user's notebook execution state.
+      mockEvent.body = createCellOutputBody();
+      (Quest.findOne as Mock).mockResolvedValue(null);
+
+      const { func } = await import('../jupyterNotebookProgress');
+      await func(mockEvent as any, mockContext as any, mockLogger as any);
+
+      expect(Quest.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: 'session-456',
+          'promptMeta.session.userId': 'user-456',
+        }),
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
     it('should handle case when no Quest is found', async () => {
       mockEvent.body = createCellOutputBody();
       (Quest.findOne as Mock).mockResolvedValue(null);
@@ -289,7 +330,7 @@ describe('jupyterNotebookProgress WebSocket handler', () => {
       expect(result).toEqual({ statusCode: 200 });
 
       // Should not update Quest
-      expect(Quest.findByIdAndUpdate).not.toHaveBeenCalled();
+      expect(Quest.findOneAndUpdate).not.toHaveBeenCalled();
 
       // Should still relay to web clients with empty questId
       expect(sendToClient).toHaveBeenCalledWith(

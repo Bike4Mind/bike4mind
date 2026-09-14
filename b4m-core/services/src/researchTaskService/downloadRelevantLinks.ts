@@ -43,7 +43,8 @@ interface IResearchTaskDownloadRelevantLinksAdapters {
     // resolves its enforcement lever from here. Absent, the lever resolves platform-only and a
     // per-org/owner/lake override silently does nothing on this door.
     scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
-    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
+    // 'find' is forwarded straight to createFabFile, for its fallback tagger's prefix-overlap check.
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'find'>;
   };
   storage: CreateFabFileAdapters['storage'];
   logger?: {
@@ -167,7 +168,13 @@ export const downloadRelevantLinks = async (
               } (${buffer.length} bytes)`
             );
           } else {
-            downloadedFile = await fabFilesService.createFabFile(user.id, downloadedFileData, adapters);
+            // Narrowed rather than forwarding `adapters` wholesale: its `logger` is
+            // `{info, error}`-shaped, not the `{warn?}` shape createFabFile's fallback-tagger
+            // diagnostics expect, and `jobs` is unrelated to file creation.
+            downloadedFile = await fabFilesService.createFabFile(user.id, downloadedFileData, {
+              db: adapters.db,
+              storage: adapters.storage,
+            });
             logger?.info(
               `✅ [DOWNLOAD_${index + 1}] File created: ${downloadedFile.id} ${
                 downloadedFile.mimeType

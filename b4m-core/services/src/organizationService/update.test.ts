@@ -64,30 +64,18 @@ describe('organizationService - update', () => {
       currentCredits: 2000,
     };
 
-    // Mock the current date for updatedAt
-    const mockDate = new Date('2023-02-01T00:00:00.000Z');
-    const originalDate = global.Date;
-    global.Date = vi.fn(function () {
-      return mockDate;
-    }) as any;
-    global.Date.now = originalDate.now;
+    await update(mockRegularUser as IUserDocument, updateParams, mockAdapters);
 
-    try {
-      await update(mockRegularUser as IUserDocument, updateParams, mockAdapters);
-
-      expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ...existingOrganization,
-          id: 'org1',
-          name: 'Updated Organization',
-          description: 'Updated description',
-          billingContact: 'updated@example.com',
-          updatedAt: mockDate,
-        })
-      );
-    } finally {
-      global.Date = originalDate;
-    }
+    // Targeted write: only the caller-editable fields that changed. currentCredits
+    // is admin-only, so a non-admin's value never reaches the write. Unchanged and
+    // non-editable fields (seats, users, updatedAt) are not round-tripped.
+    const persisted = mockAdapters.db.organizations.update.mock.calls[0][0];
+    expect(persisted).toEqual({
+      id: 'org1',
+      name: 'Updated Organization',
+      description: 'Updated description',
+      billingContact: 'updated@example.com',
+    });
   });
 
   it('should update only the provided fields and keep others unchanged', async () => {
@@ -104,15 +92,10 @@ describe('organizationService - update', () => {
       updatedAt: expect.any(Date),
     });
 
-    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: 'org1',
-        name: 'Updated Organization',
-        description: 'Original description', // Unchanged
-        billingContact: 'original@example.com', // Unchanged
-        currentCredits: 1000, // Unchanged
-      })
-    );
+    // Targeted write: only the changed field. Unchanged fields are left untouched in the
+    // DB rather than round-tripped (which is what stops a concurrent write being reverted).
+    const persisted = mockAdapters.db.organizations.update.mock.calls[0][0];
+    expect(persisted).toEqual({ id: 'org1', name: 'Updated Organization' });
   });
 
   it('should throw NotFoundError when organization is not found', async () => {
@@ -138,16 +121,12 @@ describe('organizationService - update', () => {
       mockAdapters
     );
 
-    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: 'org1',
-        name: 'Updated Organization',
-      })
-    );
-
     const updateCall = mockAdapters.db.organizations.update.mock.calls[0][0];
+    expect(updateCall).toEqual({ id: 'org1', name: 'Updated Organization' });
     expect(updateCall).not.toHaveProperty('extraParam');
-    expect(updateCall.seats).toBe(3); // Original value, not 10
+    // seats is not a caller-editable field, so it is never in the write - it stays 3 in the
+    // DB because a targeted write leaves it untouched, not because it was round-tripped.
+    expect(updateCall).not.toHaveProperty('seats');
   });
 
   it('should update currentCredits when provided by admin user', async () => {
@@ -178,12 +157,10 @@ describe('organizationService - update', () => {
 
     expect(result.currentCredits).toBe(1000); // Original value
 
-    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: 'org1',
-        currentCredits: 1000, // Original value, not 5000
-      })
-    );
+    // A non-admin's currentCredits never reaches the write at all (not round-tripped),
+    // so a concurrent credit change cannot be reverted by this PUT.
+    const persisted = mockAdapters.db.organizations.update.mock.calls[0][0];
+    expect(persisted).not.toHaveProperty('currentCredits');
   });
 
   // Regression: findUpdateAccessById returns a HYDRATED Mongoose doc (unlike
@@ -219,9 +196,12 @@ describe('organizationService - update', () => {
     expect(result.stripeCustomerId).toBe('cus_SECRET');
     expect(result.name).toBe('Acme2');
 
+    // The persisted write is a targeted partial built field-by-field, so hydrated
+    // internals cannot leak and non-editable fields (userId) are never round-tripped.
     const persisted = mockAdapters.db.organizations.update.mock.calls[0][0];
     expect('_doc' in persisted).toBe(false);
-    expect(persisted.userId).toBe('user1');
+    expect('$__' in persisted).toBe(false);
+    expect(persisted).toEqual({ id: 'org1', name: 'Acme2' });
   });
 
   it('sets a positive per-member cap when admin', async () => {
@@ -285,14 +265,15 @@ describe('organizationService - update', () => {
       updatedAt: expect.any(Date),
     });
 
-    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: 'org1',
-        name: 'Updated By Regular User',
-        description: 'Updated description by regular user',
-        billingContact: 'regular@example.com',
-        currentCredits: 1000, // Original value, not 5000
-      })
-    );
+    // The write carries only the caller-editable fields the non-admin changed;
+    // currentCredits is admin-only and never enters the write.
+    const persisted = mockAdapters.db.organizations.update.mock.calls[0][0];
+    expect(persisted).toEqual({
+      id: 'org1',
+      name: 'Updated By Regular User',
+      description: 'Updated description by regular user',
+      billingContact: 'regular@example.com',
+    });
+    expect(persisted).not.toHaveProperty('currentCredits');
   });
 });

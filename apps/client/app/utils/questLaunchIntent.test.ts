@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { consumeQuestLaunchIntent, setQuestLaunchIntent } from './questLaunchIntent';
+import {
+  consumeQuestLaunchIntent,
+  setQuestLaunchIntent,
+  armTrustedQuestLaunch,
+  consumeTrustedQuestLaunch,
+} from './questLaunchIntent';
 
 describe('questLaunchIntent', () => {
   it('returns null when no intent is pending', () => {
@@ -25,5 +30,18 @@ describe('questLaunchIntent', () => {
     setQuestLaunchIntent({ goal: 'second', autoSubmit: false, enableQuestMaster: true });
 
     expect(consumeQuestLaunchIntent()).toEqual({ goal: 'second', autoSubmit: false, enableQuestMaster: true });
+  });
+
+  describe('trusted launch flag', () => {
+    it('is not armed by default - an external goal never auto-submits', () => {
+      expect(consumeTrustedQuestLaunch()).toBe(false);
+    });
+
+    it('is armed by an in-app launch and consumed once', () => {
+      armTrustedQuestLaunch();
+      expect(consumeTrustedQuestLaunch()).toBe(true);
+      // Consume-once: a second /new visit (e.g. a post-login replay) reads false.
+      expect(consumeTrustedQuestLaunch()).toBe(false);
+    });
   });
 });

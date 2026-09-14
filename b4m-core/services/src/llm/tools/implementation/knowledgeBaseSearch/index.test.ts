@@ -249,8 +249,22 @@ describe('search_knowledge_base semantic fallback logging', () => {
     });
   }
 
+  const saved = {
+    B4M_SELF_HOST: process.env.B4M_SELF_HOST,
+    AWS_LAMBDA_FUNCTION_NAME: process.env.AWS_LAMBDA_FUNCTION_NAME,
+  };
   beforeEach(() => {
     (logger.warn as ReturnType<typeof vi.fn>).mockClear();
+    // Neither a cloud stage nor self-host by default; the cases that mean one say so. Stated
+    // rather than inherited, because whether Bedrock is reachable is now what decides the keyword
+    // fallback, and "not self-host" is no longer enough to claim it.
+    for (const k of Object.keys(saved)) delete process.env[k];
+  });
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
   });
 
   it('warns naming the missing adapter when adminSettings/apiKeys are not wired', async () => {
@@ -267,7 +281,10 @@ describe('search_knowledge_base semantic fallback logging', () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('no defaultEmbeddingModel configured'));
   });
 
-  it('warns naming the missing provider credential when the model is configured but keyless', async () => {
+  it('warns naming the missing provider credential on a keyless SELF-HOST', async () => {
+    // Self-host has no AWS role, so a missing provider key really is the end of the semantic arm.
+    // The warning has to name the credential, which is the thing an operator can actually fix.
+    process.env.B4M_SELF_HOST = 'true';
     getEffectiveLLMApiKeysMock.mockResolvedValueOnce({});
     const context = makeSemanticContext({
       adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
@@ -275,6 +292,22 @@ describe('search_knowledge_base semantic fallback logging', () => {
     });
     await run(context);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('no credential for provider'));
+  });
+
+  it('keeps semantic search on a keyless CLOUD stage instead of degrading to keyword', async () => {
+    // A cloud stage reaches Bedrock with its own role, so holding no provider key is not a reason
+    // to lose semantic search: resolveEmbeddingWithKeylessFallback swaps the model rather than
+    // returning null. This is the case every preview is in. The execution role is stated rather
+    // than inherited - hasKeylessCloudEmbedder requires positive evidence of one, and the test
+    // runner (like a plain `next dev`) has none.
+    process.env.AWS_LAMBDA_FUNCTION_NAME = 'some-stage-chatCompletion';
+    getEffectiveLLMApiKeysMock.mockResolvedValueOnce({});
+    const context = makeSemanticContext({
+      adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+      apiKeys: {},
+    });
+    await run(context);
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('no credential for provider'));
   });
 
   it('does not log a fallback warning when the embedding context resolves successfully', async () => {
@@ -484,6 +517,76 @@ describe('search_knowledge_base partial-corpus disclosure', () => {
 
     expect(fileScopedSemanticSearchMock).toHaveBeenCalled();
     expect(out).toContain('covered only 200 of 500 documents');
+  });
+
+  describe('supersession collapse threading', () => {
+    const contextWithFlag = (enabled: boolean) =>
+      semanticContext({
+        db: {
+          fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+          fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+          adminSettings: {
+            getSettingsValue: vi.fn(async (key: string) =>
+              key === 'EnableRetrievalSupersessionCollapse' ? enabled : 'text-embedding-ada-002'
+            ),
+          },
+          apiKeys: {},
+          usageEvents: { record: vi.fn() },
+        } as never,
+      });
+
+    it('passes the flag and the resolved lakes through - both are needed for a collapse to run', async () => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: [hit],
+        totalChunksSearched: 9,
+        filesInScope: 3,
+        scan: scanOf({}),
+      });
+
+      await run(contextWithFlag(true));
+
+      const params = semanticDataLakeSearchMock.mock.calls[0][0];
+      expect(params.supersessionCollapseEnabled).toBe(true);
+      expect(params.lakes).toEqual([{ id: 'lake-x', datalakeTag: 'datalake:x' }]);
+    });
+
+    it('defaults the flag to false when the setting is unset (the shipped default)', async () => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: [hit],
+        totalChunksSearched: 9,
+        filesInScope: 3,
+        scan: scanOf({}),
+      });
+
+      await run(contextWithFlag(false));
+
+      expect(semanticDataLakeSearchMock.mock.calls[0][0].supersessionCollapseEnabled).toBe(false);
+    });
+
+    it('reaches the model as a NOTE naming the suppressed ids and the matching tier', async () => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: [hit],
+        totalChunksSearched: 9,
+        filesInScope: 3,
+        scan: scanOf({}),
+        embeddingModel: 'text-embedding-ada-002',
+        supersession: {
+          count: 1,
+          sample: [{ fileId: 'old-id', fileName: 'Protocol.pdf', tier: 'fileName', supersededBy: 'new-id' }],
+          partial: true,
+        },
+      });
+
+      const out = await run(contextWithFlag(true));
+
+      expect(out).toContain('older file version(s) were not ranked');
+      expect(out).toContain('old-id');
+      expect(out).toContain('new-id');
+      expect(out).toContain('fileName');
+      // Recoverability is part of the notice: the bare-filename tier can be wrong, so the model has
+      // to know the suppressed member is still fetchable rather than gone.
+      expect(out).toContain('retrieve one by id or name');
+    });
   });
 
   it('forwards the resolved scan budgets into the search', async () => {
@@ -1078,9 +1181,9 @@ describe('search_knowledge_base untrusted-content delimiter (#1659)', () => {
       scan: { ...scan, filesMatching: 2, filesScoped: 2, filesScanned: 2, chunksScanned: 2 },
     });
     const out = await run(delimiterCtx());
-    expect(out).toContain('1. **Handbook** (relevance 0.81) - dated 2026-08-14');
+    expect(out).toContain('1. **Handbook** (ID: f1, relevance 0.81) - dated 2026-08-14');
     // No createdAt: the clause is absent entirely, not empty and not stringified.
-    expect(out).toContain('2. **Undated** (relevance 0.81)\n');
+    expect(out).toContain('2. **Undated** (ID: f2, relevance 0.81)\n');
     expect(out).not.toContain('dated undefined');
     expect(out).not.toContain('dated null');
     // Still exactly two real headers: the added suffix must not create or defang one.
@@ -1879,6 +1982,8 @@ describe('search_knowledge_base retrieval summary (#1867)', () => {
       outcome: 'ok',
       surfaces: ['knowledgeBaseSearch'],
       dataLakeTags: ['datalake:x'],
+      // A completed search that injected nothing - recorded, not left unknown.
+      injected: { chunks: 0, chars: 0 },
     });
   });
 
@@ -1892,8 +1997,19 @@ describe('search_knowledge_base retrieval summary (#1867)', () => {
     const ctx = makeContext({
       db: {
         fabfiles: {
+          // `vectorized: true` matters: makeContext's default retrievalFilter is vectorizedOnly,
+          // so a file without it is dropped by filterRetrievalExcluded and this test silently
+          // exercises the NO-HITS branch instead of the one it names.
           search: vi.fn().mockResolvedValue({
-            data: [{ id: 'f1', fileName: 'Handbook.pdf', tags: [{ name: 'datalake:x' }] }],
+            data: [
+              {
+                id: 'f1',
+                fileName: 'Handbook retired notes.pdf',
+                tags: [{ name: 'datalake:x' }],
+                vectorized: true,
+                mimeType: 'application/pdf',
+              },
+            ],
             total: 1,
           }),
         },
@@ -1904,11 +2020,18 @@ describe('search_knowledge_base retrieval summary (#1867)', () => {
 
     const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
     const retrievalCall = calls.find(c => (c[0] as { promptMeta?: { retrieval?: unknown } })?.promptMeta?.retrieval);
+    // Guards the branch this test is about: the hits write is the one carrying citables.
+    expect((retrievalCall?.[0] as { promptMeta: { citables?: unknown[] } }).promptMeta.citables).toHaveLength(1);
     expect((retrievalCall?.[0] as { promptMeta: { retrieval: unknown } }).promptMeta.retrieval).toEqual({
       attempted: true,
       outcome: 'ok',
       surfaces: ['knowledgeBaseSearch'],
       dataLakeTags: ['datalake:x'],
+      // NO `injected` (the exact-match assertion is what pins its absence). This arm matches file
+      // METADATA and emits names, types and tags - the model gets no passage content, so the
+      // output tells it to call retrieve_knowledge_content, and THAT tool decides the turn's
+      // passage volume while recording none. A zero here would survive the merge and assert a
+      // starve on a turn grounded on the whole document; unknown is the honest answer.
     });
   });
 
@@ -2039,6 +2162,126 @@ describe('search_knowledge_base retrieval summary (#1867)', () => {
   });
 });
 
+describe('search_knowledge_base injected volume', () => {
+  const passage = (over: Record<string, unknown> = {}) => ({
+    chunkId: 'c1',
+    fileId: 'f1',
+    fileName: 'Handbook.pdf',
+    fileTags: [],
+    chunkText: 'pto accrues monthly',
+    score: 0.81,
+    fileCreatedAt: null,
+    ...over,
+  });
+
+  /** Wires the deps the semantic arm needs so it actually runs rather than falling through. */
+  const semanticCtx = () =>
+    makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+
+  const retrievalWrites = (ctx: ToolContext) =>
+    (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls
+      .map(c => (c[0] as { promptMeta?: { retrieval?: { injected?: unknown } } })?.promptMeta?.retrieval)
+      .filter(Boolean);
+
+  beforeEach(() => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+  });
+
+  it('reports passages, served characters and the best score from the semantic arm', async () => {
+    const hits = [passage(), passage({ chunkId: 'c2', chunkText: 'holidays accrue too', score: 0.62 })];
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: hits,
+      totalChunksSearched: 9,
+      filesInScope: 1,
+      chunksScored: 9,
+    });
+    const ctx = semanticCtx();
+
+    await run(ctx);
+
+    // Two PASSAGES from ONE document: `chunks` is per-passage, which is exactly the count
+    // `citables` (deduped per file, and 1 here) cannot express. `chars` is the served text, so a
+    // reader can tell a two-line answer from a budget-filling one.
+    expect(retrievalWrites(ctx)).toContainEqual(
+      expect.objectContaining({
+        outcome: 'ok',
+        injected: {
+          chunks: 2,
+          chars: hits[0].chunkText.length + hits[1].chunkText.length,
+          topScore: 0.81,
+        },
+      })
+    );
+  });
+
+  it('leaves the volume unknown when the semantic arm finds nothing and the keyword arm hits', async () => {
+    // The turn that inverts the ticket's failure mode: semantic scores nothing above the floor,
+    // the keyword arm finds files and tells the model to fetch their text, and
+    // retrieve_knowledge_content - which then injects whole documents - records no volume. Any
+    // zero written here becomes the turn's final value (mergeInjected keeps the one-sided value),
+    // so a fully grounded turn would persist an affirmative "recorded starve".
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [],
+      totalChunksSearched: 9,
+      filesInScope: 1,
+      chunksScored: 9,
+    });
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'f1', fileName: 'Handbook.pdf', tags: [{ name: 'datalake:x' }] }],
+            total: 1,
+          }),
+          getAccessibleFiles: vi.fn(),
+        },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+
+    await run(ctx);
+
+    const writes = retrievalWrites(ctx);
+    expect(writes.length).toBeGreaterThan(0);
+    expect(writes.every(r => r?.injected === undefined)).toBe(true);
+  });
+
+  it('records no volume when the semantic arm throws, so a failure stays unknown rather than zero', async () => {
+    semanticDataLakeSearchMock.mockRejectedValue(new Error('embedding provider down'));
+    const ctx = semanticCtx();
+
+    await run(ctx);
+
+    const failed = retrievalWrites(ctx).find(r => r?.outcome === 'failed');
+    expect(failed).toBeDefined();
+    // The throwing surface reports no volume at all - it broke, so its volume is unknown, and a
+    // zero from it would be a lie. The keyword arm that runs next reports its own honest zero
+    // (it completed and injected no passage content), which is why the merged turn ends up
+    // 'failed' beside `chunks: 0`: worst-of outcome, sum-of-completions volume.
+    expect(failed?.injected).toBeUndefined();
+  });
+});
+
 /**
  * The semantic arm can run to completion having compared NOTHING against the query - every
  * candidate withheld for carrying no usable vector - and the keyword arm's write is then the only
@@ -2062,6 +2305,8 @@ describe('search_knowledge_base retrieval outcome when nothing was compared (#22
     annFilesQueried: 0,
     annHits: 0,
     annModelsQueried: 0,
+    capPromotions: 0,
+    candidatePoolK: 0,
     budgets: { maxFiles: 20000, maxChunks: 100000 },
   };
 
@@ -2652,6 +2897,94 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
     });
   }
 
+  /**
+   * This tool ranks 6 and serves 5 by default, so the engine's own cap pass (enforced at ITS topK)
+   * lands promotions in slots nobody reads - a promoted chunk scores at or below everything it
+   * displaced, so the re-sort puts it last. These pin the second pass at the served ceiling.
+   */
+  describe('per-document cap at the SERVED count (dataLakeSearchMaxChunksPerFile)', () => {
+    /**
+     * What the engine hands back at topK 6 with the cap already applied there: one document owns
+     * the top five, and the cap's single promotion from a second document sits in slot 6 - past
+     * the five this tool serves.
+     */
+    const crowdedTopK = [
+      ...Array.from({ length: 5 }, (_, i) => ({
+        chunkId: `a${i}`,
+        fileId: 'fileA',
+        fileName: 'Doc A.pdf',
+        fileTags: [],
+        chunkText: `passage body a${i}`,
+        score: 0.9 - i / 1000,
+      })),
+      {
+        chunkId: 'b0',
+        fileId: 'fileB',
+        fileName: 'Doc B.pdf',
+        fileTags: [],
+        chunkText: 'passage body b0',
+        score: 0.5,
+      },
+    ];
+
+    beforeEach(() => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: crowdedTopK,
+        totalChunksSearched: 400,
+        filesInScope: 200,
+        scan,
+      });
+    });
+
+    it('serves the promoted chunk that the engine top-K parked past the ceiling', async () => {
+      const out = await runWith({}, contextWithKbSettings({ dataLakeSearchMaxChunksPerFile: '2' }));
+
+      // Five passages as always - the cap redistributes membership, it never shrinks the set.
+      expect(passageCount(out)).toBe(5);
+      expect(out).toContain('**Doc B**');
+    });
+
+    it('leaves the served set alone with the cap off, so the case above is the cap and not the slice', async () => {
+      const out = await runWith({}, contextWithKbSettings({}));
+
+      expect(passageCount(out)).toBe(5);
+      expect(out).not.toContain('**Doc B**');
+    });
+
+    /**
+     * The agent-scoped arm runs its own cap pass over a different search call, so the pair above
+     * cannot cover it: replacing that pass with the uncapped results leaves them green.
+     */
+    describe('agent-scoped arm', () => {
+      const scopedContext = (settings: Record<string, string>) =>
+        contextWithKbSettings(settings, undefined, { kbScope: { fileIds: ['fileA', 'fileB'] } as never });
+
+      beforeEach(() => {
+        fileScopedSemanticSearchMock.mockResolvedValue({
+          results: crowdedTopK,
+          totalChunksSearched: 400,
+          filesInScope: 200,
+          scan,
+        });
+      });
+
+      it('serves the promoted chunk that the engine top-K parked past the ceiling', async () => {
+        const out = await runWith({}, scopedContext({ dataLakeSearchMaxChunksPerFile: '2' }));
+
+        expect(fileScopedSemanticSearchMock).toHaveBeenCalled();
+        expect(passageCount(out)).toBe(5);
+        expect(out).toContain('**Doc B**');
+      });
+
+      it('leaves the served set alone with the cap off, so the case above is the cap and not the slice', async () => {
+        const out = await runWith({}, scopedContext({}));
+
+        expect(passageCount(out)).toBe(5);
+        expect(out).not.toContain('**Doc B**');
+      });
+    });
+  });
+
   describe('relevance threshold (kbSearchMinRelevancePct, #1955)', () => {
     beforeEach(() => {
       invalidateSettingsCache();
@@ -2705,6 +3038,35 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
       const out = await runWith({}, contextWithKbSettings({ kbSearchMinRelevancePct: '50' }));
       expect(out).toContain('a configured relevance threshold filtered out every candidate passage');
       expect(out).toContain('Tell the user the knowledge base may be returning partial results');
+    });
+
+    it('does not blame the floor when nothing was compared - an unembedded lake is not a filtered one', async () => {
+      // Zero results is equally true of a corpus that was never vectorized, so attributing it to the
+      // threshold points the model (and the operator reading the log) at a knob that never ran.
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: [],
+        totalChunksSearched: 0,
+        filesInScope: 3,
+        chunksScored: 0,
+        scan: { ...scan, chunksScanned: 0, annHits: 0 },
+      });
+      const out = await runWith({}, contextWithKbSettings({ kbSearchMinRelevancePct: '50' }));
+      expect(out).not.toContain('a configured relevance threshold filtered out every candidate passage');
+      expect(clampLogger.log).not.toHaveBeenCalledWith(expect.stringContaining('relevance floor'));
+    });
+
+    it('still blames the floor on an ANN-served lake, which legitimately scores zero chunks', async () => {
+      // The guard must be `comparedNoPassages`, not `chunksScored > 0`: an Atlas/OpenSearch lake
+      // answers entirely from ANN hits and reports chunksScored 0 even when the floor did the work.
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: [],
+        totalChunksSearched: 0,
+        filesInScope: 3,
+        chunksScored: 0,
+        scan: { ...scan, chunksScanned: 0, annFilesQueried: 3, annHits: 12, annModelsQueried: 1 },
+      });
+      const out = await runWith({}, contextWithKbSettings({ kbSearchMinRelevancePct: '50' }));
+      expect(out).toContain('a configured relevance threshold filtered out every candidate passage');
     });
 
     it('an org-rung override on kbSearchMinRelevancePct reaches minScore end-to-end', async () => {
@@ -2963,8 +3325,20 @@ describe('search_knowledge_base narrows lake access to the session lake', () => 
     dataLakeTagPrefixes: ['mine:', 'other:'],
     scopedTagPrefixes: [],
     lakes: [
-      { id: 'l1', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:', source: 'registry' },
-      { id: 'l2', datalakeTag: 'datalake:other', fileTagPrefix: 'other:', source: 'registry' },
+      {
+        id: 'l1',
+        datalakeTag: 'datalake:mine',
+        fileTagPrefix: 'mine:',
+        membership: { kind: 'registry', datalakeTag: 'datalake:mine', fileTagPrefix: 'mine:' },
+        source: 'registry',
+      },
+      {
+        id: 'l2',
+        datalakeTag: 'datalake:other',
+        fileTagPrefix: 'other:',
+        membership: { kind: 'registry', datalakeTag: 'datalake:other', fileTagPrefix: 'other:' },
+        source: 'registry',
+      },
     ],
   };
 
@@ -3016,5 +3390,180 @@ describe('search_knowledge_base narrows lake access to the session lake', () => 
 
     const args = semanticDataLakeSearchMock.mock.calls[0][0];
     expect(args.dataLakeTags).toEqual(['datalake:mine', 'datalake:other']);
+  });
+});
+
+describe('search_knowledge_base flags passages that contradict each other', () => {
+  const CONFLICT_NOTE = 'NOTE: the retrieved documents below may contradict each other';
+
+  const scan = {
+    truncated: false,
+    fileBudgetHit: false,
+    chunkBudgetHit: false,
+    filesMatching: 2,
+    filesScoped: 2,
+    filesScanned: 2,
+    chunksScanned: 2,
+    chunksSkippedDimensionMismatch: 0,
+    annFilesQueried: 0,
+    annHits: 0,
+    budgets: { maxFiles: 20000, maxChunks: 100000 },
+  };
+
+  const hitOf = (fileId: string, chunkText: string) => ({
+    chunkId: `chunk-${fileId}`,
+    fileId,
+    fileName: `${fileId}.pdf`,
+    fileTags: [],
+    chunkText,
+    score: 0.81,
+  });
+
+  /** Spread over emptySemanticResult so the untyped mock keeps the fields the real service returns. */
+  const searchReturning = (results: ReturnType<typeof hitOf>[], scanOverride = scan) => ({
+    ...emptySemanticResult(),
+    results,
+    totalChunksSearched: results.length,
+    filesInScope: results.length,
+    scan: scanOverride,
+  });
+
+  function conflictContext(settings: Record<string, string> = {}): ToolContext {
+    const rows = Object.entries(settings).map(([settingName, settingValue]) => ({ settingName, settingValue }));
+    const findBySettingNames = vi.fn().mockResolvedValue(rows);
+    return makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: {
+          getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002'),
+          findAll: findBySettingNames,
+          findBySettingNames,
+        },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+  }
+
+  beforeEach(() => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+  });
+
+  it('keeps the conflict note at column 0, outside the untrusted block', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue(
+      searchReturning([hitOf('file-a', 'Uptime is 99.9%.'), hitOf('file-b', 'Uptime is 95%.')])
+    );
+
+    const out = await run(conflictContext());
+
+    const note = out.indexOf(CONFLICT_NOTE);
+    expect(note).toBeGreaterThanOrEqual(0);
+    // Inside the block the defang pass would indent it, and it would read as document text.
+    expect(note).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
+    // Sliced to the note itself, and asserted as the whole clause: the ids also appear in the passage
+    // headings, so a looser assertion would pass on a note naming the wrong field entirely.
+    const noteText = out.slice(note, out.indexOf('\n\n', note));
+    expect(noteText).toContain('metric-disagreement');
+    expect(noteText).toContain('across documents file-a, file-b.');
+  });
+
+  it('heads each passage with the id the note names, so the model can find it', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue(
+      searchReturning([hitOf('file-a', 'Uptime is 99.9%.'), hitOf('file-b', 'Uptime is 95%.')])
+    );
+
+    const out = await run(conflictContext());
+
+    // The other two channels head a section `### Name (ID: ...)`; without the same here, an id in the
+    // note is unresolvable on this channel.
+    // prettyFileName is what renders the label, so it is the id and not the name that is stable.
+    expect(out).toContain('(ID: file-a, relevance 0.81)');
+    expect(out).toContain('(ID: file-b, relevance 0.81)');
+  });
+
+  it('emits nothing when the passages agree, so the note cannot ship always-on', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue(
+      searchReturning([hitOf('file-a', 'Uptime is 99.9%.'), hitOf('file-b', 'Uptime is 99.9%.')])
+    );
+
+    expect(await run(conflictContext())).not.toContain(CONFLICT_NOTE);
+  });
+
+  // The note must describe the SERVED text. A conflict whose evidence was clipped out of the block is
+  // a claim about content the model cannot check - so the figure below sits past the serve budget.
+  it('says nothing about a conflicting figure that the serve budget clipped away', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue(
+      searchReturning([
+        hitOf('file-a', 'Uptime is 99.9%.'),
+        hitOf('file-b', `${'padding text. '.repeat(1000)} Uptime is 95%.`),
+      ])
+    );
+
+    const out = await run(conflictContext());
+
+    expect(out).not.toContain('Uptime is 95%.');
+    expect(out).toContain('Uptime is 99.9%.');
+    expect(out).not.toContain(CONFLICT_NOTE);
+  });
+
+  it('renders last of the column-0 notes, nearest the content it describes', async () => {
+    // Two notes ahead of it, not one: file-c is long enough to be clipped, which is what emits the
+    // truncation note, and carries no metric so it stays out of the conflict itself.
+    semanticDataLakeSearchMock.mockResolvedValue(
+      searchReturning(
+        [
+          hitOf('file-a', 'Uptime is 99.9%.'),
+          hitOf('file-b', 'Uptime is 95%.'),
+          hitOf('file-c', 'padding text. '.repeat(1000)),
+        ],
+        { ...scan, truncated: true, filesScanned: 1 }
+      )
+    );
+
+    const out = await run(conflictContext());
+
+    const scanNote = out.indexOf('covered only 1 of 2 documents');
+    const truncationNote = out.indexOf('NOTE: 1 of the 3 passages below was truncated');
+    const conflict = out.indexOf(CONFLICT_NOTE);
+    expect(scanNote).toBeGreaterThanOrEqual(0);
+    expect(truncationNote).toBeGreaterThanOrEqual(0);
+    expect(scanNote).toBeLessThan(truncationNote);
+    expect(truncationNote).toBeLessThan(conflict);
+    expect(conflict).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
+
+    // And after the "answer directly" line, which tells the model to do the opposite of what the
+    // conflict note asks. Whichever instruction comes last is the one it reads against the content.
+    expect(conflict).toBeGreaterThan(out.indexOf('so answer directly and only call'));
+    expect(conflict).toBeGreaterThan(out.indexOf(GROUNDED_NO_INVENTION_RULE));
+  });
+
+  // The third column-0 note the ordering test above cannot reach: it emits only under a configured
+  // token budget, so the fixture has to configure one. file-c is dropped by the budget, which is what
+  // emits the note, and the conflicting pair ranks ahead of it and is still served.
+  it('renders after the budget note too', async () => {
+    invalidateSettingsCache();
+    countTokensMock.mockClear().mockResolvedValue(80); // 2 of the 3 passages fit in 170
+    semanticDataLakeSearchMock.mockResolvedValue(
+      searchReturning([
+        hitOf('file-a', 'Uptime is 99.9%.'),
+        hitOf('file-b', 'Uptime is 95%.'),
+        hitOf('file-c', 'Nothing quantitative here.'),
+      ])
+    );
+
+    const out = await run(conflictContext({ kbSearchResultTokenBudget: '170' }));
+
+    const budgetNote = out.indexOf('further relevant passage(s) matched but were not included');
+    const conflict = out.indexOf(CONFLICT_NOTE);
+    expect(budgetNote).toBeGreaterThanOrEqual(0);
+    expect(budgetNote).toBeLessThan(conflict);
+    expect(conflict).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
   });
 });

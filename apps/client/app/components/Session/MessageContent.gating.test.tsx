@@ -1,5 +1,5 @@
 import React, { ReactNode } from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -157,6 +157,13 @@ function renderAndOpenActionsMenu() {
   fireEvent.click(screen.getByTestId('message-actions-menu-btn'));
 }
 
+// Publish-and-share is a top-level button in the action bar, not a menu item, so
+// no dropdown has to be opened first.
+function renderAndClickPublishShare(data: IChatHistoryItem = messageData) {
+  renderMessageContent(data);
+  fireEvent.click(screen.getByTestId('message-publish-share-btn'));
+}
+
 beforeEach(() => {
   mocks.showCreditsUsed = true;
   mocks.serverSettings = [];
@@ -188,8 +195,8 @@ describe('MessageContent actions menu - EnableDataLakes gating', () => {
 
     renderAndOpenActionsMenu();
 
-    // Share sits right after the gated item; Delete closes the menu - both must survive.
-    expect(screen.getByTestId('message-share-reply')).toBeInTheDocument();
+    // Delete sits right after the gated item; the items above it must survive too.
+    expect(screen.getByText('Delete')).toBeInTheDocument();
     expect(screen.getByText('Toggle Code View')).toBeInTheDocument();
     expect(screen.getByText(/^Save as/)).toBeInTheDocument();
   });
@@ -215,9 +222,7 @@ describe('MessageContent share reply - org (Team) visibility wiring', () => {
 
   it('offers the Team option and publishes org-scoped when an org account is active', async () => {
     selectedAccountValue = { id: 'org_42', name: 'Acme', personal: false };
-    renderAndOpenActionsMenu();
-
-    fireEvent.click(screen.getByTestId('message-share-reply'));
+    renderAndClickPublishShare();
 
     await waitFor(() => expect(publishAndShareSpy).toHaveBeenCalledTimes(1));
     // The dialog is told to offer Team, and the publisher is built with the org id so a Team
@@ -230,9 +235,7 @@ describe('MessageContent share reply - org (Team) visibility wiring', () => {
 
   it('omits the Team option in a personal account context', async () => {
     selectedAccountValue = null;
-    renderAndOpenActionsMenu();
-
-    fireEvent.click(screen.getByTestId('message-share-reply'));
+    renderAndClickPublishShare();
 
     await waitFor(() => expect(publishAndShareSpy).toHaveBeenCalledTimes(1));
     expect(publishAndShareSpy.mock.calls[0][0].orgOption).toBeUndefined();
@@ -244,13 +247,88 @@ describe('MessageContent share reply - org (Team) visibility wiring', () => {
     // accepts a Team publish for user.organizationId. Selecting a different (still valid) org must
     // not offer Team, or the publish would 403.
     selectedAccountValue = { id: 'org_OTHER', name: 'Other Org', personal: false };
-    renderAndOpenActionsMenu();
-
-    fireEvent.click(screen.getByTestId('message-share-reply'));
+    renderAndClickPublishShare();
 
     await waitFor(() => expect(publishAndShareSpy).toHaveBeenCalledTimes(1));
     expect(publishAndShareSpy.mock.calls[0][0].orgOption).toBeUndefined();
     expect(replyPublisherMock).toHaveBeenCalledWith(expect.objectContaining({ orgId: undefined }));
+  });
+});
+
+describe('MessageContent publish-and-share - visible action-bar button', () => {
+  // The action used to be buried in the "More options" dropdown and users never found it.
+  // It now sits in the always-visible action bar, and must NOT also be in the menu.
+  const emptyReplyMessageData = {
+    id: 'quest-2',
+    prompt: 'hello',
+    replies: [],
+    status: 'done',
+  } as unknown as IChatHistoryItem;
+
+  beforeEach(() => {
+    isFeatureEnabled.mockReset();
+    isFeatureEnabled.mockReturnValue(true);
+    publishAndShareSpy.mockReset();
+    replyPublisherMock.mockReset();
+    replyPublisherMock.mockReturnValue(vi.fn());
+    selectedAccountValue = null;
+  });
+
+  it('renders the labeled button without opening any menu', () => {
+    renderMessageContent();
+
+    const button = screen.getByTestId('message-publish-share-btn');
+    expect(button).toBeInTheDocument();
+    expect(button).toHaveTextContent('Publish & Share');
+  });
+
+  it('hides the button when the reply has no shareable content', () => {
+    renderMessageContent(emptyReplyMessageData);
+
+    expect(screen.queryByTestId('message-publish-share-btn')).not.toBeInTheDocument();
+  });
+
+  it('invokes the share flow on click', async () => {
+    renderAndClickPublishShare();
+
+    await waitFor(() => expect(publishAndShareSpy).toHaveBeenCalledTimes(1));
+    expect(replyPublisherMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-1', messageId: 'quest-1' })
+    );
+  });
+
+  it('no longer duplicates the action inside the More options menu', () => {
+    renderAndOpenActionsMenu();
+
+    expect(screen.queryByTestId('message-share-reply')).not.toBeInTheDocument();
+  });
+
+  // The action bar is duplicated for the narrow layout, so the mobile copy needs its own
+  // coverage - the desktop assertions above cannot catch a miss there.
+  describe('mobile action bar', () => {
+    const desktopWidth = window.innerWidth;
+
+    beforeEach(() => {
+      // MessageContent reads window.innerWidth on mount to pick the layout.
+      Object.defineProperty(window, 'innerWidth', { value: 500, configurable: true, writable: true });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(window, 'innerWidth', { value: desktopWidth, configurable: true, writable: true });
+    });
+
+    it('renders the icon button and wires it to the share flow', async () => {
+      renderAndClickPublishShare();
+
+      expect(document.querySelector('.action-buttons-mobile')).not.toBeNull();
+      await waitFor(() => expect(publishAndShareSpy).toHaveBeenCalledTimes(1));
+    });
+
+    it('hides the icon button when the reply has no shareable content', () => {
+      renderMessageContent(emptyReplyMessageData);
+
+      expect(screen.queryByTestId('message-publish-share-btn')).not.toBeInTheDocument();
+    });
   });
 });
 

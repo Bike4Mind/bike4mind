@@ -17,8 +17,7 @@ export interface IOAuthAuthorizationCodeDocument extends IMongoDocument {
 }
 
 export interface IOAuthAuthorizationCodeRepository extends IBaseRepository<IOAuthAuthorizationCodeDocument> {
-  findValidCode(code: string): Promise<IOAuthAuthorizationCodeDocument | null>;
-  markUsed(id: string): Promise<void>;
+  consumeValidCode(code: string): Promise<IOAuthAuthorizationCodeDocument | null>;
 }
 
 type IOAuthAuthorizationCodeModel = Model<IOAuthAuthorizationCodeDocument>;
@@ -51,12 +50,16 @@ class OAuthAuthorizationCodeRepository
     super(m);
   }
 
-  findValidCode(code: string) {
-    return this.model.findOne({ code, used: false, expiresAt: { $gt: new Date() } }).exec();
-  }
-
-  async markUsed(id: string): Promise<void> {
-    await this.model.updateOne({ _id: id }, { $set: { used: true } });
+  /**
+   * Atomically claim an unused, unexpired code: flip `used` false->true and return
+   * the matched document, or null if it was already used/expired/unknown. Single
+   * DB round-trip so two concurrent token requests can't both redeem one code
+   * (the find-then-mark split had a race that let a leaked code be spent twice).
+   */
+  consumeValidCode(code: string) {
+    return this.model
+      .findOneAndUpdate({ code, used: false, expiresAt: { $gt: new Date() } }, { $set: { used: true } })
+      .exec();
   }
 }
 

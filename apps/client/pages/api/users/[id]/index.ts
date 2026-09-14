@@ -36,10 +36,16 @@ const handler = baseApi().get<Request<{}, unknown, unknown, { id: string }>>(asy
   const isAdmin = req.user.isAdmin;
 
   if (isSelf || isAdmin) {
-    // Self/admin-gated profile view. Strip credentials, but keep securityQuestions +
-    // userNotes: the profile-edit form (ProfileDataForm) loads and round-trips them,
-    // so dropping them here would blank the admin notes on save.
-    return res.json(redactUserSecretsForSelf(user, { keep: ['securityQuestions', 'userNotes'] }));
+    // Self/admin-gated profile view. securityQuestions belong to the subject, so a self view
+    // keeps them. userNotes are admin-authored notes ABOUT the subject and are gated on the
+    // VIEWER: ProfileDataForm excludes them from its save payload (see its field allowlist
+    // and ProfileDataForm.test.tsx), so a non-admin self view cannot blank them on save.
+    return res.json(
+      redactUserSecretsForSelf(user, {
+        keep: ['securityQuestions'],
+        ...(isAdmin && { keepAdminOnly: ['userNotes'] as const }),
+      })
+    );
   }
 
   return respond(res, publicUserProfileResponseSchema, toPublicProfile(user));

@@ -144,9 +144,12 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
   });
 
   /** Drive the service's post-destruction hook the way the service itself would. */
-  const runOnPurged = async (purged: { ownerUserId: string; fileSize: number; tagNames: string[] }) => {
+  const runOnPurged = async (
+    purged: { ownerUserId: string; fileSize: number; tagNames: string[] },
+    auth?: { user?: { id: string }; apiKeyInfo?: { keyId: string } }
+  ) => {
     const { res } = makeRes();
-    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
+    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }, auth), res);
     await h.purgeDataLakeDocument.mock.calls[0][3].onPurged(purged);
   };
 
@@ -217,6 +220,26 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     );
   });
 
+  it('carries the key principal into the other-lakes rebuild, which can auto-activate a draft lake', async () => {
+    // A narrower actor here records a key-driven auto-activation (recomputeLakeStats) as the owning
+    // human's own edit, permanently, on a lake the caller never named.
+    await runOnPurged(
+      { ownerUserId: 'owner-9', fileSize: 10, tagNames: ['datalake:archive'] },
+      { user: { id: 'u1' }, apiKeyInfo: { keyId: 'key-abc' } }
+    );
+
+    expect(h.recomputeStatsForLakeTags).toHaveBeenCalledWith(
+      ['datalake:archive'],
+      expect.objectContaining({
+        actor: {
+          userId: 'u1',
+          isAdmin: false,
+          auditPrincipal: { principalKind: 'apiKey', principalId: 'key-abc', onBehalfOfUserId: 'u1' },
+        },
+      })
+    );
+  });
+
   it('drops the purged lake from the rebuild whatever the case of its tag', async () => {
     await runOnPurged({ ownerUserId: 'owner-9', fileSize: 10, tagNames: ['DataLake:Sales'] });
 
@@ -246,9 +269,10 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
   });
 
   it('names the KEY, not its owner, when a b4m_live_ key drives the destruction', async () => {
-    // `baseApi()` sets no requiredScopes here, so any valid key reaches the most destructive door
-    // in the lake surface. The row is immutable and floor-retained for 450 days: attributing a
-    // key-driven destroy to the human as though they did it by hand cannot be corrected later.
+    // Even with `requiredScopes: DATA_LAKE_WRITE_SCOPES` gating this door, a key that legitimately
+    // holds datalake:write still reaches the most destructive door in the lake surface. The row is
+    // immutable and floor-retained for 450 days: attributing a key-driven destroy to the human as
+    // though they did it by hand cannot be corrected later.
     const { res } = makeRes();
     await call(
       req({ id: 'lake-oid-1', fabFileId: FILE_ID }, { user: { id: 'u1' }, apiKeyInfo: { keyId: 'key-abc' } }),

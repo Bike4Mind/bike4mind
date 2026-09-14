@@ -80,6 +80,14 @@ export const LAKE_CONFIG_CHANGE_ACTIONS = [
    * record `system` for that too.
    */
   'auto-activate',
+  /**
+   * A grant WRITE on the lake's access-grant relation: `grant-access` creates or re-roles one
+   * principal's grant, `revoke-access` removes it. Split from `transfer-ownership` because that
+   * door moves ownership under its own narrower authority ladder and its own consent guard - these
+   * two are the routine reader/curator sharing door, which refuses the `owner` role outright.
+   */
+  'grant-access',
+  'revoke-access',
 ] as const;
 export type LakeConfigChangeAction = (typeof LAKE_CONFIG_CHANGE_ACTIONS)[number];
 
@@ -109,6 +117,7 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   organizationId: 'audited',
   isPublic: 'audited',
   auditQueryTextEnabled: 'audited',
+  lakeMemoryEnabled: 'audited',
   status: 'audited',
   // Immutable by design (it anchors the membership prefix arm), so this is a tripwire rather than
   // an expected row: if it ever moves, the audit says so instead of the change passing unseen.
@@ -125,6 +134,13 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   filesArchivedAt: 'excluded',
   lakeMemoryExtractionAt: 'excluded',
   lakeMemoryCursor: 'excluded',
+  // The purge itself is audited as its own event (LAKE_MEMORY_PURGED); a config row for the fence
+  // stamp would duplicate it.
+  lakeMemoryPurgedAt: 'excluded',
+  // Derived, not configuration: a detector's output and its timestamp. An owner changing them is not
+  // a config change, and auditing them would put document excerpts in the config history.
+  inconsistencyReport: 'excluded',
+  inconsistencyComputedAt: 'excluded',
 } as const satisfies Record<keyof IDataLake, 'audited' | 'excluded'>;
 
 /** The audited keys as a precise literal union, derived from the map so the two cannot drift. */
@@ -162,11 +178,24 @@ export const LAKE_CONFIG_FINGERPRINTED_FIELDS = ['systemPrompt'] as const satisf
  */
 export const LAKE_CONFIG_DERIVED_FIELD_EFFECTIVE_OWNER = 'effectiveOwnerUserId';
 
+/**
+ * A DERIVED field, like the effective owner above and for the same reason: a grant write moves a
+ * row in `DataLakeAccessGrant`, never a field on the lake, so `diffLakeConfig` can never see it.
+ * Its value names the principal as well as the role (see `grantChange`), because "who" is the
+ * whole content of an access change - a bare `reader -> undefined` would say nothing an owner
+ * could act on.
+ */
+export const LAKE_CONFIG_DERIVED_FIELD_ACCESS_GRANT = 'accessGrant';
+
 export const LAKE_CONFIG_CHANGE_FIELDS: readonly LakeConfigChangeField[] = [
   ...LAKE_CONFIG_DOCUMENT_FIELDS,
   LAKE_CONFIG_DERIVED_FIELD_EFFECTIVE_OWNER,
+  LAKE_CONFIG_DERIVED_FIELD_ACCESS_GRANT,
 ];
-export type LakeConfigChangeField = LakeConfigDocumentField | typeof LAKE_CONFIG_DERIVED_FIELD_EFFECTIVE_OWNER;
+export type LakeConfigChangeField =
+  | LakeConfigDocumentField
+  | typeof LAKE_CONFIG_DERIVED_FIELD_EFFECTIVE_OWNER
+  | typeof LAKE_CONFIG_DERIVED_FIELD_ACCESS_GRANT;
 
 /**
  * Compile-time pin: every field `UpdateDataLakeRequestInput` can write MUST be audited. Without it

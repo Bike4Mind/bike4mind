@@ -1,8 +1,15 @@
 import { userRepository } from '@bike4mind/database';
-import { ApiKeyScope, LLMApiRequestBody, redactSessionForClient } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  LLMApiRequestBody,
+  PROMPT_TEXT_MAX,
+  UnprocessableEntityError,
+  redactSessionForClient,
+} from '@bike4mind/common';
 import { ChatCompletionInvoke } from '@bike4mind/services';
 import { SQSService } from '@bike4mind/utils';
 import { getOrCreateSession } from '@server/managers/sessionManager';
+import { resolveBillingOrgId } from '@server/utils/orgAccess';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
@@ -30,6 +37,24 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
   )
   .post(async (req: Request<unknown, unknown, LLMApiRequestBody>, res) => {
     const { sessionId: reqSessionId, sessionName, ...invokeParams } = req.body;
+
+    // This route spreads req.body straight into the invoke params rather than parsing it here, but
+    // it is not unvalidated: the ChatCompletionInvokeParamsSchema.parse that opens invoke() caps
+    // systemPrompt and throws outside any try, so an oversized value already 422s with no quest row.
+    // Re-checking here is purely about side effects, and how many depends on the branch: with no
+    // sessionId, getOrCreateSession creates a session, notifies and writes event logs; on every
+    // request the lastNotebookId update just below fires at push time, so it lands even though the
+    // throw path never awaits asyncPromises. Thrown rather than returned so errorHandler logs the
+    // rejection - a returned status leaves no line carrying one.
+    const { systemPrompt } = req.body;
+    if (systemPrompt !== undefined && typeof systemPrompt !== 'string') {
+      throw new UnprocessableEntityError('systemPrompt must be a string.', { code: 'SYSTEM_PROMPT_INVALID' });
+    }
+    if (typeof systemPrompt === 'string' && systemPrompt.length > PROMPT_TEXT_MAX) {
+      throw new UnprocessableEntityError(`systemPrompt exceeds the ${PROMPT_TEXT_MAX}-character limit.`, {
+        code: 'SYSTEM_PROMPT_TOO_LONG',
+      });
+    }
 
     const { session, sessionId, asyncPromises } = await getOrCreateSession({
       sessionId: req.body.sessionId,
@@ -73,13 +98,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       },
     });
 
-    // Call invoke with the proper structure, matching what the frontend sends
-    // organizationId: null means personal account (no org), undefined means not sent (fall back to user's org)
-    // Note: req.user.organizationId is a MongoDB ObjectId, must convert to string for Zod validation
-    const effectiveOrgId =
-      invokeParams.organizationId !== undefined
-        ? invokeParams.organizationId
-        : (req.user.organizationId?.toString() ?? null);
+    // Resolve the billing org from the client-supplied value, rejecting any org the caller is
+    // not a member of (a bare body value would otherwise let A bill B's credit pool).
+    // null = personal account, undefined = fall back to the caller's own org.
+    const effectiveOrgId = await resolveBillingOrgId(req, invokeParams.organizationId);
 
     const quest = await chatCompletion.invoke({
       body: {

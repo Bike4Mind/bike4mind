@@ -9,11 +9,18 @@
  *
  * Browse stays the wider of the two - see the difference list in ./index.ts (admin reach;
  * draft lakes). Retrieval is a subset in every case, never the reverse. Do not paper those
- * over here. An owner's own gated lake is no longer among them: the core resolver restores it.
+ * over here. An owner's own gated lake is no longer among them: the core resolver restores it, and
+ * so is a lake held by an owner/curator grant - the grant arm below is what keeps browse and
+ * retrieval agreeing on a transferred lake.
  */
 import { DATA_LAKES, hasDeveloperUserTag, type DataLakeConfig } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository, organizationRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  dataLakeAccessGrantRepository,
+  dataLakeRepository,
+  organizationRepository,
+} from '@bike4mind/database';
 import { getRequestEntitlements, getUserEntitlements, type EntitlementRequest } from '@server/entitlements';
 import type { Logger } from '@bike4mind/observability';
 import { getRequestMembershipOrgIds, type MembershipRequest } from './requestMembership';
@@ -59,7 +66,13 @@ export function withStaticRegistryBypass(
     // Per-lake entries follow the same widening, or a privileged caller could search a registry
     // lake but not count it. Registry-sourced by construction, like the prefixes above, and
     // keyed on the globally-unique meta-tag so a lake the scope already resolved keeps its own
-    // (possibly membership-carrying) entry.
+    // entry (and with it that lake's creator-anchored scope, rather than a weaker registry copy).
+    //
+    // The scope comes from `registryMembershipScope`, i.e. off the same compile-time registry
+    // config as the prefixes, which is property 1 above applied to this bucket: reading it off
+    // `scope` would let a DB row shadowing a registry id launder its user-controlled prefix into
+    // an unanchored arm. Multi-lake retrieval drops these anyway (`lakeMembershipsFrom`); what
+    // they buy is the whole-lake count, which is per-lake and access-gated.
     lakes: [
       ...scope.lakes,
       ...registry
@@ -70,6 +83,7 @@ export function withStaticRegistryBypass(
           slug: lake.slug,
           datalakeTag: lake.datalakeTag,
           fileTagPrefix: lake.fileTagPrefix,
+          membership: dataLakeService.registryMembershipScope(lake),
           source: 'registry' as const,
         })),
     ],
@@ -143,6 +157,16 @@ export async function resolveRetrievalLakeScopeForUser(
     entitlementKeys?: string[];
     /** Pre-memoized membership lookup; falls back to the repository when absent. */
     findMembershipOrgIds?: (uid: string) => Promise<string[]>;
+    /**
+     * Default `true` - today's behaviour for every existing caller, none of which passes this
+     * flag. Pass `false` to opt a caller OUT of the privileged static-registry widening below.
+     * The attachment door does this: that widening escalates registry reach from passages
+     * (semantic-search) to whole inlined documents, and the chat attachment door structurally
+     * cannot follow it (`b4m-core/services` cannot import `@server/*`), so inheriting it here
+     * would ship the two attachment doors disagreeing for exactly the caller class most likely
+     * to notice.
+     */
+    staticRegistryBypass?: boolean;
   } = {}
 ): Promise<RetrievalLakeScope> {
   // Resolved for every caller, including admins. The static-registry bypass below covers only STATIC
@@ -159,6 +183,11 @@ export async function resolveRetrievalLakeScopeForUser(
       organizations: {
         findMembershipOrgIds: opts.findMembershipOrgIds ?? (uid => organizationRepository.findMembershipOrgIds(uid)),
       },
+      // The grant rung, on the same terms browse resolves it. Both are wired here for the same
+      // reason the chat/tool contexts carry them: an unthreaded site is not a type error, it just
+      // silently drops a grant-reached lake out of retrieval.
+      dataLakeAccessGrants: dataLakeAccessGrantRepository,
+      adminSettings: adminSettingsRepository,
     },
     user: { id: user.id, tags: user.tags ?? [] },
     entitlementKeys,
@@ -166,5 +195,5 @@ export async function resolveRetrievalLakeScopeForUser(
   });
 
   const isPrivileged = !!user.isAdmin || hasDeveloperUserTag(user.tags);
-  return isPrivileged ? withStaticRegistryBypass(scope) : scope;
+  return isPrivileged && (opts.staticRegistryBypass ?? true) ? withStaticRegistryBypass(scope) : scope;
 }

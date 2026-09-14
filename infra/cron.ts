@@ -1,3 +1,4 @@
+import { execSync } from 'child_process';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { emailJobQueue } from './emailMarketing';
 import { allSecrets } from './secrets';
@@ -647,9 +648,10 @@ const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
     // dataLakeTaxonomyQueue + websocketApi: the stuck-batch backstop calls
     // enqueueTaxonomyAnalysisIfWanted, which needs Resource.dataLakeTaxonomyQueue.url to
     // enqueue and, on a rate-limited batch, Resource.websocket.managementEndpoint to push the
-    // live status update. fabFileChunkQueue: the un-chunked rescue sweep (#1420) re-enqueues
-    // complete-but-never-chunked files for chunking.
-    link: [...allSecrets, dataLakeTaxonomyQueue, websocketApi, fabFileChunkQueue],
+    // live status update. fabFileChunkQueue: the un-chunked rescue sweep re-enqueues
+    // complete-but-never-chunked files for chunking. fabFileBucket: the moderation rescue sweep
+    // downloads stranded files to re-run the image scan.
+    link: [...allSecrets, dataLakeTaxonomyQueue, websocketApi, fabFileChunkQueue, fabFileBucket],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -659,6 +661,11 @@ const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
     permissions: [
       {
         actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+      // The moderation rescue sweep re-runs the image scan on stranded files.
+      {
+        actions: ['rekognition:DetectModerationLabels'],
         resources: ['*'],
       },
     ],
@@ -784,6 +791,73 @@ const driveLakeResyncPollCron = new sst.aws.Cron('driveLakeResyncPoll', {
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+/**
+ * system-help data-lake re-sync
+ * Mirrors the public help corpus into the `system-help` lake - the corpus behind in-chat
+ * `search_knowledge_base`. Previously this only ever ran when someone remembered to invoke
+ * `help:ingest-datalake` through `sst shell`, so the lake drifted from the shipped docs in both
+ * directions (missing new articles, still serving deleted ones).
+ *
+ * The mirror is differential (see the shared ingestHelpDatalake), so a tick on an unchanged corpus
+ * writes nothing and spends nothing on embeddings; only a deploy that moved the docs costs anything.
+ * Does NOT bootstrap: with no lake row the handler no-ops, because the lake's `createdByUserId` is
+ * the file owner and whose LLM keys embed the chunks.
+ *
+ * copyFiles carries the corpus into the bundle from the COMMITTED sources - `docs-site/docs` and the
+ * generated-but-committed `help-index.json` - so it is present regardless of whether
+ * `help:bundle-content` ran during the build. MUST STAY IN SYNC with CORPUS_DIR in the handler.
+ *
+ * HELP_CORPUS_VERSION exists only to make a docs-only edit redeploy the function: SST does not
+ * notice copyFiles CONTENT changes, so without it the bundle keeps the corpus from whenever the
+ * handler last changed and this cron converges the lake onto stale docs on a 6-hour loop, silently.
+ * Same workaround, same shape as MCP_VERSION in infra/mcp.ts.
+ *
+ * Schedule: every 6 hours, so a docs change lands in the lake the same day it deploys.
+ * Enabled: production + dev
+ */
+const HELP_CORPUS_HASH = execSync(
+  "git ls-tree -r HEAD docs-site/docs apps/client/app/generated/help-index.json | awk '{print $3}' | sort | md5sum | awk '{print $1}'"
+)
+  .toString()
+  .trim()
+  .slice(0, 8);
+
+const helpDatalakeIngestCron = new sst.aws.Cron('helpDatalakeIngest', {
+  schedule: 'rate(6 hours)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/client/server/cron/helpDatalakeIngest.handler',
+    runtime: 'nodejs24.x',
+    // Generous: a first run after a docs-wide edit re-embeds the whole corpus one chunk at a
+    // time. The steady state is a few seconds; the handler's own per-run create cap is what
+    // keeps a pathological corpus from reaching this ceiling.
+    timeout: '15 minutes',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+      HELP_CORPUS_VERSION: HELP_CORPUS_HASH,
+    },
+    copyFiles: [
+      { from: 'docs-site/docs', to: 'help-corpus/docs' },
+      { from: 'apps/client/app/generated/help-index.json', to: 'help-corpus/help-index.json' },
+    ],
+    // This cron embeds the whole help corpus through createHelpEmbedder, so it needs the same
+    // Bedrock grant the vectorize subscriber has (infra/queues.ts): an admin can point
+    // defaultEmbeddingModel at Titan, and a stage with no provider key falls back to it. Without
+    // this the first tick AccessDenies on every chunk and retries the whole corpus every 6 hours.
+    permissions: [
+      {
+        actions: ['bedrock:InvokeModel'],
+        resources: ['*'],
+      },
+    ],
+    logging: {
+      retention: '1 week',
+    },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 export {
   dailyUserActivityReport,
   weeklyUserActivityReport,
@@ -813,4 +887,5 @@ export {
   dataLakeBatchReconcileCron,
   spendReconciliationCron,
   driveLakeResyncPollCron,
+  helpDatalakeIngestCron,
 };

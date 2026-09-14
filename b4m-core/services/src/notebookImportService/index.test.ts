@@ -41,7 +41,10 @@ function makeAdapters(existingSessions: unknown[] = []) {
     },
     chatHistoryRepository: { bulkCreate, deleteMany: vi.fn() },
     knowledgeRepository: { create: vi.fn() },
-    artifactRepository: { create: vi.fn() },
+    artifactIdTaken: vi.fn().mockResolvedValue(false),
+    // Returns the id the creation path minted, which is what the notebook's array records. The
+    // shape matters: the client reads a shorter id as an incomplete legacy artifact.
+    createArtifact: vi.fn().mockResolvedValue({ id: 'artifact_code_red-circle-a1b2c3_1700000000000_0' }),
     toolRepository: { create: vi.fn(), find: vi.fn(), findById: vi.fn() },
     agentRepository: { create: vi.fn() },
     userRepository: { findById: vi.fn().mockResolvedValue({ id: 'user-1' }) },
@@ -157,8 +160,12 @@ describe('attachment ids come from the store, not from this service', () => {
       } as never
     );
     const sessionCreate = adapters.sessionRepository.create as ReturnType<typeof vi.fn>;
+    const sessionUpdate = adapters.sessionRepository.updateById as ReturnType<typeof vi.fn>;
     expect(sessionCreate).toHaveBeenCalledTimes(1);
-    return sessionCreate.mock.calls[0][0];
+    expect(sessionUpdate).toHaveBeenCalledTimes(1);
+    // Two payloads, because the notebook is created before its attachments exist and the ids are
+    // written back afterwards: `created` is the metadata, `attached` is the four id arrays.
+    return { created: sessionCreate.mock.calls[0][0], attached: sessionUpdate.mock.calls[0][1] };
   };
 
   // ToolSchema requires llmParams; without it every tool write was rejected and swallowed.
@@ -181,9 +188,9 @@ describe('attachment ids come from the store, not from this service', () => {
   });
 
   it.each([true, false])('records store-assigned attachment ids, preserveIds=%s', async preserveIds => {
-    const sessionData = await runWithAttachments({ preserveIds });
-    expect(sessionData.toolIds).toEqual(['store-tool-id']);
-    expect(sessionData.agentIds).toEqual(['store-agent-id']);
+    const { attached } = await runWithAttachments({ preserveIds });
+    expect(attached.toolIds).toEqual(['store-tool-id']);
+    expect(attached.agentIds).toEqual(['store-agent-id']);
   });
 
   /**
@@ -192,8 +199,8 @@ describe('attachment ids come from the store, not from this service', () => {
    * for notebooks when it never was.
    */
   it('does not send an id the session schema will drop', async () => {
-    const sessionData = await runWithAttachments({ preserveIds: true });
-    expect('id' in sessionData).toBe(false);
+    const { created } = await runWithAttachments({ preserveIds: true });
+    expect('id' in created).toBe(false);
   });
 });
 
@@ -215,5 +222,155 @@ describe('an attachment store that returns no id is not recorded', () => {
     const sessionData = (adapters.sessionRepository.create as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(sessionData.toolIds).toEqual([]);
     expect(result.warnings?.join(' ')).toContain('tool store returned no id');
+  });
+});
+
+describe('notebook import: artifacts', () => {
+  const withArtifact = (artifact: Record<string, unknown>) => ({
+    exportVersion: '1.0.0',
+    notebooks: [{ ...NOTEBOOK, artifacts: [artifact] }],
+  });
+
+  const ARTIFACT = {
+    // generateCompleteArtifactId's shape, identifier verbatim. The mixed case separates a faithful
+    // carry-across from a slugified one; neither matches a slug of the title.
+    id: 'artifact_recharts_Q3-Revenue_1700000000000_0',
+    name: 'My Chart',
+    type: 'recharts',
+    content: 'chart body',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-02T00:00:00.000Z',
+    metadata: { source: 'test' },
+  };
+
+  async function importArtifact(artifact: Record<string, unknown>, opts: Record<string, unknown> = {}) {
+    const { adapters } = makeAdapters();
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      withArtifact(artifact) as never,
+      { ...OPTIONS, importArtifacts: true, ...opts } as never
+    );
+    return { adapters, result };
+  }
+
+  it('sends the body and maps name onto title, which is the field the schema has', async () => {
+    // Every artifact import used to fail validation: the payload was hand-built with `name`, and
+    // without a body there is no contentId/contentHash/contentSize to satisfy the schema.
+    const { adapters } = await importArtifact(ARTIFACT);
+
+    expect(adapters.createArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        title: 'My Chart',
+        type: 'recharts',
+        content: 'chart body',
+        metadata: { source: 'test' },
+      })
+    );
+  });
+
+  it('records the id it supplied, since artifacts are read by their own id', async () => {
+    const { adapters, result } = await importArtifact(ARTIFACT, { preserveIds: true });
+
+    expect(adapters.createArtifact).toHaveBeenCalledWith(expect.objectContaining({ id: ARTIFACT.id }));
+    expect(result.importedAttachments).toBe(1);
+  });
+
+  it('remints the id without preserveIds but carries the source identifier across', async () => {
+    // `Q3-Revenue` is the identifier segment of the fixture's source id, and it has to survive the
+    // remint unchanged: the imported reply still names it, and that is what the rendered card looks
+    // the row up by. A slug of the title ("my-chart") matches only when the two happen to agree,
+    // and a slugified identifier ("q3-revenue") never matches at all.
+    const { adapters } = await importArtifact(ARTIFACT);
+
+    const [payload] = (adapters.createArtifact as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(payload.id).not.toBe(ARTIFACT.id);
+    expect(payload.id.split('_')[2]).toBe('Q3-Revenue');
+  });
+
+  it('records the id the creation path returns, not the one it was handed', async () => {
+    // The pair matters: an id that is stored but not the one recorded leaves the notebook pointing
+    // at an artifact nobody can read.
+    const { adapters } = await importArtifact(ARTIFACT);
+
+    expect(adapters.sessionRepository.updateById).toHaveBeenCalledWith(
+      'new-session-id',
+      expect.objectContaining({ artifactIds: ['artifact_code_red-circle-a1b2c3_1700000000000_0'] })
+    );
+  });
+
+  /**
+   * The notebook has to exist before its artifacts are written, because an artifact records the
+   * notebook it belongs to on itself and that is what the viewer lists by. Stamping it after the
+   * fact is not an option: `session.artifactIds` is a denormalised copy no display path reads, so
+   * an artifact written without a `sessionId` is created, counted, reported as a success, and
+   * still invisible in the notebook it was imported into.
+   */
+  it('stamps the imported artifact with the notebook it belongs to', async () => {
+    const { adapters } = await importArtifact(ARTIFACT);
+
+    expect(adapters.createArtifact).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'new-session-id' }));
+    // Ordering is the whole point, so assert it rather than trusting the payload: a stamp can only
+    // be right if the notebook was created first.
+    const created = (adapters.sessionRepository.create as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    const stamped = (adapters.createArtifact as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    expect(created).toBeLessThan(stamped);
+  });
+
+  it('refuses to reuse an id already taken rather than letting the write abort the transaction', async () => {
+    // A duplicate key is a server-side error, so it would abort the transaction the whole import
+    // runs in - and the catch below would report one warning while every later write failed.
+    const { adapters } = makeAdapters();
+    (adapters.artifactIdTaken as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      withArtifact(ARTIFACT) as never,
+      { ...OPTIONS, importArtifacts: true, preserveIds: true } as never
+    );
+
+    expect(adapters.createArtifact).not.toHaveBeenCalled();
+    expect(result.importedAttachments).toBe(0);
+    expect(result.warnings?.join(' ')).toContain(ARTIFACT.id);
+  });
+
+  it('does not consult existing ids when it is minting them, since a fresh id cannot collide', async () => {
+    const { adapters } = await importArtifact(ARTIFACT);
+
+    expect(adapters.artifactIdTaken).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unrecognised type in a sentence, since the warning reaches the importer', async () => {
+    // Refused rather than degraded to a default, unlike knowledge: the type picks the mime type and
+    // the renderer. Asserted on the text because a bare ZodError message is a JSON dump.
+    const { adapters, result } = await importArtifact({ ...ARTIFACT, type: 'not-a-real-type' });
+
+    expect(adapters.createArtifact).not.toHaveBeenCalled();
+    expect(result.importedAttachments).toBe(0);
+    expect(result.warnings?.join(' ')).toContain('unrecognised artifact type "not-a-real-type"');
+    expect(result.warnings?.join(' ')).not.toContain('invalid_value');
+  });
+
+  it('refuses an artifact with no body instead of writing a shell around it', async () => {
+    // An artifact row whose contentId points at nothing is unreadable. An export taken before the
+    // export side joined the body lands here.
+    const { adapters, result } = await importArtifact({ ...ARTIFACT, content: undefined });
+
+    expect(adapters.createArtifact).not.toHaveBeenCalled();
+    expect(result.importedAttachments).toBe(0);
+    expect(result.warnings?.join(' ')).toContain('My Chart');
+  });
+
+  it('counts and reports a creation failure rather than claiming it succeeded', async () => {
+    const { adapters } = makeAdapters();
+    (adapters.createArtifact as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('nope'));
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      withArtifact(ARTIFACT) as never,
+      { ...OPTIONS, importArtifacts: true } as never
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.importedAttachments).toBe(0);
+    expect(result.warnings?.join(' ')).toContain('nope');
   });
 });

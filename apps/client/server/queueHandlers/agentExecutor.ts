@@ -28,6 +28,7 @@ import {
   FabFile,
   fabFileChunkRepository,
   projectRepository,
+  dataLakeAccessGrantRepository,
   dataLakeRepository,
   fallbackLakeSettingsRepository,
   mongoose,
@@ -54,8 +55,8 @@ import {
   safeInputWindow,
 } from '@bike4mind/utils';
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
-import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
-import { defaultEmbeddingModelForEnv } from '@bike4mind/common';
+import { EmbeddingFactory, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
+import { defaultEmbeddingModelForEnv, isSupportedEmbeddingModel } from '@bike4mind/common';
 import { toRetrievalFilter } from '@bike4mind/utils/retrievalExclusion';
 import { getLlmByModel, getAvailableModels, resolveDeprecatedModelId, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
@@ -71,7 +72,13 @@ import {
   type IterationResult,
   type ServerAgentDefinition,
 } from '@bike4mind/agents';
-import { getTextModelCost, CreditHolderType, type IAgent, type IUserDocument } from '@bike4mind/common';
+import {
+  getTextModelCost,
+  CreditHolderType,
+  type AttachmentLakeAccess,
+  type IAgent,
+  type IUserDocument,
+} from '@bike4mind/common';
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import {
   buildSharedTools,
@@ -87,6 +94,7 @@ import {
 } from '@bike4mind/services';
 import { creditService, apiKeyService, estimateGeneratedMediaUsd } from '@bike4mind/services';
 import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/services';
+import { createAttachmentLakeAccess } from './agentExecutor.attachmentLakeAccess';
 // Lattice launch-gate. `resolveLatticeTools` owns the `enableLattice` flag
 // resolution and the Lattice tool contribution (names + `externalTools`
 // definitions); see that module's header for the Next-tracing split and the
@@ -127,6 +135,8 @@ import {
   materializeAttachmentContent,
   composeFirstIterationMessage,
   attachmentNoticeBlock,
+  attachmentNoticeStrings,
+  unmaterializedAttachments,
 } from './agentExecutor.attachmentContent';
 import { applySessionToolPolicy, delegationOffer, runHasAttachments } from './agentExecutor.sessionToolPolicy';
 import { toUserFacingFailureMessage } from './agentExecutor.failureMessage';
@@ -685,11 +695,12 @@ async function materializeAttachmentsForRun(args: {
   execution: { userId: string; query: string; messageFileIds?: string[]; sessionFabFileIds?: string[] };
   sessionKnowledgeIds: string[];
   scope: Record<string, unknown>;
+  lakeAccess: AttachmentLakeAccess;
   modelInfo?: ModelInfo;
   apiKeyTable: ApiKeyTable;
   logger: Logger;
 }) {
-  const { execution, sessionKnowledgeIds, scope, modelInfo, apiKeyTable, logger } = args;
+  const { execution, sessionKnowledgeIds, scope, lakeAccess, modelInfo, apiKeyTable, logger } = args;
 
   const requestedIds = Array.from(
     new Set([...(execution.messageFileIds ?? []), ...(execution.sessionFabFileIds ?? []), ...sessionKnowledgeIds])
@@ -702,27 +713,52 @@ async function materializeAttachmentsForRun(args: {
     logger.warn('[AttachmentContent] No resolved modelInfo; skipping content materialization', {
       requested: requestedIds.length,
     });
-    return undefined;
+    // Report-only: the turn still owes a record that these ids were asked for and none arrived,
+    // or the quest is indistinguishable from one with no attachments at all.
+    return unmaterializedAttachments(requestedIds);
   }
 
   try {
     const storage = getFilesStorage();
     const { files, missingIds } = await fetchAndConvertFabFiles(
       requestedIds,
-      { scope },
+      { scope, lakeAccess },
       { db: { fabfiles: fabFileRepository, caches: cacheRepository }, storage, logger }
     );
 
-    // Same construction as the chat path (ChatCompletionProcess ~2013): pick the env's default
-    // embedding model, then hand the factory ONLY the credential that model's provider needs.
-    // Getting this wrong is quiet rather than loud - the query embedding just fails and every file
-    // falls through to the raw-content path, so a vectorized file silently loses cosine selection.
-    const embeddingProvider = getProviderFromModel(defaultEmbeddingModelForEnv());
-    const embeddingFactory = new EmbeddingFactory({
-      ...(embeddingProvider === 'openai' && { openaiApiKey: apiKeyTable?.openai }),
-      ...(embeddingProvider === 'voyageai' && { voyageApiKey: apiKeyTable?.voyageai }),
-      ...(embeddingProvider === 'ollama' && { ollamaBaseUrl: apiKeyTable?.ollama }),
-    });
+    // Routed through the same credential-table seam as the chat, ingest and search paths rather
+    // than hand-spreading one provider's credential: the spread this replaced built an
+    // OpenAI-shaped factory around an undefined key on a stage holding no OpenAI credential, and
+    // only worked at all because an empty config also happens to fall through to Titan in
+    // getDefaultEmbeddingModel. Getting this wrong is quiet rather than loud - the query embedding
+    // just fails and every file falls through to the raw-content path, so a vectorized file
+    // silently loses cosine selection.
+    //
+    // Seeded from the admin setting for the same reason as the chat seam: the attachments being
+    // scored were stamped from it at ingest, and scoring them against an env-derived model compares
+    // vectors from two different spaces (and at two different widths).
+    const configuredEmbeddingModel = await adminSettingsRepository
+      .getSettingsValue('defaultEmbeddingModel')
+      .catch(() => undefined);
+    const { config: embeddingConfig, missing: missingEmbeddingCredential } = resolveEmbeddingWithKeylessFallback(
+      typeof configuredEmbeddingModel === 'string' && isSupportedEmbeddingModel(configuredEmbeddingModel)
+        ? configuredEmbeddingModel
+        : defaultEmbeddingModelForEnv(),
+      apiKeyTable
+    );
+    // The one state the seam refuses to substitute for, and the one that used to be loud here: the
+    // old hand-spread put the expired key into the config, so the provider answered 401 and the
+    // failure named itself. An empty config instead falls through to Titan in
+    // getDefaultEmbeddingModel, which embeds a 1024-dim query that the width guard then discards
+    // against every 1536-dim chunk - the attachment still reaches the model as raw content, so
+    // nothing errors and the lost cosine selection is invisible. Say so.
+    if (missingEmbeddingCredential !== null) {
+      logger.warn(
+        `Agent attachments: no usable ${missingEmbeddingCredential} embedding credential; cosine selection ` +
+          `is unavailable for this run and attachments fall through to raw content`
+      );
+    }
+    const embeddingFactory = new EmbeddingFactory(embeddingConfig);
 
     const budget = attachedContentExtractionBudget(
       safeInputWindow(modelInfo, modelInfo.max_tokens),
@@ -760,7 +796,7 @@ async function materializeAttachmentsForRun(args: {
       requested: requestedIds.length,
       error: err instanceof Error ? err.message : String(err),
     });
-    return undefined;
+    return unmaterializedAttachments(requestedIds);
   }
 }
 
@@ -1040,7 +1076,18 @@ async function processExecution(
     // formulate/schedule to advance the ladder. An explicit `@agent` mention still wins
     // on the initial send (it sets `startPayload.agentId` -> the persisted-agent path).
     if (!startPayload?.agentId && session.surface === OPTI_SURFACE) {
-      orchestrationProfile = buildOptiOrchestrationProfile();
+      // Premium tool names come from the generated map (the same one merged into `externalTools`
+      // below), so a tool an overlay registers is offerable here without editing a list by hand.
+      const premiumToolNames = Object.keys(premiumLlmTools);
+      // An empty map means codegen ran with no overlay hydrated. The loop then has no optimizer
+      // tools at all and answers in prose, which reads as a model failure rather than a build one -
+      // so say it once, here, where the cause is known.
+      if (premiumToolNames.length === 0) {
+        logger.warn('[opti] optimizer surface resolved no premium tools; the agent has only core generics', {
+          executionId,
+        });
+      }
+      orchestrationProfile = buildOptiOrchestrationProfile({ premiumToolNames });
     } else if (isNewExecution) {
       // `getSettingsValue<K>` is generic-narrowed to `SettingValue<K>` -
       // `OrchestrationDefaults` here - so no cast is needed.
@@ -1079,6 +1126,13 @@ async function processExecution(
         adminDefaults: orchestrationDefaults,
         model: execution.model,
       });
+    }
+    if (orchestrationProfile && isNewExecution) {
+      // Persist the profile's denials so continuations can enforce them: the profile
+      // itself does not survive a Lambda handoff (startPayload.agentId is gone on a
+      // resume), and the delegation gate below reads these every invocation. Same
+      // durability pattern as enableLattice.
+      await agentExecutionRepository.persistProfileDeniedTools(executionId, orchestrationProfile.deniedTools);
     }
     if (orchestrationProfile) {
       logger.info('[Orchestration] Resolved profile', {
@@ -1448,8 +1502,12 @@ async function processExecution(
 
     // Whether this run may offer each delegation surface - decided from the profile's
     // denials and the session contract, and consumed below at the dependency level.
+    // On a continuation the persisted-agent profile is not re-resolved (the surface-scoped
+    // optimizer profile is), so fall back to the denials persisted at resolution time -
+    // without this, a persisted agent's deniedTools stopped being enforced from the first
+    // permission card or handoff.
     const delegation = delegationOffer({
-      profileDeniedTools: orchestrationProfile?.deniedTools,
+      profileDeniedTools: orchestrationProfile?.deniedTools ?? execution.profileDeniedTools,
       session,
     });
     if (!delegation.offerDelegate || !delegation.offerDag) {
@@ -1479,6 +1537,9 @@ async function processExecution(
       // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
       // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
       sessionRetrievalTags: session.retrievalTags,
+      // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
+      // confirmed the session belongs to this run before this ToolBuilderDeps is built.
+      sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,
       // `suppressLakeArms` is deliberately NOT threaded, and the reason is worth stating because the
       // obvious one is wrong: it is not a session field. `personalCorpusOnly` is computed per TURN by
       // ChatCompletionProcess from an attachment read plus a lake-reachability probe, neither of which
@@ -1497,6 +1558,7 @@ async function processExecution(
         users: userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
         fallbackLakeSettings: fallbackLakeSettingsRepository,
         // Lattice tools persist models to Mongo and reload them by ObjectId on
         // subsequent calls (add_entity / set_value / query). Without this
@@ -2172,6 +2234,11 @@ async function processExecution(
     // rebuilding the ability set every iteration.
     const fabFileReadScope = accessibleBy(defineAbilitiesFor(user as IUserDocument), Permission.read).ofType(FabFile);
 
+    // The attachment door's lake arms, parity with the chat door's `attachmentLakeAccess`. Built
+    // per invocation and kept a thunk on purpose - see `createAttachmentLakeAccess` for why the
+    // memo must not be hoisted and why its catch is load-bearing.
+    const attachmentLakeAccess = createAttachmentLakeAccess(user as IUserDocument, logger);
+
     // --- Iteration loop ---
     let iterationResult: IterationResult | undefined;
     let iterationIndex = isNewExecution ? 0 : ((execution.checkpoint as AgentCheckpoint)?.iteration ?? 0);
@@ -2307,6 +2374,7 @@ async function processExecution(
               execution,
               sessionKnowledgeIds: session.knowledgeIds ?? [],
               scope: fabFileReadScope,
+              lakeAccess: await attachmentLakeAccess(),
               modelInfo,
               apiKeyTable: apiKeyTable as ApiKeyTable,
               logger,
@@ -2318,6 +2386,21 @@ async function processExecution(
         // the empty array.
         inlinedAttachmentIds.push(...materialized.inlinedFileIds);
         fullyInlinedAttachmentIds.push(...materialized.fullyInlinedFileIds);
+
+        // Parity with the chat door, which persists the same two values on its quest before the
+        // completion runs. Best-effort on purpose: content materialization is an enhancement over
+        // the metadata preamble, so failing to RECORD its outcome must not take the run down.
+        await questRepository
+          .recordAttachmentOutcomeByAgentExecutionId(executionId, {
+            notices: attachmentNoticeStrings(materialized.notices),
+            delivery: materialized.delivery,
+          })
+          .catch(err =>
+            logger.warn('[AttachmentContent] Could not record the attachment outcome on the quest', {
+              executionId,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          );
       }
 
       let firstIterationQuery = await maybeBuildFirstIterationQuery(
@@ -2328,6 +2411,7 @@ async function processExecution(
           execution,
           sessionKnowledgeIds: session.knowledgeIds ?? [],
           scope: fabFileReadScope,
+          lakeAccess: attachmentLakeAccess,
           availableToolNames: resolvedToolNames,
           inlinedFileIds: materialized?.inlinedFileIds ?? [],
         },
@@ -3178,6 +3262,9 @@ async function processSubagentDispatch(
       // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
       // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
       sessionRetrievalTags: session.retrievalTags,
+      // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
+      // confirmed the session belongs to this run before this ToolBuilderDeps is built.
+      sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,
       // `suppressLakeArms` is deliberately NOT threaded, and the reason is worth stating because the
       // obvious one is wrong: it is not a session field. `personalCorpusOnly` is computed per TURN by
       // ChatCompletionProcess from an attachment read plus a lake-reachability probe, neither of which
@@ -3193,6 +3280,7 @@ async function processSubagentDispatch(
         users: userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
         fallbackLakeSettings: fallbackLakeSettingsRepository,
         // Required for the Lattice opt-in pool below to actually work: the
         // Lattice tools persist models to Mongo and reload them by ObjectId on
@@ -3216,7 +3304,13 @@ async function processSubagentDispatch(
       model: child.model,
       precomputed: { adminSettingsEnforceCredits: false, models },
       apiKeyTable: apiKeyTable as ApiKeyTable,
-      agentStore,
+      // Same dependency gate as the top-level path: the delegate tool is injected as an
+      // object keyed on this dep, so a CHILD whose own record denies delegate_to_agent
+      // is enforced here or nowhere. The child gets no dagDispatcher, so only the
+      // delegate surface is load-bearing on this site.
+      agentStore: delegationOffer({ profileDeniedTools: agentDef.deniedTools, session }).offerDelegate
+        ? agentStore
+        : undefined,
       // Propagate delegation depth so the dispatched orchestrator's delegate_to_agent
       // tool starts at the right level and the depth cap fires correctly.
       depth,

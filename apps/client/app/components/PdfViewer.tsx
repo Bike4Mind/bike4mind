@@ -1,12 +1,19 @@
 import { Box, Button, CircularProgress, Typography, useTheme } from '@mui/joy';
 import { FC, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
-import * as pdfjsLib from 'pdfjs-dist';
-import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
+import type { PDFDocumentLoadingTask, RenderTask } from 'pdfjs-dist';
 
+// We import the `legacy/` entry point, not pdfjs-dist's default build. The default build is
+// compiled for "the latest" browsers and reaches for globals well above this app's Next target:
+// it touches `Iterator.prototype` at module scope (a ReferenceError below Safari 18.4) and calls
+// `Uint8Array.prototype.toHex` while computing a document fingerprint (Chrome 140 / Firefox 133 /
+// Safari 18.2). `legacy/` exposes the identical API with core-js polyfills for both, costing about
+// 60KB on a chunk that is only fetched when someone opens a PDF.
+//
 // Load the worker as a plain same-origin static asset (copied into /public from the installed
-// pdfjs-dist by scripts/copy-pdf-worker.mjs). pdf.js instantiates the module worker itself from
-// this URL.
+// pdfjs-dist by scripts/copy-pdf-worker.mjs, which must copy out of the same build directory this
+// import points at). pdf.js instantiates the module worker itself from this URL.
 //
 // We intentionally do NOT use `new Worker(new URL('pdfjs-dist/build/pdf.worker.min.mjs',
 // import.meta.url), { type: 'module' })`: Turbopack rewrites that into its own worker helper,
@@ -37,7 +44,7 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
   const [error, setError] = useState<string | null>(null);
   const [numPages, setNumPages] = useState(0);
   const renderTaskRef = useRef<RenderTask | null>(null);
-  const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
+  const loadingTaskRef = useRef<PDFDocumentLoadingTask | null>(null);
 
   useEffect(() => {
     if (!file) {
@@ -53,13 +60,15 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
         setLoading(true);
         setError(null);
 
-        const loadingTask = pdfjsLib.getDocument(file);
+        // Held before the await: the loading task is the only teardown handle that exists while
+        // the document is still loading, so an unmount mid-load can still terminate the worker.
+        const loadingTask = pdfjsLib.getDocument({ url: file });
+        loadingTaskRef.current = loadingTask;
+
         const pdf = await loadingTask.promise;
 
         if (cancelled) return;
 
-        // Store PDF reference for cleanup
-        pdfDocRef.current = pdf;
         setNumPages(pdf.numPages);
 
         if (canvasContainerRef.current) {
@@ -97,7 +106,7 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
 
             canvasContainerRef.current?.appendChild(canvas);
 
-            // pdf.js v5's RenderParameters requires the canvas element itself, not just
+            // pdf.js's RenderParameters requires the canvas element itself, not just
             // the 2D context, so pass both.
             const renderContext = {
               canvas,
@@ -128,9 +137,11 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
       if (renderTaskRef.current) {
         renderTaskRef.current.cancel?.();
       }
-      if (pdfDocRef.current) {
-        pdfDocRef.current.destroy();
-        pdfDocRef.current = null;
+      if (loadingTaskRef.current) {
+        // Destroying the loading task destroys the document and terminates the worker. It rejects
+        // if the worker never finished setting up, which is not actionable once we are unmounting.
+        loadingTaskRef.current.destroy().catch(() => {});
+        loadingTaskRef.current = null;
       }
     };
   }, [file, theme.palette.divider]);

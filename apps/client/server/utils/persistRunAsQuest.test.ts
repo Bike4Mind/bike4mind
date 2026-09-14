@@ -103,7 +103,9 @@ describe('persistRunAsQuest finishReason (#293)', () => {
       await persistRunAsQuest(EXECUTION_ID, 'reply', logger, undefined, 'end_turn');
 
       const [doc] = createMock.mock.calls[0];
-      expect(doc.promptMeta).toEqual({ finishReason: 'end_turn' });
+      // session is seeded by materializePromptMetaSession - see the dedicated
+      // promptMeta.session describe block below for that behavior.
+      expect(doc.promptMeta).toEqual({ finishReason: 'end_turn', session: { id: 's1', userId: 'u1' } });
     });
 
     it('composes finishReason AND mementoIds without either clobbering the other', async () => {
@@ -112,7 +114,11 @@ describe('persistRunAsQuest finishReason (#293)', () => {
       await persistRunAsQuest(EXECUTION_ID, 'reply', logger, undefined, 'max_tokens');
 
       const [doc] = createMock.mock.calls[0];
-      expect(doc.promptMeta).toEqual({ finishReason: 'max_tokens', context: { mementoIds: ['m1', 'm2'] } });
+      expect(doc.promptMeta).toEqual({
+        finishReason: 'max_tokens',
+        context: { mementoIds: ['m1', 'm2'] },
+        session: { id: 's1', userId: 'u1' },
+      });
     });
 
     it('still writes mementoIds when only those are present', async () => {
@@ -121,7 +127,7 @@ describe('persistRunAsQuest finishReason (#293)', () => {
       await persistRunAsQuest(EXECUTION_ID, 'reply', logger);
 
       const [doc] = createMock.mock.calls[0];
-      expect(doc.promptMeta).toEqual({ context: { mementoIds: ['m1'] } });
+      expect(doc.promptMeta).toEqual({ context: { mementoIds: ['m1'] }, session: { id: 's1', userId: 'u1' } });
     });
 
     it('omits promptMeta entirely when neither finishReason nor mementoIds are present', async () => {
@@ -170,7 +176,58 @@ describe('persistRunAsQuest retrieval (#1867)', () => {
       await persistRunAsQuest(EXECUTION_ID, 'reply', logger, undefined, 'end_turn', undefined, retrieval);
 
       const [doc] = createMock.mock.calls[0];
-      expect(doc.promptMeta).toEqual({ finishReason: 'end_turn', retrieval });
+      expect(doc.promptMeta).toEqual({ finishReason: 'end_turn', retrieval, session: { id: 's1', userId: 'u1' } });
+    });
+  });
+});
+
+describe('persistRunAsQuest promptMeta.session (bike4mind#2004)', () => {
+  describe('UPDATE branch (existing Quest patched)', () => {
+    beforeEach(() => {
+      findOneAndUpdateMock.mockResolvedValue({ _id: 'q1' }); // truthy -> update path taken
+    });
+
+    it('sets promptMeta.session when another promptMeta field is touched', async () => {
+      await persistRunAsQuest(EXECUTION_ID, 'reply', logger, undefined, 'end_turn');
+
+      const [, update] = findOneAndUpdateMock.mock.calls[0];
+      expect(update.$set['promptMeta.session']).toEqual({ id: 's1', userId: 'u1' });
+    });
+
+    it('sets promptMeta.session when only mementoIds are touched', async () => {
+      stubExecution({ usedMementoIds: ['m1'] });
+
+      await persistRunAsQuest(EXECUTION_ID, 'reply', logger);
+
+      const [, update] = findOneAndUpdateMock.mock.calls[0];
+      expect(update.$set['promptMeta.session']).toEqual({ id: 's1', userId: 'u1' });
+    });
+
+    it('omits promptMeta.session when no promptMeta field is touched, leaving the quest promptMeta-less', async () => {
+      await persistRunAsQuest(EXECUTION_ID, 'reply', logger);
+
+      const [, update] = findOneAndUpdateMock.mock.calls[0];
+      expect(update.$set).not.toHaveProperty('promptMeta.session');
+    });
+  });
+
+  describe('CREATE branch (no existing Quest)', () => {
+    beforeEach(() => {
+      findOneAndUpdateMock.mockResolvedValue(null); // falsy -> create path taken
+    });
+
+    it('seeds promptMeta.session when composing a new promptMeta record', async () => {
+      await persistRunAsQuest(EXECUTION_ID, 'reply', logger, undefined, 'end_turn');
+
+      const [doc] = createMock.mock.calls[0];
+      expect(doc.promptMeta.session).toEqual({ id: 's1', userId: 'u1' });
+    });
+
+    it('omits promptMeta (and therefore session) entirely when nothing touches it', async () => {
+      await persistRunAsQuest(EXECUTION_ID, 'reply', logger);
+
+      const [doc] = createMock.mock.calls[0];
+      expect(doc).not.toHaveProperty('promptMeta');
     });
   });
 });

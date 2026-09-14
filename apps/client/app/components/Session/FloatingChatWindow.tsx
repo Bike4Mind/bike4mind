@@ -91,6 +91,7 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
   const position = useSessionLayout(s => s.floatingChatPosition);
   const size = useSessionLayout(s => s.floatingChatSize);
   const isMinimized = useSessionLayout(s => s.floatingChatMinimized);
+  const hiddenFromLayout = useSessionLayout(s => s.hiddenFromLayout);
 
   // Prevent wheel events from bubbling out of the floating window to parent
   // JS scroll handlers (e.g. a docked landing page). Re-attaches after minimize/
@@ -278,6 +279,13 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
   );
 
   const handleMinimize = useCallback(() => {
+    // Expanding a pill that "Hide chat" put here: back to the dock it came from, not into a
+    // floating window the chat was never in. Ahead of the narrow-viewport branch below,
+    // which sizes a floating window this path is not going to open.
+    if (isMinimized && hiddenFromLayout) {
+      setSessionLayout({ layout: hiddenFromLayout, floatingChatMinimized: false });
+      return;
+    }
     if (isMinimized && typeof window !== 'undefined' && window.innerWidth < 900) {
       // Expanding on a small screen: use full viewport so the chat is usable
       const fullWidth = Math.floor(window.innerWidth * MAX_WIDTH_RATIO);
@@ -297,7 +305,7 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
     } else {
       setSessionLayout({ floatingChatMinimized: !isMinimized });
     }
-  }, [isMinimized]);
+  }, [isMinimized, hiddenFromLayout]);
 
   // Handle close - dismiss the panel entirely. Re-docking is a separate action
   // (the dock-right/dock-bottom controls in ChatPanelControls), not this button's job.

@@ -154,3 +154,36 @@ export const sanitizeHtmlForIframe = (htmlContent: string, options: SanitizeHtml
 
   return { cleanHtml, isCompleteDocument };
 };
+
+// Tags forbidden when rendering untrusted HTML directly into the app DOM (NO
+// sandbox iframe). Beyond DOMPurify's defaults this pulls out `style` (kept by
+// default) and the document-shell/resource tags, so injected email HTML cannot
+// smuggle app-origin CSS (data-exfil / UI redress) or external resource loads.
+const STRICT_FORBID_TAGS = [
+  'style',
+  'link',
+  'meta',
+  'html',
+  'head',
+  'body',
+  'title',
+  'base',
+  'script',
+  'iframe',
+  'object',
+  'embed',
+];
+
+/**
+ * Sanitize untrusted HTML for rendering directly into the app DOM (NOT inside a
+ * sandboxed iframe). Unlike `sanitizeHtmlForIframe`, whose allow-list is tuned
+ * for a sandboxed consumer (it re-admits `<style>`/`<link>`/the document shell),
+ * this forbids those so the app origin is never exposed to injected CSS or
+ * external resource loads. Use it for app-origin `dangerouslySetInnerHTML` sinks
+ * (e.g. the email-inbox body preview).
+ */
+export const sanitizeHtmlStrict = (htmlContent: string): string =>
+  DOMPurify.sanitize(htmlContent, {
+    FORBID_TAGS: STRICT_FORBID_TAGS,
+    FORBID_ATTR: FORBIDDEN_EVENT_ATTRS,
+  });

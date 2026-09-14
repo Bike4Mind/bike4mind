@@ -192,6 +192,30 @@ describe('AgentExecutionRepository', () => {
     });
   });
 
+  describe('persistProfileDeniedTools (delegation-gate durability)', () => {
+    it('is absent on a fresh execution - absent, not [], so a legacy row is distinguishable', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      const loaded = await agentExecutionRepository.findById(exec.id);
+      expect(loaded?.profileDeniedTools).toBeUndefined();
+    });
+
+    it('persists the resolved denials for continuations to re-read', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      await agentExecutionRepository.persistProfileDeniedTools(exec.id, ['delegate_to_agent', 'coordinate_task']);
+
+      const loaded = await agentExecutionRepository.findById(exec.id);
+      expect(loaded?.profileDeniedTools).toEqual(['delegate_to_agent', 'coordinate_task']);
+    });
+
+    it('persists an empty list as [], meaning "profile denies nothing" rather than "unknown"', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      await agentExecutionRepository.persistProfileDeniedTools(exec.id, []);
+
+      const loaded = await agentExecutionRepository.findById(exec.id);
+      expect(loaded?.profileDeniedTools).toEqual([]);
+    });
+  });
+
   describe('addChildExecution', () => {
     it('links a child id to the parent without duplicating', async () => {
       const parent = await agentExecutionRepository.create(makeBaseExecution());

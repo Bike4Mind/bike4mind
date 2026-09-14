@@ -262,28 +262,13 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
     super(model);
   }
 
-  // Override update method to handle custom id field
+  // Override update to key on the custom `id` field, not MongoDB `_id`. Last-writer-wins like
+  // BaseRepository.update; no guarded variant is exposed (no artifact caller opts in).
   async update(data: Partial<IArtifactDocument>, options?: Record<string, unknown>): Promise<IArtifactDocument | null> {
     if (!data.id) {
       throw new Error('id is required');
     }
-
-    // Find by custom id field, not MongoDB _id
-    const query = this.model.findOneAndUpdate(
-      {
-        id: data.id,
-      },
-      { $set: data },
-      { new: true, ...options }
-    );
-    // Only attach an explicit session when one is set; .session(null) overrides
-    // transactionAsyncLocalStorage propagation and silently breaks atomicity.
-    if (this._txn) {
-      query.session(this._txn);
-    }
-    const result = await query;
-
-    return result?.toJSON() as unknown as IArtifactDocument | null;
+    return this._plainUpdate<IArtifactDocument>({ id: data.id }, data as Record<string, unknown>, options);
   }
 
   // Implement artifact-specific methods

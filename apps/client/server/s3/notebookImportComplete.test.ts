@@ -30,6 +30,8 @@ vi.mock('sst', () => ({ Resource: { historyImportBucket: { name: 'import-bucket'
 vi.mock('@bike4mind/database', () => ({
   inboxRepository: { createInboxMessage: h.createInboxMessage },
   importHistoryJobRepository: { findByS3Key: h.findByS3Key, create: h.jobCreate },
+  imageModerationIncidentRepository: {},
+  adminSettingsRepository: {},
   sessionRepository: {},
   questRepository: {},
   Quest: {},
@@ -40,9 +42,18 @@ vi.mock('@bike4mind/database', () => ({
   User: {},
   withTransaction: (fn: (session: unknown) => Promise<unknown>) => fn(undefined),
 }));
-vi.mock('@bike4mind/services', () => ({ notebookImportService: { NotebookImportService: class {} } }));
+vi.mock('@bike4mind/services', () => ({
+  notebookImportService: { NotebookImportService: class {} },
+  moderateImageOrThrow: vi.fn(),
+}));
 vi.mock('@bike4mind/common', () => ({ InboxType: { COMMON: 'common' }, isImageServeable: () => true }));
 vi.mock('@bike4mind/observability', () => ({ Logger: class {} }));
+// Post-commit knowledge-file moderation deps: mocked like every other heavy import so this
+// dispatch-idempotency test stays isolated (the moderation path is not exercised here).
+vi.mock('@bike4mind/utils', () => ({ getSettingsMap: vi.fn(), getSettingsValue: vi.fn() }));
+vi.mock('@bike4mind/utils/imageModeration', () => ({ RekognitionImageModerationService: class {} }));
+vi.mock('@server/s3/moderateUploadedFile', () => ({ moderateUploadedFile: vi.fn() }));
+vi.mock('@server/s3/moderateImportedKnowledgeFiles', () => ({ moderateImportedKnowledgeFiles: vi.fn() }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({}) }));
 vi.mock('@server/utils/importHistoryProgress', () => ({
   updateImportProgress: vi.fn(),
