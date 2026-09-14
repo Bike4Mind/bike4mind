@@ -1,5 +1,6 @@
 import { ICachingAdapter } from './base';
 import { ICacheStrategy, CacheUsageStats, ModelBackend } from '@bike4mind/common';
+import { cachedTokensFromUsage } from '../../cacheInclusiveUsage';
 
 /**
  * DeepSeek context caching. Automatic, like Moonshot's and xAI's: no parameter,
@@ -17,13 +18,12 @@ export class DeepSeekCachingAdapter implements ICachingAdapter {
     if (!usage) return undefined;
 
     const totalInputTokens = (usage.prompt_tokens as number) || 0;
-    const cachedTokens = cachedPromptTokens(usage);
+    const cachedTokens = cachedTokensFromUsage(usage);
 
     const cacheHitRate = totalInputTokens > 0 ? (cachedTokens / totalInputTokens) * 100 : 0;
 
-    // A cache hit costs ~2% of the miss rate on both ids ($0.006 against $0.30 on
-    // flash, $0.044 against $1.32 on v4-pro), so the saving on the cached portion
-    // is ~98%.
+    // A cache hit costs ~2% of the miss rate ($0.006 against $0.30 per 1M), so
+    // the saving on the cached portion is ~98%.
     const costSavingsPercent = cacheHitRate * 0.98;
     const estimatedLatencyReduction = cacheHitRate * 0.7;
 
@@ -45,21 +45,4 @@ export class DeepSeekCachingAdapter implements ICachingAdapter {
       },
     };
   }
-}
-
-/**
- * DeepSeek reports the cached portion three redundant ways. Its own
- * `prompt_cache_hit_tokens` is preferred because it is the number the invoice is
- * computed from; the OpenAI-shaped spellings are the fallback for a proxy that
- * only forwards those. Must stay in sync with `cachedTokensFromUsage`, which
- * knows the nested spellings but not DeepSeek's flat one.
- */
-export function cachedPromptTokens(usage: Record<string, unknown> | undefined | null): number {
-  if (!usage) return 0;
-  const details = usage.prompt_tokens_details as Record<string, unknown> | undefined;
-  const candidates: unknown[] = [usage.prompt_cache_hit_tokens, details?.cached_tokens, usage.cached_tokens];
-  for (const value of candidates) {
-    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
-  }
-  return 0;
 }

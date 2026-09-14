@@ -479,6 +479,7 @@ export const getSupersededModels = (currentModels: ModelInfo[]): SupersededModel
 
 // Types and core utils:
 export * from './adapterFamilyDispatch';
+export * from './adapterPriceLiterals';
 export * from './backend';
 export * from './backendGate';
 export * from './cacheInclusiveUsage';

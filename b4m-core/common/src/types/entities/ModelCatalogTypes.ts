@@ -337,6 +337,7 @@ export const MODEL_INFO_FIELD_GROUP_OF: Record<
   supportsSafetyTolerance: 'modalities',
 
   deprecationDate: 'lifecycle',
+  replacedBy: 'lifecycle',
 
   adapterFamily: 'dispatch',
   dispatchProfile: 'dispatch',

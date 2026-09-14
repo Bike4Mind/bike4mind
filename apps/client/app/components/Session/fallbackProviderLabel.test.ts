@@ -17,7 +17,6 @@ describe('getModelProviderLabel', () => {
     ['gemini-2.5-pro-preview-05-06', 'Google'],
     ['grok-2', 'xAI'],
     ['deepseek-flash', 'DeepSeek'],
-    ['deepseek-v4-pro', 'DeepSeek'],
     ['us.deepseek.r1-v1:0', 'Bedrock'], // Bedrock-hosted DeepSeek: region prefix wins
     ['deepseek.v3-v1:0', 'Bedrock'], // Bedrock-hosted DeepSeek: bare vendor-dot prefix wins
     ['kimi-k3', 'Moonshot direct'],

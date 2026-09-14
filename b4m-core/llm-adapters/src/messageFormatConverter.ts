@@ -37,6 +37,15 @@ interface OpenAIAssistantMessage {
   reasoning_content?: string;
 }
 
+export interface OpenAIConvertOptions {
+  /**
+   * Replay `reasoning_content` on an assistant tool-call message that carries it.
+   * DeepSeek REQUIRES it whenever the request has tools; every other target must
+   * not receive it, so it defaults to off - see convertMessageToOpenAIFormat.
+   */
+  preserveReasoningContent?: boolean;
+}
+
 interface OpenAIToolMessage {
   role: 'tool';
   content: string;
@@ -70,19 +79,28 @@ function isTextBlock(block: MessageContentObject): block is MessageContentText {
  * Messages already in OpenAI format (with `tool_calls` property) pass through unchanged.
  * Messages without tool_use/tool_result content blocks pass through unchanged.
  */
-export function convertMessageToOpenAIFormat(msg: IMessage): OpenAIFormattedMessage[] {
+export function convertMessageToOpenAIFormat(
+  msg: IMessage,
+  options: OpenAIConvertOptions = {}
+): OpenAIFormattedMessage[] {
   // Already in OpenAI format (has tool_calls property from OpenAI backend's pushToolMessages)
   if (hasToolCalls(msg)) {
-    // reasoning_content rides along when the message carries it: DeepSeek requires
-    // the prior turn's monologue back on this message whenever the request has
-    // tools. No other backend writes it, so this is inert for OpenAI/xAI/Kimi.
+    // reasoning_content is replayed only for DeepSeek, which requires the prior
+    // turn's monologue back on this message whenever the request has tools.
+    // Stripped for every other target rather than passed through: DeepSeek
+    // mutates the caller's message array in place, ChatCompletionProcess builds
+    // that array once and hands the same object to every backend it tries, so a
+    // fallback hop off DeepSeek would otherwise post a provider-private field to
+    // whoever rescues the turn.
     const reasoningContent = (msg as { reasoning_content?: unknown }).reasoning_content;
     return [
       {
         role: 'assistant' as const,
         content: null,
         tool_calls: msg.tool_calls,
-        ...(typeof reasoningContent === 'string' ? { reasoning_content: reasoningContent } : {}),
+        ...(options.preserveReasoningContent && typeof reasoningContent === 'string'
+          ? { reasoning_content: reasoningContent }
+          : {}),
       },
     ];
   }
@@ -144,6 +162,9 @@ export function convertMessageToOpenAIFormat(msg: IMessage): OpenAIFormattedMess
  * Convert an array of IMessages from B4M standard format to OpenAI-compatible format.
  * Returns OpenAIFormattedMessage[] - callers targeting OpenAI SDK types should cast at the boundary.
  */
-export function convertMessagesToOpenAIFormat(messages: IMessage[]): OpenAIFormattedMessage[] {
-  return messages.flatMap(convertMessageToOpenAIFormat);
+export function convertMessagesToOpenAIFormat(
+  messages: IMessage[],
+  options: OpenAIConvertOptions = {}
+): OpenAIFormattedMessage[] {
+  return messages.flatMap(msg => convertMessageToOpenAIFormat(msg, options));
 }

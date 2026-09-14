@@ -7,7 +7,7 @@ import {
   type ModelInfo,
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
-import { splitCacheInclusiveInput } from './cacheInclusiveUsage';
+import { cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources';
 import { Stream } from 'openai/streaming';
@@ -24,9 +24,10 @@ import {
   getLatestToolCallIdOpenAI,
   replaceLastToolResultObservationOpenAI,
 } from './backend';
-import { getCachingAdapter, logCacheStats, cachedPromptTokens } from './caching/adapters';
+import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { deepseekReasoningParams, deepseekSamplingParams, deepseekStopSequences } from './deepseekParams';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
+import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
 import { normalizeOpenAIFinishReason } from './stopReason';
 
 /**
@@ -38,8 +39,8 @@ import { normalizeOpenAIFinishReason } from './stopReason';
  * genuinely differs here:
  *
  * 1. The base URL carries NO `/v1` segment; the SDK appends the path itself.
- * 2. Thinking is on by default on both ids and its sampling restrictions are
- *    SILENT no-ops rather than 400s; see deepseekParams.
+ * 2. Thinking is on by default and its sampling restrictions are SILENT no-ops
+ *    rather than 400s; see deepseekParams.
  * 3. The prior turn's `reasoning_content` has to be replayed on the assistant
  *    tool-call message whenever the request carries `tools`, which is the
  *    opposite of the usual provider rule. See pushToolMessages.
@@ -93,31 +94,6 @@ export class DeepSeekBackend implements ICompletionBackend {
         description:
           "DeepSeek's V4.1-Flash. 1M context with native vision, tool use, and selectable reasoning effort (low/high/max). Always reasons unless thinking is turned off.",
       },
-      {
-        id: ChatModels.DEEPSEEK_V4_PRO,
-        type: 'text' as const,
-        name: 'DeepSeek V4 Pro',
-        backend: ModelBackend.DeepSeek,
-        contextWindow: 1000000,
-        max_tokens: 393216,
-        can_stream: true,
-        pricing: {
-          // $1.32 / 1M in on a cache miss, $0.044 / 1M on a hit, $3.96 / 1M out.
-          // DeepSeek is temporarily serving this id from Flash capacity at Flash
-          // rates; its own listed rate is kept so the interim over-bills slightly
-          // rather than under-billing once the reroute ends.
-          1000000: { input: 1.32 / 1000000, output: 3.96 / 1000000, cache_read: 0.044 / 1000000 },
-        },
-        can_think: true,
-        // Text only: the multimodal work landed on the Flash line, and the vision
-        // aliases route there rather than here.
-        supportsVision: false,
-        supportsTools: true,
-        supportsImageVariation: false,
-        releaseDate: '2026-08-13',
-        description:
-          "DeepSeek's V4-Pro, the heavier reasoning tier of the V4 line. 1M context, tool use, selectable reasoning effort; no vision.",
-      },
     ];
   }
 
@@ -162,22 +138,44 @@ export class DeepSeekBackend implements ICompletionBackend {
         : undefined;
     options.tools = normalizedTools;
 
-    const useStreaming = options.stream && (!options.n || options.n === 1);
+    // `n` is absent from DeepSeek's schema, so a multi-choice request cannot be
+    // served at all and streaming is not what makes it impossible. Ignored loudly
+    // rather than degraded: turning streaming off as well would cost the caller
+    // the live response and still return the one choice.
+    if ((options.n ?? 1) > 1) {
+      this.logger.warn(`DeepSeek has no 'n' parameter; ignoring the request for ${options.n} choices.`);
+    }
+    const useStreaming = Boolean(options.stream);
+
+    const reasoning = { thinking: options.thinking, reasoningEffort: options.reasoningEffort };
+
+    // DeepSeek's strict `json_schema` form is beta-path-only, so a schema request
+    // is served the same way xaiBackend serves it: `json_object` plus the schema
+    // as a system instruction, reported as 'best-effort' so callers post-validate.
+    // Sending json_object alone would never show the model the contract, and
+    // leaving responseFormatMode unset invents a third state - intentClassifier
+    // gates its stricter retry on 'best-effort' and would give up on the first
+    // shape violation instead.
+    const messagesWithFormat = injectJsonSchemaInstruction(messages, options.responseFormat);
+    const bestEffortFormat = isBestEffortJsonSchema(options.responseFormat);
 
     const parameters: ChatCompletionCreateParams = {
       model,
-      messages: this.formatMessages(messages),
+      messages: this.formatMessages(messagesWithFormat),
     };
 
     Object.assign(parameters, {
-      ...deepseekSamplingParams(model, {
-        temperature: options.temperature,
-        topP: options.topP,
-        presencePenalty: options.presencePenalty,
-        frequencyPenalty: options.frequencyPenalty,
-        n: options.n,
-      }),
-      ...deepseekReasoningParams(model, { thinking: options.thinking, reasoningEffort: options.reasoningEffort }),
+      ...deepseekSamplingParams(
+        model,
+        {
+          temperature: options.temperature,
+          topP: options.topP,
+          presencePenalty: options.presencePenalty,
+          frequencyPenalty: options.frequencyPenalty,
+        },
+        reasoning
+      ),
+      ...deepseekReasoningParams(model, reasoning),
       stop: deepseekStopSequences(options.stop),
       stream: useStreaming,
       max_tokens: options.maxTokens,
@@ -193,10 +191,6 @@ export class DeepSeekBackend implements ICompletionBackend {
       }
     }
 
-    // `json_object` only. DeepSeek's strict `json_schema` form is beta-path-only,
-    // so a schema request degrades to plain JSON mode and the caller keeps the
-    // validation burden - responseFormatMode stays unset rather than claiming
-    // 'native' for a shape the provider did not enforce.
     if (options.responseFormat?.type === 'json_schema') {
       // Cast: OpenAI's typed response_format is on a newer params shape than the
       // one TS resolves here, same as openaiBackend.
@@ -206,7 +200,7 @@ export class DeepSeekBackend implements ICompletionBackend {
     }
 
     // NO GATE on reasoning capture, deliberately. Deriving this from "did we send a
-    // reasoning parameter" drops reasoning on the common path: both ids reason by
+    // reasoning parameter" drops reasoning on the common path: Flash reasons by
     // default and deepseekReasoningParams sends nothing when no explicit effort or
     // toggle was set, which is the default. Any reasoning_content DeepSeek returns
     // was billed as output tokens, so discarding it would charge the user for text
@@ -227,7 +221,9 @@ export class DeepSeekBackend implements ICompletionBackend {
         throw new Error('No choices returned from the DeepSeek API');
       }
 
-      const turnCacheReadTokens = cachedPromptTokens(response.usage as unknown as Record<string, unknown> | undefined);
+      const turnCacheReadTokens = cachedTokensFromUsage(
+        response.usage as unknown as Record<string, unknown> | undefined
+      );
 
       for (const c of response.choices) {
         if (!c.message) continue;
@@ -409,6 +405,7 @@ export class DeepSeekBackend implements ICompletionBackend {
         outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         cacheStats,
+        ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
         ...(finishReason ? { stopReason: finishReason } : {}),
       });
       return;
@@ -426,7 +423,7 @@ export class DeepSeekBackend implements ICompletionBackend {
       if (chunk.usage) {
         inputTokens = Math.max(inputTokens, chunk.usage?.prompt_tokens || 0);
         outputTokens += chunk.usage?.completion_tokens || 0;
-        const chunkCached = cachedPromptTokens(chunk.usage as unknown as Record<string, unknown>);
+        const chunkCached = cachedTokensFromUsage(chunk.usage as unknown as Record<string, unknown>);
         if (chunkCached > 0) cachedTokensFromStream = chunkCached;
       }
 
@@ -438,7 +435,7 @@ export class DeepSeekBackend implements ICompletionBackend {
         const deltaReasoning = (c.delta as { reasoning_content?: string }).reasoning_content;
 
         // Ungated, for the same reason as the non-streaming path: reasoning
-        // arrives by default on both ids and is billed either way.
+        // arrives by default and is billed either way.
         if (deltaReasoning) {
           streamedReasoning += deltaReasoning;
           if (!isInThinkingBlock) {
@@ -447,12 +444,16 @@ export class DeepSeekBackend implements ICompletionBackend {
           } else {
             streamedText[c.index] = deltaReasoning;
           }
-          return;
+          // Falls through when the SAME delta also carries prose: DeepSeek can end
+          // the monologue and start the answer in one chunk, and returning here
+          // dropped that first prose token. Returning is still right without
+          // prose, or the tool-call branch below would overwrite the monologue.
+          if (!c.delta.content) return;
         }
 
         if (isInThinkingBlock && c.delta.content) {
           isInThinkingBlock = false;
-          streamedText[c.index] = '</think>' + (c.delta.content || '');
+          streamedText[c.index] = (streamedText[c.index] ?? '') + '</think>' + c.delta.content;
           return;
         }
 
@@ -518,6 +519,25 @@ export class DeepSeekBackend implements ICompletionBackend {
         model
       );
       if (cacheStats) logCacheStats(this.logger, cacheStats, { streaming: true });
+    }
+
+    // Streaming is the default, so without this frame neither DeepSeek cache
+    // telemetry nor responseFormatMode ever reaches the caller: every per-chunk
+    // callback above fires before the terminal usage chunk is read, and the
+    // non-streaming path's single callback (which does carry both) is not the one
+    // users hit. Empty text because consumers append text and ASSIGN counts. A
+    // turn that goes on to call a tool is not terminal - the recursion emits its
+    // own totals.
+    if ((cacheStats || bestEffortFormat) && func.length === 0) {
+      const terminalFinishReason = normalizeOpenAIFinishReason(streamFinishReason);
+      await callback([''], {
+        ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
+        outputTokens: accumOutputTokens + outputTokens,
+        toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+        ...(cacheStats ? { cacheStats } : {}),
+        ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
+        ...(terminalFinishReason ? { stopReason: terminalFinishReason } : {}),
+      });
     }
 
     if (func.length > 0) {
@@ -640,13 +660,16 @@ export class DeepSeekBackend implements ICompletionBackend {
           ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
           outputTokens: accumOutputTokens + outputTokens,
           toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+          ...(cacheStats ? { cacheStats } : {}),
         });
       }
     }
   }
 
   private formatMessages(messages: IMessage[]): OpenAI.ChatCompletionMessageParam[] {
-    return convertMessagesToOpenAIFormat(messages) as OpenAI.ChatCompletionMessageParam[];
+    return convertMessagesToOpenAIFormat(messages, {
+      preserveReasoningContent: true,
+    }) as OpenAI.ChatCompletionMessageParam[];
   }
 
   formatTools(tools: ICompletionOptionTools[] = []) {
@@ -660,8 +683,9 @@ export class DeepSeekBackend implements ICompletionBackend {
    * `thinkingBlocks` carries the turn's `reasoning_content` as a single string
    * entry. DeepSeek inverts the usual rule: when a request carries `tools`, the
    * prior turn's monologue MUST be replayed on the assistant tool-call message or
-   * reasoning continuity breaks across the loop. convertMessageToOpenAIFormat
-   * preserves the field for exactly this path.
+   * reasoning continuity breaks across the loop. formatMessages opts into the
+   * converter's `preserveReasoningContent` for exactly this path; every other
+   * target strips it, because this array is shared with the fallback hop.
    */
   pushToolMessages(messages: IMessage[], tool: IChoiceEndToolUse['tool'], result: string, thinkingBlocks?: unknown[]) {
     const reasoningContent = typeof thinkingBlocks?.[0] === 'string' ? thinkingBlocks[0] : undefined;

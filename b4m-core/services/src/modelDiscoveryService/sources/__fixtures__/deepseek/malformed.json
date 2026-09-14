@@ -5,6 +5,6 @@
     { "id": "", "object": "model" },
     { "id": 42, "object": "model" },
     null,
-    { "id": "deepseek-v4-pro", "object": "model", "owned_by": "deepseek" }
+    { "id": "deepseek-flash", "object": "model", "owned_by": "deepseek" }
   ]
 }

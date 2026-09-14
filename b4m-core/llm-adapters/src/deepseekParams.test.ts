@@ -1,13 +1,15 @@
-import { ChatModels } from '@bike4mind/common';
+import { ChatModels, NO_TEMPERATURE_MODELS } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
 import {
   DEEPSEEK_MAX_STOP_SEQUENCES,
+  DEEPSEEK_MODELS,
   DEEPSEEK_THINKING_TOP_P_FLOOR,
   deepseekReasoningParams,
   deepseekSamplingParams,
   deepseekStopSequences,
   toDeepSeekEffort,
 } from './deepseekParams';
+import { DeepSeekBackend } from './deepseekBackend';
 
 /**
  * Every assertion here maps to a documented per-model constraint. Unlike Kimi,
@@ -32,10 +34,10 @@ describe('toDeepSeekEffort', () => {
 });
 
 describe('deepseekReasoningParams', () => {
-  it('sends reasoning_effort on both shipped ids', () => {
-    for (const model of [ChatModels.DEEPSEEK_FLASH, ChatModels.DEEPSEEK_V4_PRO]) {
-      expect(deepseekReasoningParams(model, { reasoningEffort: 'xhigh' })).toEqual({ reasoning_effort: 'max' });
-    }
+  it('sends reasoning_effort on the shipped id', () => {
+    expect(deepseekReasoningParams(ChatModels.DEEPSEEK_FLASH, { reasoningEffort: 'xhigh' })).toEqual({
+      reasoning_effort: 'max',
+    });
   });
 
   it('omits both spellings when nothing was asked for, leaving DeepSeek its default', () => {
@@ -55,7 +57,7 @@ describe('deepseekReasoningParams', () => {
     // There is no 'none' effort level, so an effort alongside a disable would
     // state two contradictory things about the same turn.
     expect(
-      deepseekReasoningParams(ChatModels.DEEPSEEK_V4_PRO, { thinking: { enabled: false }, reasoningEffort: 'high' })
+      deepseekReasoningParams(ChatModels.DEEPSEEK_FLASH, { thinking: { enabled: false }, reasoningEffort: 'high' })
     ).toEqual({ thinking: { type: 'disabled' } });
   });
 
@@ -68,22 +70,44 @@ describe('deepseekReasoningParams', () => {
 
 describe('deepseekSamplingParams', () => {
   /**
-   * Thinking mode is the default on both ids, and DeepSeek documents
-   * temperature, presence_penalty and frequency_penalty as unsupported there.
-   * They are ignored rather than rejected, so nothing surfaces the mistake -
-   * the answer is simply not the one the knob asked for.
+   * Thinking mode is the default, and DeepSeek documents temperature,
+   * presence_penalty and frequency_penalty as unsupported there. They are
+   * ignored rather than rejected, so nothing surfaces the mistake - the answer
+   * is simply not the one the knob asked for.
    */
-  it('drops the whole ignored sampling group on both shipped ids', () => {
-    for (const model of [ChatModels.DEEPSEEK_FLASH, ChatModels.DEEPSEEK_V4_PRO]) {
-      expect(
-        deepseekSamplingParams(model, {
-          temperature: 0.7,
-          presencePenalty: 0.2,
-          frequencyPenalty: 0.3,
-          n: 2,
-        })
-      ).toEqual({});
-    }
+  it('drops the whole ignored sampling group while thinking is on', () => {
+    expect(
+      deepseekSamplingParams(ChatModels.DEEPSEEK_FLASH, {
+        temperature: 0.7,
+        presencePenalty: 0.2,
+        frequencyPenalty: 0.3,
+      })
+    ).toEqual({});
+  });
+
+  it('hands the group back once the caller turns thinking off', () => {
+    // The restriction belongs to thinking mode, not to the id. Dropping
+    // temperature on a thinking-disabled turn reproduces from our side the exact
+    // silent no-op the drop exists to prevent: the knob moves, nothing happens.
+    expect(
+      deepseekSamplingParams(
+        ChatModels.DEEPSEEK_FLASH,
+        { temperature: 0.2, topP: 0.3, presencePenalty: 0.2, frequencyPenalty: 0.3 },
+        { thinking: { enabled: false } }
+      )
+    ).toEqual({ temperature: 0.2, top_p: 0.3, presence_penalty: 0.2, frequency_penalty: 0.3 });
+  });
+
+  it('keeps dropping the group when thinking is explicitly enabled', () => {
+    expect(
+      deepseekSamplingParams(ChatModels.DEEPSEEK_FLASH, { temperature: 0.2 }, { thinking: { enabled: true } })
+    ).toEqual({});
+  });
+
+  it('leaves top_p unclamped once thinking is off, the floor being a thinking-mode rule', () => {
+    expect(deepseekSamplingParams(ChatModels.DEEPSEEK_FLASH, { topP: 0.3 }, { thinking: { enabled: false } })).toEqual({
+      top_p: 0.3,
+    });
   });
 
   it('clamps top_p up to the documented floor rather than dropping it', () => {
@@ -99,19 +123,38 @@ describe('deepseekSamplingParams', () => {
   });
 
   it('sends nothing it was not given', () => {
-    expect(deepseekSamplingParams(ChatModels.DEEPSEEK_V4_PRO, {})).toEqual({});
+    expect(deepseekSamplingParams(ChatModels.DEEPSEEK_FLASH, {})).toEqual({});
   });
 
-  it('passes the group through for a model outside the pinned set', () => {
+  it('passes the group through for a model outside the DeepSeek family', () => {
     expect(
       deepseekSamplingParams('deepseek-chat-hypothetical', {
         temperature: 0.7,
         topP: 0.5,
         presencePenalty: 0.2,
         frequencyPenalty: 0.3,
-        n: 2,
       })
-    ).toEqual({ temperature: 0.7, top_p: 0.5, presence_penalty: 0.2, frequency_penalty: 0.3, n: 2 });
+    ).toEqual({ temperature: 0.7, top_p: 0.5, presence_penalty: 0.2, frequency_penalty: 0.3 });
+  });
+});
+
+/**
+ * Both shapers gate on DEEPSEEK_MODELS, and the picker hides the sampling knobs
+ * on the strength of NO_TEMPERATURE_MODELS. Three lists that have to name the
+ * same ids, none of which imports the others.
+ */
+describe('DEEPSEEK_MODELS agreement', () => {
+  // getModelInfo() returns a static array, so this key is never used for a network call.
+  const shippedIds = async () =>
+    (await new DeepSeekBackend('test-key-not-used').getModelInfo()).map(model => String(model.id));
+
+  it('names exactly the ids the adapter table ships', async () => {
+    expect([...DEEPSEEK_MODELS].sort()).toEqual((await shippedIds()).sort());
+  });
+
+  it('agrees with NO_TEMPERATURE_MODELS, which is what hides the knobs in the picker', () => {
+    const missing = [...DEEPSEEK_MODELS].filter(model => !NO_TEMPERATURE_MODELS.has(model));
+    expect(missing, `DeepSeek ids the picker still offers temperature for: ${missing.join(', ')}`).toEqual([]);
   });
 });
 

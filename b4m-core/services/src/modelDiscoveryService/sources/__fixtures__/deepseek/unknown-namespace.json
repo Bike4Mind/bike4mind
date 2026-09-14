@@ -1,7 +1,7 @@
 {
   "object": "list",
   "data": [
-    { "id": "deepseek-v4-pro", "object": "model", "owned_by": "deepseek" },
+    { "id": "deepseek-flash", "object": "model", "owned_by": "deepseek" },
     { "id": "deepseek-embedding-1", "object": "model", "owned_by": "deepseek" },
     { "id": "deepseek-tts-preview", "object": "file", "owned_by": "deepseek" }
   ]

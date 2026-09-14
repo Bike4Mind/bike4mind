@@ -4370,6 +4370,11 @@ export class ChatCompletionProcess {
                 primaryModelName: modelInfo.name,
                 fallbackModel: currentModel.id,
                 fallbackModelName: currentModel.name,
+                // The badge cannot infer the provider path from the id alone: a
+                // bare vendor slug is the direct API on a hosted deployment and
+                // an Ollama pull on a self-hosted one.
+                primaryModelBackend: modelInfo.backend,
+                fallbackModelBackend: currentModel.backend,
                 timestamp: Date.now(),
               };
 

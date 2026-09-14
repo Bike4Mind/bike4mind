@@ -91,8 +91,8 @@ export const CACHING_CAPABILITIES: Record<ModelBackend, ProviderCachingCapabilit
     // repeated prefixes without a documented minimum.
     minTokens: 0,
     maxTTL: 'auto',
-    // A cache hit is ~2% of the miss rate on both ids, so the saving on the
-    // cached portion is ~98%.
+    // A cache hit is ~2% of the miss rate ($0.006 against $0.30 per 1M), so the
+    // saving on the cached portion is ~98%.
     costSavings: 98,
   },
   [ModelBackend.Ollama]: {

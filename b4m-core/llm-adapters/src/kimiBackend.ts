@@ -170,12 +170,16 @@ export class KimiBackend implements ICompletionBackend {
         releaseDate: '2026-01-01',
         trainingCutoff: '2025-01-01',
         // Discontinued upstream by Moonshot: api.moonshot.ai no longer serves this
-        // id. The enum member stays so a session still pinned to it resolves a
-        // name instead of crashing; a past deprecationDate hides it from the
-        // picker, which is the only lifecycle lever an adapter row has
-        // (toModelRecord derives lifecycle from this field alone). The two
-        // Bedrock-served Kimi ids are on AWS's lifecycle and are unaffected.
+        // id. A past deprecationDate hides it from the picker, but hiding alone
+        // strands a session whose pinned lastUsedModel still names it - the
+        // lookup misses and the run dies with "Invalid LLM backend specified"
+        // before the fallback loop can rescue it. `replacedBy` is what redirects
+        // that pin, through the catalog overlay in resolveDeprecatedModelId; its
+        // DEPRECATED_MODEL_MAP entry covers the same hop before this row is
+        // seeded. The two Bedrock-served Kimi ids are on AWS's lifecycle and are
+        // unaffected.
         deprecationDate: '2026-08-31',
+        replacedBy: ChatModels.KIMI_K2_6,
         description:
           'The previous-generation Kimi, still the cheapest of the family. Superseded by K2.6 on quality at a modest price increase.',
       },
@@ -505,21 +509,27 @@ export class KimiBackend implements ICompletionBackend {
           streamFinishReason = c.finish_reason;
         }
 
+        const deltaReasoning = (c.delta as { reasoning_content?: string }).reasoning_content;
+
         // Ungated, for the same reason as the non-streaming path: reasoning arrives
         // by default on every current Kimi and is billed either way.
-        if ((c.delta as any).reasoning_content) {
+        if (deltaReasoning) {
           if (!isInThinkingBlock) {
             isInThinkingBlock = true;
-            streamedText[c.index] = '<think>' + (c.delta as any).reasoning_content;
+            streamedText[c.index] = '<think>' + deltaReasoning;
           } else {
-            streamedText[c.index] = (c.delta as any).reasoning_content;
+            streamedText[c.index] = deltaReasoning;
           }
-          return;
+          // Falls through when the SAME delta also carries prose: Moonshot can end
+          // the monologue and start the answer in one chunk, and returning here
+          // dropped that first prose token. Returning is still right without
+          // prose, or the tool-call branch below would overwrite the monologue.
+          if (!c.delta.content) return;
         }
 
-        if (isInThinkingBlock && c.delta.content && !(c.delta as any).reasoning_content) {
+        if (isInThinkingBlock && c.delta.content) {
           isInThinkingBlock = false;
-          streamedText[c.index] = '</think>' + (c.delta.content || '');
+          streamedText[c.index] = (streamedText[c.index] ?? '') + '</think>' + c.delta.content;
           return;
         }
 

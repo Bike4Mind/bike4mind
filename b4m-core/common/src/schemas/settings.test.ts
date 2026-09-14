@@ -270,6 +270,7 @@ describe('public settings projection (M2.5 security boundary)', () => {
         'anthropicDemoKey',
         'xaiApiKey',
         'moonshotApiKey',
+        'deepseekApiKey',
         'geminiDemoKey',
         'voyageApiKey',
       ]) {

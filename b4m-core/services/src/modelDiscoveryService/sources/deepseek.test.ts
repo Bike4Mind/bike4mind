@@ -7,9 +7,9 @@ import { expectDegradesOnFailure, makeContext, stubFetch } from './__fixtures__/
 import { createDeepSeekSource, DEEPSEEK_MODELS_URL, normalizeDeepSeekModels } from './deepseek';
 
 describe('deepseek source normalization', () => {
-  it('emits one text record per listed model, sorted by id', () => {
+  it('emits one text record per listed model', () => {
     const records = normalizeDeepSeekModels(models);
-    expect(records.map(r => r.modelId)).toEqual(['deepseek-flash', 'deepseek-v4-pro']);
+    expect(records.map(r => r.modelId)).toEqual(['deepseek-flash']);
     for (const record of records) {
       expect(record.patch.backend).toBe('deepseek');
       expect(record.patch.vendor).toBe('deepseek');
@@ -38,12 +38,14 @@ describe('deepseek source normalization', () => {
   });
 
   it('skips malformed entries and keeps the rest', () => {
-    expect(normalizeDeepSeekModels(malformed).map(r => r.modelId)).toEqual(['deepseek-v4-pro']);
+    expect(normalizeDeepSeekModels(malformed).map(r => r.modelId)).toEqual(['deepseek-flash']);
   });
 
-  it('classifies by modality marker before namespace, and skips a non-model object', () => {
+  it('classifies by modality marker before namespace, sorts by id, and skips a non-model object', () => {
     const records = normalizeDeepSeekModels(unknownNamespace);
-    expect(records.map(r => r.modelId)).toEqual(['deepseek-embedding-1', 'deepseek-v4-pro']);
+    // Listed chat-first, returned embedding-first: the sort is what makes a run
+    // over an unordered listing produce the same plan every time.
+    expect(records.map(r => r.modelId)).toEqual(['deepseek-embedding-1', 'deepseek-flash']);
     // The marker wins over the namespace: an embedding model must never be
     // labelled 'text' just because it sits in the deepseek- namespace.
     expect(records.find(r => r.modelId === 'deepseek-embedding-1')?.patch.type).toBe('embedding');
@@ -82,7 +84,7 @@ describe('deepseek source fetch', () => {
         // One endpoint lists everything, so a 200 IS exhaustive - which is what
         // lets absence bookkeeping eventually deprecate a withdrawn model.
         expect(result.authoritativeFor).toEqual(['deepseek']);
-        expect(result.records).toHaveLength(2);
+        expect(result.records).toHaveLength(1);
       }
     } finally {
       restore();

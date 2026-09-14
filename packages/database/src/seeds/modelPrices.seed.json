@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-14T04:49:21.548Z",
+  "generatedAt": "2026-09-14T07:41:42.338Z",
   "entries": [
     {
       "modelId": "ai21.j2-mid-v1",
@@ -219,17 +219,6 @@
           "input": 3e-7,
           "output": 0.0000012,
           "cache_read": 6e-9
-        }
-      }
-    },
-    {
-      "modelId": "deepseek-v4-pro",
-      "unit": "per_token",
-      "pricing": {
-        "1000000": {
-          "input": 0.00000132,
-          "output": 0.00000396,
-          "cache_read": 4.4e-8
         }
       }
     },

@@ -280,6 +280,9 @@ export interface IChatHistoryItem {
     primaryModelName: string;
     fallbackModel: string;
     fallbackModelName: string;
+    /** Provider path of each side; see FallbackInfoSchema for why these are optional. */
+    primaryModelBackend?: string;
+    fallbackModelBackend?: string;
     timestamp: number;
   };
 

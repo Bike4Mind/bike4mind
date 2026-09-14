@@ -42,7 +42,7 @@ const searchTool = (toolFn: ReturnType<typeof vi.fn>) => [
 describe('DeepSeekBackend reasoning capture', () => {
   it('keeps reasoning_content even when no reasoning parameter was sent', async () => {
     // Gating on "did we send a thinking parameter" drops reasoning on the common
-    // path: both ids reason by default and deepseekReasoningParams sends nothing
+    // path: Flash reasons by default and deepseekReasoningParams sends nothing
     // unless an explicit effort or toggle was set. The monologue is billed as
     // output tokens either way, so discarding it charges for unseen text.
     const { backend } = backendReturning([
@@ -130,7 +130,7 @@ describe('DeepSeekBackend reasoning capture', () => {
   it('names the finish_reason when a turn produced nothing for some other reason', async () => {
     const { backend } = backendReturning([{ index: 0, message: { content: '' }, finish_reason: 'content_filter' }]);
 
-    await expect(runTurn(backend, ChatModels.DEEPSEEK_V4_PRO)).rejects.toThrow(/finish_reason: content_filter/);
+    await expect(runTurn(backend, ChatModels.DEEPSEEK_FLASH)).rejects.toThrow(/finish_reason: content_filter/);
   });
 
   /**
@@ -391,5 +391,74 @@ describe('DeepSeekBackend streaming reasoning', () => {
     expect(info.cacheReadInputTokens).toBe(150);
     expect(info.inputTokens).toBe(150);
     expect(info.outputTokens).toBe(30);
+  });
+
+  it('surfaces cacheStats on the terminal frame, not only in the log', async () => {
+    // Every per-chunk callback fires before the terminal usage chunk is read, so
+    // a stream had no frame carrying cacheStats at all. Streaming is the default,
+    // so that was every DeepSeek turn: the telemetry existed only in CloudWatch.
+    const { backend } = streamingBackend([
+      [
+        {
+          choices: [{ index: 0, delta: { content: 'hello' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 100, completion_tokens: 5, prompt_cache_hit_tokens: 80 },
+        },
+      ],
+    ]);
+
+    const frames = await runStream(backend, ChatModels.DEEPSEEK_FLASH, { cacheStrategy: { enableCaching: true } });
+    const info = frames.at(-1)!.info;
+
+    expect(info.cacheStats?.cacheReadTokens).toBe(80);
+    expect(info.cacheStats?.totalInputTokens).toBe(100);
+    // The extra frame must not restate the counts as new usage.
+    expect(info.inputTokens).toBe(20);
+    expect(info.cacheReadInputTokens).toBe(80);
+    expect(info.outputTokens).toBe(5);
+    expect(frames.at(-1)!.text.join('')).toBe('');
+  });
+
+  it('keeps the prose from a delta that carries the monologue tail and the answer together', async () => {
+    // The reasoning branch used to return before the block-closing branch ever
+    // ran, so a chunk holding both fields lost its content silently - no error,
+    // just a missing first word. DeepSeek reasons on every turn, so the only
+    // thing making this rare is the provider's chunk boundaries.
+    const { backend } = streamingBackend([
+      [
+        { choices: [{ index: 0, delta: { reasoning_content: 'thinking' } }] },
+        { choices: [{ index: 0, delta: { reasoning_content: ' more', content: 'The answer' } }] },
+        {
+          choices: [{ index: 0, delta: { content: ' is 42' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        },
+      ],
+    ]);
+
+    const frames = await runStream(backend, ChatModels.DEEPSEEK_FLASH);
+    const joined = frames
+      .flatMap(f => f.text)
+      .filter(Boolean)
+      .join('');
+
+    expect(joined).toBe('<think>thinking more</think>The answer is 42');
+  });
+
+  it('does not degrade a streamed turn to non-streaming for an n it cannot serve', async () => {
+    // n is absent from DeepSeek's schema either way, so dropping streaming bought
+    // nothing and cost the caller the live response.
+    const { backend, create } = streamingBackend([
+      [
+        {
+          choices: [{ index: 0, delta: { content: 'hello' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        },
+      ],
+    ]);
+
+    await runStream(backend, ChatModels.DEEPSEEK_FLASH, { n: 3 });
+
+    const request = create.mock.calls[0][0] as Record<string, unknown>;
+    expect(request.stream).toBe(true);
+    expect(request).not.toHaveProperty('n');
   });
 });
