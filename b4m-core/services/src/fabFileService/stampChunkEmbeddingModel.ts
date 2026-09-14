@@ -50,20 +50,28 @@ interface StampChunkEmbeddingModelAdapters {
  *
  * Least bad is not free, and two readers turn a blank FILE label into content the user never sees.
  * `lakeSourceReachability` requires an exact file-label match, so a blank one makes every source doc
- * unreachable and `recallLakeMemory` drops the beliefs citing them - silently, returning nothing at
- * all. And the attachment scan in llm/utils keys its query vector off the file label defaulted to
- * ada-002, so on any other deployment default that lookup misses, the whole cosine arm is skipped,
- * and a format the raw-content fallback cannot decode reaches the model as nothing. Both are
- * degradations a WRONG label makes worse rather than better - that one excludes the file from every
- * search at once and sends the operator to re-embed a healthy one - which is why blank is still the
- * answer here. Consolidating the file by re-embedding it is the actual repair, and that is what the
- * warning says.
+ * unreachable, `recallLakeMemory` drops the beliefs citing them, and where that leaves none it
+ * returns nothing at all - no log on that branch, and an empty result the caller records as an
+ * ordinary one. And the attachment scan in llm/utils keys its query vector off the file label
+ * defaulted to ada-002, so on any other deployment default that lookup misses, the whole cosine arm
+ * is skipped, and a format the raw-content fallback cannot decode reaches the model as nothing -
+ * that one at least pushes a notice, unlike the silent drop above.
  *
- * The retrieval arms themselves do match each chunk on its OWN label rather than the file's: the
- * Atlas arm through its `filter` clause, the in-process cosine arm through `classifyLoadedChunk`.
- * Width is no substitute for either - voyage-3 and Titan v2 are both 1024 wide, so a blank file
- * label with no chunk-level check left a split file's two halves scoring against each other as
- * though they shared a space.
+ * A WRONG label is still worse, but the asymmetry lives in the lake search rather than in both
+ * readers: a foreign file label excludes the file there wholesale and sends the operator to re-embed
+ * a healthy one. At the attachment scan the two are near-equivalent, and for a format the raw path
+ * cannot decode a wrong label matching the turn's default is the better of them, since cosine then
+ * delivers the file's head where blank delivers only a notice. Blank is the answer here on the
+ * strength of the lake-search exclusion alone. Consolidating the file by re-embedding it is the
+ * actual repair, and that is what the warning says.
+ *
+ * The retrieval arms do match each chunk on its OWN label WHERE IT HAS ONE: the Atlas arm through
+ * its `filter` clause, the in-process cosine arm through `classifyLoadedChunk`. Neither rescues an
+ * unlabeled chunk - `classifyLoadedChunk` falls back to the parent file's label when the chunk's own
+ * is blank, which is exactly the legacy and backfill population these paragraphs are about. Width is
+ * no substitute either - voyage-3 and Titan v2 are both 1024 wide, so a blank file label with no
+ * chunk-level check left a split file's two halves scoring against each other as though they shared
+ * a space.
  *
  * `chunkEmbeddingModelStampedAt` is the readiness signal the Atlas `$vectorSearch` cutover reads
  * (see atlasSearchIndex.ts / vectorSearchEligibility.ts) - it must be set AFTER the chunk stamp
@@ -154,9 +162,12 @@ export const stampChunkEmbeddingModel = async (
  * The match is a HEURISTIC, and only one direction of it holds. A mismatch does prove this message
  * wrote none of these vectors, so withholding the label is sound. The converse does not follow:
  * equality does not show this message wrote anything, and the backfill population is exactly where
- * it fails - the width guess tiebreaks to the deployment default, which on a keyless cloud stage
- * resolves to the same model resolveEmbeddingWithKeylessFallback hands this pass, so the two agree
- * by construction rather than by evidence. Separating "labeled by the vectorize transaction" from
+ * it fails. Its width guess tiebreaks to the deployment default only when that default is one of
+ * the width candidates, and on a keyless cloud stage it is not - the default is ada-002 at 1536
+ * while the file is 1024 - so the tiebreak never fires and the guess falls through to the
+ * alphabetically first of the ten 1024-dim models. That is the same Titan id
+ * resolveEmbeddingWithKeylessFallback hands this pass, so the two agree by alphabetical accident
+ * rather than by evidence. Separating "labeled by the vectorize transaction" from
  * "labeled by the width backfill" needs a provenance marker the chunk rows do not carry; until one
  * exists this guard closes the immediate mismatch and leaves that population uncovered.
  *
@@ -192,8 +203,8 @@ const resolveFileLabel = async (
       `[embeddings] FabFile ${fabFileId} holds only vectors this message did not write, all ` +
         `declaring ${only} while this message resolved ${embeddingModel}. Leaving the file label ` +
         `unset: a chunk label is only as good as whatever wrote it, and promoting a wrong one would ` +
-        `drop the whole file from every search, where a blank label only degrades retrieval. ` +
-        `Re-embed the file to consolidate it.`
+        `drop the whole file from every lake search. A blank label degrades retrieval instead - the ` +
+        `lesser harm, not a free one. Re-embed the file to consolidate it.`
     );
     return null;
   }
