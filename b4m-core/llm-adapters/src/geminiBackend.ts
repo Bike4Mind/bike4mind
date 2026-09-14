@@ -249,7 +249,9 @@ export class GeminiBackend implements ICompletionBackend {
         supportsVision: true,
         supportsTools: true,
         logoFile: 'Google_logo.png',
-        rank: 5,
+        // Below the Pro of its own generation (5) and above Flash Lite (7). Sharing Pro's
+        // rank left the pair tied on every comparator key and the alphabet put Flash first.
+        rank: 6,
         trainingCutoff: '2025-01-31',
         releaseDate: '2025-11-30',
         description:
