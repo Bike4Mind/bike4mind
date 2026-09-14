@@ -364,7 +364,14 @@ Preview deploys are created on demand by maintainers via the internal deployer (
 3. Results are posted as a **comment on the PR** with pass/fail counts
 4. The **HTML report** is uploaded as a build artifact (`playwright-report-pr<N>-label`)
 
-In CI, `API_URL` points at the deployment under test. `E2E_CLEANUP_SECRET` is one stable value that every deploy writes into that stage's SST secret, so `pr{n}` previews, staging, and production all share it. Every Playwright step runs inside `pnpm sst shell`, so the test client reads `Resource.E2E_CLEANUP_SECRET.value` — the same value the cleanup/create-user API validates against. Previews used to self-provision a fresh random per deploy; that was dropped because it made manual QA against a preview a chore and let a redeploy invalidate the secret mid-run.
+In CI, `API_URL` points at the deployment under test. `E2E_CLEANUP_SECRET` is one stable value that every deploy writes into that stage's SST secret, so `pr{n}` previews, staging, and production all share it. Previews used to self-provision a fresh random per deploy; that was dropped because it made manual QA against a preview a chore and let a redeploy invalidate the secret mid-run.
+
+How the suite reads that value depends on the account it is running against:
+
+- **dev / staging (same account)** - the Playwright step runs inside `pnpm sst shell`, so the test client reads `Resource.E2E_CLEANUP_SECRET.value`, the same value the cleanup/create-user API validates against.
+- **`pr<N>` previews (separate account)** - the dev role cannot `sst shell` into a preview stack, so the workflows inject the `E2E_CLEANUP_SECRET` **repo secret** on `Bike4Mind/bike4mind` directly into the step's environment instead.
+
+That repo secret is a mirror of the value the deployer seeds onto every stage, and it has to be set on this repo specifically - a copy living only on the deployer repo is not visible here. **When it is unset, preview-targeted runs cannot start at all**, and every path reports that as a labeled skip rather than a failure: the PR comment reads `Skipped` and the Slack post reads `:fast_forward: Skipped`. Zero tests ran, so neither a pass nor a failure would be true. If you see that, the fix is to set the repo secret, not to debug the suite.
 
 ## Debugging
 

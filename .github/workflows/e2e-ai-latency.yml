@@ -76,6 +76,9 @@ jobs:
     outputs:
       latest_gpt: ${{ steps.discover.outputs.latest_gpt }}
       latest_claude: ${{ steps.discover.outputs.latest_claude }}
+      # Distinguishes "discovery ran and found nothing" from "discovery could not run
+      # because the preview secret is unset" - setup-matrix reports them differently.
+      discovery_skipped: ${{ steps.discover.outputs.preview_skipped }}
     steps:
       - name: Resolve configuration
         id: config
@@ -182,9 +185,14 @@ jobs:
           case "$STAGE" in
             pr[0-9]*)
               # Preview (cross-account): use the injected repo secret, no sst shell.
+              # Skip rather than `exit 1` so this does not read as a broken discovery
+              # test. A full-matrix run genuinely cannot continue without the discovered
+              # models, so setup-matrix still stops the run - but it names THIS cause,
+              # rather than reporting an unexplained empty discovery result.
               if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
-                echo "::error::E2E_CLEANUP_SECRET repo secret is required for preview runs"
-                exit 1
+                echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured; skipping model discovery (0 tests run)"
+                echo "preview_skipped=true" >> "$GITHUB_OUTPUT"
+                exit 0
               fi
               pnpm --filter client exec playwright test --project=ai-latency-discover e2e/ai-latency-discover.spec.ts \
                 2>&1 | tee apps/client/playwright-output.txt
@@ -226,6 +234,7 @@ jobs:
         env:
           DISCOVERED_GPT: ${{ needs.discover-models.outputs.latest_gpt }}
           DISCOVERED_CLAUDE: ${{ needs.discover-models.outputs.latest_claude }}
+          DISCOVERY_SKIPPED: ${{ needs.discover-models.outputs.discovery_skipped }}
           EVENT_NAME: ${{ github.event_name }}
           RUN_FULL_MATRIX: ${{ inputs.run_full_matrix }}
           RUN_ALL_SPECS: ${{ inputs.run_all_specs }}
@@ -238,7 +247,11 @@ jobs:
           # the target environment's AI Settings modal (see the discover-models job).
           build_full_matrix() {
             if [ -z "$DISCOVERED_GPT" ] || [ -z "$DISCOVERED_CLAUDE" ]; then
-              echo "Full matrix requested but model discovery did not return both models (gpt='$DISCOVERED_GPT', claude='$DISCOVERED_CLAUDE')."
+              if [ "$DISCOVERY_SKIPPED" = "true" ]; then
+                echo "::error::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured, so model discovery could not run. No tests were executed - this is a configuration gap, not a test failure."
+              else
+                echo "Full matrix requested but model discovery did not return both models (gpt='$DISCOVERED_GPT', claude='$DISCOVERED_CLAUDE')."
+              fi
               exit 1
             fi
             echo "spec_files=$ALL_SPECS" >> $GITHUB_OUTPUT
@@ -435,9 +448,14 @@ jobs:
           case "$STAGE" in
             pr[0-9]*)
               # Preview (cross-account): use the injected repo secret, no sst shell.
+              # Skip rather than `exit 1` - a red cell here is indistinguishable from a
+              # real latency/quality failure. The aggregate step in `notify` already
+              # renders a cell with no pw-results.json as "No Data", which is the honest
+              # reading of a benchmark that never started.
               if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
-                echo "::error::E2E_CLEANUP_SECRET repo secret is required for preview runs"
-                exit 1
+                echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured; skipping (0 tests run)"
+                echo "preview_skipped=true" >> "$GITHUB_OUTPUT"
+                exit 0
               fi
               pnpm --filter client exec playwright test "e2e/${SPEC_FILE}.spec.ts" \
                 2>&1 | tee apps/client/playwright-output.txt
@@ -477,7 +495,9 @@ jobs:
           find . -type f -name 'pw-results.json' 2>/dev/null | head -20 || true
 
       - name: Upload Playwright report
-        if: always()
+        # Nothing to upload on a skip; without this the upload emits a "No files were
+        # found" warning that reads like the run lost its report.
+        if: always() && steps.e2e.outputs.preview_skipped != 'true'
         uses: actions/upload-artifact@v6
         with:
           name: ai-latency-${{ matrix.spec_file }}-${{ steps.sanitize.outputs.model_safe }}-${{ steps.config.outputs.stage }}${{ inputs.e2e_test_id && format('-{0}', inputs.e2e_test_id) || '' }}

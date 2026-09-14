@@ -260,9 +260,16 @@ jobs:
           [ -n "$PLAYWRIGHT_ARGS" ] && echo "Running: playwright test $PLAYWRIGHT_ARGS" || echo "Running full suite"
           if [ -n "$PR_NUMBER" ]; then
             # Preview (cross-account): E2E_CLEANUP_SECRET is injected from the repo secret above.
+            # An unset secret means the suite cannot start at all. Report that as a labeled
+            # skip rather than `exit 1`: a red job here is indistinguishable from a real test
+            # failure, so a reviewer reads "e2e broke on this PR" when nothing ever ran. The
+            # Slack status below branches on `preview_skipped` AHEAD of pass/fail for the same reason
+            # - a skip must never render as either. (The promotion commit status needs no
+            # skip branch: it already returns early on zero parsed results.)
             if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
-              echo "::error::E2E_CLEANUP_SECRET repo secret is required for preview runs"
-              exit 1
+              echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured; skipping (0 tests run)"
+              echo "preview_skipped=true" >> "$GITHUB_OUTPUT"
+              exit 0
             fi
             pnpm --filter client exec playwright test $PLAYWRIGHT_ARGS 2>&1 | tee apps/client/playwright-output.txt
           else
@@ -271,7 +278,9 @@ jobs:
           fi
 
       - name: Upload Playwright report
-        if: always()
+        # Nothing to upload on a skip; without this the upload emits a "No files were
+        # found" warning that reads like the run lost its report.
+        if: always() && steps.e2e.outputs.preview_skipped != 'true'
         uses: actions/upload-artifact@v6
         with:
           name: playwright-report${{ inputs.artifact_suffix && format('-{0}', inputs.artifact_suffix) || '' }}-${{ steps.config.outputs.stage }}${{ inputs.e2e_test_id && format('-{0}', inputs.e2e_test_id) || '' }}
@@ -401,6 +410,11 @@ jobs:
           script: |
             const sha = process.env.TESTED_SHA;
             const total = Number(process.env.TOTAL || '0');
+            // Also the backstop for a run that skipped before Playwright started: it parses
+            // zero results, so the status is left missing rather than posted red. (Preview
+            // runs, the only ones that can skip, are never promotable to begin with - both
+            // callers tie stamp_promotable to an empty pr_number - so this step does not run
+            // for them at all. Belt and braces.)
             if (total === 0) {
               core.warning(`No e2e results parsed; skipping ${process.env.STATUS_CONTEXT} status (leaves it missing = not promotable).`);
               return;
@@ -450,7 +464,9 @@ jobs:
         # it): post nothing, since its parser emits zeros an always() post would show
         # as a bogus green. A pre-test failure (install hang, health probe) is failure()
         # not cancelled(), so it still posts - the total==0 branch in the status
-        # expressions below renders it red instead of a misleading green.
+        # expressions below renders it red instead of a misleading green. The skip
+        # branch ahead of it is the third state: a preview run that could not start
+        # for a missing repo secret is neither a pass nor a failure.
         if: ${{ !cancelled() }}
         uses: slackapi/slack-github-action@v2
         with:
@@ -458,7 +474,7 @@ jobs:
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": "Playwright E2E${{ inputs.suite_name && format(' {0}', inputs.suite_name) || ' Tests' }} (${{ inputs.trigger_label }}) — ${{ steps.results.outputs.total == '0' && ':x: No results (run failed before tests)' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Passed but some specs did not start' || ':x: Failed' }}",
+              "text": "Playwright E2E${{ inputs.suite_name && format(' {0}', inputs.suite_name) || ' Tests' }} (${{ inputs.trigger_label }}) — ${{ steps.e2e.outputs.preview_skipped == 'true' && ':fast_forward: Skipped (preview e2e unavailable: E2E_CLEANUP_SECRET repo secret not configured)' || steps.results.outputs.total == '0' && ':x: No results (run failed before tests)' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Passed but some specs did not start' || ':x: Failed' }}",
               "blocks": [
                 {
                   "type": "header",
@@ -472,7 +488,7 @@ jobs:
                   "fields": [
                     {
                       "type": "mrkdwn",
-                      "text": "*Status*\n${{ steps.results.outputs.total == '0' && ':x: No results (run failed before tests)' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Incomplete' || ':x: Failed' }}"
+                      "text": "*Status*\n${{ steps.e2e.outputs.preview_skipped == 'true' && ':fast_forward: Skipped (E2E_CLEANUP_SECRET not configured)' || steps.results.outputs.total == '0' && ':x: No results (run failed before tests)' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Incomplete' || ':x: Failed' }}"
                     },
                     {
                       "type": "mrkdwn",
