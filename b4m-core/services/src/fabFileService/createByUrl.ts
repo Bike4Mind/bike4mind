@@ -96,6 +96,13 @@ export const createFabFileByUrl = async (
 
   const { textContent, mimeType, title } = await fetchAndParseURL(params.url, { logger });
 
+  // A Buffer (the PDF arm of fetchAndParseURL) may legitimately be empty; only an empty string
+  // means the page had no extractable text at all, so the typeof guard must not be simplified to
+  // a plain falsy check.
+  if (typeof textContent === 'string' && textContent === '') {
+    throw new BadRequestError('No readable text could be extracted from that URL');
+  }
+
   const fileSize = typeof textContent === 'string' ? Buffer.byteLength(textContent) : textContent.length;
   // Hashes whatever `fetchAndParseURL` returned - extracted text for most content, raw bytes for a
   // PDF (see `ingest.ts`'s `urlContent = body` arm). Either way, identical input deterministically
@@ -141,6 +148,9 @@ export const createFabFileByUrl = async (
       storage,
       provenance,
       administeredOrgIds,
+      // mimeType comes from fetchAndParseURL's HTTP response, not the client; title is free-form
+      // page text (a <title> or URL segment) and must not be able to outrank it.
+      mimeTypePrecedence: 'claim-first',
     }
   );
 

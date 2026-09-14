@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { DuplicateFabFileError, FabFileSourceType, KnowledgeType } from '@bike4mind/common';
+import { BadRequestError } from '@bike4mind/utils';
 
 /**
  * `createFabFileByUrl` had no tests. These cover the tag/provenance pass-through added for LINK
@@ -63,6 +64,52 @@ describe('createFabFileByUrl', () => {
     // Uploaded to the path createFabFile allocated, so S3 ObjectCreated picks it up as usual.
     expect(storageUpload).toHaveBeenCalledWith(created.filePath, 'body text', { ContentType: 'text/plain' });
     expect(result.id).toBe('fab-1');
+  });
+
+  it('accepts a dotted page title and keeps it as the fileName', async () => {
+    // Regression guard: `path.extname` treats any mid-string dot as an extension, so a title like
+    // this used to be refused as an unresolvable extension. The door's mimeType comes from the
+    // fetch response, not the title, so it must win.
+    fetchAndParseURL.mockResolvedValue({
+      title: 'Node.js Documentation',
+      textContent: 'body text',
+      mimeType: 'text/html',
+    });
+
+    const result = await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, adapters());
+
+    const created = fabFilesCreate.mock.calls[0][0];
+    expect(created.fileName).toBe('Node.js Documentation');
+    expect(result.id).toBe('fab-1');
+  });
+
+  it('accepts another dotted title shape with no resolvable extension', async () => {
+    fetchAndParseURL.mockResolvedValue({
+      title: 'docs.python.org',
+      textContent: 'body text',
+      mimeType: 'text/html',
+    });
+
+    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, adapters());
+
+    expect(fabFilesCreate.mock.calls[0][0].fileName).toBe('docs.python.org');
+  });
+
+  it('creates normally when textContent is a Buffer, including a zero-length one', async () => {
+    // The PDF arm of fetchAndParseURL returns raw bytes rather than a string; confirms the
+    // empty-text guard (typeof-checked) does not also catch a legitimately empty Buffer.
+    fetchAndParseURL.mockResolvedValue({
+      title: 'report.pdf',
+      textContent: Buffer.alloc(0),
+      mimeType: 'application/pdf',
+    });
+
+    const result = await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, adapters());
+
+    expect(result.id).toBe('fab-1');
+    expect(storageUpload).toHaveBeenCalledWith(expect.any(String), Buffer.alloc(0), {
+      ContentType: 'application/pdf',
+    });
   });
 
   it('stamps adapter-supplied tags on the created file', async () => {
@@ -156,18 +203,23 @@ describe('createFabFileByUrl', () => {
     expect(created.contentHash).toBeUndefined();
   });
 
-  it('does not compute, check, or stamp a contentHash when the fetch returned no content', async () => {
-    // Regression guard: computeContentHash('') would otherwise be a shared dedup key across every
-    // JS-only/paywalled page that yields no extractable text, making unrelated empty fetches look
-    // like duplicates of each other.
+  it('rejects a URL that yields no extractable text instead of creating a phantom file', async () => {
+    // A page with no extractable text used to create a zero-byte file: fileSize 0 only trips the
+    // upper size bound, and the upload happily succeeds with empty content. Refusing here means
+    // the row is never created at all, instead of relying on a later chunk scan to notice.
     fetchAndParseURL.mockResolvedValue({ textContent: '', mimeType: 'text/html', title: 'Empty Page' });
     const checkDuplicate = vi.fn().mockResolvedValue(null);
 
-    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), checkDuplicate });
+    const thrown: unknown = await createFabFileByUrl(
+      'user-1',
+      { url: URL_UNDER_TEST },
+      { ...adapters(), checkDuplicate }
+    ).catch(e => e);
 
+    expect(thrown).toBeInstanceOf(BadRequestError);
+    expect((thrown as BadRequestError).message).toMatch(/no readable text/i);
     expect(checkDuplicate).not.toHaveBeenCalled();
-    const created = fabFilesCreate.mock.calls[0][0];
-    expect(created.contentHash).toBeUndefined();
+    expect(fabFilesCreate).not.toHaveBeenCalled();
   });
 });
 
