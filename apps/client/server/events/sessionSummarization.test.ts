@@ -113,6 +113,7 @@ vi.mock('@server/events/recordSessionOperationalUsage', () => ({
 }));
 
 import { handler } from './sessionSummarization';
+import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@server/utils/sessionOperationCounts';
 
 const OWNER = 'user-owner';
 const STRANGER = 'user-stranger';
@@ -120,9 +121,9 @@ const SESSION_ID = 'session-1';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
 
-const run = () =>
+const run = (properties: Record<string, unknown> = {}) =>
   (handler as unknown as (event: unknown, logger: unknown) => Promise<void>)(
-    { event: 'session.summarize', properties: { sessionId: SESSION_ID, trigger: 'manual' } },
+    { event: 'session.summarize', properties: { sessionId: SESSION_ID, trigger: 'manual', ...properties } },
     logger
   );
 
@@ -369,5 +370,33 @@ describe('sessionSummarization summary-file lookup', () => {
       expect(data.tags.map(t => t.name)).toEqual(['datalake:opti-knowledge', 'plain']);
       expect(logger.warn).not.toHaveBeenCalled();
     });
+  });
+});
+
+// The credit pre-flight prices a callTagging summarize at OPERATIONS_PER_SUMMARIZE_WITH_TAGGING
+// operational model calls (sessions/[id]/summary.ts, projects/[id]/sessions.ts). Nothing but this
+// cascade justifies that number, so it is asserted against the real constant: adding or removing
+// a cascaded operational call here fails until the constant is moved to match.
+describe('sessionSummarization operational cascade', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.assertLakeAdmission.mockReset();
+    h.fabFileStore.length = 0;
+    h.session = { id: SESSION_ID, _id: SESSION_ID, userId: OWNER, name: 'Notebook', tags: [] };
+    h.findOne.mockResolvedValue(null);
+    h.createFabFile.mockResolvedValue({ filePath: 'summary.txt', mimeType: 'text/plain' });
+  });
+
+  it('queues exactly the cascaded operations the pre-flight charges for', async () => {
+    await run({ callTagging: true });
+
+    // The summary itself is the first operation; every Tag it publishes is another.
+    expect(h.publishTag).toHaveBeenCalledTimes(OPERATIONS_PER_SUMMARIZE_WITH_TAGGING - 1);
+  });
+
+  it('cascades nothing without callTagging, which is why tag.ts prices itself at one', async () => {
+    await run();
+
+    expect(h.publishTag).not.toHaveBeenCalled();
   });
 });

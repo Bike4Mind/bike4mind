@@ -14,10 +14,8 @@ import { ProjectEvents, redactSessionsForClient } from '@bike4mind/common';
 import { ActivityType } from '@client/config/activities';
 import { ProjectSessionsRequestBody } from '../../../../types/api';
 import { SessionEvents } from '@server/utils/eventBus';
-import {
-  filterSessionIdsByOperationalCredits,
-  OPERATIONS_PER_SUMMARIZE_WITH_TAGGING,
-} from '@server/utils/sessionOperationalCreditPreflight';
+import { filterSessionIdsByOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
+import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@server/utils/sessionOperationCounts';
 
 const handler = baseApi()
   .get(

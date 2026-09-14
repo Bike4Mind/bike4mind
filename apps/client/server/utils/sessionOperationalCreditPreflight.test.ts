@@ -226,38 +226,36 @@ describe('checkSessionOperationalCredits', () => {
       mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0 });
     };
 
+    // Carries a real pricing map on purpose: with `pricing: {}` this passes whether the flag is
+    // read or not, which is what made the earlier version of this test tautological. The flag has
+    // to be the thing doing the work.
     it('allows a broke holder when the operations model is freeToRun', async () => {
       brokeHolder();
       mockGetOperationsModel.mockResolvedValue({
-        modelInfo: { id: 'llama3', freeToRun: true, pricing: {} },
+        modelInfo: { id: 'llama3', freeToRun: true, pricing: { 128000: { input: 0.15, output: 0.6 } } },
       });
 
       await expect(preflight()).resolves.toEqual({ allowed: true });
     });
 
-    // An admin can point `operationsModel` at any resolvable model id, and a model with no row in
-    // the price catalog settles $0 -> 0 credits with only the [UNPRICED_MODEL] alarm to show it.
-    it('allows a broke holder when the operations model has no pricing rows at all', async () => {
+    // An empty map is a GAP, not a declaration of free: both write paths reject it outright
+    // ("mark the model freeToRun instead" - ModelPriceModel.ts:91-98, model-prices.ts:213-216),
+    // so it only reaches a reader through price-seed lag or a stale per-process catalog cache.
+    // Waiving here while the SessionEvents process prices normally would drop the only
+    // maxCreditsPerMember enforcement these paths have.
+    it('keeps the refusal when the operations model has no pricing rows at all', async () => {
       brokeHolder();
       mockGetOperationsModel.mockResolvedValue({ modelInfo: { id: 'mystery-model', pricing: {} } });
 
-      await expect(preflight()).resolves.toEqual({ allowed: true });
+      await expect(preflight()).resolves.toMatchObject({ allowed: false });
     });
 
-    it('allows a broke holder when every pricing tier is zero-rate', async () => {
+    // Same gap, spelled with tiers present: an all-zero map is equally unwritable, so it means a
+    // stale or half-applied price row rather than a costless model.
+    it('keeps the refusal when every pricing tier is zero-rate but the model is not freeToRun', async () => {
       brokeHolder();
       mockGetOperationsModel.mockResolvedValue({
         modelInfo: { id: 'zero-rate', pricing: { 128000: { input: 0, output: 0 } } },
-      });
-
-      await expect(preflight()).resolves.toEqual({ allowed: true });
-    });
-
-    // A tier can charge through the cache rates alone, so those count as priced.
-    it('keeps the refusal for a model priced only on its cache rates', async () => {
-      brokeHolder();
-      mockGetOperationsModel.mockResolvedValue({
-        modelInfo: { id: 'cache-only', pricing: { 128000: { input: 0, output: 0, cache_read: 0.01 } } },
       });
 
       await expect(preflight()).resolves.toMatchObject({ allowed: false });
@@ -299,7 +297,7 @@ describe('checkSessionOperationalCredits', () => {
         userDetails: [{ id: USER_ID, usedCredits: 10 }],
       });
       mockGetOperationsModel.mockResolvedValue({
-        modelInfo: { id: 'llama3', freeToRun: true, pricing: {} },
+        modelInfo: { id: 'llama3', freeToRun: true, pricing: { 128000: { input: 0.15, output: 0.6 } } },
       });
 
       await expect(preflight()).resolves.toEqual({ allowed: true });
