@@ -60,6 +60,7 @@ import {
 import { useModelStats } from '@client/app/hooks/data/useModelStats';
 import { useFavoriteModels } from '@client/app/hooks/useFavoriteModels';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
+import { menuSurfaceSx, selectListboxSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 
 // List of model IDs to exclude from the dropdown
 // Add any model IDs you want to hide here
@@ -1084,42 +1085,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
               })}
               slotProps={{
                 listbox: {
-                  // Rows mirror the sidenav Filters panel's items (`Sidenav/FiltersPanel.tsx`):
-                  // same 36px height, 8px inset, 12px gap, 8px radius and the same two palette
-                  // tokens for hover and selected.
-                  sx: theme => ({
-                    border: 'none !important',
-                    p: '8px !important',
-                    backgroundColor: 'var(--joy-palette-background-body)',
-                    // The listbox is a Joy List, which spaces its items via this variable (default
-                    // 0px) rather than `gap` - it becomes marginBlockStart on every item after the
-                    // first. Same 4px the sidenav panel puts between its filter rows.
-                    '--List-gap': '4px',
-                    // Joy drives an Option's hover through its variant vars, and also uses this for
-                    // the keyboard-highlighted row - a plain `&:hover` would style only the mouse
-                    // case and lose to Joy's own rule anyway.
-                    '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
-                    '--variant-plainActiveBg': theme.palette.notebooklist.hoverBg,
-                    '& .MuiOption-root': {
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '12px',
-                      justifyContent: 'flex-start',
-                      color: 'text.primary',
-                      fontSize: '14px',
-                      fontWeight: '400',
-                      px: 1,
-                      minHeight: '36px',
-                      borderRadius: '8px',
-                      transition: 'background 0.15s',
-                      // Transparent, not the body colour: an explicit background here would sit on
-                      // top of the hover and selected fills below.
-                      backgroundColor: 'transparent',
-                    },
-                    '& .MuiOption-root[aria-selected="true"]': {
-                      backgroundColor: theme.palette.notebooklist.focusedBackground,
-                    },
-                  }),
+                  sx: theme => ({ ...menuSurfaceSx(theme), ...selectListboxSx(theme) }),
                   placement: 'bottom-end',
                   modifiers: [
                     { name: 'offset', options: { offset: [-0, 4] } },
