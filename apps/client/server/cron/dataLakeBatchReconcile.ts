@@ -182,7 +182,9 @@ export async function handler() {
     return { outcome: 'failed' as const, enqueued: 0, failed: 0 };
   });
   const { outcome: rescueOutcome, enqueued: rescuedChunkFiles, failed: rescueFailures } = chunkRescue;
-  await recordChunkRescueSweep(rescueOutcome, rescuedChunkFiles, rescueFailures).catch(() => {});
+  // Config.STAGE scopes the metric to this deploy; both rescue alarms filter on it, so every
+  // stage's sweep stops counting toward every other stage's threshold.
+  await recordChunkRescueSweep(rescueOutcome, rescuedChunkFiles, rescueFailures, Config.STAGE).catch(() => {});
   const rescuedVectorizeFiles = await rescueStrandedVectorizeFiles().catch(err => {
     logger.error(`[DataLakeBatchReconcile] stranded-vectorize rescue sweep failed: ${err}`);
     return 0;
