@@ -79,17 +79,22 @@ const sharedDevDomain = isSharedDevStage && process.env.SERVER_DOMAIN ? `files.d
  */
 export const routePrefix = $dev && process.env.DEV_ROUTER_DISTRIBUTION_ID ? `/${$app.stage}` : '';
 
-// Public CDN path prefixes that serve user-uploaded or user-influenced files from S3,
-// mirroring the router.routeBucket(...) registrations in infra/buckets.ts (themselves
-// mirrored by resolveProxyTarget in appFileProxy.ts and toCdnPath in app/utils/s3.ts).
-// routePrefix is '' on every stage that owns its router (the `new sst.aws.Router` branch
-// below), so these are the literal URIs the viewer requests. KEEP IN SYNC with buckets.ts.
+// Public CDN path prefixes that serve user-uploaded or user-influenced files from S3.
+// This must mirror resolveProxyTarget in appFileProxy.ts (the allowlist of prefixes routed
+// through CloudFront) - i.e. the router.routeBucket(...) registrations in infra/buckets.ts
+// PLUS the tavern overlay's /tavern-sounds + /tavern-icons routes (contributed via
+// contributeTavernInfra, sst.config.ts) and /whats-new (a separate distribution bucket the
+// proxy can't serve, so it's here but absent from resolveProxyTarget). KEEP IN SYNC with
+// both. routePrefix is '' on every stage that owns its router (the `new sst.aws.Router`
+// branch below), so these are the literal URIs the viewer requests.
 const userFileCdnPrefixes = [
   '/generated/',
   '/proxied-images/',
   '/admin-logos/',
   '/profile-photos/',
   '/org-files/',
+  '/tavern-sounds/',
+  '/tavern-icons/',
   '/app-config/',
   '/whats-new/',
 ];
