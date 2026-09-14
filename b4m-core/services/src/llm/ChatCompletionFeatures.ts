@@ -57,9 +57,11 @@ import {
   lakeMemoryFacts,
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
   FORCED_RETRIEVAL_MAX_SCORED_CHUNKS,
+  FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE,
   FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
   compareForcedRetrievalRank,
+  cosineFloorPctForSpace,
   forcedRetrievalRelativeCutoff,
   LAKE_RECALL_K_DEFAULT,
   DATALAKE_TAG_PREFIX,
@@ -580,6 +582,13 @@ export interface ChatCompletionFeature {
   ) => Promise<IMessage[]>;
 }
 
+/**
+ * How many mementos V1 recall keeps. Named because the floor beside it can now resolve to "none"
+ * on an unmeasured embedding space, which makes this the only thing bounding what gets injected.
+ * Agent mode's first-iteration recall mirrors it (`getFirstIterationMementosPreamble`).
+ */
+const MEMENTO_V1_TOP_K = 10;
+
 export class MementoFeature implements ChatCompletionFeature {
   private chatCompletion: ChatCompletionContext;
   private db: IChatCompletionServiceOptions['db'];
@@ -645,12 +654,14 @@ export class MementoFeature implements ChatCompletionFeature {
 
     this.logger.log('📚 Retrieving relevant mementos using vector similarity');
 
+    // No `minSimilarity`: the floor is a property of the embedding space, and `getRelevantMementos`
+    // is where that space is resolved. The 0.75 that used to sit here was fitted to ada-002 and
+    // would have rejected every memento in existence the moment `defaultEmbeddingModel` moved.
     const relevantMementos = await getRelevantMementos(
       this.user.id,
       message,
       {
-        topK: 10,
-        minSimilarity: 0.75,
+        topK: MEMENTO_V1_TOP_K,
         embeddingModel: embeddingFactory.getDefaultEmbeddingModel(),
         logger: this.logger,
       },
@@ -1742,13 +1753,64 @@ export const FORCED_RETRIEVAL_SETTING_KEYS = [
  * a perfect match" is itself the retrieval starvation this floor exists to prevent, so the coded
  * default - known-good, behavior-preserving - is the safer landing place.
  */
-function forcedRetrievalFloorFraction(raw: unknown, fallbackPct: number, label: string, logger: Logger): number {
+function forcedRetrievalFloorPct(raw: unknown, fallbackPct: number, label: string, logger: Logger): number {
   const pct = nonNegativeIntOr(raw as string | number | null | undefined, fallbackPct, label, logger);
   if (pct > 100) {
     logger.warn(`\u{1F512} Forced retrieval: ${label} ${pct} exceeds 100; using ${fallbackPct} instead`);
-    return fallbackPct / 100;
+    return fallbackPct;
   }
-  return pct / 100;
+  return pct;
+}
+
+function forcedRetrievalFloorFraction(raw: unknown, fallbackPct: number, label: string, logger: Logger): number {
+  return forcedRetrievalFloorPct(raw, fallbackPct, label, logger) / 100;
+}
+
+/**
+ * The absolute floor to grade THIS turn's candidates against, given what the operator configured and
+ * which embedding space the scores were actually produced in.
+ *
+ * A configured value is honored as-is: it is a raw cosine, the operator picked it for the corpus in
+ * front of them, and `forcedRetrievalMinSimilarityPct`'s whole point is that it be tunable. What
+ * cannot be honored is a value nobody chose. The setting's DECLARED default is 75, fitted to
+ * ada-002, and both settings read paths manufacture that 75 for a key no one has ever written - so
+ * an untouched deployment that flips `defaultEmbeddingModel` would carry an ada-002 number into a
+ * space whose entire band sits below it and reject every chunk on every turn.
+ *
+ * Neither read path can distinguish "never set" from "set to exactly the default" without a second
+ * scoped query per turn, which this path deliberately does not spend (see `readForcedRetrievalSettings`
+ * on why all three keys share one read). So the declared default doubles as the "nobody chose this"
+ * signal: a configured value EQUAL to it resolves per embedding space instead. The one case that
+ * misreads is an operator who deliberately types the default's own number for a space whose measured
+ * floor differs - they get the measured floor rather than their typed one, which is more results
+ * than they asked for rather than fewer, and it is logged. The opposite mistake is a silent blackout.
+ *
+ * An unmeasured space yields 0, leaving the scale-free relative floor as the only gate. That is a
+ * real loss of precision, and it beats every alternative: there is no floor that transfers across
+ * vector spaces, so the choice is between ranking without an absolute cut and guessing a cut that
+ * empties the turn.
+ */
+function resolveForcedRetrievalAbsoluteFloor(configuredPct: number, space: string, logger: Logger): number {
+  if (configuredPct !== FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT) return configuredPct / 100;
+
+  const spacePct = cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, space);
+  if (spacePct !== undefined) {
+    if (spacePct !== configuredPct) {
+      logger.log(
+        `\u{1F512} Forced retrieval: absolute floor ${spacePct}% resolved for embedding space "${space}" ` +
+          `(the ${configuredPct}% default is an ada-002 value and does not transfer)`
+      );
+    }
+    return spacePct / 100;
+  }
+
+  logger.error(
+    `\u{1F512} Forced retrieval: no measured absolute floor for embedding space "${space}"; gating on ` +
+      `the relative floor alone. Applying the ${configuredPct}% default here would have been an ` +
+      `ada-002 number in a space nobody has measured - above its band that rejects every chunk on ` +
+      `every turn. Measure one into FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE.`
+  );
+  return 0;
 }
 
 /**
@@ -1763,8 +1825,22 @@ interface ForcedRetrievalFloors {
    * leaving the absolute one as the only gate - the behavior before this was configurable.
    */
   relativeFloor: number;
-  /** Absolute cosine floor a candidate must clear regardless of how the turn's band sits. */
+  /**
+   * Absolute cosine floor a candidate must clear regardless of how the turn's band sits. `0`
+   * disables it, which is what an embedding space with no measured floor resolves to.
+   */
   minSimilarity: number;
+}
+
+/**
+ * What one turn's settings read yields. The relative floor arrives ready to use because a fraction
+ * of the turn's top score means the same thing in every vector space; the absolute one cannot,
+ * so it travels as the configured PERCENT and is resolved against the embedding space later.
+ */
+interface ForcedRetrievalConfig {
+  charBudget: number;
+  relativeFloor: number;
+  configuredAbsolutePct: number;
 }
 
 /** An above-floor candidate. The vector is dropped so each batch can be freed after scoring. */
@@ -2213,7 +2289,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * lands here too. (On the scoped path a missing adapter is swallowed inside the resolver and
    * never reaches this catch.) Every default it falls back to is behavior-preserving.
    */
-  private async resolveForcedRetrievalConfig(): Promise<{ charBudget: number; floors: ForcedRetrievalFloors }> {
+  private async resolveForcedRetrievalConfig(): Promise<ForcedRetrievalConfig> {
     try {
       const { charBudget, relative, absolute } = await this.readForcedRetrievalSettings();
       return {
@@ -2223,20 +2299,21 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           'forcedRetrievalCharBudget',
           this.logger
         ),
-        floors: {
-          relativeFloor: forcedRetrievalFloorFraction(
-            relative,
-            FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
-            'forcedRetrievalRelativeFloorPct',
-            this.logger
-          ),
-          minSimilarity: forcedRetrievalFloorFraction(
-            absolute,
-            FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
-            'forcedRetrievalMinSimilarityPct',
-            this.logger
-          ),
-        },
+        relativeFloor: forcedRetrievalFloorFraction(
+          relative,
+          FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+          'forcedRetrievalRelativeFloorPct',
+          this.logger
+        ),
+        // Stays a PERCENT here, unresolved: turning it into a cosine needs the embedding space,
+        // which is not known until the candidate files have voted on one, mid-scan. See
+        // `resolveForcedRetrievalAbsoluteFloor`.
+        configuredAbsolutePct: forcedRetrievalFloorPct(
+          absolute,
+          FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
+          'forcedRetrievalMinSimilarityPct',
+          this.logger
+        ),
       };
     } catch (err) {
       // Names every key, because one read failure degrades all three at once and an operator
@@ -2250,10 +2327,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       );
       return {
         charBudget: FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
-        floors: {
-          relativeFloor: FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT / 100,
-          minSimilarity: FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT / 100,
-        },
+        relativeFloor: FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT / 100,
+        // The coded default, which then resolves per embedding space like any unchosen value - so a
+        // settings outage cannot reintroduce the ada-002 floor in a space it does not belong to.
+        configuredAbsolutePct: FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
       };
     }
   }
@@ -2466,8 +2543,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       }
 
       // Resolved ONCE here, before the scan - never re-read per chunk in the accumulation loop
-      // below. One call for all three because they share a scope, so they share a read.
-      const { charBudget: forcedRetrievalCharBudget, floors } = await this.resolveForcedRetrievalConfig();
+      // below. One call for all three because they share a scope, so they share a read. The
+      // absolute floor is still a percent at this point: it becomes a cosine below, once the
+      // candidate files have voted on which embedding space this turn is scoring in.
+      const {
+        charBudget: forcedRetrievalCharBudget,
+        relativeFloor,
+        configuredAbsolutePct,
+      } = await this.resolveForcedRetrievalConfig();
 
       // Only a non-lake tag survives: a `datalake:` entry (the shape a lake-created session sets
       // `retrievalTags` to) names the SESSION's lake, which is already applied above via
@@ -2559,6 +2642,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       );
       const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
       const queryVector = await embeddingService.generateEmbedding(query);
+
+      // The pair is only complete HERE. `embeddingModel` above is the space every score below is
+      // computed in - the corpus's own majority, not the admin default - which is exactly the space
+      // an absolute cosine floor has to belong to. A lake still on the old model mid-migration keeps
+      // scoring against the old floor on the same deployment where a migrated one gets the new.
+      const floors: ForcedRetrievalFloors = {
+        relativeFloor,
+        minSimilarity: resolveForcedRetrievalAbsoluteFloor(configuredAbsolutePct, embeddingModel, this.logger),
+      };
 
       // Withhold foreign-model files before any chunk is loaded, mirroring the shared ranking
       // core: their vectors never enter memory and never spend the per-turn chunk budget below,
@@ -2844,7 +2936,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           preRelativeFloorCandidates: ranked.length,
           postRelativeFloorCandidates: scored.length,
         });
-        this.logger.log(`🔒 Forced retrieval: no chunk cleared the similarity floor (top=${topScore.toFixed(3)})`);
+        // Names the floor and the space, not just the top score. An off-topic question and a floor
+        // sitting above the corpus's entire band produce the identical outcome here - every score
+        // below the line - and no per-turn test separates them, so the line carries what an
+        // operator needs to tell them apart instead: a top score far below the floor across a whole
+        // scanned corpus is the misconfiguration, one just below it is a genuine miss.
+        this.logger.log(
+          `\u{1F512} Forced retrieval: no chunk cleared the ${(floors.minSimilarity * 100).toFixed(0)}% absolute ` +
+            `floor (top=${topScore.toFixed(3)} over ${scoredCount} chunks in "${embeddingModel}" space)`
+        );
         // The ZERO ROW. Unlike every other write in this collection it records an ATTEMPT AGAINST A
         // SCOPE, not a read: nothing was returned, so there is no file tag to reverse into a lake
         // and `resolvedLakeIds` is the scope that was searched. Written on THIS exit alone - the

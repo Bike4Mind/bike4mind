@@ -3419,7 +3419,15 @@ export const settingsMap = {
     // stage-neutral on cloud: this value is bundled into the browser too, and a keyless stage's
     // Bedrock fallback is resolved at the embedding seam instead. See embedding.ts.
     defaultValue: defaultEmbeddingModelForEnv(),
-    description: 'The default embedding model to use',
+    description:
+      'The default embedding model to use. Changing it changes the SCALE of every similarity score ' +
+      'in the system, so relevance floors do not carry across: a floor tuned for one model can sit ' +
+      'above the entire range of another and reject everything. The server handles this for you ' +
+      'on the floors it ships, applying the value measured for whichever model your documents are ' +
+      'actually embedded with - but if you have set Forced Retrieval Absolute Floor by hand, ' +
+      're-measure it after changing this. Existing documents keep their old vectors and are only ' +
+      'comparable to a query embedded the same way, so a change here needs a re-embed to take full ' +
+      'effect; until then each set of documents is searched with the model it was indexed under.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     options: [
@@ -3675,13 +3683,17 @@ export const settingsMap = {
     description:
       'Absolute minimum cosine similarity, as a percent, a chunk must clear to be injected on a ' +
       'Data-Lake-mode turn. This is a sanity floor for genuinely unrelated content, NOT the ranking ' +
-      'gate - the relative floor above does the ranking. Measured over 166 injected chunks on a ' +
-      'production lake the 75 default never once bound (the whole band sat between 80 and 91), so ' +
-      'it currently reads like a quality gate while providing no protection. Lowering it toward ' +
-      '30-40 is the intended companion to raising the relative floor: it lets the relative rule ' +
-      'govern a corpus whose band sits low, which a 75 line would otherwise reject wholesale. ' +
-      'Cosine similarity is not comparable across embedding models, so a value tuned for one model ' +
-      'does not transfer to another.',
+      'gate - the relative floor above does the ranking. LEAVE IT AT 75 UNLESS YOU HAVE MEASURED ' +
+      'YOUR OWN CORPUS: a raw cosine means nothing outside the embedding model it was fitted to, so ' +
+      'while this reads 75 the server ignores it and applies the floor measured for whichever model ' +
+      'your documents are actually embedded with (75 for ada-002, 35 for text-embedding-3-small, ' +
+      'and no absolute floor at all for a model nobody has measured - the relative floor still ' +
+      'applies). Set any other value and the server uses exactly that, in every space, which is ' +
+      'yours to get right: 75 against text-embedding-3-small sits above that band entirely and ' +
+      'returns nothing on every query. Where this floor lands inside your band decides a lot - on ' +
+      'one measured corpus 74 / 75 / 76 swung recall 91% / 65% / 40% - and the same 75 that is a ' +
+      'cliff on one lake rejects nothing at all on another. Re-measure after changing the ' +
+      'embedding model; the sweep tool is packages/scripts/retrieval/forcedFloorSweep.ts.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 10,

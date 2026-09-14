@@ -3,8 +3,10 @@ import {
   IApiKeyRepository,
   IMementoDocument,
   IMementoRepository,
+  MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE,
   MementoTier,
   SupportedEmbeddingModel,
+  cosineFloorPctForSpace,
   isSupportedEmbeddingModel,
 } from '@bike4mind/common';
 import {
@@ -70,8 +72,12 @@ export interface GetRelevantMementosOptions {
   topK?: number;
 
   /**
-   * Minimum similarity threshold (0-1 scale, default: 0.7)
-   * Only mementos with similarity >= this threshold will be returned
+   * Minimum similarity threshold (0-1 scale). Only mementos scoring at or above it are returned.
+   *
+   * Omit it. A raw cosine only means something inside one vector space, and this function is the
+   * one place that knows which space it just embedded in, so it resolves the floor itself from
+   * `MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE`. Passing a number here asserts you know the space you
+   * are in - which tests do, and callers generally do not.
    */
   minSimilarity?: number;
 
@@ -146,7 +152,7 @@ export async function getRelevantMementos(
 ): Promise<RelevantMemento[]> {
   const {
     topK = 5,
-    minSimilarity = 0.7,
+    minSimilarity: providedMinSimilarity,
     tier = MementoTier.HOT,
     embeddingModel: providedEmbeddingModel,
     apiKeyTable: providedApiKeyTable,
@@ -183,6 +189,21 @@ export async function getRelevantMementos(
   }
 
   logger?.debug?.('Using embedding model for memento retrieval:', embeddingModel);
+
+  // STEP 2b: Resolve the topicality floor for the space we just picked, NOT from a literal.
+  // The old 0.7/0.75 defaults were fitted to ada-002, and a cosine floor does not survive a change
+  // of embedding model: above the new band it rejects every memento in existence, which reads to
+  // the user as the assistant having forgotten them. An unmeasured space keeps the top K by
+  // similarity with no floor - less precise, but recoverable, where a blackout is not.
+  const spaceFloorPct = cosineFloorPctForSpace(MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE, embeddingModel);
+  if (providedMinSimilarity === undefined && spaceFloorPct === undefined) {
+    logger?.error?.(
+      `[getRelevantMementos] no measured topicality floor for embedding space "${embeddingModel}"; ` +
+        `returning the top ${topK} by similarity with no floor. Measure one into ` +
+        `MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE rather than borrowing another space's number.`
+    );
+  }
+  const minSimilarity = providedMinSimilarity ?? (spaceFloorPct ?? 0) / 100;
 
   // STEP 3: Setup embedding service
   const requiredProvider = getProviderFromModel(embeddingModel);

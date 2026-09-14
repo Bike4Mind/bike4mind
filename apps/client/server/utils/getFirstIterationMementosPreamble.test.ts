@@ -78,17 +78,20 @@ describe('getFirstIterationMementosPreamble', () => {
     );
 
     expect(getRelevantMementosMock).toHaveBeenCalledTimes(1);
-    // The V1 path matches MementoFeature's chat-path params (topK 10, minSimilarity 0.75) so agent-mode
-    // and chat-mode pull the same set.
+    // The V1 path matches MementoFeature's chat-path params so agent-mode and chat-mode pull the
+    // same set. `topK` is asserted; `minSimilarity` is asserted ABSENT on purpose. A cosine floor
+    // is a property of the embedding space, so `getRelevantMementos` resolves it from the model it
+    // embedded in - passing one here would pin agent mode to a number chat mode had stopped using,
+    // which is the drift the two independent 0.75 literals had already produced once.
     const [userId, prompt, options] = getRelevantMementosMock.mock.calls[0] as unknown as [
       string,
       string,
-      { topK: number; minSimilarity: number },
+      { topK: number; minSimilarity?: number },
     ];
     expect(userId).toBe('user-1');
     expect(prompt).toBe('what hobbies do I have');
     expect(options.topK).toBe(10);
-    expect(options.minSimilarity).toBe(0.75);
+    expect(options.minSimilarity).toBeUndefined();
 
     // V1 keeps its legacy KNOWN-FACTS preamble with per-memento relevance scores. (The friend-who-
     // remembers framing is the V2 path, asserted separately below.)

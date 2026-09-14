@@ -1004,8 +1004,28 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     expect(content).toContain('does not cover this');
     expect(content).not.toContain('the search was incomplete');
     const logs = (ctx.logger as unknown as { log: ReturnType<typeof vi.fn> }).log.mock.calls.flat().join(' ');
-    expect(logs).toContain('no chunk cleared the similarity floor');
+    // Asserts the DIAGNOSTIC, not the prose. An off-topic question and a floor sitting above the
+    // corpus's whole band are indistinguishable at this exit - both leave every score under the
+    // line - so the operator's only way to tell them apart is this line carrying the floor it
+    // applied, the best score anything reached, and the space both were measured in.
+    expect(logs).toContain('no chunk cleared the 75% absolute floor');
+    expect(logs).toContain('top=0.000');
+    expect(logs).toContain('text-embedding-ada-002');
     expect((quest.promptMeta as { warnings?: string[] } | undefined)?.warnings).toBeUndefined();
+  });
+
+  it('grades a text-embedding-3-small corpus against its own floor, not the ada-002 default', async () => {
+    // 0.707 cosine clears 3-small's 35% floor but sits under the 75% ada-002 default - if the
+    // absolute floor were still hardcoded, this chunk would be rejected and the turn would abstain.
+    const ctx = makeCtx({
+      files: [
+        { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-3-small', vectorizedChunkCount: 1 },
+      ],
+      rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'borderline relevant content', vector: [1, 1] }],
+    });
+    const { content } = await run(ctx);
+    expect(content).toContain('borderline relevant content');
+    expect(content).not.toContain('does not cover this');
   });
 
   it('a no-match over a PARTIALLY scanned library must not harden into "no coverage"', async () => {
