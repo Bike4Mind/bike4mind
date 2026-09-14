@@ -1,0 +1,5 @@
+Throwaway probe file. Not part of the docs site.
+
+It exists to make a pull request docs-changed=true while staying
+non-deployable, so the help-docs CI job has to take its core:build
+fallback path. Delete it along with this branch.
