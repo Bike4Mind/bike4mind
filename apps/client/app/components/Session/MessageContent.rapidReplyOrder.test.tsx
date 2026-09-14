@@ -45,6 +45,7 @@ vi.mock('@client/app/hooks/data/quests', () => ({
   useUpdateQuest: () => Object.assign(vi.fn(), { mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/fabFiles', () => ({ useGetFabFilesByQuestId: () => ({ data: [] }) }));
+vi.mock('@client/app/hooks/data/feedback', () => ({ useGetFeedbackBySessionId: () => ({ data: [] }) }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({ useModelInfo: () => ({ data: [] }) }));
 vi.mock('@client/app/hooks/data/settings', () => ({ useSettingsFromServer: () => ({ data: [] }) }));
 vi.mock('@client/app/hooks/usePublishShare', () => ({

@@ -18,6 +18,7 @@ import type { IChatHistoryItem } from '@bike4mind/common';
 const mocks = vi.hoisted(() => ({
   showCreditsUsed: true,
   serverSettings: [] as Array<{ settingName: string; settingValue: unknown }>,
+  sessionFeedback: [] as Array<{ questId?: string }>,
 }));
 
 // --- context / data hooks -------------------------------------------------
@@ -48,6 +49,9 @@ vi.mock('@client/app/hooks/data/quests', () => ({
 }));
 vi.mock('@client/app/hooks/data/fabFiles', () => ({
   useGetFabFilesByQuestId: () => ({ data: [] }),
+}));
+vi.mock('@client/app/hooks/data/feedback', () => ({
+  useGetFeedbackBySessionId: () => ({ data: mocks.sessionFeedback }),
 }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({
   useModelInfo: () => ({ data: [] }),
@@ -102,7 +106,26 @@ vi.mock('@client/app/components/Session/AgentExecution/ReasoningDisclosure', () 
 vi.mock('@client/app/components/Session/AgentExecution/AutoRouteBadge', () => ({ default: () => null }));
 vi.mock('@client/app/components/Session/ResearchModeResponseDisplay', () => ({ default: () => null }));
 vi.mock('@client/app/components/ConfirmActionModal', () => ({ default: () => null }));
-vi.mock('@client/app/components/BugReportModal', () => ({ default: () => null }));
+vi.mock('@client/app/components/BugReportModal', () => ({
+  default: ({
+    open,
+    sessionId,
+    questId,
+    onSubmitted,
+  }: {
+    open: boolean;
+    sessionId?: string;
+    questId?: string;
+    onSubmitted?: () => void;
+  }) =>
+    open ? (
+      <div data-testid="bug-report-modal-mock" data-session-id={sessionId} data-quest-id={questId}>
+        <button data-testid="bug-report-modal-mock-submit" onClick={onSubmitted}>
+          submit
+        </button>
+      </div>
+    ) : null,
+}));
 vi.mock('@client/app/components/ProfileModal/ContentPreviewModal', () => ({ default: () => null }));
 vi.mock('../common/DownloadMenu', () => ({ default: () => null, downloadFile: vi.fn() }));
 
@@ -120,8 +143,8 @@ import MessageContent from './MessageContent';
 const replyPublisherMock = replyPublisher as unknown as ReturnType<typeof vi.fn>;
 
 const appTheme = extendTheme({ ...getThemeConfig() });
-const TestWrapper = ({ children }: { children: ReactNode }) => (
-  <QueryClientProvider client={new QueryClient()}>
+const TestWrapper = ({ children, queryClient }: { children: ReactNode; queryClient?: QueryClient }) => (
+  <QueryClientProvider client={queryClient ?? new QueryClient()}>
     <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
   </QueryClientProvider>
 );
@@ -133,9 +156,11 @@ const messageData = {
   status: 'done',
 } as unknown as IChatHistoryItem;
 
-function renderMessageContent(data: IChatHistoryItem = messageData) {
+// Accepts an explicit queryClient so a test can spy on it (e.g. asserting invalidateQueries is
+// called with the right key) rather than only observing DOM effects.
+function renderMessageContent(data: IChatHistoryItem = messageData, queryClient?: QueryClient) {
   render(
-    <TestWrapper>
+    <TestWrapper queryClient={queryClient}>
       <MessageContent
         sessionId="session-1"
         messageData={data}
@@ -167,6 +192,7 @@ function renderAndClickPublishShare(data: IChatHistoryItem = messageData) {
 beforeEach(() => {
   mocks.showCreditsUsed = true;
   mocks.serverSettings = [];
+  mocks.sessionFeedback = [];
 });
 
 describe('MessageContent actions menu - EnableDataLakes gating', () => {
@@ -328,6 +354,87 @@ describe('MessageContent publish-and-share - visible action-bar button', () => {
       renderMessageContent(emptyReplyMessageData);
 
       expect(screen.queryByTestId('message-publish-share-btn')).not.toBeInTheDocument();
+    });
+  });
+});
+
+describe('MessageContent report action - persistent affordance (#1869)', () => {
+  // The control used to be buried in the "More options" dropdown (see the issue's own
+  // description of it going unfound there). It now sits in the always-visible action bar, and
+  // must NOT also be in the menu.
+  it('renders the persistent Report button without opening any menu', () => {
+    renderMessageContent();
+
+    expect(screen.getByTestId('message-report-btn')).toBeInTheDocument();
+  });
+
+  it('no longer duplicates the action inside the More options menu', () => {
+    renderAndOpenActionsMenu();
+
+    expect(screen.queryByText('Report')).not.toBeInTheDocument();
+  });
+
+  it('opens the report modal for the current session and message on click', () => {
+    renderMessageContent();
+
+    fireEvent.click(screen.getByTestId('message-report-btn'));
+
+    const modal = screen.getByTestId('bug-report-modal-mock');
+    expect(modal).toHaveAttribute('data-session-id', 'session-1');
+    expect(modal).toHaveAttribute('data-quest-id', 'quest-1');
+  });
+
+  it('renders no "Reported" annotation when this message has no feedback on record', () => {
+    mocks.sessionFeedback = [];
+
+    renderMessageContent();
+
+    expect(screen.queryByTestId('message-reported-chip')).not.toBeInTheDocument();
+  });
+
+  it('renders the "Reported" annotation when this message has a recorded report', () => {
+    mocks.sessionFeedback = [{ questId: 'quest-1' }];
+
+    renderMessageContent();
+
+    expect(screen.getByTestId('message-reported-chip')).toBeInTheDocument();
+  });
+
+  it('does not annotate a message that was not itself reported', () => {
+    mocks.sessionFeedback = [{ questId: 'some-other-quest' }];
+
+    renderMessageContent();
+
+    expect(screen.queryByTestId('message-reported-chip')).not.toBeInTheDocument();
+  });
+
+  it('invalidates the session-scoped feedback cache once the modal reports a successful submit', () => {
+    const queryClient = new QueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    renderMessageContent(messageData, queryClient);
+
+    fireEvent.click(screen.getByTestId('message-report-btn'));
+    fireEvent.click(screen.getByTestId('bug-report-modal-mock-submit'));
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['feedback', 'session', 'session-1'] });
+  });
+
+  describe('mobile action bar', () => {
+    const desktopWidth = window.innerWidth;
+
+    beforeEach(() => {
+      Object.defineProperty(window, 'innerWidth', { value: 500, configurable: true, writable: true });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(window, 'innerWidth', { value: desktopWidth, configurable: true, writable: true });
+    });
+
+    it('renders the persistent Report button', () => {
+      renderMessageContent();
+
+      expect(document.querySelector('.action-buttons-mobile')).not.toBeNull();
+      expect(screen.getByTestId('message-report-btn')).toBeInTheDocument();
     });
   });
 });
