@@ -668,15 +668,18 @@ export const useSummarizeSession = () => {
 
   return useMutation({
     mutationFn: async (sessionId: string) => {
-      const session = queryClient.getQueryData<ISessionDocument>(['sessions', sessionId]);
-      const sessionName = formatSessionTitle(session?.name);
-
       // Start tracking the job globally
       startJob(sessionId, 'summarize');
-      toast.success(`Started summarizing "${sessionName}"`);
 
       const result = await generateSessionSummary(sessionId);
       return result;
+    },
+    // Announced on acceptance, not on click. A credit refusal is now an ordinary outcome of this
+    // request, and an optimistic toast would tell the user it started and then immediately
+    // contradict itself with the refusal.
+    onSuccess: (_, sessionId) => {
+      const session = queryClient.getQueryData<ISessionDocument>(['sessions', sessionId]);
+      toast.success(`Started summarizing "${formatSessionTitle(session?.name)}"`);
     },
     onError: (error, sessionId) => {
       const session = queryClient.getQueryData<ISessionDocument>(['sessions', sessionId]);
@@ -697,15 +700,16 @@ export const useUpdateSessionTags = () => {
 
   return useMutation({
     mutationFn: async (sessionId: string) => {
-      const session = queryClient.getQueryData<ISessionDocument>(['sessions', sessionId]);
-      const sessionName = formatSessionTitle(session?.name);
-
       // Start tracking the job globally
       startJob(sessionId, 'generateTags');
-      toast.success(`Started generating tags for "${sessionName}"`);
 
       const result = await generateSessionTags(sessionId);
       return result;
+    },
+    // Announced on acceptance, not on click - see useSummarizeSession.
+    onSuccess: (_, sessionId) => {
+      const session = queryClient.getQueryData<ISessionDocument>(['sessions', sessionId]);
+      toast.success(`Started generating tags for "${formatSessionTitle(session?.name)}"`);
     },
     onError: (error, sessionId) => {
       const session = queryClient.getQueryData<ISessionDocument>(['sessions', sessionId]);

@@ -49,6 +49,11 @@ describe('POST /api/admin/recalculate-message-counts credit pre-flight', () => {
     vi.clearAllMocks();
     // The total is the first call (progress reporting); each spending operation then counts
     // only the notebooks it would actually groom.
+    //
+    // These are the counts the handler ASKS for, which is what this file is about. Against a real
+    // collection the `taggedAt` filter currently matches everything, because `taggedAt` is not a
+    // declared Session schema path and so is never persisted - see SPENDING_SPIDER_OPERATIONS in
+    // the handler. That is a defect in the field, not in the query this asserts.
     mockCount.mockImplementation(async (filter: Record<string, unknown>) =>
       'summaryAt' in filter || 'taggedAt' in filter ? UNGROOMED_PER_OPERATION : TOTAL_NOTEBOOKS
     );
@@ -65,6 +70,23 @@ describe('POST /api/admin/recalculate-message-counts credit pre-flight', () => {
       expect.objectContaining({ userId: 'admin-1', operationCount: UNGROOMED_PER_OPERATION * 2 })
     );
     expect(mockCount.mock.calls.map(ungroomedField).filter(Boolean).sort()).toEqual(['summaryAt', 'taggedAt']);
+  });
+
+  // A soft-deleted notebook is not work the spider will do, so counting one would price the gate
+  // above the real spend. The filter has to carry the same `deletedAt` clause the progress count
+  // uses, on every ungroomed count - a missing clause is invisible in the operationCount
+  // assertions above, which read whatever the mock returns.
+  it('excludes soft-deleted notebooks from every ungroomed count', async () => {
+    await run({ operations: ['summarize', 'tags'] });
+
+    const ungroomedCalls = mockCount.mock.calls.filter(([filter]) => Boolean(ungroomedField([filter])));
+    expect(ungroomedCalls).toHaveLength(2);
+    for (const [filter] of ungroomedCalls) {
+      expect(filter).toMatchObject({
+        userId: 'admin-1',
+        $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }],
+      });
+    }
   });
 
   // The spider skips an already-groomed notebook (`!session.summaryAt` / `!session.taggedAt`), so

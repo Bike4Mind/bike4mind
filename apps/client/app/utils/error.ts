@@ -1,4 +1,5 @@
 import { AxiosError, isAxiosError } from 'axios';
+import type { ApiErrorCode } from '@bike4mind/common';
 
 export interface ErrorResponse {
   message?: string;
@@ -42,7 +43,10 @@ function handleAxiosError(error: AxiosError<ErrorResponse>) {
 export function getInsufficientCreditsMessage(error: unknown): string | undefined {
   if (!isAxiosError(error)) return undefined;
   const data = error.response?.data as (ErrorResponse & { errorCode?: string }) | undefined;
-  if (data?.errorCode !== 'insufficient_credits') return undefined;
+  // `satisfies` ties the literal to the shared vocabulary in apiErrorCodes.ts, the same guard
+  // InsufficientCreditsErrorSchema uses (schemas/chat.ts:200): a rename there must break this
+  // reader rather than leave it quietly matching a code the server no longer sends.
+  if (data?.errorCode !== ('insufficient_credits' satisfies ApiErrorCode)) return undefined;
   return data.error || data.message || undefined;
 }
 

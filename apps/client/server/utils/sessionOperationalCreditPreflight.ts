@@ -12,6 +12,9 @@ import type { Logger } from '@bike4mind/observability';
  *
  * Scaling it by the operation count is what makes the gate meaningful on the fan-out paths: it
  * keeps an unbounded batch from passing the same one-credit check a single tag would.
+ *
+ * A floor and a proxy both have the same hole: work whose real settlement is always zero. That is
+ * why a refusal is not final until `operationalSpendSettlesFree` has ruled the model out.
  */
 const MIN_CREDITS_PER_OPERATION = 1;
 
@@ -52,6 +55,97 @@ export interface SessionOperationalCreditPreflightArgs {
 
 /** Discriminated so a caller that must not fail its primary action can branch on the reason. */
 export type SessionOperationalCreditVerdict = { allowed: true } | { allowed: false; reason: string };
+
+type BillingUser = NonNullable<Awaited<ReturnType<typeof userRepository.findById>>>;
+type BillingOrg = Awaited<ReturnType<typeof organizationRepository.findById>>;
+
+/**
+ * Whether the model this work will run on settles at zero credits for ANY token volume, which
+ * makes the nominal floor above the wrong question to ask. Two ways to get there, both live:
+ * a `freeToRun` backend (Ollama publishes zero rates deliberately) and a model with no row in
+ * the price catalog. `getTextModelCost` returns $0 for both (models.ts:639) and
+ * `usdToCreditsStochastic` has no 1-credit floor, so settlement debits nothing
+ * (recordOperationalUsage.ts:116-119) - refusing that work is strictly worse than the no-gate
+ * behavior it replaced.
+ *
+ * The same carve-out the sibling pre-flight makes on `embeddingCostUsd > 0`
+ * (pages/api/data-lakes/semantic-search.ts:438). That one can price the exact call because the
+ * token count is known at request time; here it is not, so the question is asked one level up:
+ * not "what will this cost" but "can this model cost anything at all".
+ *
+ * Read off `pricing` rather than by calling `getTextModelCost`: that function's `[UNPRICED_MODEL]`
+ * alarm fires on any nonzero usage at $0, and a pre-flight must not emit an alarm that means "a
+ * real call just settled free".
+ */
+function settlesFreeForAnyVolume(modelInfo: { freeToRun?: boolean; pricing: Record<number, unknown> }): boolean {
+  if (modelInfo.freeToRun === true) return true;
+  // Every rate, not just input/output: a tier priced solely through cache_read/cache_write can
+  // still charge, and the safe error here is leaving the gate in place rather than waiving it.
+  return Object.values(modelInfo.pricing).every(tier => {
+    const rates = tier as { input?: number; output?: number; cache_read?: number; cache_write?: number };
+    return !rates.input && !rates.output && !rates.cache_read && !rates.cache_write;
+  });
+}
+
+/**
+ * Resolved through the same `getOperationsModel()` the handlers themselves call
+ * (sessionSummarization.ts:64, sessionTagging.ts:115) so the gate and the charge cannot disagree
+ * about which model is in play.
+ *
+ * Imported dynamically and reached only on a would-be refusal: it reads an admin setting and
+ * builds the whole model catalog, far too much work to spend on the happy path confirming what
+ * the priced default (`gpt-4o-mini`) already implies. A resolution failure keeps the refusal
+ * rather than fail-opening like the reads above - those cannot produce a verdict at all without
+ * succeeding, whereas here a verdict already exists and "priced" is the accurate default.
+ */
+async function operationalSpendSettlesFree(logger?: Logger): Promise<boolean> {
+  try {
+    const { OperationsModelService } = await import('@client/services/operationsModelService');
+    const { modelInfo } = await OperationsModelService.getOperationsModel();
+    return settlesFreeForAnyVolume(modelInfo);
+  } catch (err) {
+    logger?.warn(
+      '[sessionOperationalCreditPreflight] failed to resolve the operations model; keeping the refusal',
+      err
+    );
+    return false;
+  }
+}
+
+/** The refusal this holder's balance earns, or null when it covers `requiredCredits`. */
+function resolveRefusalReason({
+  billingUser,
+  billingOrg,
+  userId,
+  requiredCredits,
+  requesterIsHolder,
+  operation,
+}: {
+  billingUser: BillingUser;
+  billingOrg: BillingOrg;
+  userId: string;
+  requiredCredits: number;
+  requesterIsHolder: boolean;
+  operation: string;
+}): string | null {
+  const crossHolderReason = `The owner of this notebook does not have enough credits for ${operation}.`;
+
+  // Cap before pool, mirroring deductCreditsWithOrgSupport: a capped member must be refused
+  // even when the org pool is flush.
+  if (billingOrg && creditService.isMemberCreditCapExceeded(billingOrg, userId, requiredCredits)) {
+    // "Contact your organization administrator" is only actionable for a member of that org.
+    return requesterIsHolder
+      ? `Your organization member credit limit has been reached for ${operation}. Contact your organization administrator.`
+      : crossHolderReason;
+  }
+
+  const availableCredits = (billingOrg ?? billingUser).currentCredits ?? 0;
+  if (availableCredits >= requiredCredits) return null;
+  if (!requesterIsHolder) return crossHolderReason;
+  return billingOrg
+    ? `Your organization does not have enough credits for ${operation}. It currently has ${availableCredits} credits and this requires at least ${requiredCredits}.`
+    : `You do not have enough credits for ${operation}. You currently have ${availableCredits} credits and this requires at least ${requiredCredits}.`;
+}
 
 /**
  * Credit pre-flight for the request handlers that queue session operational work. That work
@@ -101,8 +195,8 @@ export async function checkSessionOperationalCredits({
   // not turn a working request into a 500. Both assigned only after both reads succeed - a
   // half-resolved pair (user set, org null) would skip the member cap and read the member's
   // personal balance for what is org-billed usage.
-  let billingUser: Awaited<ReturnType<typeof userRepository.findById>> | null = null;
-  let billingOrg: Awaited<ReturnType<typeof organizationRepository.findById>> | null = null;
+  let billingUser: BillingUser | null = null;
+  let billingOrg: BillingOrg = null;
   try {
     const resolvedUser = await userRepository.findById(userId);
     const resolvedOrg = resolvedUser?.organizationId
@@ -125,32 +219,28 @@ export async function checkSessionOperationalCredits({
   // A caller that cannot say who is asking is treated as the holder, which is the pre-existing
   // wording; the entry points that can face a cross-tenant share all pass requesterId.
   const requesterIsHolder = requesterId === undefined || requesterId === userId;
-  const crossHolderReason = `The owner of this notebook does not have enough credits for ${operation}.`;
 
-  // Cap before pool, mirroring deductCreditsWithOrgSupport: a capped member must be refused
-  // even when the org pool is flush.
-  if (billingOrg && creditService.isMemberCreditCapExceeded(billingOrg, userId, requiredCredits)) {
-    return {
-      allowed: false,
-      // "Contact your organization administrator" is only actionable for a member of that org.
-      reason: requesterIsHolder
-        ? `Your organization member credit limit has been reached for ${operation}. Contact your organization administrator.`
-        : crossHolderReason,
-    };
+  const refusalReason = resolveRefusalReason({
+    billingUser,
+    billingOrg,
+    userId,
+    requiredCredits,
+    requesterIsHolder,
+    operation,
+  });
+  if (!refusalReason) return { allowed: true };
+
+  // Last question before refusing, and only worth asking here: MIN_CREDITS_PER_OPERATION is a
+  // nominal proxy for a cost that can legitimately be zero, and a 422 on free work is a
+  // regression against the ungated behavior this replaced.
+  if (await operationalSpendSettlesFree(logger)) {
+    logger?.info(
+      `[sessionOperationalCreditPreflight] allowing ${operation} despite the balance; the operations model settles free`
+    );
+    return { allowed: true };
   }
 
-  const availableCredits = (billingOrg ?? billingUser).currentCredits ?? 0;
-  if (availableCredits < requiredCredits) {
-    if (!requesterIsHolder) return { allowed: false, reason: crossHolderReason };
-    return {
-      allowed: false,
-      reason: billingOrg
-        ? `Your organization does not have enough credits for ${operation}. It currently has ${availableCredits} credits and this requires at least ${requiredCredits}.`
-        : `You do not have enough credits for ${operation}. You currently have ${availableCredits} credits and this requires at least ${requiredCredits}.`,
-    };
-  }
-
-  return { allowed: true };
+  return { allowed: false, reason: refusalReason };
 }
 
 /**
@@ -176,6 +266,12 @@ export async function assertSessionOperationalCredits(args: SessionOperationalCr
  * Returns rather than throws so a caller whose primary action is free (attaching a notebook to a
  * project) can skip the queueing without failing the request; it logs each refusal so a skipped
  * fan-out is visible to ops rather than silent.
+ *
+ * Each REFUSED owner costs one operations-model resolution (see `operationalSpendSettlesFree`),
+ * so a batch where every owner is broke pays for one per owner rather than one per request. Left
+ * uncached deliberately: the owner count per attach is small, the checks run concurrently, and a
+ * module-level cache would put a staleness window on a billing-adjacent read to save work that
+ * only happens when the request is being refused anyway.
  */
 export async function filterSessionIdsByOperationalCredits(
   sessions: Pick<ISessionDocument, 'id' | 'userId'>[],
