@@ -4741,6 +4741,38 @@ export const settingsMap = {
 
 export type SettingValue<K extends SettingKey> = z.infer<(typeof settingsMap)[K]['schema']>;
 
+/**
+ * Every setting the data-lake SEARCH budget merge resolves, in one list. The forced-retrieval merge
+ * is a separate read with its own list (`FORCED_RETRIEVAL_SETTING_KEYS`, b4m-core/services), which
+ * this does not cover.
+ *
+ * `resolveSearchBudgets` (b4m-core/services) reads exactly these on both its scoped and its platform
+ * path, and the guard in settings.test.ts loops this same list to assert none of them declares a
+ * Lake rung: one search is handed every lake the caller can reach as a single tag array (#2624), so
+ * a Lake-scoped override has no lakeId to key on and resolves to nothing an operator can observe.
+ * Shared rather than enumerated twice because that guard is only as good as its key list - against a
+ * hand-written one, #2465 declared a new budget key WITH a Lake rung, merged textually clean, and
+ * was caught in review rather than by CI.
+ *
+ * Declaring a key here is what makes it resolvable: the scoped path's return type is mapped over
+ * this list, so a budget read without being declared here fails to compile.
+ *
+ * `DefaultChunkSize` is not a scan budget and rides along deliberately - the serve budget is DERIVED
+ * from the chunk policy, so listing it keeps ONE derivation for both paths. Omitting it would make
+ * the scoped path serve a different budget than the platform path for the same lake, which is the
+ * disagreement `resolveSearchBudgets` exists to remove. Its Organization/Owner rungs do resolve
+ * (#1722), so a narrower rung moves the serve budget with it.
+ */
+export const SEARCH_BUDGET_SETTING_KEYS = [
+  'dataLakeSearchMaxFiles',
+  'dataLakeSearchMaxChunks',
+  'DefaultChunkSize',
+  'kbSearchDefaultResults',
+  'kbSearchResultTokenBudget',
+  'kbSearchMinRelevancePct',
+  'dataLakeSearchMaxChunksPerFile',
+] as const satisfies readonly SettingKey[];
+
 // ============================================================================
 // Public settings projection - the security boundary for the unauthenticated
 // CDN config artifact (docs/perf/mobile-startup-latency.md, M2.5).

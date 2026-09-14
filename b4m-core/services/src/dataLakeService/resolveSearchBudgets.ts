@@ -8,6 +8,7 @@ import {
   KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
   KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
   KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
+  SEARCH_BUDGET_SETTING_KEYS,
   SettingScope,
   deriveServeCharBudget,
 } from '@bike4mind/common';
@@ -99,27 +100,9 @@ export async function resolveSearchBudgets(
   // falls back to the platform value per key, so an un-overridden budget matches the platform path.
   if (scope && db.scopedSettings && scopeHasRung(scope)) {
     try {
-      const values = await resolveScopedSettingValues(
-        // DefaultChunkSize rides along deliberately. It declares no `scope.settableAt`, so
-        // computeCandidateRefs yields no rungs for it and it resolves to exactly the platform value -
-        // this adds no org/lake lever (that is #1662), it only keeps ONE derivation for both paths.
-        // Omitting it here instead would make the scoped path serve a different budget than the
-        // platform path for the same lake, which is the disagreement this whole change removes.
-        [
-          'dataLakeSearchMaxFiles',
-          'dataLakeSearchMaxChunks',
-          'DefaultChunkSize',
-          'kbSearchDefaultResults',
-          'kbSearchResultTokenBudget',
-          'kbSearchMinRelevancePct',
-          'dataLakeSearchMaxChunksPerFile',
-        ],
-        scope,
-        db,
-        {
-          logger,
-        }
-      );
+      const values = await resolveScopedSettingValues(SEARCH_BUDGET_SETTING_KEYS, scope, db, {
+        logger,
+      });
       return {
         maxFiles: positiveIntOr(values.dataLakeSearchMaxFiles, DATA_LAKE_SEARCH_MAX_FILES_DEFAULT, 'maxFiles', logger),
         maxChunks: positiveIntOr(
@@ -156,19 +139,7 @@ export async function resolveSearchBudgets(
   }
 
   try {
-    const values = await getSettingsByNames(
-      [
-        'dataLakeSearchMaxFiles',
-        'dataLakeSearchMaxChunks',
-        'DefaultChunkSize',
-        'kbSearchDefaultResults',
-        'kbSearchResultTokenBudget',
-        'kbSearchMinRelevancePct',
-        'dataLakeSearchMaxChunksPerFile',
-      ],
-      db,
-      { logger }
-    );
+    const values = await getSettingsByNames([...SEARCH_BUDGET_SETTING_KEYS], db, { logger });
     return {
       maxFiles: positiveIntOr(values.dataLakeSearchMaxFiles, DATA_LAKE_SEARCH_MAX_FILES_DEFAULT, 'maxFiles', logger),
       maxChunks: positiveIntOr(

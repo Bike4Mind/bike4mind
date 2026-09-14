@@ -17,6 +17,7 @@ import {
   WEB_SEARCH_FRESHNESS_PROMPT,
   KNOWLEDGE_BASE_RETRIEVAL_PROMPT,
   DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
+  SEARCH_BUDGET_SETTING_KEYS,
 } from './settings';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
@@ -616,24 +617,36 @@ describe('forcedRetrievalCharBudget agrees with the forced-retrieval fallback (#
   });
 });
 
-describe('data-lake scan budgets are caller-altitude, not per-lake (#2624)', () => {
-  const SCAN_BUDGET_KEYS = ['dataLakeSearchMaxFiles', 'dataLakeSearchMaxChunks'] as const;
+describe('data-lake search budgets are caller-altitude, not per-lake (#2624)', () => {
+  it('covers the keys whose Lake rung has already had to be removed by hand', () => {
+    // Anti-vacuity guard for the two loops below, and the reason this suite reads the resolver's
+    // list rather than its own: a for-of over an emptied or shortened list asserts nothing and
+    // still passes green. The three named here are the ones with history - #2707 removed the Lake
+    // rung from the first two, and #2465 shipped the third WITH one, merged textually clean, and
+    // was corrected in review rather than by this guard.
+    expect(SEARCH_BUDGET_SETTING_KEYS).toContain('dataLakeSearchMaxFiles');
+    expect(SEARCH_BUDGET_SETTING_KEYS).toContain('dataLakeSearchMaxChunks');
+    expect(SEARCH_BUDGET_SETTING_KEYS).toContain('dataLakeSearchMaxChunksPerFile');
+  });
 
   it('declares Organization and Owner but NOT Lake', () => {
-    // These two advertised a Lake rung that no retrieval caller ever resolved, so an operator could
+    // These advertised a Lake rung that no retrieval caller ever resolved, so an operator could
     // save a Lake-scoped override, see it in the admin UI, and have every search keep using the
     // platform value. The rung is not merely unwired: resolveRetrievalLakeScope hands one scan every
     // lake the caller can reach as a single dataLakeTags array, so there is no lakeId to key on.
     // Restoring Lake here without per-lake sub-budgets in the scan would re-create that same lie.
-    for (const key of SCAN_BUDGET_KEYS) {
+    // Driven off the list resolveSearchBudgets actually reads, so a NEW budget key declared with a
+    // Lake rung is covered the moment it becomes resolvable - which a literal here was not.
+    for (const key of SEARCH_BUDGET_SETTING_KEYS) {
       expect(settingsMap[key].scope?.settableAt).toEqual([SettingScopeLevel.Organization, SettingScopeLevel.Owner]);
+      expect(settingsMap[key].scope?.settableAt).not.toContain(SettingScopeLevel.Lake);
     }
   });
 
   it('still declares a scope, so the read path must stay on the scoped resolver', () => {
     // Dropping the block entirely would be the wrong fix: the Org and Owner rungs are resolvable
     // (the caller is known) and resolveSearchBudgets honors them. Only Lake was unkeyable.
-    for (const key of SCAN_BUDGET_KEYS) {
+    for (const key of SEARCH_BUDGET_SETTING_KEYS) {
       expect(settingsMap[key].scope).toBeDefined();
     }
   });
