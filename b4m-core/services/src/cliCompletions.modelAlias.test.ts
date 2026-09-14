@@ -108,4 +108,14 @@ describe('executeCompletion - OpenAI bare model alias resolution', () => {
       'Failed to create LLM backend for model: not-a-real-model'
     );
   });
+
+  // A plain-object alias map would return Object.prototype members (the Object
+  // constructor, Object.prototype.toString, ...) for these keys instead of undefined.
+  it('does not resolve prototype-property names to an inherited value', async () => {
+    const { db } = buildDb();
+
+    await expect(executeCompletion({ ...baseParams, model: 'constructor', db })).rejects.toThrow(
+      'Failed to create LLM backend for model: constructor'
+    );
+  });
 });

@@ -153,12 +153,16 @@ function estimateInputTokens(messages: IMessage[]): number {
  * @bike4mind/common), so a caller using OpenAI's convention otherwise finds no catalog
  * entry. Resolved once, up front, so every downstream use of `model` (backend lookup,
  * cost/credit calc, the completion call itself, logged usage) sees one consistent id.
+ *
+ * A Map, not a plain object: `model` is caller-controlled, and a plain object lookup
+ * keyed by an arbitrary string returns inherited properties for keys like "constructor"
+ * or "toString" instead of undefined.
  */
-const OPENAI_BARE_MODEL_ALIASES: Readonly<Record<string, ChatModels>> = {
-  'gpt-4.1': ChatModels.GPT4_1,
-  'gpt-4.1-mini': ChatModels.GPT4_1_MINI,
-  'gpt-4.1-nano': ChatModels.GPT4_1_NANO,
-};
+const OPENAI_BARE_MODEL_ALIASES: ReadonlyMap<string, ChatModels> = new Map([
+  ['gpt-4.1', ChatModels.GPT4_1],
+  ['gpt-4.1-mini', ChatModels.GPT4_1_MINI],
+  ['gpt-4.1-nano', ChatModels.GPT4_1_NANO],
+]);
 
 /**
  * Shared LLM completion logic
@@ -166,7 +170,7 @@ const OPENAI_BARE_MODEL_ALIASES: Readonly<Record<string, ChatModels>> = {
  */
 export async function executeCompletion(params: CompletionParams): Promise<void> {
   const { userId, messages, options, db, logger, onChunk, apiKeyInfo } = params;
-  const model = OPENAI_BARE_MODEL_ALIASES[params.model] ?? params.model;
+  const model = OPENAI_BARE_MODEL_ALIASES.get(params.model) ?? params.model;
   const source: CompletionSource = params.source ?? 'api';
   const completionStartTime = Date.now();
 
