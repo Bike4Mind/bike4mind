@@ -71,7 +71,7 @@ describe('decideScopeGate', () => {
     expect(decideScopeGate([ApiKeyScope.AI_CHAT], [ApiKeyScope.EMBED_CHAT], staged)).toEqual({ outcome: 'deny' });
   });
 
-  it('allows a confined key on the route that names its scope', () => {
+  it('allows a confined key on the route that names its scope (allow-path control, not the confinement branch)', () => {
     // Allow-path control (the explicit-match branch), not a confinement test: confinement
     // must not over-block a confined key from the one route it is meant for.
     expect(decideScopeGate([ApiKeyScope.EMBED_CHAT], [ApiKeyScope.EMBED_CHAT], NONE)).toEqual({ outcome: 'allow' });
