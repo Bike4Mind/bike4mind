@@ -208,6 +208,20 @@ describe('stampChunkEmbeddingModel', () => {
 
       expect(update).toHaveBeenCalledWith(expect.objectContaining({ embeddingModel: 'text-embedding-ada-002' }));
     });
+
+    it("labels the file when the pending stamp's own rows land in the space already declared", async () => {
+      // The ordinary healthy promotion, and the reason the union is not simply a clearing rule: the
+      // unlabeled vector-bearing chunks this stamp is about to write take THIS message's model,
+      // which is the one the labeled chunks already declare. The set stays at one and is this
+      // message's to vouch for, so the mixed-space branch must not fire merely because unlabeled
+      // rows existed.
+      const { adapters, update, warn } = makeAdapters(['text-embedding-ada-002'], 5);
+
+      await stampChunkEmbeddingModel('file-1', 'text-embedding-ada-002', adapters, { stampFile: true });
+
+      expect(update).toHaveBeenCalledWith(expect.objectContaining({ embeddingModel: 'text-embedding-ada-002' }));
+      expect(warn).not.toHaveBeenCalled();
+    });
   });
 
   describe('a file that completes with nothing embedded', () => {
@@ -245,9 +259,7 @@ describe('stampChunkEmbeddingModel', () => {
         stampFile: true,
       });
 
-      expect(update).toHaveBeenCalledWith(
-        expect.objectContaining({ embeddingModel: 'amazon.titan-embed-text-v2:0' })
-      );
+      expect(update).toHaveBeenCalledWith(expect.objectContaining({ embeddingModel: 'amazon.titan-embed-text-v2:0' }));
       expect(warn).not.toHaveBeenCalled();
     });
   });

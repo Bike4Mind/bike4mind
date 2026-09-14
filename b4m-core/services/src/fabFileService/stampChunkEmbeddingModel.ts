@@ -46,15 +46,24 @@ interface StampChunkEmbeddingModelAdapters {
  * them - and of the three options a blank label is the least bad: `isForeignEmbeddingModel` never
  * excludes it, so each chunk is still matched on its own truthful label by the Atlas filter, while
  * the two deliberately-stricter readers (the corpus defer gate and `isFabFileCitable`) treat blank
- * as unreachable and simply decline to optimize - a performance cost in both directions.
+ * as unreachable and decline to optimize.
  *
- * It is NOT a guarantee that nothing is lost, but both retrieval arms match each chunk on its OWN
- * label rather than the file's: the Atlas arm through its `filter` clause, the in-process cosine arm
- * through `classifyLoadedChunk`. Width is no substitute for either - voyage-3 and Titan v2 are both
- * 1024 wide, so a blank file label with no chunk-level check left a split file's two halves scoring
- * against each other as though they shared a space. A blank file label is the safest available
- * answer to a state that should not exist; consolidating the file by re-embedding it is the actual
- * repair, which is what the warning says.
+ * Least bad is not free, and two readers turn a blank FILE label into content the user never sees.
+ * `lakeSourceReachability` requires an exact file-label match, so a blank one makes every source doc
+ * unreachable and `recallLakeMemory` drops the beliefs citing them - silently, returning nothing at
+ * all. And the attachment scan in llm/utils keys its query vector off the file label defaulted to
+ * ada-002, so on any other deployment default that lookup misses, the whole cosine arm is skipped,
+ * and a format the raw-content fallback cannot decode reaches the model as nothing. Both are
+ * degradations a WRONG label makes worse rather than better - that one excludes the file from every
+ * search at once and sends the operator to re-embed a healthy one - which is why blank is still the
+ * answer here. Consolidating the file by re-embedding it is the actual repair, and that is what the
+ * warning says.
+ *
+ * The retrieval arms themselves do match each chunk on its OWN label rather than the file's: the
+ * Atlas arm through its `filter` clause, the in-process cosine arm through `classifyLoadedChunk`.
+ * Width is no substitute for either - voyage-3 and Titan v2 are both 1024 wide, so a blank file
+ * label with no chunk-level check left a split file's two halves scoring against each other as
+ * though they shared a space.
  *
  * `chunkEmbeddingModelStampedAt` is the readiness signal the Atlas `$vectorSearch` cutover reads
  * (see atlasSearchIndex.ts / vectorSearchEligibility.ts) - it must be set AFTER the chunk stamp
@@ -138,9 +147,23 @@ export const stampChunkEmbeddingModel = async (
  * why the label returned here is always either `embeddingModel` or null. A chunk label is only as
  * good as whatever wrote it, and not every writer observed an embedding: the chunk-model backfill
  * guesses a legacy file's model from vector WIDTH, which cannot separate the ten registered models
- * sharing 1024 dims. Promoting a guess is exactly the move the opening paragraph rules out - a
- * blank file label costs nothing now that both cosine scans fall through to the chunk labels, while
- * a wrong file label excludes the whole file and tells the operator to re-embed a healthy one.
+ * sharing 1024 dims. Promoting a guess is the move the opening paragraph rules out - a blank file
+ * label costs a retrieval degradation, a wrong one excludes the whole file and tells the operator to
+ * re-embed a healthy one.
+ *
+ * The match is a HEURISTIC, and only one direction of it holds. A mismatch does prove this message
+ * wrote none of these vectors, so withholding the label is sound. The converse does not follow:
+ * equality does not show this message wrote anything, and the backfill population is exactly where
+ * it fails - the width guess tiebreaks to the deployment default, which on a keyless cloud stage
+ * resolves to the same model resolveEmbeddingWithKeylessFallback hands this pass, so the two agree
+ * by construction rather than by evidence. Separating "labeled by the vectorize transaction" from
+ * "labeled by the width backfill" needs a provenance marker the chunk rows do not carry; until one
+ * exists this guard closes the immediate mismatch and leaves that population uncovered.
+ *
+ * The unlabeled count is no substitute for such a marker: a multi-message fan-out whose last message
+ * is entirely oversized legitimately arrives here with one declared model and nothing unlabeled,
+ * every label written by this ingest, and gating on it would withhold a truthful label there.
+ *
  * Vectors this message did not write are evidence about the chunks, never about the file.
  */
 const resolveFileLabel = async (
@@ -168,8 +191,9 @@ const resolveFileLabel = async (
     logger?.warn(
       `[embeddings] FabFile ${fabFileId} holds only vectors this message did not write, all ` +
         `declaring ${only} while this message resolved ${embeddingModel}. Leaving the file label ` +
-        `unset: a chunk label is only as good as whatever wrote it, and promoting a wrong one here ` +
-        `would drop the whole file from search instead of costing nothing.`
+        `unset: a chunk label is only as good as whatever wrote it, and promoting a wrong one would ` +
+        `drop the whole file from every search, where a blank label only degrades retrieval. ` +
+        `Re-embed the file to consolidate it.`
     );
     return null;
   }

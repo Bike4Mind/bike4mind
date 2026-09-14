@@ -4,8 +4,7 @@ import { setupMongoTest } from '../__test__/utils';
 
 // DB-layer guarantee the file-scoped semantic search relies on: the bulk vector load
 // returns chunks ONLY for the requested file ids, and only vector-bearing ones.
-// ObjectId-shaped so these rows survive a `fabFileId` format validator; opaque fixtures,
-// nothing below depends on them being readable.
+// Opaque ObjectId-shaped fixtures; nothing below depends on them being readable.
 const FILE_1 = 'f10000000000000000000000';
 const FILE_2 = 'f20000000000000000000000';
 
