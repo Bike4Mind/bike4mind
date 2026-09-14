@@ -197,7 +197,10 @@ function routeFiles(dir: string): string[] {
 
 const files = routeFiles(ROUTES_DIR);
 const rel = (f: string) => path.relative(ROUTES_DIR, f).split(path.sep).join('/');
-const isGated = (f: string) => ADMIN_GATE.test(readFileSync(f, 'utf8'));
+// Strip line comments first so a commented-out gate (`// requiredScopes: [ApiKeyScope.ADMIN]`)
+// does not read as gated. The declaration is often inline in the baseApi options, so the
+// regex itself stays unanchored; removing comments is what prevents the false positive.
+const isGated = (f: string) => ADMIN_GATE.test(readFileSync(f, 'utf8').replace(/\/\/[^\n]*/g, ''));
 
 describe('admin routes declare the ADMIN API-key scope gate', () => {
   it('finds the admin route files', () => {
