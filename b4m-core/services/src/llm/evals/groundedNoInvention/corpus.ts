@@ -83,9 +83,22 @@ export function groundedSystemPrompt(rule: string = GROUNDED_NO_INVENTION_RULE):
   return RETRIEVAL_HEADER + `${rule}\n\n` + renderRetrievedContentBlock(FIXTURE_SECTIONS);
 }
 
-/** Every bare number in a piece of text, comma separators removed so "2,000" and "2000" compare equal. */
+/**
+ * Every bare number in a piece of text, normalised through `Number` so the ways of writing one value
+ * compare equal - "2,000"/"2000", "8"/"8.0"/"08". Without that a model re-rendering a licensed figure
+ * scored as having invented it.
+ *
+ * Word-bounded, or a digit inside a token is harvested as a figure of its own and licenses it for the
+ * whole reply: "the Q4 2024 figures" would license 4%, and `derive/asked-to-adjudicate`'s "3 routing
+ * nodes" already licensed 3%.
+ */
 export function figuresIn(text: string): string[] {
-  return (text.match(/\d[\d,]*(?:\.\d+)?/g) ?? []).map(figure => figure.replace(/,/g, ''));
+  return (text.match(/\b\d[\d,]*(?:\.\d+)?\b/g) ?? []).map(normaliseFigure);
+}
+
+/** Must be applied to BOTH sides of the closed-world check, or the normalisation buys nothing. */
+export function normaliseFigure(figure: string): string {
+  return String(Number(figure.replace(/,/g, '')));
 }
 
 /**

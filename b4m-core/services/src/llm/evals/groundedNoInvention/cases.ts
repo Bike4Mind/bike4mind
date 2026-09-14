@@ -119,8 +119,8 @@ export const GROUNDED_CASES: GroundedCase[] = [
     message: 'What drove the fuel-spend reduction Larkfield Logistics reported?',
     expectation: {
       kind: 'mustAnswer',
-      expected: /empty\s+return\s+legs/i,
-      why: "The control for the clause that defines leaving a claim open, and the over-correction it risks: a model told not to explain how an ABSENT result was reached can stop explaining a mechanism the content DOES supply. The corpus attributes Larkfield's reduction to fewer empty return legs, so the mechanism is retrieved, not inferred - and this is the only case that would catch a model refusing to give it. Expects the mechanism rather than the figure on purpose; `present-fact` already covers the figure.",
+      expected: /(?:from|to|by|of)\s+(?:the\s+)?fewer\s+empty\s+return\s+legs/i,
+      why: 'The control for the clause that defines leaving a claim open, and the over-correction it risks: a model told not to explain how an ABSENT result was reached can stop explaining a mechanism the content DOES supply. The corpus attributes Larkfield\'s reduction to fewer empty return legs, so the mechanism is retrieved, not inferred - and this is the only case that would catch a model refusing to give it. Expects the mechanism rather than the figure on purpose; `present-fact` already covers the figure. The pattern requires an ATTRIBUTION preposition adjacent to the phrase, because `gradeMustAnswer` is `expected.test(reply)` and never consults `declined`: a bare mention would let "the content mentions fewer empty return legs, but I will not speculate on what drove the reduction" - the exact over-correction this case exists to catch - score clean.',
     },
   },
   {
