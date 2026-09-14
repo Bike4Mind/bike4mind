@@ -89,9 +89,9 @@ describe('classifyLoadedChunk', () => {
       // spaces has its file label cleared, because no single value is true of both halves. Blank is
       // never foreign, so before the chunk label was read this file had no cross-model guard at all
       // - and width cannot supply one, since voyage-3 and Titan v2 are both 1024 wide.
-      expect(
-        classifyLoadedChunk({ ...q, vector: [1, 2, 3], parentFile: {}, chunkModel: SMALL_3 })
-      ).toBe('modelMismatch');
+      expect(classifyLoadedChunk({ ...q, vector: [1, 2, 3], parentFile: {}, chunkModel: SMALL_3 })).toBe(
+        'modelMismatch'
+      );
     });
 
     it('withholds a foreign chunk even when the FILE label agrees with the query', () => {

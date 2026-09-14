@@ -1,5 +1,5 @@
 import type { ToolContext } from '../base/types';
-import { getAccessibleDataLakePrompts } from '../../../dataLakeService/getDataLakePrompts';
+import { getAccessibleDataLakePrompts, grantedLakeIdsUsedFor } from '../../../dataLakeService/getDataLakePrompts';
 import { renderDataLakePromptSection } from '../../../dataLakeService/renderDataLakePromptBlock';
 
 /**
@@ -35,8 +35,13 @@ export async function prependRetrievedLakePrompts(
       restrictToDatalakeTags: fresh,
       preauthorizedLakeIds: context.sessionPreauthorizedLakeIds,
     });
+    const injectedLakePromptIds = prompts.map(p => p.id);
     const preauthorizedSet = new Set(context.sessionPreauthorizedLakeIds ?? []);
-    const preauthorizedLakeIdsUsed = prompts.map(p => p.id).filter(id => preauthorizedSet.has(id));
+    const preauthorizedLakeIdsUsed = injectedLakePromptIds.filter(id => preauthorizedSet.has(id));
+    // Same `context` the resolver just got, so the grant reach is a per-turn memo hit rather than a
+    // second read (see grantedLakeIdsUsedFor). Never throws, so it cannot reach the outer catch and
+    // drop the injection.
+    const grantedLakeIdsUsed = await grantedLakeIdsUsedFor(context, injectedLakePromptIds);
     // Recorded whenever this injection site ran, even if nothing qualified - see the field's own
     // comment in promptMeta.ts. Merges onto whatever the tool's own retrieval outcome write already
     // set (applyQuestStatusChanges / mergeRetrievalSummary), not a replacement. Its own try/catch:
@@ -50,8 +55,9 @@ export async function prependRetrievedLakePrompts(
             attempted: true,
             surfaces: [],
             dataLakeTags: [],
-            injectedLakePromptIds: prompts.map(p => p.id),
+            injectedLakePromptIds,
             ...(preauthorizedLakeIdsUsed.length ? { preauthorizedLakeIdsUsed } : {}),
+            ...(grantedLakeIdsUsed.length ? { grantedLakeIdsUsed } : {}),
           },
         },
       });

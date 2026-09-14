@@ -2901,6 +2901,7 @@ describe('ChatCompletionProcess', () => {
       files?: Array<Partial<{ id: string; fileName: string; vectorized: boolean; chunkCount: number }>>;
       getAccessibleFilesImpl?: () => Promise<unknown>;
       dataLakeTags?: string[];
+      retrievalTags?: string[];
       promptMode?: 'raw' | 'grounded' | 'surface';
       requestTools?: string[];
       skipAutoOffers?: boolean;
@@ -2908,6 +2909,7 @@ describe('ChatCompletionProcess', () => {
       fabFileNotices?: FabFileNotice[];
     }) => {
       mockSession.knowledgeIds = opts.knowledgeIds ?? [];
+      mockSession.retrievalTags = opts.retrievalTags ?? [];
       const getAccessibleFiles = opts.getAccessibleFilesImpl
         ? vi.fn().mockImplementation(opts.getAccessibleFilesImpl)
         : vi.fn().mockResolvedValue(opts.files ?? []);
@@ -3213,6 +3215,10 @@ describe('ChatCompletionProcess', () => {
           mode: 'optional',
           surfaces: [],
           dataLakeTags: [],
+          // Present-and-empty, not absent: the seed resolved a scope and this caller's corpus is
+          // attachments only, so there was no lake in it. Absence would mean "never recorded",
+          // which is what makes the offline replay skip a turn instead of probing it.
+          lakeScope: [],
           // false: this suite stubs getSettingsValue to undefined, so no guidance string resolves
           // and the section does not ship. The populated case is its own test below.
           knowledgeBaseGuidanceInjected: false,
@@ -3275,6 +3281,33 @@ describe('ChatCompletionProcess', () => {
         });
       });
 
+      /**
+       * The scope the offline answerability replay probes. Before this the seed wrote nothing, and
+       * the replay rebuilt a scope from the session's tags as they stood at replay time - so a
+       * session whose lake selection had since changed was scored against a corpus its turn never
+       * had. These pin that the recorded value is the turn's own resolved scope, not a constant.
+       */
+      describe("records the turn's resolved lake scope", () => {
+        it('records the accessible lakes when the session expresses no lake opinion', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:acme:handbook'],
+            retrievalTags: [],
+          });
+          expect(retrieval).toMatchObject({ mode: 'optional', lakeScope: ['datalake:acme:handbook'] });
+        });
+
+        it('records nothing when the session names a lake this caller cannot reach', async () => {
+          // narrowLakeAccessToSession's narrow-to-nothing, which is a different state from its
+          // no-op above: the session asked for a lake and retained none of it, so the turn had no
+          // corpus - and the replay must skip it rather than probe the owner's whole library.
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:acme:handbook'],
+            retrievalTags: ['datalake:not-mine'],
+          });
+          expect(retrieval).toMatchObject({ mode: 'optional', lakeScope: [] });
+        });
+      });
+
       it('writes no retrieval record at all when there was nothing to retrieve from', async () => {
         // A turn with no knowledge in scope belongs in NO denominator. If it were seeded, every
         // ordinary chat turn would dilute the rate toward zero.
@@ -3315,6 +3348,10 @@ describe('ChatCompletionProcess', () => {
           mode: 'optional',
           surfaces: ['knowledgeBaseSearch'],
           dataLakeTags: [],
+          // Survives the same way, and for a sharper reason: the replay reads it off a turn whose
+          // `retrieval` a surface has since rewritten, so a merge that dropped it would leave the
+          // measurement with no corpus to probe.
+          lakeScope: [],
           // Survives the tool arm's later write, which never sets it - the flag is seeded once
           // and must reach the fold intact or the A/B loses the turn. False here for the same
           // stubbed-settings reason as above; what this pins is survival, not the value.
@@ -4190,6 +4227,9 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
+        // The seed's resolved scope, which survives the feature's later write - see the field's
+        // own comment in promptMeta.ts for why it is recorded separately from dataLakeTags.
+        lakeScope: ['datalake:corpus'],
         // One belief recalled and rendered. No `topScore`: belief relevance is a different scale
         // from the cosine similarities the other surfaces report, so a max across the two would
         // be a number that looks like a similarity and is not one.
@@ -4228,6 +4268,7 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
+        lakeScope: ['datalake:corpus'],
         // Recall completed, so the zero is RECORDED rather than unknown - the same distinction
         // 'ok' draws for the outcome, now drawn for the volume.
         injected: { chunks: 0, chars: 0 },
@@ -4253,6 +4294,8 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: ['datalake:corpus'],
+        // Survives a surface that broke: the scope was in scope whether or not recall reached it.
+        lakeScope: ['datalake:corpus'],
         knowledgeBaseGuidanceInjected: false,
       });
     });
@@ -4276,6 +4319,9 @@ describe('ChatCompletionProcess', () => {
         mode: 'forced',
         surfaces: ['lake-memory'],
         dataLakeTags: [],
+        // The pair pulling apart, which is the point of recording both: the feature searched no
+        // lake, and a lake was nonetheless in scope for the turn.
+        lakeScope: ['datalake:corpus'],
         knowledgeBaseGuidanceInjected: false,
       });
     });
