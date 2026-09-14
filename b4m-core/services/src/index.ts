@@ -66,6 +66,17 @@ export * from './auth';
 // while every value stays behind ./llm. Sourced from the types leaf rather than
 // llm/tools so this line can never become a value edge by a one-word edit.
 export type { ToolDefinition, ToolContext } from './llm/tools/base/types';
+
+// Two LLM VALUES stay on the barrel deliberately. Both are leaves that reach
+// neither the tool registry nor any heavy dependency (mathjs, isolated-vm,
+// sharp), so re-exporting them costs 2 files in the barrel closure and no
+// tracer edge to the registry - measured, and index.closure.test.ts still
+// asserts the registry is unreachable from here. Out-of-repo consumers import
+// them from the root, and severing them buys nothing, so the compat surface is
+// cheaper than the coordinated churn. Anything that DOES reach the registry
+// (ChatCompletionProcess, b4mTools, generateTools, ...) stays behind './llm'.
+export { firecrawlFetch } from './llm/tools/implementation/webfetch';
+export { createSmallLLMService } from './llm/SmallLLMService';
 export * as cliTools from './cliTools';
 export * from './latticeService';
 export * from './telemetry';
