@@ -390,4 +390,31 @@ describe('mergeRetrievalSummary', () => {
       expect(mergeRetrievalSummary(base(), base({ answerability: probe }))?.answerability).toEqual(probe);
     });
   });
+
+  describe('lakeScope', () => {
+    it('survives a later surface write, which is what the offline replay reads', () => {
+      const merged = mergeRetrievalSummary(
+        base({ lakeScope: ['datalake:acme:handbook'] }),
+        base({ surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['datalake:acme:handbook'] })
+      );
+      expect(merged?.lakeScope).toEqual(['datalake:acme:handbook']);
+    });
+
+    it('keeps a recorded empty scope rather than falling through to the other side', () => {
+      // Present-and-empty means "the session had no lake", which is a measurement; absent means
+      // the scope was never recorded. A truthy fallthrough would turn the first into the second.
+      const merged = mergeRetrievalSummary(base({ lakeScope: [] }), base({ lakeScope: ['datalake:x'] }));
+      expect(merged?.lakeScope).toEqual([]);
+    });
+
+    it('stays absent on a turn nothing seeded', () => {
+      const merged = mergeRetrievalSummary(base(), base());
+      expect(merged && 'lakeScope' in merged).toBe(false);
+    });
+
+    it('does not union the two sides - a surface must not widen the recorded scope', () => {
+      const merged = mergeRetrievalSummary(base({ lakeScope: ['datalake:a'] }), base({ lakeScope: ['datalake:b'] }));
+      expect(merged?.lakeScope).toEqual(['datalake:a']);
+    });
+  });
 });
