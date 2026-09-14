@@ -2748,7 +2748,7 @@ describe('archiveDataLake - retrieval-index removal', () => {
     expect(fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).toHaveBeenCalledWith(memberIds);
   });
 
-  it('does not let a failed residency-confirm clear abort the best-effort index removal', async () => {
+  it('skips the best-effort index removal when the residency-confirm clear fails, rather than over-claiming', async () => {
     const adapters = makeAdapters();
     const fabFileChunks = {
       clearRetrievalIndexConfirmedByFabFileIds: vi.fn().mockRejectedValue(new Error('mongo down')),
@@ -2760,7 +2760,7 @@ describe('archiveDataLake - retrieval-index removal', () => {
       retrievalIndex,
     });
 
-    expect(removalInput(retrievalIndex)).toEqual({ scope: lakeScope, fabFileIds: memberIds });
+    expect(retrievalIndex.removeForDataLake).not.toHaveBeenCalled();
     expect(adapters.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('Failed to clear the retrieval-index confirm before best-effort removal'),
       expect.any(Error)
@@ -3144,7 +3144,7 @@ describe('deleteDataLake - phase 1 retrieval-index removal', () => {
     expect(fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).toHaveBeenCalledWith(memberIds);
   });
 
-  it('does not let a failed residency-confirm clear abort the best-effort index removal', async () => {
+  it('skips the best-effort index removal when the residency-confirm clear fails, rather than over-claiming', async () => {
     const adapters = makeAdapters();
     const fabFileChunks = {
       clearRetrievalIndexConfirmedByFabFileIds: vi.fn().mockRejectedValue(new Error('mongo down')),
@@ -3156,7 +3156,7 @@ describe('deleteDataLake - phase 1 retrieval-index removal', () => {
       retrievalIndex,
     });
 
-    expect(removalInput(retrievalIndex)).toEqual({ scope: lakeScope, fabFileIds: memberIds });
+    expect(retrievalIndex.removeForDataLake).not.toHaveBeenCalled();
     expect(adapters.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('Failed to clear the retrieval-index confirm before best-effort removal'),
       expect.any(Error)
@@ -3774,7 +3774,10 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
         findById: vi.fn().mockResolvedValue(null),
         pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
       },
-      fabFileChunks: { deleteManyByFabFileId: vi.fn().mockResolvedValue(undefined) },
+      fabFileChunks: {
+        deleteManyByFabFileId: vi.fn().mockResolvedValue(undefined),
+        clearRetrievalIndexConfirmedByFabFileIds: vi.fn().mockResolvedValue(undefined),
+      },
     },
   });
 

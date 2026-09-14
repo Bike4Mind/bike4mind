@@ -54,11 +54,13 @@ export interface RetrievalIndexPort {
  * delete succeeds but the clear then fails (DocumentDB failover, timeout on a large `$in`): the
  * confirm would never be retried (unarchive has no re-index path) and the file would end up
  * permanently stamped-ready, confirmed, and absent from the index - exactly what this port exists
- * to prevent. Clearing first means the worst case of EITHER step failing is an under-claim (the
- * file scans instead of using ANN), the safe bias `annResidentFabFileIds` is built around, never
- * an over-claim. Each step gets its own try/catch and log line so a clear failure is never
- * misreported as an index-removal failure (or vice versa) to whoever is on call. Kept here rather
- * than at each call site so a door wiring `retrievalIndex` cannot forget to wire this half too.
+ * to prevent. If the clear itself fails, the removal is SKIPPED, not run anyway - running it would
+ * over-claim (index doc gone, confirm still set), the one outcome `annResidentFabFileIds`'s safe
+ * bias must never see; an index-only stale entry from skipping is tolerated by design and
+ * self-heals on the next vectorize. Each step gets its own try/catch and log line so a clear
+ * failure is never misreported as an index-removal failure (or vice versa) to whoever is on call.
+ * Kept here rather than at each call site so a door wiring `retrievalIndex` cannot forget to wire
+ * this half too.
  */
 export async function bestEffortIndexRemove(
   retrievalIndex: RetrievalIndexPort | undefined,
@@ -82,6 +84,7 @@ export async function bestEffortIndexRemove(
       `Failed to clear the retrieval-index confirm before best-effort removal for ${scope.datalakeTag}:`,
       error
     );
+    return;
   }
   try {
     await retrievalIndex.removeForDataLake({ scope, fabFileIds });
@@ -106,14 +109,16 @@ export async function bestEffortIndexRemove(
  * This is the canonical description of both postures. Call sites point here rather than restating.
  *
  * Also clears `retrievalIndexConfirmedModel` for `input.fabFileIds` (via `fabFileChunks`, when
- * wired), BEFORE the removal itself and best-effort - the same reasoning and ordering as
- * `bestEffortIndexRemove` above, so see its docblock for why clear-before-remove is the safe
- * order. A caller of this function is not otherwise touching these files' chunks unconditionally
- * (purgeDataLakeDocument only reaches them if the storage delete then succeeds; cleanupDeletedDataLake
- * hard-deletes them later in its own sweep, which implicitly clears the field, but a throw between
- * here and there would otherwise leave a stale confirm over documents already dropped from the
- * index). A failure to clear is logged, never thrown - it must not turn "zero progress on a throw"
- * into a partial write, and the field failing to clear only costs a scan, not a stranding.
+ * wired), BEFORE the removal itself - the same crash-window reasoning as `bestEffortIndexRemove`
+ * above for WHY clear-before-remove. The failure posture differs, though: a clear failure here is
+ * logged AND rethrown, never swallowed. The clear runs before anything destructive, so a throw
+ * here is genuinely zero progress, matching this function's own "zero progress on a throw"
+ * contract above. Swallowing it and running the removal anyway would over-claim (index doc gone,
+ * confirm still set) with no retry path to fix it - unarchive/re-vectorize is the only way a
+ * confirm gets set again, and this file is not going through either - which is the exact
+ * stranding this port exists to prevent, so `bestEffortIndexRemove`'s "skip on clear failure" and
+ * this function's "rethrow on clear failure" are the same over-claim-avoidance choice expressed in
+ * each posture's own vocabulary (skip vs. abort).
  */
 export async function strictIndexRemove(
   retrievalIndex: RetrievalIndexPort | undefined,
@@ -129,6 +134,7 @@ export async function strictIndexRemove(
       `Failed to clear the retrieval-index confirm before strict removal for ${input.scope.datalakeTag}:`,
       error
     );
+    throw error;
   }
   await retrievalIndex.removeForDataLake(input);
 }

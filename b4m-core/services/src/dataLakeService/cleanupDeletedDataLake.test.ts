@@ -122,17 +122,19 @@ describe('cleanupDeletedDataLake', () => {
     expect(db.fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).toHaveBeenCalledWith(['f1', 'f2']);
   });
 
-  it('does not let a failed residency-confirm clear abort the sweep', async () => {
+  it('aborts the sweep with zero progress when the residency-confirm clear fails, rather than over-claiming', async () => {
     const db = makeDb();
     db.fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds = vi.fn(async () => {
       throw new Error('mongo down');
     });
     const removeForDataLake = vi.fn(async () => {});
 
-    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db, retrievalIndex: { removeForDataLake } });
+    await expect(
+      cleanupDeletedDataLake(ADMIN, 'lake-1', { db, retrievalIndex: { removeForDataLake } })
+    ).rejects.toThrow('mongo down');
 
-    expect(removeForDataLake).toHaveBeenCalled();
-    expect(db.fabFiles.hardDeleteOneById).toHaveBeenCalled();
+    expect(removeForDataLake).not.toHaveBeenCalled();
+    expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
   });
 
   it('still aborts the sweep with zero progress when the index removal itself throws, even though the confirm was already cleared', async () => {

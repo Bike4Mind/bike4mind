@@ -287,7 +287,7 @@ describe('purgeDataLakeDocument', () => {
     expect(db.fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).toHaveBeenCalledWith(['file-1']);
   });
 
-  it('does not let a failed residency-confirm clear abort the strict index removal', async () => {
+  it('aborts the strict index removal (and the whole purge) when the residency-confirm clear fails, rather than over-claiming', async () => {
     const db = makeDb();
     db.fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds = vi.fn(async () => {
       throw new Error('mongo down');
@@ -300,8 +300,9 @@ describe('purgeDataLakeDocument', () => {
         storage: makeStorage(),
         retrievalIndex: { removeForDataLake },
       })
-    ).resolves.toMatchObject({ retrievalIndexOutcome: 'purged' });
-    expect(removeForDataLake).toHaveBeenCalled();
+    ).rejects.toThrow('mongo down');
+    expect(removeForDataLake).not.toHaveBeenCalled();
+    expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
   });
 
   it('refuses a caller who is neither the lake owner nor an admin', async () => {
