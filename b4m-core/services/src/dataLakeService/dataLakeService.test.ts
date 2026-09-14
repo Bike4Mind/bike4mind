@@ -2733,9 +2733,10 @@ describe('archiveDataLake - retrieval-index removal', () => {
     expect(fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).toHaveBeenCalledWith(memberIds);
   });
 
-  it('does not clear the residency confirm when the index removal throws', async () => {
-    // The docs may still be in the index on a thrown removal, so the confirmation could still be
-    // accurate - clearing it here would be the unsafe direction.
+  it('still clears the residency confirm even though the index removal itself then throws, so a clear-then-fail leaves the safe under-claim rather than nothing at all', async () => {
+    // Clearing runs BEFORE the removal attempt (see bestEffortIndexRemove's docblock): the worst
+    // case of the removal then failing is an unnecessary scan, never a stranded false-positive
+    // confirm.
     const adapters = makeAdapters();
     const fabFileChunks = { clearRetrievalIndexConfirmedByFabFileIds: vi.fn().mockResolvedValue(undefined) };
     await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
@@ -2744,7 +2745,26 @@ describe('archiveDataLake - retrieval-index removal', () => {
       retrievalIndex: indexPort('fails'),
     });
 
-    expect(fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).not.toHaveBeenCalled();
+    expect(fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).toHaveBeenCalledWith(memberIds);
+  });
+
+  it('does not let a failed residency-confirm clear abort the best-effort index removal', async () => {
+    const adapters = makeAdapters();
+    const fabFileChunks = {
+      clearRetrievalIndexConfirmedByFabFileIds: vi.fn().mockRejectedValue(new Error('mongo down')),
+    };
+    const retrievalIndex = indexPort();
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      ...adapters,
+      db: { ...adapters.db, fabFileChunks },
+      retrievalIndex,
+    });
+
+    expect(removalInput(retrievalIndex)).toEqual({ scope: lakeScope, fabFileIds: memberIds });
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to clear the retrieval-index confirm before best-effort removal'),
+      expect.any(Error)
+    );
   });
 
   it('resolves no member ids when no index is wired', async () => {
@@ -3112,7 +3132,7 @@ describe('deleteDataLake - phase 1 retrieval-index removal', () => {
     expect(fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).toHaveBeenCalledWith(memberIds);
   });
 
-  it('does not clear the residency confirm when the index removal throws', async () => {
+  it('still clears the residency confirm even though the index removal itself then throws, so a clear-then-fail leaves the safe under-claim rather than nothing at all', async () => {
     const adapters = makeAdapters();
     const fabFileChunks = { clearRetrievalIndexConfirmedByFabFileIds: vi.fn().mockResolvedValue(undefined) };
     await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
@@ -3121,7 +3141,26 @@ describe('deleteDataLake - phase 1 retrieval-index removal', () => {
       retrievalIndex: indexPort('fails'),
     });
 
-    expect(fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).not.toHaveBeenCalled();
+    expect(fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).toHaveBeenCalledWith(memberIds);
+  });
+
+  it('does not let a failed residency-confirm clear abort the best-effort index removal', async () => {
+    const adapters = makeAdapters();
+    const fabFileChunks = {
+      clearRetrievalIndexConfirmedByFabFileIds: vi.fn().mockRejectedValue(new Error('mongo down')),
+    };
+    const retrievalIndex = indexPort();
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      ...adapters,
+      db: { ...adapters.db, fabFileChunks },
+      retrievalIndex,
+    });
+
+    expect(removalInput(retrievalIndex)).toEqual({ scope: lakeScope, fabFileIds: memberIds });
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to clear the retrieval-index confirm before best-effort removal'),
+      expect.any(Error)
+    );
   });
 });
 

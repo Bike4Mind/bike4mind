@@ -36,10 +36,12 @@ interface DeleteDataLakeAdapters extends LakeConfigAuditAdapters {
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'softDeleteByDataLakeTag' | 'findIdsByDataLakeTag'>;
-    // Optional: only self-host deployments carry a residency confirm to clear. See
-    // bestEffortIndexRemove's docblock for why this rides alongside `retrievalIndex` rather than
-    // being a separate best-effort step at the call site.
-    fabFileChunks?: Pick<IFabFileChunkRepository, 'clearRetrievalIndexConfirmedByFabFileIds'>;
+    // REQUIRED, not optional: `retrievalIndex` is itself optional (a host without self-host
+    // OpenSearch wires neither), but a host that DOES wire `retrievalIndex` must wire this half
+    // too, or an archive/unarchive cycle leaves a stale confirm no later step ever clears (see
+    // bestEffortIndexRemove's docblock). Making it optional here let all three doors go unwired
+    // silently and compile clean; this turns a missing door into a compile error instead.
+    fabFileChunks: Pick<IFabFileChunkRepository, 'clearRetrievalIndexConfirmedByFabFileIds'>;
   };
   retrievalIndex?: RetrievalIndexPort;
   /** Disable the lake's Drive connection so the hourly poll stops enqueueing it. See ports.ts. */

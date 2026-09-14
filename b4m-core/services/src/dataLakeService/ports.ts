@@ -46,15 +46,19 @@ export interface RetrievalIndexPort {
  * Archive and phase-1 delete: a failure is logged, not fatal. Both are reversible, so a stale
  * entry is tolerated rather than blocking the transition.
  *
- * Ids resolve lazily and inside the try, so a door with no index wired pays no query, and a
- * lookup failure cannot abort an op that is contractually best-effort.
+ * Ids resolve lazily and inside a try, so a door with no index wired pays no query, and a lookup
+ * failure cannot abort an op that is contractually best-effort.
  *
- * On a SUCCESSFUL removal, also clears `retrievalIndexConfirmedModel` for the removed files (via
- * `fabFileChunks`, when wired) - the documents just left the index, so any residency confirmation
- * the files carried is now false, and `annResidentFabFileIds` would otherwise keep reporting them
- * resident with nothing left to serve. Skipped on a THROWN removal: the docs may still be in the
- * index, so the confirmation could still be accurate. Kept here rather than at each call site so
- * a door wiring `retrievalIndex` cannot forget to wire this half too.
+ * Clears `retrievalIndexConfirmedModel` for every resolved file (via `fabFileChunks`, when wired)
+ * BEFORE attempting the removal, not after - the reverse order left a gap where the OpenSearch
+ * delete succeeds but the clear then fails (DocumentDB failover, timeout on a large `$in`): the
+ * confirm would never be retried (unarchive has no re-index path) and the file would end up
+ * permanently stamped-ready, confirmed, and absent from the index - exactly what this port exists
+ * to prevent. Clearing first means the worst case of EITHER step failing is an under-claim (the
+ * file scans instead of using ANN), the safe bias `annResidentFabFileIds` is built around, never
+ * an over-claim. Each step gets its own try/catch and log line so a clear failure is never
+ * misreported as an index-removal failure (or vice versa) to whoever is on call. Kept here rather
+ * than at each call site so a door wiring `retrievalIndex` cannot forget to wire this half too.
  */
 export async function bestEffortIndexRemove(
   retrievalIndex: RetrievalIndexPort | undefined,
@@ -64,10 +68,23 @@ export async function bestEffortIndexRemove(
   fabFileChunks?: Pick<IFabFileChunkRepository, 'clearRetrievalIndexConfirmedByFabFileIds'>
 ): Promise<void> {
   if (!retrievalIndex) return;
+  let fabFileIds: string[];
   try {
-    const fabFileIds = await resolveFabFileIds();
-    await retrievalIndex.removeForDataLake({ scope, fabFileIds });
+    fabFileIds = await resolveFabFileIds();
+  } catch (error) {
+    logger?.warn(`Best-effort index removal failed for ${scope.datalakeTag}:`, error);
+    return;
+  }
+  try {
     await fabFileChunks?.clearRetrievalIndexConfirmedByFabFileIds(fabFileIds);
+  } catch (error) {
+    logger?.warn(
+      `Failed to clear the retrieval-index confirm before best-effort removal for ${scope.datalakeTag}:`,
+      error
+    );
+  }
+  try {
+    await retrievalIndex.removeForDataLake({ scope, fabFileIds });
   } catch (error) {
     logger?.warn(`Best-effort index removal failed for ${scope.datalakeTag}:`, error);
   }
@@ -87,12 +104,32 @@ export async function bestEffortIndexRemove(
  * the sweep (`api/admin/dlq/replay.ts`), which finishes the purge rather than reversing it.
  *
  * This is the canonical description of both postures. Call sites point here rather than restating.
+ *
+ * Also clears `retrievalIndexConfirmedModel` for `input.fabFileIds` (via `fabFileChunks`, when
+ * wired), BEFORE the removal itself and best-effort - the same reasoning and ordering as
+ * `bestEffortIndexRemove` above, so see its docblock for why clear-before-remove is the safe
+ * order. A caller of this function is not otherwise touching these files' chunks unconditionally
+ * (purgeDataLakeDocument only reaches them if the storage delete then succeeds; cleanupDeletedDataLake
+ * hard-deletes them later in its own sweep, which implicitly clears the field, but a throw between
+ * here and there would otherwise leave a stale confirm over documents already dropped from the
+ * index). A failure to clear is logged, never thrown - it must not turn "zero progress on a throw"
+ * into a partial write, and the field failing to clear only costs a scan, not a stranding.
  */
 export async function strictIndexRemove(
   retrievalIndex: RetrievalIndexPort | undefined,
-  input: RetrievalIndexRemoval
+  input: RetrievalIndexRemoval,
+  fabFileChunks?: Pick<IFabFileChunkRepository, 'clearRetrievalIndexConfirmedByFabFileIds'>,
+  logger?: { warn: (msg: string, ...args: unknown[]) => void }
 ): Promise<void> {
   if (!retrievalIndex) return;
+  try {
+    await fabFileChunks?.clearRetrievalIndexConfirmedByFabFileIds(input.fabFileIds);
+  } catch (error) {
+    logger?.warn(
+      `Failed to clear the retrieval-index confirm before strict removal for ${input.scope.datalakeTag}:`,
+      error
+    );
+  }
   await retrievalIndex.removeForDataLake(input);
 }
 

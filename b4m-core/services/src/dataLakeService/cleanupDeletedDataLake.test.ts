@@ -42,6 +42,7 @@ const makeDb = (fileIds: string[] = ['f1', 'f2']) => ({
   },
   fabFileChunks: {
     deleteManyByFabFileId: vi.fn(async () => {}),
+    clearRetrievalIndexConfirmedByFabFileIds: vi.fn(async () => {}),
   },
 });
 
@@ -102,6 +103,48 @@ describe('cleanupDeletedDataLake', () => {
 
     await cleanupDeletedDataLake(ADMIN, 'lake-1', { db });
 
+    expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
+  });
+
+  it('clears the stale residency confirm for every swept file BEFORE the strict index removal, so a sweep aborted between the removal and the chunk hard-delete does not leave a stranded confirm', async () => {
+    const order: string[] = [];
+    const db = makeDb(['f1', 'f2']);
+    db.fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds = vi.fn(async () => {
+      order.push('clear');
+    });
+    const removeForDataLake = vi.fn(async () => {
+      order.push('index');
+    });
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db, retrievalIndex: { removeForDataLake } });
+
+    expect(order).toEqual(['clear', 'index']);
+    expect(db.fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).toHaveBeenCalledWith(['f1', 'f2']);
+  });
+
+  it('does not let a failed residency-confirm clear abort the sweep', async () => {
+    const db = makeDb();
+    db.fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds = vi.fn(async () => {
+      throw new Error('mongo down');
+    });
+    const removeForDataLake = vi.fn(async () => {});
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db, retrievalIndex: { removeForDataLake } });
+
+    expect(removeForDataLake).toHaveBeenCalled();
+    expect(db.fabFiles.hardDeleteOneById).toHaveBeenCalled();
+  });
+
+  it('still aborts the sweep with zero progress when the index removal itself throws, even though the confirm was already cleared', async () => {
+    const db = makeDb();
+    const removeForDataLake = vi.fn(async () => {
+      throw new Error('index down');
+    });
+
+    await expect(
+      cleanupDeletedDataLake(ADMIN, 'lake-1', { db, retrievalIndex: { removeForDataLake } })
+    ).rejects.toThrow('index down');
+    expect(db.fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).toHaveBeenCalledWith(['f1', 'f2']);
     expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
   });
 });
