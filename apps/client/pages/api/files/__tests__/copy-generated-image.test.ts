@@ -46,8 +46,13 @@ function makeRes() {
   return { res: { json } as unknown as NextApiResponse, json };
 }
 
-const req = (userId: string) =>
-  ({ method: 'POST', user: { id: userId }, ability: {}, body: { imageS3Key: KEY } }) as unknown as NextApiRequest;
+const req = (userId: string, body: Record<string, unknown> = {}) =>
+  ({
+    method: 'POST',
+    user: { id: userId },
+    ability: {},
+    body: { imageS3Key: KEY, ...body },
+  }) as unknown as NextApiRequest;
 
 describe('POST /api/files/copy-generated-image object-level authz', () => {
   beforeEach(() => {
@@ -78,5 +83,21 @@ describe('POST /api/files/copy-generated-image object-level authz', () => {
     expect(h.download).toHaveBeenCalledWith(KEY);
     expect(h.createFabFile).toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith({ id: 'file-1' });
+  });
+
+  // The name is the caller's, the contentType is the stored object's: the route declares the
+  // trust order instead of rewriting the name to make extension-first resolution come out right.
+  it('keeps a mismatched caller-supplied name and persists the trusted contentType', async () => {
+    h.findSessionIdsByImage.mockResolvedValue(['s1']);
+    h.findAllByIds.mockResolvedValue([{ userId: 'me', users: [] }]);
+
+    const { res } = makeRes();
+    await handler(req('me', { fileName: 'notes.txt' }), res);
+
+    expect(h.createFabFile).toHaveBeenCalledWith(
+      'me',
+      expect.objectContaining({ fileName: 'notes.txt', mimeType: 'image/png' }),
+      expect.objectContaining({ mimeTypePrecedence: 'claim-first' })
+    );
   });
 });

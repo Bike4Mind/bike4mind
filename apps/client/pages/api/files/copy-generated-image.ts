@@ -70,6 +70,9 @@ const handler = baseApi()
             content: imageBuffer, // Pass the buffer as content to trigger upload
           },
           {
+            // The contentType comes off the stored S3 object, not the request body, so it outranks
+            // a caller-supplied fileName (an "image.txt" carrying image/png bytes stays image/png).
+            mimeTypePrecedence: 'claim-first',
             db: {
               adminSettings: adminSettingsRepository,
               // Absent, the admission lever (#1680) resolves platform-only here, so a per-org/owner/lake

@@ -1,5 +1,5 @@
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
-import { getFileExtension, getMimeTypeByExtension } from '@bike4mind/utils';
+import { getFileExtension, hasFileExtension, resolveSupportedMimeType } from '@bike4mind/utils';
 import type { SlackEventData } from './SlackEvent';
 
 export type SlackAttachment = NonNullable<SlackEventData['files']>[number];
@@ -71,35 +71,23 @@ export function validateSlackFileForIngest(file: SlackAttachment): SlackFileVali
     };
   }
 
-  // Gate on the extension's OWN mimetype, not `file.mimetype` - that field is whatever the
-  // Slack client reported, and Slack labels most plain-text files `text/plain` regardless of
-  // extension, so a `.sh`/`.srt`/`.yaml` file claiming `text/plain` used to sail through. The
-  // resolved value also decides the size cap below, so a claimed `image/png` on a non-image
-  // file no longer gets the looser cap either.
+  // No claim is passed: `file.mimetype` is whatever the Slack client reported, and Slack labels
+  // most plain-text files `text/plain` regardless of extension, so a `.sh`/`.srt`/`.yaml` file
+  // claiming `text/plain` used to sail through. The resolved value also decides the size cap
+  // below, so a claimed `image/png` on a non-image file no longer gets the looser cap either.
+  // The resolver is shared with the web ingest door, so the two cannot drift apart on what
+  // counts as an extension or on which names earn the plain-text fallback.
   const ext = getFileExtension(file.name);
-  // `path.extname` grabs a tail off ANY dot in the name, even one that isn't extension-shaped -
-  // a date ("2026.09.07") or a version ("v1.2") resolves to "07" or "2", which looks like it has
-  // an extension when the name actually has none. Checking the shape FIRST (rather than just
-  // "did path.extname find a dot") is what keeps those genuinely extension-less names on the
-  // same plain-text fallback as LICENSE/Dockerfile, instead of being judged against an extension
-  // that was never really there.
-  // Not a length/character-class check - a real extension can be longer than 8 chars
-  // (`properties`) or contain digits anywhere but the front (`7z` doesn't apply here since
-  // it's not on the allow-list, but a longer one like `properties` is a real, if unsupported,
-  // extension and must still be REFUSED, not silently coerced to plain text). Excluding only
-  // a digit-led tail is what keeps a date/version fragment ("07", "2") extension-less without
-  // also exempting a merely-long unsupported extension.
-  const looksLikeExtension = ext !== '' && !/^[0-9]/.test(ext);
-  // A trailing dot ("payload.") also fails `looksLikeExtension`, but it's malformed rather than
-  // extension-less, so it stays refused below instead of being coerced to plain text.
-  const hasNoExtension = !looksLikeExtension && !file.name.endsWith('.');
-  const resolvedMimeType = hasNoExtension ? SupportedFabFileMimeTypes.TXT_PLAIN : getMimeTypeByExtension(ext);
-  if (!resolvedMimeType || !SUPPORTED_SLACK_FILE_MIME_TYPES.includes(resolvedMimeType)) {
+  const { mimeType: resolvedMimeType, supported } = resolveSupportedMimeType(file.name, undefined, {
+    isAcceptable: m => !!m && SUPPORTED_SLACK_FILE_MIME_TYPES.includes(m),
+    extensionlessFallback: SupportedFabFileMimeTypes.TXT_PLAIN,
+  });
+  if (!supported) {
     // Name what actually decided the rejection - the resolved (extension-based) type, or the
     // raw extension if it looks like one - never `file.mimetype` (only the client's claim, which
     // can name a type that IS on the allow-list) and never a bare digit fragment `path.extname`
     // can grab out of a date or version suffix, which reads as gibberish rather than a type.
-    const reportedType = resolvedMimeType || (looksLikeExtension ? ext : '');
+    const reportedType = resolvedMimeType || (hasFileExtension(file.name) ? ext : '');
     return {
       ok: false,
       reason: 'unsupported_type',

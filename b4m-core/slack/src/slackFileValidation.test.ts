@@ -158,4 +158,12 @@ describe('validateSlackFileForIngest', () => {
     const result = validateSlackFileForIngest(attachment({ size: SLACK_MAX_FILE_SIZE_BYTES }));
     expect(result.ok).toBe(true);
   });
+
+  // A digit-led tail is a real extension, not a version fragment. These are
+  // unsupported binaries and must be refused rather than read as plain text.
+  it.each(['archive.7z', 'clip.3gp', 'model.3ds'])('refuses %s rather than coercing it to plain text', name => {
+    const result = validateSlackFileForIngest(attachment({ name, mimetype: 'application/octet-stream' }));
+
+    expect(result).toMatchObject({ ok: false, reason: 'unsupported_type' });
+  });
 });
