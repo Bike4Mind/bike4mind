@@ -282,9 +282,13 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
 
   // Expand the prompt bar when both side panels are closed so the extra
   // horizontal space is used instead of leaving wide empty gutters.
-  const isKnowledgeViewerHidden = useSessionLayout(s => s.layout === 'hide');
+  // 'vertical' is the only layout where the KV occupies horizontal space beside
+  // the chat; all others (hide, horizontal, pip, noAI, floatingChat) leave the
+  // full chat-pane width available, so none of them count as the right panel being open.
+  const isKnowledgeViewerBesideChat = useSessionLayout(s => s.layout === 'vertical');
   const isSideNavOpen = useNotebookLayout(s => s.openSideNav);
-  const bothPanelsClosed = isKnowledgeViewerHidden && !isSideNavOpen;
+  const bothPanelsClosed = !isKnowledgeViewerBesideChat && !isSideNavOpen;
+  const promptBarMaxWidth = isDockedLayout || isFloatingLayout ? 'none' : bothPanelsClosed ? '1200px' : '950px';
 
   // Determine if the stop button should be shown
   const shouldShowStopButton = useMemo(() => {
@@ -511,7 +515,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           width: isMobile ? '100vw' : '100%',
           // Docked/floating panels are already width-constrained; capping the input
           // at 950px would leave visible panel-background gutters beside it.
-          maxWidth: isDockedLayout || isFloatingLayout ? 'none' : bothPanelsClosed ? '1200px' : '950px',
+          maxWidth: promptBarMaxWidth,
           marginLeft: isCompactLayout ? '0px' : 'auto',
           marginRight: isCompactLayout ? '0px' : 'auto',
           ...(isDockedLayout
