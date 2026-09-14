@@ -27,6 +27,13 @@ export const FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT = 0.75;
  * makes a fractional value's spinner unusable - the same reason `KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT`
  * is a percent. The resolver divides by 100 once, at the one place that consumes it. `settings.test.ts`
  * pins this against the fraction above so the two cannot drift.
+ *
+ * NO LONGER THE RUNTIME DEFAULT. A raw cosine is only meaningful inside one vector space, so what an
+ * unset setting resolves to is now looked up per embedding space in
+ * `FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE` (`constants/embeddingSpaceFloors.ts`), which is
+ * where a new model's floor belongs. This stays as the setting's DECLARED default - the number the
+ * admin UI shows and seeds with - and it still matches the resolved value while `ada-002` is the
+ * configured model, which it is by default outside keyless self-host.
  */
 export const FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT = 75;
 

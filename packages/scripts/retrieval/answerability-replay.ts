@@ -262,7 +262,11 @@ const argv = yargs(hideBin(process.argv))
   .option('floor', {
     type: 'number',
     default: FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT / 100,
-    describe: 'Cosine floor for candidatesAboveFloor; defaults to the forced-retrieval floor',
+    // Not "the" forced-retrieval floor any more: that resolves per embedding space
+    // (FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE), so this default is only the ada-002 rung.
+    // Replaying a corpus embedded with another model MUST pass --floor for that space, or it grades
+    // cosines from one vector space against a bar fitted to a different one.
+    describe: 'Cosine floor for candidatesAboveFloor; defaults to the ada-002 forced-retrieval floor',
   })
   .option('dry-run', { type: 'boolean', default: false, describe: 'Probe and report without writing' })
   .option('force', { type: 'boolean', default: false, describe: 'Re-probe turns that already carry a probe' })

@@ -22,6 +22,16 @@ import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mi
 import type { ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
+// Partial mock: ChatCompletionFeatures pulls only `getRelevantMementos` from this module, and the V1
+// assertions below are about the ARGUMENTS it receives rather than what it returns. Spreading the
+// original keeps every other export real, so adding an import to the module under test does not
+// silently break this file.
+const getRelevantMementosMock = vi.hoisted(() => vi.fn());
+vi.mock('../mementoService', async importOriginal => ({
+  ...(await importOriginal<typeof import('../mementoService')>()),
+  getRelevantMementos: getRelevantMementosMock,
+}));
+
 const makeQuest = (overrides: Partial<IChatHistoryItemDocument> = {}): IChatHistoryItemDocument =>
   ({
     id: 'quest1',
@@ -235,7 +245,11 @@ describe('MementoFeature - Mementos V2 injection', () => {
 
   // Default WRITE flags for constructions that only exercise the READ path.
   const READ_ONLY = { writeV1: false, writeV2: true };
-  beforeEach(() => invokeCreateMemento.mockClear());
+  beforeEach(() => {
+    invokeCreateMemento.mockClear();
+    // Re-armed per test so one test's mockResolvedValue cannot leak into the next.
+    getRelevantMementosMock.mockReset().mockResolvedValue([]);
+  });
 
   const call = (feature: MementoFeature) =>
     feature.getContextMessages(
@@ -281,6 +295,39 @@ describe('MementoFeature - Mementos V2 injection', () => {
     await call(feature).catch(() => []); // V1 path may fail on the stub db; we only care about the gate
 
     expect(recallMementosV2).not.toHaveBeenCalled();
+  });
+
+  it('resolves the V1 embedding space inside getRelevantMementos, never from the credential factory', async () => {
+    // The P1 this pins: chat mode used to pass `embeddingFactory.getDefaultEmbeddingModel()`, which
+    // resolves by CREDENTIAL PRIORITY (an OpenAI key alone returns ada-002) and never reads the
+    // `defaultEmbeddingModel` setting. Agent mode (getFirstIterationMementosPreamble) passes neither
+    // and resolves from the setting, so the two disagreed whenever setting and credentials did.
+    //
+    // That argument picks the space the QUERY is embedded in, not just which floor applies: with the
+    // setting on 3-small and an OpenAI key present, chat embedded the query in ada-002, scored it
+    // against 3-small memento vectors, and gated the resulting cross-space noise on ada-002's 75 -
+    // memory went dark. Both call sites must now pass NEITHER argument.
+    getRelevantMementosMock.mockClear().mockResolvedValue([]);
+    const getDefaultEmbeddingModel = vi.fn().mockReturnValue('text-embedding-ada-002');
+    const feature = new MementoFeature(makeCtx(vi.fn().mockResolvedValue([]), v2User(false)), READ_ONLY);
+
+    await feature.getContextMessages(
+      makeQuest(),
+      { getDefaultEmbeddingModel } as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'what do i like',
+      undefined as unknown as Parameters<typeof feature.getContextMessages>[3],
+      1000
+    );
+
+    expect(getRelevantMementosMock).toHaveBeenCalledTimes(1);
+    const options = getRelevantMementosMock.mock.calls[0][1];
+    // `not.toHaveProperty` rather than checking for undefined: passing the key explicitly as
+    // undefined would still be a call site that thinks it owns the decision.
+    expect(options).not.toHaveProperty('embeddingModel');
+    expect(options).not.toHaveProperty('minSimilarity');
+    // The factory must not even be consulted - reaching for it here is the defect, whatever is done
+    // with the answer.
+    expect(getDefaultEmbeddingModel).not.toHaveBeenCalled();
   });
 
   it('onComplete forwards the RESOLVED write flags, so the subscriber cannot re-default V1 on', async () => {
@@ -784,6 +831,12 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
      * models a construction that never reached the seam, which is what every other test here is.
      */
     embeddingBinding?: { requested: string; model: string; missing: string | null; configured?: boolean };
+    /**
+     * Per-setting-name overrides for `adminSettings.getSettingsValue`, keyed exactly as production
+     * calls it (e.g. 'forcedRetrievalMinSimilarityPct'). Absent keys fall back to the pre-existing
+     * behavior of returning `defaultEmbeddingModel` for every setting name.
+     */
+    settings?: Record<string, unknown>;
   }) => {
     const files = opts.files ?? [{ id: 'fileA', fileName: 'A.pdf', tags: [] }];
     // Honours limit + afterChunkId like the real repository, so the probe and the within-batch
@@ -809,7 +862,11 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
             .mockResolvedValue({ data: files, hasMore: opts.hasMore ?? false, total: opts.total ?? files.length }),
         },
         fabfilechunks: { findByFabFileId: vi.fn(), findVectorsByFabFileIds },
-        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(opts.defaultEmbeddingModel) },
+        adminSettings: {
+          getSettingsValue: vi.fn(async (name: string) =>
+            opts.settings && name in opts.settings ? opts.settings[name] : opts.defaultEmbeddingModel
+          ),
+        },
       },
       resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
@@ -1004,8 +1061,71 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     expect(content).toContain('does not cover this');
     expect(content).not.toContain('the search was incomplete');
     const logs = (ctx.logger as unknown as { log: ReturnType<typeof vi.fn> }).log.mock.calls.flat().join(' ');
-    expect(logs).toContain('no chunk cleared the similarity floor');
+    // Asserts the DIAGNOSTIC, not the prose. An off-topic question and a floor sitting above the
+    // corpus's whole band are indistinguishable at this exit - both leave every score under the
+    // line - so the operator's only way to tell them apart is this line carrying the floor it
+    // applied, the best score anything reached, and the space both were measured in.
+    expect(logs).toContain('no chunk cleared the 75% absolute floor');
+    expect(logs).toContain('top=0.000');
+    expect(logs).toContain('text-embedding-ada-002');
     expect((quest.promptMeta as { warnings?: string[] } | undefined)?.warnings).toBeUndefined();
+  });
+
+  it('grades a text-embedding-3-small corpus against its own floor, not the ada-002 default', async () => {
+    // 0.707 cosine clears 3-small's 35% floor but sits under the 75% ada-002 default - if the
+    // absolute floor were still hardcoded, this chunk would be rejected and the turn would abstain.
+    const ctx = makeCtx({
+      files: [
+        { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-3-small', vectorizedChunkCount: 1 },
+      ],
+      rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'borderline relevant content', vector: [1, 1] }],
+    });
+    const { content } = await run(ctx);
+    expect(content).toContain('borderline relevant content');
+    expect(content).not.toContain('does not cover this');
+  });
+
+  it('an unmeasured embedding space never blacks out retrieval - it fails loud instead', async () => {
+    // 3-large has a measured BAND but deliberately no entry in the by-space table: the natural
+    // unmeasured case. A floor fitted to one vector space must never silently empty every query in
+    // another, so the fallback is the relative floor alone (never a 0.75 ada-002 guess) plus a loud
+    // operator-facing log, not a quiet abstention.
+    const ctx = makeCtx({
+      files: [
+        { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-3-large', vectorizedChunkCount: 1 },
+      ],
+      // cosine([1,4],[1,0]) = 1/sqrt(17) = 0.243 - well under both the 75% default and 3-small's 35%.
+      rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'weakly related content', vector: [1, 4] }],
+    });
+    const { content } = await run(ctx);
+    expect(content).toContain('weakly related content');
+    expect(content).not.toContain('does not cover this');
+    // warn, not error, and asserted as NOT error on purpose - see the same pairing in
+    // getRelevantMementos.test.ts. An unmeasured space is the designed resolution for any model
+    // outside the table, so "loud" here means visible to an operator reading logs, not an alert on a
+    // condition nobody can clear from the console.
+    const logger = ctx.logger as unknown as { warn: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn> };
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('text-embedding-3-large'));
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('an operator-configured absolute floor is honored verbatim, not replaced by the by-space table', async () => {
+    // 3-small's table entry is 35%, which this chunk's 0.707 cosine clears easily. But the operator
+    // explicitly dialed the setting to 90%, and that value must win outright - substituting the
+    // table's 35% here would silently discard a value someone deliberately tuned.
+    const ctx = makeCtx({
+      files: [
+        { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-3-small', vectorizedChunkCount: 1 },
+      ],
+      rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'borderline relevant content', vector: [1, 1] }],
+      settings: { forcedRetrievalMinSimilarityPct: 90 },
+    });
+    const { content } = await run(ctx);
+    expect(content).toContain('does not cover this');
+    expect(content).not.toContain('borderline relevant content');
+    // An explicit value is not an unresolved one - nothing here warrants the loud error the
+    // unmeasured-space case above logs.
+    expect((ctx.logger as unknown as { error: ReturnType<typeof vi.fn> }).error).not.toHaveBeenCalled();
   });
 
   it('a no-match over a PARTIALLY scanned library must not harden into "no coverage"', async () => {
