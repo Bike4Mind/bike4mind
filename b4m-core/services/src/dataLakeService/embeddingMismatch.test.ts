@@ -49,7 +49,8 @@ describe('isForeignEmbeddingModel', () => {
 });
 
 describe('classifyLoadedChunk', () => {
-  const q = { queryDim: 3, queryModel: ADA };
+  // `chunkModel: null` is the no-chunk-label baseline; the cases below that care override it.
+  const q = { queryDim: 3, queryModel: ADA, chunkModel: null };
 
   it('scores a chunk whose label and width both agree', () => {
     expect(classifyLoadedChunk({ ...q, vector: [1, 2, 3], parentFile: { embeddingModel: ADA } })).toBeNull();
@@ -80,6 +81,52 @@ describe('classifyLoadedChunk', () => {
     expect(classifyLoadedChunk({ ...q, vector: [1, 2], parentFile: { embeddingModel: ADA } })).toBe(
       'dimensionMismatch'
     );
+  });
+
+  describe('the CHUNK label decides, and the file label is only the fallback', () => {
+    it('withholds a foreign chunk under a BLANK file label - the split-file case', () => {
+      // The state stampChunkEmbeddingModel deliberately creates: a file whose chunks span two
+      // spaces has its file label cleared, because no single value is true of both halves. Blank is
+      // never foreign, so before the chunk label was read this file had no cross-model guard at all
+      // - and width cannot supply one, since voyage-3 and Titan v2 are both 1024 wide.
+      expect(
+        classifyLoadedChunk({ ...q, vector: [1, 2, 3], parentFile: {}, chunkModel: SMALL_3 })
+      ).toBe('modelMismatch');
+    });
+
+    it('withholds a foreign chunk even when the FILE label agrees with the query', () => {
+      // The chunk label is written in the same transaction as the vector beside it; the file label
+      // is a summary. Where they disagree the chunk is the one holding the vector.
+      expect(
+        classifyLoadedChunk({ ...q, vector: [1, 2, 3], parentFile: { embeddingModel: ADA }, chunkModel: SMALL_3 })
+      ).toBe('modelMismatch');
+    });
+
+    it('scores a chunk whose own label agrees even when the FILE label is foreign', () => {
+      expect(
+        classifyLoadedChunk({ ...q, vector: [1, 2, 3], parentFile: { embeddingModel: SMALL_3 }, chunkModel: ADA })
+      ).toBeNull();
+    });
+
+    it.each([[null], [undefined], [''], ['   ']])(
+      'falls back to the file label when the chunk carries none (%s)',
+      label => {
+        const chunkModel = label as string | null | undefined;
+        expect(
+          classifyLoadedChunk({ ...q, vector: [1, 2, 3], parentFile: { embeddingModel: SMALL_3 }, chunkModel })
+        ).toBe('modelMismatch');
+        expect(
+          classifyLoadedChunk({ ...q, vector: [1, 2, 3], parentFile: { embeddingModel: ADA }, chunkModel })
+        ).toBeNull();
+      }
+    );
+
+    it('still reports an orphan as unknownFile, however the chunk is labelled', () => {
+      // A chunk label cannot stand in for a parent: scope membership is the file's to answer.
+      expect(classifyLoadedChunk({ ...q, vector: [1, 2, 3], parentFile: undefined, chunkModel: ADA })).toBe(
+        'unknownFile'
+      );
+    });
   });
 });
 

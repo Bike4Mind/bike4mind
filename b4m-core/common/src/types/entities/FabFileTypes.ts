@@ -293,8 +293,15 @@ export interface IFabFile {
   isVectorizing?: boolean;
   /** Whether this FabFile has completed vectorization. */
   vectorized?: boolean;
-  /** The embedding model used to generate the vectors. */
-  embeddingModel?: string;
+  /**
+   * The embedding model used to generate the vectors, as a FILE-level claim about the whole corpus.
+   * Explicitly nullable: `stampChunkEmbeddingModel` clears it when a file's chunks turn out to span
+   * more than one embedding space, because any single value would then be a lie about half the
+   * vectors and this label is exclusion authority (isForeignEmbeddingModel drops a labeled file from
+   * every search wholesale, but never excludes a blank one). Absent, null and '' are all "unknown",
+   * and every reader must treat them the same way.
+   */
+  embeddingModel?: string | null;
   /**
    * When this file's chunks were last fully re-stamped with their per-chunk `embeddingModel`
    * (see IFabFileChunk.embeddingModel). Atlas $vectorSearch cutover treats a stamp younger than
@@ -505,6 +512,15 @@ export interface FabFileChunkVector {
   fabFileId: string;
   text: string;
   vector: number[];
+  /**
+   * The chunk's OWN model label, written beside its vector rather than summarized from the file.
+   * The two data-lake cosine scans prefer it over `FabFile.embeddingModel` because the file label
+   * is blank for a file whose chunks span two spaces, and no retrieval reader excludes a chunk on a
+   * blank FILE label. Blank is not free at the file level though - lake-memory reachability and the
+   * attachment scan's query-vector lookup both key on it (see stampChunkEmbeddingModel). The
+   * attachment scan (`cosineSearch`) does not read this field and guards on vector width alone.
+   */
+  embeddingModel?: string | null;
 }
 
 export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDocument> {
@@ -565,8 +581,25 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
     embeddedChunkCount: number;
     embeddedCharCount: number;
   }>;
-  /** Bulk-stamp every chunk of a file with the model its vectors were generated under. */
+  /**
+   * Label a file's still-UNLABELED, VECTOR-BEARING chunks with the model their vectors were
+   * generated under. Never overwrites a label already written beside a vector, and never labels a
+   * chunk that has no vector to attribute - see the implementation's notes on the mid-ingest model
+   * split a blanket update used to hide, and on the oversized chunks an unscoped one mislabeled.
+   */
   updateEmbeddingModel(fabFileId: string, embeddingModel: string): Promise<void>;
+  /**
+   * Distinct non-blank `embeddingModel` values across a file's VECTOR-BEARING chunks; >1 means its
+   * vectors span two spaces, and EMPTY means nothing in the file has been embedded at all.
+   */
+  distinctEmbeddingModelsByFabFileId(fabFileId: string): Promise<string[]>;
+  /**
+   * How many VECTOR-BEARING chunks of this file still carry no `embeddingModel` - the rows
+   * `updateEmbeddingModel` will fill. Read with `distinctEmbeddingModelsByFabFileId` to tell a
+   * file with no vectors at all (label unknown) from one whose vectors are merely unlabeled yet
+   * (label = the model about to stamp them); the distinct set is empty for both.
+   */
+  countUnlabeledVectorChunksByFabFileId(fabFileId: string): Promise<number>;
   /** One page of vector-bearing chunks missing `embeddingModel`, ascending by `_id` - backfill's keyset cursor. */
   findChunksMissingEmbeddingModel(options?: {
     limit?: number;
@@ -582,9 +615,9 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
   /** Whether `model`'s Atlas vector index exists and is queryable (cached; see atlasSearchIndex.ts). */
   getAtlasIndexStatus(model: string): Promise<{ queryable: boolean; status: string } | null>;
   /**
-   * One page of vector-bearing chunks (id, fabFileId, text, vector) for the given files,
-   * ascending by `_id`. Skips chunks without a vector at the DB layer. Powers semantic search
-   * (query embed -> cosine).
+   * One page of vector-bearing chunks (id, fabFileId, text, vector, embeddingModel) for the given
+   * files, ascending by `_id`. Skips chunks without a vector at the DB layer. Powers semantic
+   * search (query embed -> cosine).
    *
    * Contract callers rely on: `_id` is unique, so the ordering is total and `afterChunkId` is
    * an exact cursor - paging a corpus never skips or duplicates a chunk, and the same inputs

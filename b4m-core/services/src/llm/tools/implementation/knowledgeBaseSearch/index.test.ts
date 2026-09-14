@@ -249,8 +249,22 @@ describe('search_knowledge_base semantic fallback logging', () => {
     });
   }
 
+  const saved = {
+    B4M_SELF_HOST: process.env.B4M_SELF_HOST,
+    AWS_LAMBDA_FUNCTION_NAME: process.env.AWS_LAMBDA_FUNCTION_NAME,
+  };
   beforeEach(() => {
     (logger.warn as ReturnType<typeof vi.fn>).mockClear();
+    // Neither a cloud stage nor self-host by default; the cases that mean one say so. Stated
+    // rather than inherited, because whether Bedrock is reachable is now what decides the keyword
+    // fallback, and "not self-host" is no longer enough to claim it.
+    for (const k of Object.keys(saved)) delete process.env[k];
+  });
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
   });
 
   it('warns naming the missing adapter when adminSettings/apiKeys are not wired', async () => {
@@ -267,7 +281,10 @@ describe('search_knowledge_base semantic fallback logging', () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('no defaultEmbeddingModel configured'));
   });
 
-  it('warns naming the missing provider credential when the model is configured but keyless', async () => {
+  it('warns naming the missing provider credential on a keyless SELF-HOST', async () => {
+    // Self-host has no AWS role, so a missing provider key really is the end of the semantic arm.
+    // The warning has to name the credential, which is the thing an operator can actually fix.
+    process.env.B4M_SELF_HOST = 'true';
     getEffectiveLLMApiKeysMock.mockResolvedValueOnce({});
     const context = makeSemanticContext({
       adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
@@ -275,6 +292,22 @@ describe('search_knowledge_base semantic fallback logging', () => {
     });
     await run(context);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('no credential for provider'));
+  });
+
+  it('keeps semantic search on a keyless CLOUD stage instead of degrading to keyword', async () => {
+    // A cloud stage reaches Bedrock with its own role, so holding no provider key is not a reason
+    // to lose semantic search: resolveEmbeddingWithKeylessFallback swaps the model rather than
+    // returning null. This is the case every preview is in. The execution role is stated rather
+    // than inherited - hasKeylessCloudEmbedder requires positive evidence of one, and the test
+    // runner (like a plain `next dev`) has none.
+    process.env.AWS_LAMBDA_FUNCTION_NAME = 'some-stage-chatCompletion';
+    getEffectiveLLMApiKeysMock.mockResolvedValueOnce({});
+    const context = makeSemanticContext({
+      adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+      apiKeys: {},
+    });
+    await run(context);
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('no credential for provider'));
   });
 
   it('does not log a fallback warning when the embedding context resolves successfully', async () => {

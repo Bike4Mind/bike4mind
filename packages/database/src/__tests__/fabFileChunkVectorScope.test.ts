@@ -43,6 +43,80 @@ describe('FabFileChunkRepository.findVectorsByFabFileIds scoping', () => {
 
     expect(chunks).toEqual([]);
   });
+
+  // The projection is the only thing standing between the cosine scans and a blind cross-model
+  // guard, and no mocked-repository test can see it: every ranker test hands itself rows that
+  // already carry the label. Dropping `embeddingModel` from the `.select()` would leave those
+  // suites green while production silently scored a split file's two halves against each other.
+  it("projects each chunk's OWN embeddingModel", async () => {
+    await FabFileChunk.create([
+      { fabFileId: fid('f1'), text: 'voyage half', tokenCount: 1, vector: [0.1, 0.2], embeddingModel: 'voyage-3' },
+      {
+        fabFileId: fid('f1'),
+        text: 'titan half',
+        tokenCount: 1,
+        vector: [0.3, 0.4],
+        embeddingModel: 'amazon.titan-embed-text-v2:0',
+      },
+    ]);
+
+    const chunks = await fabFileChunkRepository.findVectorsByFabFileIds([fid('f1')]);
+
+    expect(chunks.map(c => c.embeddingModel).sort()).toEqual(['amazon.titan-embed-text-v2:0', 'voyage-3']);
+  });
+
+  it('reports an unlabelled chunk as null rather than omitting the field', async () => {
+    // The classifier falls back to the file label on a blank chunk label, so the shape has to be
+    // stable: a reader cannot distinguish "not projected" from "not labelled" on a missing key.
+    await FabFileChunk.create([{ fabFileId: fid('f1'), text: 'legacy', tokenCount: 1, vector: [0.1, 0.2] }]);
+
+    const chunks = await fabFileChunkRepository.findVectorsByFabFileIds([fid('f1')]);
+
+    expect(chunks[0].embeddingModel).toBeNull();
+  });
+});
+
+// What the FILE label is resolved from at vectorize completion. The distinct query cannot answer
+// this on its own: it only sees chunks that already carry a label, so it comes back empty both for
+// a file with no vectors at all and for one whose vectors are merely unlabelled so far - and those
+// want opposite file labels (see resolveFileLabel in b4m-core/services/src/fabFileService).
+describe('FabFileChunkRepository.countUnlabeledVectorChunksByFabFileId', () => {
+  setupMongoTest();
+
+  beforeEach(async () => {
+    await FabFileChunk.deleteMany({});
+  });
+
+  it('counts vector-bearing chunks with no label, however the blank is spelled', async () => {
+    await FabFileChunk.create([
+      { fabFileId: fid('f1'), text: 'missing field', tokenCount: 1, vector: [0.1] },
+      { fabFileId: fid('f1'), text: 'explicit null', tokenCount: 1, vector: [0.2], embeddingModel: null },
+      { fabFileId: fid('f1'), text: 'empty string', tokenCount: 1, vector: [0.3], embeddingModel: '' },
+      { fabFileId: fid('f1'), text: 'labelled', tokenCount: 1, vector: [0.4], embeddingModel: 'voyage-3' },
+    ]);
+
+    expect(await fabFileChunkRepository.countUnlabeledVectorChunksByFabFileId(fid('f1'))).toBe(3);
+  });
+
+  it('ignores vectorless chunks - they name no space, so the stamp will not label them', async () => {
+    // The all-oversized file: every chunk skipped at embed time, still terminal in the rollup. It
+    // must read as zero, or a file with nothing embedded would be labelled from the caller's model.
+    await FabFileChunk.create([
+      { fabFileId: fid('f1'), text: 'oversized', tokenCount: 99999 },
+      { fabFileId: fid('f1'), text: 'also oversized', tokenCount: 99999, vector: [] },
+    ]);
+
+    expect(await fabFileChunkRepository.countUnlabeledVectorChunksByFabFileId(fid('f1'))).toBe(0);
+  });
+
+  it('is scoped to the requested file', async () => {
+    await FabFileChunk.create([
+      { fabFileId: fid('f1'), text: 'mine', tokenCount: 1, vector: [0.1] },
+      { fabFileId: fid('f2'), text: 'theirs', tokenCount: 1, vector: [0.2] },
+    ]);
+
+    expect(await fabFileChunkRepository.countUnlabeledVectorChunksByFabFileId(fid('f1'))).toBe(1);
+  });
 });
 
 // Per-chunk fields, not FabFile.embeddingModel, are the source of truth here: a re-embedded file's

@@ -29,6 +29,9 @@ const h = vi.hoisted(() => ({
   computeChunkVectorRollup: vi.fn(async () => ({ terminalChunkCount: 0, embeddedChunkCount: 0, embeddedCharCount: 0 })),
   chunkUpdate: vi.fn(),
   getAtlasIndexForModel: vi.fn(() => ({ name: 'idx', numDimensions: 3 })),
+  // Echoes the requested model, matching the real helper's no-fallback path. The keyless-arm
+  // test overrides this to return a different `model` and asserts the stamp follows.
+  resolveEmbeddingWithKeylessFallback: vi.fn((model: string) => ({ config: {}, missing: null, model })),
   stampChunkEmbeddingModel: vi.fn(),
   indexChunks: vi.fn(),
   selfHostOpenSearchEnabled: vi.fn(() => false),
@@ -148,7 +151,7 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
     }
   },
   getProviderFromModel: vi.fn(() => 'openai'),
-  resolveEmbeddingConfig: vi.fn(() => ({ config: {}, missing: null })),
+  resolveEmbeddingWithKeylessFallback: h.resolveEmbeddingWithKeylessFallback,
   // Mirror the real name-based guard so any test that reaches the failure branch classifies correctly.
   isEmbeddingAuthError: (e: unknown) => e instanceof Error && e.name === 'EmbeddingAuthError',
   getAtlasIndexForModel: h.getAtlasIndexForModel,
@@ -815,7 +818,16 @@ describe('fabFileVectorize handler - embeddingModel discriminator stamp', () => 
       'ff1',
       'text-embedding-3-small',
       expect.objectContaining({ db: expect.anything() }),
-      { vectorized: true, vectorizedChunkCount: 1, isVectorizing: false, embeddedChunkCount: 0, embeddedCharCount: 0 }
+      {
+        vectorized: true,
+        vectorizedChunkCount: 1,
+        isVectorizing: false,
+        embeddedChunkCount: 0,
+        embeddedCharCount: 0,
+        // The handler is the only caller that knows which model it just embedded with, so it is
+        // the only one allowed to move the FILE-level label.
+        stampFile: true,
+      }
     );
   });
 
@@ -868,7 +880,7 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
     expect(h.chunkUpdate).toHaveBeenCalled();
   });
 
-  it('stamps embeddingModel onto the chunks passed to indexChunks - not persisted per-chunk in Mongo yet at this point', async () => {
+  it('stamps embeddingModel onto the chunks passed to indexChunks (the same objects Mongo was given)', async () => {
     h.selfHostOpenSearchEnabled.mockReturnValue(true);
     h.indexChunks.mockResolvedValue(undefined);
 
@@ -876,6 +888,20 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
 
     const indexedChunks = h.indexChunks.mock.calls[0][0];
     expect(indexedChunks).toEqual([expect.objectContaining({ id: 'c1', embeddingModel: 'text-embedding-3-small' })]);
+  });
+
+  it('persists embeddingModel on the chunk in the SAME write as its vector', async () => {
+    // The label and the vector it describes must land together: a chunk whose label names a model
+    // other than the one that produced its vector is matched by that model's Atlas filter and
+    // scored against vectors from a different space - silently wrong hits, at a width that may not
+    // even match. Writing both in one `update` is what makes that state unrepresentable, and it is
+    // also what lets the file-complete stamp DETECT a mid-ingest credential change (the file's
+    // chunks then declare two models) instead of flattening it to whichever message finished last.
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.chunkUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'c1', vector: [0.1, 0.2, 0.3], embeddingModel: 'text-embedding-3-small' })
+    );
   });
 
   it('never calls indexChunks when self-host OpenSearch is disabled', async () => {
@@ -906,6 +932,32 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
 
     expect(h.chunkUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'c1', retrievalIndexModel: 'text-embedding-3-small' })
+    );
+  });
+
+  it('stamps the model it actually embedded with when a keyless stage falls back', async () => {
+    // The corpus-mislabelling hazard: on a stage with no provider key the vectorizer embeds on
+    // Bedrock, and every downstream key - the cache entry, the Atlas width guard, both chunk
+    // stamps - has to follow that model rather than the one the payload asked for. Stamping
+    // ada-002 onto Titan vectors would make them unsearchable and silently wrong.
+    h.resolveEmbeddingWithKeylessFallback.mockReturnValueOnce({
+      config: {},
+      missing: null,
+      model: 'amazon.titan-embed-text-v2:0',
+    });
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue(undefined);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.chunkUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'c1', retrievalIndexModel: 'amazon.titan-embed-text-v2:0' })
+    );
+    expect(h.stampChunkEmbeddingModel).toHaveBeenCalledWith(
+      expect.anything(),
+      'amazon.titan-embed-text-v2:0',
+      expect.anything(),
+      expect.anything()
     );
   });
 

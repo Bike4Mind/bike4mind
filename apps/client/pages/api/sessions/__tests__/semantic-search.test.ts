@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
 const { mockGetEffectiveLLMApiKeys, mockGetSettingsValue, mockGetProviderFromModel, mockGenerateEmbedding } =
@@ -78,12 +78,21 @@ const makeRes = () => {
 // even though the admin dropdown offers Bedrock embedders and the vectorize pipeline accepts
 // them, so a corpus that ingested fine failed on every session search.
 describe('POST /api/sessions/semantic-search embedding provider resolution', () => {
+  const savedLambdaName = process.env.AWS_LAMBDA_FUNCTION_NAME;
   beforeEach(() => {
     vi.clearAllMocks();
     mockGenerateEmbedding.mockResolvedValue([0.1, 0.2, 0.3]);
     mockGetSettingsValue.mockResolvedValue(BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2);
     mockGetProviderFromModel.mockReturnValue(ModelBackend.Bedrock);
     mockGetEffectiveLLMApiKeys.mockResolvedValue({});
+    // This route runs in the Next server Lambda. hasKeylessCloudEmbedder wants positive evidence
+    // of an execution role, so the hosted runtime is stated rather than inherited from the test
+    // process - which has none, and would otherwise read as "cannot reach Bedrock".
+    process.env.AWS_LAMBDA_FUNCTION_NAME = 'some-stage-frontendServer';
+  });
+  afterEach(() => {
+    if (savedLambdaName === undefined) delete process.env.AWS_LAMBDA_FUNCTION_NAME;
+    else process.env.AWS_LAMBDA_FUNCTION_NAME = savedLambdaName;
   });
 
   it('accepts a Bedrock model on an environment holding no provider key at all', async () => {
@@ -104,17 +113,39 @@ describe('POST /api/sessions/semantic-search embedding provider resolution', () 
     expect(bodies.some(b => b.includes('Unsupported embedding provider'))).toBe(false);
   });
 
-  it('still rejects a keyed provider whose credential is genuinely absent', async () => {
-    // The fix is about keyless providers, not about making every missing credential silent.
+  it('still rejects a keyed provider whose credential is genuinely absent, on self-host', async () => {
+    // Self-host has no AWS role, so there is nothing to fall back TO and the actionable error
+    // naming the provider is the only useful answer. This is the half of the old guard that
+    // survives the keyless-fallback change.
+    const originalSelfHost = process.env.B4M_SELF_HOST;
+    process.env.B4M_SELF_HOST = 'true';
+    try {
+      mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+      mockGetSettingsValue.mockResolvedValue('text-embedding-3-small');
+      const res = makeRes();
+
+      await handler(makeReq(), res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('OpenAI') }));
+      expect(mockGenerateEmbedding).not.toHaveBeenCalled();
+    } finally {
+      if (originalSelfHost === undefined) delete process.env.B4M_SELF_HOST;
+      else process.env.B4M_SELF_HOST = originalSelfHost;
+    }
+  });
+
+  it('embeds with the keyless model instead of 400ing when a cloud stage has no credential', async () => {
+    // The vectorizer already fell back to Bedrock when it wrote this stage's corpus, so refusing
+    // the query answers from a space nothing was written into.
     mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
     mockGetSettingsValue.mockResolvedValue('text-embedding-3-small');
     const res = makeRes();
 
     await handler(makeReq(), res);
 
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('OpenAI') }));
-    expect(mockGenerateEmbedding).not.toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalledWith(400);
+    expect(mockGenerateEmbedding).toHaveBeenCalledTimes(1);
   });
 
   it('still passes a present credential through to the factory', async () => {

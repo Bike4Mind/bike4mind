@@ -51,14 +51,33 @@ import {
   type SemanticDataLakeSearchParams,
 } from './semanticDataLakeSearch';
 import { describeSearchLimitations, isPartialSearch } from './retrievalUnavailable';
+import { BedrockEmbeddingModel } from '@bike4mind/common';
 
+// Every fixture below queries under PRIMARY_MODEL ('text-embedding-ada-002') and the unlabeled-
+// chunk audit at semanticDataLakeSearch.ts:1211 warns whenever the query model differs from
+// defaultEmbeddingModelForEnv(). That premise has to be stated rather than inherited from the
+// ambient env: a developer machine with B4M_SELF_HOST + OLLAMA_BASE_URL set resolves the default
+// to the local embedder, which would make the audit fire in the tests that assert silence. A
+// synthetic low-entropy value on purpose (no real-key marker) to avoid push-protection flags.
+const savedOpenAiKey = process.env.OPENAI_API_KEY;
+const savedSelfHost = process.env.B4M_SELF_HOST;
 beforeEach(() => {
+  process.env.OPENAI_API_KEY = 'sk-proj-0000aaaa1111bbbb2222cccc3333';
+  // Normalized to hosted so the default resolves from the key above, not from the ambient env.
+  // The self-host OpenSearch describe below sets this again in its own beforeEach, which runs after.
+  delete process.env.B4M_SELF_HOST;
   mockCosine.mockReset();
   mockCosine.mockReturnValue(0.9);
   mockCreateEmbeddingService.mockClear();
   mockGenerateEmbedding.mockReset();
   mockGenerateEmbedding.mockImplementation((model: string) => [model.length, 0]);
   mockRecordDataLakeSearchMetrics.mockClear();
+});
+afterEach(() => {
+  if (savedOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
+  else process.env.OPENAI_API_KEY = savedOpenAiKey;
+  if (savedSelfHost === undefined) delete process.env.B4M_SELF_HOST;
+  else process.env.B4M_SELF_HOST = savedSelfHost;
 });
 
 const baseParams = (): SemanticDataLakeSearchParams => ({
@@ -680,6 +699,40 @@ describe('semanticDataLakeSearch dimension mismatch accounting', () => {
       },
     } as never);
     expect(partial.warn).not.toHaveBeenCalled();
+  });
+
+  it('audits unlabeled chunks when the query model differs from the deployment default', async () => {
+    // Unlabeled chunks are scored on the assumption they were embedded with the deployment
+    // default; under any other query model that assumption needs recording. Driven by the query
+    // model rather than by env, because the default is deliberately stage-neutral now - a keyless
+    // stage resolves Bedrock at the embedding seam, not here (see resolveEmbeddingWithKeylessFallback).
+    const logger = makeLogger();
+    await semanticDataLakeSearch(
+      {
+        ...baseParams(),
+        embeddingModel:
+          BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2 as SemanticDataLakeSearchParams['embeddingModel'],
+        logger: logger as never,
+      },
+      {
+        db: {
+          fabfiles: { search: filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]) },
+          fabfilechunks: {
+            findVectorsByFabFileIds: pagingChunkMock([
+              { id: 'f1-a', fabFileId: 'f1', text: 'x', vector: [1, 0] },
+            ] as never),
+          },
+        },
+      } as never
+    );
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[semanticSearch] scored chunks with no recorded embedding model',
+      expect.objectContaining({
+        queryEmbeddingModel: BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2,
+        assumedModel: 'text-embedding-ada-002',
+      })
+    );
   });
 });
 
