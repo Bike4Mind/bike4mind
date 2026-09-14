@@ -67,6 +67,11 @@ const SITES: { path: string; matches: number; note: string }[] = [
     matches: 1,
     note: 'Client badge: reddens the session-toolbar file count. Same tier as FilesSection',
   },
+  {
+    path: 'packages/scripts/help/ingestHelpDatalake.ts',
+    matches: 1,
+    note: 'system-help mirror reuse gate. Deliberately STRICTER; divergence churns re-embeds, not content',
+  },
 ];
 
 /**
@@ -114,6 +119,49 @@ const NOT_THIS_RULE: { pattern: RegExp; reason: string }[] = [
     reason:
       'Compares the QUERY model to the deployment default for a telemetry warning. No file label ' +
       'is involved; a `file.embeddingModel` form still trips the guard.',
+  },
+  {
+    pattern:
+      /(?<![.\w])(corpusResolution\.model|resolvedEmbeddingModel)\s*!==\s*(corpusEmbeddingModel|embeddingModel)\b/,
+    reason:
+      'The same substitution log as the entry below, at the two sites where the requested model is ' +
+      'not spelled `requestedEmbeddingModel`: the ChatCompletion credential seam (`corpusEmbeddingModel`) ' +
+      'and the knowledge-search tool (`embeddingModel`). Both operands are this turn own models and ' +
+      'no FabFile label is read. Pinned on both halves for the reason given below - an open left ' +
+      'operand would exempt `file.embeddingModel !== embeddingModel`, which IS the retrievability rule.',
+  },
+  {
+    pattern: /(?<![.\w])(embeddingModel|resolution\.model)\s*!==\s*requestedEmbeddingModel\b/,
+    reason:
+      'Compares the model the keyless fallback SETTLED ON to the one the caller asked for - to log ' +
+      "the substitution, or to decide whether one happened. Both operands are this request's own " +
+      'query/write model; no FabFile label is read, so it is not the retrievability rule. BOTH ' +
+      'halves are pinned, and the lookbehind is the load-bearing part: leaving the left operand ' +
+      'open would exempt `file.embeddingModel !== requestedEmbeddingModel`, which IS the ' +
+      'retrievability rule and is exactly what this guard exists to catch. A new settled-side ' +
+      'spelling trips the guard and has to be added here, which is the guard working.',
+  },
+  {
+    pattern: /(===|!==)\s*[A-Za-z0-9_.]+\s*\?[^:]*:\s*await\s+countQueryTokens\(/,
+    reason:
+      'A token-count memo in the semantic-search handler: has the query already been counted under ' +
+      'this model, reuse that count, else recount. Both operands are the request own query models ' +
+      'and no FabFile label is read - the lines only came into view because the query binding was ' +
+      'renamed from embedding_model to searchEmbeddingModel, the first spelling the prefilter can ' +
+      'see. The countQueryTokens false-branch is the marker: a site that means the retrievability ' +
+      'rule cannot resolve to a token count.',
+  },
+  {
+    pattern: /(?<![.\w])only\s*===\s*embeddingModel\b/,
+    reason:
+      'The file-label stamp asking whether the one model its chunks declare is the model THIS ' +
+      'message just resolved, before it promotes that label to the file. Both operands describe ' +
+      'what was WRITTEN - a chunk label and this pass own embedding model - so no FabFile label is ' +
+      'read against a query and nothing is excluded from search. It is a provenance rule (did this ' +
+      'pass write the label it is being asked to promote) rather than the foreignness rule, and it ' +
+      'is deliberately one-directional: a mismatch withholds the file label, never sets it. Pinned ' +
+      'on both halves for the reason the entries above give - an open left operand would exempt ' +
+      '`file.embeddingModel === embeddingModel`, which IS the retrievability rule.',
   },
 ];
 

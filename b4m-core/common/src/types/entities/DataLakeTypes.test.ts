@@ -3,6 +3,8 @@ import {
   DATA_LAKE_STABLE_STATUSES,
   DATA_LAKE_STATUSES,
   DATA_LAKE_TRANSITIONAL_STATUSES,
+  LAKE_INGESTABLE_STATUSES,
+  isLakeIngestable,
   TRANSITIONAL_RETRY_ACTION,
   resolveRetryAction,
   strandedCutoffMsFor,
@@ -127,5 +129,22 @@ describe('strandedCutoffMsFor', () => {
   // A cutoff inside that window would flag a purge SQS is still legitimately retrying.
   it('puts the purging cutoff past the cleanup consumer retry budget', () => {
     expect(strandedCutoffMsFor('purging')).toBeGreaterThanOrEqual(36 * 60_000);
+  });
+});
+
+describe('isLakeIngestable', () => {
+  // Derived over the whole enum rather than spot-checked, so a tenth status cannot land uncovered:
+  // adding one to DATA_LAKE_STATUSES without deciding here fails this test instead of silently
+  // defaulting to "refused" at six ingest doors.
+  it.each(DATA_LAKE_STATUSES)('%s is ingestable only if it is draft or active', status => {
+    expect(isLakeIngestable(status)).toBe(status === 'draft' || status === 'active');
+  });
+
+  it('refuses a lake with no status', () => {
+    expect(isLakeIngestable(undefined)).toBe(false);
+  });
+
+  it('lists exactly the two writable statuses', () => {
+    expect([...LAKE_INGESTABLE_STATUSES]).toEqual(['draft', 'active']);
   });
 });

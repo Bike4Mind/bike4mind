@@ -8,7 +8,7 @@ import type {
   PublicDataLakeSummary,
 } from '@bike4mind/common';
 import { canManageLake, isEffectiveOwner, type LakeGrant } from './manageRule';
-import { grantedLakeIdsFor, resolveEnforceReadGrants } from './resolveLakeReadAccess';
+import { grantedLakeReachFor, resolveEnforceReadGrants } from './resolveLakeReadAccess';
 
 /**
  * The browsing caller: the full access context, not just an id. The catalog is per-caller (a
@@ -50,8 +50,8 @@ interface BrowsePublicDataLakesAdapters {
  * The discover/browse catalog of public data lakes. Returns one page of the public lakes this
  * caller can reach (the repo enforces public + active + the same gate and grant arms
  * `findAccessible` applies, so discover and the list/read gate never disagree; retrieval via
- * `findActiveByUserTagsAndEntitlements` now carries the same owner/curator grant arm, and its
- * reader/org half remains behind the interlock in `resolveLakeReadAccess.ts`) enriched with the preview
+ * `findActiveByUserTagsAndEntitlements` carries the same grant arms, so a lake that browses also
+ * grounds) enriched with the preview
  * metadata the catalog renders: owner display name, file count, total size, plus per-caller
  * `isOwn`/`canManage` so the UI can gate management affordances. This is a read-only discovery
  * surface - it grants nothing; access is already ambient once a lake is public (a public
@@ -67,12 +67,11 @@ export const browsePublicDataLakes = async (
   { db }: BrowsePublicDataLakesAdapters
 ): Promise<BrowsePublicDataLakesResult> => {
   // Resolved before the catalog query so an explicitly granted public lake discovers on the same
-  // terms it lists on - the arm `listDataLakes` already passes to findAccessible. Both the flag
-  // read and the grant lookup cost one query per page on this load-more path; while the read-grant
-  // cutover is report-only the flag can only ever resolve false, and it is wired now so the arm
-  // lights up at cutover instead of needing a second pass here.
+  // terms it lists on - the arms `listDataLakes` already passes to findAccessible. Cost per page on
+  // this load-more path: the flag read, the user-grant lookup, and under enforce one org-grant
+  // lookup per org the caller belongs to.
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds = await grantedLakeIdsFor(
+  const { grantedLakeIds, orgGrantedLakes } = await grantedLakeReachFor(
     actor.userId,
     actor.organizationIds ?? [],
     db.dataLakeAccessGrants,
@@ -84,6 +83,7 @@ export const browsePublicDataLakes = async (
     limit: opts.limit,
     offset: opts.offset,
     grantedLakeIds,
+    orgGrantedLakes,
   });
 
   // Batch-resolve owners in one round-trip. Dedupe ids and drop blanks so a lake with a

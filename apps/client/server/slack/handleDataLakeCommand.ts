@@ -1,6 +1,11 @@
-import { parseDataLakeCommand, type ParsedDataLakeCommand, type SlackAttachment } from '@bike4mind/slack';
+import {
+  parseDataLakeCommand,
+  escapeSlackMrkdwn,
+  type ParsedDataLakeCommand,
+  type SlackAttachment,
+} from '@bike4mind/slack';
 import { dataLakeService } from '@bike4mind/services';
-import { STATIC_LAKE_IDS } from '@bike4mind/common';
+import { HTTPError, STATIC_LAKE_IDS } from '@bike4mind/common';
 import type { AccessContext, IDataLakeRepository, ManageableDataLakeConfig } from '@bike4mind/common';
 import { buildSlackAccessContext, type SlackIngestActor } from './dataLakeIngestAuthz';
 import { ingestSlackFilesIntoLake, type SlackLakeIngestDeps, type SlackLakeIngestOutcome } from './dataLakeFileIngest';
@@ -40,6 +45,20 @@ export interface HandleDataLakeCommandParams {
   files: SlackAttachment[];
   channel: string;
   messageTs: string;
+  /**
+   * The Slack workspace this message arrived on, stamped into the created FabFile's
+   * `sourceMetadata` so `notifySlackIndexingComplete.ts` can later resolve the SAME workspace's
+   * bot token to post the indexing-done reply, rather than guessing via the lake's org.
+   */
+  teamId: string;
+  /**
+   * The Slack app this message arrived on, stamped alongside `teamId` for the same reason: a
+   * dev-OAuth workspace is looked up by the (apiAppId, teamId) PAIR
+   * (`slackDevWorkspaceRepository.findBySlackAppIdAndTeamId`, mirroring `events.ts`'s own inbound
+   * resolution) because `slackTeamId` alone is not unique - more than one app can be installed to
+   * the same team. `teamId` alone would let the notifier resolve an arbitrary one of them.
+   */
+  apiAppId: string;
   deps: SlackLakeIngestDeps & SlackLinkIngestDeps & { dataLakes: DataLakeCommandRepo };
   /**
    * Whether the `enableAutoChunk` admin setting is on. Only affects the wording of the success
@@ -59,8 +78,50 @@ const HELP_TEXT = [
 
 const USAGE_HINT = 'Try `@datalake help`.';
 
+/**
+ * Reply for a message that names "datalake" without the leading `@` (e.g. bare `datalake list`).
+ * Kept separate from the `default:` case's "Unrecognized `@datalake` command" wording below - that
+ * one is for a real `@datalake` mention with an unknown subcommand, this one is for a message that
+ * never reached the deterministic handler at all, so the phrasing (and the caller's routing
+ * decision) must not conflate the two.
+ */
+// Hardcoded English, consistent with every other reply string in this file (HELP_TEXT,
+// USAGE_HINT, formatIngestOutcome, etc.) - noted as a known i18n gap rather than fixed in
+// isolation here, since localizing one string while the rest of the file stays English would
+// be inconsistent, not fixed.
+export function formatBareDataLakeMentionHint(): string {
+  return `Did you mean \`@datalake\`? ${USAGE_HINT}`;
+}
+
 /** Rows shown by `list` before a "+N more" tail. Keeps the reply well inside Slack's 40k limit. */
 const LIST_LIMIT = 50;
+
+// Mirrors CommandHandler.ts's cap on the assistant path (#2486): a curated refusal message
+// (see dataLakeIngestAuthz.ts) is always short, so this only bounds an unclassified
+// HTTPError's raw message before it reaches a Slack channel that may not be private.
+const MAX_ERROR_REPLY_LENGTH = 300;
+
+function capErrorReply(reply: string): string {
+  return reply.length > MAX_ERROR_REPLY_LENGTH ? `${reply.slice(0, MAX_ERROR_REPLY_LENGTH)}...` : reply;
+}
+
+/**
+ * `error instanceof HTTPError` is unreliable if `@bike4mind/common` ever resolves as two
+ * distinct module realms across the `@bike4mind/services` -> this file's boundary (same
+ * concern CommandHandler.ts's isHttpError documents for #2486) - every HTTPError subclass
+ * still sets a numeric `statusCode`, a `name` ending in `Error`, and an `additionalInfo` key
+ * (present, even if `undefined`, as a constructor parameter property), so duck-type on that
+ * shape as a fallback instead of trusting the bare instanceof alone.
+ */
+function isHttpError(err: unknown): err is HTTPError {
+  return (
+    err instanceof HTTPError ||
+    (err instanceof Error &&
+      typeof (err as { statusCode?: unknown }).statusCode === 'number' &&
+      err.name.endsWith('Error') &&
+      'additionalInfo' in err)
+  );
+}
 
 export async function handleDataLakeCommand(params: HandleDataLakeCommandParams): Promise<string> {
   const parsed = parseDataLakeCommand(params.command);
@@ -189,7 +250,9 @@ async function handleList(params: HandleDataLakeCommandParams): Promise<string> 
   // Resolved ONCE and handed to listDataLakes below as its precomputed set, rather than each
   // independently running the identical listByPrincipal query - listDataLakes' own includeReaders
   // is always false here too, since we deliberately never thread a settings adapter (see below).
-  const grantedLakeIdsArray = await dataLakeService.grantedLakeIdsFor(
+  // `false` keeps this to the USER owner/curator half, where the reach's org map is always empty -
+  // so the flat id list below is the whole set, and is what listDataLakes' precomputed option takes.
+  const { grantedLakeIds: grantedLakeIdsArray } = await dataLakeService.grantedLakeReachFor(
     ctx.userId,
     ctx.organizationIds ?? [],
     params.deps.dataLakeAccessGrants,
@@ -267,6 +330,8 @@ async function handleAdd(
         files: params.files,
         channel: params.channel,
         messageTs: params.messageTs,
+        teamId: params.teamId,
+        apiAppId: params.apiAppId,
       },
       params.deps
     );
@@ -284,6 +349,8 @@ async function handleAdd(
         link: parsed.link,
         channel: params.channel,
         messageTs: params.messageTs,
+        teamId: params.teamId,
+        apiAppId: params.apiAppId,
       },
       params.deps
     );
@@ -324,15 +391,21 @@ export function formatLinkOutcome(outcome: SlackLinkIngestOutcome, opts: { autoC
   if (!outcome.ok) return outcome.message;
 
   return formatIngestOutcome(
-    { ok: true, lakeName: outcome.lakeName, added: [outcome.fileName], duplicates: [], rejected: [] },
+    {
+      ok: true,
+      lakeName: outcome.lakeName,
+      added: outcome.duplicate ? [] : [outcome.fileName],
+      duplicates: outcome.duplicate ? [outcome.fileName] : [],
+      rejected: [],
+    },
     opts
   );
 }
 
 /**
- * Compose the in-thread reply. Confirms "added, processing" and STOPS - there is no
- * post-vectorization "now live" update in this rollout, because nothing in the pipeline emits a
- * signal this handler could await (fabFileVectorize only reaches the browser).
+ * Compose the immediate in-thread reply: "added, processing". A separate, later "now searchable"
+ * reply is posted asynchronously once indexing finishes - see `notifySlackIndexingComplete.ts`,
+ * invoked from `fabFileVectorize.ts` on completion, not from this synchronous request/response path.
  */
 export function formatIngestOutcome(
   outcome: SlackLakeIngestOutcome,
@@ -347,7 +420,10 @@ export function formatIngestOutcome(
   const lines: string[] = [];
 
   if (added.length > 0) {
-    const names = added.map(name => `"${name}"`).join(', ');
+    // A file's name can come from an attacker-controlled webpage <title> (the link-add path via
+    // createByUrl.ts) - escaped so a value like "<!channel> URGENT" cannot post as a real
+    // broadcast/mention.
+    const names = added.map(name => `"${escapeSlackMrkdwn(name)}"`).join(', ');
     // With enableAutoChunk off, objectCreated.ts never enqueues the chunk job, so the file is
     // stored but never indexed - promising searchability would be a lie the user cannot act on.
     const tail = autoChunkEnabled
@@ -357,13 +433,15 @@ export function formatIngestOutcome(
   }
 
   if (duplicates.length > 0) {
-    const names = duplicates.map(name => `"${name}"`).join(', ');
+    const names = duplicates.map(name => `"${escapeSlackMrkdwn(name)}"`).join(', ');
     lines.push(`Already in *${lakeName}*, skipped: ${names}.`);
   }
 
   if (rejected.length > 0) {
     // Warning sign, escaped so this source file stays ASCII.
-    lines.push(...rejected.map(reason => `\u26a0\ufe0f ${reason}`));
+    // Escaped like the `added`/`duplicates` arms above: rejection reasons embed the attempted file
+    // name (dataLakeFileIngest.ts), which any channel member controls by naming a file `<!channel>`.
+    lines.push(...rejected.map(reason => `\u26a0\ufe0f ${escapeSlackMrkdwn(reason)}`));
   }
 
   if (lines.length === 0) {
@@ -382,6 +460,10 @@ export interface RunDataLakeSlackCommandDeps {
   channel: string;
   messageTs: string;
   threadTs?: string;
+  /** Forwarded to `handleDataLakeCommand` - see its own field doc. */
+  teamId: string;
+  /** Forwarded to `handleDataLakeCommand` - see its own field doc. */
+  apiAppId: string;
   adminSettings: {
     getSettingsValue(
       key: 'EnableDataLakes' | 'EnableDataLakeSlackAdd' | 'enableAutoChunk'
@@ -429,6 +511,8 @@ export async function runDataLakeSlackCommand(deps: RunDataLakeSlackCommandDeps)
       files: deps.files,
       channel: deps.channel,
       messageTs: deps.messageTs,
+      teamId: deps.teamId,
+      apiAppId: deps.apiAppId,
       deps: deps.ingest,
       autoChunkEnabled,
     });
@@ -437,12 +521,17 @@ export async function runDataLakeSlackCommand(deps: RunDataLakeSlackCommandDeps)
     deps.logger.error('@datalake command failed', {
       error: err instanceof Error ? err.message : String(err),
     });
+    // dataLakeIngestAuthz.ts's write gates rethrow anything that is not a refusal
+    // (NotFoundError/BadRequestError), so an HTTPError subclass reaching here (e.g.
+    // ForbiddenError, ConflictError) already carries a message written to be shown to the
+    // caller. Anything else stays generic rather than leaking an unreviewed internal error
+    // into a channel that may not be private.
+    const text =
+      isHttpError(err) && err.message
+        ? capErrorReply(err.message)
+        : 'Something went wrong handling that `@datalake` command. Please try again.';
     try {
-      await deps.sendMessage({
-        channel: deps.channel,
-        text: 'Something went wrong handling that `@datalake` command. Please try again.',
-        threadTs: deps.threadTs,
-      });
+      await deps.sendMessage({ channel: deps.channel, text, threadTs: deps.threadTs });
     } catch {
       // Best-effort error reply; ignore a secondary sendMessage failure so we still ack 200.
     }

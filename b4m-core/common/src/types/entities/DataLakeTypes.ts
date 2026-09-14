@@ -176,6 +176,23 @@ export interface TransitionalDataLakeSummary {
 }
 
 /**
+ * The statuses that may take NEW files: a draft (its first batch) or an active lake. Every ingest
+ * door shares this one list - the web batch-create and presign doors, the Slack door, the Drive
+ * connect door, the Drive ingest queue guard, and proposal approval - so admitting a future status
+ * is a decision made here, once, rather than at six call sites that each open-coded it.
+ */
+export const LAKE_INGESTABLE_STATUSES = ['draft', 'active'] as const satisfies readonly DataLakeStatus[];
+
+type LakeIngestableStatus = (typeof LAKE_INGESTABLE_STATUSES)[number];
+
+/**
+ * Narrows, so a caller that has proven a lake ingestable keeps that in the type. The cast is on the
+ * ARRAY, not the value: casting the value would erase the guard this exists to provide.
+ */
+export const isLakeIngestable = (status?: DataLakeStatus): status is LakeIngestableStatus =>
+  (LAKE_INGESTABLE_STATUSES as readonly (DataLakeStatus | undefined)[]).includes(status);
+
+/**
  * What a terminal lifecycle settle may write alongside the status it settles on: the spent
  * file-sweep marks it clears, and the actor stamp from `lakeConfigWriteStamp`. Deliberately narrow
  * - a settle records the OUTCOME of a transition, so widening this to arbitrary lake fields would
@@ -248,9 +265,13 @@ export interface IDataLake {
    * this lake, on both channels - forced retrieval (KnowledgeRetrievalFeature) and the
    * model-driven knowledge tools (prependRetrievedLakePrompts) - resolved by
    * getAccessibleDataLakePrompts and rendered with the renderDataLakePromptSection defenses.
-   * Injected only for TRUSTED actors (the lake's creator, or a member of the lake's
-   * organization - see isTrustedForInjection); users reached via tag/entitlement grants read
-   * the lake WITHOUT this prompt. The org prompt stays authoritative on conflict. Editable
+   * Injected only for TRUSTED actors: the lake's creator, a member of the lake's organization (the
+   * #1674 governance path - see isTrustedForInjection), the holder of an owner/curator GRANT on it
+   * (#2495), or a manager admitted to a scoped session via `preauthorizedLakeIds`. A user who
+   * reaches the lake only by a tag, an entitlement, or a `reader` grant reads it WITHOUT this
+   * prompt. Note the org arm is membership, not manage rights - so "trusted" is deliberately
+   * curator-or-above for the GRANT arm specifically, not a property of the whole rule. The org
+   * prompt stays authoritative on conflict. Editable
    * only via canManageLake and withheld from non-managers by the server; uncapped, matching
    * the other system prompts in the codebase. Absent/empty = no per-lake prompt.
    */
@@ -499,7 +520,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * Resolve a lake by slug, restricted to a specific candidate id set (#2425). The caller's
    * last-resort arm: when `findBySlug`'s own-org/org-less lookup misses, a real owner/curator
    * grant on a lake in a non-member org is still legitimate access, so the caller (typically
-   * `assertLakeAccess`, via `grantedLakeIdsFor`) resolves the grant-held id set itself and tries
+   * `assertLakeAccess`, via `grantedLakeReachFor`) resolves the grant-held id set itself and tries
    * it here - keeping the decision of WHEN to pay for that extra grants lookup in the service
    * layer, not hidden inside this repository method. Sorted by `_id` so two candidates sharing a
    * slug (e.g. two independent `transferLakeOwnership` calls into different non-member orgs)
@@ -530,20 +551,29 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * gate is owner-only (not world-readable). Supply it on every user-facing retrieval call;
    * omit only for owner-agnostic lookups (then gateless org-less lakes match no one).
    *
-   * `grantedLakeIds` is the explicit-grant arm, mirroring `findAccessible`'s: a lake the caller
-   * holds an active grant on is reachable by that grant alone, so retrieval agrees with browse for
-   * a transferred/delegated lake. Pre-resolved by the caller (`grantedLakeIdsFor`); an empty or
-   * absent list adds no arm and cannot widen anything. Not every retrieval caller supplies it:
-   * getDataLakePrompts.ts deliberately omits it, since folding grants into the injection-trust
-   * decision is a separate piece of work (#1673) - an org-less transferred lake is denied by that
-   * trust gate regardless, so wiring the arm there today would be dead code.
+   * `opts.grantedLakeIds` / `opts.orgGrantedLakes` are the explicit-grant arms, resolved by the
+   * caller exactly as `findAccessible`'s are (`grantedLakeReachFor`) and keeping retrieval in step
+   * with browse: a transferred/delegated owner who can open a lake can also ground on it. A
+   * USER-principal grant IS the authorization and bypasses the org and requirement constraints;
+   * `orgGrantedLakes` is keyed by the GRANTING org and bypasses only the requirement, so an org
+   * grant can never reach a lake outside the org that issued it. Empty/absent adds no arm and
+   * cannot widen anything.
+   *
+   * Callers do NOT all resolve the same grant set. Retrieval and browse pass the full reach from
+   * `grantedLakeReachFor`; getDataLakePrompts.ts (the injection path) supplies only
+   * `grantedLakeIds` since #2495, resolved with `includeReaders = false` and NO membership org ids
+   * - owner/curator USER grants alone, so `orgGrantedLakes` is always empty there. That narrowing
+   * is a permanent security floor, not a cutover lag: a reader's read access must never become
+   * authority to write instructions into another user's system prompt. So a lake present in these
+   * arms on the retrieval side may legitimately be absent from them on the injection side, and the
+   * two must not be assumed to move together.
    */
   findActiveByUserTagsAndEntitlements(
     userTags: string[],
     entitlementKeys: string[],
     organizationIds?: string[] | null,
     userId?: string | null,
-    grantedLakeIds?: string[] | null
+    opts?: { grantedLakeIds?: string[]; orgGrantedLakes?: Record<string, string[]> }
   ): Promise<IDataLakeDocument[]>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
   /**
@@ -561,7 +591,12 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    */
   findAccessible(
     ctx: AccessContext,
-    opts?: { statuses?: DataLakeStatus[]; includePublic?: boolean; grantedLakeIds?: string[] }
+    opts?: {
+      statuses?: DataLakeStatus[];
+      includePublic?: boolean;
+      grantedLakeIds?: string[];
+      orgGrantedLakes?: Record<string, string[]>;
+    }
   ): Promise<IDataLakeDocument[]>;
   /**
    * The discover/browse catalog: active, PUBLIC lakes the given caller can actually reach.
@@ -570,8 +605,9 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * `requiredEntitlement` after being published is hidden from callers who lack the gate but
    * still discoverable by the ones who hold it (plus its owner, its grant holders and admins).
    * Without that, an entitled user could open such a lake from their own lake list while discover
-   * insisted no such public lake existed. `grantedLakeIds` mirrors `findAccessible`'s grant arm
-   * and is resolved by the caller the same way (`grantedLakeIdsFor`). `total` is therefore
+   * insisted no such public lake existed. `grantedLakeIds`/`orgGrantedLakes` mirror
+   * `findAccessible`'s grant arms and are resolved by the caller the same way
+   * (`grantedLakeReachFor`). `total` is therefore
    * per-caller too. `search` matches name or description case-insensitively. Returns one page
    * plus the unpaged `total` for the UI.
    */
@@ -582,6 +618,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
       limit?: number;
       offset?: number;
       grantedLakeIds?: string[];
+      orgGrantedLakes?: Record<string, string[]>;
     }
   ): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */

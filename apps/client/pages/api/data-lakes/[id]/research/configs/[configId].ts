@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeResearchService } from '@bike4mind/services';
 import { dataLakeResearchConfigRepository } from '@bike4mind/database';
@@ -19,7 +20,7 @@ const db = { dataLakeResearchConfigs: dataLakeResearchConfigRepository };
  * every read and write to it. That pairing is what stops a caller who manages lake A from reaching
  * lake B's config by id - the repository filters on `dataLakeId`, not just on `_id`.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .put(async (req: Request, res) => {
     const { id, configId } = req.query as { id: string; configId: string };

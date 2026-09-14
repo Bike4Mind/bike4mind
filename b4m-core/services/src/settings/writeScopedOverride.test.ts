@@ -4,7 +4,7 @@ import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mi
 import { resolveScopedSetting } from './resolveScopedSetting';
 import { clearScopedOverride, writeScopedOverride } from './writeScopedOverride';
 
-const KEY = 'dataLakeSearchMaxFiles'; // registered settableAt [organization, owner, lake], number, min 1
+const KEY = 'dataLakeSearchMaxFiles'; // registered settableAt [organization, owner], number, min 1
 // No `scope` metadata at all, so the "not settable" refusal fires before the (also true) isSensitive
 // check ever would - no registered setting is both scoped and sensitive (settings.scopeMetadata.test.ts
 // enforces that), so the isSensitive branch has no real key to exercise; it is the same kind of
@@ -12,6 +12,7 @@ const KEY = 'dataLakeSearchMaxFiles'; // registered settableAt [organization, ow
 const NOT_SETTABLE_KEY = 'openaiDemoKey';
 
 const lakeRef = { scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1' } as const;
+const orgRef = { scopeLevel: SettingScopeLevel.Organization, scopeId: 'o1' } as const;
 const ownerRef = { scopeLevel: SettingScopeLevel.Owner, scopeId: 'u1' } as const;
 const fullScope = { organizationId: 'o1', owner: { id: 'u1', type: 'User' as const }, lakeId: 'l1' };
 
@@ -70,17 +71,27 @@ describe('writeScopedOverride validation (fails loud, never reaches the db on re
     expect(spy).not.toHaveBeenCalled();
   });
 
+  it('refuses a Lake-scoped write for a setting whose rungs stop at Owner (#2624)', async () => {
+    // The scan budgets used to advertise a Lake rung no retrieval caller resolved, so an operator
+    // could save an override that was accepted, displayed, and then ignored by every search. With
+    // the rung gone the write is refused instead, which the admin route turns into a 400.
+    const db = makeWritableDb();
+    const spy = vi.spyOn(db.scopedSettings, 'upsertOverride');
+    await expect(writeScopedOverride(KEY, lakeRef, '1000', db)).rejects.toThrow(/not settable/);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it('refuses an unparseable value', async () => {
     const db = makeWritableDb();
     const spy = vi.spyOn(db.scopedSettings, 'upsertOverride');
-    await expect(writeScopedOverride(KEY, lakeRef, 'not-a-number', db)).rejects.toThrow(/validation/);
+    await expect(writeScopedOverride(KEY, orgRef, 'not-a-number', db)).rejects.toThrow(/validation/);
     expect(spy).not.toHaveBeenCalled();
   });
 
   it('refuses a value below the schema minimum (edge value, not a truthy check)', async () => {
     const db = makeWritableDb();
     const spy = vi.spyOn(db.scopedSettings, 'upsertOverride');
-    await expect(writeScopedOverride(KEY, lakeRef, '0', db)).rejects.toThrow(/validation/);
+    await expect(writeScopedOverride(KEY, orgRef, '0', db)).rejects.toThrow(/validation/);
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -94,7 +105,7 @@ describe('writeScopedOverride validation (fails loud, never reaches the db on re
   it('refuses ownerType on a non-owner-scoped write', async () => {
     const db = makeWritableDb();
     const spy = vi.spyOn(db.scopedSettings, 'upsertOverride');
-    await expect(writeScopedOverride(KEY, { ...lakeRef, ownerType: 'User' as const }, '1000', db)).rejects.toThrow(
+    await expect(writeScopedOverride(KEY, { ...orgRef, ownerType: 'User' as const }, '1000', db)).rejects.toThrow(
       /only meaningful at the owner scope/
     );
     expect(spy).not.toHaveBeenCalled();
@@ -109,23 +120,23 @@ describe('writeScopedOverride / clearScopedOverride: read-your-writes against th
     const before = await resolveScopedSetting(KEY, fullScope, db);
     expect(before).toEqual({ value: 3000, source: SettingScopeLevel.Platform });
 
-    await writeScopedOverride(KEY, lakeRef, '1000', db);
+    await writeScopedOverride(KEY, orgRef, '1000', db);
 
     // Without invalidateScopedSettingsCache actually firing, this would still read the stale negative
     // entry cached above and wrongly return the platform value - this is the regression test for the
     // "forgetting to invalidate" trap the issue describes.
     const after = await resolveScopedSetting(KEY, fullScope, db);
-    expect(after).toEqual({ value: 1000, source: SettingScopeLevel.Lake });
+    expect(after).toEqual({ value: 1000, source: SettingScopeLevel.Organization });
   });
 
   it('clearing an override falls back to the next wider scope on the very next resolve', async () => {
     const db = makeWritableDb({ [KEY]: '3000' });
-    await writeScopedOverride(KEY, lakeRef, '1000', db);
+    await writeScopedOverride(KEY, orgRef, '1000', db);
 
     const before = await resolveScopedSetting(KEY, fullScope, db);
-    expect(before).toEqual({ value: 1000, source: SettingScopeLevel.Lake });
+    expect(before).toEqual({ value: 1000, source: SettingScopeLevel.Organization });
 
-    await clearScopedOverride(KEY, lakeRef, db);
+    await clearScopedOverride(KEY, orgRef, db);
 
     const after = await resolveScopedSetting(KEY, fullScope, db);
     expect(after).toEqual({ value: 3000, source: SettingScopeLevel.Platform });

@@ -30,6 +30,7 @@ describe('useNavigationExecutor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useOptiNavigation.getState().clearPending();
+    useOptiNavigation.getState().setHostHandlesFamilyInPlace(false);
   });
 
   it('marks an Opti click as user-initiated so the surface does not drop it as a replay', () => {
@@ -58,5 +59,31 @@ describe('useNavigationExecutor', () => {
       session: 'abc',
       article: 'xyz',
     });
+  });
+
+  // A host that shows the console inside its own pane is already the view the
+  // user is looking at, and it owns the way back out. Naming the standalone view
+  // here would unmount that host mid-click and strand them there.
+  it('leaves the view alone when a host has claimed the console in place', () => {
+    useOptiNavigation.getState().setHostHandlesFamilyInPlace(true);
+    const { result } = renderHook(() => useNavigationExecutor());
+    result.current(optiIntent('assignment.solvers'));
+
+    expect(mockNavigate).not.toHaveBeenCalled();
+    const { pendingFamily, pendingSubTab, pendingUserInitiated } = useOptiNavigation.getState();
+    expect(pendingFamily).toBe('assignment');
+    expect(pendingSubTab).toBe('solvers');
+    expect(pendingUserInitiated).toBe(true);
+  });
+
+  // The claim covers family consoles only; a route intent is a real page change.
+  it('still navigates a route intent while a host holds the console claim', () => {
+    useOptiNavigation.getState().setHostHandlesFamilyInPlace(true);
+    const { result } = renderHook(() => useNavigationExecutor());
+    result.current({ navigationType: 'route', target: '/new' } as Parameters<
+      ReturnType<typeof useNavigationExecutor>
+    >[0]);
+
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/new' });
   });
 });

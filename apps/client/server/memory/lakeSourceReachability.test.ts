@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createReachableSourcesResolver,
+  createSourceDatesResolver,
   createSurvivingSourcesResolver,
   isFabFileCitable,
   type CitableFileFields,
@@ -131,5 +132,37 @@ describe('createSurvivingSourcesResolver', () => {
     const resolve = createSurvivingSourcesResolver({ fabfiles: { findExistingIdsByIds } as never });
     expect([...(await resolve([]))]).toEqual([]);
     expect(findExistingIdsByIds).not.toHaveBeenCalled();
+  });
+});
+
+describe('createSourceDatesResolver', () => {
+  it('maps each source to its document date as YYYY-MM-DD', async () => {
+    // The card renders the date verbatim, so the format is the contract, not a display detail:
+    // a full ISO timestamp would leak the upload MINUTE of someone else's document.
+    const findCitableFieldsByIds = vi.fn(async (_ids: string[]) => [
+      citableFile({ id: 'doc-1', createdAt: new Date('2026-03-14T22:31:07.000Z') }),
+      citableFile({ id: 'doc-2', createdAt: new Date('2025-01-02T00:00:00.000Z') }),
+    ]);
+    const resolve = createSourceDatesResolver({ fabfiles: { findCitableFieldsByIds } as never });
+
+    expect([...(await resolve(['doc-1', 'doc-2']))]).toEqual([
+      ['doc-1', '2026-03-14'],
+      ['doc-2', '2025-01-02'],
+    ]);
+  });
+
+  it('omits a source with no date rather than inventing one', async () => {
+    // A document predating the timestamp, or one the projection could not return, must come back
+    // absent: recallLakeMemory renders a missing entry as "unknown", which is the honest answer.
+    const findCitableFieldsByIds = vi.fn(async () => [citableFile({ id: 'doc-1', createdAt: undefined })]);
+    const resolve = createSourceDatesResolver({ fabfiles: { findCitableFieldsByIds } as never });
+    expect((await resolve(['doc-1', 'doc-missing'])).size).toBe(0);
+  });
+
+  it('short-circuits an empty id list without a DB read', async () => {
+    const findCitableFieldsByIds = vi.fn(async () => []);
+    const resolve = createSourceDatesResolver({ fabfiles: { findCitableFieldsByIds } as never });
+    expect((await resolve([])).size).toBe(0);
+    expect(findCitableFieldsByIds).not.toHaveBeenCalled();
   });
 });

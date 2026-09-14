@@ -19,6 +19,15 @@ on:
   merge_group:
     branches: [main]
 
+# A label swap - one label removed and another added in the same instant - emits
+# `unlabeled` and `labeled` together, which starts two identical runs on the same SHA.
+# Collapsing per PR keeps the survivor, which is the one that reports; the cancelled
+# twin would have reached the same verdict. Keyed off the PR number because a
+# merge_group event carries none, and a constant key would let one PR cancel another.
+concurrency:
+  group: preview-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pull-requests: read

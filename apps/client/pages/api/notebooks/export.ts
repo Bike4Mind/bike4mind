@@ -81,10 +81,10 @@ const handler = baseApi().post(
       },
       agentRepository,
       fileStorageService: {
-        getFileContent: async (filePath: string): Promise<string | null> => {
+        getFileContent: async (filePath: string): Promise<Buffer | null> => {
           try {
-            const data = await getFilesStorage().getContentAsBuffer(filePath);
-            return data.toString('utf-8');
+            // Bytes, never a decoded string - see ExportFileStorage.getFileContent for why.
+            return await getFilesStorage().getContentAsBuffer(filePath);
           } catch (error) {
             req.logger.error('Failed to read file content', { filePath, error });
             return null;

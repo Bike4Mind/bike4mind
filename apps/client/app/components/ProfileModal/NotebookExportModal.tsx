@@ -198,7 +198,12 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
 
   return (
     <Modal open={open} onClose={onClose} className="notebook-export-modal-root">
-      <ModalDialog size="md" sx={{ maxWidth: 600 }} className="notebook-export-modal-dialog">
+      <ModalDialog
+        size="md"
+        sx={{ maxWidth: 600 }}
+        className="notebook-export-modal-dialog"
+        data-testid="notebook-export-modal"
+      >
         <DialogTitle className="notebook-export-modal-title">
           <Box display="flex" alignItems="center" gap={1}>
             <CloudDownload sx={{ mr: 1 }} />
@@ -229,6 +234,7 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
                   <FormLabel className="notebook-export-modal-form-label">Knowledge Files</FormLabel>
                   <Switch
                     className="notebook-export-modal-switch"
+                    slotProps={{ input: { 'data-testid': 'notebook-export-knowledge-switch' } }}
                     checked={options.includeKnowledge}
                     onChange={e => updateOption('includeKnowledge', e.target.checked)}
                   />
@@ -237,6 +243,7 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
                 <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
                   <FormLabel>Artifacts</FormLabel>
                   <Switch
+                    slotProps={{ input: { 'data-testid': 'notebook-export-artifacts-switch' } }}
                     checked={options.includeArtifacts}
                     onChange={e => updateOption('includeArtifacts', e.target.checked)}
                   />
@@ -245,6 +252,7 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
                 <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
                   <FormLabel>Tools</FormLabel>
                   <Switch
+                    slotProps={{ input: { 'data-testid': 'notebook-export-tools-switch' } }}
                     checked={options.includeTools}
                     onChange={e => updateOption('includeTools', e.target.checked)}
                   />
@@ -253,6 +261,7 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
                 <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
                   <FormLabel>Agents</FormLabel>
                   <Switch
+                    slotProps={{ input: { 'data-testid': 'notebook-export-agents-switch' } }}
                     checked={options.includeAgents}
                     onChange={e => updateOption('includeAgents', e.target.checked)}
                   />
@@ -261,6 +270,7 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
                 <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
                   <FormLabel>Images</FormLabel>
                   <Switch
+                    slotProps={{ input: { 'data-testid': 'notebook-export-images-switch' } }}
                     checked={options.includeImages}
                     onChange={e => updateOption('includeImages', e.target.checked)}
                   />
@@ -379,7 +389,7 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
 
             {/* Export Result */}
             {exportResult && (
-              <Alert color="success" className="notebook-export-modal-alert">
+              <Alert color="success" className="notebook-export-modal-alert" data-testid="notebook-export-result">
                 <Stack spacing={1}>
                   <Typography level="title-sm">Export Complete!</Typography>
                   <Stack spacing={0.5}>
@@ -392,6 +402,7 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
                   {exportResult.downloadUrl && (
                     <Button
                       className="notebook-export-modal-export-button"
+                      data-testid="notebook-export-download-btn"
                       size="sm"
                       startDecorator={!isConverting ? <CloudDownload /> : undefined}
                       onClick={handleDownload}
@@ -414,6 +425,7 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
           <Button
             variant="solid"
             color="primary"
+            data-testid="notebook-export-submit-btn"
             onClick={handleExport}
             loading={isExporting}
             disabled={isExporting}

@@ -120,6 +120,23 @@ export function toSafeUsers(users: UserLike[] | null | undefined, scope: SafeUse
 }
 
 /**
+ * Secret-list fields the SUBJECT of a profile may legitimately get back on a self view --
+ * data that belongs to the user. Only these can be re-admitted via `keep`.
+ */
+export const SELF_KEEPABLE_SECRET_FIELDS = ['securityQuestions'] as const;
+export type SelfKeepableSecretField = (typeof SELF_KEEPABLE_SECRET_FIELDS)[number];
+
+/**
+ * Secret-list fields that describe a user rather than belong to them: admin-authored notes
+ * and login PII (IPs/userAgents). These are deliberately OUTSIDE `keep`, because `keep` is
+ * chosen by the endpoint from the SUBJECT's point of view -- passing 'userNotes' there handed
+ * every user the admin's private notes about them. Re-including one requires `keepAdminOnly`,
+ * whose name is the reminder that the caller must have checked the VIEWER, not the subject.
+ */
+export const ADMIN_ONLY_USER_FIELDS = ['userNotes', 'loginRecords'] as const;
+export type AdminOnlyUserField = (typeof ADMIN_ONLY_USER_FIELDS)[number];
+
+/**
  * Redact secrets from the caller's OWN full profile (self-view endpoints such as
  * users/[id] self and users/[id]/update). Unlike `toSafeUser` (an allowlist for
  * OTHER users), this keeps the broad self-profile but strips secrets: whole-drop
@@ -131,7 +148,11 @@ export function toSafeUsers(users: UserLike[] | null | undefined, scope: SafeUse
  */
 export function redactUserSecretsForSelf(
   input: Partial<IUser> | null | undefined,
-  options?: { keep?: readonly (keyof IUser)[] }
+  options?: {
+    keep?: readonly SelfKeepableSecretField[];
+    /** Admin-only fields to re-include. Set ONLY after confirming the VIEWER is an admin. */
+    keepAdminOnly?: readonly AdminOnlyUserField[];
+  }
 ): Record<string, unknown> | null {
   if (!input) return null;
   // Accept a Mongoose document OR a plain/toJSON()'d object. Spreading a hydrated
@@ -202,9 +223,17 @@ export function redactUserSecretsForSelf(
   }
 
   // Opt-in: re-include specific secret-list fields for a tightly-scoped caller that
-  // legitimately needs them (e.g. the self/admin profile-edit endpoint round-trips
-  // securityQuestions/userNotes). Intended for non-integration fields, never tokens.
+  // legitimately needs them (the profile-edit endpoint round-trips securityQuestions).
+  // The membership test is enforced at runtime as well as in the type: this is a
+  // disclosure boundary, and a `as` cast at a call site must not be able to widen it.
   for (const f of options?.keep ?? []) {
+    if (!SELF_KEEPABLE_SECRET_FIELDS.includes(f)) continue;
+    if (user[f] !== undefined) u[f] = user[f];
+  }
+
+  // Separate door for the admin-only fields, so a viewer check is required to open it.
+  for (const f of options?.keepAdminOnly ?? []) {
+    if (!ADMIN_ONLY_USER_FIELDS.includes(f)) continue;
     if (user[f] !== undefined) u[f] = user[f];
   }
 

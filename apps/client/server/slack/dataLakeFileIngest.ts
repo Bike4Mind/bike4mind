@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto';
 import { FabFileSourceType, KnowledgeType, type IFabFileDocument } from '@bike4mind/common';
 import { validateSlackFileForIngest, type SlackAttachment } from '@bike4mind/slack';
+import { computeContentHash } from '@bike4mind/utils';
 import {
   authorizeLakeForWrite,
   refuseMockActor,
@@ -81,6 +81,10 @@ export interface SlackLakeIngestParams {
   /** Slack origin recorded on every created file so a lake editor can audit where it came from. */
   channel: string;
   messageTs: string;
+  /** The Slack workspace this message arrived on - see `notifySlackIndexingComplete.ts`. */
+  teamId: string;
+  /** The Slack app this message arrived on, stamped alongside `teamId` - see the same doc. */
+  apiAppId: string;
 }
 
 export type SlackLakeIngestRefusal = LakeWriteRefusalReason | 'no_files';
@@ -98,13 +102,11 @@ export type SlackLakeIngestOutcome =
     }
   | { ok: false; reason: SlackLakeIngestRefusal; message: string };
 
-const sha256 = (buffer: Buffer): string => createHash('sha256').update(buffer).digest('hex');
-
 export async function ingestSlackFilesIntoLake(
   params: SlackLakeIngestParams,
   deps: SlackLakeIngestDeps
 ): Promise<SlackLakeIngestOutcome> {
-  const { actor, lakeSlug, files, channel, messageTs } = params;
+  const { actor, lakeSlug, files, channel, messageTs, teamId, apiAppId } = params;
 
   const mockRefusal = refuseMockActor(actor, lakeSlug, deps);
   if (mockRefusal) return mockRefusal;
@@ -198,7 +200,7 @@ export async function ingestSlackFilesIntoLake(
       continue;
     }
 
-    const hash = sha256(buffer);
+    const hash = computeContentHash(buffer);
 
     if (seenHashes.has(hash)) {
       duplicates.push(file.fileName);
@@ -227,7 +229,7 @@ export async function ingestSlackFilesIntoLake(
         tags,
         provenance: {
           sourceType: FabFileSourceType.SLACK,
-          sourceMetadata: { channel, messageTs },
+          sourceMetadata: { channel, messageTs, teamId, apiAppId },
         },
         administeredOrgIds: ctx.administeredOrgIds ?? [],
       });

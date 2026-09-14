@@ -13,6 +13,7 @@ import {
   ForbiddenError,
   ConflictError,
   BadGatewayError,
+  TooManyRequestsError,
   isZodError,
   canAccessTavern,
 } from '@bike4mind/common';
@@ -28,6 +29,7 @@ export {
   ForbiddenError,
   ConflictError,
   BadGatewayError,
+  TooManyRequestsError,
   isZodError,
 };
 

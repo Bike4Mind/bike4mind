@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/cli",
-  "version": "0.20.2",
+  "version": "0.21.0",
   "mcpName": "io.github.bike4mind/bike4mind",
   "type": "module",
   "description": "Interactive CLI tool for Bike4Mind with ReAct agents",
@@ -113,7 +113,7 @@
     "tldts": "^7.4.8",
     "tree-sitter-wasms": "^0.1.13",
     "turndown": "^7.2.4",
-    "undici": "^7.28.0",
+    "undici": "^7.29.0",
     "unpdf": "^1.6.2",
     "uuid": "^14.0.1",
     "voyageai": "^0.4.0",

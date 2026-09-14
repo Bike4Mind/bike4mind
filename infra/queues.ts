@@ -1055,6 +1055,15 @@ const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe(
         actions: ['rekognition:DetectModerationLabels'],
         resources: ['*'],
       },
+      {
+        // reactAct.ts publishes Lumina5/ReplSandbox SandboxUnavailable from its
+        // fail-closed branch, alarmed at infra/alarms.ts:1064. This handler is
+        // the only function that reaches it with Caller=wake - without the
+        // grant the emit AccessDenies and the alarm watches a metric nobody
+        // publishes. PutMetricData takes no resource scope.
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
     ],
     copyFiles: [
       {
@@ -1062,6 +1071,18 @@ const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe(
         to: 'tiktoken_bg.wasm',
       },
     ],
+    nodejs: {
+      // The wake's act step runs LLM-authored code in an isolated-vm isolate
+      // (b4m-core/agents/src/deepAgent/runtime/reactAct.ts). isolated-vm is a
+      // native addon pulled in by a runtime `createRequire`, so esbuild would
+      // inline a JS loader with no .node binary beside it. external + install
+      // ships the real prebuild. Without this the wake still runs, but fails
+      // closed: code_execute is dropped and an error is logged.
+      install: ['isolated-vm'],
+      esbuild: {
+        external: ['isolated-vm'],
+      },
+    },
   },
   SINGLE_RECORD_BATCH
 );

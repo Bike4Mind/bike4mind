@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -26,7 +27,7 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
  * leaves the group intact, so without suppression the one answer meaning "stop asking" would be
  * re-asked forever.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request, res) => {
     const { id } = req.query as { id: string };

@@ -24,7 +24,7 @@ import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SearchIcon from '@mui/icons-material/Search';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
-import { menuListSx, menuSurfaceSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
+import { menuItemListSx, menuSurfaceSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
 import { lakeVisibilityLabelShort } from '@client/app/components/datalake/lakeVisibility';
 import type { ManageableDataLakeConfig } from '@bike4mind/common';
@@ -165,7 +165,7 @@ export default function DataLakeLakePicker({
           sx={theme => ({
             ...menuSurfaceSx(theme),
             // 2px, matching the row action menu: this list is dense and can run long.
-            ...menuListSx({ gap: '2px' }),
+            ...menuItemListSx(theme, { gap: '2px' }),
             minWidth: 236,
             maxWidth: 300,
             maxHeight: 360,

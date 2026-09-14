@@ -147,19 +147,16 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
           onSuccess: (result: Partial<IReferralResult> | undefined) => {
             setLoading(false);
 
-            // The referral endpoint returns a per-email breakdown so we can warn the
-            // sender about invites that were skipped (duplicate account) or failed,
-            // rather than reporting a blanket success. Fall back gracefully for the
-            // user-invitation endpoint, which does not return this summary.
+            // The referral endpoint reports accepted-vs-failed so we can warn the sender
+            // about invites that could not be processed, rather than reporting a blanket
+            // success. There is deliberately no "skipped" bucket: singling out addresses
+            // that already have an account made the endpoint an existence oracle. Fall back
+            // gracefully for the user-invitation endpoint, which returns no summary.
             const sent = Array.isArray(result?.sent) ? result.sent : validEmailArray;
-            const skipped = Array.isArray(result?.skipped) ? result.skipped : [];
             const failed = Array.isArray(result?.failed) ? result.failed : [];
 
             if (sent.length > 0) {
               toast.success(t('referral.send_referral_success', { count: sent.length }));
-            }
-            if (skipped.length > 0) {
-              toast.warning(t('referral.send_referral_skipped', { count: skipped.length }));
             }
             if (failed.length > 0) {
               toast.error(t('referral.send_referral_failed', { count: failed.length }));

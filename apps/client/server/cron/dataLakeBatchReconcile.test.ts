@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  queueResourceThrows: false,
   findStuck: vi.fn(),
   reconcile: vi.fn(),
   findStuckTaxonomy: vi.fn(),
@@ -8,8 +9,10 @@ const h = vi.hoisted(() => ({
   recordForced: vi.fn(),
   recordGauge: vi.fn(),
   recordRun: vi.fn(),
+  recordRescue: vi.fn(),
   enqueueTaxonomyAnalysisIfWanted: vi.fn(),
   getSettingsValue: vi.fn(),
+  getSettingsMap: vi.fn(),
   fabFileFind: vi.fn(),
   sendToQueue: vi.fn(),
   // Hoisted rather than left inside the observability mock's closure: an SST cron's return value is
@@ -19,7 +22,8 @@ const h = vi.hoisted(() => ({
   // Spied (not a bare stub) so a test can assert the cron passes BOTH the age cutoff and the
   // stale-claim cutoff: a one-arg call silently turns the stale-claim rescue arm back off. The third
   // parameter is here for the same reason - dropping it silently strands paused files (#2120).
-  runSweep: vi.fn(async () => ({ enqueued: 0, failed: 0 })),
+  runSweep: vi.fn(async () => ({ outcome: 'swept' as const, enqueued: 0, failed: 0 })),
+  runModerationSweep: vi.fn(async () => ({ rescanned: 0 })),
   buildStrandedFilter: vi.fn((cutoff: Date, _staleClaimBefore?: Date) => ({
     vectorizeEnqueueFailedAt: { $lt: cutoff },
   })),
@@ -61,11 +65,22 @@ vi.mock('@bike4mind/observability', () => {
 });
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://localhost:27017/%STAGE%', STAGE: 'dev' } }));
 vi.mock('sst', () => ({
-  Resource: { App: { stage: 'dev' }, fabFileChunkQueue: { url: 'http://sqs/fabFileChunkQueue' } },
+  Resource: {
+    App: { stage: 'dev' },
+    // A getter, so a test can fault the RESOURCE READ itself - the thing that used to be swallowed
+    // once per candidate. Defaults to the working url.
+    get fabFileChunkQueue() {
+      if (h.queueResourceThrows) throw new Error('Resource "fabFileChunkQueue" is not linked');
+      return { url: 'http://sqs/fabFileChunkQueue' };
+    },
+  },
 }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 vi.mock('@server/worker/chunkRescueSweep', () => ({
   runChunkRescueSweep: (...a: unknown[]) => h.runSweep(...(a as [])),
+}));
+vi.mock('@server/s3/moderationRescueSweep', () => ({
+  runModerationRescueSweep: (...a: unknown[]) => h.runModerationSweep(...(a as [])),
 }));
 // Only the stranded-vectorize filter is stubbed (so the call args are assertable); the real
 // age/stale cutoff constants stay real so these tests pin the actual windows the cron uses.
@@ -77,9 +92,16 @@ vi.mock('@server/utils/cloudwatch', () => ({
   recordReconcilerForcedTerminal: (...a: unknown[]) => h.recordForced(...a),
   recordStuckBatchGauge: (...a: unknown[]) => h.recordGauge(...a),
   recordReconcileRun: (...a: unknown[]) => h.recordRun(...a),
+  recordChunkRescueSweep: (...a: unknown[]) => h.recordRescue(...a),
 }));
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   enqueueTaxonomyAnalysisIfWanted: (...a: unknown[]) => h.enqueueTaxonomyAnalysisIfWanted(...a),
+}));
+// Keep the real getSettingsValue (spread), stub only getSettingsMap - so a test can fault the
+// moderation-enabled settings read and prove it degrades (P2) instead of aborting the tick.
+vi.mock('@bike4mind/utils', async importActual => ({
+  ...(await importActual<typeof import('@bike4mind/utils')>()),
+  getSettingsMap: (...a: unknown[]) => h.getSettingsMap(...a),
 }));
 
 import { handler } from './dataLakeBatchReconcile';
@@ -88,10 +110,12 @@ const TIMEOUT = 180 * 60 * 1000;
 
 describe('dataLakeBatchReconcile cron handler', () => {
   beforeEach(() => {
+    h.queueResourceThrows = false;
     vi.clearAllMocks();
     h.recordRun.mockResolvedValue(undefined);
     h.recordForced.mockResolvedValue(undefined);
     h.recordGauge.mockResolvedValue(undefined);
+    h.recordRescue.mockResolvedValue(undefined);
     h.findStuckTaxonomy.mockResolvedValue([]);
     h.reconcileTaxonomy.mockResolvedValue([]);
     h.enqueueTaxonomyAnalysisIfWanted.mockResolvedValue(undefined);
@@ -99,7 +123,12 @@ describe('dataLakeBatchReconcile cron handler', () => {
     // explicitly because clearAllMocks() clears calls but NOT implementations - without this a test
     // that makes sendToQueue reject leaks that into every test after it in file order.
     h.getSettingsValue.mockResolvedValue(false);
+    h.getSettingsMap.mockResolvedValue({});
     h.sendToQueue.mockResolvedValue(undefined);
+    // Same reason as sendToQueue above, and the same leak: a test that makes the un-chunked sweep
+    // reject otherwise leaves that rejection in place for every test after it in file order, which
+    // shows up as a stray 'un-chunked rescue sweep failed' line in an unrelated test's log assertions.
+    h.runSweep.mockResolvedValue({ outcome: 'swept', enqueued: 0, failed: 0 });
     h.fabFileFind.mockReturnValue({
       select: () => ({ limit: () => ({ lean: async () => [] }) }),
     });
@@ -148,6 +177,8 @@ describe('dataLakeBatchReconcile cron handler', () => {
       rescuedChunkFiles: 0,
       rescuedVectorizeFiles: 0,
       rescueFailures: 0,
+      rescueOutcome: 'swept',
+      rescannedModerationFiles: 0,
     });
   });
 
@@ -164,6 +195,8 @@ describe('dataLakeBatchReconcile cron handler', () => {
       rescuedChunkFiles: 0,
       rescuedVectorizeFiles: 0,
       rescueFailures: 0,
+      rescueOutcome: 'swept',
+      rescannedModerationFiles: 0,
     });
   });
 
@@ -200,7 +233,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
     beforeEach(() => {
       h.findStuck.mockResolvedValue([]);
       h.reconcile.mockResolvedValue([]);
-      h.runSweep.mockResolvedValue({ enqueued: 0, failed: 0 });
+      h.runSweep.mockResolvedValue({ outcome: 'swept', enqueued: 0, failed: 0 });
     });
 
     it('calls the shared sweep with the hosted per-run budget', async () => {
@@ -231,6 +264,51 @@ describe('dataLakeBatchReconcile cron handler', () => {
       expect(body.rescueFailures).toBe(0);
       expect(h.recordRun).toHaveBeenCalled();
     });
+
+    it('emits the counts as metrics alongside the outcome that explains them', async () => {
+      h.runSweep.mockResolvedValue({ outcome: 'swept', enqueued: 2, failed: 3 });
+
+      await handler();
+
+      expect(h.recordRescue).toHaveBeenCalledWith('swept', 2, 3);
+    });
+
+    it('reports a GATED-OFF sweep as disabled, not as a clean idle run', async () => {
+      // The whole point of the outcome field: enableAutoChunk being off, the sweep finding nothing,
+      // and the sweep throwing all enqueue zero. Without a discriminator an operator watching the
+      // counters cannot tell a switched-off rescue from a healthy one with no backlog.
+      h.runSweep.mockResolvedValue({ outcome: 'disabled', enqueued: 0, failed: 0 });
+
+      const body = JSON.parse((await handler()).body);
+
+      expect(h.recordRescue).toHaveBeenCalledWith('disabled', 0, 0);
+      expect(body.rescueOutcome).toBe('disabled');
+    });
+
+    it('reports a THROWN sweep as failed, distinct from both disabled and swept', async () => {
+      h.runSweep.mockRejectedValue(new Error('mongo down'));
+
+      const body = JSON.parse((await handler()).body);
+
+      expect(h.recordRescue).toHaveBeenCalledWith('failed', 0, 0);
+      expect(body.rescueOutcome).toBe('failed');
+    });
+
+    it('a swept-but-idle tick still emits, so absence of data means the cron itself stopped', async () => {
+      h.runSweep.mockResolvedValue({ outcome: 'swept', enqueued: 0, failed: 0 });
+
+      await handler();
+
+      expect(h.recordRescue).toHaveBeenCalledWith('swept', 0, 0);
+    });
+
+    it('a rejecting rescue-metric helper never breaks the run', async () => {
+      h.recordRescue.mockRejectedValue(new Error('cloudwatch down'));
+
+      const res = await handler();
+
+      expect(res.statusCode).toBe(200);
+    });
   });
 
   describe('stranded-vectorize rescue sweep', () => {
@@ -241,6 +319,30 @@ describe('dataLakeBatchReconcile cron handler', () => {
       h.findStuck.mockResolvedValue([]);
       h.reconcile.mockResolvedValue([]);
       routeFind([]);
+    });
+
+    it('lets an unlinked queue fail the sweep ONCE rather than per candidate', async () => {
+      // The resource read used to sit inside the per-file `try`, so a config fault was caught once per
+      // candidate and `sent` stayed 0 - a hard misconfiguration arriving as a run of ordinary-looking
+      // send failures. Hoisted above the fan-out, it escapes the sweep instead. MUST STAY IN SYNC with
+      // the self-host twin's identical case in chunkRescueSweep.test.ts.
+      h.queueResourceThrows = true;
+      routeFind([
+        { _id: 'ff1', userId: 'u1' },
+        { _id: 'ff2', userId: 'u2' },
+        { _id: 'ff3', userId: 'u3' },
+      ]);
+
+      const res = await handler();
+
+      // ONE aggregate line from the sweep's own `.catch`, not one per candidate. That is the whole
+      // point: three identical per-file lines made a config fault look like ordinary send failures.
+      expect(h.loggerError).toHaveBeenCalledTimes(1);
+      expect(h.loggerError).toHaveBeenCalledWith(expect.stringContaining('stranded-vectorize rescue sweep failed'));
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+      // The run still heartbeats and reports, so the rest of the cron is unaffected.
+      expect(JSON.parse(res.body).rescuedVectorizeFiles).toBe(0);
+      expect(h.recordRun).toHaveBeenCalled();
     });
 
     it('re-enqueues files whose vectorize hand-off was stranded, regardless of auto-chunk', async () => {
@@ -282,6 +384,39 @@ describe('dataLakeBatchReconcile cron handler', () => {
       expect(JSON.parse(res.body).rescuedVectorizeFiles).toBe(2);
     });
 
+    it('attempts every candidate across concurrency waves, not just the first wave', async () => {
+      // The fan-out runs in fixed-size waves; an off-by-one in the slice window would silently drop
+      // the tail of a full run, which is indistinguishable from "the backlog was small" in the log.
+      routeFind(Array.from({ length: 25 }, (_, i) => ({ _id: `ff${i}`, userId: `u${i}` })));
+
+      const res = await handler();
+
+      expect(h.sendToQueue).toHaveBeenCalledTimes(25);
+      expect(JSON.parse(res.body).rescuedVectorizeFiles).toBe(25);
+    });
+
+    it('never has more than ENQUEUE_CONCURRENCY sends in flight', async () => {
+      // This is the LAST of three sweeps in one 10-minute Lambda, so a sequential run against a
+      // degraded queue is what cuts the tail off - and the bound must stay pinned as a number,
+      // since a sequential loop (peak 1) and an unbounded Promise.all (peak 25) both keep every
+      // other assertion here green. Each send holds open across a macrotask so the overlap is
+      // observable at all; an immediately-resolving stub reports a peak of 1 either way.
+      routeFind(Array.from({ length: 25 }, (_, i) => ({ _id: `ff${i}`, userId: `u${i}` })));
+      let inFlight = 0;
+      let peak = 0;
+      h.sendToQueue.mockImplementation(async () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise(resolve => setTimeout(resolve, 0));
+        inFlight -= 1;
+      });
+
+      const res = await handler();
+
+      expect(peak).toBe(10);
+      expect(JSON.parse(res.body).rescuedVectorizeFiles).toBe(25);
+    });
+
     it('sends a stranded file UNSTAMPED, so the kill switch cannot route it into the rebuild door', async () => {
       // The inverse of the un-chunked sweep's rule (#2309), and the asymmetry is the point. These
       // files are already chunked, and the handler's halt branch sits above the already-chunked
@@ -318,6 +453,32 @@ describe('dataLakeBatchReconcile cron handler', () => {
       expect(body.rescuedChunkFiles).toBe(0);
       expect(body.rescueFailures).toBe(0);
       expect(body.rescuedVectorizeFiles).toBe(0);
+    });
+  });
+
+  describe('moderation rescue sweep settings read (P2 isolation)', () => {
+    beforeEach(() => {
+      h.findStuck.mockResolvedValue([]);
+      h.reconcile.mockResolvedValue([]);
+    });
+
+    it('defaults ImageModerationEnabled to on when the setting is absent', async () => {
+      h.getSettingsMap.mockResolvedValue({}); // no ImageModerationEnabled key
+      await handler();
+      expect(h.runModerationSweep).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }));
+    });
+
+    it('a settings-read failure degrades instead of aborting the tick', async () => {
+      // The read is awaited as an ARGUMENT to the sweep; without the .catch(() => ({})) guard its
+      // rejection propagates before the sweep is even called and takes the whole tick down.
+      h.getSettingsMap.mockRejectedValueOnce(new Error('settings/db blip'));
+
+      const res = await handler();
+
+      expect(h.runModerationSweep).toHaveBeenCalledTimes(1);
+      expect(h.runModerationSweep).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }));
+      expect(res.statusCode).toBe(200);
+      expect(h.recordRun).toHaveBeenCalled();
     });
   });
 });

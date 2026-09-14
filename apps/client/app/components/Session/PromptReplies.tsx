@@ -1387,6 +1387,11 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   // every streamed token.
   const mathReadyContent = useMemo(() => promoteInlineLatexDollars(displayContent), [displayContent]);
 
+  // Suggestions belong to the answer that made them, so they render at the foot of
+  // the reply body rather than under it - which also means a reply that is nothing
+  // BUT suggestions still needs the body to exist to hold them.
+  const navSuggestions = completed && navigationIntents && navigationIntents.length > 0 ? navigationIntents : null;
+
   if (questMasterPlanId) {
     return <QuestMasterPreviewCard questMasterPlanId={questMasterPlanId} />;
   }
@@ -1470,7 +1475,13 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       )}
 
       {showSyntaxHighlight ? (
-        <SyntaxHighlighter style={syntaxTheme}>{processedContent || cleanReply}</SyntaxHighlighter>
+        <>
+          <SyntaxHighlighter style={syntaxTheme}>{processedContent || cleanReply}</SyntaxHighlighter>
+          {/* Repeated rather than hoisted above the branch: the suggestions read as part of
+              the reply, so they follow whichever body this view rendered. Edit mode is the
+              one body they are deliberately left out of. */}
+          {navSuggestions && <NavigationButtons navigationIntents={navSuggestions} />}
+        </>
       ) : (
         <>
           <ThoughtBubbles content={thought || ''} isStreaming={!completed} defaultFolded={isExpandable} />
@@ -1506,7 +1517,8 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                 images.length > 0 ||
                 generatedFiles.length > 0 ||
                 videos.length > 0 ||
-                audio.length > 0) && (
+                audio.length > 0 ||
+                navSuggestions) && (
                 <Box
                   sx={{
                     position: 'relative',
@@ -1727,6 +1739,8 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                         )}
                       </>
                     )}
+
+                    {navSuggestions && <NavigationButtons navigationIntents={navSuggestions} />}
                   </Typography>
                 </Box>
               )}
@@ -1766,10 +1780,6 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
       {attachmentList && completed && (
         <AttachmentDownloadButtons attachmentList={attachmentList} sessionId={currentSessionId || undefined} />
-      )}
-
-      {navigationIntents && navigationIntents.length > 0 && completed && (
-        <NavigationButtons navigationIntents={navigationIntents} />
       )}
 
       {/* Deliberately not gated on `completed`: a failed attachment is known before the reply

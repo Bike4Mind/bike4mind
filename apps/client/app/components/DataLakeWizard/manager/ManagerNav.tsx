@@ -727,36 +727,34 @@ export default function ManagerNav({
 }
 
 /**
- * Purge-time warning that the lake still has a Drive folder attached. Renders nothing when there is
- * no connection (or it is not visible to this caller - the endpoint 404s on a personal lake and
- * 403s for a non-manager).
+ * Purge-time notice that the lake has a Drive folder attached, so the user learns the purge also
+ * ends that sync. It does NOT tell them to disconnect first: the phase-2 purge sweep releases the
+ * connection itself (releaseDriveConnectionForLake), removing this lake's access to the folder and
+ * freeing it to be connected again - so the copy has to stay in step with that teardown. That
+ * release runs from a queue worker after the request that accepts the purge returns, so it is
+ * contingent on the sweep completing rather than guaranteed by the purge click itself; a sweep that
+ * exhausts into the DLQ leaves the lake (and its connection row) sitting in `purging` until retried.
  *
- * It deliberately does NOT promise that purging releases the connection, because today it does not:
- * the row survives its lake and its globally-unique driveFolderId then blocks re-claiming that
- * folder app-wide, with no UI or API path back (#1807). So the copy tells the user to disconnect
- * FIRST. When #1807 lands and teardown releases the connection itself, this wording must change
- * with it - it describes a defect, not a design.
+ * Renders nothing when the lake has no connection, including a personal lake (the route resolves
+ * `connection: null` for those, never 404); a read that genuinely fails (lake gone, or a 404 for a
+ * caller who lacks org owner/manager access) renders the unknown case.
  */
 function PurgeDriveWarning({ lakeId }: { lakeId: string }) {
   // Deliberately NOT gated on org scope, unlike LakeDriveStatusChip. The chip renders on every lake
-  // the user opens, so skipping a personal lake's guaranteed 404 there is worth it. This warning
+  // the user opens, so skipping a personal lake's guaranteed null there is worth it. This warning
   // guards an IRREVERSIBLE action, and gating it on a field this projection is not proven to
-  // populate would trade one wasted request for silently withholding the warning on a lake that
-  // does have a connection. A rare 404 on a purge dialog is the cheaper failure.
+  // populate would trade one wasted request for silently withholding the notice on a lake that
+  // does have a connection. A rare failed read on a purge dialog is the cheaper tradeoff.
   const { data: connection, isError, isLoading } = useLakeDriveConnection(lakeId);
 
-  // A FAILED read is not "no connection". Collapsing it into the silent case would borrow the
-  // benign default's meaning for an unknown, and the cost lands on the one action that cannot be
-  // undone: the user purges, the row survives, and its globally-unique driveFolderId blocks
-  // re-claiming that folder app-wide with no path back (#1807). A 404 (personal lake / no
-  // connection) resolves to `connection: null` and is NOT an error, so this only fires on a real
-  // failure - it does not nag on every ordinary purge.
+  // A FAILED read is not "no connection": staying silent would name a folder sync the user is about
+  // to end on some purges and not others, for no reason they can see.
   if (isError) {
     return (
       <Typography level="body-sm" color="warning" sx={{ mt: 1.5 }} data-testid="datalake-purge-drive-unknown">
-        Couldn&rsquo;t check whether a Google Drive folder is connected to this lake. If one is, purging leaves the
-        connection behind and that folder cannot be connected to another lake afterwards - restore the lake and
-        disconnect Drive first to be safe.
+        Couldn&rsquo;t check whether a Google Drive folder is connected to this lake, so we can&rsquo;t show its name
+        here. If one is connected, purging stops the sync and frees the folder to be connected to another lake. Nothing
+        in Google Drive is deleted.
       </Typography>
     );
   }
@@ -765,8 +763,9 @@ function PurgeDriveWarning({ lakeId }: { lakeId: string }) {
   const folder = connection.folderName || connection.driveFolderId;
   return (
     <Typography level="body-sm" color="warning" sx={{ mt: 1.5 }} data-testid="datalake-purge-drive-warning">
-      This lake still syncs the Google Drive folder &ldquo;{folder}&rdquo;. Purging leaves that connection behind, and
-      the folder cannot be connected to another lake afterwards. Restore the lake and disconnect Drive first.
+      This lake syncs the Google Drive folder &ldquo;{folder}&rdquo;. Purging stops that sync and removes this
+      lake&rsquo;s access to the folder. Nothing in Google Drive is deleted, and the folder can be connected to another
+      lake afterwards.
     </Typography>
   );
 }

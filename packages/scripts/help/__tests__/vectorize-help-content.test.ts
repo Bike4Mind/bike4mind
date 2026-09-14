@@ -9,7 +9,13 @@ import * as path from 'path';
 vi.mock('@bike4mind/fab-pipeline', () => ({ EmbeddingFactory: vi.fn() }));
 vi.mock('@bike4mind/common', () => ({ OpenAIEmbeddingModel: { TEXT_EMBEDDING_3_SMALL: 'text-embedding-3-small' } }));
 
-import { loadAccessLevelMap, resolveAccessLevel, relativePathToSlug, buildChunks } from '../vectorize-help-content';
+import {
+  loadAccessLevelMap,
+  resolveAccessLevel,
+  relativePathToSlug,
+  expectedRootKind,
+  buildChunks,
+} from '../vectorize-help-content';
 
 /**
  * accessLevel is the only gate keeping admin-only help docs out of non-admin
@@ -37,12 +43,19 @@ function writeIndex(content: string): string {
   return indexPath;
 }
 
-function writeArticle(relPath: string, title = 'Test Article'): string {
-  const contentRoot = path.join(root, 'content');
+function writeArticle(relPath: string, title = 'Test Article', rootDir = 'content'): string {
+  const contentRoot = path.join(root, rootDir);
   const filePath = path.join(contentRoot, relPath);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, `---\ntitle: ${title}\n---\n\n# ${title}\n\nSome body text.\n`);
   return contentRoot;
+}
+
+/** An empty, isolated root - used where a test needs a root to exist but stay empty. */
+function emptyDir(name: string): string {
+  const dir = path.join(root, name);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 describe('loadAccessLevelMap', () => {
@@ -124,10 +137,24 @@ describe('relativePathToSlug', () => {
   });
 });
 
+describe('expectedRootKind', () => {
+  it('resolves public and unset accessLevel to the public root', () => {
+    expect(expectedRootKind('public')).toBe('public');
+    expect(expectedRootKind(undefined)).toBe('public');
+  });
+
+  it('resolves admin, and anything else, to the admin root', () => {
+    expect(expectedRootKind('admin')).toBe('admin');
+    // Cast past the HelpAccessLevel union: help-index.json is read with an unchecked
+    // `as HelpIndex`, so an unrecognised value must still land on the admin side.
+    expect(expectedRootKind('something-else' as never)).toBe('admin');
+  });
+});
+
 describe('buildChunks', () => {
-  it('resolves accessLevel from the index for both public and admin articles', async () => {
-    writeArticle('features/foo.md', 'Public Article');
-    const contentRoot = writeArticle('admin/bar.md', 'Admin Article');
+  it('resolves a public entry from the public root and an admin entry from the admin root', async () => {
+    const contentRoot = writeArticle('features/foo.md', 'Public Article', 'content');
+    const adminContentRoot = writeArticle('admin/bar.md', 'Admin Article', 'admin-content');
     const indexPath = writeIndex(
       JSON.stringify({
         entries: [
@@ -137,7 +164,7 @@ describe('buildChunks', () => {
       })
     );
 
-    const chunks = await buildChunks({ contentRoot, indexPath });
+    const chunks = await buildChunks({ contentRoot, adminContentRoot, indexPath });
 
     expect(chunks.length).toBeGreaterThan(0);
     expect(chunks.filter(chunk => chunk.slug === 'features/foo').every(chunk => chunk.accessLevel === 'public')).toBe(
@@ -146,25 +173,54 @@ describe('buildChunks', () => {
     expect(chunks.filter(chunk => chunk.slug === 'admin/bar').every(chunk => chunk.accessLevel === 'admin')).toBe(true);
   });
 
+  it('throws naming the slug when an admin entry has no file under the admin root, instead of silently dropping it', async () => {
+    // Reproduces the regression this fix targets: the admin root missing entirely
+    // (e.g. bundle-help-content.ts's split step never ran) used to leave admin
+    // articles out of help-embeddings.json with no error at all.
+    const contentRoot = writeArticle('features/foo.md', 'Public Article', 'content');
+    const adminContentRoot = path.join(root, 'admin-content-never-created');
+    const indexPath = writeIndex(
+      JSON.stringify({
+        entries: [
+          { slug: 'features/foo', accessLevel: 'public' },
+          { slug: 'admin/bar', accessLevel: 'admin' },
+        ],
+      })
+    );
+
+    await expect(buildChunks({ contentRoot, adminContentRoot, indexPath })).rejects.toThrow(/admin\/bar/);
+  });
+
+  it('throws rather than reading an admin entry body out of the public root it was mistakenly left in', async () => {
+    const contentRoot = writeArticle('admin/bar.md', 'Admin Article', 'content');
+    const adminContentRoot = emptyDir('admin-content-empty');
+    const indexPath = writeIndex(JSON.stringify({ entries: [{ slug: 'admin/bar', accessLevel: 'admin' }] }));
+
+    await expect(buildChunks({ contentRoot, adminContentRoot, indexPath })).rejects.toThrow(/admin\/bar/);
+  });
+
   it('throws when a bundled article has no index entry, naming the offending slug', async () => {
     const contentRoot = writeArticle('admin/unindexed.md');
+    const adminContentRoot = emptyDir('admin-content-empty');
     const indexPath = writeIndex(JSON.stringify({ entries: [{ slug: 'features/foo', accessLevel: 'public' }] }));
 
-    await expect(buildChunks({ contentRoot, indexPath })).rejects.toThrow(/admin\/unindexed/);
+    await expect(buildChunks({ contentRoot, adminContentRoot, indexPath })).rejects.toThrow(/admin\/unindexed/);
   });
 
   it('names every unresolvable slug in one error, not just the first', async () => {
     writeArticle('admin/one.md');
     const contentRoot = writeArticle('admin/two.md');
+    const adminContentRoot = emptyDir('admin-content-empty');
     const indexPath = writeIndex(JSON.stringify({ entries: [{ slug: 'features/foo', accessLevel: 'public' }] }));
 
-    await expect(buildChunks({ contentRoot, indexPath })).rejects.toThrow(/admin\/one.*admin\/two/s);
+    await expect(buildChunks({ contentRoot, adminContentRoot, indexPath })).rejects.toThrow(/admin\/one.*admin\/two/s);
   });
 
   it('propagates the loadAccessLevelMap failure instead of vectorizing with an empty map', async () => {
     const contentRoot = writeArticle('features/foo.md');
+    const adminContentRoot = emptyDir('admin-content-empty');
     const missingPath = path.join(root, 'does-not-exist.json');
 
-    await expect(buildChunks({ contentRoot, indexPath: missingPath })).rejects.toThrow();
+    await expect(buildChunks({ contentRoot, adminContentRoot, indexPath: missingPath })).rejects.toThrow();
   });
 });

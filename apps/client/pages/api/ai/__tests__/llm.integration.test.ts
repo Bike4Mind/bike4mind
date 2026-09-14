@@ -26,6 +26,7 @@ const {
   mockInvoke,
   mockWillInjectAuthoredPrompt,
   mockLoadIdentityPrompts,
+  mockOrgFindAccessibleById,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockUserFindById: vi.fn(),
@@ -36,6 +37,7 @@ const {
   mockInvoke: vi.fn(),
   mockWillInjectAuthoredPrompt: vi.fn(),
   mockLoadIdentityPrompts: vi.fn(),
+  mockOrgFindAccessibleById: vi.fn(),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -94,6 +96,15 @@ vi.mock('@bike4mind/database', async orig => {
       ...(actual.cacheRepository as object),
       tryIncrementWithinLimitFixedWindow: (...a: unknown[]) => mockTryIncrement(...a),
     },
+    // resolveBillingOrgId -> resolveActiveOrg run for real here; only the org-membership repo call
+    // is stubbed, so the billing wiring (route -> resolver -> gate) is exercised end to end.
+    organizationRepository: {
+      ...(actual.organizationRepository as object),
+      shareable: {
+        ...((actual.organizationRepository as { shareable?: object })?.shareable ?? {}),
+        findAccessibleById: (...a: unknown[]) => mockOrgFindAccessibleById(...a),
+      },
+    },
   };
 });
 
@@ -135,6 +146,8 @@ import handler from '../llm';
 import { ApiKeyScope } from '@bike4mind/common';
 
 const VALID_KEY = 'sk-test-valid-key';
+const OWN_ORG = '650000000000000000000abc';
+const FOREIGN_ORG = '650000000000000000000def';
 
 function fire({
   apiKey = VALID_KEY as string | null,
@@ -217,6 +230,34 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mockValidate).not.toHaveBeenCalled();
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  // Billing-org wiring: resolveBillingOrgId -> the real resolveActiveOrg -> the (stubbed) org
+  // membership gate. A body organizationId the caller cannot access must not reach invoke().
+  it('denies a client-supplied org the caller is not a member of (403, no completion dispatched)', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockOrgFindAccessibleById.mockResolvedValue(null); // non-member -> gate throws ForbiddenError
+    const { req, res } = fire({ body: { organizationId: FOREIGN_ORG } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it('bills the caller own org when the request omits organizationId', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockUserFindById.mockResolvedValue({
+      id: 'user-1',
+      _id: 'user-1',
+      organizationId: OWN_ORG,
+      isBanned: false,
+      disputePending: false,
+    });
+    mockOrgFindAccessibleById.mockResolvedValue({ id: OWN_ORG }); // member -> gate resolves
+    const { req, res } = fire(); // body carries no organizationId
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(mockInvoke.mock.calls[0][0].body.organizationId).toBe(OWN_ORG);
   });
 
   // invoke()'s own parse already rejects a bad systemPrompt, but only after getOrCreateSession

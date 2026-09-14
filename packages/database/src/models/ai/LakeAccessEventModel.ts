@@ -62,6 +62,16 @@ const LakeAccessEventSchema = new Schema<ILakeAccessEventDocument>(
     // synonym for false. A `default: false` would stamp every non-reporting surface's row as
     // "considered its whole candidate set" - see ILakeAccessEvent.candidateCapReached.
     candidateCapReached: { type: Boolean, required: false, default: undefined },
+    // `default: undefined` for the same third-state reason as candidateCapReached above, and NO
+    // `min: 0` validator despite the field being a count: a validator throws, which would take the
+    // whole audit row down over one malformed field. record() sanitizes a bad value to absent
+    // instead, losing the field rather than the event.
+    filesSupersededCollapsed: { type: Number, required: false, default: undefined },
+    // `default: undefined` again, but for a plainer reason than the two above: absent is not a
+    // third state here, it is simply "not a zero row". Stored rather than derived from the two
+    // returned counts because a data-lake-public-browse row already has both at zero - see
+    // ILakeAccessEvent.servedNothing.
+    servedNothing: { type: Boolean, required: false, default: undefined },
     surface: { type: String, enum: LAKE_ACCESS_SURFACES, required: true },
     queryTextLogged: { type: Boolean, default: false },
     // No enum: this is a diagnostic join key, not a value this schema's job is to validate - see
@@ -151,6 +161,21 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
         ? input.scores.slice(0, LAKE_ACCESS_EVENT_MAX_IDS)
         : undefined;
 
+    // Same never-trust-the-caller posture as `scores`, and the same drop-rather-than-throw
+    // resolution. A count that is negative, fractional or non-finite is not a count, and absent is
+    // already this field's honest "not reported" state - so a bad value lands there rather than
+    // being persisted as a number a consumer would sum.
+    const supersededCollapsed = input.filesSupersededCollapsed;
+    const filesSupersededCollapsed =
+      typeof supersededCollapsed === 'number' && Number.isInteger(supersededCollapsed) && supersededCollapsed >= 0
+        ? supersededCollapsed
+        : undefined;
+    if (supersededCollapsed !== undefined && filesSupersededCollapsed === undefined) {
+      console.warn(
+        `[lakeAccessEvent] filesSupersededCollapsed (${supersededCollapsed}) is not a non-negative integer - dropping it`
+      );
+    }
+
     // The query-text write happens BEFORE the event, keyed to a pre-generated id, so
     // `queryTextLogged` on the event always reflects the true OUTCOME of the attempt - never just
     // the intent. A swallowed failure on the best-effort text write must not leave the event
@@ -175,11 +200,15 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
         // `scores?.length`, not `scores` - an empty array is truthy, so a caller passing
         // `scores: []` would otherwise persist one. Note this COLLAPSES the absent-vs-empty
         // distinction the `default: undefined` above preserves, rather than protecting it: an
-        // explicitly-empty array is stored as absent. That is sound only because the empty state
-        // is unreachable - every scored writer skips the write on zero results (the semantic arm
-        // returns `output: null` and never reaches here), and an empty `scores` alongside
-        // `chunkIds: []` would carry nothing `returnedChunkCount: 0` does not. If a surface ever
-        // records a genuine zero-result semantic search, revisit this rather than the default.
+        // explicitly-empty array is stored as absent.
+        //
+        // A zero-result row DOES reach here now - forced retrieval writes one when nothing clears
+        // the similarity floor (see the PRODUCT DECISION block in LakeAccessEventTypes.ts), so the
+        // "unreachable empty state" this used to rest on no longer holds. The collapse is still
+        // right, for the other reason it always had: an empty `scores` beside `chunkIds: []`
+        // carries nothing `returnedChunkCount: 0` does not. That row's near-miss diagnostic is the
+        // turn's own `promptMeta.retrieval.injected.topScore`, which is not index-aligned to a
+        // chunk and so could never live in this array anyway.
         ...(scores?.length ? { scores } : {}),
         returnedChunkCount,
         returnedFileCount,
@@ -187,6 +216,13 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
         // `typeof`, not truthiness: an explicit `false` is a real assertion (this surface
         // considered everything) and must not be silently dropped into the absent state.
         ...(typeof input.candidateCapReached === 'boolean' ? { candidateCapReached: input.candidateCapReached } : {}),
+        // `!== undefined`, not truthiness: `0` is a real assertion (the collapse ran and suppressed
+        // nothing) and must not be silently dropped into the absent state, which means the opposite.
+        ...(filesSupersededCollapsed !== undefined ? { filesSupersededCollapsed } : {}),
+        // Truthiness is right here, unlike the two spreads above: an explicit `false` carries no
+        // more than absence does, so it is stored as absence rather than as a second way to spell
+        // "an ordinary row".
+        ...(input.servedNothing ? { servedNothing: true } : {}),
         surface: input.surface,
         queryTextLogged,
         // `|| undefined`, so an empty string is stored as absent rather than indexed: the questId

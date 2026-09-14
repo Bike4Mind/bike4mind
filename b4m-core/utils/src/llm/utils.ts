@@ -62,8 +62,12 @@ const CHARS_PER_TOKEN = 3.5;
  * yield more chunks here. What bounds the payload is the per-file character budget applied to these
  * results (maxChars in processFabFilesServer), not this count - and that budget now derives from the
  * model's input window rather than its output limit; see attachedContentExtractionBudget.
+ *
+ * Exported because it is also the DEPTH a score-distribution measurement has to inspect to be
+ * measuring the served ranking (packages/scripts/retrieval/scoreDistribution.ts). A copy of the
+ * number over there would let the harness and the product drift silently.
  */
-const COSINE_SEARCH_TOP_K = 10;
+export const COSINE_SEARCH_TOP_K = 10;
 
 /**
  * How much of one attached file the cosine scan will read, and in what size pages.

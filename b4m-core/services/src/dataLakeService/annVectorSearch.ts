@@ -26,10 +26,13 @@ export interface AnnVectorSearchResult {
   hitsReturned: number;
   hitsSkippedUnknownFile: number;
   /**
-   * fabFileIds that produced at least one raw hit, BEFORE minScore filtering. A file absent here
-   * returned zero indexed chunks for this query - not "nothing scored well enough" - so the
-   * caller can tell "queryable index, no matches" apart from "not actually indexed yet" and
-   * rebucket the latter onto the scan path instead of silently returning zero results for it.
+   * fabFileIds that produced at least one raw hit, BEFORE minScore filtering.
+   *
+   * Absence is NOT on its own evidence that a file is unindexed. `knnSearch` bounds by similarity
+   * RANK, so at most `limit` files can appear here and every other ready file is absent simply
+   * for having not ranked. Read this together with `hitsReturned`: only when the backend returned
+   * FEWER than `limit` has it exhausted its indexed content, which is what makes absence
+   * meaningful. See the rebucket in semanticDataLakeSearch.ts for the rule this feeds.
    */
   filesWithHits: Set<string>;
 }

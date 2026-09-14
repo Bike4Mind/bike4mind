@@ -47,6 +47,8 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/common', async () => ({
   isSupportedEmbeddingModel: () => true,
+  // Real: the route's scope gate is built from this enum.
+  ApiKeyScope: (await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common')).ApiKeyScope,
   // Real, not a literal: converge.ts stamps this on every message it enqueues and the chunk
   // handler's kill switch reads it, so a stub here would let this suite pass against a value the
   // switch no longer recognises. It reaches converge.ts through convergenceProvenance.ts, which

@@ -293,8 +293,15 @@ export interface IFabFile {
   isVectorizing?: boolean;
   /** Whether this FabFile has completed vectorization. */
   vectorized?: boolean;
-  /** The embedding model used to generate the vectors. */
-  embeddingModel?: string;
+  /**
+   * The embedding model used to generate the vectors, as a FILE-level claim about the whole corpus.
+   * Explicitly nullable: `stampChunkEmbeddingModel` clears it when a file's chunks turn out to span
+   * more than one embedding space, because any single value would then be a lie about half the
+   * vectors and this label is exclusion authority (isForeignEmbeddingModel drops a labeled file from
+   * every search wholesale, but never excludes a blank one). Absent, null and '' are all "unknown",
+   * and every reader must treat them the same way.
+   */
+  embeddingModel?: string | null;
   /**
    * When this file's chunks were last fully re-stamped with their per-chunk `embeddingModel`
    * (see IFabFileChunk.embeddingModel). Atlas $vectorSearch cutover treats a stamp younger than
@@ -351,6 +358,13 @@ export interface IFabFile {
   blockReason?: string;
 
   /**
+   * Stamped when a moderation scan claim flips this row `pending` -> `scanning`, so the rescue
+   * sweep can reclaim a crashed `scanning` row by CLAIM age rather than `updatedAt` (which any
+   * write bumps). Only meaningful while `moderationStatus === 'scanning'`.
+   */
+  moderationClaimedAt?: Date;
+
+  /**
    * Error message for the file.
    * This is set when the file is not processed successfully, such as when the file is corrupted or unsupported.
    */
@@ -385,8 +399,12 @@ export interface IFabFile {
    * SHA-256 (hex) over the file's normalized server-extracted text, computed at chunk time by the
    * admission contract (`computeServerTextHash`). Hashed over the CANONICAL EXTRACTED TEXT, not the
    * chunk output, so it is stable across chunk-policy/embedding-model changes - the trustworthy dedup
-   * input for #1671, distinct from `contentHash` (client-side raw BYTES, unverified, absent on
-   * connector files). Tri-state: absent = never chunked (treat as UNKNOWN, never "no text"); null =
+   * input for #1671, distinct from `contentHash` (unverified, and NOT universal: only a
+   * `createFabFileByUrl` caller that opts into ingest-time dedup by supplying `checkDuplicate`
+   * stamps it - the Slack link door, as of #2027 - so it stays coupled to the dedup behavior rather
+   * than reaching doors that never asked for it; the web URL door, proposal admission, and the
+   * Google Drive connector, which calls `createFabFile` directly, do not stamp it). Tri-state:
+   * absent = never chunked (treat as UNKNOWN, never "no text"); null =
    * chunked with no extractable text; hex = fingerprint. Nulled by FAB_FILE_CONTENT_REWRITE_PATCH on
    * a byte rewrite and by the chunk pass on a text-less re-chunk, so it never outlives its text.
    */
@@ -413,6 +431,17 @@ export interface IFabFile {
 
   /** Soft-archive marker set when the file's data lake is archived (reversible). */
   archivedAt?: Date;
+
+  /**
+   * One entry per completion-notification channel that has claimed this file (#2027) - e.g.
+   * `{ channel: 'slack', at }` once the "finished indexing" Slack reply is claimed. An atomic
+   * per-channel claim guard, not just a record of when a post happened, so a redelivered or
+   * concurrent vectorize-completion message never posts the same reply twice on the same channel.
+   * Generalized (not `slackIndexNotifiedAt: Date`) so a future channel (Teams, email, webhook)
+   * reuses this array instead of accreting its own per-channel timestamp field. See
+   * `fabFileRepository.claimIndexNotification` and `notifySlackIndexingComplete.ts`.
+   */
+  dispatchedNotifications?: Array<{ channel: string; at: Date }>;
 
   /**
    * Non-destructive AI-edit history for binary Office documents (docx/xlsx). Absent for
@@ -483,6 +512,15 @@ export interface FabFileChunkVector {
   fabFileId: string;
   text: string;
   vector: number[];
+  /**
+   * The chunk's OWN model label, written beside its vector rather than summarized from the file.
+   * The two data-lake cosine scans prefer it over `FabFile.embeddingModel` because the file label
+   * is blank for a file whose chunks span two spaces, and no retrieval reader excludes a chunk on a
+   * blank FILE label. Blank is not free at the file level though - lake-memory reachability and the
+   * attachment scan's query-vector lookup both key on it (see stampChunkEmbeddingModel). The
+   * attachment scan (`cosineSearch`) does not read this field and guards on vector width alone.
+   */
+  embeddingModel?: string | null;
 }
 
 export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDocument> {
@@ -543,8 +581,25 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
     embeddedChunkCount: number;
     embeddedCharCount: number;
   }>;
-  /** Bulk-stamp every chunk of a file with the model its vectors were generated under. */
+  /**
+   * Label a file's still-UNLABELED, VECTOR-BEARING chunks with the model their vectors were
+   * generated under. Never overwrites a label already written beside a vector, and never labels a
+   * chunk that has no vector to attribute - see the implementation's notes on the mid-ingest model
+   * split a blanket update used to hide, and on the oversized chunks an unscoped one mislabeled.
+   */
   updateEmbeddingModel(fabFileId: string, embeddingModel: string): Promise<void>;
+  /**
+   * Distinct non-blank `embeddingModel` values across a file's VECTOR-BEARING chunks; >1 means its
+   * vectors span two spaces, and EMPTY means nothing in the file has been embedded at all.
+   */
+  distinctEmbeddingModelsByFabFileId(fabFileId: string): Promise<string[]>;
+  /**
+   * How many VECTOR-BEARING chunks of this file still carry no `embeddingModel` - the rows
+   * `updateEmbeddingModel` will fill. Read with `distinctEmbeddingModelsByFabFileId` to tell a
+   * file with no vectors at all (label unknown) from one whose vectors are merely unlabeled yet
+   * (label = the model about to stamp them); the distinct set is empty for both.
+   */
+  countUnlabeledVectorChunksByFabFileId(fabFileId: string): Promise<number>;
   /** One page of vector-bearing chunks missing `embeddingModel`, ascending by `_id` - backfill's keyset cursor. */
   findChunksMissingEmbeddingModel(options?: {
     limit?: number;
@@ -560,9 +615,9 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
   /** Whether `model`'s Atlas vector index exists and is queryable (cached; see atlasSearchIndex.ts). */
   getAtlasIndexStatus(model: string): Promise<{ queryable: boolean; status: string } | null>;
   /**
-   * One page of vector-bearing chunks (id, fabFileId, text, vector) for the given files,
-   * ascending by `_id`. Skips chunks without a vector at the DB layer. Powers semantic search
-   * (query embed -> cosine).
+   * One page of vector-bearing chunks (id, fabFileId, text, vector, embeddingModel) for the given
+   * files, ascending by `_id`. Skips chunks without a vector at the DB layer. Powers semantic
+   * search (query embed -> cosine).
    *
    * Contract callers rely on: `_id` is unique, so the ordering is total and `afterChunkId` is
    * an exact cursor - paging a corpus never skips or duplicates a chunk, and the same inputs
@@ -573,6 +628,21 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
     fabFileIds: string[],
     options?: { limit?: number; afterChunkId?: string }
   ): Promise<FabFileChunkVector[]>;
+  /**
+   * One page of chunk fields for the given files, `vector` excluded, ascending by `_id` - same
+   * exact-cursor contract as `findVectorsByFabFileIds`, and vectorless chunks included.
+   *
+   * The batched, vector-free counterpart of `findByFabFileId`, which is per-file and carries the
+   * embedding - the overwhelming bulk of a chunk row. A consumer that plans over a whole lake
+   * (token counts, text lengths, which model each chunk was embedded under) reads every chunk and
+   * needs none of the vectors, so pulling them costs a lake's worth of embeddings over the wire to
+   * compute a sum. Pair it with `findVectorsByFabFileIds` and join on `id` when the vectors are
+   * actually wanted.
+   */
+  findChunkFieldsByFabFileIds(
+    fabFileIds: string[],
+    options?: { limit?: number; afterChunkId?: string }
+  ): Promise<{ id: string; fabFileId: string; text: string; tokenCount?: number; embeddingModel?: string }[]>;
   /**
    * One page of chunk TEXT for a single file, ascending by `_id`, same exact-cursor contract as
    * `findVectorsByFabFileIds`. Returns vectorless chunks too - a text consumer that inherited the
@@ -597,6 +667,14 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
    * repairs the least-retrievable files first. Powers the lake "Rebuild passages" detection.
    */
   findUnderChunkedFabFileIds(fabFileIds: string[], tokenThreshold: number): Promise<string[]>;
+  /**
+   * Of the given ids, which have at least one row in fabfilechunks - one aggregate over the
+   * `{fabFileId:1,_id:1}` index (mirrors `findUnderChunkedFabFileIds`), so a caller checking a
+   * batch of candidates does not pay a per-id round trip. Built for the #2583 detection sweep: a
+   * file whose id is NOT in the returned set, despite `vectorizedChunkCount > 0`, declares chunks
+   * it does not have.
+   */
+  findFabFileIdsWithChunks(fabFileIds: string[]): Promise<Set<string>>;
 }
 
 /**
@@ -716,10 +794,16 @@ export interface LakeMembershipMemberRow {
  * Defines the database methods that are available on the FabFile model.
  */
 /**
- * The FabFile fields the lake-memory citability predicate reads, and nothing else. Exists so the
- * read can be projected: the predicate needs eight scalars, while a FabFile document carries a
- * `tags` array of arbitrary objects, a `versions` subdocument array and a Mixed `sourceMetadata` of
- * no fixed size - all of it hydrated per id by the unprojected reader this replaces.
+ * The FabFile fields the lake-memory read projects, and nothing else. Exists so the read can be
+ * projected: these are a handful of scalars, while a FabFile document carries a `tags` array of
+ * arbitrary objects, a `versions` subdocument array and a Mixed `sourceMetadata` of no fixed size -
+ * all of it hydrated per id by the unprojected reader this replaces.
+ *
+ * `createdAt` is the one field the citability predicate does NOT read: lake memory dates a recalled
+ * belief by the document it came from, so the model can weigh two sources that disagree (#1501). It
+ * is optional here because a projected row is not a hydrated document - a caller building one of
+ * these to test the predicate owes nothing about a field the predicate ignores, and the dating
+ * resolver already treats a missing date as unknown.
  */
 export type CitableFabFileFields = Pick<
   IFabFileDocument,
@@ -731,7 +815,8 @@ export type CitableFabFileFields = Pick<
   | 'embeddingModel'
   | 'fileName'
   | 'vectorized'
->;
+> &
+  Partial<Pick<IFabFileDocument, 'createdAt'>>;
 
 export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   shareable: IShareableStaticMethods<IFabFileDocument>;
@@ -798,6 +883,22 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   findAllInIds(ids: string[]): Promise<IFabFileDocument[]>;
 
   /**
+   * Like findAllInIds, but returns only the files the given user may access - owner,
+   * user-share, group-share, or global-read. For engine callers (@bike4mind/services)
+   * that hold only a userId and have no req.ability, so a caller-supplied FabFile id
+   * for a file they cannot see is never presigned or fed to a provider. The predicate
+   * must stay in sync with the CASL FabFile read rule (packages/database/src/utils/
+   * ability.ts) and buildOwnershipConditions.
+   * @param ids - The IDs of the files.
+   * @param access - The caller's userId and (optional) group ids.
+   */
+  findAccessibleInIds(
+    ids: string[],
+    access: { userId: string; userGroups?: string[] },
+    lakeAccess?: AttachmentLakeAccess
+  ): Promise<IFabFileDocument[]>;
+
+  /**
    * Find files by ID with the heavy and URL-bearing fields projected out, for
    * callers that need to know what a file IS without loading or linking to it.
    * Includes soft-deleted files, so a still-referenced deleted attachment stays
@@ -843,11 +944,20 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Mixed `sourceMetadata` included) to answer a question about existence.
    */
   findExistingIdsByIds(ids: string[]): Promise<string[]>;
-  /** Just the fields the citability predicate reads - see `CitableFabFileFields`. */
+  /** Just the projected lake-memory fields - the citability predicate's, plus the date - see `CitableFabFileFields`. */
   findCitableFieldsByIds(ids: string[]): Promise<CitableFabFileFields[]>;
 
   /** Find every non-deleted file belonging to a data-lake ingest batch (source for the post-upload taxonomy analysis job). */
   findByBatchId(batchId: string): Promise<IFabFileDocument[]>;
+
+  /**
+   * Atomic per-channel claim: appends a `dispatchedNotifications` entry for `channel` only if one
+   * does not already exist, succeeding only for the FIRST caller. The redelivery-safety primitive
+   * for a completion notification (#2027 introduced it for `'slack'`) - a redelivered or
+   * concurrent vectorize-completion message for the same file must post that channel's reply at
+   * most once. Mirrors `dataLakeBatchRepository.claimFileStatus`'s shape.
+   */
+  claimIndexNotification(fabFileId: string, channel: string): Promise<boolean>;
 
   /**
    * Search for files.
@@ -1188,6 +1298,28 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     scope: DataLakeMembershipScope
   ): Promise<{ fileCount: number; totalSizeBytes: number; totalChunkedChars: number }>;
   /**
+   * Top content tags for a lake by document count (#1292) - the tag tree read as a topic map.
+   * Same membership + liveness filter as computeDataLakeStats. Excludes the datalake: meta-tag
+   * namespace and, for a prefix-arm lake, both the bare fileTagPrefix and `<prefix>uncategorized`
+   * - all three are membership signals, not topics.
+   */
+  countDataLakeTopicTags(scope: DataLakeMembershipScope, limit?: number): Promise<{ tag: string; count: number }[]>;
+  /**
+   * Whole-lake indexing health as scalars (#1292), on the same membership + liveness predicate as
+   * computeDataLakeStats - so a member whose extraction failed BEFORE chunking is counted, which
+   * findDataLakeHealthMembers' chunk-bearing $match structurally cannot see. Bucket definitions
+   * track evaluateMemberHealth (`embeddedChunkCount` for vectorized, non-empty-string `error` for
+   * failed); `inFlightFiles` keeps a not-yet-measured member out of both other buckets.
+   */
+  summarizeDataLakeIndexingHealth(scope: DataLakeMembershipScope): Promise<{
+    chunkedFiles: number;
+    fullyVectorizedFiles: number;
+    failedFiles: number;
+    inFlightFiles: number;
+    totalChunks: number;
+    totalEmbeddedChunks: number;
+  }>;
+  /**
    * Per-member health rollups (#1666) for a lake, read from FabFile documents only (never the chunk
    * collection). Raw numbers the pure evaluator grades; char fields stay `null` when unmeasured.
    * Members with no chunks are excluded. `limit` fetches one extra row so the caller can detect and
@@ -1331,6 +1463,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * `maxChunkCharLength`), ascending by `_id` - the health backfill's phase-2 cursor.
    */
   findFileIdsMissingChunkRollups(options?: { limit?: number; afterFileId?: string }): Promise<string[]>;
+  /**
+   * One page of file ids that DECLARE vectorized chunks (`vectorizedChunkCount > 0`), ascending by
+   * `_id` - candidates for the #2583 detection sweep to check against `findFabFileIdsWithChunks`.
+   * A candidate absent from that result has zero chunk rows behind a positive count.
+   */
+  findFileIdsWithPositiveVectorizedCount(options?: {
+    limit?: number;
+    afterFileId?: string;
+  }): Promise<{ id: string; fileName?: string }[]>;
   /** Stamp all four recomputed chunk-derived rollups together - the health backfill's phase-2 write. */
   setChunkRollups(
     id: string,

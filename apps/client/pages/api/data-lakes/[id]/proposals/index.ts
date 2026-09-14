@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeRepository, dataLakeAccessGrantRepository, dataLakeProposalRepository } from '@bike4mind/database';
@@ -24,7 +25,7 @@ const DEFAULT_LIMIT = 50;
  * lake gets the same denial as a non-reader would - the lake read gate runs first, so the refusal
  * for a stranger stays not-found-style and leaks no existence.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request, res) => {
     const { id } = req.query as { id: string };

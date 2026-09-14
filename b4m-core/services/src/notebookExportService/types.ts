@@ -212,6 +212,13 @@ export interface ImportResult {
   errors?: string[];
   warnings?: string[];
   newNotebookIds?: string[];
+  /**
+   * S3 keys of the knowledge files this import wrote, one per FabFile. Every imported file is
+   * stamped `pending`; the caller scans them out of band after the import transaction commits (see
+   * server/s3/moderateImportedKnowledgeFiles.ts), because the natural upload-time scan cannot see a
+   * row still inside the open import transaction.
+   */
+  importedKnowledgeFilePaths?: string[];
 }
 
 // Validation schemas

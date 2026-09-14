@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeResearchService } from '@bike4mind/services';
 import { dataLakeResearchConfigRepository, dataLakeResearchRunRepository } from '@bike4mind/database';
@@ -24,7 +25,7 @@ const DEFAULT_LIMIT = 20;
  * run immediately instead of waiting on a worker. The row is also what makes the enqueue safe to
  * retry: the handler claims it with a compare-and-set, so a duplicate message runs nothing.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request, res) => {
     const { id } = req.query as { id: string };
@@ -39,6 +40,7 @@ const handler = baseApi()
     return res.json({ data: runs });
   })
   .post(async (req: Request, res) => {
+    assertDataLakeWriteScope(req);
     const { id } = req.query as { id: string };
     // Gated before the body is parsed, matching the config routes: a caller who may not manage this
     // lake should not be able to probe the request schema by reading which field it complains about.

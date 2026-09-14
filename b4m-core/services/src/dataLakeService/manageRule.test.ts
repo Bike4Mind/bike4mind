@@ -125,6 +125,20 @@ describe('canManageLake', () => {
     ).toBe(false);
   });
 
+  // Rung 5 used to compare the grant's org against the actor's admin rights and NOTHING else, so an
+  // orgX admin holding an org grant managed - and, since canAccessLake calls this first, also read -
+  // a lake belonging to orgY. Rung 4 above always compared; rung 5 did not.
+  it('rung 5: an ORG grant never reaches across orgs', () => {
+    const orgXAdmin = actor({ userId: 'member', administeredOrgIds: ['orgX'] });
+    const orgXGrant = [grant('organization', 'orgX', 'owner')];
+
+    // The hole: a lake owned by a DIFFERENT org.
+    expect(canManageLake(lake('creator', 'orgY'), orgXAdmin, orgXGrant)).toBe(false);
+    // Still granting, for the two shapes the rung exists to serve.
+    expect(canManageLake(lake('creator'), orgXAdmin, orgXGrant)).toBe(true);
+    expect(canManageLake(lake('creator', 'orgX'), orgXAdmin, orgXGrant)).toBe(true);
+  });
+
   it('denies a stranger with no grant and no org rights', () => {
     expect(canManageLake(lake('creator', 'org1'), actor({ userId: 'stranger' }))).toBe(false);
   });
@@ -152,6 +166,19 @@ describe('resolveLakeManageRung', () => {
         grant('organization', 'org-2', 'curator'),
       ])
     ).toBe('org-grant');
+  });
+
+  it('names no rung for a cross-org ORG grant, and still org-grant on the org-less lake', () => {
+    const orgXAdmin = actor({ userId: 'member', administeredOrgIds: ['orgX'] });
+    const orgXGrant = [grant('organization', 'orgX', 'owner')];
+
+    expect(resolveLakeManageRung(lake('creator', 'orgY'), orgXAdmin, orgXGrant)).toBeNull();
+    expect(resolveLakeManageRung(lake('creator'), orgXAdmin, orgXGrant)).toBe('org-grant');
+    // The org-LESS lake is the only shape that reports this rung: on a same-org lake the org-admin
+    // rung above fires first, and cross-org is now denied outright. Which is why the containment
+    // admits the org-less lake rather than demanding strict equality - strict equality would make
+    // rung 5 a subset of rung 4, and this rung (plus its persisted audit value) dead code.
+    expect(resolveLakeManageRung(lake('creator', 'orgX'), orgXAdmin, orgXGrant)).toBe('org-admin');
   });
 
   it('returns null for an actor who cannot manage the lake at all', () => {

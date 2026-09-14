@@ -15,6 +15,7 @@ export const OAUTH_FAILURE_REASONS = [
   'state_invalid',
   'state_expired',
   'state_missing',
+  'registration_closed',
   'internal',
 ] as const;
 
@@ -39,6 +40,8 @@ export function oauthFailureRedirectMessage(reason: OAuthFailureReason): string 
   switch (reason) {
     case 'state_expired':
       return 'Your login request expired. Please try again.';
+    case 'registration_closed':
+      return 'This instance is invite-only. Ask an administrator for an invite.';
     default:
       return 'Authentication failed';
   }

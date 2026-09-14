@@ -14,7 +14,7 @@ import {
 } from '@mui/joy';
 import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
 import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
-import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 
 interface DataLakeIngestPickerModalProps {
   open: boolean;
@@ -40,14 +40,7 @@ export default function DataLakeIngestPickerModal({ open, files, onClose }: Data
   const setStep = useDataLakeWizardStore(s => s.setStep);
 
   const handlePick = (lake: NonNullable<typeof lakes>[number]) => {
-    openWizardForLake({
-      id: lake.id,
-      slug: lake.slug,
-      name: lake.name,
-      fileTagPrefix: lake.fileTagPrefix,
-      requiredUserTag: lake.requiredUserTag,
-      requiredEntitlement: lake.requiredEntitlement,
-    });
+    openWizardForLake(toWizardTargetLake(lake));
     setFiles(files);
     // Preview is opt-in elsewhere, but a drop can carry a whole traversed folder the user
     // never itemized, so this entry point turns it on and lands there - skipping straight to

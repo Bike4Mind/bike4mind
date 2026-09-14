@@ -49,6 +49,25 @@ export const INCONSISTENCY_KINDS = [
 export const UNIMPLEMENTED_INCONSISTENCY_CLASS = 'availability-vs-marketing' as const;
 export type InconsistencyKind = (typeof INCONSISTENCY_KINDS)[number];
 
+/**
+ * The kinds whose finding can support the claim that two DOCUMENTS disagree with each other, rather
+ * than only "worth a human's eye". Classified here, beside the rules, rather than in whatever
+ * allowlist each caller happens to carry. `satisfies` checks membership, not coverage: a fifth kind
+ * compiles with this list untouched and defaults to not-asserted. That is the safe default, but it
+ * is a default and not an enforcement - classify a new rule here deliberately.
+ *
+ * Only `metric-disagreement` qualifies, and only because it is the one rule comparing a parsed VALUE
+ * across documents. The other two cross-document kinds cannot show disagreement:
+ * `superlative-conflict` compares nothing at all, so two documents that AGREE - including two
+ * carrying the identical sentence - group as a finding; `relationship-conflict` keys on `ORG`, a bare
+ * capitalization proxy, while CUSTOMER/PROSPECT carry generic technical vocabulary, so two sentences
+ * about the same capitalized product name satisfy it without describing a relationship at all.
+ *
+ * Both remain fully reported by `detectCorpusInconsistencies` - a human triaging a lake's health
+ * wants recall. This list is for the callers that ASSERT a finding rather than offer it.
+ */
+export const DISAGREEMENT_INCONSISTENCY_KINDS = ['metric-disagreement'] as const satisfies readonly InconsistencyKind[];
+
 export interface CorpusDocument {
   fabFileId: string;
   fileName?: string | null;
@@ -71,8 +90,9 @@ export interface InconsistencyFinding {
    */
   subject: string;
   /**
-   * Bounded at `EVIDENCE_MAX` entries, one per document. Read `documentCount` for how many documents
-   * the finding actually spans - a finding capped here still reports its true reach.
+   * Bounded at `EVIDENCE_MAX` entries, one per document, led by a pair of documents that actually
+   * differ where the kind compares values (see `witnessOrder`). Read `documentCount` for how many
+   * documents the finding actually spans - a finding capped here still reports its true reach.
    */
   evidence: InconsistencyEvidence[];
   /**
@@ -138,9 +158,58 @@ const SUPERLATIVE = /\b(only|sole|first|fastest|largest|highest|best|leading|num
 const SUPERLATIVE_SUBJECT =
   /\b(?:only|sole|first|fastest|largest|highest|best|leading)\s+([a-z0-9-]+(?:\s+[a-z0-9-]+)?)/i;
 
-/** `Label: 42%` / `Label is 42 percent` / `Label was 1,200 ms`. */
+/**
+ * `Label: 42%` / `Label is 42 percent` / `Label was 1,200 ms` / `Label is 30 days` (no unit).
+ *
+ * Three boundaries, none of them optional, and both token guards are spelled `(?!\w)` on purpose:
+ * `\w` IS the class `\b` uses, so a hand-written class cannot drift out of step with it again. A
+ * guard narrower than `\w` on one branch, or missing on the other, each shipped a false-positive
+ * class that no test could see - which is why all three are pinned below.
+ *
+ * - The VALUE ends on a digit, so the greedy `[0-9,.]` run cannot read the sentence-final period of
+ *   `Total revenue is 1,200.` into the figure and compare `1200.` against `1200`.
+ * - A WORD-shaped unit is followed by a non-word char, so `1,200 gbps` declines to read `gb` and
+ *   `5 gb_x` declines to read `gb`. `%` is exempt and outside the guard: it has no `\b` after it, so
+ *   a guard covering the whole group would make `99.9%.` and `50%off` - a routine extraction
+ *   artifact - capture unitless.
+ * - The unit-ABSENT branch carries its OWN guard, or the value ends mid-token: `Latency is 40usec`
+ *   becomes the unitless metric `40` and disagrees with `Latency is 40 ms`, and `Instance is
+ *   8xlarge` becomes a metric at all.
+ *
+ * Two residuals, both pre-existing and both narrowing a value rather than inventing one: a value
+ * carrying a `.` can still stop at it, so `Latency is 99.9usec` reads as `99`; and a clip landing
+ * inside a unit WORD can shorten it into another valid unit, so `5 gbps` cut to `5 gb` reads as
+ * gigabytes. Closing either means refusing a match rather than shortening one, which is a different
+ * change to a rule two surfaces already depend on.
+ */
 const METRIC =
-  /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*([0-9][0-9,.]*)\s*(%|percent|ms|s|gb|mb|tb|x)?\b/i;
+  /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*([0-9](?:[0-9,.]*[0-9])?)(?:\s*(%|(?:percent|ms|s|gb|mb|tb|x)(?!\w))|(?!\w))/i;
+
+/** `percent` and `%` are one unit written two ways, so they must group and compare as one. */
+function canonicalUnit(unit?: string): string {
+  const lower = unit?.toLowerCase() ?? '';
+  return lower === 'percent' ? '%' : lower;
+}
+
+/**
+ * One FIGURE written two ways, compared as one: `99.90` and `99.9` are the same number, and reporting
+ * them as a disagreement is a formatting difference read as a numeric one.
+ *
+ * Non-numeric captures stay literal, which is load-bearing rather than defensive: `METRIC`'s value
+ * group admits multiple separators, so `Version is 3.4.5` captures `3.4.5` and `Number` gives `NaN` -
+ * every such version string would otherwise compare equal to every other.
+ *
+ * The trade, and it errs toward silence: past ~15 significant digits two genuinely different figures
+ * canonicalize to one double and stop being reported (`1e21` vs `1e21 + 1`, `2^53` vs `2^53 + 1`,
+ * `0.1000000000000000055` vs `0.1`). This value never leaves the module - `InconsistencyFinding`
+ * carries no `detail` - so the comparison changes but nothing rendered does, including the
+ * exponential form `String(Number(...))` gives at those magnitudes.
+ */
+function canonicalValue(value: string): string {
+  const bare = value.replace(/,/g, '');
+  const numeric = Number(bare);
+  return Number.isFinite(numeric) ? String(numeric) : bare;
+}
 
 const CUSTOMER = /\b(customer|client|deployed|in production with|live with)\b/i;
 const PROSPECT = /\b(prospect|pipeline|opportunity|evaluating|pilot|proof of concept|poc|trialling|trialing)\b/i;
@@ -203,18 +272,54 @@ function toEvidence(hit: Hit): InconsistencyEvidence {
   return { fabFileId: hit.doc.fabFileId, fileName: hit.doc.fileName ?? null, excerpt: excerpt(hit.sentence) };
 }
 
+/** Sorted distinct details, so two documents holding the same values agree however they order them. */
+function detailSignature(position: Hit[]): string {
+  return [...new Set(position.map(h => h.detail))].sort().join('|');
+}
+
+/**
+ * One hit per document, ordered so the FIRST TWO HITS actually differ.
+ *
+ * Hits, not rendered excerpts: `toEvidence` clips an excerpt at `EXCERPT_MAX`, so two sentences that
+ * diverge only past that bound still render identically. Anchoring the excerpt window on the match
+ * offset would close that, and needs a `matchIndex` threaded through `Hit` and every rule - a change
+ * to what the stored admin report quotes for all four kinds, so not this one.
+ *
+ * Evidence is what a reader is shown as proof, and "whatever each document matched first" need not
+ * contain the hits that disagree: a document stating both values agrees with its sibling on whichever
+ * it happens to state first, so a real finding rendered two IDENTICAL sentences as its proof. Anchor
+ * instead on a detail that some other document does not carry at all - such a pair exists whenever
+ * the per-document sets differ, so the tail return is reached only by a rule that sets no `detail`
+ * and therefore has no witness pair to promote.
+ */
+function witnessOrder(positions: Hit[][]): Hit[] {
+  for (const [i, hits] of positions.entries()) {
+    for (const hit of hits) {
+      const j = positions.findIndex((other, k) => k !== i && !other.some(h => h.detail === hit.detail));
+      if (j === -1) continue;
+      return [hit, positions[j][0], ...positions.filter((_, k) => k !== i && k !== j).map(p => p[0])];
+    }
+  }
+  return positions.map(hits => hits[0]);
+}
+
 /**
  * Group hits by subject and keep only groups spanning MORE THAN ONE document.
  *
  * The cross-document requirement is the whole point: one document restating its own superlative in
- * three sections is not an inconsistency, and flagging it would bury the real findings. `distinguish`
- * additionally requires the grouped hits to actually DISAGREE - two documents stating the same metric
- * at the same value agree, and agreement is not a finding.
+ * three sections is not an inconsistency, and flagging it would bury the real findings.
+ *
+ * `requireDisagreement` additionally requires the DOCUMENTS to hold different SETS of values, since
+ * agreement is not a finding. Per-document sets rather than the flat hit list, which is the
+ * distinction the rule turns on: a document stating both values contributes two differing details on
+ * its own, so a flat comparison reported two byte-identical documents as contradicting each other -
+ * naming a document that agrees. Sets still keep the case where one document holds both values and a
+ * sibling holds only one of them: those documents really do disagree.
  */
 function crossDocumentGroups(
   hits: Hit[],
   kind: InconsistencyKind,
-  distinguish?: (hits: Hit[]) => boolean
+  requireDisagreement = false
 ): InconsistencyFinding[] {
   const bySubject = new Map<string, Hit[]>();
   for (const hit of hits) {
@@ -225,12 +330,20 @@ function crossDocumentGroups(
 
   const findings: InconsistencyFinding[] = [];
   for (const [subject, group] of bySubject) {
-    const docIds = new Set(group.map(h => h.doc.fabFileId));
-    if (docIds.size < 2) continue;
-    if (distinguish && !distinguish(group)) continue;
-    // One excerpt per document: three sentences from the same file are one document's position.
-    const seen = new Set<string>();
-    const perDocument = group.filter(h => !seen.has(h.doc.fabFileId) && (seen.add(h.doc.fabFileId), true));
+    // One position per document: three sentences from the same file are one document's position.
+    const byDocument = new Map<string, Hit[]>();
+    for (const hit of group) {
+      const existing = byDocument.get(hit.doc.fabFileId);
+      if (existing) existing.push(hit);
+      else byDocument.set(hit.doc.fabFileId, [hit]);
+    }
+    if (byDocument.size < 2) continue;
+
+    const positions = [...byDocument.values()];
+    if (requireDisagreement && new Set(positions.map(detailSignature)).size < 2) continue;
+    // Unconditional, so evidence order is one convention rather than one per kind. A rule that sets
+    // no `detail` cannot have a witness pair, and for those this degrades to first-hit-per-document.
+    const perDocument = witnessOrder(positions);
     findings.push({
       kind,
       subject,
@@ -252,17 +365,41 @@ function detectSuperlativeConflicts(documents: CorpusDocument[]): InconsistencyF
   );
 }
 
-function detectMetricDisagreements(documents: CorpusDocument[]): InconsistencyFinding[] {
+/**
+ * `unitRequired` narrows this rule to metrics carrying a unit from `METRIC`'s alternation, and groups
+ * by label AND unit so only same-unit values are ever compared.
+ *
+ * Off by default, because a triage reader can dismiss a weak finding in a second. It exists for the
+ * callers that assert disagreement (see `DISAGREEMENT_INCONSISTENCY_KINDS`), where the label alone is
+ * too loose: `\bof\b` plus an optional unit makes `Section 2 of 5` a metric, `30 days` a metric
+ * (`days` is not in the alternation), and a per-period series of `Monthly active users: 1,200` a
+ * disagreement with its own next quarter. Requiring a unit drops all three; requiring it to MATCH
+ * keeps `100 ms` from being read as disagreeing with `2 s` on evidence that is really a unit change.
+ *
+ * What it also drops, and should not: `METRIC.exec` takes the FIRST match in a sentence, so a
+ * leading unitless number shadows a real metric behind it. `Section 2 of 5 states that uptime is
+ * 99.9%` matches as label `Section 2` / value `5` / no unit, and the sentence is discarded before the
+ * `99.9%` is ever seen. `Section N of M` is the exact shape this mode exists to drop; when it merely
+ * PRECEDES a genuine metric the cost is recall, not a false assertion, which is why it is left as is.
+ *
+ * The unit rides in `subject` to do that grouping, so a caller enabling this and RENDERING `subject`
+ * gets `uptime %` rather than `uptime`.
+ */
+function detectMetricDisagreements(documents: CorpusDocument[], unitRequired = false): InconsistencyFinding[] {
   return crossDocumentGroups(
     collect(documents, sentence => {
       const match = METRIC.exec(sentence);
       if (!match) return null;
       const [, label, value, unit] = match;
-      return { subject: normalizeSubject(label), detail: `${value.replace(/,/g, '')}${unit?.toLowerCase() ?? ''}` };
+      const canonical = canonicalUnit(unit);
+      if (unitRequired && !canonical) return null;
+      return {
+        subject: unitRequired ? `${normalizeSubject(label)} ${canonical}` : normalizeSubject(label),
+        detail: `${canonicalValue(value)}${canonical}`,
+      };
     }),
     'metric-disagreement',
-    // Agreement is not a finding: two documents quoting the same figure are consistent.
-    group => new Set(group.map(h => h.detail)).size > 1
+    true
   );
 }
 
@@ -280,7 +417,7 @@ function detectRelationshipConflicts(documents: CorpusDocument[]): Inconsistency
       }
     }
   }
-  return crossDocumentGroups(hits, 'relationship-conflict', group => new Set(group.map(h => h.detail)).size > 1);
+  return crossDocumentGroups(hits, 'relationship-conflict', true);
 }
 
 /**
@@ -375,11 +512,11 @@ export interface LakeInconsistencyReport extends CorpusInconsistencyReport {
  */
 export function detectCorpusInconsistencies(
   documents: CorpusDocument[],
-  options: { nowYear: number; sampled?: boolean; maxFindings?: number }
+  options: { nowYear: number; sampled?: boolean; maxFindings?: number; metricUnitRequired?: boolean }
 ): CorpusInconsistencyReport {
   const findings = [
     ...detectSuperlativeConflicts(documents),
-    ...detectMetricDisagreements(documents),
+    ...detectMetricDisagreements(documents, options.metricUnitRequired),
     ...detectRelationshipConflicts(documents),
     ...detectExpiredClaims(documents, options.nowYear),
   ];

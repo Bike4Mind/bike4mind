@@ -24,6 +24,7 @@ export {
   type EmbeddingModelInfo,
   getProviderFromModel,
   resolveEmbeddingConfig,
+  resolveEmbeddingWithKeylessFallback,
   type EmbeddingKeyTable,
   type EmbeddingCredential,
   type ResolvedEmbeddingConfig,

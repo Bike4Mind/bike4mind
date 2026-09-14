@@ -21,14 +21,23 @@ import {
   dataLakeBatchRepository,
   dataLakeRepository,
   fabFileRepository,
+  adminSettingsRepository,
   FabFile,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
-import { recordReconcilerForcedTerminal, recordStuckBatchGauge, recordReconcileRun } from '@server/utils/cloudwatch';
+import {
+  recordReconcilerForcedTerminal,
+  recordStuckBatchGauge,
+  recordReconcileRun,
+  recordChunkRescueSweep,
+  type ChunkRescueOutcome,
+} from '@server/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
 import { runChunkRescueSweep } from '@server/worker/chunkRescueSweep';
+import { runModerationRescueSweep } from '@server/s3/moderationRescueSweep';
 import {
   buildStrandedVectorizeScanFilter,
   CHUNK_CLAIM_STALE_MS,
@@ -43,6 +52,18 @@ const logger = new Logger({ metadata: { service: 'dataLakeBatchReconcile' } });
 const MAX_PER_RUN = 500;
 /** Cap per daily run for the un-chunked rescue sweep; a large backlog drains gradually. */
 const CHUNK_RESCUE_MAX_PER_RUN = 500;
+/** Cap per daily run for the moderation rescue sweep; stranded files are rare so this is a safety net. */
+const MODERATION_RESCUE_MAX_PER_RUN = 200;
+
+/**
+ * How many stranded-vectorize sends are in flight at once, matching the bound the un-chunked sweep
+ * and driveLakeResyncPoll already use. sendToQueue builds a fresh SQSClient per call
+ * (server/utils/sqs.ts), so its retry token bucket never throttles down across the loop and every
+ * failed send pays its full attempt budget with no back-off. Run one-at-a-time against a degraded
+ * queue, CHUNK_RESCUE_MAX_PER_RUN of those is a wall-clock cost this handler cannot absorb - it is
+ * the LAST of three sweeps in one 10-minute Lambda, so the tail is what gets cut off.
+ */
+const ENQUEUE_CONCURRENCY = 10;
 
 /**
  * Hosted counterpart of the same second pass in the self-host worker's fabFileChunkScan: files
@@ -59,13 +80,16 @@ async function rescueStrandedVectorizeFiles(): Promise<number> {
     .limit(CHUNK_RESCUE_MAX_PER_RUN)
     .lean();
 
-  // Per-send catch, not a bare sequential loop: one throttled or unroutable send must cost only
-  // itself, not abandon every candidate behind it (the same lesson driveLakeResyncPoll learned). A
-  // recovery sweep is the worst place for that, since it runs precisely when the queue is under the
-  // stress that makes a transient send failure likely. Returns the SENT count so a partially-failing
-  // tick is distinguishable from a clean one in the log.
+  // Bounded-concurrency fan-out with a PER-FILE catch: one throttled or unroutable send must cost
+  // only itself, not abandon every candidate behind it (the same lesson driveLakeResyncPoll
+  // learned). A recovery sweep is the worst place for that, since it runs precisely when the queue
+  // is under the stress that makes a transient send failure likely - which is also why the sends
+  // are bounded rather than sequential, see ENQUEUE_CONCURRENCY. Returns the SENT count so a
+  // partially-failing run is distinguishable from a clean one in the log.
+  // Read the queue URL once: an unlinked-resource fault is one config error, not a log per file.
+  const queueUrl = Resource.fabFileChunkQueue.url;
   let sent = 0;
-  for (const file of candidates) {
+  const sendOne = async (file: (typeof candidates)[number]) => {
     try {
       // Deliberately UNSTAMPED, unlike the un-chunked sweep above (#2309): these files are already
       // chunked, and the handler's halt branch (fabFileChunk.ts, isConvergenceHalted) runs ABOVE the
@@ -78,7 +102,7 @@ async function rescueStrandedVectorizeFiles(): Promise<number> {
       // no chunks to damage; this filter has no paused-file exclusion, which is what would make the
       // re-fire unbounded rather than one-shot. Finishing an already-committed hand-off is not the
       // background work the kill switch exists to stop.
-      await sendToQueue(Resource.fabFileChunkQueue.url, {
+      await sendToQueue(queueUrl, {
         fabFileId: String(file._id),
         userId: String(file.userId),
       });
@@ -86,6 +110,9 @@ async function rescueStrandedVectorizeFiles(): Promise<number> {
     } catch (err) {
       logger.error(`[DataLakeBatchReconcile] stranded-vectorize rescue send failed for ${file._id}: ${err}`);
     }
+  };
+  for (let i = 0; i < candidates.length; i += ENQUEUE_CONCURRENCY) {
+    await Promise.all(candidates.slice(i, i + ENQUEUE_CONCURRENCY).map(file => sendOne(file)));
   }
   return sent;
 }
@@ -144,17 +171,40 @@ export async function handler() {
     logger,
   });
 
-  // Isolated so a rescue failure never blocks the batch reconciliation above.
-  const { enqueued: rescuedChunkFiles, failed: rescueFailures } = await runChunkRescueSweep({
+  // Isolated so a rescue failure never blocks the batch reconciliation above. The sweep names its
+  // own outcome ('disabled' | 'swept'); a throw never gets that far, so 'failed' is ours to report
+  // - without it this catch would return the same zeroes as a healthy idle tick.
+  const chunkRescue: { outcome: ChunkRescueOutcome; enqueued: number; failed: number } = await runChunkRescueSweep({
     limit: CHUNK_RESCUE_MAX_PER_RUN,
     logger,
   }).catch(err => {
     logger.error(`[DataLakeBatchReconcile] un-chunked rescue sweep failed: ${err}`);
-    return { enqueued: 0, failed: 0 };
+    return { outcome: 'failed' as const, enqueued: 0, failed: 0 };
   });
+  const { outcome: rescueOutcome, enqueued: rescuedChunkFiles, failed: rescueFailures } = chunkRescue;
+  await recordChunkRescueSweep(rescueOutcome, rescuedChunkFiles, rescueFailures).catch(() => {});
   const rescuedVectorizeFiles = await rescueStrandedVectorizeFiles().catch(err => {
     logger.error(`[DataLakeBatchReconcile] stranded-vectorize rescue sweep failed: ${err}`);
     return 0;
+  });
+
+  // Isolated like the sweeps above: re-scan FabFiles whose moderation scan never completed (a
+  // transient import-scan failure, or an upload whose objectCreated scan exhausted its retries),
+  // so a stranded 'pending' file does not stay unservable forever.
+  const { rescanned: rescannedModerationFiles } = await runModerationRescueSweep({
+    enabled:
+      getSettingsValue(
+        'ImageModerationEnabled',
+        // Guard the settings read itself: it is awaited as an ARGUMENT to the sweep, evaluated
+        // before the .catch() below is attached, so a settings/DB blip here would otherwise reject
+        // out of the whole tick. Default to moderation ON (fail-closed) if the read fails.
+        await getSettingsMap({ adminSettings: adminSettingsRepository }).catch(() => ({}))
+      ) ?? true,
+    limit: MODERATION_RESCUE_MAX_PER_RUN,
+    logger,
+  }).catch(err => {
+    logger.error(`[DataLakeBatchReconcile] moderation rescue sweep failed: ${err}`);
+    return { rescanned: 0 };
   });
 
   // Heartbeat every run (even zero-work) so a stopped/broken cron alarms on absence of data.
@@ -168,6 +218,8 @@ export async function handler() {
     rescuedChunkFiles,
     rescuedVectorizeFiles,
     rescueFailures,
+    rescueOutcome,
+    rescannedModerationFiles,
   });
   return {
     statusCode: 200,
@@ -179,6 +231,8 @@ export async function handler() {
       rescuedChunkFiles,
       rescuedVectorizeFiles,
       rescueFailures,
+      rescueOutcome,
+      rescannedModerationFiles,
     }),
   };
 }

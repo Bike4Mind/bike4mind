@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -38,7 +39,7 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
  * whether its content is findable. Computed on demand and cached client-side rather than folded into
  * recomputeLakeStats, which fires repeatedly during ingestion.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request, res) => {
     const { id } = req.query as { id: string };

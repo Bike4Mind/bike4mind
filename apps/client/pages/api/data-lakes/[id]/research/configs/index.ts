@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeResearchService } from '@bike4mind/services';
 import { dataLakeResearchConfigRepository } from '@bike4mind/database';
@@ -23,7 +24,7 @@ const db = { dataLakeResearchConfigs: dataLakeResearchConfigRepository };
  * Manage-gated on both verbs (see `assertLakeResearchManage`). Bounds and normalization live in the
  * service, not here, so a config written through any future second path means the same thing.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request, res) => {
     const { id } = req.query as { id: string };
@@ -32,6 +33,7 @@ const handler = baseApi()
     return res.json({ data: configs });
   })
   .post(async (req: Request, res) => {
+    assertDataLakeWriteScope(req);
     const { id } = req.query as { id: string };
     const lake = await assertLakeResearchManage(req, id);
     const input = CreateInput.parse(req.body);

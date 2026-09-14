@@ -3,6 +3,7 @@ initializeSlackPackage();
 
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
+import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import {
   getOAuthWorkspaceWithCredentials,
   buildUserLinkRedirectUri,
@@ -48,8 +49,10 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     }
     const workspace = workspaceResult.workspace;
 
-    // Generate state token and build OAuth URL
-    const state = generateUserLinkStateToken(req.user.id);
+    // Generate state token and build OAuth URL. Bind the flow to this browser: the
+    // state carries the nonce-cookie hash the callback re-checks (issueStateNonce sets
+    // the cookie on res).
+    const state = generateUserLinkStateToken(req.user.id, issueStateNonce(res, NONCE_SLOT.slackUserLink));
     const redirectUri = buildUserLinkRedirectUri(workspace, req);
     const slackAuthUrl = buildSlackOAuthUrl(workspace.slackClientId!, redirectUri, state, workspace.slackTeamId);
 

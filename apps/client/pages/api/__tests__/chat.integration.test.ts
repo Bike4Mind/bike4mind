@@ -530,6 +530,214 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     });
   });
 
+  // Tool selection. `tools` is a top-level field with nothing in the schema marking it
+  // conditional on toolMode, so sending it alone used to be a silent no-op: the array was
+  // read in exactly one place (the toolMode === 'smart' branch), and the request then took
+  // the tools-disabled path, which sends `tools: []`. Nothing covered that shape, which is
+  // why the drop was invisible in a green suite.
+  describe('tool selection', () => {
+    type InvokedBody = {
+      tools?: string[];
+      enableQuestMaster?: boolean;
+      enableMementos?: boolean;
+      enableAgents?: boolean;
+    };
+    const invokedBody = () => (mockInvoke.mock.calls[0][0] as { body: InvokedBody }).body;
+
+    it('honors a tools array sent without toolMode instead of dropping it', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', tools: ['web_search'] } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedBody().tools).toEqual(['web_search']);
+    });
+
+    // The named tool is intent to enable tools, nothing more. QuestMaster/Mementos/Agents
+    // stay off, matching smart mode's conservative defaults rather than the legacy
+    // enableTools path's full-capability defaults.
+    it('enables only tools for a tools-without-toolMode request, not the other capabilities', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', tools: ['web_search'] } });
+      await handler(req, res);
+      expect(invokedBody()).toMatchObject({
+        enableQuestMaster: false,
+        enableMementos: false,
+        enableAgents: false,
+      });
+    });
+
+    // The response's own `tools` field reported null on this shape, so a caller could not
+    // even see that their array had been discarded.
+    it('reports the resolved set back on the response, with no toolMode since none was sent', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', tools: ['web_search'] } });
+      await handler(req, res);
+      expect(res._getJSONData().tools).toEqual({ effectiveTools: ['web_search'] });
+    });
+
+    // Unknown ids are dropped by filterKnownTools, so an all-unknown array resolves to
+    // nothing and must NOT count as intent to enable tools.
+    it('does not enable tools when every named id is unrecognized', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', tools: ['not_a_tool'] } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedBody().tools).toEqual([]);
+      expect(invokedBody().enableQuestMaster).toBe(false);
+    });
+
+    // No endpoint enumerates the valid ids, so a dropped id must be reported or a typo is
+    // indistinguishable from a tool that does not exist in this deployment.
+    it('reports an unrecognized id back on the response rather than failing quiet', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', tools: ['websearch'] } });
+      await handler(req, res);
+      expect(res._getJSONData().tools).toEqual({ effectiveTools: [], unrecognizedTools: ['websearch'] });
+    });
+
+    // `unrecognizedTools` describes the ids, not what the mode did with them, so it is reported
+    // under every toolMode. Suppressing it under 'fast' would put the endpoint back in the position
+    // this route was fixed out of: knowing an id does not exist here and saying nothing, so the
+    // caller only finds out after dropping 'fast' and resending.
+    it("reports an unrecognized id under toolMode 'fast' too", async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({
+        body: { message: 'hi', sessionId: 'sess-1', toolMode: 'fast', tools: ['websearch'] },
+      });
+      await handler(req, res);
+      expect(res._getJSONData().tools).toMatchObject({ toolMode: 'fast', unrecognizedTools: ['websearch'] });
+    });
+
+    // The other half of that invariant, and what makes the field's name true: 'fast' discards a
+    // RECOGNIZED id, and discarding is not the same fact as not existing. `effectiveTools: []` is
+    // what reports the discard; listing web_search as unrecognized would conflate a deliberate
+    // mode drop with a typo - the exact ambiguity this route was fixed to remove.
+    it("does not call a recognized id unrecognized just because 'fast' dropped it", async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({
+        body: { message: 'hi', sessionId: 'sess-1', toolMode: 'fast', tools: ['web_search', 'websearch'] },
+      });
+      await handler(req, res);
+      expect(res._getJSONData().tools).toEqual({
+        toolMode: 'fast',
+        effectiveTools: [],
+        unrecognizedTools: ['websearch'],
+      });
+    });
+
+    it('omits unrecognizedTools entirely when every id was recognized', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', tools: ['web_search'] } });
+      await handler(req, res);
+      expect(res._getJSONData().tools).not.toHaveProperty('unrecognizedTools');
+    });
+
+    // Syntactically present but resolving to nothing must read the same as absent.
+    it('treats an explicitly empty tools array as no tools named', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', tools: [] } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedBody().tools).toEqual([]);
+      expect(invokedBody().enableQuestMaster).toBe(false);
+      expect(res._getJSONData().tools).toBeUndefined();
+    });
+
+    // `tools` carries no length bound, so an 8000-id payload has to leave this layer bounded on
+    // both sides. Asserting the two output sets rather than a wall clock pins the invariant that
+    // actually matters (Set membership for the split, Set collapse for both reported lists) and
+    // keeps the test independent of runner contention - this suite runs as three parallel CI
+    // shards, each with a worker per core.
+    it('collapses a large mixed tools payload to the two distinct ids', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const tools = [...Array(4000).fill('web_search'), ...Array(4000).fill('websearch')];
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', tools } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      // The set that reaches the service layer: one copy, not 4000. N copies would reserve N
+      // tools' worth of the verbatim history budget and reach the provider as duplicate names.
+      expect(invokedBody().tools).toEqual(['web_search']);
+      expect(res._getJSONData().tools.unrecognizedTools).toEqual(['websearch']);
+    });
+
+    // The echo is the documented way to discover a mistyped id, so it is capped like the log line
+    // rather than reflecting an unbounded list of the caller's own bad ids back at them.
+    it('caps the reported unrecognized ids at 10 distinct entries', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const tools = Array.from({ length: 25 }, (_, i) => `not_a_tool_${i}`);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', tools } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().tools.unrecognizedTools).toHaveLength(10);
+    });
+
+    // A partially-recognized array still counts as intent, narrowed to what survived.
+    it('enables tools from the recognized subset when only some ids are known', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({
+        body: { message: 'hi', sessionId: 'sess-1', tools: ['not_a_tool', 'web_search'] },
+      });
+      await handler(req, res);
+      expect(invokedBody().tools).toEqual(['web_search']);
+      expect(res._getJSONData().tools).toEqual({
+        effectiveTools: ['web_search'],
+        unrecognizedTools: ['not_a_tool'],
+      });
+    });
+
+    // 'fast' contributes no tools from the request, so it drops a named set. It does not
+    // guarantee an empty offered set downstream - resolveEnabledTools still auto-offers the
+    // knowledge tool when the session has reachable documents.
+    it("lets toolMode 'fast' drop an explicit tools array", async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({
+        body: { message: 'hi', sessionId: 'sess-1', toolMode: 'fast', tools: ['web_search'] },
+      });
+      await handler(req, res);
+      expect(invokedBody().tools).toEqual([]);
+    });
+
+    // A legacy caller that names tools now gets them on the wire instead of having them
+    // dropped, and keeps the full-capability defaults enableTools has always implied.
+    it('sends the named tools for a legacy enableTools caller, keeping full capabilities', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({
+        body: { message: 'hi', sessionId: 'sess-1', enableTools: true, tools: ['web_search'] },
+      });
+      await handler(req, res);
+      expect(invokedBody()).toMatchObject({
+        tools: ['web_search'],
+        enableQuestMaster: true,
+        enableMementos: true,
+        enableAgents: true,
+      });
+    });
+
+    // The unchanged legacy path (what the voice agent_request portal sends): enableTools with
+    // no named set must still leave `tools` off the wire so the service layer resolves it.
+    it('sends no tools key at all for enableTools with no named set', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', enableTools: true } });
+      await handler(req, res);
+      expect(invokedBody().tools).toBeUndefined();
+      expect(res._getJSONData().tools).toBeUndefined();
+    });
+
+    // The no-tools default, unchanged.
+    it('keeps the tools-disabled default when neither tools, toolMode nor enableTools is sent', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1' } });
+      await handler(req, res);
+      expect(invokedBody()).toMatchObject({
+        tools: [],
+        enableQuestMaster: false,
+        enableMementos: false,
+        enableAgents: false,
+      });
+      expect(res._getJSONData().tools).toBeUndefined();
+    });
+  });
+
   // The caller-supplied systemPrompt field (POST /api/chat). Asserted here specifically on the
   // ASYNC (wait: false, default) dispatch path via mockInvoke - a test that only covered wait:true
   // would pass even if the default path silently dropped the field.

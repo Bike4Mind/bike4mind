@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeRepository, dataLakeSpendNotificationRepository } from '@bike4mind/database';
 import { ForbiddenError, NotFoundError } from '@server/utils/errors';
@@ -17,7 +18,7 @@ import { Request } from 'express';
  * Deliberately admin-only rather than lake-owner: the meter enforces a platform cost control,
  * and letting an owner zero their own spend would let them mint unlimited budget.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .post(async (req: Request, res) => {
     if (!req.user?.isAdmin) {

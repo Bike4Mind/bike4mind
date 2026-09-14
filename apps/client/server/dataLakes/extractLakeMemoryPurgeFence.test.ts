@@ -97,10 +97,14 @@ const seedLake = (docCount: number, lakeOver: Record<string, unknown> = {}) => {
 const PLENTY_OF_TIME = { dataLakeId: 'lake-1', getRemainingTimeInMillis: () => 10 * 60_000 };
 
 /**
- * A purge that lands AFTER the run claimed its lease - the only kind the fence refuses. Evaluated when
- * the mock is called, so it necessarily post-dates the run's `claimedAt`. A hardcoded past timestamp
- * would describe a purge that PREDATES the run, which the fence deliberately lets through so a rebuild
- * can re-key a lake that was erased once already.
+ * A purge that lands AFTER the run claimed its lease - the only kind the fence refuses. A hardcoded past
+ * timestamp would describe a purge that PREDATES the run, which the fence deliberately lets through so a
+ * rebuild can re-key a lake that was erased once already.
+ *
+ * MUST be called from inside a `mockImplementation`, never passed to `mockResolvedValue`: that argument
+ * is evaluated eagerly at setup, so the stamp would predate the `claimedAt` taken inside
+ * extractLakeMemoryForBatch and the `>=` fence would only trip when both landed in the same millisecond.
+ * That is what made this suite fail under CI scheduling contention while passing locally.
  */
 const purgedNow = () => new Date();
 
@@ -142,7 +146,7 @@ describe('extractLakeMemoryForBatch purge fence', () => {
     // hasMore drives the handler's re-enqueue. A purged lake that still asked for a continuation would
     // keep billing LLM work to rebuild exactly what was just erased.
     seedLake(10);
-    getLakeMemoryFenceMock.mockResolvedValue({ exists: true, purgedAt: purgedNow() });
+    getLakeMemoryFenceMock.mockImplementation(async () => ({ exists: true, purgedAt: purgedNow() }));
 
     const result = await extractLakeMemoryForBatch(PLENTY_OF_TIME, makeLogger() as never);
 
@@ -329,7 +333,7 @@ describe('extractLakeMemoryForBatch purge fence', () => {
     // The lease is deliberately NOT cleared by the purge itself, precisely so this run releases it -
     // otherwise a post-purge rebuild would 409 until the lease aged out.
     seedLake(10);
-    getLakeMemoryFenceMock.mockResolvedValue({ exists: true, purgedAt: purgedNow() });
+    getLakeMemoryFenceMock.mockImplementation(async () => ({ exists: true, purgedAt: purgedNow() }));
 
     await extractLakeMemoryForBatch(PLENTY_OF_TIME, makeLogger() as never);
 

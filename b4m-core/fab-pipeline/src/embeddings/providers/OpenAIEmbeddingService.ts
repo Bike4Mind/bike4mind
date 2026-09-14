@@ -46,21 +46,29 @@ const headerOrNull = (httpResponse: Response, name: string): string | null => {
   }
 };
 
+/**
+ * The ceilings `generateEmbeddingBatch` splits on, at module scope and exported because a cost
+ * PREFLIGHT has to model the same split before it spends (packages/scripts/retrieval/capturePlan.ts).
+ * A second copy of these numbers in a script cannot track a provider change.
+ */
+export const OPENAI_MAX_INPUTS_PER_REQUEST = 2048;
+export const OPENAI_MAX_TOKENS_PER_INPUT = 8192;
+
+/** Hard limit imposed by OpenAI's embeddings API. */
+const OPENAI_MAX_TOKENS_PER_REQUEST = 300000;
+
+/**
+ * Effective token limit with a 10% safety buffer.
+ * The tiktoken fallback (text.length/3) deliberately overestimates to be safe,
+ * but DB token counts may have been produced by a different tokenizer (Bedrock, Voyage)
+ * that underestimates. The buffer keeps us clear of the hard limit under tokenizer variance.
+ */
+export const OPENAI_EFFECTIVE_TOKEN_LIMIT = Math.floor(OPENAI_MAX_TOKENS_PER_REQUEST * 0.9);
+
 export class OpenAIEmbeddingService implements EmbeddingService {
   private client: OpenAI;
   private model: OpenAIEmbeddingModel;
   private credentialFingerprint: string;
-
-  /** Hard limit imposed by OpenAI's embeddings API. */
-  private static readonly MAX_TOKENS_PER_REQUEST = 300000;
-
-  /**
-   * Effective token limit with a 10% safety buffer.
-   * The tiktoken fallback (text.length/3) deliberately overestimates to be safe,
-   * but DB token counts may have been produced by a different tokenizer (Bedrock, Voyage)
-   * that underestimates. The buffer keeps us clear of the hard limit under tokenizer variance.
-   */
-  private static readonly EFFECTIVE_TOKEN_LIMIT = Math.floor(OpenAIEmbeddingService.MAX_TOKENS_PER_REQUEST * 0.9);
 
   constructor(apiKey: string, model: OpenAIEmbeddingModel = OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002) {
     this.client = new OpenAI({ apiKey });
@@ -150,9 +158,6 @@ export class OpenAIEmbeddingService implements EmbeddingService {
       return [];
     }
 
-    const MAX_INPUTS_PER_REQUEST = 2048;
-    const MAX_TOKENS_PER_INPUT = 8192;
-
     // Validate provided token counts for data integrity issues (undefined, null, NaN, <=0).
     // Cross-provider tokenizer mismatches are handled by the safety check in processSingleBatch().
     let tokens: number[];
@@ -183,8 +188,10 @@ export class OpenAIEmbeddingService implements EmbeddingService {
     for (let i = 0; i < texts.length; i++) {
       const tokenCount = tokens[i];
 
-      if (tokenCount > MAX_TOKENS_PER_INPUT) {
-        throw new Error(`Input at index ${i} exceeds ${MAX_TOKENS_PER_INPUT} token limit (${tokenCount} tokens)`);
+      if (tokenCount > OPENAI_MAX_TOKENS_PER_INPUT) {
+        throw new Error(
+          `Input at index ${i} exceeds ${OPENAI_MAX_TOKENS_PER_INPUT} token limit (${tokenCount} tokens)`
+        );
       }
 
       totalTokens += tokenCount;
@@ -193,15 +200,10 @@ export class OpenAIEmbeddingService implements EmbeddingService {
     Logger.globalInstance.debug(`[OpenAI] Batch embedding: ${texts.length} inputs, ${totalTokens} total tokens`);
 
     // Split into batches using the effective limit (not the hard 300k) to absorb tokenizer variance.
-    const batches = this.createBatches(
-      texts,
-      tokens,
-      MAX_INPUTS_PER_REQUEST,
-      OpenAIEmbeddingService.EFFECTIVE_TOKEN_LIMIT
-    );
+    const batches = this.createBatches(texts, tokens, OPENAI_MAX_INPUTS_PER_REQUEST, OPENAI_EFFECTIVE_TOKEN_LIMIT);
 
     Logger.globalInstance.debug(
-      `[OpenAI] Split into ${batches.length} batch(es) (effective limit: ${OpenAIEmbeddingService.EFFECTIVE_TOKEN_LIMIT} tokens)`
+      `[OpenAI] Split into ${batches.length} batch(es) (effective limit: ${OPENAI_EFFECTIVE_TOKEN_LIMIT} tokens)`
     );
 
     // If only one batch, process directly.
@@ -313,10 +315,10 @@ export class OpenAIEmbeddingService implements EmbeddingService {
     const tokenCounts = preCalculatedTokens || (await this.calculateTokenCounts(texts));
     const batchTokens = tokenCounts.reduce((sum, count) => sum + count, 0);
 
-    if (batchTokens > OpenAIEmbeddingService.EFFECTIVE_TOKEN_LIMIT) {
+    if (batchTokens > OPENAI_EFFECTIVE_TOKEN_LIMIT) {
       // Safety check triggered - likely cross-provider tokenizer mismatch (e.g., Bedrock chunks, OpenAI vectorization)
       Logger.globalInstance.warn(
-        `[OpenAI] Batch exceeds effective token limit (${batchTokens}/${OpenAIEmbeddingService.EFFECTIVE_TOKEN_LIMIT} tokens), splitting recursively`
+        `[OpenAI] Batch exceeds effective token limit (${batchTokens}/${OPENAI_EFFECTIVE_TOKEN_LIMIT} tokens), splitting recursively`
       );
 
       // Split in half and process recursively
@@ -335,11 +337,11 @@ export class OpenAIEmbeddingService implements EmbeddingService {
       return [...firstEmbeddings, ...secondEmbeddings];
     }
 
-    // Check if any single text exceeds 8192 token limit (using already calculated tokens)
+    // Check if any single text exceeds the per-input token limit (using already calculated tokens)
     for (let i = 0; i < tokenCounts.length; i++) {
-      if (tokenCounts[i] > 8192) {
+      if (tokenCounts[i] > OPENAI_MAX_TOKENS_PER_INPUT) {
         throw new Error(
-          `Text at index ${i} exceeds OpenAI's 8192 token limit per input (${tokenCounts[i]} tokens). ` +
+          `Text at index ${i} exceeds OpenAI's ${OPENAI_MAX_TOKENS_PER_INPUT} token limit per input (${tokenCounts[i]} tokens). ` +
             `This indicates a data integrity issue - chunk should have been smaller. ` +
             `This chunk cannot be processed and the entire batch must fail.`
         );

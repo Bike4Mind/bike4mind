@@ -4,6 +4,7 @@ import {
   type IDataLakeAccessGrantRepository,
   type IDataLakeDocument,
   type IDataLakeRepository,
+  isLakeIngestable,
 } from '@bike4mind/common';
 import { SLACK_MOCK_USER_ID } from '@bike4mind/slack';
 import { dataLakeService } from '@bike4mind/services';
@@ -198,9 +199,7 @@ export async function authorizeLakeForWrite(
     throw err;
   }
 
-  // Same rule as the web upload doors: only a draft (first batch) or active lake takes new files,
-  // so an archived/deleting one cannot be topped up through Slack either.
-  if (lake.status !== 'draft' && lake.status !== 'active') {
+  if (!isLakeIngestable(lake.status)) {
     return {
       ok: false,
       reason: 'lake_not_writable',

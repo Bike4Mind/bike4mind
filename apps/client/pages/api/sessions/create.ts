@@ -2,6 +2,7 @@ import { sessionService, dataLakeService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
+  agentRepository,
   dataLakeAccessGrantRepository,
   dataLakeRepository,
   fabFileRepository,
@@ -143,6 +144,7 @@ const handler = baseApi().post(
         sessions: sessionRepository,
         projects: projectRepository,
         fabFiles: fabFileRepository,
+        agents: agentRepository,
       },
       logger: req.logger,
       // See the update route: the ownership reader cannot see a lake-membership file, so without

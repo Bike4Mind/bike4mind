@@ -216,10 +216,12 @@ const handler = baseApi()
 
     // Use the same resolved id already computed for the saved document, not the raw request-body
     // userId: an untrusted body value that isn't a valid ObjectId threw a Mongoose CastError deep
-    // in the analytics side-effect, which errorHandler maps to a 404 -- masking a save that already
-    // succeeded. The resolved id removes that specific trigger, but logEvent is still a post-save
-    // side-effect that can fail for other reasons (e.g. a transient write failure inside
-    // incrementUserCounter) -- same containment as the Slack/email side-effects below.
+    // in the analytics side-effect, which errorHandler maps to a 404 - masking a save that had
+    // already succeeded. That cast is a findById, so it is on `_id` and errorHandler still maps
+    // it; the resolved id plus the try/catch below are what actually contain it. logEvent is
+    // still a post-save side-effect that can fail for other reasons (e.g. a transient write
+    // failure inside incrementUserCounter) -- same containment as the Slack/email side-effects
+    // below.
     if (authenticated) {
       try {
         // Never log the verbatim report text: CounterLog carries no TTL of its own, and doing so

@@ -55,10 +55,27 @@ const makeDb = (fileOverrides: Record<string, unknown> = {}) => {
 describe('purgeDataLakeDocument', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('destroys chunks then the document and verifies both by reading them back', async () => {
+  it('destroys the document then its chunks, and verifies both by reading them back', async () => {
+    const order: string[] = [];
     const db = makeDb();
+    // Wrap rather than replace: the underlying mocks still mutate makeDb()'s `files`/`chunkCount`
+    // state, which the receipt's read-back (chunksRemaining/documentDeleted/verified) depends on.
+    const originalHardDelete = db.fabFiles.hardDeleteOneById;
+    db.fabFiles.hardDeleteOneById = vi.fn(async (id: string) => {
+      order.push('document');
+      return originalHardDelete(id);
+    });
+    const originalDeleteChunks = db.fabFileChunks.deleteManyByFabFileId;
+    db.fabFileChunks.deleteManyByFabFileId = vi.fn(async (id: string) => {
+      order.push('chunks');
+      return originalDeleteChunks(id);
+    });
+
     const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage() });
 
+    // The document goes first (#2583): an interruption between the two must strand orphaned
+    // chunks, never a document reporting a stale vectorizedChunkCount over chunks already gone.
+    expect(order).toEqual(['document', 'chunks']);
     expect(db.fabFileChunks.deleteManyByFabFileId).toHaveBeenCalledWith('file-1');
     expect(db.fabFiles.hardDeleteOneById).toHaveBeenCalledWith('file-1');
     expect(receipt).toMatchObject({
@@ -72,6 +89,92 @@ describe('purgeDataLakeDocument', () => {
       fileCount: 4,
       totalSizeBytes: 900,
     });
+  });
+
+  it('leaves the document already gone, not stranded with a stale chunk count, when the chunk delete is interrupted (#2583)', async () => {
+    // Simulates a crash/timeout between the two deletes. Because the document goes first, the
+    // interruption strands only orphaned chunks - unreachable without their file, costing storage
+    // rather than recall - never a document reporting itself vectorized over chunks that no longer
+    // exist.
+    const db = makeDb({ filePath: 'uploads/q3.pdf', fileSize: 27707 });
+    db.fabFileChunks.deleteManyByFabFileId = vi.fn(async () => {
+      throw new Error('simulated crash');
+    });
+    const onPurged = vi.fn(async () => {});
+    const shredDocumentMemory = vi.fn(async () => {});
+    const logger = { info: vi.fn(), error: vi.fn() };
+
+    // Once the row is gone there is no retry door left, so this must not throw and skip the
+    // refund below with it - it reports the gap instead, same as any other partial sweep.
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', {
+      db,
+      storage: makeStorage(),
+      onPurged,
+      shredDocumentMemory,
+      logger,
+    });
+
+    expect(db.fabFiles.hardDeleteOneById).toHaveBeenCalledWith('file-1');
+    expect(await db.fabFiles.findById('file-1')).toBeUndefined();
+    expect(receipt.documentDeleted).toBe(true);
+    expect(receipt.chunksRemaining).toBe(3);
+    expect(receipt.verified).toBe(false);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('could not delete its chunks'),
+      expect.objectContaining({ fabFileId: 'file-1' })
+    );
+    // The refund must still fire: the row really is gone, and there is no retry door to recover it
+    // through otherwise.
+    expect(onPurged).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 27707 }));
+    // Same argument, and the reason the shred is gated on `documentDeleted` and not `verified`:
+    // the row is permanently gone, so a shred skipped here is a shred that can never run. The
+    // document would keep speaking through its extracted beliefs forever.
+    expect(shredDocumentMemory).toHaveBeenCalledWith(expect.objectContaining({ fabFileId: 'file-1' }));
+  });
+
+  it('does NOT shred the document memory when the sweep left the row in place', async () => {
+    // The hazard the gate actually guards: shredding the beliefs of a document that SURVIVED the
+    // sweep destroys recall for content still in the lake. A storage-delete refusal never reaches
+    // hardDeleteOneById, so the row stays and the shred must not fire.
+    const db = makeDb({ filePath: 'uploads/q3.pdf', fileSize: 27707 });
+    const storage = { delete: vi.fn(async () => Promise.reject(new Error('s3 down'))) };
+    const shredDocumentMemory = vi.fn(async () => {});
+    const logger = { info: vi.fn(), error: vi.fn() };
+
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', {
+      db,
+      storage,
+      shredDocumentMemory,
+      logger,
+    });
+
+    expect(receipt.documentDeleted).toBe(false);
+    expect(receipt.verified).toBe(false);
+    expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
+    expect(shredDocumentMemory).not.toHaveBeenCalled();
+  });
+
+  it('reports verified:false when the session unlink fails, even though the chunks went cleanly (#2583)', async () => {
+    // `verified` is the durable audit claim that the purge converged. Nothing re-reads sessions in
+    // the read-back, so without its own flag an unlink failure is invisible: the receipt would say
+    // verified:true while chats still hold the dead id in `knowledgeIds`.
+    const db = makeDb({ filePath: 'uploads/q3.pdf', fileSize: 27707 });
+    db.sessions.findAllWithKnowledgeId = vi.fn(async () => {
+      throw new Error('sessions unavailable');
+    });
+    const logger = { info: vi.fn(), error: vi.fn() };
+
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage(), logger });
+
+    // The chunk delete is in its own try, so an unlink failure does not cost it its attempt.
+    expect(db.fabFileChunks.deleteManyByFabFileId).toHaveBeenCalledWith('file-1');
+    expect(receipt.documentDeleted).toBe(true);
+    expect(receipt.chunksRemaining).toBe(0);
+    expect(receipt.verified).toBe(false);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('could not unlink it from sessions'),
+      expect.objectContaining({ fabFileId: 'file-1' })
+    );
   });
 
   it('reports verified:false rather than throwing when the sweep leaves chunks behind', async () => {
@@ -583,9 +686,13 @@ describe('purgeDataLakeDocument', () => {
     });
   });
 
-  it('leaves the extracted facts alone when the sweep did not converge', async () => {
-    // Shredding the beliefs of a document that survived would destroy recall for content the lake
-    // still holds.
+  it('still shreds the extracted facts when the row is gone but the chunk sweep left rows behind', async () => {
+    // The gate is `documentDeleted`, not `verified`, and this is the case that separates them: the
+    // row is destroyed, the chunk sweep silently leaves rows, so the receipt files verified:false.
+    // Gating on `verified` would skip the shred here permanently - the row no longer resolves, so a
+    // re-POST 404s and no retry can ever reach it, leaving the document speaking through its
+    // beliefs forever. The hazard the gate DOES guard - shredding a document that survived - is a
+    // documentDeleted:false case, covered by the storage-refusal test above.
     const db = makeDb();
     db.fabFileChunks.deleteManyByFabFileId = vi.fn(async () => {});
     const shredDocumentMemory = vi.fn(async () => {});
@@ -597,8 +704,9 @@ describe('purgeDataLakeDocument', () => {
       logger: { info: vi.fn(), error: vi.fn() },
     });
 
+    expect(receipt.documentDeleted).toBe(true);
     expect(receipt.verified).toBe(false);
-    expect(shredDocumentMemory).not.toHaveBeenCalled();
+    expect(shredDocumentMemory).toHaveBeenCalledWith(expect.objectContaining({ fabFileId: 'file-1' }));
   });
 
   it('distinguishes collocated vectors from a door left unwired', async () => {

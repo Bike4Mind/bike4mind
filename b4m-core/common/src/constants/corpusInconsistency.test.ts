@@ -67,6 +67,203 @@ describe('metric disagreements', () => {
   });
 });
 
+describe('metric disagreements with unitRequired', () => {
+  const unitKinds = (documents: CorpusDocument[]) =>
+    detectCorpusInconsistencies(documents, { nowYear: 2026, metricUnitRequired: true }).findings.map(f => f.kind);
+
+  it('still flags one metric stated at two values', () => {
+    expect(unitKinds([doc('a', 'Uptime is 99.9%.'), doc('b', 'Uptime is 95%.')])).toEqual(['metric-disagreement']);
+  });
+
+  it('treats `percent` and `%` as the same unit, so the values still compare', () => {
+    expect(unitKinds([doc('a', 'Uptime is 99.9%.'), doc('b', 'Uptime is 95 percent.')])).toEqual([
+      'metric-disagreement',
+    ]);
+  });
+
+  it.each([
+    ['a bare index, where `of` is the separator', 'Section 2 of 5 covers ingest.', 'Section 2 of 9 covers endpoints.'],
+    ['a unit outside the vocabulary', 'Retention is 30 days.', 'Retention is 90 days.'],
+    ['an unqualified count', 'Monthly active users: 1,200.', 'Monthly active users: 1,450.'],
+  ])('drops %s', (_label, a, b) => {
+    expect(unitKinds([doc('a', a), doc('b', b)])).toEqual([]);
+  });
+
+  it('does not compare one label measured in two different units', () => {
+    // 100 ms against 2 s is a unit change, not evidence that the documents disagree.
+    expect(unitKinds([doc('a', 'Latency is 100 ms.'), doc('b', 'Latency is 2 s.')])).toEqual([]);
+  });
+
+  it('leaves the default behaviour alone', () => {
+    expect(kinds([doc('a', 'Retention is 30 days.'), doc('b', 'Retention is 90 days.')])).toEqual([
+      'metric-disagreement',
+    ]);
+  });
+});
+
+describe('metric units', () => {
+  const unitKinds = (documents: CorpusDocument[]) =>
+    detectCorpusInconsistencies(documents, { nowYear: 2026, metricUnitRequired: true }).findings.map(f => f.kind);
+
+  // `%` is the only non-word member of the unit alternation, so a trailing `\b` could never close it:
+  // `99.9%.` has no boundary between `%` and `.`. Every percentage in a corpus was captured unitless,
+  // which is invisible by default and silently empties the unit-required mode.
+  it.each(['Uptime is 99.9%.', 'Uptime is 99.9% across all regions.', 'Uptime is 99.9%'])(
+    'captures `%` in %j',
+    text => {
+      expect(unitKinds([doc('a', text), doc('b', 'Uptime is 95%.')])).toEqual(['metric-disagreement']);
+    }
+  );
+
+  it('still declines to read a unit out of a longer word', () => {
+    // `1,200 gbps` is not 1,200 GB, exactly as under the old trailing `\b`.
+    expect(unitKinds([doc('a', 'Throughput is 1,200 gbps.'), doc('b', 'Throughput is 900 gbps.')])).toEqual([]);
+  });
+
+  // A guard placed AFTER the whole optional unit group also applies to the unit-absent branch, where
+  // it makes `%` unreachable. Inside the alternation it guards only the word-shaped units, so a
+  // de-spaced `%` - a routine PDF/OCR extraction artifact - still carries its unit and the conflict
+  // survives the unit requirement.
+  it('captures `%` even when the next character is a letter', () => {
+    expect(
+      unitKinds([doc('a', 'Discount is 50%off list price.'), doc('b', 'Discount is 30% off list price.')])
+    ).toEqual(['metric-disagreement']);
+  });
+
+  // DEFAULT mode, which is what the whole-lake health scan runs: the value group is greedy over `.`,
+  // so without an anchor forcing it to end on a digit it swallows the sentence-final period and the
+  // same figure compares as `1200.` against `1200`. Chunked prose ends sentences on numbers
+  // constantly, so this is a systematic false positive rather than an edge case.
+  it.each([
+    ['Total revenue is 1,200.', 'Total revenue is 1,200 USD.'],
+    ['Monthly active users: 1,200.', 'Monthly active users: 1,200 in Q1.'],
+    ['Score is 7.', 'Score is 7 out of 10.'],
+    ['Version is 3.4.5.', 'Version is 3.4.5 today.'],
+  ])('does not read a sentence-final period as part of the value: %j', (a, b) => {
+    expect(kinds([doc('a', a), doc('b', b)])).toEqual([]);
+  });
+
+  // DEFAULT mode again. The unit-absent branch needs its own boundary, or the value ends mid-token:
+  // the glued suffix is dropped and the same quantity in two notations compares as `40` against
+  // `40ms`. It also turns identifier-shaped prose into metrics, which the module charter rules out.
+  it.each([
+    ['a unit outside the vocabulary', 'Latency is 40usec.', 'Latency is 40 ms.'],
+    ['an alphanumeric identifier', 'Instance is 8xlarge.', 'Instance is 16xlarge.'],
+    ['a version suffix', 'Version is 3beta.', 'Version is 7beta.'],
+    // `_` is a word character, so the guard has to cover it too or this one slips past the class.
+    ['an underscored identifier', 'Version is 1_2.', 'Version is 3_4.'],
+  ])('does not read a value out of the middle of a token: %s', (_label, a, b) => {
+    expect(kinds([doc('a', a), doc('b', b)])).toEqual([]);
+  });
+
+  // DEFAULT mode. The UNIT-side guard has to cover the same class, or a unit word glued to an
+  // identifier is read as a bare unit and the same quantity compares as `5` against `5gb`. Both
+  // guards are `(?!\w)` for this reason: a hand-written class drifted out of step with `\b` twice.
+  it.each([
+    ['a unit word glued to an identifier', 'Memory is 5 gb_x.', 'Memory is 5.'],
+    ['a spelled-out unit glued to an identifier', 'Uptime is 99.9 percent_x.', 'Uptime is 99.9.'],
+    ['a bare unit letter glued to an identifier', 'Rate is 3 x_factor.', 'Rate is 3.'],
+  ])('does not read a unit out of the middle of a token: %s', (_label, a, b) => {
+    expect(kinds([doc('a', a), doc('b', b)])).toEqual([]);
+  });
+
+  // Making `%` capturable also changed what DEFAULT mode reports, because `detail` is value+unit:
+  // `99.9%` and `99.9 percent` now canonicalize to one unit and agree, while `40%` and a bare `40`
+  // now differ. Pinned in both directions - the whole-lake scan is the surface that sees this.
+  it('reads a percentage and the same figure spelled out as agreeing', () => {
+    expect(kinds([doc('a', 'Uptime is 99.9%.'), doc('b', 'Uptime is 99.9 percent.')])).toEqual([]);
+  });
+
+  it('reads a percentage and the same bare figure as disagreeing', () => {
+    expect(kinds([doc('a', 'Margin is 40%.'), doc('b', 'Margin is 40 in Q1.')])).toEqual(['metric-disagreement']);
+  });
+});
+
+/**
+ * The value has to be compared as a NUMBER, not as the digits that happened to be typed. `detail` is
+ * private to this module and every test can only see whether a finding APPEARED, so a fixture holding
+ * two NOTATIONS of one figure is the only way to observe value semantics at all - and without one, a
+ * formatting difference reads as a numeric one. Both modes: the unit is present and identical in
+ * every row below, so the unit requirement cannot help.
+ */
+describe('the same figure written two ways is not a disagreement', () => {
+  const unitKinds = (documents: CorpusDocument[]) =>
+    detectCorpusInconsistencies(documents, { nowYear: 2026, metricUnitRequired: true }).findings.map(f => f.kind);
+
+  it.each([
+    ['a trailing zero', 'Uptime is 99.90%.', 'Uptime is 99.9%.'],
+    ['two trailing zeros', 'Uptime is 99.900%.', 'Uptime is 99.9%.'],
+    ['a redundant decimal', 'Margin is 40.0%.', 'Margin is 40%.'],
+    ['a leading zero', 'Margin is 099%.', 'Margin is 99%.'],
+  ])('says nothing about %s', (_label, a, b) => {
+    expect(kinds([doc('a', a), doc('b', b)])).toEqual([]);
+    expect(unitKinds([doc('a', a), doc('b', b)])).toEqual([]);
+  });
+
+  it('still reports a real difference between two figures in the same unit', () => {
+    expect(kinds([doc('a', 'Uptime is 99.90%.'), doc('b', 'Uptime is 99.8%.')])).toEqual(['metric-disagreement']);
+  });
+
+  // The non-numeric guard, and it is load-bearing rather than defensive: the value group admits
+  // multiple separators, so a version string parses to NaN. Canonicalizing that away would make
+  // every version compare equal to every other and silence the kind wholesale.
+  it('compares a multi-separator value literally rather than as one number', () => {
+    expect(kinds([doc('a', 'Version is 3.4.5 ms.'), doc('b', 'Version is 3.4.6 ms.')])).toEqual([
+      'metric-disagreement',
+    ]);
+  });
+
+  // The documented cost, pinned so it is a decision rather than a surprise: past a double's
+  // precision two genuinely different figures canonicalize to one and stop being reported. It errs
+  // toward silence, which is the safe direction for a rule that asserts disagreement.
+  it('stops distinguishing two figures past a double precision', () => {
+    expect(kinds([doc('a', 'Total is 9007199254740993 ms.'), doc('b', 'Total is 9007199254740992 ms.')])).toEqual([]);
+  });
+});
+
+/**
+ * The charter of `crossDocumentGroups`, for the two kinds that compare a value: a finding must mean
+ * the DOCUMENTS hold different values. A document stating both values supplies both on its own, so a
+ * comparison over the flat hit list reported two documents that agree - byte-identical ones included -
+ * as contradicting each other, and named a document whose only claim matched its sibling's.
+ */
+describe('agreement across documents is not a finding', () => {
+  const unitKinds = (documents: CorpusDocument[]) =>
+    detectCorpusInconsistencies(documents, { nowYear: 2026, metricUnitRequired: true }).findings;
+
+  const BOTH = 'Uptime is 99.9%.\nUptime is 95%.';
+
+  it('says nothing about two byte-identical documents', () => {
+    expect(unitKinds([doc('a', BOTH), doc('b', BOTH)])).toEqual([]);
+  });
+
+  it('says nothing when a document states both values and the other states both too', () => {
+    expect(unitKinds([doc('a', BOTH), doc('b', 'Uptime is 95%.\nUptime is 99.9%.')])).toEqual([]);
+  });
+
+  it('says nothing when each document states one value and they match', () => {
+    expect(unitKinds([doc('a', 'Uptime is 99.9%.'), doc('b', 'Uptime is 99.9%.')])).toEqual([]);
+  });
+
+  // The row that separates comparing per-document SETS from simply deferring the comparison until
+  // after the one-hit-per-document dedup. `file-b`'s only figure contradicts one of `file-a`'s, so
+  // these documents do disagree - and a dedup-first comparison drops it, because both documents
+  // happen to state 99.9% first.
+  it('still flags a document holding both values against one holding only the other', () => {
+    const findings = unitKinds([doc('a', BOTH), doc('b', 'Uptime is 99.9%.')]);
+    expect(findings.map(f => f.kind)).toEqual(['metric-disagreement']);
+    // And the evidence has to WITNESS the disagreement. Quoting whatever each document matched
+    // first offers two identical sentences as proof that the two documents differ.
+    expect(findings[0].evidence.map(e => e.excerpt)).toEqual(['Uptime is 95%.', 'Uptime is 99.9%.']);
+  });
+
+  it('applies the same rule to relationship conflicts', () => {
+    const both = 'Northwind Logistics is a customer.\nNorthwind Logistics is a prospect.';
+    expect(kinds([doc('a', both), doc('b', both)])).toEqual([]);
+    expect(kinds([doc('a', both), doc('b', 'Northwind Logistics is a customer.')])).toEqual(['relationship-conflict']);
+  });
+});
+
 describe('relationship conflicts', () => {
   it('flags an organization called a customer in one document and a prospect in another', () => {
     const report = run([

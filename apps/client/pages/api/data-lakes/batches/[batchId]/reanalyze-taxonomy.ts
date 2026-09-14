@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { isDevelopment } from '@server/utils/config';
@@ -28,7 +29,7 @@ const resolveTaxonomyDailyLimit = (req: Request): number => {
   return TAXONOMY_DAILY_CAP;
 };
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .use(
     rateLimit({

@@ -2,6 +2,32 @@ import { emailJobRepository } from '@bike4mind/database';
 import { EmailJobOverallStatus } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { z } from 'zod';
+
+// Reaches `BaseRepository.update` -> `$set`, so these cast before validators run. `isTestMode`
+// and the `recipientFilter` booleans are Boolean-typed (throw `CastError kind='Boolean'` on 2,
+// {} or []), and `testEmailAddresses` plus the filter's four id arrays are `[String]` (throw on
+// an object element). `variables` is a `Map<String>`: a non-object there raises a TypeError
+// rather than a CastError, so it answers 500 both before and after the narrowing -- validating
+// it here is an improvement, not a regression fix, and is included because it is the same body.
+const recipientFilterSchema = z.object({
+  all: z.boolean().optional(),
+  allUsers: z.boolean().optional(),
+  allSubscribers: z.boolean().optional(),
+  userIds: z.array(z.string()).optional(),
+  subscriberIds: z.array(z.string()).optional(),
+  specificEmails: z.array(z.string()).optional(),
+  tags: z.array(z.string()).optional(),
+});
+
+const updateBodySchema = z.object({
+  name: z.string().optional(),
+  subject: z.string().optional(),
+  variables: z.record(z.string(), z.string()).optional(),
+  recipientFilter: recipientFilterSchema.optional(),
+  isTestMode: z.boolean().optional(),
+  testEmailAddresses: z.array(z.string()).optional(),
+});
 
 const handler = baseApi()
   .get(async (req, res) => {
@@ -35,22 +61,11 @@ const handler = baseApi()
       throw new BadRequestError('Cannot update campaign while sending is in progress');
     }
 
-    const { name, subject, variables, recipientFilter, isTestMode, testEmailAddresses } = req.body as {
-      name?: string;
-      subject?: string;
-      variables?: Record<string, string>;
-      recipientFilter?: {
-        all?: boolean;
-        allUsers?: boolean;
-        allSubscribers?: boolean;
-        userIds?: string[];
-        subscriberIds?: string[];
-        specificEmails?: string[];
-        tags?: string[];
-      };
-      isTestMode?: boolean;
-      testEmailAddresses?: string[];
-    };
+    const parsedBody = updateBodySchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      throw new BadRequestError('Invalid request body');
+    }
+    const { name, subject, variables, recipientFilter, isTestMode, testEmailAddresses } = parsedBody.data;
 
     const updated = await emailJobRepository.update({
       id,

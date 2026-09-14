@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { dataLakeService } from '@bike4mind/services';
@@ -72,7 +73,7 @@ const lakeMemoryCallerRateLimit = rateLimit({
 
 const gateDeps = { db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository } };
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   // POST-scoped: the GET is the state poll the manager panel drives while a build runs, and capping
   // it would throttle reading state rather than starting work. Same shape as /converge.
@@ -88,6 +89,7 @@ const handler = baseApi()
     return res.json(lakeMemory);
   })
   .post(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
+    assertDataLakeWriteScope(req);
     const { id } = req.query;
     const ctx = await toAccessContext(req);
     const lake = await dataLakeService.assertLakeRebuildAccess(id, ctx, gateDeps);

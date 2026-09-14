@@ -3,6 +3,52 @@
  * Used by both the index builder (Node.js) and the client (React)
  */
 
+import type { HelpAccessLevel } from './types.js';
+
+/**
+ * Whether an entry is publicly readable. Unset counts as public, matching
+ * filterHelpIndex in apps/client/pages/api/help/index.ts.
+ *
+ * Every access-level branch must be written as "is it public?" rather than
+ * "is it admin?": bundle-help-content.ts sends anything non-public to the
+ * admin-only root, so a new HelpAccessLevel value added to the union would
+ * otherwise be requested from the public static path and fail open on the
+ * client while 404ing in practice. Keep this the single definition.
+ */
+export function isPublicAccessLevel(accessLevel: HelpAccessLevel | undefined): boolean {
+  return !accessLevel || accessLevel === 'public';
+}
+
+/**
+ * Bundled help content locations, relative to apps/client.
+ *
+ * Four call sites must agree on these: bundle-help-content.ts writes both roots,
+ * vectorize-help-content.ts embeds from both, and apps/client's server/help/retrieval.ts
+ * and pages/api/help/content.ts read them at runtime. Divergence is silent and dangerous -
+ * a value that put the admin root back under public/ would re-expose admin-only articles as
+ * unauthenticated static assets with every test still passing - so both live here only.
+ */
+export const PUBLIC_HELP_CONTENT_DIR = 'public/help-content';
+export const ADMIN_HELP_CONTENT_DIR = 'app/generated/help-content-admin';
+
+/*
+ * Neither constant is statically resolvable at its read sites, and that is deliberate. Both server
+ * readers interpolate them into a template literal so that no content root ever reaches a `path.*`
+ * call: @vercel/nft cannot fold a `path.resolve()` whose base it does not know, and its fallback
+ * is to glob the entire app directory into the traced bundle - measured at 47 MB against Lambda's
+ * hard 250 MB ceiling. See `apps/client/server/help/contentPath.ts` for the full reasoning.
+ *
+ * The consequence is that nothing traces these directories implicitly any more. Both roots are
+ * declared in `outputFileTracingIncludes` in `apps/client/next.config.mjs`, and that declaration
+ * is now the ONLY thing carrying them into the Next server function - and, via `.next/standalone`,
+ * the only thing carrying the admin root into a self-host image (the Dockerfile's runner stage
+ * copies `.next/standalone`, `.next/static` and `public/`, so the public root arrives on its own
+ * but nothing copies `app/generated`).
+ *
+ * So a value changed here has to be changed in that glob too. Get it wrong and help content 404s
+ * at runtime with nothing failing at build time; `loadHelpContent` swallows the ENOENT.
+ */
+
 /**
  * Strip markdown inline formatting from text (bold, italic, code, links)
  * This ensures consistent text extraction from both raw markdown and rendered content

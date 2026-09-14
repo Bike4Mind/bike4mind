@@ -10,7 +10,10 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: { assertLakeWriteAccess, assertCanWriteDataLakeTags, reconcileDataLakeFallbackTags },
 }));
 
-import { FabFileSourceType } from '@bike4mind/common';
+// The real class, not a mock - `dataLakeLinkIngest.ts` now imports `DuplicateFabFileError` and
+// `isDuplicateFabFileError` from `@bike4mind/common` directly (moved there so a single package
+// owns its identity - see errors.ts), so no shim is needed to make `instanceof` agree here.
+import { DuplicateFabFileError, FabFileSourceType } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { SLACK_MOCK_USER_ID } from '@bike4mind/slack';
 import { ingestSlackLinkIntoLake, type SlackLinkIngestDeps } from './dataLakeLinkIngest';
@@ -80,6 +83,7 @@ const run = (overrides: Record<string, unknown> = {}) =>
       link: LINK,
       channel: 'C123',
       messageTs: '1700000000.0001',
+      teamId: 'T123',
       ...overrides,
     } as never,
     deps
@@ -212,15 +216,50 @@ describe('successful ingest', () => {
       ],
       provenance: {
         sourceType: FabFileSourceType.SLACK,
-        sourceMetadata: { channel: 'C123', messageTs: '1700000000.0001', sourceUrl: LINK },
+        sourceMetadata: { channel: 'C123', messageTs: '1700000000.0001', sourceUrl: LINK, teamId: 'T123' },
       },
       // Carried from the AUTHORIZED context, and asserted here because `createFabFile` runs a third
       // manage gate that cannot derive this from the user document: dropping it refuses an org admin
       // the prologue already authorized. Exact-match assertion, so a future field cannot go
       // unnoticed either.
       administeredOrgIds: ['org-2'],
+      // Scopes the dedup check to this lake - see the `duplicate content` describe block below.
+      datalakeTag: 'datalake:sales',
     });
-    expect(outcome).toEqual({ ok: true, lakeName: 'Sales', fileName: 'An Article', sourceUrl: LINK });
+    expect(outcome).toEqual({
+      ok: true,
+      lakeName: 'Sales',
+      fileName: 'An Article',
+      sourceUrl: LINK,
+      duplicate: false,
+    });
+  });
+});
+
+describe('duplicate content is skipped, not re-added', () => {
+  it('reports skip-not-replace, matching the FILE path wording, without creating anything new', async () => {
+    // createByUrl.ts throws this BEFORE any row is created when its checkDuplicate adapter (bound
+    // to findByContentHashesInDataLake, scoped to this lake's tag) finds a live match.
+    createLakeFileFromUrl.mockRejectedValue(new DuplicateFabFileError({ id: 'fab-existing' } as never, 'An Article'));
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({
+      ok: true,
+      lakeName: 'Sales',
+      fileName: 'An Article',
+      sourceUrl: LINK,
+      duplicate: true,
+    });
+  });
+
+  it('is reported as a SUCCESS, never folded into the refusal de-dup path', async () => {
+    createLakeFileFromUrl.mockRejectedValue(new DuplicateFabFileError({ id: 'fab-existing' } as never, 'An Article'));
+
+    const outcome = await run();
+
+    expect(outcome.ok).toBe(true);
+    expect(deps.logger.error).not.toHaveBeenCalled();
   });
 });
 

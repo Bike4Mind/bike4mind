@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -15,7 +16,7 @@ import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   // GET /api/data-lakes - list accessible data lakes
   .get(async (req: Request, res) => {
@@ -53,6 +54,7 @@ const handler = baseApi()
   })
   // POST /api/data-lakes - create a new data lake
   .post(async (req: Request, res) => {
+    assertDataLakeWriteScope(req);
     const userId = req.user.id;
     const params = CreateDataLakeRequestInput.parse(req.body);
 

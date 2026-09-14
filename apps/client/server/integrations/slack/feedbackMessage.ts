@@ -19,7 +19,10 @@ export interface FeedbackPromptMetaInput {
   finishReason?: string;
   functionCalls?: Array<{ name?: string }> | null;
   citables?: unknown[];
-  context?: { lakeMemory?: { beliefCount?: number; dataLakeTags?: string[] } };
+  // beliefBudget is an explicit addition to this allowlist (#2496), not an inherited field: it is
+  // the admin-configured lakeMemoryRecallK in force for the turn, so it carries no user or document
+  // content, and without it `beliefCount` cannot say whether the cap bound the turn.
+  context?: { lakeMemory?: { beliefCount?: number; beliefBudget?: number; dataLakeTags?: string[] } };
 }
 
 const MAX_FUNCTION_CALL_NAMES = 5;
@@ -146,7 +149,14 @@ export function buildPromptMetaSummary(promptMeta: FeedbackPromptMetaInput | nul
   if (lakeMemory?.beliefCount !== undefined) {
     const tags = lakeMemory.dataLakeTags?.map(escapeLine) ?? [];
     const tagsPart = tags.length ? ` (${joinWithOverflow(tags, MAX_DATA_LAKE_TAGS)})` : '';
-    lines.push(`Lake beliefs: ${lakeMemory.beliefCount}${tagsPart}`);
+    // `8/24` rather than `8`: the count alone cannot say whether the lakeMemoryRecallK budget bound
+    // the turn, which is the first thing worth knowing when a report shows thin lake grounding.
+    // Bare when the budget is absent - turns recorded before that field existed have none.
+    const countPart =
+      lakeMemory.beliefBudget !== undefined
+        ? `${lakeMemory.beliefCount}/${lakeMemory.beliefBudget}`
+        : `${lakeMemory.beliefCount}`;
+    lines.push(`Lake beliefs: ${countPart}${tagsPart}`);
   }
 
   return lines.length ? lines.join('\n') : 'none';

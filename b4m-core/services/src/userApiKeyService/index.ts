@@ -1,4 +1,5 @@
 export * from './create';
+export * from './delete';
 export * from './getSystemUser';
 export * from './list';
 export * from './rateLimit';
