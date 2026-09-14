@@ -107,7 +107,17 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
     // query - and fail closed, matching executeCompletion. Scoped to the API-key path only: that
     // caller asked for org billing explicitly, whereas the implicit JWT own-org fallback must
     // degrade rather than 403 a caller on a stale pointer (see resolveBillingOrgId).
-    if (billingOrg && req.apiKeyInfo && !organizationService.isCurrentOrgMember(billingOrg, userId)) {
+    //
+    // A platform admin mints org-billed keys on a customer org's behalf (user-api-keys/index.ts
+    // admits them explicitly) and is never on that org's roster, so the authority arm is checked
+    // here rather than inside isCurrentOrgMember, which reports roster attachment only. billingUser
+    // is already in hand above - no extra query.
+    if (
+      billingOrg &&
+      req.apiKeyInfo &&
+      !billingUser?.isAdmin &&
+      !organizationService.isCurrentOrgMember(billingOrg, userId)
+    ) {
       throw new BadRequestError(
         'This API key bills an organization you are no longer a member of. Re-mint the key to continue.'
       );

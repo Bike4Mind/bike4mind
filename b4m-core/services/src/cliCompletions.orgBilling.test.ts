@@ -221,6 +221,17 @@ describe('executeCompletion - org billing routing', () => {
     expect(mockSubtractCredits).not.toHaveBeenCalled();
   });
 
+  it('bills the org for a platform admin, who is on no org roster', async () => {
+    // The mint route lets a platform admin create an org-billed key for a customer org, so a
+    // roster-only gate would break that key on its very first call, not just after someone left.
+    const { db, organizations } = buildDb({ org: buildOrg({ users: [{ userId: 'someone-else' }] }) });
+    db.users.findById = vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100, isAdmin: true });
+
+    await executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' });
+
+    expect(organizations.incrementCredits).toHaveBeenCalledWith('org1', -10);
+  });
+
   it('bills the org for its billing owner, who holds no users[] row', async () => {
     // assignManager/ownership never write a roster row, so a roster-only check would 403 the two
     // principals most entitled to spend the pool.

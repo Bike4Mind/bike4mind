@@ -214,8 +214,20 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // Fail closed rather than falling back to personal billing: the caller asked to spend the org's
     // credits, and quietly spending their own instead would be a surprising charge they never
     // authorized. An explicit error tells them to re-mint the key.
+    //
+    // The platform-admin arm lives HERE, not in the predicate: `isCurrentOrgMember` reports roster
+    // attachment, not authority, and must stay that way so the two ideas cannot be conflated. But a
+    // platform admin mints org-billed keys on a customer org's behalf as a normal support action -
+    // pages/api/user-api-keys/index.ts admits them explicitly - and is never on that org's roster,
+    // so without this arm such a key would fail on its very first call, not merely after someone
+    // left. Only queried on the refusal path, so the happy path keeps its no-extra-query property.
     if (!isCurrentOrgMember(organization, userId)) {
-      throw new Error(`[CLI_CREDITS] User ${userId} is no longer a member of billing organization ${organization.id}`);
+      const actor = await db.users.findById(userId);
+      if (!actor?.isAdmin) {
+        throw new Error(
+          `[CLI_CREDITS] User ${userId} is no longer a member of billing organization ${organization.id}`
+        );
+      }
     }
   }
   const billToOrg = organization !== null;

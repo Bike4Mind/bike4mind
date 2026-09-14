@@ -488,6 +488,21 @@ describe('POST /api/ai/music', () => {
     expect(generate).not.toHaveBeenCalled();
   });
 
+  // A platform admin is authorized to mint an org-billed key for a customer org but is never on
+  // that org's roster, so a roster-only gate would break the key on its first call.
+  it('admits a platform admin holding an org-billed key for an org they are not on', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateMusicCredits.mockReturnValue({ requiredCredits: 200, usdCost: 0.1, billedSeconds: 40 });
+    findById.mockResolvedValue({ id: 'u1', currentCredits: 0, isAdmin: true });
+    orgFindById.mockResolvedValue({ id: 'org1', currentCredits: 10000, userDetails: [], users: [] });
+
+    const { res, promise } = run({ prompt: 'orchestral', lengthMs: 40000 }, orgKey);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(orgIncrement).toHaveBeenCalled();
+  });
+
   // The other side of that gate, deliberately: a browser/JWT caller did not ask for org billing,
   // so a stale own-org pointer degrades as before rather than locking them out of the route.
   it('does not apply the roster check to a browser/JWT caller billing their own org seat', async () => {
