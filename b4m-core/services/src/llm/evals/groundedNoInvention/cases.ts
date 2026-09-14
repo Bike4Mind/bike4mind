@@ -23,7 +23,9 @@
  *  - `mustAnswer` on a fact the corpus DOES carry - the control. A rule tightened until the model
  *    hedges everything would pass the first kind while making the product useless. Four of these:
  *    one asks for the fact, `confirm-supported-claim` asks "is that accurate?" about a claim the
- *    corpus SUPPORTS, and `correct-contradicted-claim` asks it about a claim the corpus CONTRADICTS
+ *    corpus SUPPORTS, `explain-supported-mechanism` asks HOW a supported result was reached (the
+ *    over-correction control described below), and `correct-contradicted-claim` asks it about a claim
+ *    the corpus CONTRADICTS
  *    (Pinebrook's real 18% versus an asserted 40%) - the direction with the business consequence,
  *    where "unsupported" alone would leave an inflated figure standing uncorrected. The second exists
  *    because the rule now tells the model not to answer yes or no to an accuracy question, and that
@@ -137,7 +139,7 @@ export const GROUNDED_CASES: GroundedCase[] = [
     expectation: {
       kind: 'mustAnswer',
       expected: /\b5\b/,
-      why: 'The one cell the other six leave uncovered, and the only place the derive licence and the decline-the-yes/no clause overlap: a DERIVED figure is by construction a result the retrieved content does not contain, so an accuracy question about one satisfies the scope test for both. The asserted count is wrong on purpose - a model echoing "3" or reporting that the content states no node count has read the prohibition as governing, and only producing 5 shows the licence survived. `index.ts` asserts these clauses leave the derive licence untouched; until now that was asserted rather than measured.',
+      why: 'The one cell the other nine leave uncovered, and the only place the derive licence and the decline-the-yes/no clause overlap: a DERIVED figure is by construction a result the retrieved content does not contain, so an accuracy question about one satisfies the scope test for both. The asserted count is wrong on purpose - a model echoing "3" or reporting that the content states no node count has read the prohibition as governing, and only producing 5 shows the licence survived. `index.ts` asserts these clauses leave the derive licence untouched; until now that was asserted rather than measured.',
     },
   },
   {

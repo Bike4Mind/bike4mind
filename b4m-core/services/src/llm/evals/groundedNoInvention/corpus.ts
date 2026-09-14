@@ -90,11 +90,17 @@ export function figuresIn(text: string): string[] {
 
 /**
  * The closed-world allowlist `grade.ts` checks a reply's percentages against: every number the fixture
- * corpus states. Derived from the sections rather than hand-listed so editing the corpus cannot
- * silently widen it.
+ * corpus states. Derived from the sections rather than hand-listed so it cannot go stale against them.
  *
  * BARE numbers, not just the ones carrying a percent sign, because the corpus writes ranges where only
  * the last figure is signed ("average 15 to 20%") - a reply quoting that range honestly must not read
  * as having supplied the 15 itself.
+ *
+ * FLAT, with no link back to the section or claim a number came from, so the verdict on an invented
+ * percentage turns on digit-string collision: 25 is licensed by the competitive section's "no
+ * competitor has published a figure above 25%", 400 by a shipments-per-hour rate and 2024 by a year.
+ * Deriving it does not protect against that - it is the mechanism: a number added anywhere in the
+ * corpus, for any reason, licenses that percentage for every claim. Closing it needs the reply graded
+ * against the section it cites, which nothing here does.
  */
 export const CORPUS_FIGURES: ReadonlySet<string> = new Set(FIXTURE_SECTIONS.flatMap(figuresIn));

@@ -59,8 +59,9 @@ the whole system-prompt stack - tells a harsher story on the same case and the s
 | word-list wording (see below) | 2 / 12 |
 | shipped wording | **2 failures / 30** |
 
-The other cases were clean at 5 samples each on the shipped wording, including both `mustAnswer`
-controls.
+The five other cases that existed then were clean at 5 samples each on the shipped wording,
+including both `mustAnswer` controls. `premise-challenge/invites-elaboration` and
+`grounded-answer/explain-supported-mechanism` were added afterwards and have never been sampled.
 
 **Every number in this section predates the supply class, and none of them is comparable to a run made
 after it.** They were produced by a grader with three claim classes, which could not fail a reply that
@@ -117,6 +118,6 @@ Grading is lexical, not semantic: the failure is a model reaching for a blunt ve
 
 The supply class (`suppliedTheClaim`) is read by `gradeMustNotDenyPremise` alone, on two signals: a **percentage** appearing in neither the fixture corpus nor the user's own question, and a **general-knowledge frame** ("published benchmarks show", "gains like that are typically ..."). `gradeMustAnswer` stays blind to it by construction - a derived figure and a corrected one are both specifics the closed-world check cannot license, so reading it there would fail all three `mustAnswer` controls for doing the right thing.
 
-It is narrow on purpose, and the narrowings cost reach. Only percentages are scanned, so a fabricated dollar value or duration is not caught; the allowlist is every number the corpus states rather than only its percentages, so quoting "15 to 20%" does not read as inventing the 15; and the frame signal is suppressed inside a gap-naming sentence and its generalisation half ("typically", "usually") needs a result noun or an attribution verb alongside it, so a pointer at where the claim could be confirmed does not fail - at the cost of missing a supply that rides in the same sentence as the gap report, or generalises about something that set does not name. **A purely qualitative supply carrying neither signal grades clean**, and two of the four measured turns were that shape. Reaching those needs a semantic check of whether an assertion is corpus-backed, which no pattern does.
+It is narrow on purpose, and the narrowings cost reach. Only percentages are scanned, so a fabricated dollar value or duration is not caught. The allowlist is every number the corpus states rather than only its percentages, so quoting "15 to 20%" does not read as inventing the 15 - but it is a **flat** set with no link back to the section a number came from, so an invented percentage colliding with any number anywhere in the corpus is licensed (25, 400 and 2024 all escape). The frame signal is suppressed inside a gap-naming sentence, in a clause that REFUSES the source ("I will not answer from general knowledge" names the same words as the supply it declines), and its generalisation half ("typically", "usually") needs a result noun or attribution verb alongside it drawn from a set that excludes the corpus's own vocabulary - `result`, `reduction`, `improvement`, `savings` - because those are what an honest reply writes when it offers what the content DOES cover. Each of those costs reach: a supply riding in the same sentence as the gap report, or generalising about something the remaining set does not name, escapes. **A purely qualitative supply carrying neither signal grades clean**, and two of the four measured turns were that shape. Reaching those needs a semantic check of whether an assertion is corpus-backed, which no pattern does.
 
 Denials are detected per sentence, and a denial the same sentence disclaims ("that does not mean it did not happen") does not count - the wanted answer reaches for the same words the defect does, one sentence later and negated.
