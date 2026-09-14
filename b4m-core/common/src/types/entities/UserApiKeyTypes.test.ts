@@ -34,6 +34,7 @@ const EXPECTED_NOT_CONFINED: ReadonlySet<ApiKeyScope> = new Set([
   ApiKeyScope.DATALAKE_WRITE,
   ApiKeyScope.DATALAKE_SHARE,
   ApiKeyScope.DATALAKE_QUERY,
+  ApiKeyScope.OVERWATCH_READ,
 ]);
 
 describe('CONFINED_API_KEY_SCOPES', () => {
