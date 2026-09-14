@@ -59,12 +59,21 @@ export type ResolvedSearchBudgets = SemanticSearchBudgets & {
  * a matched chunk to SERVE, and (#1955) how many passages and how relevant they must be for
  * `search_knowledge_base` specifically.
  *
- * Shared by every entrypoint (the search route, the chat KB tool, forced retrieval) so no surface
- * derives its budget by hand. That guarantees one DERIVATION, not one number: the KB tool resolves
- * through the scoped path below while the search route (data-lakes/semantic-search) still resolves
- * platform-only, so once an org/owner override is written the two surfaces legitimately scan to
- * different depths for the same caller. Widening the guarantee back to one number means giving the
- * remaining platform-only callers a scope, not narrowing this resolver.
+ * Shared by both retrieval entrypoints - the search route (data-lakes/semantic-search) and the chat
+ * KB tool - so neither derives its budget by hand. (Forced retrieval does NOT come through here: it
+ * builds its own scoped read via resolveScopedSettingValues in ChatCompletionFeatures.)
+ *
+ * As of #2709 both entrypoints resolve on a CALLER scope rather than platform-only, so an org/owner
+ * override moves both surfaces instead of just the chat one. That is why `scope` below is REQUIRED:
+ * a platform-only read is still available, but only by passing an empty scope (`{}`, the idiom
+ * lakeAdmissionGate already uses), never by omitting the argument. Two of the three call sites had
+ * silently omitted it, which is the whole of #2709.
+ *
+ * The two entrypoints do NOT yet derive the org rung the same way, so equal budgets are not
+ * guaranteed for a caller whose selected org is not one they belong to. The route verifies the
+ * selected org against the caller's membership set (#1674) and drops the rung when it fails; the KB
+ * tool passes `context.user.organizationId` through as-is, because ToolContext wires no repo that
+ * could check membership. Closing that gap means threading one through the tool surfaces first.
  *
  * Uses the CACHED settings accessor, so this costs no round-trip on a warm cache.
  *
@@ -78,26 +87,41 @@ export type ResolvedSearchBudgets = SemanticSearchBudgets & {
  * because the symptom of a bad value would otherwise be "retrieval quietly covers less than the
  * admin configured", which is indistinguishable from a small corpus.
  *
- * Scope (epic #1658 lane 0 / #1660): callers that know the org/owner a search runs for may pass a
- * `scope` (and the `scopedSettings` overlay repo) to let a narrower rung tighten the budget below
- * the platform ceiling. Org and Owner are the only rungs on offer: every key read here lost or
+ * Scope (epic #1658 lane 0 / #1660): a caller passes the org/owner a search runs for as `scope`,
+ * plus the `scopedSettings` overlay repo, to let a narrower rung tighten the budget below the
+ * platform ceiling. Org and Owner are the only rungs on offer: every key read here lost or
  * never had a Lake rung, because one search spans EVERY lake the caller can reach (#2624), so a
  * `scope.lakeId` reaching this function resolves nothing no matter what is stored against it.
- * Omitting both - every caller today - takes the byte-identical platform path below, so this
- * change is additive. Chunk-policy rungs ride this same seam when #1662 gives `DefaultChunkSize`
- * its `scope.settableAt`; the serve budget below picks them up with no edit here.
+ * Passing rungs WITHOUT the repo warns rather than resolving platform-only in silence - it is a
+ * wiring mistake, since the two travel together. Chunk-policy rungs ride this same seam when #1662
+ * gives `DefaultChunkSize` its `scope.settableAt`; the serve budget below picks them up with no
+ * edit here.
  */
 export async function resolveSearchBudgets(
   db: {
     adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
     scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
   },
-  logger?: Logger,
-  scope?: SettingScope
+  logger: Logger | undefined,
+  scope: SettingScope
 ): Promise<ResolvedSearchBudgets> {
+  const hasRung = scopeHasRung(scope);
+
+  // Rungs with no store to read them from is a WIRING bug, not a platform read: the caller asked for
+  // scoped budgets and would have got platform ones with no signal. Warn rather than resolve quietly -
+  // silence here is the same failure #2709 found one level up, where the omission was the scope itself.
+  // Once per process, for the reason the ceiling warn below is throttled: this states a WIRING fact,
+  // and this resolver runs on every search of every turn.
+  if (hasRung && !db.scopedSettings && !missingOverlayStoreWarned) {
+    missingOverlayStoreWarned = true;
+    logger?.warn?.(
+      '[semanticSearch] scope carries override rungs but no scopedSettings store is wired; resolving platform-only'
+    );
+  }
+
   // Scoped path: only when a caller both supplies rungs and wires the overlay store. The resolver
   // falls back to the platform value per key, so an un-overridden budget matches the platform path.
-  if (scope && db.scopedSettings && scopeHasRung(scope)) {
+  if (hasRung && db.scopedSettings) {
     try {
       const values = await resolveScopedSettingValues(
         // DefaultChunkSize rides along deliberately. It declares no `scope.settableAt`, so
@@ -247,9 +271,13 @@ function resolveServeBudget(rawChunkSize: string | number | null | undefined, lo
  */
 const ceilingWarnedTargets = new Set<number>();
 
-/** Test-only: the limiter above is module state, so a test asserting it has to start from a clean slate. */
-export function resetServeCeilingWarnLimiter(): void {
+/** Same once-per-process reasoning, for the missing-overlay-store warn at the top of the resolver. */
+let missingOverlayStoreWarned = false;
+
+/** Test-only: the limiters above are module state, so a test asserting one starts from a clean slate. */
+export function resetBudgetWarnLimiters(): void {
   ceilingWarnedTargets.clear();
+  missingOverlayStoreWarned = false;
 }
 
 function scopeHasRung(scope: SettingScope): boolean {

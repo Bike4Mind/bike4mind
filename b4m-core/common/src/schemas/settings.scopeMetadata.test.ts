@@ -5,8 +5,18 @@ import { SettingScopeLevel } from '../types/entities/ScopedSettingTypes';
 /**
  * Lockstep guard for the scoped-settings foundation (#1660). The resolver relies on invariants that
  * live in the setting DEFINITION, so drift there would silently break scoping rather than fail a
- * type. Pinning them here means a bad `scope` registration fails the build - the "a lever with no
- * consumer / a lever that lies" class the epic (#1683) wants stopped at the source.
+ * type. Pinning them here means a malformed `scope` registration fails the build.
+ *
+ * SCOPE OF THIS GUARD, deliberately narrow (#2709): every assertion below is STRUCTURAL - it reads
+ * `settingsMap` and nothing else, so it can only judge whether a declaration is well-formed, never
+ * whether a consumer honors it. It does NOT catch "a lever with no consumer / a lever that lies",
+ * which this docblock used to claim and #2624 walked straight past. That class is a property of
+ * CALL SITES, not of this file, and the defence against it belongs where it is caused: making
+ * `scope` a REQUIRED parameter, as `resolveSearchBudgets` now does, so a new consumer has to name
+ * the scope it wants instead of inheriting platform-only by omission. Prefer that to a second list
+ * here. Note what it does and does not buy: it forces the decision to be written down, and a
+ * caller that deliberately writes `{}` still reads platform-only - which is the point, since some
+ * genuinely should. `resolveScopedSettingValues` has no such requirement today.
  */
 const VALID_LEVELS = new Set([SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake]);
 

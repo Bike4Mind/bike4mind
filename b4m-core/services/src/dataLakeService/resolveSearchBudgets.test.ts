@@ -18,7 +18,7 @@ import {
   deriveServeCharBudget,
 } from '@bike4mind/common';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
-import { resetServeCeilingWarnLimiter, resolveSearchBudgets } from './resolveSearchBudgets';
+import { resetBudgetWarnLimiters, resolveSearchBudgets } from './resolveSearchBudgets';
 
 /**
  * Every resolved field OTHER than the scan budgets, at its coded behavior-preserving default: the
@@ -85,13 +85,13 @@ beforeEach(() => {
   // stored values and passes or fails for the wrong reason.
   invalidateSettingsCache();
   invalidateScopedSettingsCache();
-  // The ceiling warn is throttled by module state, so without this a later case sees it already spent.
-  resetServeCeilingWarnLimiter();
+  // Both warns are throttled by module state, so without this a later case sees one already spent.
+  resetBudgetWarnLimiters();
 });
 
 describe('resolveSearchBudgets - platform path (unchanged behavior)', () => {
   it('uses coded defaults when no rows exist', async () => {
-    const budgets = await resolveSearchBudgets(makeDb({}));
+    const budgets = await resolveSearchBudgets(makeDb({}), undefined, {});
     expect(budgets).toEqual({
       maxFiles: DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
       maxChunks: DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
@@ -102,7 +102,9 @@ describe('resolveSearchBudgets - platform path (unchanged behavior)', () => {
 
   it('uses configured platform values', async () => {
     const budgets = await resolveSearchBudgets(
-      makeDb({ dataLakeSearchMaxFiles: '10', dataLakeSearchMaxChunks: '200' })
+      makeDb({ dataLakeSearchMaxFiles: '10', dataLakeSearchMaxChunks: '200' }),
+      undefined,
+      {}
     );
     expect(budgets).toEqual({ maxFiles: 10, maxChunks: 200, maxChunkChars: DEFAULT_SERVE_CHARS, ...NON_SCAN_DEFAULTS });
   });
@@ -112,7 +114,8 @@ describe('resolveSearchBudgets - platform path (unchanged behavior)', () => {
     // maxChunks '0' is < 1 (unusable -> default + warn); maxFiles '7.9' floors to 7.
     const budgets = await resolveSearchBudgets(
       makeDb({ dataLakeSearchMaxFiles: '7.9', dataLakeSearchMaxChunks: '0' }),
-      logger
+      logger,
+      {}
     );
     expect(budgets.maxFiles).toBe(7);
     expect(budgets.maxChunks).toBe(DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT);
@@ -208,7 +211,7 @@ describe('resolveSearchBudgets - scoped path', () => {
     ]);
 
     const scoped = await resolveSearchBudgets(db, undefined, scope);
-    const platform = await resolveSearchBudgets(db);
+    const platform = await resolveSearchBudgets(db, undefined, {});
 
     expect(scoped.maxFiles).toBe(25); // proves the scoped branch actually ran
     expect(scoped.maxChunkChars).toBe(deriveServeCharBudget(300).maxChunkChars);
@@ -242,7 +245,7 @@ describe('resolveSearchBudgets - serve budget', () => {
   it('derives the serve budget from the chunk policy, not from a cap of its own', async () => {
     const logger = loggerStub();
 
-    const budgets = await resolveSearchBudgets(makeDb({ DefaultChunkSize: '1000' }), logger);
+    const budgets = await resolveSearchBudgets(makeDb({ DefaultChunkSize: '1000' }), logger, {});
 
     expect(budgets.maxChunkChars).toBe(deriveServeCharBudget(1000).maxChunkChars);
     // The invariant the issue asks for: a full chunk fits in what the serve path will emit.
@@ -253,7 +256,7 @@ describe('resolveSearchBudgets - serve budget', () => {
   it('falls back to the chunker default when no chunk size is configured, silently', async () => {
     const logger = loggerStub();
 
-    const budgets = await resolveSearchBudgets(makeDb({}), logger);
+    const budgets = await resolveSearchBudgets(makeDb({}), logger, {});
 
     expect(budgets.maxChunkChars).toBe(DEFAULT_SERVE_CHARS);
     // An unset setting is the normal case, so it must not look like a misconfiguration.
@@ -263,14 +266,18 @@ describe('resolveSearchBudgets - serve budget', () => {
   it('warns and uses the chunker default for a set-but-unusable chunk size', async () => {
     const logger = loggerStub();
 
-    const budgets = await resolveSearchBudgets(makeDb({ DefaultChunkSize: 'not-a-number' }), logger);
+    const budgets = await resolveSearchBudgets(makeDb({ DefaultChunkSize: 'not-a-number' }), logger, {});
 
     expect(budgets.maxChunkChars).toBe(DEFAULT_SERVE_CHARS);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('DefaultChunkSize'));
   });
 
   it('never serves below the historical cap, however small the configured chunk is', async () => {
-    const budgets = await resolveSearchBudgets(makeDb({ DefaultChunkSize: String(MIN_PASSAGE_TOKEN_TARGET) }));
+    const budgets = await resolveSearchBudgets(
+      makeDb({ DefaultChunkSize: String(MIN_PASSAGE_TOKEN_TARGET) }),
+      undefined,
+      {}
+    );
 
     expect(budgets.maxChunkChars).toBe(SERVE_CHUNK_CHARS_FLOOR);
   });
@@ -279,7 +286,7 @@ describe('resolveSearchBudgets - serve budget', () => {
     const logger = loggerStub();
 
     // 6554 tokens is what the pre-passage-granularity chunker produced; those chunks still exist.
-    const budgets = await resolveSearchBudgets(makeDb({ DefaultChunkSize: '6554' }), logger);
+    const budgets = await resolveSearchBudgets(makeDb({ DefaultChunkSize: '6554' }), logger, {});
 
     expect(budgets.maxChunkChars).toBe(SERVE_CHUNK_CHARS_CEILING);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('6554'));
@@ -291,9 +298,9 @@ describe('resolveSearchBudgets - serve budget', () => {
     const db = makeDb({ DefaultChunkSize: '6554' });
     const ceilingWarn = expect.stringContaining('exceeds the per-passage serve ceiling');
 
-    await resolveSearchBudgets(db, logger);
-    await resolveSearchBudgets(db, logger);
-    await resolveSearchBudgets(db, logger);
+    await resolveSearchBudgets(db, logger, {});
+    await resolveSearchBudgets(db, logger, {});
+    await resolveSearchBudgets(db, logger, {});
 
     // Search runs up to MAX_SEARCHES times a turn for every user, so a per-call warn buries the
     // signal in its own repetition. The fact is about the config, not about any one request.
@@ -306,9 +313,9 @@ describe('resolveSearchBudgets - serve budget', () => {
   it('warns again when the chunk target changes to another ceiling-bound value', async () => {
     const logger = loggerStub();
 
-    await resolveSearchBudgets(makeDb({ DefaultChunkSize: '6554' }), logger);
+    await resolveSearchBudgets(makeDb({ DefaultChunkSize: '6554' }), logger, {});
     invalidateSettingsCache();
-    await resolveSearchBudgets(makeDb({ DefaultChunkSize: '7000' }), logger);
+    await resolveSearchBudgets(makeDb({ DefaultChunkSize: '7000' }), logger, {});
 
     // Throttling must not silence a NEW misconfiguration - that would be the "silent" failure this
     // whole change removes, reintroduced in the warn itself.
@@ -318,7 +325,9 @@ describe('resolveSearchBudgets - serve budget', () => {
 
   it('still resolves the scan budgets alongside the serve budget', async () => {
     const budgets = await resolveSearchBudgets(
-      makeDb({ dataLakeSearchMaxFiles: '10', dataLakeSearchMaxChunks: '250', DefaultChunkSize: '512' })
+      makeDb({ dataLakeSearchMaxFiles: '10', dataLakeSearchMaxChunks: '250', DefaultChunkSize: '512' }),
+      undefined,
+      {}
     );
 
     expect(budgets).toEqual({
@@ -342,7 +351,7 @@ describe('resolveSearchBudgets - serve budget', () => {
       },
     } as unknown as Parameters<typeof resolveSearchBudgets>[0];
 
-    const budgets = await resolveSearchBudgets(exploding, logger);
+    const budgets = await resolveSearchBudgets(exploding, logger, {});
 
     // The never-throws contract has to cover the new fields too, or the serve path gets undefined and
     // clips to nothing at exactly the moment settings are already broken.
@@ -359,7 +368,9 @@ describe('resolveSearchBudgets - serve budget', () => {
 describe('resolveSearchBudgets - kb* fields (#1955)', () => {
   it('resolves configured platform values for the token budget and relevance threshold', async () => {
     const budgets = await resolveSearchBudgets(
-      makeDb({ kbSearchDefaultResults: '8', kbSearchResultTokenBudget: '4000', kbSearchMinRelevancePct: '30' })
+      makeDb({ kbSearchDefaultResults: '8', kbSearchResultTokenBudget: '4000', kbSearchMinRelevancePct: '30' }),
+      undefined,
+      {}
     );
     expect(budgets.kbDefaultResults).toBe(8);
     expect(budgets.kbResultTokenBudget).toBe(4000);
@@ -370,7 +381,8 @@ describe('resolveSearchBudgets - kb* fields (#1955)', () => {
     const logger = loggerStub();
     const budgets = await resolveSearchBudgets(
       makeDb({ kbSearchResultTokenBudget: '0', kbSearchMinRelevancePct: '0' }),
-      logger
+      logger,
+      {}
     );
     expect(budgets.kbResultTokenBudget).toBe(0);
     expect(budgets.kbMinRelevance).toBe(0);
@@ -384,7 +396,7 @@ describe('resolveSearchBudgets - kb* fields (#1955)', () => {
     // minScore: 5.0, a cosine score no real match can ever clear, silently degrading every KB
     // search to keyword-only forever.
     const logger = loggerStub();
-    const budgets = await resolveSearchBudgets(makeDb({ kbSearchMinRelevancePct: '500' }), logger);
+    const budgets = await resolveSearchBudgets(makeDb({ kbSearchMinRelevancePct: '500' }), logger, {});
     expect(budgets.kbMinRelevance).toBe(1);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('kbSearchMinRelevancePct'));
   });
@@ -393,7 +405,8 @@ describe('resolveSearchBudgets - kb* fields (#1955)', () => {
     const logger = loggerStub();
     const budgets = await resolveSearchBudgets(
       makeDb({ kbSearchResultTokenBudget: '-5', kbSearchMinRelevancePct: 'not-a-number' }),
-      logger
+      logger,
+      {}
     );
     expect(budgets.kbResultTokenBudget).toBe(KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT);
     expect(budgets.kbMinRelevance).toBe(KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT / 100);
@@ -414,7 +427,7 @@ describe('resolveSearchBudgets - kb* fields (#1955)', () => {
       },
     } as unknown as Parameters<typeof resolveSearchBudgets>[0];
 
-    const budgets = await resolveSearchBudgets(exploding, logger);
+    const budgets = await resolveSearchBudgets(exploding, logger, {});
 
     expect(budgets.kbDefaultResults).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
     expect(budgets.kbResultTokenBudget).toBe(KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT);
@@ -462,7 +475,9 @@ describe('resolveSearchBudgets - kb* fields (#1955)', () => {
   });
 
   it('resolves a configured per-document cap', async () => {
-    expect((await resolveSearchBudgets(makeDb({ dataLakeSearchMaxChunksPerFile: '3' }))).maxChunksPerFile).toBe(3);
+    expect(
+      (await resolveSearchBudgets(makeDb({ dataLakeSearchMaxChunksPerFile: '3' }), undefined, {})).maxChunksPerFile
+    ).toBe(3);
   });
 
   it('honors an explicit 0 as disabled, with no warning', async () => {
@@ -472,9 +487,9 @@ describe('resolveSearchBudgets - kb* fields (#1955)', () => {
     // 0 is the disabled value, not an unusable one: warning on it would fire on every search for
     // every install that leaves the cap off, which is all of them by default.
     const logger = loggerStub();
-    expect((await resolveSearchBudgets(makeDb({ dataLakeSearchMaxChunksPerFile: '0' }), logger)).maxChunksPerFile).toBe(
-      0
-    );
+    expect(
+      (await resolveSearchBudgets(makeDb({ dataLakeSearchMaxChunksPerFile: '0' }), logger, {})).maxChunksPerFile
+    ).toBe(0);
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
@@ -482,7 +497,7 @@ describe('resolveSearchBudgets - kb* fields (#1955)', () => {
     // Falling back to DISABLED rather than to some positive cap matters: a bad row must not start
     // silently dropping passages that retrieval used to serve.
     const logger = loggerStub();
-    const budgets = await resolveSearchBudgets(makeDb({ dataLakeSearchMaxChunksPerFile: 'three' }), logger);
+    const budgets = await resolveSearchBudgets(makeDb({ dataLakeSearchMaxChunksPerFile: 'three' }), logger, {});
     expect(budgets.maxChunksPerFile).toBe(DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('dataLakeSearchMaxChunksPerFile'));
   });
@@ -529,10 +544,33 @@ describe('resolveSearchBudgets - kb* fields (#1955)', () => {
     // pins the RESOLVER side against the setting's declared defaultValue directly, so the two
     // cannot silently diverge even if one side's import is later swapped for a literal.
     const { settingsMap } = await import('@bike4mind/common');
-    const budgets = await resolveSearchBudgets(makeDb({}));
+    const budgets = await resolveSearchBudgets(makeDb({}), undefined, {});
     expect(budgets.kbDefaultResults).toBe(settingsMap.kbSearchDefaultResults.defaultValue);
     expect(budgets.kbResultTokenBudget).toBe(settingsMap.kbSearchResultTokenBudget.defaultValue);
     expect(budgets.kbMinRelevance).toBe((settingsMap.kbSearchMinRelevancePct.defaultValue as number) / 100);
     expect(budgets.maxChunksPerFile).toBe(settingsMap.dataLakeSearchMaxChunksPerFile.defaultValue);
+  });
+});
+
+describe('resolveSearchBudgets - rungs without a store (#2709)', () => {
+  it('warns instead of silently resolving platform-only when rungs are passed with no overlay store', async () => {
+    const logger = loggerStub();
+    const { scopedSettings, ...dbWithoutOverlay } = makeDb({ dataLakeSearchMaxFiles: '10' });
+
+    const budgets = await resolveSearchBudgets(dbWithoutOverlay, logger, scope);
+
+    // Still resolves - this is a wiring mistake, not an outage, so the search must not fail.
+    expect(budgets.maxFiles).toBe(10);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('no scopedSettings store is wired'));
+  });
+
+  it('stays silent on a genuine platform read, where an empty scope carries no rungs', async () => {
+    const logger = loggerStub();
+    const { scopedSettings, ...dbWithoutOverlay } = makeDb({ dataLakeSearchMaxFiles: '10' });
+
+    const budgets = await resolveSearchBudgets(dbWithoutOverlay, logger, {});
+
+    expect(budgets.maxFiles).toBe(10);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });
