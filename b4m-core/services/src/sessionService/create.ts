@@ -15,7 +15,7 @@ import {
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
 import { usableSessionIds } from '../utils/objectIds';
-import { projectService } from '..';
+import * as projectService from '../projectService';
 import { deriveRetrievalTagsFromFiles, type DeriveRetrievalTagsAdapters } from './deriveRetrievalTags';
 
 const createSessionParametersSchema = z.object({

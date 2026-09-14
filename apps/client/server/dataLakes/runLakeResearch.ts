@@ -6,7 +6,8 @@ import {
   dataLakeResearchRunRepository,
   fabFileRepository,
 } from '@bike4mind/database';
-import { apiKeyService, dataLakeResearchService, dataLakeService, resolveWebSearchProvider } from '@bike4mind/services';
+import { apiKeyService, dataLakeResearchService, dataLakeService } from '@bike4mind/services';
+import { resolveWebSearchProvider } from '@bike4mind/services/llm';
 import { getAvailableModels, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { fetchAndParseURL } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';

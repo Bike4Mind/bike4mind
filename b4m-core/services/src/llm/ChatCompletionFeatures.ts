@@ -34,12 +34,6 @@ import {
   IUsageEventRepository,
   IMementoRepository,
   IOrganizationRepository,
-  DashboardParamsSchema,
-  PromptMetaZodSchema,
-  b4mLLMTools,
-  ResearchModeParamsSchema,
-  GenerateImageToolCallSchema,
-  AudioGenerationToolCallSchema,
   ILatticeModel,
   IDataLakeAccessGrantRepository,
   IDataLakeRepository,
@@ -63,7 +57,6 @@ import {
   forcedRetrievalRelativeCutoff,
   LAKE_RECALL_K_DEFAULT,
   DATALAKE_TAG_PREFIX,
-  PROMPT_TEXT_MAX,
   materializePromptMetaSession,
   ModelBackend,
   type SupportedEmbeddingModel,
@@ -131,6 +124,7 @@ import {
   DEFAULT_VERBATIM_WINDOW_FRACTION,
   SYSTEM_PROMPT_RESERVE_TOKENS,
 } from './ChatCompletionProcess';
+import { QuestStartBodySchema } from './questStartBody';
 import { forcedRetrievalNoContextPrompt, type ForcedRetrievalNoContextFinding } from './forcedRetrievalAbstention';
 import { resolveLakeMemoryScope } from './resolveLakeMemoryScope';
 import { MCPClient } from '@bike4mind/mcp';
@@ -439,70 +433,7 @@ export interface IChatCompletionServiceOptions {
   gpcSignalDetected?: boolean;
 }
 
-export const QuestStartBodySchema = z.object({
-  userId: z.string(),
-  sessionId: z.string(),
-  questId: z.string(),
-  message: z.string().min(1, 'Message cannot be empty'),
-  messageFileIds: z.array(z.string()),
-  historyCount: z.number(),
-  fabFileIds: z.array(z.string()),
-  params: ChatCompletionCreateInputSchema,
-  dashboardParams: DashboardParamsSchema.optional(),
-  enableQuestMaster: z.boolean().optional(),
-  enableMementos: z.boolean().optional(),
-  enableArtifacts: z.boolean().optional(),
-  /** See ChatCompletionInvokeParamsSchema.promptMode - must stay in sync with it. */
-  promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
-  /** See ChatCompletionInvokeParamsSchema.skipAutoOffers - must stay in sync with it. */
-  skipAutoOffers: z.boolean().optional(),
-  /** See ChatCompletionInvokeParamsSchema.systemPrompt - must stay in sync with it. */
-  systemPrompt: z.string().max(PROMPT_TEXT_MAX).optional(),
-  enableAgents: z.boolean().optional(),
-  enableLattice: z.boolean().optional(),
-  promptMeta: PromptMetaZodSchema,
-  tools: z.array(z.union([b4mLLMTools, z.string()])).optional(),
-  mcpServers: z.array(z.string()).optional(),
-  projectId: z.string().optional(),
-  organizationId: z.string().nullable().optional(),
-  questMaster: QuestMasterParamsSchema.optional(),
-  toolPromptId: z.string().optional(),
-  researchMode: ResearchModeParamsSchema.optional(),
-  fallbackModel: z.string().optional(),
-  embeddingModel: z.string().optional(),
-  queryComplexity: z.string(),
-  imageConfig: GenerateImageToolCallSchema.optional(),
-  audioConfig: AudioGenerationToolCallSchema.optional(),
-  deepResearchConfig: z
-    .object({
-      maxDepth: z.number().optional(),
-      duration: z.number().optional(),
-      // searchers are passed via ToolContext, not through this API schema
-      searchers: z.array(z.any()).optional(),
-    })
-    .optional(),
-  extraContextMessages: z
-    .array(
-      z.object({
-        role: z.enum(['user', 'assistant', 'system', 'function', 'tool']),
-        content: z.union([z.string(), z.array(z.any())]),
-        fabFileIds: z.array(z.string()).optional(),
-      })
-    )
-    .optional(),
-  /** User's timezone (IANA format, e.g., "America/New_York") */
-  timezone: z.string().optional(),
-  /** Persona-based sub-agent filter - only these agent names are available for delegation */
-  allowedAgents: z.array(z.string()).optional(),
-  /** When true, Quest Processor injects Slack-specific tool configs (help, notebooks, curated files) */
-  enableSlackTools: z.boolean().optional(),
-  /**
-   * Disclose the system prompt text this completion was assembled from. Exposed on the process
-   * instance for the direct response of the request that asked for it, and never persisted -
-   * the derived breakdown (`promptMeta.context.systemPromptDetails`) is the persisted half.
-   */
-  includeSystemPrompt: z.boolean().optional(),
-});
+export { QuestStartBodySchema } from './questStartBody';
 
 // Type for what features need from the chat completion service
 export type ChatCompletionContext = Pick<

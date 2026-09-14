@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { LATTICE_TOOL_NAMES } from '@bike4mind/services';
+import { LATTICE_TOOL_NAMES } from '@bike4mind/services/llm';
 import { latticeToolDefinitions } from '@bike4mind/services/llm/tools/cliTools';
 
 // Mock only `buildSharedTools` so the pool builder can be exercised without a
