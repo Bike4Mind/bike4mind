@@ -60,6 +60,31 @@ describe('POST /api/blog/presign-image-upload', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('rejects a baseUrl pointed at an internal/private host or non-https before reaching the blog', async () => {
+    // The presign runs server-side with the user's blog key, so an internal/metadata baseUrl
+    // would turn it into an SSRF vector.
+    const fetchMock = vi.fn();
+    global.fetch = fetchMock as never;
+    for (const baseUrl of [
+      'https://169.254.169.254/', // cloud metadata
+      'https://localhost/',
+      'https://10.0.0.5/',
+      'http://blog.example.com/', // non-https
+    ]) {
+      const { req, res } = request(validBody, { apiKey: 'enc-key', baseUrl });
+      await expect(mockRefs.handler!(req, res)).rejects.toThrow(/not allowed/i);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed baseUrl before reaching the blog', async () => {
+    const fetchMock = vi.fn();
+    global.fetch = fetchMock as never;
+    const { req, res } = request(validBody, { apiKey: 'enc-key', baseUrl: 'not a url' });
+    await expect(mockRefs.handler!(req, res)).rejects.toThrow(/not a valid URL/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('forwards the decrypted key to the blog and returns the presigned URLs', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce({
       ok: true,

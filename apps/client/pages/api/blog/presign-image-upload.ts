@@ -2,6 +2,7 @@ import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { BadRequestError } from '@bike4mind/utils';
 import { decryptToken } from '@server/security/tokenEncryption';
+import { rejectIfUnsafe } from '@server/utils/ssrfGuard';
 
 interface PresignImageUploadRequest {
   fileName: string;
@@ -49,6 +50,22 @@ const handler = baseApi().post<Request<unknown, PresignImageUploadResponse, Pres
       throw new BadRequestError(
         'Blog integration not configured. Add your blog API key in Settings -> Integrations -> Blog Publishing.'
       );
+    }
+
+    // Fail closed against SSRF: this presign runs server-side with the user's blog key, so a
+    // baseUrl pointed at an internal/metadata host would let the server reach it on the caller's
+    // behalf. Guard the new surface here; publish.ts shares this host unguarded and is tracked
+    // as a follow-up rather than remediated in this security PR.
+    let blogUrl: URL;
+    try {
+      blogUrl = new URL(user.blogIntegration.baseUrl);
+    } catch {
+      throw new BadRequestError('Blog integration baseUrl is not a valid URL');
+    }
+    const unsafe = rejectIfUnsafe(blogUrl);
+    if (unsafe) {
+      req.logger.error('[Blog presign] blocked SSRF attempt on blog baseUrl', { reason: unsafe });
+      throw new BadRequestError(`Blog integration baseUrl is not allowed: ${unsafe}`);
     }
 
     const host = user.blogIntegration.baseUrl.replace(/\/+$/, '');

@@ -4,6 +4,7 @@ import { createS3Client } from '@bike4mind/fab-pipeline';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { rejectIfUnsafe } from '@server/utils/ssrfGuard';
 import { Resource } from 'sst';
 import crypto from 'crypto';
 import { z } from 'zod';
@@ -29,67 +30,6 @@ const ExternalImageQuery = z.object({
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB
 const FETCH_TIMEOUT_MS = 10_000;
-
-/**
- * SSRF guard. Returns null if the URL is safe to fetch, otherwise a reason.
- *
- * Note: this is a hostname-string check, not a DNS-resolved IP check, so it
- * does not defend against DNS rebinding. The admin-only gate is the primary
- * control; this is defence in depth.
- */
-function rejectIfUnsafe(url: URL): string | null {
-  if (url.protocol !== 'https:') {
-    return 'only https URLs are allowed';
-  }
-
-  // Normalize: strip square brackets from IPv6 notation so the same checks
-  // work for both `::1` and `[::1]` forms returned by URL.hostname.
-  const raw = url.hostname.toLowerCase();
-  const host = raw.startsWith('[') && raw.endsWith(']') ? raw.slice(1, -1) : raw;
-
-  // Reject literal loopback / unspecified
-  if (host === 'localhost' || host === '0.0.0.0' || host === '::' || host === '::1') {
-    return 'loopback hosts are not allowed';
-  }
-
-  // Reject IPv4-mapped IPv6 addresses (::ffff:a.b.c.d / ::ffff:hex:hex).
-  // Node normalises these to ::ffff:XXYY:ZZWW which bypasses the IPv4 regex but
-  // fetch() still dials the underlying IPv4 address.
-  if (host.includes('ffff:')) {
-    return 'IPv4-mapped IPv6 addresses are not allowed';
-  }
-
-  // Reject IPv4 in private / loopback / link-local ranges
-  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (ipv4) {
-    const [a, b] = [parseInt(ipv4[1], 10), parseInt(ipv4[2], 10)];
-    if (
-      a === 10 ||
-      a === 127 ||
-      a === 0 ||
-      (a === 169 && b === 254) || // link-local + AWS metadata 169.254.169.254
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      a >= 224 // multicast / reserved
-    ) {
-      return 'private/reserved IPv4 addresses are not allowed';
-    }
-  }
-
-  // Reject IPv6 unique-local (fc00::/7) and link-local (fe80::/10)
-  if (
-    host.startsWith('fc') ||
-    host.startsWith('fd') ||
-    host.startsWith('fe8') ||
-    host.startsWith('fe9') ||
-    host.startsWith('fea') ||
-    host.startsWith('feb')
-  ) {
-    return 'private/reserved IPv6 addresses are not allowed';
-  }
-
-  return null;
-}
 
 function generateCacheKey(rawUrl: string, parsed: URL): string {
   const hash = crypto.createHash('sha256').update(rawUrl).digest('hex');
