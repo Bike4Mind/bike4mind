@@ -334,6 +334,37 @@ describe('mergeRetrievalSummary', () => {
     });
   });
 
+  describe('grantedLakeIdsUsed', () => {
+    it('unions ids without duplicates, independent of injectedLakePromptIds', () => {
+      const merged = mergeRetrievalSummary(
+        base({ injectedLakePromptIds: ['lake1'], grantedLakeIdsUsed: ['lake1'] }),
+        base({ injectedLakePromptIds: ['lake1', 'lake2'], grantedLakeIdsUsed: ['lake2'] })
+      );
+      expect(merged?.grantedLakeIdsUsed).toEqual(['lake1', 'lake2']);
+    });
+
+    it('stays absent when neither side reached a lake by grant', () => {
+      const merged = mergeRetrievalSummary(base(), base());
+      expect(merged && 'grantedLakeIdsUsed' in merged).toBe(false);
+    });
+
+    it('survives a side that never asserted the field', () => {
+      const merged = mergeRetrievalSummary(base({ grantedLakeIdsUsed: ['lake1'] }), base());
+      expect(merged?.grantedLakeIdsUsed).toEqual(['lake1']);
+    });
+
+    it('merges alongside preauthorizedLakeIdsUsed without either arm absorbing the other', () => {
+      // The two arms OVERLAP by design - a lake can be both - so neither union may be derived
+      // from the other's.
+      const merged = mergeRetrievalSummary(
+        base({ injectedLakePromptIds: ['both'], grantedLakeIdsUsed: ['both'], preauthorizedLakeIdsUsed: ['both'] }),
+        base({ injectedLakePromptIds: ['granted'], grantedLakeIdsUsed: ['granted'] })
+      );
+      expect(merged?.grantedLakeIdsUsed).toEqual(['both', 'granted']);
+      expect(merged?.preauthorizedLakeIdsUsed).toEqual(['both']);
+    });
+  });
+
   describe('answerability', () => {
     const probe = {
       topScore: 0.88,

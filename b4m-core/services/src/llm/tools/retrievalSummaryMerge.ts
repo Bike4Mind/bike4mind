@@ -93,7 +93,8 @@ function mergeInjected(
  *   was already backfilled (a regenerate, an edit), and since this function returns an explicit
  *   object literal, a field with no case here is DROPPED rather than carried. That silent erase is
  *   the failure this rule exists to prevent.
- * - surfaces / dataLakeTags / injectedLakePromptIds / preauthorizedLakeIdsUsed: union, deduped.
+ * - surfaces / dataLakeTags / injectedLakePromptIds / preauthorizedLakeIdsUsed / grantedLakeIdsUsed:
+ *   union, deduped.
  *   injectedLakePromptCount is derived from the merged injectedLakePromptIds, not merged
  *   independently, so a two-sided merge can never leave the two disagreeing.
  * - injected: chunks and chars SUM, topScore is the max, and the pre/post relative-floor candidate
@@ -138,6 +139,10 @@ export function mergeRetrievalSummary(
     existing.preauthorizedLakeIdsUsed || incoming.preauthorizedLakeIdsUsed
       ? [...new Set([...(existing.preauthorizedLakeIdsUsed ?? []), ...(incoming.preauthorizedLakeIdsUsed ?? [])])]
       : undefined;
+  const grantedLakeIdsUsed =
+    existing.grantedLakeIdsUsed || incoming.grantedLakeIdsUsed
+      ? [...new Set([...(existing.grantedLakeIdsUsed ?? []), ...(incoming.grantedLakeIdsUsed ?? [])])]
+      : undefined;
 
   // Keys are spread in only when defined: the shape is absent-or-fully-present on the Mongoose
   // side, and an explicit `undefined` would persist as a set-but-empty path.
@@ -153,5 +158,6 @@ export function mergeRetrievalSummary(
     ...(injectedLakePromptIds ? { injectedLakePromptIds, injectedLakePromptCount: injectedLakePromptIds.length } : {}),
     ...(injected ? { injected } : {}),
     ...(preauthorizedLakeIdsUsed ? { preauthorizedLakeIdsUsed } : {}),
+    ...(grantedLakeIdsUsed ? { grantedLakeIdsUsed } : {}),
   };
 }
