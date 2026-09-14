@@ -1116,17 +1116,52 @@ describe('fabFileChunk handler - a failed vectorize enqueue must not strand the 
     });
 
     it('embeds the rest in the space the existing vectors are in, not the file label', async () => {
-      // The pass INTENDED voyage-3 but the vectors landed in 3-small (keyless fallback resolves its
+      // The pass INTENDED voyage-3 but the vectors landed in ada-002 (keyless fallback resolves its
       // own model per message). The new vectors have to sit beside the ones that exist.
+      //
+      // The committed space is deliberately neither the file label NOR the deployment default
+      // (text-embedding-3-small): with it equal to the default, "resume in the default" - the exact
+      // bug this guard exists to stop - is indistinguishable from "resume in the committed space".
       h.findAccessibleById.mockResolvedValue({ id: 'ff1', chunked: true, embeddingModel: 'voyage-3' });
-      h.distinctEmbeddingModelsByFabFileId.mockResolvedValue(['text-embedding-3-small']);
+      h.distinctEmbeddingModelsByFabFileId.mockResolvedValue(['text-embedding-ada-002']);
 
       await dispatch(makeEvent(payload), {} as never, mockLogger);
 
       expect(h.sendToQueue).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ embeddingModel: 'text-embedding-3-small' })
+        expect.objectContaining({ embeddingModel: 'text-embedding-ada-002' })
       );
+    });
+
+    // The other half of the same precedence, and the arm that used to be silent: unlabeled vectors
+    // BESIDE a declared space. The declared space still wins (it is the only hard evidence, and the
+    // largest population the remaining chunks can join), but the file may already be split and this
+    // resume cannot tell - so it reports, on the same bar as the `unrecorded` arm below.
+    it('resumes in the declared space but warns when unlabeled vectors sit beside it', async () => {
+      h.findAccessibleById.mockResolvedValue({ id: 'ff1', chunked: true, embeddingModel: 'voyage-3' });
+      h.distinctEmbeddingModelsByFabFileId.mockResolvedValue(['text-embedding-ada-002']);
+      h.countUnlabeledVectorChunksByFabFileId.mockResolvedValue(2);
+
+      await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ embeddingModel: 'text-embedding-ada-002' })
+      );
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('no recorded space'));
+    });
+
+    it('still refuses a retired declared space when unlabeled vectors sit beside it', async () => {
+      // The warning must not become a way around the refusal, and must not claim a resume that is
+      // not happening.
+      h.findAccessibleById.mockResolvedValue({ ...stranded, embeddingModel: RETIRED });
+      h.distinctEmbeddingModelsByFabFileId.mockResolvedValue([RETIRED]);
+      h.countUnlabeledVectorChunksByFabFileId.mockResolvedValue(2);
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(/no longer available/);
+
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('resuming in'));
     });
 
     it('refuses when the space its vectors are in has left the supported models', async () => {
@@ -1191,6 +1226,34 @@ describe('fabFileChunk handler - a failed vectorize enqueue must not strand the 
       // The strand's batch charge is given back before the refusal is charged, so the file is
       // counted failed once rather than twice.
       expect(h.revertFileFailure).toHaveBeenCalled();
+      // And the refusal then charges it - once, against the file's own batch. Losing this leaves a
+      // batch that can never reach a terminal state, since the refused file never completes either.
+      expect(h.updateFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', 'failed', expect.stringContaining('Reprocess'));
+      expect(h.incrementCounters).toHaveBeenCalledTimes(1);
+      expect(h.incrementCounters).toHaveBeenCalledWith('batch-1', { failedFiles: 1, processingFailedFiles: 1 });
+    });
+
+    // clearStrandedMarkers clears `error` only when this handler owns it, so a file stranded while
+    // holding a chunking/vectorizing error from elsewhere keeps that error - and markFailedIfNotAlready
+    // writes only into an unerrored file. Without a superseding write the refusal reason would land
+    // nowhere but the log: the user reads a stale transient reason, and because the surviving error
+    // carries no VECTORIZE_ENQUEUE_ERROR_PREFIX, no later resume can clear it either.
+    it('writes the refusal reason over a foreign error it is not allowed to clear', async () => {
+      h.findAccessibleById.mockResolvedValue({ ...stranded, error: 'Chunking failed: corrupt PDF' });
+      h.distinctEmbeddingModelsByFabFileId.mockResolvedValue([RETIRED]);
+      h.markFailedIfNotAlready.mockResolvedValue(false); // the foreign error is still there
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(/no longer available/);
+
+      // The foreign error survived the undo, as it must.
+      expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $unset: { vectorizeEnqueueFailedAt: 1 } });
+      // ...and the refusal replaces it anyway, because it is terminal and names a different cause.
+      expect(h.fabFileUpdateOne).toHaveBeenCalledWith(
+        { _id: 'ff1' },
+        { $set: { error: expect.stringContaining('Reprocess'), isVectorizing: false } }
+      );
+      // Superseding the message must not charge the batch a second failure for the same file.
+      expect(h.incrementCounters).not.toHaveBeenCalled();
     });
 
     it('refuses a file whose vectors already span two spaces, rather than picking one', async () => {
@@ -1231,6 +1294,20 @@ describe('fabFileChunk handler - a failed vectorize enqueue must not strand the 
     it('falls back to the file label for unrecorded vectors where that label is still usable', async () => {
       h.findAccessibleById.mockResolvedValue({ id: 'ff1', chunked: true, embeddingModel: 'voyage-3' });
       h.countUnlabeledVectorChunksByFabFileId.mockResolvedValue(4);
+
+      await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ embeddingModel: 'voyage-3' })
+      );
+    });
+
+    it('prefers the file label over the default when the file holds no vectors at all', async () => {
+      // The chunks were SIZED against the file label, so with no vectors to contradict it, it still
+      // wins over a default that has moved since. Label differs from the default, or "always take
+      // the default" reads as a pass.
+      h.findAccessibleById.mockResolvedValue({ id: 'ff1', chunked: true, embeddingModel: 'voyage-3' });
 
       await dispatch(makeEvent(payload), {} as never, mockLogger);
 

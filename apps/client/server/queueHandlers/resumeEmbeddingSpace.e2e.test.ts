@@ -175,6 +175,22 @@ describe('resume embedding-space guard against a real mongod (#2766)', () => {
     expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('no recorded embedding space'));
   });
 
+  // Both queries firing on the SAME file, which is the interaction a mock cannot stage wrong: the
+  // labelled vector lands in the distinct set, the unlabelled one in the count, and only both
+  // together read as `mixed`. The declared space still wins, and the uncertainty is reported.
+  it('resumes in the declared space but warns when unlabelled vectors sit beside it', async () => {
+    const { fabFileId, userId } = await seedFile(undefined, [
+      { space: COMMITTED_SPACE, vectorized: true },
+      { space: undefined, vectorized: true },
+      { space: undefined, vectorized: false },
+    ]);
+
+    await dispatch(makeEvent({ fabFileId, userId }), {} as never, mockLogger);
+
+    expect(requestedModel()).toBe(COMMITTED_SPACE);
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('no recorded space'));
+  });
+
   it('stays silent and takes the default when the file holds no vectors at all', async () => {
     const { fabFileId, userId } = await seedFile(undefined, [
       { space: undefined, vectorized: false },

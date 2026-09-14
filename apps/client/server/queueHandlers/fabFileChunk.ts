@@ -120,6 +120,12 @@ async function enqueueVectorizeBatches(params: {
  * deferFailureIfRetryable for why an earlier attempt must leave 'failed' untouched. The caller
  * always rethrows afterwards, so SQS retries and eventually routes to the DLQ. Mirrors
  * fabFileVectorize.ts's own failure handling - keep the two in sync.
+ *
+ * `supersedes` is for a PERMANENT verdict that outranks whatever error the file already carries.
+ * Default off, because first-error-wins is right for the transient failures: a chunking or
+ * vectorizing error from elsewhere is still true and must not be papered over by a retry of this
+ * handler. It is wrong for a refusal, which is terminal and names a different, actionable cause -
+ * and which the stranded file's own stale transient error would otherwise suppress entirely.
  */
 async function accountFileFailure(params: {
   event: SQSEvent;
@@ -129,8 +135,9 @@ async function accountFileFailure(params: {
   userId: string;
   action: string;
   errorMessage: string;
+  supersedes?: boolean;
 }): Promise<void> {
-  const { event, logger, fabFileId, batchId, userId, action, errorMessage } = params;
+  const { event, logger, fabFileId, batchId, userId, action, errorMessage, supersedes = false } = params;
 
   if (
     await deferFailureIfRetryable(event, FAB_FILE_CHUNK_MAX_RECEIVE_COUNT, {
@@ -145,6 +152,18 @@ async function accountFileFailure(params: {
   }
 
   const isFirstFailure = await fabFileRepository.markFailedIfNotAlready(fabFileId, errorMessage);
+  // The guard declined because the file already holds an error, which for a superseding verdict is
+  // the case it most needs to write into: `clearStrandedMarkers` only clears an error this handler
+  // owns, so a stranded file carrying a FOREIGN one keeps it, drops the marker that was its route
+  // back through the rescue sweep, and would be left showing a stale reason for a file now blocked
+  // on a terminal, different one - with the real message only in the log. The batch accounting
+  // below stays guarded on `isFirstFailure` regardless: replacing a message must not charge the
+  // file's failure to the batch twice.
+  if (!isFirstFailure && supersedes) {
+    await FabFile.updateOne({ _id: fabFileId }, { $set: { error: errorMessage, isVectorizing: false } }).catch(err =>
+      logger.error(`Failed to supersede the stored error on ${fabFileId}: ${err}`)
+    );
+  }
   if (!batchId || !isFirstFailure) return;
 
   try {
@@ -324,6 +343,12 @@ type CommittedEmbeddingSpace =
   | { kind: 'none' }
   /** Every vector that exists is in this one space. */
   | { kind: 'single'; model: string }
+  /**
+   * One space is declared, but some vectors name none. Evidence enough to CHOOSE that space - it is
+   * where the rest belong, and the largest population they can safely join - but not enough to
+   * certify the file whole, because an unlabeled vector could be in a second space.
+   */
+  | { kind: 'mixed'; model: string; unlabeledVectorChunks: number }
   /** The vectors already span several spaces, so no single choice can make the file whole. */
   | { kind: 'split'; models: string[] }
   /** Vectors exist but name no space at all - legacy rows, and the width backfill's input. */
@@ -335,14 +360,18 @@ async function readCommittedEmbeddingSpace(fabFileId: string): Promise<Committed
     fabFileChunkRepository.countUnlabeledVectorChunksByFabFileId(fabFileId),
   ]);
   if (declaredModels.length > 1) return { kind: 'split', models: declaredModels };
-  // One declared model ALONGSIDE unlabeled vectors still reads as that one space. This is a
-  // heuristic and knowingly so: an unlabeled vector names no space, so it could in principle be in
-  // a second one. But the declared model is the only actual evidence the file offers, the unlabeled
-  // population is overwhelmingly rows written before the vectorize handler labeled per chunk, and
-  // calling this ambiguous would refuse a file that is almost certainly homogeneous. Separating the
-  // two needs a provenance marker the chunk rows do not carry - the same gap `resolveFileLabel`
-  // names from its own side.
-  if (declaredModels.length === 1) return { kind: 'single', model: declaredModels[0] };
+  // One declared model ALONGSIDE unlabeled vectors is still RESUMED in the declared space - it is
+  // the only actual evidence the file offers, the unlabeled population is overwhelmingly rows
+  // written before the vectorize handler labeled per chunk, and refusing would strand a file that
+  // is almost certainly homogeneous. But it is kept distinct from `single`, because the two are not
+  // equally certain: an unlabeled vector names no space, so it could be in a second one, and no
+  // marker on the chunk rows can separate the two (the same gap `resolveFileLabel` names from its
+  // own side). Collapsing it into `single` made the MORE suspicious shape the silent one while
+  // `unrecorded` - which knows strictly less - warned.
+  if (declaredModels.length === 1) {
+    const model = declaredModels[0];
+    return unlabeledVectorChunks > 0 ? { kind: 'mixed', model, unlabeledVectorChunks } : { kind: 'single', model };
+  }
   if (unlabeledVectorChunks > 0) return { kind: 'unrecorded', vectorChunks: unlabeledVectorChunks };
   return { kind: 'none' };
 }
@@ -417,19 +446,34 @@ function resolveResumeEmbeddingModel(params: {
           `consolidate it into one space.`
       );
     case 'single':
+    case 'mixed':
       // The chunk label outranks the file label even where the file label is itself usable: a
       // disagreement means the chunking pass intended one space and the vectors landed in another
       // (resolveEmbeddingWithKeylessFallback can resolve a different model than was requested), and
       // it is the vectors that the new ones have to sit beside.
-      return isSupportedEmbeddingModel(committed.model)
-        ? committed.model
-        : refuse(
-            'this file was partly indexed with a search model that is no longer available. ' +
-              'Reprocess it to rebuild the whole file with the current one.',
-            `holds vectors in ${committed.model}, which has left the supported embedding models. ` +
-              `Finishing its remaining chunks in ${defaultEmbeddingModel} would leave one file in two ` +
-              `vector spaces. Restore ${committed.model} to the supported models, or re-embed the file whole.`
-          );
+      if (!isSupportedEmbeddingModel(committed.model)) {
+        return refuse(
+          'this file was partly indexed with a search model that is no longer available. ' +
+            'Reprocess it to rebuild the whole file with the current one.',
+          `holds vectors in ${committed.model}, which has left the supported embedding models. ` +
+            `Finishing its remaining chunks in ${defaultEmbeddingModel} would leave one file in two ` +
+            `vector spaces. Restore ${committed.model} to the supported models, or re-embed the file whole.`
+        );
+      }
+      // Resumed, but not silently. Unlabeled vectors beside a declared space mean the file may
+      // ALREADY be split, which this resume can neither confirm nor repair - so it is reported, on
+      // the same prevented-OR-reported bar as `unrecorded` below. Warning after the retired-model
+      // check, so a file that is about to be refused does not also claim it is being resumed.
+      if (committed.kind === 'mixed') {
+        logger.warn(
+          `[embeddings] FabFile ${fabFileId} holds vectors in ${committed.model} alongside ` +
+            `${committed.unlabeledVectorChunks} vector-bearing chunk(s) in no recorded space; resuming in ` +
+            `${committed.model}, where the rest belong if those chunks are in it too. If they are not, the ` +
+            `file is already split and no resume can make it whole. Run the chunk embedding-model backfill ` +
+            `(packages/scripts/datalake) to label those rows and find out which.`
+        );
+      }
+      return committed.model;
     case 'unrecorded':
       // Vectors exist but name no space. The file label is intent rather than observation, yet it
       // is the best evidence available and what this path has always used, so it still wins.
@@ -535,6 +579,10 @@ async function resumeVectorizeEnqueue(
   // real reason into it; `revertStrandBatchAccounting` gives back the failure the strand charged,
   // so re-accounting it here is a replacement rather than a double count. A permanent refusal
   // SUPERSEDES the transient strand it replaces, and this is what makes the records say so.
+  //
+  // The undo settles the error only for the error this handler OWNS. A file stranded while holding
+  // someone else's error keeps it, so `accountFileFailure` is asked to supersede (see `supersedes`
+  // there) rather than trusting the undo to have left the field clear.
   let embeddingModel: string;
   try {
     embeddingModel = resolveResumeEmbeddingModel({
@@ -557,6 +605,7 @@ async function resumeVectorizeEnqueue(
       userId,
       action: 'Vectorize enqueue',
       errorMessage: err instanceof Error ? err.message : String(err),
+      supersedes: true,
     });
     throw err;
   }
