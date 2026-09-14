@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { IUserDocument } from '@bike4mind/common';
 import { decryptToken } from '@server/security/tokenEncryption';
+import { rejectIfUnsafe } from '@server/utils/ssrfGuard';
 
 interface BlogPublishParams {
   title: string;
@@ -31,6 +32,20 @@ async function publishToBlog(user: IUserDocument, params: BlogPublishParams): Pr
 
   const { apiKey: rawApiKey, baseUrl, defaultAuthor, defaultTags } = user.blogIntegration;
   const apiKey = decryptToken(rawApiKey) ?? '';
+
+  // Fail closed against SSRF: this runs server-side with the user's blog key, so a baseUrl
+  // pointed at an internal/metadata host would let the server reach it on the caller's behalf.
+  // Reject before the outbound POST. Mirrors blog/presign-image-upload.ts (shared guard).
+  let blogUrl: URL;
+  try {
+    blogUrl = new URL(baseUrl);
+  } catch {
+    throw new Error('Blog integration baseUrl is not a valid URL');
+  }
+  const unsafe = rejectIfUnsafe(blogUrl);
+  if (unsafe) {
+    throw new Error(`Blog integration baseUrl is not allowed: ${unsafe}`);
+  }
 
   const requestBody: Record<string, any> = {
     title: params.title,
@@ -98,7 +113,7 @@ const handler = baseApi().post(async (req, res) => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to publish blog post';
-    const isConfigError = message.includes('not configured');
+    const isConfigError = message.includes('not configured') || message.startsWith('Blog integration baseUrl');
     if (isConfigError) {
       console.warn('Blog publish config issue:', message);
       return res.status(422).json({ success: false, message });
