@@ -28,7 +28,7 @@
   --b4m-md-line-2: rgba(16, 38, 56, 0.22);
   --b4m-md-ink: #141f28;
   --b4m-md-ink-2: #425663;
-  --b4m-md-ink-3: #768895;
+  --b4m-md-ink-3: #5b6c7a;
   --b4m-md-accent: #0b6bcb;
   --b4m-md-accent-soft: rgba(11, 107, 203, 0.07);
   --b4m-md-accent-line: rgba(11, 107, 203, 0.32);
@@ -48,7 +48,7 @@
   --b4m-md-line-2: rgba(190, 215, 235, 0.17);
   --b4m-md-ink: #e8edf2;
   --b4m-md-ink-2: #a6b5c1;
-  --b4m-md-ink-3: #6c7d8b;
+  --b4m-md-ink-3: #8090a0;
   --b4m-md-accent: #5aaaea;
   --b4m-md-accent-soft: rgba(90, 170, 234, 0.11);
   --b4m-md-accent-line: rgba(90, 170, 234, 0.34);
@@ -104,8 +104,10 @@
     'source-code-pro', monospace;
 
   /* Cap the reading measure on the flow children rather than on `.b4m-md`
-     itself: the element is the reply bubble, and narrowing it would shrink its
-     background and padding along with the text. */
+     itself: the wrapper is the container-query container, so narrowing it would
+     shrink the width every `@container` rule below measures against, and it
+     would also pull in the full-width children (tables, code blocks, figures)
+     that are deliberately allowed past the measure. */
   --b4m-md-measure: min(100%, 68ch);
   --b4m-md-measure-wide: min(100%, 76ch);
 
@@ -143,6 +145,16 @@
    because <div> inside <p> is invalid nesting. It keeps the paragraph rhythm. */
 .b4m-md .b4m-md-figure {
   margin: 0 0 1.05em;
+}
+
+/* The figure's caption is chrome, not prose. ImageContainer renders it as a Joy
+   <Typography>, which emits a bare <p>, and `.b4m-md p` above outspecifies Joy's
+   own emotion class - so without this the caption would be pulled into the
+   reading serif and given the paragraph's bottom margin. */
+.b4m-md .b4m-md-figure p {
+  margin: 0;
+  font-family: var(--b4m-md-font-ui);
+  text-wrap: initial;
 }
 
 .b4m-md strong {

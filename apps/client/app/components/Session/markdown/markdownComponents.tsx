@@ -50,8 +50,11 @@ const cellsOf = (row: HastNode): HastNode[] =>
  * numeric-column analysis
  * ------------------------------------------------------------------------ */
 
-/** Matches a single quantity: digits, optional thousands separators, optional decimal. */
-const NUMBER_RE = /\d[\d,]*(?:\.\d+)?/g;
+/** Matches a single quantity: optional sign, digits, optional thousands separators, optional decimal. */
+const NUMBER_RE = /-?\d[\d,]*(?:\.\d+)?/g;
+
+/** Accounting notation: a wholly parenthesised quantity is negative. */
+const ACCOUNTING_RE = /^\((.*)\)$/;
 
 /** A column is read as prose once any of its cells is this long, however numeric it looks. */
 const PROSE_CELL_LENGTH = 24;
@@ -61,6 +64,10 @@ const MIN_COMPARABLE_ROWS = 3;
 
 export const NUM_CELL_CLASS = 'b4m-md-num';
 export const NUMTEXT_CELL_CLASS = 'b4m-md-numtext';
+
+/** Joins class names, returning undefined so an empty result emits no attribute. */
+const joinClass = (...names: (string | undefined)[]): string | undefined =>
+  names.filter(Boolean).join(' ') || undefined;
 
 interface CellMeta {
   className?: string;
@@ -78,10 +85,10 @@ const EMPTY_TABLE_META: TableMeta = { cells: new Map(), totalRows: new Set() };
 const TableMetaContext = createContext<TableMeta>(EMPTY_TABLE_META);
 
 /**
- * Parses one column to numbers. Returns null unless the column is honestly
- * comparable: every body cell must yield exactly one number, there must be
- * enough rows to compare, and the maximum must be positive (a column of zeroes
- * has no magnitude to draw).
+ * Parses one column to signed numbers. Returns null unless the column is
+ * honestly comparable: every body cell must yield exactly one number, and there
+ * must be enough rows to compare. Sign is preserved here; whether the column
+ * can carry magnitude bars is the caller's decision.
  */
 const columnValues = (rows: HastNode[][], column: number): number[] | null => {
   if (rows.length < MIN_COMPARABLE_ROWS) return null;
@@ -89,13 +96,15 @@ const columnValues = (rows: HastNode[][], column: number): number[] | null => {
   for (const row of rows) {
     const cell = row[column];
     if (!cell) return null;
-    const matches = textOf(cell).trim().match(NUMBER_RE);
+    const text = textOf(cell).trim();
+    const accounting = ACCOUNTING_RE.exec(text);
+    const matches = (accounting ? accounting[1].trim() : text).match(NUMBER_RE);
     if (!matches || matches.length !== 1) return null;
     const value = Number(matches[0].replace(/,/g, ''));
     if (!Number.isFinite(value)) return null;
-    values.push(value);
+    values.push(accounting ? -Math.abs(value) : value);
   }
-  return Math.max(...values) > 0 ? values : null;
+  return values;
 };
 
 /**
@@ -122,12 +131,19 @@ export const analyseTable = (table: HastNode): TableMeta => {
     const className = isProse ? NUMTEXT_CELL_CLASS : NUM_CELL_CLASS;
     const max = Math.max(...values);
 
+    // A bar encodes magnitude as width, which has no honest reading once a value
+    // is negative: scaled against the column maximum, the most negative value
+    // would draw the longest bar. Such a column keeps its numeric alignment and
+    // simply draws nothing. `max > 0` covers the all-zero column too, where
+    // there is no scale to divide by.
+    const drawsBars = !isProse && max > 0 && values.every(value => value >= 0);
+
     headRows.forEach(row => {
       if (row[column]) cells.set(row[column], { className });
     });
     bodyRows.forEach((row, rowIndex) => {
       if (!row[column]) return;
-      cells.set(row[column], { className, bar: isProse ? undefined : values[rowIndex] / max });
+      cells.set(row[column], { className, bar: drawsBars ? values[rowIndex] / max : undefined });
     });
   }
 
@@ -215,7 +231,7 @@ export const createMarkdownComponents = ({ highlightText }: MarkdownComponentsOp
   const HeaderCell = ({ node, children, ref, ...props }: ComponentProps<'th'> & ExtraProps) => {
     const { className } = useCellMeta(node);
     return (
-      <th {...props} className={className}>
+      <th {...props} className={joinClass(props.className, className)}>
         {highlightStrings(children, highlightText)}
       </th>
     );
@@ -224,10 +240,13 @@ export const createMarkdownComponents = ({ highlightText }: MarkdownComponentsOp
   const Cell = ({ node, children, ref, ...props }: ComponentProps<'td'> & ExtraProps) => {
     const { className, bar } = useCellMeta(node);
     // The bar width is data, so it has to reach CSS as a value rather than a
-    // class; a custom property is the only channel for that.
-    const style = bar === undefined ? undefined : ({ '--b4m-md-bar': bar.toFixed(4) } as CSSProperties);
+    // class; a custom property is the only channel for that. Merged over
+    // props.style rather than replacing it: GFM column alignment (`|---:|`)
+    // arrives from react-markdown as a text-align on that same prop.
+    const style =
+      bar === undefined ? props.style : ({ ...props.style, '--b4m-md-bar': bar.toFixed(4) } as CSSProperties);
     return (
-      <td {...props} className={className} style={style}>
+      <td {...props} className={joinClass(props.className, className)} style={style}>
         {highlightStrings(children, highlightText)}
       </td>
     );

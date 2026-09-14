@@ -36,7 +36,7 @@ const DARK: Palette = {
   bg: '#0C1218',
   fg: '#A6B5C1',
   ink: '#E8EDF2',
-  ink3: '#6C7D8B',
+  ink3: '#8090A0',
   keyword: '#8FC1F0',
   string: '#D9A45E',
   number: '#E8A33D',
@@ -49,7 +49,7 @@ const LIGHT: Palette = {
   bg: '#EDF2F6',
   fg: '#425663',
   ink: '#141F28',
-  ink3: '#768895',
+  ink3: '#5B6C7A',
   keyword: '#2364A8',
   string: '#8A5A12',
   number: '#9A6410',
@@ -58,8 +58,12 @@ const LIGHT: Palette = {
   selection: 'rgba(11, 107, 203, 0.14)',
 };
 
+// Leads with the face layout.tsx self-hosts, so a fenced block and the inline
+// code around it resolve to the same mono. The fallback belongs INSIDE var():
+// an undefined custom property invalidates the whole font-family at
+// computed-value time, so a trailing comma-list would never be reached.
 const FONT_STACK =
-  "var(--joy-fontFamily-code, ui-monospace, 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace)";
+  "var(--font-reading-mono, 'JetBrains Mono'), var(--joy-fontFamily-code, ui-monospace), 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace";
 
 /**
  * Builds the full Prism style map for one palette.
@@ -166,6 +170,11 @@ export const observatoryDark: PrismStyle = build(DARK);
 /** Prism theme for chat-reply code blocks in light mode. */
 export const observatoryLight: PrismStyle = build(LIGHT);
 
-/** Returns the reply code-block Prism theme matching the resolved color scheme. */
+/**
+ * Returns the reply code-block Prism theme matching the resolved color scheme.
+ * An absent mode resolves light, matching the bare `.b4m-md` token block in
+ * observatory.css - so a surface rendering without a color-scheme attribute
+ * does not pair light prose with a dark code block.
+ */
 export const getMarkdownSyntaxTheme = (mode: 'light' | 'dark' | undefined): PrismStyle =>
-  mode === 'light' ? observatoryLight : observatoryDark;
+  mode === 'dark' ? observatoryDark : observatoryLight;
