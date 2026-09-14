@@ -42,6 +42,13 @@ describe('assertSameQuerySet', () => {
     expect(() => assertSameQuerySet([fixture, short])).toThrow(/different question sets/);
   });
 
+  it('refuses two fixtures whose question TEXT differs under the same ids', () => {
+    // An external question set has no committed text for assertQuestionTextMatches to pin it to, so
+    // a reworded question between two captures would otherwise reach the table under one id.
+    const reworded = other({ queries: fixture.queries.map(q => ({ ...q, questionHash: `${q.questionHash}x` })) });
+    expect(() => assertSameQuerySet([fixture, reworded])).toThrow(/different question sets/);
+  });
+
   it('refuses two same-size fixtures whose question ids differ', () => {
     // The count check a reader would reach for first passes here, which is why the compare is on sets.
     const swapped = other({
@@ -71,6 +78,30 @@ describe('resolveQueries', () => {
     // questions reads as a better model.
     const bad = other({ queries: [...fixture.queries, { ...fixture.queries[0], id: 'q99' }] });
     expect(() => resolveQueries(bad)).toThrow(/q99/);
+  });
+
+  it('prefers ground truth carried in the fixture over the committed set', () => {
+    // The --questions case: ids that corpus.ts has never heard of, scored anyway.
+    const external = other({
+      queries: fixture.queries.map((q, i) => ({ ...q, id: `ext${i}`, supporting: [`file-${i}`] })),
+    });
+    const queries = resolveQueries(external);
+    expect(queries.map(q => q.supporting)).toEqual(fixture.queries.map((_, i) => [`file-${i}`]));
+  });
+
+  it('keeps an empty carried supporting set as a negative rather than reading it as absent', () => {
+    // [] and undefined mean opposite things here: a declared negative vs no ground truth at all.
+    const external = other({ queries: fixture.queries.map(q => ({ ...q, supporting: [] })) });
+    expect(resolveQueries(external).every(q => q.supporting.length === 0)).toBe(true);
+  });
+
+  it('refuses a fixture where only some queries carry ground truth', () => {
+    // The dangerous shape: the uncarried half silently falls back to corpus.ts, and a miss there
+    // defaults to [] - indistinguishable from a legitimate negative.
+    const half = other({
+      queries: fixture.queries.map((q, i) => (i === 0 ? { ...q, supporting: ['file-0'] } : q)),
+    });
+    expect(() => resolveQueries(half)).toThrow(/partly external/);
   });
 });
 

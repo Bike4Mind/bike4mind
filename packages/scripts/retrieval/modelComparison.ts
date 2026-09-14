@@ -53,9 +53,17 @@ export function assertSameCorpus(fixtures: readonly EmbeddingFixture[]): void {
  *
  * Compared as id SETS, not counts - two same-size fixtures with different ids are the identical bug,
  * and a length check waves it through.
+ *
+ * The key is id AND question-text hash. For a committed question set `assertQuestionTextMatches`
+ * already pins the text to `corpus.ts`, but an EXTERNAL set (`--questions`) has no committed text to
+ * pin to, so a reworded question between two captures would otherwise reach the table under one id.
+ * Comparing the hash here covers both, and costs nothing for the committed case.
  */
 export function assertSameQuerySet(fixtures: readonly EmbeddingFixture[]): void {
-  const keyed = fixtures.map(f => ({ fixture: f, key: [...new Set(f.queries.map(q => q.id))].sort().join(',') }));
+  const keyed = fixtures.map(f => ({
+    fixture: f,
+    key: [...new Set(f.queries.map(q => `${q.id}:${q.questionHash}`))].sort().join(','),
+  }));
   const distinct = [...new Set(keyed.map(k => k.key))];
   if (distinct.length > 1) {
     throw new Error(
@@ -68,18 +76,39 @@ export function assertSameQuerySet(fixtures: readonly EmbeddingFixture[]): void 
 }
 
 /**
- * Resolve a fixture's queries against the committed ground truth.
+ * Resolve a fixture's queries against their ground truth, from whichever of the two sources the
+ * capture used.
+ *
+ * A fixture whose queries carry `supporting` was captured with `--questions` against a corpus this
+ * repo cannot hold ground truth for, and it is self-describing. Otherwise the ground truth is the
+ * committed `PROBE_QUESTIONS`, joined by id.
  *
  * A query id with no entry in `corpus.ts` is an ERROR, not a skip. Silently dropping it would shrink
  * the question set for one arm only - and an arm scored on fewer, or easier, questions reads as a
  * better model.
  */
 export function resolveQueries(fixture: EmbeddingFixture): { id: string; vector: number[]; supporting: string[] }[] {
+  // Tested per query rather than once for the fixture: a half-external file is corrupt in a way that
+  // scores silently, since the committed-ground-truth arm below defaults a miss to [] - which reads
+  // as a legitimate negative rather than as missing data.
+  const external = fixture.queries.filter(q => q.supporting !== undefined);
+  if (external.length > 0 && external.length !== fixture.queries.length) {
+    throw new Error(
+      `Fixture "${fixture.corpus}" carries ground truth on ${external.length} of ` +
+        `${fixture.queries.length} queries. A partly external question set cannot be scored: the ` +
+        'queries without it would fall back to corpus.ts, silently mixing two ground truths.'
+    );
+  }
+  if (external.length === fixture.queries.length) {
+    return fixture.queries.map(q => ({ id: q.id, vector: q.vector, supporting: q.supporting ?? [] }));
+  }
+
   const unknown = fixture.queries.filter(q => !SUPPORTING_BY_ID.has(q.id)).map(q => q.id);
   if (unknown.length > 0) {
     throw new Error(
       `Fixture "${fixture.corpus}" carries query id(s) with no ground truth in corpus.ts: ` +
-        `${unknown.join(', ')}. Re-capture against the current PROBE_QUESTIONS.`
+        `${unknown.join(', ')}. Re-capture against the current PROBE_QUESTIONS, or supply the set ` +
+        'the capture used with --questions.'
     );
   }
   return fixture.queries.map(q => ({ id: q.id, vector: q.vector, supporting: SUPPORTING_BY_ID.get(q.id) ?? [] }));
