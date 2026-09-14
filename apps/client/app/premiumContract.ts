@@ -110,8 +110,11 @@ export type PremiumNotebookSidenav = ComponentType | null;
  * carries `lazyImport` thunks, so deriving the policy from `premiumRoutes` would pull
  * the overlay's lazy component graph into a server-rendered route.
  *
- * Both fields are origin-relative paths beginning with `/`. Entries that are not are
- * dropped by `app/seo/crawlPolicy.ts` rather than trusted into a served file.
+ * Both fields are origin-relative paths beginning with `/`, restricted to characters
+ * that cannot change the meaning of the file they land in. Next's metadata serializer
+ * does no escaping, so `app/seo/crawlPolicy.ts` drops anything else rather than trust
+ * it into a served file - a newline would emit extra robots.txt directives, and a bare
+ * `&` would make the sitemap XML unparseable.
  */
 export interface PremiumRouteIndexing {
   /**
@@ -120,12 +123,25 @@ export interface PremiumRouteIndexing {
    * overlay itself. An overlay whose routes are gated or client-only contributes an
    * empty list - an indexed empty shell is a thin-content signal, and a sitemap full
    * of login redirects is worse than no sitemap.
+   *
+   * A path covered by ANY `disallowPaths` prefix - this overlay's, another overlay's,
+   * or core's - is dropped rather than advertised, because robots.txt is one file for
+   * the whole origin. There is deliberately no `allowPaths` sibling to order against a
+   * broader disallow: expressing that correctly needs longest-match reasoning across
+   * every contributor, so the contract makes the conflict impossible instead of
+   * letting an overlay publish a sitemap entry its own robots.txt forbids.
    */
   sitemapPaths: string[];
   /**
    * `Disallow:` patterns for everything else the overlay owns. A trailing `/` makes
    * the entry a subtree prefix, which is how a parameterised route is expressed
    * (robots.txt has no notion of a router param).
+   *
+   * Never list a path whose URL is itself a capability (a share or invite token). A
+   * crawler blocked from fetching such a page never reads the `noindex` it was blocked
+   * from seeing, and can still index the URL from a link elsewhere - so a disallow
+   * makes a leaked link MORE exposed. Serve those a per-response `X-Robots-Tag`
+   * instead, the way the core share surfaces do.
    */
   disallowPaths: string[];
 }

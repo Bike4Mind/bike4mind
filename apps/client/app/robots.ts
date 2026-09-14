@@ -1,5 +1,5 @@
 import type { MetadataRoute } from 'next';
-import { WEBSITE_URL } from '@client/config/general';
+import { CANONICAL_ORIGIN } from '@client/config/general';
 import { premiumRouteIndexing } from './premium-generated/premiumRouteIndexing.generated';
 import { buildDisallowList, buildSitemapPaths, buildSitemapUrl } from './seo/crawlPolicy';
 
@@ -11,7 +11,7 @@ export const dynamic = 'force-static';
 // decision about this product, not a mechanical one, and getting them wrong is silent -
 // see the group trap in seo/crawlPolicy.ts before adding any.
 export default function robots(): MetadataRoute.Robots {
-  const sitemapUrl = buildSitemapUrl(WEBSITE_URL, buildSitemapPaths(premiumRouteIndexing));
+  const sitemapUrl = buildSitemapUrl(CANONICAL_ORIGIN, buildSitemapPaths(premiumRouteIndexing));
 
   return {
     rules: [{ userAgent: '*', allow: '/', disallow: buildDisallowList(premiumRouteIndexing) }],
