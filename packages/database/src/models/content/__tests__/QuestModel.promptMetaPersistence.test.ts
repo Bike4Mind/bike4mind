@@ -123,6 +123,11 @@ const FULL_PROMPT_META = {
     // what covers the BSON-type half, so a Number-vs-String slip on any of these five fails here
     // rather than shipping as a field that saves and then fails its Zod re-parse on read.
     injected: { chunks: 5, chars: 1300, topScore: 0.88, preRelativeFloorCandidates: 8, postRelativeFloorCandidates: 6 },
+    injectedLakePromptIds: ['lake-granted', 'lake-both'],
+    // The two per-arm fields OVERLAP by design - a lake can be admitted by both - so the round trip
+    // carries one lake in each and one in both, rather than partitioning the injected ids.
+    preauthorizedLakeIdsUsed: ['lake-both'],
+    grantedLakeIdsUsed: ['lake-granted', 'lake-both'],
     // Deliberately `false`, not `true`: a falsy leaf is where a Mongoose/Zod mismatch silently
     // drops a value, and `false` is this field's load-bearing case (the A/B's control arm).
     knowledgeBaseGuidanceInjected: false,

@@ -94,7 +94,11 @@ import {
   partitionBySupersession,
   type SupersessionReport,
 } from '../dataLakeService/supersession';
-import { getAccessibleDataLakePrompts, datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
+import {
+  getAccessibleDataLakePrompts,
+  datalakeTagsFrom,
+  grantedLakeIdsUsedFor,
+} from '../dataLakeService/getDataLakePrompts';
 import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
 import { attributeAccessedLakeIds } from '../dataLakeService/attributeAccessedLakes';
 import { recordLakeAccessEvent } from '../dataLakeService/recordLakeAccessEvent';
@@ -2140,12 +2144,18 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
 
       const { db, user } = this.chatCompletion;
       const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
-      const prompts = await getAccessibleDataLakePrompts(
-        { db, user, entitlementKeys, logger: this.logger },
-        { restrictToDatalakeTags: datalakeTags, preauthorizedLakeIds: this.preauthorizedLakeIds }
-      );
+      // Held in a local rather than passed inline: the grant-reach memo is scoped by OBJECT
+      // IDENTITY, so the telemetry derivation below is a cache hit only if it gets this same
+      // instance (see grantedLakeIdsUsedFor).
+      const lakeAccessContext = { db, user, entitlementKeys, logger: this.logger };
+      const prompts = await getAccessibleDataLakePrompts(lakeAccessContext, {
+        restrictToDatalakeTags: datalakeTags,
+        preauthorizedLakeIds: this.preauthorizedLakeIds,
+      });
+      const injectedLakePromptIds = prompts.map(p => p.id);
       const preauthorizedSet = new Set(this.preauthorizedLakeIds);
-      const preauthorizedLakeIdsUsed = prompts.map(p => p.id).filter(id => preauthorizedSet.has(id));
+      const preauthorizedLakeIdsUsed = injectedLakePromptIds.filter(id => preauthorizedSet.has(id));
+      const grantedLakeIdsUsed = await grantedLakeIdsUsedFor(lakeAccessContext, injectedLakePromptIds);
       // Recorded whenever this injection site ran, even if nothing qualified (present-and-empty
       // is distinct from absent - see the field's own comment in promptMeta.ts).
       quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
@@ -2156,8 +2166,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         attempted: true,
         surfaces: [],
         dataLakeTags: [],
-        injectedLakePromptIds: prompts.map(p => p.id),
+        injectedLakePromptIds,
         ...(preauthorizedLakeIdsUsed.length ? { preauthorizedLakeIdsUsed } : {}),
+        ...(grantedLakeIdsUsed.length ? { grantedLakeIdsUsed } : {}),
       });
       const section = renderDataLakePromptSection(prompts);
       if (!section) return null;

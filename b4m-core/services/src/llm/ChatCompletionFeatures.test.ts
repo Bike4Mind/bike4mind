@@ -1852,6 +1852,10 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
     opts: {
       dataLakesThrows?: boolean;
       activeGrants?: Array<{ dataLakeId: string; principalType: string; principalId: string; role: string }>;
+      // The caller's own USER-principal grant rows, which is what the injection resolver's
+      // owner/curator grant arm reads (listByPrincipal) - distinct from `activeGrants`, the per-lake
+      // rows the pre-authorization manage re-check batches over.
+      principalGrants?: Array<{ dataLakeId: string; role: string }>;
     } = {}
   ) => {
     const chunksByFile = Object.fromEntries(
@@ -1886,11 +1890,11 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
         // resolves EMPTY so these tests keep isolating the pre-authorization arm: the injection
         // resolver reads it for its own owner/curator grant arm, which would otherwise admit the
         // same lake for a different reason than the one under test.
-        ...(opts.activeGrants
+        ...(opts.activeGrants || opts.principalGrants
           ? {
               dataLakeAccessGrants: {
-                listActiveByLakes: vi.fn().mockResolvedValue(opts.activeGrants),
-                listByPrincipal: vi.fn().mockResolvedValue([]),
+                listActiveByLakes: vi.fn().mockResolvedValue(opts.activeGrants ?? []),
+                listByPrincipal: vi.fn().mockResolvedValue(opts.principalGrants ?? []),
               },
             }
           : {}),
@@ -2100,6 +2104,66 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
       'anything'
     );
     expect(quest.promptMeta?.retrieval?.preauthorizedLakeIdsUsed).toBeUndefined();
+  });
+
+  // The arm this field exists for: a stranger's lake in an org the caller does not belong to, with
+  // no pre-authorization - so the grant row is the ONLY thing that could have injected the prompt,
+  // and it is now named rather than left to be inferred from injectedLakePromptIds alone.
+  it('records grantedLakeIdsUsed for a lake admitted by the callers curator grant', async () => {
+    const quest = makeQuest();
+    const ctx = makeCtx(
+      [lakeFile('fA', 'datalake:x')],
+      [makeLake({ createdByUserId: 'stranger', organizationId: 'org-beta' })],
+      { principalGrants: [{ dataLakeId: 'lakeX', role: 'curator' }] }
+    );
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual(['lakeX']);
+    expect(quest.promptMeta?.retrieval?.grantedLakeIdsUsed).toEqual(['lakeX']);
+    // TWO reads, both predating this field: one resolving the turn's retrieval scope (a different
+    // memo scope - the chat context), one for the injection arm. The telemetry derivation adds
+    // NONE, because it is handed the same context the arm was and hits the per-turn memo (#2589) -
+    // a third read here is that memo no longer being shared.
+    expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves grantedLakeIdsUsed absent when the creator arm injected the prompt', async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([lakeFile('fA', 'datalake:x')], [makeLake()], {
+        principalGrants: [],
+      }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual(['lakeX']);
+    expect(quest.promptMeta?.retrieval?.grantedLakeIdsUsed).toBeUndefined();
+  });
+
+  it('does NOT name a lake the caller holds only a reader grant on', async () => {
+    // A reader grant cannot admit a prompt at all (the permanent injection floor), so it must not
+    // appear here either - a reader listed in this field would read as cross-tenant injection.
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([lakeFile('fA', 'datalake:x')], [makeLake()], {
+        principalGrants: [{ dataLakeId: 'lakeX', role: 'reader' }],
+      }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    expect(quest.promptMeta?.retrieval?.grantedLakeIdsUsed).toBeUndefined();
   });
 });
 

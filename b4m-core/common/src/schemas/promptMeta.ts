@@ -630,6 +630,31 @@ export const RetrievalSummarySchema = z.object({
    * admitted id was among this turn's injections, including every turn on a session with none.
    */
   preauthorizedLakeIdsUsed: z.array(z.string()).optional(),
+  /**
+   * Which of this turn's injected lake prompt ids the caller holds an owner/curator GRANT on - the
+   * per-arm sibling of `preauthorizedLakeIdsUsed`, and the reason both exist: `injectedLakePromptIds`
+   * records THAT a lake's systemPrompt entered the turn, these two record WHICH ARM admitted it.
+   * A subset of injectedLakePromptIds, never a superset. Derived at both injection sites via
+   * grantedLakeIdsUsedFor.
+   *
+   * THE ARM WORTH NAMING SEPARATELY: the grant arm (#2495) is the only one that can cross an org
+   * boundary - `grantLakeAccess` can hand a CURATOR grant to an arbitrary cross-tenant user, and
+   * that grant carries injection trust. The creator and org arms cannot reach past one org, and a
+   * reader grant is excluded permanently, so a lake listed here is the case an operator auditing
+   * cross-tenant prompt influence is actually looking for.
+   *
+   * MEMBERSHIP, NOT CAUSATION, the same caveat the field above carries: a granted lake its holder
+   * could already reach (they created it, or they are in its org) injects through the ordinary
+   * trust arm and is listed here anyway, so a non-empty value does not prove the grant is what
+   * made the injection possible. The two fields OVERLAP for that reason - a lake can appear in
+   * both - so they are not a partition of injectedLakePromptIds and must not be counted as one.
+   *
+   * Absent means no injected id was grant-reached, including every turn where the grant read
+   * FAILED (it is fail-quiet by design - telemetry must not drop the injection it records), so
+   * absence is weaker evidence than presence. Date-bound any rollup: turns predating this field
+   * carry nothing, and no backfill is possible - a past turn's grant rows have moved on.
+   */
+  grantedLakeIdsUsed: z.array(z.string()).optional(),
 });
 
 /**
