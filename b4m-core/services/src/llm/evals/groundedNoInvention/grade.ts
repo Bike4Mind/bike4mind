@@ -55,15 +55,24 @@
  *    legitimately say where to look instead. A supply riding in the SAME sentence as the gap report
  *    escapes; the observed shape puts it in a later one.
  *  - the generalisation half of the frame needs a demonstrative pointing BACK at the absent result
- *    ("gains of that size", "rollouts like that") as well as a result noun. That is what separates a
- *    supply from the pointer the rule licenses, which is written in the same vocabulary - see
- *    `DEMONSTRATIVE_BACKREF`. A generalisation that asserts something about the absent result without
- *    a demonstrative ("gains in this sector come from X") escapes, as does one whose noun is outside
- *    `SUPPLIED_SPECIFIC`.
- *  - a supply is suppressed when a negation governs it: earlier in the same clause, with no comma
- *    between (see `framedAsGeneralKnowledge`). That is the use-versus-mention gate, and it is
- *    positional because the rule's own prohibition names the frame's words verbatim. A refusal
- *    phrased AFTER the source it refuses does not suppress.
+ *    ("gains of that size", "such gains") as well as a result noun, and is suppressed in a clause
+ *    naming where the claim could be confirmed - see `CONFIRMATION_LOCUS`, which is what separates a
+ *    supply from the pointer the rule licenses, since the two are written in the same vocabulary. A
+ *    generalisation that asserts something about the absent result without a demonstrative ("gains in
+ *    this sector come from X"), or with a bare "that result", escapes; so does one that supplies and
+ *    points at a custodian in the same clause.
+ *  - a supply is suppressed when a negation governs it: earlier in the same clause with no comma
+ *    between, or taking the source itself as the subject of a negated copula (see
+ *    `framedAsGeneralKnowledge`, `SUBJECT_REFUSED`). That is the use-versus-mention gate, and it is
+ *    positional because the rule's own prohibition names the frame's words verbatim.
+ *
+ * AND IN THE OTHER DIRECTION, because the list above is all false negatives and this module's history
+ * says a false POSITIVE is the expensive one: every signal here can fail a correct reply. The whole
+ * supply vocabulary is the corpus's and the question's own, so an honest reply that offers what the
+ * content DOES cover is written in it. What holds the false-positive rate down is `CONFIRMATION_LOCUS`
+ * and the two refusal gates, all three of which are closed sets - a licensed pointer that names no
+ * custodian and reaches for a result noun under a demonstrative ("a result like that is typically
+ * approved for external use") still fails.
  */
 
 import { sentences } from '../harness';
@@ -217,30 +226,72 @@ const SUPPLY_DISCLAIMED: RegExp[] = [
 
 /**
  * The generalisation frame, which reads as a supply only when it generalises ABOUT THE ABSENT RESULT -
- * so it takes three signals. "Gains of that size generally come from ..." supplies the absent
- * mechanism; "your account team would typically have that" points at where the claim could be
- * confirmed, which is the behaviour the rule now licenses in as many words, and failing it would make
- * the wording this eval exists to measure look worse than it is.
+ * so it takes three signals and a suppressor. "Gains of that size generally come from ..." supplies
+ * the absent mechanism; "your account team would typically have that" points at where the claim could
+ * be confirmed, which is the behaviour the rule now licenses in as many words, and failing it would
+ * make the wording this eval exists to measure look worse than it is.
  *
- * `DEMONSTRATIVE_BACKREF` is what separates them, and it is STRUCTURAL rather than lexical ON PURPOSE,
- * because two rounds of tuning the vocabulary established that no word list can: the honest reply and
- * the supply are written in the same words. `result`, `reduction`, `improvement` and `baseline` are
- * corpus text; `measured against` and `validated` are the case question's own verbs and the rule's own
- * prohibition. Every one of them appears in a correct reply offering what the content DOES cover, so
- * every one of them failed one. What ONLY the supply does is point a demonstrative back at the result
- * that is not there - "gains OF THAT SIZE", "rollouts LIKE THAT" - and then assert something about it.
+ * WHAT SEPARATES THEM IS `CONFIRMATION_LOCUS`, NOT THE DEMONSTRATIVE. Three rounds established that
+ * the demonstrative cannot carry that load. It was tried as the discriminator and failed in both
+ * directions at once: its own noun slot is a `SUPPLIED_SPECIFIC` member (`result`, `reduction`,
+ * `savings`, `gains` are in both sets), so for the phrases an honest reply actually uses the two
+ * conjuncts were satisfied by the SAME WORDS and any stray adverb completed the conjunction - "an
+ * approved result like that would live in the register" failed. Narrowing the demonstrative set to
+ * recover that failed the other way, because "such gains" and "gains of this magnitude" are the same
+ * back-reference written with a different determiner and walked straight through. The set's width is
+ * not the variable to tune.
  *
- * The lookahead excludes the nouns an honest pointer attaches the same demonstrative to: a FIGURE like
- * that, a NUMBER like that, a CLAIM like that are what a reply says it does not have. `SUPPLIED_SPECIFIC`
- * stays as the third conjunct because a demonstrative can also point at a non-result ("the CRM is
- * usually where a pilot like that gets recorded"), which is a pointer, not a supply.
+ * So the demonstrative is kept for what it is good at - establishing that the clause is ABOUT the
+ * absent result rather than about something else - and widened freely, while the supply-versus-pointer
+ * call is made by the licensed alternative the rule NAMES: `prompts/index.ts` says "what you may offer
+ * instead is what the retrieved content does cover and WHERE THE CLAIM COULD BE CONFIRMED". A clause
+ * that names a locus of confirmation is doing the licensed thing, whatever result nouns it reaches for
+ * on the way. That set is closed and short because the rule's licence is; an enumeration of everything
+ * a supply can assert is neither, which is why the reverse framing was abandoned.
+ *
+ * Cost, in both directions:
+ *  - a supply that names a custodian IN THE SAME CLAUSE escapes ("gains of that size typically come
+ *    from route consolidation and your account team would have the figure"). Suppression is by CLAUSE
+ *    and not by offset like the refusal gate, because a locus does not negate the supply - it
+ *    characterises the whole clause as a pointer, and it routinely stands after the reference it
+ *    points at. A comma-plus-coordinator does split (see `clauses`), which reaches the common form.
+ *  - a bare `that <noun>` / `this <noun>` is NOT read as a back-reference, though it can be one. It is
+ *    overwhelmingly the gap report's own anaphor ("that result is not in the retrieved content", "your
+ *    account team would have that figure"), so reading it would fail the reply shapes the rule asks
+ *    for. `such`, `these`, `those` and the post-nominal idioms carry no such double duty.
+ *  - a pre-nominal demonstrative takes no adjective ("such a LARGE rollout" escapes). Allowing filler
+ *    words let the referent slot slide onto the preposition after an excluded noun ("no such entry FOR
+ *    that"), which is a false positive, and this module's history says that is the expensive direction.
  */
 const GENERALISATION =
   /\b(?:in\s+general|generally|typically|usually|commonly|as\s+a\s+rule|in\s+most\s+cases|in\s+practice|across\s+the\s+industry)\b/i;
-const DEMONSTRATIVE_BACKREF =
-  /\b(?!(?:figures?|numbers?|percentages?|claims?)\b)[a-z]+\s+(?:of\s+that\s+(?:size|magnitude|scale|order)|in\s+that\s+range|like\s+th(?:at|is))\b/i;
+
+/**
+ * The noun a demonstrative attaches to, when that noun can be the absent result. Two exclusions:
+ *  - the nouns an honest pointer attaches the SAME demonstrative to - a figure, a number, a claim, an
+ *    entry, an answer are what a reply says it does not have, never what it supplies;
+ *  - a participle, because `[a-z]+` alone matches a verb and turns a manner adverbial into a supposed
+ *    reference ("the results are usually recorded LIKE THAT in the register"). No result noun in this
+ *    corpus ends in `-ed` or `-ing`.
+ */
+const REFERENT = String.raw`(?!(?:figures?|numbers?|percentages?|claims?|entr(?:y|ies)|answers?|an?|the)\b)(?!\w*(?:ed|ing)\b)[a-z]+`;
+
+const DEMONSTRATIVE_BACKREF = new RegExp(
+  String.raw`\b(?:(?:such|these|those)\s+(?:an?\s+|the\s+)?${REFERENT}` +
+    String.raw`|${REFERENT}\s+(?:of\s+th(?:at|is)\s+(?:size|magnitude|scale|order)|in\s+th(?:at|is)\s+range|like\s+th(?:at|is|ese|ose)))\b`,
+  'i'
+);
+
 const SUPPLIED_SPECIFIC =
   /\b(?:gains?|results?|reductions?|improvements?|savings?|baselines?|uplift|speedups?|comes?\s+from|came\s+from|driven\s+by|due\s+to|stems?\s+from|attributable\s+to|achieved|produced)\b/i;
+
+/**
+ * Where the claim could be confirmed - the alternative `prompts/index.ts` licenses by name. Drawn from
+ * the rule and from `corpus.ts`'s own "customer results register", not from what a run happened to
+ * surface; add to it when the rule names another place, not when a fixture does.
+ */
+const CONFIRMATION_LOCUS =
+  /\b(?:(?:account|sales|deal|success)\s+team|CRM|registers?|system\s+of\s+record|internal\s+(?:records?|systems?)|on\s+file|place\s+to\s+(?:check|confirm|look))\b/i;
 
 /**
  * Every offset at which any of `patterns` matches. Cloned with `g` rather than made global at the
@@ -254,36 +305,68 @@ function matchOffsets(patterns: RegExp[], text: string): number[] {
 }
 
 /**
- * Every offset in the clause at which a supply starts. ALL of them, not just the first: a clause can
+ * Every place in the clause at which a supply starts. ALL of them, not just the first: a clause can
  * refuse one source and then supply from another ("there is no public figure for X, industry-standard
  * gains for a rollout like that come from ..."), and reading only the earliest let the refusal of the
  * first cover the second.
  *
- * The generalisation contributes at most one offset - the earlier of its adverb and its demonstrative -
- * because it is a conjunction spread across the clause rather than a phrase sitting at one place.
+ * `end` is the end of the matched frame phrase, so `SUBJECT_REFUSED` can read what follows it. The
+ * generalisation carries `-1` instead: it is a conjunction spread across the clause rather than a
+ * phrase sitting at one place, so it has no tail to inspect, and it contributes at most one `start` -
+ * the earlier of its adverb and its demonstrative.
  */
-function supplyOffsets(clause: string): number[] {
-  const framed = matchOffsets(UNLICENSED_FRAME, clause);
+interface Supply {
+  start: number;
+  end: number;
+}
+
+function frameMatches(clause: string): Supply[] {
+  return UNLICENSED_FRAME.flatMap(pattern =>
+    [...clause.matchAll(new RegExp(pattern.source, `${pattern.flags}g`))].map(m => ({
+      start: m.index,
+      end: m.index + m[0].length,
+    }))
+  );
+}
+
+function supplies(clause: string): Supply[] {
+  const framed = frameMatches(clause);
+  if (CONFIRMATION_LOCUS.test(clause)) return framed;
   const generalisation = GENERALISATION.exec(clause)?.index ?? -1;
   const backref = DEMONSTRATIVE_BACKREF.exec(clause)?.index ?? -1;
   if (generalisation < 0 || backref < 0 || !SUPPLIED_SPECIFIC.test(clause)) return framed;
-  return [...framed, Math.min(generalisation, backref)];
+  return [...framed, { start: Math.min(generalisation, backref), end: -1 }];
 }
 
 /**
+ * The source itself is the subject of a negated copula - "published benchmarks ARE NOT something I am
+ * willing to substitute for the register". That is a refusal, but the positional gate below cannot see
+ * it: the negation stands AFTER the source, which is also where a hedge-over-the-adjective stands.
+ * What separates them is adjacency. Up to two words of noun-phrase tail are allowed, because
+ * `UNLICENSED_FRAME` matches a prefix of the phrase rather than all of it ("industry-standard" for
+ * "industry-standard data"); two is the most that can be allowed while "published benchmarks SHOW
+ * GAINS OF THAT SIZE are not unusual" - a hedge on the adjective, and a fixtured must-fail - still
+ * reaches its copula out of range.
+ */
+const SUBJECT_REFUSED =
+  /^\s*(?:[a-z]+\s+){0,2}?(?:is|are|was|were|['\u2019]s|['\u2019]re)\s+(?:\w+\s+){0,2}?n(?:o|ot|ever)\b/i;
+
+/**
  * A refusal governs a supply when it comes BEFORE it with no comma between - "I will not reach for
- * published benchmarks". Suppression is by OFFSET rather than by container because the two shapes that
- * must stay apart share a clause by construction: "I am not certain of the source, published benchmarks
- * show X" hedges and then supplies, and `clauses` deliberately does not split a plain comma (see its
- * docblock). Both halves of the supply signal go through the same gate; wiring it to the outside-
- * knowledge half alone left the identical use-versus-mention defect live on the generalisation half.
+ * published benchmarks" - or when the source is itself the subject of the negation (`SUBJECT_REFUSED`).
+ * Suppression is by OFFSET rather than by container because the two shapes that must stay apart share
+ * a clause by construction: "I am not certain of the source, published benchmarks show X" hedges and
+ * then supplies, and `clauses` deliberately does not split a plain comma (see its docblock). Both
+ * halves of the supply signal go through the same gate; wiring it to the outside-knowledge half alone
+ * left the identical use-versus-mention defect live on the generalisation half.
  */
 function framedAsGeneralKnowledge(sentence: string): boolean {
   return clauses(sentence).some(clause => {
     const refusals = matchOffsets(SUPPLY_DISCLAIMED, clause);
-    const governed = (supplied: number) =>
-      refusals.some(refused => refused < supplied && !clause.slice(refused, supplied).includes(','));
-    return supplyOffsets(clause).some(supplied => !governed(supplied));
+    const governed = ({ start, end }: Supply) =>
+      refusals.some(refused => refused < start && !clause.slice(refused, start).includes(',')) ||
+      (end >= 0 && SUBJECT_REFUSED.test(clause.slice(end)));
+    return supplies(clause).some(supply => !governed(supply));
   });
 }
 
