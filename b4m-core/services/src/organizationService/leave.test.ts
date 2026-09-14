@@ -72,6 +72,16 @@ describe('organizationService - leave', () => {
         groups: {
           findByOrganization: vi.fn().mockResolvedValue([]),
         },
+        // Same for org lakes: no lakes by default, so the lake-access lapse is a no-op.
+        dataLakes: {
+          findByOrganizationId: vi.fn().mockResolvedValue([]),
+        },
+        dataLakeAccessGrants: {
+          listByPrincipal: vi.fn().mockResolvedValue([]),
+          listActiveByLakes: vi.fn().mockResolvedValue([]),
+          upsertGrant: vi.fn().mockResolvedValue(undefined),
+        },
+        lakeConfigChangeEvents: { record: vi.fn().mockResolvedValue(undefined) },
       },
     };
   });
@@ -168,6 +178,29 @@ describe('organizationService - leave', () => {
     expect(result.adminUserIds).toEqual(['other-admin']);
     expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(
       expect.objectContaining({ adminUserIds: ['other-admin'] })
+    );
+  });
+
+  // Load-bearing: without it this file merely mocks the lake repos away, and the departure-side
+  // trigger could be deleted from leave.ts with every test here still green.
+  it('lapses the departing user lake grants and passes on a lake they created', async () => {
+    mockAdapters.db.dataLakes.findByOrganizationId.mockResolvedValue([
+      { id: 'lake1', name: 'Team Lake', organizationId: 'org1', createdByUserId: 'user1' },
+    ]);
+    mockAdapters.db.dataLakeAccessGrants.listByPrincipal.mockResolvedValue([
+      { dataLakeId: 'lake1', principalType: 'user', principalId: 'user1', role: 'owner', expiresAt: null },
+    ]);
+
+    await leave(mockMemberUser as IUserDocument, { id: 'org1' }, mockAdapters);
+
+    expect(mockAdapters.db.dataLakes.findByOrganizationId).toHaveBeenCalledWith('org1');
+    expect(mockAdapters.db.dataLakeAccessGrants.upsertGrant).toHaveBeenCalledWith(
+      expect.objectContaining({ principalId: 'user1', expiresAt: expect.any(Date) })
+    );
+    // Expiring the creator's own grant is not enough on its own - it would drop them into the
+    // creator fallback in resolveEffectiveOwnerIds - so the org's billing owner must succeed them.
+    expect(mockAdapters.db.dataLakeAccessGrants.upsertGrant).toHaveBeenCalledWith(
+      expect.objectContaining({ dataLakeId: 'lake1', principalId: 'owner1', role: 'owner', expiresAt: null })
     );
   });
 

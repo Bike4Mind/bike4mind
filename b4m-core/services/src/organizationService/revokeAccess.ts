@@ -1,7 +1,7 @@
 import { IGroupRepository, IOrganizationRepository, IUserDocument, IUserRepository } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
-import { purgeOrgMembershipArtifacts } from './purgeOrgMembership';
+import { purgeOrgMembershipArtifacts, type PurgeOrgMembershipAdapters } from './purgeOrgMembership';
 import { canAdministerOrganization } from './orgAuthority';
 
 const revokeAccessSchema = z.object({
@@ -11,8 +11,8 @@ const revokeAccessSchema = z.object({
 
 type RevokeAccessParameters = z.infer<typeof revokeAccessSchema>;
 
-interface RevokeAccessAdapters {
-  db: {
+interface RevokeAccessAdapters extends PurgeOrgMembershipAdapters {
+  db: PurgeOrgMembershipAdapters['db'] & {
     organizations: IOrganizationRepository;
     groups: Pick<IGroupRepository, 'findByOrganization'>;
     users: Pick<IUserRepository, 'removeGroupsFromUser' | 'findById' | 'update'>;
@@ -47,9 +47,12 @@ export const revokeAccess = async (
   organization.userDetails = organization.userDetails.filter(user => user.id.toString() !== userId);
 
   // Mirror leave.ts: an involuntarily-removed member must not keep the org's group ids (data
-  // access) or a seat in adminUserIds (org-admin authority - assertCanManageOrgGroups reads it).
-  // Involuntary removal is exactly where retained access matters most. Idempotent under retry.
-  organization.adminUserIds = await purgeOrgMembershipArtifacts(userId, organization, adapters);
+  // access), their data-lake access on this org's lakes, or a seat in adminUserIds (org-admin
+  // authority - assertCanManageOrgGroups reads it). Involuntary removal is exactly where retained
+  // access matters most. Idempotent under retry. The whole org doc goes in because the lake step
+  // needs the billing owner to pass a departed creator's lakes on to; the lapse is attributed to
+  // the REMOVING admin, the principal whose action ended the access.
+  organization.adminUserIds = await purgeOrgMembershipArtifacts(userId, organization, { userId: user.id }, adapters);
 
   await adapters.db.organizations.update(organization);
 

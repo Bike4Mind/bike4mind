@@ -63,6 +63,17 @@ describe('organizationService - revokeAccess', () => {
           findById: vi.fn().mockResolvedValue(null),
           update: vi.fn().mockResolvedValue(undefined),
         },
+        // No org lakes by default, so the lake-access lapse is a no-op unless a test sets some and
+        // the org-update assertions in the existing cases stay exact.
+        dataLakes: {
+          findByOrganizationId: vi.fn().mockResolvedValue([]),
+        },
+        dataLakeAccessGrants: {
+          listByPrincipal: vi.fn().mockResolvedValue([]),
+          listActiveByLakes: vi.fn().mockResolvedValue([]),
+          upsertGrant: vi.fn().mockResolvedValue(undefined),
+        },
+        lakeConfigChangeEvents: { record: vi.fn().mockResolvedValue(undefined) },
       },
     };
   });
@@ -105,6 +116,34 @@ describe('organizationService - revokeAccess', () => {
     expect(result.adminUserIds).toEqual(['user2']);
     expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(
       expect.objectContaining({ adminUserIds: ['user2'] })
+    );
+  });
+
+  // Load-bearing: without it this file merely mocks the lake repos away, and the departure-side
+  // trigger could be deleted from revokeAccess.ts with every test here still green.
+  it('lapses the removed user lake grants and passes on a lake they created', async () => {
+    mockAdapters.db.dataLakes.findByOrganizationId.mockResolvedValue([
+      { id: 'lake1', name: 'Team Lake', organizationId: 'org1', createdByUserId: 'user1' },
+    ]);
+    mockAdapters.db.dataLakeAccessGrants.listByPrincipal.mockResolvedValue([
+      { dataLakeId: 'lake1', principalType: 'user', principalId: 'user1', role: 'owner', expiresAt: null },
+    ]);
+
+    await revokeAccess(mockOwnerUser as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters);
+
+    expect(mockAdapters.db.dataLakes.findByOrganizationId).toHaveBeenCalledWith('org1');
+    expect(mockAdapters.db.dataLakeAccessGrants.upsertGrant).toHaveBeenCalledWith(
+      expect.objectContaining({ principalId: 'user1', expiresAt: expect.any(Date) })
+    );
+    // The removing admin is the attributed principal on both writes.
+    expect(mockAdapters.db.dataLakeAccessGrants.upsertGrant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dataLakeId: 'lake1',
+        principalId: 'owner1',
+        role: 'owner',
+        grantedByUserId: 'owner1',
+        expiresAt: null,
+      })
     );
   });
 

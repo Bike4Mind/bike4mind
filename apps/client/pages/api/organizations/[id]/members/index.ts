@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { organizationService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
-import { withTransaction } from '@bike4mind/database';
+import { withTransaction, dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { BadRequestError } from '@server/utils/errors';
 import { logEvent } from '@server/utils/analyticsLog';
 import {
@@ -82,8 +83,10 @@ const handler = baseApi()
     return respond(res, safeUserResponseSchema, toSafeUser(newMember, 'same-org'));
   })
   .delete(async (req, res) => {
-    // Transaction: org-membership removal and clearing the user's organizationId must
-    // commit atomically, or a failure between the two leaves a stale organizationId. Mirrors addMember above.
+    // Transaction: org-membership removal, lapsing the member's data-lake grants on this org's
+    // lakes, and clearing the user's organizationId must commit atomically, or a failure between
+    // them leaves a stale organizationId or live grants on an org the user has left. Mirrors
+    // addMember above.
     const organization = await withTransaction(() =>
       organizationService.leave(
         req.user,
@@ -93,6 +96,9 @@ const handler = baseApi()
             organizations: organizationRepository,
             users: userRepository,
             groups: groupRepository,
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            ...lakeConfigAuditDb,
           },
         }
       )
