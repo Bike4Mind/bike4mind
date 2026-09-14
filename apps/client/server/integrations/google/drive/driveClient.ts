@@ -125,6 +125,41 @@ export async function withDriveRetry<T>(operation: string, call: () => Promise<T
   }
 }
 
+/**
+ * Is this error Drive telling us a stored `changes.list` pageToken is no longer valid (expired, or
+ * the corresponding startPageToken was reset)? Classified structurally off the status code, like
+ * isDriveRateLimitError - the message text carries no stable marker. Callers MUST treat a true here
+ * as "fall back to a full walk", not a permanent failure: an invalid cursor is routine (Drive expires
+ * them; see the syncCursor doc comment) and dropping the sync instead would silently stop re-syncing
+ * the folder forever.
+ */
+export function isDriveInvalidCursorError(e: unknown): boolean {
+  if (typeof e !== 'object' || e === null) return false;
+  const err = e as Record<string, unknown>;
+  const response = err.response as Record<string, unknown> | undefined;
+  for (const raw of [err.code, err.status, response?.status]) {
+    const code = typeof raw === 'string' ? Number(raw) : raw;
+    if (code === 400 || code === 404) return true;
+  }
+  return false;
+}
+
+/**
+ * Is this error Drive confirming a file is genuinely gone (a plain 404), as opposed to a transient
+ * failure (rate limit, 5xx, network blip)? getFileParents uses this to decide whether an ancestry
+ * lookup failure means "this ancestor no longer exists" (safe to fold into null/no-chain) versus
+ * "we couldn't tell right now" (must NOT be read the same way - see getFileParents).
+ */
+export function isDriveNotFoundError(e: unknown): boolean {
+  if (typeof e !== 'object' || e === null) return false;
+  const err = e as Record<string, unknown>;
+  const response = err.response as Record<string, unknown> | undefined;
+  for (const raw of [err.code, err.status, response?.status]) {
+    if ((typeof raw === 'string' ? Number(raw) : raw) === 404) return true;
+  }
+  return false;
+}
+
 // Drive file/folder ids are URL-safe tokens ([A-Za-z0-9_-]); the alias 'root' also matches. The
 // length bound (real ids are ~33-44 chars) stops ~1MB of legal characters being interpolated into
 // the `q` string and sent outbound. Validate before interpolating so a crafted id can't break out.
@@ -266,4 +301,132 @@ export async function listFolderChildren(drive: drive_v3.Drive, folderId: string
   } while (pageToken);
 
   return files;
+}
+
+/**
+ * One entry from `drive.changes.list`: either a file that changed (added/edited/moved/re-shared -
+ * `file` present) or one that is gone for good (deleted, or the caller lost access - `removed: true`,
+ * `file` absent). `file.trashed` is a SEPARATE, softer signal (still resolvable, still in `file`) -
+ * both read as "no longer live" by the caller, but only `removed` means Drive will never mention this
+ * id again.
+ */
+export type DriveChange = {
+  fileId: string;
+  removed: boolean;
+  file?: DriveFile & { parents?: string[]; trashed?: boolean };
+};
+
+const CHANGES_FIELDS =
+  'nextPageToken, newStartPageToken, changes(fileId, removed, file(id, name, mimeType, modifiedTime, md5Checksum, size, parents, trashed))';
+
+/**
+ * Establish the baseline cursor for incremental sync: the pageToken meaning "now". Call once right
+ * BEFORE a full walk (first sync, or a cursor-invalidation fallback - see isDriveInvalidCursorError)
+ * and persist the result as the connection's syncCursor only once that walk has been applied.
+ *
+ * Before, not after, and the order is the point: a file created mid-walk, after its parent folder was
+ * already listed, is in neither the walk's result nor a feed read from a token taken afterwards. Taken
+ * first, the token instead overlaps the walk - `listChanges` replays some changes the walk already
+ * covered, which the caller diffs out as no-ops. Overlap is recoverable; a gap is not.
+ */
+export async function getStartPageToken(drive: drive_v3.Drive): Promise<string> {
+  const res = await withDriveRetry('changes.getStartPageToken', () =>
+    drive.changes.getStartPageToken({ supportsAllDrives: true })
+  );
+  const token = res.data.startPageToken;
+  if (!token) {
+    throw new Error('Drive did not return a startPageToken');
+  }
+  return token;
+}
+
+/**
+ * Pull every change since `pageToken`, following pagination (same page-cap discipline as
+ * listFolderChildren - see MAX_LIST_PAGES). The Changes API is Drive-WIDE: it has no folder filter,
+ * so this returns every change the credential can see across the whole Drive/shared-drive, not just
+ * the connected folder's subtree - narrowing to that subtree is the caller's job (driveLakeIngest
+ * resolves per-candidate membership via driveContent.isUnderRoot).
+ *
+ * `newStartPageToken` is only present on the LAST page and is the cursor to persist for the next
+ * poll; a caller that stops paginating early (it never should - see the throw below) would have
+ * nothing valid to advance the cursor to.
+ */
+export async function listChanges(
+  drive: drive_v3.Drive,
+  pageToken: string
+): Promise<{ changes: DriveChange[]; newStartPageToken: string }> {
+  const changes: DriveChange[] = [];
+  let token: string | undefined = pageToken;
+  let newStartPageToken: string | undefined;
+  let pages = 0;
+
+  do {
+    // Explicit params type: without it, TS's overload resolution against the googleapis
+    // client's several list() signatures (callback vs promise vs streamed) infers `res` in
+    // terms of itself and fails to compile (TS7022).
+    const params: drive_v3.Params$Resource$Changes$List = {
+      pageToken: token,
+      fields: CHANGES_FIELDS,
+      pageSize: 1000,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    };
+    const res = await withDriveRetry('changes.list', () => drive.changes.list(params));
+
+    for (const c of res.data.changes ?? []) {
+      if (!c.fileId) continue;
+      const f = c.file;
+      changes.push({
+        fileId: c.fileId,
+        removed: !!c.removed,
+        file: f
+          ? {
+              id: f.id ?? c.fileId,
+              name: f.name ?? '',
+              mimeType: f.mimeType ?? '',
+              ...(f.modifiedTime && { modifiedTime: f.modifiedTime }),
+              ...(f.md5Checksum && { md5Checksum: f.md5Checksum }),
+              ...(f.size != null && { size: Number(f.size) }),
+              ...(f.parents && { parents: f.parents }),
+              ...(f.trashed != null && { trashed: f.trashed }),
+            }
+          : undefined,
+      });
+    }
+
+    token = res.data.nextPageToken ?? undefined;
+    newStartPageToken = res.data.newStartPageToken ?? newStartPageToken;
+    pages++;
+    if (token && pages >= MAX_LIST_PAGES) {
+      throw new Error(`Drive changes feed exceeded ${MAX_LIST_PAGES} pages; listing is not exhaustive`);
+    }
+  } while (token);
+
+  if (!newStartPageToken) {
+    throw new Error('Drive changes.list did not return a newStartPageToken on its last page');
+  }
+  return { changes, newStartPageToken };
+}
+
+/**
+ * A file/folder's current direct parent ids, for live ancestor-chain resolution (see
+ * driveContent.isUnderRoot). Returns null for anything CONFIRMED unusable as an ancestor: gone (404)
+ * or trashed - the conservative (exclude, don't include) side of that check.
+ *
+ * A transient failure (rate limit, 5xx, network blip) is NOT folded into that same null: isUnderRoot's
+ * caller uses a false/null result to decide a tracked file moved out of the connected tree and should
+ * be evicted from the lake, so misreading "Drive hiccuped" as "confirmed gone" would silently drop a
+ * still-live file (the #2394 failure mode). Rethrown so the caller can tell the two apart.
+ */
+export async function getFileParents(drive: drive_v3.Drive, fileId: string): Promise<string[] | null> {
+  try {
+    const res = await withDriveRetry('files.get(parents)', () =>
+      drive.files.get({ fileId, fields: 'id, parents, trashed', supportsAllDrives: true })
+    );
+    if (res.data.trashed) return null;
+    return res.data.parents ?? [];
+  } catch (e) {
+    if (isDriveNotFoundError(e)) return null;
+    throw e;
+  }
 }

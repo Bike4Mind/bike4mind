@@ -21,8 +21,59 @@ describe('atlasVectorSearch', () => {
       minScore: 0,
       adapters: { vectorSearch },
     });
-    expect(result).toEqual({ results: [], hitsReturned: 0, hitsSkippedUnknownFile: 0, filesWithHits: new Set() });
+    // backendQueryMs is null rather than 0 precisely here: no query was issued, and a 0 would
+    // enter the latency metric as an instantaneous one.
+    expect(result).toEqual({
+      results: [],
+      hitsReturned: 0,
+      hitsSkippedUnknownFile: 0,
+      filesWithHits: new Set(),
+      backendQueryMs: null,
+    });
     expect(vectorSearch).not.toHaveBeenCalled();
+  });
+
+  // The measurement the dataLakeAnnQuerySlow alarm reads. It has to cover the backend call and
+  // nothing else - a timer that also wrapped the shaping loop below would attribute this
+  // process's CPU work to Atlas.
+  it('times the backend call alone, excluding hit shaping', async () => {
+    vi.useFakeTimers();
+    try {
+      const vectorSearch = vi.fn().mockImplementation(async () => {
+        vi.advanceTimersByTime(45_400);
+        return [{ id: 'c1', fabFileId: 'f1', text: 'hello', score: 0.9 }];
+      });
+      const result = await atlasVectorSearch({
+        fileIds: ['f1'],
+        fileById,
+        queryVector: [1, 2, 3],
+        model: 'text-embedding-3-small',
+        limit: 10,
+        minScore: 0,
+        adapters: { vectorSearch },
+      });
+      expect(result.backendQueryMs).toBe(45_400);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A query that throws has no duration to report, and must not be papered over with one - the
+  // caller degrades to the scan path, and inventing a datapoint here would put a failed query
+  // into the latency population.
+  it('reports no duration when the backend call throws', async () => {
+    const vectorSearch = vi.fn().mockRejectedValue(new Error('index unavailable'));
+    await expect(
+      atlasVectorSearch({
+        fileIds: ['f1'],
+        fileById,
+        queryVector: [1, 2, 3],
+        model: 'text-embedding-3-small',
+        limit: 10,
+        minScore: 0,
+        adapters: { vectorSearch },
+      })
+    ).rejects.toThrow('index unavailable');
   });
 
   it('shapes hits into SemanticChunkResult rows using the parent file metadata', async () => {

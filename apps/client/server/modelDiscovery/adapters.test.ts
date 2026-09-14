@@ -38,6 +38,7 @@ vi.mock('./bedrockControlPlane', () => ({ createBedrockControlPlane }));
 
 // Real factories, wrapped so the options each one was handed are readable.
 const captured = {
+  openai: undefined as { knownModelIds?: () => unknown } | undefined,
   bedrock: undefined as { client: unknown; activeModelIds?: () => unknown } | undefined,
   modelsDev: undefined as { targets: () => unknown; aliases?: unknown } | undefined,
   litellm: undefined as { targets: () => unknown; aliases?: unknown } | undefined,
@@ -50,6 +51,10 @@ vi.mock('@bike4mind/services', async importOriginal => {
     ...actual,
     modelDiscoveryService: {
       ...real,
+      createOpenAiSource: (options: never) => {
+        captured.openai = options;
+        return real.createOpenAiSource(options);
+      },
       createBedrockSource: (options: never) => {
         captured.bedrock = options;
         return real.createBedrockSource(options);
@@ -89,6 +94,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  captured.openai = undefined;
   captured.bedrock = undefined;
   captured.modelsDev = undefined;
   captured.litellm = undefined;
@@ -154,6 +160,26 @@ describe('bedrock wiring', () => {
     expect(active).toEqual(new Set(['claude-sonnet-5', 'grok-3-fast']));
     // The 'discovered' Bedrock id is absent, so it still gets its entitlement call.
     expect((active as Set<string>).has('us.anthropic.claude-sonnet-9')).toBe(false);
+  });
+});
+
+describe('openai wiring', () => {
+  it('hands the source every id the catalog holds', async () => {
+    buildModelDiscoveryAdapters(logger);
+
+    await expect(captured.openai!.knownModelIds!()).resolves.toEqual(
+      new Set(['claude-sonnet-5', 'us.anthropic.claude-sonnet-9', 'grok-3-fast'])
+    );
+  });
+
+  it('keeps the new-model docs leg off when the catalog read failed', async () => {
+    // An empty `known` set would make every listed id look new, so the leg would
+    // emit provider-authoritative name and window claims for models the catalog
+    // already holds - the one thing this source must never do.
+    rowsInForce.mockRejectedValue(new Error('mongo is down'));
+    buildModelDiscoveryAdapters(logger);
+
+    await expect(captured.openai!.knownModelIds!()).resolves.toBeUndefined();
   });
 });
 

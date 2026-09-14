@@ -459,6 +459,31 @@ export const RetrievalSummarySchema = z.object({
   /** Lakes resolved at the moment retrieval ran, stamped point-in-time (not read live from the session). */
   dataLakeTags: z.array(z.string()),
   /**
+   * The lake scope the turn's retrieval surfaces WOULD have searched, resolved at the seed site
+   * whether or not any of them ran: the caller's accessible lakes narrowed to the session
+   * (narrowLakeAccessToSession), or empty where the corpus is personal and the lake arms are
+   * suppressed. `dataLakeTags` is the other half of the pair and answers a different question -
+   * which lakes retrieval ACTUALLY used - so on a turn where retrieval never ran that one is empty
+   * while this one still names whatever was in scope.
+   *
+   * EXISTS FOR THE OFFLINE REPLAY. `answerability` is reconstructed after the fact, and without a
+   * recorded scope the replay had to rebuild one from the session's `retrievalTags` as they stand
+   * at replay time - a session whose lake selection had since changed was replayed against a
+   * corpus its turn never had, with nothing to flag it. Recording it here removes that drift for
+   * every turn seeded after this landed; `probedAt` still discloses the content drift, which no
+   * amount of recording can fix.
+   *
+   * Absence means NOT RECORDED (a turn predating this, or one whose `retrieval` was written only
+   * by a surface rather than by the seed) - never "no lakes in scope", which is present-and-empty.
+   * The replay must keep those apart: probing an unrecorded turn would mean inventing a scope,
+   * which is the approximation this field exists to end.
+   *
+   * Only the seed writes it, so mergeRetrievalSummary carries it first-writer-wins rather than
+   * unioning: a later surface write asserting a narrower scope must not be able to widen the
+   * recorded one, and a union across the two would mean neither.
+   */
+  lakeScope: z.array(z.string()).optional(),
+  /**
    * Ids of the lakes whose `systemPrompt` was injected this turn (getAccessibleDataLakePrompts),
    * across every injection site (forced retrieval and the model-driven knowledge tools). NOT the
    * prompt text itself - that already reaches the model in the completion, and copying it here
@@ -556,6 +581,69 @@ export const RetrievalSummarySchema = z.object({
     })
     .optional(),
   /**
+   * Could the corpus in scope have answered this turn, whether or not the model went looking?
+   *
+   * The denominator the optional-path retrieval rate has always been missing (#1394). A rate of
+   * "the model retrieved on 20% of offered turns" cannot say whether the other 80% were misses or
+   * turns with nothing to find, and the two argue for opposite things: the first for routing work,
+   * the second for leaving the optional path alone. Crossing this field with the rate separates
+   * them.
+   *
+   * THE ONLY FIELD IN THIS BLOCK NOT WRITTEN BY THE TURN. Every sibling is stamped point-in-time
+   * while the turn runs; this one is written afterwards by an offline replay
+   * (packages/scripts/retrieval/answerability-replay.ts) that re-scores the recorded prompt against
+   * the corpus. That is deliberate - the population it exists to measure is the turns where
+   * retrieval did NOT run, so computing it live would mean adding a full brute-force chunk scan
+   * (ChatCompletionFeatures' forced path, which has no ANN index) to exactly the turns that pay
+   * nothing for retrieval today. The measurement is not worth that latency on live traffic.
+   *
+   * BEING A RECONSTRUCTION, IT CARRIES DRIFTS THE OTHER FIELDS DO NOT:
+   * 1. Corpus CONTENT moves. A document added or reindexed between the turn and the replay is
+   *    scored as though it had been there. `probedAt` discloses the gap; a replay run long after
+   *    the window is weak evidence, not strong.
+   * 2. Corpus SCOPE no longer drifts: the seed records the turn's resolved scope in `lakeScope`
+   *    and the replay probes that, so a session whose lake selection has since changed is still
+   *    scored against the lakes its turn actually had. The cost is coverage rather than accuracy -
+   *    a turn with no recorded scope is skipped instead of approximated, so every turn predating
+   *    the field is outside the measurement.
+   * 3. The QUESTION can move out from under it. The probe is keyed to the quest, not to the
+   *    prompt text it scored, so a turn whose prompt is later rewritten in place keeps a probe
+   *    describing the question it used to ask. mergeRetrievalSummary preserves the probe across
+   *    a runtime write deliberately - dropping it would erase the backfill - so nothing
+   *    invalidates a stale one. Re-run the replay with --force over a window whose turns were
+   *    edited.
+   *
+   * RAW SCORE, NOT A VERDICT, so the cutoff lives in the reader. summarizeOptionalPathRetrieval
+   * applies it at fold time, which lets the same replay be re-thresholded without re-running -
+   * the point of storing the number, given the two live floors disagree by construction (forced
+   * retrieval's absolute default is 0.75, the knowledge tool's is 0).
+   *
+   * `topScore` is the same raw cosine scale as `injected.topScore` and comparable to it. It is NOT
+   * comparable to lake memory's belief relevance, for the reason `injected` documents at length.
+   *
+   * `scanTruncated` inherits forced retrieval's saturation: the replay bounds its scan the same
+   * way, so a low `topScore` on a truncated scan is not proof the corpus lacked an answer - it is
+   * proof the part that was scanned did. Treat those turns as unknown rather than as negatives.
+   *
+   * Absence means NOT PROBED - never "not answerable". Every turn predating the replay, and every
+   * turn the replay skipped or failed on, is absent, so a fold must keep it as its own arm rather
+   * than letting it fall in with the negatives.
+   */
+  answerability: z
+    .object({
+      /** Best cosine the replay found across the reconstructed corpus. */
+      topScore: z.number(),
+      /** Chunks at or above `floor`. Separates "one lucky match" from "a rich seam". */
+      candidatesAboveFloor: z.number(),
+      /** The absolute floor the replay counted `candidatesAboveFloor` against, as a fraction. */
+      floor: z.number(),
+      /** The scan hit its chunk ceiling, so `topScore` is a floor on the true best, not the best. */
+      scanTruncated: z.boolean(),
+      /** When the replay ran, NOT when the turn ran - the disclosure for content drift above. */
+      probedAt: JsonSafeDate,
+    })
+    .optional(),
+  /**
    * Which of this turn's injected lake prompt ids were BOTH in the session's pre-authorized (manage-
    * but-not-member admission) set AND injected on this turn - see unionPreauthorizedLakeAccess and
    * pages/api/sessions/create.ts. A subset of injectedLakePromptIds, never a superset. Narrows the
@@ -567,6 +655,31 @@ export const RetrievalSummarySchema = z.object({
    * admitted id was among this turn's injections, including every turn on a session with none.
    */
   preauthorizedLakeIdsUsed: z.array(z.string()).optional(),
+  /**
+   * Which of this turn's injected lake prompt ids the caller holds an owner/curator GRANT on - the
+   * per-arm sibling of `preauthorizedLakeIdsUsed`, and the reason both exist: `injectedLakePromptIds`
+   * records THAT a lake's systemPrompt entered the turn, these two record WHICH ARM admitted it.
+   * A subset of injectedLakePromptIds, never a superset. Derived at both injection sites via
+   * grantedLakeIdsUsedFor.
+   *
+   * THE ARM WORTH NAMING SEPARATELY: the grant arm (#2495) is the only one that can cross an org
+   * boundary - `grantLakeAccess` can hand a CURATOR grant to an arbitrary cross-tenant user, and
+   * that grant carries injection trust. The creator and org arms cannot reach past one org, and a
+   * reader grant is excluded permanently, so a lake listed here is the case an operator auditing
+   * cross-tenant prompt influence is actually looking for.
+   *
+   * MEMBERSHIP, NOT CAUSATION, the same caveat the field above carries: a granted lake its holder
+   * could already reach (they created it, or they are in its org) injects through the ordinary
+   * trust arm and is listed here anyway, so a non-empty value does not prove the grant is what
+   * made the injection possible. The two fields OVERLAP for that reason - a lake can appear in
+   * both - so they are not a partition of injectedLakePromptIds and must not be counted as one.
+   *
+   * Absent means no injected id was grant-reached, including every turn where the grant read
+   * FAILED (it is fail-quiet by design - telemetry must not drop the injection it records), so
+   * absence is weaker evidence than presence. Date-bound any rollup: turns predating this field
+   * carry nothing, and no backfill is possible - a past turn's grant rows have moved on.
+   */
+  grantedLakeIdsUsed: z.array(z.string()).optional(),
 });
 
 /**

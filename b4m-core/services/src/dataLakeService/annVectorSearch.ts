@@ -35,6 +35,41 @@ export interface AnnVectorSearchResult {
    * meaningful. See the rebucket in semanticDataLakeSearch.ts for the rule this feeds.
    */
   filesWithHits: Set<string>;
+  /**
+   * Wall-clock ms spent inside the backend's own ANN call, measured around that await alone so
+   * the shaping loop below is excluded - this is meant to be attributable to Atlas
+   * `$vectorSearch` / OpenSearch kNN, not to this module's CPU work.
+   *
+   * `null` when no query was issued (the empty-fileIds return below), so a search that never
+   * touched the index cannot contribute a 0 ms observation. A 0 would survive the alarm's
+   * Maximum untouched but quietly drag the dashboard's Average - and any percentile this metric
+   * is later read with - toward a system faster than the one that ran.
+   *
+   * Only ever set on a SUCCESSFUL call: a query that runs past the caller's request timeout never
+   * returns, so this measures the approach to that ceiling, not the crossing of it.
+   */
+  backendQueryMs: number | null;
+}
+
+/**
+ * The slowest single backend ANN query across one search's model queries, or `null` when none of
+ * them reached a backend.
+ *
+ * A MAXIMUM, not a sum. A search queries its primary model and then every alternate model
+ * CONCURRENTLY (`Promise.all` in semanticDataLakeSearch), so adding the durations together
+ * reports a wait that never happened. Max is also the statistic the question needs: the failure
+ * being watched for is a first-touch index page-in, which is one pathological query among healthy
+ * ones, not a uniform slowdown.
+ *
+ * Nulls are dropped rather than coerced to 0, so a model that never reached the backend cannot
+ * invent an observation or pull the maximum down.
+ *
+ * Read as a lower bound on ANN wall clock: the primary query runs before the alternates and each
+ * alternate embeds its query first, so the phase always costs at least this and usually more.
+ */
+export function slowestAnnQueryMs(durationsMs: ReadonlyArray<number | null>): number | null {
+  const observed = durationsMs.filter((ms): ms is number => ms !== null);
+  return observed.length > 0 ? Math.max(...observed) : null;
 }
 
 /**
@@ -60,10 +95,12 @@ export async function annVectorSearch(args: {
 }): Promise<AnnVectorSearchResult> {
   const { fileIds, fileById, queryVector, model, limit, minScore, adapter } = args;
   if (fileIds.length === 0) {
-    return { results: [], hitsReturned: 0, hitsSkippedUnknownFile: 0, filesWithHits: new Set() };
+    return { results: [], hitsReturned: 0, hitsSkippedUnknownFile: 0, filesWithHits: new Set(), backendQueryMs: null };
   }
 
+  const backendStartedAt = Date.now();
   const hits = await adapter.knnSearch(fileIds, queryVector, model, { limit });
+  const backendQueryMs = Date.now() - backendStartedAt;
   const filesWithHits = new Set(hits.map(h => h.fabFileId));
 
   const results: SemanticChunkResult[] = [];
@@ -96,5 +133,5 @@ export async function annVectorSearch(args: {
     });
   }
 
-  return { results, hitsReturned: hits.length, hitsSkippedUnknownFile, filesWithHits };
+  return { results, hitsReturned: hits.length, hitsSkippedUnknownFile, filesWithHits, backendQueryMs };
 }

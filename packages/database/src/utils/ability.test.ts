@@ -18,7 +18,8 @@ vi.mock('../models', () => ({
 }));
 
 import { defineAbilitiesFor } from './ability';
-import { Prompt, FabFile } from '../models';
+import { Prompt, FabFile, FeedbackModel } from '../models';
+import { accessibleBy } from '@casl/mongoose';
 
 const makeUser = (overrides: Partial<IUserDocument> = {}): IUserDocument =>
   ({ id: 'u1', isAdmin: false, tags: [], groups: [], email: 'user@example.com', ...overrides }) as IUserDocument;
@@ -101,5 +102,41 @@ describe('db-core defineAbilitiesFor - group-shared document access', () => {
     const ability = defineAbilitiesFor(makeUser({ groups: [] }));
     const doc = sharedWithGroups([{ groupId: 'g1', permissions: ['read'] }]);
     expect(ability.can('read', doc)).toBe(false);
+  });
+});
+
+// Mirrors the HTTP ability's Feedback block (apps/client/server/auth/ability.ts). Both grant a
+// reporter { userId }-scoped read and delete; if one side drops the condition, that side hands
+// every logged-in user the admin view, so both are pinned separately.
+describe('db-core defineAbilitiesFor - Feedback read/delete scoping', () => {
+  const ownReport = Object.assign(new FeedbackModel(), { userId: 'u1' });
+  const othersReport = Object.assign(new FeedbackModel(), { userId: 'someone-else' });
+
+  it('lets a reporter read and retract their own report, but not anyone else\'s', () => {
+    const a = defineAbilitiesFor(makeUser());
+    expect(a.can('read', ownReport)).toBe(true);
+    expect(a.can('delete', ownReport)).toBe(true);
+    expect(a.can('read', othersReport)).toBe(false);
+    expect(a.can('delete', othersReport)).toBe(false);
+  });
+
+  it('lets an admin read and delete any report', () => {
+    const a = defineAbilitiesFor(makeUser({ isAdmin: true }));
+    expect(a.can('read', othersReport)).toBe(true);
+    expect(a.can('delete', othersReport)).toBe(true);
+  });
+
+  it('pins the footgun: a by-class check passes for a non-owner, an instance check does not', () => {
+    const a = defineAbilitiesFor(makeUser());
+    expect(a.can('read', FeedbackModel)).toBe(true);
+    expect(a.can('read', othersReport)).toBe(false);
+  });
+
+  it('narrows a list query to the caller, opens it for an admin, and fails closed with no grant', () => {
+    expect(JSON.stringify(accessibleBy(defineAbilitiesFor(makeUser()), 'read').ofType(FeedbackModel))).toContain('u1');
+    expect(accessibleBy(defineAbilitiesFor(makeUser({ isAdmin: true })), 'read').ofType(FeedbackModel)).toEqual({});
+    expect(accessibleBy(defineAbilitiesFor(undefined), 'read').ofType(FeedbackModel)).toEqual({
+      $expr: { $eq: [0, 1] },
+    });
   });
 });

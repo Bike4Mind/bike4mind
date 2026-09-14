@@ -154,7 +154,15 @@ export const process = async (
     researchTask.statusFailedMessage = (e as Error).message;
     researchTask.statusFailedAt = new Date();
 
-    await db.researchTasks.update(researchTask);
+    // Write only the fields this error path sets, not the whole stale researchTask: the success-path
+    // update above (and processScrape/DeepResearch) may have already advanced the doc, and a whole-doc
+    // write would clobber that.
+    await db.researchTasks.update({
+      id: researchTask.id,
+      status: researchTask.status,
+      statusFailedMessage: researchTask.statusFailedMessage,
+      statusFailedAt: researchTask.statusFailedAt,
+    });
 
     try {
       await adapters.jobs.researchTasks.sendToClient(researchTask, {

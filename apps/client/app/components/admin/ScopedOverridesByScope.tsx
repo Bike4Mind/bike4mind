@@ -8,9 +8,33 @@ import { getErrorMessage } from '@client/app/utils/error';
 import TuneIcon from '@mui/icons-material/Tune';
 import { Alert, Box, Button, Card, FormControl, FormLabel, Input, Option, Select, Stack, Typography } from '@mui/joy';
 import { useMemo, useState } from 'react';
-import { displayValue, LEVEL_LABELS, OVERRIDE_STALENESS_NOTE, type OverrideLevel } from './ScopedSettingOverrides';
+import {
+  displayValue,
+  INERT_RUNG_NOTE,
+  LEVEL_LABELS,
+  OVERRIDE_STALENESS_NOTE,
+  type AdminSetting,
+  type OverrideLevel,
+} from './ScopedSettingOverrides';
 
 const ALL_LEVELS: OverrideLevel[] = [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake];
+
+/** See INERT_RUNG_NOTE for why a stored value at an unsettable rung is not reported as applying. */
+function describeOverride(
+  setting: AdminSetting,
+  storedValue: string | undefined,
+  isSettableHere: boolean,
+  platformValue: string
+): string {
+  if (storedValue === undefined) {
+    return isSettableHere
+      ? `no override at this rung (platform: ${displayValue(setting, platformValue)})`
+      : 'not settable at this rung';
+  }
+  return isSettableHere
+    ? `overridden here: ${displayValue(setting, storedValue)}`
+    : `${displayValue(setting, storedValue)} is stored here, but it is ${INERT_RUNG_NOTE}`;
+}
 
 /**
  * The inverse view of the per-setting sections: given one scope address, which scope-capable
@@ -113,11 +137,7 @@ export function ScopedOverridesByScope() {
                 <Typography level="body-sm" sx={{ flex: 1, minWidth: 0 }}>
                   <strong>{setting.name}</strong>
                   {' - '}
-                  {override
-                    ? `overridden here: ${displayValue(setting, override.settingValue)}`
-                    : isSettableHere
-                      ? `no override at this rung (platform: ${displayValue(setting, String(platformValue))})`
-                      : 'not settable at this rung'}
+                  {describeOverride(setting, override?.settingValue, isSettableHere, String(platformValue))}
                 </Typography>
                 {override && (
                   <Button

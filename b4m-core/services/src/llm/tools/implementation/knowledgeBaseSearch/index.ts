@@ -11,7 +11,7 @@ import {
   createTokenizer,
   getProviderFromModel,
   getSettingsByNames,
-  resolveEmbeddingConfig,
+  resolveEmbeddingWithKeylessFallback,
   type ITokenizer,
 } from '@bike4mind/utils';
 import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
@@ -32,6 +32,7 @@ import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
 import { PARTIAL_RESULTS_STATUS_SUFFIX } from '../../../../dataLakeService/embeddingMismatch';
 import { describeSearchLimitations, isPartialSearch } from '../../../../dataLakeService/retrievalUnavailable';
 import {
+  capChunksPerFile,
   comparedNoPassages,
   fileScopedSemanticSearch,
   semanticDataLakeSearch,
@@ -273,20 +274,38 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
     { db: { apiKeys, adminSettings }, getSettingsByNames },
     { logger: context.logger }
   );
-  const provider = getProviderFromModel(embeddingModel);
   // A missing credential means the semantic arm cannot run, so fall back to keyword search.
   // Keyless providers (Bedrock, authenticating through the AWS credential chain) report
-  // nothing missing and proceed.
-  if (resolveEmbeddingConfig(provider, apiKeyTable).missing) {
+  // nothing missing and proceed - including a cloud stage holding no provider key at all, which
+  // resolves to Bedrock here rather than losing semantic search entirely. The RESOLVED model is
+  // what goes downstream, so the query is embedded in the same space the corpus was written in.
+  const { missing, model: resolvedEmbeddingModel } = resolveEmbeddingWithKeylessFallback(embeddingModel, apiKeyTable);
+  const provider = getProviderFromModel(resolvedEmbeddingModel);
+  if (missing) {
     context.logger.warn(`📚 [semantic] falling back to keyword search: no credential for provider "${provider}"`);
     return null;
+  }
+  // Otherwise silent, and the symptom is indistinguishable from an empty corpus: the query is
+  // embedded in one space while anything ingested before the credential state changed sits in
+  // another, so the arm runs, matches nothing, and reports a clean zero. Same wording as the
+  // vectorize handler and both semantic-search routes.
+  if (resolvedEmbeddingModel !== embeddingModel) {
+    context.logger.warn(
+      `📚 [semantic] no credential resolved for ${embeddingModel}; embedding the query with keyless ${resolvedEmbeddingModel} instead`
+    );
   }
 
   const vectorSearchEnabled = (await adminSettings.getSettingsValue('EnableDataLakeVectorSearch')) ?? false;
   const supersessionCollapseEnabled =
     (await adminSettings.getSettingsValue('EnableRetrievalSupersessionCollapse')) ?? false;
 
-  return { embeddingModel, provider, apiKeyTable, vectorSearchEnabled, supersessionCollapseEnabled };
+  return {
+    embeddingModel: resolvedEmbeddingModel,
+    provider,
+    apiKeyTable,
+    vectorSearchEnabled,
+    supersessionCollapseEnabled,
+  };
 }
 
 /**
@@ -650,11 +669,25 @@ async function trySemanticKbSearch(
       };
     }
 
+    // Re-enforce the per-document cap at the count actually SERVED. The engine applies it at its
+    // own topK, which this tool deliberately ranks WIDER than `ceiling` (KB_SEARCH_CANDIDATE_FLOOR,
+    // and KB_SEARCH_MAX_RESULTS once either adaptive knob is on). A promoted chunk scores at or
+    // below every chunk it displaced, so promotions land in the tail of that top-K - exactly the
+    // slots a `ceiling`-wide prefix never reads. Without this second pass a cap that promotes
+    // fewer than `topK - ceiling` chunks is invisible on this path rather than merely weaker: one
+    // chunk at the default 6-ranked/5-served, five under a relevance floor that widens topK to 10.
+    // Cheap where it cannot help - with the cap off capChunksPerFile returns the list untouched -
+    // and at a given ceiling it never returns fewer (it backfills). `ceiling` can trail topK even
+    // with a token budget configured: a model-supplied `max_results` sets it on its own path in
+    // resolvePassageCeiling. Under that budget the swap is not free, though: a promoted chunk that
+    // is larger than the one it displaced can end the budget walk a passage earlier.
+    const servedCandidates = capChunksPerFile(search.results, ceiling, budgets.maxChunksPerFile);
+
     // Bound by token budget (the primary lever once configured), with the passage ceiling as a
     // safety rail - replaces the old flat `.slice(0, maxResults)`. Ordering matters: this MUST run
     // before emitSemanticCitables and before fileHits/lakeIds/chunkIds below, or the audit trail and
     // the model's citations would include passages the model never actually saw.
-    const bound = await boundPassagesByTokenBudget(search.results, {
+    const bound = await boundPassagesByTokenBudget(servedCandidates, {
       tokenBudget: budgets.kbResultTokenBudget,
       maxPassages: ceiling,
       // Non-widened fallback on pricing failure - see boundPassagesByTokenBudget's own doc comment.
@@ -678,7 +711,9 @@ async function trySemanticKbSearch(
         // KB_SEARCH_MAX_RESULTS candidates once the budget widens topK, but everything past
         // `ceiling` was never admissible in the first place (a model-supplied max_results
         // narrows it below the widened topK) - attributing those to "the budget withheld them"
-        // overstates what the budget actually did.
+        // overstates what the budget actually did. Still measured off `search.results`: the cap
+        // pass above returns its input untouched when the cap is off, so it is not a ceiling
+        // bound of its own.
         droppedCount: Math.min(search.results.length, ceiling) - ranked.length,
       }),
       skipNotice,
@@ -785,7 +820,10 @@ async function tryScopedSemanticKbSearch(
       };
     }
 
-    const bound = await boundPassagesByTokenBudget(search.results, {
+    // Same served-count re-enforcement as the lake-wide arm above; see its comment for why.
+    const servedCandidates = capChunksPerFile(search.results, ceiling, budgets.maxChunksPerFile);
+
+    const bound = await boundPassagesByTokenBudget(servedCandidates, {
       tokenBudget: budgets.kbResultTokenBudget,
       maxPassages: ceiling,
       // Non-widened fallback on pricing failure - see boundPassagesByTokenBudget's own doc comment.
@@ -805,7 +843,9 @@ async function tryScopedSemanticKbSearch(
         // KB_SEARCH_MAX_RESULTS candidates once the budget widens topK, but everything past
         // `ceiling` was never admissible in the first place (a model-supplied max_results
         // narrows it below the widened topK) - attributing those to "the budget withheld them"
-        // overstates what the budget actually did.
+        // overstates what the budget actually did. Still measured off `search.results`: the cap
+        // pass above returns its input untouched when the cap is off, so it is not a ceiling
+        // bound of its own.
         droppedCount: Math.min(search.results.length, ceiling) - ranked.length,
       }),
       skipNotice,

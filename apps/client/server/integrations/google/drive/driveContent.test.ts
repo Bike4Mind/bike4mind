@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { drive_v3 } from '@googleapis/drive';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
-import { walkFolder, fetchDriveFileContent, DriveWalkTimeBudgetExceededError } from './driveContent';
+import { walkFolder, fetchDriveFileContent, isUnderRoot, DriveWalkTimeBudgetExceededError } from './driveContent';
 import { FOLDER_MIME_TYPE, isDriveRateLimitError } from './driveClient';
 
 const folder = (id: string, name: string) => ({ id, name, mimeType: FOLDER_MIME_TYPE });
@@ -193,6 +193,57 @@ describe('fetchDriveFileContent', () => {
 
     const res = await fetchDriveFileContent(drive, file('n', 'notes.txt', 'text/plain'));
     expect(res).toMatchObject({ ok: false, reason: 'error' });
+  });
+});
+
+describe('isUnderRoot', () => {
+  /** A drive whose files.get resolves id -> parents per the given map (trashed/missing -> null). */
+  function mockAncestryDrive(parentsOf: Record<string, string[] | 'trashed' | undefined>) {
+    const get = vi.fn(async ({ fileId }: { fileId: string }) => {
+      const entry = parentsOf[fileId];
+      if (entry === 'trashed') return { data: { trashed: true } };
+      return { data: { parents: entry } };
+    });
+    return { drive: { files: { get } } as unknown as drive_v3.Drive, get };
+  }
+
+  it('resolves true when a direct parent IS the root', async () => {
+    const { drive } = mockAncestryDrive({});
+    expect(await isUnderRoot(drive, ['ROOT'], 'ROOT', new Map())).toBe(true);
+  });
+
+  it('resolves true through several levels of ancestry', async () => {
+    const { drive } = mockAncestryDrive({ mid: ['ROOT'], near: ['mid'] });
+    expect(await isUnderRoot(drive, ['near'], 'ROOT', new Map())).toBe(true);
+  });
+
+  it('resolves false once the chain runs out before reaching the root', async () => {
+    const { drive } = mockAncestryDrive({ top: [] });
+    expect(await isUnderRoot(drive, ['top'], 'ROOT', new Map())).toBe(false);
+  });
+
+  it('resolves false (not throws) through a cyclic parents graph', async () => {
+    const { drive } = mockAncestryDrive({ a: ['b'], b: ['a'] });
+    expect(await isUnderRoot(drive, ['a'], 'ROOT', new Map())).toBe(false);
+  });
+
+  it('resolves false when an ancestor is trashed (not a usable chain)', async () => {
+    const { drive } = mockAncestryDrive({ mid: 'trashed' });
+    expect(await isUnderRoot(drive, ['mid'], 'ROOT', new Map())).toBe(false);
+  });
+
+  it('memoizes ancestor lookups across calls sharing one cache', async () => {
+    const { drive, get } = mockAncestryDrive({ shared: ['ROOT'] });
+    const cache = new Map<string, string[] | null>();
+    await isUnderRoot(drive, ['shared'], 'ROOT', cache);
+    await isUnderRoot(drive, ['shared'], 'ROOT', cache);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves false with no parents to check', async () => {
+    const { drive } = mockAncestryDrive({});
+    expect(await isUnderRoot(drive, undefined, 'ROOT', new Map())).toBe(false);
+    expect(await isUnderRoot(drive, [], 'ROOT', new Map())).toBe(false);
   });
 });
 

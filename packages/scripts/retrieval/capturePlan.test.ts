@@ -8,6 +8,8 @@ import {
   formatCapturePlan,
   isCapturableFile,
   modalLength,
+  readAllPages,
+  toBatches,
   parseSupportedModels,
   planCapture,
   selectReusableChunks,
@@ -304,5 +306,45 @@ describe('assertOnePerInput', () => {
 
   it('rejects an empty vector, which is not an embedding of anything', () => {
     expect(() => assertOnePerInput([[1], []], 2, 'probe queries')).toThrow(/probe queries/);
+  });
+});
+
+describe('toBatches', () => {
+  it('splits into whole batches and a remainder', () => {
+    expect(toBatches(['a', 'b', 'c', 'd', 'e'], 2)).toEqual([['a', 'b'], ['c', 'd'], ['e']]);
+  });
+
+  it('is empty for no ids', () => {
+    expect(toBatches([], 200)).toEqual([]);
+  });
+
+  it('refuses a size that would never advance', () => {
+    expect(() => toBatches(['a'], 0)).toThrow(/at least 1/);
+  });
+});
+
+describe('readAllPages', () => {
+  const page = (ids: string[]) => ids.map(id => ({ id }));
+
+  it('walks the cursor until a short page ends it', async () => {
+    const pages = [page(['1', '2']), page(['3', '4']), page(['5'])];
+    const seen: (string | undefined)[] = [];
+    const all = await readAllPages(async after => {
+      seen.push(after);
+      return pages.shift() ?? [];
+    }, 2);
+
+    expect(all.map(r => r.id)).toEqual(['1', '2', '3', '4', '5']);
+    expect(seen).toEqual([undefined, '2', '4']);
+  });
+
+  it('stops on an empty first page', async () => {
+    expect(await readAllPages(async () => [], 2)).toEqual([]);
+  });
+
+  // A full page that does not move the cursor is an infinite loop on a credentialed run, where the
+  // corpus is large enough that nobody would notice it was not progress.
+  it('throws rather than spin on a non-advancing cursor', async () => {
+    await expect(readAllPages(async () => page(['1', '2']), 2)).rejects.toThrow(/without advancing/);
   });
 });

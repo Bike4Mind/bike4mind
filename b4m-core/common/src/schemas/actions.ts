@@ -237,6 +237,9 @@ export const QuestExportProgressAction = z.object({
   downloadUrl: z.string().optional(),
   filename: z.string().optional(),
   errorMessage: z.string().optional(),
+  // Quests omitted because neither the plan owner nor the caller could read their session; present
+  // (and > 0) only on a partial export, so the client can qualify the otherwise-100% success.
+  droppedQuestCount: z.number().optional(),
   clientId: z.string().optional(),
 });
 export type IQuestExportProgressAction = z.infer<typeof QuestExportProgressAction>;

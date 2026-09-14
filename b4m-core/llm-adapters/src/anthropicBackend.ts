@@ -352,7 +352,7 @@ export class AnthropicBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         logoFile: 'Anthropic_logo.png',
-        rank: 1, // premium tier - ranked below the Sonnet 4.6 default (opt-in via picker)
+        rank: 1,
         trainingCutoff: '2024-10-01',
         releaseDate: '2025-05-23',
         description:
@@ -374,7 +374,7 @@ export class AnthropicBackend implements ICompletionBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 1, // premium tier - ranked below the Sonnet 4.6 default (opt-in via picker)
+        rank: 1,
         supportsTools: true,
         trainingCutoff: '2025-08-01',
         releaseDate: '2025-08-06',
@@ -400,7 +400,7 @@ export class AnthropicBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         logoFile: 'Anthropic_logo.png',
-        rank: 1,
+        rank: 2,
         trainingCutoff: '2024-10-01',
         releaseDate: '2025-05-23',
         // Retired upstream by Anthropic - the dated snapshot claude-sonnet-4-20250514 no longer
@@ -429,7 +429,7 @@ export class AnthropicBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         logoFile: 'Anthropic_logo.png',
-        rank: 1,
+        rank: 2,
         trainingCutoff: '2025-07-01',
         releaseDate: '2025-09-30',
         description:
@@ -449,7 +449,7 @@ export class AnthropicBackend implements ICompletionBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 1,
+        rank: 3,
         supportsTools: true,
         trainingCutoff: '2025-07-01',
         releaseDate: '2025-10-16',
@@ -498,7 +498,7 @@ export class AnthropicBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         logoFile: 'Anthropic_logo.png',
-        rank: 1, // demoted below Sonnet 5 (the new default) - opt-in via picker
+        rank: 2,
         trainingCutoff: '2025-10-01',
         releaseDate: '2026-02-19',
         description:
@@ -524,7 +524,7 @@ export class AnthropicBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         logoFile: 'Anthropic_logo.png',
-        rank: 0, // new default workhorse tier
+        rank: 1, // the Opus and Fable flagships hold rank 0
         trainingCutoff: '2026-01-01',
         releaseDate: '2026-07-01',
         description:
@@ -545,7 +545,7 @@ export class AnthropicBackend implements ICompletionBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 1, // premium tier - ranked below the Sonnet 4.6 default (opt-in via picker)
+        rank: 1,
         supportsTools: true,
         trainingCutoff: '2025-08-01',
         releaseDate: '2026-02-06',
@@ -569,7 +569,7 @@ export class AnthropicBackend implements ICompletionBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 1, // premium tier - ranked below the Sonnet 4.6 default (opt-in via picker)
+        rank: 1,
         supportsTools: true,
         trainingCutoff: '2026-01-31',
         releaseDate: '2026-04-17',
@@ -593,7 +593,7 @@ export class AnthropicBackend implements ICompletionBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 1, // premium tier - ranked below the Sonnet 4.6 default (opt-in via picker)
+        rank: 1,
         supportsTools: true,
         trainingCutoff: '2026-01-01',
         releaseDate: '2026-05-28',
@@ -617,7 +617,7 @@ export class AnthropicBackend implements ICompletionBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 1, // premium tier - opt-in via the picker, not the default workhorse tier
+        rank: 0,
         supportsTools: true,
         trainingCutoff: '2026-01-01',
         releaseDate: '2026-07-01',
@@ -646,7 +646,7 @@ export class AnthropicBackend implements ICompletionBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 1, // premium tier - ranked below the Sonnet 5 default (opt-in via picker)
+        rank: 0,
         supportsTools: true,
         releaseDate: '2026-07-24',
         description:

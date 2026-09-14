@@ -45,7 +45,7 @@ describe('assertSameQuerySet', () => {
   it('refuses two same-size fixtures whose question ids differ', () => {
     // The count check a reader would reach for first passes here, which is why the compare is on sets.
     const swapped = other({
-      queries: [...fixture.queries.slice(0, -1), { id: 'q05', vector: fixture.queries[0].vector }],
+      queries: [...fixture.queries.slice(0, -1), { ...fixture.queries[0], id: 'q05' }],
     });
     expect(swapped.queries).toHaveLength(fixture.queries.length);
     expect(() => assertSameQuerySet([fixture, swapped])).toThrow(/different question sets/);
@@ -69,7 +69,7 @@ describe('resolveQueries', () => {
   it('throws on a query id with no ground truth rather than quietly scoring fewer questions', () => {
     // A dropped question shrinks the set for ONE arm, and an arm scored on fewer or easier
     // questions reads as a better model.
-    const bad = other({ queries: [...fixture.queries, { id: 'q99', vector: fixture.queries[0].vector }] });
+    const bad = other({ queries: [...fixture.queries, { ...fixture.queries[0], id: 'q99' }] });
     expect(() => resolveQueries(bad)).toThrow(/q99/);
   });
 });
@@ -194,6 +194,15 @@ describe('reportFromRaw', () => {
     expect(report).toContain('SCORED AT CAPTURE WIDTH ONLY (text-embedding-ada-002@16)');
     expect(report).not.toContain('text-embedding-ada-002@512');
   });
+
+  it('refuses width arms for a fixture whose model the registry does not know and which is not declared synthetic', () => {
+    // A hand-edited or typo'd fixture reaching the comparison path: the schema validates `model` as
+    // a non-empty string, so nothing before this point can tell it from a real capture.
+    const typo = { ...tinyFixture, model: 'text-embedding-ada-oo2', syntheticMatryoshka: undefined };
+    const report = reportFromRaw([typo], [16, 8]);
+    expect(report).toContain('SCORED AT CAPTURE WIDTH ONLY (text-embedding-ada-oo2@16)');
+    expect(report).not.toContain('text-embedding-ada-oo2@8');
+  });
 });
 
 describe('formatComparison', () => {
@@ -235,6 +244,18 @@ describe('ground-truth applicability in the report', () => {
     expect(formatComparison(compareArms([fixture], [16]))).not.toContain('ONLY PARTLY DESCRIBES');
   });
 
+  it('names the arms the ground truth does not describe, rather than stating it table-wide', () => {
+    // quality() gates per row, so on a mixed set the table-wide phrasing printed "reads n/a" above
+    // arms whose cells are real numbers.
+    const unlabelled = other({
+      model: 'unlabelled',
+      chunks: fixture.chunks.map((c, i) => ({ ...c, docId: `67f0a1b2c3d4e5f60000000${i % 10}` })),
+    });
+    const report = formatComparison(compareArms([fixture, unlabelled], [16]));
+    expect(report).toContain('GROUND TRUTH DOES NOT DESCRIBE THIS CORPUS (unlabelled@16)');
+    expect(report).not.toContain('synthetic-eval-embedding@16): no captured document');
+  });
+
   it('names the coverage fraction when the corpus holds only part of the ground truth', () => {
     // One shared slug passes the all-or-nothing flag above, and then recall is bounded by the
     // corpus rather than by the model - which is the reading that flag exists to prevent.
@@ -244,8 +265,26 @@ describe('ground-truth applicability in the report', () => {
       ),
     });
     const report = formatComparison(compareArms([partial], [16]));
-    expect(report).toContain('GROUND TRUTH ONLY PARTLY DESCRIBES THIS CORPUS (1 of 5 supporting documents');
+    expect(report).toContain(
+      'GROUND TRUTH ONLY PARTLY DESCRIBES THIS CORPUS (synthetic-eval-embedding@16: 1 of 5 supporting documents'
+    );
     expect(report).not.toContain('GROUND TRUTH DOES NOT DESCRIBE');
+  });
+
+  it("reports every partial arm's own fraction, not whichever fixture came first", () => {
+    // The shape a --reuse-stored-vectors baseline produces: it drops a whole doc whose chunks are
+    // unlabeled, so its coverage sits below the embed arm's and one printed fraction is wrong for
+    // the other row.
+    const drop = (docs: readonly string[]) =>
+      fixture.chunks.map((c, i) => (docs.includes(c.docId) ? { ...c, docId: `67f0a1b2c3d4e5f60000000${i % 10}` } : c));
+    const embedArm = other({ model: 'embedded', chunks: drop(['features/knowledge-management']) });
+    const baseline = other({
+      model: 'baseline',
+      chunks: drop(['features/knowledge-management', 'features/organizations-teams']),
+    });
+    const report = formatComparison(compareArms([embedArm, baseline], [16]));
+    expect(report).toContain('embedded@16: ');
+    expect(report).toContain('baseline@16: ');
   });
 });
 

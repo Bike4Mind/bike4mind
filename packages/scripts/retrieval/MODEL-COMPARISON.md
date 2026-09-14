@@ -131,15 +131,19 @@ Each arm prints a block shaped like the published prod probe, then one cross-arm
 | `posTop` / `negTop` | mean rank-1 cosine on answerable vs unanswerable questions. Their **gap** is the floor headroom. |
 | `recall`/`prec`/`hit`/`mrr` | did the wider band actually buy better retrieval, or just rescale the same ordering? |
 
-The last six columns all read `n/a` when no captured document matches a supporting slug in `corpus.ts`
-(the report says so in a note). `posTop`/`negTop` are partitioned by `supporting.length`, so on a lake
-the ground truth does not describe, the "positive" and "negative" halves are an arbitrary split and
-their gap is noise. `band` and `spread` need no labels and stay valid.
+The last six columns read `n/a` for an arm whose captured documents match no supporting slug in
+`corpus.ts` (the report says so in a note, **naming the arms** - it is a per-arm property, and on a
+mixed set the other rows' cells are real numbers). `posTop`/`negTop` are partitioned by
+`supporting.length`, so on a lake the ground truth does not describe, the "positive" and "negative"
+halves are an arbitrary split and their gap is noise. `band` and `spread` need no labels and stay
+valid.
 
 PARTIAL overlap gets its own note, because the all-or-nothing check above passes on it: a lake sharing
 one supporting slug renders a full set of quality columns computed against the whole supporting set,
 so `recall` and `prec` are bounded well below 1 by the corpus rather than by the model. The note states
-the fraction (`3 of 49 supporting documents captured`); compare arms to each other, not to 1.
+each arm's own fraction (`3-small@1536: 3 of 49, ada-002@1536: 2 of 49 supporting documents captured`),
+because coverage really does differ between arms - a `--reuse-stored-vectors` baseline drops a whole
+document whose chunks are unlabeled. Compare arms to each other, not to 1.
 
 Each arm block prints the band **twice**. `overall band` is pooled across every probe question,
 including the 5 deliberate negatives; `positives-only band` is the same statistic over the answerable
@@ -218,17 +222,225 @@ and every cosine is the same width, so the only remaining difference is the one-
 
 ## Results
 
-No credentialed run has happened yet. **Do not fill this in from memory or estimate any cell** - the
-whole point of the harness is that the numbers come from a measurement.
+Captured 2026-09-11 against the `system-help` lake on the `dev` (staging) stage: 51 capturable files,
+452 chunks, 62 files unreachable by the served path. The baseline reused the corpus's stored ada-002
+vectors (0 excluded - no unlabeled, mismatched, missing or wrong-width vector), and both candidates
+were embedded fresh for $0.0140 total. Scores are exact cosine, NOT the ANN path prod measures
+through.
 
-| arm | chunks | band min | band max | width | spread | posTop | negTop | recall | mrr |
-|---|---|---|---|---|---|---|---|---|---|
-| `text-embedding-ada-002@1536` (baseline) | | | | | | | | | |
-| `text-embedding-3-small@1536` | | | | | | | | | |
-| `text-embedding-3-small@512` | | | | | | | | | |
-| `text-embedding-3-large@3072` | | | | | | | | | |
-| `text-embedding-3-large@1536` | | | | | | | | | |
-| `text-embedding-3-large@512` | | | | | | | | | |
+**This corpus is NOT in the long-document regime** (median chunk 638 chars against the prod reference
+of 2182), so read the table for what it can support and no further - see the findings below.
+
+| arm | chunks | band min | band max | width | spread | posTop | negTop | recall | prec | hit | mrr |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `text-embedding-ada-002@1536` (baseline) | 452 | 0.7191 | 0.8110 | 0.0918 | 0.0279 | 0.7699 | 0.7647 | 0.910 | 0.295 | 1.000 | 0.707 |
+| `text-embedding-3-small@1536` | 452 | 0.2293 | 0.5588 | 0.3294 | 0.0968 | 0.4269 | 0.3615 | 0.867 | 0.353 | 1.000 | 0.897 |
+| `text-embedding-3-small@512` | 452 | 0.2608 | 0.5719 | 0.3111 | 0.0940 | 0.4619 | 0.3939 | 0.833 | 0.306 | 0.960 | 0.843 |
+| `text-embedding-3-large@3072` | 452 | 0.2104 | 0.5197 | 0.3093 | 0.0984 | 0.4031 | 0.3246 | 0.877 | 0.338 | 1.000 | 0.890 |
+| `text-embedding-3-large@1536` | 452 | 0.2161 | 0.5430 | 0.3269 | 0.0977 | 0.4261 | 0.3499 | 0.843 | 0.323 | 1.000 | 0.890 |
+| `text-embedding-3-large@512` | 452 | 0.2458 | 0.5946 | 0.3488 | 0.0973 | 0.4599 | 0.3761 | 0.843 | 0.336 | 1.000 | 0.845 |
+
+`prec` and `hit` are added to the columns this section originally listed: the harness prints both, and
+`hit` is what carries the truncation finding below.
+
+### SETTLED: ada-002 loses on every axis that matters
+
+Band width 3.5x, rank-1-to-rank-10 spread 3.5x, MRR 0.707 -> 0.897. The decisive one is the gap between
+`posTop` and `negTop` - how far a real answer outscores the best false lead on a question the corpus
+cannot answer:
+
+| arm | posTop - negTop |
+|---|---|
+| `ada-002@1536` | **0.0052** |
+| `3-small@1536` | 0.0654 |
+| `3-small@512` | 0.0680 |
+| `3-large@1536` | 0.0762 |
+| `3-large@3072` | 0.0785 |
+| `3-large@512` | 0.0838 |
+
+Every 3-* arm separates answerable from unanswerable 12-16x better than ada-002, whose 0.0052 leaves no
+absolute floor able to tell them apart at all. This conclusion does not depend on the corpus regime.
+
+ada-002 does win `recall` (0.910 against 0.867). With `hit` at 1.000 for both that edge buys little - it
+drags more of the supporting set into the top 10 while ranking it worse - but it belongs in the table
+rather than dropped.
+
+### NOT SETTLED: 3-small against 3-large
+
+They are within noise of each other here, and `3-small` costs 6.5x less - which is exactly the tempting
+conclusion this corpus cannot support. At a 638-char median this run reproduces the short-text regime
+the Mementos table was already in, where small ties large for the stated reason that the extra capacity
+is for long documents. Untested, not refuted. **Do not record a model verdict from this run.**
+
+### NEW: 512-dim truncation is not free at this chunk size
+
+Mementos measured 512 lossless on short facts (`b4m-core/memory/src/eval/dimensions.test.ts`). Here it
+costs real quality: `3-small` MRR 0.897 -> 0.843 and hit 1.000 -> 0.960, `3-large` MRR 0.890 -> 0.845.
+`3-small@512` is the only arm in the table that fails to place a supporting document in the top 10 for
+every question. Two points now sit on that curve - lossless at memento length, lossy at 638 chars - and
+the FAB corpus at 2182 chars sits further along the same axis, so expect the loss to grow rather than
+shrink. Directional, not proven.
+
+### NEW: what the measured bands do to the live cosine floors
+
+`3-small@1536` spans 0.2293-0.5588 and `3-large@3072` spans 0.2104-0.5197. The `0.75` floors that used
+to live in `forcedRetrieval.ts`, `ChatCompletionFeatures.ts` and `getFirstIterationMementosPreamble.ts`
+sit ABOVE the whole band in either space, so after the flip they would have rejected every chunk on
+every query - the silent outage `b4m-core/common/src/schemas/embedding.ts` records this codebase
+hitting twice already.
+
+**Those three literals are gone** (#2572 item 4a). Both floors now resolve per embedding space from
+`FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE` / `MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE` in
+`b4m-core/common/src/constants/embeddingSpaceFloors.ts`, keyed on the space the scores were actually
+produced in - for forced retrieval that is the candidate files' MAJORITY model, not the admin
+default, so a lake still on ada-002 mid-migration keeps its own floor on the same deployment where a
+migrated one gets 3-small's. A space with no measured entry applies no absolute floor and logs at
+error level, leaving the scale-free relative floor as the only gate: less precise, and recoverable,
+where a blackout is not. So the numbers below are still what a floor DOES to recall in each space,
+but the shipped 85:75 row is no longer what a 3-small deployment would run.
+
+A FAB replacement floor is bracketed by `posTop` and `negTop`: roughly 0.38-0.40 for `3-small@1536`.
+That is NOT `MEMENTO_MIN_SIMILARITY` (0.25), which sits below this corpus's `negTop` of 0.3615 and would
+admit the noise. The memento floor does not transfer to the file corpus.
+
+`FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT` (85) changes character on the flip. Under ada-002 a
+per-turn spread of 0.0279 against a top near 0.77 puts rank 10 at ~96% of rank 1, so 85 rejects nothing.
+Under `3-small` a spread of ~0.097 against a top near 0.43 puts rank 10 near 78%, so 85 begins cutting
+around rank 5-6. Given precision of 0.35 that may well be an improvement, but it is a dormant gate
+switching on rather than a no-op, and it is the opposite direction from the "tune it UPWARD" note at its
+definition.
+
+Both paragraphs above were derived by hand from the band and the spread. `forced-floor-sweep.ts` now
+measures them directly off the same fixtures, so the re-tune after the embedding flip does not have to
+repeat the derivation:
+
+```bash
+# ada-002 arm
+pnpm --filter @bike4mind/scripts retrieval:forced-floor-sweep \
+  --fixture out/text-embedding-ada-002.system-help.fixture.json \
+  --floors 0:0,0:74,85:75,0:76
+
+# 3-small arm
+pnpm --filter @bike4mind/scripts retrieval:forced-floor-sweep \
+  --fixture out/text-embedding-3-small.system-help.fixture.json \
+  --floors 85:75,0:30,0:35,85:35
+```
+
+**These two runs are what produced the MEASURED table below, and neither is reproducible from a
+clean clone.** `packages/scripts/out/` is gitignored, so the captures are not committed - 452 chunks
+of vectors per arm is not something to put in git. Re-making them means a staged capture against a
+provider key with real spend (see "Price the candidates, then run them" above). The only committed
+fixture is the synthetic `retrieval/fixtures/tiny-comparison.fixture.json`, which exercises the tool
+but measures no embedding model. `--fixture` is singular, one arm per run, so the table below is a
+hand-merge of these two runs with an `arm` column the tool does not print.
+
+### MEASURED: the first sweep off a real capture
+
+Run on the `system-help` lake (51 articles, 452 chunks, 30 `PROBE_QUESTIONS`) captured under both
+arms, 12000-char budget. Read the caveats at the end of this subsection before quoting any number.
+
+Shipped defaults are `forcedRetrievalRelativeFloorPct` 85 and `forcedRetrievalMinSimilarityPct` 75.
+The 75 is now the ada-002 entry of `FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE` rather than a
+single global default; 3-small resolves to 35, and this table is where that 35 comes from.
+
+| arm | floors | accepted/q | served/q | relative bound | emptied | recall | precision |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ada-002 | 0:0 (baseline) | 256.0 | 15.7 | 0.0% | 0/30 | 100.0% | 3.8% |
+| ada-002 | 0:74 | 13.1 | 9.4 | 0.0% | 0/30 | 90.7% | 36.6% |
+| ada-002 | **85:75** (shipped) | 6.3 | 5.9 | **0.0%** | 2/30 | 65.3% | 39.6% |
+| ada-002 | 0:76 | 2.7 | 2.7 | 0.0% | 9/30 | 39.7% | 56.1% |
+| 3-small | **85:75** (was shipped) | **0.0** | **0.0** | 0.0% | **30/30** | **0.0%** | n/a |
+| 3-small | 0:30 | 19.2 | 9.9 | 0.0% | 0/30 | 92.7% | 32.1% |
+| 3-small | 0:35 | 6.8 | 5.9 | 0.0% | 4/30 | 70.0% | 53.5% |
+| 3-small | 85:35 | 3.3 | 3.3 | 40.0% | 4/30 | 62.0% | 71.7% |
+
+`recall` and `precision` are over `accepted/q`, the population the floors gate. `served/q` is what
+the char budget then injects. The baseline row is the reason both columns are printed: its 100.0%
+recall is over 256 accepted chunks of which 15.7 reached the model, so a floor's apparent cost
+between the baseline and a live value is partly a cost the budget was already imposing.
+
+The hand-derivation held up: it predicted 85 rejecting nothing under ada-002 and cutting "around
+rank 5-6" under 3-small, and the sweep measures 0.0% bound and a mean cut rank of 5.2. Three things
+the measurement adds to it.
+
+**1. Where the absolute floor lands inside the band decides everything, and one point is a lot.**
+This corpus's ada-002 band is 0.0918 wide, so one point of the setting moves the gate by ~11% of the
+band. Measured, 74 -> 75 -> 76 is 90.7% -> 65.3% -> 39.7% recall, and 75 is the first value that
+empties a query outright. Here 74 dominates the shipped 75 - 25 points of recall, 0 emptied queries
+instead of 2, for 3 points of precision - though `served/q` says the model-visible difference is the
+narrower 9.4 vs 5.9, since the budget was already trimming 74's wider accepted set. That does NOT make 74 the value to ship: on the production
+lake in `FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT`'s comment the band sat at 0.8025-0.9140 and
+0.75 was below all of it, rejecting nothing. Same setting, same model, one corpus where it is a
+cliff and one where it is a no-op. A single global percent cannot be correct for both, which is the
+case for per-lake floors (#2572, item 3) rather than for a new global number.
+
+**2. The relative floor at 85 is inert on THIS corpus by arithmetic, not by luck.** A candidate
+reaching the relative cutoff has already cleared the absolute one, so the relative floor can only cut
+when `topScore * relativeFloor > minSimilarity`, i.e. when `topScore > minSimilarity /
+relativeFloor`. At 85:75 that is 0.882, and this corpus's ada-002 band max is 0.8110 - no query here
+can reach it. Sweeping 80/85/88/90/92 at absolute 75 changes not one column; the first value that
+binds is 95 (10% of queries). Note this is a statement about the corpus, not the vector space: the
+production lake behind `FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT`'s comment measured a band
+topping out at 0.9140, comfortably past 0.882, so the same default would bind there. Which is the
+point of measuring rather than deriving - "is this gate live" has a per-corpus answer, and a help
+corpus of short articles answers it differently from a lake of long documents.
+
+**3. The relative floor transfers across vector spaces and the absolute floor does not.** On this
+corpus the same 85 is inert under ada-002 and binds on 40% of queries under 3-small, because its
+threshold `0.35/0.85 = 0.412` lands mid-distribution against a measured `posTop` of 0.4269. Holding
+the absolute floor at 35 and adding it is what that buys: 0:35 -> 85:35 is 6.8 -> 3.3 chunks/q, mean
+cut rank 5.2, precision 53.5% -> 71.7% for 8 points of recall. The absolute floor meanwhile goes from "one point past the knee" to "above the entire
+band" - 0.75 exceeds 3-small's band max of 0.5588, so that pair returned nothing on every query.
+That is the silent outage the band paragraph predicts, now measured: not a tuning nicety, a total
+blackout on the forced path. A raw cosine threshold is not comparable across embedding models; a
+fraction of the turn's top score is.
+
+This row is what made the absolute floor space-keyed rather than global (see the band section
+above). The relative floor needed no such treatment, and this is the measurement that says why: the
+same 85 does useful and comparable work in BOTH spaces, because a fraction of the turn's own top
+score carries its scale with it.
+
+Caveats, all of which bound how far these numbers travel:
+
+- **Not the long-document regime.** Median chunk 638 chars against a prod reference of 2182. Floor
+  values fitted on short help prose are not fitted for a production lake. Recapture before adopting
+  any specific number.
+- **A full scan, over a differently-composed pool than prod gates.** The 256-chunk pool cap
+  truncated all 30 queries at the low floors, so every `cut @` is a rank within a truncated pool;
+  that cap is genuinely shared with the served path. The rest is not: forced retrieval does not go
+  through Atlas `$vectorSearch` at all, so the divergence is not ANN vs exact kNN. It is the three
+  narrowings this harness does not model - a 100-file candidate cap ordered `fileName` ASC, a
+  4000-chunk per-turn scan budget, and supersession collapse before scoring. None binds on this
+  51-article fixture; all three bind on a production lake, and they make the served pool differently
+  composed rather than simply shallower.
+- **The budget is charged pre-defang, so `served/q` is optimistic.** This harness spends
+  `countCodePoints(text)`; the served walk spends `defangRetrievedContent(text).length`, which adds
+  one character per line starting `[`, `---`, `###`, `N. **` or `NOTE:`, and counts UTF-16 units
+  rather than code points. Both errors run the same direction, so the real `served/q` and
+  budget-bound rank are slightly below what is printed here - small on prose, systematic on markdown
+  headings and lists. Correcting it means re-capturing: `charLength` is fixture data, the fixture
+  schema carries no version field, and a capture taken under the old definition would load clean and
+  be swept under the new one.
+- 30 hand-authored questions, 5 of them negatives. Enough to separate a dead gate from a live one;
+  not enough to pick between two adjacent live values.
+
+Read `bound` before recall. A relative floor showing 0.0% there is the dormant case this section
+describes under ada-002; `cut @` against `budget-bound`, and `accepted/q` against `served/q`, are
+what separate a floor that cuts from one cutting past where the char budget already stopped.
+
+**The table above is an abridged transcription of the tool's output.** The tool prints
+`relative | absolute | accepted/q | served/q | pre-rel | bound | cut @ | budget-bound | emptied |
+recall | precision | MRR`; the table drops `pre-rel`, `cut @`, `budget-bound` and `MRR`, and strips
+the denominator the tool prints beside precision (`n=`), which matters because that denominator
+moves with the configuration. So the two comparisons the paragraph above tells you to make have to
+be read off a fresh run, not off this table - as does the mean cut rank of 5.2 quoted earlier.
+
+What cannot drift is **the arithmetic**: `compareForcedRetrievalRank` and
+`forcedRetrievalRelativeCutoff` are one implementation with one definition site each, shared with
+the served path. The rest of the gate - the absolute-floor comparison, the `topScore` read, the cap
+application, and the budget walk - is hand-mirrored here and pinned only by comments. It agrees with
+the served scan today, and the budget walk is the one place it knowingly does not (see the
+pre-defang caveat above).
 
 ## Out of scope
 
@@ -243,8 +455,23 @@ pnpm --filter @bike4mind/scripts test retrieval/
 pnpm --filter @bike4mind/scripts typecheck
 pnpm --filter @bike4mind/scripts retrieval:model-comparison \
   --fixtures retrieval/fixtures/tiny-comparison.fixture.json --widths 16,8
+pnpm --filter @bike4mind/scripts retrieval:forced-floor-sweep \
+  --fixture retrieval/fixtures/tiny-comparison.fixture.json --floors 0:0,85:75
 ```
 
 `fixtures/tiny-comparison.fixture.json` is a 16-dim **synthetic** capture with a planted topical
 structure. It exercises the truncation, the scoring and the rendering end to end without credentials.
 No number it produces is a measurement of any embedding model.
+
+It carries `"syntheticMatryoshka": true`, which is what lets a model the registry does not know be
+truncated to a narrower arm. Only a committed test fixture sets it: without the flag, "unregistered
+model" and "synthetic fixture" would be one signal, and a typo in a hand-edited capture
+(`text-embedding-ada-oo2`) would render width arms of a model that never had them.
+
+## Re-capturing after a question is reworded
+
+Every captured query carries a `questionHash` of the `PROBE_QUESTIONS` text it embeds, and
+`loadEmbeddingFixture` checks it. Changing a question's wording therefore invalidates existing
+fixtures by design: the id still matches, so nothing downstream would have noticed that two arms were
+scored on different questions under one label. Re-capture every arm (the whole set - a mixed pair is
+the bug) before scoring again.

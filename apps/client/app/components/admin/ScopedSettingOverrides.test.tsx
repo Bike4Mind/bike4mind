@@ -70,6 +70,15 @@ describe('ScopedSettingOverrides level options', () => {
     expect(screen.getAllByRole('option').map(o => o.textContent)).toEqual(['Organization', 'Owner']);
   });
 
+  // The operator-facing half of #2624: the Lake option is what let an inert override be saved in
+  // the first place, so the picker - not just the schema - is where its absence has to be pinned.
+  it('offers no lake rung on a data-lake scan budget, so an inert override cannot be created', () => {
+    renderSection(settingsMap.dataLakeSearchMaxFiles);
+    fireEvent.click(screen.getByTestId('scoped-override-dataLakeSearchMaxFiles-level-select'));
+
+    expect(screen.getAllByRole('option').map(o => o.textContent)).toEqual(['Organization', 'Owner']);
+  });
+
   it('renders nothing for a setting that does not opt into scoping', () => {
     renderSection(settingsMap.DefaultAPIModel);
     expect(screen.queryByTestId('scoped-override-DefaultAPIModel-header')).not.toBeInTheDocument();
@@ -224,6 +233,26 @@ describe('ScopedSettingOverrides existing rows', () => {
       scopeLevel: 'lake',
       scopeId: 'lake-1',
     });
+  });
+
+  // #2624 removed the Lake rung from the data-lake scan budgets. Overrides an operator already
+  // saved there stay in the collection and are never read again, so the row has to say so - listing
+  // one under "Scoped overrides" with no qualifier repeats the lie the rung removal was meant to end.
+  it('marks a stored override at a rung the setting no longer declares as inert, and keeps Clear', () => {
+    overrides = [
+      row({ settingName: 'dataLakeSearchMaxFiles', scopeLevel: 'lake', scopeId: 'lake-1', settingValue: '1' }),
+      row({ settingName: 'dataLakeSearchMaxFiles', scopeLevel: 'organization', scopeId: 'org-1', settingValue: '2' }),
+    ];
+    renderSection(settingsMap.dataLakeSearchMaxFiles);
+
+    expect(screen.getByTestId('scoped-override-dataLakeSearchMaxFiles-row-lake-lake-1')).toHaveTextContent(
+      'Lake lake-1 = 1 - inert - no longer settable at this rung'
+    );
+    // The still-settable rung is untouched, so the note cannot be a blanket suffix.
+    expect(screen.getByTestId('scoped-override-dataLakeSearchMaxFiles-row-organization-org-1')).not.toHaveTextContent(
+      'inert'
+    );
+    expect(screen.getByTestId('scoped-override-dataLakeSearchMaxFiles-clear-btn-lake-lake-1')).toBeInTheDocument();
   });
 
   it('says so when nothing is overridden, and discloses the propagation delay', () => {

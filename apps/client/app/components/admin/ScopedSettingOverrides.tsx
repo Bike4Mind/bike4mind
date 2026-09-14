@@ -40,6 +40,15 @@ export const LEVEL_LABELS: Record<OverrideLevel, string> = {
 export const OVERRIDE_STALENESS_NOTE =
   'A change applies immediately on the instance that served it and within ~5 min (one cache TTL) everywhere else.';
 
+/**
+ * A stored override outlives the rung it was written at: dropping a level from a setting's
+ * `settableAt` leaves rows already saved there in the collection, where the resolver no longer
+ * looks for them (#2624 did exactly that to the data-lake scan budgets). Presenting one as a value
+ * that applies would repeat the lie the removal was meant to end, so both override views label it
+ * and both keep offering Clear. Shared so the two cannot drift into saying different things.
+ */
+export const INERT_RUNG_NOTE = 'inert - no longer settable at this rung, so nothing reads it';
+
 /** Booleans are stored as 'true'/'false'; show the operator the switch position, not the string. */
 export const displayValue = (setting: AdminSetting, storedValue: string): string =>
   setting.type === 'boolean' ? (storedValue === 'true' ? 'On' : 'Off') : storedValue;
@@ -120,6 +129,7 @@ const ScopedSettingOverrides = ({ setting }: { setting: AdminSetting }) => {
               <Typography level="body-sm" sx={{ flex: 1, minWidth: 0 }}>
                 <strong>{LEVEL_LABELS[row.scopeLevel]}</strong> {row.scopeId}
                 {row.ownerType ? ` (${row.ownerType})` : ''} = {displayValue(setting, row.settingValue)}
+                {settableAt.includes(row.scopeLevel) ? '' : ` - ${INERT_RUNG_NOTE}`}
               </Typography>
               <Button
                 data-testid={`scoped-override-${setting.key}-clear-btn-${row.scopeLevel}-${row.scopeId}`}

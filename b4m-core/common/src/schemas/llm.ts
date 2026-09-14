@@ -38,6 +38,8 @@ export const b4mLLMTools = z.enum([
   'retrieve_knowledge_content',
   // Cardinality - the one knowledge-base question ranked retrieval cannot answer
   'count_knowledge_base',
+  // Corpus shape - topics, folders, pipeline health (#1292), alongside the cardinality tool above
+  'describe_knowledge_base',
   // Agent delegation
   'delegate_to_agent',
   // OptiHashi optimization tools

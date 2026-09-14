@@ -428,6 +428,14 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
   // archivedAt: null excludes files whose data lake is archived (matches null AND
   // missing, so non-data-lake files are unaffected). Keeps archived lake content out
   // of search/RAG retrieval - the read-path half of "archive hides files".
+  //
+  // These two conjuncts and NO status clause: this is the retrieval half of the divergence
+  // documented on `LAKE_REPORTING_EXCLUDED_STATUS` (dataLakeLifecycleScope). Lake REPORTING
+  // additionally drops `status: 'pending'` to keep a presigned-but-never-uploaded row from
+  // activating a draft lake; retrieval has no such lifecycle to protect and deliberately does not
+  // copy the clause. Over the same `buildDataLakeMembershipFilter` scope that one conjunct is the
+  // ONLY reason the two corpora differ, so anything reporting a lake's size must disclose the gap
+  // rather than let two readers derive different totals from one lake (#2737).
   const baseFilter: Record<string, unknown> = { deletedAt: null, archivedAt: null };
   const andConditions: object[] = [];
 

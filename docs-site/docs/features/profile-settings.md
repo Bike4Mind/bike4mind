@@ -20,7 +20,10 @@ Access your profile by clicking your avatar in the sidebar footer.
 View and edit your basic profile:
 - **Avatar** - Upload a profile picture
 - **Name** - Your display name
-- **Email** - Primary email (change with verification)
+- **Email** - Primary email (change with verification). If you signed up through a social provider
+  that did not confirm your email, your account has no email on file and this field reads
+  "No email on file" - use **Add Email** to attach one, then confirm the verification link. Until
+  then you sign in through that provider rather than by one-time code
 - **Phone** - Contact number (optional)
 - **Location** - Your location (optional)
 

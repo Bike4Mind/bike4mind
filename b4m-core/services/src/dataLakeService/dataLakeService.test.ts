@@ -1427,10 +1427,8 @@ describe('management views - the grant reach is manage-scoped, not read-scoped',
     listActiveByLakes: vi.fn().mockResolvedValue([]),
   });
 
-  // The cutover setting is ON here to prove the manage reach does not consult it. That is the only
-  // thing it proves at this level: the read reach's reader/org arms are ALSO held back by the
-  // source-level READ_GRANT_ENFORCEMENT_READY interlock, so with it false the two reaches happen to
-  // agree on a reader row here. The reaches are compared where they provably differ in
+  // The read-grant setting is ON here to prove the manage reach does not consult it. That is the
+  // only thing it proves at this level. The reaches are compared where they provably differ in
   // resolveLakeReadAccess.test.ts; these cases guard the wiring and the role split.
   const dbFor = (grants: ReturnType<typeof grantRepoFor>) => ({
     dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() },
@@ -1975,7 +1973,7 @@ describe('updateDataLake — clearing an access gate', () => {
     expect(written).not.toHaveProperty('requiredEntitlement');
   });
 
-  it('lets an admin clear a gate on someone else’s lake, and refuses a non-owner', async () => {
+  it("lets an admin clear a gate on someone else's lake, and refuses a non-owner", async () => {
     const { db, update } = makeDb(gated());
     await expect(
       updateDataLake({ userId: 'admin', isAdmin: true }, 'lake1', { requiredUserTag: '' }, { db })
@@ -1996,7 +1994,7 @@ describe('updateDataLake — clearing an access gate', () => {
     ).resolves.toMatchObject({ requiredUserTag: '' });
   });
 
-  it('an ungated, org-less lake is owner-only — clearing does not make it world-readable', async () => {
+  it('an ungated, org-less lake is owner-only - clearing does not make it world-readable', async () => {
     const cleared = lake({ createdByUserId: 'owner', requiredUserTag: '', requiredEntitlement: '' });
     expect(canAccessLake(cleared, ctx({ userId: 'stranger' }))).toBe(false);
     expect(canAccessLake(cleared, ctx({ userId: 'owner' }))).toBe(true);
