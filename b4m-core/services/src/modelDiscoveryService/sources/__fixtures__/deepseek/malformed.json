@@ -1,0 +1,10 @@
+{
+  "object": "list",
+  "data": [
+    { "object": "model", "owned_by": "deepseek" },
+    { "id": "", "object": "model" },
+    { "id": 42, "object": "model" },
+    null,
+    { "id": "deepseek-v4-pro", "object": "model", "owned_by": "deepseek" }
+  ]
+}

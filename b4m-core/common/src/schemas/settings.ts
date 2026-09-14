@@ -241,6 +241,7 @@ export const SettingKeySchema = z.enum([
   'geminiDemoKey',
   'xaiApiKey',
   'moonshotApiKey',
+  'deepseekApiKey',
   'voyageApiKey',
   'FirecrawlApiKey',
   'FirecrawlApiUrl',
@@ -1610,6 +1611,13 @@ export const API_SERVICE_GROUPS = {
     icon: 'AutoAwesome',
     settings: [{ key: 'moonshotApiKey', order: 1 }],
   },
+  DEEPSEEK: {
+    id: 'deepseekAPIService',
+    name: 'DeepSeek Service',
+    description: 'DeepSeek API integration settings',
+    icon: 'AutoAwesome',
+    settings: [{ key: 'deepseekApiKey', order: 1 }],
+  },
   ANTHROPIC: {
     id: 'anthropicAPIService',
     name: 'Anthropic Service',
@@ -1994,6 +2002,16 @@ export const settingsMap = {
     isSensitive: true,
     category: 'AI',
     group: API_SERVICE_GROUPS.MOONSHOT.id,
+    order: 1,
+  }),
+  deepseekApiKey: makeStringSetting({
+    key: 'deepseekApiKey',
+    name: 'DeepSeek API Key',
+    defaultValue: '',
+    description: 'The global API Key for DeepSeek.',
+    isSensitive: true,
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DEEPSEEK.id,
     order: 1,
   }),
   voyageApiKey: makeStringSetting({

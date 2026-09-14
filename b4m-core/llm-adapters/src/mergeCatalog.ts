@@ -36,6 +36,7 @@ export const DISPATCHABLE_ADAPTER_FAMILIES: readonly string[] = [
   'gemini',
   'xai',
   'kimi',
+  'deepseek',
   'ollama',
   'bfl',
   'local-image',

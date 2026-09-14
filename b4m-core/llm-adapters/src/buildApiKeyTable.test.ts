@@ -24,6 +24,7 @@ const ALL_KEYS = {
   ollama: 'http://localhost:11434',
   xai: 'sk-xai',
   kimi: 'sk-moonshot',
+  deepseek: 'sk-deepseek',
   voyageai: 'sk-voyage',
   imageGen: 'http://localhost:7860',
 };
@@ -42,6 +43,10 @@ describe('buildApiKeyTable', () => {
 
   it('routes the Moonshot key to the Kimi backend', () => {
     expect(buildApiKeyTable(ALL_KEYS)[ModelBackend.Kimi]).toBe('sk-moonshot');
+  });
+
+  it('routes the DeepSeek key to the DeepSeek backend', () => {
+    expect(buildApiKeyTable(ALL_KEYS)[ModelBackend.DeepSeek]).toBe('sk-deepseek');
   });
 
   it('normalizes imageGen onto local-image, which has no key of that name', () => {
@@ -71,6 +76,16 @@ describe('buildApiKeyTable', () => {
     const without = { apiKeys: buildApiKeyTable({ ...ALL_KEYS, kimi: null }), isSelfHost: false };
     expect(isBackendUsable(ModelBackend.Kimi, without)).toBe(false);
   });
+
+  it('gates DeepSeek on its own key, which KEYED_LISTING_BACKENDS has to name', () => {
+    // Omission from KEYED_LISTING_BACKENDS fails closed and silently: a valid key
+    // and a working adapter still list nothing.
+    const ctx = { apiKeys: buildApiKeyTable(ALL_KEYS), isSelfHost: false };
+    expect(isBackendUsable(ModelBackend.DeepSeek, ctx)).toBe(true);
+
+    const without = { apiKeys: buildApiKeyTable({ ...ALL_KEYS, deepseek: null }), isSelfHost: false };
+    expect(isBackendUsable(ModelBackend.DeepSeek, without)).toBe(false);
+  });
 });
 
 describe('getAvailableModels with a Moonshot key', () => {
@@ -79,12 +94,29 @@ describe('getAvailableModels with a Moonshot key', () => {
     const kimiIds = models.filter(m => m.backend === ModelBackend.Kimi).map(m => String(m.id));
 
     expect(kimiIds).toEqual(
-      expect.arrayContaining(['kimi-k3', 'kimi-k2.7-code', 'kimi-k2.7-code-highspeed', 'kimi-k2.6', 'kimi-k2.5'])
+      expect.arrayContaining(['kimi-k3', 'kimi-k2.7-code', 'kimi-k2.7-code-highspeed', 'kimi-k2.6'])
     );
+    // kimi-k2.5 is absent on purpose: Moonshot discontinued the direct id and its
+    // adapter row carries a past deprecationDate, which is what filters it here.
+    expect(kimiIds).not.toContain('kimi-k2.5');
   });
 
   it('lists none of them without the key', async () => {
     const models = await getAvailableModels(buildApiKeyTable({}), { isSelfHost: true });
     expect(models.some(m => m.backend === ModelBackend.Kimi)).toBe(false);
+  });
+});
+
+describe('getAvailableModels with a DeepSeek key', () => {
+  it('lists the direct DeepSeek models', async () => {
+    const models = await getAvailableModels(buildApiKeyTable({ deepseek: 'sk-deepseek' }), { isSelfHost: true });
+    const ids = models.filter(m => m.backend === ModelBackend.DeepSeek).map(m => String(m.id));
+
+    expect(ids).toEqual(expect.arrayContaining(['deepseek-flash', 'deepseek-v4-pro']));
+  });
+
+  it('lists none of them without the key', async () => {
+    const models = await getAvailableModels(buildApiKeyTable({}), { isSelfHost: true });
+    expect(models.some(m => m.backend === ModelBackend.DeepSeek)).toBe(false);
   });
 });

@@ -18,6 +18,10 @@ export enum ModelBackend {
   // Distinct from Bedrock-served Kimi (moonshotai.kimi-*), which routes through
   // ModelBackend.Bedrock on the same vendor.
   Kimi = 'kimi',
+  // DeepSeek's own OpenAI-compatible endpoint. Distinct from the Bedrock-served
+  // DeepSeek rows (deepseek.*), which route through ModelBackend.Bedrock, and
+  // from the Ollama alias for a locally pulled deepseek-r1.
+  DeepSeek = 'deepseek',
   VoyageAI = 'voyageai',
   AWS = 'aws',
   // Self-hosted Stable-Diffusion image backend (A1111-compatible REST API),
@@ -267,6 +271,16 @@ export enum ChatModels {
   // @see https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-thinking.html
   KIMI_K2_5_BEDROCK = 'moonshotai.kimi-k2.5',
   KIMI_K2_THINKING_BEDROCK = 'moonshot.kimi-k2-thinking',
+
+  // DeepSeek direct from api.deepseek.com, the only two ids it still serves.
+  // Neither collides with the Bedrock-served DEEPSEEK_R1_BEDROCK / DEEPSEEK_V3_1
+  // above or the Ollama DEEPSEEK_R1: those are other people's copies on other
+  // backends, with their own limits and their own prices.
+  //
+  // The vendor's legacy aliases deepseek-v4-flash and deepseek-v4-flash-vision-exp
+  // route to deepseek-flash and are deliberately not separate members.
+  DEEPSEEK_FLASH = 'deepseek-flash',
+  DEEPSEEK_V4_PRO = 'deepseek-v4-pro',
 }
 export const CHAT_MODELS = Object.values(ChatModels);
 export const supportedChatModels = z.enum(ChatModels);
@@ -425,6 +439,13 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
   ChatModels.KIMI_K2_7_CODE_HIGHSPEED,
   ChatModels.KIMI_K2_6,
   ChatModels.KIMI_K2_5,
+  // DeepSeek reasons by default on both ids, and its docs state temperature,
+  // presence_penalty and frequency_penalty are unsupported in thinking mode.
+  // Unlike Kimi these are silent no-ops rather than a 400, which is the worse
+  // failure: the knob moves, the answer does not. Listed here so the picker
+  // stops offering it.
+  ChatModels.DEEPSEEK_FLASH,
+  ChatModels.DEEPSEEK_V4_PRO,
 ]);
 
 /**

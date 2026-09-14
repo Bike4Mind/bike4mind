@@ -19,8 +19,8 @@ const INDEXES: Record<AggregatorName, ReturnType<typeof buildAggregatorKeyIndex>
 };
 
 /**
- * Measured against the checked-in seed on 2026-07-28: models.dev 73/120 (60.8%),
- * litellm 105/120 (87.5%). The thresholds sit under those, which tolerates an
+ * Measured against the checked-in seed on 2026-09-13: models.dev 75/122 (61.5%),
+ * litellm 106/122 (86.9%). The thresholds sit under those, which tolerates an
  * aggregator retiring a handful of entries while still failing a normalizer
  * regression - dropping any single normalization step costs 10 points or more
  * (the region-prefix strip alone carries 17 Bedrock ids).
@@ -36,6 +36,13 @@ const INDEXES: Record<AggregatorName, ReturnType<typeof buildAggregatorKeyIndex>
  * k2.7-code. That is the expected shape for a provider newer than the aggregators
  * rather than a normalizer defect: those three are priced from the seed, and the
  * two-agreeing-aggregators rule can only flag them until litellm catches up.
+ *
+ * Adding the two direct DeepSeek ids moved litellm again, from 87.5% to 86.9%:
+ * deepseek-v4-pro joins litellm's own bare entry, but deepseek-flash does not -
+ * litellm still only carries the vendor's legacy deepseek-v4-flash alias name,
+ * the same "aggregator has not caught up yet" shape as the Kimi ids above. Both
+ * join models.dev, which already lists the current names.
+ *
  * Raise these when the seed is next regenerated, never lower them without saying
  * why here.
  */

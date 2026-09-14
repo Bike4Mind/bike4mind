@@ -5815,6 +5815,8 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       geminiDemoKey: '',
       bflApiKey: '',
       xaiApiKey: '',
+      moonshotApiKey: '',
+      deepseekApiKey: '',
       ollamaBackend: '',
       EnableOllama: 'false',
     };

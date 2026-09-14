@@ -7,7 +7,7 @@ import {
   type ModelInfo,
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
-import { cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
+import { splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources';
 import { Stream } from 'openai/streaming';
@@ -21,35 +21,40 @@ import {
   ICompletionBackend,
   ICompletionOptionTools,
   ICompletionOptions,
+  getLatestToolCallIdOpenAI,
+  replaceLastToolResultObservationOpenAI,
 } from './backend';
-import { getCachingAdapter, logCacheStats } from './caching/adapters';
-import { kimiReasoningParams, kimiSamplingParams, kimiToolChoice } from './kimiParams';
+import { getCachingAdapter, logCacheStats, cachedPromptTokens } from './caching/adapters';
+import { deepseekReasoningParams, deepseekSamplingParams, deepseekStopSequences } from './deepseekParams';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { normalizeOpenAIFinishReason } from './stopReason';
 
 /**
- * Moonshot AI's Kimi models, served from their OpenAI-compatible endpoint.
+ * DeepSeek's models, served from their own OpenAI-compatible endpoint.
  *
- * Structurally this is xaiBackend's twin - same OpenAI SDK against a different
+ * Structurally this is kimiBackend's twin - same OpenAI SDK against a different
  * baseURL, same recursive tool loop, same multi-turn token accumulators - and the
- * two must stay in sync on that machinery. Three things genuinely differ:
+ * three OpenAI-compatible backends must stay in sync on that machinery. What
+ * genuinely differs here:
  *
- * 1. `max_tokens` is deprecated upstream in favor of `max_completion_tokens`.
- * 2. Structured output is NATIVE (json_schema), not the best-effort prompt
- *    injection xAI needs, so callers get responseFormatMode: 'native'.
- * 3. Reasoning controls are per-model and mutually exclusive; see kimiParams.
+ * 1. The base URL carries NO `/v1` segment; the SDK appends the path itself.
+ * 2. Thinking is on by default on both ids and its sampling restrictions are
+ *    SILENT no-ops rather than 400s; see deepseekParams.
+ * 3. The prior turn's `reasoning_content` has to be replayed on the assistant
+ *    tool-call message whenever the request carries `tools`, which is the
+ *    opposite of the usual provider rule. See pushToolMessages.
  *
- * @see https://platform.kimi.ai/docs/api/chat
+ * @see https://api-docs.deepseek.com/api/create-chat-completion
  */
-export class KimiBackend implements ICompletionBackend {
-  private _baseUrl = 'https://api.moonshot.ai/v1';
+export class DeepSeekBackend implements ICompletionBackend {
+  private _baseUrl = 'https://api.deepseek.com';
   private _api: OpenAI;
   private logger: Logger;
   public currentModel: string = '';
 
   constructor(apiKey: string, logger?: Logger) {
     if (!apiKey) {
-      throw new Error('Moonshot API key is required');
+      throw new Error('DeepSeek API key is required');
     }
     this._api = new OpenAI({ apiKey, baseURL: this._baseUrl });
     this.logger = logger ?? new Logger();
@@ -58,126 +63,60 @@ export class KimiBackend implements ICompletionBackend {
   /**
    * Seed listing. Post-registry this is the fallback tier, not the source of
    * truth: the catalog overlays context window, limits, lifecycle and price on
-   * top of these rows, and discovery keeps them current without a deploy. What
-   * cannot come from a feed - and so has to live here - is the reasoning and
-   * dispatch shape each id needs.
+   * top of these rows. DeepSeek's own GET /models returns id/object/owned_by and
+   * nothing else, so everything below has to live here.
+   *
+   * Prices are the PEAK rates. Off-peak (outside 01:00-04:00 and 06:00-10:00 UTC,
+   * Mon-Fri) is exactly half, and ModelInfo.pricing is keyed by context tier with
+   * no time dimension to express that in - so the rate that never under-bills is
+   * the one recorded.
    */
   async getModelInfo(): Promise<ModelInfo[]> {
     return [
       {
-        id: ChatModels.KIMI_K3,
+        id: ChatModels.DEEPSEEK_FLASH,
         type: 'text' as const,
-        name: 'Kimi K3',
-        backend: ModelBackend.Kimi,
-        contextWindow: 1048576,
-        max_tokens: 131072,
+        name: 'DeepSeek Flash',
+        backend: ModelBackend.DeepSeek,
+        contextWindow: 1000000,
+        max_tokens: 393216,
         can_stream: true,
         pricing: {
-          // $3 / 1M in, $15 / 1M out, $0.30 / 1M cache read.
-          // @see https://platform.kimi.ai/docs/pricing/chat-k3
-          1048576: { input: 3 / 1000000, output: 15 / 1000000, cache_read: 0.3 / 1000000 },
+          // $0.30 / 1M in on a cache miss, $0.006 / 1M on a hit, $1.20 / 1M out.
+          1000000: { input: 0.3 / 1000000, output: 1.2 / 1000000, cache_read: 0.006 / 1000000 },
         },
         can_think: true,
         supportsVision: true,
         supportsTools: true,
         supportsImageVariation: false,
-        releaseDate: '2026-07-16',
+        releaseDate: '2026-08-13',
         description:
-          "Moonshot's Kimi K3 flagship. 1M context with native vision, tool use, and selectable reasoning effort (low/high/max). Always reasons - effort sets depth, not whether.",
+          "DeepSeek's V4.1-Flash. 1M context with native vision, tool use, and selectable reasoning effort (low/high/max). Always reasons unless thinking is turned off.",
       },
       {
-        id: ChatModels.KIMI_K2_7_CODE,
+        id: ChatModels.DEEPSEEK_V4_PRO,
         type: 'text' as const,
-        name: 'Kimi K2.7 Code',
-        backend: ModelBackend.Kimi,
-        contextWindow: 262144,
-        // Half the window, deliberately, and the same output ceiling the K3 row above
-        // carries. At the full 262144 the server's context - output - buffer went
-        // negative, which empties the prompt; every K2.x row has to keep it positive.
-        max_tokens: 131072,
+        name: 'DeepSeek V4 Pro',
+        backend: ModelBackend.DeepSeek,
+        contextWindow: 1000000,
+        max_tokens: 393216,
         can_stream: true,
         pricing: {
-          // $0.95 / 1M in, $4 / 1M out, $0.19 / 1M cache read.
-          262144: { input: 0.95 / 1000000, output: 4 / 1000000, cache_read: 0.19 / 1000000 },
+          // $1.32 / 1M in on a cache miss, $0.044 / 1M on a hit, $3.96 / 1M out.
+          // DeepSeek is temporarily serving this id from Flash capacity at Flash
+          // rates; its own listed rate is kept so the interim over-bills slightly
+          // rather than under-billing once the reroute ends.
+          1000000: { input: 1.32 / 1000000, output: 3.96 / 1000000, cache_read: 0.044 / 1000000 },
         },
         can_think: true,
-        supportsVision: true,
+        // Text only: the multimodal work landed on the Flash line, and the vision
+        // aliases route there rather than here.
+        supportsVision: false,
         supportsTools: true,
         supportsImageVariation: false,
-        releaseDate: '2026-06-12',
-        trainingCutoff: '2025-01-01',
+        releaseDate: '2026-08-13',
         description:
-          "Moonshot's coding-focused Kimi, tuned for long-horizon repository work with less overthinking. Thinking cannot be disabled.",
-      },
-      {
-        id: ChatModels.KIMI_K2_7_CODE_HIGHSPEED,
-        type: 'text' as const,
-        name: 'Kimi K2.7 Code (High Speed)',
-        backend: ModelBackend.Kimi,
-        contextWindow: 262144,
-        max_tokens: 131072,
-        can_stream: true,
-        pricing: {
-          // Same model on faster infrastructure at 2x the rate: $1.90 / $8.00.
-          262144: { input: 1.9 / 1000000, output: 8 / 1000000, cache_read: 0.38 / 1000000 },
-        },
-        can_think: true,
-        supportsVision: true,
-        supportsTools: true,
-        supportsImageVariation: false,
-        releaseDate: '2026-06-12',
-        trainingCutoff: '2025-01-01',
-        description:
-          'Kimi K2.7 Code served at 180-260 tokens/s for latency-sensitive work. Identical capabilities to K2.7 Code at twice the price.',
-      },
-      {
-        id: ChatModels.KIMI_K2_6,
-        type: 'text' as const,
-        name: 'Kimi K2.6',
-        backend: ModelBackend.Kimi,
-        contextWindow: 262144,
-        max_tokens: 131072,
-        can_stream: true,
-        pricing: {
-          // $0.95 / 1M in, $4 / 1M out, $0.16 / 1M cache read.
-          262144: { input: 0.95 / 1000000, output: 4 / 1000000, cache_read: 0.16 / 1000000 },
-        },
-        can_think: true,
-        supportsVision: true,
-        supportsTools: true,
-        supportsImageVariation: false,
-        releaseDate: '2026-04-21',
-        trainingCutoff: '2025-01-01',
-        description:
-          "Moonshot's multimodal workhorse for agent loops, coding, and visual context. Thinking can be turned off on this one, unlike the K2.7 code models.",
-      },
-      {
-        id: ChatModels.KIMI_K2_5,
-        type: 'text' as const,
-        name: 'Kimi K2.5',
-        backend: ModelBackend.Kimi,
-        contextWindow: 262144,
-        max_tokens: 131072,
-        can_stream: true,
-        pricing: {
-          // $0.60 / 1M in, $3 / 1M out, $0.10 / 1M cache read.
-          262144: { input: 0.6 / 1000000, output: 3 / 1000000, cache_read: 0.1 / 1000000 },
-        },
-        can_think: true,
-        supportsVision: true,
-        supportsTools: true,
-        supportsImageVariation: false,
-        releaseDate: '2026-01-01',
-        trainingCutoff: '2025-01-01',
-        // Discontinued upstream by Moonshot: api.moonshot.ai no longer serves this
-        // id. The enum member stays so a session still pinned to it resolves a
-        // name instead of crashing; a past deprecationDate hides it from the
-        // picker, which is the only lifecycle lever an adapter row has
-        // (toModelRecord derives lifecycle from this field alone). The two
-        // Bedrock-served Kimi ids are on AWS's lifecycle and are unaffected.
-        deprecationDate: '2026-08-31',
-        description:
-          'The previous-generation Kimi, still the cheapest of the family. Superseded by K2.6 on quality at a modest price increase.',
+          "DeepSeek's V4-Pro, the heavier reasoning tier of the V4 line. 1M context, tool use, selectable reasoning effort; no vision.",
       },
     ];
   }
@@ -193,7 +132,7 @@ export class KimiBackend implements ICompletionBackend {
 
     const toolCallCount = options._internal?.toolCallCount ?? 0;
 
-    // Multi-turn token accumulators. Each Moonshot call (every recursive tool
+    // Multi-turn token accumulators. Each DeepSeek call (every recursive tool
     // round-trip) is billed independently, so we add each turn's usage and emit
     // the running total - consumers assign rather than add, so the terminal turn
     // has to carry the whole session.
@@ -203,7 +142,7 @@ export class KimiBackend implements ICompletionBackend {
 
     const maxToolCalls = options._internal?.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
     if (toolCallCount >= maxToolCalls && options.tools?.length) {
-      this.logger.warn(`⚠️ Max tool calls limit (${maxToolCalls}) reached. Disabling tools to prevent infinite loops.`);
+      this.logger.warn(`Max tool calls limit (${maxToolCalls}) reached. Disabling tools to prevent infinite loops.`);
       await this.complete(
         model,
         // Tools are going away, so the prompts that order the model to use one have to go with them.
@@ -231,63 +170,50 @@ export class KimiBackend implements ICompletionBackend {
     };
 
     Object.assign(parameters, {
-      // Every pinned sampling parameter goes through this one gate - sending any
-      // of them to a model that fixes them is a 400, so none may be set here.
-      ...kimiSamplingParams(model, {
+      ...deepseekSamplingParams(model, {
         temperature: options.temperature,
         topP: options.topP,
         presencePenalty: options.presencePenalty,
         frequencyPenalty: options.frequencyPenalty,
         n: options.n,
       }),
-      ...kimiReasoningParams(model, { thinking: options.thinking, reasoningEffort: options.reasoningEffort }),
-      stop: options.stop,
+      ...deepseekReasoningParams(model, { thinking: options.thinking, reasoningEffort: options.reasoningEffort }),
+      stop: deepseekStopSequences(options.stop),
       stream: useStreaming,
-      // `max_tokens` is deprecated upstream; Moonshot documents
-      // max_completion_tokens as the supported spelling.
-      max_completion_tokens: options.maxTokens,
+      max_tokens: options.maxTokens,
+      // Without include_usage a streamed turn reports NO usage at all and settles
+      // at zero; with it, `usage` is null on every chunk but the last.
       ...(useStreaming && { stream_options: { include_usage: true } }),
     });
 
     if (options.tools?.length) {
       parameters.tools = this.formatTools(options.tools);
-      const choice = kimiToolChoice(model, options.tool_choice);
-      if (choice !== undefined) {
-        parameters.tool_choice = choice as ChatCompletionCreateParams['tool_choice'];
+      if (options.tool_choice !== undefined) {
+        parameters.tool_choice = options.tool_choice as ChatCompletionCreateParams['tool_choice'];
       }
     }
 
-    // Native structured output - Moonshot implements OpenAI's json_schema form,
-    // so unlike xAI there is no prompt-injection fallback and no post-validation
-    // burden on the caller.
+    // `json_object` only. DeepSeek's strict `json_schema` form is beta-path-only,
+    // so a schema request degrades to plain JSON mode and the caller keeps the
+    // validation burden - responseFormatMode stays unset rather than claiming
+    // 'native' for a shape the provider did not enforce.
     if (options.responseFormat?.type === 'json_schema') {
-      const rf = options.responseFormat;
       // Cast: OpenAI's typed response_format is on a newer params shape than the
       // one TS resolves here, same as openaiBackend.
-      (parameters as any).response_format = {
-        type: 'json_schema',
-        json_schema: {
-          name: rf.json_schema.name,
-          ...(rf.json_schema.description ? { description: rf.json_schema.description } : {}),
-          schema: rf.json_schema.schema,
-          ...(rf.json_schema.strict !== undefined ? { strict: rf.json_schema.strict } : { strict: true }),
-        },
-      };
+      (parameters as unknown as Record<string, unknown>).response_format = { type: 'json_object' };
     } else if (options.responseFormat?.type === 'text') {
-      (parameters as any).response_format = { type: 'text' };
+      (parameters as unknown as Record<string, unknown>).response_format = { type: 'text' };
     }
-    const nativeFormat = options.responseFormat?.type === 'json_schema';
 
     // NO GATE on reasoning capture, deliberately. Deriving this from "did we send a
-    // reasoning parameter" drops reasoning on the common path: K3 always reasons and
-    // kimiReasoningParams sends nothing when no explicit effort was set (the default,
-    // since reasoningEffort is only populated on an explicit user override), and
-    // k2.6/k2.5 default thinking ON when the parameter is omitted. Any
-    // reasoning_content Moonshot returns was billed as output tokens, so discarding
-    // it would charge the user for text they never see.
+    // reasoning parameter" drops reasoning on the common path: both ids reason by
+    // default and deepseekReasoningParams sends nothing when no explicit effort or
+    // toggle was set, which is the default. Any reasoning_content DeepSeek returns
+    // was billed as output tokens, so discarding it would charge the user for text
+    // they never see.
 
-    // Moonshot's context caching is automatic with no parameter or header to set;
-    // the adapter exists to read `usage.cached_tokens` back out.
+    // DeepSeek's context caching is automatic with no parameter or header to set;
+    // the adapter exists to read the cache counters back out.
     const cacheStrategy = options.cacheStrategy;
 
     const response = await this._api.chat.completions.create(parameters, { signal: options.abortSignal });
@@ -298,21 +224,19 @@ export class KimiBackend implements ICompletionBackend {
       const streamedText: string[] = [];
 
       if (!response.choices || response.choices.length === 0) {
-        throw new Error('No choices returned from the Moonshot API');
+        throw new Error('No choices returned from the DeepSeek API');
       }
 
-      const turnCacheReadTokens = cachedTokensFromUsage(response.usage as Record<string, unknown> | undefined);
+      const turnCacheReadTokens = cachedPromptTokens(response.usage as unknown as Record<string, unknown> | undefined);
 
       for (const c of response.choices) {
         if (!c.message) continue;
 
-        // Kimi returns thinking on `reasoning_content`, same field xAI uses. It is
-        // read here but NOT returned early: a reasoning model that also calls a
+        // Read here but NOT returned early: a reasoning turn that also calls a
         // tool populates both, and handling reasoning first would hand back the
-        // monologue as the whole answer and never run the tool. That is not
-        // hypothetical for Kimi - the k2.7-code ids cannot turn thinking off, and
-        // they are the agentic models most likely to call something.
-        const reasoningContent = (c.message as any).reasoning_content as string | undefined;
+        // monologue as the whole answer and never run the tool. Both DeepSeek ids
+        // reason by default, so that is the normal agentic turn, not an edge case.
+        const reasoningContent = (c.message as { reasoning_content?: string }).reasoning_content;
 
         if (c.message.tool_calls && c.message.tool_calls.length > 0) {
           for (const toolCall of c.message.tool_calls) {
@@ -365,7 +289,7 @@ export class KimiBackend implements ICompletionBackend {
 
             type ToolPayload = { id: string; name: string; parameters: string; result: { toString(): string } };
 
-            this.logger.debug('[Tool Execution] Executing tools (Kimi non-streaming)', {
+            this.logger.debug('[Tool Execution] Executing tools (DeepSeek non-streaming)', {
               mode: parallelEnabled && resolvedTools.length > 1 ? 'parallel' : 'sequential',
               toolNames: resolvedTools.map(t => t.name),
             });
@@ -394,6 +318,10 @@ export class KimiBackend implements ICompletionBackend {
                   }
             );
 
+            // Only the first replayed assistant message carries the monologue:
+            // repeating it once per parallel tool call would feed DeepSeek the
+            // same reasoning several times over.
+            let turnReasoning = reasoningContent;
             for (const outcome of outcomes) {
               if (outcome.ok) {
                 const resultStr = outcome.result.toString();
@@ -401,7 +329,8 @@ export class KimiBackend implements ICompletionBackend {
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  resultStr
+                  resultStr,
+                  turnReasoning ? [turnReasoning] : undefined
                 );
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
@@ -411,9 +340,11 @@ export class KimiBackend implements ICompletionBackend {
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  observation
+                  observation,
+                  turnReasoning ? [turnReasoning] : undefined
                 );
               }
+              turnReasoning = undefined;
             }
 
             await this.complete(
@@ -452,22 +383,21 @@ export class KimiBackend implements ICompletionBackend {
       }
 
       // A turn that produced neither prose nor a tool call is a failure, not an
-      // empty answer, and the most likely cause on Kimi is a reasoning model that
-      // spent its whole max_completion_tokens budget thinking. Without this the
-      // user gets a silent blank reply. The Bedrock path has the same guard in
-      // bedrockBackend/base.ts; the direct path needs its own.
+      // empty answer, and the most likely cause is a reasoning model that spent
+      // its whole max_tokens budget thinking. Without this the user gets a silent
+      // blank reply.
       if (streamedText.every(text => !text) && toolsUsed.length === 0) {
         const finish = response.choices[0]?.finish_reason;
         throw new Error(
           finish === 'length'
-            ? `Moonshot returned no content for ${model}: the output budget was exhausted before any answer was produced (finish_reason: length). Raise maxTokens or lower the reasoning effort.`
-            : `Moonshot returned no content for ${model} (finish_reason: ${finish ?? 'unknown'}).`
+            ? `DeepSeek returned no content for ${model}: the output budget was exhausted before any answer was produced (finish_reason: length). Raise maxTokens or lower the reasoning effort.`
+            : `DeepSeek returned no content for ${model} (finish_reason: ${finish ?? 'unknown'}).`
         );
       }
 
       let cacheStats: CacheUsageStats | undefined;
       if (cacheStrategy?.enableCaching && response.usage) {
-        const adapter = getCachingAdapter(ModelBackend.Kimi);
+        const adapter = getCachingAdapter(ModelBackend.DeepSeek);
         cacheStats = adapter.extractCacheStats(response as unknown as Record<string, unknown>, model);
         if (cacheStats) logCacheStats(this.logger, cacheStats, { streaming: false });
       }
@@ -479,7 +409,6 @@ export class KimiBackend implements ICompletionBackend {
         outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         cacheStats,
-        ...(nativeFormat ? { responseFormatMode: 'native' as const } : {}),
         ...(finishReason ? { stopReason: finishReason } : {}),
       });
       return;
@@ -487,6 +416,7 @@ export class KimiBackend implements ICompletionBackend {
 
     const func: { name?: string; id?: string; parameters?: string }[] = [];
     let isInThinkingBlock = false;
+    let streamedReasoning = '';
     let cachedTokensFromStream = 0;
     let streamFinishReason: string | undefined;
     let sawAnyText = false;
@@ -496,7 +426,7 @@ export class KimiBackend implements ICompletionBackend {
       if (chunk.usage) {
         inputTokens = Math.max(inputTokens, chunk.usage?.prompt_tokens || 0);
         outputTokens += chunk.usage?.completion_tokens || 0;
-        const chunkCached = cachedTokensFromUsage(chunk.usage as unknown as Record<string, unknown>);
+        const chunkCached = cachedPromptTokens(chunk.usage as unknown as Record<string, unknown>);
         if (chunkCached > 0) cachedTokensFromStream = chunkCached;
       }
 
@@ -505,19 +435,22 @@ export class KimiBackend implements ICompletionBackend {
           streamFinishReason = c.finish_reason;
         }
 
-        // Ungated, for the same reason as the non-streaming path: reasoning arrives
-        // by default on every current Kimi and is billed either way.
-        if ((c.delta as any).reasoning_content) {
+        const deltaReasoning = (c.delta as { reasoning_content?: string }).reasoning_content;
+
+        // Ungated, for the same reason as the non-streaming path: reasoning
+        // arrives by default on both ids and is billed either way.
+        if (deltaReasoning) {
+          streamedReasoning += deltaReasoning;
           if (!isInThinkingBlock) {
             isInThinkingBlock = true;
-            streamedText[c.index] = '<think>' + (c.delta as any).reasoning_content;
+            streamedText[c.index] = '<think>' + deltaReasoning;
           } else {
-            streamedText[c.index] = (c.delta as any).reasoning_content;
+            streamedText[c.index] = deltaReasoning;
           }
           return;
         }
 
-        if (isInThinkingBlock && c.delta.content && !(c.delta as any).reasoning_content) {
+        if (isInThinkingBlock && c.delta.content) {
           isInThinkingBlock = false;
           streamedText[c.index] = '</think>' + (c.delta.content || '');
           return;
@@ -548,10 +481,9 @@ export class KimiBackend implements ICompletionBackend {
     }
 
     // Close a <think> block left open because the stream ended on reasoning with no
-    // following prose -- a reasoning-to-tool turn (the k2.7-code agentic ids cannot
-    // disable thinking, so they routinely reason then call a tool) or a stream
-    // truncated mid-reasoning. Without this the tag stays open and the monologue
-    // bleeds into the answer after the tool recursion.
+    // following prose - a reasoning-to-tool turn, which is the normal shape here.
+    // Without this the tag stays open and the monologue bleeds into the answer
+    // after the tool recursion.
     if (isInThinkingBlock) {
       await callback(['</think>'], {
         ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
@@ -562,37 +494,30 @@ export class KimiBackend implements ICompletionBackend {
     }
 
     // Empty-stream guard, mirroring the non-streaming path: a turn that emitted no
-    // text and has no tool call to make produced nothing usable. The most likely
-    // cause is a reasoning model that spent its whole budget thinking; without this
-    // the stream returns silently with zero callbacks and the chat hangs.
+    // text and has no tool call to make produced nothing usable. Without this the
+    // stream returns silently with zero callbacks and the chat hangs.
     if (!sawAnyText && func.length === 0 && toolsUsed.length === 0) {
       throw new Error(
         streamFinishReason === 'length'
-          ? `Moonshot returned no content for ${model}: the output budget was exhausted before any answer was produced (finish_reason: length). Raise maxTokens or lower the reasoning effort.`
-          : `Moonshot returned no content for ${model} (finish_reason: ${streamFinishReason ?? 'unknown'}).`
+          ? `DeepSeek returned no content for ${model}: the output budget was exhausted before any answer was produced (finish_reason: length). Raise maxTokens or lower the reasoning effort.`
+          : `DeepSeek returned no content for ${model} (finish_reason: ${streamFinishReason ?? 'unknown'}).`
       );
     }
 
     let cacheStats: CacheUsageStats | undefined;
     if (cacheStrategy?.enableCaching && inputTokens > 0) {
-      const adapter = getCachingAdapter(ModelBackend.Kimi);
+      const adapter = getCachingAdapter(ModelBackend.DeepSeek);
       cacheStats = adapter.extractCacheStats(
         {
-          usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens, cached_tokens: cachedTokensFromStream },
+          usage: {
+            prompt_tokens: inputTokens,
+            completion_tokens: outputTokens,
+            prompt_cache_hit_tokens: cachedTokensFromStream,
+          },
         },
         model
       );
       if (cacheStats) logCacheStats(this.logger, cacheStats, { streaming: true });
-    }
-
-    if (nativeFormat && func.length === 0) {
-      await callback([], {
-        ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
-        outputTokens: accumOutputTokens + outputTokens,
-        toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
-        responseFormatMode: 'native',
-        cacheStats,
-      });
     }
 
     if (func.length > 0) {
@@ -638,7 +563,7 @@ export class KimiBackend implements ICompletionBackend {
 
         type ToolPayloadStream = { id: string; name: string; parameters: string; result: { toString(): string } };
 
-        this.logger.debug('[Tool Execution] Executing tools (Kimi streaming)', {
+        this.logger.debug('[Tool Execution] Executing tools (DeepSeek streaming)', {
           mode: parallelEnabled && resolvedTools.length > 1 ? 'parallel' : 'sequential',
           toolNames: resolvedTools.map(t => t.name),
         });
@@ -667,6 +592,7 @@ export class KimiBackend implements ICompletionBackend {
               }
         );
 
+        let turnReasoning: string | undefined = streamedReasoning || undefined;
         for (const outcome of outcomes) {
           if (outcome.ok) {
             const resultStr = outcome.result.toString();
@@ -674,7 +600,8 @@ export class KimiBackend implements ICompletionBackend {
             this.pushToolMessages(
               messages,
               { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-              resultStr
+              resultStr,
+              turnReasoning ? [turnReasoning] : undefined
             );
           } else {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
@@ -684,9 +611,11 @@ export class KimiBackend implements ICompletionBackend {
             this.pushToolMessages(
               messages,
               { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-              observation
+              observation,
+              turnReasoning ? [turnReasoning] : undefined
             );
           }
+          turnReasoning = undefined;
         }
 
         await this.complete(
@@ -727,10 +656,20 @@ export class KimiBackend implements ICompletionBackend {
     }));
   }
 
-  pushToolMessages(messages: IMessage[], tool: IChoiceEndToolUse['tool'], result: string, _thinkingBlocks?: unknown[]) {
+  /**
+   * `thinkingBlocks` carries the turn's `reasoning_content` as a single string
+   * entry. DeepSeek inverts the usual rule: when a request carries `tools`, the
+   * prior turn's monologue MUST be replayed on the assistant tool-call message or
+   * reasoning continuity breaks across the loop. convertMessageToOpenAIFormat
+   * preserves the field for exactly this path.
+   */
+  pushToolMessages(messages: IMessage[], tool: IChoiceEndToolUse['tool'], result: string, thinkingBlocks?: unknown[]) {
+    const reasoningContent = typeof thinkingBlocks?.[0] === 'string' ? thinkingBlocks[0] : undefined;
+
     messages.push({
       content: null,
       role: 'assistant',
+      ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
       tool_calls: [
         {
           id: tool.id,
@@ -747,9 +686,14 @@ export class KimiBackend implements ICompletionBackend {
       role: 'tool',
       content: JSON.stringify({ result }),
       tool_call_id: tool.id,
-      // Moonshot's tool-call guide shows `name` on the result message alongside
-      // tool_call_id, unlike OpenAI where the id alone suffices.
-      name: tool.name,
     } as unknown as IMessage);
+  }
+
+  replaceLastToolResultObservation(messages: IMessage[], toolCallId: string, newObservation: string): void {
+    replaceLastToolResultObservationOpenAI(messages, toolCallId, newObservation);
+  }
+
+  getLatestToolCallId(messages: IMessage[], toolName: string): string | undefined {
+    return getLatestToolCallIdOpenAI(messages, toolName);
   }
 }

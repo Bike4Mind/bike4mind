@@ -33,6 +33,8 @@ interface OpenAIAssistantMessage {
   role: 'assistant';
   content: string | null;
   tool_calls?: OpenAIToolCall[];
+  /** Only DeepSeek needs this replayed; see deepseekBackend.pushToolMessages. */
+  reasoning_content?: string;
 }
 
 interface OpenAIToolMessage {
@@ -71,7 +73,18 @@ function isTextBlock(block: MessageContentObject): block is MessageContentText {
 export function convertMessageToOpenAIFormat(msg: IMessage): OpenAIFormattedMessage[] {
   // Already in OpenAI format (has tool_calls property from OpenAI backend's pushToolMessages)
   if (hasToolCalls(msg)) {
-    return [{ role: 'assistant' as const, content: null, tool_calls: msg.tool_calls }];
+    // reasoning_content rides along when the message carries it: DeepSeek requires
+    // the prior turn's monologue back on this message whenever the request has
+    // tools. No other backend writes it, so this is inert for OpenAI/xAI/Kimi.
+    const reasoningContent = (msg as { reasoning_content?: unknown }).reasoning_content;
+    return [
+      {
+        role: 'assistant' as const,
+        content: null,
+        tool_calls: msg.tool_calls,
+        ...(typeof reasoningContent === 'string' ? { reasoning_content: reasoningContent } : {}),
+      },
+    ];
   }
 
   // Convert assistant messages with tool_use content blocks

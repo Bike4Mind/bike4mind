@@ -265,6 +265,7 @@ export const testCredentials = (overrides: Partial<DiscoveryCredentials> = {}): 
   bfl: 'sk-test',
   xai: 'sk-test',
   kimi: 'sk-test',
+  deepseek: 'sk-test',
   voyageai: 'sk-test',
   ollama: 'http://localhost:11434',
   imageGen: null,

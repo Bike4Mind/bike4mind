@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-19T08:37:48.452Z",
+  "generatedAt": "2026-09-14T04:49:21.548Z",
   "entries": [
     {
       "modelId": "ai21.j2-mid-v1",
@@ -208,6 +208,28 @@
         "1000000": {
           "input": 0.000003,
           "output": 0.000015
+        }
+      }
+    },
+    {
+      "modelId": "deepseek-flash",
+      "unit": "per_token",
+      "pricing": {
+        "1000000": {
+          "input": 3e-7,
+          "output": 0.0000012,
+          "cache_read": 6e-9
+        }
+      }
+    },
+    {
+      "modelId": "deepseek-v4-pro",
+      "unit": "per_token",
+      "pricing": {
+        "1000000": {
+          "input": 0.00000132,
+          "output": 0.00000396,
+          "cache_read": 4.4e-8
         }
       }
     },

@@ -164,6 +164,9 @@ const VENDOR_BY_BACKEND: Record<ModelBackend, string> = {
   // Vendor, not backend: Bedrock-served Kimi carries the same 'moonshotai'
   // vendor while routing through ModelBackend.Bedrock.
   [ModelBackend.Kimi]: 'moonshotai',
+  // Matches the `deepseek.` prefix the Bedrock-served rows resolve to, so both
+  // tiers file under one vendor in the admin dashboard.
+  [ModelBackend.DeepSeek]: 'deepseek',
   [ModelBackend.BFL]: 'black-forest-labs',
   [ModelBackend.AWS]: 'amazon',
   [ModelBackend.VoyageAI]: 'voyageai',
