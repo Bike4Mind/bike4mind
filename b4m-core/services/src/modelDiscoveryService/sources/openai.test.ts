@@ -13,6 +13,7 @@ import {
   mergeOpenAiPricing,
   normalizeOpenAiModels,
   OPENAI_MAX_MODEL_DOC_FETCHES,
+  OPENAI_MAX_NEW_MODEL_DOC_FETCHES,
   OPENAI_MODELS_URL,
 } from './openai';
 import { OPENAI_PRICING_URL, openAiModelDocUrl } from './openaiDocs';
@@ -54,31 +55,62 @@ const pricedBy = (result: SourceResult, modelId: string) =>
 
 describe('openai source normalization', () => {
   it('matches the golden file for the captured response', () => {
-    expect(normalizeOpenAiModels(models)).toEqual(expected);
+    expect(normalizeOpenAiModels(models).records).toEqual(expected);
   });
 
-  it('never invents a name or a context window it cannot know', () => {
-    for (const record of normalizeOpenAiModels(models)) {
+  it('never invents a name or a context window from the listing alone', () => {
+    // The listing is four fields wide. A name and a window only ever come from a
+    // model's own docs page, and only for an id the catalog does not hold yet
+    // (see the new-model docs suite below).
+    for (const record of normalizeOpenAiModels(models).records) {
       expect(record.patch).not.toHaveProperty('name');
       expect(record.patch).not.toHaveProperty('contextWindow');
     }
   });
 
+  it('classifies the chat namespaces and still refuses to guess an unknown one', () => {
+    const typeOf = (id: string) => normalizeOpenAiModels(listing([id])).records[0]?.patch.type;
+
+    expect(typeOf('gpt-6-astra')).toBe('text');
+    expect(typeOf('chatgpt-4o-latest')).toBe('text');
+    expect(typeOf('o3-mini')).toBe('text');
+    expect(typeOf('codex-mini-latest')).toBe('text');
+    // Modality markers still win over the allowlist, or a new image or voice
+    // model would be offered as a chat model.
+    expect(typeOf('gpt-image-1.5')).toBe('image');
+    expect(typeOf('gpt-4o-mini-tts')).toBe('tts');
+    expect(typeOf('gpt-realtime')).toBe('realtime-voice');
+    // No `type` at all: dropped and counted rather than mislabeled. 'audio' has
+    // no member in the enum, and "omni-" is not the o-series.
+    expect(typeOf('gpt-4o-audio-preview')).toBeUndefined();
+    expect(typeOf('omni-moderation-latest')).toBeUndefined();
+    expect(typeOf('babbage-002')).toBeUndefined();
+  });
+
+  it('reads the created stamps the listing publishes', () => {
+    expect(normalizeOpenAiModels(models).createdAt.get('gpt-5.6-sol')).toBe(1782228018);
+    expect(normalizeOpenAiModels(malformed).createdAt.has('')).toBe(false);
+    expect(normalizeOpenAiModels(null).createdAt.size).toBe(0);
+  });
+
   it('skips malformed entries and keeps the rest', () => {
-    expect(normalizeOpenAiModels(malformed).map(record => record.modelId)).toEqual(['gpt-5']);
+    expect(normalizeOpenAiModels(malformed).records.map(record => record.modelId)).toEqual(['gpt-5']);
   });
 
   it('skips an unknown object kind and keeps an unknown owner tier', () => {
-    expect(normalizeOpenAiModels(unknownEnum).map(record => record.modelId)).toEqual(['gpt-5', 'gpt-5.7-quantum']);
+    expect(normalizeOpenAiModels(unknownEnum).records.map(record => record.modelId)).toEqual([
+      'gpt-5',
+      'gpt-5.7-quantum',
+    ]);
   });
 
   it('returns nothing for an empty list rather than inventing rows', () => {
-    expect(normalizeOpenAiModels(empty)).toEqual([]);
+    expect(normalizeOpenAiModels(empty).records).toEqual([]);
   });
 
   it('tolerates a payload that is not a list at all', () => {
-    expect(normalizeOpenAiModels(null)).toEqual([]);
-    expect(normalizeOpenAiModels({ data: 'nope' })).toEqual([]);
+    expect(normalizeOpenAiModels(null).records).toEqual([]);
+    expect(normalizeOpenAiModels({ data: 'nope' }).records).toEqual([]);
   });
 });
 
@@ -317,6 +349,210 @@ describe('openai source pricing', () => {
       const result = await createOpenAiSource().fetch(makeContext());
       expect(result.ok).toBe(true);
       expect(pricedBy(result, 'gpt-5')).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe('openai new-model docs', () => {
+  /** Every id the catalog holds, as the driver's thunk supplies it. */
+  const holding = (...ids: string[]) => ({ knownModelIds: () => new Set(ids) });
+
+  /**
+   * A Standard table carrying only the short-context columns, so no row is
+   * missing a breakpoint and the PRICING leg fetches no model page at all. That
+   * leaves every model-page URL in `seen` attributable to the new-model leg.
+   */
+  const flatPricing = (ids: readonly string[]) =>
+    [
+      '### Standard pricing data',
+      '',
+      '| Model | Short context input | Short context output |',
+      '| --- | --- | --- |',
+      ...ids.map(id => `| ${id} | $1.00 | $2.00 |`),
+      '',
+    ].join('\n');
+
+  const modelPages = (urls: readonly string[]) =>
+    urls.filter(url => url !== OPENAI_MODELS_URL && url !== OPENAI_PRICING_URL);
+
+  const patchOf = (result: SourceResult, modelId: string) =>
+    result.ok ? result.records.find(record => record.modelId === modelId)?.patch : undefined;
+
+  it('emits what a new model page states, and claims no more than that', async () => {
+    const { route } = routes({
+      list: listing(['gpt-5.6-sol']),
+      modelPages: { 'gpt-5.6-sol': { raw: read('model-gpt-5.6-sol.md') } },
+    });
+    const restore = stubFetch(route);
+    try {
+      const result = await createOpenAiSource(holding()).fetch(makeContext());
+
+      expect(patchOf(result, 'gpt-5.6-sol')).toEqual({
+        id: 'gpt-5.6-sol',
+        vendor: 'openai',
+        backend: 'openai',
+        type: 'text',
+        name: 'GPT-5.6 Sol',
+        contextWindow: 1_050_000,
+        maxOutputTokens: 128_000,
+        supportsVision: true,
+        // No `style`: that decides how a request builder shapes the call, and no
+        // feed may author dispatch.
+        reasoning: { supported: true },
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it('still invents nothing when the id has no page of its own', async () => {
+    const { seen, route } = routes({
+      list: listing(['gpt-5.4-nano']),
+      pricing: { raw: flatPricing(['gpt-5.4-nano']) },
+      modelPages: { 'gpt-5.4-nano': { status: 404, raw: 'not found' } },
+    });
+    const restore = stubFetch(route);
+    try {
+      const result = await createOpenAiSource(holding()).fetch(makeContext());
+
+      expect(modelPages(seen)).toEqual([openAiModelDocUrl('gpt-5.4-nano')]);
+      expect(patchOf(result, 'gpt-5.4-nano')).not.toHaveProperty('name');
+      expect(patchOf(result, 'gpt-5.4-nano')).not.toHaveProperty('contextWindow');
+    } finally {
+      restore();
+    }
+  });
+
+  it('refuses a page that is not the model it asked for', async () => {
+    // The docs request follows redirects, so a soft 404 answers 200 with somebody
+    // else's document - and sol's name and window on luna's row is worse than no
+    // row at all.
+    const { route } = routes({
+      list: listing(['gpt-5.6-luna']),
+      modelPages: { 'gpt-5.6-luna': { raw: read('model-gpt-5.6-sol.md') } },
+    });
+    const restore = stubFetch(route);
+    try {
+      const result = await createOpenAiSource(holding()).fetch(makeContext());
+      expect(patchOf(result, 'gpt-5.6-luna')).not.toHaveProperty('name');
+    } finally {
+      restore();
+    }
+  });
+
+  it('reads no page for an id the catalog already holds', async () => {
+    // A seeded display name and window belong to the seed, an operator or an
+    // aggregator, and a provider claim would outrank all three. A page fetched
+    // here is an unstubbed fetch, which throws.
+    const { seen, route } = routes({
+      list: listing(['gpt-5.4-nano']),
+      pricing: { raw: flatPricing(['gpt-5.4-nano']) },
+    });
+    const restore = stubFetch(route);
+    try {
+      await createOpenAiSource(holding('gpt-5.4-nano')).fetch(makeContext());
+      expect(modelPages(seen)).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  it('reads nothing at all when no driver supplied the known ids', async () => {
+    const { seen, route } = routes({
+      list: listing(['gpt-5.4-nano']),
+      pricing: { raw: flatPricing(['gpt-5.4-nano']) },
+    });
+    const restore = stubFetch(route);
+    try {
+      await createOpenAiSource().fetch(makeContext());
+      expect(modelPages(seen)).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  it('reads nothing when the driver could not read the catalog', async () => {
+    // Undefined is "unknown", not "the catalog is empty": a failed read must not
+    // make every listed id look new.
+    const { seen, route } = routes({
+      list: listing(['gpt-5.4-nano']),
+      pricing: { raw: flatPricing(['gpt-5.4-nano']) },
+    });
+    const restore = stubFetch(route);
+    try {
+      await createOpenAiSource({ knownModelIds: () => undefined }).fetch(makeContext());
+      expect(modelPages(seen)).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  it('spends no fetch on an id that could never be introduced', async () => {
+    // A dated snapshot and a fine-tune are refused by planCatalogWrites, an id
+    // with no inferable type fails the append schema, and an image or transcribe
+    // page states no context window so it can never parse. A page for any of them
+    // is a request for a row that cannot exist - and these ids are the NEWEST
+    // here, so before they were filtered they took the head of the queue and
+    // starved the one id that can yield a row.
+    const ids = [
+      'gpt-5.9-2026-09-01',
+      'ft:gpt-5.4-nano:acme::x1',
+      'gpt-4o-audio-preview',
+      'gpt-image-9-nova',
+      'gpt-9-transcribe',
+      'gpt-5.4-nano',
+    ];
+    const { seen, route } = routes({
+      list: { data: ids.map((id, index) => ({ id, object: 'model', created: 1_700_000_100 - index })) },
+      pricing: { raw: flatPricing(ids) },
+      modelPages: { 'gpt-5.4-nano': { status: 404, raw: 'not found' } },
+    });
+    const restore = stubFetch(route);
+    try {
+      await createOpenAiSource(holding()).fetch(makeContext());
+      expect(modelPages(seen)).toEqual([openAiModelDocUrl('gpt-5.4-nano')]);
+    } finally {
+      restore();
+    }
+  });
+
+  it('reads the newest unknown ids first, up to its own cap', async () => {
+    // `created` ascends with the id here, so newest-first is reverse-alphabetical
+    // and the two oldest are what falls off the cap. The cap is this leg's own:
+    // enriching new models must not cost the pricing legs their pages.
+    const count = OPENAI_MAX_NEW_MODEL_DOC_FETCHES + 2;
+    const ids = Array.from({ length: count }, (_unused, index) => `gpt-new-${index}`);
+    const { seen, route } = routes({
+      list: { data: ids.map((id, index) => ({ id, object: 'model', created: 1_700_000_000 + index })) },
+      pricing: { raw: flatPricing(ids) },
+      modelPages: Object.fromEntries(ids.map(id => [id, { status: 404, raw: 'not found' }])),
+    });
+    const restore = stubFetch(route);
+    try {
+      await createOpenAiSource(holding()).fetch(makeContext());
+
+      expect(modelPages(seen)).toEqual(
+        ids
+          .slice(2)
+          .reverse()
+          .map(id => openAiModelDocUrl(id))
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it('reads no new-model page once the docs budget is spent', async () => {
+    const { seen, route } = routes({
+      list: listing(['gpt-5.4-nano']),
+      pricing: { raw: flatPricing(['gpt-5.4-nano']) },
+    });
+    const restore = stubFetch(route);
+    try {
+      await createOpenAiSource(holding()).fetch(makeContext({ deadlineAt: new Date(Date.now() - 1) }));
+      expect(modelPages(seen)).toEqual([]);
     } finally {
       restore();
     }

@@ -39,6 +39,7 @@ import {
   buildDataLakePrefixOnlyMembershipFilter,
   buildLacksContentPrefixTagFilter,
   buildNoOtherLakeMetaTagFilter,
+  LAKE_REPORTING_EXCLUDED_STATUS,
 } from '../../queries/dataLakeLifecycleScope';
 
 /**
@@ -1743,7 +1744,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           ...buildDataLakeMembershipFilter(scope),
           deletedAt: null,
           archivedAt: null,
-          status: { $ne: 'pending' },
+          status: { $ne: LAKE_REPORTING_EXCLUDED_STATUS },
         },
       },
       {
@@ -1840,18 +1841,36 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * The bucket definitions track `evaluateMemberHealth` (@bike4mind/common/constants/lakeHealth),
    * which is the owner of what these words mean - keep them in step:
    *  - `fullyVectorizedFiles` keys on `embeddedChunkCount`, the count of vector-bearing ROWS, and
-   *    NOT `vectorizedChunkCount`, which also counts an oversized un-embeddable chunk as done. A
-   *    file the evaluator grades `unknown` (legacy rows with the count absent) is not counted as
-   *    vectorized here either, which is why `inFlightFiles` ships alongside: without it an
-   *    unmeasured member is indistinguishable from a broken one.
+   *    NOT `vectorizedChunkCount`, which also counts an oversized un-embeddable chunk as done.
+   *  - `unmeasuredFiles` is the member the evaluator grades `unknown`: chunked, not failed, and
+   *    carrying NO `embeddedChunkCount` at all (legacy rows predate the counter). Absent is not
+   *    zero and not in flight - it means nobody measured it - so it gets its own bucket rather
+   *    than riding `inFlightFiles`, which a caller renders as a positive "still indexing" claim.
+   *    Folding the two reported a fully-indexed 74-member lake as 31 done and 43 working (#2737),
+   *    the same collapse `PredicateStatus`'s third arm exists to forbid.
+   *  - `inFlightFiles` is therefore MEASURED and genuinely short: `embeddedChunkCount` present and
+   *    below `chunkCount`.
    *  - `failedFiles` is `error` being a NON-EMPTY string, matching the evaluator's `hasError`.
    *    A legacy `error: ''` row is not a failure, and `{ $ne: null }` would have called it one.
+   *  - `totalEmbeddedChunks` sums an absent counter as 0, so it is a FLOOR whenever
+   *    `unmeasuredFiles > 0`. Counting vector-bearing chunk ROWS instead would cost a read of the
+   *    chunk collection this method exists to avoid (#1666), so the honest move is for the caller
+   *    to report it as a floor - which it can, because `unmeasuredFiles` tells it when to.
+   *
+   * `retrievalOnlyFiles` is the second half of #2737 and is NOT one of the buckets above: it counts
+   * the live members that retrieval serves and this report does not, i.e. exactly the rows
+   * `LAKE_REPORTING_EXCLUDED_STATUS` drops. The pending exclusion is deliberate on both sides (see
+   * that constant), but two readers derived opposite corpus sizes from one lake because the gap was
+   * invisible. Hence the `$match` here admits pending rows and every bucket gates on `reported`
+   * instead - identical numbers to the old `$match`, plus the size of the difference.
    */
   async summarizeDataLakeIndexingHealth(scope: DataLakeMembershipScope): Promise<{
     chunkedFiles: number;
     fullyVectorizedFiles: number;
     failedFiles: number;
     inFlightFiles: number;
+    unmeasuredFiles: number;
+    retrievalOnlyFiles: number;
     totalChunks: number;
     totalEmbeddedChunks: number;
   }> {
@@ -1870,13 +1889,23 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     const fullyVectorized = {
       $and: [hasChunks, embeddedMeasured, { $gte: ['$embeddedChunkCount', { $ifNull: ['$chunkCount', 0] }] }],
     };
+    // The reporting/retrieval divergence, moved out of `$match` so its size is reportable rather
+    // than invisible. Absent and null `status` both read as reported, exactly as `{ $ne: PENDING }`
+    // did, so every bucket below returns what the narrower `$match` returned.
+    const isRetrievalOnly = { $eq: ['$status', LAKE_REPORTING_EXCLUDED_STATUS] };
+    const reported = { $not: [isRetrievalOnly] };
     const count = (cond: unknown) => ({ $sum: { $cond: [cond, 1, 0] } });
+    const sumReported = (field: string) => ({
+      $sum: { $cond: [reported, { $ifNull: [field, 0] }, 0] },
+    });
 
     const [agg] = await this.fabFileModel.aggregate<{
       chunkedFiles: number;
       fullyVectorizedFiles: number;
       failedFiles: number;
       inFlightFiles: number;
+      unmeasuredFiles: number;
+      retrievalOnlyFiles: number;
       totalChunks: number;
       totalEmbeddedChunks: number;
     }>([
@@ -1885,20 +1914,27 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           ...buildDataLakeMembershipFilter(scope),
           deletedAt: null,
           archivedAt: null,
-          status: { $ne: 'pending' },
         },
       },
       {
         $group: {
           _id: null,
-          chunkedFiles: count(hasChunks),
-          fullyVectorizedFiles: count(fullyVectorized),
-          failedFiles: count(hasError),
-          // Chunked, not failed, and not yet provably complete - the population a "not fully
-          // indexed" answer must not silently fold into either of the other two buckets.
-          inFlightFiles: count({ $and: [hasChunks, { $not: [hasError] }, { $not: [fullyVectorized] }] }),
-          totalChunks: { $sum: { $ifNull: ['$chunkCount', 0] } },
-          totalEmbeddedChunks: { $sum: { $ifNull: ['$embeddedChunkCount', 0] } },
+          chunkedFiles: count({ $and: [reported, hasChunks] }),
+          fullyVectorizedFiles: count({ $and: [reported, fullyVectorized] }),
+          failedFiles: count({ $and: [reported, hasError] }),
+          // Chunked, not failed, MEASURED, and short - a file vectorization is genuinely still
+          // working on. The unmeasured member below used to land here and be rendered as progress.
+          inFlightFiles: count({
+            $and: [reported, hasChunks, { $not: [hasError] }, embeddedMeasured, { $not: [fullyVectorized] }],
+          }),
+          // Chunked, not failed, and never measured. Disjoint from `inFlightFiles` by
+          // `embeddedMeasured`, so the two together are the old bucket exactly.
+          unmeasuredFiles: count({
+            $and: [reported, hasChunks, { $not: [hasError] }, { $not: [embeddedMeasured] }],
+          }),
+          retrievalOnlyFiles: count(isRetrievalOnly),
+          totalChunks: sumReported('$chunkCount'),
+          totalEmbeddedChunks: sumReported('$embeddedChunkCount'),
         },
       },
       { $project: { _id: 0 } },
@@ -1910,6 +1946,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         fullyVectorizedFiles: 0,
         failedFiles: 0,
         inFlightFiles: 0,
+        unmeasuredFiles: 0,
+        retrievalOnlyFiles: 0,
         totalChunks: 0,
         totalEmbeddedChunks: 0,
       }

@@ -1,11 +1,12 @@
-import React from 'react';
-import { Dropdown, MenuButton, Menu, MenuItem, IconButton, Tooltip } from '@mui/joy';
+import React, { useState } from 'react';
+import { Dropdown, MenuButton, Menu, MenuItem, ListDivider, IconButton, Tooltip } from '@mui/joy';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import SaveAltIcon from '@mui/icons-material/SaveAlt';
 import { toast } from 'react-hot-toast';
 import { marked } from 'marked';
 import { Document, Paragraph, TextRun, Packer, Table, TableRow, TableCell, WidthType } from 'docx';
 import { renderMarkdownToStyledHtml } from '@client/app/utils/markdownToStyledHtml';
+import { buildReplyDownloads, type ReplyDownload } from '@client/app/utils/replyDownloads';
 
 // Utility: Download a file
 export const downloadFile = (content: string, fileName: string, mimeType: string) => {
@@ -217,9 +218,16 @@ const DownloadMenu: React.FC<{
 }> = ({ content, fileName, onClose }) => {
   const handleClose = onClose || (() => {});
   const isMobile = useIsMobile();
+  // Scanned on open rather than on render: this mounts once per message in a session, and a
+  // reply that is still streaming would otherwise cache a format list built from a partial body.
+  const [detected, setDetected] = useState<ReplyDownload[]>([]);
 
   return (
-    <Dropdown>
+    <Dropdown
+      onOpenChange={(_event, open) => {
+        if (open) setDetected(buildReplyDownloads(content, fileName.replace(/\.[^./]+$/, '')));
+      }}
+    >
       <Tooltip title="Download">
         <MenuButton
           className="download-menu-button"
@@ -230,6 +238,20 @@ const DownloadMenu: React.FC<{
         </MenuButton>
       </Tooltip>
       <Menu className="download-menu" placement={isMobile ? 'top' : 'bottom'}>
+        {detected.map(item => (
+          <MenuItem
+            key={item.key}
+            className="download-menu-item-detected"
+            data-testid={`download-menu-detected-${item.key}`}
+            onClick={() => {
+              downloadFile(item.content, item.fileName, item.mimeType);
+              handleClose();
+            }}
+          >
+            {item.label}
+          </MenuItem>
+        ))}
+        {detected.length > 0 && <ListDivider />}
         <MenuItem
           className="download-menu-item-markdown"
           onClick={() => {

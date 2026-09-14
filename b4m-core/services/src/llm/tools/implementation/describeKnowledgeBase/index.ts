@@ -54,6 +54,8 @@ interface LakeShape {
     fullyVectorizedFiles: number;
     failedFiles: number;
     inFlightFiles: number;
+    unmeasuredFiles: number;
+    retrievalOnlyFiles: number;
     totalChunks: number;
     totalEmbeddedChunks: number;
   };
@@ -148,6 +150,11 @@ function rankTopics(files: { tags?: { name?: unknown }[] | null }[], prefixArm: 
  * FabFileRepository.summarizeDataLakeIndexingHealth's `$group`, which in turn tracks
  * evaluateMemberHealth - keep all three in step. `embeddedChunkCount`, NOT `vectorizedChunkCount`:
  * the latter counts an oversized un-embeddable chunk as done.
+ *
+ * That includes the `unmeasuredFiles` split (#2737): an `embeddedChunkCount` of ABSENT is the
+ * evaluator's `unknown`, not zero and not in flight, and `describeLake` renders the two buckets as
+ * different claims. A seventh counter added only to the `$group` would leave this path quietly
+ * asserting progress for the same rows.
  */
 function summarizeHealth(files: SearchResultFile[]): LakeShape['health'] {
   const health = {
@@ -155,6 +162,10 @@ function summarizeHealth(files: SearchResultFile[]): LakeShape['health'] {
     fullyVectorizedFiles: 0,
     failedFiles: 0,
     inFlightFiles: 0,
+    unmeasuredFiles: 0,
+    // Structurally zero here, not unknown: these rows came back FROM retrieval, so there is no
+    // reporting-vs-retrieval gap on this path for `describeLake` to disclose. See collectWalked.
+    retrievalOnlyFiles: 0,
     totalChunks: 0,
     totalEmbeddedChunks: 0,
   };
@@ -164,12 +175,17 @@ function summarizeHealth(files: SearchResultFile[]): LakeShape['health'] {
     const failed = typeof file.error === 'string' && file.error.length > 0;
     const vectorized = chunkCount > 0 && embedded !== null && embedded >= chunkCount;
     health.totalChunks += chunkCount;
+    // Absent contributes 0, which is why the caller reports this as a floor once anything is
+    // unmeasured - the alternative is counting vector-bearing chunk rows, the read #1666 avoids.
     health.totalEmbeddedChunks += embedded ?? 0;
     if (failed) health.failedFiles += 1;
     if (chunkCount > 0) {
       health.chunkedFiles += 1;
       if (vectorized) health.fullyVectorizedFiles += 1;
-      else if (!failed) health.inFlightFiles += 1;
+      else if (!failed) {
+        if (embedded === null) health.unmeasuredFiles += 1;
+        else health.inFlightFiles += 1;
+      }
     }
   }
   return health;
@@ -310,11 +326,35 @@ async function describeLake(
     `- Corpus size: ${shape.partial ? 'at least ' : ''}${shape.fileCount} document(s), ` +
       `${formatFileSize(shape.totalSizeBytes)}`
   );
+  // A member with no `embeddedChunkCount` contributes 0 to the vector sum, so the figure is a floor
+  // - not a measurement - the moment anything is unmeasured. Say which one it is.
+  const vectorBearing =
+    health.unmeasuredFiles > 0
+      ? `at least ${health.totalEmbeddedChunks} carrying a vector`
+      : `${health.totalEmbeddedChunks} carrying a vector`;
   lines.push(
     `- Pipeline health, live: ${health.chunkedFiles} chunked, ${health.fullyVectorizedFiles} fully vectorized, ` +
-      `${health.inFlightFiles} still indexing, ${health.failedFiles} failed, ` +
-      `${health.totalChunks} chunk(s) total (${health.totalEmbeddedChunks} carrying a vector)`
+      `${health.inFlightFiles} still indexing, ${health.unmeasuredFiles} not measured, ` +
+      `${health.failedFiles} failed, ${health.totalChunks} chunk(s) total (${vectorBearing})`
   );
+  // "Not measured" is the one bucket that is a statement about the RECORD, not about the document,
+  // and it is the bucket most easily re-narrated as bad news. Spell out that it is neither progress
+  // nor a fault, or the model swaps one wrong definite claim (#2737's "still indexing") for another.
+  if (health.unmeasuredFiles > 0) {
+    lines.push(
+      `- Note: "not measured" means ${health.unmeasuredFiles} document(s) carry no indexing counter at all ` +
+        `(legacy rows predate it) - it does NOT mean they are incomplete, failed or still working. They may ` +
+        `be fully indexed. Report their state as unknown, and treat the vector count above as a floor.`
+    );
+  }
+  // The corpus this section describes vs the corpus a search runs over. Both are deliberate; the
+  // silent disagreement between them is the defect (see LAKE_REPORTING_EXCLUDED_STATUS).
+  if (health.retrievalOnlyFiles > 0) {
+    lines.push(
+      `- Note: search can also reach ${health.retrievalOnlyFiles} member(s) that the figures above exclude ` +
+        `(uploads that were never completed), so this corpus size is that much smaller than retrieval's.`
+    );
+  }
   lines.push(`- Top topics: ${formatTagList(shape.topics)}`);
   lines.push(
     `- Folders${shape.foldersSampled ? ` (sampled from ${FOLDER_SCAN_LIMIT} files)` : ''}: ` +

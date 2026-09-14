@@ -540,6 +540,8 @@ export const ModelDiscoveryState = z.object({
     .optional(),
   /** Optional: a state row written before Phase 4 has none, and must keep parsing. */
   suggestion: ModelLifecycleSuggestion.optional(),
+  /** Dispatch probes spent on this model, so one that always fails stops taking a budget slot. */
+  probeAttempts: z.number().int().nonnegative().optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -570,6 +572,9 @@ export interface IModelDiscoveryStateRepository extends IBaseRepository<IModelDi
     suggestion: ModelLifecycleSuggestionInput,
     at?: Date
   ): Promise<IModelDiscoveryState>;
+
+  /** One more spent dispatch probe. */
+  recordProbeAttempt(modelId: string): Promise<IModelDiscoveryState>;
 
   /** The deprecation queue: every model carrying a suggestion nobody has settled, oldest first. */
   pendingSuggestions(): Promise<IModelDiscoveryState[]>;
