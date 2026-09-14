@@ -79,6 +79,51 @@ const sharedDevDomain = isSharedDevStage && process.env.SERVER_DOMAIN ? `files.d
  */
 export const routePrefix = $dev && process.env.DEV_ROUTER_DISTRIBUTION_ID ? `/${$app.stage}` : '';
 
+// Public CDN path prefixes that serve user-uploaded or user-influenced files from S3,
+// mirroring the router.routeBucket(...) registrations in infra/buckets.ts (themselves
+// mirrored by resolveProxyTarget in appFileProxy.ts and toCdnPath in app/utils/s3.ts).
+// routePrefix is '' on every stage that owns its router (the `new sst.aws.Router` branch
+// below), so these are the literal URIs the viewer requests. KEEP IN SYNC with buckets.ts.
+const userFileCdnPrefixes = [
+  '/generated/',
+  '/proxied-images/',
+  '/admin-logos/',
+  '/profile-photos/',
+  '/org-files/',
+  '/app-config/',
+  '/whats-new/',
+];
+
+// Defense-in-depth CSP backstop for hosted/CDN-served user files. A user-supplied file
+// (an SVG or HTML uploaded as e.g. a profile photo) opened directly at its CDN URL must
+// not execute script. SST v4's lazy Router serves every route through ONE default cache
+// behavior plus a routing CloudFront Function, so there are no per-route cache behaviors
+// and no ResponseHeadersPolicy to attach to -- the only path-scoped hook is this
+// viewer-response function. Set the same inert-document CSP the self-host proxy uses
+// (apps/client/pages/api/app-files/serve/[...key].ts) plus nosniff, but ONLY for the
+// user-file prefixes so the SPA (default behavior) and the ALB API routes
+// (/api/ai/v1/completions, ...) are left untouched. event.request.uri here is the URI as
+// received from the viewer, so we match the public prefixes, not the rewritten S3 keys.
+const userFileCspInjection = `
+  var __cspUri = event.request.uri;
+  var __cspPrefixes = ${JSON.stringify(userFileCdnPrefixes)};
+  for (var __cspI = 0; __cspI < __cspPrefixes.length; __cspI++) {
+    if (__cspUri.indexOf(__cspPrefixes[__cspI]) === 0) {
+      event.response.headers["content-security-policy"] = { value: "default-src 'none'; sandbox" };
+      event.response.headers["x-content-type-options"] = { value: "nosniff" };
+      break;
+    }
+  }
+`;
+
+// Dev-only permissive CORS on every path (unchanged behavior; deployed stages rely on
+// per-bucket CORS config instead).
+const devCorsInjection = `
+  event.response.headers["access-control-allow-origin"] = { value: "*" };
+  event.response.headers["access-control-allow-methods"] = { value: "GET, HEAD, OPTIONS, POST, PUT" };
+  event.response.headers["access-control-allow-headers"] = { value: "*" };
+`;
+
 const routerInstance = shouldUseSharedRouter
   ? sst.aws.Router.get('Router', process.env.DEV_ROUTER_DISTRIBUTION_ID!)
   : new sst.aws.Router('Router', {
@@ -117,20 +162,14 @@ const routerInstance = shouldUseSharedRouter
               },
             }
           : {}),
-      ...(!$dev
-        ? {}
-        : {
-            edge: {
-              viewerResponse: {
-                injection: `
-              // Add CORS headers for all paths in non-production environments
-              event.response.headers["access-control-allow-origin"] = { value: "*" };
-              event.response.headers["access-control-allow-methods"] = { value: "GET, HEAD, OPTIONS, POST, PUT" };
-              event.response.headers["access-control-allow-headers"] = { value: "*" };
-            `,
-              },
-            },
-          }),
+      // Always attach a viewer-response function: it applies the user-file CSP backstop on
+      // every stage that owns its router (deployed + shared-dev), and additionally injects
+      // permissive CORS on personal `sst dev` stages.
+      edge: {
+        viewerResponse: {
+          injection: userFileCspInjection + ($dev ? devCorsInjection : ''),
+        },
+      },
       transform: {
         // When reusing an existing cache policy, import it into Pulumi state\
         // This prevents creating a new cache policy and instead references the existing one
