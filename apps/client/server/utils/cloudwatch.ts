@@ -530,8 +530,9 @@ export async function recordReconcileRun(): Promise<void> {
  * is a DISTINCT stream in CloudWatch, so the stage-less stream cannot be scoped in place - every
  * deployed stage writes it, which is how a dev-stage rescue failure ends up counting toward
  * production's threshold. Emitting both streams is what lets the alarms move to the scoped one
- * without a deploy window where an alarm reads a stream nobody writes yet, and it keeps a
- * cross-stage total readable in the console.
+ * without a deploy window where an alarm reads a stream nobody writes yet, and it leaves the
+ * stage-less stream as the cross-stage total. Note the cost of that: a query that sums ACROSS
+ * dimension sets (a SEARCH expression, not a plain metric selection) now counts every run twice.
  *
  * NOTE the asymmetry with the feedback-delivery builders below: those add a COARSE `{ Stage }`-only
  * rollup, and copying that shape here would break an alarm. dataLakeChunkRescueSweepFailing reads
