@@ -99,6 +99,29 @@ export class ConflictError extends HTTPError {
   }
 }
 
+/**
+ * Thrown by `BaseRepository.updateGuarded` when a version-guarded write matches no document because a
+ * concurrent writer advanced the doc's `__v` since this caller read it - a lost optimistic-concurrency
+ * race. Extends ConflictError so an uncaught one surfaces as a retryable 409 rather than a 500; a
+ * caller that can re-read and re-apply should catch it. Uses the `.name` fallback guard below for the
+ * same cross-module-realm reason as `isChunkClaimLostError`.
+ */
+export class ConcurrencyConflictError extends ConflictError {
+  constructor(
+    public readonly modelName: string,
+    additionalInfo?: Record<string, unknown>
+  ) {
+    super(`Concurrent modification of ${modelName}: the document changed since it was read`, additionalInfo);
+    this.name = 'ConcurrencyConflictError';
+  }
+}
+
+export function isConcurrencyConflictError(err: unknown): err is ConcurrencyConflictError {
+  return Boolean(
+    err && (err instanceof ConcurrencyConflictError || (err as Error).name === 'ConcurrencyConflictError')
+  );
+}
+
 /** 502: an upstream we depend on failed. The caller's request was well-formed. */
 export class BadGatewayError extends HTTPError {
   constructor(

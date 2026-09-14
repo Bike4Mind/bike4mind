@@ -521,7 +521,14 @@ describe('ChatCompletionProcess', () => {
       attachedFileTokenBudget: number;
       skipAutoOffers?: boolean;
       knowledgeSearchDisabled?: boolean;
-      queryEmbeddingModel?: string;
+      /**
+       * The credential binding this turn resolved, which is what the gate queries with - NOT the
+       * advertised `defaultEmbeddingModel` setting, which on a keyless stage names a model the turn
+       * cannot embed with. `missing === null` is the only settled state. Defaults to a settled
+       * 'model-A' (the model the fixtures are embedded under); pass a non-null `missing` for the
+       * expired-caller-key / no-Ollama-URL states, or `null` for a turn that never reached the seam.
+       */
+      embeddingBinding?: { model: string; missing: string | null; requested?: string; configured?: boolean } | null;
       retrievalFilter?: RetrievalExclusionOptions;
     }) => {
       // Seed the per-turn access memo directly (getAccessibleDataLakeAccess returns it when set),
@@ -540,13 +547,21 @@ describe('ChatCompletionProcess', () => {
         skipAutoOffers: opts.skipAutoOffers ?? false,
         knowledgeSearchDisabled: opts.knowledgeSearchDisabled ?? false,
         retrievalFilter: opts.retrievalFilter ?? {},
+        // `embeddingBinding: null` omits the key entirely, reproducing a caller that never set it.
+        ...(opts.embeddingBinding === null
+          ? {}
+          : {
+              embeddingBinding: {
+                requested: opts.embeddingBinding?.requested ?? opts.embeddingBinding?.model ?? 'model-A',
+                // Defaults true: every fixture below is a stage whose `defaultEmbeddingModel` names
+                // a registered model, which is the ordinary case. Pass false for the unset /
+                // unregistered setting.
+                configured: opts.embeddingBinding?.configured ?? true,
+                ...(opts.embeddingBinding ?? { model: 'model-A', missing: null }),
+              },
+            }),
         defaultAdminSettings: {
           ...(opts.threshold ? { CorpusRetrievalMinInlineTokensPerDoc: opts.threshold } : {}),
-          // The query embedding model; a doc is retrievable only if embedded under the same one.
-          // Defaults to the model the fixtures embed under ('model-A') unless a test overrides it.
-          ...(opts.queryEmbeddingModel === undefined
-            ? { defaultEmbeddingModel: 'model-A' }
-            : { defaultEmbeddingModel: opts.queryEmbeddingModel }),
         },
       });
     };
@@ -709,22 +724,87 @@ describe('ChatCompletionProcess', () => {
         dataLakeTags: ['datalake:corpus'],
         threshold: '500',
         attachedFileTokenBudget: 4000,
-        queryEmbeddingModel: 'model-A',
       });
       expect(plan.deferredToRetrieval).toBe(false);
       expect(plan.retrievableCount).toBe(0);
     });
 
-    it('defers nothing when the query embedding model is unresolvable (semantic arm cannot run)', async () => {
+    // The three states below all leave the turn unable to embed a query, so the semantic arm cannot
+    // run and NOTHING is deferrable - the corpus is inlined instead of stranded behind a tool that
+    // would return zero hits. They are separate tests because `config` alone cannot tell them apart
+    // (resolveEmbeddingWithKeylessFallback returns an empty config for all three), which is exactly
+    // the collapse that made a keyed stage query Bedrock.
+    it('defers nothing when the caller key is present but expired (missing is non-null)', async () => {
       const plan = await runPlan({
-        files: lakeFiles(40), // vectorized under 'model-A', but the query has no model
+        files: lakeFiles(40), // vectorized under 'model-A', but this turn cannot embed a query
         dataLakeTags: ['datalake:corpus'],
         threshold: '500',
         attachedFileTokenBudget: 4000,
-        queryEmbeddingModel: '',
+        embeddingBinding: { model: 'model-A', missing: 'openai' },
       });
       expect(plan.deferredToRetrieval).toBe(false);
       expect(plan.retrievableCount).toBe(0);
+    });
+
+    it('defers nothing when no embedder is reachable at all (self-host with no Ollama base URL)', async () => {
+      const plan = await runPlan({
+        files: lakeFiles(40),
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000,
+        embeddingBinding: { model: 'model-A', missing: 'ollama' },
+      });
+      expect(plan.deferredToRetrieval).toBe(false);
+      expect(plan.retrievableCount).toBe(0);
+    });
+
+    it('defers nothing when the binding is absent, which means NOT-YET-RESOLVED rather than keyless', async () => {
+      // An unset binding must never be read as "this deployment is keyless": that is the reading
+      // that routed a keyed production stage to Bedrock. Absent means unknown, and unknown defers
+      // nothing.
+      const plan = await runPlan({
+        files: lakeFiles(40),
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000,
+        embeddingBinding: null,
+      });
+      expect(plan.deferredToRetrieval).toBe(false);
+      expect(plan.retrievableCount).toBe(0);
+    });
+
+    it('defers nothing when defaultEmbeddingModel is unset or unregistered, however well the labels match', async () => {
+      // The seam still resolves a model in this state - it needs one to build a query embedder with
+      // - but it resolves it from the ENV default, and `search_knowledge_base` does not share that
+      // fallback: an unusable setting makes the tool abandon its semantic arm and answer from
+      // keyword search alone. So a file whose stored label happens to equal the env default is NOT
+      // reachable the way the gate would be claiming, and deferring it hands the doc to a search
+      // that cannot vector-match it. `configured: false` is what carries that distinction.
+      const plan = await runPlan({
+        files: lakeFiles(40), // labeled 'model-A', which is also what the env fallback resolved
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000,
+        embeddingBinding: { model: 'model-A', missing: null, configured: false },
+      });
+      expect(plan.deferredToRetrieval).toBe(false);
+      expect(plan.retrievableCount).toBe(0);
+    });
+
+    it('defers a corpus whose chunks were embedded by the KEYLESS fallback, not the advertised model', async () => {
+      // The headline fix. On a preview with no provider key the corpus is embedded and stamped with
+      // the model the seam fell back TO, while `defaultEmbeddingModel` still advertises model-A.
+      // Comparing against the advertised value made every one of these docs look foreign, so the
+      // gate deferred nothing and the whole corpus was inlined on every turn.
+      const plan = await runPlan({
+        files: lakeFiles(40, 'datalake:corpus', { embeddingModel: 'amazon.titan-embed-text-v2:0' }),
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000,
+        embeddingBinding: { model: 'amazon.titan-embed-text-v2:0', missing: null },
+      });
+      expect(plan.deferredToRetrieval).toBe(true);
+      expect(plan.retrievableCount).toBe(40);
     });
 
     it('keeps a small corpus inlined (per-doc share stays above the floor)', async () => {
@@ -786,7 +866,8 @@ describe('ChatCompletionProcess', () => {
         skipAutoOffers: false,
         knowledgeSearchDisabled: true,
         retrievalFilter: {},
-        defaultAdminSettings: { CorpusRetrievalMinInlineTokensPerDoc: '500', defaultEmbeddingModel: 'model-A' },
+        embeddingBinding: { requested: 'model-A', model: 'model-A', missing: null, configured: true },
+        defaultAdminSettings: { CorpusRetrievalMinInlineTokensPerDoc: '500' },
       });
       expect(plan.deferredToRetrieval).toBe(false);
       expect(plan.deferredKnowledgeIds).toHaveLength(0);
@@ -4038,6 +4119,7 @@ describe('ChatCompletionProcess', () => {
       beliefs?: { fact: string; relevance: number; sources: string[] }[];
       recallLakeMemory?: (input: unknown) => Promise<unknown>;
       retrievalTags?: string[];
+      lakeScopeExplicit?: boolean;
     }): Promise<{ systemText: string; retrieval: unknown }> => {
       mockDb.dataLakes = { findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([ownedLake('corpus')]) };
       (service as any).entitlementsResolved = true;
@@ -4045,7 +4127,10 @@ describe('ChatCompletionProcess', () => {
       (service as any).recallLakeMemory = params.recallLakeMemory ?? vi.fn().mockResolvedValue(params.beliefs ?? []);
       // buildOptimizedFeatures is stubbed in beforeEach, so register the real feature under the
       // same key the assembly reads, mirroring the SkillsFeature test above.
-      service.features.set('lakeMemory', new LakeMemoryFeature(service, params.retrievalTags ?? [], {}));
+      service.features.set(
+        'lakeMemory',
+        new LakeMemoryFeature(service, params.retrievalTags ?? [], {}, params.lakeScopeExplicit)
+      );
 
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!'])),
@@ -4193,6 +4278,33 @@ describe('ChatCompletionProcess', () => {
         dataLakeTags: [],
         knowledgeBaseGuidanceInjected: false,
       });
+    });
+
+    it('emits no card when the session scope is explicit and selects no lake', async () => {
+      // The bug this pair pins: an empty selection is ambiguous on its own, so it used to fall back
+      // to the FULL entitled set. With the scope marked explicit it means what it says.
+      const { systemText, retrieval } = await runAndCaptureSystemText({
+        message: 'What is the warranty?',
+        beliefs: [{ fact: 'should never be recalled', relevance: 0.9, sources: ['doc1'] }],
+        retrievalTags: [],
+        lakeScopeExplicit: true,
+      });
+
+      expect(systemText).not.toContain('Background reference facts');
+      expect(retrieval).toMatchObject({ outcome: 'no_lakes', dataLakeTags: [] });
+    });
+
+    it('still spans the entitled lakes when the session expressed no lake scope at all', async () => {
+      // The other half of the tri-state: absence keeps the pre-existing fallback, so no already
+      // deployed session loses its card.
+      const { systemText, retrieval } = await runAndCaptureSystemText({
+        message: 'What is the warranty on the X-200 pump?',
+        beliefs: [{ fact: 'The X-200 pump has a 5-year warranty.', relevance: 0.9, sources: ['doc1'] }],
+        retrievalTags: [],
+      });
+
+      expect(systemText).toContain('The X-200 pump has a 5-year warranty.');
+      expect(retrieval).toMatchObject({ outcome: 'ok', dataLakeTags: ['datalake:corpus'] });
     });
   });
 

@@ -25,7 +25,9 @@ import {
 import mongoose from 'mongoose';
 import {
   BASE_E2E_EMAIL_PATTERN,
+  BASE_E2E_USERNAME_PATTERN,
   buildE2EEmailPattern,
+  buildE2EUsernamePattern,
   resolveStaleSweepMinutes,
   sanitizeTestId,
 } from '@server/utils/e2eCleanupScope';
@@ -51,9 +53,15 @@ const handler = baseApi({ auth: false }).delete(
     // (sanitizeTestId / resolveStaleSweepMinutes tolerate arrays and non-strings).
     const { testId: rawTestId, staleMinutes } = req.query as { testId?: string; staleMinutes?: string };
     const testId = sanitizeTestId(rawTestId);
+    // Emailless test users (create-user.ts with no `email`) carry the marker on the
+    // username, so both fields are swept or they would leak past every cleanup.
     const emailPattern = buildE2EEmailPattern(testId);
+    const usernamePattern = buildE2EUsernamePattern(testId);
 
-    const scoped = await User.find({ email: { $regex: emailPattern } }, { _id: 1 }).lean();
+    const scoped = await User.find(
+      { $or: [{ email: { $regex: emailPattern } }, { username: { $regex: usernamePattern } }] },
+      { _id: 1 }
+    ).lean();
     const byId = new Map(scoped.map(u => [u._id.toString(), u._id] as const));
 
     // Aged sweep: reclaims users orphaned by runs that died before their own teardown
@@ -67,7 +75,10 @@ const handler = baseApi({ auth: false }).delete(
     if (staleMinutes !== undefined) {
       const cutoff = new Date(Date.now() - resolveStaleSweepMinutes(staleMinutes) * 60_000);
       const orphans = await User.find(
-        { email: { $regex: BASE_E2E_EMAIL_PATTERN }, createdAt: { $lt: cutoff } },
+        {
+          $or: [{ email: { $regex: BASE_E2E_EMAIL_PATTERN } }, { username: { $regex: BASE_E2E_USERNAME_PATTERN } }],
+          createdAt: { $lt: cutoff },
+        },
         { _id: 1 }
       ).lean();
       for (const orphan of orphans) {

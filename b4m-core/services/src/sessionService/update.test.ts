@@ -469,6 +469,18 @@ describe('updateSession - lake-scope derivation on attach', () => {
     expect(update.mock.calls[0][0]).toMatchObject({ retrievalTags: ['datalake:acme'] });
   });
 
+  it('derives nothing for a session whose explicit scope selected no lake', async () => {
+    // The empty-but-explicit state: the derivation guard reads the marker, not just the tag list,
+    // so attaching a lake file does not silently re-scope a session the user deliberately cleared.
+    const { update, adapters } = makeAdapters({ lakeScopeExplicit: true }, [
+      { id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] },
+    ]);
+
+    await updateSession(user, { id: 'session-1', knowledgeIds: [LAKE_FILE_ID] } as never, adapters as never);
+
+    expect(update.mock.calls[0][0].retrievalTags).toBeUndefined();
+  });
+
   it('never overwrites a scope the session already has', async () => {
     const { update, adapters } = makeAdapters({ retrievalTags: ['datalake:chosen'] }, [
       { id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] },

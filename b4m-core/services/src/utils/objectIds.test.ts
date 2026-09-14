@@ -19,13 +19,21 @@ describe('usableSessionIds', () => {
   it('names what it dropped, so a partial result never reads as a complete one', () => {
     const log = logger();
     usableSessionIds([GOOD, JUNK], 'knowledge', log);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('[knowledge]'), { skipped: [JUNK] });
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('[knowledge]'), {
+      received: 2,
+      usable: 1,
+      skipped: [JUNK],
+    });
   });
 
   it.each(['tool', 'agent'] as const)('names the %s kind in its warning', kind => {
     const log = logger();
     usableSessionIds([JUNK], kind, log);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(`[${kind}]`), { skipped: [JUNK] });
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(`[${kind}]`), {
+      received: 1,
+      usable: 0,
+      skipped: [JUNK],
+    });
   });
 
   it('stays quiet when every id is usable', () => {

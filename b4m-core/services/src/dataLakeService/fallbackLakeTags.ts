@@ -1,13 +1,20 @@
 import type { IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
-import { DATALAKE_TAG_PREFIX, normalizeTagPrefix, satisfiesTagPrefix } from '@bike4mind/common';
+import {
+  DATALAKE_TAG_PREFIX,
+  normalizeTagPrefix,
+  satisfiesTagPrefix,
+  UNCATEGORIZED_TAG_SUFFIX,
+} from '@bike4mind/common';
 import { extractDataLakeMetaTags } from './authorizeLakeWrite';
 import { collidesWithRegistryPrefix, findCollidingPrefixLakes } from './tagPrefixCollision';
 
 /**
- * Suffix stamped under a lake's `fileTagPrefix` for a file no other tag under that prefix
- * covers. Lowercase literal: the tag tree renders it as a node label.
+ * Re-exported from `@bike4mind/common`, where the literal now lives so `@bike4mind/database` can
+ * read it too (see its docblock there). Kept exported here because this module is the tag's WRITER
+ * and every existing import site - including the backfill migration, which reaches it through the
+ * `dataLakeService` barrel - names it from here.
  */
-export const UNCATEGORIZED_TAG_SUFFIX = 'uncategorized';
+export { UNCATEGORIZED_TAG_SUFFIX } from '@bike4mind/common';
 
 /**
  * Relevance weight this reconciler stamps on a minted `<prefix>uncategorized` tag, and the one

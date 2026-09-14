@@ -98,7 +98,7 @@ export function resolveQueries(fixture: EmbeddingFixture): { id: string; vector:
  * the instrument check is read off, so it must not vanish because the width list omitted 1536.
  */
 export function applicableWidths(fixture: EmbeddingFixture, widths: readonly number[]): number[] {
-  if (!isTruncatableModel(fixture.model)) return [fixture.dims];
+  if (!isTruncatableModel(fixture)) return [fixture.dims];
   return [...widths].sort((a, b) => b - a).filter(width => width <= fixture.dims);
 }
 
@@ -134,7 +134,21 @@ export function compareArms(fixtures: readonly EmbeddingFixture[], widths: reado
           chunksExcluded: arm.chunksExcluded,
           filesExcluded: arm.filesExcluded,
           filesUnreachable: arm.filesUnreachable,
-          queries: queries.map(q => ({ ...q, vector: byId.get(q.id) ?? q.vector })),
+          queries: queries.map(q => {
+            // Cannot fire while both sides derive from fixture.queries - and it must not fail open if
+            // that ever changes: the full-width fallback vector against truncated chunks scores 0 on
+            // every pair (computeCosineSimilarity returns 0 on a width mismatch), which renders as a
+            // 0.0000 band rather than as an error. Every other missing-id path here throws.
+            const vector = byId.get(q.id);
+            if (!vector) {
+              throw new Error(
+                `Arm ${arm.arm} has no query vector for "${q.id}" after truncation to ${width} dims. ` +
+                  'Scoring it at the capture width would compare vectors of two widths, which is 0 ' +
+                  'for every pair and reads as a collapsed band rather than as a fault.'
+              );
+            }
+            return { ...q, vector };
+          }),
         })
       );
     }
@@ -185,22 +199,29 @@ export function formatComparison(rows: readonly ArmRow[], fixtures: readonly Emb
     );
   }
   // corpus.ts names help slugs, so a capture of any other lake has no ground truth to score against.
-  // Saying so beats printing quality columns of n/a and leaving the reader to work out why.
-  if (rows.some(r => !r.groundTruthApplies)) {
+  // Saying so beats printing quality columns of n/a and leaving the reader to work out why. Named
+  // per arm because `groundTruthApplies` is a per-ROW property: table-wide phrasing prints "reads
+  // n/a" above arms whose quality cells are real numbers.
+  const unlabelled = rows.filter(r => !r.groundTruthApplies).map(r => r.arm);
+  if (unlabelled.length > 0) {
     notes.push(
-      'GROUND TRUTH DOES NOT DESCRIBE THIS CORPUS: no captured document matches a supporting slug in ' +
-        'corpus.ts, so recall/prec/hit/mrr read n/a - and so do posTop/negTop, which are partitioned ' +
-        'by the same labels. Read the band and the spread, which need no labels, and ignore the rest.'
+      `GROUND TRUTH DOES NOT DESCRIBE THIS CORPUS (${unlabelled.join(', ')}): no captured document ` +
+        'matches a supporting slug in corpus.ts, so recall/prec/hit/mrr read n/a for those arms - and ' +
+        'so do posTop/negTop, which are partitioned by the same labels. Read the band and the spread, ' +
+        'which need no labels, and ignore the rest.'
     );
   }
   // Partial overlap is the likelier accident than none, and it does NOT trip the flag above: one
   // shared slug renders a full set of quality columns off a fraction of the ground truth. Stating
-  // the fraction fixes the reading without pretending the numbers are unusable.
-  const partial = rows.filter(r => r.groundTruthApplies && r.groundTruthCoverage.matched < r.groundTruthCoverage.total);
+  // the fraction fixes the reading without pretending the numbers are unusable. Per arm again, and
+  // here the coverage genuinely differs between them: a --reuse-stored-vectors baseline drops a
+  // whole doc whose chunks are unlabeled, so its fraction sits below an embed arm's.
+  const partial = rows
+    .filter(r => r.groundTruthApplies && r.groundTruthCoverage.matched < r.groundTruthCoverage.total)
+    .map(r => `${r.arm}: ${r.groundTruthCoverage.matched} of ${r.groundTruthCoverage.total}`);
   if (partial.length > 0) {
-    const { matched, total } = partial[0].groundTruthCoverage;
     notes.push(
-      `GROUND TRUTH ONLY PARTLY DESCRIBES THIS CORPUS (${matched} of ${total} supporting documents ` +
+      `GROUND TRUTH ONLY PARTLY DESCRIBES THIS CORPUS (${partial.join(', ')} supporting documents ` +
         'captured). recall and prec are computed against the full supporting set, so they are bounded ' +
         'well below 1 by the corpus rather than by the model. Compare arms to each other, not to 1.'
     );
@@ -222,7 +243,7 @@ export function formatComparison(rows: readonly ArmRow[], fixtures: readonly Emb
   }
   // A non-MRL capture ignores --widths entirely, and silence would read as "no narrower arm was asked
   // for" rather than "a narrower arm of this model would not be an embedding".
-  const nonMatryoshka = fixtures.filter(f => !isTruncatableModel(f.model)).map(f => `${f.model}@${f.dims}`);
+  const nonMatryoshka = fixtures.filter(f => !isTruncatableModel(f)).map(f => `${f.model}@${f.dims}`);
   if (nonMatryoshka.length > 0) {
     notes.push(
       `SCORED AT CAPTURE WIDTH ONLY (${nonMatryoshka.join(', ')}): not a Matryoshka model, so a ` +

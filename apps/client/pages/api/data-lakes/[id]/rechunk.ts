@@ -124,9 +124,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       // rescue sweep selects on, so it self-heals on the next pass rather than needing an undo.
       // The cost of routing recovery that way, since the reset above covers the whole wave before
       // any send: the file stays unsearchable until the chunk rescue sweep re-enqueues it - daily
-      // 05:00 UTC hosted (infra/cron.ts), ~60s self-host, and only while `enableAutoChunk` is on,
-      // which is the one condition that can hold it indefinitely. REBUILD_PENDING_STALE_MS (2h) does
-      // not gate that sweep; it gates this door's own stale-pending re-detection
+      // 05:00 UTC hosted (infra/cron.ts), ~60s self-host, and only while `enableAutoChunk` is on and
+      // the lake is not convergence-paused - either can hold it indefinitely. The refusal above is no
+      // protection against the second: it checks at request time, so a pause that lands after this
+      // wave was reset still strands the file. REBUILD_PENDING_STALE_MS (2h) does not gate that
+      // sweep; it gates this door's own stale-pending re-detection
       // (findConvergencePausedFilesByScope).
       //
       // NO `chunkSize` on purpose, unlike /converge which sends `policy.requiredTarget`. This door

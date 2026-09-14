@@ -1,29 +1,33 @@
 import { describe, it, expect } from 'vitest';
 import { FabFileChunk } from '../models/content/FabFileModel';
-import { setupMongoTest } from '../__test__/utils';
+import { setupMongoTest, testFabFileId as fid } from '../__test__/utils';
 
 /**
  * The fabfilechunks index set is deliberately minimal: one compound index serves both the keyset
- * chunk walk and every bare `fabFileId` read. Two regressions would undo that silently - a second
- * declaration creeping back onto the schema (autoIndex builds whatever is declared, so it returns
- * on the next cold boot), or the compound itself going away. The plan tests below name the index
- * rather than just asserting "some index scan", because a resurrected `{ fabFileId: 1 }` would
- * satisfy the weaker form while being exactly the thing we do not want back.
+ * chunk walk and every bare `fabFileId` read, and a second compound covers the residency
+ * aggregate (annResidentFabFileIds). Two regressions would undo that silently - a stray
+ * declaration creeping back onto the schema (autoIndex builds whatever is declared, so it
+ * returns on the next cold boot), or either compound going away. The plan tests below name the
+ * indexes rather than just asserting "some index scan", because a resurrected `{ fabFileId: 1 }`
+ * would satisfy the weaker form while being exactly the thing we do not want back.
  */
 describe('fabfilechunks indexes', () => {
   setupMongoTest();
 
   // schema.indexes() also reports field-level `index: true` / `unique: true`, so this covers the
   // route CLAUDE.md forbids as well as an explicit declaration.
-  it('declares exactly one index: the keyset compound', () => {
-    expect(FabFileChunk.schema.indexes().map(([key]) => key)).toEqual([{ fabFileId: 1, _id: 1 }]);
+  it('declares exactly two indexes: the keyset compound and the residency compound', () => {
+    expect(FabFileChunk.schema.indexes().map(([key]) => key)).toEqual([
+      { fabFileId: 1, _id: 1 },
+      { fabFileId: 1, embeddingModel: 1, retrievalIndexConfirmedModel: 1 },
+    ]);
   });
 
-  it('builds only the _id index and the keyset compound', async () => {
+  it('builds only the _id index and the two declared compounds', async () => {
     await FabFileChunk.createIndexes();
 
     const names = (await FabFileChunk.collection.indexes()).map(index => index.name).sort();
-    expect(names).toEqual(['_id_', 'fabFileId_1__id_1']);
+    expect(names).toEqual(['_id_', 'fabFileId_1__id_1', 'fabFileId_1_embeddingModel_1_retrievalIndexConfirmedModel_1']);
   });
 
   // Key-pattern serialization contract for 20260810000000_drop-legacy-fabfilechunk-indexes.ts,
@@ -47,14 +51,14 @@ describe('fabfilechunks indexes', () => {
     // What the compound is actually for. Both plan assertions elsewhere use a single-id $in, which
     // never exercises the SORT_MERGE across files that keeps a large lake walk non-blocking.
     await FabFileChunk.create(
-      ['a', 'b', 'c'].flatMap(fabFileId =>
+      [fid('a'), fid('b'), fid('c')].flatMap(fabFileId =>
         Array.from({ length: 8 }, (_, i) => ({ fabFileId, text: `${fabFileId}${i}`, tokenCount: 2, vector: [0.1] }))
       )
     );
     await FabFileChunk.createIndexes();
 
     const plan = await FabFileChunk.collection
-      .find({ fabFileId: { $in: ['a', 'b', 'c'] }, vector: { $exists: true, $ne: [] } })
+      .find({ fabFileId: { $in: [fid('a'), fid('b'), fid('c')] }, vector: { $exists: true, $ne: [] } })
       .sort({ _id: 1 })
       .limit(5)
       .explain('queryPlanner');
@@ -68,14 +72,18 @@ describe('fabfilechunks indexes', () => {
   it('serves a resumed keyset page from the same index', async () => {
     // Page 2..N is where a large walk spends its time, and no other test explains a cursored page.
     await FabFileChunk.create(
-      Array.from({ length: 10 }, (_, i) => ({ fabFileId: 'lake', text: `c${i}`, tokenCount: 2, vector: [0.1] }))
+      Array.from({ length: 10 }, (_, i) => ({ fabFileId: fid('lake'), text: `c${i}`, tokenCount: 2, vector: [0.1] }))
     );
     await FabFileChunk.createIndexes();
-    const first = await FabFileChunk.collection.find({ fabFileId: 'lake' }).sort({ _id: 1 }).limit(3).toArray();
+    const first = await FabFileChunk.collection
+      .find({ fabFileId: fid('lake') })
+      .sort({ _id: 1 })
+      .limit(3)
+      .toArray();
 
     const plan = await FabFileChunk.collection
       .find({
-        fabFileId: { $in: ['lake'] },
+        fabFileId: { $in: [fid('lake')] },
         vector: { $exists: true, $ne: [] },
         _id: { $gt: first[first.length - 1]._id },
       })
@@ -94,14 +102,14 @@ describe('fabfilechunks indexes', () => {
     // filter on fabFileId alone and must still get an index scan rather than a collection scan.
     await FabFileChunk.create(
       Array.from({ length: 60 }, (_, i) => ({
-        fabFileId: i % 12 === 0 ? 'lake' : 'other',
+        fabFileId: i % 12 === 0 ? fid('lake') : fid('other'),
         text: `chunk ${i}`,
         tokenCount: 2,
       }))
     );
     await FabFileChunk.createIndexes();
 
-    const plan = await FabFileChunk.collection.find({ fabFileId: 'lake' }).explain('queryPlanner');
+    const plan = await FabFileChunk.collection.find({ fabFileId: fid('lake') }).explain('queryPlanner');
 
     // Substring checks on the serialized plan, matching fabFileChunkVectorScope.test.ts: MongoDB's
     // SBE nests the classic plan under winningPlan.queryPlan, so a structural path assertion would
@@ -109,5 +117,30 @@ describe('fabfilechunks indexes', () => {
     const stages = JSON.stringify(plan.queryPlanner.winningPlan);
     expect(stages).toContain('"indexName":"fabFileId_1__id_1"');
     expect(stages).not.toContain('COLLSCAN');
+  });
+
+  it('serves the residency aggregate match from the index alone, with no document fetch', async () => {
+    // Without this compound, `retrievalIndexModel` in neither index meant `annResidentFabFileIds`
+    // FETCHED every matching chunk row - including `vector` - before the aggregation's projection
+    // ever applied. `executionStats` proves the fix: zero documents examined for a plan that
+    // matched every row via the index's keys alone.
+    await FabFileChunk.create(
+      Array.from({ length: 20 }, (_, i) => ({
+        fabFileId: fid('lake'),
+        text: `chunk ${i}`,
+        tokenCount: 2,
+        embeddingModel: 'model-a',
+        retrievalIndexConfirmedModel: 'model-a',
+      }))
+    );
+    await FabFileChunk.createIndexes();
+
+    const plan = await FabFileChunk.collection
+      .find({ fabFileId: fid('lake'), embeddingModel: 'model-a' })
+      .explain('executionStats');
+
+    expect(plan.executionStats.totalDocsExamined).toBe(0);
+    const stages = JSON.stringify(plan.queryPlanner.winningPlan);
+    expect(stages).toContain('"indexName":"fabFileId_1_embeddingModel_1_retrievalIndexConfirmedModel_1"');
   });
 });

@@ -513,7 +513,8 @@ export function convertIds(ids: Array<string | mongoose.Types.ObjectId>): Array<
 /**
  * Keeps only the ids that can address a row by `_id`.
  *
- * Session and project id arrays are declared `[{ type: String }]`, so they can hold an entry that
+ * Session and project id arrays are declared `[{ type: String }]`, as is
+ * `DataLakeAccessGrantModel.dataLakeId`, so any of them can hold an entry that
  * is not a stringified ObjectId. Passing one to an `_id` query rejects the WHOLE `$in` with a
  * CastError, losing every other row in the call - and the API error handler remaps that to a 404,
  * so it surfaces as a confusing "not found". Such an id could never have matched, so it is dropped
@@ -521,7 +522,9 @@ export function convertIds(ids: Array<string | mongoose.Types.ObjectId>): Array<
  *
  * `isObjectIdOrHexString`, not `isValidObjectId`: for string input the two agree, but the latter
  * also accepts a number and casts it to a fabricated id. Pinned against a real server in
- * packages/database/src/models/content/FabFileModel.objectIdCasting.integration.test.ts.
+ * packages/database/src/models/content/FabFileModel.objectIdCasting.integration.test.ts (the
+ * predicate itself) and .../models/ai/DataLakeModel.objectIdCasting.integration.test.ts (the
+ * grant arms, where dropping an id must not widen access).
  *
  * `artifactIds` must NOT be filtered with this - those are minted as
  * `artifact_<type>_<identifier>_<ts>_<index>` (see `createArtifactId` in @bike4mind/common, whose
@@ -541,7 +544,11 @@ export function usableObjectIds(
   const all = ids ?? [];
   const usable = all.filter(id => mongoose.isObjectIdOrHexString(id));
   if (usable.length !== all.length) {
+    // `usable: 0` against a non-empty `received` is the case worth watching: callers drop the arm
+    // entirely rather than emit an `$in: []`, so access narrows with nothing else marking it.
     logger.warn(`[${label}] skipping ids that cannot address a row by _id`, {
+      received: all.length,
+      usable: usable.length,
       skipped: all.filter(id => !mongoose.isObjectIdOrHexString(id)),
     });
   }

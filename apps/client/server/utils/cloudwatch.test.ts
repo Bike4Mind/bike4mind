@@ -16,6 +16,7 @@ vi.mock('@aws-sdk/client-cloudwatch', () => ({
 import {
   buildFeedbackDeliveryFailureMetrics,
   buildFeedbackDeliverySkippedMetrics,
+  recordChunkRescueSweep,
   recordWebhookDeliveryFailure,
 } from './cloudwatch';
 
@@ -160,5 +161,60 @@ describe('recordWebhookDeliveryFailure', () => {
       'DeliveryLatency',
       'HttpResponseCode',
     ]);
+  });
+});
+
+describe('recordChunkRescueSweep', () => {
+  beforeEach(() => {
+    send.mockReset().mockResolvedValue(undefined);
+  });
+
+  // dataLakeChunkRescueFailuresHigh (infra/alarms.ts) reads namespace + metric name as hardcoded
+  // STRINGS across a package boundary - infra does not import DataLakeBatchMetrics, so nothing
+  // typechecks the pair. Renaming a metric here would leave the alarm pointed at a stream that
+  // never receives a datapoint, and an alarm on a silent metric looks exactly like a healthy one.
+  it('emits the names and namespace the alarm is pointed at', async () => {
+    await recordChunkRescueSweep('swept', 4, 2);
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const { Namespace, MetricData } = send.mock.calls[0][0].input;
+    expect(Namespace).toBe('Lumina5/DataLakeBatch');
+    expect(MetricData.map((d: { MetricName: string }) => d.MetricName)).toEqual([
+      'ChunkRescueRuns',
+      'ChunkRescueEnqueued',
+      'ChunkRescueFailures',
+    ]);
+  });
+
+  it('leaves the two counters DIMENSIONLESS, which is the only stream the alarm can see', async () => {
+    // Same trap as webhookDeliveryHighFailures above: the alarm filters on no dimension, so a
+    // dimensioned ChunkRescueFailures datapoint would be a separate stream it never reads.
+    await recordChunkRescueSweep('swept', 4, 2);
+
+    const { MetricData } = send.mock.calls[0][0].input;
+    const byName = (name: string) => MetricData.find((d: { MetricName: string }) => d.MetricName === name);
+
+    expect(byName('ChunkRescueFailures')).toMatchObject({ Value: 2, Unit: StandardUnit.Count, Dimensions: [] });
+    expect(byName('ChunkRescueEnqueued')).toMatchObject({ Value: 4, Unit: StandardUnit.Count, Dimensions: [] });
+  });
+
+  it('carries the outcome as a dimension on the Runs metric, so zero-work states stay tellable apart', async () => {
+    await recordChunkRescueSweep('disabled', 0, 0);
+
+    const { MetricData } = send.mock.calls[0][0].input;
+    expect(MetricData[0]).toMatchObject({
+      MetricName: 'ChunkRescueRuns',
+      Value: 1,
+      Dimensions: [{ Name: 'outcome', Value: 'disabled' }],
+    });
+  });
+
+  it('emits all three datapoints in ONE PutMetricData call', async () => {
+    // The sweep is on a daily cron; three API calls where one does is pure waste, and a partial
+    // failure across three calls would leave the counters disagreeing with the outcome.
+    await recordChunkRescueSweep('failed', 0, 0);
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0].input.MetricData).toHaveLength(3);
   });
 });

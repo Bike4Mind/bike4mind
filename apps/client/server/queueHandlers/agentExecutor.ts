@@ -55,8 +55,8 @@ import {
   safeInputWindow,
 } from '@bike4mind/utils';
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
-import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
-import { defaultEmbeddingModelForEnv } from '@bike4mind/common';
+import { EmbeddingFactory, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
+import { defaultEmbeddingModelForEnv, isSupportedEmbeddingModel } from '@bike4mind/common';
 import { toRetrievalFilter } from '@bike4mind/utils/retrievalExclusion';
 import { getLlmByModel, getAvailableModels, resolveDeprecatedModelId, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
@@ -726,16 +726,39 @@ async function materializeAttachmentsForRun(args: {
       { db: { fabfiles: fabFileRepository, caches: cacheRepository }, storage, logger }
     );
 
-    // Same construction as the chat path (ChatCompletionProcess ~2013): pick the env's default
-    // embedding model, then hand the factory ONLY the credential that model's provider needs.
-    // Getting this wrong is quiet rather than loud - the query embedding just fails and every file
-    // falls through to the raw-content path, so a vectorized file silently loses cosine selection.
-    const embeddingProvider = getProviderFromModel(defaultEmbeddingModelForEnv());
-    const embeddingFactory = new EmbeddingFactory({
-      ...(embeddingProvider === 'openai' && { openaiApiKey: apiKeyTable?.openai }),
-      ...(embeddingProvider === 'voyageai' && { voyageApiKey: apiKeyTable?.voyageai }),
-      ...(embeddingProvider === 'ollama' && { ollamaBaseUrl: apiKeyTable?.ollama }),
-    });
+    // Routed through the same credential-table seam as the chat, ingest and search paths rather
+    // than hand-spreading one provider's credential: the spread this replaced built an
+    // OpenAI-shaped factory around an undefined key on a stage holding no OpenAI credential, and
+    // only worked at all because an empty config also happens to fall through to Titan in
+    // getDefaultEmbeddingModel. Getting this wrong is quiet rather than loud - the query embedding
+    // just fails and every file falls through to the raw-content path, so a vectorized file
+    // silently loses cosine selection.
+    //
+    // Seeded from the admin setting for the same reason as the chat seam: the attachments being
+    // scored were stamped from it at ingest, and scoring them against an env-derived model compares
+    // vectors from two different spaces (and at two different widths).
+    const configuredEmbeddingModel = await adminSettingsRepository
+      .getSettingsValue('defaultEmbeddingModel')
+      .catch(() => undefined);
+    const { config: embeddingConfig, missing: missingEmbeddingCredential } = resolveEmbeddingWithKeylessFallback(
+      typeof configuredEmbeddingModel === 'string' && isSupportedEmbeddingModel(configuredEmbeddingModel)
+        ? configuredEmbeddingModel
+        : defaultEmbeddingModelForEnv(),
+      apiKeyTable
+    );
+    // The one state the seam refuses to substitute for, and the one that used to be loud here: the
+    // old hand-spread put the expired key into the config, so the provider answered 401 and the
+    // failure named itself. An empty config instead falls through to Titan in
+    // getDefaultEmbeddingModel, which embeds a 1024-dim query that the width guard then discards
+    // against every 1536-dim chunk - the attachment still reaches the model as raw content, so
+    // nothing errors and the lost cosine selection is invisible. Say so.
+    if (missingEmbeddingCredential !== null) {
+      logger.warn(
+        `Agent attachments: no usable ${missingEmbeddingCredential} embedding credential; cosine selection ` +
+          `is unavailable for this run and attachments fall through to raw content`
+      );
+    }
+    const embeddingFactory = new EmbeddingFactory(embeddingConfig);
 
     const budget = attachedContentExtractionBudget(
       safeInputWindow(modelInfo, modelInfo.max_tokens),
