@@ -127,7 +127,9 @@ export function isPrivateIP(ip: string): boolean {
  * This catches obvious cases before DNS resolution.
  */
 export function isPrivateOrInternalHostname(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
+  // URL.hostname wraps IPv6 literals in brackets ([::1]); strip them so the loopback
+  // and IPv6-range checks below see the bare address instead of missing on the brackets.
+  const normalized = hostname.replace(/^\[|\]$/g, '').toLowerCase();
 
   // Block localhost variations
   if (
@@ -279,5 +281,76 @@ export function validateTargetUrlSync(url: string): { valid: boolean; error?: st
     return { valid: true };
   } catch {
     return { valid: false, error: 'Invalid URL format' };
+  }
+}
+
+/** Thrown by {@link safeFetch} when a target, or its redirect target, is unsafe to fetch. */
+export class SsrfError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SsrfError';
+  }
+}
+
+/**
+ * Synchronous, https-only SSRF check for a URL fetched server-side with caller/user-influenced
+ * input. Returns null when safe, otherwise a human-readable reason. Reuses
+ * isPrivateOrInternalHostname so the blocked-range list lives in one place. Hostname-string
+ * check only (no DNS), so it does not defend against DNS rebinding - pair it with an
+ * auth/ownership gate as the primary control. For fetch call sites use {@link safeFetch}, which
+ * also re-checks a single redirect hop.
+ */
+export function rejectSsrfUrl(url: URL): string | null {
+  if (url.protocol !== 'https:') {
+    return 'only https URLs are allowed';
+  }
+  if (isPrivateOrInternalHostname(url.hostname)) {
+    return 'points to a private or internal network';
+  }
+  return null;
+}
+
+/**
+ * Fetch a caller/user-influenced URL with SSRF protection on BOTH the initial host and a single
+ * redirect hop. A plain fetch defaults to redirect:'follow', so a guard on the initial URL alone
+ * is bypassed by a public host that 3xx-redirects to an internal one. This validates up front
+ * (rejectSsrfUrl), fetches with redirect:'manual', re-validates the Location, and follows at most
+ * one hop with redirect:'error'. Callers keep their own timeout/size/content-type handling via
+ * `init` and the returned Response.
+ *
+ * @throws SsrfError if the target or its redirect target is unsafe.
+ */
+export async function safeFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  assertSafeFetchUrl(url);
+
+  const response = await fetch(url, { ...init, redirect: 'manual' });
+  const isRedirect = response.status >= 300 && response.status < 400;
+  if (!isRedirect) {
+    return response;
+  }
+
+  const location = response.headers.get('location');
+  if (!location) {
+    throw new SsrfError('redirect without a Location header');
+  }
+  const target = new URL(location, url);
+  const reason = rejectSsrfUrl(target);
+  if (reason) {
+    throw new SsrfError(`blocked redirect: ${reason}`);
+  }
+  // One extra hop only: redirect:'error' rejects any further redirect from the target.
+  return fetch(target.toString(), { ...init, redirect: 'error' });
+}
+
+function assertSafeFetchUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new SsrfError('invalid URL');
+  }
+  const reason = rejectSsrfUrl(parsed);
+  if (reason) {
+    throw new SsrfError(reason);
   }
 }

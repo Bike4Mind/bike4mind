@@ -85,6 +85,20 @@ describe('POST /api/blog/presign-image-upload', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('blocks a public baseUrl that redirects to an internal host (no follow of the redirect)', async () => {
+    // A public host passes the up-front guard, then 302s to cloud metadata. safeFetch re-checks
+    // the Location and refuses to follow it, so the blog key never reaches the internal host.
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      status: 302,
+      headers: { get: (k: string) => (k.toLowerCase() === 'location' ? 'https://169.254.169.254/' : null) },
+    });
+    global.fetch = fetchMock as never;
+
+    const { req, res } = request(validBody, configured);
+    await expect(mockRefs.handler!(req, res)).rejects.toThrow(/not allowed/i);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('forwards the decrypted key to the blog and returns the presigned URLs', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce({
       ok: true,
@@ -96,11 +110,13 @@ describe('POST /api/blog/presign-image-upload', () => {
     await mockRefs.handler!(req, res);
 
     // Trailing slash stripped; key decrypted (never the raw stored value) in the header.
+    // redirect:'manual' is added by safeFetch so a redirect to an internal host is re-checked.
     expect(fetchMock).toHaveBeenCalledWith('https://blog.example.com/api/posts/images/presigned-url', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-API-Key': 'decrypted:enc-key' },
       body: JSON.stringify({ fileName: 'a.jpg', fileSize: 10, mimeType: 'image/jpeg', postId: 'p1' }),
       signal: expect.any(AbortSignal),
+      redirect: 'manual',
     });
     expect(res._getJSONData()).toEqual({ uploadUrl: 'https://s3/u', imageUrl: 'https://blog/i.jpg', key: 'k' });
   });

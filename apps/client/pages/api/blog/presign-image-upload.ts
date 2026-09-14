@@ -2,7 +2,7 @@ import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { BadRequestError } from '@bike4mind/utils';
 import { decryptToken } from '@server/security/tokenEncryption';
-import { rejectIfUnsafe } from '@server/utils/ssrfGuard';
+import { rejectSsrfUrl, safeFetch, SsrfError } from '@server/utils/ssrfProtection';
 
 interface PresignImageUploadRequest {
   fileName: string;
@@ -54,15 +54,15 @@ const handler = baseApi().post<Request<unknown, PresignImageUploadResponse, Pres
 
     // Fail closed against SSRF: this presign runs server-side with the user's blog key, so a
     // baseUrl pointed at an internal/metadata host would let the server reach it on the caller's
-    // behalf. Guard the new surface here; publish.ts shares this host unguarded and is tracked
-    // as a follow-up rather than remediated in this security PR.
+    // behalf. Reject the host up front for a clean 4xx; the outbound safeFetch below re-checks it
+    // and a redirect hop. Mirrors blog/publish.ts.
     let blogUrl: URL;
     try {
       blogUrl = new URL(user.blogIntegration.baseUrl);
     } catch {
       throw new BadRequestError('Blog integration baseUrl is not a valid URL');
     }
-    const unsafe = rejectIfUnsafe(blogUrl);
+    const unsafe = rejectSsrfUrl(blogUrl);
     if (unsafe) {
       req.logger.error('[Blog presign] blocked SSRF attempt on blog baseUrl', { reason: unsafe });
       throw new BadRequestError(`Blog integration baseUrl is not allowed: ${unsafe}`);
@@ -78,7 +78,7 @@ const handler = baseApi().post<Request<unknown, PresignImageUploadResponse, Pres
 
     let response: Response;
     try {
-      response = await fetch(`${host}/api/posts/images/presigned-url`, {
+      response = await safeFetch(`${host}/api/posts/images/presigned-url`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -91,6 +91,9 @@ const handler = baseApi().post<Request<unknown, PresignImageUploadResponse, Pres
     } catch (error) {
       clearTimeout(timeoutId);
       req.logger.error('[Blog presign] request to blog failed:', error);
+      if (error instanceof SsrfError) {
+        throw new BadRequestError(`Blog integration baseUrl is not allowed: ${error.message}`);
+      }
       throw new BadRequestError(
         error instanceof Error && error.name === 'AbortError'
           ? 'Blog upload URL request timed out after 15s'

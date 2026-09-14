@@ -4,7 +4,7 @@ import { createS3Client } from '@bike4mind/fab-pipeline';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
-import { rejectIfUnsafe } from '@server/utils/ssrfGuard';
+import { rejectSsrfUrl, safeFetch, SsrfError } from '@server/utils/ssrfProtection';
 import { Resource } from 'sst';
 import crypto from 'crypto';
 import { z } from 'zod';
@@ -83,7 +83,7 @@ const handler = baseApi().get(
       throw new BadRequestError('url must be a valid URL');
     }
 
-    const reject = rejectIfUnsafe(parsed);
+    const reject = rejectSsrfUrl(parsed);
     if (reject) {
       req.logger.warn('Blocked SSRF attempt on /api/external-image', { url: rawUrl, reason: reject });
       throw new BadRequestError(reject);
@@ -110,47 +110,22 @@ const handler = baseApi().get(
 
     let response: Response;
     try {
-      // Use redirect: 'manual' instead of redirect: 'error' so we
-      // can follow legitimate CDN redirects (Gravatar, GitHub avatars, Cloudinary)
-      // after re-checking the Location header through the SSRF guard. This closes
-      // the redirect-to-private-host bypass without breaking real image hosts.
-      response = await fetch(parsed.toString(), {
+      // safeFetch re-checks the initial host and follows at most one redirect after
+      // re-validating its Location through the SSRF guard, so legitimate CDN redirects
+      // (Gravatar, GitHub avatars, Cloudinary) still work while a redirect to a private
+      // host is blocked.
+      response = await safeFetch(parsed.toString(), {
         headers: {
           'User-Agent': `Lumina5-ImageProxy/1.0${brand ? ` (${brand})` : ''}`,
           Accept: 'image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
         },
         signal: controller.signal,
-        redirect: 'manual',
       });
-
-      // Follow at most one redirect, re-checking the target through the SSRF guard
-      if (response.status >= 300 && response.status < 400) {
-        const location = response.headers.get('location');
-        if (!location) {
-          throw new BadRequestError('Redirect without Location header');
-        }
-        const redirectUrl = new URL(location, parsed);
-        const redirectReject = rejectIfUnsafe(redirectUrl);
-        if (redirectReject) {
-          req.logger.warn('Blocked SSRF via redirect', {
-            from: rawUrl,
-            to: redirectUrl.toString(),
-            reason: redirectReject,
-          });
-          throw new BadRequestError(`Blocked redirect: ${redirectReject}`);
-        }
-        // Second fetch with redirect: 'error' to prevent further hops
-        response = await fetch(redirectUrl.toString(), {
-          headers: {
-            'User-Agent': `Lumina5-ImageProxy/1.0${brand ? ` (${brand})` : ''}`,
-            Accept: 'image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-          },
-          signal: controller.signal,
-          redirect: 'error',
-        });
-      }
     } catch (fetchError) {
-      if (fetchError instanceof BadRequestError) throw fetchError;
+      if (fetchError instanceof SsrfError) {
+        req.logger.warn('Blocked SSRF on external image fetch', { url: rawUrl, reason: fetchError.message });
+        throw new BadRequestError(fetchError.message);
+      }
       if (fetchError instanceof Error && fetchError.name === 'AbortError') {
         throw new BadRequestError('Image fetch timed out');
       }

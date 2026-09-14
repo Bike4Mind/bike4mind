@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { IUserDocument } from '@bike4mind/common';
 import { decryptToken } from '@server/security/tokenEncryption';
-import { rejectIfUnsafe } from '@server/utils/ssrfGuard';
+import { rejectSsrfUrl, safeFetch, SsrfError } from '@server/utils/ssrfProtection';
 
 interface BlogPublishParams {
   title: string;
@@ -35,14 +35,15 @@ async function publishToBlog(user: IUserDocument, params: BlogPublishParams): Pr
 
   // Fail closed against SSRF: this runs server-side with the user's blog key, so a baseUrl
   // pointed at an internal/metadata host would let the server reach it on the caller's behalf.
-  // Reject before the outbound POST. Mirrors blog/presign-image-upload.ts (shared guard).
+  // Reject the host up front; the outbound safeFetch below re-checks it and a redirect hop.
+  // Mirrors blog/presign-image-upload.ts (shared guard).
   let blogUrl: URL;
   try {
     blogUrl = new URL(baseUrl);
   } catch {
     throw new Error('Blog integration baseUrl is not a valid URL');
   }
-  const unsafe = rejectIfUnsafe(blogUrl);
+  const unsafe = rejectSsrfUrl(blogUrl);
   if (unsafe) {
     throw new Error(`Blog integration baseUrl is not allowed: ${unsafe}`);
   }
@@ -68,7 +69,7 @@ async function publishToBlog(user: IUserDocument, params: BlogPublishParams): Pr
 
   let response: Response;
   try {
-    response = await fetch(`${baseUrl}/api/posts`, {
+    response = await safeFetch(`${baseUrl}/api/posts`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -80,6 +81,11 @@ async function publishToBlog(user: IUserDocument, params: BlogPublishParams): Pr
     clearTimeout(timeoutId);
   } catch (fetchError) {
     clearTimeout(timeoutId);
+    // Keep every baseUrl problem (including a redirect to an internal host) in the same 422
+    // "not allowed" bucket the up-front guard uses.
+    if (fetchError instanceof SsrfError) {
+      throw new Error(`Blog integration baseUrl is not allowed: ${fetchError.message}`);
+    }
     if (fetchError instanceof Error && fetchError.name === 'AbortError') {
       throw new Error('Blog API request timed out after 15s');
     }

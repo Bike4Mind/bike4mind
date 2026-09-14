@@ -68,6 +68,22 @@ describe('POST /api/blog/publish', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('blocks a public baseUrl that redirects to an internal host (no follow of the redirect)', async () => {
+    // A public host passes the up-front guard, then 302s to cloud metadata. safeFetch re-checks
+    // the Location and refuses to follow it, so the blog key never reaches the internal host.
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      status: 302,
+      headers: { get: (k: string) => (k.toLowerCase() === 'location' ? 'https://169.254.169.254/' : null) },
+    });
+    global.fetch = fetchMock as never;
+
+    const { req, res } = request({ apiKey: 'enc', baseUrl: 'https://blog.example.com' });
+    await mockRefs.handler!(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData().message).toMatch(/not allowed/i);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('reaches the blog for a valid public https baseUrl', async () => {
     global.fetch = vi.fn().mockResolvedValueOnce({
       ok: true,
