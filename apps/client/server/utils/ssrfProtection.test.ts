@@ -1,5 +1,17 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { isPrivateIP, isPrivateOrInternalHostname, rejectSsrfUrl, safeFetch, SsrfError } from './ssrfProtection';
+import { isPrivateIP, isPrivateOrInternalHostname, assertUrlAllowed, safeFetch, SsrfError } from './ssrfProtection';
+
+// validateTargetUrl (used by assertUrlAllowed) resolves DNS; stub it deterministically so a
+// public NAME resolves public and known-bad names resolve to loopback/private, without real DNS.
+vi.mock('dns', () => {
+  const resolve4 = (host: string, cb: (e: Error | null, a?: string[]) => void) => {
+    if (/(^|\.)nip\.io$/.test(host) || host === 'internal.example') cb(null, ['127.0.0.1']);
+    else if (host === 'rebind.example') cb(null, ['10.0.0.5']);
+    else cb(null, ['93.184.216.34']);
+  };
+  const resolve6 = (_host: string, cb: (e: Error | null, a?: string[]) => void) => cb(null, []);
+  return { default: { resolve4, resolve6 }, resolve4, resolve6 };
+});
 
 describe('isPrivateIP - RFC 2544 benchmarking range', () => {
   it('blocks 198.18.0.0/15', () => {
@@ -52,6 +64,42 @@ describe('isPrivateIP - IPv4-mapped IPv6 (hex and dotted spellings)', () => {
   });
 });
 
+describe('isPrivateIP - IPv4-compatible and 6to4 IPv6 (embedded IPv4)', () => {
+  it('blocks IPv4-compatible ::a.b.c.d embedding a private IPv4 (hex + dotted)', () => {
+    expect(isPrivateIP('::7f00:1')).toBe(true); // ::127.0.0.1
+    expect(isPrivateIP('::a00:5')).toBe(true); // ::10.0.0.5
+    expect(isPrivateIP('::127.0.0.1')).toBe(true);
+    expect(isPrivateOrInternalHostname('[::7f00:1]')).toBe(true);
+  });
+
+  it('blocks 6to4 2002:: embedding a private IPv4', () => {
+    expect(isPrivateIP('2002:7f00:1::')).toBe(true); // 127.0.0.1
+    expect(isPrivateIP('2002:a00:5::')).toBe(true); // 10.0.0.5
+    expect(isPrivateOrInternalHostname('[2002:7f00:1::]')).toBe(true);
+  });
+
+  it('does not over-block a public embedded address', () => {
+    expect(isPrivateIP('::808:808')).toBe(false); // ::8.8.8.8 (compat, public)
+    expect(isPrivateIP('2002:808:808::')).toBe(false); // 6to4 8.8.8.8 (public)
+  });
+});
+
+describe('alternate IPv4 encodings normalize and are blocked', () => {
+  // WHATWG new URL() parses integer/hex/octal hosts into dotted-decimal, so the guard sees the
+  // canonical form and the range check applies - no separate decoder needed.
+  it('normalizes integer/hex/octal hosts to dotted-decimal', () => {
+    expect(new URL('https://2130706433').hostname).toBe('127.0.0.1');
+    expect(new URL('https://0x7f000001').hostname).toBe('127.0.0.1');
+    expect(new URL('https://0177.0.0.1').hostname).toBe('127.0.0.1');
+  });
+
+  it('so the hostname check catches them', () => {
+    for (const u of ['https://2130706433', 'https://0x7f000001', 'https://0177.0.0.1']) {
+      expect(isPrivateOrInternalHostname(new URL(u).hostname)).toBe(true);
+    }
+  });
+});
+
 describe('isPrivateOrInternalHostname - trailing-dot FQDN', () => {
   it('strips a trailing dot so localhost. / metadata. are still caught', () => {
     expect(isPrivateOrInternalHostname('localhost.')).toBe(true);
@@ -71,21 +119,41 @@ describe('isPrivateOrInternalHostname - bracketed IPv6 literals', () => {
     expect(isPrivateOrInternalHostname('[fe80::1]')).toBe(true);
     expect(isPrivateOrInternalHostname('[fc00::1]')).toBe(true);
   });
+
+  it('blocks the whole fe00::/8 (link-local + deprecated site-local fec0::/10)', () => {
+    // fec0::/10 site-local (RFC 3879) is an IPv6 literal, so DNS resolution never backstops it;
+    // nothing in fe00::/8 is global-unicast, so the guard blocks the entire /8.
+    for (const ip of ['fe80::1', 'febf::1', 'fec0::1', 'fed0::1', 'fee0::1', 'feff::1']) {
+      expect(isPrivateIP(ip)).toBe(true);
+      expect(isPrivateOrInternalHostname(`[${ip}]`)).toBe(true);
+    }
+    expect(isPrivateOrInternalHostname('[2606:4700:4700::1111]')).toBe(false); // public, not over-blocked
+  });
 });
 
-describe('rejectSsrfUrl', () => {
-  it('allows a public https host', () => {
-    expect(rejectSsrfUrl(new URL('https://blog.example.com/api'))).toBeNull();
+describe('assertUrlAllowed (DNS-resolving gate)', () => {
+  it('allows a public https host', async () => {
+    await expect(assertUrlAllowed('https://good.example/api')).resolves.toBeUndefined();
   });
 
-  it('rejects non-https', () => {
-    expect(rejectSsrfUrl(new URL('http://blog.example.com'))).toMatch(/https/i);
+  it('rejects non-https before any resolution', async () => {
+    await expect(assertUrlAllowed('http://good.example')).rejects.toThrow(/https/i);
   });
 
-  it('rejects private/internal hosts (including bracketed IPv6)', () => {
+  it('rejects a malformed URL', async () => {
+    await expect(assertUrlAllowed('not a url')).rejects.toThrow(/not a valid url/i);
+  });
+
+  it('rejects private/internal literals (including bracketed IPv6)', async () => {
     for (const u of ['https://localhost', 'https://169.254.169.254', 'https://10.0.0.1', 'https://[::1]']) {
-      expect(rejectSsrfUrl(new URL(u))).toMatch(/private or internal/i);
+      await expect(assertUrlAllowed(u)).rejects.toBeInstanceOf(SsrfError);
     }
+  });
+
+  it('rejects a public NAME that resolves to a private IP (the hostname-only-guard gap)', async () => {
+    // 127.0.0.1.nip.io has a real A record pointing at loopback; the sync hostname check passed
+    // it, DNS resolution catches it.
+    await expect(assertUrlAllowed('https://127.0.0.1.nip.io')).rejects.toThrow(/private ip/i);
   });
 });
 
@@ -120,28 +188,26 @@ describe('safeFetch - initial-host and redirect-hop SSRF protection', () => {
     const res = okResponse();
     const fetchMock = vi.fn().mockResolvedValueOnce(res);
     global.fetch = fetchMock as never;
-    await expect(safeFetch('https://blog.example.com')).resolves.toBe(res);
+    // public IP literals so the guard's DNS path is not exercised here (covered separately)
+    await expect(safeFetch('https://93.184.216.34')).resolves.toBe(res);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ redirect: 'manual' });
   });
 
   it('follows one redirect to a public host with redirect:error on the second hop', async () => {
     const final = okResponse();
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(redirectTo('https://cdn.example.net/img'))
-      .mockResolvedValueOnce(final);
+    const fetchMock = vi.fn().mockResolvedValueOnce(redirectTo('https://8.8.8.8/img')).mockResolvedValueOnce(final);
     global.fetch = fetchMock as never;
-    await expect(safeFetch('https://blog.example.com')).resolves.toBe(final);
+    await expect(safeFetch('https://93.184.216.34')).resolves.toBe(final);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[1][0]).toBe('https://cdn.example.net/img');
+    expect(fetchMock.mock.calls[1][0]).toBe('https://8.8.8.8/img');
     expect(fetchMock.mock.calls[1][1]).toMatchObject({ redirect: 'error' });
   });
 
   it('blocks a redirect to a private host without following it (the follow-fetch bypass)', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(redirectTo('https://169.254.169.254/'));
     global.fetch = fetchMock as never;
-    await expect(safeFetch('https://blog.example.com')).rejects.toThrow(/blocked redirect/i);
+    await expect(safeFetch('https://93.184.216.34')).rejects.toThrow(/blocked redirect/i);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

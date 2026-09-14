@@ -2,7 +2,7 @@ import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { BadRequestError } from '@bike4mind/utils';
 import { decryptToken } from '@server/security/tokenEncryption';
-import { rejectSsrfUrl, safeFetch, SsrfError } from '@server/utils/ssrfProtection';
+import { assertUrlAllowed, safeFetch, SsrfError } from '@server/utils/ssrfProtection';
 
 interface PresignImageUploadRequest {
   fileName: string;
@@ -54,18 +54,17 @@ const handler = baseApi().post<Request<unknown, PresignImageUploadResponse, Pres
 
     // Fail closed against SSRF: this presign runs server-side with the user's blog key, so a
     // baseUrl pointed at an internal/metadata host would let the server reach it on the caller's
-    // behalf. Reject the host up front for a clean 4xx; the outbound safeFetch below re-checks it
-    // and a redirect hop. Mirrors blog/publish.ts.
-    let blogUrl: URL;
+    // behalf. Reject the host up front for a clean 4xx (DNS-resolving, so a public name that
+    // resolves to a private IP is caught too); the outbound safeFetch below re-checks it and a
+    // redirect hop. Mirrors blog/publish.ts.
     try {
-      blogUrl = new URL(user.blogIntegration.baseUrl);
-    } catch {
-      throw new BadRequestError('Blog integration baseUrl is not a valid URL');
-    }
-    const unsafe = rejectSsrfUrl(blogUrl);
-    if (unsafe) {
-      req.logger.error('[Blog presign] blocked SSRF attempt on blog baseUrl', { reason: unsafe });
-      throw new BadRequestError(`Blog integration baseUrl is not allowed: ${unsafe}`);
+      await assertUrlAllowed(user.blogIntegration.baseUrl);
+    } catch (e) {
+      if (e instanceof SsrfError) {
+        req.logger.error('[Blog presign] blocked SSRF attempt on blog baseUrl', { reason: e.message });
+        throw new BadRequestError(`Blog integration baseUrl is not allowed: ${e.message}`);
+      }
+      throw e;
     }
 
     const host = user.blogIntegration.baseUrl.replace(/\/+$/, '');

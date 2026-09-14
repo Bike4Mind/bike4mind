@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { IUserDocument } from '@bike4mind/common';
 import { decryptToken } from '@server/security/tokenEncryption';
-import { rejectSsrfUrl, safeFetch, SsrfError } from '@server/utils/ssrfProtection';
+import { assertUrlAllowed, safeFetch, SsrfError } from '@server/utils/ssrfProtection';
 
 interface BlogPublishParams {
   title: string;
@@ -35,17 +35,16 @@ async function publishToBlog(user: IUserDocument, params: BlogPublishParams): Pr
 
   // Fail closed against SSRF: this runs server-side with the user's blog key, so a baseUrl
   // pointed at an internal/metadata host would let the server reach it on the caller's behalf.
-  // Reject the host up front; the outbound safeFetch below re-checks it and a redirect hop.
-  // Mirrors blog/presign-image-upload.ts (shared guard).
-  let blogUrl: URL;
+  // Reject the host up front (DNS-resolving, so a public name that resolves to a private IP is
+  // caught too); the outbound safeFetch below re-checks it and a redirect hop. Mirrors
+  // blog/presign-image-upload.ts (shared guard).
   try {
-    blogUrl = new URL(baseUrl);
-  } catch {
-    throw new Error('Blog integration baseUrl is not a valid URL');
-  }
-  const unsafe = rejectSsrfUrl(blogUrl);
-  if (unsafe) {
-    throw new Error(`Blog integration baseUrl is not allowed: ${unsafe}`);
+    await assertUrlAllowed(baseUrl);
+  } catch (e) {
+    if (e instanceof SsrfError) {
+      throw new Error(`Blog integration baseUrl is not allowed: ${e.message}`);
+    }
+    throw e;
   }
 
   const requestBody: Record<string, any> = {

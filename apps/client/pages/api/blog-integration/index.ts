@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository } from '@bike4mind/database';
 import { z } from 'zod';
 import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
-import { rejectSsrfUrl, safeFetch, SsrfError } from '@server/utils/ssrfProtection';
+import { assertUrlAllowed, safeFetch, SsrfError } from '@server/utils/ssrfProtection';
 
 /**
  * Blog Integration Settings API
@@ -65,14 +65,19 @@ const handler = baseApi()
 
       // Fail closed against SSRF: baseUrl is user-supplied and fetched server-side with the
       // user's key (here, and by blog/publish + blog/presign-image-upload). Reject an
-      // internal/loopback/non-https host before we test or store it. Shared guard in
+      // internal/loopback/non-https host - DNS-resolving, so a public name that resolves to a
+      // private IP is caught too - before we test or store it. Shared guard in
       // server/utils/ssrfProtection.ts.
-      const unsafeBaseUrl = rejectSsrfUrl(new URL(baseUrl));
-      if (unsafeBaseUrl) {
-        return res.status(400).json({
-          error: 'Invalid blog settings',
-          message: `Base URL is not allowed: ${unsafeBaseUrl}`,
-        });
+      try {
+        await assertUrlAllowed(baseUrl);
+      } catch (e) {
+        if (e instanceof SsrfError) {
+          return res.status(400).json({
+            error: 'Invalid blog settings',
+            message: `Base URL is not allowed: ${e.message}`,
+          });
+        }
+        throw e;
       }
 
       // Test the API key by making a test request (optional but recommended)

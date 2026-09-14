@@ -4,7 +4,7 @@ import { createS3Client } from '@bike4mind/fab-pipeline';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
-import { rejectSsrfUrl, safeFetch, SsrfError } from '@server/utils/ssrfProtection';
+import { assertUrlAllowed, safeFetch, SsrfError } from '@server/utils/ssrfProtection';
 import { Resource } from 'sst';
 import crypto from 'crypto';
 import { z } from 'zod';
@@ -83,10 +83,14 @@ const handler = baseApi().get(
       throw new BadRequestError('url must be a valid URL');
     }
 
-    const reject = rejectSsrfUrl(parsed);
-    if (reject) {
-      req.logger.warn('Blocked SSRF attempt on /api/external-image', { url: rawUrl, reason: reject });
-      throw new BadRequestError(reject);
+    try {
+      await assertUrlAllowed(parsed.toString());
+    } catch (e) {
+      if (e instanceof SsrfError) {
+        req.logger.warn('Blocked SSRF attempt on /api/external-image', { url: rawUrl, reason: e.message });
+        throw new BadRequestError(e.message);
+      }
+      throw e;
     }
 
     const bucketName = Resource.appFilesBucket.name;

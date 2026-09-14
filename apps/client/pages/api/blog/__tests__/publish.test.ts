@@ -26,6 +26,14 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: vi.fn((v: string) => `decrypted:${v}`) }));
 
+// The SSRF gate resolves DNS; stub it so blog.example.com is public and *.nip.io is loopback.
+vi.mock('dns', () => {
+  const resolve4 = (host: string, cb: (e: Error | null, a?: string[]) => void) =>
+    cb(null, /(^|\.)nip\.io$/.test(host) ? ['127.0.0.1'] : ['93.184.216.34']);
+  const resolve6 = (_host: string, cb: (e: Error | null, a?: string[]) => void) => cb(null, []);
+  return { default: { resolve4, resolve6 }, resolve4, resolve6 };
+});
+
 import '../publish';
 
 function request(blogIntegration: unknown) {
@@ -82,6 +90,16 @@ describe('POST /api/blog/publish', () => {
     expect(res._getStatusCode()).toBe(422);
     expect(res._getJSONData().message).toMatch(/not allowed/i);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a public baseUrl that resolves to a private IP (127.0.0.1.nip.io)', async () => {
+    const fetchMock = vi.fn();
+    global.fetch = fetchMock as never;
+    const { req, res } = request({ apiKey: 'enc', baseUrl: 'https://127.0.0.1.nip.io' });
+    await mockRefs.handler!(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData().message).toMatch(/not allowed/i);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('reaches the blog for a valid public https baseUrl', async () => {
