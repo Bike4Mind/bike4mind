@@ -1,0 +1,189 @@
+/**
+ * Real-Mongo cover for the resume's embedding-space guard (#2766).
+ *
+ * The unit suite in fabFileChunk.test.ts mocks `distinctEmbeddingModelsByFabFileId` and
+ * `countUnlabeledVectorChunksByFabFileId` outright, so it proves what the handler does GIVEN a
+ * classification and nothing about whether real chunk rows produce that classification. The whole
+ * guard rests on those two queries meaning what their names say, and their filters are subtle in
+ * exactly the way a mock hides: one selects `embeddingModel: { $nin: [null, ''] }` while the other
+ * selects the complement through a three-arm `$or`, and both are scoped to `'vector.0': $exists`.
+ * A chunk that is vector-bearing-but-unlabeled has to land in the second and not the first, and
+ * only a real mongod can say whether it does.
+ *
+ * Mirrors vectorizeStrandRecovery.e2e.test.ts: real @bike4mind/database against a throwaway
+ * replica set, everything that leaves the process mocked. Consumes the built dist, so
+ * `pnpm turbo:core:build` must be current.
+ *
+ * Runs in the integration lane only - `CLIENT_TEST_LANE=integration` (apps/client/package.json's
+ * `test:integration`, the `client-integration` CI job). Without it vitest EXCLUDES `*.e2e.test.ts`
+ * and reports 0 tests with exit 0, which reads as a pass.
+ */
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
+import mongoose from 'mongoose';
+import {
+  createMongoReplSet,
+  MONGO_TEST_TIMEOUT_MS,
+} from '../../../../packages/database/src/__test__/createMongoServer';
+
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
+
+const h = vi.hoisted(() => ({ sendToQueue: vi.fn(async () => undefined) }));
+
+vi.mock('@server/queueHandlers/utils', () => ({
+  dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
+  MARK_PAUSED_MAX_ATTEMPTS: 3,
+  MARK_PAUSED_RETRY_DELAY_MS: 0,
+}));
+vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
+vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
+vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })) }));
+vi.mock('sst', () => ({
+  Resource: new Proxy({}, { get: () => ({ url: 'https://queue.test', managementEndpoint: 'wss://ws.test' }) }),
+}));
+
+import { AdminSettings, FabFile, User, fabFileChunkRepository } from '@bike4mind/database';
+import { KnowledgeType } from '@bike4mind/common';
+import { dispatch } from './fabFileChunk';
+import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from './sqsDelivery';
+
+const DEPLOYMENT_DEFAULT = 'text-embedding-3-small';
+const COMMITTED_SPACE = 'voyage-3';
+const RETIRED_SPACE = 'text-embedding-retired-001'; // deliberately absent from SupportedEmbeddingModelSchema
+
+const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() } as never;
+
+/**
+ * Delivered as the FINAL attempt by default. deferFailureIfRetryable suppresses the whole failure
+ * record on every earlier one, so a refusal delivered as attempt 1 leaves `error` unwritten and an
+ * assertion against it would be checking a file the handler deliberately had not marked yet.
+ */
+const makeEvent = (body: Record<string, unknown>, receiveCount = FAB_FILE_CHUNK_MAX_RECEIVE_COUNT) =>
+  ({
+    Records: [{ body: JSON.stringify(body), attributes: { ApproximateReceiveCount: String(receiveCount) } }],
+  }) as never;
+
+let replSet: Awaited<ReturnType<typeof createMongoReplSet>> | undefined;
+
+beforeAll(async () => {
+  replSet = await createMongoReplSet();
+  await mongoose.connect(replSet.getUri());
+});
+afterAll(async () => {
+  await mongoose.disconnect();
+  await replSet?.stop();
+});
+afterEach(async () => {
+  vi.clearAllMocks();
+  await mongoose.connection.dropDatabase();
+});
+
+/** A chunk with a real vector in `space`, or a vectorless one when `space` is null. */
+type SeedChunk = { space: string | null | undefined; vectorized: boolean };
+
+async function seedFile(fileLabel: string | undefined, chunks: SeedChunk[]) {
+  await AdminSettings.create({ settingName: 'defaultEmbeddingModel', settingValue: DEPLOYMENT_DEFAULT });
+  const user = await User.create({ username: `u-space-${Date.now()}`, name: 'Space Tester' });
+  const userId = user._id.toString();
+  const fabFile = await FabFile.create({
+    userId,
+    fileName: 'x.pdf',
+    type: KnowledgeType.FILE,
+    mimeType: 'application/pdf',
+    filePath: 'x.pdf',
+    fileSize: 100,
+    status: 'complete',
+    chunked: true,
+    chunkCount: chunks.length,
+    ...(fileLabel ? { embeddingModel: fileLabel } : {}),
+    vectorized: false,
+    vectorizedChunkCount: 0,
+  });
+  const fabFileId = fabFile._id.toString();
+  await fabFileChunkRepository.bulkInsert(
+    chunks.map((c, i) => ({
+      text: `chunk ${i}`,
+      fabFileId,
+      tokenCount: 5,
+      // `vector.0` existing is what every one of the three queries keys on.
+      ...(c.vectorized ? { vector: [0.1, 0.2, 0.3] } : {}),
+      ...(c.space === undefined ? {} : { embeddingModel: c.space }),
+    })) as never
+  );
+  return { fabFileId, userId };
+}
+
+const requestedModel = () =>
+  (h.sendToQueue.mock.calls[0]?.[1] as { embeddingModel: string } | undefined)?.embeddingModel;
+
+describe('resume embedding-space guard against a real mongod (#2766)', () => {
+  it('resumes in the space the existing vectors declare, not the deployment default', async () => {
+    // The file label says one thing and the vectors say another - the vectors win.
+    const { fabFileId, userId } = await seedFile('text-embedding-3-large', [
+      { space: COMMITTED_SPACE, vectorized: true },
+      { space: undefined, vectorized: false },
+    ]);
+
+    await dispatch(makeEvent({ fabFileId, userId }), {} as never, mockLogger);
+
+    expect(requestedModel()).toBe(COMMITTED_SPACE);
+  });
+
+  it('refuses rather than finish a file whose vectors are in a retired space', async () => {
+    const { fabFileId, userId } = await seedFile(DEPLOYMENT_DEFAULT, [
+      { space: RETIRED_SPACE, vectorized: true },
+      { space: undefined, vectorized: false },
+    ]);
+
+    await expect(dispatch(makeEvent({ fabFileId, userId }), {} as never, mockLogger)).rejects.toThrow(
+      /no longer available/
+    );
+
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    const stored = await FabFile.findById(fabFileId).lean();
+    expect(stored?.error).toContain('Reprocess it');
+    expect(stored?.error).not.toContain(RETIRED_SPACE); // user-safe: no model ids in the tooltip
+  });
+
+  it('refuses a file whose vectors genuinely span two spaces', async () => {
+    const { fabFileId, userId } = await seedFile(undefined, [
+      { space: COMMITTED_SPACE, vectorized: true },
+      { space: DEPLOYMENT_DEFAULT, vectorized: true },
+      { space: undefined, vectorized: false },
+    ]);
+
+    await expect(dispatch(makeEvent({ fabFileId, userId }), {} as never, mockLogger)).rejects.toThrow(
+      /more than one search space/
+    );
+
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  // The classification that a mock most easily gets wrong: these chunks HAVE vectors, so they are
+  // not in the resume set, but carry no label, so they contribute nothing to the distinct set. The
+  // file must read as `unrecorded` (warn and proceed), never as `none` (proceed silently) and never
+  // as a refusal - most of the real corpus looks exactly like this.
+  it('treats vector-bearing but unlabeled chunks as an unrecorded space: warns, still resumes', async () => {
+    const { fabFileId, userId } = await seedFile(undefined, [
+      { space: undefined, vectorized: true },
+      { space: '', vectorized: true }, // the empty-string arm of the unlabeled filter
+      { space: undefined, vectorized: false },
+    ]);
+
+    await dispatch(makeEvent({ fabFileId, userId }), {} as never, mockLogger);
+
+    expect(requestedModel()).toBe(DEPLOYMENT_DEFAULT);
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('no recorded embedding space'));
+  });
+
+  it('stays silent and takes the default when the file holds no vectors at all', async () => {
+    const { fabFileId, userId } = await seedFile(undefined, [
+      { space: undefined, vectorized: false },
+      { space: undefined, vectorized: false },
+    ]);
+
+    await dispatch(makeEvent({ fabFileId, userId }), {} as never, mockLogger);
+
+    expect(requestedModel()).toBe(DEPLOYMENT_DEFAULT);
+    expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('embedding space'));
+  });
+});

@@ -67,6 +67,10 @@ const h = vi.hoisted(() => {
     sendToQueue: vi.fn(),
     fabFileUpdate: vi.fn(async () => null),
     findVectorlessChunkIds: vi.fn(async () => [] as string[]),
+    // The resume's committed-space evidence (#2766). Default to "nothing embedded yet", which is
+    // what every pre-existing resume test assumes, so they keep taking the file-label arm.
+    distinctEmbeddingModelsByFabFileId: vi.fn(async () => [] as string[]),
+    countUnlabeledVectorChunksByFabFileId: vi.fn(async () => 0),
     markConvergencePaused: vi.fn(async () => undefined),
   };
 });
@@ -82,7 +86,11 @@ vi.mock('@bike4mind/database', () => ({
     reopenFinalizedWithErrors: h.reopenFinalizedWithErrors,
     markFailureCounted: h.markFailureCounted,
   },
-  fabFileChunkRepository: { findVectorlessChunkIds: h.findVectorlessChunkIds },
+  fabFileChunkRepository: {
+    findVectorlessChunkIds: h.findVectorlessChunkIds,
+    distinctEmbeddingModelsByFabFileId: h.distinctEmbeddingModelsByFabFileId,
+    countUnlabeledVectorChunksByFabFileId: h.countUnlabeledVectorChunksByFabFileId,
+  },
   fabFileRepository: {
     shareable: { findAccessibleById: h.findAccessibleById },
     markFailedIfNotAlready: h.markFailedIfNotAlready,
@@ -151,7 +159,10 @@ vi.mock('@bike4mind/common', async () => {
     }
   }
   return {
-    isSupportedEmbeddingModel: vi.fn(() => true),
+    // Real, not a constant `true`: the resume's refusal to finish a file in a second vector space
+    // (#2766) turns entirely on this predicate rejecting a model id that has left the supported
+    // enum, and a stubbed-true version would make every one of those tests assert against itself.
+    isSupportedEmbeddingModel: actual.isSupportedEmbeddingModel,
     DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT: 50,
     ChunkClaimLostError,
     // Mirrors the REAL dual-check in errors.ts exactly (not just re-declaring the class) - an
@@ -940,6 +951,10 @@ describe('fabFileChunk handler - a failed vectorize enqueue must not strand the 
     h.completedBatchStatus.mockReturnValue(undefined);
     h.deferFailureIfRetryable.mockResolvedValue(false);
     h.findVectorlessChunkIds.mockResolvedValue([]);
+    // Restored for the same reason as the passthroughs above: these carry a per-test value and
+    // clearAllMocks would otherwise leak one test's committed-space evidence into the next.
+    h.distinctEmbeddingModelsByFabFileId.mockResolvedValue([]);
+    h.countUnlabeledVectorChunksByFabFileId.mockResolvedValue(0);
     h.sendToQueue.mockResolvedValue(undefined);
     h.reopenFinalizedWithErrors.mockResolvedValue(null);
     h.markFailureCounted.mockResolvedValue(undefined);
@@ -1077,6 +1092,176 @@ describe('fabFileChunk handler - a failed vectorize enqueue must not strand the 
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(ENQUEUE_ERR);
     expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, markerWrite);
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', expect.stringContaining(ENQUEUE_ERR));
+  });
+
+  // #2766. The resume used to fall back to the deployment default whenever the file's own label was
+  // absent or no longer in the supported enum. On a PARTIALLY vectorized file that finishes the
+  // remaining chunks in a different space than the ones already embedded - one file, two spaces, no
+  // error - and the widths need not even differ (ada-002 and 3-small are both 1536), so nothing
+  // downstream can separate the two populations. The space the file is already committed to comes
+  // from the CHUNK labels (what the vectors are in), never the file label (what a pass intended).
+  describe('never finishes a partially-vectorized file in a second embedding space', () => {
+    const RETIRED = 'text-embedding-retired-001'; // not in SupportedEmbeddingModelSchema
+    const stranded = {
+      id: 'ff1',
+      batchId: 'batch-1',
+      chunked: true,
+      error: 'Could not hand off for vector indexing: SQS throttled',
+      vectorizeEnqueueFailedAt: new Date(),
+    };
+
+    beforeEach(() => {
+      h.findVectorlessChunkIds.mockResolvedValue(['c2']);
+      h.deferFailureIfRetryable.mockResolvedValue(false); // final attempt, so the refusal is accounted
+    });
+
+    it('embeds the rest in the space the existing vectors are in, not the file label', async () => {
+      // The pass INTENDED voyage-3 but the vectors landed in 3-small (keyless fallback resolves its
+      // own model per message). The new vectors have to sit beside the ones that exist.
+      h.findAccessibleById.mockResolvedValue({ id: 'ff1', chunked: true, embeddingModel: 'voyage-3' });
+      h.distinctEmbeddingModelsByFabFileId.mockResolvedValue(['text-embedding-3-small']);
+
+      await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ embeddingModel: 'text-embedding-3-small' })
+      );
+    });
+
+    it('refuses when the space its vectors are in has left the supported models', async () => {
+      h.findAccessibleById.mockResolvedValue({ ...stranded, embeddingModel: RETIRED });
+      h.distinctEmbeddingModelsByFabFileId.mockResolvedValue([RETIRED]);
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(/no longer available/);
+
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+      expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', expect.stringContaining('Reprocess'));
+      // The ids and the operator's repair go to the log, never to the stored string.
+      expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining(RETIRED));
+    });
+
+    // FileIndexingAlert (and the file browser, and the chat attachment panel) render FabFile.error
+    // verbatim in a tooltip to any user who can see the file - the field's stated contract is that
+    // whoever writes it keeps it user-safe. A refusal is the newest writer of that field.
+    it('stores a user-safe reason, with no internal ids or model names in it', async () => {
+      h.findAccessibleById.mockResolvedValue({ ...stranded, embeddingModel: RETIRED });
+      h.distinctEmbeddingModelsByFabFileId.mockResolvedValue([RETIRED]);
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
+
+      const [, storedError] = h.markFailedIfNotAlready.mock.calls[0] as [string, string];
+      expect(storedError).not.toContain(RETIRED);
+      expect(storedError).not.toContain('ff1');
+      expect(storedError).toMatch(/Reprocess it/);
+    });
+
+    // The rescue sweep selects purely on `vectorizeEnqueueFailedAt`, so every file it delivers
+    // arrives already stranded. A refusal that left that stamp in place would be re-enqueued,
+    // refused and re-DLQ'd on every cycle forever - declining to RE-stamp does nothing, because
+    // the stamp is how the sweep found the file. It has to come off.
+    it('drops the stranded stamp on a refusal, so the rescue sweep stops re-enqueueing it', async () => {
+      h.findAccessibleById.mockResolvedValue({ ...stranded, embeddingModel: RETIRED });
+      h.distinctEmbeddingModelsByFabFileId.mockResolvedValue([RETIRED]);
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(/no longer available/);
+
+      expect(h.fabFileUpdateOne).toHaveBeenCalledWith(
+        { _id: 'ff1' },
+        { $unset: { vectorizeEnqueueFailedAt: 1 }, $set: { error: null } }
+      );
+      // Never re-armed either - that is the other half of the same loop.
+      expect(h.fabFileUpdateOne).not.toHaveBeenCalledWith({ _id: 'ff1' }, markerWrite);
+    });
+
+    // markFailedIfNotAlready only writes into a file whose `error` is empty, and a stranded file
+    // always carries the transient one that stopped it. Without the undo first, the refusal reason
+    // is swallowed and the user goes on reading "SQS throttled" while the real, actionable message
+    // never lands.
+    it('replaces the stale transient error with the refusal reason', async () => {
+      h.findAccessibleById.mockResolvedValue({ ...stranded, embeddingModel: RETIRED });
+      h.distinctEmbeddingModelsByFabFileId.mockResolvedValue([RETIRED]);
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(/no longer available/);
+
+      const clearedAt = h.fabFileUpdateOne.mock.invocationCallOrder[0];
+      const accountedAt = h.markFailedIfNotAlready.mock.invocationCallOrder[0];
+      expect(clearedAt).toBeLessThan(accountedAt); // undo first, or the write below is a no-op
+      expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', expect.stringContaining('Reprocess'));
+      // The strand's batch charge is given back before the refusal is charged, so the file is
+      // counted failed once rather than twice.
+      expect(h.revertFileFailure).toHaveBeenCalled();
+    });
+
+    it('refuses a file whose vectors already span two spaces, rather than picking one', async () => {
+      h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1', chunked: true });
+      h.distinctEmbeddingModelsByFabFileId.mockResolvedValue(['text-embedding-ada-002', 'voyage-3']);
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(/more than one search space/);
+
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+      expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('2 embedding spaces'));
+    });
+
+    // Absence of evidence is not evidence of a conflict. Most of the corpus predates per-chunk
+    // labeling, and its vectors are usually in the deployment default already - refusing all of
+    // them to prevent a hazard that may not be there would strand a healthy population. So this
+    // arm reports instead of preventing, which is the other half of the acceptance bar.
+    it('warns but still resumes when vectors exist in no recorded space and no label is usable', async () => {
+      h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1', chunked: true }); // no label
+      h.countUnlabeledVectorChunksByFabFileId.mockResolvedValue(4);
+
+      await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ embeddingModel: 'text-embedding-3-small' })
+      );
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('no recorded embedding space'));
+    });
+
+    it('says nothing when there are no vectors to be split in the first place', async () => {
+      h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1', chunked: true }); // no label
+
+      await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('embedding space'));
+    });
+
+    it('falls back to the file label for unrecorded vectors where that label is still usable', async () => {
+      h.findAccessibleById.mockResolvedValue({ id: 'ff1', chunked: true, embeddingModel: 'voyage-3' });
+      h.countUnlabeledVectorChunksByFabFileId.mockResolvedValue(4);
+
+      await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ embeddingModel: 'voyage-3' })
+      );
+    });
+
+    it('still takes the deployment default when the file holds no vectors at all', async () => {
+      // Nothing embedded yet - no space to contradict, so a moved default (or a label that has left
+      // the enum) is free to apply. Refusing here would strand every legitimately un-embedded file.
+      h.findAccessibleById.mockResolvedValue({ id: 'ff1', chunked: true, embeddingModel: RETIRED });
+
+      await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+      expect(h.sendToQueue).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ embeddingModel: 'text-embedding-3-small' })
+      );
+    });
+
+    it('asks nothing of the chunk collection for a file that is already fully vectorized', async () => {
+      h.findAccessibleById.mockResolvedValue({ id: 'ff1', chunked: true });
+      h.findVectorlessChunkIds.mockResolvedValue([]);
+
+      await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+      expect(h.distinctEmbeddingModelsByFabFileId).not.toHaveBeenCalled();
+      expect(h.countUnlabeledVectorChunksByFabFileId).not.toHaveBeenCalled();
+    });
   });
 
   it("batches the fan-out at the operator's chunk-batch size per message", async () => {

@@ -306,14 +306,163 @@ async function undoStrand(params: {
 }
 
 /**
+ * The embedding space a file's EXISTING vectors already occupy, read from the chunks themselves.
+ *
+ * The two `embeddingModel` fields one interface apart mean different things, and only one of them
+ * is evidence here. `IFabFileChunk.embeddingModel` is the space that chunk's vector is actually in,
+ * written beside the vector in the same transaction (fabFileVectorize.ts). `IFabFile.embeddingModel`
+ * is only the model the file's last chunking pass INTENDED to embed with, written before any vector
+ * existed (fabFileService/chunk.ts). On a resume the two can disagree, and a resume is choosing a
+ * space for vectors that must sit beside ones that already exist - so the chunks decide.
+ *
+ * Reads the same two counts as `resolveFileLabel` (fabFileService/stampChunkEmbeddingModel.ts),
+ * which answers the neighbouring question at the other end of the pass: which single file label is
+ * honest once a vectorize pass completes. Keep the two readings of those counts in step.
+ */
+type CommittedEmbeddingSpace =
+  /** Nothing embedded yet, so there is no space to preserve and any model is safe. */
+  | { kind: 'none' }
+  /** Every vector that exists is in this one space. */
+  | { kind: 'single'; model: string }
+  /** The vectors already span several spaces, so no single choice can make the file whole. */
+  | { kind: 'split'; models: string[] }
+  /** Vectors exist but name no space at all - legacy rows, and the width backfill's input. */
+  | { kind: 'unrecorded'; vectorChunks: number };
+
+async function readCommittedEmbeddingSpace(fabFileId: string): Promise<CommittedEmbeddingSpace> {
+  const [declaredModels, unlabeledVectorChunks] = await Promise.all([
+    fabFileChunkRepository.distinctEmbeddingModelsByFabFileId(fabFileId),
+    fabFileChunkRepository.countUnlabeledVectorChunksByFabFileId(fabFileId),
+  ]);
+  if (declaredModels.length > 1) return { kind: 'split', models: declaredModels };
+  // One declared model ALONGSIDE unlabeled vectors still reads as that one space. This is a
+  // heuristic and knowingly so: an unlabeled vector names no space, so it could in principle be in
+  // a second one. But the declared model is the only actual evidence the file offers, the unlabeled
+  // population is overwhelmingly rows written before the vectorize handler labeled per chunk, and
+  // calling this ambiguous would refuse a file that is almost certainly homogeneous. Separating the
+  // two needs a provenance marker the chunk rows do not carry - the same gap `resolveFileLabel`
+  // names from its own side.
+  if (declaredModels.length === 1) return { kind: 'single', model: declaredModels[0] };
+  if (unlabeledVectorChunks > 0) return { kind: 'unrecorded', vectorChunks: unlabeledVectorChunks };
+  return { kind: 'none' };
+}
+
+/**
+ * The model a resume must embed its remaining chunks with - or a throw, when finishing the file at
+ * all would put it in two vector spaces.
+ *
+ * Falling back to the deployment default was safe only while a deployment never moved off its
+ * first embedding model. Once `defaultEmbeddingModel` changes (or an id is retired from
+ * SupportedEmbeddingModelSchema and `isSupportedEmbeddingModel` stops recognising the file's
+ * label), that fallback finishes a PARTIALLY vectorized file in a space its earlier vectors are
+ * not in: one file, two spaces, no error. Cosine across two spaces is noise that can outrank a
+ * genuine match, and the widths need not even differ - ada-002 and 3-small are both 1536 - so
+ * nothing downstream separates the two populations by inspection.
+ *
+ * Refuses only on POSITIVE evidence of a conflict, never on absence of evidence. That asymmetry is
+ * the whole design. Most of the corpus predates per-chunk labeling, so its vectors name no space at
+ * all, and refusing every such file would strand a large, overwhelmingly healthy population to
+ * prevent a hazard that may not be there - the file's unlabeled vectors are usually in the
+ * deployment default already. Those get the resume they have always got, plus a warning, which is
+ * the other half of what this is for: prevented OR reported, never silent.
+ *
+ * A refusal is loud rather than lost. The throw is accounted and rethrown like any other hand-off
+ * failure, so the file carries a visible error and the Reprocess button beside it is the repair.
+ * Recovery is automatic once the block clears: the error carries VECTORIZE_ENQUEUE_ERROR_PREFIX, so
+ * a later resume that CAN honour the space wipes it.
+ *
+ * A refusal therefore speaks to TWO audiences and says different things to each. What it throws is
+ * stored on the FabFile, and `FileIndexingAlert` (and the file browser, and the chat attachment
+ * panel) render that string verbatim in a tooltip to any user who can see the file - so the thrown
+ * text stays short, free of ids and model names, and names the action that surface actually offers.
+ * The model ids, the counts and the operator's repair go to the log beside it.
+ *
+ * The `single` arm is also where retiring an embedding-model id is held to being the migration it
+ * is: an id must not leave SupportedEmbeddingModelSchema while stored rows still name it and hold
+ * vectorless chunks. Nothing at build time can see those rows, so the contract can only be held at
+ * the row - and only for rows that name a space, which is why running the chunk-model backfill is
+ * a prerequisite of that migration rather than a nicety.
+ *
+ * What this decides is a REQUEST, not a guarantee, and the distinction matters for how far the
+ * protection reaches. The vectorize handler re-resolves the model it is sent through
+ * `resolveEmbeddingWithKeylessFallback` (fabFileVectorize.ts) and substitutes keyless Bedrock when
+ * the requested provider has no credential on a keyless stage - then stamps the chunk with what it
+ * actually embedded with. So a credential lapsing mid-file still splits it, whatever is asked for
+ * here. That is a different mechanism from the one this guards (the model SETTING moving, or an id
+ * leaving the enum), it predates this, and `resolveFileLabel` reports it at completion rather than
+ * preventing it. Closing it means teaching the substitution about a file's existing vectors, which
+ * belongs in that handler, not this one.
+ */
+function resolveResumeEmbeddingModel(params: {
+  fabFileId: string;
+  fileLabel: string | null | undefined;
+  committed: CommittedEmbeddingSpace;
+  defaultEmbeddingModel: string;
+  logger: Logger;
+}): string {
+  const { fabFileId, fileLabel, committed, defaultEmbeddingModel, logger } = params;
+  const usableFileLabel = fileLabel && isSupportedEmbeddingModel(fileLabel) ? fileLabel : undefined;
+  const refuse = (userMessage: string, operatorDetail: string): never => {
+    logger.error(`[embeddings] FabFile ${fabFileId} ${operatorDetail}`);
+    throw new Error(`${VECTORIZE_ENQUEUE_ERROR_PREFIX}: ${userMessage}`);
+  };
+
+  switch (committed.kind) {
+    case 'split':
+      return refuse(
+        'this file was partly indexed in more than one search space, so it cannot be finished as ' +
+          'it is. Reprocess it to rebuild the whole file in one space.',
+        `already holds vectors in ${committed.models.length} embedding spaces ` +
+          `(${committed.models.join(', ')}), so no model can finish it whole. Re-embed the file to ` +
+          `consolidate it into one space.`
+      );
+    case 'single':
+      // The chunk label outranks the file label even where the file label is itself usable: a
+      // disagreement means the chunking pass intended one space and the vectors landed in another
+      // (resolveEmbeddingWithKeylessFallback can resolve a different model than was requested), and
+      // it is the vectors that the new ones have to sit beside.
+      return isSupportedEmbeddingModel(committed.model)
+        ? committed.model
+        : refuse(
+            'this file was partly indexed with a search model that is no longer available. ' +
+              'Reprocess it to rebuild the whole file with the current one.',
+            `holds vectors in ${committed.model}, which has left the supported embedding models. ` +
+              `Finishing its remaining chunks in ${defaultEmbeddingModel} would leave one file in two ` +
+              `vector spaces. Restore ${committed.model} to the supported models, or re-embed the file whole.`
+          );
+    case 'unrecorded':
+      // Vectors exist but name no space. The file label is intent rather than observation, yet it
+      // is the best evidence available and what this path has always used, so it still wins.
+      if (usableFileLabel) return usableFileLabel;
+      // Nothing at all to go on. Proceeding is a guess about a file that already holds vectors, so
+      // it is reported rather than made silently - and the repair is cheap and bulk: the chunk-model
+      // backfill (packages/scripts/datalake) labels these rows from vector width, after which this
+      // file resolves through the `single` arm above and is protected properly.
+      logger.warn(
+        `[embeddings] FabFile ${fabFileId} holds ${committed.vectorChunks} vector-bearing chunk(s) in ` +
+          `no recorded embedding space and carries no usable file label; resuming in ` +
+          `${defaultEmbeddingModel}. If that is not the space those vectors are already in, the file ` +
+          `ends up split across two. Run the chunk embedding-model backfill before changing ` +
+          `defaultEmbeddingModel so files like this are protected rather than guessed at.`
+      );
+      return defaultEmbeddingModel;
+    case 'none':
+      // Nothing embedded yet, so there is no space to contradict and no guess to report. The chunks
+      // were SIZED against the file label, so it still wins over the current default where usable.
+      return usableFileLabel ?? defaultEmbeddingModel;
+  }
+}
+
+/**
  * Re-send the vectorize fan-out for the chunks of an already-chunked file that still hold no
  * vector, undoing everything the strand recorded first. This is the recovery half of the
  * committed-chunks-but-no-vectors state: a plain SQS redelivery reaches it, and so does the
  * stranded-vectorize sweep (buildStrandedVectorizeScanFilter) by re-enqueueing a chunk message.
  * Non-destructive - it sends messages only, and the vectorize handler dedupes.
  *
- * The chunks were sized against the model they were chunked under, so that model (not the current
- * default, which may have changed since) is what their embeddings must be generated with.
+ * The chunks were sized against the model they were chunked under, and any vector that already
+ * exists fixes the space the rest must join, so neither is the current default - which may have
+ * moved since. `resolveResumeEmbeddingModel` decides, and refuses rather than split the file.
  *
  * Deliberately NOT gated on `wasStranded`: any redelivery for an already-chunked file resumes, not
  * only one carrying a marker. That is a chosen trade-off, not an accident of where `wasStranded` is
@@ -353,11 +502,6 @@ async function resumeVectorizeEnqueue(
     return;
   }
 
-  const embeddingModel =
-    fabFile.embeddingModel && isSupportedEmbeddingModel(fabFile.embeddingModel)
-      ? fabFile.embeddingModel
-      : defaultEmbeddingModel;
-
   // Undo the strand BEFORE the fan-out, not after. The vectorize handler claims its manifest entry
   // from ['chunking','uploaded','pending'], so a message that lands while the entry still reads
   // 'failed' loses that claim and the file is never counted complete - and these messages can be
@@ -374,6 +518,47 @@ async function resumeVectorizeEnqueue(
   // marker-less file still recovers (see this function's doc comment).
   if (wasStranded) {
     await undoStrand({ fabFileId, batchId: fabFile.batchId, userId, to: 'chunking', ownsError, logger });
+  }
+
+  // Resolved AFTER the strand is undone, and the ordering is load-bearing on the path that feeds
+  // most of these refusals - the rescue sweep, which selects purely on `vectorizeEnqueueFailedAt`
+  // and so only ever delivers files that arrive already stranded.
+  //
+  // Refusing before the undo looks safer and is the bug. The stamp is how the sweep FOUND this
+  // file, so declining to re-stamp it achieves nothing: the stamp stays, the next cycle re-enqueues
+  // the same unfixable file, and it re-DLQs forever. And `markFailedIfNotAlready` only writes into
+  // a file with no error, which a stranded file always has - so the refusal reason would be
+  // swallowed and the user would go on reading the stale transient one.
+  //
+  // Undoing first settles both. `clearStrandedMarkers` drops the stamp so the sweep stops selecting
+  // the file, and clears the error this handler owns so `accountFileFailure` below can write the
+  // real reason into it; `revertStrandBatchAccounting` gives back the failure the strand charged,
+  // so re-accounting it here is a replacement rather than a double count. A permanent refusal
+  // SUPERSEDES the transient strand it replaces, and this is what makes the records say so.
+  let embeddingModel: string;
+  try {
+    embeddingModel = resolveResumeEmbeddingModel({
+      fabFileId,
+      fileLabel: fabFile.embeddingModel,
+      committed: await readCommittedEmbeddingSpace(fabFileId),
+      defaultEmbeddingModel,
+      logger,
+    });
+  } catch (err) {
+    // accountFileFailure, not recordVectorizeEnqueueFailure: the latter re-stamps
+    // `vectorizeEnqueueFailedAt` to put a file back in front of the rescue sweep, which is right
+    // for a transient hand-off failure and wrong for one no retry can clear. The rethrow is what
+    // keeps it loud - SQS retries to the DLQ, as it does for the pre-flight failures above.
+    await accountFileFailure({
+      event,
+      logger,
+      fabFileId,
+      batchId: fabFile.batchId,
+      userId,
+      action: 'Vectorize enqueue',
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
   }
 
   try {
