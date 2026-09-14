@@ -1,5 +1,13 @@
 # @bike4mind/fab-pipeline
 
+## 1.3.2
+
+### Patch Changes
+
+- Updated dependencies [[`7958ee1`](https://github.com/Bike4Mind/bike4mind/commit/7958ee13d277295ed9877a24686aa266265a727f)]:
+  - @bike4mind/common@7.1.1
+  - @bike4mind/db-core@0.5.2
+
 ## 1.3.1
 
 ### Patch Changes
