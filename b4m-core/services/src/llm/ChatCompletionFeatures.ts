@@ -1789,6 +1789,23 @@ function forcedRetrievalFloorFraction(raw: unknown, fallbackPct: number, label: 
  * real loss of precision, and it beats every alternative: there is no floor that transfers across
  * vector spaces, so the choice is between ranking without an absolute cut and guessing a cut that
  * empties the turn.
+ *
+ * `space` is the space the QUERY was embedded in, which is what the scores being gated were produced
+ * against - not a claim about the corpus. `resolveMajorityEmbeddingModel` votes over the parent
+ * files' `embeddingModel`, and that label has exactly one writer: `fabFileService/chunk.ts` records
+ * it when a chunking pass COMMITS, alongside `chunkEmbeddingModelStampedAt: null`. So it names the
+ * model that pass INTENDED to embed with - it is not a completion stamp, and it is not proof that
+ * every vector under it landed in that space (`resumeVectorizeEnqueue` re-embeds only the vectorless
+ * chunks, and falls back to the CURRENT default when the stored label is absent or no longer in
+ * `SupportedEmbeddingModelSchema`). A MAJORITY rather than a unanimity check is what makes that
+ * workable: labelled files decide the space, unlabelled ones abstain, and only a corpus with no
+ * labelled file at all falls back to the `defaultEmbeddingModel` admin setting. Unlabelled chunks
+ * are scored either way - `isForeignEmbeddingModel` gives them the benefit of the doubt, because
+ * withholding on a missing label would blind the common case. That is the right default, not a
+ * guarantee. Where a file's vectors really are from another space, the cosines were already noise
+ * before this function ran, and no floor can rescue them - the mismatch is the bug, not the floor.
+ * The log below therefore names the space the floor was chosen FOR, which is always right, and says
+ * nothing about whether every scored chunk really lives there.
  */
 function resolveForcedRetrievalAbsoluteFloor(configuredPct: number, space: string, logger: Logger): number {
   if (configuredPct !== FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT) return configuredPct / 100;

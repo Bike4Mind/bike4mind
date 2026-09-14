@@ -23,11 +23,15 @@ import { OpenAIEmbeddingModel } from '../schemas/embedding';
  * the embedding migration is not the third.
  *
  * THE KEY IS THE SPACE, AND TODAY THE SPACE IS THE MODEL ID. Mementos key on `model@dims` because
- * they truncate to 512. The file corpus stores full-width vectors and stamps each chunk with the
- * bare model id (`fabfilechunks.embeddingModel`), so the model alone identifies the space here. If
- * a `dimensions` parameter is ever introduced on this path these keys MUST widen to match: two
- * vectors both honestly labelled `text-embedding-3-small`, one 1536 wide and one 512, are different
- * spaces, and cosine between them scores noise rather than similarity.
+ * they truncate to 512. The file corpus stores full-width vectors and records the bare model id in
+ * two places - `fabfilechunks.embeddingModel` per chunk, and `fabfiles.embeddingModel` on the
+ * parent - so the model alone identifies the space here. Forced retrieval keys off the PARENT
+ * label, which is what `resolveMajorityEmbeddingModel` votes over; that label is written at
+ * chunk-commit time and records intent rather than proving where the vectors landed, so it
+ * identifies a space per FILE and not per chunk. If a `dimensions` parameter is ever introduced on
+ * this path these keys MUST widen to match: two vectors both honestly labelled
+ * `text-embedding-3-small`, one 1536 wide and one 512, are different spaces, and cosine between
+ * them scores noise rather than similarity.
  *
  * AN ABSENT ENTRY IS AN ANSWER, NOT AN OVERSIGHT. There is no floor that is safe across unmeasured
  * spaces, so lookup reports absence instead of substituting a shared fallback. The measurement is
