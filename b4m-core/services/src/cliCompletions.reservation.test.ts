@@ -120,10 +120,15 @@ describe('executeCompletion - pre-flight reservation size', () => {
       currentCredits: 100_000,
       maxCreditsPerMember: capBetween,
       userDetails: [],
+      users: [{ userId: 'user1' }],
     };
     const { db, organizations } = buildDb(org);
 
-    await expect(executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' })).rejects.toThrow(/credit/i);
+    await expect(executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' })).rejects.toThrow(
+      // Pinned to the cap message: a bare /credit/i also matches the CLI_CREDITS membership
+      // refusal, so this would pass without ever reaching the cap check.
+      /member credit limit/i
+    );
 
     // Blocked before the pool was touched.
     expect(organizations.incrementCredits).not.toHaveBeenCalled();
