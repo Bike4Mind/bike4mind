@@ -6,10 +6,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { Request } from 'express';
 import { SessionEvents } from '@server/utils/eventBus';
 import { isValidObjectId } from '@server/utils/objectId';
-import {
-  assertSessionOperationalCredits,
-  OPERATIONS_PER_SUMMARIZE_WITH_TAGGING,
-} from '@server/utils/sessionOperationalCreditPreflight';
+import { assertSessionOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
+import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@server/utils/sessionOperationCounts';
 
 const handler = baseApi().post<Request<{}, unknown, unknown, { id: string }>>(async (req, res) => {
   const sessionId = req.query.id;

@@ -1,4 +1,4 @@
-import { insufficientCreditsError, type ISessionDocument } from '@bike4mind/common';
+import { insufficientCreditsError, type ISessionDocument, type ModelInfo } from '@bike4mind/common';
 import { adminSettingsRepository, organizationRepository, userRepository } from '@bike4mind/database';
 import { creditService, isOperationalBillingEnabled } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
@@ -17,13 +17,6 @@ import type { Logger } from '@bike4mind/observability';
  * why a refusal is not final until `operationalSpendSettlesFree` has ruled the model out.
  */
 const MIN_CREDITS_PER_OPERATION = 1;
-
-/**
- * Operational calls a Summarize published with `callTagging` queues: the summary itself, plus the
- * Tag it cascades to at `sessionSummarization.ts:345`. Shared by the publishers that set the flag
- * so they cannot drift apart from the cascade they are counting.
- */
-export const OPERATIONS_PER_SUMMARIZE_WITH_TAGGING = 2;
 
 export interface SessionOperationalCreditPreflightArgs {
   /**
@@ -61,30 +54,29 @@ type BillingOrg = Awaited<ReturnType<typeof organizationRepository.findById>>;
 
 /**
  * Whether the model this work will run on settles at zero credits for ANY token volume, which
- * makes the nominal floor above the wrong question to ask. Two ways to get there, both live:
- * a `freeToRun` backend (Ollama publishes zero rates deliberately) and a model with no row in
- * the price catalog. `getTextModelCost` returns $0 for both (models.ts:639) and
- * `usdToCreditsStochastic` has no 1-credit floor, so settlement debits nothing
- * (recordOperationalUsage.ts:116-119) - refusing that work is strictly worse than the no-gate
- * behavior it replaced.
+ * makes the nominal floor above the wrong question to ask. `freeToRun` is the codebase's only
+ * declaration of that: the backends that publish zero rates deliberately set it
+ * (ollamaBackend.ts:122, localImageBackend.ts:68), `generateModelPriceSeed.ts:47` skips seeding
+ * price rows for a model carrying it, and `getTextModelCost` reads it to decide that $0 on real
+ * usage is intent rather than a gap (models.ts:646-654).
  *
  * The same carve-out the sibling pre-flight makes on `embeddingCostUsd > 0`
  * (pages/api/data-lakes/semantic-search.ts:438). That one can price the exact call because the
  * token count is known at request time; here it is not, so the question is asked one level up:
- * not "what will this cost" but "can this model cost anything at all".
+ * not "what will this cost" but "is this model declared costless".
  *
- * Read off `pricing` rather than by calling `getTextModelCost`: that function's `[UNPRICED_MODEL]`
- * alarm fires on any nonzero usage at $0, and a pre-flight must not emit an alarm that means "a
- * real call just settled free".
+ * An empty or all-zero `pricing` map is deliberately NOT accepted as that declaration, even
+ * though `getTextModelCost` would return $0 for it. Both write paths reject that state outright
+ * with "mark the model freeToRun instead" (ModelPriceModel.ts:91-98, model-prices.ts:213-216)
+ * and modelCatalog.ts:78-81 calls it the intended fail-loud signal, so it only ever reaches a
+ * reader as a gap: price-seed lag, or the per-process `_modelCache` serving this process a map
+ * the SessionEvents process already prices from. Inferring "free" from it would waive the charge
+ * here while settlement debits normally - and this pre-flight is the sole `maxCreditsPerMember`
+ * enforcement point on these paths (recordOperationalUsage.ts:84-88), so a false waive costs
+ * more than the ordinary fail-open elsewhere in this file.
  */
-function settlesFreeForAnyVolume(modelInfo: { freeToRun?: boolean; pricing: Record<number, unknown> }): boolean {
-  if (modelInfo.freeToRun === true) return true;
-  // Every rate, not just input/output: a tier priced solely through cache_read/cache_write can
-  // still charge, and the safe error here is leaving the gate in place rather than waiving it.
-  return Object.values(modelInfo.pricing).every(tier => {
-    const rates = tier as { input?: number; output?: number; cache_read?: number; cache_write?: number };
-    return !rates.input && !rates.output && !rates.cache_read && !rates.cache_write;
-  });
+function settlesFreeForAnyVolume(modelInfo: Pick<ModelInfo, 'freeToRun'>): boolean {
+  return modelInfo.freeToRun === true;
 }
 
 /**

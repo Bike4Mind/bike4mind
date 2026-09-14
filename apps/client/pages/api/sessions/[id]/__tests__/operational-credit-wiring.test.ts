@@ -34,11 +34,11 @@ vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) 
 vi.mock('@server/utils/eventBus', () => ({
   SessionEvents: { Tag: { publish: mockPublishTag }, Summarize: { publish: mockPublishSummarize } },
 }));
-// The constant has to be declared here too: an export the real module has and the mock does not
-// arrives as `undefined`, which would make summary.ts's operationCount assertion vacuous.
+// Only the pre-flight itself is mocked. OPERATIONS_PER_SUMMARIZE_WITH_TAGGING lives in its own
+// unmocked module precisely so the `operationCount: 2` assertion below reads the real constant -
+// re-declaring it in this factory would pin the test to its own copy instead.
 vi.mock('@server/utils/sessionOperationalCreditPreflight', () => ({
   assertSessionOperationalCredits: mockAssertCredits,
-  OPERATIONS_PER_SUMMARIZE_WITH_TAGGING: 2,
 }));
 
 import tagHandler from '../tag';
