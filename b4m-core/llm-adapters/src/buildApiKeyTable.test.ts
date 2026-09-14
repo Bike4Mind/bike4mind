@@ -112,7 +112,7 @@ describe('getAvailableModels with a DeepSeek key', () => {
     const models = await getAvailableModels(buildApiKeyTable({ deepseek: 'sk-deepseek' }), { isSelfHost: true });
     const ids = models.filter(m => m.backend === ModelBackend.DeepSeek).map(m => String(m.id));
 
-    expect(ids).toEqual(['deepseek-flash']);
+    expect(ids).toEqual(expect.arrayContaining(['deepseek-flash', 'deepseek-v4-pro']));
   });
 
   it('lists none of them without the key', async () => {

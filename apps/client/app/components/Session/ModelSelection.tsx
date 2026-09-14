@@ -212,7 +212,7 @@ export const getModelBackend = (model: ModelInfo): string => {
     return 'Moonshot';
   }
 
-  // DeepSeek models: first-party (deepseek-flash) and the
+  // DeepSeek models: first-party (deepseek-flash, deepseek-v4-pro) and the
   // Bedrock-served rows (us.deepseek.r1-v1:0, deepseek.v3-v1:0) all contain
   // "deepseek" in id/name. The Ollama-hosted deepseek-r1:latest also does, so it
   // is excluded by backend here rather than by string, and is caught by the
