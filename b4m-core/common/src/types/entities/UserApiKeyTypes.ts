@@ -95,6 +95,9 @@ export enum ApiKeyScope {
    * check (`requestHasOverwatchAccess`: admin OR developer OR `overwatch:pro`)
    * still runs against the key's owner and can refuse on its own. A key minted
    * with this scope by a user who does not hold Overwatch access opens nothing.
+   * That check and the routes it guards live in the Overwatch overlay package;
+   * neither has an implementation in this repository, so nothing here verifies
+   * the claim - it is a property of the consumer, recorded for the reader.
    */
   OVERWATCH_READ = 'overwatch:read',
 }
