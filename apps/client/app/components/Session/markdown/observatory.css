@@ -443,8 +443,18 @@
   border-collapse: collapse;
   border: 0;
   font-family: var(--b4m-md-font-ui);
-  font-size: 0.84em;
   line-height: 1.45;
+}
+
+/* Cell sizes are set per cell type rather than once on the table, so each one
+   resolves against the block's own text size. Sizing the table and then the
+   head cell made the two em values multiply: 0.68 of 0.84 is 0.57, which put
+   the column labels at about 9px - uppercase, letter-spaced and in the muted
+   tone. Nobody picked 0.57. Keep new cell sizes on this level for the same
+   reason. */
+.b4m-md tbody td,
+.b4m-md tbody th {
+  font-size: 0.84em;
 }
 
 .b4m-md thead th {
