@@ -36,6 +36,17 @@ export interface IOAuthClientDocument extends IMongoDocument {
    * never as an implicitly-trusted secret holder.
    */
   tokenEndpointAuthMethod: 'none' | 'client_secret_post';
+  /**
+   * Trust class, and with it what the token endpoint issues:
+   * - 'first-party': a client B4M owns; receives a full first-party session (access + refresh),
+   *   unchanged legacy behavior, reachable across the API.
+   * - 'relying-party': a third-party client; receives a scope/audience-bound OAuth access token
+   *   (no first-party refresh), default-denied at the route layer except OAuth-reachable routes,
+   *   and gated by recorded user consent (see OAuthGrant).
+   * Defaults to 'first-party' so existing clients grandfather in with no behavior change; a client
+   * is opted into the restricted treatment only by an explicit reclassification.
+   */
+  clientType: 'first-party' | 'relying-party';
   isActive: boolean;
   /** Populated only for Pattern-A federated clients; gates the AI-token exchange. */
   federatedIdp?: IOAuthClientFederatedIdp;
@@ -58,6 +69,7 @@ const OAuthClientSchema = new Schema<IOAuthClientDocument>(
     redirectUris: [{ type: String, required: true }],
     allowedScopes: { type: [String], default: ['openid', 'email', 'profile'] },
     tokenEndpointAuthMethod: { type: String, enum: ['none', 'client_secret_post'], default: 'none' },
+    clientType: { type: String, enum: ['first-party', 'relying-party'], default: 'first-party' },
     isActive: { type: Boolean, default: true },
     // Pattern-A federated trust config. Absent (default) for ordinary "Sign in with B4M" clients;
     // its presence is the gate for the AI-token exchange endpoint. `_id: false` - it's an inline value.

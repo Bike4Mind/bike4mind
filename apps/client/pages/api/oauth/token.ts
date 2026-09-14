@@ -10,10 +10,11 @@
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { oauthAuthorizationCodeRepository, userRepository } from '@bike4mind/database';
+import { oauthAuthorizationCodeRepository, oauthGrantRepository, userRepository } from '@bike4mind/database';
 import { verifyPkce, validateClientSecret, validateClient, generateIdToken } from '@server/auth/oauthServer';
 import { issueSessionForRequest } from '@server/auth/issueSession';
-import { ACCESS_TOKEN_TTL_SECONDS } from '@server/auth/tokenGenerator';
+import { ACCESS_TOKEN_TTL_SECONDS, authTokenGenerator } from '@server/auth/tokenGenerator';
+import { grantCovers, oauthAccessTokenAudience } from '@server/auth/oauthConsent';
 
 const AuthCodeRequestSchema = z.object({
   grant_type: z.literal('authorization_code'),
@@ -98,11 +99,6 @@ const handler = baseApi({ auth: false })
         return res.status(400).json({ error: 'invalid_grant', error_description: 'User not found' });
       }
 
-      const { accessToken, refreshToken } = await issueSessionForRequest(req, user.id, {
-        createdVia: 'oauth-token',
-        tokenVersion: user.tokenVersion ?? 0,
-      });
-
       const userEmail = user.email ?? '';
       const idToken = generateIdToken({
         userId: user.id,
@@ -112,6 +108,44 @@ const handler = baseApi({ auth: false })
         clientId: client_id,
         scopes: authCode.scopes,
         nonce: authCode.nonce,
+      });
+
+      // Relying-party clients get a scope/audience-bound OAuth access token, NOT a full first-party
+      // session: no first-party refresh token, and the route gate (oauthRouteGate) default-denies it
+      // everywhere except OAuth-reachable routes. Consent must already be recorded (the authorize
+      // flow upserts the grant); re-check it here as defense in depth so a code minted before a
+      // client was reclassified - or for a client whose grant was revoked - cannot be redeemed.
+      if (client.clientType === 'relying-party') {
+        const grant = await oauthGrantRepository.findGrant(user.id, client_id);
+        if (!grant || !grantCovers(grant.scopes, authCode.scopes)) {
+          return res.status(400).json({ error: 'access_denied', error_description: 'User consent required' });
+        }
+
+        const scopeStr = authCode.scopes.join(' ');
+        const accessToken = authTokenGenerator.signAccessToken(user.id, user.tokenVersion ?? 0, {
+          kind: 'oauth',
+          client_id,
+          scope: scopeStr,
+          aud: oauthAccessTokenAudience(),
+        });
+
+        return res.json({
+          access_token: accessToken,
+          id_token: idToken,
+          token_type: 'Bearer',
+          expires_in: ACCESS_TOKEN_TTL_SECONDS,
+          // RFC 6749 3.3: echo the granted scope so the client sees what it actually got.
+          scope: scopeStr,
+          // No refresh_token: a relying party re-authorizes through the browser flow, which its
+          // remembered consent makes silent. ponytail: rotated OAuth refresh tokens (RFC 9700
+          // 2.2.2) are the upgrade path if a headless relying party ever needs one.
+        });
+      }
+
+      // First-party clients keep the existing full first-party session (access + refresh), unchanged.
+      const { accessToken, refreshToken } = await issueSessionForRequest(req, user.id, {
+        createdVia: 'oauth-token',
+        tokenVersion: user.tokenVersion ?? 0,
       });
 
       return res.json({
