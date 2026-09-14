@@ -21,7 +21,13 @@ describe('openSearchVectorSearch', () => {
       minScore: 0,
       adapters: { knnSearch },
     });
-    expect(result).toEqual({ results: [], hitsReturned: 0, hitsSkippedUnknownFile: 0, filesWithHits: new Set() });
+    expect(result).toEqual({
+      results: [],
+      hitsReturned: 0,
+      hitsSkippedUnknownFile: 0,
+      filesWithHits: new Set(),
+      backendQueryMs: null,
+    });
     expect(knnSearch).not.toHaveBeenCalled();
   });
 
