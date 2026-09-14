@@ -39,9 +39,11 @@ describe('preview gate duplicate-run collapse', () => {
   const src = fs.readFileSync(GATE, 'utf8');
   const block = concurrencyBlock(src);
 
-  it('declares a top-level concurrency group that cancels the superseded run', () => {
+  it('declares a top-level concurrency group that serializes rather than cancels', () => {
     expect(block).not.toBe('');
-    expect(block).toMatch(/^ {2}cancel-in-progress: true$/m);
+    // Cancelling leaves a CANCELLED check run that a required gate can read as the
+    // current verdict, blocking a PR whose real verdict was a pass.
+    expect(block).toMatch(/^ {2}cancel-in-progress: false$/m);
   });
 
   it('keys the group on the PR, so one PR can never cancel another', () => {

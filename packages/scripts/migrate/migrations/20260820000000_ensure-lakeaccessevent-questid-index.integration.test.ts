@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
 import { LakeAccessEventModel, safeDropIndex } from '@bike4mind/database';
-import { createMongoServer } from '../../../database/src/__test__/createMongoServer';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
 
 // A core migration imported transitively via '@bike4mind/database' need not evaluate SST config,
 // but mirror the sibling ensure-organization-member-index test's guard so this stays robust if
@@ -9,6 +9,10 @@ import { createMongoServer } from '../../../database/src/__test__/createMongoSer
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
 import migration from './20260820000000_ensure-lakeaccessevent-questid-index';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const INDEX_NAME = 'questId_1';
 
@@ -48,7 +52,7 @@ describe('ensure-lakeaccessevent-questid-index migration (real DB)', () => {
     // sparse, not a plain index: most rows have no questId, and options
     // can't be changed after the fact without a coordinated drop-and-rebuild.
     expect(idx?.sparse).toBe(true);
-  }, 30000);
+  });
 
   it('is idempotent on re-run', async () => {
     await migration.up();
@@ -56,5 +60,5 @@ describe('ensure-lakeaccessevent-questid-index migration (real DB)', () => {
 
     const idx = (await LakeAccessEventModel.collection.indexes()).find(i => i.name === INDEX_NAME);
     expect(idx).toBeDefined();
-  }, 30000);
+  });
 });
