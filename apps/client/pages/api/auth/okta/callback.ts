@@ -367,12 +367,18 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       }
       Logger.debug('[Okta Callback] Updated existing user:', user.id);
     } else {
-      // Create new user (no password needed for OAuth users)
-      // Email is guaranteed to exist at this point due to validation above
+      // Create new user (no password needed for OAuth users). The email is present
+      // (validated above) but only becomes the account's login identity when the
+      // provider asserts it as verified - an unverified email would otherwise be a
+      // seedable identity a later verified sign-in could auto-link into. Same gate
+      // the passport create path applies (verifyCallback.ts) and the same
+      // OIDC-native boolean the link branch above reads (do NOT use
+      // isProviderEmailVerified() here - see that comment). Emailless accounts are
+      // schema-valid (partial unique index on email); sign-in still succeeds.
       user = await User.create({
         name,
         username: name,
-        email,
+        ...(userInfo.email_verified === true ? { email } : {}),
         hasUsablePassword: false,
         isAdmin: false,
         oauthCredentials,

@@ -269,6 +269,51 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
   });
 });
 
+describe('/api/auth/okta/callback - new-account email verification gate', () => {
+  it('persists the email when the provider asserts email_verified === true', async () => {
+    await runCallback({
+      user: null,
+      userInfo: { sub: 'okta-v', email: 'verified@example.com', email_verified: true, name: 'Ver Ified' },
+    });
+
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ email: 'verified@example.com' }));
+  });
+
+  it('creates the account WITHOUT an email when email_verified is false', async () => {
+    const res = await runCallback({
+      user: null,
+      userInfo: { sub: 'okta-u', email: 'unverified@example.com', email_verified: false, name: 'Un Verified' },
+    });
+
+    // Sign-in still succeeds, but the unverified email is never written as a login identity.
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(mockCreate.mock.calls[0][0].email).toBeUndefined();
+  });
+
+  it('creates the account WITHOUT an email when the email_verified claim is absent', async () => {
+    const res = await runCallback({
+      user: null,
+      userInfo: { sub: 'okta-a', email: 'noclaim@example.com', name: 'No Claim' },
+    });
+
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(mockCreate.mock.calls[0][0].email).toBeUndefined();
+  });
+
+  it('still rejects (does not create) when the email itself is absent', async () => {
+    const res = await runCallback({
+      user: null,
+      userInfo: { sub: 'okta-none', email_verified: true, name: 'No Email' },
+    });
+
+    // The pre-create email-required guard is untouched by the verification gate.
+    expect(res._getRedirectUrl()).toContain('email_required');
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+});
+
 describe('/api/auth/okta/callback - IDP email-domain bind', () => {
   const victim = {
     id: 'victim-1',
