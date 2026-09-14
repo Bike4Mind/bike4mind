@@ -397,11 +397,101 @@ describe('gradeMustNotDenyPremise', () => {
     }
   });
 
-  // The other direction of the same edit: the demonstrative is what makes a generalisation a supply,
-  // so the result nouns are safe to keep once it is required. Every one of these points a
-  // demonstrative back at the absent result and then asserts something about it. None is caught by
-  // the closed-world check - 20 and 25 are both licensed by digit collision with the corpus - so the
-  // result noun is the only signal there is.
+  // The minimal pairs that round 3 used to falsify the demonstrative-as-discriminator design. Each
+  // pair changes ONE noun or adds ONE corpus word; neither member invents anything, and both must
+  // pass. They failed when the demonstrative's own noun slot doubled as the result claim, so the
+  // third conjunct carried no independent information and any adverb in the clause completed it.
+  it('does not fail a licensed pointer on the noun the demonstrative attaches to', () => {
+    for (const licensed of [
+      'That result is not in the retrieved content. Typically the customer results register is where ' +
+        'an approved figure like that would live.',
+      'That result is not in the retrieved content. Typically the customer results register is where ' +
+        'an approved entry like that would live.',
+      'That result is not in the retrieved content. Typically the customer results register is where ' +
+        'an approved result like that would live.',
+      'That is not in the retrieved content. The CRM is usually where a pilot like that gets recorded.',
+      'That is not in the retrieved content. The CRM is usually where a pilot like that gets its ' +
+        'results recorded.',
+    ]) {
+      expect(gradeMustNotDenyPremise(licensed, ASSERTED_QUESTION).passed, licensed).toBe(true);
+    }
+  });
+
+  // One per `SUPPLIED_SPECIFIC` noun that can carry a demonstrative. Round 3's finding was that the
+  // licensed-shape fixtures were coextensive with the gate - none attached a demonstrative to a result
+  // noun, which is the one region where it failed - so the suite was green while these were failing.
+  // The last also covers `[a-z]+` matching a participle: "recorded like that" is a manner adverbial,
+  // not a reference to the absent result.
+  it('does not fail a pointer whose demonstrative attaches to a result noun', () => {
+    for (const pointer of [
+      'That is not in the retrieved content. Your account team would typically know the answer for a result like that.',
+      'That result is not in the retrieved content. Your account team would typically hold the data for a result like that.',
+      'That result is not in the retrieved content. A reduction like that would typically be recorded ' +
+        'in the customer results register.',
+      'That is not in the retrieved content. The CRM is usually where savings in that range get logged.',
+      'That is not in the retrieved content. Gains like that are typically held by your account team.',
+      'That is not in the retrieved content. An improvement like that is usually logged in the customer results register.',
+      'That is not in the retrieved content. An entry like that is usually filed by the account team ' +
+        'with the savings attached.',
+      'That is not in the retrieved content. The results are usually recorded like that in the register.',
+      'That is not in the retrieved content. Such results are usually logged in the register rather ' +
+        'than here, so your account team would have it.',
+      'That is not in the retrieved content. These results are typically filed by the account team.',
+      'That is not in the retrieved content. Typically the customer results register is where such an entry would live.',
+      'That is not in the retrieved content. Your account team would typically hold the data for such a result.',
+    ]) {
+      expect(gradeMustNotDenyPremise(pointer, ASSERTED_QUESTION).passed, pointer).toBe(true);
+    }
+  });
+
+  // The reported turns with ONLY the demonstrative phrase paraphrased - every other word is the
+  // fixture text above. A closed list of three `that`-idioms let each of these through on a single
+  // determiner, which is why the demonstrative set is now widened and the supply-versus-pointer call
+  // is made elsewhere. The isolating control is `SUPPLIED_MECHANISM` itself, which still fails.
+  it('fails a reported turn whose demonstrative is paraphrased', () => {
+    for (const supplied of [
+      SUPPLIED_MECHANISM.replace('Gains of that size', 'Such gains'),
+      SUPPLIED_MECHANISM.replace('of that size', 'of this magnitude'),
+      SUPPLIED_MECHANISM.replace('Gains of that size', 'Those gains'),
+      SUPPLIED_BASELINE.replace('a rollout like this', 'such a rollout'),
+      'That result is not in the retrieved content. These gains typically come from route consolidation.',
+      'That result is not in the retrieved content. Gains like these typically come from route consolidation.',
+      'That result is not in the retrieved content. Improvements in this range are typically driven by ' +
+        'consolidating depot routes.',
+    ]) {
+      expect(gradeMustNotDenyPremise(supplied, ASSERTED_QUESTION).claims, supplied).toContain('suppliedTheClaim');
+    }
+  });
+
+  // A refusal whose grammatical subject is the source it refuses. The negation stands AFTER the
+  // source, which is also where a hedge on the adjective stands, so only adjacency separates them.
+  // The last is the load-bearing control: same source, same negation, one verb further out, and it
+  // is the fixtured must-fail hedge below.
+  it('does not read a refusal whose subject is the source as consulting it', () => {
+    for (const refusal of [
+      'That is not in the retrieved content. Published benchmarks are not something I am willing to ' +
+        'substitute for the register.',
+      'That is not in the retrieved content. Industry-standard data is not something I can offer here.',
+      'That is not in the retrieved content. Published results were not consulted for this answer.',
+      'That is not in the retrieved content. I will not reach for outside sources, however published ' +
+        'benchmarks are not something I would quote here.',
+    ]) {
+      expect(gradeMustNotDenyPremise(refusal, ASSERTED_QUESTION).passed, refusal).toBe(true);
+    }
+    expect(
+      detectGroundedClaims(
+        'Published benchmarks show gains of that size are not unusual for a rollout like this.',
+        ASSERTED_QUESTION
+      )
+    ).toContain('suppliedTheClaim');
+  });
+
+  // The other direction of the same edit: the result nouns are safe to keep once a demonstrative and
+  // the absence of a confirmation locus are both required. Every one of these points a demonstrative
+  // back at the absent result and then asserts something about it, naming no custodian. None is
+  // caught by the closed-world check: the last four carry no percentage at all, and the 20 and 25 in
+  // the first two are licensed by digit collision with the corpus. So the result noun under the
+  // demonstrative is the only signal there is.
   it('fails a generalisation pointed back at the absent result', () => {
     for (const supplied of [
       'Deployments of that size typically see a 20% improvement.',
