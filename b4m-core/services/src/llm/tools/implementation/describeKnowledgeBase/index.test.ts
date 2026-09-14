@@ -43,6 +43,8 @@ const emptyHealth = {
   fullyVectorizedFiles: 0,
   failedFiles: 0,
   inFlightFiles: 0,
+  unmeasuredFiles: 0,
+  retrievalOnlyFiles: 0,
   totalChunks: 0,
   totalEmbeddedChunks: 0,
 };
@@ -143,6 +145,7 @@ describe('describe_knowledge_base', () => {
       {},
       {
         summarizeDataLakeIndexingHealth: vi.fn().mockResolvedValue({
+          ...emptyHealth,
           chunkedFiles: 3,
           fullyVectorizedFiles: 1,
           failedFiles: 2,
@@ -161,6 +164,55 @@ describe('describe_knowledge_base', () => {
     // findDataLakeHealthMembers' chunk-bearing $match) is counted here.
     expect(out).toContain('2 failed');
     expect(out).toContain('9 chunk(s) total (4 carrying a vector)');
+    // Nothing is unmeasured here, so the vector count is a measurement and says so - no "at least".
+    expect(out).toContain('0 not measured');
+    expect(out).not.toContain('carry no indexing counter');
+  });
+
+  it('reports an unmeasured member as unmeasured, never as work still in progress (#2737)', async () => {
+    const ctx = makeContext(
+      {},
+      {
+        summarizeDataLakeIndexingHealth: vi.fn().mockResolvedValue({
+          ...emptyHealth,
+          chunkedFiles: 74,
+          fullyVectorizedFiles: 31,
+          inFlightFiles: 0,
+          unmeasuredFiles: 43,
+          totalChunks: 881,
+          totalEmbeddedChunks: 340,
+        }),
+      }
+    );
+    const out = await run(ctx);
+    // The lake this was measured on was FULLY indexed. Reporting the 43 as in flight told the model
+    // a definite thing about work in progress that nobody had established.
+    expect(out).toContain('0 still indexing');
+    expect(out).toContain('43 not measured');
+    // An absent counter sums as zero, so the vector figure is a floor - it must not read as a count.
+    expect(out).toContain('881 chunk(s) total (at least 340 carrying a vector)');
+    expect(out).toContain('carry no indexing counter');
+    expect(out).toContain('Report their state as unknown');
+  });
+
+  it('discloses the members retrieval serves that the reported corpus excludes (#2737)', async () => {
+    const ctx = makeContext(
+      {},
+      {
+        summarizeDataLakeIndexingHealth: vi.fn().mockResolvedValue({
+          ...emptyHealth,
+          chunkedFiles: 74,
+          fullyVectorizedFiles: 74,
+          retrievalOnlyFiles: 10,
+          totalChunks: 881,
+          totalEmbeddedChunks: 881,
+        }),
+      }
+    );
+    const out = await run(ctx);
+    // Reporting excludes `status: 'pending'`; retrieval's filter does not. Both are deliberate, so
+    // the fix is that the size of the gap is stated rather than two readers deriving 84 and 74.
+    expect(out).toContain('search can also reach 10 member(s)');
   });
 
   it('derives folder structure from relativePath using the shared discriminator, not a truthy check', async () => {
@@ -290,9 +342,9 @@ describe('describe_knowledge_base', () => {
           .mockResolvedValue([{ fabFileId: 'f1', fileName: 'a.md', relativePath: null }]),
       }
     );
-    (
-      ctx.db.fabfilechunks!.distinctRetrievalIndexModelsByFabFileIds as ReturnType<typeof vi.fn>
-    ).mockResolvedValue(['text-embedding-ada-002']);
+    (ctx.db.fabfilechunks!.distinctRetrievalIndexModelsByFabFileIds as ReturnType<typeof vi.fn>).mockResolvedValue([
+      'text-embedding-ada-002',
+    ]);
     const out = await run(ctx);
     expect(ctx.db.fabfilechunks!.distinctRetrievalIndexModelsByFabFileIds).toHaveBeenCalledWith(['f1']);
     // The stale model is the point: this is the lake where retrieval quietly returns less than the
@@ -410,6 +462,26 @@ describe('describe_knowledge_base honours the session retrieval-exclusion contra
     expect(out).toContain('2 fully vectorized');
     expect(out).toContain('1 still indexing');
     expect(out).toContain('1 failed');
+  });
+
+  it('splits unmeasured from in-flight on the walked path too, not only in the aggregate (#2737)', async () => {
+    const rows = [
+      // Measured and short: vectorization really is working on this one.
+      { ...kept, id: 'a', chunkCount: 4, embeddedChunkCount: 1, error: null },
+      // Never measured: a legacy row that predates the counter. Absent is not zero.
+      { ...kept, id: 'b', chunkCount: 3, embeddedChunkCount: null, error: null },
+      { ...kept, id: 'c', chunkCount: 2, embeddedChunkCount: undefined, error: null },
+    ];
+    const search = vi.fn().mockResolvedValue({ data: rows, total: rows.length, hasMore: false });
+    const ctx = makeContext({ retrievalFilter: { vectorizedOnly: true } } as never, { search });
+    const out = await run(ctx);
+    // summarizeHealth is a second, hand-written implementation of the same definitions - a bucket
+    // added only to the `$group` would leave this path still asserting progress for rows b and c.
+    expect(out).toContain('1 still indexing');
+    expect(out).toContain('2 not measured');
+    expect(out).toContain('9 chunk(s) total (at least 1 carrying a vector)');
+    // These rows came back FROM retrieval, so there is no reporting-vs-retrieval gap to disclose.
+    expect(out).not.toContain('search can also reach');
   });
 
   it('reports a floor, and says so, when the walk hits its scan bound', async () => {
