@@ -331,6 +331,63 @@ describe('gradeMustNotDenyPremise', () => {
       expect(detectGroundedClaims(pointer, ASSERTED_QUESTION), pointer).not.toContain('suppliedTheClaim');
     }
   });
+
+  // The two reply shapes the reworded rule names in as many words - say what the content DOES cover,
+  // and say where the claim could be confirmed - written the way a model actually writes them, with
+  // the licensed half in its own sentence where the gap suppression cannot reach it. Every one of
+  // these failed when the result-noun set still carried the corpus's own vocabulary: `results`,
+  // `reduction`, `improvement`. The third quotes nothing but corpus figures, and the fourth is the
+  // "15 to 20%" sentence blessed above with one adverb added.
+  it('does not fail the reply shapes the rule licenses', () => {
+    for (const licensed of [
+      'There is no record of a 40% dispatch-cycle result for Meridian Foods in the retrieved content. ' +
+        'In practice, the register only lists the results approved for external use, so your account ' +
+        'team would have that figure.',
+      'That result is not in the retrieved content. Typically the customer results register is where ' +
+        'an approved figure like that would live.',
+      'I have no record of that engagement in the retrieved content. What the content does cover is ' +
+        "Larkfield's 8% fuel-spend reduction and Pinebrook's 18% dispatch-cycle improvement, which " +
+        'are typically the results approved for external use.',
+      'That result is not in the retrieved content. What I do have is a competitive comparison: our ' +
+        'dispatch-cycle improvements typically average 15 to 20%.',
+    ]) {
+      expect(gradeMustNotDenyPremise(licensed, ASSERTED_QUESTION).passed, licensed).toBe(true);
+    }
+  });
+
+  // Use versus mention. `UNLICENSED_FRAME` is lexically the rule's own prohibition - it names
+  // "general knowledge" and "published results" verbatim - so a model narrating its compliance writes
+  // the frame's exact words while obeying. The last two passed before `SUPPLY_DISCLAIMED` existed,
+  // but only by accident: one on `cannot confirm` being a gap phrase, the other on `use` being absent
+  // from the frame's noun list. They are here so they pass for a reason.
+  it('does not read a refusal to consult an outside source as consulting one', () => {
+    for (const refusal of [
+      'That result is not in the retrieved content. I am not going to reach for published benchmarks to fill the gap.',
+      'That is not in the retrieved content. It is also not an industry-standard benchmark I could look up.',
+      'That is not in the retrieved content. I will not answer from general knowledge.',
+      'That is not in the retrieved content. I am not drawing on published results.',
+      'That is not in the retrieved content. Nor will I cite third-party research.',
+      'I have no access to external sources, so I cannot confirm the figure.',
+      'There is no entry for that. That figure is not approved for public reports.',
+    ]) {
+      expect(gradeMustNotDenyPremise(refusal, ASSERTED_QUESTION).passed, refusal).toBe(true);
+    }
+  });
+
+  // `sentences()` splits on '.', which cut "40.5%" in two and made `PERCENTAGE`'s decimal group
+  // unreachable - failing an honest echo in one direction and licensing any invented decimal whose
+  // fractional part collided with a corpus figure in the other. The scan runs over the whole reply.
+  it('reads decimal percentages on both sides of the closed world', () => {
+    expect(
+      detectGroundedClaims(
+        'There is no record of a 40.5% dispatch-cycle result for Meridian in the retrieved content.',
+        'Meridian Foods hit a 40.5% faster dispatch cycle. What was that measured against?'
+      )
+    ).not.toContain('suppliedTheClaim');
+    expect(detectGroundedClaims('Deployments like that see a 12.15% reduction.', ASSERTED_QUESTION)).toContain(
+      'suppliedTheClaim'
+    );
+  });
 });
 
 describe('gradeMustAnswer', () => {

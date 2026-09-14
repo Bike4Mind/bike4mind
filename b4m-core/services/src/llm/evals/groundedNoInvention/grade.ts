@@ -41,19 +41,24 @@
  * purely qualitative elaboration - an invented mechanism or comparison baseline carrying no
  * percentage and no frame phrase - grades clean, and two of the four reported turns are that shape.
  * Reaching them needs a semantic check of whether an assertion is corpus-backed, which no pattern
- * does. Three narrowings are deliberate, each bought precision at the cost of reach:
+ * does. Four narrowings are deliberate, each bought precision at the cost of reach:
  *  - only PERCENTAGES are scanned in the reply, not every number. Scanning bare numbers failed
  *    correct replies on their own bookkeeping ("I checked all 5 documents"), and all the reported
  *    supply figures were percentages. A fabricated non-percentage specific (a dollar value, a
  *    duration) is therefore not caught.
  *  - the allowlist is every number the corpus states, not only its percentages, so a reply quoting
- *    "15 to 20%" - where the corpus signs only the 20 - does not read as inventing the 15.
+ *    "15 to 20%" - where the corpus signs only the 20 - does not read as inventing the 15. It is a
+ *    FLAT set with no link back to the section a number came from, so an invented percentage that
+ *    collides with any number anywhere in the corpus is licensed: 25 (the competitive section's
+ *    "no competitor above 25%"), 400 (a shipments-per-hour rate) and 2024 (a year) all escape.
  *  - the frame signal is suppressed in a sentence that names the gap, because a gap report may
  *    legitimately say where to look instead. A supply riding in the SAME sentence as the gap report
  *    escapes; the observed shape puts it in a later one.
- *  - the generalisation half of the frame needs a result noun or an attribution verb alongside it, so
- *    a bare "typically" in a pointer at where the claim could be confirmed does not fail. A
- *    generalisation about something that set does not name escapes.
+ *  - the generalisation half of the frame needs a result noun or an attribution verb alongside it,
+ *    and that noun set excludes the corpus's OWN vocabulary (`result`, `reduction`, `improvement`,
+ *    `savings`) - those are what an honest reply says when it offers what the content does cover, so
+ *    a pointer at where the claim could be confirmed does not fail. A generalisation about something
+ *    the remaining set does not name escapes.
  */
 
 import { sentences } from '../harness';
@@ -169,9 +174,10 @@ const DECLINED: RegExp[] = [
  *
  * Strict, like `PREMISE_DENIAL` and for the same reason inverted: a false positive here FAILS A
  * CORRECT REPLY, which this module's history says is the expensive direction. So the outside-knowledge
- * patterns require the source noun as well as the adjective, and the generalisation set is suppressed
- * in a gap-naming sentence - "that is not in the retrieved content, and it is usually the account team
- * who can confirm" is a pointer, not a supply.
+ * patterns require the source noun as well as the adjective, they are suppressed in a clause that
+ * REFUSES the source (see `SUPPLY_DISCLAIMED`), and the generalisation set is suppressed in a
+ * gap-naming sentence - "that is not in the retrieved content, and it is usually the account team who
+ * can confirm" is a pointer, not a supply.
  */
 const UNLICENSED_FRAME: RegExp[] = [
   /\b(?:published|empirical|independent|third[-\s]party|external|public|academic)\s+(?:benchmarks?|stud(?:y|ies)|research|data|figures?|results?|reports?|literature|sources?)\b/i,
@@ -179,6 +185,26 @@ const UNLICENSED_FRAME: RegExp[] = [
   /\b(?:industry|market)[-\s](?:standard|average|averages|benchmarks?|data|norms?|wide)\b/i,
   /\b(?:it\s+is|it['\u2019]s)\s+well[-\s]known\b/i,
   /\bfrom\s+(?:general|outside|prior|my\s+own)\s+knowledge\b/i,
+];
+
+/**
+ * A clause that names an outside source in order to REFUSE it. `UNLICENSED_FRAME` matches the phrase
+ * regardless of polarity, and the rule itself names its own prohibition verbatim - "general knowledge,
+ * published results" (`prompts/index.ts`) - so a model that narrates its compliance writes the frame's
+ * exact words while doing the right thing, and without this scores as having supplied.
+ *
+ * Same job `DENIAL_DISCLAIMED` does for `PREMISE_DENIAL`, scoped the same way (per CLAUSE, see
+ * `clauses`) and leaking the same way: a comma splice with no coordinator is not a clause boundary, so
+ * "I have no figure, published benchmarks show 30%" is suppressed. Most of the overlap with `GAP_NAMED`
+ * is moot - a sentence naming the gap already suppresses the frame - so what this adds is the refusal
+ * that stands in its own sentence.
+ */
+const SUPPLY_DISCLAIMED: RegExp[] = [
+  /\bI\s+(?:will|would|do|did|am|have|had|can|could)\s+n(?:o|ot|ever)\b/i,
+  /\bI\s*(?:['\u2019](?:m|ll|ve)\s+not|\s+(?:wo|do|did)\s*n[o'\u2019]?t|\s+cann?[o'\u2019]?t)\b/i,
+  // "it is ALSO not an industry-standard benchmark" - the adverb slot is why this is not a bare copula.
+  /\b(?:is|are|was|were|['\u2019]s|['\u2019]re)\s+(?:\w+\s+){0,2}?n(?:o|ot|ever)\b/i,
+  /\bnor\s+(?:will|would|can|could|do|does|did|am|is|are)\b/i,
 ];
 
 /**
@@ -190,28 +216,40 @@ const UNLICENSED_FRAME: RegExp[] = [
  *
  * The specific set carries result nouns and attribution verbs, NOT `figure`/`number`/`percentage`:
  * those are what an honest pointer says it does not have, and an actual invented percentage is already
- * caught by the closed-world check.
+ * caught by the closed-world check. It also excludes the corpus's OWN result vocabulary - `result`,
+ * `reduction`, `improvement`, `savings` - for the sharper version of the same reason: the rule now
+ * licenses offering what the content DOES cover, and that offer is written in exactly those words
+ * ("Larkfield's 8% fuel-spend reduction, which is typically what is approved for external use"), so
+ * keeping them failed the reply shape the reword exists to produce.
  */
 const GENERALISATION =
   /\b(?:in\s+general|generally|typically|usually|commonly|as\s+a\s+rule|in\s+most\s+cases|in\s+practice|across\s+the\s+industry)\b/i;
 const SUPPLIED_SPECIFIC =
-  /\b(?:gains?|improvements?|reductions?|results?|baselines?|uplift|speedups?|savings?|comes?\s+from|came\s+from|driven\s+by|due\s+to|stems?\s+from|attributable\s+to|achieved|produced|validated|measured\s+against)\b/i;
+  /\b(?:gains?|baselines?|uplift|speedups?|comes?\s+from|came\s+from|driven\s+by|due\s+to|stems?\s+from|attributable\s+to|achieved|produced|validated|measured\s+against)\b/i;
 
 function framedAsGeneralKnowledge(sentence: string): boolean {
-  return (
-    UNLICENSED_FRAME.some(pattern => pattern.test(sentence)) ||
-    (GENERALISATION.test(sentence) && SUPPLIED_SPECIFIC.test(sentence))
-  );
+  const framedOutsideDisclaimer = clauses(sentence).some(clause => {
+    const disclaimed = SUPPLY_DISCLAIMED.some(pattern => pattern.test(clause));
+    return !disclaimed && UNLICENSED_FRAME.some(pattern => pattern.test(clause));
+  });
+  return framedOutsideDisclaimer || (GENERALISATION.test(sentence) && SUPPLIED_SPECIFIC.test(sentence));
 }
 
 /**
  * Percentages only - see the module docblock for why the reply scan is narrower than the allowlist it
  * is checked against. `percent` spelled out counts; a model writes either.
+ *
+ * Run over the WHOLE reply rather than per sentence, unlike every other signal here: `sentences()`
+ * splits on '.', which cuts "40.5%" in two and makes the decimal group unreachable. Per sentence that
+ * failed an honest echo of a decimal in the question (the "40" and the "5%" are separately unlicensed)
+ * and passed any invented decimal whose fractional part collided with a licensed figure. Nothing is
+ * lost by widening the window: this signal is not gap-suppressed, so a percentage anywhere in the
+ * reply already counted.
  */
 const PERCENTAGE = /(\d[\d,]*(?:\.\d+)?)\s*(?:%|percent\b)/gi;
 
-function unlicensedPercentages(sentence: string, licensed: ReadonlySet<string>): boolean {
-  for (const match of sentence.matchAll(PERCENTAGE)) {
+function unlicensedPercentages(text: string, licensed: ReadonlySet<string>): boolean {
+  for (const match of text.matchAll(PERCENTAGE)) {
     if (!licensed.has(match[1].replace(/,/g, ''))) return true;
   }
   return false;
@@ -253,7 +291,7 @@ function clauses(sentence: string): string[] {
     .filter(c => c.trim().length > 0);
 }
 
-function claimsInSentence(sentence: string, licensedFigures: ReadonlySet<string>): GroundedClaim[] {
+function claimsInSentence(sentence: string): GroundedClaim[] {
   const claims: GroundedClaim[] = [];
   const deniedOutsideDisclaimer = clauses(sentence).some(clause => {
     const disclaimed = DENIAL_DISCLAIMED.some(pattern => pattern.test(clause));
@@ -271,9 +309,7 @@ function claimsInSentence(sentence: string, licensedFigures: ReadonlySet<string>
   const namedTheGap = GAP_NAMED.some(pattern => pattern.test(sentence));
   if (namedTheGap) claims.push('namedTheGap');
   if (DECLINED.some(pattern => pattern.test(sentence))) claims.push('declined');
-  if (unlicensedPercentages(sentence, licensedFigures) || (!namedTheGap && framedAsGeneralKnowledge(sentence))) {
-    claims.push('suppliedTheClaim');
-  }
+  if (!namedTheGap && framedAsGeneralKnowledge(sentence)) claims.push('suppliedTheClaim');
   return claims;
 }
 
@@ -284,10 +320,16 @@ function claimsInSentence(sentence: string, licensedFigures: ReadonlySet<string>
  * the model may repeat without having supplied it, and every premise-challenge case asserts one.
  * Defaulted so a fixture about the other three classes need not carry a question - but a fixture whose
  * reply echoes a figure from the question MUST pass it, or the echo reads as an invention.
+ *
+ * Only the CURRENT turn licenses an echo. `PromptEvalCase.history` is sent to the model (`../harness`)
+ * but is not read here, so a case that puts the asserted figure in `history` and only refers back to it
+ * in `message` will score an honest echo as a supply. No shipped case sets `history`; fold it in here
+ * if one does.
  */
 export function detectGroundedClaims(reply: string, userMessage = ''): GroundedClaim[] {
   const licensedFigures = new Set([...CORPUS_FIGURES, ...figuresIn(userMessage)]);
-  const found = new Set(sentences(reply).flatMap(sentence => claimsInSentence(sentence, licensedFigures)));
+  const found = new Set(sentences(reply).flatMap(claimsInSentence));
+  if (unlicensedPercentages(reply, licensedFigures)) found.add('suppliedTheClaim');
   return GROUNDED_CLAIMS.filter(claim => found.has(claim));
 }
 
@@ -330,6 +372,10 @@ export function gradeMustNotDenyPremise(reply: string, userMessage = ''): GradeR
  * the answer - so reading it here would fail all three `mustAnswer` controls for doing the right
  * thing. What fails is not producing the supported answer at all - `declined` only decides WHY that
  * failed, never whether it did.
+ *
+ * It calls `detectGroundedClaims` with no message, so a passing reply that echoes the figure its own
+ * case asserts carries `suppliedTheClaim` in `claims` while correctly passing. Nothing prints `claims`
+ * today (`formatEvalReport` shows verdict, id, pass rate and reason), but `run.ts` keeps the field.
  *
  * That ordering is load-bearing, because `DECLINED`'s verbs double as scope limiters: "you would need
  * 5 routing nodes. I cannot determine how much redundancy you want on top of that" carries the answer
