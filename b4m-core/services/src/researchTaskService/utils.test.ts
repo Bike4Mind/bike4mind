@@ -86,6 +86,7 @@ describe('findExistingResearchData utils', () => {
       findByMetadataUrlAndOrganizationId: vi.fn(),
       findByMetadataUrlAndUserId: vi.fn(),
       findByUrlAndOrganizationId: vi.fn(),
+      findByUrlAndUserIdAndOrganizationId: vi.fn(),
       findByUrlAndUserId: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
@@ -130,7 +131,7 @@ describe('findExistingResearchData utils', () => {
   describe('findExistingResearchData', () => {
     it('should use organization-based lookup when organizationId exists', async () => {
       // Arrange
-      mockResearchDataRepo.findByUrlAndOrganizationId.mockResolvedValue(mockResearchData);
+      mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
 
       // Act
       const result = await findExistingResearchData(
@@ -141,7 +142,11 @@ describe('findExistingResearchData utils', () => {
       );
 
       // Assert
-      expect(mockResearchDataRepo.findByUrlAndOrganizationId).toHaveBeenCalledWith('https://example.com', 'org-123');
+      expect(mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId).toHaveBeenCalledWith(
+        'https://example.com',
+        'test-user-123',
+        'org-123'
+      );
       expect(mockResearchDataRepo.findByUrlAndUserId).not.toHaveBeenCalled();
       expect(result).toEqual(mockResearchData);
     });
@@ -160,13 +165,13 @@ describe('findExistingResearchData utils', () => {
 
       // Assert
       expect(mockResearchDataRepo.findByUrlAndUserId).toHaveBeenCalledWith('https://example.com', 'test-user-123');
-      expect(mockResearchDataRepo.findByUrlAndOrganizationId).not.toHaveBeenCalled();
+      expect(mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId).not.toHaveBeenCalled();
       expect(result).toEqual(mockResearchData);
     });
 
     it('should return null when no existing research data is found', async () => {
       // Arrange
-      mockResearchDataRepo.findByUrlAndOrganizationId.mockResolvedValue(null);
+      mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(null);
 
       // Act
       const result = await findExistingResearchData(
@@ -207,7 +212,7 @@ describe('findExistingResearchData utils', () => {
     it('should update existing file when research data exists', async () => {
       // Arrange
       const content = 'Updated content';
-      mockResearchDataRepo.findByUrlAndOrganizationId.mockResolvedValue(mockResearchData);
+      mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
       mockFabFilesRepo.findById.mockResolvedValue(mockFabFile);
 
       // Act
@@ -248,7 +253,7 @@ describe('findExistingResearchData utils', () => {
     it('should handle Buffer content correctly', async () => {
       // Arrange
       const content = Buffer.from('Buffer content');
-      mockResearchDataRepo.findByUrlAndOrganizationId.mockResolvedValue(mockResearchData);
+      mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
       mockFabFilesRepo.findById.mockResolvedValue(mockFabFile);
 
       // Act
@@ -272,7 +277,7 @@ describe('findExistingResearchData utils', () => {
 
     it('should throw error when existing file is not found', async () => {
       // Arrange
-      mockResearchDataRepo.findByUrlAndOrganizationId.mockResolvedValue(mockResearchData);
+      mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
       mockFabFilesRepo.findById.mockResolvedValue(null);
 
       // Act & Assert
@@ -292,7 +297,7 @@ describe('findExistingResearchData utils', () => {
     it('should throw error when existing file has no filePath', async () => {
       // Arrange
       const fileWithoutPath = { ...mockFabFile, filePath: null };
-      mockResearchDataRepo.findByUrlAndOrganizationId.mockResolvedValue(mockResearchData);
+      mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
       mockFabFilesRepo.findById.mockResolvedValue(fileWithoutPath);
 
       // Act & Assert
@@ -311,7 +316,7 @@ describe('findExistingResearchData utils', () => {
 
     it('should return isExisting false when no research data exists', async () => {
       // Arrange
-      mockResearchDataRepo.findByUrlAndOrganizationId.mockResolvedValue(null);
+      mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(null);
 
       // Act
       const result = await findOrUpdateExistingResearchData(
@@ -331,7 +336,7 @@ describe('findExistingResearchData utils', () => {
 
     it('should work without logger', async () => {
       // Arrange
-      mockResearchDataRepo.findByUrlAndOrganizationId.mockResolvedValue(null);
+      mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(null);
 
       // Act
       const result = await findOrUpdateExistingResearchData(
@@ -378,7 +383,7 @@ describe('findExistingResearchData utils', () => {
           mimeType: 'image/png',
           moderationStatus: 'blocked',
         };
-        mockResearchDataRepo.findByUrlAndOrganizationId.mockResolvedValue(mockResearchData);
+        mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
         mockFabFilesRepo.findById.mockResolvedValue(blockedImageFile);
 
         // Act
@@ -408,7 +413,7 @@ describe('findExistingResearchData utils', () => {
           mimeType: 'image/jpeg',
           moderationStatus: 'pending',
         };
-        mockResearchDataRepo.findByUrlAndOrganizationId.mockResolvedValue(mockResearchData);
+        mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
         mockFabFilesRepo.findById.mockResolvedValue(pendingImageFile);
 
         // Act
@@ -434,7 +439,7 @@ describe('findExistingResearchData utils', () => {
           mimeType: 'image/png',
           moderationStatus: 'clean',
         };
-        mockResearchDataRepo.findByUrlAndOrganizationId.mockResolvedValue(mockResearchData);
+        mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
         mockFabFilesRepo.findById.mockResolvedValue(cleanImageFile);
 
         // Act
@@ -455,7 +460,7 @@ describe('findExistingResearchData utils', () => {
 
       it('re-mints a fileUrl for a clean non-image on re-crawl (normal case)', async () => {
         // Arrange - a clean text/markdown file (the production steady state for research content).
-        mockResearchDataRepo.findByUrlAndOrganizationId.mockResolvedValue(mockResearchData);
+        mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
         mockFabFilesRepo.findById.mockResolvedValue({ ...mockFabFile, moderationStatus: 'clean' });
 
         // Act
@@ -478,7 +483,7 @@ describe('findExistingResearchData utils', () => {
         // Arrange - the serve gate keys on moderationStatus alone, for every mime type. A
         // non-image that is not yet 'clean' (e.g. still pending its objectCreated pass, or a
         // legacy row before the backfill) must be withheld too, not just images.
-        mockResearchDataRepo.findByUrlAndOrganizationId.mockResolvedValue(mockResearchData);
+        mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
         mockFabFilesRepo.findById.mockResolvedValue({ ...mockFabFile, moderationStatus: 'pending' });
 
         // Act
@@ -600,7 +605,7 @@ describe('findExistingResearchData utils', () => {
       // Arrange
       const url = 'https://complex-example.com';
       const content = 'Complex content';
-      mockResearchDataRepo.findByUrlAndOrganizationId.mockResolvedValue(mockResearchData);
+      mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
       mockFabFilesRepo.findById.mockResolvedValue(mockFabFile);
 
       // Act
@@ -627,7 +632,11 @@ describe('findExistingResearchData utils', () => {
       expect(hasOrgContext).toBe(true);
       expect(existingData).toEqual(mockResearchData);
       expect(updateResult).not.toBeNull();
-      expect(mockResearchDataRepo.findByUrlAndOrganizationId).toHaveBeenCalledWith(url, 'org-123');
+      expect(mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId).toHaveBeenCalledWith(
+        url,
+        'test-user-123',
+        'org-123'
+      );
     });
 
     it('should handle user-fallback workflow', async () => {
@@ -667,7 +676,7 @@ describe('findExistingResearchData utils', () => {
     it('should handle special characters in URL', async () => {
       // Arrange
       const specialUrl = 'https://example.com/path?query=value&special=characters%20encoded';
-      mockResearchDataRepo.findByUrlAndOrganizationId.mockResolvedValue(null);
+      mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(null);
 
       // Act
       const result = await findExistingResearchData(
@@ -678,14 +687,18 @@ describe('findExistingResearchData utils', () => {
       );
 
       // Assert
-      expect(mockResearchDataRepo.findByUrlAndOrganizationId).toHaveBeenCalledWith(specialUrl, 'org-123');
+      expect(mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId).toHaveBeenCalledWith(
+        specialUrl,
+        'test-user-123',
+        'org-123'
+      );
       expect(result).toBeNull();
     });
 
     it('should handle very large content', async () => {
       // Arrange
       const largeContent = 'x'.repeat(10000); // 10KB content
-      mockResearchDataRepo.findByUrlAndOrganizationId.mockResolvedValue(mockResearchData);
+      mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
       mockFabFilesRepo.findById.mockResolvedValue(mockFabFile);
 
       // Act
@@ -709,7 +722,7 @@ describe('findExistingResearchData utils', () => {
 
     it('should handle storage upload failure', async () => {
       // Arrange
-      mockResearchDataRepo.findByUrlAndOrganizationId.mockResolvedValue(mockResearchData);
+      mockResearchDataRepo.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
       mockFabFilesRepo.findById.mockResolvedValue(mockFabFile);
       mockStorage.upload.mockRejectedValue(new Error('Storage upload failed'));
 

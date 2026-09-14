@@ -37,6 +37,7 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
 import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE } from './creditService';
+import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 
 export interface CompletionParams {
@@ -203,6 +204,18 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     organization = await db.organizations.findById(params.billingOrganizationId);
     if (!organization) {
       throw new Error(`[CLI_CREDITS] Billing organization ${params.billingOrganizationId} not found`);
+    }
+
+    // The billing target is stamped on the API key at MINT time and never revisited, so a key whose
+    // minting user has since left (or been removed from) the org kept drawing on that org's shared
+    // credit pool indefinitely. Re-verify membership at USE time, against the roster just fetched -
+    // no extra query.
+    //
+    // Fail closed rather than falling back to personal billing: the caller asked to spend the org's
+    // credits, and quietly spending their own instead would be a surprising charge they never
+    // authorized. An explicit error tells them to re-mint the key.
+    if (!isCurrentOrgMember(organization, userId)) {
+      throw new Error(`[CLI_CREDITS] User ${userId} is no longer a member of billing organization ${organization.id}`);
     }
   }
   const billToOrg = organization !== null;

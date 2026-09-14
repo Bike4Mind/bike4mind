@@ -17,7 +17,7 @@ import {
   userRepository,
   usageEventRepository,
 } from '@bike4mind/database';
-import { apiKeyService, creditService, estimateSoundCredits } from '@bike4mind/services';
+import { apiKeyService, creditService, estimateSoundCredits, organizationService } from '@bike4mind/services';
 import { aiSoundService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { BadRequestError } from '@server/utils/errors';
@@ -97,6 +97,18 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
     if (billingOrganizationId) {
       billingOrg = await organizationRepository.findById(billingOrganizationId);
       if (!billingOrg) throw new BadRequestError('Billing organization not found');
+    }
+
+    // Mint-time trust is not use-time trust: an org-billed API key carries its billing target
+    // stamped on it and never revisited, so a key whose minting user has since left the org would
+    // keep drawing on that org's shared pool. Re-check against the roster just fetched - no extra
+    // query - and fail closed, matching executeCompletion. Scoped to the API-key path only: that
+    // caller asked for org billing explicitly, whereas the implicit JWT own-org fallback must
+    // degrade rather than 403 a caller on a stale pointer (see resolveBillingOrgId).
+    if (billingOrg && req.apiKeyInfo && !organizationService.isCurrentOrgMember(billingOrg, userId)) {
+      throw new BadRequestError(
+        'This API key bills an organization you are no longer a member of. Re-mint the key to continue.'
+      );
     }
 
     // Org-billed: enforce the per-member cap before touching the shared pool. This is an

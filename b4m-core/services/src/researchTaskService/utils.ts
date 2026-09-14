@@ -31,12 +31,17 @@ export async function findExistingResearchData(
   user: IUserDocument,
   researchDataRepository: IResearchDataRepository
 ): Promise<IResearchData | null> {
-  // Priority: Organization-level lookup first, then user-level fallback
+  // Always scoped to the CALLER'S OWN research data; the org only narrows it further.
+  //
+  // This used to match on url + organizationId alone, so an org-scoped task deduped against
+  // whichever member had scraped the url first - and findOrUpdateExistingResearchData then
+  // re-uploaded the caller's content over that member's FabFile and returned it linked to the
+  // caller's task, destroying the original owner's copy. Two people in one organization
+  // researching the same url is not consent to overwrite each other's files.
   if (researchTask.organizationId) {
-    return await researchDataRepository.findByUrlAndOrganizationId(url, researchTask.organizationId);
-  } else {
-    return await researchDataRepository.findByUrlAndUserId(url, user.id);
+    return await researchDataRepository.findByUrlAndUserIdAndOrganizationId(url, user.id, researchTask.organizationId);
   }
+  return await researchDataRepository.findByUrlAndUserId(url, user.id);
 }
 
 /**
