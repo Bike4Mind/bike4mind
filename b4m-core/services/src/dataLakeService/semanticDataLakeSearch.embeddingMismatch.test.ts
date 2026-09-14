@@ -165,6 +165,7 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
     const splitFile = [{ id: 'split', fileName: 'split.md', vectorizedChunkCount: 2 }];
     const NEAR_1024 = unit(0.72, Math.sqrt(1 - 0.72 ** 2), SHARED_DIM);
     const EXACT_1024 = unit(1, 0, SHARED_DIM);
+    const at = (cosine: number) => unit(cosine, Math.sqrt(1 - cosine ** 2), SHARED_DIM);
 
     beforeEach(() => {
       h.queryVector = unit(1, 0, SHARED_DIM);
@@ -207,6 +208,40 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
       );
 
       expect(result.results.map(r => r.chunkText)).toEqual(['the titan half']);
+      expect(result.embeddingMismatch.skippedChunks.byReason.modelMismatch).toBe(1);
+    });
+
+    it('spends the per-document cap on surviving chunks, not on the half it is about to drop', async () => {
+      // The chunk-label filter and the per-document cap meet exactly once, at the merge, and the
+      // order is what keeps them independent: the filter runs before anything enters the candidate
+      // pool, the cap runs after. Move the cap above the filter and the Titan chunk takes this
+      // file's single slot at a perfect 1.0, then gets dropped - the voyage half that actually
+      // answers is never served, and the document silently forfeits its allowance to a chunk no
+      // reader can see. Nothing else in either suite would notice.
+      const files = [
+        { id: 'split', fileName: 'split.md', vectorizedChunkCount: 3 },
+        { id: 'other', fileName: 'other.md', vectorizedChunkCount: 1 },
+      ];
+      const findVectors = pagedRows([
+        chunk('c1', 'split', 'the real answer', NEAR_1024, VOYAGE_3),
+        chunk('c2', 'split', 'the split runner-up', at(0.6), VOYAGE_3),
+        chunk('c3', 'split', 'cross-space noise', EXACT_1024, TITAN_V2),
+        chunk('c4', 'other', 'the other file', at(0.5), VOYAGE_3),
+      ]);
+
+      const result = await semanticDataLakeSearch(
+        params({
+          embeddingModel: VOYAGE_3 as SemanticDataLakeSearchParams['embeddingModel'],
+          topK: 2,
+          budgets: { maxChunksPerFile: 1 },
+        }),
+        adapters(files, findVectors)
+      );
+
+      // Uncapped the split file would hold both slots, at 0.72 and 0.60; the cap hands the second
+      // to the other document. The Titan chunk is out of the running under either arrangement.
+      expect(result.results.map(r => r.chunkText)).toEqual(['the real answer', 'the other file']);
+      expect(result.scan.capPromotions).toBe(1);
       expect(result.embeddingMismatch.skippedChunks.byReason.modelMismatch).toBe(1);
     });
   });
