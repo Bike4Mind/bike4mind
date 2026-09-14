@@ -87,7 +87,9 @@ export type ResolvedSearchBudgets = SemanticSearchBudgets & {
  * Omitting both - every caller today - takes the byte-identical platform path below, so this
  * change is additive. The chunk-policy rung rides this same seam and is already live -
  * `DefaultChunkSize` has been settable at Organization/Owner since #1722 - so the serve budget
- * below follows a narrower rung with no edit here.
+ * below follows a narrower rung with no edit here. Note that rung resolves against the CALLER here,
+ * while the setting's declared subject is the file OWNER; that mismatch is current behavior, not a
+ * decision (see `SEARCH_BUDGET_SETTING_KEYS` in common, and the follow-up it points at).
  */
 export async function resolveSearchBudgets(
   db: {

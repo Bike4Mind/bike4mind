@@ -19,6 +19,7 @@ import {
   DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
   SEARCH_BUDGET_SETTING_KEYS,
   FORCED_RETRIEVAL_SETTING_KEYS,
+  type SettingKey,
 } from './settings';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
@@ -659,6 +660,30 @@ describe('scoped retrieval settings are caller-altitude, not per-lake (#2624, #2
     for (const key of SCOPED_RETRIEVAL_KEYS) {
       expect(settingsMap[key].scope).toBeDefined();
     }
+  });
+
+  it('no setting outside the convergence allowlist declares a Lake rung at all', () => {
+    // The loops above are list-gated, so the #2465 failure mode survives in two steps: declare a
+    // Lake-scoped setting in one PR, wire its read in a later one, and nothing forces it into either
+    // key list until the read exists. This assertion is the fail-CLOSED half and needs no list
+    // maintenance - it walks every setting and requires a Lake rung to be justified HERE, so a new
+    // one fails on the commit that declares it rather than on the commit that reads it.
+    //
+    // The allowlist is lake-convergence policy: these three take a lake as their SUBJECT (a lake is
+    // the thing being paused, rate-limited or admission-gated), which is exactly what a retrieval
+    // budget is not - retrieval spans every lake the caller can reach at once. Adding an entry here
+    // should mean answering that question, not silencing this test.
+    const LAKE_SUBJECT_SETTINGS: readonly SettingKey[] = [
+      'PauseLakeConvergence',
+      'LakeConvergenceBulkChangeSharePct',
+      'EnforceLakeAdmission',
+    ];
+
+    const declaringLake = (Object.keys(settingsMap) as SettingKey[]).filter(key =>
+      settingsMap[key].scope?.settableAt?.includes(SettingScopeLevel.Lake)
+    );
+
+    expect(declaringLake.sort()).toEqual([...LAKE_SUBJECT_SETTINGS].sort());
   });
 });
 
