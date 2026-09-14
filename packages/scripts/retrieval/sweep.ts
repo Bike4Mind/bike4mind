@@ -8,7 +8,10 @@
 import type { Aggregate } from './metrics';
 
 /**
- * One point in the sweep. Both knobs are admin settings introduced by #1955 (PR #2009).
+ * One point in the sweep. Both knobs are admin settings introduced by #1955 (PR #2009), and both
+ * belong to the `search_knowledge_base` TOOL path - forced retrieval reads neither. Its own two
+ * floors are swept by `forcedFloorSweep.ts`; see `recall-probe.ts`' header for why the two
+ * instruments are separate rather than four columns of one table.
  *
  * `tokenBudget` is `kbSearchResultTokenBudget`: approximate tokens of served passage text one call
  * may emit. `minRelevancePct` is `kbSearchMinRelevancePct`: a whole-number percent, converted to the
