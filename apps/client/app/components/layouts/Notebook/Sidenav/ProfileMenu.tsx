@@ -42,6 +42,7 @@ import GavelIcon from '@mui/icons-material/GavelOutlined';
 import ExtensionIcon from '@mui/icons-material/ExtensionOutlined';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesomeOutlined';
+import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
 import LogoDevIcon from '@mui/icons-material/LogoDev';
 import LogoutIcon from '@mui/icons-material/LogoutOutlined';
 import RefreshIcon from '@mui/icons-material/RefreshOutlined';
@@ -512,6 +513,17 @@ const ProfileMenu = () => {
                   onClick={() => {
                     toggleReferralModal();
                     closeAll();
+                  }}
+                />
+                {/* Tutorials lives here while the page is being built out; it moves to
+                    the sidenav rail once it replaces the first-run slider. */}
+                <MenuRow
+                  testId="profile-more-tutorials"
+                  icon={<MenuBookOutlinedIcon sx={{ fontSize: '18px' }} />}
+                  label={t('tutorials.title', 'Tutorials')}
+                  onClick={() => {
+                    navigate({ to: '/tutorials/explore' });
+                    closeNavigation();
                   }}
                 />
                 <MenuRow
