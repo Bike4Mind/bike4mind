@@ -31,7 +31,8 @@ vi.mock('@server/models/Subscription', () => ({
 }));
 
 import defineAbilitiesFor from '../ability';
-import { Prompt, FabFile } from '@bike4mind/database';
+import { Prompt, FabFile, FeedbackModel } from '@bike4mind/database';
+import { accessibleBy } from '@casl/mongoose';
 
 const makeUser = (overrides: Partial<IUserDocument> = {}): IUserDocument =>
   ({
@@ -145,5 +146,60 @@ describe('defineAbilitiesFor - group-shared document access', () => {
       { groupId: 'g2', permissions: ['read', 'update'] },
     ]);
     expect(ability.can('update', doc)).toBe(true);
+  });
+});
+
+describe('defineAbilitiesFor - Feedback read/delete scoping', () => {
+  // A reporter owns fb-own; someone else owns fb-other. Instances, not the class: every non-admin
+  // feedback grant carries a { userId } condition, and a by-class check does not evaluate it.
+  const ownReport = Object.assign(new FeedbackModel(), { userId: 'u1' });
+  const othersReport = Object.assign(new FeedbackModel(), { userId: 'someone-else' });
+
+  it('lets a reporter read and retract their OWN report', () => {
+    const ability = defineAbilitiesFor(makeUser());
+    expect(ability.can('read', ownReport)).toBe(true);
+    expect(ability.can('delete', ownReport)).toBe(true);
+  });
+
+  it("denies a reporter reading or deleting SOMEONE ELSE'S report", () => {
+    const ability = defineAbilitiesFor(makeUser());
+    expect(ability.can('read', othersReport)).toBe(false);
+    expect(ability.can('delete', othersReport)).toBe(false);
+  });
+
+  it('lets an admin read and delete any report', () => {
+    const ability = defineAbilitiesFor(makeUser({ isAdmin: true }));
+    expect(ability.can('read', othersReport)).toBe(true);
+    expect(ability.can('delete', othersReport)).toBe(true);
+  });
+
+  it('pins the footgun these grants create: the by-class check passes for a non-owner', () => {
+    // This is why every feedback route authorizes against the fetched instance (read/update/
+    // delete) or narrows the query with accessibleBy (list). If a route ever reverts to a
+    // by-class check, it hands every logged-in user the admin view - and this assertion is the
+    // record of why that check is not safe here.
+    const ability = defineAbilitiesFor(makeUser());
+    expect(ability.can('read', FeedbackModel)).toBe(true);
+    expect(ability.can('delete', FeedbackModel)).toBe(true);
+    expect(ability.can('read', othersReport)).toBe(false);
+    expect(ability.can('delete', othersReport)).toBe(false);
+  });
+
+  it('narrows a list query to the caller for a non-admin, and not at all for an admin', () => {
+    // accessibleBy is what pages/api/feedback/index.ts uses to scope the list; these are the two
+    // shapes it must produce.
+    const reporterScope = accessibleBy(defineAbilitiesFor(makeUser()), 'read').ofType(FeedbackModel);
+    expect(JSON.stringify(reporterScope)).toContain('u1');
+
+    const adminScope = accessibleBy(defineAbilitiesFor(makeUser({ isAdmin: true })), 'read').ofType(FeedbackModel);
+    expect(adminScope).toEqual({});
+  });
+
+  it('fails closed for a caller with no read grant at all', () => {
+    // An unsatisfiable filter, never an empty one: an empty filter would match the whole
+    // collection.
+    const scope = accessibleBy(defineAbilitiesFor(undefined), 'read').ofType(FeedbackModel);
+    expect(scope).toEqual({ $expr: { $eq: [0, 1] } });
+    expect(scope).not.toEqual({});
   });
 });
