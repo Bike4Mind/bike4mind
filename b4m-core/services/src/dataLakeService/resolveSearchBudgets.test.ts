@@ -198,6 +198,27 @@ describe('resolveSearchBudgets - scoped path', () => {
     expect(budgets.kbMinRelevance).toBeCloseTo(0.25);
   });
 
+  it('resolves identically to the platform path when the scope carries no overrides at all', async () => {
+    // The production-dominant case after #2709: every org caller now takes the scoped branch, and
+    // the overwhelming majority have nothing stored. Asserted field-by-field with toEqual rather
+    // than spot-checked, so a scoped branch that forgot to carry one field shows up here instead of
+    // as a setting that silently reads differently on one surface.
+    const platformRows = {
+      dataLakeSearchMaxFiles: '3000',
+      dataLakeSearchMaxChunks: '9000',
+      DefaultChunkSize: '300',
+      kbSearchDefaultResults: '7',
+      kbSearchResultTokenBudget: '4000',
+      kbSearchMinRelevancePct: '25',
+      dataLakeSearchMaxChunksPerFile: '4',
+    };
+
+    const scoped = await resolveSearchBudgets(makeDb(platformRows, []), undefined, scope);
+    const platform = await resolveSearchBudgets(makeDb(platformRows, []), undefined, {});
+
+    expect(scoped).toEqual(platform);
+  });
+
   it('carries the same derived serve budget as the platform path', async () => {
     // 300 tokens derives 1800 chars: a number neither the deleted 1200 constant nor the default
     // policy (3072) can produce, so a scoped branch that hardcoded either one fails here.
