@@ -2,6 +2,7 @@ import {
   AnthropicBackend,
   AWSBackend,
   BFLBackend,
+  DeepSeekBackend,
   GeminiBackend,
   KimiBackend,
   OpenAIBackend,
@@ -38,6 +39,7 @@ export async function collectStaticCatalogModels(): Promise<ModelInfo[]> {
     new GeminiBackend('seed-key'),
     new XAIBackend('seed-key'),
     new KimiBackend('seed-key'),
+    new DeepSeekBackend('seed-key'),
     new AWSBackend(),
     new BFLBackend('seed-key'),
   ];

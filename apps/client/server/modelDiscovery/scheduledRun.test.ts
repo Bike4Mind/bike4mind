@@ -28,6 +28,7 @@ const { runModelDiscovery, repos, emitMetrics, connectDB, whenCatalogSeeded, sou
       createAnthropicSource: factory('anthropic'),
       createXaiSource: factory('xai'),
       createKimiSource: factory('kimi'),
+      createDeepSeekSource: factory('deepseek'),
       createGeminiSource: factory('gemini'),
       createOllamaSource: factory('ollama'),
       createBflSource: factory('bfl'),

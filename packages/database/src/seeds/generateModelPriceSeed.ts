@@ -1,6 +1,7 @@
 import {
   AnthropicBackend,
   AWSBackend,
+  DeepSeekBackend,
   GeminiBackend,
   KimiBackend,
   OpenAIBackend,
@@ -29,6 +30,7 @@ export async function collectStaticTextModels(): Promise<ModelInfo[]> {
     new GeminiBackend('seed-key'),
     new XAIBackend('seed-key'),
     new KimiBackend('seed-key'),
+    new DeepSeekBackend('seed-key'),
     new AWSBackend(),
   ];
   const models = (await Promise.all(backends.map(b => b.getModelInfo()))).flat();

@@ -125,9 +125,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       // The cost of routing recovery that way, since the reset above covers the whole wave before
       // any send: the file stays unsearchable until the chunk rescue sweep re-enqueues it - daily
       // 05:00 UTC hosted (infra/cron.ts), ~60s self-host, and only while `enableAutoChunk` is on and
-      // the lake is not convergence-paused - either can hold it indefinitely. The refusal above is no
-      // protection against the second: it checks at request time, so a pause that lands after this
-      // wave was reset still strands the file. REBUILD_PENDING_STALE_MS (2h) does not gate that
+      // convergence work is not paused for the file - either can hold it indefinitely. That pause is
+      // not specifically this door's lake: the platform switch, or ANY lake holding the file, can
+      // impose it (pickScopedLake). And the refusal above is no protection against it, for two
+      // independent reasons - it resolves at request time, so a pause landing after this wave was
+      // reset is missed, and it resolves against this lake alone, so a pause already set on a sibling
+      // lake holding a member never reaches it. REBUILD_PENDING_STALE_MS (2h) does not gate that
       // sweep; it gates this door's own stale-pending re-detection
       // (findConvergencePausedFilesByScope).
       //

@@ -36,6 +36,10 @@ export const ADAPTER_FAMILIES = [
   // controls, the sampling pins and max_completion_tokens do not, so a Kimi row
   // routed to the OpenAI shaper would 400.
   'kimi',
+  // DeepSeek direct. Not 'openai-chat' for the same reason as 'kimi': thinking
+  // mode is a per-request parameter, the sampling group is silently ignored
+  // while it is on, and the cache counters have their own field names.
+  'deepseek',
   'ollama',
   'bfl',
   'local-image',
@@ -333,6 +337,7 @@ export const MODEL_INFO_FIELD_GROUP_OF: Record<
   supportsSafetyTolerance: 'modalities',
 
   deprecationDate: 'lifecycle',
+  replacedBy: 'lifecycle',
 
   adapterFamily: 'dispatch',
   dispatchProfile: 'dispatch',

@@ -14,7 +14,7 @@ Run the open core of Bike4Mind on your own hardware - a laptop, a server, or you
 
 - **Docker** and **Docker Compose** (Docker Desktop, or Docker Engine + the compose plugin).
 - ~4 GB free RAM for the stack (more if you build the image yourself, see below).
-- API keys for whichever LLM providers you want to use (Anthropic, OpenAI, Google Gemini, xAI, or a local Ollama endpoint).
+- API keys for whichever LLM providers you want to use (Anthropic, OpenAI, Google Gemini, xAI, DeepSeek, Moonshot (Kimi), or a local Ollama endpoint).
 
 You do **not** need Node, pnpm, or a local build - the app ships as a prebuilt image at `ghcr.io/bike4mind/bike4mind-selfhost` (multi-arch: amd64 + arm64), published by CI from `main`.
 
@@ -58,6 +58,8 @@ ANTHROPIC_API_KEY=      # Claude
 OPENAI_API_KEY=         # GPT
 GEMINI_API_KEY=         # Google Gemini
 XAI_API_KEY=            # Grok
+DEEPSEEK_API_KEY=       # DeepSeek
+MOONSHOT_API_KEY=       # Kimi
 # ...plus optional GitHub/Google OAuth, Stripe, Slack - see the template
 ```
 

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-14T06:28:42.150Z",
+  "generatedAt": "2026-09-14T08:54:49.742Z",
   "notice": "Fallback defaults last maintained on 2026-09-14. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
@@ -713,6 +713,38 @@
         "rank": 1,
         "trainingCutoff": "2026-01-01",
         "releaseDate": "2026-07-01"
+      }
+    },
+    {
+      "modelId": "deepseek-flash",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "deepseek-flash",
+        "vendor": "deepseek",
+        "backend": "deepseek",
+        "type": "text",
+        "name": "DeepSeek Flash",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 393216,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "DeepSeek's V4.1-Flash. 1M context with native vision, tool use, and selectable reasoning effort (low/high/max). Always reasons unless thinking is turned off.",
+        "releaseDate": "2026-08-13"
       }
     },
     {
@@ -2952,7 +2984,9 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
-          "status": "active"
+          "status": "deprecated",
+          "deprecationDate": "2026-08-31",
+          "replacedBy": "kimi-k2.6"
         },
         "description": "The previous-generation Kimi, still the cheapest of the family. Superseded by K2.6 on quality at a modest price increase.",
         "trainingCutoff": "2025-01-01",

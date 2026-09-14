@@ -90,18 +90,18 @@ const filterRadioSx = {
   '& .MuiRadio-icon': { width: '12px', height: '12px', borderRadius: '50%' },
 } as const;
 
-// Function to get backend logo path
-const getBackendLogo = (backend: string): string | null => {
-  const logoMap: Record<string, string> = {
-    OpenAI: '/images/logos/llm/llm-logo-openai.png',
-    Anthropic: '/images/logos/llm/llm-logo-anthropic.png',
-    Meta: '/images/logos/llm/llm-logo-meta.png',
-    'Black Forest Labs': '/images/logos/llm/llm-logo-bfl.png',
-    xAI: '/images/logos/XAI_Logo.svg',
-  };
-
-  return logoMap[backend] || null;
+// Backend section logos. Providers absent here (Google, Moonshot, DeepSeek, ...)
+// render as text-only headers - shared by getBackendLogo and preloadBackendLogos.
+const BACKEND_LOGOS: Record<string, string> = {
+  OpenAI: '/images/logos/llm/llm-logo-openai.png',
+  Anthropic: '/images/logos/llm/llm-logo-anthropic.png',
+  Meta: '/images/logos/llm/llm-logo-meta.png',
+  'Black Forest Labs': '/images/logos/llm/llm-logo-bfl.png',
+  xAI: '/images/logos/XAI_Logo.svg',
 };
+
+// Function to get backend logo path
+const getBackendLogo = (backend: string): string | null => BACKEND_LOGOS[backend] || null;
 
 // Global image cache to prevent re-requests
 const imageCache = new Map<string, string>();
@@ -134,15 +134,7 @@ const preloadAndCacheImage = (src: string): Promise<string> => {
 
 // Preload all backend logos
 const preloadBackendLogos = async () => {
-  const logoMap: Record<string, string> = {
-    OpenAI: '/images/logos/llm/llm-logo-openai.png',
-    Anthropic: '/images/logos/llm/llm-logo-anthropic.png',
-    Meta: '/images/logos/llm/llm-logo-meta.png',
-    'Black Forest Labs': '/images/logos/llm/llm-logo-bfl.png',
-    xAI: '/images/logos/XAI_Logo.svg',
-  };
-
-  const preloadPromises = Object.values(logoMap).map(src => preloadAndCacheImage(src));
+  const preloadPromises = Object.values(BACKEND_LOGOS).map(src => preloadAndCacheImage(src));
   await Promise.allSettled(preloadPromises);
 };
 
@@ -220,18 +212,31 @@ export const getModelBackend = (model: ModelInfo): string => {
     return 'Moonshot';
   }
 
+  // DeepSeek models: first-party (deepseek-flash) and the
+  // Bedrock-served rows (us.deepseek.r1-v1:0, deepseek.v3-v1:0) all contain
+  // "deepseek" in id/name. The Ollama-hosted deepseek-r1:latest also does, so it
+  // is excluded by backend here rather than by string, and is caught by the
+  // self-host branch above (or has no vendor grouping to speak of if a hosted
+  // deployment ever surfaced a remote Ollama model).
+  if (model.backend !== ModelBackend.Ollama && (modelName.includes('deepseek') || modelId.includes('deepseek'))) {
+    return 'DeepSeek';
+  }
+
   // Default to "Other" if no match found
   return 'Other';
 };
 
 // Display order of the provider sections. Anything absent sorts alphabetically after these.
-const BACKEND_PRIORITY = [
+// Exported for the ordering test - the next provider added here gets a signal if it's forgotten.
+export const BACKEND_PRIORITY = [
   SELF_HOSTED_BACKEND,
   'OpenAI',
   'Anthropic',
   'Google',
   'Meta',
   'xAI',
+  'DeepSeek',
+  'Moonshot',
   'Mistral',
   'Black Forest Labs',
   'Cohere',
@@ -239,7 +244,7 @@ const BACKEND_PRIORITY = [
 
 // Non-mutating: callers pass a fresh Object.keys() array, but the copy keeps that a contract
 // of this function rather than of each call site.
-const sortBackendsByPriority = (backends: string[]): string[] =>
+export const sortBackendsByPriority = (backends: string[]): string[] =>
   [...backends].sort((a, b) => {
     const aIndex = BACKEND_PRIORITY.indexOf(a);
     const bIndex = BACKEND_PRIORITY.indexOf(b);

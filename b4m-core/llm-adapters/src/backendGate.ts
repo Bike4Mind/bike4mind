@@ -37,6 +37,7 @@ export interface EffectiveLLMKeys {
   ollama?: string | null;
   xai?: string | null;
   kimi?: string | null;
+  deepseek?: string | null;
   voyageai?: string | null;
   /** The getEffectiveLLMApiKeys spelling of the local-image base URL. */
   imageGen?: string | null;
@@ -67,6 +68,7 @@ export function buildApiKeyTable(keys: EffectiveLLMKeys): ApiKeyTable {
     [ModelBackend.Ollama]: keys.ollama || undefined,
     [ModelBackend.XAI]: keys.xai || undefined,
     [ModelBackend.Kimi]: keys.kimi || undefined,
+    [ModelBackend.DeepSeek]: keys.deepseek || undefined,
     [ModelBackend.VoyageAI]: keys.voyageai || undefined,
     // `imageGen` has no backend of that name; leaving it un-normalized drops
     // every local image model on the floor.
@@ -98,6 +100,7 @@ const KEYED_LISTING_BACKENDS: readonly string[] = [
   ModelBackend.BFL,
   ModelBackend.XAI,
   ModelBackend.Kimi,
+  ModelBackend.DeepSeek,
   ModelBackend.LocalImage,
 ];
 

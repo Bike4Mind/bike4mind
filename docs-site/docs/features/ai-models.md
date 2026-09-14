@@ -116,6 +116,17 @@ Claude 3.x through 4.5 models (and Claude 4.6 Sonnet) support a 200K token conte
 - **Grok 2** — Previous generation
 - **Grok 2 Vision** — Multimodal with image understanding
 
+### DeepSeek Models (Direct API)
+
+- **DeepSeek Flash** - DeepSeek-V4.1-Flash, 1M context window with vision, tool use, and reasoning support
+
+### Moonshot Models (Kimi)
+
+- **Kimi K3** - Moonshot's flagship model, 1M context window with vision, tool use, and reasoning support
+- **Kimi K2.7 Code** - Coding-focused variant
+- **Kimi K2.7 Code Highspeed** - Faster coding-focused variant
+- **Kimi K2.6** - Previous-generation general-purpose model
+
 ### Meta Llama Models (AWS Bedrock)
 
 - **Llama 4 Maverick 17B Instruct** — Optimized for fast, efficient inference
@@ -127,6 +138,11 @@ Claude 3.x through 4.5 models (and Claude 4.6 Sonnet) support a 200K token conte
 
 - **DeepSeek R1** — Advanced reasoning model with 128K context
 - **DeepSeek v3.1** — General-purpose model with 128K context
+
+### Moonshot Models (AWS Bedrock)
+
+- **Kimi K2.5** - General-purpose model
+- **Kimi K2 Thinking** - Reasoning-focused variant
 
 ### Amazon Titan Models (AWS Bedrock)
 
@@ -255,6 +271,8 @@ Different models support different context lengths:
 | Gemini 2.5 Pro | 2M tokens | Largest documents |
 | Gemini 3.x / 2.5 Flash | 1M tokens | Large documents, fast |
 | Grok 4 | 256K tokens | Long conversations |
+| DeepSeek Flash | 1M tokens | Massive codebases, long documents |
+| Kimi K3 | 1M tokens | Large documents, agentic tool use |
 | DeepSeek R1 / v3.1 | 128K tokens | Code repositories |
 
 ## Cost Optimization
@@ -274,7 +292,7 @@ Different models support different context lengths:
 ## API Keys & Custom Models
 
 ### Bring Your Own Keys
-- Use your own API keys for supported providers (OpenAI, Anthropic, Google, xAI, Black Forest Labs)
+- Use your own API keys for supported providers (OpenAI, Anthropic, Google, xAI, DeepSeek, Moonshot (Kimi), Black Forest Labs)
 - Manage keys from your Profile settings
 
 ### Ollama Integration
