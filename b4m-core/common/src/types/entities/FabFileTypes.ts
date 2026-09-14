@@ -1276,13 +1276,21 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * computeDataLakeStats - so a member whose extraction failed BEFORE chunking is counted, which
    * findDataLakeHealthMembers' chunk-bearing $match structurally cannot see. Bucket definitions
    * track evaluateMemberHealth (`embeddedChunkCount` for vectorized, non-empty-string `error` for
-   * failed); `inFlightFiles` keeps a not-yet-measured member out of both other buckets.
+   * failed).
+   *
+   * `inFlightFiles` and `unmeasuredFiles` are disjoint and must stay that way (#2737): in-flight is
+   * measured and short, unmeasured has no `embeddedChunkCount` at all. Only the first may be
+   * rendered as work in progress - the second is the evaluator's `unknown`, and `totalEmbeddedChunks`
+   * is a FLOOR while it is non-zero. `retrievalOnlyFiles` is not a bucket but the size of the gap
+   * between this report's corpus and retrieval's (see LAKE_REPORTING_EXCLUDED_STATUS).
    */
   summarizeDataLakeIndexingHealth(scope: DataLakeMembershipScope): Promise<{
     chunkedFiles: number;
     fullyVectorizedFiles: number;
     failedFiles: number;
     inFlightFiles: number;
+    unmeasuredFiles: number;
+    retrievalOnlyFiles: number;
     totalChunks: number;
     totalEmbeddedChunks: number;
   }>;

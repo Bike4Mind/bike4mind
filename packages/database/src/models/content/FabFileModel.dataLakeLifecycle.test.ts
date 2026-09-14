@@ -355,11 +355,13 @@ describe('FabFile data lake lifecycle membership', () => {
       const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
 
       expect(health.fullyVectorizedFiles).toBe(0);
+      // MEASURED and short, so genuinely in flight - not the unmeasured bucket below.
       expect(health.inFlightFiles).toBe(1);
+      expect(health.unmeasuredFiles).toBe(0);
       expect(health.totalEmbeddedChunks).toBe(2);
     });
 
-    it('keeps an unmeasured legacy member in flight rather than calling it broken', async () => {
+    it('reports an unmeasured legacy member as unmeasured, not as in flight and not as broken', async () => {
       await makeFile({
         fileName: 'legacy.txt',
         userId: CREATOR,
@@ -369,12 +371,102 @@ describe('FabFile data lake lifecycle membership', () => {
 
       const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
 
+      // An absent `embeddedChunkCount` is the evaluator's `unknown`: not zero, not in flight.
+      // Riding `inFlightFiles` had describe_knowledge_base render this row as "still indexing",
+      // a definite claim about work in progress that nothing had measured (#2737).
       expect(health).toMatchObject({
         chunkedFiles: 1,
         fullyVectorizedFiles: 0,
-        inFlightFiles: 1,
+        inFlightFiles: 0,
+        unmeasuredFiles: 1,
         failedFiles: 0,
         totalChunks: 3,
+        // Summed as zero because the counter is absent - a floor, which is why the bucket above
+        // exists to tell the caller when to read it as one.
+        totalEmbeddedChunks: 0,
+      });
+    });
+
+    it('does not count a failed unmeasured member as unmeasured - it is already failed', async () => {
+      await makeFile({
+        fileName: 'broken-legacy.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 3,
+        error: 'vectorize failed',
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      // Same `!hasError` guard `inFlightFiles` always carried: a member with a terminal error is
+      // settled, so it must not also be reported as something nobody has measured yet.
+      expect(health).toMatchObject({ failedFiles: 1, unmeasuredFiles: 0, inFlightFiles: 0 });
+    });
+
+    it('counts a pending member as retrieval-only instead of dropping it silently', async () => {
+      await makeFile({
+        fileName: 'uploaded.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 2,
+        embeddedChunkCount: 2,
+      });
+      // A presigned row that never finished uploading. Reporting excludes it (it must not activate
+      // a draft lake); retrieval's filter has no status clause, so a search runs over it (#2737).
+      await makeFile({
+        fileName: 'never-uploaded.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        status: 'pending',
+        chunkCount: 7,
+        embeddedChunkCount: 7,
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      // Every bucket still reports the narrower corpus, exactly as the old `$match` did...
+      expect(health).toMatchObject({
+        chunkedFiles: 1,
+        fullyVectorizedFiles: 1,
+        totalChunks: 2,
+        totalEmbeddedChunks: 2,
+      });
+      // ...but the size of the gap is now reportable rather than invisible.
+      expect(health.retrievalOnlyFiles).toBe(1);
+    });
+
+    it('reads a legacy row with no status, or a null one, as reported rather than retrieval-only', async () => {
+      const missing = await makeFile({
+        fileName: 'no-status.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 2,
+        embeddedChunkCount: 2,
+      });
+      const nulled = await makeFile({
+        fileName: 'null-status.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 3,
+        embeddedChunkCount: 3,
+      });
+      // The schema defaults `status` to 'pending', so these legacy shapes have to be written past
+      // Mongoose. They are real: findByContentHashes' own comment calls out preserving
+      // "legacy/undefined-status rows", which is why it uses `$ne` rather than `=== 'complete'`.
+      await FabFile.collection.updateOne({ _id: missing._id }, { $unset: { status: '' } });
+      await FabFile.collection.updateOne({ _id: nulled._id }, { $set: { status: null } });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      // `$eq: ['$status', 'pending']` is false for both, matching what `{ $ne: 'pending' }` matched
+      // before the bucket moved out of `$match`. Getting this wrong would quietly drop every legacy
+      // member out of the reported corpus and into the gap count.
+      expect(health).toMatchObject({
+        chunkedFiles: 2,
+        fullyVectorizedFiles: 2,
+        retrievalOnlyFiles: 0,
+        totalChunks: 5,
+        totalEmbeddedChunks: 5,
       });
     });
 
@@ -408,6 +500,8 @@ describe('FabFile data lake lifecycle membership', () => {
         fullyVectorizedFiles: 0,
         failedFiles: 0,
         inFlightFiles: 0,
+        unmeasuredFiles: 0,
+        retrievalOnlyFiles: 0,
         totalChunks: 0,
         totalEmbeddedChunks: 0,
       });
