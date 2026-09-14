@@ -568,6 +568,16 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
    */
   clearRetrievalIndexConfirmed(chunkIds: string[], model: string): Promise<void>;
   /**
+   * Clear `retrievalIndexConfirmedModel` for every chunk of the given files, under ANY model.
+   * Called after a best-effort or strict index removal (archive, delete) actually drops the
+   * files' documents from the external index - without this, a file's confirmed-resident stamp
+   * survives the removal and `annResidentFabFileIds` keeps reporting it resident for documents
+   * that are gone. Unlike `clearRetrievalIndexConfirmed`, this is keyed on the FILE, not on the
+   * chunks a specific vectorize delivery dispatched, and clears every model at once because index
+   * removal drops the file's documents wherever they were ever indexed.
+   */
+  clearRetrievalIndexConfirmedByFabFileIds(fabFileIds: string[]): Promise<void>;
+  /**
    * The subset of `fabFileIds` whose chunks are confirmed RESIDENT in `model`'s external retrieval
    * index: every chunk EMBEDDED under that model carries a matching `retrievalIndexConfirmedModel`.
    *

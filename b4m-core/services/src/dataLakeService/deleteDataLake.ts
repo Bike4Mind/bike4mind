@@ -4,6 +4,7 @@ import type {
   IDataLakeRepository,
   IDataLakeBatchRepository,
   IFabFileRepository,
+  IFabFileChunkRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { canManageLake, type ManageActor } from './manageRule';
@@ -35,6 +36,10 @@ interface DeleteDataLakeAdapters extends LakeConfigAuditAdapters {
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'softDeleteByDataLakeTag' | 'findIdsByDataLakeTag'>;
+    // Optional: only self-host deployments carry a residency confirm to clear. See
+    // bestEffortIndexRemove's docblock for why this rides alongside `retrievalIndex` rather than
+    // being a separate best-effort step at the call site.
+    fabFileChunks?: Pick<IFabFileChunkRepository, 'clearRetrievalIndexConfirmedByFabFileIds'>;
   };
   retrievalIndex?: RetrievalIndexPort;
   /** Disable the lake's Drive connection so the hourly poll stops enqueueing it. See ports.ts. */
@@ -145,7 +150,13 @@ export const deleteDataLake = async (
   // Not softDeleteByDataLakeTag's return: it reports only the files this call flipped, so a re-run
   // after a crashed attempt would hand the index an empty set. findIdsByDataLakeTag sees
   // soft-deleted members too and stays stable across re-runs.
-  await bestEffortIndexRemove(retrievalIndex, scope, () => db.fabFiles.findIdsByDataLakeTag(scope), logger);
+  await bestEffortIndexRemove(
+    retrievalIndex,
+    scope,
+    () => db.fabFiles.findIdsByDataLakeTag(scope),
+    logger,
+    db.fabFileChunks
+  );
 
   // Terminal transition only, and conditional on the 'deleting' claimed above - see the note on
   // archiveDataLake's settle step for why a plain write here lets the loser of an archive-vs-delete

@@ -4,6 +4,7 @@ import type {
   IDataLakeRepository,
   IDataLakeBatchRepository,
   IFabFileRepository,
+  IFabFileChunkRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { canManageLake, type ManageActor } from './manageRule';
@@ -48,6 +49,10 @@ interface ArchiveDataLakeAdapters extends LakeConfigAuditAdapters {
       | 'findIdsByDataLakeTag'
       | 'hasArchivedMemberExclusiveToDataLakeTag'
     >;
+    // Optional: only self-host deployments carry a residency confirm to clear. See
+    // bestEffortIndexRemove's docblock for why this rides alongside `retrievalIndex` rather than
+    // being a separate best-effort step at the call site.
+    fabFileChunks?: Pick<IFabFileChunkRepository, 'clearRetrievalIndexConfirmedByFabFileIds'>;
   };
   retrievalIndex?: RetrievalIndexPort;
   /** Disable the lake's Drive connection so the hourly poll stops enqueueing it. See ports.ts. */
@@ -212,7 +217,13 @@ export const archiveDataLake = async (
   // Same scope the sweep ran on. findIdsByDataLakeTag is the id source rather than the flip's
   // count because it reports every member whatever its archived/deleted state, so a re-run after
   // a crashed attempt still hands the index the full set.
-  await bestEffortIndexRemove(retrievalIndex, scope, () => db.fabFiles.findIdsByDataLakeTag(scope), logger);
+  await bestEffortIndexRemove(
+    retrievalIndex,
+    scope,
+    () => db.fabFiles.findIdsByDataLakeTag(scope),
+    logger,
+    db.fabFileChunks
+  );
 
   // Step 3: settle to archived and reconcile stats from source (now 0 live files).
   // Stamped on the TERMINAL transition only (not the 'archiving' claim above): one stamp per

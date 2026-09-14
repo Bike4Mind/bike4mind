@@ -1,4 +1,4 @@
-import type { DataLakeMembershipScope } from '@bike4mind/common';
+import type { DataLakeMembershipScope, IFabFileChunkRepository } from '@bike4mind/common';
 
 /**
  * What a lifecycle sweep hands the index: the lake it ran on, and the member ids it resolved.
@@ -48,16 +48,26 @@ export interface RetrievalIndexPort {
  *
  * Ids resolve lazily and inside the try, so a door with no index wired pays no query, and a
  * lookup failure cannot abort an op that is contractually best-effort.
+ *
+ * On a SUCCESSFUL removal, also clears `retrievalIndexConfirmedModel` for the removed files (via
+ * `fabFileChunks`, when wired) - the documents just left the index, so any residency confirmation
+ * the files carried is now false, and `annResidentFabFileIds` would otherwise keep reporting them
+ * resident with nothing left to serve. Skipped on a THROWN removal: the docs may still be in the
+ * index, so the confirmation could still be accurate. Kept here rather than at each call site so
+ * a door wiring `retrievalIndex` cannot forget to wire this half too.
  */
 export async function bestEffortIndexRemove(
   retrievalIndex: RetrievalIndexPort | undefined,
   scope: DataLakeMembershipScope,
   resolveFabFileIds: () => Promise<string[]>,
-  logger?: { warn: (msg: string, ...args: unknown[]) => void }
+  logger?: { warn: (msg: string, ...args: unknown[]) => void },
+  fabFileChunks?: Pick<IFabFileChunkRepository, 'clearRetrievalIndexConfirmedByFabFileIds'>
 ): Promise<void> {
   if (!retrievalIndex) return;
   try {
-    await retrievalIndex.removeForDataLake({ scope, fabFileIds: await resolveFabFileIds() });
+    const fabFileIds = await resolveFabFileIds();
+    await retrievalIndex.removeForDataLake({ scope, fabFileIds });
+    await fabFileChunks?.clearRetrievalIndexConfirmedByFabFileIds(fabFileIds);
   } catch (error) {
     logger?.warn(`Best-effort index removal failed for ${scope.datalakeTag}:`, error);
   }

@@ -645,3 +645,52 @@ describe('FabFileChunkRepository.clearRetrievalIndexConfirmed', () => {
     await expect(fabFileChunkRepository.clearRetrievalIndexConfirmed([], 'model-a')).resolves.toBeUndefined();
   });
 });
+
+describe('FabFileChunkRepository.clearRetrievalIndexConfirmedByFabFileIds', () => {
+  setupMongoTest();
+
+  beforeEach(async () => {
+    await FabFileChunk.deleteMany({});
+  });
+
+  it('clears the confirm across every model for the given files, leaving other files untouched', async () => {
+    const [c1, c2, c3] = await FabFileChunk.create([
+      {
+        fabFileId: fid('f1'),
+        text: 'a',
+        tokenCount: 1,
+        embeddingModel: 'model-a',
+        retrievalIndexModel: 'model-a',
+        retrievalIndexConfirmedModel: 'model-a',
+      },
+      {
+        fabFileId: fid('f1'),
+        text: 'b',
+        tokenCount: 1,
+        embeddingModel: 'model-b',
+        retrievalIndexModel: 'model-b',
+        retrievalIndexConfirmedModel: 'model-b',
+      },
+      {
+        fabFileId: fid('f2'),
+        text: 'c',
+        tokenCount: 1,
+        embeddingModel: 'model-a',
+        retrievalIndexModel: 'model-a',
+        retrievalIndexConfirmedModel: 'model-a',
+      },
+    ]);
+
+    await fabFileChunkRepository.clearRetrievalIndexConfirmedByFabFileIds([fid('f1')]);
+
+    expect((await FabFileChunk.findById(c1.id))?.retrievalIndexConfirmedModel).toBeUndefined();
+    expect((await FabFileChunk.findById(c2.id))?.retrievalIndexConfirmedModel).toBeUndefined();
+    expect((await FabFileChunk.findById(c3.id))?.retrievalIndexConfirmedModel).toBe('model-a');
+    expect(await fabFileChunkRepository.annResidentFabFileIds([fid('f1')], 'model-a')).toEqual([]);
+    expect(await fabFileChunkRepository.annResidentFabFileIds([fid('f2')], 'model-a')).toEqual([fid('f2')]);
+  });
+
+  it('is a no-op on an empty id list', async () => {
+    await expect(fabFileChunkRepository.clearRetrievalIndexConfirmedByFabFileIds([])).resolves.toBeUndefined();
+  });
+});

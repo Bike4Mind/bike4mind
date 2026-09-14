@@ -197,6 +197,16 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     );
   }
 
+  async clearRetrievalIndexConfirmedByFabFileIds(fabFileIds: string[]): Promise<void> {
+    if (fabFileIds.length === 0) return;
+    // Every model, not one: archive/delete removes a file's documents from whatever index they were
+    // ever dispatched to, so any confirmation the file carries is stale afterward.
+    await this.fabFileChunkModel.updateMany(
+      { fabFileId: { $in: fabFileIds }, retrievalIndexConfirmedModel: { $ne: null } },
+      { $unset: { retrievalIndexConfirmedModel: '' } }
+    );
+  }
+
   async annResidentFabFileIds(fabFileIds: string[], model: string): Promise<string[]> {
     if (fabFileIds.length === 0) return [];
     // Denominator is `embeddingModel`, not `retrievalIndexModel` - see the interface docblock for
