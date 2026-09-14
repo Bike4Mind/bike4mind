@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
-const { mockFindUserById, mockFindOrgById, mockBillingEnabled } = vi.hoisted(() => ({
+const { mockFindUserById, mockFindOrgById, mockBillingEnabled, mockGetOperationsModel } = vi.hoisted(() => ({
   mockFindUserById: vi.fn(),
   mockFindOrgById: vi.fn(),
   mockBillingEnabled: vi.fn(async () => false),
+  mockGetOperationsModel: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -17,6 +18,11 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/services')>()),
   isOperationalBillingEnabled: mockBillingEnabled,
+}));
+// Reached only on a would-be refusal, and mocked rather than imported for real because the
+// service resolves system API keys and builds the whole model catalog.
+vi.mock('@client/services/operationsModelService', () => ({
+  OperationsModelService: { getOperationsModel: mockGetOperationsModel },
 }));
 
 import {
@@ -32,12 +38,18 @@ const ORG_ID = 'org-1';
 /** Both gates on - the only configuration in which recordOperationalUsage can debit. */
 const billingOn = () => mockBillingEnabled.mockResolvedValue(true);
 
+/** The priced default (`gpt-4o-mini`), so a refusal in these tests stands as a refusal. */
+const PRICED_OPERATIONS_MODEL = {
+  modelInfo: { id: 'gpt-4o-mini', pricing: { 128000: { input: 0.15, output: 0.6 } } },
+};
+
 const preflight = (overrides: Partial<Parameters<typeof checkSessionOperationalCredits>[0]> = {}) =>
   checkSessionOperationalCredits({ userId: USER_ID, operationCount: 1, operation: 'session tagging', ...overrides });
 
 describe('checkSessionOperationalCredits', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetOperationsModel.mockResolvedValue(PRICED_OPERATIONS_MODEL);
     mockBillingEnabled.mockResolvedValue(false);
     mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 1000 });
     mockFindOrgById.mockResolvedValue(null);
@@ -204,11 +216,101 @@ describe('checkSessionOperationalCredits', () => {
 
     await expect(preflight()).resolves.toEqual({ allowed: true });
   });
+
+  // The MIN_CREDITS_PER_OPERATION floor is a proxy for a cost that can be structurally zero.
+  // Refusing free work is a regression against the ungated behavior this gate replaced, so the
+  // model gets the last word on a would-be refusal.
+  describe('zero-settlement carve-out', () => {
+    const brokeHolder = () => {
+      billingOn();
+      mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0 });
+    };
+
+    it('allows a broke holder when the operations model is freeToRun', async () => {
+      brokeHolder();
+      mockGetOperationsModel.mockResolvedValue({
+        modelInfo: { id: 'llama3', freeToRun: true, pricing: {} },
+      });
+
+      await expect(preflight()).resolves.toEqual({ allowed: true });
+    });
+
+    // An admin can point `operationsModel` at any resolvable model id, and a model with no row in
+    // the price catalog settles $0 -> 0 credits with only the [UNPRICED_MODEL] alarm to show it.
+    it('allows a broke holder when the operations model has no pricing rows at all', async () => {
+      brokeHolder();
+      mockGetOperationsModel.mockResolvedValue({ modelInfo: { id: 'mystery-model', pricing: {} } });
+
+      await expect(preflight()).resolves.toEqual({ allowed: true });
+    });
+
+    it('allows a broke holder when every pricing tier is zero-rate', async () => {
+      brokeHolder();
+      mockGetOperationsModel.mockResolvedValue({
+        modelInfo: { id: 'zero-rate', pricing: { 128000: { input: 0, output: 0 } } },
+      });
+
+      await expect(preflight()).resolves.toEqual({ allowed: true });
+    });
+
+    // A tier can charge through the cache rates alone, so those count as priced.
+    it('keeps the refusal for a model priced only on its cache rates', async () => {
+      brokeHolder();
+      mockGetOperationsModel.mockResolvedValue({
+        modelInfo: { id: 'cache-only', pricing: { 128000: { input: 0, output: 0, cache_read: 0.01 } } },
+      });
+
+      await expect(preflight()).resolves.toMatchObject({ allowed: false });
+    });
+
+    it('keeps the refusal for the priced default', async () => {
+      brokeHolder();
+
+      await expect(preflight()).resolves.toMatchObject({ allowed: false });
+    });
+
+    // Deliberately NOT fail-open like the reads above: a verdict already exists at this point,
+    // and "priced" is the accurate default for every model but the handful carved out here.
+    it('keeps the refusal when the operations model cannot be resolved', async () => {
+      brokeHolder();
+      mockGetOperationsModel.mockRejectedValue(new Error('catalog unavailable'));
+      const logger = { warn: vi.fn(), info: vi.fn() };
+
+      await expect(preflight({ logger: logger as never })).resolves.toMatchObject({ allowed: false });
+      expect(logger.warn).toHaveBeenCalled();
+    });
+
+    // The resolution reads an admin setting and builds the model catalog, so it must never run
+    // for the overwhelming majority of requests that are funded anyway.
+    it('never resolves the model on the happy path', async () => {
+      billingOn();
+
+      await expect(preflight()).resolves.toEqual({ allowed: true });
+      expect(mockGetOperationsModel).not.toHaveBeenCalled();
+    });
+
+    it('waives the per-member cap refusal too, not just the pool refusal', async () => {
+      billingOn();
+      mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0, organizationId: ORG_ID });
+      mockFindOrgById.mockResolvedValue({
+        id: ORG_ID,
+        currentCredits: 1_000_000,
+        maxCreditsPerMember: 10,
+        userDetails: [{ id: USER_ID, usedCredits: 10 }],
+      });
+      mockGetOperationsModel.mockResolvedValue({
+        modelInfo: { id: 'llama3', freeToRun: true, pricing: {} },
+      });
+
+      await expect(preflight()).resolves.toEqual({ allowed: true });
+    });
+  });
 });
 
 describe('assertSessionOperationalCredits', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetOperationsModel.mockResolvedValue(PRICED_OPERATIONS_MODEL);
     mockFindOrgById.mockResolvedValue(null);
   });
 
@@ -243,6 +345,7 @@ describe('filterSessionIdsByOperationalCredits', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetOperationsModel.mockResolvedValue(PRICED_OPERATIONS_MODEL);
     mockFindOrgById.mockResolvedValue(null);
   });
 
@@ -323,5 +426,48 @@ describe('filterSessionIdsByOperationalCredits', () => {
 
     expect(allowed).toEqual(new Set(['s1']));
     expect(mockFindUserById).not.toHaveBeenCalled();
+  });
+
+  // Each owner is sized to THEIR share of the batch, not to the batch. The mixed shape is what
+  // makes this assertable: owner 1 holds one of the three sessions and exactly the 2 credits it
+  // needs, so sizing the check against the batch (3 x 2 = 6) would refuse a holder who can pay.
+  // Every other case in this block has one session per owner or one owner for all of them, where
+  // the two sizings agree.
+  it("sizes each owner's check to their own sessions, not to the whole batch", async () => {
+    billingOn();
+    mockFindUserById.mockImplementation(async (id: string) =>
+      id === USER_ID ? { id, currentCredits: 2 } : { id, currentCredits: 1000 }
+    );
+    const logger = { warn: vi.fn(), info: vi.fn() };
+
+    const allowed = await filter(
+      [
+        { id: 's1', userId: USER_ID },
+        { id: 's2', userId: OTHER_USER_ID },
+        { id: 's3', userId: OTHER_USER_ID },
+      ],
+      logger
+    );
+
+    expect(allowed).toEqual(new Set(['s1', 's2', 's3']));
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  // The same discrimination in the other direction: the owner holding the larger share is the one
+  // who must be refused, and a batch-sized check would have refused the wrong owner as well.
+  it('refuses the owner whose own share outruns their balance, not the batch as a whole', async () => {
+    billingOn();
+    mockFindUserById.mockImplementation(async (id: string) =>
+      id === USER_ID ? { id, currentCredits: 2 } : { id, currentCredits: 3 }
+    );
+
+    const allowed = await filter([
+      { id: 's1', userId: USER_ID },
+      { id: 's2', userId: OTHER_USER_ID },
+      { id: 's3', userId: OTHER_USER_ID },
+    ]);
+
+    // Owner 1: 1 session x 2 ops = 2 against 2 credits, allowed. Owner 2: 2 x 2 = 4 against 3.
+    expect(allowed).toEqual(new Set(['s1']));
   });
 });
