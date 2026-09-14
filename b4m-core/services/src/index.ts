@@ -53,8 +53,8 @@ export * from './auth';
 // implementation and its dependencies. Because @vercel/nft traces files rather than
 // used bindings, a single `export *` from here puts that whole closure in the Next
 // server bundle for every consumer that only wanted a plain *Service namespace
-// (~397 apps/client files import this barrel; severing the LLM surface takes 747
-// of the 787 pages/api routes off the tool closure).
+// (~397 apps/client files import this barrel; severing the LLM surface drops the
+// pages/api routes that reach the tool closure from 773 to 40 of 787).
 // Import these from their subpaths instead:
 //   '@bike4mind/services/llm', '@bike4mind/services/cliCompletions',
 //   '@bike4mind/services/agentProactiveMessagingService'

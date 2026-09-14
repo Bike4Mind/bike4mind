@@ -5,8 +5,8 @@ import { latticeToolDefinitions } from '@bike4mind/services/llm/tools/cliTools';
 // Mock only `buildSharedTools` so the pool builder can be exercised without a
 // full ToolBuilderDeps runtime; keep every other real export (LATTICE_TOOL_NAMES etc.).
 const buildSharedToolsMock = vi.fn();
-vi.mock('@bike4mind/services', async importActual => {
-  const actual = await importActual<typeof import('@bike4mind/services')>();
+vi.mock('@bike4mind/services/llm', async importActual => {
+  const actual = await importActual<typeof import('@bike4mind/services/llm')>();
   return { ...actual, buildSharedTools: (...args: unknown[]) => buildSharedToolsMock(...args) };
 });
 
