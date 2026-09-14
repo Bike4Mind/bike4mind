@@ -217,11 +217,41 @@ describe('resolveSearchBudgets - scoped path', () => {
     expect(scoped.maxChunkChars).not.toBe(DEFAULT_SERVE_CHARS);
   });
 
-  it('does not let a narrower rung override the chunk policy - that is not a lever yet', async () => {
-    // DefaultChunkSize declares no scope.settableAt, so an override row for it must be inert:
-    // #1661 derives the serve budget, it does not add an org/lake chunk-policy rung (that is #1662).
-    // The row sits at Organization, a rung this resolver demonstrably DOES honour for the scan
-    // budgets above - on a Lake row the assertion would hold even if settableAt were ignored.
+  it('CURRENTLY lets a caller-side rung move the chunk policy, and the serve budget with it', async () => {
+    // Pinned as current behavior, NOT as a blessed lever. DefaultChunkSize has declared settableAt
+    // [Organization, Owner] since #1722, so this rung resolves and the DERIVED serve budget follows
+    // it - but this resolver reads the CALLER's scope while that setting's declared subject is the
+    // FILE OWNER, and a search spans other owners' files. So a caller's own override can clip
+    // current-policy chunks it does not own, against the invariant at knowledgeBaseSearch/index.ts
+    // :92-93. Whether DefaultChunkSize belongs in the scoped read is open; this test exists to make
+    // the behavior visible if that decision changes it, not to defend it.
+    // The assertion here used to claim the opposite - and passed, because its override value sat
+    // above the setting's own `max`, so the schema parse in pickOverride discarded the row before
+    // settableAt was ever consulted. The two cases differ ONLY in the stored value, which is
+    // exactly why they are now separate tests.
+    const db = makeDb({ DefaultChunkSize: '300' }, [
+      {
+        scopeLevel: SettingScopeLevel.Organization,
+        scopeId: 'o1',
+        settingName: 'DefaultChunkSize',
+        settingValue: '1000',
+      },
+    ]);
+
+    const budgets = await resolveSearchBudgets(db, undefined, scope);
+
+    expect(budgets.maxChunkChars).toBe(deriveServeCharBudget(1000).maxChunkChars);
+    expect(budgets.maxChunkChars).not.toBe(deriveServeCharBudget(300).maxChunkChars);
+  });
+
+  it('discards a chunk-policy override above the setting max rather than clamping it', async () => {
+    // 6554 is past DefaultChunkSize's own `max` (OVERSIZED_PASSAGE_TOKEN_THRESHOLD, 1500), so
+    // pickOverride's schema parse rejects the row and resolution falls through to the platform
+    // value rather than landing on the clamped ceiling. The rejection is the setting's `max`, in
+    // pickOverride, and it happens BEFORE `scope.clamp` is consulted at all - applyClamp only ever
+    // sees a value that already parsed, or the platform value. So for an overlay row out-of-range
+    // means DISCARDED, not bounded - a distinction an operator only sees as "my override did
+    // nothing".
     const db = makeDb({ DefaultChunkSize: '300' }, [
       {
         scopeLevel: SettingScopeLevel.Organization,
