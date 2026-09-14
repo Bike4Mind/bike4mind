@@ -221,11 +221,15 @@ export function isPrivateOrInternalHostname(hostname: string): boolean {
  * Blocks internal/private networks to prevent SSRF attacks.
  * Resolves DNS and validates resolved IPs to prevent DNS rebinding attacks.
  *
- * TOCTOU assumption: DNS is resolved here, then Node resolves independently in fetch().
- * A DNS rebinding attack could serve different IPs on the two lookups. In practice this
- * requires compromising the authoritative DNS of the target domain - acceptable risk for
- * first-party API endpoints (googleapis.com, linkedin.com) but worth noting for future
- * callers that add untrusted user-supplied URLs.
+ * TOCTOU: DNS is resolved here, then Node resolves independently at connect time. An attacker who
+ * controls the authoritative DNS for a host they themselves supply (e.g. a blog-integration baseUrl)
+ * can pass this check on the first lookup and have the socket dial a private IP on the second - so
+ * this validation does NOT on its own close rebinding for user-supplied hosts. What contains it is
+ * that safeFetch's callers bound the bytes an upstream response can return (blog/publish.ts,
+ * presign-image-upload.ts), leaving a blind connect oracle rather than an internal read. That is the
+ * same residual the repo already accepts for https fetchers (b4m-core/.../webfetch/plainFetch.ts);
+ * the full connect-time IP pin (ssrfSafeLookup in b4m-core/fab-pipeline) exists only for the
+ * node-http/axios fetchers, which can install a validating lookup that global fetch here cannot.
  *
  * @param url - The URL to validate
  * @returns Object with valid flag and optional error message
@@ -296,33 +300,6 @@ export function makeAllowedHostChecker(allowedHosts: string[]): (url: string) =>
       return false;
     }
   };
-}
-
-/**
- * Synchronous URL validation for cases where DNS resolution is not needed
- * (e.g., the URL has already been validated or is known to be safe).
- *
- * @param url - The URL to validate
- * @returns Object with valid flag and optional error message
- */
-export function validateTargetUrlSync(url: string): { valid: boolean; error?: string } {
-  try {
-    const parsed = new URL(url);
-
-    // Must be HTTP or HTTPS
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return { valid: false, error: 'URL must use HTTP or HTTPS protocol' };
-    }
-
-    // Check hostname directly
-    if (isPrivateOrInternalHostname(parsed.hostname)) {
-      return { valid: false, error: 'URL points to a private or internal network' };
-    }
-
-    return { valid: true };
-  } catch {
-    return { valid: false, error: 'Invalid URL format' };
-  }
 }
 
 /** Thrown by {@link safeFetch} when a target, or its redirect target, is unsafe to fetch. */

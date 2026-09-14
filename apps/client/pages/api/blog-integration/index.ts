@@ -66,8 +66,10 @@ const handler = baseApi()
       // Fail closed against SSRF: baseUrl is user-supplied and fetched server-side with the
       // user's key (here, and by blog/publish + blog/presign-image-upload). Reject an
       // internal/loopback/non-https host - DNS-resolving, so a public name that resolves to a
-      // private IP is caught too - before we test or store it. Shared guard in
-      // server/utils/ssrfProtection.ts.
+      // private IP is caught at validation time too - before we test or store it. This does not
+      // close DNS rebinding (validation and the later connect resolve separately; see the TOCTOU
+      // note in ssrfProtection.ts); the outbound calls use safeFetch, which bounds what an upstream
+      // response can return. Shared guard in server/utils/ssrfProtection.ts.
       try {
         await assertUrlAllowed(baseUrl);
       } catch (e) {

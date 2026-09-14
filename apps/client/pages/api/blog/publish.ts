@@ -92,8 +92,18 @@ async function publishToBlog(user: IUserDocument, params: BlogPublishParams): Pr
   }
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to publish blog post: ${response.status} ${response.statusText}. ${errorText}`);
+    // Bound what the upstream body can leak into our response: parse a message/error field, else
+    // cap the raw text. An unbounded relay of a user-supplied host's response is an SSRF read half.
+    // Mirrors presign-image-upload.ts.
+    const text = await response.text().catch(() => '');
+    let detail = `status ${response.status}`;
+    try {
+      const parsed = JSON.parse(text);
+      detail = parsed.message || parsed.error || detail;
+    } catch {
+      if (text) detail = text.substring(0, 200);
+    }
+    throw new Error(`Failed to publish blog post: ${detail}`);
   }
 
   const data: BlogPublishResponse = await response.json();

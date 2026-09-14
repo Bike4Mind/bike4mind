@@ -118,4 +118,23 @@ describe('POST /api/blog/publish', () => {
     );
     expect(res._getJSONData().success).toBe(true);
   });
+
+  it('does not relay the full upstream error body (bounds the SSRF read half)', async () => {
+    // A non-ok upstream response must not have its whole body echoed back to the caller - that is
+    // the read half of the rebind chain. Non-JSON bodies are capped; JSON keeps only message/error.
+    const secret = 'INTERNAL-SECRET-'.repeat(60); // ~960 chars, non-JSON
+    global.fetch = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+      text: () => Promise.resolve(secret),
+    }) as never;
+
+    const { req, res } = request({ apiKey: 'enc', baseUrl: 'https://blog.example.com' });
+    await mockRefs.handler!(req, res);
+
+    const message = res._getJSONData().message as string;
+    expect(message).not.toContain(secret);
+    expect(message.length).toBeLessThan(260);
+  });
 });
