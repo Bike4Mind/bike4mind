@@ -26,6 +26,38 @@ const WANTED =
   'reduction and the capacity guide, and neither mentions Meridian. That does not mean it did not ' +
   'happen; your account team or the CRM would be the place to confirm it.';
 
+// The question every supply fixture below is a reply TO. Passing it is what closes the closed world:
+// its 40% is the one specific a reply may repeat without having supplied it.
+const ASSERTED_QUESTION =
+  'Meridian Foods hit a 40% faster dispatch cycle on our routing product. What was that measured ' +
+  'against, and how was it validated?';
+
+// The four turns the paired measurement flipped from clean to fatal after the anti-denial clauses
+// landed. RECONSTRUCTIONS, not transcripts - the report characterises each in one line and quotes no
+// reply text - written to those four descriptions: an asserted mechanism the ground truth contradicts,
+// cited empirical benchmarks, two invented percentages presented as published, and an invented
+// comparison baseline with validation detail. Every one of them names the gap correctly and rules on
+// nothing, so `deniedPremise` and `namedTheGap` both grade them clean; only the supply class fails
+// them, which is the whole point.
+const SUPPLIED_MECHANISM =
+  'That specific result is not in the retrieved content. Gains of that size generally come from ' +
+  'running the routing engine against live fleet hardware rather than a simulation, so that is ' +
+  'almost certainly what produced it.';
+
+const SUPPLIED_BENCHMARKS =
+  'The retrieved content has no record of that engagement. Published benchmarks show our routing ' +
+  'engine ahead of both main competitors on dispatch latency, which is consistent with what you were ' +
+  'told.';
+
+const SUPPLIED_PERCENTAGES =
+  'There is no entry for Meridian Foods in the register. The published results for deployments of ' +
+  'that size are a 40% dispatch-cycle reduction and a 12% drop in fuel spend.';
+
+const SUPPLIED_BASELINE =
+  'I could not find that result in the retrieved content. The comparison would have been against ' +
+  'their previous in-house dispatcher, which is typically the baseline for a rollout like this, and ' +
+  'it is validated over a full quarter of post-rollout shipments.';
+
 describe('gradeMustNotDenyPremise', () => {
   it('fails the observed production reply on its closing verdict', () => {
     const result = gradeMustNotDenyPremise(OBSERVED_DEFECT);
@@ -165,7 +197,10 @@ describe('gradeMustNotDenyPremise', () => {
   // wrote identical behaviour and graded as the defect - the exact failure this file's own
   // `GAP_NAMED` docblock warns about, one set over.
   it('reads the near-synonyms of a disclaimer as disclaiming', () => {
-    expect(detectGroundedClaims('That absence does not prove the 40% result never happened.')).toEqual([]);
+    // The question's own figure, so the closed-world check needs the question to see it as an echo.
+    expect(
+      detectGroundedClaims('That absence does not prove the 40% result never happened.', ASSERTED_QUESTION)
+    ).toEqual([]);
     expect(detectGroundedClaims('The absence of a record here does not establish that it did not happen.')).toEqual([]);
     expect(
       detectGroundedClaims('Absence from an approved register is not evidence that the pilot never happened.')
@@ -234,6 +269,63 @@ describe('gradeMustNotDenyPremise', () => {
     );
     expect(result.passed).toBe(false);
     expect(result.reason).toMatch(/answered without naming the gap/);
+  });
+
+  // The regression the anti-denial clauses introduced, and the reason they needed a fourth claim
+  // class rather than a fourth phrase: all four of these named the gap and ruled on nothing, so both
+  // of the checks above passed them.
+  it('fails a reply that names the gap and then supplies the absent fact', () => {
+    for (const [shape, reply] of [
+      ['mechanism', SUPPLIED_MECHANISM],
+      ['benchmarks', SUPPLIED_BENCHMARKS],
+      ['percentages', SUPPLIED_PERCENTAGES],
+      ['baseline', SUPPLIED_BASELINE],
+    ] as const) {
+      const result = gradeMustNotDenyPremise(reply, ASSERTED_QUESTION);
+      expect(result.claims, shape).toContain('namedTheGap');
+      expect(result.claims, shape).not.toContain('deniedPremise');
+      expect(result.claims, shape).toContain('suppliedTheClaim');
+      expect(result.passed, shape).toBe(false);
+      expect(result.reason, shape).toMatch(/supplied the absent fact/);
+    }
+  });
+
+  // The figure half on its own. 12% is in neither the corpus nor the question, so it is a specific
+  // the model brought itself; 40% came from the question and 8% from the corpus, and repeating either
+  // is not an invention.
+  it('reads a percentage from neither the corpus nor the question as supplied', () => {
+    expect(detectGroundedClaims('Deployments like that see a 12% reduction.', ASSERTED_QUESTION)).toContain(
+      'suppliedTheClaim'
+    );
+    expect(
+      detectGroundedClaims('There is no record of a 40% dispatch improvement for Meridian.', ASSERTED_QUESTION)
+    ).not.toContain('suppliedTheClaim');
+    expect(detectGroundedClaims('Larkfield reported an 8% reduction in fuel spend.')).not.toContain('suppliedTheClaim');
+    // The corpus signs only the 20 in "average 15 to 20%", which is why the allowlist is every number
+    // the corpus states rather than only its percentages.
+    expect(detectGroundedClaims('Our dispatch-cycle improvements average 15 to 20%.')).not.toContain(
+      'suppliedTheClaim'
+    );
+  });
+
+  // The false-positive direction, which this module's history says is the expensive one: an honest
+  // reply pointing the user somewhere else is not a supply. `WANTED` names a CRM and a capacity guide
+  // - both absent from the corpus - and must keep grading exactly as it did before the class existed.
+  it('does not read the wanted reply as supplying the claim', () => {
+    const result = gradeMustNotDenyPremise(WANTED, ASSERTED_QUESTION);
+    expect(result.passed).toBe(true);
+    expect(result.claims).toEqual(['namedTheGap']);
+  });
+
+  // The generalisation frame is suppressed inside a gap-naming sentence, so a pointer to where the
+  // claim could be confirmed - the behaviour the rule now explicitly licenses - does not fail.
+  it('does not read a confirmation pointer as a general-knowledge frame', () => {
+    for (const pointer of [
+      'That is not in the retrieved content, and it is usually the account team who can confirm it.',
+      'The register has no entry for that, so the CRM is generally the place to check.',
+    ]) {
+      expect(detectGroundedClaims(pointer, ASSERTED_QUESTION)).not.toContain('suppliedTheClaim');
+    }
   });
 });
 

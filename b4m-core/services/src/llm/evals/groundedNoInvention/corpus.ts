@@ -82,3 +82,19 @@ const RETRIEVAL_HEADER =
 export function groundedSystemPrompt(rule: string = GROUNDED_NO_INVENTION_RULE): string {
   return RETRIEVAL_HEADER + `${rule}\n\n` + renderRetrievedContentBlock(FIXTURE_SECTIONS);
 }
+
+/** Every bare number in a piece of text, comma separators removed so "2,000" and "2000" compare equal. */
+export function figuresIn(text: string): string[] {
+  return (text.match(/\d[\d,]*(?:\.\d+)?/g) ?? []).map(figure => figure.replace(/,/g, ''));
+}
+
+/**
+ * The closed-world allowlist `grade.ts` checks a reply's percentages against: every number the fixture
+ * corpus states. Derived from the sections rather than hand-listed so editing the corpus cannot
+ * silently widen it.
+ *
+ * BARE numbers, not just the ones carrying a percent sign, because the corpus writes ranges where only
+ * the last figure is signed ("average 15 to 20%") - a reply quoting that range honestly must not read
+ * as having supplied the 15 itself.
+ */
+export const CORPUS_FIGURES: ReadonlySet<string> = new Set(FIXTURE_SECTIONS.flatMap(figuresIn));

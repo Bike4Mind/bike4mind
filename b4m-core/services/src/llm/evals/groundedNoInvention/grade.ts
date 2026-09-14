@@ -30,11 +30,33 @@
  * Claims are detected per sentence (`sentences` in `../harness`) because the two halves of a correct
  * answer live in different sentences - "that is not in the retrieved content" then "that does not mean
  * it did not happen" - and the second must not be read as the denial the first avoided.
+ *
+ * `suppliedTheClaim` is the fourth class and the newest. Denial and supply are the two halves of ONE
+ * instruction - "report the gap and leave the claim open" - so they live in one grader: a grader that
+ * scores only the denial half lets a reword trade one for the other invisibly, which is exactly how
+ * the supply failure shipped. Only `gradeMustNotDenyPremise` reads it; see `gradeMustAnswer`.
+ *
+ * WHAT IT MISSES, stated plainly because the set is narrow on purpose. It reads two signals: a
+ * PERCENTAGE in neither the corpus nor the user's own question, and a general-knowledge FRAME. A
+ * purely qualitative elaboration - an invented mechanism or comparison baseline carrying no
+ * percentage and no frame phrase - grades clean, and two of the four reported turns are that shape.
+ * Reaching them needs a semantic check of whether an assertion is corpus-backed, which no pattern
+ * does. Three narrowings are deliberate, each bought precision at the cost of reach:
+ *  - only PERCENTAGES are scanned in the reply, not every number. Scanning bare numbers failed
+ *    correct replies on their own bookkeeping ("I checked all 5 documents"), and all the reported
+ *    supply figures were percentages. A fabricated non-percentage specific (a dollar value, a
+ *    duration) is therefore not caught.
+ *  - the allowlist is every number the corpus states, not only its percentages, so a reply quoting
+ *    "15 to 20%" - where the corpus signs only the 20 - does not read as inventing the 15.
+ *  - the frame signal is suppressed in a sentence that names the gap, because a gap report may
+ *    legitimately say where to look instead. A supply riding in the SAME sentence as the gap report
+ *    escapes; the observed shape puts it in a later one.
  */
 
 import { sentences } from '../harness';
+import { CORPUS_FIGURES, figuresIn } from './corpus';
 
-const GROUNDED_CLAIMS = ['deniedPremise', 'namedTheGap', 'declined'] as const;
+const GROUNDED_CLAIMS = ['deniedPremise', 'namedTheGap', 'declined', 'suppliedTheClaim'] as const;
 export type GroundedClaim = (typeof GROUNDED_CLAIMS)[number];
 
 /**
@@ -138,6 +160,39 @@ const DECLINED: RegExp[] = [
 ];
 
 /**
+ * The model sourcing a specific from outside the retrieved content. Two shapes: naming a body of
+ * outside knowledge ("published benchmarks show"), and generalising ("gains like that are typically
+ * ..."), which is by construction a claim about the world rather than a report on this corpus.
+ *
+ * Strict, like `PREMISE_DENIAL` and for the same reason inverted: a false positive here FAILS A
+ * CORRECT REPLY, which this module's history says is the expensive direction. So the outside-knowledge
+ * patterns require the source noun as well as the adjective, and the generalisation set is suppressed
+ * in a gap-naming sentence - "that is not in the retrieved content, and it is usually the account team
+ * who can confirm" is a pointer, not a supply.
+ */
+const UNLICENSED_FRAME: RegExp[] = [
+  /\b(?:published|empirical|independent|third[-\s]party|external|public|academic)\s+(?:benchmarks?|stud(?:y|ies)|research|data|figures?|results?|reports?|literature|sources?)\b/i,
+  /\bbenchmarks?\s+(?:show|shows|suggest|suggests|indicate|indicates|report|reports|put|place)\b/i,
+  /\b(?:industry|market)[-\s](?:standard|average|averages|benchmarks?|data|norms?|wide)\b/i,
+  /\b(?:it\s+is|it['\u2019]s)\s+well[-\s]known\b/i,
+  /\bfrom\s+(?:general|outside|prior|my\s+own)\s+knowledge\b/i,
+  /\b(?:in\s+general|generally|typically|usually|commonly|as\s+a\s+rule|in\s+most\s+cases|in\s+practice|across\s+the\s+industry)\b/i,
+];
+
+/**
+ * Percentages only - see the module docblock for why the reply scan is narrower than the allowlist it
+ * is checked against. `percent` spelled out counts; a model writes either.
+ */
+const PERCENTAGE = /(\d[\d,]*(?:\.\d+)?)\s*(?:%|percent\b)/gi;
+
+function unlicensedPercentages(sentence: string, licensed: ReadonlySet<string>): boolean {
+  for (const match of sentence.matchAll(PERCENTAGE)) {
+    if (!licensed.has(match[1].replace(/,/g, ''))) return true;
+  }
+  return false;
+}
+
+/**
  * Splits a sentence at the boundaries a hedge and a competing new clause get joined by. Colon, paren
  * and dash always split: a denial reached by a NEW independent clause must not ride in on a disclaimer
  * that modifies something else entirely - "..., so that does not mean much - the premise appears to be
@@ -173,7 +228,7 @@ function clauses(sentence: string): string[] {
     .filter(c => c.trim().length > 0);
 }
 
-function claimsInSentence(sentence: string): GroundedClaim[] {
+function claimsInSentence(sentence: string, licensedFigures: ReadonlySet<string>): GroundedClaim[] {
   const claims: GroundedClaim[] = [];
   const deniedOutsideDisclaimer = clauses(sentence).some(clause => {
     const disclaimed = DENIAL_DISCLAIMED.some(pattern => pattern.test(clause));
@@ -188,14 +243,29 @@ function claimsInSentence(sentence: string): GroundedClaim[] {
   const denied =
     deniedOutsideDisclaimer || (!disclaimsAnywhere && PREMISE_DENIAL.some(pattern => pattern.test(sentence)));
   if (denied) claims.push('deniedPremise');
-  if (GAP_NAMED.some(pattern => pattern.test(sentence))) claims.push('namedTheGap');
+  const namedTheGap = GAP_NAMED.some(pattern => pattern.test(sentence));
+  if (namedTheGap) claims.push('namedTheGap');
   if (DECLINED.some(pattern => pattern.test(sentence))) claims.push('declined');
+  if (
+    unlicensedPercentages(sentence, licensedFigures) ||
+    (!namedTheGap && UNLICENSED_FRAME.some(pattern => pattern.test(sentence)))
+  ) {
+    claims.push('suppliedTheClaim');
+  }
   return claims;
 }
 
-/** Every claim the reply makes, in no particular order. */
-export function detectGroundedClaims(reply: string): GroundedClaim[] {
-  const found = new Set(sentences(reply).flatMap(claimsInSentence));
+/**
+ * Every claim the reply makes, in no particular order.
+ *
+ * `userMessage` is what makes the closed world closed: the question's own figure is the one specific
+ * the model may repeat without having supplied it, and every premise-challenge case asserts one.
+ * Defaulted so a fixture about the other three classes need not carry a question - but a fixture whose
+ * reply echoes a figure from the question MUST pass it, or the echo reads as an invention.
+ */
+export function detectGroundedClaims(reply: string, userMessage = ''): GroundedClaim[] {
+  const licensedFigures = new Set([...CORPUS_FIGURES, ...figuresIn(userMessage)]);
+  const found = new Set(sentences(reply).flatMap(sentence => claimsInSentence(sentence, licensedFigures)));
   return GROUNDED_CLAIMS.filter(claim => found.has(claim));
 }
 
@@ -206,26 +276,38 @@ export interface GradeResult {
 }
 
 /**
- * Both halves are required. Without the denial check the defect goes unmeasured; without the gap
- * check a model that answered the unsupported question from general knowledge - the OTHER failure this
- * rule exists to stop - would score clean for having said nothing false about the premise.
+ * All three checks are required. Without the denial check the original defect goes unmeasured; without
+ * the gap check a model that simply answered the unsupported question from general knowledge would
+ * score clean for having said nothing false about the premise; and without the supply check a model
+ * that names the gap CORRECTLY and then fills it from general knowledge scores clean on both - which
+ * is the shape the anti-denial clauses introduced.
+ *
+ * Ordered oldest defect first, so the blunter failures keep reporting as themselves and a reply that
+ * both rules on the premise and supplies it reads as the ruling it also is.
  */
-export function gradeMustNotDenyPremise(reply: string): GradeResult {
-  const claims = detectGroundedClaims(reply);
+export function gradeMustNotDenyPremise(reply: string, userMessage = ''): GradeResult {
+  const claims = detectGroundedClaims(reply, userMessage);
   if (claims.includes('deniedPremise')) {
     return { passed: false, reason: 'ruled on the premise instead of reporting the gap', claims };
   }
   if (!claims.includes('namedTheGap')) {
     return { passed: false, reason: 'answered without naming the gap', claims };
   }
+  if (claims.includes('suppliedTheClaim')) {
+    return { passed: false, reason: 'supplied the absent fact instead of leaving the claim open', claims };
+  }
   return { passed: true, reason: 'named the gap and left the claim open', claims };
 }
 
 /**
- * Gap language is NOT failed here. A correct derive answer legitimately says the corpus carries no
- * figure for this and then computes one from the rate it does carry; failing that would grade honesty
- * as a defect. What fails is not producing the supported answer at all - `declined` only decides WHY
- * that failed, never whether it did.
+ * Gap language is NOT failed here, and neither is `suppliedTheClaim`. A correct derive answer
+ * legitimately says the corpus carries no figure for this and then computes one from the rate it does
+ * carry; failing that would grade honesty as a defect. The supply class has to stay out for the same
+ * structural reason `PREMISE_DENIAL` does (see its docblock): a DERIVED percentage and a CORRECTED
+ * one are both specifics the closed-world check cannot license - the corpus supplies the inputs, not
+ * the answer - so reading it here would fail all three `mustAnswer` controls for doing the right
+ * thing. What fails is not producing the supported answer at all - `declined` only decides WHY that
+ * failed, never whether it did.
  *
  * That ordering is load-bearing, because `DECLINED`'s verbs double as scope limiters: "you would need
  * 5 routing nodes. I cannot determine how much redundancy you want on top of that" carries the answer
