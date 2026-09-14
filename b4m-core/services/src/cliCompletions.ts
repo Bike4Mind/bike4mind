@@ -148,11 +148,25 @@ function estimateInputTokens(messages: IMessage[]): number {
 }
 
 /**
+ * OpenAI's own API accepts these bare names as an alias for whatever dated snapshot is
+ * current, but our catalog stores the dated snapshot id itself (ChatModels.GPT4_1 etc. in
+ * @bike4mind/common), so a caller using OpenAI's convention otherwise finds no catalog
+ * entry. Resolved once, up front, so every downstream use of `model` (backend lookup,
+ * cost/credit calc, the completion call itself, logged usage) sees one consistent id.
+ */
+const OPENAI_BARE_MODEL_ALIASES: Readonly<Record<string, ChatModels>> = {
+  'gpt-4.1': ChatModels.GPT4_1,
+  'gpt-4.1-mini': ChatModels.GPT4_1_MINI,
+  'gpt-4.1-nano': ChatModels.GPT4_1_NANO,
+};
+
+/**
  * Shared LLM completion logic
  * Used by Next.js API route, Lambda function, and available for 3rd party integrations
  */
 export async function executeCompletion(params: CompletionParams): Promise<void> {
-  const { userId, model, messages, options, db, logger, onChunk, apiKeyInfo } = params;
+  const { userId, messages, options, db, logger, onChunk, apiKeyInfo } = params;
+  const model = OPENAI_BARE_MODEL_ALIASES[params.model] ?? params.model;
   const source: CompletionSource = params.source ?? 'api';
   const completionStartTime = Date.now();
 
