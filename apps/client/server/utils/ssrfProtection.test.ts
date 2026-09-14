@@ -26,6 +26,44 @@ describe('isPrivateIP - RFC 2544 benchmarking range', () => {
   });
 });
 
+describe('isPrivateIP - IPv4-mapped IPv6 (hex and dotted spellings)', () => {
+  // new URL('https://[::ffff:127.0.0.1]').hostname is '[::ffff:7f00:1]', not the dotted form,
+  // so the guard must recognize the hex spelling or it is dead code for every URL-derived host.
+  it('blocks private mapped addresses in the hex form new URL() produces', () => {
+    expect(isPrivateIP('::ffff:7f00:1')).toBe(true); // 127.0.0.1
+    expect(isPrivateIP('::ffff:a00:5')).toBe(true); // 10.0.0.5
+    expect(isPrivateIP('::ffff:a9fe:a9fe')).toBe(true); // 169.254.169.254 (cloud metadata)
+  });
+
+  it('blocks private mapped addresses in the dotted form', () => {
+    expect(isPrivateIP('::ffff:127.0.0.1')).toBe(true);
+    expect(isPrivateIP('::ffff:169.254.169.254')).toBe(true);
+  });
+
+  it('does not over-block a genuinely public mapped address', () => {
+    expect(isPrivateIP('::ffff:808:808')).toBe(false); // 8.8.8.8
+    expect(isPrivateIP('::ffff:8.8.8.8')).toBe(false);
+  });
+
+  it('catches the bracketed hostname forms through the hostname check', () => {
+    expect(isPrivateOrInternalHostname('[::ffff:7f00:1]')).toBe(true); // 127.0.0.1
+    expect(isPrivateOrInternalHostname('[::ffff:a9fe:a9fe]')).toBe(true); // 169.254.169.254
+    expect(isPrivateOrInternalHostname('[::ffff:808:808]')).toBe(false); // 8.8.8.8 public
+  });
+});
+
+describe('isPrivateOrInternalHostname - trailing-dot FQDN', () => {
+  it('strips a trailing dot so localhost. / metadata. are still caught', () => {
+    expect(isPrivateOrInternalHostname('localhost.')).toBe(true);
+    expect(isPrivateOrInternalHostname('metadata.google.internal.')).toBe(true);
+    expect(isPrivateOrInternalHostname('foo.local.')).toBe(true);
+  });
+
+  it('does not over-block a public host with a trailing dot', () => {
+    expect(isPrivateOrInternalHostname('blog.example.com.')).toBe(false);
+  });
+});
+
 describe('isPrivateOrInternalHostname - bracketed IPv6 literals', () => {
   // URL.hostname wraps IPv6 literals in brackets; without stripping them the IPv6 checks miss.
   it('strips the brackets so loopback/link-local/ULA literals are still caught', () => {

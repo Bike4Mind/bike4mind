@@ -90,10 +90,24 @@ function isPrivateIPv6(ip: string): boolean {
   // ff00::/8 - Multicast
   if (normalized.startsWith('ff')) return true;
 
-  // ::ffff:0:0/96 - IPv4-mapped IPv6 addresses (check the embedded IPv4)
-  const ipv4MappedMatch = normalized.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
-  if (ipv4MappedMatch) {
-    return isPrivateIPv4(ipv4MappedMatch[1]);
+  // ::ffff:0:0/96 - IPv4-mapped IPv6. Re-check the embedded IPv4, which is the address
+  // fetch() actually dials. WHATWG `new URL()` never emits the dotted form (::ffff:127.0.0.1);
+  // it hexifies to ::ffff:7f00:1, so match both spellings or the check is dead for every
+  // URL-derived host. Any other ::ffff: shape fails closed.
+  if (normalized.startsWith('::ffff:')) {
+    const rest = normalized.slice('::ffff:'.length);
+    const dotted = rest.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+    if (dotted) {
+      return isPrivateIPv4(dotted[1]);
+    }
+    const hex = rest.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (hex) {
+      const high = parseInt(hex[1], 16);
+      const low = parseInt(hex[2], 16);
+      const ipv4 = `${(high >> 8) & 0xff}.${high & 0xff}.${(low >> 8) & 0xff}.${low & 0xff}`;
+      return isPrivateIPv4(ipv4);
+    }
+    return true;
   }
 
   // 2001:db8::/32 - Documentation
@@ -127,9 +141,13 @@ export function isPrivateIP(ip: string): boolean {
  * This catches obvious cases before DNS resolution.
  */
 export function isPrivateOrInternalHostname(hostname: string): boolean {
-  // URL.hostname wraps IPv6 literals in brackets ([::1]); strip them so the loopback
-  // and IPv6-range checks below see the bare address instead of missing on the brackets.
-  const normalized = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  // URL.hostname wraps IPv6 literals in brackets ([::1]) and a hostname may carry a
+  // trailing dot (the FQDN root label, e.g. `localhost.`); strip both so the checks below
+  // match the bare address/name instead of missing on the brackets or the dot.
+  const normalized = hostname
+    .replace(/^\[|\]$/g, '')
+    .replace(/\.$/, '')
+    .toLowerCase();
 
   // Block localhost variations
   if (
