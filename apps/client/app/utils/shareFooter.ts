@@ -12,7 +12,7 @@
  * marketing site with UTM attribution.
  */
 
-import { B4M_HORIZONTAL_LOGO_SVG } from '@client/app/utils/b4mLogo';
+import { B4M_HORIZONTAL_LOGO_SVG, B4M_FAVICON_SVG } from '@client/app/utils/b4mLogo';
 // Marketing-site URL sourced from config (empty when unconfigured).
 import { WEBSITE_URL, getBrandName } from '@client/config/general';
 import { escapeAttr } from './htmlEscape';
@@ -46,6 +46,15 @@ export interface ShareFooterOptions {
  * instead, so a fork's share pages never embed the upstream logo. Both paths are inline (no
  * external fetch) to stay valid under the strict serve CSP (`script-src 'none'`).
  */
+/**
+ * Icon for the gate panel. Inlined SVG when the operator opts in (no external fetch,
+ * passes validateBundle); empty string for forks so they never embed the upstream icon.
+ */
+function gateIconHtml(): string {
+  if (process.env.NEXT_PUBLIC_SHARE_BUILTIN_LOGO === 'true') return B4M_FAVICON_SVG;
+  return '';
+}
+
 function shareWordmarkHtml(): string {
   if (process.env.NEXT_PUBLIC_SHARE_BUILTIN_LOGO === 'true') return B4M_HORIZONTAL_LOGO_SVG;
   return `<span style="display:block;font-size:20px;font-weight:800;color:#fff;letter-spacing:-.01em">${escapeAttr(
@@ -146,7 +155,7 @@ export function buildSignupGateHtml(): { styles: string; html: string } {
     '<div class="b4m-gate-handle" aria-hidden="true"></div>',
     '<div class="b4m-gate-inner">',
     '<div class="b4m-gate-left">',
-    '<img src="/images/logos/Colored_Favicon.svg" alt="" style="width:38px;height:38px;display:block">',
+    gateIconHtml(),
     `<h2 class="b4m-gate-title">Read the rest with a free account</h2>`,
     `<p class="b4m-gate-body">Create a free ${brandName} account to explore this artifact and build your own \u2014 no credit card required.</p>`,
     '</div>',

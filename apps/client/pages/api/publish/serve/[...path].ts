@@ -1787,7 +1787,7 @@ ${
   </div>
   <div class="b4m-ph-right">
     <span class="b4m-live">Live</span>
-    <a href="/signup" class="b4m-ph-share">Share</a>
+    <a href="/register" class="b4m-ph-share">Sign up</a>
   </div>
 </header>`
 }
