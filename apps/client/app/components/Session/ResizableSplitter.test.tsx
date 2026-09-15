@@ -104,3 +104,45 @@ describe('ResizableSplitter', () => {
     expect(width()).toBe(48);
   });
 });
+
+// jsdom does not lay the split row out, so the equal-gutters outcome itself is a preview
+// check. What it does resolve is the handle's own width and margins (plain px longhands,
+// not Joy `calc(var(--joy-spacing))` values), which is the whole input to the invariant:
+// the handle's outer size has to be zero or the row no longer sums to 100%.
+const measureHandle = () => {
+  renderSplitter();
+  const style = getComputedStyle(handle());
+  const box = {
+    width: parseFloat(style.width),
+    marginLeft: parseFloat(style.marginLeft),
+    marginRight: parseFloat(style.marginRight),
+  };
+  // Guard the measurement itself: if jsdom ever stops resolving the emitted rule these come
+  // back NaN, and every assertion below would fail for a reason that has nothing to do with
+  // the layout.
+  for (const [prop, value] of Object.entries(box)) {
+    if (!Number.isFinite(value)) throw new Error(`jsdom did not resolve ${prop}`);
+  }
+  return box;
+};
+
+describe('ResizableSplitter geometry', () => {
+  it('contributes zero width to the split row', () => {
+    const { width: handleWidth, marginLeft, marginRight } = measureHandle();
+
+    expect(handleWidth + marginLeft + marginRight).toBe(0);
+  });
+
+  it('keeps the grab strip centered on the pane boundary', () => {
+    const { marginLeft, marginRight } = measureHandle();
+
+    expect(marginLeft).toBe(marginRight);
+    expect(marginLeft).toBeLessThan(0);
+  });
+
+  it('keeps the grab strip wide enough to catch with a pointer', () => {
+    // Zeroing both the width and the margins would satisfy the sum above while leaving
+    // only the 2px ::before bar to aim at.
+    expect(measureHandle().width).toBeGreaterThanOrEqual(8);
+  });
+});

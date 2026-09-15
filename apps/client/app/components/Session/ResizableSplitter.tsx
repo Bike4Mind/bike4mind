@@ -24,6 +24,8 @@ const dragState = {
   currentWidth: 50,
 };
 
+const SPLITTER_WIDTH_PX = 8;
+
 const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) => {
   const knowledgeViewerWidth = useSessionLayout(s => s.knowledgeViewerWidth) || 50;
   const [isDragging, setIsDragging] = useState(false);
@@ -152,10 +154,15 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
   return (
     <Box
       sx={{
-        // Negative margin so the handle overlaps BOTH panes evenly and reads as the boundary
-        // between them rather than as chrome belonging to either pane.
-        width: '8px',
-        marginX: '-6px',
+        // Negative margins so the handle straddles the pane boundary and reads as the
+        // boundary itself rather than as chrome belonging to either pane. They have to be
+        // exactly half the width, because SessionContainer sizes the two panes in
+        // percentages that already sum to 100% and no child of that row sets flex-grow:
+        // anything the handle adds or subtracts survives as free space instead of being
+        // absorbed, and the row is row-reverse with the default justify-content, so the
+        // leftover parks on the physical left of the chat pane.
+        width: `${SPLITTER_WIDTH_PX}px`,
+        marginX: `${-(SPLITTER_WIDTH_PX / 2)}px`,
         cursor: 'col-resize',
         display: 'flex',
         alignItems: 'center',
@@ -164,7 +171,7 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
         zIndex: 10,
         touchAction: 'none', // Prevent touch scrolling during drag
         // The visible mark is a short centered bar, not a full-height rule. It lives on
-        // ::before so the element itself stays a full-height 8px grab strip -- a 2px-wide
+        // ::before so the element itself stays a full-height grab strip -- a 2px-wide
         // hit area would be near-impossible to catch with a pointer.
         '&::before': {
           content: '""',
@@ -184,7 +191,7 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
         },
         // The handle is keyboard-focusable, so it needs its own focus indicator. The ring
         // goes on the bar, not the element: the negative margins mean an outline on the
-        // 8px full-height strip would be drawn across both panes' content.
+        // full-height grab strip would be drawn across both panes' content.
         '&:focus-visible': {
           outline: 'none',
         },
