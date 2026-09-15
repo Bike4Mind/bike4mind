@@ -9,6 +9,7 @@ import {
   embeddingModelContextWindow,
 } from './chunk';
 import { Logger } from '@bike4mind/observability';
+import { countCodePoints, MIN_CHUNK_CHARS_FLOOR } from '@bike4mind/common';
 
 // Minimal mock storage - chunkText doesn't use storage
 const mockStorage = {
@@ -247,6 +248,115 @@ describe('SmartChunker', () => {
     });
   });
 
+  describe('mergeOrDropNearEmptyChunks (#2817)', () => {
+    it('merges a near-empty chunk forward into the following chunk', async () => {
+      const chunks: Chunk[] = [
+        { text: 'This is a normal, reasonably long first chunk of real content here.', tokenCount: 15 },
+        { text: 'x', tokenCount: 1 },
+        { text: 'This is a normal, reasonably long third chunk of real content too.', tokenCount: 15 },
+      ];
+      const result = await (chunker as any).mergeOrDropNearEmptyChunks(chunks);
+
+      expect(result).toHaveLength(2);
+      expect(result[0].text).toBe(chunks[0].text);
+      expect(result[1].text).toBe(`x ${chunks[2].text}`);
+      for (const chunk of result) {
+        expect(countCodePoints(chunk.text)).toBeGreaterThanOrEqual(MIN_CHUNK_CHARS_FLOOR);
+      }
+    });
+
+    it('accumulates a run of several under-floor chunks until the floor clears', async () => {
+      const chunks: Chunk[] = [
+        { text: 'a', tokenCount: 1 },
+        { text: 'b', tokenCount: 1 },
+        { text: 'c', tokenCount: 1 },
+        { text: 'd'.repeat(60), tokenCount: 20 },
+      ];
+      const result = await (chunker as any).mergeOrDropNearEmptyChunks(chunks);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].text).toBe(`a b c ${'d'.repeat(60)}`);
+    });
+
+    it('drops a near-empty chunk when neither neighbor can absorb it without exceeding the token limit', async () => {
+      const tinyChunker = createChunker(1);
+      try {
+        const chunks: Chunk[] = [
+          { text: 'This is a long enough chunk of real content, over the floor mark.', tokenCount: 15 },
+          { text: '.', tokenCount: 1 },
+          { text: 'Another long enough chunk of real content, also over the floor mark.', tokenCount: 15 },
+        ];
+        const result = await (tinyChunker as any).mergeOrDropNearEmptyChunks(chunks);
+
+        expect(result).toHaveLength(2);
+        expect(result.some((c: Chunk) => c.text === '.')).toBe(false);
+      } finally {
+        tinyChunker.freeEncoder();
+      }
+    });
+
+    it('keeps a lone near-empty chunk rather than leaving the file with zero chunks', async () => {
+      const chunks: Chunk[] = [{ text: '.', tokenCount: 1 }];
+      const result = await (chunker as any).mergeOrDropNearEmptyChunks(chunks);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].text).toBe('.');
+    });
+
+    it('merges a near-empty chunk BACKWARD into the preceding chunk when forward merge would overflow', async () => {
+      // The next chunk is already far over the limit alone (as a real splitOversizedSegment
+      // remainder always sits exactly at chunkTokenLimit), so a forward merge always overflows;
+      // the preceding chunk has headroom and should absorb it instead of it being dropped.
+      const limitedChunker = createChunker(50);
+      try {
+        const chunks: Chunk[] = [
+          { text: 'This chunk has real content and plenty of headroom left.', tokenCount: 12 },
+          { text: '.', tokenCount: 1 },
+          { text: 'x'.repeat(5000), tokenCount: 9999 },
+        ];
+        const result = await (limitedChunker as any).mergeOrDropNearEmptyChunks(chunks);
+
+        expect(result).toHaveLength(2);
+        expect(result[0].text).toBe(`${chunks[0].text} .`);
+        expect(result[1].text).toBe(chunks[2].text);
+      } finally {
+        limitedChunker.freeEncoder();
+      }
+    });
+
+    it('merges a trailing near-empty chunk backward rather than dropping it', async () => {
+      const chunks: Chunk[] = [
+        { text: 'This is a normal, reasonably long final chunk of real content here.', tokenCount: 15 },
+        { text: '.', tokenCount: 1 },
+      ];
+      const result = await (chunker as any).mergeOrDropNearEmptyChunks(chunks);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].text).toBe(`${chunks[0].text} .`);
+    });
+
+    it('cascades: after a drop, the chunk that failed to absorb it gets its own chance as the new pendingShort', async () => {
+      // With chunkTokenLimit=1, even "a z" (two single-char words) exceeds the limit, so the
+      // forward merge of 'a' into 'z' fails; there is no preceding chunk yet (merged is empty),
+      // so 'a' drops. 'z' itself is still under the floor, so - rather than being pushed straight
+      // to merged - it becomes the NEW pendingShort and, being the last chunk, is kept as the
+      // sole survivor (never leaving the file with zero chunks).
+      const tinyChunker = createChunker(1);
+      try {
+        const chunks: Chunk[] = [
+          { text: 'a', tokenCount: 1 },
+          { text: 'z', tokenCount: 1 },
+        ];
+        const result = await (tinyChunker as any).mergeOrDropNearEmptyChunks(chunks);
+
+        expect(result).toHaveLength(1);
+        expect(result[0].text).toBe('z');
+      } finally {
+        tinyChunker.freeEncoder();
+      }
+    });
+  });
+
   describe('validateAndResplitChunks', () => {
     it('re-splits artificially oversized chunks', { timeout: 30000 }, async () => {
       const oversizedChunk: Chunk = {
@@ -260,6 +370,21 @@ describe('SmartChunker', () => {
         expect(actualTokens).toBeLessThanOrEqual(CHUNK_TOKEN_LIMIT);
       }
       expect(result.length).toBeGreaterThan(1);
+    });
+
+    it('also merges/drops near-empty chunks (#2817) - proves the wiring, not just the isolated helper', async () => {
+      // The mergeOrDropNearEmptyChunks tests above call that private method directly and would
+      // stay green even if its call site inside validateAndResplitChunks were deleted. This test
+      // goes through validateAndResplitChunks itself, so removing that call site fails it.
+      const longChunk: Chunk = {
+        text: 'This is a normal, reasonably long chunk of real content that clears the floor easily.',
+        tokenCount: 20,
+      };
+      const shortChunk: Chunk = { text: '.', tokenCount: 1 };
+      const result = await (chunker as any).validateAndResplitChunks([longChunk, shortChunk]);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].text).toBe(`${longChunk.text} .`);
     });
   });
 
