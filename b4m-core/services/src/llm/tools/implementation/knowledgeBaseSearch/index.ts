@@ -923,7 +923,7 @@ const KB_SEARCH_CANDIDATE_FLOOR = 6;
  * comment) - it degrades to personal scope instead, same direction as a genuinely stale pointer.
  */
 async function resolveKbBudgets(context: ToolContext): Promise<ResolvedSearchBudgets> {
-  const pointerOrgId = context.user.organizationId;
+  const pointerOrgId = normalizeId(context.user.organizationId);
   let membershipOrgIds: string[] = [];
   if (pointerOrgId) {
     try {
