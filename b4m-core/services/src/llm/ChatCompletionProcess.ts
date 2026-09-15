@@ -100,7 +100,7 @@ import { resolvePersonalCorpusOnly } from './resolvePersonalCorpusOnly';
 import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
 import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedReplyAccumulator';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
-import { buildCorrectionContextMessages } from './buildCorrectionContext';
+import { resolveCorrectionContext } from './buildCorrectionContext';
 import { LATTICE_TOOL_NAMES } from './tools';
 import {
   getDynamicDataLakeAccess,
@@ -2488,22 +2488,10 @@ export class ChatCompletionProcess {
         );
       }
 
-      // Correct-and-retry framing. Read off the PERSISTED quest rather than the request body:
-      // ChatCompletionInvoke already bound the link to this session before writing it, so trusting
-      // the document here keeps that one check authoritative instead of re-deriving trust from a
-      // field the caller controls.
-      const correctedTurn = quest.correctsQuestId ? await this.db.quests.findById(quest.correctsQuestId) : null;
-      const correctionContextMessages = buildCorrectionContextMessages(correctedTurn);
-      // The turn still runs, so this degradation is invisible from the outside - it is only ever
-      // legible here. Both causes are recoverable states (the corrected turn was deleted, or it
-      // errored before recording an answer), not bugs, so a warn rather than a throw.
-      if (quest.correctsQuestId && correctionContextMessages.length === 0) {
-        logger.warn(
-          `🔁 [CORRECTION] Sending turn without correction framing: quest ${quest.correctsQuestId} is ${
-            correctedTurn ? 'missing a recorded answer' : 'gone'
-          }`
-        );
-      }
+      // Correct-and-retry framing, including the session re-check that keeps a link copied into
+      // another session from dereferencing here. See resolveCorrectionContext for why the read side
+      // owns that check rather than trusting the writers.
+      const correctionContextMessages = await resolveCorrectionContext(quest, this.db.quests, logger);
 
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Previous messages loaded in ${
@@ -3067,7 +3055,7 @@ export class ChatCompletionProcess {
       const taggedContextMessages = buildTaggedContextMessages({
         dateContext: [dateTimeContext], // Always provide current date/time awareness
         extraContext: extraContextMessages, // Extra context messages from external sources, at the top
-        correction: correctionContextMessages,
+        ...correctionContextMessages,
         // Artifact emission guidance. Without this, correct <artifact> usage
         // is left to the model's defaults and large HTML/code can leak into the chat
         // body as raw markup. Gated on the same effective flag as extraction, so a turn is

@@ -315,7 +315,14 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
           enableMementos: isMementosEnabled,
           enableArtifacts: isArtifactsEnabled,
           // A correction is a new turn, never a re-run of the flagged quest: passing its id as
-          // `questId` would overwrite the very answer the correction chain has to preserve.
+          // `questId` would overwrite the very answer the correction chain has to preserve. The
+          // `correctsQuestId` arm is defense in depth for a future call site, not today's gate -
+          // the only caller that sets the field passes a message with no `id` at all
+          // (MessageContent's handleSubmitCorrection), and the server refuses the combination
+          // outright with a BadRequestError. Both are pinned: MessageContent.gating.test.tsx
+          // 'sends a new turn linked to the corrected quest' and
+          // ChatCompletionInvokeCorrectionBinding.test.ts 'refuses to combine a correction with an
+          // in-place retry'.
           questId: isVariation || correctsQuestId ? undefined : messageData?.id,
           correctsQuestId,
           image: options?.image,

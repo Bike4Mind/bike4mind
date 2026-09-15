@@ -42,6 +42,7 @@ export type PromptSourceId =
   | 'urls'
   | 'attachedFiles'
   | 'correction'
+  | 'correctionQuote'
   | 'callerPrompt';
 
 /**
@@ -75,8 +76,10 @@ export const PROMPT_SOURCE_ORDER: PromptSourceId[] = [
   'attachedFiles',
   // Correct-and-retry framing. Last of the content sources so it sits closest to the turn it
   // describes: it names an answer the model already gave and tells it what the user said was
-  // wrong, which is only unambiguous once the rest of the context is in place.
+  // wrong, which is only unambiguous once the rest of the context is in place. The quote follows
+  // the instruction so the two read as one passage whenever both survive the budget.
   'correction',
+  'correctionQuote',
   // Caller-supplied systemPrompt (no SPA control authors it, but /api/ai/llm reaches it too).
   // Appended last, after every source above it -
   // including the caller's own attached files/URLs - so it sits inside the per-caller cached
@@ -147,7 +150,7 @@ const CALLER_SUPPLIED_SOURCES: PromptSourceId[] = ['extraContext', 'urls', 'atta
  * user's own critique of a previous answer, and the one source whose loss would silently turn a
  * correct-and-retry back into an ordinary turn that answers the critique as if it were a question.
  */
-const ALWAYS_ADMITTED_SOURCES: PromptSourceId[] = [...CALLER_SUPPLIED_SOURCES, 'correction'];
+const ALWAYS_ADMITTED_SOURCES: PromptSourceId[] = [...CALLER_SUPPLIED_SOURCES, 'correction', 'correctionQuote'];
 
 export const PROMPT_MODE_SOURCES: Record<PromptMode, PromptSourceId[]> = {
   raw: ALWAYS_ADMITTED_SOURCES,
@@ -182,7 +185,10 @@ export const SYSTEM_PROMPT_PRIORITY: Record<PromptSourceId, number> = {
 
   // Ranked ahead of the tenant/session band because it is not guidance that degrades gracefully:
   // dropped, the turn still runs, but the model reads the user's critique as a fresh question and
-  // answers it instead of re-answering - a wrong answer that looks like a working feature.
+  // answers it instead of re-answering - a wrong answer that looks like a working feature. This is
+  // the framing sentence ONLY, which is why it can afford this rank: the quoted answer it used to
+  // carry is up to MAX_QUOTED_ANSWER_CHARS + MAX_QUOTED_PROMPT_CHARS of text the model usually
+  // still has in history, and at rank 5 that payload would evict the org and session prompts below.
   correction: 5,
 
   // Authored by the tenant or the session, or invoked by name. Losing one of these changes who the
@@ -196,6 +202,12 @@ export const SYSTEM_PROMPT_PRIORITY: Record<PromptSourceId, number> = {
   // reaches the budget - it is the caller's own per-request guidance, ranked just behind the
   // tenant/session band it must defer to.
   callerPrompt: 15,
+
+  // The quoted request and answer the framing above refers to. Split off from it and ranked here
+  // because it is only an identifier for WHICH answer is meant - buildCorrectionContext.ts says so
+  // in as many words, since the turn itself is usually still in the window. Losing it degrades the
+  // correction; losing the tenant prompt to make room for it changes who the assistant is.
+  correctionQuote: 16,
 
   // Grounding data. Absent, the model does not degrade politely - it fabricates, or denies it can see
   // something the user knows it was given.
@@ -317,6 +329,7 @@ export const PROMPT_SOURCE_METADATA: Record<
   urls: { origin: 'user', name: 'url_content' },
   attachedFiles: { origin: 'user', name: 'attached_files' },
   correction: { origin: 'session', name: 'correction' },
+  correctionQuote: { origin: 'session', name: 'correction_quote' },
   callerPrompt: { origin: 'caller', name: 'caller_prompt' },
 };
 

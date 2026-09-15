@@ -109,12 +109,15 @@ export class ChatCompletionInvoke {
       enableSlackTools,
     } = ChatCompletionInvokeParamsSchema.parse(body);
 
-    // Parallelize independent operations: API keys, session, and organization fetch
-    const [apiKeyTable, session, organization] = await Promise.all([
+    // Parallelize independent operations: API keys, session, organization, and the correction
+    // target. The correction lookup rides this batch rather than the quest batch below because its
+    // validation has to settle BEFORE the quest is created - a refused correction must not mint one.
+    const [apiKeyTable, session, organization, correctedTurn] = await Promise.all([
       this.apiKeyTableCache ||
         getEffectiveLLMApiKeys(userId, { db: this.db, getSettingsByNames }, { logger: new Logger() }),
       this.db.sessions.findById(sessionId),
       organizationId ? this.db.organizations.findById(organizationId) : Promise.resolve(null),
+      correctsQuestId ? this.db.quests.findById(correctsQuestId) : Promise.resolve(null),
     ]);
 
     if (!this.apiKeyTableCache) {
@@ -268,8 +271,7 @@ export class ChatCompletionInvoke {
         this.logger.warn(`Refusing correction of ${correctsQuestId}: correctsQuestId cannot be combined with questId.`);
         throw new BadRequestError('correctsQuestId cannot be combined with questId');
       }
-      const corrected = await this.db.quests.findById(correctsQuestId);
-      if (!corrected || corrected.sessionId !== sessionId) {
+      if (!correctedTurn || correctedTurn.sessionId !== sessionId) {
         this.logger.warn(
           `Quest ${correctsQuestId} is not a correctable turn in session ${sessionId}; refusing correction.`
         );

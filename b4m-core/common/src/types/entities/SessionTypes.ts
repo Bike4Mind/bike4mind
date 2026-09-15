@@ -221,6 +221,11 @@ export interface IChatHistoryItem {
    * Server-derived: set only by ChatCompletionInvoke after confirming the referenced quest
    * belongs to the same session, never trusted from the request body as given.
    *
+   * Session-bound, so it does not survive a copy: sessionService clone/fork/snip strip it rather
+   * than spreading it into the new session, and resolveCorrectionContext re-checks the target's
+   * sessionId on read. Two guards because access is checked when you copy, not when the pointer is
+   * later dereferenced - a link that outlived its session would otherwise still resolve.
+   *
    * Read by the evaluation-pair export, which turns a chain link into the triple
    * (previous answer, what the user said was wrong, corrected answer).
    */

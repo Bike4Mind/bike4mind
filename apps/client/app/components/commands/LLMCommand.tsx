@@ -172,6 +172,10 @@ export async function handleLLMCommand(
       imageConfig: _omitImageConfig,
       audioConfig: _omitAudioConfig,
       agentMode: _omitAgentMode,
+      // Both are sent as top-level request fields above; without these they would also ride
+      // `params`, which is the same duplication every other field in this list exists to avoid.
+      questId: _omitQuestId,
+      correctsQuestId: _omitCorrectsQuestId,
       ...payload
     } = args;
 
