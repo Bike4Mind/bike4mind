@@ -156,4 +156,32 @@ describe('admin/scoped-settings/effective resolution', () => {
 
     expect((response as { value: unknown }).value).not.toBe('sk-live-actualSecretValue');
   });
+
+  it('omits ignoredOverrides from the response when the resolver reports none', async () => {
+    resolveScopedSetting.mockResolvedValue({ value: 'gpt-4o', source: 'platform' });
+
+    const response = await invoke({ query: { settingName: 'DefaultAPIModel' } });
+
+    expect(response).not.toHaveProperty('ignoredOverrides');
+  });
+
+  // Lets an admin investigating "I set this lever and nothing happened" see a discarded override
+  // instead of a source:"platform" indistinguishable from a lever that was never set.
+  it('surfaces ignoredOverrides when the resolver reports a discarded narrower override', async () => {
+    resolveScopedSetting.mockResolvedValue({
+      value: 3,
+      source: 'platform',
+      ignoredOverrides: [{ scopeLevel: 'organization', scopeId: 'org-1', reason: 'unparseable' }],
+    });
+
+    const response = await invoke({ query: { settingName: 'kbSearchDefaultResults' } });
+
+    expect(response).toEqual({
+      settingName: 'kbSearchDefaultResults',
+      scope: { organizationId: undefined, owner: undefined, lakeId: undefined },
+      value: 3,
+      source: 'platform',
+      ignoredOverrides: [{ scopeLevel: 'organization', scopeId: 'org-1', reason: 'unparseable' }],
+    });
+  });
 });
