@@ -222,10 +222,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // direction a message resolves exactly the model it requested and is still the one that would
     // open a second space, because the file's existing vectors are the substituted ones.
     //
-    // An empty result means nothing is embedded yet (distinctEmbeddingModelsByFabFileId counts only
-    // vector-bearing chunks) - the normal first-message case, which must proceed. A file that
-    // already spans two spaces may likewise continue in either one: that damage predates this
-    // guard and blocking it would only strand the file short of the stamp that reports it.
+    // An empty result means no LABELED vectors - NOT necessarily an unembedded file. Chunks written
+    // before per-chunk labeling carry a vector and no model, so a fully embedded file of that
+    // vintage reads empty here and is waved through into a second space. The guard inherits that
+    // blind spot from the read rather than introducing it (this handler checked nothing before),
+    // and cannot separate it from the normal first-message case, which also reads empty and must
+    // proceed. A file that already spans two spaces may likewise continue in either one: that
+    // damage predates this guard and blocking it would only strand the file short of the stamp
+    // that reports it.
     //
     // This closes the sequential window a rotation actually lands in. Messages running concurrently
     // on a file with no vectors yet can all read empty and still split it; resolveFileLabel remains
