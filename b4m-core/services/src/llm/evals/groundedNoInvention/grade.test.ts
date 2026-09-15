@@ -397,7 +397,7 @@ describe('gradeMustNotDenyPremise', () => {
     }
   });
 
-  // The minimal pairs that round 3 used to falsify the demonstrative-as-discriminator design. Each
+  // The minimal pairs that falsify the demonstrative-as-discriminator design. Each
   // pair changes ONE noun or adds ONE corpus word; neither member invents anything, and both must
   // pass. They failed when the demonstrative's own noun slot doubled as the result claim, so the
   // third conjunct carried no independent information and any adverb in the clause completed it.
@@ -417,11 +417,12 @@ describe('gradeMustNotDenyPremise', () => {
     }
   });
 
-  // One per `SUPPLIED_SPECIFIC` noun that can carry a demonstrative. Round 3's finding was that the
-  // licensed-shape fixtures were coextensive with the gate - none attached a demonstrative to a result
-  // noun, which is the one region where it failed - so the suite was green while these were failing.
-  // The last also covers `[a-z]+` matching a participle: "recorded like that" is a manner adverbial,
-  // not a reference to the absent result.
+  // One per `SUPPLIED_SPECIFIC` noun that can carry a demonstrative. The licensed-shape fixtures above
+  // are coextensive with the gate - none attaches a demonstrative to a result noun, which is the one
+  // region where it failed - so without these the suite is green while that region is broken. The
+  // eighth also covers `[a-z]+` matching a participle: "recorded like that" is a manner adverbial, not
+  // a reference to the absent result, and it is the only fixture here that names no custodian, so it is
+  // the only one the participle guard alone decides.
   it('does not fail a pointer whose demonstrative attaches to a result noun', () => {
     for (const pointer of [
       'That is not in the retrieved content. Your account team would typically know the answer for a result like that.',
@@ -459,6 +460,11 @@ describe('gradeMustNotDenyPremise', () => {
       'That result is not in the retrieved content. Improvements in this range are typically driven by ' +
         'consolidating depot routes.',
     ]) {
+      // `String.replace` returns the receiver unchanged when the needle is absent, silently. Both base
+      // fixtures already carry the class, so a reword of either would collapse the first four entries
+      // into re-assertions of the base and this block would stop testing the demonstrative set at all.
+      expect(supplied, supplied).not.toBe(SUPPLIED_MECHANISM);
+      expect(supplied, supplied).not.toBe(SUPPLIED_BASELINE);
       expect(gradeMustNotDenyPremise(supplied, ASSERTED_QUESTION).claims, supplied).toContain('suppliedTheClaim');
     }
   });
@@ -500,6 +506,9 @@ describe('gradeMustNotDenyPremise', () => {
       'Results like that usually reflect a full quarter of post-rollout shipments against an in-house dispatcher.',
       'Improvements of that magnitude are generally the consequence of consolidating depot routes onto a single engine.',
       'Savings in that range are typically realised over a full quarter of post-rollout shipments.',
+      // The same supply in the singular. `saving` ends in `-ing`, so the participle guard made it - and
+      // it alone of the result nouns - unreachable while its own plural above was not.
+      'A saving of that size is typically realised over a full quarter of post-rollout shipments.',
     ]) {
       const reply = `That result is not in the retrieved content. ${supplied}`;
       expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toContain('suppliedTheClaim');
@@ -542,6 +551,159 @@ describe('gradeMustNotDenyPremise', () => {
         'published benchmarks show our routing engine ahead of both main competitors on dispatch latency.',
     ]) {
       expect(gradeMustNotDenyPremise(hedged, ASSERTED_QUESTION).claims, hedged).toContain('suppliedTheClaim');
+    }
+  });
+
+  // Use versus mention on the CONFIRMATION POINTER. Every one of these names a place the claim could be
+  // confirmed and then supplies anyway, or names no place at all - the locus word is the finite verb,
+  // the agent of the invented mechanism, or its subject matter. Presence of the word is what three
+  // an earlier revision tested for, and all six graded clean on it; only the construction separates
+  // them. The second
+  // and last are the isolating controls, one word apart from the row above.
+  it('fails a supply whose custodian word is not pointing at anything', () => {
+    for (const supplied of [
+      'Rollouts of that scale usually register a double-digit reduction in dispatch time.',
+      'Rollouts of that scale usually show a double-digit reduction in dispatch time.',
+      'Deployments like that typically register savings across a full quarter.',
+      'Gains of that size are usually produced by the success team consolidating depot routes.',
+      'Improvements of that magnitude generally stem from the internal systems being consolidated onto one engine.',
+      'Improvements of that magnitude are typically measured against a pre-rollout baseline and validated ' +
+        'by the account team reviewing dispatch logs.',
+      'Improvements of that magnitude are typically measured against a pre-rollout baseline and validated ' +
+        'by an analyst reviewing dispatch logs.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${supplied}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toContain('suppliedTheClaim');
+    }
+  });
+
+  // One per branch of `POINTED_AT`, so a corrupted branch shows up as a failing test rather than as a
+  // silent loss of the only thing standing between a licensed pointer and a fail. Every one is the
+  // same claim - the absent result lives with someone else - written in a different construction.
+  it('does not fail a pointer in any of the constructions that name a custodian', () => {
+    for (const pointer of [
+      'Your account team would typically have the gains figure for a result like that.',
+      'The sales team generally keeps savings of that size on the account record.',
+      'Typically the customer results register is where an approved result like that would live.',
+      'The CRM is usually where gains of that size get recorded.',
+      'Improvements of that magnitude are typically logged in internal records rather than here.',
+      'Savings in that range are usually held by the account team.',
+      'A reduction like that is typically on file with the customer.',
+      'Gains of that size are generally the place to check with your account team.',
+      'The system of record would typically hold a result like that.',
+      'Savings like those are usually kept with the account record, not here.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${pointer}`;
+      // `claims` and not `passed`: if `GAP_NAMED` ever widened to match the POINTER sentence too, the
+      // supply check would be short-circuited on it and the fixture would pass for an unrelated reason.
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, pointer).toEqual(['namedTheGap']);
+    }
+    // Adding a word to the custodian set no longer disarms the gate on its own, because the word has to
+    // be doing the holding. This is the shape that used to grade clean on a bare set membership.
+    expect(
+      detectGroundedClaims(
+        'That result is not in the retrieved content. Gains of that size typically come from richer telemetry.',
+        ASSERTED_QUESTION
+      )
+    ).toContain('suppliedTheClaim');
+  });
+
+  // A genuine custodian offer standing NEXT TO a genuine supply. `clauses` requires a comma before a
+  // coordinator - it is splitting a denial off its disclaimer, where the comma is the observed shape -
+  // so scoping the pointer test to the clause let the unpunctuated form switch the supply off entirely.
+  // Each of the first two is paired with its comma'd twin: one character, and it used to be the whole
+  // verdict. The last puts the pointer first and the supply second.
+  it('does not let a pointer beside a supply suppress it', () => {
+    for (const supplied of [
+      'Improvements of that magnitude typically come from route consolidation so your account team is the place to confirm.',
+      'Improvements of that magnitude typically come from route consolidation, so your account team is the place to confirm.',
+      'Gains of that size generally come from route consolidation and your account team would have the exact number.',
+      'Gains of that size generally come from route consolidation, and your account team would have the exact number.',
+      'The customer results register would be the place to look and savings of that size typically come from route consolidation.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${supplied}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toContain('suppliedTheClaim');
+    }
+  });
+
+  // An honest reply declining with a demonstrative, which is how a refusal about a named result is
+  // actually written. All six carry a result noun, a generalisation adverb and a demonstrative, so all
+  // six are lexically identical to a supply; what separates them is that the predicate refuses or hands
+  // the claim to someone else. The last two are the no-demonstrative controls, and the seventh is the
+  // `such as` collocation, where `such` is not a demonstrative at all.
+  it('does not fail an honest refusal written with a demonstrative', () => {
+    for (const refusal of [
+      'Such results are typically not something I can confirm from what I have here.',
+      'Such a large improvement is typically something the customer would document, not us.',
+      'Those specific gains are typically outside what I am able to verify.',
+      'Such savings are usually not something I can speak to.',
+      'These results are generally not mine to confirm.',
+      'Such an improvement is usually documented by the customer, not by us.',
+      'The approved outcomes I can cite are things such as the Larkfield fuel-spend reduction, which is ' +
+        'typically the closest comparable I have.',
+      'I usually cannot confirm results of that sort.',
+      'I am generally not able to confirm that.',
+      'I am typically unable to confirm such results from what I have here.',
+      // The adverb between the subject and the modal: a refusal that generalises about its own habit,
+      // which is the shape most likely to collide with the generalisation half of the supply signal.
+      'I usually would not quote results of that size without an entry to cite.',
+      'Gains of that size are not generally documented in the retrieved content.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${refusal}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, refusal).toEqual(['namedTheGap']);
+    }
+    // Polarity, and the isolating control for the block: the same sentence asserting rather than
+    // declining is a supply. When the refusal gate could not reach the generalisation half at all, both
+    // of these graded the same way, which is the tell that no gate was firing.
+    expect(
+      detectGroundedClaims(
+        'That result is not in the retrieved content. Gains of that size are generally documented in the retrieved content.',
+        ASSERTED_QUESTION
+      )
+    ).toContain('suppliedTheClaim');
+    expect(
+      detectGroundedClaims(
+        'That result is not in the retrieved content. Such a large improvement is typically the consequence ' +
+          'of consolidating depot routes.',
+        ASSERTED_QUESTION
+      )
+    ).toContain('suppliedTheClaim');
+  });
+
+  // A negated copula is not yet a refusal. What the negation PREDICATES is the whole difference: a
+  // refusal negates the speaker's access or the act of sourcing, a hedge negates a quality. Every word
+  // that tells them apart stands to the RIGHT of the negation, which is why adjacency alone cannot and
+  // the complement has to be read. The first two must fail and are one predicate away from the third.
+  it('reads a hedge over a quality as a supply and a refusal of the source as a refusal', () => {
+    for (const hedged of [
+      'Industry-standard data is not far off the number you were given.',
+      'Published benchmarks show gains are not unusual.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${hedged}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, hedged).toContain('suppliedTheClaim');
+    }
+    for (const refusal of [
+      'Industry-standard data is not something I can offer here.',
+      // A post-modified subject, which the earlier two-word cap put out of range.
+      'Published benchmarks on dispatch latency are not something I would quote here.',
+      'Published results were not consulted for this answer.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${refusal}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).passed, refusal).toBe(true);
+    }
+  });
+
+  // The two exclusions in `REFERENT` that nothing else reaches. Neither reply names a custodian or
+  // refuses, so the demonstrative gate is the only thing deciding them: the first binds `an` and the
+  // second binds `entry` the moment its exclusion goes, and both then read as generalisations about the
+  // absent result. Both are honest - the second states the register policy the corpus itself states.
+  it('does not read an article or a pointer own noun as the thing referred back to', () => {
+    for (const licensed of [
+      'Such an entry is typically where the savings would be published.',
+      'An entry like that is typically approved for external use before a rep quotes the result.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${licensed}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, licensed).toEqual(['namedTheGap']);
     }
   });
 

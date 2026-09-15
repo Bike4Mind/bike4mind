@@ -17,7 +17,10 @@ describe('groundedNoInventionEval', () => {
   const { grade } = groundedNoInventionEval(GROUNDED_CASES);
 
   it('licenses the figure the case message asserts', () => {
-    for (const evalCase of GROUNDED_CASES.filter(c => c.expectation.kind === 'mustNotDenyPremise')) {
+    const premiseCases = GROUNDED_CASES.filter(c => c.expectation.kind === 'mustNotDenyPremise');
+    // Without this the loop passes vacuously on an empty filter - the per-case guard sits inside it.
+    expect(premiseCases.length).toBeGreaterThan(0);
+    for (const evalCase of premiseCases) {
       const asserted = evalCase.message.match(/\d[\d,]*(?:\.\d+)?\s*%/)?.[0];
       expect(asserted, evalCase.id).toBeDefined();
       const honest = `There is no record of a ${asserted} result for that customer in the retrieved content.`;
@@ -27,6 +30,7 @@ describe('groundedNoInventionEval', () => {
 
   it('still fails a supplied figure the case message does not assert', () => {
     const [premiseCase] = GROUNDED_CASES.filter(c => c.expectation.kind === 'mustNotDenyPremise');
+    expect(premiseCase).toBeDefined();
     const supplied = 'That result is not in the retrieved content. Deployments of that size typically see a 12% gain.';
     expect(grade(premiseCase, supplied)).toMatchObject({ passed: false });
   });
