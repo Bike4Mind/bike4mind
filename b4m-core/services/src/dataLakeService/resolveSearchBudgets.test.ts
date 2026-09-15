@@ -241,14 +241,11 @@ describe('resolveSearchBudgets - scoped path', () => {
     expect(scoped.maxChunkChars).not.toBe(DEFAULT_SERVE_CHARS);
   });
 
-  it('CURRENTLY lets a caller-side rung move the chunk policy, and the serve budget with it', async () => {
-    // Pinned as current behavior, NOT as a blessed lever. DefaultChunkSize has declared settableAt
-    // [Organization, Owner] since #1722, so this rung resolves and the DERIVED serve budget follows
-    // it - but this resolver reads the CALLER's scope while that setting's declared subject is the
-    // FILE OWNER, and a search spans other owners' files. So a caller's own override can clip
-    // current-policy chunks it does not own, against the invariant at knowledgeBaseSearch/index.ts
-    // :92-93. Whether DefaultChunkSize belongs in the scoped read is open; this test exists to make
-    // the behavior visible if that decision changes it, not to defend it.
+  it('lets a caller-side rung RAISE the chunk policy, and the serve budget with it', async () => {
+    // DefaultChunkSize has declared settableAt [Organization, Owner] since #1722, so this rung
+    // resolves and the DERIVED serve budget follows it upward. Raising is the direction that stays
+    // safe when the caller is not the file owner: a budget above a chunk's producing policy clips
+    // nothing, so an owner who pinned their own target high still gets their own files served whole.
     // The assertion here used to claim the opposite - and passed, because its override value sat
     // above the setting's own `max`, so the schema parse in pickOverride discarded the row before
     // settableAt was ever consulted. The two cases differ ONLY in the stored value, which is
@@ -266,6 +263,74 @@ describe('resolveSearchBudgets - scoped path', () => {
 
     expect(budgets.maxChunkChars).toBe(deriveServeCharBudget(1000).maxChunkChars);
     expect(budgets.maxChunkChars).not.toBe(deriveServeCharBudget(300).maxChunkChars);
+  });
+
+  it('does NOT let a caller-side rung lower the serve budget below the platform chunk policy', async () => {
+    // The other half of #2803, and the defect it fixed. This resolver reads the CALLER's scope while
+    // DefaultChunkSize's declared subject is the FILE OWNER, and a search spans other owners' files -
+    // so a caller pinning a SMALL target would truncate in-policy chunks it does not own, against the
+    // invariant at knowledgeBaseSearch/index.ts. The platform value floors it for that reason.
+    // Stored values chosen so the two outcomes cannot be confused with the floor or the coded
+    // default: 1000 -> 6000, 64 -> SERVE_CHUNK_CHARS_FLOOR. Before the fix this resolved to the floor.
+    const db = makeDb({ DefaultChunkSize: '1000' }, [
+      {
+        scopeLevel: SettingScopeLevel.Organization,
+        scopeId: 'o1',
+        settingName: 'DefaultChunkSize',
+        settingValue: String(MIN_PASSAGE_TOKEN_TARGET),
+      },
+    ]);
+
+    const budgets = await resolveSearchBudgets(db, undefined, scope);
+
+    expect(budgets.maxChunkChars).toBe(deriveServeCharBudget(1000).maxChunkChars);
+    expect(budgets.maxChunkChars).not.toBe(deriveServeCharBudget(MIN_PASSAGE_TOKEN_TARGET).maxChunkChars);
+    expect(budgets.maxChunkChars).not.toBe(SERVE_CHUNK_CHARS_FLOOR);
+  });
+
+  it('floors the serve budget at the coded default when neither rung configures a chunk policy', async () => {
+    // With no platform row the floor is DEFAULT_PASSAGE_TOKEN_TARGET, not zero, so a caller rung
+    // below the chunker's own default still cannot shrink what other owners' files are served at.
+    const db = makeDb({}, [
+      {
+        scopeLevel: SettingScopeLevel.Organization,
+        scopeId: 'o1',
+        settingName: 'DefaultChunkSize',
+        settingValue: String(MIN_PASSAGE_TOKEN_TARGET),
+      },
+    ]);
+
+    const budgets = await resolveSearchBudgets(db, undefined, scope);
+
+    expect(budgets.maxChunkChars).toBe(DEFAULT_SERVE_CHARS);
+  });
+
+  it('warns once per unusable platform chunk row, not on every scoped search', async () => {
+    // The platform floor read puts a set-but-unusable warn on the SCOPED path, where one never fired
+    // before (that path coerces its own rows silently). Since this is the path production takes on
+    // every search of every turn, an unthrottled warn here would bury itself in repetition - the same
+    // reason the ceiling warn is throttled. The label must also stay distinguishable from the scoped
+    // row's, which is why the filter below can match one and not the other.
+    const logger = loggerStub();
+    const db = makeDb({ DefaultChunkSize: 'not-a-number' }, [
+      {
+        scopeLevel: SettingScopeLevel.Organization,
+        scopeId: 'o1',
+        settingName: 'dataLakeSearchMaxFiles',
+        settingValue: '25',
+      },
+    ]);
+
+    const first = await resolveSearchBudgets(db, logger, scope);
+    await resolveSearchBudgets(db, logger, scope);
+    await resolveSearchBudgets(db, logger, scope);
+
+    expect(first.maxFiles).toBe(25); // proves the scoped branch actually ran, all three times
+    expect(first.maxChunkChars).toBe(DEFAULT_SERVE_CHARS);
+    const platformWarns = logger.warn.mock.calls.filter(call =>
+      String(call[0]).includes('unusable platform DefaultChunkSize')
+    );
+    expect(platformWarns).toHaveLength(1);
   });
 
   it('discards a chunk-policy override above the setting max rather than clamping it', async () => {
