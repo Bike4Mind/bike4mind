@@ -191,3 +191,48 @@ describe('xlsx sheet-name prototype-pollution guard', () => {
     expect(wb.Sheets['A1']['A1'].v).toBe('fresh');
   });
 });
+
+describe('size-bound guards', () => {
+  // Build a valid .xlsx, then patch its worksheet dimension to a crafted range so XLSX.read
+  // reports an oversized !ref without XLSX.write ever materializing the grid (which itself
+  // hangs on a huge range - the reason applyXlsxText's existingRef is bounded too).
+  async function makeXlsxWithRef(ref: string): Promise<Buffer> {
+    const ws = XLSX.utils.aoa_to_sheet([['A1']]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+    const small = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+    const zip = await JSZip.loadAsync(small);
+    const sheetPath = Object.keys(zip.files).find(p => /xl\/worksheets\/sheet1\.xml$/.test(p))!;
+    const xml = (await zip.files[sheetPath].async('string')).replace(
+      /<dimension ref="[^"]*"\/>/,
+      `<dimension ref="${ref}"/>`
+    );
+    zip.file(sheetPath, xml);
+    return zip.generateAsync({ type: 'nodebuffer' });
+  }
+
+  it('rejects an xlsx whose !ref declares more cells than the cap, without iterating it', async () => {
+    const buffer = await makeXlsxWithRef('A1:XFD1048576'); // the full grid, ~17e9 cells
+    const start = Date.now();
+    await expect(extractEditableText(buffer, XLSX_MIME)).rejects.toThrow(/cells/);
+    expect(Date.now() - start).toBeLessThan(1000); // bounded before the loop, not after
+  });
+
+  it('rejects the same oversized !ref on the apply (write-back) path', async () => {
+    const buffer = await makeXlsxWithRef('A1:XFD1048576');
+    await expect(applyEditedText(buffer, '### Sheet: Sheet1\nx', XLSX_MIME)).rejects.toThrow(/cells/);
+  });
+
+  it('still extracts a normally-sized sheet', async () => {
+    const buffer = await makeXlsxWithRef('A1:A1');
+    await expect(extractEditableText(buffer, XLSX_MIME)).resolves.toContain('### Sheet: Sheet1');
+  });
+
+  it('rejects a docx whose document.xml decompresses over the per-entry cap', async () => {
+    const bomb =
+      '<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+      `<w:body><w:p><w:r><w:t>${'a'.repeat(33 * 1024 * 1024)}</w:t></w:r></w:p></w:body></w:document>`;
+    const docx = await makeDocx(bomb);
+    await expect(extractEditableText(docx, DOCX_MIME)).rejects.toThrow(/decompressed/);
+  });
+});

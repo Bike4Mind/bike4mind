@@ -496,6 +496,19 @@ describe('SmartChunker', () => {
       expect(allText).toContain('Attributed run text');
       expect(allText).toContain('Bare run text');
     });
+
+    it('skips a slide whose decompressed XML exceeds the per-entry cap, keeping the rest', async () => {
+      // A .pptx is a zip; one slide entry can inflate ~1000x when decompressed (zip-bomb shape).
+      // The oversized slide is skipped before it is materialized; the normal slide still chunks.
+      const huge = `<a:t>OVERSIZED_MARKER ${'x'.repeat(17 * 1024 * 1024)}</a:t>`;
+      const pptx = await buildPptx([huge, '<a:t>Normal slide text</a:t>']);
+      const start = Date.now();
+      const chunks = await chunker.chunkFile(pptx, PPTX_MIME);
+      const allText = chunks.map(c => c.text).join(' ');
+      expect(allText).toContain('Normal slide text');
+      expect(allText).not.toContain('OVERSIZED_MARKER');
+      expect(Date.now() - start).toBeLessThan(5000);
+    });
   });
 });
 

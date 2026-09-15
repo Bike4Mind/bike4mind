@@ -26,6 +26,15 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { S3Storage } from './storage';
 
+/**
+ * Bounds on PPTX zip extraction. A .pptx is a zip; a crafted one can pack far more slide
+ * entries than any real deck, and each entry can inflate ~1000x when decompressed (zip-bomb
+ * shape). Cap the number of slides chunked and skip any single slide whose decompressed XML is
+ * over the per-entry limit, so a small upload can't force multi-GB allocation on the pipeline.
+ */
+const MAX_PPTX_SLIDES = 5_000;
+const MAX_SLIDE_XML_BYTES = 16 * 1024 * 1024;
+
 export const ChunkSchema = z.object({
   text: z.string(),
   tokenCount: z.number(),
@@ -551,13 +560,17 @@ export class SmartChunker {
   // order, and chunk the concatenated text. Notes slides are intentionally skipped.
   private async chunkPPTX(content: Buffer): Promise<Chunk[]> {
     const zip = await JSZip.loadAsync(content);
-    const slidePaths = Object.keys(zip.files)
+    const allSlidePaths = Object.keys(zip.files)
       .filter(p => /^ppt\/slides\/slide\d+\.xml$/.test(p))
       .sort((a, b) => {
         const na = parseInt(a.match(/slide(\d+)\.xml$/)?.[1] ?? '0', 10);
         const nb = parseInt(b.match(/slide(\d+)\.xml$/)?.[1] ?? '0', 10);
         return na - nb;
       });
+    const slidePaths = allSlidePaths.slice(0, MAX_PPTX_SLIDES);
+    if (allSlidePaths.length > slidePaths.length) {
+      this.logger.warn(`PPTX declares ${allSlidePaths.length} slides; only the first ${MAX_PPTX_SLIDES} are chunked`);
+    }
 
     const decodeXmlEntities = (s: string): string =>
       s
@@ -569,7 +582,20 @@ export class SmartChunker {
 
     const slideTexts: string[] = [];
     for (let i = 0; i < slidePaths.length; i++) {
-      const xml = await zip.files[slidePaths[i]].async('string');
+      const entry = zip.files[slidePaths[i]];
+      // Skip a slide whose decompressed XML is over the per-entry cap BEFORE materializing it
+      // (JSZip exposes the uncompressed size on the entry), with a post-read length check as a
+      // fallback for the rare zip that omits that metadata.
+      const declaredBytes = (entry as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize;
+      if (typeof declaredBytes === 'number' && declaredBytes > MAX_SLIDE_XML_BYTES) {
+        this.logger.warn(`Skipping oversized PPTX slide ${i + 1} (${declaredBytes} bytes decompressed)`);
+        continue;
+      }
+      const xml = await entry.async('string');
+      if (xml.length > MAX_SLIDE_XML_BYTES) {
+        this.logger.warn(`Skipping oversized PPTX slide ${i + 1} (${xml.length} bytes decompressed)`);
+        continue;
+      }
       // `<a:t>` runs frequently carry attributes (e.g. `<a:t xml:space="preserve">`);
       // match the open tag with optional attributes, else PPTX text is silently dropped.
       const runs = xml.match(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g) ?? [];

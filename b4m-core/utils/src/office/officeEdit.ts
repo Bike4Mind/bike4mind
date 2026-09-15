@@ -40,6 +40,64 @@ export function isAiEditableOfficeMime(mime?: string | null): boolean {
  */
 export const MAX_OFFICE_EDIT_BYTES = 10 * 1024 * 1024;
 
+/**
+ * Cap on the number of cells a worksheet's declared `!ref` range may span. A .xlsx can declare
+ * a range far larger than its populated cells (the full grid, `A1:XFD1048576`, is ~17e9 cells);
+ * extractXlsxText iterates the DECLARED range, so an unbounded `!ref` turns a tiny upload into
+ * minutes of event-loop work. Well above any human-scale AI-editable sheet.
+ */
+export const MAX_XLSX_CELLS = 1_000_000;
+
+/**
+ * Max decompressed size of a single OOXML zip entry we read into a string (the docx
+ * `word/document.xml`). The 10 MB binary cap bounds the compressed upload, not what an entry
+ * decompresses to - a small zip can inflate an entry by ~1000x (zip-bomb shape), so bound the
+ * uncompressed size before materializing it.
+ */
+export const MAX_OFFICE_ENTRY_BYTES = 32 * 1024 * 1024;
+
+/**
+ * Decode a worksheet's declared `!ref`, rejecting one whose cell count exceeds MAX_XLSX_CELLS.
+ * Both the read (extractXlsxText, which iterates the range) and write (applyXlsxText) paths take
+ * their range through here so a crafted `!ref` is bounded before it drives any work.
+ */
+function decodeBoundedRange(XLSX: typeof import('xlsx'), ref: string, sheetName: string): import('xlsx').Range {
+  const range = XLSX.utils.decode_range(ref);
+  const cellCount = (range.e.r - range.s.r + 1) * (range.e.c - range.s.c + 1);
+  if (cellCount > MAX_XLSX_CELLS) {
+    throw new BadRequestError(
+      `Spreadsheet sheet "${sheetName}" declares ${cellCount.toLocaleString()} cells, over the ${MAX_XLSX_CELLS.toLocaleString()}-cell limit`
+    );
+  }
+  return range;
+}
+
+/**
+ * Read a named zip entry to a string, rejecting one whose declared uncompressed size exceeds
+ * `maxBytes` BEFORE decompressing it (JSZip exposes `_data.uncompressedSize` on the entry). When
+ * the metadata is absent, fall back to reading then checking length - one entry's worst case,
+ * not an unbounded loop.
+ */
+async function readZipEntryBounded(
+  entry: import('jszip').JSZipObject,
+  maxBytes: number,
+  label: string
+): Promise<string> {
+  const declared = (entry as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize;
+  if (typeof declared === 'number' && declared > maxBytes) {
+    throw new BadRequestError(
+      `${label} is ${declared.toLocaleString()} bytes decompressed, over the ${maxBytes.toLocaleString()}-byte limit`
+    );
+  }
+  const text = await entry.async('string');
+  if (text.length > maxBytes) {
+    throw new BadRequestError(
+      `${label} is ${text.length.toLocaleString()} bytes decompressed, over the ${maxBytes.toLocaleString()}-byte limit`
+    );
+  }
+  return text;
+}
+
 export async function extractEditableText(buffer: Buffer, mime: string): Promise<string> {
   if (mime === SupportedFabFileMimeTypes.DOCX) return extractDocxText(buffer);
   if (mime === SupportedFabFileMimeTypes.XLSX) return extractXlsxText(buffer);
@@ -118,7 +176,7 @@ async function loadDocumentXml(buffer: Buffer): Promise<{ zip: import('jszip'); 
   }
   const entry = zip.file('word/document.xml');
   if (!entry) throw new BadRequestError('File is not a valid .docx document (missing word/document.xml)');
-  const xml = await entry.async('string');
+  const xml = await readZipEntryBounded(entry, MAX_OFFICE_ENTRY_BYTES, 'word/document.xml');
   return { zip, xml };
 }
 
@@ -206,7 +264,7 @@ async function extractXlsxText(buffer: Buffer): Promise<string> {
     const lines = [`${XLSX_SHEET_HEADER}${sheetName}`];
     const ref = sheet['!ref'];
     if (ref) {
-      const range = XLSX.utils.decode_range(ref);
+      const range = decodeBoundedRange(XLSX, ref, sheetName);
       for (let r = range.s.r; r <= range.e.r; r++) {
         const row: string[] = [];
         for (let c = range.s.c; c <= range.e.c; c++) {
@@ -292,7 +350,7 @@ async function applyXlsxText(originalBuffer: Buffer, editedText: string): Promis
     }
 
     const existingRef = sheet['!ref']
-      ? XLSX.utils.decode_range(sheet['!ref'])
+      ? decodeBoundedRange(XLSX, sheet['!ref'], name)
       : { s: { r: 0, c: 0 }, e: { r: 0, c: 0 } };
     let maxR = existingRef.e.r;
     let maxC = existingRef.e.c;
