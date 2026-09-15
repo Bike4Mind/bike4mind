@@ -16,7 +16,6 @@ import type {
   LatticeOperation,
 } from '@bike4mind/common';
 
-import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { assertSafeObjectKey } from '@bike4mind/utils/safeObjectKey';
 import { DependencyTracker, createDependencyTracker } from './DependencyTracker';
 
@@ -51,6 +50,40 @@ interface EvaluationContext {
   computedValues: ILatticeComputedValues;
   scenario?: ILatticeScenario;
   errors: ILatticeError[];
+}
+
+/**
+ * Backtrack-free glob match where `*` is the only wildcard and every other character is a
+ * literal. Deliberately not a compiled RegExp: escaping the pattern still leaves `*` live as
+ * `.*`, and a chained-`*` pattern (`'*a'.repeat(12) + 'Z'`) then costs the regex engine
+ * exponential time - measured at ~30s of blocked event loop against a 40-char subject. This
+ * two-pointer walk is O(text * pattern) worst case with no backtracking stack, so a hostile
+ * pattern cannot outrun its input.
+ */
+function globMatches(text: string, pattern: string): boolean {
+  let textIndex = 0;
+  let patternIndex = 0;
+  let lastStarPattern = -1;
+  let lastStarText = 0;
+
+  while (textIndex < text.length) {
+    if (patternIndex < pattern.length && pattern[patternIndex] === '*') {
+      lastStarPattern = patternIndex++;
+      lastStarText = textIndex;
+    } else if (patternIndex < pattern.length && pattern[patternIndex] === text[textIndex]) {
+      patternIndex++;
+      textIndex++;
+    } else if (lastStarPattern >= 0) {
+      // Let the most recent `*` absorb one more character, then resume just after it.
+      patternIndex = lastStarPattern + 1;
+      textIndex = ++lastStarText;
+    } else {
+      return false;
+    }
+  }
+
+  while (patternIndex < pattern.length && pattern[patternIndex] === '*') patternIndex++;
+  return patternIndex === pattern.length;
 }
 
 // HYDRATION ENGINE CLASS
@@ -326,20 +359,13 @@ export class HydrationEngine {
   }
 
   /**
-   * Check if an entity ID matches a pattern
+   * Check if an entity ID matches a rule-authored pattern. `*` is the only wildcard; see
+   * {@link globMatches} for why this is not a compiled RegExp.
    */
   private matchesPattern(entityId: string, pattern: string): boolean {
-    // Simple wildcard matching
     if (pattern === '*') return true;
     if (!pattern.includes('*')) return entityId === pattern;
-
-    // Escape the rule-authored pattern before compiling so only the intended `*`
-    // glob survives as a wildcard; every other regex metacharacter is treated as a
-    // literal (prevents regex injection and catastrophic backtracking). `escapeRegex`
-    // turns `*` into `\*`, so restore just those to `.*`.
-    const escaped = escapeRegex(pattern).replace(/\\\*/g, '.*');
-    const regex = new RegExp('^' + escaped + '$');
-    return regex.test(entityId);
+    return globMatches(entityId, pattern);
   }
 
   /**

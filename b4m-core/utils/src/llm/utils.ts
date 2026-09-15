@@ -1063,8 +1063,10 @@ export async function processUrlsFromPrompt(
   });
 
   // Remove processed URLs from the user prompt. Escape each URL before building the
-  // alternation: a raw URL can carry regex metacharacters that would otherwise change
-  // what gets stripped (and could inject a catastrophic-backtracking pattern).
+  // alternation: URL_REGEX can emit `?` and `.`, so a URL like `https://example.com/a?b=1`
+  // used to compile to a pattern that no longer matched its own text and was left in the
+  // prompt (or mis-stripped). Its character classes cannot emit `(`/`+`/`*`, so backtracking
+  // was never the exposure here - correct stripping is.
   const remainingPrompt = processedUrls.length
     ? userPrompt.replace(new RegExp(processedUrls.map(escapeRegex).join('|'), 'gi'), '').trim()
     : userPrompt.trim();

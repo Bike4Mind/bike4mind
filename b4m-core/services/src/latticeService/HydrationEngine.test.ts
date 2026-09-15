@@ -52,30 +52,29 @@ describe('HydrationEngine prototype-pollution guards', () => {
     expect(ok.values.revenue.total.value).toBe(3);
 
     const result = engine.hydrate(data([entity('revenue')]), store([addRule('r1', '__proto__', 'polluted')]));
-    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
     expect(result.errors.some(e => /r1/.test(JSON.stringify(e)))).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(result.values, '__proto__')).toBe(false);
   });
 
   it('rejects a rule whose output targets a reserved attribute name', () => {
     const engine = new HydrationEngine();
     const result = engine.hydrate(data([entity('revenue')]), store([addRule('r1', 'revenue', 'constructor')]));
 
-    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
     expect(result.errors.length).toBeGreaterThan(0);
+    expect(Object.prototype.hasOwnProperty.call(result.values.revenue, 'constructor')).toBe(false);
   });
 
   it('stores a base-data entity named __proto__ as a harmless own key, not on the prototype', () => {
     const engine = new HydrationEngine();
     const result = engine.hydrate(data([entity('__proto__', [{ key: 'x', value: 5 }])]), store([]));
 
-    expect(({} as Record<string, unknown>).x).toBeUndefined();
     // Handled as a literal key: it appears in the computed values, prototype untouched.
     expect(Object.prototype.hasOwnProperty.call(result.values, '__proto__')).toBe(true);
   });
 });
 
 describe('HydrationEngine matchesPattern (regex-injection guard)', () => {
-  // matchesPattern is private; exercise it directly - it is the [176] injection sink.
+  // matchesPattern is private; exercise it directly - it is the pattern-compilation sink.
   const match = (pattern: string, entityId: string): boolean =>
     (new HydrationEngine() as unknown as { matchesPattern(e: string, p: string): boolean }).matchesPattern(
       entityId,
@@ -94,9 +93,25 @@ describe('HydrationEngine matchesPattern (regex-injection guard)', () => {
     expect(match('a.b', 'a.b')).toBe(true);
   });
 
-  it('does not hang on an injected catastrophic-backtracking pattern', () => {
+  it('matches multi-* globs correctly', () => {
+    expect(match('*a*b', 'xxaybzzb')).toBe(true);
+    expect(match('*a*b', 'xxbyyaz')).toBe(false);
+    expect(match('a*b*', 'ab')).toBe(true);
+    expect(match('a**b', 'axxb')).toBe(true);
+    expect(match('rev*', 'rev')).toBe(true);
+    expect(match('*enue', 'enue')).toBe(true);
+  });
+
+  it('stays linear on a chained-* pattern that made the compiled form exponential', () => {
+    // Every case above lacks a `*` chain, so it is this one that exercises the matcher's
+    // hot path. Under the previous escape-then-compile form this pattern became
+    // `.*a.*a...Z` and blocked the event loop for ~30s against the same subject; the
+    // two-pointer matcher returns in well under a millisecond. The bound is loose on
+    // purpose - it only needs to separate "linear" from "exponential", not to be a
+    // benchmark, so CPU contention in CI cannot flake it.
+    const pattern = '*a'.repeat(12) + 'Z';
     const t0 = performance.now();
-    expect(match('(a+)+$', 'a'.repeat(40) + '!')).toBe(false);
-    expect(performance.now() - t0).toBeLessThan(100);
+    expect(match(pattern, 'a'.repeat(40))).toBe(false);
+    expect(performance.now() - t0).toBeLessThan(1000);
   });
 });

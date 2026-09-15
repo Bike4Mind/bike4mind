@@ -163,14 +163,39 @@ describe('unsupported mime', () => {
 });
 
 describe('xlsx sheet-name prototype-pollution guard', () => {
+  // Pollution from this path lands on the CELL ADDRESS keys the writer emits, not on any
+  // value from the edited text, so those are the keys worth asserting on.
+  const POLLUTED_KEYS = ['A1', 'B1', 'A2', '!ref'];
+
   afterEach(() => {
-    delete (Object.prototype as Record<string, unknown>).polluted;
+    for (const key of POLLUTED_KEYS) delete (Object.prototype as Record<string, unknown>)[key];
   });
 
   it('rejects a reserved sheet name and leaves Object.prototype untouched', async () => {
     const buffer = makeXlsx();
     const edited = '### Sheet: __proto__\nA,polluted\nx,y';
     await expect(applyEditedText(buffer, edited, XLSX_MIME)).rejects.toThrow(/sheet name/i);
-    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    for (const key of POLLUTED_KEYS) {
+      expect(({} as Record<string, unknown>)[key]).toBeUndefined();
+    }
+  });
+
+  it('looks up an existing sheet by own property, not through the prototype chain', async () => {
+    // A sheet legitimately named `A1` must not read as "already existing" just because
+    // Object.prototype happens to carry an A1 key.
+    // Non-enumerable so it stays out of the `for...in` loops inside xlsx: the point is only
+    // that a prototype-chain read finds it, not that it contaminates iteration.
+    Object.defineProperty(Object.prototype, 'A1', {
+      value: { t: 's', v: 'from-prototype' },
+      configurable: true,
+      writable: true,
+    });
+
+    const buffer = makeXlsx();
+    const out = await applyEditedText(buffer, '### Sheet: A1\nfresh', XLSX_MIME);
+    const wb = XLSX.read(out, { type: 'buffer', cellFormula: true });
+
+    expect(wb.SheetNames).toContain('A1');
+    expect(wb.Sheets['A1']['A1'].v).toBe('fresh');
   });
 });

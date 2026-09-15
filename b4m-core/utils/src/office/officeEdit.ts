@@ -258,19 +258,22 @@ async function applyXlsxText(originalBuffer: Buffer, editedText: string): Promis
   }
 
   for (const { name, csv } of splitXlsxSheets(editedText)) {
-    // The sheet name comes from the edited text (`### Sheet: <name>`). A reserved key like
-    // `__proto__` would make `workbook.Sheets[name]` resolve to Object.prototype (truthy),
-    // so a cell write or book_append_sheet mutates the prototype process-wide. Reject it.
-    if (isForbiddenObjectKey(name)) {
-      throw new BadRequestError(`Invalid sheet name "${name}"`);
-    }
-
     const rows = parse(csv.replace(/\s+$/, ''), { relax_column_count: true, skip_empty_lines: false }) as string[][];
 
-    const sheet = workbook.Sheets[name];
+    // Own-property test rather than `workbook.Sheets[name]`: a plain-object index resolves
+    // through the prototype chain, so a sheet name of `__proto__` reads back Object.prototype
+    // as an existing sheet and the cell writes below would land on it process-wide.
+    const sheet = Object.hasOwn(workbook.Sheets, name) ? workbook.Sheets[name] : undefined;
     if (!sheet) {
-      // New sheet introduced by the edit: build it cell-by-cell via cellFromText so a formula
-      // cell keeps its `.f` (aoa_to_sheet on `.v` alone would drop the formula).
+      // New sheet introduced by the edit (`### Sheet: <name>` in the edited text). book_append_sheet
+      // assigns `Sheets[name]`, which for a reserved name reassigns the container's prototype
+      // instead of adding a sheet, so reject rather than silently corrupt the workbook.
+      if (isForbiddenObjectKey(name)) {
+        throw new BadRequestError(`Invalid sheet name "${name}"`);
+      }
+
+      // Build it cell-by-cell via cellFromText so a formula cell keeps its `.f`
+      // (aoa_to_sheet on `.v` alone would drop the formula).
       const created: import('xlsx').WorkSheet = {};
       let nr = 0;
       let nc = 0;

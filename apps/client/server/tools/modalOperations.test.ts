@@ -28,10 +28,20 @@ describe('updateModal search-term regex escaping', () => {
     expect(titleRe.source).toBe('\\(a\\+\\)\\+\\$');
     expect(textRe.source).toBe('\\(a\\+\\)\\+\\$');
 
-    // And the compiled regex no longer catastrophically backtracks.
-    const t0 = performance.now();
-    expect(titleRe.test('a'.repeat(50) + '!')).toBe(false);
-    expect(performance.now() - t0).toBeLessThan(100);
+    // The escaped form is a literal, so it matches the raw text and nothing else. (No timing
+    // assertion: the `.source` check above already fails if escaping is reverted, and a wall-clock
+    // bound would only add CI flake.)
+    expect(titleRe.test('(a+)+$')).toBe(true);
+    expect(titleRe.test('aaaa')).toBe(false);
+  });
+
+  it('coerces a non-string search term instead of throwing inside escapeRegex', async () => {
+    // `params` is untyped model output and can carry a number or boolean here. `new RegExp(123)`
+    // used to coerce silently; escapeRegex would throw on `.replace`.
+    await updateModal(undefined, { title: 123 });
+
+    expect(findOne).toHaveBeenCalledTimes(1);
+    expect((findOne.mock.calls[0][0].$or[0].title as RegExp).source).toBe('123');
   });
 
   it('leaves an ordinary search term matchable (contains semantics preserved)', async () => {
