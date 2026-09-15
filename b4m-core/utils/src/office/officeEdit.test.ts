@@ -161,3 +161,33 @@ describe('unsupported mime', () => {
     await expect(applyEditedText(Buffer.from('x'), 'y', 'text/plain')).rejects.toThrow();
   });
 });
+
+describe('xlsx sheet-name prototype-pollution guard', () => {
+  it('rejects a reserved sheet name', async () => {
+    // `book_append_sheet(wb, ws, '__proto__')` reassigns `wb.Sheets`'s OWN prototype to the sheet
+    // object - it never writes shared `Object.prototype` - so the rejection itself is the whole
+    // assertion here. The own-property read is what the sibling test below covers.
+    const buffer = makeXlsx();
+    const edited = '### Sheet: __proto__\nA,polluted\nx,y';
+    await expect(applyEditedText(buffer, edited, XLSX_MIME)).rejects.toThrow(/sheet name/i);
+  });
+
+  it('looks up an existing sheet by own property, not through the prototype chain', async () => {
+    // A sheet legitimately named `A1` must not read as "already existing" just because
+    // Object.prototype happens to carry an A1 key.
+    // Non-enumerable so it stays out of the `for...in` loops inside xlsx: the point is only
+    // that a prototype-chain read finds it, not that it contaminates iteration.
+    Object.defineProperty(Object.prototype, 'A1', {
+      value: { t: 's', v: 'from-prototype' },
+      configurable: true,
+      writable: true,
+    });
+
+    const buffer = makeXlsx();
+    const out = await applyEditedText(buffer, '### Sheet: A1\nfresh', XLSX_MIME);
+    const wb = XLSX.read(out, { type: 'buffer', cellFormula: true });
+
+    expect(wb.SheetNames).toContain('A1');
+    expect(wb.Sheets['A1']['A1'].v).toBe('fresh');
+  });
+});
