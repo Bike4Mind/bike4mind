@@ -6,9 +6,9 @@
  * its logged-in user, and receives a short-lived, revocable `ai:generate` key
  * scoped to that user. The ID token is either one the app's own Cognito pool
  * issued (with B4M federated upstream) or one B4M issued directly, per the
- * client's registered `federatedIdp.subjectSource`. The app then sends the key as `X-API-Key` to
- * `/api/ai/v1/completions`, so completions bill the resolved user's B4M credits
- * with no manual API-key paste.
+ * client's registered `federatedIdp.subjectSource`. The app then sends the key
+ * as `X-API-Key` to `/api/ai/v1/completions`, so completions bill the resolved
+ * user's B4M credits with no manual API-key paste.
  *
  * This is the only surface that mints an API key *outside* the consent-gated
  * REST path, so it enforces the consent gate itself (step 5) - see the
