@@ -803,9 +803,14 @@ const driveLakeResyncPollCron = new sst.aws.Cron('driveLakeResyncPoll', {
  * Does NOT bootstrap: with no lake row the handler no-ops, because the lake's `createdByUserId` is
  * the file owner and whose LLM keys embed the chunks.
  *
- * copyFiles carries the corpus into the bundle from the COMMITTED sources - `docs-site/docs` and the
- * generated-but-committed `help-index.json` - so it is present regardless of whether
- * `help:bundle-content` ran during the build. MUST STAY IN SYNC with CORPUS_DIR in the handler.
+ * copyFiles carries the corpus into the bundle as `docs-site/docs` plus `help-index.json`. MUST
+ * STAY IN SYNC with CORPUS_DIR in the handler.
+ *
+ * The index is generated, not committed, and it is generated HERE rather than relied on from
+ * elsewhere. `apps/client`'s prebuild also produces it, but that belongs to the web component's
+ * `next build` and nothing orders that before this function is bundled, so depending on it would
+ * be a race that fails as a missing copyFiles source. Regenerating is keyless, deterministic and
+ * a few seconds, so doing it unconditionally is cheaper than the coupling.
  *
  * HELP_CORPUS_VERSION exists only to make a docs-only edit redeploy the function: SST does not
  * notice copyFiles CONTENT changes, so without it the bundle keeps the corpus from whenever the
@@ -815,8 +820,14 @@ const driveLakeResyncPollCron = new sst.aws.Cron('driveLakeResyncPoll', {
  * Schedule: every 6 hours, so a docs change lands in the lake the same day it deploys.
  * Enabled: production + dev
  */
+execSync('pnpm --filter @bike4mind/scripts help:build-index', { stdio: 'inherit' });
+
+// Hashes the index's BYTES, not a git blob: it is no longer tracked, so `git ls-tree` cannot see
+// it. Both halves are needed - docs-site covers the article bodies the mirror ingests, which the
+// index does not carry, and the index covers a generator change that alters its shape.
 const HELP_CORPUS_HASH = execSync(
-  "git ls-tree -r HEAD docs-site/docs apps/client/app/generated/help-index.json | awk '{print $3}' | sort | md5sum | awk '{print $1}'"
+  "{ git ls-tree -r HEAD docs-site/docs | awk '{print $3}'; " +
+    "md5sum apps/client/app/generated/help-index.json | awk '{print $1}'; } | sort | md5sum | awk '{print $1}'"
 )
   .toString()
   .trim()
