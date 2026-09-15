@@ -24,6 +24,8 @@ import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.g
 import { openExternalLinkByKey } from '@client/app/utils/externalLinks';
 import { greenAlpha } from '@client/app/utils/themes/colors';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
+import { useIsMobile } from '@client/app/hooks/useIsMobile';
+import { useNotebookLayout } from '..';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
@@ -212,11 +214,18 @@ const ProfileMenu = () => {
   const { mutate: logout, isPending: isPendingLogout } = useUserLogout();
   const appVersion = useAppVersion();
 
+  const isMobile = useIsMobile();
+  const setOpenSideNav = useNotebookLayout(s => s.setOpenSideNav);
+
   const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [isCreditsModalOpen, setIsCreditsModalOpen] = useState(false);
   const [isSubscriptionModalOpen, setIsSubscriptionModalOpen] = useState(false);
+
+  const closeOnMobile = () => {
+    if (isMobile) setOpenSideNav(false);
+  };
 
   const closeAll = () => {
     setOpen(false);
@@ -299,6 +308,7 @@ const ProfileMenu = () => {
               icon={<AdminPanelSettingsIcon sx={{ fontSize: '18px' }} />}
               label={t('admin.title', 'Admin')}
               onClick={() => {
+                closeOnMobile();
                 navigate({ to: '/admin' });
                 closeNavigation();
               }}
@@ -316,6 +326,7 @@ const ProfileMenu = () => {
               ) : undefined
             }
             onClick={() => {
+              closeOnMobile();
               navigate({ to: '/profile' });
               closeNavigation();
             }}
@@ -325,6 +336,7 @@ const ProfileMenu = () => {
             icon={<ExtensionIcon sx={{ fontSize: '18px' }} />}
             label={t('skills.title', 'Skills')}
             onClick={() => {
+              closeOnMobile();
               navigate({ to: '/skills' });
               closeNavigation();
             }}
@@ -334,6 +346,7 @@ const ProfileMenu = () => {
             icon={<KeyOutlinedIcon sx={{ fontSize: '18px' }} />}
             label={t('apiKeys.title', 'API Keys')}
             onClick={() => {
+              closeOnMobile();
               navigate({ to: '/profile', search: { tab: 'api-keys' } });
               closeNavigation();
             }}
@@ -343,6 +356,7 @@ const ProfileMenu = () => {
             icon={<BusinessIcon sx={{ fontSize: '18px' }} />}
             label={t('organization.teams', 'Teams')}
             onClick={() => {
+              closeOnMobile();
               navigate({ to: '/organizations' });
               closeNavigation();
             }}
@@ -538,6 +552,7 @@ const ProfileMenu = () => {
                     icon={<AutoAwesomeIcon sx={{ fontSize: '18px' }} />}
                     label={t('quests.my_quests', 'My Quests')}
                     onClick={() => {
+                      closeOnMobile();
                       navigate({ to: '/quests' });
                       closeNavigation();
                     }}
@@ -553,6 +568,7 @@ const ProfileMenu = () => {
                       // Premium routes are registered at runtime via the codegen
                       // glue, so their paths can't appear in the static route-tree
                       // union - erase the typed `to` here.
+                      closeOnMobile();
                       navigate({ to: item.path as never });
                       closeNavigation();
                     }}
