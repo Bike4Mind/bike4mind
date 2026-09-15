@@ -474,17 +474,22 @@
   background: var(--b4m-md-surface-2);
 }
 
-/* A column every body cell of which parses to exactly one number: right-align,
-   tabular figures, and a magnitude bar under the value.
+/* A column every body cell of which parses to exactly one number: tabular
+   figures and a magnitude bar under the value.
+
+   Every column reads left-aligned, numeric ones included. Right-alignment is
+   the classier setting for comparing magnitudes down a column, but it puts a
+   ragged left edge between a label and its own numbers, and these tables are
+   read a row at a time far more often than a column at a time.
 
    analyseTable sets these classes on the head cell as well, so the label sits
-   over its own column. Alignment is the only thing a label should take from
-   them: the face, the figures and the ink are how a datum is presented, and a
-   head cell holds a word. Left unscoped they also outrank `.b4m-md thead th`
-   on specificity (0,2,0 against 0,1,2), which rendered a single head row in
-   two typefaces, two inks and - via numtext's own font-size - two sizes. */
+   over its own column. The face, the figures and the ink are how a datum is
+   presented and a head cell holds a word, so those stay scoped to tbody. Left
+   unscoped they also outrank `.b4m-md thead th` on specificity (0,2,0 against
+   0,1,2), which rendered a single head row in two typefaces, two inks and -
+   via numtext's own font-size - two sizes. */
 .b4m-md .b4m-md-num {
-  text-align: right;
+  text-align: left;
   white-space: nowrap;
 }
 
@@ -498,10 +503,13 @@
   position: relative;
 }
 
+/* The bar grows from the left, under the digit the value starts at, now that
+   the column is left-aligned - anchored right it would have floated away from
+   the number it measures. */
 .b4m-md tbody td.b4m-md-num[style*='--b4m-md-bar']::after {
   content: '';
   position: absolute;
-  right: 14px;
+  left: 14px;
   bottom: 5px;
   width: calc(var(--b4m-md-bar) * 62px);
   height: 2px;
@@ -511,8 +519,8 @@
 }
 
 /* Numeric, but long enough that the >24-character guard classes it as prose.
-   Prose is what it then gets: the body face, no right-alignment and no bar, so
-   a wrapped cell does not ladder away from its neighbours. The mono face is
+   Prose is what it then gets: no nowrap and no bar, so a wrapped cell does not
+   ladder away from its neighbours. The mono face is
    deliberately not carried over - a sentence set in mono reads worse, and it
    would put a third typeface in a table that otherwise uses two. Tabular
    figures are kept, since the cell does still hold exactly one number. */
