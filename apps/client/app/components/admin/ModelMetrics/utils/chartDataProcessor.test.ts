@@ -95,6 +95,24 @@ describe('processChartData', () => {
       expect(points(chartData.dailyTrends).map(p => p.x)).toEqual(['12/30', '12/31', '01/01', '01/02']);
     });
 
+    it('keeps two years that share one MM/DD label apart', () => {
+      // The label is not unique, so grouping on it merged the two days into one point:
+      // the counts summed and the averages ran together. Grouping is on the bucket instant.
+      const chartData = processChartData([
+        metric('2025-03-04T10:00:00', { contextRetrievalTime: 100 }),
+        metric('2026-03-04T10:00:00', { contextRetrievalTime: 900 }),
+      ]);
+
+      expect(points(chartData.dailyTrends)).toEqual([
+        { x: '03/04', y: 1 },
+        { x: '03/04', y: 1 },
+      ]);
+      expect(points(chartData.contextRetrievalTrends)).toEqual([
+        { x: '03/04', y: 100 },
+        { x: '03/04', y: 900 },
+      ]);
+    });
+
     it('returns empty series for no metrics', () => {
       const chartData = processChartData([]);
 

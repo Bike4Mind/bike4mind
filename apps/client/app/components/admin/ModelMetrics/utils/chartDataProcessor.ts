@@ -8,12 +8,15 @@ const MS_PER_HOUR = 60 * 60 * 1000;
 const MAX_HOURLY_SPAN_MS = 48 * MS_PER_HOUR;
 
 // Bucket labels double as the x-axis ticks, so they stay short and carry no year.
-// That makes them unsortable across a year boundary, hence the separate sortKey.
+// That makes them ambiguous between years ('03/04' is two real days), so every bucket
+// is grouped and ordered by sortKey - its start instant - and the label is only shown.
 const HOURLY_LABEL = 'MM/DD HH:00';
 const DAILY_LABEL = 'MM/DD';
 
 interface Bucket {
+  /** Display label for the x-axis. Not unique: two years share one 'MM/DD'. */
   x: string;
+  /** Start of the bucket, in ms. The grouping and ordering key. */
   sortKey: number;
 }
 
@@ -43,13 +46,13 @@ const buildAverageTrend = (
         return acc;
       }
       const { x, sortKey } = toBucket(metric.timestamp, useHourlyGranularity);
-      if (!acc[x]) {
-        acc[x] = { values: [], x, sortKey };
+      if (!acc[sortKey]) {
+        acc[sortKey] = { values: [], x, sortKey };
       }
-      acc[x].values.push(value);
+      acc[sortKey].values.push(value);
       return acc;
     },
-    {} as Record<string, { values: number[]; x: string; sortKey: number }>
+    {} as Record<number, { values: number[]; x: string; sortKey: number }>
   );
 
   return [
@@ -125,13 +128,13 @@ export const processChartData = (
   const usageByBucket = filteredMetrics.reduce(
     (acc, metric) => {
       const { x, sortKey } = toBucket(metric.timestamp, useHourlyGranularity);
-      if (!acc[x]) {
-        acc[x] = { x, y: 0, sortKey };
+      if (!acc[sortKey]) {
+        acc[sortKey] = { x, y: 0, sortKey };
       }
-      acc[x].y += 1;
+      acc[sortKey].y += 1;
       return acc;
     },
-    {} as Record<string, { x: string; y: number; sortKey: number }>
+    {} as Record<number, { x: string; y: number; sortKey: number }>
   );
 
   const dailyTrends = [

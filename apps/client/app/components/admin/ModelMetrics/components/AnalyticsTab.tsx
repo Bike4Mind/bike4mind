@@ -12,7 +12,6 @@ import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 const ResponsiveLineChart = ResponsiveLine as any;
 
 interface AnalyticsTabProps {
-  chartData: any; // Keep the original prop but use analytics data instead
   filters?: {
     dateFrom?: string;
     dateTo?: string;
@@ -140,7 +139,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
 
       {/* Row 2: Daily Usage Trends */}
       <Box sx={{ mt: 2, mb: 2 }}>
-        <Typography level="h4" sx={{ mb: 2 }}>
+        <Typography level="h4" sx={{ mb: 2 }} data-testid="analytics-trends-heading">
           {chartData.granularity === 'hourly' ? 'Hourly' : 'Daily'} Analytics Trends
         </Typography>
         <Box sx={{ height: 300 }}>
@@ -496,7 +495,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
         </Box>
 
         <Box sx={{ flex: { xs: 'none', sm: 1 }, width: { xs: '100%', sm: 'auto' } }}>
-          <Typography level="h4" sx={{ mb: 2 }}>
+          <Typography level="h4" sx={{ mb: 2 }} data-testid="analytics-chars-per-second-heading">
             Characters Streamed Per Second
           </Typography>
           <Box sx={{ height: { xs: 220, sm: 300 } }}>
@@ -554,7 +553,11 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
                   gap: 1,
                 }}
               >
-                <Typography level="body-lg" sx={{ color: 'text.primary', fontWeight: 'bold' }}>
+                <Typography
+                  level="body-lg"
+                  sx={{ color: 'text.primary', fontWeight: 'bold' }}
+                  data-testid="analytics-chars-per-second-single"
+                >
                   {chartData.charactersPerSecondTrends[0].data[0].y} chars/sec on{' '}
                   {chartData.charactersPerSecondTrends[0].data[0].x}
                 </Typography>
@@ -575,7 +578,11 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
                   borderColor: 'divider',
                 }}
               >
-                <Typography level="body-lg" sx={{ color: 'text.secondary' }}>
+                <Typography
+                  level="body-lg"
+                  sx={{ color: 'text.secondary' }}
+                  data-testid="analytics-chars-per-second-empty"
+                >
                   No streaming speed data available
                 </Typography>
               </Box>
