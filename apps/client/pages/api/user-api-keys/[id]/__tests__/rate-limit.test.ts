@@ -11,6 +11,7 @@ import { createMocks } from 'node-mocks-http';
 const mockRefs = vi.hoisted(() => ({
   patchHandler: null as null | ((req: any, res: any) => unknown),
   otherVerbs: [] as string[],
+  baseApiOptions: undefined as undefined | Record<string, unknown>,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -29,7 +30,12 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return {
+    baseApi: (options?: Record<string, unknown>) => {
+      mockRefs.baseApiOptions = options;
+      return chain;
+    },
+  };
 });
 
 vi.mock('@server/middlewares/csrfProtection', () => ({
@@ -103,6 +109,14 @@ describe('PATCH /api/user-api-keys/[id]/rate-limit', () => {
   it('registers PATCH only, so next-connect 405s every other verb', () => {
     expect(mockRefs.patchHandler).not.toBeNull();
     expect(mockRefs.otherVerbs).toEqual([]);
+  });
+
+  // The escape hatch only exists if the route actually asks for it: a key that
+  // has hit its own daily limit must still be able to raise it. Asserted here
+  // because the middleware-level tests build their own fixture routers and
+  // never import this file, so dropping the option would otherwise go unnoticed.
+  it('opts out of the daily API-key rate limit it exists to raise', () => {
+    expect(mockRefs.baseApiOptions).toMatchObject({ exemptFromDailyRateLimit: true });
   });
 });
 

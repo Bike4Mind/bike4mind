@@ -15,6 +15,15 @@ export interface ApiKeyRateLimitOptions {
    * (an expensive GET keeps its daily cap unless a route explicitly opts in).
    */
   exemptReadsFromDailyLimit?: boolean;
+  /**
+   * When true, EVERY request on this route (any method) skips the per-DAY
+   * quota. Unlike `exemptReadsFromDailyLimit`, this is not restricted to safe
+   * methods - it exists for the self-service PATCH that raises a key's own
+   * limit, which a caller needs precisely because their key is daily-exhausted.
+   * The per-minute burst limit still applies regardless, so a runaway loop on
+   * this route is still throttled. Defaults to false.
+   */
+  exemptFromDailyLimit?: boolean;
 }
 
 /** RFC 7231 safe methods: no state change, so cheap to serve and safe to exempt. */
@@ -53,9 +62,14 @@ export const apiKeyRateLimit =
 
     const { keyId, rateLimit } = req.apiKeyInfo;
 
-    // A route can exempt its cheap reads from the day quota; only safe methods
-    // actually qualify, so a POST on an opted-in route still counts.
-    const meterDailyLimit = !(options.exemptReadsFromDailyLimit && SAFE_METHODS.has(req.method.toUpperCase()));
+    // A route can exempt its cheap reads from the day quota (safe methods only),
+    // or exempt itself entirely regardless of method. Either way the per-minute
+    // burst check above already ran, so the day-only exemption never removes
+    // throttling entirely.
+    const meterDailyLimit = !(
+      options.exemptFromDailyLimit ||
+      (options.exemptReadsFromDailyLimit && SAFE_METHODS.has(req.method.toUpperCase()))
+    );
 
     try {
       // Check rate limit with context for analytics logging
