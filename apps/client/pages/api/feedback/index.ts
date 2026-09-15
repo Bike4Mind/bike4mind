@@ -29,6 +29,7 @@ import { postFeedbackToSlack } from '@server/integrations/slack/slack';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
 import { Config } from '@server/utils/config';
 import { resolveFeedbackContext } from '@server/utils/feedbackContext';
+import { buildFeedbackDeepLinks, FEEDBACK_LINK_LABELS, type FeedbackDeepLinks } from '@server/utils/feedbackDeepLinks';
 import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
@@ -141,6 +142,32 @@ type FeedbackEmailRoute =
 // bracketed substring would hide information from the staff reading it.
 function sanitizeForEmail(value: string): string {
   return sanitizeHtml(value, { allowedTags: [], allowedAttributes: {}, disallowedTagsMode: 'escape' });
+}
+
+/**
+ * `href` lives in a double-quoted attribute, which sanitizeForEmail does not cover: it is a
+ * text-node sanitizer (allowedTags: []), documented to neutralize markup rather than to make a
+ * string safe inside an attribute. The deep-link builders percent-encode every id they
+ * interpolate, so this is defense in depth for the day one of them stops.
+ */
+function escapeHtmlAttribute(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/**
+ * The email's counterpart to renderLinksLine in feedbackMessage.ts - same two targets, and the
+ * labels come from the same constant, so a report triaged from the inbox and one triaged from
+ * Slack lead to the same places by the same names.
+ * Empty string when there is nothing to link to, which collapses the row out of the template.
+ */
+function renderFeedbackLinksHtml(links: FeedbackDeepLinks | null): string {
+  if (!links) return '';
+  const anchors = [`<a href="${escapeHtmlAttribute(links.record)}">${FEEDBACK_LINK_LABELS.record}</a>`];
+  if (links.conversation) {
+    const label = links.conversationIsTurn ? FEEDBACK_LINK_LABELS.turn : FEEDBACK_LINK_LABELS.session;
+    anchors.push(`<a href="${escapeHtmlAttribute(links.conversation)}">${label}</a>`);
+  }
+  return `<p><strong>Links:</strong> ${anchors.join(' - ')}</p>`;
 }
 
 /**
@@ -400,6 +427,20 @@ const handler = baseApi()
       ? { ...promptMeta, functionCalls: redactFunctionCallsForViewer(promptMeta.functionCalls) }
       : promptMeta;
 
+    // Built once for both channels so a link in Slack and the same link in the email can never
+    // disagree. Null on a deploy with no APP_URL: both channels then render no link section
+    // rather than an unfollowable relative path, and the notification still goes out.
+    const deepLinks = buildFeedbackDeepLinks({
+      feedbackId: newFeedback.id,
+      sessionId: newFeedback.sessionId,
+      questId: newFeedback.questId,
+    });
+    if (!deepLinks) {
+      Logger.warn('[feedback] APP_URL is unset - delivering the notification without deep links', {
+        feedbackId: newFeedback.id,
+      });
+    }
+
     // Send feedback to Slack if enabled. postFeedbackToSlack records its own
     // success/failure/skip metrics and reports its own outcome; the 'disabled' skip is
     // recorded here since it never even calls into postFeedbackToSlack. Collected below (with the
@@ -411,15 +452,16 @@ const handler = baseApi()
     let slack: FeedbackChannelDelivery;
     if (getSettingsValue('EnableFeedBackToSlack', settings)) {
       console.log('Sending feedback to Slack is enabled');
-      slack = await postFeedbackToSlack(
-        type || 'CS',
+      slack = await postFeedbackToSlack({
+        type: type || 'CS',
         organization,
-        newFeedback.username,
-        newFeedback.userEmail ?? '',
-        newFeedback.userId,
-        truncatedContent,
-        promptMetaForExternalEgress
-      );
+        username: newFeedback.username,
+        userEmail: newFeedback.userEmail ?? '',
+        userId: newFeedback.userId,
+        content: truncatedContent,
+        promptMeta: promptMetaForExternalEgress,
+        links: deepLinks,
+      });
     } else {
       slack = { outcome: 'skipped', reason: 'disabled' };
       disabledChannelMetrics.push(
@@ -560,6 +602,7 @@ const handler = baseApi()
                       <p><strong>From:</strong> ${sanitizedUsername} (ID: ${sanitizedUserId})</p>
                       <p><strong>Email:</strong> ${sanitizedUserEmail}</p>
                       ${sanitizedType ? `<p><strong>Type:</strong> ${sanitizedType}</p>` : ''}
+                      ${renderFeedbackLinksHtml(deepLinks)}
                     </div>
                     <p><strong>Message:</strong></p>
                     <p>${sanitizedContent}</p>

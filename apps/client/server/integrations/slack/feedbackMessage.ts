@@ -1,4 +1,5 @@
 import { escapeSlackText } from '@bike4mind/services';
+import { FEEDBACK_LINK_LABELS, type FeedbackDeepLinks } from '@server/utils/feedbackDeepLinks';
 
 /**
  * Fields this module reads out of a feedback submission's (already-redacted)
@@ -174,6 +175,33 @@ export interface FeedbackSlackMessageInput {
   content: string;
   /** Already redacted (functionCalls[].returnValue/.error stripped) by the caller. */
   promptMeta?: FeedbackPromptMetaInput | null;
+  /** Absolute deep links to the record and the conversation; null when APP_URL is unset. */
+  links?: FeedbackDeepLinks | null;
+}
+
+/**
+ * `*Links:* <url|Admin record> - <url|Conversation turn>`, or an empty string when there is
+ * nothing to link to.
+ *
+ * The session and turn ids ride out to the Slack workspace here for the first time - a deliberate
+ * addition to this module's egress allowlist (cf. FeedbackPromptMetaInput), not an inherited field.
+ * They are opaque ObjectIds carrying no user or document content, and a link nobody can follow back
+ * to the conversation is the whole problem this solves; the targets themselves stay behind the
+ * app's own auth.
+ *
+ * The URLs go through `escapeSlackText` like every other interpolated value: the path builders
+ * already percent-encode the ids, so the only character this actually rewrites is the query
+ * separator `&` (which Slack resolves back before following the link), but escaping unconditionally
+ * is what keeps this line safe if a future id source stops being percent-encoded.
+ */
+function renderLinksLine(links: FeedbackDeepLinks | null | undefined): string {
+  if (!links) return '';
+  const parts = [`<${escapeSlackText(links.record)}|${FEEDBACK_LINK_LABELS.record}>`];
+  if (links.conversation) {
+    const label = links.conversationIsTurn ? FEEDBACK_LINK_LABELS.turn : FEEDBACK_LINK_LABELS.session;
+    parts.push(`<${escapeSlackText(links.conversation)}|${label}>`);
+  }
+  return `*Links:* ${parts.join(' - ')}\n`;
 }
 
 /**
@@ -205,14 +233,17 @@ function toBlockquote(text: string): string {
  * the blockquote are what keep a crafted field off its own line, which is what actually
  * matters. Each identity field is capped (`escapeIdentityField`) and the whole result capped to
  * `MAX_MESSAGE_CHARS`, so an oversized field truncates the delivered message rather than
- * failing to send, with Prompt Meta (least actionable for triage) truncated away first.
+ * failing to send, with Prompt Meta (least actionable for triage) truncated away first. The
+ * Links line sits ABOVE `content` for that same reason: everything above it is length-capped, so
+ * no submission can be long enough to push the links past the cap.
  */
 export function buildFeedbackSlackMessage(input: FeedbackSlackMessageInput): string {
-  const { stagePrefix, type, organization, username, userEmail, userId, content, promptMeta } = input;
+  const { stagePrefix, type, organization, username, userEmail, userId, content, promptMeta, links } = input;
   const message =
     `${stagePrefix}*Type:* ${escapeIdentityField(type)}\n` +
     `*User Details:* ${escapeIdentityField(organization)} - ${escapeIdentityField(username)} (ID: ${escapeIdentityField(userId)})\n` +
     `*User Email:* ${escapeIdentityField(userEmail)}\n` +
+    renderLinksLine(links) +
     `*Feedback:*\n${toBlockquote(escapeSlackText(content))}\n` +
     `\n*Prompt Meta:* ${buildPromptMetaSummary(promptMeta)}`;
   return message.length > MAX_MESSAGE_CHARS ? `${truncateSafely(message, MAX_MESSAGE_CHARS)}... [truncated]` : message;
