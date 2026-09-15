@@ -515,17 +515,19 @@ const ProfileMenu = () => {
                     closeAll();
                   }}
                 />
-                {/* Tutorials lives here while the page is being built out; it moves to
-                    the sidenav rail once it replaces the first-run slider. */}
-                <MenuRow
-                  testId="profile-more-tutorials"
-                  icon={<MenuBookOutlinedIcon sx={{ fontSize: '18px' }} />}
-                  label={t('tutorials.title', 'Tutorials')}
-                  onClick={() => {
-                    navigate({ to: '/tutorials/explore' });
-                    closeNavigation();
-                  }}
-                />
+                {/* Admin-only while the page is placeholder copy. Drop the gate - and move
+                    this row to the sidenav rail - once it replaces the first-run slider. */}
+                {isAdmin && (
+                  <MenuRow
+                    testId="profile-more-tutorials"
+                    icon={<MenuBookOutlinedIcon sx={{ fontSize: '18px' }} />}
+                    label={t('tutorials.title', 'Tutorials')}
+                    onClick={() => {
+                      navigate({ to: '/tutorials/explore' });
+                      closeNavigation();
+                    }}
+                  />
+                )}
                 <MenuRow
                   testId="profile-more-about"
                   icon={<InfoOutlinedIcon sx={{ fontSize: '18px' }} />}
