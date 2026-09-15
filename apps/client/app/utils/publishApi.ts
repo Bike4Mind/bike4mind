@@ -10,7 +10,7 @@ import type {
 } from '@bike4mind/common';
 import { ELISION_PUBLISH_BODY, SCOPE_URL_PREFIX } from '@bike4mind/common';
 import { detectElidedSafe } from '@client/app/utils/artifactParser';
-import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
+import { buildShareFooterHtml, buildSignupGateHtml } from '@client/app/utils/shareFooter';
 import { exportHref, type PublishExportFormat } from '@client/app/utils/publishExport';
 
 /** Summary row for the published-artifacts management list. */
@@ -696,12 +696,13 @@ export function buildArtifactIndexHtml(type: string, content: string, title: str
     return /<\/body>/i.test(content) ? content.replace(/<\/body>/i, `${footer}</body>`) : content + footer;
   }
 
+  const gate = buildSignupGateHtml();
   const PAGE = (inner: string, extraStyle = '') => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta property="og:title" content="${t}"><title>${t}</title>
-<style>:root{color-scheme:light dark}body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;line-height:1.6;max-width:900px;margin:0 auto;padding:2rem 1.25rem 4rem}pre{background:rgba(127,127,127,.12);padding:1rem;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-wrap:break-word}img,svg{max-width:100%;height:auto}${extraStyle}</style>
-</head><body>${inner}${buildShareFooterHtml({ source: 'artifact' })}</body></html>`;
+<style>:root{color-scheme:light dark}body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;line-height:1.6;max-width:900px;margin:0 auto;padding:2rem 1.25rem 4rem}pre{background:rgba(127,127,127,.12);padding:1rem;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-wrap:break-word}img,svg{max-width:100%;height:auto}${extraStyle}${gate?.styles ?? ''}</style>
+</head><body>${inner}${buildShareFooterHtml({ source: 'artifact' })}${gate?.html ?? ''}</body></html>`;
 
   if (type === 'html') return PAGE(content); // HTML fragment
   if (type === 'svg') return PAGE(content); // inline SVG markup
