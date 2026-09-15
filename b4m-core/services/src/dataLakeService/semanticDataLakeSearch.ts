@@ -19,7 +19,11 @@ import {
 } from '@bike4mind/utils';
 import { filterRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { Logger } from '@bike4mind/observability';
-import { supportsAtlasVectorSearch, selfHostOpenSearchEnabled } from '@bike4mind/db-core';
+import {
+  supportsAtlasVectorSearch,
+  selfHostOpenSearchEnabled,
+  selfHostOpenSearchResidencyRequired,
+} from '@bike4mind/db-core';
 import {
   classifyLoadedChunk,
   createEmbeddingMismatchAccumulator,
@@ -394,9 +398,11 @@ export interface SemanticDataLakeSearchAdapters {
 
 /**
  * Confirmed index residency for the self-host OpenSearch ANN path, or `null` when it cannot be
- * established - no port wired, or the lookup itself failed. `null` means "unknown", NOT "none":
- * the caller then keeps the pre-residency behavior rather than dropping every file off the ANN
- * path, so a repository that has not adopted the port loses no capability.
+ * established - no port wired, the lookup itself failed, or the caller has not opted into
+ * requiring it (`selfHostOpenSearchResidencyRequired`). `null` means "unknown", NOT "none": the
+ * caller then keeps the pre-residency behavior rather than dropping every file off the ANN path,
+ * so a repository that has not adopted the port - or a deployment that has not opted in - loses
+ * no capability.
  */
 async function resolveIndexResidency(
   annReady: Array<{ id: string }>,
@@ -1099,7 +1105,13 @@ async function rankChunksForFiles(args: {
     // unstamped one is.
     const split = partitionByVectorSearchReadiness(rankable, annReadinessNow);
     scanEligible = split.scanOnly;
-    const residentIds = await resolveIndexResidency(split.annReady, embeddingModel, args.fabfilechunks, logger);
+    // Gated by an explicit opt-in (default OFF): an existing self-host corpus indexed before
+    // `retrievalIndexConfirmedModel` existed has no confirm stamp on any of its chunks, so gating
+    // by default would revert it to scan-only on upgrade with no route back short of a re-chunk.
+    // See selfHostOpenSearchResidencyRequired's docblock.
+    const residentIds = selfHostOpenSearchResidencyRequired()
+      ? await resolveIndexResidency(split.annReady, embeddingModel, args.fabfilechunks, logger)
+      : null;
     if (residentIds) {
       const byResidency = partitionByIndexResidency(split.annReady, residentIds);
       annEligible = byResidency.resident;

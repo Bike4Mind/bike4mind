@@ -2382,6 +2382,7 @@ describe('semanticDataLakeSearch self-host OpenSearch cutover', () => {
     process.env.B4M_SELF_HOST = 'true';
     process.env.B4M_SELF_HOST_OPENSEARCH = 'true';
     process.env.OPENSEARCH_ENDPOINT = 'localhost:9200';
+    process.env.B4M_SELF_HOST_OPENSEARCH_REQUIRE_RESIDENCY = 'true';
   };
 
   afterEach(() => {
@@ -2679,6 +2680,31 @@ describe('semanticDataLakeSearch self-host OpenSearch cutover', () => {
       } as never);
 
       expect(annResidentFabFileIds).not.toHaveBeenCalled();
+    });
+
+    // Existing self-host deployments enabled OpenSearch before `retrievalIndexConfirmedModel`
+    // existed, so their whole corpus is genuinely resident in the index but carries no confirm
+    // stamp. Requiring residency by default would revert that corpus to scan-only on upgrade with
+    // no route back short of a re-chunk - so the requirement stays off until explicitly opted in.
+    it('skips the residency gate entirely when the require-residency flag is off, even with the port wired', async () => {
+      process.env.B4M_SELF_HOST = 'true';
+      process.env.B4M_SELF_HOST_OPENSEARCH = 'true';
+      process.env.OPENSEARCH_ENDPOINT = 'localhost:9200';
+      // Deliberately NOT setting B4M_SELF_HOST_OPENSEARCH_REQUIRE_RESIDENCY.
+      const { search, findVectorsByFabFileIds, knnSearch } = openSearchAdapters({
+        files: [annFile('legacy-indexed')],
+        annHits: [{ id: 'legacy-indexed-c0', fabFileId: 'legacy-indexed', text: 'ann hit', score: 0.95 }],
+      });
+      const annResidentFabFileIds = residencyPort([]);
+
+      const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, annResidentFabFileIds } },
+        vectorIndex: { knnSearch },
+      } as never);
+
+      expect(annResidentFabFileIds).not.toHaveBeenCalled();
+      expect(result.scan.annFilesQueried).toBe(1);
+      expect(result.results.map(r => r.fileId)).toEqual(['legacy-indexed']);
     });
   });
 

@@ -119,11 +119,11 @@ describe('fabfilechunks indexes', () => {
     expect(stages).not.toContain('COLLSCAN');
   });
 
-  it('serves the residency aggregate match from the index alone, with no document fetch', async () => {
-    // Without this compound, `retrievalIndexModel` in neither index meant `annResidentFabFileIds`
-    // FETCHED every matching chunk row - including `vector` - before the aggregation's projection
-    // ever applied. `executionStats` proves the fix: zero documents examined for a plan that
-    // matched every row via the index's keys alone.
+  it('serves the residency aggregate from the index alone, with no document fetch', async () => {
+    // Runs the SAME pipeline `annResidentFabFileIds` issues (FabFileModel.ts), not a `.find()`
+    // proxy for it - a `.find()` with a matching filter can stay covered while the real
+    // $match/$group/$match pipeline stops being covered, which is exactly the plan-drift shape
+    // this index exists to prevent. Keep this pipeline literal in sync with that method's.
     await FabFileChunk.create(
       Array.from({ length: 20 }, (_, i) => ({
         fabFileId: fid('lake'),
@@ -135,15 +135,24 @@ describe('fabfilechunks indexes', () => {
     );
     await FabFileChunk.createIndexes();
 
-    const plan = await FabFileChunk.collection
-      .find(
-        { fabFileId: fid('lake'), embeddingModel: 'model-a' },
-        { projection: { _id: 0, retrievalIndexConfirmedModel: 1 } }
-      )
-      .explain('executionStats');
+    const pipeline = [
+      { $match: { fabFileId: { $in: [fid('lake')] }, embeddingModel: 'model-a' } },
+      {
+        $group: {
+          _id: '$fabFileId',
+          dispatched: { $sum: 1 },
+          confirmed: { $sum: { $cond: [{ $eq: ['$retrievalIndexConfirmedModel', 'model-a'] }, 1, 0] } },
+        },
+      },
+      { $match: { $expr: { $eq: ['$confirmed', '$dispatched'] } } },
+    ];
 
-    expect(plan.executionStats.totalDocsExamined).toBe(0);
-    const stages = JSON.stringify(plan.queryPlanner.winningPlan);
-    expect(stages).toContain('"indexName":"fabFileId_1_embeddingModel_1_retrievalIndexConfirmedModel_1"');
+    const explainResult = await FabFileChunk.collection.aggregate(pipeline).explain('executionStats');
+    const cursorStage = explainResult.stages[0].$cursor ?? explainResult.stages[0];
+
+    expect(cursorStage.executionStats.totalDocsExamined).toBe(0);
+    expect(JSON.stringify(cursorStage)).toContain(
+      '"indexName":"fabFileId_1_embeddingModel_1_retrievalIndexConfirmedModel_1"'
+    );
   });
 });

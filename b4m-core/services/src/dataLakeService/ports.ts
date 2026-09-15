@@ -56,9 +56,11 @@ export interface RetrievalIndexPort {
  * permanently stamped-ready, confirmed, and absent from the index - exactly what this port exists
  * to prevent. If the clear itself fails, the removal is SKIPPED, not run anyway - running it would
  * over-claim (index doc gone, confirm still set), the one outcome `annResidentFabFileIds`'s safe
- * bias must never see; an index-only stale entry from skipping is tolerated by design and
- * self-heals on the next vectorize. Each step gets its own try/catch and log line so a clear
- * failure is never misreported as an index-removal failure (or vice versa) to whoever is on call.
+ * bias must never see; skipping instead leaves the index document and the confirm both untouched,
+ * which is exactly the state the file was already in - no worse than not having attempted the
+ * removal at all, and nothing is silently promised to self-heal on its own. Each step gets its own
+ * try/catch and log line so a clear failure is never misreported as an index-removal failure (or
+ * vice versa) to whoever is on call.
  * Kept here rather than at each call site so a door wiring `retrievalIndex` cannot forget to wire
  * this half too.
  */
