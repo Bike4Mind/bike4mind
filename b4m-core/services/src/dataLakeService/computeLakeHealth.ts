@@ -1,6 +1,7 @@
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
   deriveLakeMemoryState,
+  deriveLakeServingState,
   findDuplicateMembers,
   isLakeServingRetrieval,
   isLeaseHeld,
@@ -121,9 +122,14 @@ export async function computeLakeHealth(
     | 'lakeMemoryExtractionAt'
     | 'lakeMemoryCursor'
     | 'lastSyncAt'
+    | 'status'
   >,
   { db, logger }: ComputeLakeHealthAdapters
 ): Promise<LakeHealthApiResponse> {
+  // Independent of every content-predicate scan below and of the empty-lake early return: nothing
+  // here depends on the lake's members, only on the lake document itself (#2839).
+  const serving = deriveLakeServingState(lake.status);
+
   const resolved = await resolveScopedSetting(
     'DefaultChunkSize',
     scopeForLake(lake),
@@ -166,6 +172,7 @@ export async function computeLakeHealth(
       serving,
       inconsistency: storedInconsistency(lake),
       lakeMemory,
+      serving,
     };
   }
 
@@ -210,6 +217,7 @@ export async function computeLakeHealth(
     // collection (#1665). detectLakeInconsistencies writes it; this renders whatever it last wrote.
     inconsistency: storedInconsistency(lake),
     lakeMemory: { ...lakeMemory, memberCount: members.length },
+    serving,
   };
 }
 

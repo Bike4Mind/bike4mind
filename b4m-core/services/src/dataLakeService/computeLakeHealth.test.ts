@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { DataLakeStatus } from '@bike4mind/common';
 
 // Isolate the service's own logic (policy selection, member fetch, truncation, capping) from the
 // cached platform-settings read. scopeForLake stays real - the service passes it straight through.
@@ -62,6 +63,7 @@ const lake = {
   createdByUserId: 'u1',
   organizationId: undefined,
   requiredPassageTokenTarget: undefined as number | null | undefined,
+  status: 'active' as DataLakeStatus,
 };
 
 type MembershipRow = {
@@ -295,6 +297,39 @@ describe('computeLakeHealth', () => {
 
     expect(health.serving).toEqual({ status: 'draft', isServing: false });
     expect(health.coverage.membersWithChunks).toBe(0);
+  });
+});
+
+describe('computeLakeHealth serving state (#2839)', () => {
+  it('reports servesRetrieval false for a draft lake even though the corpus is fully healthy', async () => {
+    const adapters = makeAdapters([healthyMember('a')]);
+    const health = await computeLakeHealth({ ...lake, status: 'draft' }, adapters as never);
+
+    expect(health.serving).toEqual({ status: 'draft', servesRetrieval: false });
+    // The corpus predicates must stay blind to status - this is the same lake the healthy-lake
+    // tests above grade, and it still scores perfectly on content. Non-active is a SEPARATE fact.
+    expect(health.reachableShare).toBe(1);
+  });
+
+  it('reports servesRetrieval false for an archived lake', async () => {
+    const adapters = makeAdapters([healthyMember('a')]);
+    const health = await computeLakeHealth({ ...lake, status: 'archived' }, adapters as never);
+
+    expect(health.serving).toEqual({ status: 'archived', servesRetrieval: false });
+  });
+
+  it('reports servesRetrieval true for an active lake', async () => {
+    const adapters = makeAdapters([healthyMember('a')]);
+    const health = await computeLakeHealth({ ...lake, status: 'active' }, adapters as never);
+
+    expect(health.serving).toEqual({ status: 'active', servesRetrieval: true });
+  });
+
+  it('surfaces the serving state on the empty-lake (null datalakeTag) early return too', async () => {
+    const adapters = makeAdapters([]);
+    const health = await computeLakeHealth({ ...lake, datalakeTag: '', status: 'draft' }, adapters as never);
+
+    expect(health.serving).toEqual({ status: 'draft', servesRetrieval: false });
   });
 });
 

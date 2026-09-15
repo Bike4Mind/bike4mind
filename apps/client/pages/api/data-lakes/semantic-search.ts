@@ -356,13 +356,18 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       // both the check and the charge undone, which is the pre-existing behaviour - it must not
       // turn a working search into a 500.
       let billingUser: Awaited<ReturnType<typeof userRepository.findById>> | null = null;
-      let billingOrg: Awaited<ReturnType<typeof organizationRepository.findById>> | null = null;
+      let billingOrg: Awaited<ReturnType<typeof organizationRepository.shareable.findAccessibleById>> | null = null;
       try {
         // Both assigned only after both reads succeed: a half-resolved pair (user set, org
         // null) would skip the member cap and bill the member personally for org usage.
         const resolvedUser = await userRepository.findById(req.user.id);
+        // ACL-checked, not the plain accessor: a stale organizationId pointer (the roster no
+        // longer carries this user, #2607) must fall back to personal billing rather than
+        // billing/capping against an org they've left. Same shareable ACL resolveActiveOrg
+        // uses (#2769), deliberately WITHOUT its isAdmin arm - platform admin rights are not
+        // a billing relationship, so an admin's own stale pointer bills personally too.
         const resolvedOrg = resolvedUser?.organizationId
-          ? await organizationRepository.findById(resolvedUser.organizationId)
+          ? await organizationRepository.shareable.findAccessibleById(req.user, resolvedUser.organizationId)
           : null;
         billingUser = resolvedUser;
         billingOrg = resolvedOrg;

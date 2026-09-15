@@ -845,13 +845,24 @@ jobs:
   # and go quiet on exactly the changes it exists to guard. Hence the explicit `if` that
   # keeps the `docs-changed` gate and tolerates core-build having been skipped, plus the
   # artifact download with a local build as fallback.
+  #
+  # `!cancelled()` rather than `always()`: both lift the implicit `success()` on `needs` (which
+  # is what lets a skipped core-build through), but `always()` also survives run cancellation,
+  # and `cancel-in-progress` is on for PRs. A second push would cancel the run and this job
+  # would still claim a runner for a full install + core build + vitest on a superseded SHA -
+  # costly where runner slots are the queue bottleneck (see the concurrency note at the top).
+  # `needs.core-build.result != 'failure'` rather than an allowlist of success/skipped: a
+  # core-build that ends `cancelled` (runner loss) is not a build failure, and the allowlist
+  # form skipped this job on it while ci-complete only reddens on the literal `failure` - so
+  # the help guards could go missing on a green docs PR. The fallback build covers that case.
+  # Keep the block scalar: a bare `if: !cancelled() && ...` is a YAML tag indicator, not text.
   help-docs:
     name: Help Docs Guards
     needs: [changes, core-build]
     if: |
-      always() &&
+      !cancelled() &&
       needs.changes.outputs.docs-changed == 'true' &&
-      (needs.core-build.result == 'success' || needs.core-build.result == 'skipped')
+      needs.core-build.result != 'failure'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 10
     permissions:

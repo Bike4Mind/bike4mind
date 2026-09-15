@@ -11,6 +11,7 @@ const {
   mockResolveSearchBudgets,
   mockGetProviderFromModel,
   mockFindOrgById,
+  mockFindAccessibleOrgById,
   mockGetSettingsMap,
   mockRecordOperationalUsage,
   mockRecordLakeAccessEvent,
@@ -26,6 +27,7 @@ const {
   mockResolveSearchBudgets: vi.fn(),
   mockGetProviderFromModel: vi.fn(),
   mockFindOrgById: vi.fn(),
+  mockFindAccessibleOrgById: vi.fn(),
   mockGetSettingsMap: vi.fn(async () => ({}) as Record<string, unknown>),
   mockRecordOperationalUsage: vi.fn(),
   mockRecordLakeAccessEvent: vi.fn().mockResolvedValue(undefined),
@@ -72,7 +74,14 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   adminSettingsRepository: { getSettingsValue: mockGetSettingsValue },
   creditTransactionRepository: {},
-  organizationRepository: { findById: mockFindOrgById, findMembershipOrgIds: mockFindMembershipOrgIds },
+  organizationRepository: {
+    // Kept as its own spy purely so the billing tests can assert it is NOT called: the
+    // plain accessor skips the membership ACL, and a revert to it has to fail the suite
+    // rather than pass silently.
+    findById: mockFindOrgById,
+    shareable: { findAccessibleById: mockFindAccessibleOrgById },
+    findMembershipOrgIds: mockFindMembershipOrgIds,
+  },
   usageEventRepository: {},
   userRepository: { findById: mockFindUserById },
   lakeAccessEventRepository: { record: mockRecordLakeAccessEvent },
@@ -1157,12 +1166,12 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
     mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
     mockGetSettingsMap.mockResolvedValue(BILLING_ON);
     mockFindUserById.mockResolvedValue(user());
-    mockFindOrgById.mockResolvedValue(null);
+    mockFindAccessibleOrgById.mockResolvedValue(null);
   });
 
   it('rejects a member who has spent their organization cap, before embedding anything', async () => {
     mockFindUserById.mockResolvedValue(user({ organizationId: 'org1' }));
-    mockFindOrgById.mockResolvedValue({
+    mockFindAccessibleOrgById.mockResolvedValue({
       id: 'org1',
       currentCredits: 1_000_000,
       maxCreditsPerMember: 500,
@@ -1177,7 +1186,7 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
 
   it('rejects when the organization pool is exhausted', async () => {
     mockFindUserById.mockResolvedValue(user({ organizationId: 'org1' }));
-    mockFindOrgById.mockResolvedValue({ id: 'org1', currentCredits: 0, userDetails: [] });
+    mockFindAccessibleOrgById.mockResolvedValue({ id: 'org1', currentCredits: 0, userDetails: [] });
 
     await expect(handler(makeReq({ query: 'onboarding' }), makeRes())).rejects.toThrow(
       /organization does not have enough credits/i
@@ -1197,6 +1206,24 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
     expect(mockSemanticSearch).not.toHaveBeenCalled();
   });
 
+  it('falls back to personal billing when the org pointer is stale - the caller is not on that roster (#2769)', async () => {
+    // organizationId is SET, but the ACL read returns null - a member-set removal (or #2607's
+    // migration) has outrun the pointer. Must bill/refuse against the user's own balance, never
+    // the stale org's cap or pool.
+    mockFindUserById.mockResolvedValue(user({ organizationId: 'stale-org', currentCredits: 0 }));
+    mockFindAccessibleOrgById.mockResolvedValue(null);
+
+    await expect(handler(makeReq({ query: 'onboarding' }), makeRes())).rejects.toThrow(
+      /you do not have enough credits/i
+    );
+
+    expect(mockSemanticSearch).not.toHaveBeenCalled();
+    // Pins the accessor AND the argument order, so reverting to the plain non-ACL lookup
+    // fails here instead of passing on an identical-looking return value.
+    expect(mockFindAccessibleOrgById).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 'stale-org');
+    expect(mockFindOrgById).not.toHaveBeenCalled();
+  });
+
   it('rejects with the 422 insufficient-credits classifier the Add Credits CTA keys off', async () => {
     mockFindUserById.mockResolvedValue(user({ currentCredits: 0 }));
 
@@ -1208,7 +1235,7 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
 
   it('lets a funded member through and settles the spend', async () => {
     mockFindUserById.mockResolvedValue(user({ organizationId: 'org1' }));
-    mockFindOrgById.mockResolvedValue({
+    mockFindAccessibleOrgById.mockResolvedValue({
       id: 'org1',
       currentCredits: 1_000_000,
       maxCreditsPerMember: 500,
@@ -1257,7 +1284,7 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
     mockGetProviderFromModel.mockReturnValue(ModelBackend.Ollama);
     mockGetEffectiveLLMApiKeys.mockResolvedValue({ ollama: 'http://localhost:11434' });
     mockFindUserById.mockResolvedValue(user({ organizationId: 'org1' }));
-    mockFindOrgById.mockResolvedValue({
+    mockFindAccessibleOrgById.mockResolvedValue({
       id: 'org1',
       currentCredits: 0,
       maxCreditsPerMember: 500,
@@ -1288,7 +1315,7 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
     // A half-resolved pair would skip the member cap and land org usage on the member's own
     // balance, which is worse than the pre-existing behaviour of charging nobody.
     mockFindUserById.mockResolvedValue(user({ organizationId: 'org1', currentCredits: 0 }));
-    mockFindOrgById.mockRejectedValue(new Error('organizations read failed'));
+    mockFindAccessibleOrgById.mockRejectedValue(new Error('organizations read failed'));
 
     await handler(makeReq({ query: 'onboarding' }), makeRes());
 

@@ -1,5 +1,6 @@
 import type { InconsistencyKind } from './corpusInconsistency';
 import type { WireLakeMembershipReport } from './lakeMembershipHealth';
+import type { DataLakeStatus } from '../types/entities/DataLakeTypes';
 /**
  * Derived data-lake health (#1666): the retrievability contract as four CHECKABLE predicates plus
  * one headline - "what share of the lake's content can actually reach the model". Health is
@@ -514,11 +515,34 @@ function compareGroupContent(
 }
 
 /**
+ * Whether a lake's lifecycle status currently permits retrieval, and the status itself so a caller
+ * can name it (#2839). The four content predicates above grade the corpus only and never read
+ * `status` - a draft or archived lake can pass every one of them while `servesRetrieval` is
+ * `false`, because nothing else in this module asks whether the lake is in a state that can serve a
+ * query.
+ *
+ * `servesRetrieval` mirrors the SAME 'active' gate retrieval itself applies -
+ * `getDynamicDataLakeTags`'s DB pre-filter and `sessions/create.ts`'s binding check - so this
+ * cannot report "serving" for a status retrieval would actually refuse.
+ */
+export type LakeServingState = {
+  status: DataLakeStatus;
+  servesRetrieval: boolean;
+};
+
+/** Pure; see `LakeServingState`. */
+export function deriveLakeServingState(status: DataLakeStatus): LakeServingState {
+  return { status, servesRetrieval: status === 'active' };
+}
+
+/**
  * The shape GET /api/data-lakes/:id/health returns - the report with its drill-down list capped and
  * an exact count beside it, plus a scan-bound flag. Defined here so the handler, the service and the
  * client hook share ONE contract.
  */
 export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & {
+  /** See `LakeServingState`: distinct from the corpus-quality predicates above on purpose. */
+  serving: LakeServingState;
   /** Failing members for the drill-down, worst-first, capped for payload size. */
   affectedMembers: LakeHealthMemberResult[];
   /** Total failing members even when `affectedMembers` is capped, so the UI never implies fewer. */
