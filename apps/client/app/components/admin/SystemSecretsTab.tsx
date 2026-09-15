@@ -77,6 +77,10 @@ interface Tier1SecretInfo {
   severity?: 'error' | 'warning' | 'info';
   message?: string;
   hint?: string;
+  /** 'always' blocks a deploy of any stage; 'production' only on stages serving real traffic. */
+  enforcement?: 'always' | 'production';
+  /** True when a deploy of this stage would be refused for this secret. */
+  blocksDeploy?: boolean;
 }
 
 interface Tier1StatusResponse {
@@ -187,7 +191,7 @@ const Tier1StatusSection: React.FC = () => {
     return null;
   }
 
-  const hasIssues = tier1Status.secrets.some(s => s.status !== 'configured');
+  const hasIssues = tier1Status.secrets.some(s => s.blocksDeploy);
 
   return (
     <Card variant="outlined" color={hasIssues ? 'warning' : 'neutral'} sx={{ mb: 3 }}>
@@ -196,7 +200,8 @@ const Tier1StatusSection: React.FC = () => {
           <Box>
             <Typography level="title-md">Infrastructure Secrets (SST)</Typography>
             <Typography level="body-sm" color="neutral">
-              These secrets must be configured via SST CLI
+              These secrets must be configured via SST CLI. A deploy of this stage is refused while any of
+              them is unset.
             </Typography>
           </Box>
           <IconButton
@@ -222,6 +227,11 @@ const Tier1StatusSection: React.FC = () => {
                 </td>
                 <td>
                   <Tier1StatusChip status={secret.status} message={secret.message} hint={secret.hint} />
+                  {secret.status !== 'configured' && !secret.blocksDeploy && (
+                    <Typography level="body-xs" color="neutral" sx={{ mt: 0.5 }}>
+                      Not required on this stage
+                    </Typography>
+                  )}
                 </td>
               </tr>
             ))}
