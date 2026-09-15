@@ -136,11 +136,16 @@ export function generateIdToken(params: {
     aud: params.clientId,
     iat: now,
     exp: now + 3600,
-    email: params.email,
-    name: params.name,
   };
 
-  if (params.picture) payload.picture = params.picture;
+  // OIDC claim gating (OpenID Connect Core 5.4): the `email` scope releases the email claim and
+  // `profile` releases name/picture. An openid-only grant carries identity (sub) but no PII -
+  // without this an openid-only token leaked the user's email and name in every id_token.
+  if (params.scopes.includes('email')) payload.email = params.email;
+  if (params.scopes.includes('profile')) {
+    payload.name = params.name;
+    if (params.picture) payload.picture = params.picture;
+  }
   if (params.nonce) payload.nonce = params.nonce;
 
   return jwt.sign(payload, privateKey, {
