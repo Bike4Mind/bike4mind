@@ -104,16 +104,23 @@ export class ChatCompletionInvoke {
       audioConfig,
       mcpServers,
       extraContextMessages,
+      correctsQuestId,
       allowedAgents,
       enableSlackTools,
     } = ChatCompletionInvokeParamsSchema.parse(body);
 
-    // Parallelize independent operations: API keys, session, and organization fetch
-    const [apiKeyTable, session, organization] = await Promise.all([
+    // Parallelize independent operations: API keys, session, organization, and the correction
+    // target. The correction lookup rides this batch rather than the quest batch below because its
+    // validation has to settle BEFORE the quest is created - a refused correction must not mint one.
+    const [apiKeyTable, session, organization, correctedTurn] = await Promise.all([
       this.apiKeyTableCache ||
         getEffectiveLLMApiKeys(userId, { db: this.db, getSettingsByNames }, { logger: new Logger() }),
       this.db.sessions.findById(sessionId),
       organizationId ? this.db.organizations.findById(organizationId) : Promise.resolve(null),
+      // Gated on `!questId` too, not just `correctsQuestId`: the combination is refused below with a
+      // BadRequestError, and `correctsQuestId` carries no ObjectId-shape constraint, so fetching it
+      // here would let a malformed id raise a CastError out of this batch ahead of that refusal.
+      correctsQuestId && !questId ? this.db.quests.findById(correctsQuestId) : Promise.resolve(null),
     ]);
 
     if (!this.apiKeyTableCache) {
@@ -253,6 +260,28 @@ export class ChatCompletionInvoke {
       ],
     };
 
+    // Correct-and-retry: bind the claimed correction target to the caller's session before it is
+    // persisted, for the same reason the retry path below re-checks `questId` - `sessionId` was
+    // resolved through an access-scoped lookup, so a quest from another session must not become a
+    // link in this session's correction chain. Refusing loudly (rather than dropping the field) is
+    // deliberate: a silently-unlinked correction still sends the turn, so the user sees a normal
+    // answer and the eval-pair export never learns the turn was a correction at all.
+    if (correctsQuestId) {
+      // A correction must create a new quest, so it cannot ride a retry: the `questId` branch
+      // below overwrites the flagged quest in place, which would both destroy the answer the
+      // chain exists to preserve and drop this field on the floor without a word.
+      if (questId) {
+        this.logger.warn(`Refusing correction of ${correctsQuestId}: correctsQuestId cannot be combined with questId.`);
+        throw new BadRequestError('correctsQuestId cannot be combined with questId');
+      }
+      if (!correctedTurn || correctedTurn.sessionId !== sessionId) {
+        this.logger.warn(
+          `Quest ${correctsQuestId} is not a correctable turn in session ${sessionId}; refusing correction.`
+        );
+        throw new NotFoundError('Quest not found');
+      }
+    }
+
     // Parallelize independent operations: quest ops + admin settings + session update
     const [quest, defaultEmbeddingModel, modelConfigurations] = await Promise.all([
       // Quest creation/update
@@ -300,6 +329,9 @@ export class ChatCompletionInvoke {
             status: 'running',
             promptMeta,
             agentIds: session.agentIds || [],
+            // Session-bound by the guard above, so the chain a correction claims to extend is
+            // always one the caller can actually see.
+            correctsQuestId,
           }),
 
       // Admin settings fetches
