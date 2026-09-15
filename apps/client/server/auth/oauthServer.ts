@@ -136,11 +136,16 @@ export function generateIdToken(params: {
     aud: params.clientId,
     iat: now,
     exp: now + 3600,
-    email: params.email,
-    name: params.name,
   };
 
-  if (params.picture) payload.picture = params.picture;
+  // OIDC claim gating (OpenID Connect Core 5.4): the `email` scope releases the email claim and
+  // `profile` releases name/picture. An openid-only grant carries identity (sub) but no PII -
+  // without this an openid-only token leaked the user's email and name in every id_token.
+  if (params.scopes.includes('email')) payload.email = params.email;
+  if (params.scopes.includes('profile')) {
+    payload.name = params.name;
+    if (params.picture) payload.picture = params.picture;
+  }
   if (params.nonce) payload.nonce = params.nonce;
 
   return jwt.sign(payload, privateKey, {
@@ -184,7 +189,9 @@ export function getOidcDiscovery() {
     subject_types_supported: ['public'],
     id_token_signing_alg_values_supported: ['RS256'],
     scopes_supported: ['openid', 'email', 'profile'],
-    token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
+    // The token endpoint reads client_secret only from the POST body, and public clients
+    // (PKCE, no secret) are supported - so advertise exactly those two, not client_secret_basic.
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
     claims_supported: ['sub', 'iss', 'aud', 'exp', 'iat', 'email', 'name', 'picture'],
     code_challenge_methods_supported: ['S256'],
   };

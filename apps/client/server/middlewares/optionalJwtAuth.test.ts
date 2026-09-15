@@ -86,6 +86,20 @@ describe('optionalJwtAuth', () => {
     expect(next).toHaveBeenCalledOnce();
   });
 
+  it('degrades a relying-party OAuth access token to anonymous — does NOT set req.user', () => {
+    // verifyJwtPayload stamps oauthGrant onto the user and returns it as a success. On the normal
+    // auth chain oauthRouteGate default-denies it, but this auth:false route bypasses that gate, so
+    // the shim must mirror the default-deny here or an openid-only OAuth token would read a user's
+    // PRIVATE published artifacts via /api/publish/serve. Falling through to anonymous means the
+    // existing visibility gate denies the private bundle, exactly as for an un-credentialed viewer.
+    queueAuthResult(null, { id: 'u1', oauthGrant: { clientId: 'c1', scopes: ['openid'], aud: 'x' } });
+    const { req, res, next } = make({ authorization: 'Bearer oauth.token' });
+    optionalJwtAuth()(req, res, next);
+    expect(req.user).toBeUndefined();
+    expect(req.ability).toBeUndefined();
+    expect(next).toHaveBeenCalledOnce();
+  });
+
   it('passes through anonymously (no 401) on an invalid/expired Bearer token', () => {
     queueAuthResult(null, false);
     const { req, res, next } = make({ authorization: 'Bearer bad.token' });
