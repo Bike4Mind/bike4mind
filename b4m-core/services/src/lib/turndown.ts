@@ -1,6 +1,12 @@
 import turndown from 'turndown';
 // @ts-ignore There is no type definition for this package
 import * as turndownPluginGfm from '@joplin/turndown-plugin-gfm';
+import { capForParse } from '@bike4mind/common';
+
+// cleanEmailHtml runs ~12 sequential quadratic cleaners over one inbound email body;
+// capping the input once bounds all of them. 512k is far above a real email; an
+// oversized/adversarial body is truncated so it can't pin CPU.
+const EMAIL_HTML_PARSE_CAP = 512_000;
 
 export const htmlToMarkdown = (html: string, _isArxiv: boolean = false) => {
   const turndownService = new turndown({
@@ -101,7 +107,7 @@ export const listMarkdownLinks = (
  * @returns Cleaned HTML string
  */
 export function cleanEmailHtml(html: string): string {
-  let cleaned = html;
+  let cleaned = capForParse(html, EMAIL_HTML_PARSE_CAP);
 
   // Remove WiseStamp tracking pixels
   cleaned = cleaned.replace(/<img[^>]*src="https:\/\/tracy\.srv\.wisestamp\.com[^"]*"[^>]*>/gi, '');

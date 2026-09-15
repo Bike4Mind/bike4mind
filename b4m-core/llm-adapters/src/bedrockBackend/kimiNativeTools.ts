@@ -17,7 +17,14 @@
  * deltas, and a section can carry several parallel calls.
  */
 
+import { capForParse } from '@bike4mind/common';
+
 export type ParsedNativeToolCall = { id: string; name: string; index: number; arguments: string };
+
+// The per-call regex backtracks super-linearly on a section full of unterminated
+// markers; cap the section so malformed model output can't pin CPU. 256k is far
+// above any real native tool-call section.
+const NATIVE_TOOL_SECTION_PARSE_CAP = 256_000;
 
 const SECTION_BEGIN = '<|tool_calls_section_begin|>';
 const SECTION_END = '<|tool_calls_section_end|>';
@@ -43,6 +50,7 @@ function splitNativeToolId(rawId: string, fallbackIndex: number): { name: string
  * whole string that contains them - the per-call regex ignores the section markers).
  */
 export function parseNativeToolSection(section: string): ParsedNativeToolCall[] {
+  section = capForParse(section, NATIVE_TOOL_SECTION_PARSE_CAP);
   const calls: ParsedNativeToolCall[] = [];
   const re = /<\|tool_call_begin\|>\s*([\s\S]+?)\s*<\|tool_call_argument_begin\|>\s*([\s\S]*?)\s*<\|tool_call_end\|>/g;
   let match: RegExpExecArray | null;
