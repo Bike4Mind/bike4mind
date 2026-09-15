@@ -99,11 +99,12 @@ async function publishToBlog(user: IUserDocument, params: BlogPublishParams): Pr
     let detail = `status ${response.status}`;
     try {
       const parsed = JSON.parse(text);
-      detail = parsed.message || parsed.error || detail;
+      if (parsed.message || parsed.error) detail = String(parsed.message || parsed.error);
     } catch {
-      if (text) detail = text.substring(0, 200);
+      if (text) detail = text;
     }
-    throw new Error(`Failed to publish blog post: ${detail}`);
+    // Cap after both branches: a JSON message/error field is as caller-controlled as raw text.
+    throw new Error(`Failed to publish blog post: ${detail.substring(0, 200)}`);
   }
 
   const data: BlogPublishResponse = await response.json();

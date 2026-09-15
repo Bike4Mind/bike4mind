@@ -137,4 +137,22 @@ describe('POST /api/blog/publish', () => {
     expect(message).not.toContain(secret);
     expect(message.length).toBeLessThan(260);
   });
+
+  it('caps a long JSON message/error field too (not only the non-JSON body)', async () => {
+    // The JSON branch pulls parsed.message straight from a user-controlled host, so it must be
+    // bounded the same as raw text - otherwise {"message": <long>} relays the whole thing.
+    const longMessage = 'X'.repeat(960);
+    global.fetch = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      text: () => Promise.resolve(JSON.stringify({ message: longMessage })),
+    }) as never;
+
+    const { req, res } = request({ apiKey: 'enc', baseUrl: 'https://blog.example.com' });
+    await mockRefs.handler!(req, res);
+
+    const message = res._getJSONData().message as string;
+    expect(message).not.toContain(longMessage);
+    expect(message.length).toBeLessThanOrEqual(260);
+  });
 });

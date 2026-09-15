@@ -182,4 +182,21 @@ describe('POST /api/blog/presign-image-upload', () => {
     const { req, res } = request(validBody, configured);
     await expect(mockRefs.handler!(req, res)).rejects.toThrow(/unauthorized/i);
   });
+
+  it('caps a long JSON message/error field (bounds the SSRF read half)', async () => {
+    // parsed.message comes straight from a user-controlled host, so it must be bounded the same
+    // as a raw non-JSON body - otherwise {"message": <long>} relays the whole thing verbatim.
+    const longMessage = 'X'.repeat(960);
+    global.fetch = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      text: () => Promise.resolve(JSON.stringify({ message: longMessage })),
+    }) as never;
+
+    const { req, res } = request(validBody, configured);
+    const err = await Promise.resolve(mockRefs.handler!(req, res)).catch(e => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).not.toContain(longMessage);
+    expect(err.message.length).toBeLessThanOrEqual(200);
+  });
 });

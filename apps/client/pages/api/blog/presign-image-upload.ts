@@ -101,15 +101,17 @@ const handler = baseApi().post<Request<unknown, PresignImageUploadResponse, Pres
     }
 
     if (!response.ok) {
+      // Bound what the upstream body can leak into our response: an unbounded relay of a
+      // user-supplied host's response is an SSRF read half. Mirrors blog/publish.ts.
       const text = await response.text().catch(() => '');
       let message = `Presigned URL request failed with status ${response.status}`;
       try {
         const parsed = JSON.parse(text);
-        message = parsed.message || parsed.error || message;
+        if (parsed.message || parsed.error) message = String(parsed.message || parsed.error);
       } catch {
-        if (text) message = text.substring(0, 200);
+        if (text) message = text;
       }
-      throw new BadRequestError(message);
+      throw new BadRequestError(message.substring(0, 200));
     }
 
     const presigned = await response.json();
