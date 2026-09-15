@@ -183,8 +183,12 @@ export async function fetchDriveFileContent(drive: drive_v3.Drive, file: DriveFi
       return { ok: true, bytes: Buffer.from(res.data as ArrayBuffer), mimeType: exportMime };
     }
 
-    // Native file: only ingest types the chunker can actually process.
-    const { mimeType, supported } = resolveSupportedMimeType(file.name, file.mimeType);
+    // Native file: only ingest types the chunker can actually process. Claim-first:
+    // Drive's mimeType is metadata the uploader declares (Drive only auto-detects it when
+    // none is supplied), and it survives a rename - so it outranks the title's extension.
+    const { mimeType, supported } = resolveSupportedMimeType(file.name, file.mimeType, {
+      precedence: 'claim-first',
+    });
     if (!supported) {
       return { ok: false, reason: 'unsupported', detail: file.mimeType };
     }

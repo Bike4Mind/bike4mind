@@ -261,6 +261,67 @@ export function categoryForFile(fileName: string): string {
   return FILE_TYPE_MAP[getExtension(fileName)] || 'Other';
 }
 
+const M = SupportedFabFileMimeTypes;
+
+/**
+ * Extension -> supported MIME type, used by guessMimeType below. Must stay in sync with
+ * the server's extension table (`EXT_TO_MIME` / `getMimeTypeByExtension` in
+ * b4m-core/utils/src/file.ts) - see the drift-guard test in folderTreeParser.test.ts.
+ */
+export const EXT_TO_SUPPORTED_MIME: Record<string, SupportedFabFileMimeTypes> = {
+  // Documents & text
+  pdf: M.PDF,
+  txt: M.TXT_PLAIN,
+  log: M.TXT_PLAIN,
+  ini: M.TXT_PLAIN,
+  env: M.TXT_PLAIN,
+  conf: M.TXT_PLAIN,
+  md: M.TXT_MARKDOWN,
+  mdx: M.TXT_MARKDOWN,
+  csv: M.CSV,
+  json: M.JSON,
+  html: M.HTML,
+  htm: M.HTML,
+  xml: M.XML,
+  docx: M.DOCX,
+  pptx: M.PPTX,
+  xls: M.XLS,
+  xlsx: M.XLSX,
+  // Images
+  png: M.PNG,
+  jpg: M.JPG,
+  jpeg: M.JPG,
+  gif: M.GIF,
+  svg: M.SVG,
+  webp: M.WEBP,
+  // Code
+  js: M.JS,
+  jsx: M.JSX,
+  ts: M.TS,
+  tsx: M.TSX,
+  py: M.PY,
+  java: M.JAVA,
+  cpp: M.CPP,
+  cs: M.CS,
+  php: M.PHP,
+  rb: M.RUBY,
+  go: M.GO,
+  swift: M.SWIFT,
+  kt: M.KOTLIN,
+  rs: M.RUST,
+  css: M.CSS,
+  less: M.LESS,
+  sass: M.SASS,
+  scss: M.SCSS,
+  // Data serialization
+  yaml: M.YAML,
+  yml: M.YAML,
+  toml: M.TOML,
+  // Shell scripts
+  sh: M.SH,
+  bash: M.BASH,
+};
+
 /**
  * Maps a file extension to its MIME type. Every mapped value is a
  * `SupportedFabFileMimeTypes` member, so extensions the ingest pipeline can
@@ -270,61 +331,7 @@ export function categoryForFile(fileName: string): string {
  */
 function guessMimeType(fileName: string): string {
   const ext = getExtension(fileName);
-  const M = SupportedFabFileMimeTypes;
-  const mimeMap: Record<string, SupportedFabFileMimeTypes> = {
-    // Documents & text
-    pdf: M.PDF,
-    txt: M.TXT_PLAIN,
-    log: M.TXT_PLAIN,
-    ini: M.TXT_PLAIN,
-    env: M.TXT_PLAIN,
-    conf: M.TXT_PLAIN,
-    md: M.TXT_MARKDOWN,
-    mdx: M.TXT_MARKDOWN,
-    csv: M.CSV,
-    json: M.JSON,
-    html: M.HTML,
-    htm: M.HTML,
-    xml: M.XML,
-    docx: M.DOCX,
-    pptx: M.PPTX,
-    xls: M.XLS,
-    xlsx: M.XLSX,
-    // Images
-    png: M.PNG,
-    jpg: M.JPG,
-    jpeg: M.JPG,
-    gif: M.GIF,
-    svg: M.SVG,
-    webp: M.WEBP,
-    // Code
-    js: M.JS,
-    jsx: M.JSX,
-    ts: M.TS,
-    tsx: M.TSX,
-    py: M.PY,
-    java: M.JAVA,
-    cpp: M.CPP,
-    cs: M.CS,
-    php: M.PHP,
-    rb: M.RUBY,
-    go: M.GO,
-    swift: M.SWIFT,
-    kt: M.KOTLIN,
-    rs: M.RUST,
-    css: M.CSS,
-    less: M.LESS,
-    sass: M.SASS,
-    scss: M.SCSS,
-    // Data serialization
-    yaml: M.YAML,
-    yml: M.YAML,
-    toml: M.TOML,
-    // Shell scripts
-    sh: M.SH,
-    bash: M.BASH,
-  };
-  return mimeMap[ext] || 'application/octet-stream';
+  return EXT_TO_SUPPORTED_MIME[ext] || 'application/octet-stream';
 }
 
 /**

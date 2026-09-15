@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
-import { FabFileSourceType, KnowledgeType } from '@bike4mind/common';
-import { invalidateSettingsCache } from '@bike4mind/utils';
+import { FabFileSourceType, KnowledgeType, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { BadRequestError, invalidateSettingsCache } from '@bike4mind/utils';
 import { createFabFile, type CreateFabFileAdapters } from './create';
 
 // Unsupported file-type gating on ingest. The rejection throws right
 // after the user lookup - before any settings/storage adapter is touched - so
 // these cases only need a user stub. This guards the loophole where a file with
-// an unknown extension (e.g. .exe) was silently coerced to text/plain and
+// an unknown extension (e.g. setup.exe) was silently coerced to text/plain and
 // accepted. (Extension-to-MIME resolution itself is covered by utils/file.test.ts.)
 function adapters(): CreateFabFileAdapters {
   return {
@@ -23,7 +23,7 @@ function adapters(): CreateFabFileAdapters {
 const base = { fileSize: 100, type: KnowledgeType.FILE as const };
 
 describe('createFabFile — unsupported file-type gating', () => {
-  it('rejects a binary with an unknown extension and empty MIME type (the .exe loophole)', async () => {
+  it('rejects a binary with an unknown extension and empty MIME type (the setup.exe loophole)', async () => {
     await expect(createFabFile('u1', { ...base, fileName: 'malware.exe', mimeType: '' }, adapters())).rejects.toThrow(
       /not supported/i
     );
@@ -36,6 +36,104 @@ describe('createFabFile — unsupported file-type gating', () => {
     await expect(
       createFabFile('u1', { ...base, fileName: 'bundle.zip', mimeType: 'application/octet-stream' }, adapters())
     ).rejects.toThrow(/not supported/i);
+  });
+
+  // A supplied claim must disqualify the plain-text fallback even when the name itself
+  // is extension-less - otherwise the fallback becomes a route around the throw above.
+  it('rejects an extension-less name whose claimed MIME type is unsupported', async () => {
+    await expect(
+      createFabFile('u1', { ...base, fileName: 'payload', mimeType: 'application/octet-stream' }, adapters())
+    ).rejects.toThrow(/not supported/i);
+  });
+
+  it('rejects a digit-tail name whose claimed MIME type is unsupported', async () => {
+    await expect(
+      createFabFile('u1', { ...base, fileName: 'backup.001', mimeType: 'application/octet-stream' }, adapters())
+    ).rejects.toThrow(/not supported/i);
+  });
+});
+
+describe('createFabFile - extension-first MIME resolution', () => {
+  // Same user/storage stubs as adapters() above, but with fabFiles.create echoing
+  // back the built data (so these cases can assert on the persisted mimeType) and
+  // adminSettings resolving to an empty settings list (so getSettingsMap doesn't
+  // reduce over undefined once execution passes the mime gate).
+  function resolvingAdapters(): CreateFabFileAdapters {
+    const deps = adapters();
+    deps.db.fabFiles.create = vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data }));
+    deps.db.adminSettings = {
+      findAll: vi.fn().mockResolvedValue([]),
+      findBySettingNames: vi.fn().mockResolvedValue([]),
+    };
+    return deps;
+  }
+
+  it('stores a shell script as its extension type even when the client claims text/plain', async () => {
+    const created = await createFabFile(
+      'u1',
+      { ...base, fileName: 'deploy.sh', mimeType: 'text/plain' },
+      resolvingAdapters()
+    );
+
+    expect(created.mimeType).toBe(SupportedFabFileMimeTypes.SH);
+  });
+
+  // Inverted deliberately: a digit tail used to be exempted as a date/version fragment, which
+  // meant renaming any binary to 'payload.1' got it admitted as plain text. Every dot-tail is
+  // an extension now, so it must resolve or the file is refused.
+  it('refuses a date-suffixed name rather than reading it as plain text', async () => {
+    await expect(
+      createFabFile('u1', { ...base, fileName: 'Meeting notes 2026.09.07', mimeType: '' }, resolvingAdapters())
+    ).rejects.toThrow(BadRequestError);
+  });
+
+  it('still accepts a dotless name with no claim as plain text', async () => {
+    const created = await createFabFile('u1', { ...base, fileName: 'LICENSE', mimeType: '' }, resolvingAdapters());
+
+    expect(created.mimeType).toBe(SupportedFabFileMimeTypes.TXT_PLAIN);
+  });
+
+  // Malformed rather than extension-less, so it gets no fallback - matches Slack.
+  it('refuses a trailing-dot name', async () => {
+    await expect(
+      createFabFile('u1', { ...base, fileName: 'payload.', mimeType: '' }, resolvingAdapters())
+    ).rejects.toThrow(BadRequestError);
+  });
+
+  // What the trailing dot withholds is the FALLBACK, not the claim: with one supplied the name
+  // resolves like any other extension-less one, so these two pin which half is which.
+  it('accepts a trailing-dot name carrying a supported claim, as for any extension-less name', async () => {
+    const created = await createFabFile(
+      'u1',
+      { ...base, fileName: 'payload.', mimeType: SupportedFabFileMimeTypes.TXT_PLAIN },
+      resolvingAdapters()
+    );
+
+    expect(created.mimeType).toBe(SupportedFabFileMimeTypes.TXT_PLAIN);
+  });
+
+  it('refuses a trailing-dot name carrying an unsupported claim', async () => {
+    await expect(
+      createFabFile('u1', { ...base, fileName: 'payload.', mimeType: 'application/x-msdownload' }, resolvingAdapters())
+    ).rejects.toThrow(BadRequestError);
+  });
+
+  it('still refuses a digit-led unsupported extension', async () => {
+    await expect(
+      createFabFile('u1', { ...base, fileName: 'archive.7z', mimeType: '' }, resolvingAdapters())
+    ).rejects.toThrow(BadRequestError);
+  });
+
+  // Audio is storable but not ingestable: .mp3 resolves by extension, and the storable
+  // predicate this door passes is what keeps it accepted.
+  it('keeps accepting an audio file', async () => {
+    const created = await createFabFile(
+      'u1',
+      { ...base, fileName: 'speech.mp3', mimeType: 'audio/mpeg' },
+      resolvingAdapters()
+    );
+
+    expect(created.mimeType).toBe('audio/mpeg');
   });
 });
 
