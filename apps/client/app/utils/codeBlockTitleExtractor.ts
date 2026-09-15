@@ -13,6 +13,13 @@
 // Memoization cache for performance
 const titleCache = new Map<string, string>();
 
+// A code block title is derived from the head of the block (its first declaration,
+// tag, or statement), so the per-language extractors only ever need to scan a bounded
+// prefix. Capping the input here keeps their backtracking regexes - e.g. the lazy
+// SELECT ... FROM, which is super-linear over many SELECT anchors - from turning an
+// oversized block into a UI-thread stall. The window is far wider than any real title.
+const MAX_TITLE_SCAN_CHARS = 8_192;
+
 /**
  * Main entry point for extracting titles from code blocks
  */
@@ -22,8 +29,10 @@ export function extractCodeBlockTitle(code: string, language: string, explicitTi
     return explicitTitle.trim();
   }
 
+  const scanCode = code.length > MAX_TITLE_SCAN_CHARS ? code.slice(0, MAX_TITLE_SCAN_CHARS) : code;
+
   // Check cache for performance
-  const cacheKey = `${language}:${code.substring(0, 200)}`; // Use first 200 chars as key
+  const cacheKey = `${language}:${scanCode.substring(0, 200)}`; // Use first 200 chars as key
   if (titleCache.has(cacheKey)) {
     return titleCache.get(cacheKey)!;
   }
@@ -34,56 +43,56 @@ export function extractCodeBlockTitle(code: string, language: string, explicitTi
   switch (language.toLowerCase()) {
     case 'javascript':
     case 'js':
-      extractedTitle = extractJavaScriptTitle(code);
+      extractedTitle = extractJavaScriptTitle(scanCode);
       break;
 
     case 'typescript':
     case 'ts':
-      extractedTitle = extractTypeScriptTitle(code);
+      extractedTitle = extractTypeScriptTitle(scanCode);
       break;
 
     case 'jsx':
     case 'tsx':
-      extractedTitle = extractReactTitle(code);
+      extractedTitle = extractReactTitle(scanCode);
       break;
 
     case 'python':
     case 'py':
-      extractedTitle = extractPythonTitle(code);
+      extractedTitle = extractPythonTitle(scanCode);
       break;
 
     case 'html':
-      extractedTitle = extractHTMLTitle(code);
+      extractedTitle = extractHTMLTitle(scanCode);
       break;
 
     case 'css':
     case 'scss':
     case 'sass':
-      extractedTitle = extractCSSTitle(code);
+      extractedTitle = extractCSSTitle(scanCode);
       break;
 
     case 'sql':
-      extractedTitle = extractSQLTitle(code);
+      extractedTitle = extractSQLTitle(scanCode);
       break;
 
     case 'bash':
     case 'sh':
     case 'shell':
-      extractedTitle = extractBashTitle(code);
+      extractedTitle = extractBashTitle(scanCode);
       break;
 
     case 'json':
-      extractedTitle = extractJSONTitle(code);
+      extractedTitle = extractJSONTitle(scanCode);
       break;
 
     case 'yaml':
     case 'yml':
-      extractedTitle = extractYAMLTitle(code);
+      extractedTitle = extractYAMLTitle(scanCode);
       break;
 
     default:
       // Try generic extraction for unknown languages
-      extractedTitle = extractGenericTitle(code);
+      extractedTitle = extractGenericTitle(scanCode);
   }
 
   // Priority 3: Language-based fallback
