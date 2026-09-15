@@ -30,7 +30,7 @@ function buildArgs(overrides: Partial<ModerateImportedKnowledgeFilesArgs> = {}):
     claim: vi.fn(async () => ({ _id: 'oid', id: 'f1', mimeType: 'text/plain', moderationClaimedAt: CLAIMED_AT })),
     persist: vi.fn(async () => true),
     release: vi.fn(async () => undefined),
-    retireMissingObject: vi.fn(async () => undefined),
+    retireMissingObject: vi.fn(async () => true),
     downloadBytes: vi.fn(async () => Buffer.from('x')),
     downloadPartialBytes: vi.fn(async () => Buffer.from('x')),
     ...overrides,
@@ -102,10 +102,24 @@ describe('moderateImportedKnowledgeFiles', () => {
     const args = buildArgs({ moderate, terminalOnMissingObject: true });
     const { scanned } = await moderateImportedKnowledgeFiles(args);
     expect(scanned).toBe(1);
-    expect(args.retireMissingObject).toHaveBeenCalledWith('oid');
+    expect(args.retireMissingObject).toHaveBeenCalledWith('oid', CLAIMED_AT);
     // No 'blocked' verdict written, and no release - releasing back to pending is the poison loop this fixes.
     expect(args.persist).not.toHaveBeenCalled();
     expect(args.release).not.toHaveBeenCalled();
+  });
+
+  it('does not count a missing-object retire whose claim was superseded mid-scan', async () => {
+    // A successor re-claimed and resolved the row between this run's download failing and the
+    // retire landing: the guard must reject the write rather than destroying the successor's file.
+    const moderate = vi.fn(async () => {
+      throw noSuchKey();
+    }) as unknown as ModerateImportedKnowledgeFilesArgs['moderate'];
+    const retireMissingObject = vi.fn(async () => false);
+    const args = buildArgs({ moderate, terminalOnMissingObject: true, retireMissingObject });
+    const { scanned } = await moderateImportedKnowledgeFiles(args);
+    expect(scanned).toBe(0);
+    expect(args.release).not.toHaveBeenCalled(); // the successor owns the row now; do not touch it
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('superseded'));
   });
 
   it('does not count a missing-object retire whose soft-delete write itself fails', async () => {

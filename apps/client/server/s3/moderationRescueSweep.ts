@@ -65,9 +65,12 @@ export interface ModerationRescueSweepArgs {
  * operator re-scan route for a FabFile (unlike a published artifact's unblock path). A row keeps
  * being retried, just never ahead of a row that has not been tried.
  *
- * Re-scans in place with the same claim/persist wiring as the import path. Runs from the daily
- * reconcile cron; recovery latency is coarse but the held file is fail-closed (unservable) until it
- * completes, so lag is safe.
+ * Re-scans in place with the same claim/persist wiring as the import path. Two callers, two very
+ * different cadences: the hosted daily reconcile cron, and the self-host worker's 60s tick
+ * (worker/main.ts). MODERATION_RETRY_BACKOFF_MS only bites on the latter - on the daily cadence the
+ * last attempt is always at least a day old, so the fairness sort is the only mechanism doing work
+ * there. Recovery latency is coarse but the held file is fail-closed (unservable) until it
+ * completes, so lag is safe either way.
  */
 export async function runModerationRescueSweep({
   enabled,

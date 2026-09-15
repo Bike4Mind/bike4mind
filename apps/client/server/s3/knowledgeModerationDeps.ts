@@ -46,38 +46,42 @@ export function buildKnowledgeModerationDeps(
     // Same identity-guard shape as the chunk claim's release in queueHandlers/fabFileChunk.ts.
     persist: async (_id, patch, claimedAt) => {
       const res = await FabFile.updateOne(
-        {
-          _id: _id as Types.ObjectId,
-          moderationStatus: 'scanning',
-          ...(claimedAt ? { moderationClaimedAt: claimedAt } : {}),
-        },
+        { _id: _id as Types.ObjectId, moderationStatus: 'scanning', moderationClaimedAt: claimedAt },
         { $set: patch, $unset: { moderationClaimedAt: 1 } }
       );
       return res.matchedCount > 0;
     },
     release: async (_id, claimedAt) => {
-      await FabFile.updateOne(
-        {
-          _id: _id as Types.ObjectId,
-          moderationStatus: 'scanning',
-          ...(claimedAt ? { moderationClaimedAt: claimedAt } : {}),
-        },
+      const res = await FabFile.updateOne(
+        { _id: _id as Types.ObjectId, moderationStatus: 'scanning', moderationClaimedAt: claimedAt },
         {
           // The attempt bookkeeping the rescue sweep's fairness sort and backoff read - see
           // moderationRescueSweep.ts. Written here because this is the single point every
-          // transient scan failure funnels through.
+          // transient failure on THIS door (the import path and the sweep's re-scan) funnels
+          // through. objectCreated.ts has no equivalent release - a crashed upload-time scan is
+          // only ever recovered by the sweep's own stale-claim reclaim, so its attempt count is
+          // undercounted relative to a row scanned through here.
           $set: { moderationStatus: 'pending', moderationLastAttemptAt: new Date() },
           $inc: { moderationAttempts: 1 },
           $unset: { moderationClaimedAt: 1 },
         }
       );
+      return res.matchedCount > 0;
     },
     // A missing-object orphan (see moderateImportedKnowledgeFiles.terminalOnMissingObject): the row's
     // bytes never landed, so soft-delete it rather than write a content-policy verdict. deleteOne is
     // the softDeletePlugin's soft-delete (stamps deletedAt), so the row then drops out of every
-    // default find - serving and this sweep's own re-selection alike.
-    retireMissingObject: async _id => {
-      await FabFile.deleteOne({ _id: _id as Types.ObjectId });
+    // default find - serving and this sweep's own re-selection alike. Guarded on the claim stamp like
+    // persist/release above: a successor can reclaim and cleanly scan this row between this run's
+    // download failing and this delete landing, and an unguarded delete would destroy that
+    // successor's clean file rather than merely dropping a verdict.
+    retireMissingObject: async (_id, claimedAt) => {
+      const res = await FabFile.deleteOne({
+        _id: _id as Types.ObjectId,
+        moderationStatus: 'scanning',
+        moderationClaimedAt: claimedAt,
+      });
+      return res.deletedCount > 0;
     },
     downloadBytes: filePath => storage.download(filePath),
     downloadPartialBytes: (filePath, length) => storage.downloadRange(filePath, length),
