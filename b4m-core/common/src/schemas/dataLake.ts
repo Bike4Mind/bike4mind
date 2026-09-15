@@ -52,7 +52,20 @@ export const CreateDataLakeRequestInput = z.object({
     // mirrors this via tagPrefixIssue / hasBlankTagPrefixSegment so the rules cannot drift.
     .refine(s => !hasBlankTagPrefixSegment(s), 'Tag prefix segments must be non-empty (e.g. "acme:" or "acme:legal:")')
     .refine(s => !isReservedTagPrefix(s), `Tag prefix cannot use the reserved "${DATALAKE_TAG_PREFIX}" namespace`),
-  requiredUserTag: z.string().min(1).max(100).optional(),
+  // Trimmed at parse time (like fileTagPrefix above) so both write paths - the create wizard
+  // and the settings modal - normalize identically rather than depending on client-side trim.
+  // lakeMatchesAccess does an exact, whole-string membership test with no comma-splitting, so
+  // a multi-tag or internally-spaced value would save as a gate that matches nobody.
+  requiredUserTag: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .refine(
+      s => !/[\s,;]/.test(s),
+      'User tag must be a single tag with no commas, semicolons, or whitespace (e.g. "vip")'
+    )
+    .optional(),
   // Entitlement keys are namespaced (must contain ":") so a bare user-tag value can never
   // be a requiredEntitlement - tags pass through 1:1 as entitlement keys, so an un-namespaced
   // value would be self-grantable. Stored normalized (lowercase) by the service.
@@ -94,7 +107,20 @@ export const UpdateDataLakeRequestInput = z.object({
   // already treats '' as ungated - the access queries in DataLakeModel carry explicit
   // `requiredUserTag: ''` arms, and lakeMatchesAccess/canAccessLake test truthiness.
   // Omitting the field still means "leave unchanged" (Mongo $set strips undefined).
-  requiredUserTag: z.union([z.literal(''), z.string().min(1).max(100)]).optional(),
+  requiredUserTag: z
+    .union([
+      z.literal(''),
+      z
+        .string()
+        .trim()
+        .min(1)
+        .max(100)
+        .refine(
+          s => !/[\s,;]/.test(s),
+          'User tag must be a single tag with no commas, semicolons, or whitespace (e.g. "vip")'
+        ),
+    ])
+    .optional(),
   requiredEntitlement: z
     .union([
       z.literal(''),

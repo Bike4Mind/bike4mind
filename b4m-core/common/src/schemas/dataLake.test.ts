@@ -16,7 +16,12 @@ import {
   MAX_TAXONOMY_TAGS,
 } from '../constants/dataLakes';
 
-const input = (fileTagPrefix: string) => ({ name: 'Lake', slug: 'my-lake', fileTagPrefix });
+const input = (fileTagPrefix: string, requiredUserTag?: string) => ({
+  name: 'Lake',
+  slug: 'my-lake',
+  fileTagPrefix,
+  ...(requiredUserTag !== undefined ? { requiredUserTag } : {}),
+});
 
 const withSlug = (slug: string) => ({ name: 'Lake', slug, fileTagPrefix: 'acme:' });
 
@@ -121,6 +126,65 @@ describe('CreateDataLakeRequestInput.fileTagPrefix', () => {
       expect(result.error.issues.some(i => /must end with/i.test(i.message))).toBe(true);
       expect(result.error.issues.some(i => /non-empty/i.test(i.message))).toBe(false);
     }
+  });
+});
+
+// lakeMatchesAccess does an exact, whole-string lowercase membership test with no comma-split
+// and no trim, so a value it cannot match as a single tag must be rejected at the schema rather
+// than silently saved as a gate nobody can pass.
+describe('CreateDataLakeRequestInput.requiredUserTag', () => {
+  it('accepts a single ordinary tag', () => {
+    expect(CreateDataLakeRequestInput.safeParse(input('acme:', 'vip')).success).toBe(true);
+  });
+
+  it('rejects a comma-separated value', () => {
+    expect(CreateDataLakeRequestInput.safeParse(input('acme:', 'team-a, team-b')).success).toBe(false);
+  });
+
+  it('rejects a semicolon-separated value', () => {
+    expect(CreateDataLakeRequestInput.safeParse(input('acme:', 'team-a; team-b')).success).toBe(false);
+  });
+
+  it('trims surrounding whitespace so both write paths save identically', () => {
+    const result = CreateDataLakeRequestInput.safeParse(input('acme:', '  vip  '));
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.requiredUserTag).toBe('vip');
+    }
+  });
+
+  it('rejects a value with internal whitespace', () => {
+    expect(CreateDataLakeRequestInput.safeParse(input('acme:', 'team a')).success).toBe(false);
+  });
+
+  it('rejects a whitespace-only value', () => {
+    expect(CreateDataLakeRequestInput.safeParse(input('acme:', '   ')).success).toBe(false);
+  });
+});
+
+describe('UpdateDataLakeRequestInput.requiredUserTag', () => {
+  it('accepts a single ordinary tag', () => {
+    expect(UpdateDataLakeRequestInput.safeParse({ requiredUserTag: 'vip' }).success).toBe(true);
+  });
+
+  it('still accepts the empty-string clear sentinel', () => {
+    expect(UpdateDataLakeRequestInput.safeParse({ requiredUserTag: '' }).success).toBe(true);
+  });
+
+  it('rejects a comma-separated value', () => {
+    expect(UpdateDataLakeRequestInput.safeParse({ requiredUserTag: 'team-a, team-b' }).success).toBe(false);
+  });
+
+  it('trims surrounding whitespace', () => {
+    const result = UpdateDataLakeRequestInput.safeParse({ requiredUserTag: '  vip  ' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.requiredUserTag).toBe('vip');
+    }
+  });
+
+  it('rejects a whitespace-only value (does not collapse to the clear sentinel)', () => {
+    expect(UpdateDataLakeRequestInput.safeParse({ requiredUserTag: '   ' }).success).toBe(false);
   });
 });
 
