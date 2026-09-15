@@ -811,6 +811,50 @@ describe('fetchAndParseURL page-chrome stripping', () => {
     expect(text).toContain('Real prose that also must survive.');
   });
 
+  it('treats 15 characters of non-control text in a strip as still strippable, and 16 as not', async () => {
+    const pageWith = (extra: string) =>
+      `<html><body><nav><a href="/a">Home</a><a href="/b">Docs</a><span>${extra}</span></nav>` +
+      '<p>Real prose paragraph describing the article content in enough detail.</p></body></html>';
+
+    const nonControlText15 = 'A'.repeat(15);
+    const textAt15 = await fetchText(pageWith(nonControlText15));
+    expect(textAt15).not.toContain('Home');
+    expect(textAt15).not.toContain(nonControlText15);
+    expect(textAt15).toContain('Real prose paragraph describing the article content in enough detail.');
+
+    const nonControlText16 = 'A'.repeat(16);
+    const textAt16 = await fetchText(pageWith(nonControlText16));
+    expect(textAt16).toContain(nonControlText16);
+    expect(textAt16).toContain('Real prose paragraph describing the article content in enough detail.');
+  });
+
+  it('treats a control strip within the depth cap as still strippable, and one past it as not', async () => {
+    // MAX_STRIP_CONTAINER_DEPTH is 32, measured from the document root: a <nav> wrapped in N
+    // levels sits at depth N + 2 (html -> body -> N wrappers -> nav), so 30 wrappers land the nav
+    // exactly at the cap and 31 land it one past it. Wrapped in <article>, not <div> - a <div>
+    // wrapper with no text of its own and the nav's two links as its only descendants would
+    // itself qualify as a (shallow, well-within-cap) control strip and get removed as a whole,
+    // never exercising the nav's own depth at all. <article> is not a STRIP_CONTAINER_SELECTOR
+    // tag, so it only adds depth without being a candidate itself.
+    const wrap = (depth: number, inner: string) => '<article>'.repeat(depth) + inner + '</article>'.repeat(depth);
+    const nav = '<nav><a href="/a">Home</a><a href="/b">Docs</a></nav>';
+    const prose = '<p>Real prose paragraph describing the article content in detail.</p>';
+
+    const atCap = `<html><body>${wrap(30, nav)}${prose}</body></html>`;
+    const textAtCap = await fetchText(atCap);
+    expect(textAtCap).not.toContain('Home');
+    expect(textAtCap).not.toContain('Docs');
+    expect(textAtCap).toContain('Real prose paragraph describing the article content in detail.');
+
+    // Deliberate, documented gap (see MAX_STRIP_CONTAINER_DEPTH): a genuine nav bar nested past the
+    // cap is never evaluated as a strip candidate at all, so it survives untouched.
+    const pastCap = `<html><body>${wrap(31, nav)}${prose}</body></html>`;
+    const textPastCap = await fetchText(pastCap);
+    expect(textPastCap).toContain('Home');
+    expect(textPastCap).toContain('Docs');
+    expect(textPastCap).toContain('Real prose paragraph describing the article content in detail.');
+  });
+
   it('extracts a deeply nested document without the cost blowing up with depth', async () => {
     // Each level is a plain qualifying STRIP_CONTAINER_SELECTOR tag with no controls of its own, so
     // without the depth cap every one of the 500 levels pays for a full-subtree scan of everything

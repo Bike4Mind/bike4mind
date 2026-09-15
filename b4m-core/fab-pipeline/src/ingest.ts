@@ -262,11 +262,20 @@ const MAX_CONTROL_LABEL_CHARS = 40;
 const MAX_NON_CONTROL_TEXT_CHARS = 15;
 
 /**
- * How much of a container's nesting depth (from the extraction scope, not the document root) the
- * strip check will still climb to evaluate. `isControlStrip` scans a candidate's ENTIRE subtree, so
- * checking every container in a deeply nested document is quadratic in nesting depth - and nesting
- * is entirely up to whatever HTML the fetched URL happens to return. Nesting past this depth stops
- * being checked as a strip candidate rather than being paid for on every level.
+ * How much of a container's nesting depth (from the document root, so a page with no `<main>`
+ * and one that has it are budgeted the same way) the strip check will still climb to evaluate.
+ * `isControlStrip` scans a candidate's ENTIRE subtree, so checking every container in a deeply
+ * nested document is quadratic in nesting depth - and nesting is entirely up to whatever HTML the
+ * fetched URL happens to return. Nesting past this depth stops being checked as a strip candidate
+ * rather than being paid for on every level.
+ *
+ * Sized well clear of real layout nesting - the deepest control group measured live against
+ * react.dev, tailwindcss.com and docs.github.com sits at 16 - but a control strip nested deeper
+ * than this is a real, deliberate gap: it is never evaluated at all, at any depth from here to its
+ * leaves, since every one of its descendants is at least as deep. Closing that gap properly needs
+ * either a much higher cap (which reopens the cost problem this constant exists to bound) or
+ * skipping only the expensive subtree scan while still descending past the cap - out of scope
+ * here; see the boundary test pinning today's behavior instead of leaving it undocumented.
  */
 const MAX_STRIP_CONTAINER_DEPTH = 32;
 
@@ -277,6 +286,11 @@ const MAX_STRIP_CONTAINER_DEPTH = 32;
  * "Further reading." label - fifteen to twenty characters) and a real one-sentence page ("The
  * chapter itself, in prose." - twenty-nine): short enough that a genuinely tiny real page still
  * survives, long enough that what a footer or a stray label leaves behind on its own doesn't.
+ *
+ * Known limitation: an absolute count cannot always tell a genuine short sentence from a
+ * same-length piece of boilerplate (a copyright line can be as long as an intro sentence) - see
+ * `pruneChromeFromScope` for why the alternative (weighing the bar against how much was removed)
+ * was tried and reverted.
  */
 const MIN_SURVIVING_CONTENT_CHARS = 20;
 
@@ -345,17 +359,31 @@ function isControlStrip($: CheerioAPI, element: DomNode): boolean {
  * and treating either as proof the prune was safe defeats the guard in exactly the case it exists
  * for. Below the bar, everything pruned in this call is restored.
  *
+ * A fixed character count cannot fully replace judging whether surviving text is real content or
+ * boilerplate (a copyright line and a short genuine sentence can be the same length) - that needs
+ * the density/boilerplate pass this ticket explicitly scopes out. It is deliberately NOT relative
+ * to how much was pruned either: a legitimate strip removal is very often far larger than the
+ * genuine prose sitting next to it (a 40-item nav beside a one-sentence intro, or GitHub's own
+ * aria-hidden tooltip spans beside a paragraph), so "survives >= removed" would roll back exactly
+ * the pages this function exists to clean.
+ *
  * Returns whether the prune was kept, so a caller working scope-by-scope (see `mainContentScope`)
  * knows whether THIS scope still has enough of its own content to be trusted at all.
  */
 function pruneChromeFromScope($: CheerioAPI, scope: Cheerio<DomNode>): boolean {
-  const root = scope.get(0);
+  // Measured from the DOCUMENT root, not `scope` - `scope` is `<main>` in one branch of
+  // `mainContentScope` and the whole `Document` in the other, so measuring from `scope` gave
+  // `html`/`body` a free ride on a page with no `<main>` but not on one that has it, meaning
+  // identical markup could get two different depth budgets depending on whether the page
+  // declares a landmark. Measuring from the same fixed point in both branches makes the budget
+  // mean the same thing either way.
+  const documentRoot = $.root().get(0) as DomNode | undefined;
   const strips: DomNode[] = [];
   scope.find(STRIP_CONTAINER_SELECTOR).each((_index, element) => {
     // Outermost qualifying container only: removing a nested one first would leave the parent's
     // remaining siblings looking like content, and doing both is wasted work.
     if (strips.some(strip => $.contains(strip, element))) return;
-    if (root && depthWithin(element, root) > MAX_STRIP_CONTAINER_DEPTH) return;
+    if (documentRoot && depthWithin(element, documentRoot) > MAX_STRIP_CONTAINER_DEPTH) return;
     if (isControlStrip($, element)) strips.push(element);
   });
 
