@@ -290,4 +290,29 @@ describe('RekognitionImageModerationService.checkImage', () => {
       expect(client.send).toHaveBeenCalledTimes(3);
     });
   });
+
+  describe('pixel-bomb guard', () => {
+    // A valid PNG header declaring width x height, padded past the inline threshold so
+    // fitForInlineDetection reaches the decode branch. image-size reads the IHDR without
+    // decoding, standing in for a compressible file that declares a huge canvas.
+    function oversizedHugeDimsPng(width: number, height: number): Buffer {
+      const head = Buffer.alloc(33);
+      head.write('89504e470d0a1a0a', 0, 'hex');
+      head.writeUInt32BE(13, 8);
+      head.write('IHDR', 12, 'ascii');
+      head.writeUInt32BE(width, 16);
+      head.writeUInt32BE(height, 20);
+      head.writeUInt8(8, 24);
+      head.writeUInt8(6, 25);
+      return Buffer.concat([head, Buffer.alloc(MAX_INLINE_IMAGE_BYTES + 1024 - head.length)]);
+    }
+
+    it('fails closed on an oversized image declaring more pixels than the decode budget, before any Rekognition call', async () => {
+      const client = fakeClient(async () => ({ ModerationLabels: [] }));
+      const svc = new RekognitionImageModerationService(Logger.globalInstance, client);
+      const bomb = oversizedHugeDimsPng(20000, 20000); // 4e8 px, well over the 60 MP budget
+      await expect(svc.checkImage(bomb, 'image/png')).rejects.toBeInstanceOf(UnsupportedImageFormatError);
+      expect(client.send).not.toHaveBeenCalled(); // rejected before the bitmap is materialized
+    });
+  });
 });

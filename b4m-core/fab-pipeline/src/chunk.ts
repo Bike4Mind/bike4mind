@@ -11,6 +11,8 @@ import {
   SupportedEmbeddingModel,
   SupportedFabFileMimeTypes,
   VoyageAIEmbeddingModel,
+  readZipEntryBounded,
+  type BoundedZipEntry,
 } from '@bike4mind/common';
 import mammoth from 'mammoth';
 import JSZip from 'jszip';
@@ -25,6 +27,28 @@ import {
 } from './embeddings';
 import { Logger } from '@bike4mind/observability';
 import { S3Storage } from './storage';
+
+/**
+ * Bounds on PPTX zip extraction. A .pptx is a zip; a crafted one can pack far more slide
+ * entries than any real deck, and each entry can inflate ~1000x when decompressed (zip-bomb
+ * shape). The slide-count and per-entry caps bound each item, but an attacker controls their
+ * PRODUCT, so two aggregate budgets bound the extraction as a whole:
+ *
+ * - MAX_PPTX_TOTAL_XML_BYTES caps the decompression one upload can drive, letting the per-item
+ *   numbers stay generous. 32 MB is ~1,000 slides of real slide XML, which runs tens of KB per
+ *   slide (media lives in separate zip entries).
+ * - MAX_PPTX_TEXT_CHARS caps the extracted text accumulated across slides. This is NOT implied by
+ *   the XML budget: tiktoken traps on a string of that size, so `fullText` has to be bounded on
+ *   its own before chunkText tokenizes it. 2M characters is ~500k tokens, orders of magnitude past
+ *   any real deck.
+ *
+ * Crossing either stops the walk with a warning rather than failing the file, so a deck that is
+ * merely huge still contributes everything read up to that point.
+ */
+const MAX_PPTX_SLIDES = 5_000;
+const MAX_SLIDE_XML_BYTES = 16 * 1024 * 1024;
+const MAX_PPTX_TOTAL_XML_BYTES = 32 * 1024 * 1024;
+const MAX_PPTX_TEXT_CHARS = 2_000_000;
 
 export const ChunkSchema = z.object({
   text: z.string(),
@@ -551,13 +575,17 @@ export class SmartChunker {
   // order, and chunk the concatenated text. Notes slides are intentionally skipped.
   private async chunkPPTX(content: Buffer): Promise<Chunk[]> {
     const zip = await JSZip.loadAsync(content);
-    const slidePaths = Object.keys(zip.files)
+    const allSlidePaths = Object.keys(zip.files)
       .filter(p => /^ppt\/slides\/slide\d+\.xml$/.test(p))
       .sort((a, b) => {
         const na = parseInt(a.match(/slide(\d+)\.xml$/)?.[1] ?? '0', 10);
         const nb = parseInt(b.match(/slide(\d+)\.xml$/)?.[1] ?? '0', 10);
         return na - nb;
       });
+    const slidePaths = allSlidePaths.slice(0, MAX_PPTX_SLIDES);
+    if (allSlidePaths.length > slidePaths.length) {
+      this.logger.warn(`PPTX declares ${allSlidePaths.length} slides; only the first ${MAX_PPTX_SLIDES} are chunked`);
+    }
 
     const decodeXmlEntities = (s: string): string =>
       s
@@ -568,8 +596,29 @@ export class SmartChunker {
         .replace(/&amp;/g, '&');
 
     const slideTexts: string[] = [];
+    let totalXmlBytes = 0;
+    let totalTextChars = 0;
     for (let i = 0; i < slidePaths.length; i++) {
-      const xml = await zip.files[slidePaths[i]].async('string');
+      const entry = zip.files[slidePaths[i]];
+      // Bound the decompressed XML as it inflates rather than trusting the entry's self-declared
+      // uncompressed size, which comes from the zip's own headers. Cap this read at whatever is
+      // left of the aggregate budget too, so an exhausted budget stops the walk rather than
+      // inflating one more full-sized slide first.
+      const entryCap = Math.min(MAX_SLIDE_XML_BYTES, MAX_PPTX_TOTAL_XML_BYTES - totalXmlBytes);
+      // `internalStream` is documented ZipObject API but is missing from the `jszip` types.
+      const read = await readZipEntryBounded(entry as unknown as BoundedZipEntry, entryCap);
+      if (!read.ok) {
+        if (entryCap < MAX_SLIDE_XML_BYTES) {
+          this.logger.warn(
+            `PPTX slide XML exhausted the ${MAX_PPTX_TOTAL_XML_BYTES}-byte total budget at slide ${i + 1}; remaining slides are not chunked`
+          );
+          break;
+        }
+        this.logger.warn(`Skipping oversized PPTX slide ${i + 1} (over ${MAX_SLIDE_XML_BYTES} bytes decompressed)`);
+        continue;
+      }
+      totalXmlBytes += read.byteLength;
+      const xml = read.text;
       // `<a:t>` runs frequently carry attributes (e.g. `<a:t xml:space="preserve">`);
       // match the open tag with optional attributes, else PPTX text is silently dropped.
       const runs = xml.match(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g) ?? [];
@@ -578,7 +627,18 @@ export class SmartChunker {
         .join(' ')
         .replace(/\s+/g, ' ')
         .trim();
-      if (text) slideTexts.push(`Slide ${i + 1}: ${text}`);
+      if (text) {
+        // Truncate rather than push whole, so one text-heavy slide cannot overshoot the cap.
+        const kept = text.slice(0, MAX_PPTX_TEXT_CHARS - totalTextChars);
+        slideTexts.push(`Slide ${i + 1}: ${kept}`);
+        totalTextChars += kept.length;
+        if (totalTextChars >= MAX_PPTX_TEXT_CHARS) {
+          this.logger.warn(
+            `PPTX extracted text reached the ${MAX_PPTX_TEXT_CHARS}-character cap at slide ${i + 1}; remaining slides are not chunked`
+          );
+          break;
+        }
+      }
     }
 
     const fullText = slideTexts.join('\n\n');

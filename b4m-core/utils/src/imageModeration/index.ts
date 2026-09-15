@@ -4,6 +4,7 @@ import {
   InvalidImageFormatException,
 } from '@aws-sdk/client-rekognition';
 import { Logger } from '@bike4mind/observability';
+import { imagePixelCount, MAX_IMAGE_PIXELS } from '../imageResize';
 
 /**
  * Rekognition top-level ("L1") categories we block on. Broadening is a policy change.
@@ -126,6 +127,14 @@ export class RekognitionImageModerationService implements ImageModerationService
    */
   private async fitForInlineDetection(bytes: Buffer): Promise<Buffer> {
     if (bytes.length <= MAX_INLINE_IMAGE_BYTES) return bytes;
+    // Reject a decompression bomb before jimp materializes the bitmap: a compressible file can
+    // declare a huge canvas. Fail-closed (block) is the safe direction for moderation.
+    const pixels = imagePixelCount(bytes);
+    if (pixels !== null && pixels > MAX_IMAGE_PIXELS) {
+      throw new UnsupportedImageFormatError(
+        `Image declares ${pixels} pixels, over the ${MAX_IMAGE_PIXELS}-pixel decode limit`
+      );
+    }
     // Dynamic import mirrors ensureImageWithinDimensionLimit in llm/utils.ts: a static jimp
     // import makes bundlers (CLI's tsdown) treat it as external even where it's never called.
     const { Jimp } = await import('jimp');
@@ -168,6 +177,12 @@ export class RekognitionImageModerationService implements ImageModerationService
    * format rather than a transient failure.
    */
   private async transcodeToJpeg(bytes: Buffer): Promise<Buffer> {
+    const pixels = imagePixelCount(bytes);
+    if (pixels !== null && pixels > MAX_IMAGE_PIXELS) {
+      throw new UnsupportedImageFormatError(
+        `Image declares ${pixels} pixels, over the ${MAX_IMAGE_PIXELS}-pixel decode limit`
+      );
+    }
     // Dynamic import for the same bundler reason as fitForInlineDetection.
     const { Jimp } = await import('jimp');
     const image = await Jimp.read(bytes);
