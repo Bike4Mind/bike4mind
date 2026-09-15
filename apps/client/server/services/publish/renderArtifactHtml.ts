@@ -41,8 +41,8 @@ export function renderArtifactIndexHtml(type: ArtifactType, content: string, tit
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta property="og:title" content="${t}"><title>${t}</title>
-<style>:root{color-scheme:light dark}body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;line-height:1.6;max-width:900px;margin:0 auto;padding:2rem 1.25rem 4rem}pre{background:rgba(127,127,127,.12);padding:1rem;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-wrap:break-word}img,svg{max-width:100%;height:auto}${extraStyle}${gate?.styles ?? ''}</style>
-</head><body>${inner}${buildShareFooterHtml({ source: 'artifact' })}${gate?.html ?? ''}</body></html>`;
+<style>:root{color-scheme:light dark}body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;line-height:1.6;max-width:900px;margin:0 auto;padding:2rem 1.25rem 4rem}pre{background:rgba(127,127,127,.12);padding:1rem;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-wrap:break-word}img,svg{max-width:100%;height:auto}${extraStyle}${gate.styles}</style>
+</head><body>${inner}${buildShareFooterHtml({ source: 'artifact' })}${gate.html}</body></html>`;
 
   if (type === 'html') return PAGE(content); // HTML fragment
   if (type === 'svg') return PAGE(content); // inline SVG markup
