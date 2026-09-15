@@ -684,7 +684,12 @@ export function PublishShareModal({
                       transition: 'border-color .15s, background-color .15s',
                     }}
                   >
-                    <Radio value={o.value} disabled={busy} data-testid={`publish-share-gate-${o.value}`} />
+                    <Radio
+                      value={o.value}
+                      disabled={busy}
+                      aria-label={o.label}
+                      data-testid={`publish-share-gate-${o.value}`}
+                    />
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1 }}>
                       {o.icon}
                       <Box>
@@ -767,7 +772,8 @@ export function PublishShareModal({
                     Joy's FormControl context and lands in the switch's aria-describedby, so a screen-
                     reader user actually hears this caveat instead of just the label. */}
                 <FormHelperText sx={{ opacity: 0.75 }}>
-                  Off by default. Won&apos;t show in Google unless enabled.
+                  Off by default. When off, the link still works for anyone you send it to - it just won&apos;t show up
+                  in Google. Link previews in chat apps work either way.
                 </FormHelperText>
               </Box>
             </Box>

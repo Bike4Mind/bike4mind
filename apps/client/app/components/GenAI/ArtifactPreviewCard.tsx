@@ -475,7 +475,9 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
             </Button>
           </Box>
         )}
-        {artifactShareModal}
+        {/* Stop propagation so clicks inside the modal don't reach the Card's
+            handleToggleExpand and toggle the expand state behind the open dialog. */}
+        <Box onClick={e => e.stopPropagation()}>{artifactShareModal}</Box>
       </Box>
     </Card>
   );
