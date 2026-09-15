@@ -66,6 +66,13 @@ contract, because a violation fails the build.
   `schema` so the drift check still runs, and list the rest in `alsoReturns`. Use
   `headers` for anything a caller can only learn from a header - e.g. where the
   saved copy of generated audio lives, which a raw-bytes body cannot carry.
+- **Async endpoints declare `pollResult`.** When a `200` only acknowledges the work
+  and the outcome arrives on a poll, model the job resource's outcome fields there -
+  including the `errorCode` classifier for a failure that lands after the ACK, where
+  no status code is left to signal it. It publishes as a `<operationId>PollResult`
+  component that the response points at via an `x-poll-result` extension, rather
+  than as content of the `200` - that body belongs to the poll operation. See
+  CONVENTIONS.md section 4.
 - **422 is auto-documented.** A contract with a `request` schema returns 422 on
   validation failure (both adapters guarantee it), so `registerContract` injects a
   standard 422 response - you do not (and should not) declare it per endpoint.
