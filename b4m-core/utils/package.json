@@ -89,6 +89,16 @@
         "default": "./dist/safeObjectKey.cjs"
       }
     },
+    "./globMatches": {
+      "import": {
+        "types": "./dist/globMatches.d.mts",
+        "default": "./dist/globMatches.mjs"
+      },
+      "require": {
+        "types": "./dist/globMatches.d.cts",
+        "default": "./dist/globMatches.cjs"
+      }
+    },
     "./contentDisposition": {
       "import": {
         "types": "./dist/contentDisposition.d.mts",
