@@ -1283,6 +1283,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   markUploaded(fabFileId: string): Promise<void>;
   markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean>;
   /**
+   * Unconditional counterpart to markFailedIfNotAlready, for a PERMANENT verdict that outranks
+   * whatever error the file already carries. Returns the error it replaced (null if there was
+   * none) so the caller can log the text this write destroys.
+   */
+  supersedeFailureError(fabFileId: string, errorMessage: string): Promise<string | null>;
+  /**
    * Guarded partial-progress write for the multi-message vectorize fan-out: applies only if the
    * stored count is not already higher and the file has not been stamped terminal, so a stale
    * rollup can never regress a count or reopen `isVectorizing` on a settled file. Returns true

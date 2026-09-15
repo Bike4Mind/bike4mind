@@ -76,6 +76,74 @@ describe('FabFileChunkRepository.findVectorsByFabFileIds scoping', () => {
   });
 });
 
+// The other half of the same reading, and the one the resume's embedding-space guard rests on
+// (resolveResumeEmbeddingModel in apps/client/server/queueHandlers/fabFileChunk.ts): which spaces
+// the file's VECTORS occupy. One means finish there, two means refuse - so a row that votes
+// without holding a vector can turn a healthy file into a permanent refusal.
+describe('FabFileChunkRepository.distinctEmbeddingModelsByFabFileId', () => {
+  setupMongoTest();
+
+  beforeEach(async () => {
+    await FabFileChunk.deleteMany({});
+  });
+
+  it("returns every distinct space the file's vectors are in, deduped", async () => {
+    await FabFileChunk.create([
+      { fabFileId: fid('f1'), text: 'a', tokenCount: 1, vector: [0.1], embeddingModel: 'voyage-3' },
+      { fabFileId: fid('f1'), text: 'b', tokenCount: 1, vector: [0.2], embeddingModel: 'voyage-3' },
+      { fabFileId: fid('f1'), text: 'c', tokenCount: 1, vector: [0.3], embeddingModel: 'text-embedding-3-small' },
+    ]);
+
+    const models = await fabFileChunkRepository.distinctEmbeddingModelsByFabFileId(fid('f1'));
+
+    expect(models.sort()).toEqual(['text-embedding-3-small', 'voyage-3']);
+  });
+
+  // The load-bearing filter, and the one nothing else pins: `'vector.0': { $exists: true }`. A
+  // labelled chunk with no vector names a space it does not occupy - updateEmbeddingModel is scoped
+  // so it can no longer create one, but rows written before that scoping exist. Letting one vote
+  // reads a single-space file as split, which the guard turns into a REFUSAL the file can only
+  // leave through a manual reprocess. Drop the filter and this is the only test that reddens.
+  it('ignores a labelled chunk that holds no vector', async () => {
+    await FabFileChunk.create([
+      { fabFileId: fid('f1'), text: 'embedded', tokenCount: 1, vector: [0.1], embeddingModel: 'voyage-3' },
+      { fabFileId: fid('f1'), text: 'oversized, never embedded', tokenCount: 99999, embeddingModel: 'voyage-3' },
+      {
+        fabFileId: fid('f1'),
+        text: 'empty vector',
+        tokenCount: 1,
+        vector: [],
+        embeddingModel: 'text-embedding-3-small',
+      },
+    ]);
+
+    const models = await fabFileChunkRepository.distinctEmbeddingModelsByFabFileId(fid('f1'));
+
+    expect(models).toEqual(['voyage-3']);
+  });
+
+  // Empty is not the same answer as one model: it means nothing here has been embedded, which the
+  // guard reads as "no space to preserve" rather than "this space".
+  it('excludes blank labels however they are spelled, and returns empty for a file with none', async () => {
+    await FabFileChunk.create([
+      { fabFileId: fid('f1'), text: 'missing field', tokenCount: 1, vector: [0.1] },
+      { fabFileId: fid('f1'), text: 'explicit null', tokenCount: 1, vector: [0.2], embeddingModel: null },
+      { fabFileId: fid('f1'), text: 'empty string', tokenCount: 1, vector: [0.3], embeddingModel: '' },
+    ]);
+
+    expect(await fabFileChunkRepository.distinctEmbeddingModelsByFabFileId(fid('f1'))).toEqual([]);
+  });
+
+  it('is scoped to the requested file', async () => {
+    await FabFileChunk.create([
+      { fabFileId: fid('f1'), text: 'mine', tokenCount: 1, vector: [0.1], embeddingModel: 'voyage-3' },
+      { fabFileId: fid('f2'), text: 'theirs', tokenCount: 1, vector: [0.2], embeddingModel: 'text-embedding-3-small' },
+    ]);
+
+    expect(await fabFileChunkRepository.distinctEmbeddingModelsByFabFileId(fid('f1'))).toEqual(['voyage-3']);
+  });
+});
+
 // What the FILE label is resolved from at vectorize completion. The distinct query cannot answer
 // this on its own: it only sees chunks that already carry a label, so it comes back empty both for
 // a file with no vectors at all and for one whose vectors are merely unlabelled so far - and those

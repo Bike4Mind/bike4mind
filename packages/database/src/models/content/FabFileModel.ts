@@ -730,6 +730,17 @@ const mapBounded = async <T, R>(items: T[], limit: number, task: (item: T) => Pr
   return results;
 };
 
+/**
+ * The write that puts a file into the failed state, shared by the first-failure CAS
+ * (markFailedIfNotAlready) and the superseding write (supersedeFailureError) so the two can never
+ * drift. `isVectorizing: false` beside the error is the load-bearing half: without it a file that
+ * failed mid-vectorize reads as in-flight forever to lakeConvergence.
+ */
+const failedFileFields = (errorMessage: string): { error: string; isVectorizing: boolean } => ({
+  error: errorMessage,
+  isVectorizing: false,
+});
+
 export class FabFileRepository extends BaseRepository<IFabFileDocument> implements IFabFileRepository {
   shareable: IFabFileRepository['shareable'];
   constructor(
@@ -1428,10 +1439,25 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean> {
     const result = await this.fabFileModel.findOneAndUpdate(
       { _id: fabFileId, $or: [{ error: null }, { error: { $exists: false } }, { error: '' }] },
-      { $set: { error: errorMessage, isVectorizing: false } },
+      { $set: failedFileFields(errorMessage) },
       { new: false }
     );
     return result !== null;
+  }
+
+  /**
+   * Unconditional counterpart to markFailedIfNotAlready, for a caller holding a PERMANENT verdict
+   * that outranks whatever error the file already carries. Returns the error it replaced (null if
+   * there was none, or the file is gone) so the caller can keep that text in the log - this write
+   * is the only thing that destroys it.
+   */
+  async supersedeFailureError(fabFileId: string, errorMessage: string): Promise<string | null> {
+    const previous = await this.fabFileModel.findOneAndUpdate(
+      { _id: fabFileId },
+      { $set: failedFileFields(errorMessage) },
+      { new: false }
+    );
+    return previous?.error ?? null;
   }
 
   /**
