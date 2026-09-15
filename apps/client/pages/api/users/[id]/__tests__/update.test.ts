@@ -36,12 +36,18 @@ vi.mock('@server/utils/ip', () => ({
   truncateIp: (ip: string) => ip,
 }));
 
+// Stands in for the real helper, which derives its list from the admin/self schema
+// diff; that derivation is covered in b4m-core/services (adminUpdate.test.ts).
+const ADMIN_ONLY = ['currentCredits', 'isAdmin', 'isBanned', 'tags'];
+
 vi.mock('@bike4mind/services', () => ({
   userService: {
     adminUpdateUser: (...a: unknown[]) => mockAdminUpdateUser(...a),
     updateUser: (...a: unknown[]) => mockUpdateUser(...a),
     adminUpdateUserSchema: z.object({}).passthrough(),
     updateUserSchema: z.object({}).passthrough(),
+    findAdminOnlyUserUpdateFields: (body: unknown) =>
+      body && typeof body === 'object' ? ADMIN_ONLY.filter(f => f in (body as Record<string, unknown>)) : [],
   },
 }));
 
@@ -139,6 +145,46 @@ describe('PUT /api/users/:id/update - lockout guard', () => {
     await promise;
     expect(res._getStatusCode()).toBe(200);
     expect(mockCount).not.toHaveBeenCalled();
+    expect(mockAdminUpdateUser).toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/users/:id/update - self-service admin-only fields', () => {
+  const SELF = { id: 'u1', isAdmin: false };
+
+  it.each([
+    ['isAdmin', { isAdmin: true }],
+    ['tags', { tags: ['vip'] }],
+    ['currentCredits', { currentCredits: 9999 }],
+  ])('rejects a self-service update carrying %s instead of silently discarding it', async (field, body) => {
+    const { res, promise } = run({ user: SELF, userId: SELF.id, body: { name: 'New Name', ...body } });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().adminOnlyFields).toEqual([field]);
+    expect(res._getJSONData().error).toContain(field);
+    expect(mockUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('names every offending field when several are sent', async () => {
+    const { res, promise } = run({ user: SELF, userId: SELF.id, body: { isAdmin: true, tags: ['vip'] } });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().adminOnlyFields).toEqual(['isAdmin', 'tags']);
+  });
+
+  it('leaves a clean self-service update alone', async () => {
+    mockUserFindById.mockReturnValue({ id: 'u1' });
+    const { res, promise } = run({ user: SELF, userId: SELF.id, body: { name: 'New Name' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdateUser).toHaveBeenCalled();
+  });
+
+  it('does not apply the guard to admins', async () => {
+    mockUserFindById.mockReturnValue({ isAdmin: false });
+    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { tags: ['vip'] } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
     expect(mockAdminUpdateUser).toHaveBeenCalled();
   });
 });

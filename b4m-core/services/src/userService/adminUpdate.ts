@@ -53,6 +53,27 @@ export const adminUpdateUserSchema = updateUserSchema.extend({
   creditDelta: z.number().optional(),
 });
 
+/**
+ * Fields the admin schema adds on top of the self-service allowlist, i.e. the
+ * privileged half of a user update. Derived from the two schemas rather than
+ * restated so it cannot drift when either one changes. `id` is excluded: it is a
+ * route param on the admin endpoint, not a privileged mutation.
+ */
+export const ADMIN_ONLY_USER_UPDATE_FIELDS: readonly string[] = Object.keys(adminUpdateUserSchema.shape)
+  .filter(key => key !== 'id' && !(key in updateUserSchema.shape))
+  .sort();
+
+/**
+ * Admin-only keys present in a self-service update body. Zod would strip these
+ * silently, so callers must be told instead of getting a 200 that implies the
+ * privileged write landed.
+ */
+export function findAdminOnlyUserUpdateFields(body: unknown): string[] {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return [];
+  const keys = body as Record<string, unknown>;
+  return ADMIN_ONLY_USER_UPDATE_FIELDS.filter(field => Object.prototype.hasOwnProperty.call(keys, field));
+}
+
 export type AdminUpdateUserParameters = z.infer<typeof adminUpdateUserSchema>;
 
 export interface AdminUpdateUserAdapters {

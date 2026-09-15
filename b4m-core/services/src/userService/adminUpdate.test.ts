@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { adminUpdateUser } from './adminUpdate';
+import { adminUpdateUser, ADMIN_ONLY_USER_UPDATE_FIELDS, findAdminOnlyUserUpdateFields } from './adminUpdate';
 
 const ADMIN_ID = 'admin-1';
 const TARGET_ID = 'user-1';
@@ -251,5 +251,35 @@ describe('adminUpdateUser - preferences merge', () => {
       showDebug: false,
       experimentalFeatures: { agentMode: true },
     });
+  });
+});
+
+describe('findAdminOnlyUserUpdateFields', () => {
+  it('covers the privileged fields the self-service schema deliberately omits', () => {
+    expect(ADMIN_ONLY_USER_UPDATE_FIELDS).toEqual(
+      expect.arrayContaining(['currentCredits', 'email', 'isAdmin', 'isBanned', 'organizationId', 'tags'])
+    );
+  });
+
+  it('excludes fields the self-service schema already allows, and the route-param id', () => {
+    expect(ADMIN_ONLY_USER_UPDATE_FIELDS).not.toContain('id');
+    for (const shared of ['name', 'role', 'preferences', 'systemFiles', 'lastNotebookId']) {
+      expect(ADMIN_ONLY_USER_UPDATE_FIELDS).not.toContain(shared);
+    }
+  });
+
+  it('reports the admin-only keys a body carries, ignoring permitted ones', () => {
+    expect(findAdminOnlyUserUpdateFields({ name: 'a', tags: ['vip'], isAdmin: true })).toEqual(['isAdmin', 'tags']);
+  });
+
+  it('reports a key present but undefined - it was still asked for', () => {
+    expect(findAdminOnlyUserUpdateFields({ tags: undefined })).toEqual(['tags']);
+  });
+
+  it('returns nothing for a clean body or a non-object', () => {
+    expect(findAdminOnlyUserUpdateFields({ name: 'a' })).toEqual([]);
+    expect(findAdminOnlyUserUpdateFields(null)).toEqual([]);
+    expect(findAdminOnlyUserUpdateFields('tags')).toEqual([]);
+    expect(findAdminOnlyUserUpdateFields([{ tags: [] }])).toEqual([]);
   });
 });

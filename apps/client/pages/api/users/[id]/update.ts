@@ -155,6 +155,19 @@ const handler = baseApi().put(
         redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions'], keepAdminOnly: ['userNotes'] })
       );
     } else {
+      // Reject rather than silently strip: Zod drops unknown keys, so without this a
+      // request asking for a privileged mutation (isAdmin, tags, currentCredits, ...)
+      // would get a 200 with the permitted half applied and no sign the rest was
+      // discarded. The allowlist parse below and secureParameters inside the service
+      // remain the layers that actually enforce the boundary.
+      const adminOnlyFields = userService.findAdminOnlyUserUpdateFields(req.body);
+      if (adminOnlyFields.length > 0) {
+        return res.status(403).json({
+          error: `Forbidden: these fields are admin-only and were not applied: ${adminOnlyFields.join(', ')}`,
+          adminOnlyFields,
+        });
+      }
+
       // Parse with the self-service schema -- excludes isAdmin, tags, email, etc.
       // secureParameters inside the service strips any keys not in this allowlist.
       const body = userService.updateUserSchema.parse(req.body ?? {});
