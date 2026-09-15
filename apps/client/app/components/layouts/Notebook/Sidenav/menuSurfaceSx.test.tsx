@@ -28,6 +28,16 @@ describe('menuSurfaceSx', () => {
   it('takes the corner as an argument, for the profile More flyout', () => {
     expect(menuSurfaceSx(theme, '12px').borderRadius).toBe('12px');
   });
+
+  // The ground is not a preference. Joy grounds a listbox in background.popup, which this theme
+  // leaves at Joy's default - and Joy's DARK default is common.black, so a popup that skips this
+  // recipe is a pure black panel. Asserted per scheme because the light default (common.white) is
+  // close enough to background.surface to hide the trap.
+  it.each(['light', 'dark'] as const)('grounds the panel away from Joy black popup in %s', scheme => {
+    const palette = theme.colorSchemes[scheme].palette;
+    expect(menuSurfaceSx({ ...theme, palette } as typeof theme).backgroundColor).toBe(palette.background.surface);
+    expect(palette.background.surface).not.toBe(palette.background.popup);
+  });
 });
 
 describe('menuListSx', () => {
@@ -83,11 +93,44 @@ describe('selectListboxSx', () => {
     expect(optionSx['--variant-plainActiveBg']).toBe(theme.palette.notebooklist.hoverBg);
   });
 
-  it('marks the selected row by its ground and leaves the text as ordinary ink', () => {
+  it('marks the selected row by its ground and its weight, not by a second ink', () => {
     expect(optionSx['&[aria-selected="true"]']).toMatchObject({
       backgroundColor: theme.palette.notebooklist.focusedBackground,
-      color: 'inherit',
+      fontWeight: 600,
     });
+    // No `color` on the selected row: the row-level ink below already covers it, and a second ink
+    // here is what would make selection read as a colour change rather than a weight change.
+    expect(optionSx['&[aria-selected="true"]']).not.toHaveProperty('color');
+  });
+
+  // Joy paints every row from --variant-plainColor, which falls through to its OWN neutral scale.
+  // This theme tints text.primary and leaves `neutral` at Joy's defaults, so a row left to Joy
+  // reads grey among brand-tinted siblings - the reason six call sites each restated this ink.
+  it.each(['light', 'dark'] as const)('pins the row ink at the app token, not Joy neutral, in %s', scheme => {
+    const palette = theme.colorSchemes[scheme].palette;
+    const row = selectListboxSx({ ...theme, palette } as typeof theme)['& [role="option"]'];
+    expect(row.color).toBe(palette.text.primary);
+    expect(row.color).not.toBe(palette.neutral.plainColor);
+  });
+
+  // Joy's List paints itself with `body-${size}` typography, so a DEFAULT-size Select's listbox
+  // lands on fontSize.md while every dropdown control in this app is a 14px one. Pinned on the
+  // listbox rather than per row because an Option's own fontSize is `inherit`.
+  it('pins the 14px row scale a default-size Select would not get from Joy', () => {
+    expect(selectListboxSx(theme).fontSize).toBe(theme.fontSize.sm);
+    expect(selectListboxSx(theme).fontSize).not.toBe(theme.fontSize.md);
+  });
+
+  // The ground alone is NOT enough, exactly as for menuItemListSx: dark mode gives hoverBg and
+  // focusedBackground the same value, so a hovered sibling paints the selected row's colour and
+  // only the weight still marks it. Asserted per scheme - `theme.palette` resolves to the light
+  // one, where the two tokens happen to differ, which is how a light-only assertion hides this.
+  it.each(['light', 'dark'] as const)('keeps the selected row distinguishable from a hovered sibling in %s', scheme => {
+    const palette = theme.colorSchemes[scheme].palette;
+    const row = selectListboxSx({ ...theme, palette } as typeof theme)['& [role="option"]'];
+    const selected = row['&[aria-selected="true"]'];
+    const groundAlone = selected.backgroundColor !== row['--variant-plainHoverBg'];
+    expect(groundAlone || selected.fontWeight === 600).toBe(true);
   });
 
   it('styles option rows only, so it is inert on a Joy Menu (rows are role="menuitem")', () => {
@@ -274,6 +317,32 @@ describe('selectListboxSx on a rendered Joy Select', () => {
     render(<SelectHarness sx={(t: typeof theme) => ({ ...menuSurfaceSx(t), ...selectListboxSx(t) })} />);
     const unselected = screen.getAllByRole('option').find(o => o.getAttribute('aria-selected') !== 'true');
     expect(bg(unselected as Element)).not.toBe(selectedGround);
+  });
+
+  // Joy repaints a selected Option's ink from --variant-outlinedColor, so declaring the ink on the
+  // row is what keeps ONE ink across the list. An unresolved var() on either row would mean Joy's
+  // rule won and the selected row had drifted to a different colour than its siblings.
+  //
+  // The weight is NOT asserted here, only in the object test above: jsdom resolves the selected
+  // row's font-weight from this same nested rule when selectListboxSx is spread alone, and reports
+  // `normal` once menuSurfaceSx's declarations join it in the class. The ground from that rule
+  // still resolves, so the rule is live either way - do not read the gap as the weight missing.
+  it('gives the selected row the same ink as its siblings, so only the weight marks it', () => {
+    render(<SelectHarness sx={(t: typeof theme) => ({ ...menuSurfaceSx(t), ...selectListboxSx(t) })} />);
+    const options = screen.getAllByRole('option');
+    const selected = options.find(o => o.getAttribute('aria-selected') === 'true') as Element;
+    const unselected = options.find(o => o.getAttribute('aria-selected') !== 'true') as Element;
+    const ink = getComputedStyle(selected).color;
+    expect(ink).toBe(getComputedStyle(unselected).color);
+    expect(ink).not.toContain('var(');
+  });
+
+  // The harness Select takes Joy's default size, which is exactly the case the call sites kept
+  // hitting: without this the listbox would render body-md and every row with it.
+  it('reaches the rows with the 14px scale on a default-size Select', () => {
+    render(<SelectHarness sx={(t: typeof theme) => ({ ...menuSurfaceSx(t), ...selectListboxSx(t) })} />);
+    expect(getComputedStyle(screen.getByRole('listbox')).fontSize).toBe(theme.fontSize.sm);
+    expect(getComputedStyle(screen.getAllByRole('option')[0]).fontSize).toBe(theme.fontSize.sm);
   });
 });
 

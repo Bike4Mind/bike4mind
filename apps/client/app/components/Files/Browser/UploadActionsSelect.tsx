@@ -7,6 +7,7 @@ import {
   KeyboardArrowDown as KeyboardArrowDownIcon,
 } from '@mui/icons-material';
 import { DataLakeIcon, DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
+import { menuSurfaceSx, selectListboxSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 
 interface UploadActionsSelectProps {
   onUploadFiles?: (files: File[]) => void;
@@ -163,31 +164,7 @@ export const UploadActionsSelect: React.FC<UploadActionsSelectProps> = ({
         }}
         slotProps={{
           listbox: {
-            sx: {
-              minWidth: '200px',
-              border: 'none !important',
-              py: '4px !important',
-              backgroundColor: 'var(--joy-palette-background-body)',
-              '& .MuiOption-root': {
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1,
-                justifyContent: 'flex-start',
-                color: 'text.primary',
-                fontSize: '14px',
-                fontWeight: '400',
-                backgroundColor: 'var(--joy-palette-background-body)',
-                transition: 'opacity 0.2s ease-in-out',
-              },
-              '& .MuiOption-highlighted': {
-                backgroundColor: 'transparent !important',
-              },
-              '& .MuiOption-root:hover': {
-                backgroundColor: 'transparent !important',
-                color: 'text.primary',
-                opacity: 0.8,
-              },
-            },
+            sx: theme => ({ ...menuSurfaceSx(theme), ...selectListboxSx(theme), minWidth: '200px' }),
             placement: 'bottom-end',
             modifiers: [
               { name: 'offset', options: { offset: [-0, 4] } },
