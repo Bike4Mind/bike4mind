@@ -76,8 +76,8 @@ const handler = baseApi().post(
 
       // Admin-gated is not credit-gated (#1852): the spider fans summarize/tag out across every
       // notebook this user owns, so an ungated run is the largest operational spend on the
-      // platform. Skipped on a dry run, which publishes the same events but performs no model
-      // calls.
+      // platform. Skipped on a dry run, which returns the plan and never reaches the publishes
+      // at all (spider.ts:317-320 returns before them), so it spends nothing to gate.
       if (!dryRun) {
         // Sized to the work the handler will actually do, not to `totalNotebooks`: it skips an
         // already-groomed notebook per operation, so pricing a re-run at notebooks x operations

@@ -1,4 +1,4 @@
-import { insufficientCreditsError, type ISessionDocument, type ModelInfo } from '@bike4mind/common';
+import { getTextModelCost, insufficientCreditsError, type ISessionDocument, type ModelInfo } from '@bike4mind/common';
 import { adminSettingsRepository, organizationRepository, userRepository } from '@bike4mind/database';
 import { creditService, isOperationalBillingEnabled } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
@@ -17,6 +17,13 @@ import type { Logger } from '@bike4mind/observability';
  * why a refusal is not final until `operationalSpendSettlesFree` has ruled the model out.
  */
 const MIN_CREDITS_PER_OPERATION = 1;
+
+/**
+ * Input and output token volume the zero-settlement probe below prices at. Far above any real
+ * operational call (a summary of the largest notebook is orders of magnitude under it), because
+ * the probe is asking "is this model costless at ANY volume", not what this call will cost.
+ */
+const FREE_SETTLEMENT_PROBE_TOKENS = 1_000_000;
 
 export interface SessionOperationalCreditPreflightArgs {
   /**
@@ -54,29 +61,47 @@ type BillingOrg = Awaited<ReturnType<typeof organizationRepository.findById>>;
 
 /**
  * Whether the model this work will run on settles at zero credits for ANY token volume, which
- * makes the nominal floor above the wrong question to ask. `freeToRun` is the codebase's only
- * declaration of that: the backends that publish zero rates deliberately set it
- * (ollamaBackend.ts:122, localImageBackend.ts:68), `generateModelPriceSeed.ts:47` skips seeding
- * price rows for a model carrying it, and `getTextModelCost` reads it to decide that $0 on real
- * usage is intent rather than a gap (models.ts:646-654).
+ * makes the nominal floor above the wrong question to ask. Two conditions, and both are
+ * load-bearing, because neither alone means "settlement will charge nothing":
+ *
+ * 1. `freeToRun` is the codebase's only DECLARATION of costless intent: the backends that
+ *    publish zero rates deliberately set it (ollamaBackend.ts:122, localImageBackend.ts:68) and
+ *    `generateModelPriceSeed.ts:49` skips seeding price rows for a model carrying it. It is an
+ *    annotation, though, not a billing switch - `getTextModelCost` reads it ONLY to suppress the
+ *    `[UNPRICED_MODEL]` alarm (models.ts:678-686), never to force a zero, and no write path
+ *    stops a `freeToRun` model from also carrying a priced tier (the discovery append at
+ *    runModelDiscovery.ts:999 bypasses the admin route's known-model gate). The flag alone would
+ *    therefore waive the gate on work that settlement then charges in full.
+ * 2. So settlement's own pricing function gets asked what it would compute, at a volume no real
+ *    operational call reaches. `getTextModelCost` is what the settlement caller uses
+ *    (recordSessionOperationalUsage.ts:63), so a zero here is the zero that would be debited -
+ *    and `tierForTokens` falls back to the highest tier rather than returning null
+ *    (models.ts:692-697), so a priced model cannot dodge the probe by having no tier this wide.
+ *
+ * Order matters: `freeToRun` is tested FIRST so the probe can never raise `[UNPRICED_MODEL]`
+ * itself, which is exactly what a computed zero on a model without the flag would do.
  *
  * The same carve-out the sibling pre-flight makes on `embeddingCostUsd > 0`
- * (pages/api/data-lakes/semantic-search.ts:438). That one can price the exact call because the
- * token count is known at request time; here it is not, so the question is asked one level up:
- * not "what will this cost" but "is this model declared costless".
+ * (pages/api/data-lakes/semantic-search.ts:486). That one can price the exact call because the
+ * token count is known at request time; here it is not, so the question is asked at a volume
+ * chosen to exceed any real one instead.
  *
- * An empty or all-zero `pricing` map is deliberately NOT accepted as that declaration, even
- * though `getTextModelCost` would return $0 for it. Both write paths reject that state outright
+ * An empty or all-zero `pricing` map is deliberately NOT accepted as the declaration on its own,
+ * even though the probe returns $0 for it. Both write paths reject that state outright
  * with "mark the model freeToRun instead" (ModelPriceModel.ts:91-98, model-prices.ts:213-216)
  * and modelCatalog.ts:78-81 calls it the intended fail-loud signal, so it only ever reaches a
  * reader as a gap: price-seed lag, or the per-process `_modelCache` serving this process a map
  * the SessionEvents process already prices from. Inferring "free" from it would waive the charge
  * here while settlement debits normally - and this pre-flight is the sole `maxCreditsPerMember`
  * enforcement point on these paths (recordOperationalUsage.ts:84-88), so a false waive costs
- * more than the ordinary fail-open elsewhere in this file.
+ * more than the ordinary fail-open elsewhere in this file. Requiring the flag is what keeps that
+ * gap out; requiring the probe is what keeps a mislabelled model from exploiting the flag.
  */
-function settlesFreeForAnyVolume(modelInfo: Pick<ModelInfo, 'freeToRun'>): boolean {
-  return modelInfo.freeToRun === true;
+function settlesFreeForAnyVolume(modelInfo: ModelInfo): boolean {
+  return (
+    modelInfo.freeToRun === true &&
+    getTextModelCost(modelInfo, FREE_SETTLEMENT_PROBE_TOKENS, FREE_SETTLEMENT_PROBE_TOKENS) === 0
+  );
 }
 
 /**
@@ -122,8 +147,14 @@ function resolveRefusalReason({
 }): string | null {
   const crossHolderReason = `The owner of this notebook does not have enough credits for ${operation}.`;
 
-  // Cap before pool, mirroring deductCreditsWithOrgSupport: a capped member must be refused
-  // even when the org pool is flush.
+  // Cap before pool: a capped member must be refused even when the org pool is flush. Mirrors
+  // the RESERVATION pre-flights, which are the only place the cap is ever enforced -
+  // semantic-search.ts:496 and music.ts:129 in this app, ChatCompletionProcess.ts:3661 and
+  // cliCompletions.ts:380 in core. Deliberately NOT deductCreditsWithOrgSupport: that is the
+  // settlement write and it documents at :168-172 why it runs no cap check of its own (throwing
+  // there cannot block an already-served request, and would freeze `usedCredits` so the cap
+  // could never trip again). That is the same reason the cap cannot live in
+  // recordOperationalUsage, and therefore the reason this pre-flight exists.
   if (billingOrg && creditService.isMemberCreditCapExceeded(billingOrg, userId, requiredCredits)) {
     // "Contact your organization administrator" is only actionable for a member of that org.
     return requesterIsHolder
@@ -179,7 +210,11 @@ export async function checkSessionOperationalCredits({
     const billingEnabled = await isOperationalBillingEnabled({ adminSettings: adminSettingsRepository }, logger);
     if (!billingEnabled) return { allowed: true };
   } catch (err) {
-    logger?.warn('[sessionOperationalCreditPreflight] failed to read billing settings', err);
+    // error, not warn: the fail-open is correct but it means the gate stopped enforcing, which is
+    // indistinguishable from the ungated behavior it replaced. These two strings are the only
+    // evidence that happened, so they are deliberately distinctive enough to hang a
+    // LogMetricFilter alarm on without touching this code (infra/alarms.ts:807).
+    logger?.error('[sessionOperationalCreditPreflight] gate disabled: failed to read billing settings', err);
     return { allowed: true };
   }
 
@@ -197,7 +232,10 @@ export async function checkSessionOperationalCredits({
     billingUser = resolvedUser;
     billingOrg = resolvedOrg;
   } catch (err) {
-    logger?.warn('[sessionOperationalCreditPreflight] failed to resolve user/organization for billing', err);
+    logger?.error(
+      '[sessionOperationalCreditPreflight] gate disabled: failed to resolve user/organization for billing',
+      err
+    );
     return { allowed: true };
   }
 
@@ -226,8 +264,11 @@ export async function checkSessionOperationalCredits({
   // nominal proxy for a cost that can legitimately be zero, and a 422 on free work is a
   // regression against the ungated behavior this replaced.
   if (await operationalSpendSettlesFree(logger)) {
-    logger?.info(
-      `[sessionOperationalCreditPreflight] allowing ${operation} despite the balance; the operations model settles free`
+    // warn, not info: a waived refusal is the designed path, but it is still a refusal this gate
+    // declined to enforce, and the operations model being costless is worth seeing when someone
+    // asks why a zero-balance account is running summaries.
+    logger?.warn(
+      `[sessionOperationalCreditPreflight] waiving ${operation} refusal; the operations model settles free at any volume`
     );
     return { allowed: true };
   }
@@ -259,11 +300,12 @@ export async function assertSessionOperationalCredits(args: SessionOperationalCr
  * project) can skip the queueing without failing the request; it logs each refusal so a skipped
  * fan-out is visible to ops rather than silent.
  *
- * Each REFUSED owner costs one operations-model resolution (see `operationalSpendSettlesFree`),
- * so a batch where every owner is broke pays for one per owner rather than one per request. Left
- * uncached deliberately: the owner count per attach is small, the checks run concurrently, and a
- * module-level cache would put a staleness window on a billing-adjacent read to save work that
- * only happens when the request is being refused anyway.
+ * Per owner, not per request: one settings read (cheap after the first - AdminSettingsCache holds
+ * it in process, though concurrent first-callers on a cold container can each miss) plus, for a
+ * REFUSED owner only, one operations-model resolution (see `operationalSpendSettlesFree`). Left
+ * uncached beyond that deliberately: the owner count per attach is bounded by the notebooks being
+ * attached, the checks run concurrently, and a module-level cache would put a staleness window on
+ * a billing-adjacent read to save work that only happens when the request is being refused anyway.
  */
 export async function filterSessionIdsByOperationalCredits(
   sessions: Pick<ISessionDocument, 'id' | 'userId'>[],
