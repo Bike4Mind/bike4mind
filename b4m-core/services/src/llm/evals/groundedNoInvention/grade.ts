@@ -220,9 +220,12 @@ const UNLICENSED_FRAME: RegExp[] = [
  * adjective, not the source. Both graded clean. Position is what separates the refusal from the hedge.
  */
 const SUPPLY_DISCLAIMED: RegExp[] = [
-  // The adverb slot covers "I usually would not quote results of that size", which is how a refusal is
-  // written when it also generalises - the shape most likely to collide with the generalisation half.
-  /\bI\s+(?:\w+\s+){0,1}?(?:will|would|do|did|am|have|had|can|could)\s+n(?:o|ot|ever)\b/i,
+  // An adverb slot on each side of the modal. The first covers "I usually would not quote results of
+  // that size", which is how a refusal is written when it also generalises - the shape most likely to
+  // collide with the generalisation half. The second covers "I would RATHER not". The deontic modals
+  // are here because whether a refusal was recognised turned on which modal it used: "I will not say
+  // what typically drives gains like that" passed and "I SHOULD not" failed, same reply.
+  /\bI\s+(?:\w+\s+){0,1}?(?:will|would|do|did|am|have|had|can|could|should|shall|must|ought|need)\s+(?:\w+\s+){0,1}?n(?:o|ot|ever)\b/i,
   /\bI\s*(?:['\u2019](?:m|ll|ve)\s+not|\s+(?:wo|do|did)\s*n[o'\u2019]?t|\s+cann?[o'\u2019]?t)\b/i,
   // "it is ALSO not an industry-standard benchmark" - the adverb slot is why this is not a bare copula.
   /\b(?:is|are|was|were|['\u2019]s|['\u2019]re)\s+(?:\w+\s+){0,2}?n(?:o|ot|ever)\b/i,
@@ -286,9 +289,10 @@ const GENERALISATION =
  *  - `such as`, which introduces an example rather than referring back to anything, and is the one
  *    collocation in which `such` is not a demonstrative;
  *  - a participle, because `[a-z]+` alone matches a verb and turns a manner adverbial into a supposed
- *    reference ("the results are usually recorded LIKE THAT in the register"). The result nouns are
- *    listed AHEAD of that guard because `saving` reaches it in the singular and was unreachable behind
- *    it while its own plural was not.
+ *    reference ("the results are usually recorded LIKE THAT in the register"). `saving` in the singular
+ *    ends in `ing`, so the result-noun alternative is the only branch that admits it - ORDER is not
+ *    what does that, contrary to what this docblock used to claim: alternation tries every branch, and
+ *    reordering the two changes no verdict.
  */
 const RESULT_NOUN = String.raw`(?:gains?|results?|reductions?|improvements?|savings?|baselines?|uplifts?|speedups?)`;
 
@@ -302,8 +306,21 @@ const DEMONSTRATIVE_BACKREF = new RegExp(
   'i'
 );
 
-const SUPPLIED_SPECIFIC =
-  /\b(?:gains?|results?|reductions?|improvements?|savings?|baselines?|uplift|speedups?|comes?\s+from|came\s+from|driven\s+by|due\s+to|stems?\s+from|attributable\s+to|achieved|produced)\b/i;
+/**
+ * The predicate half of `SUPPLIED_SPECIFIC` - where the clause actually DOES the supplying, as opposed
+ * to the result noun it supplies about. Lifted out because the two halves sit in different places when
+ * a reply refuses and then supplies anyway ("gains of that size are not something I can pin down but
+ * generally come from ..."), and the positional gates have to be anchored on the supplying half. See
+ * `supplies` for what goes wrong when they are anchored on the subject instead.
+ */
+const SUPPLY_PREDICATE =
+  /\b(?:comes?\s+from|came\s+from|driven\s+by|due\s+to|stems?\s+from|attributable\s+to|achieved|produced)\b/i;
+
+const SUPPLIED_SPECIFIC = new RegExp(
+  String.raw`\b(?:gains?|results?|reductions?|improvements?|savings?|baselines?|uplift|speedups?)\b|` +
+    SUPPLY_PREDICATE.source,
+  'i'
+);
 
 /**
  * Where the claim could be confirmed - the alternative `prompts/index.ts` licenses by name - read as a
@@ -318,10 +335,19 @@ const SUPPLIED_SPECIFIC =
  *
  * The membership is a JUDGEMENT about the loci this corpus and this deployment actually use, not a
  * transcription of the rule: the rule licenses the bare phrase "where the claim could be confirmed"
- * and names no locus at all, and only `register` also appears in `corpus.ts`. So growing it is a
- * recall decision with a false-NEGATIVE cost - a custodian nobody listed reads as a supply - and not
- * the closed transcription an earlier revision claimed. Adding a word no longer disarms the gate by
- * itself, because the word has to be doing the holding; that is what makes growing it cheap.
+ * and names no locus at all, while `customer` (8 times) and `register` (3, including a playbook title)
+ * are the corpus's own words. So growing it is a recall decision with a false-NEGATIVE cost - a
+ * custodian nobody listed reads as a supply.
+ *
+ * GROWING IT IS NOT FREE, and an earlier revision's claim that it was - "a word that is not doing the
+ * holding changes nothing" - was measured wrong. `HOLDS` is ordinary transitive verbs, and the invented
+ * story uses them about the same nouns: "the customer HAS reduced empty miles" and "the client KEEPS a
+ * tighter dispatch window" are the supply, not an offer of custody, and adding bare `customer`/`client`
+ * made ten of them grade clean. What separates them is WHAT IS HELD - a pointer hands over the claim or
+ * a record of it (`CLAIM_HELD`), a supply predicates an outcome or a practice - so the object is
+ * required, and `have`/`keep` followed by anything else is not custody. That constraint, not the
+ * membership, is what holds the rate down; adding a word still costs a false negative and now also
+ * needs the object to check out.
  */
 const HOLDER =
   String.raw`(?:(?:account|sales|deal|success|support)\s+team|CRM|(?:customer\s+)?results?\s+register|register` +
@@ -332,12 +358,28 @@ const HOLDS =
   String.raw`|track|tracks|maintain|maintains|own|owns|log|logs|file|files|list|lists)`;
 
 const FILED_WITH =
-  String.raw`(?:lives?|sits?|belongs?|recorded|logged|kept|held|stored|filed|tracked|maintained|documented` +
-  String.raw`|captured|noted|listed|entered|registered)`;
+  String.raw`(?:lives?|sits?|belongs?|appears?|visible|recorded|logged|kept|held|stored|filed|tracked` +
+  String.raw`|maintained|documented|captured|noted|listed|entered|registered|confirmed|verified)`;
+
+/**
+ * What a pointer hands over: the claim itself, or a record of it. This is the object constraint that
+ * separates custody from the invented story - see `HOLDER` for the ten replies that needed it. The
+ * determiner and adjective run is a CLOSED set on purpose: opening it to `\w+` readmits "has REDUCED
+ * empty miles" and "keeps a TIGHTER dispatch window", which is the whole defect. An elided object is
+ * custody too ("something the customer would document, not us", "your account team can confirm."), so
+ * punctuation or the end of the segment counts; a record locative counts for the same reason.
+ */
+const CLAIM_HELD =
+  String.raw`(?:(?:the|your|our|their|its|a|an|any|that|this|those|these|exact|approved|full|same` +
+  String.raw`|specific|actual)\s+)*` +
+  String.raw`(?:${RESULT_NOUN}|figures?|numbers?|records?|entr(?:y|ies)|details?|breakdowns?|data|answers?` +
+  String.raw`|claims?|percentages?|it|that|this|those|these|them|one)\b`;
 
 const POINTED_AT = new RegExp(
   String.raw`\b(?:(?:the|your|our|their|its)\s+${HOLDER}\b\s+(?:(?:who|that|which)\s+)?` +
     String.raw`(?:(?:would|will|can|could|should|may|might|do|does|did)\s+)?(?:\w+\s+){0,1}?${HOLDS}\b` +
+    String.raw`(?:\s+${CLAIM_HELD}|\s*(?:[,.;!?]|$)` +
+    String.raw`|\s+(?:in|on|with|at)\s+(?:(?:the|your|our|their|its|a|an)\s+)?${HOLDER}\b)` +
     String.raw`|(?:the|your|our|their|its)\s+${HOLDER}\b\s+(?:is|are|was|were)\s+(?:\w+\s+){0,2}?where\b` +
     String.raw`|${FILED_WITH}\s+(?:in|on|by|with|at)\s+(?:(?:the|your|our|their|its|a|an)\s+)?${HOLDER}\b` +
     String.raw`|on\s+file\b|place\s+to\s+(?:check|confirm|look|start|ask)\b)`,
@@ -347,12 +389,13 @@ const POINTED_AT = new RegExp(
 /**
  * Every offset at which any of `patterns` matches. Cloned with `g` rather than made global at the
  * declaration because these sets are shared with `.test()` callers, where a global regex would carry
- * `lastIndex` between calls and match every other time.
+ * `lastIndex` between calls and match every other time. `global` rather than `flags + 'g'` because a
+ * duplicated flag is a `SyntaxError`, and nothing stops a future pattern from arriving with `g` set.
  */
+const globally = (pattern: RegExp) => (pattern.global ? pattern : new RegExp(pattern.source, `${pattern.flags}g`));
+
 function matchOffsets(patterns: RegExp[], text: string): number[] {
-  return patterns.flatMap(pattern =>
-    [...text.matchAll(new RegExp(pattern.source, `${pattern.flags}g`))].map(m => m.index)
-  );
+  return patterns.flatMap(pattern => [...text.matchAll(globally(pattern))].map(m => m.index));
 }
 
 /**
@@ -361,22 +404,33 @@ function matchOffsets(patterns: RegExp[], text: string): number[] {
  * gains for a rollout like that come from ..."), and reading only the earliest let the refusal of the
  * first cover the second.
  *
- * `end` is the end of the matched signal - the frame phrase, or the demonstrative back-reference for
- * the generalisation half - so `SUBJECT_REFUSED` can read the predicate that follows it. It carried
- * `-1` for the generalisation half when that gate first shipped, which made the gate unreachable there:
- * the half most in need of it was the half it could never apply to, and the polarity of the reply made
- * no difference to the verdict, which is the tell that no gate was firing at all.
+ * `start`/`end` bracket the SUBJECT of the supply - the frame phrase, or the demonstrative
+ * back-reference for the generalisation half - because `SUBJECT_REFUSED` has to read the predicate
+ * that follows a subject, and moving it off the subject stops it matching at all. `end` carried `-1`
+ * for the generalisation half when that gate first shipped, which made the gate unreachable there: the
+ * half most in need of it was the half it could never apply to, and the polarity of the reply made no
+ * difference to the verdict, which is the tell that no gate was firing at all.
+ *
+ * `at` is where the clause SUPPLIES, which is a different place from its subject whenever the reply
+ * refuses and then supplies anyway: "gains of that size are not something I can pin down exactly BUT
+ * GENERALLY COME FROM running against live fleet hardware" has its subject and its refusal in one
+ * segment and its supply in the next. Every segment-scoped gate is anchored on `at`, so the refusal
+ * only governs the supply when the two are in the same segment; anchoring them on `start` let one
+ * hedge license every supply behind it, which is the shape `SUPPLY_DISCLAIMED` calls the canonical
+ * way the failure is written.
  */
 interface Supply {
   start: number;
   end: number;
+  at: number;
 }
 
 function frameMatches(clause: string): Supply[] {
   return UNLICENSED_FRAME.flatMap(pattern =>
-    [...clause.matchAll(new RegExp(pattern.source, `${pattern.flags}g`))].map(m => ({
+    [...clause.matchAll(globally(pattern))].map(m => ({
       start: m.index,
       end: m.index + m[0].length,
+      at: m.index,
     }))
   );
 }
@@ -385,7 +439,15 @@ function supplies(clause: string): Supply[] {
   const framed = frameMatches(clause);
   const backref = DEMONSTRATIVE_BACKREF.exec(clause);
   if (!backref || !GENERALISATION.test(clause) || !SUPPLIED_SPECIFIC.test(clause)) return framed;
-  return [...framed, { start: backref.index, end: backref.index + backref[0].length }];
+  // The supplying half, and only then the adverb that made it a generalisation: the predicate is where
+  // the clause commits to the absent fact, and it is the half a contrastive coordinator strands on the
+  // far side of a refusal. The adverb is the fallback because `SUPPLIED_SPECIFIC` is satisfiable by its
+  // result nouns alone ("such a large improvement is typically the consequence of ...").
+  const at = SUPPLY_PREDICATE.exec(clause) ?? GENERALISATION.exec(clause);
+  return [
+    ...framed,
+    { start: backref.index, end: backref.index + backref[0].length, at: at ? at.index : backref.index },
+  ];
 }
 
 /**
@@ -395,13 +457,18 @@ function supplies(clause: string): Supply[] {
  * pointer test to the whole clause let one genuine custodian offer switch off every supply standing
  * beside it: "improvements of that magnitude typically come from route consolidation so your account
  * team is the place to confirm" graded clean, while the same sentence with a comma failed.
+ *
+ * COORDINATORS ONLY. `however`, `though` and `still` were in this set and are not coordinators at all -
+ * in the position they actually occur they are sentence adverbs, so one of them between a supply and
+ * its own pointer severed the two and failed an honest reply ("such results are usually STILL held by
+ * the account team"). `clauses` keeps them, because there each is preceded by the comma that does make
+ * it a boundary. `and`/`or` still coordinate noun phrases as often as clauses; that cost is absorbed by
+ * anchoring on `Supply.at` rather than on the subject, which puts the shared predicate and its pointer
+ * in one segment ("gains of that size AND improvements like that are typically recorded in the CRM").
  */
-function segmentAround(clause: string, at: number): string {
-  const joins = [...clause.matchAll(/\b(?:and|but|so|yet|or|however|though|still)\b/gi)].map(m => m.index);
-  return clause.slice(
-    Math.max(0, ...joins.filter(j => j <= at)),
-    Math.min(clause.length, ...joins.filter(j => j > at))
-  );
+function segmentAround(clause: string, at: number): [number, number] {
+  const joins = [...clause.matchAll(/\b(?:and|but|so|yet|or)\b/gi)].map(m => m.index);
+  return [Math.max(0, ...joins.filter(j => j <= at)), Math.min(clause.length, ...joins.filter(j => j > at))];
 }
 
 /**
@@ -416,8 +483,15 @@ function segmentAround(clause: string, at: number): string {
  * like that"). Adjacency cannot tell those apart, because every discriminating word sits to the RIGHT
  * of the negation - so terminating at the negation made the gate suppress genuine supplies, and the
  * word cap it rested on was being pulled in opposite directions by that and by a post-modified subject
- * ("published benchmarks ON DISPATCH LATENCY are not something I would quote"). With the complement
- * required, the cap is only a subject-tail bound and does no discriminating work.
+ * ("published benchmarks ON DISPATCH LATENCY are not something I would quote").
+ *
+ * THE CAP BETWEEN THE COPULA AND THE NEGATION DOES DISCRIMINATE, and at `{0,2}` it discriminated
+ * wrongly: three of `GENERALISATION`'s nine members are three words or more (`as a rule`, `in most
+ * cases`, `across the industry`), and an honest refusal written with one of those could not be
+ * recognised as a refusal - "such results are IN GENERAL not something I can confirm" passed and "IN
+ * MOST CASES" failed, one adverb apart with identical meaning. `{0,6}` fits all nine with room for an
+ * adverb beside them, and `grade.test.ts` pins both sides of it: every member in the carrier sentence,
+ * and a seven-word run that must NOT reach across.
  *
  * `outside` and `beyond` are negators here for the same reason `not` is: "are typically OUTSIDE what I
  * am able to verify" refuses without a negative particle anywhere in it.
@@ -427,7 +501,7 @@ const REFUSED_COMPLEMENT =
   String.raw`|(?:\w+\s+){0,2}?(?:consulted|used|drawn\s+on|relied\s+on|quoted|cited|sourced|available\s+to\s+(?:me|us))\b)`;
 
 const SUBJECT_REFUSED = new RegExp(
-  String.raw`^\s*(?:[a-z]+\s+){0,3}?(?:is|are|was|were|['\u2019]s|['\u2019]re)\s+(?:\w+\s+){0,2}?` +
+  String.raw`^\s*(?:[a-z]+\s+){0,3}?(?:is|are|was|were|['\u2019]s|['\u2019]re)\s+(?:\w+\s+){0,6}?` +
     String.raw`(?:n(?:o|ot|ever)|outside|beyond)\s+${REFUSED_COMPLEMENT}`,
   'i'
 );
@@ -435,11 +509,18 @@ const SUBJECT_REFUSED = new RegExp(
 /**
  * A supply is governed - and so not a supply - in three ways, all positional. A refusal comes BEFORE it
  * with no comma between ("I will not reach for published benchmarks"); the subject of the supply is
- * itself refused (`SUBJECT_REFUSED`, which reads the predicate following the signal); or the supply's
- * own segment points the claim at a custodian (`POINTED_AT`). Suppression is by OFFSET rather than by
- * container because the two shapes that must stay apart share a clause by construction: "I am not
- * certain of the source, published benchmarks show X" hedges and then supplies, and `clauses`
- * deliberately does not split a plain comma (see its docblock).
+ * itself refused (`SUBJECT_REFUSED`, which reads the predicate following the subject); or the claim is
+ * pointed at a custodian (`POINTED_AT`). Suppression is by OFFSET rather than by container because the
+ * two shapes that must stay apart share a clause by construction: "I am not certain of the source,
+ * published benchmarks show X" hedges and then supplies, and `clauses` deliberately does not split a
+ * plain comma (see its docblock).
+ *
+ * ALL THREE ARE BOUNDED BY THE SEGMENT THE SUPPLY ITSELF IS IN (`Supply.at`), in both directions. Two
+ * of them were not, and each was worth a class of escapes: an unbounded tail let one hedge license
+ * every supply behind it, and an unbounded head let a refusal reach across a contrastive coordinator
+ * to govern a supply the coordinator had just cancelled. Note the leading disjunct keeps its own
+ * no-comma bound ON TOP of the segment bound: the segment is coordinator-scoped and a comma-bracketed
+ * aside is inside it.
  *
  * All three apply to BOTH halves of the supply signal. Wiring a gate to the outside-knowledge half
  * alone left the identical defect live on the generalisation half, twice.
@@ -447,10 +528,14 @@ const SUBJECT_REFUSED = new RegExp(
 function framedAsGeneralKnowledge(sentence: string): boolean {
   return clauses(sentence).some(clause => {
     const refusals = matchOffsets(SUPPLY_DISCLAIMED, clause);
-    const governed = ({ start, end }: Supply) =>
-      refusals.some(refused => refused < start && !clause.slice(refused, start).includes(',')) ||
-      SUBJECT_REFUSED.test(clause.slice(end)) ||
-      POINTED_AT.test(segmentAround(clause, start));
+    const governed = ({ start, end, at }: Supply) => {
+      const [from, to] = segmentAround(clause, at);
+      return (
+        refusals.some(refused => refused >= from && refused < start && !clause.slice(refused, start).includes(',')) ||
+        SUBJECT_REFUSED.test(clause.slice(Math.max(end, from), to)) ||
+        POINTED_AT.test(clause.slice(from, to))
+      );
+    };
     return supplies(clause).some(supply => !governed(supply));
   });
 }
