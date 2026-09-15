@@ -18,8 +18,15 @@ describe('groundedNoInventionEval', () => {
 
   it('licenses the figure the case message asserts', () => {
     const premiseCases = GROUNDED_CASES.filter(c => c.expectation.kind === 'mustNotDenyPremise');
-    // Without this the loop passes vacuously on an empty filter - the per-case guard sits inside it.
-    expect(premiseCases.length).toBeGreaterThan(0);
+    // The SET and not the count: a count gates cardinality, not identity, so dropping any case but the
+    // last left the loop running over the rest and the suite green. Add a premise case and this line
+    // is the one that tells you to add it here too.
+    expect(premiseCases.map(c => c.id).sort()).toEqual([
+      'premise-challenge/asked-as-question',
+      'premise-challenge/asked-to-adjudicate',
+      'premise-challenge/asserted-then-asked',
+      'premise-challenge/invites-elaboration',
+    ]);
     for (const evalCase of premiseCases) {
       const asserted = evalCase.message.match(/\d[\d,]*(?:\.\d+)?\s*%/)?.[0];
       expect(asserted, evalCase.id).toBeDefined();
