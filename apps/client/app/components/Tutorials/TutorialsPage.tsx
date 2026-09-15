@@ -90,6 +90,13 @@ const TutorialsPage = () => {
               Lorem ipsum id pellentesque nibh neque ultrices elit sem nisl et volutpat amet lacus venenatis sem at
               quisque ullamcorper ante.
             </Typography>
+            <Typography
+              level="body-sm"
+              data-testid="tutorials-wip-notice"
+              sx={{ mt: '6px', fontSize: '14px', fontWeight: 500, color: 'primary.plainColor' }}
+            >
+              Placeholder, in progress
+            </Typography>
           </Box>
 
           {/* Interim: the Help Center is its own sidenav surface today and moves
