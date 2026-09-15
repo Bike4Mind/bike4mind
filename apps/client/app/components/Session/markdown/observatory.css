@@ -9,6 +9,13 @@
    to `[data-color-mode]` - that is the unrelated attribute the @uiw editor
    packages use, and it is never set on this app's <html>.
 
+   Every color below resolves from the `reading` palette group
+   (utils/themes/components/reading.ts) through the `--joy-palette-reading-*`
+   variables Joy emits for it. Change a reply color THERE, not here. The literal
+   after each var() is the same value as a fallback, and is what renders where
+   the Joy variables are absent - SSR before hydration, and tests that mount a
+   component without the app theme.
+
    Non-ASCII is deliberate in this file: .css is outside the repo's ASCII
    guards (which cover .ts/.tsx/.mts/.cts only), and the typography here wants
    real characters.
@@ -20,43 +27,43 @@
    default light scheme is 'light', so this is the same answer, not a guess. */
 .b4m-md,
 [data-joy-color-scheme='light'] .b4m-md {
-  --b4m-md-bg: #eceff3;
-  --b4m-md-bg-2: #ffffff;
-  --b4m-md-surface: #f6f9fb;
-  --b4m-md-surface-2: #edf2f6;
-  --b4m-md-line: rgba(16, 38, 56, 0.11);
-  --b4m-md-line-2: rgba(16, 38, 56, 0.22);
-  --b4m-md-ink: #141f28;
-  --b4m-md-ink-2: #364a58;
-  --b4m-md-ink-3: #506271;
-  --b4m-md-accent: #0b6bcb;
-  --b4m-md-accent-soft: rgba(11, 107, 203, 0.07);
-  --b4m-md-accent-line: rgba(11, 107, 203, 0.32);
-  --b4m-md-warn: #9a6410;
-  --b4m-md-warn-soft: rgba(232, 163, 61, 0.14);
-  --b4m-md-danger: #c41c1c;
-  --b4m-md-ok: #167230;
-  --b4m-md-lift: rgba(255, 255, 255, 0.9);
+  --b4m-md-bg: var(--joy-palette-reading-bg, #eceff3);
+  --b4m-md-bg-2: var(--joy-palette-reading-bg2, #ffffff);
+  --b4m-md-surface: var(--joy-palette-reading-surface, #f6f9fb);
+  --b4m-md-surface-2: var(--joy-palette-reading-surface2, #edf2f6);
+  --b4m-md-line: var(--joy-palette-reading-line, rgba(16, 38, 56, 0.11));
+  --b4m-md-line-2: var(--joy-palette-reading-line2, rgba(16, 38, 56, 0.22));
+  --b4m-md-ink: var(--joy-palette-reading-ink, #141f28);
+  --b4m-md-ink-2: var(--joy-palette-reading-ink2, #364a58);
+  --b4m-md-ink-3: var(--joy-palette-reading-ink3, #506271);
+  --b4m-md-accent: var(--joy-palette-reading-accent, #0b6bcb);
+  --b4m-md-accent-soft: var(--joy-palette-reading-accentSoft, rgba(11, 107, 203, 0.07));
+  --b4m-md-accent-line: var(--joy-palette-reading-accentLine, rgba(11, 107, 203, 0.32));
+  --b4m-md-warn: var(--joy-palette-reading-warn, #9a6410);
+  --b4m-md-warn-soft: var(--joy-palette-reading-warnSoft, rgba(232, 163, 61, 0.14));
+  --b4m-md-danger: var(--joy-palette-reading-danger, #c41c1c);
+  --b4m-md-ok: var(--joy-palette-reading-ok, #167230);
+  --b4m-md-lift: var(--joy-palette-reading-lift, rgba(255, 255, 255, 0.9));
 }
 
 [data-joy-color-scheme='dark'] .b4m-md {
-  --b4m-md-bg: #080b0e;
-  --b4m-md-bg-2: #0b1014;
-  --b4m-md-surface: #0f161d;
-  --b4m-md-surface-2: #0c1218;
-  --b4m-md-line: rgba(190, 215, 235, 0.085);
-  --b4m-md-line-2: rgba(190, 215, 235, 0.17);
-  --b4m-md-ink: #e8edf2;
-  --b4m-md-ink-2: #b6c4ce;
-  --b4m-md-ink-3: #8ea0b0;
-  --b4m-md-accent: #5aaaea;
-  --b4m-md-accent-soft: rgba(90, 170, 234, 0.11);
-  --b4m-md-accent-line: rgba(90, 170, 234, 0.34);
-  --b4m-md-warn: #e8a33d;
-  --b4m-md-warn-soft: rgba(232, 163, 61, 0.1);
-  --b4m-md-danger: #e5555a;
-  --b4m-md-ok: #43d08c;
-  --b4m-md-lift: rgba(255, 255, 255, 0.055);
+  --b4m-md-bg: var(--joy-palette-reading-bg, #0e1214);
+  --b4m-md-bg-2: var(--joy-palette-reading-bg2, #0b0f11);
+  --b4m-md-surface: var(--joy-palette-reading-surface, #13181c);
+  --b4m-md-surface-2: var(--joy-palette-reading-surface2, #141b23);
+  --b4m-md-line: var(--joy-palette-reading-line, rgba(209, 228, 244, 0.08));
+  --b4m-md-line-2: var(--joy-palette-reading-line2, rgba(209, 228, 244, 0.15));
+  --b4m-md-ink: var(--joy-palette-reading-ink, #d1e4f4);
+  --b4m-md-ink-2: var(--joy-palette-reading-ink2, rgba(209, 228, 244, 0.85));
+  --b4m-md-ink-3: var(--joy-palette-reading-ink3, rgba(209, 228, 244, 0.7));
+  --b4m-md-accent: var(--joy-palette-reading-accent, #5aaaea);
+  --b4m-md-accent-soft: var(--joy-palette-reading-accentSoft, rgba(90, 170, 234, 0.11));
+  --b4m-md-accent-line: var(--joy-palette-reading-accentLine, rgba(90, 170, 234, 0.34));
+  --b4m-md-warn: var(--joy-palette-reading-warn, #e8a33d);
+  --b4m-md-warn-soft: var(--joy-palette-reading-warnSoft, rgba(232, 163, 61, 0.1));
+  --b4m-md-danger: var(--joy-palette-reading-danger, #e5555a);
+  --b4m-md-ok: var(--joy-palette-reading-ok, #43d08c);
+  --b4m-md-lift: var(--joy-palette-reading-lift, rgba(209, 228, 244, 0.04));
 }
 
 /* -- shape and fonts ------------------------------------------------------

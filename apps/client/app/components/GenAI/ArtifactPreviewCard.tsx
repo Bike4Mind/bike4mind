@@ -208,22 +208,28 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
     <Card
       variant="outlined"
       data-testid={`${testIdPrefix}-artifact-card`}
-      sx={{
+      sx={theme => ({
         // surface2 is the sidebar/header surface. Joy's background.level1 default is not
         // defined by this theme, so the cards would otherwise sit on an unpicked color.
         backgroundColor: 'background.surface2',
+        // Same card recipe as a fenced code block (markdown/syntaxTheme.ts): the
+        // fill stays the theme's own surface and a brand-blue veil falls across
+        // it, so every framed thing a reply produces is one family. backgroundImage
+        // rather than a background shorthand, so the fill above still resolves per
+        // color scheme.
+        backgroundImage: `linear-gradient(180deg, ${theme.palette.reading.cardTintTop}, ${theme.palette.reading.cardTintBottom})`,
         borderRadius: '8px',
         position: 'relative',
         overflow: 'visible',
         borderWidth: 1,
-        borderColor: isSelected ? 'primary.500' : 'neutral.outlinedBorder',
+        borderColor: isSelected ? 'primary.500' : theme.palette.reading.cardLine,
         transition: 'all 0.2s ease-in-out',
         cursor: collapsible ? 'pointer' : 'default',
         '&:hover': {
           transform: 'translateY(-2px)',
           boxShadow: 'sm',
         },
-      }}
+      })}
       onClick={handleToggleExpand}
     >
       {/* Type badge: the icon and the type label are one pill overhanging the card

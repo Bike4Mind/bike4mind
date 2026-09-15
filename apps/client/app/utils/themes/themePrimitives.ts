@@ -18,6 +18,7 @@ import { APP_NAME } from '@client/config/general';
 import {
   aiSettingsTheme,
   chatboxTheme,
+  readingTheme,
   commonTheme,
   creditsTheme,
   fileBrowserTheme,
@@ -189,6 +190,7 @@ export const colorSchemes = {
       aiSettings: aiSettingsTheme.dark,
       inbox: inboxTheme.dark,
       chatbox: chatboxTheme.dark,
+      reading: readingTheme.dark,
       common: commonTheme.dark,
       credits: creditsTheme.dark,
       searchbar: searchbarTheme.dark,
@@ -304,6 +306,7 @@ export const colorSchemes = {
       aiSettings: aiSettingsTheme.light,
       inbox: inboxTheme.light,
       chatbox: chatboxTheme.light,
+      reading: readingTheme.light,
       common: commonTheme.light,
       credits: creditsTheme.light,
       searchbar: searchbarTheme.light,

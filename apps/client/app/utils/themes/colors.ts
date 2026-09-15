@@ -224,6 +224,7 @@ export const brandAlpha = {
     70: alpha(brand[100], 0.7), // #D1E4F4B3 / rgba(209, 228, 244, 0.7)
     75: alpha(brand[100], 0.75), // #D1E4F4BF / rgba(209, 228, 244, 0.75)
     80: alpha(brand[100], 0.8), // #D1E4F4CC / rgba(209, 228, 244, 0.8)
+    85: alpha(brand[100], 0.85), // #D1E4F4D9 / rgba(209, 228, 244, 0.85)
   },
 
   // brand[400] (#335F70) with opacity - Mid-tone elements
