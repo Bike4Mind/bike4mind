@@ -178,6 +178,12 @@ export interface AlternateAnnOutcome {
   embedded: boolean;
   /** Embed failed, or embed succeeded but the ANN query itself failed - either way, no usable results from this model. */
   failed: boolean;
+  /**
+   * Backend ANN latency for this model's query, or `null` when no query reached the backend
+   * (embed failed, query threw, or there were no files to ask about). Excludes the query embed,
+   * which is a provider HTTP call and not what the retrieval latency metric is about.
+   */
+  backendQueryMs: number | null;
 }
 
 const EMPTY_OUTCOME = (model: string, embedded: boolean): AlternateAnnOutcome => ({
@@ -189,6 +195,7 @@ const EMPTY_OUTCOME = (model: string, embedded: boolean): AlternateAnnOutcome =>
   filesUnranked: [],
   embedded,
   failed: true,
+  backendQueryMs: null,
 });
 
 /**
@@ -236,6 +243,7 @@ export async function runAlternateModelAnn(args: {
       filesUnranked,
       embedded: true,
       failed: false,
+      backendQueryMs: result.backendQueryMs,
     };
   } catch (error) {
     logger?.warn?.('[semanticSearch] alternate-model ANN query failed', {

@@ -11,7 +11,7 @@ import {
 import { usdToCredits, getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, ApiKeyTable } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { apiKeyService } from '@bike4mind/services';
+import { apiKeyService, resolveOpenAiBareModelAlias } from '@bike4mind/services';
 import { z } from 'zod';
 import type { CompletionRequestSchema } from '@bike4mind/common';
 
@@ -76,7 +76,11 @@ export async function logCompletionAnalytics(params: LogCompletionAnalyticsParam
       const apiKeys = await apiKeyService.getEffectiveLLMApiKeys(userId, { db, getSettingsByNames });
 
       const models = await getAvailableModels(apiKeys as ApiKeyTable);
-      const modelInfo = models.find(m => m.id === (body.model as ChatModels));
+      // Same resolution executeCompletion applies to the request before billing it, so a
+      // bare OpenAI alias (e.g. "gpt-4.1") that the completion succeeded on doesn't come
+      // back here as "model not found" and log a spurious zero-credit event.
+      const resolvedModelId = resolveOpenAiBareModelAlias(body.model);
+      const modelInfo = models.find(m => m.id === (resolvedModelId as ChatModels));
 
       if (modelInfo && finalInputTokens > 0 && finalOutputTokens > 0) {
         const costInUsd = getTextModelCost(modelInfo, finalInputTokens, finalOutputTokens);

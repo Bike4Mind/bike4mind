@@ -16,8 +16,12 @@ describe('getModelProviderLabel', () => {
     ['o1-preview', 'OpenAI'],
     ['gemini-2.5-pro-preview-05-06', 'Google'],
     ['grok-2', 'xAI'],
-    ['deepseek-chat', 'DeepSeek'],
+    ['deepseek-flash', 'DeepSeek'],
     ['us.deepseek.r1-v1:0', 'Bedrock'], // Bedrock-hosted DeepSeek: region prefix wins
+    ['deepseek.v3-v1:0', 'Bedrock'], // Bedrock-hosted DeepSeek: bare vendor-dot prefix wins
+    ['kimi-k3', 'Moonshot direct'],
+    ['moonshotai.kimi-k2.5', 'Bedrock'], // Bedrock-hosted Kimi: vendor-dot prefix wins
+    ['moonshot.kimi-k2-thinking', 'Bedrock'], // Bedrock-hosted Kimi, other AWS spelling
     ['mistral-large-latest', 'Mistral'],
     ['command-r-plus', 'Cohere'],
   ])('maps %s -> %s', (id, expected) => {

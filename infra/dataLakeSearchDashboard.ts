@@ -7,9 +7,9 @@
  * so the two counters have to be read against each other rather than alone.
  *
  * Metrics emitted by: b4m-core/services/src/dataLakeService/dataLakeSearchMetrics.ts
- * No alarm yet: ChunksScanned is the regression signal, but its threshold is
- * corpus- and traffic-dependent and there is no production baseline while the
- * vector-search flag is still off.
+ * No alarm on ChunksScanned: it is the regression signal, but its threshold is
+ * corpus- and traffic-dependent and there is no production baseline yet.
+ * AnnQueryDurationMs IS alarmed - see dataLakeAnnQuerySlow in infra/alarms.ts.
  *
  * Stage-gated the same way as alarms.ts / dashboard.ts.
  */
@@ -128,6 +128,40 @@ if (isMonitoredStage) {
             region,
             period: 300,
             yAxis: { left: { min: 0, label: 'Models' } },
+          },
+        },
+        {
+          type: 'metric',
+          x: 0,
+          y: 12,
+          width: 24,
+          height: 6,
+          properties: {
+            // Read against the annotation, not against its own history. The steady state is ~2.5s
+            // and the risk is a first-touch index page-in that jumps straight to tens of seconds,
+            // so the shape that matters is distance to the request timeout - which is why the
+            // 60s Lambda ceiling and the 30s alarm line are drawn on the graph rather than left
+            // for the reader to remember.
+            //
+            // Maximum and Average together: the metric is already a per-search max across models,
+            // so Average is the typical search and Maximum is the worst one in the window. A gap
+            // between them is the signature of the page-in - one outlier among healthy queries -
+            // where both rising together is a genuinely slower backend.
+            title: 'ANN Query Duration vs Request Timeout',
+            metrics: [
+              [NAMESPACE, 'AnnQueryDurationMs', 'Stage', $app.stage, { stat: 'Maximum', label: 'Slowest query' }],
+              [NAMESPACE, 'AnnQueryDurationMs', 'Stage', $app.stage, { stat: 'Average', label: 'Average query' }],
+            ],
+            view: 'timeSeries',
+            region,
+            period: 300,
+            yAxis: { left: { min: 0, label: 'Milliseconds' } },
+            annotations: {
+              horizontal: [
+                { value: 30000, label: 'Alarm: dataLakeAnnQuerySlow', color: '#ff7f0e' },
+                { value: 60000, label: 'Server Lambda timeout', color: '#d62728' },
+              ],
+            },
           },
         },
       ],

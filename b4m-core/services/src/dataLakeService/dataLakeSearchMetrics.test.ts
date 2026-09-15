@@ -11,7 +11,7 @@ vi.mock('@aws-sdk/client-cloudwatch', () => ({
   PutMetricDataCommand: vi.fn(function (this: any, input: unknown) {
     this.input = input;
   }),
-  StandardUnit: { Count: 'Count' },
+  StandardUnit: { Count: 'Count', Milliseconds: 'Milliseconds' },
 }));
 
 import {
@@ -20,6 +20,7 @@ import {
   CHUNKS_SCANNED_METRIC,
   ANN_HITS_METRIC,
   ANN_MODELS_QUERIED_METRIC,
+  ANN_QUERY_DURATION_METRIC,
   type DataLakeSearchMetrics,
 } from './dataLakeSearchMetrics';
 
@@ -29,6 +30,7 @@ const metrics: DataLakeSearchMetrics = {
   chunksScanned: 0,
   annHits: 12,
   annModelsQueried: 2,
+  annSlowestQueryMs: 2558,
 };
 
 /** Every datapoint published for one metric name, in emit order. */
@@ -60,15 +62,22 @@ describe('recordDataLakeSearchMetrics', () => {
     expect(CHUNKS_SCANNED_METRIC).toBe('ChunksScanned');
     expect(ANN_HITS_METRIC).toBe('AnnHits');
     expect(ANN_MODELS_QUERIED_METRIC).toBe('AnnModelsQueried');
+    expect(ANN_QUERY_DURATION_METRIC).toBe('AnnQueryDurationMs');
     expect(new Set(MetricData.map((d: { MetricName: string }) => d.MetricName))).toEqual(
-      new Set(['AnnUnrankedFilesLeftOffScan', 'ChunksScanned', 'AnnHits', 'AnnModelsQueried'])
+      new Set(['AnnUnrankedFilesLeftOffScan', 'ChunksScanned', 'AnnHits', 'AnnModelsQueried', 'AnnQueryDurationMs'])
     );
   });
 
   it('emits an alarmable Stage-only datapoint alongside the Backend breakdown', async () => {
     await recordDataLakeSearchMetrics(metrics);
 
-    for (const name of ['AnnUnrankedFilesLeftOffScan', 'ChunksScanned', 'AnnHits', 'AnnModelsQueried']) {
+    for (const name of [
+      'AnnUnrankedFilesLeftOffScan',
+      'ChunksScanned',
+      'AnnHits',
+      'AnnModelsQueried',
+      'AnnQueryDurationMs',
+    ]) {
       expect(dataFor(name).map((d: { Dimensions: unknown }) => d.Dimensions)).toEqual([
         [{ Name: 'Stage', Value: 'production' }],
         [
@@ -113,6 +122,39 @@ describe('recordDataLakeSearchMetrics', () => {
     expect(dataFor('ChunksScanned')[0].Dimensions).toEqual([{ Name: 'Stage', Value: 'production' }]);
   });
 
+  // Count is the wrong unit for a duration in a way that is invisible on a graph: CloudWatch
+  // would still draw the line, but the percentile statistics the alarm reads are only meaningful
+  // when the unit says these are milliseconds.
+  it('publishes the duration as Milliseconds, not Count', async () => {
+    await recordDataLakeSearchMetrics(metrics);
+
+    expect(dataFor('AnnQueryDurationMs').map((d: { Unit: string }) => d.Unit)).toEqual([
+      'Milliseconds',
+      'Milliseconds',
+    ]);
+    expect(dataFor('AnnQueryDurationMs').map((d: { Value: number }) => d.Value)).toEqual([2558, 2558]);
+    expect(dataFor('ChunksScanned').every((d: { Unit: string }) => d.Unit === 'Count')).toBe(true);
+  });
+
+  // The inverse of the ChunksScanned case above, and the reason the field is nullable rather than
+  // defaulted to 0. A search where no query reached a backend has no latency to report; publishing
+  // 0 would enter the population as an instant query and pull the alarm's statistic away from the
+  // searches that actually ran.
+  it('omits the duration entirely when no ANN query reached a backend', async () => {
+    await recordDataLakeSearchMetrics({ ...metrics, annSlowestQueryMs: null });
+
+    expect(dataFor('AnnQueryDurationMs')).toEqual([]);
+    expect(dataFor('ChunksScanned')).toHaveLength(2);
+  });
+
+  // 0 is a real measurement (a sub-millisecond cache hit), distinct from null. Folding the two
+  // together in a falsy check would drop it.
+  it('publishes a zero duration, which is not the same as no query', async () => {
+    await recordDataLakeSearchMetrics({ ...metrics, annSlowestQueryMs: 0 });
+
+    expect(dataFor('AnnQueryDurationMs').map((d: { Value: number }) => d.Value)).toEqual([0, 0]);
+  });
+
   // SEED_STAGE_NAME comes from DEFAULT_LAMBDA_ENVIRONMENT, so only an SST deploy sets it. This is
   // also what keeps a CLI, self-host or test run from publishing to a CloudWatch it has no
   // credentials for - and this emitter sits on the search request path.
@@ -155,7 +197,63 @@ describe('infra/dataLakeSearchDashboard.ts stays in sync', () => {
     [CHUNKS_SCANNED_METRIC],
     [ANN_HITS_METRIC],
     [ANN_MODELS_QUERIED_METRIC],
+    [ANN_QUERY_DURATION_METRIC],
   ])('graphs %s', literal => {
     expect(dashboard).toContain(literal);
+  });
+});
+
+// Same contract as the dashboard block above, against the other infra consumer. This one is
+// load-bearing in a way the dashboard is not: a dashboard graphing a dead metric is a blank panel
+// someone eventually notices, whereas an alarm watching a metric nobody publishes sits in
+// INSUFFICIENT_DATA and silently never fires - indistinguishable from the healthy state it is
+// supposed to be asserting.
+describe('infra/alarms.ts stays in sync', () => {
+  const alarms = readFileSync(new URL('../../../../infra/alarms.ts', import.meta.url), 'utf8');
+
+  it('alarms on the duration metric this module publishes', () => {
+    expect(alarms).toContain(`metricName: '${ANN_QUERY_DURATION_METRIC}'`);
+    expect(alarms).toContain("namespace: 'Lumina5/DataLakeRetrieval'");
+  });
+
+  /** The alarm's own threshold, read out of the resource so the assertions below cannot drift. */
+  const alarmThresholdMs = () => {
+    const match = alarms.match(
+      /name: `\$\{\$app\.name\}-\$\{\$app\.stage\}-data-lake-ann-query-slow`[\s\S]*?threshold: (\d+)/
+    );
+    expect(match).not.toBeNull();
+    return Number(match![1]);
+  };
+
+  // The dashboard draws this threshold as a horizontal line so the graph can be read against it.
+  // Nothing links the two numbers - they are separate files that cannot import each other - so a
+  // threshold change would leave the graph annotating a line the alarm no longer fires on, which
+  // is worse than no line at all because it reads as authoritative.
+  it('draws the same threshold on the dashboard that it alarms at', () => {
+    const dashboardBody = readFileSync(
+      new URL('../../../../infra/dataLakeSearchDashboard.ts', import.meta.url),
+      'utf8'
+    );
+    expect(dashboardBody).toContain(`{ value: ${alarmThresholdMs()}, label: 'Alarm: dataLakeAnnQuerySlow'`);
+  });
+
+  // The threshold only means something relative to the timeout it is protecting. If someone
+  // raises the Lambda timeout (option 4 in the originating issue) without revisiting this, the
+  // alarm keeps firing at a level that is no longer the danger line.
+  it('alarms below the server Lambda timeout it is protecting', () => {
+    const web = readFileSync(new URL('../../../../infra/web.ts', import.meta.url), 'utf8');
+    expect(web).toContain("timeout: '60 seconds'");
+
+    expect(alarmThresholdMs()).toBeLessThan(60_000);
+  });
+
+  // The dashboard's other annotation line. Same drift risk as the threshold, but pinned against
+  // infra/web.ts rather than against the alarm, because that is where the real number lives.
+  it('draws the server Lambda timeout the graph is read against', () => {
+    const dashboardBody = readFileSync(
+      new URL('../../../../infra/dataLakeSearchDashboard.ts', import.meta.url),
+      'utf8'
+    );
+    expect(dashboardBody).toContain("{ value: 60000, label: 'Server Lambda timeout'");
   });
 });

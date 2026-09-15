@@ -49,7 +49,7 @@ import type { AttributableLake } from './attributeAccessedLakes';
 import { atlasVectorSearch, type AtlasVectorSearchAdapters } from './atlasVectorSearch';
 import { openSearchVectorSearch, type OpenSearchVectorSearchAdapters } from './openSearchVectorSearch';
 import { planAlternateAnnModels, runAlternateModelAnn, type AlternateAnnOutcome } from './alternateModelAnn';
-import type { AnnVectorSearchResult } from './annVectorSearch';
+import { slowestAnnQueryMs, type AnnVectorSearchResult } from './annVectorSearch';
 
 /**
  * Shared vector/semantic search over FabFile chunks in a user's accessible data lakes.
@@ -206,6 +206,21 @@ export interface SemanticSearchScanAccounting {
    * operator needs to see cap pressure.
    */
   annModelsQueried: number;
+  /**
+   * Slowest single backend ANN query in this search, in ms, or `null` when no query reached a
+   * backend at all. The number to read against the caller's request timeout: the frontend server
+   * Lambda that serves POST /api/data-lakes/semantic-search caps at 60s (infra/web.ts), and a
+   * first-touch Atlas index page-in has been observed at 45s inside the aggregation alone.
+   *
+   * A MAXIMUM, not a sum. The alternate-model queries run concurrently (`Promise.all` over the
+   * selected candidates), so adding them reports a duration nothing ever waited. Max is also the
+   * statistic the question needs - an index page-in is one pathological query, not many slightly
+   * slow ones - which is why annModelsQueried is graphed the same way.
+   *
+   * A lower bound on the ANN phase, not the whole of it: the primary query runs before the
+   * alternates and each alternate embeds its query first, so the phase always costs at least this.
+   */
+  annSlowestQueryMs: number | null;
   /**
    * Slots the per-document cap actually redistributed: entries it admitted that the uncapped
    * top-K would not have held. 0 both when the cap is off and when it was on but inert, which is
@@ -578,6 +593,8 @@ export function emptyScanAccounting(budgets?: SemanticSearchBudgets): SemanticSe
     annHits: 0,
     annUnrankedFilesLeftOffScan: 0,
     annModelsQueried: 0,
+    // null, not 0: no query reached a backend, and 0 would read as an instant one.
+    annSlowestQueryMs: null,
     capPromotions: 0,
     // A search that never ran asked for nothing; 0 rather than a topK it never used.
     candidatePoolK: 0,
@@ -1059,6 +1076,7 @@ async function rankChunksForFiles(args: {
     hitsReturned: 0,
     hitsSkippedUnknownFile: 0,
     filesWithHits: new Set(),
+    backendQueryMs: null,
   };
   // Set on a primary-model ANN failure so the alternate-model phase below is skipped entirely -
   // an outage that broke the primary model's query almost certainly breaks every other model on
@@ -1278,6 +1296,7 @@ async function rankChunksForFiles(args: {
     annHits: annResult.hitsReturned + alternateHitsReturned,
     annUnrankedFilesLeftOffScan,
     annModelsQueried: (primaryAnnQueried ? 1 : 0) + alternateModelsQueried,
+    annSlowestQueryMs: slowestAnnQueryMs([annResult.backendQueryMs, ...outcomes.map(o => o.backendQueryMs)]),
     capPromotions,
     candidatePoolK,
     budgets: { maxFiles: budgets.maxFiles, maxChunks: budgets.maxChunks },
@@ -1300,6 +1319,7 @@ async function rankChunksForFiles(args: {
       chunksScanned: scan.chunksScanned,
       annHits: scan.annHits,
       annModelsQueried: scan.annModelsQueried,
+      annSlowestQueryMs: scan.annSlowestQueryMs,
     },
     logger
   );

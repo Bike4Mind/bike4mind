@@ -1220,6 +1220,72 @@ if (isMonitoredStage) {
   });
 
   /**
+   * Alarm: a single data-lake ANN query approached the request timeout.
+   *
+   * A first production ANN query took 49.2s end to end; the identical query immediately after took
+   * 2.6s, on a warm container with an already-open Mongo connection. 45.4s of the first was
+   * unaccounted for after the query embedding and the scope filters - consistent with Atlas
+   * faulting the vector index in from disk on first touch, though that attribution was a
+   * hypothesis at filing time and is precisely what this metric exists to confirm or refute. So
+   * the failure is not a slow system, it is a cliff the steady state gives no warning of, and the
+   * counters in this namespace cannot see it at all: a 49s search and a 2s search publish
+   * identical AnnHits.
+   *
+   * WHAT A FIRING DOES AND DOES NOT MEAN. The metric is emitted from the shared ranking core, so
+   * it covers both retrieval entrypoints, and they do not share a deadline:
+   *   - POST /api/data-lakes/semantic-search runs on the frontend server Lambda, capped at 60s
+   *     (infra/web.ts). Here a slow query is a correctness cliff - it returns a timeout, not a
+   *     slow result.
+   *   - the search_knowledge_base chat tool runs on ChatCompletion, an always-on Fargate service
+   *     with no comparable ceiling (infra/chatCompletion.ts). Here the same query is a bad wait,
+   *     not a failure.
+   * The datapoint does not say which one produced it - the caller that knows is the HTTP route or
+   * the tool, several frames above the emitter, and threading it down would change a shared
+   * service signature for a purely diagnostic gain. So treat a firing as "an ANN query went
+   * pathological somewhere", then use the Backend dimension and the route's own logs to place it.
+   *
+   * Threshold 30s: an order of magnitude above the observed steady state (2.5-2.9s) and half the
+   * Lambda budget, so it fires with time left to act and no plausible false positive on either
+   * entrypoint.
+   *
+   * Maximum, not a percentile. The metric is already a per-search maximum across models, and the
+   * question is whether ANY single index touch went pathological - which a percentile over a
+   * route serving single-digit requests per day cannot answer honestly, since p99 of one sample
+   * is that sample. Revisit as p99 if volume grows.
+   *
+   * This watches the approach to the ceiling, not the crossing of it: a query that overruns the
+   * Lambda never returns, so it publishes nothing. A timeout shows up as this alarm's SILENCE
+   * plus a 5xx - which is why this alarm does not on its own close the timeout risk, and why the
+   * keep-warm option in the originating issue stays open.
+   *
+   * Metric emitted by: b4m-core/services/src/dataLakeService/dataLakeSearchMetrics.ts ->
+   * recordDataLakeSearchMetrics (ANN_QUERY_DURATION_METRIC).
+   * Namespace: Lumina5/DataLakeRetrieval / AnnQueryDurationMs
+   * Alarms on the Stage-only dimension set; the Backend set is for attribution only.
+   */
+  new aws.cloudwatch.MetricAlarm('dataLakeAnnQuerySlow', {
+    name: `${$app.name}-${$app.stage}-data-lake-ann-query-slow`,
+    alarmDescription:
+      'A data-lake ANN query took over 30s. On POST /api/data-lakes/semantic-search that is most of the 60s Lambda budget and the next one may time out; from the chat tool it is a bad wait. Check which entrypoint before escalating',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'AnnQueryDurationMs',
+    namespace: 'Lumina5/DataLakeRetrieval',
+    period: 300, // 5 minutes
+    statistic: 'Maximum',
+    threshold: 30000, // 30 seconds in milliseconds, against the 60s Lambda timeout
+    dimensions: { Stage: $app.stage },
+    // No emission means no ANN query ran anywhere, which is the common state - the HTTP route in
+    // particular has served single-digit requests per day.
+    treatMissingData: 'notBreaching',
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'DataLakeRetrieval',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
    * Alarm: Data Lake un-chunked rescue sweep, failing enqueues
    *
    * Every failure here is a file that stayed un-chunked for another day: the sweep found it,
@@ -1241,7 +1307,11 @@ if (isMonitoredStage) {
    *
    * Metric emitted by: server/utils/cloudwatch.ts -> recordChunkRescueSweep, wired from
    * server/cron/dataLakeBatchReconcile.ts's rescue sweep.
-   * Namespace: Lumina5/DataLakeBatch / ChunkRescueFailures
+   * Namespace: Lumina5/DataLakeBatch / ChunkRescueFailures, dimension Stage=<this stage>. The
+   * emitter writes both a stage-less and a `{ Stage }`-scoped stream (a dimensioned metric is a
+   * distinct stream in CloudWatch); this alarm reads the scoped one so a dev-stage sweep failure
+   * no longer counts toward production's threshold, matching the `Stage`-dimension pattern
+   * `anthropicRateLimitErrors` above and `feedbackDeliveryFailures` below already use.
    */
   new aws.cloudwatch.MetricAlarm('dataLakeChunkRescueFailuresHigh', {
     name: `${$app.name}-${$app.stage}-data-lake-chunk-rescue-failures-high`,
@@ -1251,6 +1321,7 @@ if (isMonitoredStage) {
     evaluationPeriods: 3, // three consecutive daily runs, so a one-off SQS blip does not page
     metricName: 'ChunkRescueFailures',
     namespace: 'Lumina5/DataLakeBatch',
+    dimensions: { Stage: $app.stage }, // the scoped stream; the stage-less one is every stage at once
     period: 86400, // 1 day - matches the daily cron that emits it
     statistic: 'Sum', // a counter per run, unlike StuckBatches' gauge sample
     threshold: 0, // any failure at all; see the docblock on why a count threshold hides the real case
@@ -1281,7 +1352,10 @@ if (isMonitoredStage) {
    *
    * Metric emitted by: server/utils/cloudwatch.ts -> recordChunkRescueSweep, with the 'failed'
    * outcome supplied by server/cron/dataLakeBatchReconcile.ts's catch.
-   * Namespace: Lumina5/DataLakeBatch / ChunkRescueRuns, dimension outcome=failed
+   * Namespace: Lumina5/DataLakeBatch / ChunkRescueRuns, dimensions outcome=failed + Stage=<this
+   * stage>. Unlike the stage rollups elsewhere in this file, the scoped Runs stream keeps
+   * `outcome` alongside `Stage` - a `{ Stage }`-only Runs stream counts every run, healthy ones
+   * included, so `Sum > 0` against it would page daily on a working sweep.
    */
   new aws.cloudwatch.MetricAlarm('dataLakeChunkRescueSweepFailing', {
     name: `${$app.name}-${$app.stage}-data-lake-chunk-rescue-sweep-failing`,
@@ -1291,7 +1365,11 @@ if (isMonitoredStage) {
     evaluationPeriods: 2, // two consecutive daily runs; one throw is a blip, two is a broken sweep
     metricName: 'ChunkRescueRuns',
     namespace: 'Lumina5/DataLakeBatch',
-    dimensions: { outcome: 'failed' }, // 'disabled' and 'swept' share the metric and must not fire
+    // 'disabled' and 'swept' share the metric and must not fire; Stage keeps another stage's
+    // broken sweep from paging this one. Both dimensions must match the emitted stream exactly -
+    // CloudWatch treats each dimension combination as its own stream, so dropping either one here
+    // points the alarm at a stream nothing writes, which reads identically to a healthy sweep.
+    dimensions: { outcome: 'failed', Stage: $app.stage },
     period: 86400, // 1 day - matches the daily cron that emits it
     statistic: 'Sum',
     threshold: 0, // any throw at all

@@ -942,6 +942,36 @@ describe('POST /api/data-lakes/semantic-search mixed-model payload shape', () =>
     });
   });
 
+  // The attribution the originating issue could not make from outside the VPC: latency_ms alone
+  // cannot say whether a 49s search was the aggregation or everything else around it.
+  it('serializes the ANN share of latency_ms so a slow search can be attributed', async () => {
+    mockSemanticSearch.mockResolvedValue({
+      ...EMPTY_RESULT,
+      scan: { ...FULL_SCAN, annModelsQueried: 1, annSlowestQueryMs: 45_400 },
+    });
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'onboarding' }), res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.scan.ann_slowest_query_ms).toBe(45_400);
+  });
+
+  // null, not absent and not 0: a scan-only search has no ANN duration to report, and a caller
+  // reading 0 would conclude the index answered instantly.
+  it('reports a null ANN duration when no query reached a backend', async () => {
+    mockSemanticSearch.mockResolvedValue({
+      ...EMPTY_RESULT,
+      scan: { ...FULL_SCAN, annModelsQueried: 0, annSlowestQueryMs: null },
+    });
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'onboarding' }), res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.scan.ann_slowest_query_ms).toBeNull();
+  });
+
   it('serializes the per-document cap counters, which no log level can surface', async () => {
     mockSemanticSearch.mockResolvedValue({
       ...EMPTY_RESULT,

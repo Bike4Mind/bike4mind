@@ -148,11 +148,38 @@ function estimateInputTokens(messages: IMessage[]): number {
 }
 
 /**
+ * OpenAI's own API accepts these bare names as an alias for whatever dated snapshot is
+ * current, but our catalog stores the dated snapshot id itself (ChatModels.GPT4_1 etc. in
+ * @bike4mind/common), so a caller using OpenAI's convention otherwise finds no catalog
+ * entry. Resolved once, up front, so every downstream use of `model` (backend lookup,
+ * cost/credit calc, the completion call itself, logged usage) sees one consistent id.
+ *
+ * A Map, not a plain object: `model` is caller-controlled, and a plain object lookup
+ * keyed by an arbitrary string returns inherited properties for keys like "constructor"
+ * or "toString" instead of undefined.
+ */
+const OPENAI_BARE_MODEL_ALIASES: ReadonlyMap<string, ChatModels> = new Map([
+  ['gpt-4.1', ChatModels.GPT4_1],
+  ['gpt-4.1-mini', ChatModels.GPT4_1_MINI],
+  ['gpt-4.1-nano', ChatModels.GPT4_1_NANO],
+]);
+
+/**
+ * Exported so callers that do their own catalog lookup against the raw request model
+ * (logCompletionAnalytics' credit-estimate lookup) resolve the same alias executeCompletion
+ * does, rather than independently missing it once the request itself starts succeeding.
+ */
+export function resolveOpenAiBareModelAlias(modelId: string): string {
+  return OPENAI_BARE_MODEL_ALIASES.get(modelId) ?? modelId;
+}
+
+/**
  * Shared LLM completion logic
  * Used by Next.js API route, Lambda function, and available for 3rd party integrations
  */
 export async function executeCompletion(params: CompletionParams): Promise<void> {
-  const { userId, model, messages, options, db, logger, onChunk, apiKeyInfo } = params;
+  const { userId, messages, options, db, logger, onChunk, apiKeyInfo } = params;
+  const model = resolveOpenAiBareModelAlias(params.model);
   const source: CompletionSource = params.source ?? 'api';
   const completionStartTime = Date.now();
 

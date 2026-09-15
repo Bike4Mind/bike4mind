@@ -69,9 +69,17 @@ export class OperationsModelService {
 
   /** True when a cloud text-model API key is available; gates the self-host Ollama default. */
   private static hasCloudTextKey(apiKeyTable: OperationsApiKeyTable): boolean {
-    // Kimi counts: it is a hosted text provider, so holding only a Moonshot key
-    // should stop self-host from defaulting operations to local Ollama.
-    return !!(apiKeyTable.openai || apiKeyTable.anthropic || apiKeyTable.gemini || apiKeyTable.xai || apiKeyTable.kimi);
+    // Kimi and DeepSeek count: both are hosted text providers, so holding only
+    // one of their keys should stop self-host from defaulting operations to
+    // local Ollama.
+    return !!(
+      apiKeyTable.openai ||
+      apiKeyTable.anthropic ||
+      apiKeyTable.gemini ||
+      apiKeyTable.xai ||
+      apiKeyTable.kimi ||
+      apiKeyTable.deepseek
+    );
   }
 
   /**
