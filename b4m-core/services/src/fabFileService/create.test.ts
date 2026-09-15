@@ -100,6 +100,24 @@ describe('createFabFile - extension-first MIME resolution', () => {
     ).rejects.toThrow(BadRequestError);
   });
 
+  // What the trailing dot withholds is the FALLBACK, not the claim: with one supplied the name
+  // resolves like any other extension-less one, so these two pin which half is which.
+  it('accepts a trailing-dot name carrying a supported claim, as for any extension-less name', async () => {
+    const created = await createFabFile(
+      'u1',
+      { ...base, fileName: 'payload.', mimeType: SupportedFabFileMimeTypes.TXT_PLAIN },
+      resolvingAdapters()
+    );
+
+    expect(created.mimeType).toBe(SupportedFabFileMimeTypes.TXT_PLAIN);
+  });
+
+  it('refuses a trailing-dot name carrying an unsupported claim', async () => {
+    await expect(
+      createFabFile('u1', { ...base, fileName: 'payload.', mimeType: 'application/x-msdownload' }, resolvingAdapters())
+    ).rejects.toThrow(BadRequestError);
+  });
+
   it('still refuses a digit-led unsupported extension', async () => {
     await expect(
       createFabFile('u1', { ...base, fileName: 'archive.7z', mimeType: '' }, resolvingAdapters())
