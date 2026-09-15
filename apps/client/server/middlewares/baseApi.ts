@@ -45,6 +45,16 @@ interface BaseAPIOptions {
    * safe).
    */
   exemptReadsFromDailyRateLimit?: boolean;
+  /**
+   * Charge this route's API-key requests to the small, separate MANAGEMENT
+   * quota instead of the key's configured one, so a key whose own window is
+   * exhausted can still reach it. Strictly for low-volume key-administration
+   * operations that cannot consume model spend - notably the self-service
+   * rate-limit PATCH, which would otherwise sit behind the limiter it exists
+   * to lift. It changes only which counter the request is charged to, never
+   * who may call the route. Defaults to false.
+   */
+  meterAsKeyManagement?: boolean;
 }
 
 /** Default max body size: 1MB - prevents memory exhaustion from large payloads */
@@ -147,7 +157,12 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
       router.use(apiKeyAnomalyDetection());
 
       // Enforce per-API-key rate limits (skips non-API-key requests)
-      router.use(apiKeyRateLimit({ exemptReadsFromDailyLimit: resolvedOptions.exemptReadsFromDailyRateLimit }));
+      router.use(
+        apiKeyRateLimit({
+          exemptReadsFromDailyLimit: resolvedOptions.exemptReadsFromDailyRateLimit,
+          counter: resolvedOptions.meterAsKeyManagement ? 'management' : 'request',
+        })
+      );
     }
 
     // Apply JWT authentication middleware (will be skipped if already authenticated via API key)
