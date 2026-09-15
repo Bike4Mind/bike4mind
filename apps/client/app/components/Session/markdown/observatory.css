@@ -85,7 +85,7 @@
      below h2, table heads, labels), mono for data. */
   --b4m-md-font-ui: var(
     --joy-fontFamily-body,
-    'Poppins',
+    'Libre Franklin',
     -apple-system,
     BlinkMacSystemFont,
     'Segoe UI',
