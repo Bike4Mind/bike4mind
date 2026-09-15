@@ -376,9 +376,11 @@ describe('fetchAndParseURL whole-body text extraction', () => {
     expect(result.textContent).toContain('Status code');
     expect(result.textContent).toContain('404');
     // Pins the space-separator behavior itself, not just that both strings appear somewhere -
-    // without this, deleting the td/th separator would still pass (the run-on "Status code404"
-    // still contains both substrings).
+    // without these, deleting the td/th separator would still pass (the run-on "Status code404"
+    // still contains both substrings), and so would carving td/th back out of the block selector,
+    // which puts the next cell on its own line instead of keeping the row together.
     expect(result.textContent).not.toContain('Status code404');
+    expect(result.textContent).toContain('Status code 404');
   });
 
   it('separates adjacent HTML5 semantic containers instead of jamming them together', async () => {
@@ -400,6 +402,59 @@ describe('fetchAndParseURL whole-body text extraction', () => {
     expect(result.textContent).toContain('Term');
     expect(result.textContent).toContain('Definition');
     expect(result.textContent).not.toContain('TermDefinition');
+  });
+
+  it('separates non-inline elements outside the common block set', async () => {
+    // Every OTHER extraction test here uses a tag the old enumerated allowlist already covered, so
+    // this case is the only thing stopping the deliberate inline-denylist inversion from being
+    // 'simplified' back into an allowlist with CI still green. The tags below are the ones that
+    // allowlist missed; on a real Node.js API page the <details><summary> pattern alone jams its
+    // heading into the following text roughly a hundred times.
+    const page =
+      '<html><body>' +
+      '<details><summary>History</summary><p>Changed in v2</p></details>' +
+      '<nav>Home</nav><nav>About</nav>' +
+      '<button>Submit</button><button>Cancel</button>' +
+      '<aside>Sidebar</aside><address>Contact us</address>' +
+      '<select><option>Alpha</option><option>Beta</option></select>' +
+      '</body></html>';
+    axiosGet.mockResolvedValueOnce(html(page));
+
+    const result = await fetchAndParseURL('http://93.184.216.34/docs', { logger });
+
+    expect(result.textContent).toContain('History');
+    expect(result.textContent).toContain('Changed in v2');
+    expect(result.textContent).toContain('Home');
+    expect(result.textContent).toContain('About');
+    expect(result.textContent).toContain('Submit');
+    expect(result.textContent).toContain('Cancel');
+    expect(result.textContent).toContain('Sidebar');
+    expect(result.textContent).toContain('Contact us');
+    expect(result.textContent).toContain('Alpha');
+    expect(result.textContent).toContain('Beta');
+    // One jam per tag family - the positives above alone would still pass if a break were dropped.
+    expect(result.textContent).not.toContain('HistoryChanged');
+    expect(result.textContent).not.toContain('HomeAbout');
+    expect(result.textContent).not.toContain('SubmitCancel');
+    expect(result.textContent).not.toContain('SidebarContact');
+    expect(result.textContent).not.toContain('AlphaBeta');
+  });
+
+  it('keeps inline elements inline instead of breaking a sentence at every tag', async () => {
+    // The other half of the same selector. Collapsing it to a bare '*' passes every block-separation
+    // case above while shredding ordinary prose - a linked, emphasized sentence comes back as
+    // 'See the docs\nfor more\ndetail.' - so the inline carve-out needs its own pin.
+    const page =
+      '<html><body>' +
+      '<p>See the <a href="/x">docs</a> for <strong>more</strong> detail.</p>' +
+      '<p>Press <code>npm i</code> then <em>wait</em>.</p>' +
+      '</body></html>';
+    axiosGet.mockResolvedValueOnce(html(page));
+
+    const result = await fetchAndParseURL('http://93.184.216.34/guide', { logger });
+
+    expect(result.textContent).toContain('See the docs for more detail.');
+    expect(result.textContent).toContain('Press npm i then wait.');
   });
 
   it('never lets script, style, or noscript content reach the stored text', async () => {
