@@ -2751,6 +2751,26 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
     expect(FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT).toBe(85);
     expect(injected).toEqual([0, 1]);
   });
+
+  it('reads a whitespace-only relative floor as unset rather than as a floor of 0', async () => {
+    // An admin who clears the field can leave '   ' behind, and `Number('   ')` is 0 - the
+    // DISABLED value for this floor - so without the trim in `nonNegativeIntOr` a cleared row
+    // removes the floor instead of restoring the default, keeping all four passages rather than the
+    // two that clear 85.
+    //
+    // `withScopedOverlay: false` is load-bearing, not incidental: this pins the PLATFORM read path,
+    // the only one the trim can defend. On the scoped path `z.coerce.number()` has already turned
+    // '   ' into the number 0 before the helper sees it, so no string-level fix reaches that case.
+    const { injected } = await run(
+      makeCtx({
+        scores: [1.0, 0.9, 0.8, 0.76],
+        platform: { forcedRetrievalRelativeFloorPct: '   ' },
+        withScopedOverlay: false,
+      })
+    );
+    expect(FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT).toBe(85);
+    expect(injected).toEqual([0, 1]);
+  });
 });
 
 describe('KnowledgeRetrievalFeature access-event audit', () => {

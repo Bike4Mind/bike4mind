@@ -1688,10 +1688,11 @@ const FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS = 4000;
  * a floor of 20.0, which no similarity can clear, starving every Data-Lake turn with nothing in the
  * output to say why. Cheap guard, unbounded downside.
  *
- * Falls back rather than clamping to 100, which is where this deliberately diverges from
- * `resolveRelevancePct`'s handling of the same hazard: clamping a fat-fingered value to "admit only
- * a perfect match" is itself the retrieval starvation this floor exists to prevent, so the coded
- * default - known-good, behavior-preserving - is the safer landing place.
+ * Falls back rather than clamping to 100: clamping a fat-fingered value to "admit only a perfect
+ * match" is itself the retrieval starvation this floor exists to prevent, so the coded default -
+ * known-good, behavior-preserving - is the safer landing place. `resolveRelevancePct` in
+ * `resolveSearchBudgets.ts` now guards `kbSearchMinRelevancePct` identically; the two must stay in
+ * sync, since they are the same hazard on the two retrieval paths.
  */
 function forcedRetrievalFloorPct(raw: unknown, fallbackPct: number, label: string, logger: Logger): number {
   const pct = nonNegativeIntOr(raw as string | number | null | undefined, fallbackPct, label, logger);
