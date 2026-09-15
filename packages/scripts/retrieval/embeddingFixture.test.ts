@@ -195,7 +195,7 @@ describe('question-text integrity', () => {
       ...tinyFixture,
       queries: tinyFixture.queries.map(q => ({ ...q, supporting: [''] })),
     };
-    expect(() => loadEmbeddingFixture(blank)).toThrow();
+    expect(() => loadEmbeddingFixture(blank)).toThrow(/supporting/);
   });
 });
 

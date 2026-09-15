@@ -112,11 +112,21 @@ if (argv.questions !== undefined && argv.questions.trim() === '') {
   );
 }
 
-/** `JSON.parse` names neither the file nor the flag, and its message is the likeliest one to hit. */
+/**
+ * Neither `readFileSync` nor `JSON.parse` names the file or the flag, and their messages are the
+ * likeliest ones to hit. The read is its own try: folded into the parse's, a path typo reports as
+ * "could not be read as JSON", blaming the contents for a filename.
+ */
 function readQuestionFile(file: string): ProbeQuestion[] {
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (error) {
+    throw new Error(`Question file "${file}" could not be read: ${(error as Error).message}`);
+  }
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(file, 'utf8'));
+    raw = JSON.parse(text);
   } catch (error) {
     throw new Error(`Question file "${file}" could not be read as JSON: ${(error as Error).message}`);
   }
