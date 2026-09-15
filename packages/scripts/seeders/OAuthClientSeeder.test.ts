@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
 
 /**
  * Pins the seeder's two load-bearing properties: it is idempotent (skips a client
@@ -23,10 +23,18 @@ const logger = { info: vi.fn(), error: vi.fn() } as unknown as ConstructorParame
 const absent = () => ({ exec: () => Promise.resolve(null) });
 
 describe('OAuthClientSeeder', () => {
+  const priorIsPreview = process.env.IS_PREVIEW;
+
   beforeEach(() => {
     vi.clearAllMocks();
     h.fetchPw.mockResolvedValue('seeder-pw');
     h.create.mockResolvedValue({});
+    process.env.IS_PREVIEW = 'true';
+  });
+
+  afterEach(() => {
+    if (priorIsPreview === undefined) delete process.env.IS_PREVIEW;
+    else process.env.IS_PREVIEW = priorIsPreview;
   });
 
   it('creates a public and a confidential client when neither exists', async () => {
@@ -36,12 +44,17 @@ describe('OAuthClientSeeder', () => {
 
     expect(h.create).toHaveBeenCalledTimes(2);
     expect(h.create).toHaveBeenCalledWith(
-      expect.objectContaining({ clientId: PREVIEW_PUBLIC_CLIENT_ID, tokenEndpointAuthMethod: 'none' })
+      expect.objectContaining({
+        clientId: PREVIEW_PUBLIC_CLIENT_ID,
+        tokenEndpointAuthMethod: 'none',
+        clientType: 'relying-party',
+      })
     );
     expect(h.create).toHaveBeenCalledWith(
       expect.objectContaining({
         clientId: PREVIEW_CONFIDENTIAL_CLIENT_ID,
         tokenEndpointAuthMethod: 'client_secret_post',
+        clientType: 'relying-party',
       })
     );
   });
@@ -51,6 +64,16 @@ describe('OAuthClientSeeder', () => {
 
     await new OAuthClientSeeder(logger).seed();
 
+    expect(h.create).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op on a non-preview stage (IS_PREVIEW!=true)', async () => {
+    process.env.IS_PREVIEW = 'false';
+    (h.findOne as Mock).mockReturnValue(absent());
+
+    await new OAuthClientSeeder(logger).seed();
+
+    expect(h.findOne).not.toHaveBeenCalled();
     expect(h.create).not.toHaveBeenCalled();
   });
 

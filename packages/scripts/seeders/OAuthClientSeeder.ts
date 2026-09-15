@@ -44,6 +44,9 @@ export class OAuthClientSeeder {
       clientId,
       redirectUris: [PREVIEW_REDIRECT_URI],
       allowedScopes: ['openid', 'email', 'profile'],
+      // Preview clients are relying parties so QA exercises the real scope/audience-bound token +
+      // consent path, not a full first-party session (the model default). Never left implicit.
+      clientType: 'relying-party',
       isActive: true,
       ...fields,
     });
@@ -51,6 +54,14 @@ export class OAuthClientSeeder {
   }
 
   async seed(): Promise<void> {
+    // Preview-only, enforced at the seeder as defense in depth. The seedDatabase.ts Lambda already
+    // refuses non-preview stages (and sets IS_PREVIEW=true for a real preview), but MigrationManager
+    // .seed() and the `migrate seed` CLI have no stage check - so a direct invocation against a
+    // non-preview DB would otherwise mint these usable OAuth clients there. Skip unless IS_PREVIEW.
+    if (process.env.IS_PREVIEW !== 'true') {
+      this.logger.info('OAuthClientSeeder skipped: not a preview stage (IS_PREVIEW!=true)');
+      return;
+    }
     try {
       // Public client: auth is via PKCE, so the required secret hash is a random,
       // never-exposed value.
