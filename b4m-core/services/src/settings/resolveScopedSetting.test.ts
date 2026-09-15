@@ -160,7 +160,10 @@ describe('pickOverride (narrower-wins + parse guard)', () => {
       [key(SettingScopeLevel.Owner, 'u1'), '1500'],
       [key(SettingScopeLevel.Organization, 'o1'), '2000'],
     ]);
-    expect(pickOverride(KEY, refs, overrides, numberSchema)).toEqual({ value: 1500, source: SettingScopeLevel.Owner });
+    expect(pickOverride(KEY, refs, overrides, numberSchema)).toEqual({
+      won: { value: 1500, source: SettingScopeLevel.Owner },
+      ignored: [],
+    });
   });
 
   it('skips an unparseable narrower override and warns, falling through to the next rung', () => {
@@ -170,14 +173,14 @@ describe('pickOverride (narrower-wins + parse guard)', () => {
       [key(SettingScopeLevel.Organization, 'o1'), '2000'],
     ]);
     expect(pickOverride(KEY, refs, overrides, numberSchema, logger as never)).toEqual({
-      value: 2000,
-      source: SettingScopeLevel.Organization,
+      won: { value: 2000, source: SettingScopeLevel.Organization },
+      ignored: [{ scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1', reason: 'unparseable' }],
     });
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('unparseable override'));
   });
 
-  it('returns null when no rung has a value (caller keeps platform)', () => {
-    expect(pickOverride(KEY, refs, new Map(), numberSchema)).toBeNull();
+  it('returns won: null when no rung has a value (caller keeps platform)', () => {
+    expect(pickOverride(KEY, refs, new Map(), numberSchema)).toEqual({ won: null, ignored: [] });
   });
 });
 
@@ -242,6 +245,16 @@ describe('resolveScopedSetting (integration, through the real settingsMap)', () 
     const db = makeDb({ [KEY]: '3000' }, [override(SettingScopeLevel.Lake, 'l1', '1000')]);
     const r = await resolveScopedSetting(KEY, fullScope, db);
     expect(r).toEqual({ value: 3000, source: SettingScopeLevel.Platform });
+  });
+
+  it('an unparseable override falls through to platform and is reported in ignoredOverrides', async () => {
+    const db = makeDb({ [KEY]: '3000' }, [override(SettingScopeLevel.Organization, 'o1', 'not-a-number')]);
+    const r = await resolveScopedSetting(KEY, { organizationId: 'o1', owner }, db);
+    expect(r).toEqual({
+      value: 3000,
+      source: SettingScopeLevel.Platform,
+      ignoredOverrides: [{ scopeLevel: SettingScopeLevel.Organization, scopeId: 'o1', reason: 'unparseable' }],
+    });
   });
 
   it('ignores overrides when no scoped store is wired (platform-only db)', async () => {
@@ -399,7 +412,11 @@ describe('resolveScopedSettingFromOverrides (the bulk, pure resolver - #2157)', 
       pauseOverride(SettingScopeLevel.Lake, 'l1', 'sometimes'),
     ]);
 
-    expect(resolved[0]).toEqual({ value: true, source: SettingScopeLevel.Platform });
+    expect(resolved[0]).toEqual({
+      value: true,
+      source: SettingScopeLevel.Platform,
+      ignoredOverrides: [{ scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1', reason: 'unparseable' }],
+    });
   });
 
   it('an empty row set returns the platform value for every scope, with no rung claimed', () => {
@@ -446,6 +463,10 @@ describe('resolveScopedSettingFromOverrides (the bulk, pure resolver - #2157)', 
     );
 
     expect(clamped).toEqual({ value: MIN_PASSAGE_TOKEN_TARGET, source: SettingScopeLevel.Platform });
-    expect(rejectedOverride).toEqual({ value: MIN_PASSAGE_TOKEN_TARGET, source: SettingScopeLevel.Platform });
+    expect(rejectedOverride).toEqual({
+      value: MIN_PASSAGE_TOKEN_TARGET,
+      source: SettingScopeLevel.Platform,
+      ignoredOverrides: [{ scopeLevel: SettingScopeLevel.Owner, scopeId: 'u2', reason: 'unparseable' }],
+    });
   });
 });
