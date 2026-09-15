@@ -214,3 +214,27 @@ describe('PUT /api/users/:id/update - self-service admin-only field discard', ()
     expect(res._getJSONData()).toBeNull();
   });
 });
+
+describe('PUT /api/users/:id/update - real allowlist binds the ignoredFields guarantee', () => {
+  it('does not list creditDelta, tags, or isAdmin in the real self-service allowlist', async () => {
+    // Bypasses the module-level @bike4mind/services mock (which stands in a
+    // two-key schema for the handler tests above) to load the actual schema
+    // that ships in production. If any of these three fields were ever added
+    // to it, this assertion would fail before the protection in issue #2838
+    // silently disappeared.
+    const { userService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+    const allowedKeys = new Set(Object.keys(userService.updateUserSchema.shape));
+
+    expect(allowedKeys.has('creditDelta')).toBe(false);
+    expect(allowedKeys.has('tags')).toBe(false);
+    expect(allowedKeys.has('isAdmin')).toBe(false);
+
+    // Reproduces update.ts's own ignoredFields computation against the real
+    // allowlist, so this test breaks the same way the handler would if one of
+    // these fields were ever added to updateUserSchema.
+    const submitted = { name: 'New Name', creditDelta: 500, tags: ['vip'], isAdmin: true };
+    const ignoredFields = Object.keys(submitted).filter(key => !allowedKeys.has(key));
+    expect(ignoredFields).toEqual(expect.arrayContaining(['creditDelta', 'tags', 'isAdmin']));
+    expect(ignoredFields).toHaveLength(3);
+  });
+});
