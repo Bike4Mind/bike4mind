@@ -126,10 +126,9 @@ async function enqueueVectorizeBatches(params: {
  * vectorizing error from elsewhere is still true and must not be papered over by a retry of this
  * handler. It is wrong for a refusal, which is terminal and names a different, actionable cause -
  * and which the stranded file's own stale transient error would otherwise suppress entirely.
- * It rewrites the FabFile and its manifest entry TOGETHER: the two error strings are read by
- * different guards (`ownsError` here, revertFileFailure's prefix match on the entry), so leaving
- * one behind is what charges a single file's failure to its batch twice. It never re-charges the
- * counters itself - that stays guarded on `isFirstFailure` below.
+ * It rewrites the manifest entry and the FabFile as a pair, in that order and for the reason given
+ * at the writes themselves. It never re-charges the counters - that stays guarded on
+ * `isFirstFailure` below.
  */
 async function accountFileFailure(params: {
   event: SQSEvent;
@@ -165,19 +164,30 @@ async function accountFileFailure(params: {
   // file's failure to the batch twice.
   if (!isFirstFailure && supersedes) {
     try {
+      // `ownsError` above reads the FILE, revertFileFailure's prefix match reads the ENTRY, so the
+      // two have to move together. They are two writes to two collections with no transaction, and
+      // the catch below swallows either - so the ORDER is what a half-done supersede leaves behind,
+      // and only one of the two is recoverable.
+      //
+      // Entry first: the file keeps the foreign error, `ownsError` stays false, and nothing
+      // re-stamped `vectorizeEnqueueFailedAt` (recordVectorizeEnqueueFailure's job, not this
+      // path's), so the next delivery reads `wasStranded` as false, runs no undo, and simply
+      // retries both writes - at the cost of the user reading the stale reason until one lands.
+      // File first instead leaves `ownsError` true, so the next delivery clears the file while
+      // revertFileFailure declines on the entry's stale text: the refusal re-runs as a FIRST
+      // failure and charges the batch again for this one file - the divergence the pair exists to
+      // close, reached by losing the second write.
+      //
+      // A no-match on the entry write needs no handling: it means the entry was never 'failed', so
+      // there is no charge to revert and none to double.
+      //
+      // Error text only (see supersedeFileError): updateFileStatus would restamp
+      // `failureCounted: false` and strip the attribution those counters are given back by.
+      if (batchId) await dataLakeBatchRepository.supersedeFileError(batchId, fabFileId, errorMessage);
       const replaced = await fabFileRepository.supersedeFailureError(fabFileId, errorMessage);
       // That write is the only thing that destroys the outgoing text, and it is the sole record of
       // why the file was already failing - so it survives here rather than nowhere.
       if (replaced) logger.warn(`Superseded the stored error on ${fabFileId}: ${replaced}`);
-      // The manifest entry has to move with the file record, or the two disagree permanently and
-      // the batch is charged twice for this one file. revertFileFailure matches the ENTRY's error
-      // against this handler's prefix to decide whose failure it may revoke: an entry left holding
-      // the superseded text makes the next delivery's undo decline, while the file-side clear
-      // succeeds - so the verdict re-runs as a FIRST failure and increments the counters again,
-      // which finalizeBatchIfComplete can read as the batch being complete while a file is still
-      // in flight. Error text only (see supersedeFileError): updateFileStatus would restamp
-      // `failureCounted: false` and strip the attribution those counters are given back by.
-      if (batchId) await dataLakeBatchRepository.supersedeFileError(batchId, fabFileId, errorMessage);
     } catch (err) {
       logger.error(`Failed to supersede the stored error on ${fabFileId}: ${err}`);
     }

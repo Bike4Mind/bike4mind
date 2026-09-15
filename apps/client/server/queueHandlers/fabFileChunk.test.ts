@@ -1267,6 +1267,39 @@ describe('fabFileChunk handler - a failed vectorize enqueue must not strand the 
       expect(h.incrementCounters).not.toHaveBeenCalled();
     });
 
+    // The pair above is two writes to two collections with no transaction, and their shared catch
+    // swallows a failure of either - so the ORDER is what decides which half-done state a lost
+    // write leaves behind, and only one of the two orders is recoverable. Entry first leaves the
+    // file holding the foreign error, so `ownsError` stays false, the next delivery runs no undo
+    // and simply retries both writes. File first leaves `ownsError` true, so the next delivery
+    // clears the file while revertFileFailure declines on the entry's stale foreign text, and the
+    // refusal re-runs as a first failure and charges the batch twice - the very divergence the
+    // pair exists to close. Both assertions below fail if the two writes are swapped back.
+    it('leaves the file error alone when the manifest entry could not be superseded', async () => {
+      h.findAccessibleById.mockResolvedValue({ ...stranded, error: 'Chunking failed: corrupt PDF' });
+      h.distinctEmbeddingModelsByFabFileId.mockResolvedValue([RETIRED]);
+      h.markFailedIfNotAlready.mockResolvedValue(false);
+      h.supersedeFileError.mockRejectedValueOnce(new Error('manifest write lost'));
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(/no longer available/);
+
+      expect(h.supersedeFileError).toHaveBeenCalled();
+      expect(h.supersedeFailureError).not.toHaveBeenCalled();
+      expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('manifest write lost'));
+    });
+
+    it('supersedes the manifest entry before the file record', async () => {
+      h.findAccessibleById.mockResolvedValue({ ...stranded, error: 'Chunking failed: corrupt PDF' });
+      h.distinctEmbeddingModelsByFabFileId.mockResolvedValue([RETIRED]);
+      h.markFailedIfNotAlready.mockResolvedValue(false);
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(/no longer available/);
+
+      expect(h.supersedeFileError.mock.invocationCallOrder[0]).toBeLessThan(
+        h.supersedeFailureError.mock.invocationCallOrder[0]
+      );
+    });
+
     // `supersedes` defaults OFF, and the default is the load-bearing half: first-error-wins is
     // right for every transient failure, because a chunking or vectorizing error from elsewhere is
     // still true and must not be papered over by a retry of this handler. Flipping the default to

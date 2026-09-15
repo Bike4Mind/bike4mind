@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
-import type { AccessContext, DataLakeStatus, IDataLake } from '@bike4mind/common';
+import type { AccessContext, BatchFileStatus, DataLakeStatus, IDataLake } from '@bike4mind/common';
 import { lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
 import { dataLakeRepository, dataLakeBatchRepository, DataLakeModel } from './DataLakeModel';
 import { setupMongoTest } from '../../__test__/utils';
@@ -1589,6 +1589,94 @@ describe('DataLakeBatchRepository.revertFileFailure - the exit from failed', () 
       errorPrefix: PREFIX,
     });
     expect(updated?.failedFiles).toBe(0);
+  });
+});
+
+// What this write must NOT touch is the point of it, and a mocked caller can only assert the call.
+// `failureCounted` is the per-entry attribution revertFileFailure hands the counters back by, and
+// the 'failed' scope is what keeps a superseding verdict from stamping an error onto an entry that
+// carries no charge - both live inside the query, so only a real server can show them holding.
+describe('DataLakeBatchRepository.supersedeFileError - error text and nothing else', () => {
+  setupMongoTest();
+
+  const PREFIX = 'Could not hand off for vector indexing';
+
+  const batchWithEntry = async (status: BatchFileStatus, error?: string) => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 1 } as never);
+    await dataLakeBatchRepository.appendFiles(batch.id, [{ fabFileId: 'ff1', fileName: 'a.pdf', status, error }]);
+    return batch;
+  };
+
+  it('rewrites the error on a failed entry', async () => {
+    const batch = await batchWithEntry('failed', 'Chunking failed: corrupt PDF');
+    await dataLakeBatchRepository.supersedeFileError(batch.id, 'ff1', `${PREFIX}: Reprocess it`);
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.files[0].error).toBe(`${PREFIX}: Reprocess it`);
+    expect(fresh?.files[0].status).toBe('failed');
+  });
+
+  // The counters were charged against the OUTGOING failure, and this flag is how revertFileFailure
+  // knows they were. updateFileStatus would restamp it false, which makes the revert decline and
+  // reintroduces the double charge from the other side - so this write must leave it where it is.
+  it('leaves the failureCounted attribution untouched', async () => {
+    const batch = await batchWithEntry('failed', 'Chunking failed: corrupt PDF');
+    await dataLakeBatchRepository.markFailureCounted(batch.id, 'ff1', true);
+
+    await dataLakeBatchRepository.supersedeFileError(batch.id, 'ff1', `${PREFIX}: Reprocess it`);
+
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.files[0].failureCounted).toBe(true);
+  });
+
+  // Drop `status: 'failed'` from the filter and this entry gets an error string contradicting its
+  // own status - a completed file rendered as failed, with no failure to revert it.
+  it('refuses to stamp an entry that is not failed', async () => {
+    const batch = await batchWithEntry('complete');
+    await dataLakeBatchRepository.supersedeFileError(batch.id, 'ff1', `${PREFIX}: Reprocess it`);
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.files[0].error).toBeUndefined();
+    expect(fresh?.files[0].status).toBe('complete');
+  });
+
+  // The $elemMatch is what makes the two conditions describe ONE entry. Split them across dotted
+  // paths (`'files.fabFileId'` + `'files.status'`) and Mongo satisfies them from DIFFERENT elements:
+  // the batch below matches because ffB exists and ffA is failed, and the positional `files.$` then
+  // binds to the wrong entry - stamping ffB's refusal reason onto ffA, a file that failed for its
+  // own reason and whose counters are attributed to it. A single-entry case cannot show this, which
+  // is why the no-op case above passes under both forms.
+  it('does not satisfy its two conditions from two different entries', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 2 } as never);
+    await dataLakeBatchRepository.appendFiles(batch.id, [
+      { fabFileId: 'ffA', fileName: 'a.pdf', status: 'failed', error: 'Chunking failed: corrupt PDF' },
+      { fabFileId: 'ffB', fileName: 'b.pdf', status: 'complete' },
+    ]);
+
+    await dataLakeBatchRepository.supersedeFileError(batch.id, 'ffB', `${PREFIX}: Reprocess it`);
+
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.files[0].error).toBe('Chunking failed: corrupt PDF'); // ffA keeps its own reason
+    expect(fresh?.files[1].error).toBeUndefined(); // ffB was never eligible
+  });
+
+  it('stamps the right entry when the batch carries several', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 2 } as never);
+    await dataLakeBatchRepository.appendFiles(batch.id, [
+      { fabFileId: 'ffA', fileName: 'a.pdf', status: 'complete' },
+      { fabFileId: 'ffB', fileName: 'b.pdf', status: 'failed', error: 'Chunking failed: corrupt PDF' },
+    ]);
+
+    await dataLakeBatchRepository.supersedeFileError(batch.id, 'ffB', `${PREFIX}: Reprocess it`);
+
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.files[0].error).toBeUndefined();
+    expect(fresh?.files[1].error).toBe(`${PREFIX}: Reprocess it`);
+  });
+
+  it('is a no-op for a fabFileId this batch does not carry', async () => {
+    const batch = await batchWithEntry('failed', 'Chunking failed: corrupt PDF');
+    await dataLakeBatchRepository.supersedeFileError(batch.id, 'ff-other', `${PREFIX}: Reprocess it`);
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.files[0].error).toBe('Chunking failed: corrupt PDF');
   });
 });
 

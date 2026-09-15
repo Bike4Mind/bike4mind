@@ -194,9 +194,8 @@ describe('resume embedding-space guard against a real mongod (#2766)', () => {
   // Seeded WITH a label that differs from the default, because the arm's decision is "the file
   // label still wins where nothing contradicts it" - the chunks were sized against it. Seeding no
   // label instead would assert the default, which is what a mutant that ignores the label entirely
-  // also returns, so the case could not fail. Silence is the other half: `'vector.0': $exists`
-  // must exclude these never-embedded rows, or they read as vectors in no recorded space and warn.
-  it('stays silent and keeps the file label when the file holds no vectors at all', async () => {
+  // also returns, so the case could not fail.
+  it('keeps the file label when the file holds no vectors at all', async () => {
     const { fabFileId, userId } = await seedFile(COMMITTED_SPACE, [
       { space: undefined, vectorized: false },
       { space: undefined, vectorized: false },
@@ -205,6 +204,23 @@ describe('resume embedding-space guard against a real mongod (#2766)', () => {
     await dispatch(makeEvent({ fabFileId, userId }), {} as never, mockLogger);
 
     expect(requestedModel()).toBe(COMMITTED_SPACE);
+  });
+
+  // Silence is a SEPARATE case from the one above, and it needs the label gone to mean anything.
+  // `'vector.0': $exists` is what keeps these never-embedded rows out of the unlabelled-vector
+  // count; drop it and the file reads as `unrecorded` instead of `none`. With a label seeded that
+  // arm returns the label and says nothing, so the assertion could not fail - it is only with no
+  // label that `unrecorded` reaches its warn and the two arms become distinguishable. Both return
+  // the default either way, which is why the model assertion is not the one doing the work here.
+  it('stays silent when a file with no label holds no vectors either', async () => {
+    const { fabFileId, userId } = await seedFile(undefined, [
+      { space: undefined, vectorized: false },
+      { space: undefined, vectorized: false },
+    ]);
+
+    await dispatch(makeEvent({ fabFileId, userId }), {} as never, mockLogger);
+
+    expect(requestedModel()).toBe(DEPLOYMENT_DEFAULT);
     expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('embedding space'));
   });
 });
