@@ -24,11 +24,14 @@ const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
     ...overrides,
   }) as IDataLakeDocument;
 
-// The DB knows nothing: both lookups miss, as they do for the seeded opti-knowledge lake.
+// The DB knows nothing: both lookups miss, as they do for the seeded opti-knowledge lake. No
+// dataLakeAccessGrants wired, so the #2425 grant-fallback arm never calls findBySlugAmongIds -
+// it's mocked only to satisfy the adapter type.
 const fallbackDb = () => ({
   dataLakes: {
     findById: vi.fn().mockRejectedValue(new Error('bad id')),
     findBySlug: vi.fn().mockResolvedValue(null),
+    findBySlugAmongIds: vi.fn().mockResolvedValue(null),
   },
 });
 
@@ -87,6 +90,7 @@ describe('resolveFallbackLake (via assertLakeAccess) - merges the fallback overl
       dataLakes: {
         findById: vi.fn().mockRejectedValue(new Error('bad id')),
         findBySlug: vi.fn().mockResolvedValue(dbLake),
+        findBySlugAmongIds: vi.fn().mockResolvedValue(null),
       },
       fallbackLakeSettings: { findByLakeId },
     };
@@ -112,7 +116,9 @@ describe('assertFallbackLakeSettingsWriteAccess', () => {
 
   it('refuses a DB (persisted) lake outright - it has its own settings editor', async () => {
     const l = lake({ createdByUserId: 'owner' });
-    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn() } };
+    const db = {
+      dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn(), findBySlugAmongIds: vi.fn() },
+    };
     await expect(assertFallbackLakeSettingsWriteAccess('lake1', ctx({ isAdmin: true }), { db })).rejects.toThrow(
       /its own settings editor/i
     );

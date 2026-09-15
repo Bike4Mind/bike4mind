@@ -23,6 +23,17 @@ describe('dataLakeKeys parity', () => {
     expect(dataLakeKeys.filesRoot).toEqual(['dataLakeFiles']);
   });
 
+  // Two roots, deliberately: the run list is polled while a run is in flight, and a shared prefix
+  // would drag the config list along on every tick. The invalidation on settle relies on
+  // `proposalsOf` prefix-matching `proposals`, so that pairing is asserted here too.
+  it('research configs and runs are separate roots', () => {
+    expect(dataLakeKeys.researchConfigs('lake1')).toEqual(['dataLakeResearchConfigs', 'lake1']);
+    expect(dataLakeKeys.researchRuns('lake1', 20)).toEqual(['dataLakeResearchRuns', 'lake1', { limit: 20 }]);
+    expect(dataLakeKeys.researchRunsOf('lake1')).toEqual(['dataLakeResearchRuns', 'lake1']);
+    expect(dataLakeKeys.researchRuns('lake1', 20).slice(0, 2)).toEqual(dataLakeKeys.researchRunsOf('lake1'));
+    expect(dataLakeKeys.proposals('lake1', 'pending').slice(0, 2)).toEqual(dataLakeKeys.proposalsOf('lake1'));
+  });
+
   it('browse surfaces keyed by source discriminator', () => {
     expect(dataLakeKeys.tagCounts('opti')).toEqual(['dataLakeTagCounts', 'opti']);
     expect(dataLakeKeys.tagCountsRoot).toEqual(['dataLakeTagCounts']);

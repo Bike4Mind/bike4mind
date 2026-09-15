@@ -1,4 +1,5 @@
 import {
+  canUpdateShareable,
   ChatCompletionInvokeParamsSchema,
   isSupportedEmbeddingModel,
   IUserDocument,
@@ -11,6 +12,7 @@ import {
   BadRequestError,
   ForbiddenError,
   InternalServerError,
+  NotFoundError,
   isModelAccessible,
   isZodError,
   getSettingsByNames,
@@ -87,6 +89,8 @@ export class ChatCompletionInvoke {
       enableAgents,
       enableLattice,
       promptMode,
+      skipAutoOffers,
+      systemPrompt,
       tools,
       projectId,
       organizationId,
@@ -134,8 +138,13 @@ export class ChatCompletionInvoke {
     // have that notebook's full prior context sent to the model, and (with wait: true) read the
     // reply straight back in the response, bypassing the promptMeta redaction on GET
     // /api/quests/{id} entirely. Same owner-or-sharee rule as that route (quests/[id]/index.ts).
-    const isOwnerOrSharee = session.userId === userId || session.users?.some(u => u.userId === userId);
-    if (!isOwnerOrSharee) {
+    // Update-level, not any-share: a completion appends to this notebook's history and writes
+    // lastUsedModel/lastUpdated onto it, so a read-only sharee must not reach it. `this.user` is
+    // the acting principal only when it is the id invoke was called for - the two are separate
+    // inputs - so its groups are consulted only then, and group grants are otherwise absent
+    // rather than assumed.
+    const actorGroups = this.user?.id === userId ? (this.user.groups ?? []) : [];
+    if (!canUpdateShareable(session, userId, actorGroups)) {
       throw new ForbiddenError('You do not have access to this session');
     }
 
@@ -253,7 +262,18 @@ export class ChatCompletionInvoke {
               this.logger.warn(
                 `Quest not found for questId: ${questId}. Quest may have been deleted before the quest was started.`
               );
-              return null;
+              throw new NotFoundError('Quest not found');
+            }
+            // Bind the retry to the caller's target session. `sessionId` was resolved through an
+            // access-scoped lookup upstream (getOrCreateSession), so refusing a quest that belongs
+            // to a different session stops a caller retrying/overwriting another user's quest by id.
+            // Throw rather than returning null: a bare null flowed to `if (!quest) return` and made
+            // the invoke a silent no-op (a 200 with no quest on the media routes). The same generic
+            // NotFound as the missing-quest case keeps the refusal from leaking whether the quest
+            // exists in a session the caller cannot see.
+            if (q.sessionId !== sessionId) {
+              this.logger.warn(`Quest ${questId} does not belong to session ${sessionId}; refusing retry.`);
+              throw new NotFoundError('Quest not found');
             }
             // Retry path: clear prior replies and images.
             q.type = 'message';
@@ -356,6 +376,11 @@ export class ChatCompletionInvoke {
         enableAgents,
         enableLattice,
         promptMode,
+        // Must be carried explicitly: this literal - not the parsed request - is what
+        // dispatchQuest ships to the async worker, so a field omitted here is silently dropped on
+        // every path except `wait: true`.
+        skipAutoOffers,
+        systemPrompt,
         promptMeta: PromptMetaZodSchema.parse(quest.promptMeta),
         sessionId: session.id,
         tools,

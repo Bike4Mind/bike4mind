@@ -11,7 +11,7 @@ import {
   createTokenizer,
   getProviderFromModel,
   getSettingsByNames,
-  resolveEmbeddingConfig,
+  resolveEmbeddingWithKeylessFallback,
   type ITokenizer,
 } from '@bike4mind/utils';
 import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
@@ -20,17 +20,20 @@ import type { Logger } from '@bike4mind/observability';
 import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
 import { lakeMembershipsFrom, warnIfManyLakeMemberships } from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
+import { membershipOrgIdsForTurn } from '../../../../dataLakeService/membershipOrgIdsForTurn';
 import {
   defangRetrievedContent,
   documentDateClause,
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
+import { buildRetrievalConflictNote, type RetrievalPassage } from '../../../../dataLakeService/retrievalConflictNote';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
 import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
 import { PARTIAL_RESULTS_STATUS_SUFFIX } from '../../../../dataLakeService/embeddingMismatch';
-import { describeSearchLimitations } from '../../../../dataLakeService/retrievalUnavailable';
+import { describeSearchLimitations, isPartialSearch } from '../../../../dataLakeService/retrievalUnavailable';
 import {
+  capChunksPerFile,
   comparedNoPassages,
   fileScopedSemanticSearch,
   semanticDataLakeSearch,
@@ -68,6 +71,15 @@ function prettyFileName(fn: string): string {
 }
 
 /**
+ * A limitation notice the model must hear, plus whether it means the CORPUS itself came back
+ * incomplete. The two used to be the same thing and no longer are - see `formatSkipNotice`.
+ */
+interface SkipNotice {
+  text: string;
+  partial: boolean;
+}
+
+/**
  * Format semantic passages WITH their content so the model can answer without retrieving.
  *
  * Passage text is untrusted: a lake can serve content its owner did not author (a shared source
@@ -78,8 +90,14 @@ function prettyFileName(fn: string): string {
  * `maxChunkChars` comes from resolveSearchBudgets, which derives it from the chunk-size policy. It is
  * not a constant here on purpose: a serve cap set independently of the chunk size WILL disagree with
  * it, and the disagreement is invisible - every full-size passage arrives pre-truncated and the model
- * answers from a fraction of what the lake stores. Clipping now only fires on chunks larger than the
- * current policy would produce (legacy content from a coarser chunker), and says so when it does.
+ * answers from a fraction of what the lake stores. Clipping fires on chunks larger than that policy
+ * would produce (legacy content from a coarser chunker), and says so when it does.
+ *
+ * "That policy" is the caller's rung floored at the platform value (#2803), not the policy of each
+ * passage's own OWNER, so the guarantee is not quite absolute: an owner who pinned their chunk target
+ * above both still has their in-policy chunks clipped here. Per-file resolution is what would close
+ * it - see `resolveServeTarget`. The notice below names one number because this budget is one number;
+ * that is the coupling to revisit first if per-file ever lands.
  *
  * `bounding` (#1955) is set when a token budget stopped short of returning every ranked passage -
  * distinct from `scan.truncated` (how much of the CORPUS was searched) and `skipNotice` (whether what
@@ -90,23 +108,33 @@ function formatSemanticResults(
   results: SemanticChunkResult[],
   maxChunkChars: number,
   scan?: SemanticSearchScanAccounting,
-  skipNotice?: string | null,
+  skipNotice?: SkipNotice | null,
   logger?: Logger,
   bounding?: { budgetBound: boolean; droppedCount: number }
 ): string {
   let clippedCount = 0;
   let longestChars = 0;
+  // Fed the SERVED text, not r.chunkText: a conflict whose evidence was clipped out of the block
+  // would be a note about content the model cannot check.
+  const conflictPassages: RetrievalPassage[] = [];
   const blocks = results.map((r, i) => {
     // Measured AFTER trim on purpose: the budget governs what this function emits, and the trimmed
     // string is what it emits. A padded chunk that fits once trimmed is served whole, correctly.
     longestChars = Math.max(longestChars, r.chunkText.trim().length);
     const { text, clipped } = servedPassageText(r, maxChunkChars);
     if (clipped) clippedCount++;
+    conflictPassages.push({ fabFileId: r.fileId, text });
     // The file name is content-adjacent and equally attacker-influenced: without toContentLabel a
-    // crafted name carries a newline plus a forged marker into the label line. The date needs no
-    // such wrap - documentDateClause emits digits and separators only.
+    // crafted name carries a newline plus a forged marker into the label line. Neither the id nor
+    // the date needs that wrap - the id is MongoDB-generated and documentDateClause emits digits and
+    // separators only.
+    //
+    // The id is here so this channel attributes a passage the same way the other two do
+    // (`### Name (ID: ...)`): the conflict note that precedes the block names documents by
+    // `fabFileId` alone, and without it on the heading the model has no way to map a named id back
+    // to a passage it can read.
     return (
-      `${i + 1}. **${toContentLabel(prettyFileName(r.fileName))}** (relevance ${r.score.toFixed(2)})` +
+      `${i + 1}. **${toContentLabel(prettyFileName(r.fileName))}** (ID: ${r.fileId}, relevance ${r.score.toFixed(2)})` +
       `${documentDateClause(r.fileCreatedAt)}\n` +
       text
     );
@@ -147,6 +175,11 @@ function formatSemanticResults(
     bounding?.budgetBound && bounding.droppedCount > 0
       ? `NOTE: ${bounding.droppedCount} further relevant passage(s) matched but were not included, to stay within a configured retrieval budget. Do not state or imply the knowledge base has nothing further on this topic; call retrieve_knowledge_content for a specific file if you need more.\n\n`
       : '';
+  // Last of our column-0 framing, nearest the content it describes - and deliberately AFTER the
+  // "answer directly" line below, which is the opposite instruction for a corpus that disagrees with
+  // itself. The notes above are about what was reached and how much of it was served; this one is
+  // about the served passages contradicting each other, so it gets the last word.
+  const conflictNote = buildRetrievalConflictNote(conflictPassages);
   return (
     formatSkipNotice(skipNotice) +
     partial +
@@ -154,6 +187,7 @@ function formatSemanticResults(
     budgetNote +
     `Found ${results.length} relevant passage(s) in the knowledge base \u2014 the content is included below, so answer directly and only call retrieve_knowledge_content if you need MORE detail from a specific file:\n\n` +
     `${GROUNDED_NO_INVENTION_RULE}\n\n` +
+    conflictNote +
     renderRetrievedContentBlock(blocks)
   );
 }
@@ -165,9 +199,51 @@ function formatSemanticResults(
  * could be COMPARED. Phrased as an instruction because a bare fact tends to be paraphrased into a
  * claim of completeness.
  */
-function formatSkipNotice(skipNotice?: string | null): string {
+function formatSkipNotice(skipNotice?: SkipNotice | null): string {
   if (!skipNotice) return '';
-  return `NOTE: ${skipNotice} Tell the user the knowledge base may be returning partial results.\n\n`;
+  // The trailing instruction is conditional because not every notice means a partial corpus: a
+  // supersession collapse reports that a newer generation displaced an older one, which is a
+  // COMPLETE corpus deduplicated. Telling the model to warn about partial results there would be
+  // false, and false often enough (every search against any lake holding a re-upload) to teach it
+  // to discount the warning on the searches where it is true.
+  const partial = skipNotice.partial ? ' Tell the user the knowledge base may be returning partial results.' : '';
+  return `NOTE: ${skipNotice.text}${partial}\n\n`;
+}
+
+/**
+ * Did a configured relevance floor empty an otherwise-populated result set - as opposed to there
+ * having been nothing to filter?
+ *
+ * `comparedNoPassages` is what makes the claim honest: an unembedded lake, or a tag filter that
+ * matched no files, also returns zero results, and blaming the floor there sends the model (and the
+ * sweep in packages/scripts/retrieval) chasing a threshold that never ran. Deliberately NOT
+ * `chunksScored > 0` - a healthy all-ANN lake legitimately scores zero chunks (see
+ * `comparedNoPassages` in semanticDataLakeSearch), which that check would misread as unindexed.
+ *
+ * Shared by both semantic arms so the attribution rule cannot drift between them.
+ */
+function floorEmptiedResultSet(search: SemanticDataLakeSearchResult, kbMinRelevance: number): boolean {
+  return kbMinRelevance > 0 && search.results.length === 0 && !comparedNoPassages(search);
+}
+
+/**
+ * Compose the one notice channel that survives the fall-through to keyword search.
+ *
+ * The relevance-floor reason leads and is COMPOSED with (not replaced by) the search limitations:
+ * when the floor emptied the result set it is the reason there are zero results, and a limitation
+ * notice that merely says an older version was not ranked would point the model at a superseded
+ * document instead of the actual cause.
+ */
+function buildSkipNotice(
+  search: Parameters<typeof describeSearchLimitations>[0],
+  floorEmptiedResults: boolean
+): SkipNotice | null {
+  const reasons = [
+    floorEmptiedResults ? 'a configured relevance threshold filtered out every candidate passage for this query' : null,
+    describeSearchLimitations(search),
+  ].filter((r): r is string => r !== null);
+  if (reasons.length === 0) return null;
+  return { text: reasons.join('. '), partial: isPartialSearch(search) || floorEmptiedResults };
 }
 
 /**
@@ -180,6 +256,7 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
   provider: string;
   apiKeyTable: Awaited<ReturnType<typeof getEffectiveLLMApiKeys>>;
   vectorSearchEnabled: boolean;
+  supersessionCollapseEnabled: boolean;
 } | null> {
   const adminSettings = context.db.adminSettings;
   const apiKeys = context.db.apiKeys;
@@ -204,18 +281,38 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
     { db: { apiKeys, adminSettings }, getSettingsByNames },
     { logger: context.logger }
   );
-  const provider = getProviderFromModel(embeddingModel);
   // A missing credential means the semantic arm cannot run, so fall back to keyword search.
   // Keyless providers (Bedrock, authenticating through the AWS credential chain) report
-  // nothing missing and proceed.
-  if (resolveEmbeddingConfig(provider, apiKeyTable).missing) {
+  // nothing missing and proceed - including a cloud stage holding no provider key at all, which
+  // resolves to Bedrock here rather than losing semantic search entirely. The RESOLVED model is
+  // what goes downstream, so the query is embedded in the same space the corpus was written in.
+  const { missing, model: resolvedEmbeddingModel } = resolveEmbeddingWithKeylessFallback(embeddingModel, apiKeyTable);
+  const provider = getProviderFromModel(resolvedEmbeddingModel);
+  if (missing) {
     context.logger.warn(`📚 [semantic] falling back to keyword search: no credential for provider "${provider}"`);
     return null;
   }
+  // Otherwise silent, and the symptom is indistinguishable from an empty corpus: the query is
+  // embedded in one space while anything ingested before the credential state changed sits in
+  // another, so the arm runs, matches nothing, and reports a clean zero. Same wording as the
+  // vectorize handler and both semantic-search routes.
+  if (resolvedEmbeddingModel !== embeddingModel) {
+    context.logger.warn(
+      `📚 [semantic] no credential resolved for ${embeddingModel}; embedding the query with keyless ${resolvedEmbeddingModel} instead`
+    );
+  }
 
   const vectorSearchEnabled = (await adminSettings.getSettingsValue('EnableDataLakeVectorSearch')) ?? false;
+  const supersessionCollapseEnabled =
+    (await adminSettings.getSettingsValue('EnableRetrievalSupersessionCollapse')) ?? false;
 
-  return { embeddingModel, provider, apiKeyTable, vectorSearchEnabled };
+  return {
+    embeddingModel: resolvedEmbeddingModel,
+    provider,
+    apiKeyTable,
+    vectorSearchEnabled,
+    supersessionCollapseEnabled,
+  };
 }
 
 /**
@@ -303,7 +400,8 @@ async function emitSemanticCitables(
   context: ToolContext,
   ranked: SemanticChunkResult[],
   corpusLabel: string,
-  skipNotice?: string | null,
+  maxChunkChars: number,
+  skipNotice?: SkipNotice | null,
   dataLakeTags: string[] = []
 ): Promise<void> {
   // Citables - dedup to one chip per file (multiple chunks can match the same article)
@@ -331,15 +429,35 @@ async function emitSemanticCitables(
   const more = citables.length > 3 ? ` +${citables.length - 3} more` : '';
   // Appended to the one found-status rather than a second update, which would read as a bug.
   // warnings also accretes onto promptMeta so the notice survives in the quest record.
-  const partial = skipNotice ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
+  const partial = skipNotice?.partial ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
+  // Injected volume (RetrievalSummarySchema.injected). Counted over `ranked` - PASSAGES, not the
+  // per-file `citables` above - and priced with the same servedPassageText formatSemanticResults
+  // emits, so `chars` is the retrieved content the model actually received: trimmed, clipped to
+  // the serve budget, headings and framing excluded. That is the same thing forced retrieval's
+  // `used` counts, which is what lets the two sum into one number.
+  const injectedChars = ranked.reduce((sum, r) => sum + servedPassageText(r, maxChunkChars).text.length, 0);
+  // `ranked` is already minScore-filtered upstream, so this max is the best score among the SURVIVORS,
+  // never a sub-floor near-miss - and this site is not reached at all on a starve. Narrower than forced
+  // retrieval's topScore, which is a running max over every chunk it scored; see the schema.
+  const topScores = ranked.map(r => r.score);
   await context.statusUpdate(
     // any: statusUpdate takes a Partial<IChatHistoryItemDocument>; promptMeta's generated type
     // does not narrow to this literal. Pre-existing pattern in this file.
     {
       promptMeta: {
         citables,
-        ...(skipNotice ? { warnings: [skipNotice] } : {}),
-        retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags },
+        ...(skipNotice ? { warnings: [skipNotice.text] } : {}),
+        retrieval: {
+          attempted: true,
+          outcome: 'ok',
+          surfaces: ['knowledgeBaseSearch'],
+          dataLakeTags,
+          injected: {
+            chunks: ranked.length,
+            chars: injectedChars,
+            ...(topScores.length ? { topScore: Math.max(...topScores) } : {}),
+          },
+        },
       },
     } as any,
     `📄 Found ${citables.length} relevant doc(s) in ${corpusLabel}: ${names.join(', ')}${more}${partial}`
@@ -356,7 +474,7 @@ async function emitSemanticCitables(
  */
 interface SemanticArmResult {
   output: string | null;
-  skipNotice: string | null;
+  skipNotice: SkipNotice | null;
   datalakeTags: string[];
   /** Files this arm actually matched, for attachmentInlineNotice - see its call site. Empty
    *  whenever `output` is null (nothing matched, or the arm never ran). */
@@ -472,7 +590,7 @@ async function trySemanticKbSearch(
   try {
     const embedCtx = await resolveEmbeddingContext(context);
     if (!embedCtx) return NO_SEMANTIC_RESULT;
-    const { embeddingModel, provider, apiKeyTable, vectorSearchEnabled } = embedCtx;
+    const { embeddingModel, provider, apiKeyTable, vectorSearchEnabled, supersessionCollapseEnabled } = embedCtx;
 
     // Narrowed to the session's own lake(s) before anything is searched: without this, a session
     // created FOR one lake still ranks passages from every lake its owner can reach. Subtractive
@@ -515,6 +633,10 @@ async function trySemanticKbSearch(
         ownFilesOnly: context.suppressLakeArms === true,
         budgets,
         vectorSearchEnabled,
+        // Per-lake supersession collapse - `lakes` is only ever an attribution source here, never a
+        // second way to resolve access (the scope is still the tags above).
+        lakes,
+        supersessionCollapseEnabled,
         // Retrieval exclusion (opt-in) - agree with the surface's listing predicate. No-op when unset.
         retrievalFilter: context.retrievalFilter,
         logger: context.logger,
@@ -534,12 +656,8 @@ async function trySemanticKbSearch(
     // relevance floor that emptied an otherwise-thin-but-nonempty result set has to fold into
     // `skipNotice` here, not just a server log, or the model reads a bare metadata listing as
     // "the knowledge base has nothing on this topic".
-    const floorEmptiedResults = budgets.kbMinRelevance > 0 && search.results.length === 0;
-    const skipNotice =
-      describeSearchLimitations(search) ??
-      (floorEmptiedResults
-        ? 'a configured relevance threshold filtered out every candidate passage for this query'
-        : null);
+    const floorEmptiedResults = floorEmptiedResultSet(search, budgets.kbMinRelevance);
+    const skipNotice = buildSkipNotice(search, floorEmptiedResults);
     if (search.results.length === 0) {
       if (floorEmptiedResults) {
         context.logger.log(
@@ -558,11 +676,25 @@ async function trySemanticKbSearch(
       };
     }
 
+    // Re-enforce the per-document cap at the count actually SERVED. The engine applies it at its
+    // own topK, which this tool deliberately ranks WIDER than `ceiling` (KB_SEARCH_CANDIDATE_FLOOR,
+    // and KB_SEARCH_MAX_RESULTS once either adaptive knob is on). A promoted chunk scores at or
+    // below every chunk it displaced, so promotions land in the tail of that top-K - exactly the
+    // slots a `ceiling`-wide prefix never reads. Without this second pass a cap that promotes
+    // fewer than `topK - ceiling` chunks is invisible on this path rather than merely weaker: one
+    // chunk at the default 6-ranked/5-served, five under a relevance floor that widens topK to 10.
+    // Cheap where it cannot help - with the cap off capChunksPerFile returns the list untouched -
+    // and at a given ceiling it never returns fewer (it backfills). `ceiling` can trail topK even
+    // with a token budget configured: a model-supplied `max_results` sets it on its own path in
+    // resolvePassageCeiling. Under that budget the swap is not free, though: a promoted chunk that
+    // is larger than the one it displaced can end the budget walk a passage earlier.
+    const servedCandidates = capChunksPerFile(search.results, ceiling, budgets.maxChunksPerFile);
+
     // Bound by token budget (the primary lever once configured), with the passage ceiling as a
     // safety rail - replaces the old flat `.slice(0, maxResults)`. Ordering matters: this MUST run
     // before emitSemanticCitables and before fileHits/lakeIds/chunkIds below, or the audit trail and
     // the model's citations would include passages the model never actually saw.
-    const bound = await boundPassagesByTokenBudget(search.results, {
+    const bound = await boundPassagesByTokenBudget(servedCandidates, {
       tokenBudget: budgets.kbResultTokenBudget,
       maxPassages: ceiling,
       // Non-widened fallback on pricing failure - see boundPassagesByTokenBudget's own doc comment.
@@ -573,7 +705,7 @@ async function trySemanticKbSearch(
     });
     const ranked = bound.kept;
 
-    await emitSemanticCitables(context, ranked, 'the data lake', skipNotice, dataLakeTags);
+    await emitSemanticCitables(context, ranked, 'the data lake', budgets.maxChunkChars, skipNotice, dataLakeTags);
     context.logger.log(
       `📚 [semantic] returning ${ranked.length}/${search.results.length} passages from ${new Set(ranked.map(r => r.fileId)).size} files (top score ${search.results[0].score.toFixed(3)}${budgets.kbResultTokenBudget > 0 ? `, ${bound.tokensUsed} tokens` : ''}${bound.budgetBound ? ', budget-bound' : ''})`
     );
@@ -586,7 +718,9 @@ async function trySemanticKbSearch(
         // KB_SEARCH_MAX_RESULTS candidates once the budget widens topK, but everything past
         // `ceiling` was never admissible in the first place (a model-supplied max_results
         // narrows it below the widened topK) - attributing those to "the budget withheld them"
-        // overstates what the budget actually did.
+        // overstates what the budget actually did. Still measured off `search.results`: the cap
+        // pass above returns its input untouched when the cap is off, so it is not a ceiling
+        // bound of its own.
         droppedCount: Math.min(search.results.length, ceiling) - ranked.length,
       }),
       skipNotice,
@@ -673,12 +807,8 @@ async function tryScopedSemanticKbSearch(
     await recordAllEmbeddingUsage(context, query, embeddingModel, provider, search.alternateModelsEmbedded ?? []);
 
     // See the matching branch in trySemanticKbSearch above for why this folds into skipNotice.
-    const scopedFloorEmptiedResults = budgets.kbMinRelevance > 0 && search.results.length === 0;
-    const skipNotice =
-      describeSearchLimitations(search) ??
-      (scopedFloorEmptiedResults
-        ? 'a configured relevance threshold filtered out every candidate passage for this query'
-        : null);
+    const scopedFloorEmptiedResults = floorEmptiedResultSet(search, budgets.kbMinRelevance);
+    const skipNotice = buildSkipNotice(search, scopedFloorEmptiedResults);
     if (search.results.length === 0) {
       if (scopedFloorEmptiedResults) {
         context.logger.log(
@@ -697,7 +827,10 @@ async function tryScopedSemanticKbSearch(
       };
     }
 
-    const bound = await boundPassagesByTokenBudget(search.results, {
+    // Same served-count re-enforcement as the lake-wide arm above; see its comment for why.
+    const servedCandidates = capChunksPerFile(search.results, ceiling, budgets.maxChunksPerFile);
+
+    const bound = await boundPassagesByTokenBudget(servedCandidates, {
       tokenBudget: budgets.kbResultTokenBudget,
       maxPassages: ceiling,
       // Non-widened fallback on pricing failure - see boundPassagesByTokenBudget's own doc comment.
@@ -707,7 +840,7 @@ async function tryScopedSemanticKbSearch(
       logger: context.logger,
     });
     const ranked = bound.kept;
-    await emitSemanticCitables(context, ranked, "this agent's knowledge base", skipNotice, []);
+    await emitSemanticCitables(context, ranked, "this agent's knowledge base", budgets.maxChunkChars, skipNotice, []);
     // Agent-scoped results never carry a lake prompt: this arm must not consult owner-wide access
     // or imply a wider corpus, so its provenance is intentionally empty (no injection downstream).
     return {
@@ -717,7 +850,9 @@ async function tryScopedSemanticKbSearch(
         // KB_SEARCH_MAX_RESULTS candidates once the budget widens topK, but everything past
         // `ceiling` was never admissible in the first place (a model-supplied max_results
         // narrows it below the widened topK) - attributing those to "the budget withheld them"
-        // overstates what the budget actually did.
+        // overstates what the budget actually did. Still measured off `search.results`: the cap
+        // pass above returns its input untouched when the cap is off, so it is not a ceiling
+        // bound of its own.
         droppedCount: Math.min(search.results.length, ceiling) - ranked.length,
       }),
       skipNotice,
@@ -775,12 +910,33 @@ const KB_SEARCH_CANDIDATE_FLOOR = 6;
  * `budgetsPromise` cache below) on the CALLER's org/owner scope (#1955 item 4) - a knowledge-base
  * search spans a mixed multi-lake corpus plus the caller's own/shared files, so there is no single
  * lake for a narrower rung to key on (see `scopeForCaller`'s own doc comment).
+ *
+ * `user.organizationId` is a selected-org display pointer, not proof of membership (#1674) - a
+ * stale pointer left over from #2607's still-pending migration must not let a former member read
+ * that org's budget ceiling. Verified via the same per-turn `membershipOrgIdsForTurn` memo the
+ * data-lake resolvers already share, so this costs nothing extra when either has already run this
+ * turn. A pointer that isn't in the caller's membership set falls back to personal scope (#2769).
+ *
+ * The membership read is wrapped, not left to propagate: unlike `scopeForCaller`'s pure predecessor,
+ * this now has an external failure mode, and a transient org-repo outage must not fail the whole
+ * search over a budget ceiling that's tolerable to get wrong (see `scopeForCaller`'s own doc
+ * comment) - it degrades to personal scope instead, same direction as a genuinely stale pointer.
  */
 async function resolveKbBudgets(context: ToolContext): Promise<ResolvedSearchBudgets> {
+  const pointerOrgId = normalizeId(context.user.organizationId);
+  let membershipOrgIds: string[] = [];
+  if (pointerOrgId) {
+    try {
+      membershipOrgIds = await membershipOrgIdsForTurn(context, context.userId, context.db.organizations);
+    } catch (err) {
+      context.logger.warn('[search_knowledge_base] failed to resolve org membership; using personal scope', err);
+    }
+  }
+  const verifiedOrgId = pointerOrgId && membershipOrgIds.includes(pointerOrgId) ? pointerOrgId : undefined;
   return resolveSearchBudgets(
     { adminSettings: context.db.adminSettings, scopedSettings: context.db.scopedSettings },
     context.logger,
-    scopeForCaller({ userId: context.userId, organizationId: context.user.organizationId })
+    scopeForCaller({ userId: context.userId, organizationId: verifiedOrgId })
   );
 }
 
@@ -974,7 +1130,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
     const injectedLakeTags = new Set<string>();
     // Carries the most recent skip notice across calls in this completion, so the model still
     // hears about a comparability gap on the capped call, which never runs a search of its own.
-    let lastSkipNotice: string | null = null;
+    let lastSkipNotice: SkipNotice | null = null;
     // Resolved at most once per completion, same discipline as searchCallCount above - a settings
     // (+ scoped-overlay) read on every search_knowledge_base call would cost a real DB round-trip
     // for no benefit, since every call in a completion shares the same caller scope. Resolved only
@@ -1227,6 +1383,23 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           // distinguishable from "never searched" (#1867).
           const keywordArmOutcome = semantic.retrievalOutcome ?? 'ok';
 
+          // Injected volume (RetrievalSummarySchema.injected), written ONLY on the no-hits branch
+          // below. This arm matches file METADATA and emits names, types, tags and notes - no
+          // passage content reaches the model, which is why its output tells the model to call
+          // retrieve_knowledge_content for the text. So on a HIT the passage volume for the turn
+          // is decided by that follow-up tool, which records no volume of its own: writing a zero
+          // here would let it survive the merge (absent-beats-nothing, see mergeInjected) and make
+          // a turn grounded on a whole document assert a starve. Unknown is the honest answer, and
+          // `outcome` cannot recover it - it reads 'ok' either way.
+          //
+          // The no-hits zero is safe and is the point: nothing was found, so nothing can follow.
+          // That write needs no outcome guard - `keywordArmOutcome` can be the semantic arm's
+          // 'failed' (proveRetrievalOutcome returns it on a query-embedding failure), but this
+          // keyword pass still completed its own search, and worst-of outcome beside
+          // sum-of-completions volume is the documented shape. A keyword pass that THREW never
+          // reaches here; the outer catch writes 'failed' with no volume.
+          const keywordArmNoHitsInjected = { chunks: 0, chars: 0 };
+
           // Emit citable source chips so search results appear as clickable citations
           if (rankedResults.length > 0) {
             const citables: CitableSource[] = rankedResults.map((file: IFabFileDocument, index: number) => {
@@ -1275,13 +1448,13 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             // has to land here too: when semantic finds nothing to say, this keyword status is the
             // ONLY user-visible write for the turn, so a total-withholding warning would otherwise
             // never reach the promptMeta inspector or the status line.
-            const skipSuffix = semantic.skipNotice ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
+            const skipSuffix = semantic.skipNotice?.partial ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
             const foundStatus = `📄 Found ${rankedResults.length} in ${corpusLabel}: ${names.join(', ')}${more}${skipSuffix}`;
             await context.statusUpdate(
               {
                 promptMeta: {
                   citables,
-                  ...(semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {}),
+                  ...(semantic.skipNotice ? { warnings: [semantic.skipNotice.text] } : {}),
                   retrieval: {
                     attempted: true,
                     outcome: keywordArmOutcome,
@@ -1296,11 +1469,11 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           } else {
             // No hits - tell the user what was searched so the wait reads as deliberate.
             const clippedQuery = query.length > 50 ? query.slice(0, 49) + '…' : query;
-            const skipSuffix = semantic.skipNotice ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
+            const skipSuffix = semantic.skipNotice?.partial ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
             await context.statusUpdate(
               {
                 promptMeta: {
-                  ...(semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {}),
+                  ...(semantic.skipNotice ? { warnings: [semantic.skipNotice.text] } : {}),
                   // Zero hits, so the outcome is the whole signal this write carries - see
                   // `keywordArmOutcome` above for why 'ok' here is a claim about the SEARCH and
                   // not about the empty result.
@@ -1309,6 +1482,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                     outcome: keywordArmOutcome,
                     surfaces: ['knowledgeBaseSearch'],
                     dataLakeTags: keywordArmLakes.map(l => l.datalakeTag),
+                    injected: keywordArmNoHitsInjected,
                   },
                 },
               } as any,

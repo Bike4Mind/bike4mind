@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { researchTaskService } from '@bike4mind/services';
 import {
   adminSettingsRepository,
+  dataLakeAccessGrantRepository,
   dataLakeRepository,
   organizationRepository,
   researchTaskRepository,
@@ -97,6 +98,7 @@ const process = async (parameters: { id: string; userId: string }, logger: Logge
             taskSchedules: taskScheduleRepository,
             apiKeys: apiKeyRepository,
             dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
             organizations: organizationRepository,
           },
           llm,

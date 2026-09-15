@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { MCPClient } from './client';
+import path from 'path';
 
 /**
  * AC#6 - streamable-HTTP MCP transport.
@@ -82,6 +83,49 @@ describe('MCPClient (streamable-HTTP transport)', () => {
     expect(authHeaders.length).toBeGreaterThan(0);
     for (const h of authHeaders) {
       expect(h).toBe(`Bearer ${token}`);
+    }
+  });
+});
+
+/**
+ * The stdio transport spawns a child of the process holding this platform's credentials, so what
+ * that child inherits is the security boundary. This drives a real spawn against a fixture MCP
+ * server that reports its own `process.env`, which is the only way to prove the boundary end to
+ * end - the transport merges the SDK's own defaults underneath whatever MCPClient passes. The
+ * per-branch filtering rules are unit-tested in childEnv.test.ts.
+ */
+describe('MCPClient (stdio child environment)', () => {
+  const probeScript = path.resolve(import.meta.dirname, '__fixtures__', 'envProbeServer.mjs');
+
+  it('starts the child with its configured variables and no inherited secret', async () => {
+    process.env.B4M_TEST_PLATFORM_SECRET = 'must-not-reach-the-child';
+
+    const client = new MCPClient({
+      name: 'env-probe',
+      command: process.execPath,
+      args: [probeScript],
+      suppressStderr: true,
+      envVariables: [
+        { key: 'THIRD_PARTY_TOKEN', value: 'abc' },
+        { key: 'NODE_OPTIONS', value: '--require /tmp/payload.js' },
+        { key: 'HTTPS_PROXY', value: 'http://corp-proxy.internal:8080' },
+      ],
+    });
+
+    try {
+      await client.connectToServer();
+      const result = (await client.callTool('dumpEnv', {})) as { content: Array<{ text: string }> };
+      const env = JSON.parse(result.content[0].text) as Record<string, string>;
+
+      expect(env.THIRD_PARTY_TOKEN).toBe('abc');
+      // The whole point: a secret held by this process is not in the child's environment.
+      expect(env.B4M_TEST_PLATFORM_SECRET).toBeUndefined();
+      expect(env.NODE_OPTIONS).toBeUndefined();
+      // A caller-supplied command already owns its argv, so a proxy it configures is honoured.
+      expect(env.HTTPS_PROXY).toBe('http://corp-proxy.internal:8080');
+    } finally {
+      delete process.env.B4M_TEST_PLATFORM_SECRET;
+      await client.disconnect();
     }
   });
 });

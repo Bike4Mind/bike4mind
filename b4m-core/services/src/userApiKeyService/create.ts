@@ -53,6 +53,16 @@ const createUserApiKeySchema = z.object({
   // by the route; the service only enforces the field-shape invariant below.
   billingOwnerType: z.enum(CreditHolderType).optional(),
   organizationId: z.string().optional(),
+  // Manage-but-not-member session admission (see pages/api/sessions/create.ts): the lakes this
+  // key may bind a session to. No existence/manage check at THIS layer - session-create
+  // independently re-verifies the ACTING user's live manage rights against the lake on every
+  // request, so a stale or made-up id reaching the document is inert, never a privilege. That is
+  // why this schema stays a shape check; it is not a statement that no caller should screen. The
+  // admin mint route (pages/api/admin/users/[userId]/generate-api-key.ts) does screen, and must
+  // keep doing so: an id the target cannot manage is a binding that narrows nothing, which is the
+  // only thing the field is for. No new ApiKeyScope: the widening is bound to specific lake ids
+  // rather than gated by a scope.
+  preauthorizedLakeIds: z.array(z.string().min(1)).max(25).optional(),
 });
 
 export type CreateUserApiKeyParameters = z.infer<typeof createUserApiKeySchema>;
@@ -91,6 +101,7 @@ export interface CreateUserApiKeyResult {
   allowedOrigins?: string[];
   branding?: IEmbedBranding;
   spendCap?: number;
+  preauthorizedLakeIds?: string[];
   createdAt: Date;
 }
 
@@ -202,6 +213,7 @@ export const createUserApiKey = async (
     allowedOrigins: params.allowedOrigins,
     branding: params.branding,
     spendCap: params.spendCap,
+    preauthorizedLakeIds: params.preauthorizedLakeIds,
   });
 
   return {
@@ -222,6 +234,7 @@ export const createUserApiKey = async (
     allowedOrigins: apiKeyDocument.allowedOrigins,
     branding: apiKeyDocument.branding,
     spendCap: apiKeyDocument.spendCap,
+    preauthorizedLakeIds: apiKeyDocument.preauthorizedLakeIds,
     createdAt: apiKeyDocument.createdAt,
   };
 };

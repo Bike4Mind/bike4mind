@@ -10,6 +10,7 @@ import {
   parseImageModelOverride,
   parseDataLakeCommand,
   isDataLakeCommand,
+  looksLikeBareDataLakeMention,
   AGENT_REGISTRY,
 } from './agent-parser';
 import { ImageModels } from '@bike4mind/common';
@@ -222,6 +223,77 @@ describe('@datalake command', () => {
     // not a leading mention, and word-boundary guard
     expect(isDataLakeCommand(parseCommand('hey @datalake'))).toBe(false);
     expect(isDataLakeCommand(parseCommand('@datalaked add'))).toBe(false);
+  });
+
+  describe('looksLikeBareDataLakeMention (#2027 usage hint)', () => {
+    it('is true for the literal word with no leading @, anchored to message-start', () => {
+      expect(looksLikeBareDataLakeMention(parseCommand('datalake list'))).toBe(true);
+      expect(looksLikeBareDataLakeMention(parseCommand('DataLake'))).toBe(true);
+      expect(looksLikeBareDataLakeMention(parseCommand('<@U12345> datalake list'))).toBe(true);
+    });
+
+    it('is false when "datalake" appears mid-message rather than at the start', () => {
+      // Anchored the same way as DATA_LAKE_MENTION_PATTERN - an ordinary sentence that happens to
+      // mention the product by name partway through is not an attempt to invoke it.
+      expect(looksLikeBareDataLakeMention(parseCommand('please datalake help'))).toBe(false);
+    });
+
+    it('is false for declarative prose that starts with the phrase but is not command-shaped', () => {
+      // Regression: position-only anchoring let this fire on ordinary sentences that merely START
+      // with "datalake"/"data lake" - which a DM or app-mention (always admitted by shouldProcess,
+      // regardless of command pattern) would previously have routed to the assistant, per main.
+      // A command-shaped tail (nothing else, or a known subcommand) is required instead.
+      expect(looksLikeBareDataLakeMention(parseCommand('data lake costs are rising this quarter'))).toBe(false);
+      expect(
+        looksLikeBareDataLakeMention(parseCommand('<@UBOT> data lake permissions are confusing, can you explain?'))
+      ).toBe(false);
+      expect(looksLikeBareDataLakeMention(parseCommand('Datalake ingestion failed last night - any idea why?'))).toBe(
+        false
+      );
+      expect(looksLikeBareDataLakeMention(parseCommand('Data Lake 101 notes'))).toBe(false);
+    });
+
+    it('is true for a subcommand with trailing args, not just a bare subcommand word', () => {
+      // A command-shaped tail only requires the subcommand word itself - "add" is normally followed
+      // by "to <lake> <link>", which must not be mistaken for prose and refused.
+      expect(looksLikeBareDataLakeMention(parseCommand('datalake add to sales https://example.com'))).toBe(true);
+      expect(looksLikeBareDataLakeMention(parseCommand('datalake list please'))).toBe(true);
+    });
+
+    it('is false for a real @datalake command, so the two are never double-handled', () => {
+      expect(looksLikeBareDataLakeMention(parseCommand('@datalake add to sales https://x.com'))).toBe(false);
+      expect(looksLikeBareDataLakeMention(parseCommand('@datalake'))).toBe(false);
+      expect(looksLikeBareDataLakeMention(parseCommand('<@U12345> @datalake list'))).toBe(false);
+    });
+
+    it('is false when the word never appears at all', () => {
+      expect(looksLikeBareDataLakeMention(parseCommand('summarize this thread'))).toBe(false);
+      expect(looksLikeBareDataLakeMention(parseCommand('@dev create an issue'))).toBe(false);
+    });
+
+    it('does not fire on a mere substring - word boundary only, no fuzzy match', () => {
+      expect(looksLikeBareDataLakeMention(parseCommand('datalakes are cool'))).toBe(false);
+      expect(looksLikeBareDataLakeMention(parseCommand('metadatalake'))).toBe(false);
+    });
+
+    // #2028's acceptance criteria name this specific enumerable set - not general edit-distance
+    // fuzzy matching, which would risk false positives on unrelated words.
+    it('is true for the enumerable set of misspellings #2028 names', () => {
+      expect(looksLikeBareDataLakeMention(parseCommand('datakale list'))).toBe(true);
+      expect(looksLikeBareDataLakeMention(parseCommand('data lake list'))).toBe(true);
+      expect(looksLikeBareDataLakeMention(parseCommand('data-lake list'))).toBe(true);
+      expect(looksLikeBareDataLakeMention(parseCommand('Datakale'))).toBe(true);
+      expect(looksLikeBareDataLakeMention(parseCommand('<@U12345> datakale list'))).toBe(true);
+    });
+
+    it('is false for a real @datakale-style command too, so misspellings never double-handle either', () => {
+      expect(looksLikeBareDataLakeMention(parseCommand('@datakale list'))).toBe(false);
+      expect(looksLikeBareDataLakeMention(parseCommand('@data-lake list'))).toBe(false);
+    });
+
+    it('still requires the word boundary for a misspelling substring', () => {
+      expect(looksLikeBareDataLakeMention(parseCommand('datakales are cool'))).toBe(false);
+    });
   });
 
   it('selectAgent never routes @datalake to an LLM persona (falls back to the general agent)', () => {

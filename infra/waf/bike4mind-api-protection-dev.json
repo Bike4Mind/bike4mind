@@ -253,7 +253,7 @@
                             "Type": "LOWERCASE"
                           }
                         ],
-                        "PositionalConstraint": "STARTS_WITH"
+                        "PositionalConstraint": "EXACTLY"
                       }
                     },
                     {
@@ -268,7 +268,7 @@
                             "Type": "LOWERCASE"
                           }
                         ],
-                        "PositionalConstraint": "STARTS_WITH"
+                        "PositionalConstraint": "EXACTLY"
                       }
                     },
                     {
@@ -283,7 +283,7 @@
                             "Type": "LOWERCASE"
                           }
                         ],
-                        "PositionalConstraint": "STARTS_WITH"
+                        "PositionalConstraint": "EXACTLY"
                       }
                     },
                     {
@@ -298,7 +298,7 @@
                             "Type": "LOWERCASE"
                           }
                         ],
-                        "PositionalConstraint": "STARTS_WITH"
+                        "PositionalConstraint": "EXACTLY"
                       }
                     },
                     {
@@ -313,7 +313,7 @@
                             "Type": "LOWERCASE"
                           }
                         ],
-                        "PositionalConstraint": "STARTS_WITH"
+                        "PositionalConstraint": "EXACTLY"
                       }
                     },
                     {
@@ -328,7 +328,7 @@
                             "Type": "LOWERCASE"
                           }
                         ],
-                        "PositionalConstraint": "STARTS_WITH"
+                        "PositionalConstraint": "EXACTLY"
                       }
                     }
                   ]
@@ -388,6 +388,96 @@
                         ],
                         "PositionalConstraint": "STARTS_WITH"
                       }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/api/admin/security-dashboard/web-owasp-ingest",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "EXACTLY"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/api/admin/security-dashboard/code-semgrep-ingest",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "EXACTLY"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/api/admin/security-dashboard/packages-ingest",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "EXACTLY"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/api/admin/security-dashboard/secrets-ingest",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "EXACTLY"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/api/admin/security-dashboard/cloud-prowler-ingest",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "EXACTLY"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/api/admin/security-dashboard/attack-simulation-ingest",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "EXACTLY"
+                      }
                     }
                   ]
                 }
@@ -411,7 +501,107 @@
       "Statement": {
         "ManagedRuleGroupStatement": {
           "VendorName": "AWS",
-          "Name": "AWSManagedRulesKnownBadInputsRuleSet"
+          "Name": "AWSManagedRulesKnownBadInputsRuleSet",
+          "ScopeDownStatement": {
+            "NotStatement": {
+              "Statement": {
+                "OrStatement": {
+                  "Statements": [
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/api/admin/security-dashboard/web-owasp-ingest",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "EXACTLY"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/api/admin/security-dashboard/code-semgrep-ingest",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "EXACTLY"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/api/admin/security-dashboard/packages-ingest",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "EXACTLY"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/api/admin/security-dashboard/secrets-ingest",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "EXACTLY"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/api/admin/security-dashboard/cloud-prowler-ingest",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "EXACTLY"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/api/admin/security-dashboard/attack-simulation-ingest",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "EXACTLY"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
         }
       },
       "OverrideAction": {

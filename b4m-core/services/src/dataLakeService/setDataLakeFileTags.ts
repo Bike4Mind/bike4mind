@@ -21,8 +21,10 @@ import { lakeMembershipScope } from './lakeMembershipScope';
 import {
   decideStampPrefix,
   createDataLakeFallbackTagger,
+  stampRefusalMessage,
   UNCATEGORIZED_TAG_SUFFIX,
   LAKE_CONTENT_TAG_STRENGTH,
+  UNVERIFIED_PREFIX_OVERLAP_REFUSAL,
 } from './fallbackLakeTags';
 import { findPrefixArmChanges } from './prefixArmMembership';
 import { assertLakeAdmission, type AdmissionMember } from './lakeAdmissionGate';
@@ -224,22 +226,18 @@ export const setDataLakeFileTags = async (
   // Step 5. An unusable/reserved/colliding prefix is a property of the LAKE, refused once here
   // rather than once per submitted tag, and before any file read. `decideStampPrefix` is the ONE
   // gate on "may this lake mint a content tag, and under what prefix" - shared with the write-
-  // door reconciler and the backfill migration so all three cannot decide differently. Unlike
-  // those two, this door FAILS CLOSED on `overlapCheckFailed` too: it admits CALLER-AUTHORED
-  // names across an unverified overlap, not a fixed placeholder, so a failed diagnostic must not
-  // let a curator mint prefix-arm membership in a lake they may hold no rights over.
+  // door reconciler, the backfill migration and `applyTaxonomySuggestions` so all four cannot
+  // decide differently. Unlike the reconciler and the migration, this door FAILS CLOSED on
+  // `overlapCheckFailed` too: it admits CALLER-AUTHORED names across an unverified overlap, not a
+  // fixed placeholder, so a failed diagnostic must not let a curator mint prefix-arm membership in
+  // a lake they may hold no rights over. `applyTaxonomySuggestions` makes the same two calls from
+  // the same shared messages - see `tagWriteDoorPrefixGate.test.ts` for the parity assertion.
   const decision = await decideStampPrefix(lake, { dataLakes: db.dataLakes, logger });
   if (!decision.stamp) {
-    throw new BadRequestError(
-      decision.detail
-        ? `This lake's tag prefix cannot be used right now: ${decision.reason} (${decision.detail})`
-        : `This lake's tag prefix cannot be used right now: ${decision.reason}`
-    );
+    throw new BadRequestError(stampRefusalMessage(decision));
   }
   if (decision.overlapCheckFailed) {
-    throw new BadRequestError(
-      "Could not verify this lake's tag prefix does not overlap another lake right now - try again"
-    );
+    throw new BadRequestError(UNVERIFIED_PREFIX_OVERLAP_REFUSAL);
   }
   const prefix = decision.prefix;
 

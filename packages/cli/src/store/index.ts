@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type { Session, Message } from '../storage';
 import type { PermissionResponse } from '../components';
 import type { BackgroundAgentJob, BackgroundAgentStatus } from '../agents/types.js';
-import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services';
+import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
 import type { ShellSession, ShellSessionStatus } from '@bike4mind/services/llm/tools/cliTools';
 import type { HeartbeatLogEntry } from '../features/tavern/types.js';
 import type { ReviewGateResponse } from '../tools/reviewGateTool.js';

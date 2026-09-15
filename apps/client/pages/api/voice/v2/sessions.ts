@@ -116,7 +116,12 @@ const handler = baseApi().post(async (req, res) => {
       req.user,
       { name: `Voice • ${reasoningModelId}` },
       {
-        db: { sessions: sessionRepository, projects: projectRepository, fabFiles: fabFileRepository },
+        db: {
+          sessions: sessionRepository,
+          projects: projectRepository,
+          fabFiles: fabFileRepository,
+          agents: agentRepository,
+        },
         // Imported at CALL time - see the other call sites.
         // See resolveRetrievalLakeScopeForUser - request-free so the lake arm of the lake-tag
         // derivation runs here too, not only on the two session routes that have a `req`.

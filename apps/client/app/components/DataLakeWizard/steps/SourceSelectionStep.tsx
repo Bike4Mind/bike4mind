@@ -30,6 +30,7 @@ import { slugifyDataLakeName } from '@client/app/hooks/data/dataLakeSlug';
 import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
+import { canConnectLakeDrive } from '@client/app/components/datalake/lakeVisibility';
 import DriveConnectAction from './DriveConnectAction';
 import DrivePendingConnectAction from './DrivePendingConnectAction';
 
@@ -47,6 +48,7 @@ export default function SourceSelectionStep() {
   const config = useDataLakeWizardStore(s => s.config);
   const setConfig = useDataLakeWizardStore(s => s.setConfig);
   const targetLake = useDataLakeWizardStore(s => s.targetLake);
+  const canConnectDrive = !!targetLake && canConnectLakeDrive(targetLake);
   const optionalSteps = useDataLakeWizardStore(s => s.optionalSteps);
   const setOptionalStep = useDataLakeWizardStore(s => s.setOptionalStep);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -308,8 +310,8 @@ export default function SourceSelectionStep() {
         </Box>
 
         {/* Append mode has a lake to bind to, so the folder connects on the spot. Create mode
-            does not, so the selection is parked and connected on commit (#1916). */}
-        {targetLake ? <DriveConnectAction lake={targetLake} /> : <DrivePendingConnectAction />}
+            does not, so the selection is parked and connected on commit. */}
+        {targetLake ? canConnectDrive && <DriveConnectAction lake={targetLake} /> : <DrivePendingConnectAction />}
       </Stack>
 
       {/* Once files are in hand: what was picked up, plus the two opt-in steps. Both default

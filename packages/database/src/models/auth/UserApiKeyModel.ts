@@ -219,6 +219,11 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     // `[]`/`{}` (which would otherwise echo in the API response for every key).
     agentId: { type: String },
     allowedOrigins: { type: [String], default: undefined },
+    // Lake ids this key is bound to for the manage-but-not-member session admission (see
+    // pages/api/sessions/create.ts's preauthorizedLakeIds containment check). Admin-minted only.
+    // No index: the only read is by the key's own id (already indexed), never a bulk lookup by
+    // lake. `default: undefined` so an ordinary key does not materialize an empty array.
+    preauthorizedLakeIds: { type: [String], default: undefined },
     branding: {
       type: new mongoose.Schema<IEmbedBranding>(
         {

@@ -35,3 +35,19 @@ export const ORGANIZATION_SUBSCRIPTION_MAX_SEATS = 100;
  * in the client.
  */
 export const ORG_MEMBERSHIP_ACL_PERMISSIONS = ['read', 'write'] as const;
+
+/**
+ * Does this `users[]` ACL row confer membership? The in-memory twin of `orgMembershipFilter`'s
+ * `$elemMatch` (`OrganizationModel`), for the app-side layers the docstring above anticipates -
+ * anywhere that has to answer "is X a member" without issuing the Mongo query. Keep the two in
+ * lockstep: they are one rule, and #2005 is what a divergence costs.
+ *
+ * Deliberately loose about its input rather than taking `IUserShare`: `permissions` is required by
+ * the TYPE but absent on real stored rows (the appointment route could persist an admin whose row
+ * had none), and the set includes 'write', which is not a `Permission` enum member. A predicate
+ * that only accepted well-typed rows could not be asked about the rows that actually break.
+ */
+export const orgAclRowConfersMembership = (row: { permissions?: readonly string[] | null }): boolean =>
+  (row.permissions ?? []).some(permission =>
+    (ORG_MEMBERSHIP_ACL_PERMISSIONS as readonly string[]).includes(permission)
+  );

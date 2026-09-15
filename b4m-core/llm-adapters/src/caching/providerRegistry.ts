@@ -82,6 +82,20 @@ export const CACHING_CAPABILITIES: Record<ModelBackend, ProviderCachingCapabilit
     // $3.00 on K3), so the saving on the cached portion is ~90%.
     costSavings: 90,
   },
+  [ModelBackend.DeepSeek]: {
+    backend: ModelBackend.DeepSeek,
+    supported: true,
+    automatic: true,
+    explicitControl: false,
+    // Not published as a hard floor the way Moonshot's 256 is; caching engages on
+    // repeated prefixes without a documented minimum.
+    minTokens: 0,
+    maxTTL: 'auto',
+    // A cache hit is 2.0% of the miss rate on Flash and 3.3% on V4 Pro, so the
+    // saving on the cached portion is ~98% either way; this single flat score
+    // uses Flash's figure as the estimate for both.
+    costSavings: 98,
+  },
   [ModelBackend.Ollama]: {
     backend: ModelBackend.Ollama,
     supported: false,

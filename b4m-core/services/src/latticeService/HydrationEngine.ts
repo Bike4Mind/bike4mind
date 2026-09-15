@@ -16,6 +16,8 @@ import type {
   LatticeOperation,
 } from '@bike4mind/common';
 
+import { assertSafeObjectKey } from '@bike4mind/utils/safeObjectKey';
+import { globMatches } from '@bike4mind/utils/globMatches';
 import { DependencyTracker, createDependencyTracker } from './DependencyTracker';
 
 // TYPES
@@ -132,11 +134,13 @@ export class HydrationEngine {
    * Initialize computed values from base data (including scenario overrides)
    */
   private initializeFromData(data: ILatticeDataStore, scenario?: ILatticeScenario): ILatticeComputedValues {
-    const values: ILatticeComputedValues = {};
+    // Null-proto containers: entity/attribute ids are model-authored, so a `__proto__`
+    // key must land as a harmless own property rather than reaching Object.prototype.
+    const values: ILatticeComputedValues = Object.create(null);
 
     // First, add all base values
     for (const entity of data.entities) {
-      values[entity.id] = {};
+      values[entity.id] = Object.create(null);
       for (const attr of entity.attributes) {
         if (!attr.isComputed) {
           values[entity.id][attr.key] = {
@@ -152,7 +156,7 @@ export class HydrationEngine {
     if (scenario) {
       for (const override of scenario.overrides) {
         if (!values[override.entityId]) {
-          values[override.entityId] = {};
+          values[override.entityId] = Object.create(null);
         }
         values[override.entityId][override.attributeKey] = {
           value: override.value,
@@ -206,11 +210,15 @@ export class HydrationEngine {
     // Apply operation
     const result = this.applyOperation(definition.operation, inputValues, context);
 
-    // Store result
+    // Store result. targetEntityId/targetAttribute are rule-authored, so reject reserved
+    // names that would reach the prototype chain (the container is also null-proto below,
+    // but rejecting here surfaces a bad rule as a recorded error instead of a silent key).
     const { targetEntityId, targetAttribute } = definition.output;
+    assertSafeObjectKey(targetEntityId, 'entity');
+    assertSafeObjectKey(targetAttribute, 'attribute');
 
     if (!context.computedValues[targetEntityId]) {
-      context.computedValues[targetEntityId] = {};
+      context.computedValues[targetEntityId] = Object.create(null);
     }
 
     context.computedValues[targetEntityId][targetAttribute] = {
@@ -318,15 +326,13 @@ export class HydrationEngine {
   }
 
   /**
-   * Check if an entity ID matches a pattern
+   * Check if an entity ID matches a rule-authored pattern. `*` is the only wildcard; see
+   * {@link globMatches} for why this is not a compiled RegExp.
    */
   private matchesPattern(entityId: string, pattern: string): boolean {
-    // Simple wildcard matching
     if (pattern === '*') return true;
     if (!pattern.includes('*')) return entityId === pattern;
-
-    const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
-    return regex.test(entityId);
+    return globMatches(entityId, pattern);
   }
 
   /**

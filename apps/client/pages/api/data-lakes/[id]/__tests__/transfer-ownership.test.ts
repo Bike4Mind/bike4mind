@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
+  assertLakeAccessWithGrants: vi.fn(),
   transferLakeOwnership: vi.fn(),
   listLakeOwnershipCandidates: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false, administeredOrgIds: [] })),
@@ -23,6 +24,7 @@ vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () =>
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeAccess: h.assertLakeAccess,
+    assertLakeAccessWithGrants: h.assertLakeAccessWithGrants,
     transferLakeOwnership: h.transferLakeOwnership,
     listLakeOwnershipCandidates: h.listLakeOwnershipCandidates,
   },
@@ -52,6 +54,10 @@ const makeRes = () => {
 const req = (query: Record<string, string>, body: unknown) => ({ method: 'POST', query, body }) as never;
 const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(r, res);
 
+// The POST gate's return value, forwarded WHOLE to the service.
+const LAKE = { id: 'lake-oid-1', slug: 'my-lake' };
+const GRANTS = [{ principalType: 'user', principalId: 'u9', role: 'owner' }];
+
 describe('POST /api/data-lakes/[id]/transfer-ownership', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -60,15 +66,17 @@ describe('POST /api/data-lakes/[id]/transfer-ownership', () => {
   });
 
   it('transfers against the RESOLVED lake and returns the service result verbatim', async () => {
-    // assertLakeAccess resolves id-or-slug, so the service must get lake.id, not the raw query value.
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', slug: 'my-lake' });
+    // The gate resolves id-or-slug, so the service must get the resolved lake, not the raw query
+    // value - and the grants the gate already read, so its authority check does not re-read them.
+    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: LAKE, grants: GRANTS });
     const { res, json } = makeRes();
 
     await call(req({ id: 'my-lake' }, { newOwnerUserId: 'newOwner' }), res);
 
     expect(h.transferLakeOwnership).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'u1', isAdmin: false }),
-      'lake-oid-1',
+      LAKE,
+      GRANTS,
       'newOwner',
       // Not expect.anything(): the config-audit repos ride one shared helper, and a route that
       // dropped `adminSettings` would still compile (it is optional so the retention read stays
@@ -84,7 +92,7 @@ describe('POST /api/data-lakes/[id]/transfer-ownership', () => {
   });
 
   it('does not transfer when the access gate denies the lake', async () => {
-    h.assertLakeAccess.mockRejectedValue(new Error('Data lake not found'));
+    h.assertLakeAccessWithGrants.mockRejectedValue(new Error('Data lake not found'));
     const { res } = makeRes();
 
     await expect(call(req({ id: 'lake1' }, { newOwnerUserId: 'x' }), res)).rejects.toThrow(/not found/i);
@@ -92,7 +100,7 @@ describe('POST /api/data-lakes/[id]/transfer-ownership', () => {
   });
 
   it('takes the acting principal from the access context, never from the request body', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1' });
+    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: { id: 'lake1' }, grants: [] });
     const { res } = makeRes();
 
     await call(req({ id: 'lake1' }, { newOwnerUserId: 'newOwner', userId: 'attacker', isAdmin: true }), res);
@@ -100,14 +108,15 @@ describe('POST /api/data-lakes/[id]/transfer-ownership', () => {
     // The actor is the ctx, not the body-supplied attacker identity; newOwnerUserId still comes from the body.
     expect(h.transferLakeOwnership).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'u1', isAdmin: false }),
-      'lake1',
+      { id: 'lake1' },
+      [],
       'newOwner',
       expect.anything()
     );
   });
 
   it('rejects a missing newOwnerUserId (schema validation)', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1' });
+    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: { id: 'lake1' }, grants: [] });
     const { res } = makeRes();
 
     await expect(call(req({ id: 'lake1' }, {}), res)).rejects.toThrow();

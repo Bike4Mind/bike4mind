@@ -37,6 +37,7 @@ describe('processDiscoveredLinks', () => {
       },
       researchDatas: {
         findByUrlAndOrganizationId: vi.fn(),
+        findByUrlAndUserIdAndOrganizationId: vi.fn(),
         findByUrlAndUserId: vi.fn(),
       },
     };
@@ -198,7 +199,7 @@ describe('processDiscoveredLinks', () => {
     const mockContent = '# Test Content\nThis is test content.';
 
     mockDb.researchTasks.findById.mockResolvedValue(orgTask);
-    mockDb.researchDatas.findByUrlAndOrganizationId.mockResolvedValue(mockResearchData);
+    mockDb.researchDatas.findByUrlAndUserIdAndOrganizationId.mockResolvedValue(mockResearchData);
     mockDb.fabFiles.findById.mockResolvedValue(mockFabFile);
     mockedAxios.get.mockResolvedValue({ data: mockContent });
     mockLLM.complete.mockImplementation(async (model, messages, options, callback) => {
@@ -209,7 +210,11 @@ describe('processDiscoveredLinks', () => {
     await processDiscoveredLinks({ id: 'test-task-id' }, adapters);
 
     // Assert
-    expect(mockDb.researchDatas.findByUrlAndOrganizationId).toHaveBeenCalledWith('https://example.com', 'test-org-id');
+    expect(mockDb.researchDatas.findByUrlAndUserIdAndOrganizationId).toHaveBeenCalledWith(
+      'https://example.com',
+      'test-user-id',
+      'test-org-id'
+    );
     expect(mockDb.researchDatas.findByUrlAndUserId).not.toHaveBeenCalled();
   });
 

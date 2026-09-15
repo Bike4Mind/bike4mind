@@ -103,6 +103,15 @@ export interface PricePlanInput {
   baselineRowsInForce?: readonly IModelPrice[];
   /** Ids the catalog covers, including the models this run's catalog plan adds. */
   knownModelIds: ReadonlySet<string>;
+  /**
+   * The prices this build ships in code (adapterPriceTiers), the last-resort
+   * carry for a rate no feed publishes. A model's FIRST row has no row in force
+   * to carry from, so without this a first write drops cache and audio rates the
+   * literal already knew - and an absent cache_read sends getTextModelCost to
+   * input * CACHE_READ_MULTIPLIER, which over-bills every provider whose real
+   * cached rate is below 10% of input.
+   */
+  adapterTiers?: ReadonlyMap<string, IModelPriceTier>;
   /** modelDiscoveryPriceBandPct: the largest move, in percent, applied unattended. */
   bandPct: number;
   runStartedAt: Date;
@@ -321,7 +330,8 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
 
     // Carried forward per tier: the cache and audio rates no feed publishes come
     // from the tier under the SAME threshold, never from the row's lowest one.
-    const tiers = planned.map(({ key, price }) => [key, buildTier(price, current?.pricing[key])] as const);
+    const literal = input.adapterTiers?.get(modelId);
+    const tiers = planned.map(({ key, price }) => [key, buildTier(price, current?.pricing[key], literal)] as const);
     const unchanged =
       current !== undefined &&
       tiers.every(([key, tier]) => {
@@ -760,18 +770,32 @@ const baselineMove = (proposed: number, current: number): number => {
  * are carried forward from the row being superseded: dropping them would
  * silently move cached reads and voice minutes onto the text rate, which is a
  * billing change nobody asked for.
+ *
+ * `literal` is the adapter price this build ships, consulted only when there is
+ * no row to carry from - a model's first row. Absent from that first write, a
+ * cache_read does not fall back to the literal at all: the read path replaces
+ * each tier WHOLESALE (applyModelPriceCatalog), so getTextModelCost lands on
+ * input * CACHE_READ_MULTIPLIER instead.
  */
-function buildTier(price: DiscoveredRates, carry: IModelPriceTier | undefined): IModelPriceTier {
+function buildTier(
+  price: DiscoveredRates,
+  carry: IModelPriceTier | undefined,
+  literal: IModelPriceTier | undefined
+): IModelPriceTier {
   const tier: IModelPriceTier = {
     input: price.inputPerMTok / TOKENS_PER_MTOK,
     output: price.outputPerMTok / TOKENS_PER_MTOK,
   };
-  const cacheRead = perToken(price.cacheReadPerMTok) ?? carry?.cache_read;
-  const cacheWrite = perToken(price.cacheWritePerMTok) ?? carry?.cache_write;
+  // Whole-tier precedence, not per rate: a row in force that omits a rate omits
+  // it deliberately, and letting a code default fill that gap would override a
+  // stored decision instead of seeding an absent one.
+  const held = carry ?? literal;
+  const cacheRead = perToken(price.cacheReadPerMTok) ?? held?.cache_read;
+  const cacheWrite = perToken(price.cacheWritePerMTok) ?? held?.cache_write;
   if (cacheRead !== undefined) tier.cache_read = cacheRead;
   if (cacheWrite !== undefined) tier.cache_write = cacheWrite;
   for (const field of AUDIO_RATE_FIELDS) {
-    const rate = carry?.[field];
+    const rate = held?.[field];
     if (rate !== undefined) tier[field] = rate;
   }
   return tier;

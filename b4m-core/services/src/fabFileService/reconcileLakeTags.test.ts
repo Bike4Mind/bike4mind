@@ -467,6 +467,46 @@ describe('reconcileLakeTags', () => {
       });
       expect(adapters.db.dataLakes.activateIfDraft).not.toHaveBeenCalled();
     });
+
+    // Pins the API-key scope gate itself: the route's own scope check never sees this tag (it
+    // carries no `datalake:` prefix), so `assertWriteScope` is the ONLY thing standing between a
+    // caller with no data-lake scope and joining a lake this way.
+    it('calls assertWriteScope on a prefix-arm join, and propagates its refusal', async () => {
+      const adapters = withPrefixLakes([], [lake({ createdByUserId: 'owner' })]);
+      const assertWriteScope = vi.fn();
+
+      const result = await reconcileLakeTags(owner, 'f1', [], [tag('lk:invoices', 1)], {
+        ...adapters,
+        assertWriteScope,
+      } as any);
+      await result.commit();
+      expect(assertWriteScope).toHaveBeenCalledTimes(1);
+
+      assertWriteScope.mockClear();
+      assertWriteScope.mockImplementation(() => {
+        throw new Error('missing scope');
+      });
+      await expect(
+        reconcileLakeTags(owner, 'f1', [], [tag('lk:invoices', 1)], {
+          ...adapters,
+          assertWriteScope,
+        } as any)
+      ).rejects.toThrow('missing scope');
+    });
+
+    it('does not call assertWriteScope when nothing joins via the prefix arm', async () => {
+      const adapters = withPrefixLakes([tag('lk:invoices', 1)], [lake({ createdByUserId: 'owner' })]);
+      const assertWriteScope = vi.fn();
+
+      // Already a member and stays one - a preserve, not a join.
+      const result = await reconcileLakeTags(owner, 'f1', ['lk:invoices'], [], {
+        ...adapters,
+        assertWriteScope,
+      } as any);
+      await result.commit();
+
+      expect(assertWriteScope).not.toHaveBeenCalled();
+    });
   });
 });
 

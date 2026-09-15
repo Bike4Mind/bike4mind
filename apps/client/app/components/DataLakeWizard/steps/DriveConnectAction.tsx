@@ -8,8 +8,8 @@ import {
   useLakeDriveConnection,
   useConnectDriveFolderToLake,
   useDisconnectLakeDrive,
-  DRIVE_STATUS_BADGE,
 } from '@client/app/hooks/data/googleDrive';
+import { describeDriveConnection } from '@client/app/hooks/data/driveConnectionDisplay';
 import { useDriveFolderPicker } from '@client/app/hooks/data/useDriveFolderPicker';
 
 /** The specific server `error` message off an axios failure, if the response carried one. */
@@ -51,9 +51,12 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
   }
 
   if (isError) {
-    // The status query 404s for a personal lake and 403s for a non-manager - either way there is no
-    // working connect action to offer, so disable it with guidance rather than render an enabled
-    // button that can only ever fail.
+    // Every caller gates this component on org scope already (see SourceSelectionStep and
+    // SelectedLakeHeader), but the read itself needs org owner/manager - narrower than
+    // canManageLake, which also grants the lake's creator, a curator grant, or an administered
+    // org. So this is a normal, steady state for an org member who can manage the lake without
+    // being its org's owner or manager, not just a render/fetch race. No working connect action
+    // to offer either way, so disable it with guidance rather than render a button that can only fail.
     return (
       <Tooltip title="Google Drive connect is available to organization owners/managers on an organization data lake.">
         <span>
@@ -72,15 +75,17 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
   }
 
   if (connection) {
-    const badge = DRIVE_STATUS_BADGE[connection.status];
+    // Not DRIVE_STATUS_BADGE directly: a 'connected' connection carrying a lastError is a sync that
+    // stopped short with files missing, and only describeDriveConnection reads it that way.
+    const { label, color } = describeDriveConnection(connection);
     return (
       <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap" data-testid="drive-connection-status">
         <CloudIcon color="primary" />
         <Typography level="body-sm">
           <strong>{connection.folderName || connection.driveFolderId}</strong>
         </Typography>
-        <Chip size="sm" variant="soft" color={badge.color}>
-          {badge.label}
+        <Chip size="sm" variant="soft" color={color}>
+          {label}
         </Chip>
         <Button
           data-testid="drive-resync-btn"
@@ -138,9 +143,12 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
             Disconnect
           </Button>
         )}
-        {connection.status === 'credential_error' && connection.lastError && (
+        {connection.lastError && (
           <Box sx={{ flexBasis: '100%' }}>
-            <Typography level="body-xs" color="danger">
+            {/* Shown for ANY status that recorded one, not just credential_error: a sync that stopped
+                short heals the status back to 'connected', so gating on the error statuses hid the
+                one message saying files are missing from the lake (#2394). */}
+            <Typography level="body-xs" color={color} data-testid="drive-connection-last-error">
               {connection.lastError}
             </Typography>
           </Box>

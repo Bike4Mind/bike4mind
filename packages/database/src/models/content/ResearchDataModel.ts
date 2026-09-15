@@ -140,6 +140,15 @@ class ResearchDataRepository extends BaseRepository<IResearchData> implements IR
     return result?.toJSON() ?? null;
   }
 
+  async findByUrlAndUserIdAndOrganizationId(
+    url: string,
+    userId: string,
+    organizationId: string
+  ): Promise<IResearchData | null> {
+    const result = await this.researchDataModel.findOne({ url, userId, organizationId });
+    return result?.toJSON() ?? null;
+  }
+
   async existsByUrlAndResearchTaskId(url: string, researchTaskId: string): Promise<boolean> {
     const result = await this.researchDataModel.exists({ url, researchTaskId });
     return result !== null;

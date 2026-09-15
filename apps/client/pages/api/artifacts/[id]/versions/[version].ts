@@ -1,4 +1,5 @@
-import { artifactVersionRepository, artifactContentRepository } from '@bike4mind/database';
+import { artifactService } from '@bike4mind/services';
+import { artifactRepository, artifactVersionRepository, artifactContentRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@server/utils/errors';
@@ -21,6 +22,22 @@ const handler = baseApi()
       if (isNaN(versionNumber)) {
         return res.status(400).json({ error: 'Invalid version number' });
       }
+
+      // Gate on the canonical artifact read predicate (owner / share / public)
+      // before returning any version content. Mirrors ../versions.ts; throws
+      // NotFoundError/UnauthorizedError so unauthorized callers cannot read
+      // another user's private version content.
+      await artifactService.get(
+        userId,
+        { id: artifactId as string, includeContent: false, includeVersions: false },
+        {
+          db: {
+            artifacts: artifactRepository as any,
+            artifactContents: artifactContentRepository as any,
+            artifactVersions: artifactVersionRepository as any,
+          },
+        }
+      );
 
       const versionDoc = await artifactVersionRepository.findByVersion(artifactId as string, versionNumber);
 

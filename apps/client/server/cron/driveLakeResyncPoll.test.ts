@@ -33,6 +33,9 @@ const bothFlagsOn = () =>
     async (key: string) => key === 'EnableDataLakes' || key === 'EnableDataLakeDrivePoll'
   );
 
+// A connection that re-walked recently, so the periodic forced re-walk does not fire for it.
+const recentFullWalk = () => new Date(Date.now() - 60 * 60 * 1000);
+
 describe('driveLakeResyncPoll cron', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -61,14 +64,44 @@ describe('driveLakeResyncPoll cron', () => {
   });
 
   it('enqueues each due connection by id onto the ingest queue', async () => {
-    h.findDueForPoll.mockResolvedValue([{ id: 'conn1' }, { id: 'conn2' }, { id: 'conn3' }]);
+    h.findDueForPoll.mockResolvedValue([
+      { id: 'conn1', lastFullWalkAt: recentFullWalk() },
+      { id: 'conn2', lastFullWalkAt: recentFullWalk() },
+      { id: 'conn3', lastFullWalkAt: recentFullWalk() },
+    ]);
 
     const res = await handler();
 
     expect(h.sendToQueue).toHaveBeenCalledTimes(3);
+    // No forceFullWalk: each of these re-walked recently, so the handler goes incremental.
     expect(h.sendToQueue).toHaveBeenCalledWith('ingest-queue-url', { connectionId: 'conn1' });
     expect(h.sendToQueue).toHaveBeenCalledWith('ingest-queue-url', { connectionId: 'conn3' });
-    expect(JSON.parse(res.body)).toMatchObject({ enqueued: 3 });
+    expect(JSON.parse(res.body)).toMatchObject({ enqueued: 3, forcedFullWalks: 0 });
+  });
+
+  it('forces a full re-walk on a connection that has not walked in 24h, and leaves the rest incremental', async () => {
+    // Drive's changes feed is per-FILE: a subfolder dragged into or out of the connected root emits
+    // one record for the folder and none for its descendants, so no number of incremental pulls
+    // reclassifies them. The periodic re-walk is the only thing that reconciles that.
+    h.findDueForPoll.mockResolvedValue([
+      { id: 'fresh', lastFullWalkAt: recentFullWalk() },
+      { id: 'stale', lastFullWalkAt: new Date(Date.now() - 25 * 60 * 60 * 1000) },
+    ]);
+
+    const res = await handler();
+
+    expect(h.sendToQueue).toHaveBeenCalledWith('ingest-queue-url', { connectionId: 'fresh' });
+    expect(h.sendToQueue).toHaveBeenCalledWith('ingest-queue-url', { connectionId: 'stale', forceFullWalk: true });
+    expect(JSON.parse(res.body)).toMatchObject({ enqueued: 2, forcedFullWalks: 1 });
+  });
+
+  it('forces a full re-walk on a connection that has never recorded one', async () => {
+    // Brand new (the handler full-walks anyway) or predating the field - both want the re-walk.
+    h.findDueForPoll.mockResolvedValue([{ id: 'conn1' }]);
+
+    await handler();
+
+    expect(h.sendToQueue).toHaveBeenCalledWith('ingest-queue-url', { connectionId: 'conn1', forceFullWalk: true });
   });
 
   it('scans with a 6h cutoff and the 200-per-run limit', async () => {
@@ -92,7 +125,11 @@ describe('driveLakeResyncPoll cron', () => {
   it('keeps sweeping past a connection whose enqueue fails, and counts it', async () => {
     // One unroutable id used to reject out of a sequential loop and abandon every connection behind
     // it, so a single bad row stalled the whole sweep - tick after tick, since nothing else clears it.
-    h.findDueForPoll.mockResolvedValue([{ id: 'conn1' }, { id: 'bad' }, { id: 'conn3' }]);
+    h.findDueForPoll.mockResolvedValue([
+      { id: 'conn1', lastFullWalkAt: recentFullWalk() },
+      { id: 'bad', lastFullWalkAt: recentFullWalk() },
+      { id: 'conn3', lastFullWalkAt: recentFullWalk() },
+    ]);
     h.sendToQueue.mockImplementation(async (_url: string, body: { connectionId: string }) => {
       if (body.connectionId === 'bad') throw new Error('queue does not exist');
     });

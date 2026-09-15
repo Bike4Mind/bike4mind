@@ -251,4 +251,105 @@ describe('tagService - remove', () => {
       expect(mockDataLakeRepo.setStats).not.toHaveBeenCalled();
     });
   });
+
+  /**
+   * `assertWriteScope` is API-KEY SCOPE, a separate axis from the manage-rights reasoning above:
+   * this service only ever touches files `userId` owns, so no manage-rights check is needed, but a
+   * `files:write`-only key should not be able to walk a file out of a lake via this path any more
+   * than `files/tags/toggle.ts` lets it via a meta-tag. Fired only when a prefix-arm match is
+   * detected, and BEFORE the strip - not transactional, so a denial must land before any write.
+   */
+  describe('API-key write-scope gate on a prefix-arm delete', () => {
+    it('calls assertWriteScope before stripping files when the deleted tag matches a lake prefix', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc('lk:invoices'));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+      const assertWriteScope = vi.fn();
+
+      await remove(userId, { id: existingTagId }, { ...adapters, assertWriteScope });
+
+      expect(assertWriteScope).toHaveBeenCalledTimes(1);
+      const gateOrder = assertWriteScope.mock.invocationCallOrder[0];
+      const stripOrder = (mockFabFileRepo.removeTagByUserId as Mock).mock.invocationCallOrder[0];
+      expect(gateOrder).toBeLessThan(stripOrder);
+    });
+
+    it('does not call assertWriteScope when the deleted tag matches no lake prefix', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc('unrelated:tag'));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+      const assertWriteScope = vi.fn();
+
+      await remove(userId, { id: existingTagId }, { ...adapters, assertWriteScope });
+
+      expect(assertWriteScope).not.toHaveBeenCalled();
+    });
+
+    it('propagates a denial from assertWriteScope before any file is touched', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc('lk:invoices'));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+      const assertWriteScope = vi.fn(() => {
+        throw new Error('datalake:write is required');
+      });
+
+      await expect(remove(userId, { id: existingTagId }, { ...adapters, assertWriteScope })).rejects.toThrow(
+        'datalake:write is required'
+      );
+      expect(mockFabFileRepo.removeTagByUserId).not.toHaveBeenCalled();
+      expect(mockTagRepo.delete).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * The audit principal on the auto-activate row a prefix-arm delete can emit. Sibling of #1964's
+   * tag-toggle door: this path built its actor with no `auditPrincipal`, so a key-driven delete
+   * that published a draft lake recorded the human instead of the key. Removing `auditPrincipal`
+   * from the actor at remove.ts's recompute call turns the key case red.
+   */
+  describe('auto-activate audit principal', () => {
+    const auditSpy = () => {
+      const record = vi.fn().mockResolvedValue({});
+      return { db: { lakeConfigChangeEvents: { record } }, record };
+    };
+
+    const drivingActivation = (audit: ReturnType<typeof auditSpy>) => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc('lk:invoices'));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake({ status: 'draft' })]);
+      // fileCount > 0 is what makes the flip eligible - a surviving sibling tag kept members.
+      (mockFabFileRepo.computeDataLakeStats as Mock).mockResolvedValue({
+        fileCount: 1,
+        totalSizeBytes: 10,
+        totalChunkedChars: 0,
+      });
+      (mockDataLakeRepo.activateIfDraft as Mock).mockResolvedValue(true);
+      return { db: { ...adapters.db, ...audit.db } };
+    };
+
+    it('names the API key, not the human, when a key-driven delete publishes a draft lake', async () => {
+      const audit = auditSpy();
+      const withAudit = {
+        ...drivingActivation(audit),
+        auditPrincipal: { principalKind: 'apiKey' as const, principalId: 'key-abc', onBehalfOfUserId: userId },
+      };
+
+      await remove(userId, { id: existingTagId }, withAudit);
+
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'auto-activate',
+          principalKind: 'apiKey',
+          principalId: 'key-abc',
+          onBehalfOfUserId: userId,
+        })
+      );
+    });
+
+    it('still names the tag owner when no key is involved', async () => {
+      const audit = auditSpy();
+
+      await remove(userId, { id: existingTagId }, drivingActivation(audit));
+
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'auto-activate', principalKind: 'user', principalId: userId })
+      );
+    });
+  });
 });

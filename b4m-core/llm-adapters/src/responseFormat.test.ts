@@ -7,7 +7,7 @@
  *  - Anthropic: per-message `cache: true` -> cache_control: ephemeral + beta header
  *  - Anthropic: cache_read_input_tokens / cache_creation_input_tokens forwarded to cb
  *  - OpenAI: json_schema -> native response_format passthrough
- *  - Bedrock/Gemini/xAI: best-effort JSON instruction injected; mode reported
+ *  - Bedrock/Gemini/xAI/DeepSeek: best-effort JSON instruction injected; mode reported
  *  - getTextModelCost: applies 0.1x / 1.25x multipliers
  */
 
@@ -27,6 +27,7 @@ import { AnthropicBackend } from './anthropicBackend';
 import { OpenAIBackend } from './openaiBackend';
 import { GeminiBackend } from './geminiBackend';
 import { XAIBackend } from './xaiBackend';
+import { DeepSeekBackend } from './deepseekBackend';
 import {
   buildJsonSchemaInstruction,
   injectJsonSchemaInstruction,
@@ -578,5 +579,50 @@ describe('GeminiBackend best-effort response_format', () => {
 
     const last = calls[calls.length - 1];
     expect(last?.info?.responseFormatMode).toBe('best-effort');
+  });
+});
+
+describe('DeepSeekBackend best-effort response_format', () => {
+  it('injects the schema and reports best-effort, json_object alone never showing the contract', async () => {
+    // DeepSeek serves only the loose `json_object` mode outside its beta path, so
+    // sending that without the instruction asks for "some JSON" and leaves
+    // responseFormatMode unset - a third state no consumer models. intentClassifier
+    // gates its stricter retry on 'best-effort' and would throw on the first shape
+    // violation instead of retrying.
+    const backend = new DeepSeekBackend('test-key');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let lastParams: any = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (backend as unknown as { _api: any })._api = {
+      chat: {
+        completions: {
+          create: async (params: unknown) => {
+            lastParams = params;
+            return asOpenAIStream([
+              { choices: [{ index: 0, delta: { content: '{"name":"x"}' }, finish_reason: null }], usage: null },
+              {
+                choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+                usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 },
+              },
+            ]);
+          },
+        },
+      },
+    };
+
+    const { calls, cb } = captureCb();
+    await backend.complete(
+      ChatModels.DEEPSEEK_FLASH,
+      [{ role: 'user', content: 'extract' }],
+      { stream: true, executeTools: false, responseFormat: SAMPLE_SCHEMA },
+      cb
+    );
+
+    const systemMsg = lastParams.messages.find((m: { role: string }) => m.role === 'system');
+    expect(systemMsg?.content).toContain('extract_user');
+    expect(systemMsg?.content).toContain('JSON Schema');
+    expect(lastParams.response_format).toEqual({ type: 'json_object' });
+
+    expect(calls[calls.length - 1]?.info?.responseFormatMode).toBe('best-effort');
   });
 });

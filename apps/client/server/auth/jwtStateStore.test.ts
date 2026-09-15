@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import jwt from 'jsonwebtoken';
+import { createHash } from 'crypto';
 
 let mockJwtSecret: string | undefined = 'test-jwt-secret-for-state-store';
 
@@ -224,6 +225,56 @@ describe('jwtStateStore', () => {
       if (!result.valid) {
         expect(result.reason).toBe('invalid');
       }
+    });
+  });
+
+  describe('browser-binding nonce', () => {
+    const nonceHash = createHash('sha256').update('a-browser-nonce').digest('hex');
+
+    it('embeds the nonce hash as the nh claim when provided', () => {
+      const token = createStateToken({ audience: TEST_AUDIENCE }, undefined, nonceHash);
+      const decoded = jwt.decode(token) as { nh?: string };
+      expect(decoded.nh).toBe(nonceHash);
+    });
+
+    it('omits nh when no nonce hash is provided', () => {
+      const token = createStateToken({ audience: TEST_AUDIENCE });
+      const decoded = jwt.decode(token) as { nh?: string };
+      expect(decoded.nh).toBeUndefined();
+    });
+
+    it('accepts a token whose nh matches the expected hash', () => {
+      const token = createStateToken({ audience: TEST_AUDIENCE }, undefined, nonceHash);
+      const result = verifyStateToken(token, { audience: TEST_AUDIENCE }, nonceHash);
+      expect(result.valid).toBe(true);
+    });
+
+    it('rejects a token whose nh does not match (state minted in another browser)', () => {
+      const token = createStateToken({ audience: TEST_AUDIENCE }, undefined, nonceHash);
+      const otherHash = createHash('sha256').update('a-different-browser').digest('hex');
+      const result = verifyStateToken(token, { audience: TEST_AUDIENCE }, otherHash);
+      expect(result.valid).toBe(false);
+      if (!result.valid) expect(result.reason).toBe('invalid');
+    });
+
+    it('rejects when the caller enforces binding but the request has no nonce cookie', () => {
+      const token = createStateToken({ audience: TEST_AUDIENCE }, undefined, nonceHash);
+      // readStateNonceHash returns null when the cookie is absent.
+      const result = verifyStateToken(token, { audience: TEST_AUDIENCE }, null);
+      expect(result.valid).toBe(false);
+    });
+
+    it('rejects a token with no nh when the caller enforces binding', () => {
+      const token = createStateToken({ audience: TEST_AUDIENCE });
+      const result = verifyStateToken(token, { audience: TEST_AUDIENCE }, nonceHash);
+      expect(result.valid).toBe(false);
+    });
+
+    it('skips the nonce check when the caller opts out (undefined)', () => {
+      // Backward compat for the injected Slack verifier and pre-binding callers.
+      const token = createStateToken({ audience: TEST_AUDIENCE }, undefined, nonceHash);
+      const result = verifyStateToken(token, { audience: TEST_AUDIENCE });
+      expect(result.valid).toBe(true);
     });
   });
 });
