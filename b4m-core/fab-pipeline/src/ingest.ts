@@ -1,6 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import axios from 'axios';
-import type { CheerioAPI } from 'cheerio';
+import type { Cheerio, CheerioAPI } from 'cheerio';
 import mime from 'mime-types';
 import { ssrfSafeHttpAgent, ssrfSafeHttpsAgent, validateUrlForFetch } from './ssrfProtection';
 
@@ -185,11 +185,282 @@ const INLINE_SELECTOR =
 const BLOCK_LEVEL_SELECTOR = `*:not(${INLINE_SELECTOR.split(', ').join('):not(')}):not(td):not(th)`;
 
 /**
+ * cheerio's `AnyNode`, named without importing `domhandler` directly - that is a transitive dep of
+ * cheerio rather than one of ours, and cheerio re-exports the type only under aliases like this.
+ */
+type DomNode = Parameters<CheerioAPI['contains']>[0];
+
+/**
+ * Elements that carry UI rather than prose, removed before extraction.
+ *
+ * Two principles only, deliberately narrow - `nav`/`header`/`footer`/`aside` are NOT here, because
+ * pages do put real content in the last two and a full boilerplate pass is a different job:
+ *  - `aria-hidden`/`hidden`: the page itself says this is not content to be read. That is what
+ *    catches the duplicated tooltip labels modern doc sites render next to every icon button
+ *    ("Collapse sidebar", "Search or ask Copilot"), which are plain `<span>`s with no other signal.
+ *  - interactive controls, native or via the equivalent ARIA role: a control's label is an
+ *    instruction to the reader, not part of the document.
+ */
+const NON_CONTENT_SELECTOR = [
+  '[aria-hidden="true"]',
+  '[hidden]',
+  'button',
+  'input',
+  'select',
+  'textarea',
+  'option',
+  'optgroup',
+  'datalist',
+  'label',
+  'dialog',
+  'template',
+  // No text an embedding can use: icon markup, and `<title>`/`<desc>` that exist for screen readers.
+  'svg',
+  '[role="button"]',
+  '[role="search"]',
+  '[role="searchbox"]',
+  '[role="combobox"]',
+  '[role="listbox"]',
+  '[role="menu"]',
+  '[role="menubar"]',
+  '[role="tablist"]',
+  '[role="toolbar"]',
+  '[role="dialog"]',
+  '[role="alertdialog"]',
+  '[role="tooltip"]',
+  '[role="radiogroup"]',
+].join(', ');
+
+/**
+ * What counts as a control when judging a control strip. Broader than `NON_CONTENT_SELECTOR`,
+ * because a link is content in prose but a control in a nav bar - `a[href]` is the only reason the
+ * strip rule can see an unmarked `<div>` of nav links as chrome at all.
+ */
+const CONTROL_SELECTOR =
+  'a[href], button, input, select, textarea, summary, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="option"], [role="checkbox"], [role="radio"], [role="switch"]';
+
+/**
+ * Containers a control strip can be. Headings and `<p>` are excluded: `<h2><a>Title</a></h2>` is
+ * content. `<table>`/`<tbody>`/`<tr>` and `<li>` are excluded too: a row of short linked cells is
+ * how an ordinary reference table looks, never a nav bar, and a list is judged at the `<ul>`/`<ol>`
+ * level as a whole rather than letting one busy `<li>` speak for it.
+ */
+const STRIP_CONTAINER_SELECTOR = 'div, span, ul, ol, nav, header, footer, aside, section, form';
+
+/**
+ * Longest a single control's label may be before the group stops looking like a control strip.
+ * Nav items, tabs and toolbar buttons are a word or three; anything longer is prose in a link.
+ */
+const MAX_CONTROL_LABEL_CHARS = 40;
+
+/**
+ * How much non-control text a strip candidate may still carry before it stops looking like chrome.
+ * Requiring exactly zero (the previous rule) let a single stray word - a wordmark, a version
+ * string, a bare "Menu" - defeat the whole strip and leak the nav into stored content. Budgeted
+ * small and absolute, at wordmark scale rather than sentence scale.
+ */
+const MAX_NON_CONTROL_TEXT_CHARS = 15;
+
+/**
+ * How much of a container's nesting depth (from the document root, so a page with no `<main>`
+ * and one that has it are budgeted the same way) the strip check will still climb to evaluate.
+ * `isControlStrip` scans a candidate's ENTIRE subtree, so checking every container in a deeply
+ * nested document is quadratic in nesting depth - and nesting is entirely up to whatever HTML the
+ * fetched URL happens to return. Nesting past this depth stops being checked as a strip candidate
+ * rather than being paid for on every level.
+ *
+ * Sized well clear of real layout nesting - the deepest control group measured live against
+ * react.dev, tailwindcss.com and docs.github.com sits at 16 - but a control strip nested deeper
+ * than this is a real, deliberate gap: it is never evaluated at all, at any depth from here to its
+ * leaves, since every one of its descendants is at least as deep. Closing that gap properly needs
+ * either a much higher cap (which reopens the cost problem this constant exists to bound) or
+ * skipping only the expensive subtree scan while still descending past the cap - out of scope
+ * here; see the boundary test pinning today's behavior instead of leaving it undocumented.
+ */
+const MAX_STRIP_CONTAINER_DEPTH = 32;
+
+/**
+ * How much of the scope's own surviving text has to remain, after chrome pruning, before that
+ * pruning is trusted. Below this, pruning is treated as having taken real content down with it -
+ * see `pruneChromeFromScope`. Sized between a bare boilerplate remnant (a copyright line, a
+ * "Further reading." label - fifteen to twenty characters) and a real one-sentence page ("The
+ * chapter itself, in prose." - twenty-nine): short enough that a genuinely tiny real page still
+ * survives, long enough that what a footer or a stray label leaves behind on its own doesn't.
+ *
+ * Known limitation: an absolute count cannot always tell a genuine short sentence from a
+ * same-length piece of boilerplate (a copyright line can be as long as an intro sentence) - see
+ * `pruneChromeFromScope` for why the alternative (weighing the bar against how much was removed)
+ * was tried and reverted.
+ */
+const MIN_SURVIVING_CONTENT_CHARS = 20;
+
+const squash = (text: string) => text.replace(/\s+/g, ' ').trim();
+
+/**
+ * Nesting depth of `element` below `within`, walking parent pointers directly rather than through
+ * cheerio's `.parents()` (which itself re-walks the chain with wrapper allocation at every step) -
+ * this runs once per strip candidate, so it has to stay cheap even though `isControlStrip` itself
+ * is not.
+ */
+function depthWithin(element: DomNode, within: DomNode): number {
+  let depth = 0;
+  // `.parent` is a domhandler property untyped on the public `AnyNode` union we widen to.
+  let current = (element as { parent?: DomNode | null }).parent;
+  while (current && current !== within) {
+    depth++;
+    current = (current as { parent?: DomNode | null }).parent;
+  }
+  return depth;
+}
+
+/**
+ * True when an element is a group of adjacent controls with no prose of its own - a nav bar, a
+ * breadcrumb row, a tab strip, a footer link column, a sandbox toolbar.
+ *
+ * Needs TWO controls, which is what keeps `<li><a>Some page</a></li>` in a real content list and
+ * `<div><a>An article title</a></div>` on a card. It also has to run BEFORE the controls themselves
+ * are removed, or the evidence is gone: react.dev's `Fork` link only reads as chrome because the
+ * `Reload` and `Clear` buttons share its toolbar.
+ *
+ * "No prose of its own" tolerates the punctuation sites use to separate items, so a `A | B | C`
+ * nav still qualifies, and now also a small budget of non-separator text - see
+ * `MAX_NON_CONTROL_TEXT_CHARS`.
+ */
+function isControlStrip($: CheerioAPI, element: DomNode): boolean {
+  const $element = $(element);
+  if (!squash($element.text())) return false;
+
+  const controls = $element.find(CONTROL_SELECTOR);
+  if (controls.length < 2) return false;
+
+  for (const control of controls.toArray()) {
+    const label = squash($(control).text());
+    if (label.length > MAX_CONTROL_LABEL_CHARS || /[.!?]\s/.test(label)) return false;
+  }
+
+  const outsideControls = $element.clone().find(CONTROL_SELECTOR).remove().end().text();
+  return outsideControls.replace(/[\s|\u00b7\u2022/,:;-]+/g, '').length <= MAX_NON_CONTROL_TEXT_CHARS;
+}
+
+/**
+ * Removes control strips and non-content elements from `scope`, together, with ONE rollback
+ * covering both.
+ *
+ * Both prunings are done via a placeholder swap rather than an outright `remove()`, so either can
+ * be undone. They are decided together - not the strip rule with its own guard and the non-content
+ * removal with none - because a subtree that is real content by itself can sit entirely inside a
+ * `label`/`dialog`/`aria-hidden` wrapper (a client framework's whole-page aria-hidden mount, an
+ * article rendered inside a `<dialog>`), and pruning each half separately let the second one erase
+ * what the first had just decided to protect.
+ *
+ * The bar for trusting the prune is "enough of the scope's own text survives"
+ * (`MIN_SURVIVING_CONTENT_CHARS`), not "any text survives at all": a page that is mostly a link
+ * directory routinely carries a footer copyright line or a "Further reading." label alongside it,
+ * and treating either as proof the prune was safe defeats the guard in exactly the case it exists
+ * for. Below the bar, everything pruned in this call is restored.
+ *
+ * A fixed character count cannot fully replace judging whether surviving text is real content or
+ * boilerplate (a copyright line and a short genuine sentence can be the same length) - that needs
+ * the density/boilerplate pass this ticket explicitly scopes out. It is deliberately NOT relative
+ * to how much was pruned either: a legitimate strip removal is very often far larger than the
+ * genuine prose sitting next to it (a 40-item nav beside a one-sentence intro, or GitHub's own
+ * aria-hidden tooltip spans beside a paragraph), so "survives >= removed" would roll back exactly
+ * the pages this function exists to clean.
+ *
+ * Returns whether the prune was kept, so a caller working scope-by-scope (see `mainContentScope`)
+ * knows whether THIS scope still has enough of its own content to be trusted at all.
+ */
+function pruneChromeFromScope($: CheerioAPI, scope: Cheerio<DomNode>): boolean {
+  // Measured from the DOCUMENT root, not `scope` - `scope` is `<main>` in one branch of
+  // `mainContentScope` and the whole `Document` in the other, so measuring from `scope` gave
+  // `html`/`body` a free ride on a page with no `<main>` but not on one that has it, meaning
+  // identical markup could get two different depth budgets depending on whether the page
+  // declares a landmark. Measuring from the same fixed point in both branches makes the budget
+  // mean the same thing either way.
+  const documentRoot = $.root().get(0) as DomNode | undefined;
+  const strips: DomNode[] = [];
+  scope.find(STRIP_CONTAINER_SELECTOR).each((_index, element) => {
+    // Outermost qualifying container only: removing a nested one first would leave the parent's
+    // remaining siblings looking like content, and doing both is wasted work.
+    if (strips.some(strip => $.contains(strip, element))) return;
+    if (documentRoot && depthWithin(element, documentRoot) > MAX_STRIP_CONTAINER_DEPTH) return;
+    if (isControlStrip($, element)) strips.push(element);
+  });
+
+  const stripPlaceholders = strips.map(strip => {
+    const placeholder = $('<div></div>');
+    $(strip).replaceWith(placeholder);
+    return placeholder;
+  });
+
+  const nonContentEls = scope.find(NON_CONTENT_SELECTOR).toArray();
+  const nonContentPlaceholders = nonContentEls.map(element => {
+    const placeholder = $('<div></div>');
+    $(element).replaceWith(placeholder);
+    return placeholder;
+  });
+
+  const survives = squash(scope.text()).length >= MIN_SURVIVING_CONTENT_CHARS;
+
+  if (survives) {
+    for (const placeholder of stripPlaceholders) placeholder.remove();
+    for (const placeholder of nonContentPlaceholders) placeholder.remove();
+  } else {
+    nonContentPlaceholders.forEach((placeholder, index) => placeholder.replaceWith(nonContentEls[index]));
+    stripPlaceholders.forEach((placeholder, index) => placeholder.replaceWith(strips[index]));
+  }
+
+  return survives;
+}
+
+/**
+ * The scope to extract from: the document's own main-content landmark when it declares exactly one
+ * AND still has enough of its own content once chrome pruning runs against it - otherwise the
+ * whole document.
+ *
+ * This is the half of the fix that handles chrome with no other tell - a sticky sub-header of icon
+ * buttons, a site footer carrying a survey and a privacy link. Trusting the page's own `<main>` also
+ * answers the "real content in `<aside>`/`<footer>`" case for free, and better than a rule about
+ * those tags could: an `<aside>` or `<footer>` INSIDE `main` is kept, one outside it is site chrome
+ * by the page's own declaration. A document with no `main` keeps the previous whole-document scope.
+ *
+ * Checked twice, before AND after pruning. The first check (`main.text().trim()`) only rules out a
+ * `<main>` that is LITERALLY empty - a client-rendered app shipping `<main></main>` with its real
+ * content elsewhere. It does not rule out a `<main>` that is truthy for the wrong reason: a loading
+ * placeholder ("Loading...") with the real article outside it, or a `<main>` whose only content IS
+ * a nav bar, so pruning empties it and the real prose living outside `<main>` is never looked at.
+ * The second check is `pruneChromeFromScope`'s own return value once it has actually run against
+ * the candidate - if pruning leaves `<main>` without enough of its own text, `<main>` is abandoned
+ * (its pruning already rolled back by that call) and the whole document is scanned instead, this
+ * time seeing everything `<main>` would have hidden from it.
+ */
+function mainContentScope($: CheerioAPI): Cheerio<DomNode> {
+  const main = $('main, [role="main"]');
+  // `Cheerio<T>` is invariant in T, so the two branches' element types (Element vs Document) need
+  // widening to their common supertype rather than either one being inferred.
+  if (main.length === 1 && main.text().trim()) {
+    const scope = main as Cheerio<DomNode>;
+    if (pruneChromeFromScope($, scope)) return scope;
+  }
+  const root = $.root() as Cheerio<DomNode>;
+  pruneChromeFromScope($, root);
+  return root;
+}
+
+/**
  * Extract readable text from the WHOLE document, not just `<p>` elements. The single collector
  * this replaced was `<p>`-only and fell back to the raw HTML when it found none: on a page whose
  * content isn't inside `<p>` (an RFC page using `<pre>`) that meant the fallback fired and stored
  * markup verbatim; on a page with real substance in headings, list items, table cells or code
  * blocks alongside its `<p>`s, that content was silently dropped.
+ *
+ * Because it reads the whole document, page chrome that the `<p>`-only collector dropped by
+ * accident now has to be dropped on purpose, or nav bars, search widgets, cookie banners, footer
+ * link columns and button labels get chunked and embedded alongside the article. Two rules do
+ * that - see `isControlStrip` and `NON_CONTENT_SELECTOR` for why each one is shaped the way it is -
+ * applied together by `mainContentScope` (via `pruneChromeFromScope`) against whichever scope it
+ * settles on, with its own rollback if pruning went too far. The strip rule MUST run before the
+ * control removal, since it recognises a strip by the controls in it.
  *
  * `head` (title/meta/script/style all live there, and the caller already reads `<title>`
  * separately) plus any stray `script`/`style`/`noscript` outside it are removed before extraction,
@@ -204,7 +475,12 @@ const BLOCK_LEVEL_SELECTOR = `*:not(${INLINE_SELECTOR.split(', ').join('):not(')
  */
 function extractReadableText($: CheerioAPI): string {
   $('head, script, style, noscript').remove();
-  $('br').replaceWith('\n');
+
+  // Chrome pruning (both rules) and its rollback all happen inside this call - see
+  // `pruneChromeFromScope`. What comes back is the scope to read from, already pruned.
+  const scope = mainContentScope($);
+
+  scope.find('br').replaceWith('\n');
 
   // The stash-and-splice marker is scoped to a per-call random token, not a fixed string - this
   // function processes arbitrary third-party HTML, and a fixed marker could collide with a page's
@@ -216,7 +492,7 @@ function extractReadableText($: CheerioAPI): string {
   const markerPattern = new RegExp(`\\uE000PRE${nonce}_(\\d+)\\uE000`, 'g');
 
   const preBlocks: string[] = [];
-  $('pre').each((_index, element) => {
+  scope.find('pre').each((_index, element) => {
     const text = $(element).text();
     // An empty <pre> has nothing worth preserving - remove it outright rather than stashing an
     // empty placeholder, or a page whose only "content" is an empty <pre> would incorrectly stop
@@ -229,16 +505,17 @@ function extractReadableText($: CheerioAPI): string {
     }
   });
 
-  $('td, th').each((_index, cell) => {
+  scope.find('td, th').each((_index, cell) => {
     $(cell).after(' ');
   });
-  $(BLOCK_LEVEL_SELECTOR).each((_index, element) => {
+  scope.find(BLOCK_LEVEL_SELECTOR).each((_index, element) => {
     $(element).after('\n');
   });
 
-  // `$.root()` covers the whole remaining document in one call - no need to special-case a
-  // missing `<body>` (malformed HTML with no body tag still has its text picked up).
-  const collapsed = $.root()
+  // The scope is `$.root()` unless the page declared a `main` - which covers the whole remaining
+  // document in one call, so there is no need to special-case a missing `<body>` (malformed HTML
+  // with no body tag still has its text picked up).
+  const collapsed = scope
     .text()
     .split('\n')
     .map(line => line.replace(/[ \t]+/g, ' ').trim())
