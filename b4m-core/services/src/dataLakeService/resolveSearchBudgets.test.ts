@@ -111,7 +111,8 @@ describe('resolveSearchBudgets - platform path (unchanged behavior)', () => {
 
   it('floors a non-integer and ignores an unusable value with a warning', async () => {
     const logger = loggerStub();
-    // dataLakeSearchMaxChunks '0' is < 1 (unusable -> default + warn); maxFiles '7.9' floors to 7.
+    // dataLakeSearchMaxChunks '0' is < 1 (unusable -> default + warn); dataLakeSearchMaxFiles
+    // '7.9' floors to 7.
     const budgets = await resolveSearchBudgets(
       makeDb({ dataLakeSearchMaxFiles: '7.9', dataLakeSearchMaxChunks: '0' }),
       logger,
@@ -659,5 +660,8 @@ describe('positiveIntOr / nonNegativeIntOr - shared coercion contract', () => {
     expect(logger.warn).toHaveBeenCalledWith(
       'ignoring unusable forcedRetrievalRelativeFloorPct setting " -3 "; using 10'
     );
+    // Named explicitly, not just implied by the exact match above: the wrong-subsystem tag is the
+    // defect, so a future reword must not be able to reintroduce it quietly.
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('[semanticSearch]'));
   });
 });
