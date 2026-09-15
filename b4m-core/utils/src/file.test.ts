@@ -93,8 +93,21 @@ describe('resolveSupportedMimeType extension-less rule', () => {
     });
   });
 
-  it.each(['.env', '.eslintrc', '.prettierrc', '.exe'])('reads dotfile %s as extension-less', name => {
+  it.each(['.env', '.eslintrc', '.prettierrc'])('reads dotfile %s as extension-less', name => {
     expect(resolveSupportedMimeType(name, '', opts)).toEqual({
+      mimeType: SupportedFabFileMimeTypes.TXT_PLAIN,
+      supported: true,
+    });
+  });
+
+  // `.exe` resolves the same way - `path.extname('.exe')` is also '' for a leading-dot-only
+  // name, so it takes the same plain-text fallback as the dotfiles above. Not a regression
+  // (main reaches the same outcome); stated on its own because it deliberately includes a
+  // name whose tail happens to look like a binary extension. Checking the tail against the
+  // extension table would not catch it either, since '.exe' resolves to nothing here - the
+  // asymmetry is the point: 'backup.001' is refused above while '.exe' is admitted.
+  it('reads .exe as extension-less too, and admits it via the same fallback', () => {
+    expect(resolveSupportedMimeType('.exe', '', opts)).toEqual({
       mimeType: SupportedFabFileMimeTypes.TXT_PLAIN,
       supported: true,
     });
@@ -131,17 +144,70 @@ describe('resolveSupportedMimeType extension-less rule', () => {
 });
 
 describe('getMimeTypeByExtension', () => {
-  // Isolates the invert() last-wins pin from resolveSupportedMimeType's own
-  // precedence behavior: the .md cases above all pass a matching claim, so none
-  // of them exercise this lookup on its own.
+  // Pins the canonical spelling: md must resolve to TXT_MARKDOWN, not the legacy
+  // text/x-markdown enum member. The .md cases above all pass a matching claim, so
+  // none of them exercise this lookup on its own.
   it('resolves md to the canonical markdown MIME type', () => {
     expect(getMimeTypeByExtension('md')).toBe(SupportedFabFileMimeTypes.TXT_MARKDOWN);
+  });
+
+  // log/yml/htm are in the client's own map (guessMimeType in
+  // apps/client/app/utils/folderTreeParser.ts); an extension-first door would refuse them
+  // outright without an entry in the extension table.
+  //
+  // jfif/jpe/text/shtml are different: browser-reported spellings with no client-side
+  // counterpart in guessMimeType - keep them here even though nothing on the client ever
+  // produces them, or a browser's own claim for one of these fails the extension-first
+  // check that backs it up.
+  it.each([
+    ['log', SupportedFabFileMimeTypes.TXT_PLAIN],
+    ['yml', SupportedFabFileMimeTypes.YAML],
+    ['htm', SupportedFabFileMimeTypes.HTML],
+    ['jfif', SupportedFabFileMimeTypes.JPG],
+    ['jpe', SupportedFabFileMimeTypes.JPG],
+    ['text', SupportedFabFileMimeTypes.TXT_PLAIN],
+    ['shtml', SupportedFabFileMimeTypes.HTML],
+  ])('resolves %s to its alias MIME type', (ext, mime) => {
+    expect(getMimeTypeByExtension(ext)).toBe(mime);
+  });
+
+  // Regression pin from an earlier refactor: every extension the old if-branch
+  // implementation resolved still resolves the same way today.
+  it.each([
+    ['xls', SupportedFabFileMimeTypes.XLS],
+    ['xlsx', SupportedFabFileMimeTypes.XLSX],
+    ['docx', SupportedFabFileMimeTypes.DOCX],
+    ['pptx', SupportedFabFileMimeTypes.PPTX],
+    ['ts', SupportedFabFileMimeTypes.TS],
+    ['tsx', SupportedFabFileMimeTypes.TS],
+    ['jpeg', SupportedFabFileMimeTypes.JPG],
+    ['ini', SupportedFabFileMimeTypes.TXT_PLAIN],
+    ['env', SupportedFabFileMimeTypes.TXT_PLAIN],
+    ['conf', SupportedFabFileMimeTypes.TXT_PLAIN],
+    ['mdx', SupportedFabFileMimeTypes.TXT_MARKDOWN],
+  ])('still resolves %s to its prior MIME type', (ext, mime) => {
+    expect(getMimeTypeByExtension(ext)).toBe(mime);
   });
 
   // A prototype-bearing lookup table answers these with an inherited member (the Object
   // function itself), which is truthy and so escapes as a non-string mimeType.
   it.each(['constructor', '__proto__', 'toString'])('resolves inherited key %s to nothing', key => {
     expect(getMimeTypeByExtension(key)).toBe('');
+  });
+});
+
+// Pins the client/server allowlist agreement: these extensions are in the client's
+// guessMimeType map and must resolve (not be refused) at a default extension-first door.
+describe('resolveSupportedMimeType extension-alias regression', () => {
+  it.each([
+    ['notes.yml', SupportedFabFileMimeTypes.YAML],
+    ['app.log', SupportedFabFileMimeTypes.TXT_PLAIN],
+    ['page.htm', SupportedFabFileMimeTypes.HTML],
+  ])('accepts %s with a matching claim at the default door', (name, mime) => {
+    expect(resolveSupportedMimeType(name, mime)).toEqual({
+      mimeType: mime,
+      supported: true,
+    });
   });
 });
 
@@ -165,8 +231,8 @@ describe('resolveSupportedMimeType extension precedence', () => {
     expect(resolveSupportedMimeType(name, claim)).toEqual({ mimeType: '', supported: false });
   });
 
-  // Audio resolves by extension now (MIME_TO_EXT carries the audio types), so the predicate is
-  // the only thing deciding it - the claim is never reached.
+  // Audio resolves by extension now (the extension table carries the audio types), so the
+  // predicate is the only thing deciding it - the claim is never reached.
   it('keeps audio supported under the storable predicate', () => {
     expect(resolveSupportedMimeType('speech.mp3', 'audio/mpeg', { isAcceptable: isStorableFabFileMimeType })).toEqual({
       mimeType: 'audio/mpeg',

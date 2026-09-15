@@ -120,4 +120,38 @@ describe('POST /api/files/copy-generated-image object-level authz', () => {
       );
     }
   );
+
+  // The guard must be tolerant, not exact: a cased or parameterised generic type is still generic.
+  it.each(['Application/Octet-Stream', 'application/octet-stream; charset=binary', 'binary/octet-stream'])(
+    'substitutes PNG for a stored contentType of %s (case/parameter tolerant)',
+    async contentType => {
+      h.findSessionIdsByImage.mockResolvedValue(['s1']);
+      h.findAllByIds.mockResolvedValue([{ userId: 'me', users: [] }]);
+      h.getMetadata.mockResolvedValue({ contentType });
+
+      const { res } = makeRes();
+      await handler(req('me', { fileName: 'notes.txt' }), res);
+
+      expect(h.createFabFile).toHaveBeenCalledWith(
+        'me',
+        expect.objectContaining({ mimeType: 'image/png' }),
+        expect.anything()
+      );
+    }
+  );
+
+  it('keeps a genuine stored contentType like image/webp', async () => {
+    h.findSessionIdsByImage.mockResolvedValue(['s1']);
+    h.findAllByIds.mockResolvedValue([{ userId: 'me', users: [] }]);
+    h.getMetadata.mockResolvedValue({ contentType: 'image/webp' });
+
+    const { res } = makeRes();
+    await handler(req('me', { fileName: 'notes.txt' }), res);
+
+    expect(h.createFabFile).toHaveBeenCalledWith(
+      'me',
+      expect.objectContaining({ mimeType: 'image/webp' }),
+      expect.anything()
+    );
+  });
 });

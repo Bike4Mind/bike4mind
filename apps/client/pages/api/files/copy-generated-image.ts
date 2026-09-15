@@ -52,12 +52,15 @@ const handler = baseApi()
       const imageBuffer = await getGeneratedImageStorage().download(imageS3Key);
 
       const metadata = await getGeneratedImageStorage().getMetadata(imageS3Key);
+      const storedType = metadata.contentType;
       // An octet-stream (what S3 reports for objects written without an explicit ContentType)
       // carries no type at all, and claim-first would then fall through to the caller-supplied
-      // fileName - storing PNG bytes as whatever "notes.txt" claims. Treat it as absent.
-      const storedType = metadata.contentType;
+      // fileName - storing PNG bytes as whatever "notes.txt" claims. Treat it as absent. This
+      // single substring match is deliberately broader than the two-spelling check in
+      // b4m-core/fab-pipeline/src/ingest.ts, so it also catches cased and parameterised variants
+      // (e.g. "; charset=binary").
       const contentType =
-        !storedType || storedType === 'application/octet-stream' || storedType === 'binary/octet-stream'
+        !storedType || storedType.trim().toLowerCase().includes('octet-stream')
           ? SupportedFabFileMimeTypes.PNG
           : storedType;
 

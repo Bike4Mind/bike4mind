@@ -85,8 +85,10 @@ export function validateSlackFileForIngest(file: SlackAttachment): SlackFileVali
   if (!supported) {
     // Name what actually decided the rejection - the resolved (extension-based) type, or the raw
     // extension when nothing resolved - never `file.mimetype` (only the client's claim, which can
-    // name a type that IS on the allow-list).
-    const reportedType = resolvedMimeType || ext;
+    // name a type that IS on the allow-list). A digit tail that `path.extname` grabbed out of a
+    // date or version suffix is not a type either, so it falls through to the no-type wording.
+    const isDateOrVersionFragment = /^\d+$/.test(ext);
+    const reportedType = resolvedMimeType || (isDateOrVersionFragment ? '' : ext);
     return {
       ok: false,
       reason: 'unsupported_type',

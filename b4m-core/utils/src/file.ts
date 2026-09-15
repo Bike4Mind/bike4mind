@@ -1,6 +1,5 @@
 import path from 'path';
 import { fileTypeFromBuffer } from 'file-type';
-import invert from 'lodash/invert.js';
 import { AudioMimeType, SupportedFabFileMimeTypes, isSupportedFabFileMimeType } from '@bike4mind/common';
 
 /**
@@ -26,14 +25,15 @@ export async function getFileType(
     return { ext: fileType.ext, mime: fileType.mime };
   }
 
-  let ext = getFileExtension(fileName);
+  // getFileExtension always returns a string (possibly ''), so there is no mime -> ext
+  // fallback here. For a genuine mime -> extension lookup, see extensionFromMimeType in
+  // @bike4mind/common.
+  const ext = getFileExtension(fileName);
 
   // Trust a caller-provided MIME type; otherwise treat text as text/plain and
   // everything else as binary.
   const mime =
     currentMimeType || (isPlainText(buffer) ? SupportedFabFileMimeTypes.TXT_PLAIN : 'application/octet-stream');
-
-  ext = ext ?? MIME_TO_EXT[mime as keyof typeof MIME_TO_EXT] ?? '';
 
   return { ext, mime };
 }
@@ -100,44 +100,10 @@ const hasFileExtension = (fileName: string) => getFileExtension(fileName) !== ''
 const isExtensionlessFileName = (fileName: string) => !hasFileExtension(fileName) && !fileName.endsWith('.');
 
 /**
- * Returns the MIME type corresponding to a given file extension.
- * Special handling for configuration files and TypeScript files.
+ * Returns the MIME type corresponding to a given file extension, or '' if unresolved.
  */
 export const getMimeTypeByExtension = (ext: string) => {
   const lowerExt = ext.toLowerCase();
-
-  if (['ini', 'env', 'conf'].includes(lowerExt)) {
-    return SupportedFabFileMimeTypes.TXT_PLAIN;
-  }
-
-  if (lowerExt === 'tsx' || lowerExt === 'ts') {
-    return SupportedFabFileMimeTypes.TS;
-  }
-
-  // Markdown variants (.md and .mdx share the canonical markdown MIME type;
-  // MIME_TO_EXT carries a legacy spelling that would otherwise win the invert)
-  if (lowerExt === 'md' || lowerExt === 'mdx') {
-    return SupportedFabFileMimeTypes.TXT_MARKDOWN;
-  }
-
-  if (lowerExt === 'xls') {
-    return SupportedFabFileMimeTypes.XLS;
-  }
-  if (lowerExt === 'xlsx') {
-    return SupportedFabFileMimeTypes.XLSX;
-  }
-  if (lowerExt === 'docx') {
-    return SupportedFabFileMimeTypes.DOCX;
-  }
-  if (lowerExt === 'pptx') {
-    return SupportedFabFileMimeTypes.PPTX;
-  }
-
-  // .jpeg shares the .jpg MIME type (MIME_TO_EXT only carries the 'jpg' spelling)
-  if (lowerExt === 'jpeg') {
-    return SupportedFabFileMimeTypes.JPG;
-  }
-
   return EXT_TO_MIME[lowerExt] ?? '';
 };
 
@@ -198,71 +164,90 @@ export function resolveSupportedMimeType(
   return { mimeType: '', supported: false };
 }
 
-const MIME_TO_EXT = {
+// The extension allowlist: every key is a deliberate admission decision, canonical and
+// alias spellings alike, as ordinary co-equal entries. Must stay in sync with
+// `guessMimeType` in apps/client/app/utils/folderTreeParser.ts, the client-side map this
+// table is meant to agree with.
+// Null-prototype: a plain object would resolve 'constructor'/'__proto__' to an inherited
+// member, and the truthy result skips the `?? ''` in getMimeTypeByExtension.
+const EXT_TO_MIME: Record<string, string> = Object.assign(Object.create(null), {
   // Text and documents
-  [SupportedFabFileMimeTypes.TXT_PLAIN]: 'txt', // Default extension for plain text, also used for .ini and .env
-  [SupportedFabFileMimeTypes.TXT_MARKDOWN]: 'md',
-  [SupportedFabFileMimeTypes.TXT_MD_LEGACY]: 'md',
-  [SupportedFabFileMimeTypes.HTML]: 'html',
-  [SupportedFabFileMimeTypes.CSV]: 'csv',
+  txt: SupportedFabFileMimeTypes.TXT_PLAIN, // Default extension for plain text, also used for .ini and .env
+  ini: SupportedFabFileMimeTypes.TXT_PLAIN,
+  env: SupportedFabFileMimeTypes.TXT_PLAIN,
+  conf: SupportedFabFileMimeTypes.TXT_PLAIN,
+  log: SupportedFabFileMimeTypes.TXT_PLAIN,
+  // Browser-reported spelling with no client-side counterpart in guessMimeType - it
+  // belongs only here, where a claim needs an extension-side match.
+  text: SupportedFabFileMimeTypes.TXT_PLAIN,
+  md: SupportedFabFileMimeTypes.TXT_MARKDOWN,
+  mdx: SupportedFabFileMimeTypes.TXT_MARKDOWN,
+  html: SupportedFabFileMimeTypes.HTML,
+  htm: SupportedFabFileMimeTypes.HTML,
+  // Browser-reported spelling with no client-side counterpart in guessMimeType.
+  shtml: SupportedFabFileMimeTypes.HTML,
+  csv: SupportedFabFileMimeTypes.CSV,
 
   // Images
-  [SupportedFabFileMimeTypes.JPG]: 'jpg',
-  [SupportedFabFileMimeTypes.PNG]: 'png',
-  [SupportedFabFileMimeTypes.GIF]: 'gif',
-  [SupportedFabFileMimeTypes.SVG]: 'svg',
-  [SupportedFabFileMimeTypes.WEBP]: 'webp',
+  jpg: SupportedFabFileMimeTypes.JPG,
+  jpeg: SupportedFabFileMimeTypes.JPG,
+  jfif: SupportedFabFileMimeTypes.JPG, // Windows/Chrome "Save As" spelling for a JPEG.
+  // Browser-reported spelling with no client-side counterpart in guessMimeType.
+  jpe: SupportedFabFileMimeTypes.JPG,
+  png: SupportedFabFileMimeTypes.PNG,
+  gif: SupportedFabFileMimeTypes.GIF,
+  svg: SupportedFabFileMimeTypes.SVG,
+  webp: SupportedFabFileMimeTypes.WEBP,
 
   // Documents
-  [SupportedFabFileMimeTypes.PDF]: 'pdf',
-  [SupportedFabFileMimeTypes.JSON]: 'json',
-  [SupportedFabFileMimeTypes.XML]: 'xml',
-  [SupportedFabFileMimeTypes.DOCX]: 'docx',
-  [SupportedFabFileMimeTypes.PPTX]: 'pptx',
-  [SupportedFabFileMimeTypes.XLSX]: 'xlsx',
-  [SupportedFabFileMimeTypes.XLS]: 'xls',
+  pdf: SupportedFabFileMimeTypes.PDF,
+  json: SupportedFabFileMimeTypes.JSON,
+  xml: SupportedFabFileMimeTypes.XML,
+  docx: SupportedFabFileMimeTypes.DOCX,
+  pptx: SupportedFabFileMimeTypes.PPTX,
+  xlsx: SupportedFabFileMimeTypes.XLSX,
+  xls: SupportedFabFileMimeTypes.XLS,
 
   // Programming languages
-  [SupportedFabFileMimeTypes.JS]: 'js',
-  [SupportedFabFileMimeTypes.JSX]: 'jsx',
-  [SupportedFabFileMimeTypes.TS]: 'ts', // TSX also maps to 'text/typescript' but is handled separately
-  [SupportedFabFileMimeTypes.PY]: 'py',
-  [SupportedFabFileMimeTypes.JAVA]: 'java',
-  [SupportedFabFileMimeTypes.CPP]: 'cpp',
-  [SupportedFabFileMimeTypes.CS]: 'cs',
-  [SupportedFabFileMimeTypes.PHP]: 'php',
-  [SupportedFabFileMimeTypes.RUBY]: 'rb',
-  [SupportedFabFileMimeTypes.GO]: 'go',
-  [SupportedFabFileMimeTypes.SWIFT]: 'swift',
-  [SupportedFabFileMimeTypes.KOTLIN]: 'kt',
-  [SupportedFabFileMimeTypes.RUST]: 'rs',
-  [SupportedFabFileMimeTypes.CSS]: 'css',
-  [SupportedFabFileMimeTypes.LESS]: 'less',
-  [SupportedFabFileMimeTypes.SASS]: 'sass',
-  [SupportedFabFileMimeTypes.SCSS]: 'scss',
+  js: SupportedFabFileMimeTypes.JS,
+  jsx: SupportedFabFileMimeTypes.JSX,
+  ts: SupportedFabFileMimeTypes.TS,
+  tsx: SupportedFabFileMimeTypes.TS, // TSX shares TS's MIME type ('text/typescript').
+  py: SupportedFabFileMimeTypes.PY,
+  java: SupportedFabFileMimeTypes.JAVA,
+  cpp: SupportedFabFileMimeTypes.CPP,
+  cs: SupportedFabFileMimeTypes.CS,
+  php: SupportedFabFileMimeTypes.PHP,
+  rb: SupportedFabFileMimeTypes.RUBY,
+  go: SupportedFabFileMimeTypes.GO,
+  swift: SupportedFabFileMimeTypes.SWIFT,
+  kt: SupportedFabFileMimeTypes.KOTLIN,
+  rs: SupportedFabFileMimeTypes.RUST,
+  css: SupportedFabFileMimeTypes.CSS,
+  less: SupportedFabFileMimeTypes.LESS,
+  sass: SupportedFabFileMimeTypes.SASS,
+  scss: SupportedFabFileMimeTypes.SCSS,
 
   // Data serialization
-  [SupportedFabFileMimeTypes.YAML]: 'yaml',
-  [SupportedFabFileMimeTypes.TOML]: 'toml',
+  yaml: SupportedFabFileMimeTypes.YAML,
+  yml: SupportedFabFileMimeTypes.YAML,
+  toml: SupportedFabFileMimeTypes.TOML,
 
   // Shell scripts
-  [SupportedFabFileMimeTypes.SH]: 'sh',
-  [SupportedFabFileMimeTypes.BASH]: 'bash',
+  sh: SupportedFabFileMimeTypes.SH,
+  bash: SupportedFabFileMimeTypes.BASH,
 
   // Audio: storable but never ingestable, so these resolve by extension and are then
   // refused or kept by the caller's predicate (isStorableFabFileMimeType accepts them).
-  [AudioMimeType.MP3]: 'mp3',
-  [AudioMimeType.WAV]: 'wav',
-  [AudioMimeType.OPUS]: 'opus',
-  [AudioMimeType.AAC]: 'aac',
-  [AudioMimeType.FLAC]: 'flac',
-  [AudioMimeType.PCM]: 'pcm',
-  [AudioMimeType.OGG]: 'ogg',
-  [AudioMimeType.WEBM]: 'webm',
-} as const;
-
-// Declared after the literal above, not beside its consumer: `MIME_TO_EXT` is a const, so an
-// earlier invert() would hit its temporal dead zone at module load.
-// Null-prototype: a plain object would resolve 'constructor'/'__proto__' to an inherited
-// member, and the truthy result skips the `?? ''` in getMimeTypeByExtension.
-const EXT_TO_MIME: Record<string, string> = Object.assign(Object.create(null), invert(MIME_TO_EXT));
+  mp3: AudioMimeType.MP3,
+  wav: AudioMimeType.WAV,
+  opus: AudioMimeType.OPUS,
+  aac: AudioMimeType.AAC,
+  flac: AudioMimeType.FLAC,
+  pcm: AudioMimeType.PCM,
+  // .webm and .ogg are container extensions that can hold video, so a WebM video still
+  // resolves to audio/webm here and is stored - never chunked - at a storable door; the
+  // storable predicate, not this table, is what gates them.
+  ogg: AudioMimeType.OGG,
+  webm: AudioMimeType.WEBM,
+});

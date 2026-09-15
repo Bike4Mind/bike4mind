@@ -95,21 +95,38 @@ describe('createFabFileByUrl', () => {
     expect(fabFilesCreate.mock.calls[0][0].fileName).toBe('docs.python.org');
   });
 
-  it('creates normally when textContent is a Buffer, including a zero-length one', async () => {
+  it('creates normally when textContent is a non-empty Buffer (the PDF arm)', async () => {
     // The PDF arm of fetchAndParseURL returns raw bytes rather than a string; confirms the
-    // empty-text guard (typeof-checked) does not also catch a legitimately empty Buffer.
+    // zero-length guard does not reject a Buffer that legitimately carries content.
     fetchAndParseURL.mockResolvedValue({
       title: 'report.pdf',
-      textContent: Buffer.alloc(0),
+      textContent: Buffer.from('%PDF-1.4 fake pdf bytes'),
       mimeType: 'application/pdf',
     });
 
     const result = await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, adapters());
 
     expect(result.id).toBe('fab-1');
-    expect(storageUpload).toHaveBeenCalledWith(expect.any(String), Buffer.alloc(0), {
+    expect(storageUpload).toHaveBeenCalledWith(expect.any(String), Buffer.from('%PDF-1.4 fake pdf bytes'), {
       ContentType: 'application/pdf',
     });
+  });
+
+  it('rejects a zero-length Buffer instead of creating a phantom 0-byte PDF file', async () => {
+    // Inverted from a prior version of this test that pinned a zero-length Buffer as an accepted
+    // create - that was the phantom-file bug: a PDF-typed response with an empty body must be
+    // refused the same as an empty extracted string, not treated as "legitimately empty".
+    fetchAndParseURL.mockResolvedValue({
+      title: 'report.pdf',
+      textContent: Buffer.alloc(0),
+      mimeType: 'application/pdf',
+    });
+
+    const thrown: unknown = await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, adapters()).catch(e => e);
+
+    expect(thrown).toBeInstanceOf(BadRequestError);
+    expect((thrown as BadRequestError).message).toMatch(/no readable text/i);
+    expect(fabFilesCreate).not.toHaveBeenCalled();
   });
 
   it('stamps adapter-supplied tags on the created file', async () => {

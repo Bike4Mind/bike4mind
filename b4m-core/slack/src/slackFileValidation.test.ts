@@ -64,7 +64,7 @@ describe('validateSlackFileForIngest', () => {
     }
   );
 
-  it.each(['.env', '.eslintrc', '.prettierrc', '.exe'])(
+  it.each(['.env', '.eslintrc', '.prettierrc'])(
     'accepts dotfile %s - `path.extname` reports no extension for it, same as a bare LICENSE/Dockerfile name, so it must not be refused as unsupported (regression: main accepts these)',
     name => {
       const result = validateSlackFileForIngest(attachment({ name, mimetype: 'text/plain' }));
@@ -72,6 +72,19 @@ describe('validateSlackFileForIngest', () => {
       expect(result.ok).toBe(true);
     }
   );
+
+  // `.exe` resolves the same way - `path.extname('.exe')` is also '' for a leading-dot-only
+  // name, so it takes the same extension-less fallback as the dotfiles above. Not a
+  // regression (main accepts these too); stated on its own because it deliberately includes
+  // a name whose tail happens to look like a binary extension. Checking the tail against the
+  // extension table would not catch it either, since '.exe' resolves to nothing here - the
+  // asymmetry is the point: a digit-tail name like 'backup.001' is refused while '.exe' is
+  // admitted.
+  it('accepts .exe too via the same extension-less fallback, not because it resolves as a type', () => {
+    const result = validateSlackFileForIngest(attachment({ name: '.exe', mimetype: 'text/plain' }));
+
+    expect(result.ok).toBe(true);
+  });
 
   it('rejects payload. - a trailing dot resolves no extension too, but is malformed rather than extension-less, so it must not get the dotfile fallback', () => {
     const result = validateSlackFileForIngest(attachment({ name: 'payload.', mimetype: 'text/plain' }));
@@ -83,15 +96,31 @@ describe('validateSlackFileForIngest', () => {
 
   // Inverted deliberately: a digit tail was exempted as a date/version suffix, which also let
   // any binary in once renamed to 'payload.1'. A dot-tail is an extension that must resolve, and
-  // the rejection names the raw tail because nothing resolved from it.
+  // the rejection still refuses it even though nothing resolved from it.
   it.each(['Meeting notes 2026.09.07', 'My Report v1.2'])(
     'rejects %s - a dot-tail is an extension, not an extension-less name',
     name => {
       const result = validateSlackFileForIngest(attachment({ name, mimetype: 'text/plain' }));
 
       expect(result).toMatchObject({ ok: false, reason: 'unsupported_type' });
+      if (result.ok) throw new Error('expected rejection');
+      // The digit tail is a date/version fragment, not a type - naming it would read as
+      // gibberish, so the message falls through to the "no recognized file type" wording
+      // rather than "unsupported type 07".
+      expect(result.message).toBe(`File "${name}" has no recognized file type.`);
+      expect(result.message).not.toContain('unsupported type');
     }
   );
+
+  it('still names the type for a genuinely unsupported extension, e.g. .exe', () => {
+    const result = validateSlackFileForIngest(
+      attachment({ name: 'malware.exe', mimetype: 'application/octet-stream' })
+    );
+
+    expect(result).toMatchObject({ ok: false, reason: 'unsupported_type' });
+    if (result.ok) throw new Error('expected rejection');
+    expect(result.message).toBe('File "malware.exe" has unsupported type exe.');
+  });
 
   it('still refuses movie.mkv - a real extension-shaped tail stays a type decision, not an extension-less name', () => {
     const result = validateSlackFileForIngest(attachment({ name: 'movie.mkv', mimetype: 'text/plain' }));
