@@ -18,10 +18,17 @@ import { organizationRepository } from '@bike4mind/database/infra';
 import { userRepository } from '@bike4mind/database/auth';
 import { groupRepository } from '@bike4mind/database/social';
 
+// No `force` here, deliberately. The service still accepts a seat-ceiling override for the
+// platform-admin migration path, but a client must never be able to set it and enroll past the
+// seats the org has paid for. Zod strips unknown keys, so a request body carrying `force` has it
+// dropped here and it never reaches the service.
+//
+// Not `.strict()`: this route's declared body type is `{name, email, level}`, so rejecting unknown
+// keys would 400 callers sending fields the route has always ignored. Stripping is what closes the
+// bypass; rejecting would only change who else breaks.
 const addMemberBodySchema = z.object({
   userId: z.string().optional(),
   email: z.string().optional(),
-  force: z.boolean().optional(),
 });
 
 const handler = baseApi()

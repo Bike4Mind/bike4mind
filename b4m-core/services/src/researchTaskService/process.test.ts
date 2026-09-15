@@ -104,6 +104,7 @@ describe('researchTaskService - process', () => {
       findByMetadataUrlAndUserId: vi.fn().mockResolvedValue(null),
       findByMetadataUrlAndOrganizationId: vi.fn().mockResolvedValue(null),
       findByUrlAndOrganizationId: vi.fn().mockResolvedValue(null),
+      findByUrlAndUserIdAndOrganizationId: vi.fn().mockResolvedValue(null),
       findByUrlAndUserId: vi.fn().mockResolvedValue(null),
       existsByUrlAndResearchTaskId: vi.fn().mockResolvedValue(false),
     };
