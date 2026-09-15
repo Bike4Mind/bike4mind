@@ -47,6 +47,14 @@ describe('isAbstention', () => {
   it('scores a substantive short answer as an answer', () => {
     expect(isAbstention('Billing is seat-based with a four-seat minimum.')).toBe(false);
   });
+
+  it('does not skip a short real answer that uses "insufficient" as an ordinary word', () => {
+    // The drop must correlate with grounding, not topic - a question about credit allowance can
+    // legitimately use this word in a substantive answer.
+    expect(
+      isAbstention('Insufficient funds are not the issue here; billing is seat based with a 4 seat minimum.')
+    ).toBe(false);
+  });
 });
 
 describe('buildJudgePrompt', () => {

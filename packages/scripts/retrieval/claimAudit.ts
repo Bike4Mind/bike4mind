@@ -88,13 +88,16 @@ const ABSTENTION_SENTINEL = 'INSUFFICIENT';
  * Matched loosely on purpose: this decides `abstained` (a skip) versus running a judge pass, and a
  * model that emits "INSUFFICIENT." or wraps the sentinel in a sentence has still declined. The
  * strictness that matters is in `parseJudgeResponse`, where a misread would silently invent a rate.
- * A short answer CONTAINING the sentinel is an abstention; a long one that merely mentions it is
- * not, so the length bound keeps a genuine answer discussing insufficiency from being skipped.
+ * The word-boundary match keeps a substantive answer that merely uses "insufficient" as an ordinary
+ * word (e.g. discussing credit allowance) from matching on that substring alone; the short word-count
+ * bound then keeps that same answer - which is not a bare wrapper around the sentinel - from being
+ * skipped, since the drop would otherwise correlate with topic rather than grounding.
  */
 export function isAbstention(answer: string): boolean {
   const trimmed = answer.trim();
   if (trimmed === '') return true;
-  return trimmed.length <= 200 && trimmed.toUpperCase().includes(ABSTENTION_SENTINEL);
+  if (!new RegExp(`\\b${ABSTENTION_SENTINEL}\\b`, 'i').test(trimmed)) return false;
+  return trimmed.split(/\s+/).filter(Boolean).length <= 6;
 }
 
 /**
