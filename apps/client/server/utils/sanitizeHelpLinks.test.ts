@@ -130,4 +130,31 @@ describe('stripFabricatedLinks', () => {
     const input = 'Open any **Notebook**, then use the model selector dropdown.';
     expect(stripFabricatedLinks(input)).toBe(input);
   });
+
+  it('completes on an unclosed markdown-link target without catastrophic backtracking', () => {
+    // The pre-rewrite MARKDOWN_LINK_RE backtracked exponentially on `[a](` followed by
+    // a long run of URL chars with no closing `)`. Linear now: this returns immediately.
+    // (If it ever regresses, this test blows the vitest timeout rather than hanging CI.)
+    // Kept under the 200k defense-in-depth cap so the passthrough assertion is exact.
+    const adversarial = 'preamble ' + '[a](' + 'a'.repeat(150_000);
+    const out = stripFabricatedLinks(adversarial);
+    expect(typeof out).toBe('string');
+    // No closing paren means it was never a link, so the text passes through unchanged.
+    expect(out).toBe(adversarial);
+  });
+
+  it('preserves a genuine external link whose URL is angle-bracket wrapped inside markdown', () => {
+    // The pre-rewrite regex leaked the trailing `>` into the captured URL, corrupting
+    // parsing and wrongly flagging a real autolink target as fabricated. Now the `>` is
+    // excluded (per the file's angle-bracket contract) and the external link survives.
+    const input = 'See [the API](<https://docs.anthropic.com/en/api>) for details.';
+    expect(stripFabricatedLinks(input)).toBe(input);
+  });
+  it('does not truncate a reply longer than the scan cap', () => {
+    // The 200k cap bounds the scan; the tail is re-appended so an oversized reply is
+    // passed through rather than silently cut off mid-sentence.
+    const oversized = 'x'.repeat(250_000) + ' END_MARKER';
+    const out = stripFabricatedLinks(oversized);
+    expect(out).toBe(oversized);
+  });
 });
