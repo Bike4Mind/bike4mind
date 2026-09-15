@@ -119,16 +119,65 @@ export function parseArtifacts(content: string): ArtifactParseResult {
 
 // mapMimeTypeToArtifactType is the single source of truth in @bike4mind/common.
 
+// Linear anchor checks for the fenced-code detectors below. Each detector used to
+// encode a content requirement inside a `(?:.*\n)*?ANCHOR(?:\n.*)*?` regex that
+// backtracks quadratically on a fence with no closing delimiter. Capturing the body
+// with a single lazy group and moving the ANCHOR check here keeps the accept/reject
+// decision identical while running in linear time.
+
+// True when some line has a declaration keyword followed, later on the SAME line, by
+// a component token - the React detector's original requirement (case-insensitive).
+// Checking the earliest declaration is equivalent to the old regex's backtracking:
+// if any declaration has a component token after it, the earliest one does too.
+function hasReactComponentLine(code: string): boolean {
+  const DECLARATIONS = ['function', 'const', 'class'];
+  const COMPONENT_TOKENS = ['component', 'app', 'export default'];
+  for (const rawLine of code.split('\n')) {
+    const line = rawLine.toLowerCase();
+    let declStart = Infinity;
+    let declEnd = -1;
+    for (const decl of DECLARATIONS) {
+      const at = line.indexOf(decl);
+      if (at >= 0 && at < declStart) {
+        declStart = at;
+        declEnd = at + decl.length;
+      }
+    }
+    if (declEnd < 0) continue;
+    const afterDecl = line.slice(declEnd);
+    if (COMPONENT_TOKENS.some(token => afterDecl.includes(token))) return true;
+  }
+  return false;
+}
+
+// A full HTML document: a <!DOCTYPE ...> followed later by a closing </html>.
+function hasFullHtmlDocument(code: string): boolean {
+  const lower = code.toLowerCase();
+  const doctype = lower.indexOf('<!doctype');
+  if (doctype < 0) return false;
+  return lower.indexOf('</html>', doctype + '<!doctype'.length) >= 0;
+}
+
+// A complete SVG: an opening <svg followed later by a closing </svg>.
+function hasCompleteSvg(code: string): boolean {
+  const lower = code.toLowerCase();
+  const open = lower.indexOf('<svg');
+  if (open < 0) return false;
+  return lower.indexOf('</svg>', open + '<svg'.length) >= 0;
+}
+
 /**
  * Post-processes AI responses to detect code blocks that should be artifacts
  * and converts them to proper artifact syntax as a fallback
  */
 export function convertCodeBlocksToArtifacts(content: string): string {
-  // Detect React component code blocks
-  const reactCodeBlockRegex =
-    /```(?:tsx?|javascript|jsx)\s*((?:.*\n)*?.*(?:function|const|class).*(?:Component|App|export default).*(?:\n.*)*?)```/gi;
+  // Detect React component code blocks (body captured linearly; see hasReactComponentLine)
+  const reactCodeBlockRegex = /```(?:tsx?|javascript|jsx)\s*([\s\S]*?)```/gi;
 
   content = content.replace(reactCodeBlockRegex, (match, codeContent) => {
+    // Anchor requirement the old regex encoded inline: a declaration + component token
+    // on one line. Without it, this fence is not a React component - leave it alone.
+    if (!hasReactComponentLine(codeContent)) return match;
     // Check if this looks like a React component
     if (
       codeContent.includes('useState') ||
@@ -147,10 +196,13 @@ ${codeContent.trim()}
     return match;
   });
 
-  // Detect HTML code blocks
-  const htmlCodeBlockRegex = /```html\s*((?:.*\n)*?.*<!DOCTYPE.*(?:\n.*)*?.*<\/html>.*(?:\n.*)*?)```/gi;
+  // Detect full HTML-document code blocks (body captured linearly; see hasFullHtmlDocument).
+  // A fence that is not a full document is left unchanged here so the fragment handler
+  // below still promotes it - preserving the original two-tier behavior.
+  const htmlCodeBlockRegex = /```html\s*([\s\S]*?)```/gi;
 
   content = content.replace(htmlCodeBlockRegex, (match, codeContent) => {
+    if (!hasFullHtmlDocument(codeContent)) return match;
     const title = extractHTMLTitle(codeContent) || 'HTML Page';
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
@@ -174,10 +226,12 @@ ${codeContent.trim()}
 </artifact>`;
   });
 
-  // Detect SVG code blocks
-  const svgCodeBlockRegex = /```svg\s*((?:.*\n)*?.*<svg.*(?:\n.*)*?.*<\/svg>.*(?:\n.*)*?)```/gi;
+  // Detect SVG code blocks (body captured linearly; see hasCompleteSvg)
+  const svgCodeBlockRegex = /```svg\s*([\s\S]*?)```/gi;
 
   content = content.replace(svgCodeBlockRegex, (match, codeContent) => {
+    // Not a complete <svg>...</svg> - leave the fence unchanged.
+    if (!hasCompleteSvg(codeContent)) return match;
     const identifier = 'svg-graphic';
 
     return `<artifact identifier="${identifier}" type="image/svg+xml" title="SVG Graphic">
