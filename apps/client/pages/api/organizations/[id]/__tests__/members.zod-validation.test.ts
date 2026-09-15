@@ -30,6 +30,13 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: any) => fn(),
   organizationRepository: {},
   userRepository: {},
+  // A factory must name every export the module graph reaches, or the missing binding throws.
+  // The lake repos the route passes to the service throw when the handler runs; the audit pair
+  // behind `lakeConfigAuditDb` throws at IMPORT time, taking the suite to zero tests.
+  dataLakeRepository: {},
+  dataLakeAccessGrantRepository: {},
+  lakeConfigChangeEventRepository: {},
+  adminSettingsRepository: {},
 }));
 vi.mock('@bike4mind/database/social', () => ({ groupRepository: {} }));
 vi.mock('@bike4mind/common', async importOriginal => {
