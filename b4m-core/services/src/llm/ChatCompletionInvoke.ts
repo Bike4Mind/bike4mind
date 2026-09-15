@@ -1,6 +1,7 @@
 import {
   canUpdateShareable,
   ChatCompletionInvokeParamsSchema,
+  isPromptMetaModelType,
   isSupportedEmbeddingModel,
   IUserDocument,
   LLMModelConfig,
@@ -169,6 +170,18 @@ export class ChatCompletionInvoke {
       );
     }
 
+    // What promptMeta.model.type is allowed to record, resolved once so the write below needs no
+    // cast. A completion legitimately resolves to text, image or video - the media backends run
+    // through this same path - and speech-to-text is the one catalog type it cannot: that is served
+    // by the transcription route, and dispatching it here would fail at the provider with a raw
+    // error, so reject it up front like a disabled model. An ABSENT type is a separate case and
+    // must not fail the turn: the field is declared required but assembled from discovery feeds and
+    // cached catalog rows, so it degrades to unrecorded and resolveQuestModelType falls back.
+    const modelType = isPromptMetaModelType(model.type) ? model.type : undefined;
+    if (model.type && !modelType) {
+      throw new BadRequestError(`Model "${model.id}" is a ${model.type} model and cannot run a chat completion`);
+    }
+
     // Start sessions.update early (will await later in parallel with admin settings)
     const sessionUpdatePromise = this.db.sessions.update({
       id: sessionId,
@@ -181,7 +194,7 @@ export class ChatCompletionInvoke {
     const promptMeta: Partial<PromptMeta> = {
       model: {
         name: model.id,
-        type: model?.type as 'text' | 'image' | undefined,
+        type: modelType,
         backend: model?.backend,
         contextWindow: model?.contextWindow,
         maxTokens: model?.max_tokens,
