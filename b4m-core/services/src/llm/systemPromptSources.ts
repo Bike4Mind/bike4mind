@@ -41,6 +41,7 @@ export type PromptSourceId =
   | 'recentImages'
   | 'urls'
   | 'attachedFiles'
+  | 'correction'
   | 'callerPrompt';
 
 /**
@@ -72,6 +73,10 @@ export const PROMPT_SOURCE_ORDER: PromptSourceId[] = [
   'recentImages',
   'urls',
   'attachedFiles',
+  // Correct-and-retry framing. Last of the content sources so it sits closest to the turn it
+  // describes: it names an answer the model already gave and tells it what the user said was
+  // wrong, which is only unambiguous once the rest of the context is in place.
+  'correction',
   // Caller-supplied systemPrompt (no SPA control authors it, but /api/ai/llm reaches it too).
   // Appended last, after every source above it -
   // including the caller's own attached files/URLs - so it sits inside the per-caller cached
@@ -137,10 +142,17 @@ export type PromptMode = 'raw' | 'grounded' | 'surface';
  */
 const CALLER_SUPPLIED_SOURCES: PromptSourceId[] = ['extraContext', 'urls', 'attachedFiles', 'callerPrompt'];
 
+/**
+ * Admitted by every mode. The caller's own content, plus the correction framing - which is the
+ * user's own critique of a previous answer, and the one source whose loss would silently turn a
+ * correct-and-retry back into an ordinary turn that answers the critique as if it were a question.
+ */
+const ALWAYS_ADMITTED_SOURCES: PromptSourceId[] = [...CALLER_SUPPLIED_SOURCES, 'correction'];
+
 export const PROMPT_MODE_SOURCES: Record<PromptMode, PromptSourceId[]> = {
-  raw: CALLER_SUPPLIED_SOURCES,
-  grounded: [...CALLER_SUPPLIED_SOURCES, 'knowledgeRetrieval', 'lakeMemory'],
-  surface: [...CALLER_SUPPLIED_SOURCES, 'knowledgeRetrieval', 'lakeMemory', 'organizationPrompt', 'sessionPrompt'],
+  raw: ALWAYS_ADMITTED_SOURCES,
+  grounded: [...ALWAYS_ADMITTED_SOURCES, 'knowledgeRetrieval', 'lakeMemory'],
+  surface: [...ALWAYS_ADMITTED_SOURCES, 'knowledgeRetrieval', 'lakeMemory', 'organizationPrompt', 'sessionPrompt'],
 };
 
 /**
@@ -167,6 +179,11 @@ export const SYSTEM_PROMPT_PRIORITY: Record<PromptSourceId, number> = {
   extraContext: 0,
   urls: 0,
   attachedFiles: 0,
+
+  // Ranked ahead of the tenant/session band because it is not guidance that degrades gracefully:
+  // dropped, the turn still runs, but the model reads the user's critique as a fresh question and
+  // answers it instead of re-answering - a wrong answer that looks like a working feature.
+  correction: 5,
 
   // Authored by the tenant or the session, or invoked by name. Losing one of these changes who the
   // assistant is, which no other source can compensate for.
@@ -299,6 +316,7 @@ export const PROMPT_SOURCE_METADATA: Record<
   recentImages: { origin: 'hardcoded', name: 'recent_images' },
   urls: { origin: 'user', name: 'url_content' },
   attachedFiles: { origin: 'user', name: 'attached_files' },
+  correction: { origin: 'session', name: 'correction' },
   callerPrompt: { origin: 'caller', name: 'caller_prompt' },
 };
 

@@ -256,7 +256,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
   // reason ChatHistory re-rendered on every streaming chunk.)
   const sendMessage = useStableCallback(
     async (messageData: Partial<IChatHistoryItem>, options: SendMessageOptions = { isRetry: false }) => {
-      const { isRetry, isImageEdit, isVariation } = options;
+      const { isRetry, isImageEdit, isVariation, correctsQuestId } = options;
       if (!sessionId) return;
       if (!messageData.prompt) return;
       if (isRetry && !messageData.id) return;
@@ -314,7 +314,10 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
           enableQuestMaster: isQuestMasterEnabled,
           enableMementos: isMementosEnabled,
           enableArtifacts: isArtifactsEnabled,
-          questId: isVariation ? undefined : messageData?.id,
+          // A correction is a new turn, never a re-run of the flagged quest: passing its id as
+          // `questId` would overwrite the very answer the correction chain has to preserve.
+          questId: isVariation || correctsQuestId ? undefined : messageData?.id,
+          correctsQuestId,
           image: options?.image,
           queryClient,
           tools,

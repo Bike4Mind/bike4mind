@@ -189,6 +189,14 @@ describe('filterByPromptMode', () => {
     expect(filterByPromptMode(everything, undefined)).toEqual(everything);
   });
 
+  // Correct-and-retry is reachable from any surface that can send a turn, and the framing is the
+  // only thing separating "re-answer this correctly" from "answer this critique as a question".
+  it('keeps the correction framing under every mode', () => {
+    for (const mode of ['raw', 'grounded', 'surface'] as const) {
+      expect(filterByPromptMode(everything, mode).map(t => t.source)).toContain('correction');
+    }
+  });
+
   it('drops every prompt we inject under raw', () => {
     const kept = filterByPromptMode(everything, 'raw').map(t => t.source);
 
@@ -206,6 +214,7 @@ describe('filterByPromptMode', () => {
       'extraContext',
       'urls',
       'attachedFiles',
+      'correction',
       'callerPrompt',
     ]);
   });
@@ -217,6 +226,7 @@ describe('filterByPromptMode', () => {
       'lakeMemory',
       'urls',
       'attachedFiles',
+      'correction',
       'callerPrompt',
     ]);
   });
@@ -230,6 +240,7 @@ describe('filterByPromptMode', () => {
       'lakeMemory',
       'urls',
       'attachedFiles',
+      'correction',
       'callerPrompt',
     ]);
   });
