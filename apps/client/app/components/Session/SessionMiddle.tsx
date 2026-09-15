@@ -473,8 +473,11 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
                       Previously this lived in a fixed block above SessionBottom,
                       which created a large visual gap between the user prompt
                       (top) and the agent activity (bottom of viewport).
-                      Constrain to the same 950px column the chat bubbles and
-                      input box use — `width: 100%` matters here because the
+                      Constrain to the same 950px column the chat bubbles use.
+                      The prompt bar intentionally widens beyond this (up to
+                      1200px) when both side panels are closed; the asymmetry
+                      is deliberate - the transcript column stays narrow for
+                      readability. `width: 100%` matters here because the
                       footer slot in ChatHistory passes its full container to
                       us; without it, `maxWidth: 950px` alone would let the
                       flex children collapse to their natural width and the
