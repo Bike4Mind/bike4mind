@@ -1,6 +1,5 @@
 import type { InconsistencyKind } from './corpusInconsistency';
 import type { WireLakeMembershipReport } from './lakeMembershipHealth';
-import type { DataLakeStatus } from '../types/entities/DataLakeTypes';
 /**
  * Derived data-lake health (#1666): the retrievability contract as four CHECKABLE predicates plus
  * one headline - "what share of the lake's content can actually reach the model". Health is
@@ -580,14 +579,6 @@ export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & 
    * membership as well as in count.
    */
   duplicateMembers: LakeHealthDuplicatesReport;
-  /**
-   * The lake's LIFECYCLE answer to "can any of this be retrieved", which every predicate above is
-   * blind to: they grade the corpus, and a draft or archived lake with a perfect corpus still serves
-   * nothing (`isLakeServingRetrieval`). Reported beside the corpus figures rather than folded into
-   * them - a non-serving lake is not an ingestion failure, and its predicates stay meaningful for
-   * whoever is preparing it - but it is never "healthy" either, which is what the badge derives.
-   */
-  serving: { status: DataLakeStatus; isServing: boolean };
   /**
    * Lake memory: whether this lake's extracted-fact profile is enabled, present and current.
    * See `LakeMemoryHealth` and `deriveLakeMemoryState` above - the same shape the build door's own

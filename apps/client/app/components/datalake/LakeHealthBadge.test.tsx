@@ -22,7 +22,7 @@ const predicates = (over?: Partial<Record<string, unknown>>) => ({
   ...over,
 });
 
-const serving = (status = 'active') => ({ status, isServing: status === 'active' });
+const serving = (status = 'active') => ({ status, servesRetrieval: status === 'active' });
 
 describe('deriveLakeHealthBadge', () => {
   it('is unknown when nothing is measured (share null), never a false low score', () => {

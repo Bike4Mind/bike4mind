@@ -193,16 +193,6 @@ export const isLakeIngestable = (status?: DataLakeStatus): status is LakeIngesta
   (LAKE_INGESTABLE_STATUSES as readonly (DataLakeStatus | undefined)[]).includes(status);
 
 /**
- * Whether a lake in this status can serve retrieval at all, independent of how complete its corpus
- * is. The two independent retrieval gates - the `status: 'active'` pre-filter in
- * `getDynamicDataLakeTags` and the session-binding rejection in POST /api/sessions - both admit
- * exactly `active`, so a draft, archived or mid-transition lake is browse-only however well it is
- * ingested, chunked and embedded. Keep in step with those gates: lake health reports this as its own
- * state (`LakeHealthApiResponse.serving`) so a fully-indexed non-active lake cannot read as healthy.
- */
-export const isLakeServingRetrieval = (status: DataLakeStatus | null | undefined): boolean => status === 'active';
-
-/**
  * What a terminal lifecycle settle may write alongside the status it settles on: the spent
  * file-sweep marks it clears, and the actor stamp from `lakeConfigWriteStamp`. Deliberately narrow
  * - a settle records the OUTCOME of a transition, so widening this to arbitrary lake fields would

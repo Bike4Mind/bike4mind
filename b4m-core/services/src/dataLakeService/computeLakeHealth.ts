@@ -3,7 +3,6 @@ import {
   deriveLakeMemoryState,
   deriveLakeServingState,
   findDuplicateMembers,
-  isLakeServingRetrieval,
   isLeaseHeld,
   resolveLakeHealthPolicy,
   selectLakeHealthMembers,
@@ -122,7 +121,6 @@ export async function computeLakeHealth(
     | 'lakeMemoryExtractionAt'
     | 'lakeMemoryCursor'
     | 'lastSyncAt'
-    | 'status'
   >,
   { db, logger }: ComputeLakeHealthAdapters
 ): Promise<LakeHealthApiResponse> {
@@ -142,9 +140,6 @@ export async function computeLakeHealth(
       : DEFAULT_PASSAGE_TOKEN_TARGET;
 
   const policy = resolveLakeHealthPolicy({ explicitTarget: lake.requiredPassageTokenTarget, inheritedTarget });
-  // Lifecycle, not corpus: reported unconditionally, including on the empty-lake path below, because
-  // it is the one finding that does not depend on scanning a single member.
-  const serving = { status: lake.status, isServing: isLakeServingRetrieval(lake.status) };
 
   // Independent of the content-predicate scan below and of the empty-lake early return, so it is
   // computed once and reused by both.
@@ -169,7 +164,6 @@ export async function computeLakeHealth(
       scanTruncated: false,
       membership: toWireMembershipReport(summarizeLakeMembership([], { scope: membershipScopeDisclosure(scope) })),
       duplicateMembers: { memberCount: 0, groupCount: 0, groups: [] },
-      serving,
       inconsistency: storedInconsistency(lake),
       lakeMemory,
       serving,
@@ -212,7 +206,6 @@ export async function computeLakeHealth(
         members: g.members.slice(0, DUPLICATE_MEMBERS_PER_GROUP),
       })),
     },
-    serving,
     // READ, never computed here: detection needs chunk text and this function may not touch the chunk
     // collection (#1665). detectLakeInconsistencies writes it; this renders whatever it last wrote.
     inconsistency: storedInconsistency(lake),

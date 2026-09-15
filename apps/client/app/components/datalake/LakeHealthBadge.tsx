@@ -54,7 +54,7 @@ export function deriveLakeHealthBadge(
   // Lifecycle outranks every corpus predicate: a non-active lake serves no retrieval at all, so how
   // well its content is chunked and embedded cannot make it healthy. Reported as its own level
   // rather than as a failure, because nothing is wrong with the corpus.
-  if (serving && !serving.isServing) return 'notServing';
+  if (serving && !serving.servesRetrieval) return 'notServing';
   const anyMemberPredicateFails =
     predicates.chunkWithinPolicy.fail > 0 ||
     predicates.chunkCountConsistent.fail > 0 ||
@@ -92,7 +92,8 @@ const pct = (share: number) => `${Math.round(share * 100)}%`;
 
 /** The chip label leads with the ONE headline metric: reachable content share (#1666). */
 function badgeLabel(level: BadgeLevel, health: LakeHealthApiResponse): string {
-  if (level === 'notServing') return `Not serving: ${health.serving.status}`;
+  const { serving } = health;
+  if (level === 'notServing') return `Not serving: ${serving.status}`;
   if (health.reachableShare === null) {
     // Nothing is measured, so never render a share ("Reachable 0%" - Math.round(null) - would misread
     // as "nothing is reachable"). The level still carries a known defect: P4 -> unhealthy, a failing
@@ -117,7 +118,7 @@ function HealthTooltip({ health, failedFileCount = 0 }: { health: LakeHealthApiR
     predicates.fullyVectorized.fail > 0;
   return (
     <Box sx={{ p: 0.5, maxWidth: 340 }}>
-      {serving && !serving.isServing && (
+      {serving && !serving.servesRetrieval && (
         <Typography level="body-xs" sx={{ fontWeight: 'lg', color: 'warning.400', mb: 0.25 }}>
           This lake is {serving.status}, so it serves no retrieval - search and session bindings skip it whatever the
           figures below say.
