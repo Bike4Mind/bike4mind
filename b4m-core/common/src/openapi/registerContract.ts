@@ -90,9 +90,13 @@ export function registerContract(contract: EndpointContract): void {
     // points a caller at it. zod-to-openapi emits every registered definition,
     // referenced or not.
     if (spec.pollResult) {
+      // Keyed by status, not just operationId: two statuses on one contract both
+      // declaring pollResult would otherwise register the same component name twice,
+      // and whichever registration ran last would silently win for both responses.
+      const pollResultName = `${contract.operationId}${status}PollResult`;
       registry.register(
-        `${contract.operationId}PollResult`,
-        spec.pollResult.schema.openapi(`${contract.operationId}PollResult`, {
+        pollResultName,
+        spec.pollResult.schema.openapi(pollResultName, {
           description: spec.pollResult.description,
           ...(spec.pollResult.example !== undefined && { example: spec.pollResult.example }),
         })

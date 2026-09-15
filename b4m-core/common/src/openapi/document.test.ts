@@ -263,9 +263,9 @@ describe('buildOpenApiDocument', () => {
   // the spec or a contract-faithful client has no documented reason to look.
   it('publishes the chat poll result with the quest error classifier', () => {
     const pollResult = chat.responses['200']['x-poll-result'];
-    expect(pollResult.schema).toEqual(ref('sendChatMessagePollResult'));
+    expect(pollResult.schema).toEqual(ref('sendChatMessage200PollResult'));
 
-    const component = doc.components.schemas.sendChatMessagePollResult;
+    const component = doc.components.schemas.sendChatMessage200PollResult;
     expect(component.properties.type.enum).toContain('error');
     // The same vocabulary the synchronous 422s classify with, not a chat-local one.
     expect(component.properties.errorCode.enum).toEqual([...QUEST_ERROR_CODES]);
@@ -278,7 +278,7 @@ describe('buildOpenApiDocument', () => {
     expect(chat.description).toContain('insufficient_credits');
     expect(chat.description).toMatch(/match on the classifier/i);
     expect(chat.responses['200'].description).toMatch(/errorCode/);
-    expect(doc.components.schemas.sendChatMessagePollResult.description).toMatch(/classifier to match on/);
+    expect(doc.components.schemas.sendChatMessage200PollResult.description).toMatch(/classifier to match on/);
   });
 
   it('emits no orphaned component schemas (every schema is $ref-ed somewhere)', () => {

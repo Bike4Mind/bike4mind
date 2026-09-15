@@ -270,11 +270,17 @@ not optional documentation; a contract that publishes only the handoff invites a
 to consume a credit-exhaustion message as a model reply.
 
 Declare the job resource's outcome fields via `ResponseSpec.pollResult`. It publishes as a
-`<operationId>PollResult` component that the response points at with an `x-poll-result`
-extension rather than as a body of that status, since the body belongs to the poll
-operation. Use the same `errorCode` vocabulary as the synchronous `422`s above -
-`insufficient_credits` / `spend_cap_exceeded` mean the same thing whether they arrive as
-a status or on a job resource. `POST /api/chat` is the reference.
+`<operationId><status>PollResult` component that the response points at with an
+`x-poll-result` extension rather than as a body of that status, since the body belongs to
+the poll operation. Use the same `errorCode` vocabulary as the synchronous `422`s above,
+but only for codes that actually reach the job resource - a check made before the job
+exists (a spend cap, say) surfaces as a synchronous status on its own route instead, never
+on the poll. `POST /api/chat` is the reference.
+
+`agentExecutions.contract.ts` is the exception: its poll target is itself a contract, so it
+needs no `pollResult` indirection, and its `error` field stays free prose (the stored
+reason carries infrastructure identifiers, not a documented vocabulary) rather than a
+classifier.
 
 ---
 

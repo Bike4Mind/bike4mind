@@ -225,11 +225,13 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getJSONData()).toMatchObject({ type: 'error', errorCode: 'insufficient_credits' });
     });
 
-    it('leaves it undefined on a successful turn', async () => {
+    it('omits it on a successful turn', async () => {
       validateWithScopes([ApiKeyScope.AI_CHAT]);
       const { req, res } = fire();
       await handler(req, res);
-      expect(res._getJSONData().errorCode).toBeUndefined();
+      // res.json() drops undefined properties, so `.errorCode` being undefined would
+      // pass whether the handler emits the field or not - the field's absence is the point.
+      expect('errorCode' in res._getJSONData()).toBe(false);
     });
   });
 

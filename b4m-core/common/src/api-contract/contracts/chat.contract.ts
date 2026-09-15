@@ -26,10 +26,11 @@ export const chatContract = defineEndpoint({
     'entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` ' +
     'body and on the polled quest. A turn can FAIL after the ACK - notably when the caller runs out ' +
     'of credits, which is reported on the quest rather than as a status, since the ACK was already ' +
-    'sent: the polled quest is then `type: "error"` with `errorCode: "insufficient_credits"` (or ' +
-    '`"spend_cap_exceeded"`) and the failure text in `reply`. Match on the classifier rather than ' +
-    'reading `reply`, which carries that failure message in the same field a real answer uses. ' +
-    'Authenticate with an API key (`b4m_live_`) or a JWT.',
+    'sent: the polled quest is then `type: "error"` with `errorCode: "insufficient_credits"` and the ' +
+    'failure text in `reply`. Match on the classifier rather than reading `reply`, which carries ' +
+    'that failure message in the same field a real answer uses. A spend-cap-exceeded rejection is ' +
+    'checked before a quest exists and never reaches the poll path; it surfaces as a synchronous ' +
+    '422 on `/api/embed` instead. Authenticate with an API key (`b4m_live_`) or a JWT.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
@@ -42,7 +43,7 @@ export const chatContract = defineEndpoint({
     200: {
       description:
         'Message accepted - NOT a completed turn. The default (async) path returns this queued ACK; ' +
-        'the outcome arrives on `GET /api/quests/{id}` (see the `sendChatMessagePollResult` ' +
+        'the outcome arrives on `GET /api/quests/{id}` (see the `sendChatMessage200PollResult` ' +
         'schema), which reports a failed turn as `type: "error"` plus an `errorCode` classifier. ' +
         'With `wait: true` the body additionally carries the completed reply ' +
         '(`response`/`responses`), `toolPayloads`, `createdAt`, and `performance` timings - fields ' +
@@ -53,12 +54,15 @@ export const chatContract = defineEndpoint({
         description:
           'Outcome fields of the quest polled at `GET /api/quests/{id}` after this ACK. A finished ' +
           'turn that failed is `status: "done"` with `type: "error"` and the failure text in ' +
-          '`reply`, so a caller reading `reply` alone cannot tell a failure from an answer - ' +
-          '`errorCode` is the classifier to match on, and credit exhaustion is ' +
-          '`insufficient_credits` (the balance is short) or `spend_cap_exceeded` (the admin-set ' +
-          'ceiling is reached), the same vocabulary the synchronous 422s on `/api/ai/music`, ' +
-          '`/api/ai/sound-effects` and `/api/ai/tts` use. The poll body carries further fields ' +
-          '(`images`, `files`, `toolPayloads`, `promptMeta`); only the outcome subset is modelled here.',
+          '`reply`, so a caller reading `reply` alone cannot tell a classified failure from an ' +
+          'answer - `errorCode` is the classifier to match on; credit exhaustion arrives here as ' +
+          '`insufficient_credits`, the same vocabulary the synchronous 422s on `/api/ai/music`, ' +
+          '`/api/ai/sound-effects` and `/api/ai/tts` use. (A spend-cap-exceeded rejection is caught ' +
+          'before a quest exists and surfaces as a synchronous 422 on `/api/embed` instead - it ' +
+          'never reaches this poll.) `type`/`errorCode` separate a classified failure only: a run ' +
+          'recovered from a timeout with partial content keeps `type: "message"` even though it did ' +
+          'not finish. The poll body carries further fields (`images`, `files`, `toolPayloads`, ' +
+          '`promptMeta`); only the outcome subset is modelled here.',
         example: {
           id: '664f1c2b9a1e4d0012ab34cd',
           status: 'done',

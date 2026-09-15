@@ -299,7 +299,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
         // would make a generated client parse an ACK as the outcome. The prose
         // lives on the component it points at.
         if (pollResultStatuses?.has(status)) {
-          response['x-poll-result'] = { schema: { $ref: `#/components/schemas/${opId}PollResult` } };
+          response['x-poll-result'] = { schema: { $ref: `#/components/schemas/${opId}${status}PollResult` } };
         }
         if (emitsRateLimitHeaders && !isInjectedAuthFailure(status, declaredStatuses)) {
           response.headers = { ...response.headers, ...RATE_LIMIT_HEADER_SPEC };
