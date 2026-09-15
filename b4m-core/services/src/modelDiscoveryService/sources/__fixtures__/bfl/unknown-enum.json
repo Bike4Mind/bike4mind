@@ -1,0 +1,24 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "BFL API", "version": "0.1.0" },
+  "paths": {
+    "/v1/flux-3-holo": {
+      "post": {
+        "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Flux3HoloInputs" } } } }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Flux3HoloInputs": {
+        "properties": {
+          "prompt": { "type": "string" },
+          "input_image": { "type": "string" },
+          "safety_tolerance": { "type": "integer" },
+          "render_mode": { "type": "string", "enum": ["raster", "volumetric", "holographic"] },
+          "output_format": { "type": "string", "enum": ["jpeg", "png", "gltf"] }
+        }
+      }
+    }
+  }
+}

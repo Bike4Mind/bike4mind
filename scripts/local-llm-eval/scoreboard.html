@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Bike4Mind · Local-LLM Shootout</title>
+<style>
+  :root {
+    /* Bike4Mind brand tokens (from apps/client/app/utils/themes/colors.ts) */
+    --ground:   #0E1214;  /* gray.900 — surface dark */
+    --panel:    #131A1E;  /* raised surface */
+    --panel-2:  #0A3D50;  /* brand.600 deep navy-teal */
+    --stroke:   #1E2C34;  /* hairline */
+    --text:     #D1E4F4;  /* brand.100 light blue text */
+    --muted:    #7C93A3;  /* derived mid */
+    --accent:   #0B6BCB;  /* brand.800 electric blue */
+    --accent-d: #0959AA;  /* brand.900 */
+    --green:    #1FB84B;  /* green.800 — signature B4M green */
+    --emerald:  #10b981;  /* green.400 gradient */
+    --gold:     #FFD700;  /* winner accent */
+    --red:      #EA3D3D;  /* red — fail */
+    --amber:    #E8845A;  /* orange — partial */
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1100px 520px at 78% -8%, rgba(11,107,203,0.20), transparent 60%),
+      radial-gradient(900px 480px at 6% 4%, rgba(31,184,75,0.10), transparent 55%),
+      var(--ground);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* faint workbench grid */
+  body::before {
+    content: "";
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(124,147,163,0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(124,147,163,0.045) 1px, transparent 1px);
+    background-size: 46px 46px;
+    mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, #000 35%, transparent 85%);
+  }
+
+  .wrap { position: relative; z-index: 1; max-width: 1000px; margin: 0 auto; padding: 40px 24px 64px; }
+
+  /* ---- header ---- */
+  header { display: flex; align-items: center; gap: 16px; margin-bottom: 8px; }
+  .mark {
+    width: 42px; height: 42px; border-radius: 11px; flex: none;
+    background: linear-gradient(135deg, var(--green), var(--accent));
+    box-shadow: 0 0 22px rgba(11,107,203,0.45), inset 0 0 0 1px rgba(255,255,255,0.12);
+    display: grid; place-items: center;
+    font-family: var(--mono); font-weight: 700; font-size: 15px; color: #04141d; letter-spacing: -0.5px;
+  }
+  .brand-name { font-family: var(--mono); font-size: 12px; letter-spacing: 4px; color: var(--muted); text-transform: uppercase; }
+  h1 {
+    margin: 2px 0 0; font-size: clamp(30px, 6vw, 52px); line-height: 0.98;
+    font-weight: 800; letter-spacing: -1.5px;
+    background: linear-gradient(92deg, var(--text) 30%, #8fd0ff 70%, var(--green));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .sub {
+    font-family: var(--mono); font-size: 12.5px; color: var(--muted);
+    margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px 18px;
+  }
+  .sub b { color: var(--text); font-weight: 600; }
+  .sub .dot { color: var(--accent); }
+
+  /* ---- hero duel ---- */
+  .duel {
+    margin: 30px 0 36px; display: grid; grid-template-columns: 1fr auto 1fr; gap: 0;
+    border: 1px solid var(--stroke); border-radius: 18px; overflow: hidden;
+    background: linear-gradient(180deg, rgba(10,61,80,0.30), rgba(19,26,30,0.6));
+  }
+  .duel-side { padding: 26px 28px; }
+  .duel-side .role { font-family: var(--mono); font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); }
+  .duel-side .name { font-family: var(--mono); font-size: 17px; font-weight: 700; margin: 6px 0 14px; color: var(--text); }
+  .duel-side .big { font-size: clamp(34px, 7vw, 56px); font-weight: 800; letter-spacing: -2px; line-height: 1; }
+  .duel-side .meta { font-family: var(--mono); font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+  .win .big { color: var(--green); text-shadow: 0 0 26px rgba(31,184,75,0.45); }
+  .lose .big { color: var(--red); }
+  .win { background: radial-gradient(120% 120% at 0% 0%, rgba(31,184,75,0.12), transparent 60%); }
+  .lose { text-align: right; }
+  .vs {
+    display: grid; place-items: center; padding: 0 14px;
+    font-family: var(--mono); font-weight: 800; font-size: 13px; color: var(--muted);
+    border-left: 1px solid var(--stroke); border-right: 1px solid var(--stroke);
+    background: rgba(0,0,0,0.2);
+  }
+  .duel-note {
+    grid-column: 1 / -1; border-top: 1px solid var(--stroke);
+    padding: 14px 28px; font-size: 14px; color: var(--text);
+    background: rgba(0,0,0,0.22);
+  }
+  .duel-note b { color: var(--gold); }
+  .duel-note .flip { color: var(--muted); }
+
+  /* ---- verdict (top recommendations) ---- */
+  .verdict { display: flex; flex-direction: column; gap: 12px; margin: 26px 0 40px; }
+  .vcard {
+    border: 1px solid var(--stroke); border-left: 3px solid var(--tier, var(--accent));
+    border-radius: 12px; padding: 18px 22px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.016), transparent), var(--panel);
+  }
+  .vcard .tier { font-family: var(--mono); font-size: 11px; letter-spacing: 2px; text-transform: uppercase; font-weight: 700; color: var(--tier, var(--accent)); }
+  .vcard .vhead { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin: 8px 0 10px; }
+  .vcard .vname { font-family: var(--mono); font-size: 16px; font-weight: 700; color: var(--text); }
+  .chip { font-family: var(--mono); font-size: 11px; color: var(--muted); border: 1px solid var(--stroke); border-radius: 20px; padding: 2px 9px; white-space: nowrap; }
+  .chip.ok { color: var(--green); border-color: rgba(31,184,75,0.32); }
+  .vcard p { margin: 0; font-size: 14.5px; color: var(--text); }
+  .vcard p b { color: #bfe4ff; font-weight: 600; }
+  .vcard .mut { color: var(--muted); }
+  .vcard.avoid ul { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 9px; }
+  .vcard.avoid li { font-size: 14px; color: var(--text); }
+  .vcard.avoid li .m { font-family: var(--mono); color: #ffb4b4; font-weight: 600; }
+  .vcard.avoid li .warn { color: var(--red); font-weight: 600; }
+
+  /* ---- section heads ---- */
+  .sec-head { display: flex; align-items: baseline; gap: 12px; margin: 0 0 16px; flex-wrap: wrap; }
+  .sec-head h2 { margin: 0; font-size: 14px; letter-spacing: 1.5px; text-transform: uppercase; font-weight: 700; color: var(--text); }
+  .sec-head .hint { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+  .round-badge { font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 1px; color: #04141d; background: var(--accent); padding: 3px 9px; border-radius: 6px; }
+  .round-badge.hard { background: var(--gold); }
+  .section { margin-top: 52px; }
+  .intro { font-size: 14.5px; color: var(--muted); margin: 0 0 20px; max-width: 70ch; }
+  .intro b { color: var(--text); } .intro code { font-family: var(--mono); font-size: 12.5px; color: #9fd6ff; }
+
+  /* ---- leaderboard ---- */
+  .board { display: flex; flex-direction: column; gap: 8px; }
+  .row {
+    display: grid;
+    grid-template-columns: 34px minmax(150px, 1.4fr) 60px 1fr 62px 78px;
+    align-items: center; gap: 14px;
+    padding: 12px 16px; border: 1px solid var(--stroke); border-radius: 12px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.018), transparent), var(--panel);
+  }
+  .row.top { border-color: rgba(255,215,0,0.32); box-shadow: 0 0 0 1px rgba(255,215,0,0.06) inset, 0 6px 24px rgba(0,0,0,0.25); }
+  .row.fail { opacity: 0.82; }
+  .rank { font-family: var(--mono); font-weight: 700; font-size: 16px; text-align: center; color: var(--muted); }
+  .row.top .rank { color: var(--gold); text-shadow: 0 0 14px rgba(255,215,0,0.5); }
+  .model { font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+  .model .flag { display: inline-block; margin-left: 6px; font-size: 11px; }
+  .size { font-family: var(--mono); font-size: 12.5px; color: var(--muted); text-align: right; }
+
+  .bar { height: 14px; border-radius: 6px; background: rgba(124,147,163,0.12); overflow: hidden; position: relative; }
+  .bar > span {
+    position: absolute; inset: 0 100% 0 0; border-radius: 6px;
+    background: linear-gradient(90deg, var(--emerald), var(--green) 55%, var(--accent));
+    box-shadow: 0 0 12px rgba(31,184,75,0.35);
+    animation: fill 1100ms cubic-bezier(.22,.9,.27,1) forwards;
+    animation-delay: calc(var(--i) * 90ms + 200ms);
+  }
+  .bar.partial > span { background: linear-gradient(90deg, #f59e0b, var(--amber)); box-shadow: 0 0 12px rgba(232,132,90,0.4); }
+  .bar.zero > span { background: var(--red); box-shadow: none; }
+  @keyframes fill { to { inset: 0 calc(100% - var(--w)) 0 0; } }
+
+  .score { font-family: var(--mono); font-size: 14px; font-weight: 700; text-align: right; }
+  .score.ok { color: var(--green); }
+  .score.mid { color: var(--amber); }
+  .score.bad { color: var(--red); }
+  .tcell { font-family: var(--mono); font-size: 12.5px; color: var(--muted); text-align: right; }
+  .tcell b { color: var(--text); font-weight: 600; }
+
+  /* ---- mini charts ---- */
+  .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 22px; }
+  .card { border: 1px solid var(--stroke); border-radius: 14px; padding: 20px; background: var(--panel); }
+  .mini { display: flex; flex-direction: column; gap: 9px; }
+  .mini .line { display: grid; grid-template-columns: 132px 1fr 46px; align-items: center; gap: 10px; }
+  .mini .lab { font-family: var(--mono); font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mini .track { height: 9px; border-radius: 5px; background: rgba(124,147,163,0.12); overflow: hidden; position: relative; }
+  .mini .track > span { position: absolute; inset: 0; border-radius: 5px; transform-origin: left; transform: scaleX(var(--f)); }
+  .mini.spd .track > span { background: linear-gradient(90deg, var(--accent), #59c1ff); }
+  .mini.tim .track > span { background: linear-gradient(90deg, #335F70, #8fd0ff); }
+  .mini .val { font-family: var(--mono); font-size: 11.5px; color: var(--text); text-align: right; }
+  .mini .val.ok::after { content: " ✓"; color: var(--green); }
+  .mini .val.bad::after { content: " ✗"; color: var(--red); }
+
+  /* ---- slope chart ---- */
+  .slopewrap { border: 1px solid var(--stroke); border-radius: 14px; padding: 18px 10px 6px; background: var(--panel); overflow-x: auto; }
+  .slopewrap svg { display: block; width: 100%; height: auto; min-width: 540px; }
+  .slope-cap { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin: 8px 12px 6px; }
+
+  /* ---- twist insight ---- */
+  .twist { margin-top: 22px; border: 1px solid var(--stroke); border-left: 3px solid var(--gold); border-radius: 12px; padding: 22px 26px; background: linear-gradient(180deg, rgba(255,215,0,0.05), transparent), var(--panel); }
+  .twist h3 { margin: 0 0 10px; font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--gold); }
+  .twist p { margin: 0 0 11px; font-size: 15px; }
+  .twist p:last-child { margin-bottom: 0; }
+  .twist code { font-family: var(--mono); font-size: 13px; color: #9fd6ff; }
+  .twist .up { color: var(--green); font-weight: 700; }
+  .twist .down { color: var(--red); font-weight: 700; }
+
+  footer { margin-top: 44px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); line-height: 1.7; }
+  footer b { color: var(--text); }
+
+  @media (max-width: 720px) {
+    .duel { grid-template-columns: 1fr; }
+    .vs { border: none; border-top: 1px solid var(--stroke); border-bottom: 1px solid var(--stroke); padding: 8px; }
+    .lose { text-align: left; }
+    .row { grid-template-columns: 28px 1fr 56px; row-gap: 8px; }
+    .row .bar, .row .score, .row .tcell { grid-column: 2 / -1; }
+    .row .rank { grid-row: 1 / 3; }
+    .charts { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .bar > span { animation: none; inset: 0 calc(100% - var(--w)) 0 0; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="mark">b4m</div>
+    <div>
+      <div class="brand-name">Bike4Mind · Cognitive Workbench</div>
+      <h1>Local-LLM Shootout</h1>
+    </div>
+  </header>
+  <div class="sub">
+    <span><span class="dot">▸</span> <b>8 open models</b>, two real Bike4Mind coding tasks</span>
+    <span><span class="dot">▸</span> auto-graded vs. ground-truth · <b>10 cases</b> each</span>
+    <span><span class="dot">▸</span> Rig: <b>Apple M4 Max · 128 GB</b> · Ollama 0.30</span>
+  </div>
+
+  <!-- VERDICT: what to actually run (lead with the action) -->
+  <div class="sec-head" style="margin-top:30px"><h2>What to actually run</h2><span class="hint">start here · battle-tested across both rounds</span></div>
+  <div class="verdict">
+    <div class="vcard" style="--tier:var(--green)">
+      <div class="tier">Default · daily-driver local coder</div>
+      <div class="vhead"><span class="vname">qwen2.5-coder:32b</span><span class="chip ok">10/10 · 10/10</span><span class="chip">19 GB</span><span class="chip">28–32 s</span></div>
+      <p>The one to reach for by default — the <b>only model that scored 10/10 on both rounds</b>, and it did so fastest, with zero reasoning overhead. At 19 GB it loads quickly and leaves most of your 128 GB free. Boring in the best way: ask for a function, get correct code, move on.</p>
+    </div>
+    <div class="vcard" style="--tier:var(--accent)">
+      <div class="tier">Co-equal pick · agentic loops</div>
+      <div class="vhead"><span class="vname">glm-4.7-flash</span><span class="chip ok">10/10 · 10/10</span><span class="chip">19 GB</span><span class="chip">73 t/s</span></div>
+      <p>Matches the coder on correctness in the same 19 GB and <b>generates ~3.5× faster</b> (73 vs 20 tok/s) — ideal for agent loops where calls compound. One catch: it <b>reasons heavily</b> and needed ~2× the token budget to avoid spiraling. Give it room and it nails everything, including the hardest edge case.</p>
+    </div>
+    <div class="vcard" style="--tier:var(--gold)">
+      <div class="tier">★ Speed demon · with a caveat</div>
+      <div class="vhead"><span class="vname">qwen3-coder:30b</span><span class="chip">9/10 hard</span><span class="chip">18 GB</span><span class="chip">~11 s · 108 t/s</span></div>
+      <p>Stunningly fast — <b>~11 s</b> at 108 tok/s, 3–4× quicker than anything else. It aced hard mode <b>except the one trap case</b> (recovering JSON past a decoy brace), exactly where a speed-first model cuts a corner. Brilliant when you can let it run tests and self-correct; risky one-shot.</p>
+    </div>
+    <div class="vcard avoid" style="--tier:var(--red)">
+      <div class="tier">Know the limits</div>
+      <ul>
+        <li><span class="m">deepseek-r1:70b</span> &amp; <span class="m">qwen3.6:27b</span> — both 10/10 but took <span class="warn">8–9 minutes</span> per function. Correct, not interactive.</li>
+        <li><span class="m">VibeThinker-3B</span> — a 3.3 GB marvel that aced the easy task, then <span class="warn">collapsed to 4/10</span> on harder code (a variable-scope bug). Real ceiling.</li>
+        <li><span class="m">qwen3.5:9b</span> — <span class="warn">0/10 both rounds</span>: over-thinks, then ships code that won't even parse.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- HERO: David vs Goliath (Round 1) -->
+  <section class="duel" aria-label="Round 1 headline result">
+    <div class="duel-side win">
+      <div class="role">3.3 GB · reasoning</div>
+      <div class="name">VibeThinker-3B</div>
+      <div class="big">10/10</div>
+      <div class="meta">a 3-billion-param model · perfect score</div>
+    </div>
+    <div class="vs">BEATS</div>
+    <div class="duel-side lose">
+      <div class="role">18 GB · coder-specialist</div>
+      <div class="name">qwen3-coder:30b</div>
+      <div class="big">4/10</div>
+      <div class="meta">killed by a Set-identity bug</div>
+    </div>
+    <div class="duel-note">Round 1: a model <b>5× smaller</b> out-scored the purpose-built coder. <span class="flip">…but hard mode flips it completely — see the plot twist below.</span></div>
+  </section>
+
+  <!-- ROUND 1 -->
+  <div class="section">
+    <div class="sec-head"><span class="round-badge">Round 1</span><h2>Easy — tool-pairing repair</h2><span class="hint">ensureToolPairingIntegrity · pure-function rewrite</span></div>
+    <div class="board" id="board"></div>
+    <div class="charts">
+      <div class="card">
+        <div class="sec-head" style="margin-bottom:14px"><h2>Generation Speed</h2><span class="hint">tok/s</span></div>
+        <div class="mini spd" id="spd"></div>
+      </div>
+      <div class="card">
+        <div class="sec-head" style="margin-bottom:14px"><h2>Time to Answer</h2><span class="hint">log scale</span></div>
+        <div class="mini tim" id="tim"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROUND 2 -->
+  <div class="section">
+    <div class="sec-head"><span class="round-badge hard">Round 2</span><h2>Hard — untrusted LLM-output parsing</h2><span class="hint">tavern/generate-quests bug #8022</span></div>
+    <p class="intro">The real production bug: the endpoint ran <code>JSON.parse()</code> straight on raw LLM output and returned <b>HTTP 500</b> whenever the model replied in prose instead of JSON. Each model had to write a robust <code>parseQuestResponse()</code> surviving 10 cases — prose, fences, JSON buried in text, a <b>decoy <code>{placeholder}</code> brace</b>, shape validation, and never throwing on malformed input.</p>
+    <div class="board" id="board2"></div>
+  </div>
+
+  <!-- THE SLOPE CHART (the synthesis) -->
+  <div class="section">
+    <div class="sec-head"><h2>The plot twist · difficulty isn't linear</h2><span class="hint">score: Round 1 → Round 2</span></div>
+    <div class="slopewrap"><div id="slope"></div></div>
+    <p class="slope-cap">Five models held a flat 10→10. The story is the two crossings: the fast coder rose as the tiny model fell.</p>
+    <div class="twist">
+      <h3>What hard mode revealed</h3>
+      <p><b>It's not reasoning-vs-direct — it's careful-vs-hasty.</b> The lone discriminator on hard mode was recovering JSON past a decoy <code>{placeholder}</code>. Everyone careful caught it — whether by reasoning (<code>glm</code>, <code>gpt-oss</code>, <code>deepseek</code>) or by disciplined coding (<code>qwen2.5-coder</code>). Only the speed-first <code>qwen3-coder</code> cut that corner.</p>
+      <p><span class="up">▲ qwen3-coder: 4 → 9.</span> The "easy" task hid a subtler trap (an object-identity <code>Set</code> bug) than the "hard" one. Difficulty isn't where you'd guess.</p>
+      <p><span class="down">▼ VibeThinker-3B: 10 → 4.</span> The 3 GB model kept variable scope straight on simple code but not complex code — it declared a value inside a <code>try</code> and used it outside. <b>That's where parameter count finally bit.</b> The easy task masked the ceiling; the hard task surfaced it.</p>
+    </div>
+  </div>
+
+  <footer>
+    <b>Method:</b> each model got the identical spec one-shot (temp 0.2) and wrote the function in CommonJS; graded on deep-equality clones (Round 1 also catches input mutation; Round 2 counts any thrown exception as a failure). Reasoning models given a 32k-token budget so a long chain of thought can still finish.<br>
+    <b>Tasks are real Bike4Mind code:</b> <code style="font-size:11px">ensureToolPairingIntegrity</code> (b4m-core/llm-adapters) and the <code style="font-size:11px">tavern/generate-quests</code> fix for issue #8022.
+  </footer>
+</div>
+
+<script>
+  // ---------- Round 1 (easy) ----------
+  const DATA = [
+    { rank: 1, model: "qwen2.5-coder:32b", size: "19 GB",  score: 10, time: 32,  tps: 22,  flag: "" },
+    { rank: 2, model: "glm-4.7-flash",     size: "19 GB",  score: 10, time: 45,  tps: 76,  flag: "" },
+    { rank: 3, model: "gpt-oss:120b",      size: "65 GB",  score: 10, time: 45,  tps: 66,  flag: "" },
+    { rank: 4, model: "VibeThinker-3B",    size: "3.3 GB", score: 10, time: 74,  tps: 104, flag: "⭐" },
+    { rank: 5, model: "qwen3.6:27b",       size: "17 GB",  score: 10, time: 298, tps: 22,  flag: "" },
+    { rank: 6, model: "deepseek-r1:70b",   size: "42 GB",  score: 10, time: 576, tps: 9,   flag: "" },
+    { rank: 7, model: "qwen3-coder:30b",   size: "18 GB",  score: 4,  time: 7.2, tps: 111, flag: "⚡" },
+    { rank: 8, model: "qwen3.5:9b",        size: "6.6 GB", score: 0,  time: 249, tps: 64,  flag: "✖" },
+  ];
+
+  // ---------- Round 2 (hard) ----------
+  const DATA2 = [
+    { rank: 1, model: "qwen2.5-coder:32b", size: "19 GB",  score: 10, time: 28,  tps: 20,  flag: "" },
+    { rank: 2, model: "glm-4.7-flash",     size: "19 GB",  score: 10, time: 45,  tps: 73,  flag: "" },
+    { rank: 3, model: "gpt-oss:120b",      size: "65 GB",  score: 10, time: 58,  tps: 64,  flag: "" },
+    { rank: 4, model: "qwen3.6:27b",       size: "17 GB",  score: 10, time: 480, tps: 21,  flag: "" },
+    { rank: 5, model: "deepseek-r1:70b",   size: "42 GB",  score: 10, time: 558, tps: 10,  flag: "" },
+    { rank: 6, model: "qwen3-coder:30b",   size: "18 GB",  score: 9,  time: 11,  tps: 108, flag: "⚡" },
+    { rank: 7, model: "VibeThinker-3B",    size: "3.3 GB", score: 4,  time: 113, tps: 96,  flag: "▼" },
+    { rank: 8, model: "qwen3.5:9b",        size: "6.6 GB", score: 0,  time: 175, tps: 60,  flag: "✖" },
+  ];
+
+  const medal = (r) => (r === 1 ? "①" : r === 2 ? "②" : r === 3 ? "③" : r);
+  function renderBoard(id, data) {
+    const board = document.getElementById(id);
+    data.forEach((d, i) => {
+      const cls = d.score === 10 ? "ok" : d.score === 0 ? "bad" : "mid";
+      const barCls = d.score === 10 ? "" : d.score === 0 ? "zero" : "partial";
+      const el = document.createElement("div");
+      el.className = "row" + (d.rank === 1 ? " top" : "") + (d.score < 5 ? " fail" : "");
+      el.innerHTML =
+        '<div class="rank">' + medal(d.rank) + '</div>' +
+        '<div class="model">' + d.model + (d.flag ? ' <span class="flag">' + d.flag + '</span>' : '') + '</div>' +
+        '<div class="size">' + d.size + '</div>' +
+        '<div class="bar ' + barCls + '" style="--i:' + i + ';--w:' + (d.score * 10) + '%"><span></span></div>' +
+        '<div class="score ' + cls + '">' + d.score + '/10</div>' +
+        '<div class="tcell"><b>' + d.time + 's</b><br>' + d.tps + ' t/s</div>';
+      board.appendChild(el);
+    });
+  }
+  renderBoard("board", DATA);
+  renderBoard("board2", DATA2);
+
+  // ---------- Round 1 mini charts ----------
+  const maxT = Math.max(...DATA.map(d => d.tps));
+  const spd = document.getElementById("spd");
+  [...DATA].sort((a, b) => b.tps - a.tps).forEach(d => {
+    const el = document.createElement("div");
+    el.className = "line";
+    el.innerHTML = '<div class="lab">' + d.model + '</div>' +
+      '<div class="track"><span style="--f:' + (d.tps / maxT).toFixed(3) + '"></span></div>' +
+      '<div class="val">' + d.tps + '</div>';
+    spd.appendChild(el);
+  });
+  const lt = DATA.map(d => Math.log10(d.time));
+  const mn = Math.min(...lt), mx = Math.max(...lt);
+  const tim = document.getElementById("tim");
+  [...DATA].sort((a, b) => a.time - b.time).forEach(d => {
+    const f = (Math.log10(d.time) - mn) / (mx - mn);
+    const el = document.createElement("div");
+    el.className = "line";
+    el.innerHTML = '<div class="lab">' + d.model + '</div>' +
+      '<div class="track"><span style="--f:' + Math.max(0.04, f).toFixed(3) + '"></span></div>' +
+      '<div class="val ' + (d.score === 10 ? "ok" : "bad") + '">' + d.time + 's</div>';
+    tim.appendChild(el);
+  });
+
+  // ---------- Slope chart (Round 1 -> Round 2) ----------
+  (function () {
+    const W = 760, H = 348, L = 168, R = 472, TOP = 52, BOT = 300;
+    const y = (s) => TOP + (10 - s) / 10 * (BOT - TOP);
+    const lines = [
+      { e: 10, h: 10, color: "#7C93A3", w: 4, dash: "", label: "5 models · 10 → 10", sub: "qwen2.5-coder · glm · gpt-oss · qwen3.6 · deepseek" },
+      { e: 4,  h: 9,  color: "#FFD700", w: 3.5, dash: "", label: "▲ qwen3-coder · 4 → 9" },
+      { e: 10, h: 4,  color: "#EA3D3D", w: 3.5, dash: "", label: "▼ VibeThinker-3B · 10 → 4" },
+      { e: 0,  h: 0,  color: "#7a4a52", w: 2.5, dash: "5 5", label: "qwen3.5:9b · 0 → 0" },
+    ];
+    const NS = "http://www.w3.org/2000/svg";
+    let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Slope chart of scores from Round 1 to Round 2">`;
+    // gridlines + y ticks
+    for (const score of [0, 5, 10]) {
+      const yy = y(score);
+      s += `<line x1="${L}" y1="${yy}" x2="${R}" y2="${yy}" stroke="#1E2C34" stroke-width="1"/>`;
+      s += `<text x="${L - 12}" y="${yy + 4}" text-anchor="end" font-family="${'ui-monospace, Menlo, monospace'}" font-size="11" fill="#5d7180">${score}</text>`;
+      s += `<text x="${R + 12}" y="${yy + 4}" text-anchor="start" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#5d7180" opacity="0.0">${score}</text>`;
+    }
+    // axis end caps
+    s += `<line x1="${L}" y1="${TOP}" x2="${L}" y2="${BOT}" stroke="#2a3942" stroke-width="1.5"/>`;
+    s += `<line x1="${R}" y1="${TOP}" x2="${R}" y2="${BOT}" stroke="#2a3942" stroke-width="1.5"/>`;
+    // column headers
+    s += `<text x="${L}" y="${TOP - 22}" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12" font-weight="700" fill="#D1E4F4" letter-spacing="2">EASY</text>`;
+    s += `<text x="${L}" y="${TOP - 8}" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="10" fill="#5d7180">tool-pairing</text>`;
+    s += `<text x="${R}" y="${TOP - 22}" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="12" font-weight="700" fill="#FFD700" letter-spacing="2">HARD</text>`;
+    s += `<text x="${R}" y="${TOP - 8}" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="10" fill="#5d7180">#8022 parsing</text>`;
+    // lines
+    for (const ln of lines) {
+      const y1 = y(ln.e), y2 = y(ln.h);
+      s += `<line x1="${L}" y1="${y1}" x2="${R}" y2="${y2}" stroke="${ln.color}" stroke-width="${ln.w}" ${ln.dash ? `stroke-dasharray="${ln.dash}"` : ""} stroke-linecap="round" opacity="0.92"/>`;
+      s += `<circle cx="${L}" cy="${y1}" r="4.5" fill="${ln.color}"/>`;
+      s += `<circle cx="${R}" cy="${y2}" r="4.5" fill="${ln.color}"/>`;
+      s += `<text x="${R + 16}" y="${y2 + (ln.sub ? 0 : 4)}" text-anchor="start" font-family="ui-monospace, Menlo, monospace" font-size="12" font-weight="700" fill="${ln.color}">${ln.label}</text>`;
+      if (ln.sub) s += `<text x="${R + 16}" y="${y2 + 15}" text-anchor="start" font-family="ui-monospace, Menlo, monospace" font-size="9.5" fill="#5d7180">${ln.sub}</text>`;
+    }
+    s += `</svg>`;
+    document.getElementById("slope").innerHTML = s;
+  })();
+</script>
+</body>
+</html>

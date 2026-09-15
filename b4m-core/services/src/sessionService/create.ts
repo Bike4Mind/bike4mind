@@ -1,0 +1,165 @@
+import { secureParameters } from '@bike4mind/utils';
+import {
+  RETRIEVAL_EXCLUDE_MARKER_MAX_LENGTH,
+  RETRIEVAL_EXCLUDE_MARKERS_MAX,
+} from '@bike4mind/utils/retrievalExclusion';
+import {
+  DATA_LAKE_GROUNDING_MODES,
+  IAgentRepository,
+  IFabFileRepository,
+  IProjectRepository,
+  ISessionDocument,
+  ISessionRepository,
+  IUserDocument,
+} from '@bike4mind/common';
+import { z } from 'zod';
+import { Logger } from '@bike4mind/observability';
+import { usableSessionIds } from '../utils/objectIds';
+import * as projectService from '../projectService';
+import { deriveRetrievalTagsFromFiles, type DeriveRetrievalTagsAdapters } from './deriveRetrievalTags';
+
+const createSessionParametersSchema = z.object({
+  name: z.string(),
+  knowledgeIds: z.array(z.string()).optional(),
+  artifactIds: z.array(z.string()).optional(),
+  agentIds: z.array(z.string()).optional(),
+  systemPromptText: z.string().optional(),
+  systemPromptId: z.string().optional(),
+  surface: z.string().optional(),
+  enabledTools: z.array(z.string()).optional(),
+  disabledTools: z.array(z.string()).optional(),
+  disableUserIntegrations: z.boolean().optional(),
+  forceKnowledgeRetrieval: z.boolean().optional(),
+  retrievalTags: z.array(z.string()).optional(),
+  // Marks the `retrievalTags` above as a deliberate selection, so an EMPTY one scopes the
+  // lake-memory card to nothing instead of widening to every entitled lake.
+  lakeScopeExplicit: z.boolean().optional(),
+  // Resolved from the lake at the create route (resolveLakeSessionDefaults) whenever `dataLakeId`
+  // is set: the route deletes the client-sent value there, so the lake is authoritative. A session
+  // that names a lake ONLY by `retrievalTags` keeps the caller's own mode, having no lake-defaults
+  // merge for it to override.
+  // secureParameters strips unknown keys, so it MUST be declared here or the resolved grounding mode
+  // is silently dropped and the completion path falls back to size-only behavior.
+  corpusGroundingMode: z.enum(DATA_LAKE_GROUNDING_MODES).optional(),
+  // secureParameters strips unknown keys, so these MUST be declared here or a surface's
+  // retrieval-exclusion opt-in is silently dropped at create time.
+  retrievalExcludeFilenameMarkers: z
+    .array(z.string().trim().min(1).max(RETRIEVAL_EXCLUDE_MARKER_MAX_LENGTH))
+    .max(RETRIEVAL_EXCLUDE_MARKERS_MAX)
+    .optional(),
+  retrievalVectorizedOnly: z.boolean().optional(),
+  citationStyle: z.enum(['named', 'indexed']).optional(),
+  temperature: z.number().optional(),
+  maxToolCalls: z.number().int().positive().optional(),
+  autoNamePlaceholder: z.string().optional(),
+  tags: z.array(z.object({ name: z.string(), strength: z.number() })).optional(),
+  summary: z.string().optional(),
+  summaryAt: z.date().optional(),
+  clonedSourceId: z.string().optional().nullable(),
+  forkedSourceId: z.string().optional().nullable(),
+  projectId: z.string().optional(),
+  lastUsedModel: z.string().optional().nullable(),
+});
+
+type CreateSessionParameters = z.infer<typeof createSessionParametersSchema>;
+
+/**
+ * Compile-time guard for the manage-but-not-member admission. `preauthorizedLakeIds` must never
+ * become a `createSession` input: the create route authorizes it with `canManageLake` and writes it
+ * in a separate call afterwards, so no copy path (fork/snip/clone) can carry it. Adding the key to
+ * the schema above resolves the argument to `false` and fails the build.
+ *
+ * This lives here rather than as a `@ts-expect-error` in create.test.ts because tsconfig.json
+ * excludes test files, so an assertion in one is in no typecheck program and can never fail.
+ */
+type AssertTrue<T extends true> = T;
+export type CreateSessionParametersOmitPreauthorizedLakeIds = AssertTrue<
+  'preauthorizedLakeIds' extends keyof CreateSessionParameters ? false : true
+>;
+
+export interface CreateSessionAdapters {
+  db: {
+    sessions: ISessionRepository;
+    projects: IProjectRepository;
+    fabFiles: IFabFileRepository;
+    agents: IAgentRepository;
+  };
+  /** Optional so existing callers compile; without it a failed lake-tag derivation is silent. */
+  logger?: Logger;
+  /** Lets the lake-tag derivation see lake-membership files - see DeriveRetrievalTagsAdapters. */
+  resolveLakeAccess?: DeriveRetrievalTagsAdapters['resolveLakeAccess'];
+}
+
+export const createSession = async (
+  user: IUserDocument,
+  parameters: CreateSessionParameters,
+  adapters: CreateSessionAdapters
+) => {
+  const { db } = adapters;
+  const {
+    knowledgeIds: rawKnowledgeIds = [],
+    artifactIds = [],
+    agentIds: rawAgentIds = [],
+    projectId,
+    ...rest
+  } = secureParameters(parameters, createSessionParametersSchema);
+
+  // Both arrays reference ObjectId-keyed collections; artifactIds does not. See usableSessionIds.
+  // NOTE: notebookImportService writes sessions through sessionRepository.create directly, so it
+  // does NOT pass through here - the read-side guards still carry rows it produces.
+  const dropLogger = adapters.logger ?? Logger.globalInstance;
+  const knowledgeIds = usableSessionIds(rawKnowledgeIds, 'knowledge', dropLogger);
+  const agentIds = usableSessionIds(rawAgentIds, 'agent', dropLogger);
+
+  // Explicit wins: a caller that already resolved a lake (resolveLakeSessionDefaults) or hand-set
+  // tags is authoritative, so derivation runs only for a file-seeded session that named neither.
+  // Derives from the filtered ids: an unusable one addresses no file, and fabFiles is _id-keyed.
+  // `lakeScopeExplicit` counts as explicit even with no tags: a caller who deliberately selected
+  // no lake must not have one derived back from the files they attached.
+  const retrievalTags =
+    rest.retrievalTags?.length || rest.lakeScopeExplicit || knowledgeIds.length === 0
+      ? rest.retrievalTags
+      : await deriveRetrievalTagsFromFiles(user, knowledgeIds, adapters);
+
+  // Object-level authz: only attach agents the caller can actually access (owner +
+  // user-shares + group-shares). Foreign ids are filtered out (not replaced by the query
+  // result) so the caller's original order and duplicates are preserved.
+  const accessibleAgentIds = agentIds.length
+    ? new Set((await db.agents.shareable.findAllAccessibleByIds(user, agentIds)).map(agent => agent.id))
+    : null;
+  const authorizedAgentIds = accessibleAgentIds ? agentIds.filter(id => accessibleAgentIds.has(id)) : agentIds;
+
+  const buildData: Omit<ISessionDocument, 'id'> = {
+    groups: [],
+    users: [],
+    isGlobalRead: false,
+    isGlobalWrite: false,
+    clonedSourceId: rest.clonedSourceId ?? null,
+    forkedSourceId: rest.forkedSourceId ?? null,
+    lastUsedModel: rest.lastUsedModel ?? null,
+
+    ...rest,
+
+    // After ...rest so the derived value wins over the (absent) request value it stands in for.
+    ...(retrievalTags?.length ? { retrievalTags } : {}),
+    userId: user.id,
+    knowledgeIds,
+    artifactIds,
+    agentIds: authorizedAgentIds,
+    firstCreated: new Date(),
+    lastUpdated: new Date(),
+    updatedAt: new Date(),
+    createdAt: new Date(),
+  };
+
+  const notebook = await db.sessions.create(buildData);
+
+  if (projectId) {
+    const project = await db.projects.shareable.findAccessibleById(user, projectId);
+    if (project) {
+      await projectService.addSessions(user, { projectId: project.id, sessionIds: [notebook.id] }, adapters);
+    }
+  }
+
+  return notebook;
+};

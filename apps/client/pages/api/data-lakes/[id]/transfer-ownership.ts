@@ -1,0 +1,106 @@
+import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_OR_SHARE_SCOPES, assertDataLakeShareScope } from '@server/dataLakes/dataLakeScopes';
+import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { dataLakeService } from '@bike4mind/services';
+import {
+  withTransaction,
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  userRepository,
+  organizationRepository,
+} from '@bike4mind/database';
+import { Request } from 'express';
+import { z } from 'zod';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
+
+const TransferOwnershipInput = z.object({
+  newOwnerUserId: z.string().min(1),
+});
+
+/**
+ * GET  /api/data-lakes/:id/transfer-ownership -> { data: LakeOwnershipCandidateList }
+ * POST /api/data-lakes/:id/transfer-ownership  { newOwnerUserId }
+ *
+ * The GET is the option set behind the transfer picker: who this caller may hand the lake to. It is
+ * on the same route as the action deliberately - one resource, one access gate, and the candidate
+ * rule shared with the POST's validation (`lakeOwnershipCandidates`) rather than re-derived, so the
+ * UI can never offer a teammate the POST would reject. It returns an EMPTY list rather than a 403
+ * when the caller may read but not transfer, so the modal simply shows no control.
+ *
+ * The POST transfers a lake's ownership to another user. Ownership is carried by an owner-role access grant
+ * (not `createdByUserId`, which stays the immutable creator), so this upserts an owner grant for the
+ * new owner and demotes prior owners to curator. Access-gated first (not-found-style denial), then
+ * the service enforces the narrower transfer authorization (platform admin, current effective owner,
+ * or an admin of the lake's org - the orphaned-creator succession path) and validates the new owner.
+ */
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_OR_SHARE_SCOPES })
+  .use(requireFeatureEnabled('EnableDataLakes'))
+  .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
+    const { id } = req.query;
+    const ctx = await toAccessContext(req);
+
+    // Same not-found-style read gate as the POST: a lake the caller cannot see is not disclosed.
+    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    });
+
+    const data = await dataLakeService.listLakeOwnershipCandidates(lake, ctx, {
+      db: {
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        users: userRepository,
+        organizations: organizationRepository,
+      },
+    });
+
+    return res.json({ data });
+  })
+  .post(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
+    assertDataLakeShareScope(req);
+    const { id } = req.query;
+    const { newOwnerUserId } = TransferOwnershipInput.parse(req.body);
+    const ctx = await toAccessContext(req);
+
+    const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
+
+    // Transaction: the grant read this transfer decides from, and the grant writes it then makes,
+    // must be one unit. `transferLakeOwnership` is adapter-injected and connection-free by design,
+    // so it takes no session itself and its docblock names this route as where the wrapping
+    // belongs. Two things need it. Within the transfer, a failure mid-loop otherwise leaves the
+    // lake with two effective owners and no audit row to explain it. Across operations, a departure
+    // (`lapseDepartedMemberLakeAccess`, the only other writer of an `owner` grant) can commit
+    // between this gate and these writes - and the demotion loop below would then resurrect the
+    // member who just left, by upserting them to `curator` with `expiresAt: null` over the row the
+    // departure expired. Both paths being transactional is what turns that into a write conflict
+    // Mongo aborts and retries, at which point the gate re-reads the grants and sees the departure.
+    // The gate therefore has to be INSIDE the callback: a retry must re-read, not reuse the
+    // snapshot that was already stale.
+    const result = await withTransaction(async () => {
+      // Resolve + access-gate the lake first, so a caller who can't even see it gets a not-found
+      // (no existence leak). The service then applies the stricter transfer authorization, to the
+      // grants this gate already read rather than a second copy of them.
+      const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
+        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      });
+
+      return dataLakeService.transferLakeOwnership(actor, lake, grants, newOwnerUserId, {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          users: userRepository,
+          organizations: organizationRepository,
+          ...lakeConfigAuditDb,
+        },
+        logger: req.logger,
+      });
+    });
+
+    return res.json(result);
+  });
+
+export const config = {
+  api: { externalResolver: true },
+};
+
+export default handler;

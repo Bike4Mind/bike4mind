@@ -1,0 +1,541 @@
+import {
+  IOrganizationDocument,
+  Permission,
+  IOrganizationRepository,
+  IUserShare,
+  ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+  ORG_MEMBERSHIP_ACL_PERMISSIONS,
+} from '@bike4mind/common';
+import mongoose, { HydratedDocument, Model, Schema } from 'mongoose';
+import { softDeletePlugin } from '../../../utils/mongo';
+import BaseRepository from '@bike4mind/db-core';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
+import { ShareableDocumentRepository, ShareableDocumentSchema } from '../../content/SharableDocumentModel';
+
+export interface IOrganizationObject extends HydratedDocument<IOrganizationDocument> {}
+
+interface IOrganizationModel extends Model<IOrganizationDocument, {}> {
+  isNew: boolean;
+  // Accepts a targeted partial (id + only the changed fields), not just a whole document -
+  // the static below just $sets whatever it is handed, and passing a partial is how callers
+  // avoid reverting a concurrent write to fields they did not touch.
+  update: (organization: Partial<IOrganizationDocument> & { id: string }) => Promise<unknown>;
+  findShareAccessById: (userId: string, id: string) => Promise<IOrganizationDocument | null>;
+}
+
+// The users[] ACL permission values that constitute org membership, from the one shared definition
+// (see the constant for why 'write' counts and why it is not a Permission enum member). Consumed
+// here only by orgMembershipFilter below, which is what keeps this file's two call sites agreeing;
+// shared with the engine's derived member counts (assembleLakeAccessView's org holderCount), which
+// must count exactly the members this gate admits.
+const MEMBER_PERMISSIONS = ORG_MEMBERSHIP_ACL_PERMISSIONS;
+
+/**
+ * THE org-membership predicate: billing owner OR a users[] ACL row granting read/write.
+ *
+ * Both call sites must describe the same membership or an org becomes selectable-but-unreadable:
+ * `search()` backs the account-switcher list, which is where BOTH data-lake write paths (create and
+ * visibility promotion, via `resolveActiveOrg`) get the org id they stamp, while
+ * `findMembershipOrgIds` backs the read scope (`AccessContext.organizationIds`) that decides which
+ * org lakes list. #1648 was exactly that disagreement - a lake created in the
+ * switched-to org was invisible in its creator's own manager - so the shape lives here once rather
+ * than as two hand-synced `$or` blocks that a new arm could widen on one side only.
+ *
+ * Deliberately NO groups arm, unlike the shareable ACL (`findAccessibleById`) that the write-side
+ * `resolveActiveOrg` validates against; see that function's note on the wider write predicate.
+ *
+ * Deliberately NO managerId/adminUserIds arms either, and #2005 is the reason to keep it that way:
+ * org-admin rights DO grant lake visibility, but they earn it through `AccessContext
+ * .administeredOrgIds` (`findIdsWithAdminRights` -> the org-admin arm of `findAccessible`), not by
+ * being folded in here. Widening this predicate would reach the switcher and therefore
+ * `resolveActiveOrg`, turning "may administer that org" into "may write as that org" - a privilege
+ * change, not a visibility fix. Admin rights and membership are meant to be different sets.
+ */
+const orgMembershipFilter = (userId: string): Record<string, unknown> => ({
+  $or: [{ userId }, { users: { $elemMatch: { userId, permissions: { $in: MEMBER_PERMISSIONS } } } }],
+});
+
+const OrganizationSchema = new Schema<IOrganizationDocument>(
+  {
+    ...ShareableDocumentSchema,
+    name: {
+      type: String,
+      required: true,
+    },
+    personal: {
+      type: Boolean,
+      default: true,
+    },
+    description: {
+      type: String,
+      required: false,
+    },
+    billingContact: {
+      type: String,
+      required: false,
+    },
+    seats: {
+      type: Number,
+      default: 10,
+    },
+    userId: {
+      type: String,
+      required: true,
+    },
+    managerId: {
+      type: String,
+      required: false,
+      default: null,
+    },
+    // Group-type keys this org may have (platform-admin writes only). Default empty = fail-closed.
+    allowedGroupTypes: { type: [String], default: [] },
+    // Org admins appointed by the billing owner / platform admin (not a Permission verb, not on users[]).
+    adminUserIds: { type: [String], default: [] },
+    // `users[]` (the shareable ACL, from IShareableDocument) is AUTHORITATIVE for org membership -
+    // every membership check reads it. `userDetails[]` below is a per-member credit side-table
+    // (usedCredits / lastCreditUsedAt), NOT a membership list; keep the two in sync but never treat
+    // userDetails as the source of truth for "is X a member" (org-groups #1173).
+    userDetails: [
+      {
+        id: {
+          type: String,
+          required: true,
+        },
+        email: {
+          type: String,
+          required: true,
+        },
+        name: {
+          type: String,
+          required: true,
+        },
+        usedCredits: {
+          type: Number,
+          default: 0,
+        },
+        lastCreditUsedAt: {
+          type: Date,
+          default: null,
+        },
+      },
+    ],
+    currentCredits: {
+      type: Number,
+      default: 0,
+      required: false,
+    },
+    lastCreditsPurchasedAt: {
+      type: Date,
+      default: null,
+      required: false,
+    },
+    logoFileId: {
+      type: Schema.Types.ObjectId,
+      ref: 'AppFile',
+    },
+    stripeCustomerId: {
+      type: String,
+      required: false,
+      default: null,
+    },
+    /**
+     * Organization-wide system prompt applied to all team-member conversations. Lets
+     * enterprise customers set domain-specific context that overrides model training
+     * biases (e.g., a company focused on lunar space elevators).
+     */
+    systemPrompt: {
+      type: String,
+      default: '',
+      maxlength: 10000, // ~2500 tokens
+    },
+    preferredModel: { type: String },
+    temperature: { type: Number, min: 0, max: 2 },
+    maxTokens: { type: Number, min: 1, max: 200000 },
+    maxCreditsPerMember: { type: Number, required: false },
+  },
+  {
+    virtuals: true,
+    timestamps: true,
+    toJSON: {
+      virtuals: true,
+    },
+    toObject: {
+      virtuals: true,
+    },
+    statics: {
+      findShareAccessById: async function (userId: string, id: string) {
+        const result = await this.findOne({ _id: id, 'users.userId': userId });
+
+        if (!result) return null;
+
+        result.users.find((u: IUserShare) => u.userId && u.permissions.includes(Permission.share));
+
+        return result;
+      },
+      update: function (organization: Partial<IOrganizationDocument> & { id: string }) {
+        return this.updateOne({ _id: organization.id }, { $set: organization });
+      },
+    },
+  }
+);
+
+OrganizationSchema.virtual('logo', {
+  ref: 'AppFile',
+  localField: 'logoFileId',
+  foreignField: '_id',
+  justOne: true,
+});
+
+// Default seats are applied by the organization manager / creating action, not a pre('save')
+// hook - keep schema-side side effects out of the model so the source of the value is explicit.
+
+OrganizationSchema.plugin(softDeletePlugin);
+
+// Per CLAUDE.md MongoDB guideline: performance indexes declared together here,
+// never as `index: true` on field definitions. `userId` (billing owner) and
+// `managerId` back `findIdsAdministeredBy`'s `$or`, which is on the hot path of
+// every `/api/skills` list call. `adminUserIds` backs the third arm of
+// `findIdsWithAdminRights`'s `$or` (#1668) - Mongo index-unions an `$or` only when EVERY
+// branch is index-supported, so without this the org-admin resolution `toAccessContext` runs
+// on every non-admin data-lake request would plan a full `organizations` collscan.
+OrganizationSchema.index({ userId: 1 });
+OrganizationSchema.index({ managerId: 1 });
+// Backs findMembershipOrgIds' reverse lookup (users[] ACL by member) - previously every
+// membership question collscanned. The owner arm rides the existing { userId: 1 } index.
+OrganizationSchema.index({ 'users.userId': 1 });
+OrganizationSchema.index({ adminUserIds: 1 });
+
+export const Organization =
+  (mongoose.models.Organization as IOrganizationModel) ??
+  mongoose.model<IOrganizationDocument, IOrganizationModel>('Organization', OrganizationSchema);
+
+export class OrganizationRepository extends BaseRepository<IOrganizationDocument> implements IOrganizationRepository {
+  shareable: IOrganizationRepository['shareable'];
+
+  constructor(
+    private organizationModel: IOrganizationModel,
+    extensions: {
+      shareable: IOrganizationRepository['shareable'];
+    }
+  ) {
+    super(organizationModel);
+    this.shareable = extensions.shareable;
+  }
+
+  async findByStripeCustomerId(stripeCustomerId: string): Promise<IOrganizationDocument | null> {
+    return this.organizationModel.findOne({ stripeCustomerId });
+  }
+
+  /**
+   * Atomically increment the credits of an organization
+   * @param organizationId - The ID of the organization
+   * @param amount - The amount to increment by (can be negative for decrements)
+   * @returns The updated organization document
+   */
+  async incrementCredits(organizationId: string, amount: number): Promise<IOrganizationDocument | null> {
+    return this.organizationModel.findByIdAndUpdate(
+      organizationId,
+      { $inc: { currentCredits: amount } },
+      { new: true }
+    );
+  }
+
+  /**
+   * Atomically add a member and raise the seat ceiling to fit, in ONE updateOne
+   * (aggregation pipeline) - the domain-signup auto-add path for orgs NOT billed through Stripe
+   * (#1239). Concurrency-safe by construction:
+   *  - the `users.userId != member` filter is idempotent (a racing duplicate add matches no
+   *    doc and returns null), and
+   *  - `seats` is raised with `$max` to the POST-add owner-inclusive team size (`$size users + 2`:
+   *    the owner is not a `users[]` row but still holds a seat, plus the member being added), the
+   *    same owner-inclusive accounting `addMember`/`validateSeatChange` use (#1423). Never blindly
+   *    incremented - so N racing joins land N members with `seats` equal to that size, never a
+   *    double-raise past it.
+   *
+   * `deletedAt: null` keeps the write off a soft-deleted org: the softDeletePlugin only hooks
+   * `find`/`findOne`, not `findOneAndUpdate`, so without this a delete landing between the caller's
+   * read and this write would grow a dead org's ceiling.
+   *
+   * Returns the PRE-image ({ new: false }) - the caller derives before/after seats from this one
+   * atomically-matched document rather than from an earlier read, so two racers can't report
+   * overlapping ranges. Null means the user is already a member (the guard), the org is gone, or the
+   * org is at `ORGANIZATION_SUBSCRIPTION_MAX_SEATS` (see CLAMP below).
+   * `$$NOW` stamps `updatedAt` since a pipeline update bypasses Mongoose's timestamp hook.
+   *
+   * NOTE (Stripe): this deliberately does NOT touch `subscriptions.quantity` or Stripe's billed
+   * quantity, so it must never run for a Stripe-billed org - a raise it doesn't know about would be
+   * force-reverted by the next `customer.subscription.updated` webhook. `applyPartnerRuleMembership`
+   * routes Stripe-billed orgs to `addMemberIfUnderCeiling` instead.
+   *
+   * CLAMP (#1424): the `$size(users) < MAX_SEATS - 1` guard caps the raise at the ceiling. MAX is an
+   * owner-inclusive ceiling (`validateSeatChange` clamps the owner+members+pending floor at it), so the
+   * post-add owner-inclusive size (`$size users + 2`) must stay <= MAX, i.e. pre-add members must be
+   * < MAX - 1 (#1423). Without a clamp a full org grew a `seats` floor above
+   * `ORGANIZATION_SUBSCRIPTION_MAX_SEATS`, wedging every later `setSeats`. At the ceiling the add
+   * matches no doc and returns null - the caller routes that to the same 'at-capacity' outcome the
+   * Stripe path already uses (an admin is alerted to add seats), rather than raising past the ceiling.
+   */
+  async addMemberRaisingSeats(
+    organizationId: string,
+    member: IOrganizationDocument['users'][number]
+  ): Promise<IOrganizationDocument | null> {
+    return this.organizationModel.findOneAndUpdate(
+      {
+        _id: organizationId,
+        deletedAt: null,
+        'users.userId': { $ne: member.userId },
+        $expr: { $lt: [{ $size: '$users' }, ORGANIZATION_SUBSCRIPTION_MAX_SEATS - 1] },
+      },
+      [
+        {
+          $set: {
+            users: { $concatArrays: ['$users', [member]] },
+            seats: { $max: ['$seats', { $add: [{ $size: '$users' }, 2] }] },
+            updatedAt: '$$NOW',
+          },
+        },
+      ],
+      { new: false }
+    );
+  }
+
+  /**
+   * Atomically add a member ONLY if it fits under the current seat ceiling, never raising it - the
+   * domain-signup auto-add path for Stripe-billed orgs (#1239). Raising a Stripe org's ceiling out
+   * of band would desync the billed quantity and get force-reverted by the next subscription
+   * webhook, so such an org keeps its ceiling and a candidate past it is rejected (the caller then
+   * alerts an admin to add seats through the billing-aware path).
+   *
+   * The `$expr` capacity guard (`$size users + 1 < seats`: owner + members must leave room for one
+   * more, the same owner-inclusive accounting `addMember`/`validateSeatChange` use, #1423) is
+   * evaluated inside the atomic match, so the fit check can't race the write.
+   * Returns the PRE-image ({ new: false }); null means already a member, org gone, OR at capacity -
+   * the caller re-reads to tell those apart.
+   */
+  async addMemberIfUnderCeiling(
+    organizationId: string,
+    member: IOrganizationDocument['users'][number]
+  ): Promise<IOrganizationDocument | null> {
+    return this.organizationModel.findOneAndUpdate(
+      {
+        _id: organizationId,
+        deletedAt: null,
+        'users.userId': { $ne: member.userId },
+        $expr: { $lt: [{ $add: [{ $size: '$users' }, 1] }, '$seats'] },
+      },
+      [
+        {
+          $set: {
+            users: { $concatArrays: ['$users', [member]] },
+            updatedAt: '$$NOW',
+          },
+        },
+      ],
+      { new: false }
+    );
+  }
+
+  /**
+   * Search for organizations with filtering, sorting, and pagination
+   *
+   * @param options - Search options
+   * @returns Paginated result of organizations
+   */
+  async search(
+    query: string,
+    filters: { personal?: boolean; name?: string; userId?: string },
+    pagination: { page: number; limit: number },
+    orderBy: { field: keyof IOrganizationDocument; direction: 'asc' | 'desc' }
+  ): Promise<{
+    data: IOrganizationDocument[];
+    hasMore: boolean;
+    total: number;
+  }> {
+    const q: Record<string, unknown> = {};
+
+    if (query) {
+      q.$or = [
+        { name: { $regex: escapeRegex(query), $options: 'si' } },
+        { description: { $regex: escapeRegex(query), $options: 'si' } },
+      ];
+    }
+
+    if (filters) {
+      if (filters.personal !== undefined) {
+        q.personal = filters.personal;
+      }
+
+      if (filters.name) {
+        q.name = { $regex: escapeRegex(filters.name), $options: 'i' };
+      }
+
+      if (filters.userId) {
+        q.$and = [orgMembershipFilter(filters.userId)];
+
+        if (q.$or) {
+          (q.$and as unknown[]).push({ $or: q.$or });
+          delete q.$or; // Remove the $or field to avoid conflicts
+        }
+      }
+    }
+
+    const page = pagination.page || 1;
+    const limit = pagination.limit || 10;
+
+    const sortField = orderBy.field || 'name';
+    const sortDirection = orderBy.direction || 'asc';
+
+    const skip = (page - 1) * limit;
+
+    const sort: Record<string, 1 | -1> = {
+      [sortField]: sortDirection === 'asc' ? 1 : -1,
+    };
+
+    const organizations = await this.organizationModel
+      .find(q)
+      .sort(sort)
+      .skip(skip)
+      .limit(limit + 1);
+
+    const total = await this.organizationModel.countDocuments(q);
+
+    const hasMore = organizations.length === limit + 1;
+    if (hasMore) organizations.pop();
+
+    return {
+      data: organizations,
+      hasMore,
+      total,
+    };
+  }
+
+  async findByIdAndUserId(id: string, userId: string): Promise<IOrganizationDocument | null> {
+    const result = await this.organizationModel.findOne({ _id: id, userId });
+    return result?.toObject() || null;
+  }
+
+  /**
+   * IDs of every organization the user administers (billing owner or assigned
+   * manager). Used to surface org-scoped resources - e.g. org-scoped skills -
+   * to the people who can manage them, without widening visibility to all
+   * members. Returns a bare id list (projection-only) so callers can feed it
+   * straight into an `$in` filter.
+   */
+  async findIdsAdministeredBy(userId: string): Promise<string[]> {
+    const orgs = await this.organizationModel
+      .find({ $or: [{ userId }, { managerId: userId }] })
+      .select('_id')
+      .lean();
+    return orgs.map(org => org._id.toString());
+  }
+
+  async findMembershipOrgIds(userId: string): Promise<string[]> {
+    const docs = await this.organizationModel.find(orgMembershipFilter(userId), { _id: 1 }).lean();
+    return docs.map(d => String(d._id));
+  }
+
+  async findIdsWithAdminRights(userId: string): Promise<string[]> {
+    // Billing owner OR team manager OR an appointed org admin (adminUserIds). Broader than
+    // findIdsAdministeredBy, which omits appointed admins - see the interface doc for why this is a
+    // separate method. Matches the org-admin semantics of assertCanManageOrgGroups (billing owner +
+    // adminUserIds), extended with managerId for parity with findIdsAdministeredBy.
+    const orgs = await this.organizationModel
+      .find({ $or: [{ userId }, { managerId: userId }, { adminUserIds: userId }] })
+      .select('_id')
+      .lean();
+    return orgs.map(org => org._id.toString());
+  }
+
+  async incrementCurrentStorage(organizationId: string, count: number): Promise<void> {
+    await this.organizationModel.findByIdAndUpdate(organizationId, [
+      {
+        $set: {
+          currentStorageSize: {
+            $max: [0, { $add: [{ $ifNull: ['$currentStorageSize', 0] }, count] }],
+          },
+        },
+      },
+      { new: true },
+    ]);
+  }
+
+  /**
+   * Seed a zero-usage `userDetails` row for a member if one is not already present. Safe to call on
+   * every membership grant and as a self-heal before a spend: the `userDetails.id != member.id`
+   * guard means a member who already has a row matches no document and the `$push` is skipped.
+   * Not fully atomic - two concurrent calls for the same brand-new member can both pass the `$ne`
+   * guard and push, leaving a duplicate row (the positional `$inc` then tracks only the first). The
+   * window is a single member's first-ever spend and the downside is undercounting, not overcharge,
+   * so it is accepted rather than guarded with a unique index (same tradeoff as `addMember`'s `$ne`).
+   *
+   * WHY THIS EXISTS: `updateUserDetails` increments via the positional `$` operator, which can only
+   * update an element that already exists - it cannot create the row it positions on. A member with
+   * no row therefore tracks no usage and is invisible to `maxCreditsPerMember` (reads `usedCredits`
+   * as 0 forever). Every path that adds a member (`create`, `addMember`, `applyPartnerRuleMembership`)
+   * must seed the row so `users[]` and `userDetails[]` stay in sync at the grant point
+   * (schema comment above).
+   */
+  async ensureUserDetails(organizationId: string, member: { id: string; email: string; name: string }): Promise<void> {
+    await this.organizationModel.updateOne(
+      { _id: organizationId, 'userDetails.id': { $ne: member.id } },
+      {
+        $push: {
+          userDetails: {
+            id: member.id,
+            email: member.email,
+            name: member.name,
+            usedCredits: 0,
+            lastCreditUsedAt: null,
+          },
+        },
+      }
+    );
+  }
+
+  /**
+   * Update a user's usage details within an organization.
+   * Uses $inc for creditsDelta (atomic increment) and $set for lastCreditUsedAt
+   * to avoid race conditions with concurrent requests.
+   *
+   * The caller must ensure a `userDetails` row exists first (see `ensureUserDetails`): the positional
+   * `$` operator here updates an existing element and cannot create one, so a missing row makes this
+   * a no-op (logged below).
+   *
+   * @param organizationId - The ID of the organization
+   * @param userId - The ID of the user within the organization
+   * @param updates - creditsDelta uses $inc for atomicity, lastCreditUsedAt uses $set
+   */
+  async updateUserDetails(
+    organizationId: string,
+    userId: string,
+    updates: { creditsDelta?: number; lastCreditUsedAt?: Date }
+  ): Promise<void> {
+    const updateOps: Record<string, Record<string, unknown>> = {};
+
+    if (updates.creditsDelta !== undefined) {
+      updateOps.$inc = { 'userDetails.$.usedCredits': updates.creditsDelta };
+    }
+    if (updates.lastCreditUsedAt !== undefined) {
+      updateOps.$set = { 'userDetails.$.lastCreditUsedAt': updates.lastCreditUsedAt };
+    }
+
+    if (Object.keys(updateOps).length > 0) {
+      const result = await this.organizationModel.updateOne(
+        { _id: organizationId, 'userDetails.id': userId },
+        updateOps
+      );
+
+      if (result.matchedCount === 0) {
+        console.warn(
+          `updateUserDetails: No userDetails entry found for user ${userId} in organization ${organizationId}. ` +
+            'Credits were deducted from the org but usage was not tracked for this user.'
+        );
+      }
+    }
+  }
+}
+
+export const organizationRepository = new OrganizationRepository(Organization, {
+  shareable: new ShareableDocumentRepository(Organization),
+});
+export default Organization;

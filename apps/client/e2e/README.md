@@ -1,0 +1,414 @@
+# Playwright E2E Tests
+
+End-to-end tests for the Bike4Mind client application using [Playwright](https://playwright.dev/).
+
+## Quick Start
+
+```bash
+# From apps/client/
+pnpm test:e2e:setup    # Installs Chromium + creates .env.e2e interactively
+pnpm test:e2e          # Run all tests
+```
+
+If you prefer manual setup:
+
+```bash
+# 1. Install browser
+npx playwright install chromium --with-deps
+
+# 2. Create environment file
+cp .env.e2e.example .env.e2e
+# Fill in the required values (see Environment Variables below)
+
+# 3. Run tests
+pnpm test:e2e
+```
+
+## Manual login on a preview (QA — no Playwright)
+
+If you just need to **sign into a PR preview by hand** (not run the automated suite),
+you don't need any of the Playwright setup below. The app is passwordless, and preview
+envs have open self-registration **off**, so use the standing seeded accounts that every
+preview auto-creates:
+
+| Account | Role |
+|---|---|
+| `qa-admin-e2e@test.com` | Admin (default credits, admin settings) |
+| `qa-user-e2e@test.com` | Regular user |
+
+Steps:
+
+1. Go to `https://app.pr<N>.preview.bike4mind.com/login`, enter the email, click **Continue**.
+2. Fetch the one-time code (the `-e2e@test.com` addresses expose it via the gated test endpoint):
+   ```bash
+   curl -s -H "x-e2e-cleanup-secret: $E2E_CLEANUP_SECRET" \
+     "https://app.pr<N>.preview.bike4mind.com/api/test/otc-code?email=qa-admin-e2e@test.com"
+   # → {"code":"123456"}
+   ```
+3. Type the 6-digit code → **Verify Code** → you're in.
+
+`$E2E_CLEANUP_SECRET` is one shared value, the same on every preview and stable across redeploys — see
+[Environment Variables](#environment-variables) for what it is and how to get it.
+
+Notes: codes expire in 10 min and are single-use (use **Resend code** + re-fetch if needed);
+there's a 30s cooldown per email and 5 sends / 15 min per IP; only `-e2e@test.com` emails work
+with the code endpoint. These seeded accounts exist **only on preview stages** (the seeder refuses
+to run anywhere else). Once #9762 (edge-gated open signup) lands, you'll self-register on previews
+with your own inbox instead.
+
+## Available Scripts
+
+Run from `apps/client/`:
+
+| Script | Description |
+|--------|-------------|
+| `pnpm test:e2e:setup` | Interactive setup — installs Chromium and creates `.env.e2e` |
+| `pnpm test:e2e` | Run all tests in headless mode |
+| `pnpm test:e2e:ui` | Open Playwright UI mode (interactive test runner) |
+| `pnpm test:e2e:headed` | Run tests with a visible browser window |
+| `pnpm test:e2e:report` | Open the HTML test report from the last run |
+
+You can also pass Playwright CLI flags directly:
+
+```bash
+# Run a specific test file
+pnpm test:e2e -- auth.spec.ts
+
+# Run tests matching a name pattern
+pnpm test:e2e -- -g "should log in"
+
+# Run with a specific number of workers
+PW_WORKERS=1 pnpm test:e2e
+```
+
+## Environment Variables
+
+Copy `.env.e2e.example` to `.env.e2e` and fill in the values:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `API_URL` | Yes | Base URL of the app (default: `http://localhost:3000`) |
+| `E2E_TEST_ID` | No* | Prefix for test user isolation (e.g., `alice`). **Required in practice on any shared stage:** when empty, cleanup runs unscoped and hard-deletes every ephemeral `-e2e@test.com` user on the target stage, including the live users of anyone else's in-flight run. CI does not depend on this variable — `e2e-run.yml` always appends a per-run `gh<run_id>` scope. |
+| `E2E_CLEANUP_SECRET` | Yes* | Shared secret for the `/api/test/*` endpoints (create-user, cleanup, otc-code). **Same value on every stage** (previews, staging, production) — each deploy writes the deployer's `E2E_CLEANUP_SECRET` GitHub secret into that stage's SST secret, so it does not change between deploys. Required when running without SST context (staging/preview); falls back to the SST Resource if unset. Get the value from the team secret store, or read it per-stage: `./for-env bike4mind-previews npx sst secret list --stage pr<N> \| grep E2E_CLEANUP_SECRET`. Never commit the literal value. |
+| `PW_WORKERS` | No | Number of parallel workers (default: 1) |
+
+## Project Structure
+
+```
+e2e/
+├── core.setup.ts              # Creates core test users (admin/manager) and seeds auth state
+├── global-setup.ts            # Pre-run cleanup of stale test data
+├── global-teardown.ts         # Post-run cleanup
+├── fixtures.ts                # Custom fixtures (page objects, helpers)
+├── constants.ts               # Timeout values (TIMEOUTS.ACTION, etc.)
+│
+├── .auth/                     # Stored authentication state (gitignored)
+│   ├── admin.json             # Admin browser state
+│   ├── user.json              # Regular user browser state
+│   └── test-users.json        # Test user credentials for API calls
+│
+├── helpers/
+│   ├── api.ts                 # API client (create test users, create/delete resources)
+│   ├── auth-seed.ts           # Token-seed auth (writes tokens to localStorage / storageState)
+│   ├── test-users.ts          # Test user credential management
+│   └── console-tracker.ts     # Console error tracking & filtering
+│
+├── pages/                     # Page Object Model classes
+│   ├── BasePage.ts            # Common utilities (clearStorage, dismissModals, waitForToast)
+│   ├── LoginPage.ts           # Login flow
+│   ├── SignupPage.ts          # Signup flow
+│   ├── NavigationPage.ts      # Sidebar navigation
+│   ├── ChatPage.ts            # Chat / AI interactions
+│   ├── NotebookPage.ts        # Notebook operations
+│   ├── ProjectsPage.ts        # Project CRUD
+│   ├── ProfilePage.ts         # User profile
+│   ├── AdminPage.ts           # Admin dashboard
+│   ├── AgentsPage.ts          # Agents feature
+│   ├── FileUploadPage.ts      # File handling
+│   └── ModelSelectorPage.ts   # Model selection
+│
+└── *.spec.ts                  # Test specs (auth, signup, projects, etc.)
+```
+
+## Test Projects
+
+The Playwright config defines four projects that run in dependency order:
+
+```
+setup → unauthenticated
+      → admin
+      → chromium
+```
+
+| Project | Purpose | Auth State |
+|---------|---------|------------|
+| **setup** | Creates test users, logs them in, saves browser state | None (creates auth) |
+| **unauthenticated** | Login and signup flows | None (tests auth UI) |
+| **websocket-auth** | WebSocket token gates (`typ`, tokenVersion revocation) | None (mints throwaway users) |
+| **admin** | Admin-only features (dashboard, settings) | `.auth/admin.json` |
+| **chromium** | Main test suite (everything except auth/signup/admin) | `.auth/user.json` |
+
+The `setup` project runs first (serially) and the other three depend on it. This means test users are created once and their browser sessions are reused across all tests.
+
+## Authentication Flow
+
+The app is passwordless — users sign in with a one-time code (OTC) emailed to
+them. The E2E suite does **not** drive that UI to authenticate. Instead, setup
+**token-seeds** auth: `/api/test/create-user` returns real access/refresh tokens,
+and the suite writes them straight into the app's persisted `localStorage` and a
+Playwright `storageState` file. No password, no OTC email, no UI round-trip.
+
+The core setup (`core.setup.ts`) and per-spec setups (`helpers/spec-setup.ts`)
+run before the tests:
+
+1. **Creates test users** via `/api/test/create-user` with timestamped emails (e.g., `setup-admin-17100000-e2e@test.com`, or `setup-admin-alice-17100000-e2e@test.com` if `E2E_TEST_ID=alice`). The response carries `accessToken` + `refreshToken`.
+2. **Configures features** — enables Agents globally (admin setting) and per-user (preferences)
+3. **Seeds auth** — `seedAuthStorageState` (in `helpers/auth-seed.ts`) plants the returned refresh token as the app's HttpOnly `b4m_rt` cookie and saves the browser's `storageState` to `.auth/`. The app's cold-load silent refresh exchanges it for an access token on the first navigation; nothing is written to localStorage.
+4. **Saves credentials** to `.auth/*-data.json` (including tokens) for API-based test setup and mid-test user switching
+5. **Creates invite code** for the signup spec
+
+For mid-test user switching, `seedAuthOnPage` swaps the same cookie on a live
+page's context and navigates to `/` to bootstrap the authenticated app. An agent
+(Claude Code + Playwright MCP) authenticates the same way — by cookie-seeding, not
+by a password/OTC UI round-trip.
+
+`/api/test/create-user` also accepts **no `email`** (omit it or pass `null`) to mint an *emailless* account - the shape an OAuth signup with no provider-verified email produces (see `verifyCallback`'s create path). Such an account cannot receive a login one-time code, so enter it through the returned tokens or **Admin → Login as User**. The username must then end in `-e2e` so cleanup can still find it; the same two-tier rule as emails applies (`qa-emailless-e2e` is standing and never swept, `qa-emailless-12345678-e2e` is reclaimed by the aged sweep).
+
+Before setup runs, `global-setup.ts` calls `/api/test/cleanup` to remove stale test users from prior runs. After all tests, `global-teardown.ts` does the same.
+
+Both calls are **scoped to this run's `E2E_TEST_ID`**, so a run can only ever delete its own
+users. Every CI workflow supplies a non-empty id (`e2e-run.yml` derives `gh<run_id>`;
+`e2e-ai-latency.yml` derives one per matrix cell), because an unscoped sweep deletes every
+ephemeral e2e user on the stage and will kill a concurrent suite mid-test — its users vanish,
+the app 401s, and the tests fail with unrelated-looking timeouts.
+
+Because a per-run scope never matches a previous run's leftovers, `global-setup` also passes
+`staleMinutes` to sweep users orphaned by runs that died before their own teardown. The endpoint
+floors that window (see `server/utils/e2eCleanupScope.ts`), so it can only reach runs that are
+long finished — never one still in flight.
+
+### Completing an OTC login/registration in a test (no mailbox needed)
+
+On non-production stages, `GET /api/test/otc-code?email=<addr>` returns the plaintext
+code that `/api/otc/send` just emailed — so Playwright (and QA automation) can complete
+the passwordless flow without reading a real inbox. Gating: `isE2EEnabled()` (hard-false
+on production), the `x-e2e-cleanup-secret` header, and a `-e2e@test.com` email restriction
+(it can never reveal a real user's code). Pattern:
+
+```ts
+await loginPage.goto();
+await loginPage.fillEmail(user.email);           // triggers /api/otc/send
+const { code } = await (await request.get(
+  `${baseURL}/api/test/otc-code?email=${encodeURIComponent(user.email)}`,
+  { headers: { 'x-e2e-cleanup-secret': process.env.E2E_CLEANUP_SECRET! } }
+)).json();
+await loginPage.fillOtc(code);
+await loginPage.submit();
+```
+
+**MFA** needs no extra infra: the MFA setup endpoint returns the `totpSecret`, so a test
+can enroll, then generate valid codes in-test with `otplib`/`speakeasy`.
+
+The OTC verification logic is also covered by unit tests in `b4m-core/services`
+(`sendOTC.test.ts` / `verifyOTC.test.ts`), the endpoint gating by `apps/client/__tests__/otc-code.test.ts`,
+and the login UI's error path (wrong code) by `auth.spec.ts`. Authoring the browser
+happy-path + MFA specs on top of this is tracked in #9759.
+
+## Writing Tests
+
+### Use page objects and fixtures
+
+Tests use custom fixtures that provide page objects automatically:
+
+```typescript
+import { test, expect } from '../fixtures';
+import { TIMEOUTS } from '../constants';
+
+test('should create a project', async ({ projectsPage, navigationPage }) => {
+  await navigationPage.navigateToProjects();
+  await projectsPage.createProject('My Project');
+  await expect(projectsPage.projectTitle).toHaveText('My Project', {
+    timeout: TIMEOUTS.NAVIGATION,
+  });
+});
+```
+
+### Available fixtures
+
+All page objects are available as fixtures — just destructure them in the test signature:
+
+- `loginPage`, `signupPage`, `navigationPage`, `chatPage`, `notebookPage`
+- `projectsPage`, `profilePage`, `adminPage`, `agentsPage`
+- `modelSelector`, `fileUpload`, `basePage`
+
+Additional fixtures:
+- **`consoleTracker`** — captures `console.error` and page errors (auto-filters noise like ResizeObserver, HMR, etc.)
+- **`verifyAnswers(answers, options?)`** — polls the page for AI-generated content with configurable timeout and AND/OR logic
+
+### Use `data-testid` for selectors
+
+Always use `data-testid` attributes, never CSS classes:
+
+```typescript
+// ✅ Good
+page.getByTestId('submit-btn')
+
+// ❌ Bad
+page.locator('.submit-button')
+```
+
+### Use timeout constants
+
+Import from `constants.ts` instead of hardcoding timeouts:
+
+```typescript
+import { TIMEOUTS } from '../constants';
+
+await expect(element).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });  // 15s
+await page.waitForTimeout(TIMEOUTS.UI_SETTLE);                       // 500ms
+```
+
+| Constant | Value | Use Case |
+|----------|-------|----------|
+| `UI_SETTLE` | 500ms | Brief wait for UI to settle |
+| `POST_ACTION` | 2s | After a user action |
+| `ELEMENT_STATE` | 5s | Element state changes |
+| `MODAL` | 8s | Modal appearance |
+| `VISIBLE` | 10s | Default assertion timeout |
+| `NAVIGATION` | 15s | Page navigation |
+| `ACTION` | 30s | Major operations |
+| `VERIFY_ANSWER` | 50s | AI streaming responses |
+| `AI_RESPONSE` | 120s | AI / image generation |
+
+### API helpers for test setup
+
+Use `helpers/api.ts` to set up test data without going through the UI:
+
+```typescript
+import { apiCreateSession, apiDeleteSession } from '../helpers/api';
+import { getTestUsers } from '../helpers/test-users';
+
+let sessionId: string;
+
+test.beforeAll(async ({ request }) => {
+  // Setup already seeded tokens onto the test users — reuse them, no login needed.
+  const { user } = getTestUsers();
+  sessionId = await apiCreateSession(request, user.accessToken, 'Test Session');
+});
+
+test.afterAll(async ({ request }) => {
+  const { user } = getTestUsers();
+  await apiDeleteSession(request, user.accessToken, sessionId);
+});
+```
+
+## Core gate
+
+The E2E suite is split into two signals so a heavy, environment-sensitive spec can't
+block the "is the app fundamentally alive" check:
+
+| Signal | Workflow | Commit status | Role |
+|--------|----------|---------------|------|
+| **Core** | `.github/workflows/e2e-core.yml` | `e2e/core` | Curated, fast, deterministic subset - the gate we can require |
+| **Full suite** | `.github/workflows/e2e-manual.yml` | `e2e/smoke` | Everything, including AI-latency-dependent specs - advisory, for triage |
+
+> **Never make `e2e/core` a branch-protection required check.** This workflow is
+> `workflow_dispatch`-only and stamps the status onto the tested *staging* SHA - it can
+> never report on a merge-queue SHA, so a required-check rule would deadlock the queue.
+> `e2e/core` is consumed by the prod-promotion console (which reads it per-commit), not by
+> GitHub branch protection.
+
+The **Core** run executes a fixed set of whole Playwright projects in a single invocation
+(one run, one report, one status). The current set is defined by `CORE_PROJECTS` in
+`e2e-core.yml`:
+
+- `unauthenticated` - auth + signup
+- `notebook` - load a notebook
+- `prompts` - basic prompt flow
+
+Deliberately excluded: AI-latency-dependent and known-unstable specs (`image-gen`,
+`agents`, etc.). Those still run in the advisory full suite.
+
+> **Gotcha - whole projects only.** The Core set uses `--project=` flags with **no**
+> positional spec-file filter. A positional filter (e.g. `e2e/auth.spec.ts`, as the
+> full suite's single-test `Auth`/`Signup` selections use) applies globally to *every*
+> project in the run, so mixing one in would wrongly filter the other projects down to
+> files matching that path and break them. `--project=unauthenticated` alone runs both
+> auth + signup, which is what we want for Core.
+
+### Graduating a spec into Core
+
+The Core set is meant to grow as specs prove themselves. A project qualifies to be added
+to `CORE_PROJECTS` when it is:
+
+1. **Green over N consecutive runs** - at least the last 5, drawing on the deployer-
+   triggered `e2e-core` runs and the full suite's daily `e2e-manual` schedule, with no
+   real-test failures. Setup/infra flakes that leave the status *missing* don't reset the
+   count; a real red does.
+2. **Deterministic** - no dependence on AI latency, model output wording, or other
+   non-deterministic timing. If it needs `AI_RESPONSE`-tier waits or asserts on generated
+   content, it stays out.
+3. **Fast** - its contribution keeps the whole Core run comfortably under the job's
+   25-minute cap.
+
+To add one: append `--project=<name>` to `CORE_PROJECTS` in `e2e-core.yml` and update the
+list above. Removing a project that starts flaking is the same edit in reverse - prefer
+demoting a spec back to advisory over letting a red Core gate get ignored.
+
+## CI Integration
+
+Preview deploys are created on demand by maintainers via the internal deployer (not by PR events). To run the suite against a PR preview, a maintainer adds the **`run-e2e`** label, which triggers `.github/workflows/e2e-on-label.yml`:
+
+1. CI waits for the preview URL to become healthy
+2. Tests run headless (1 worker) against the preview URL
+3. Results are posted as a **comment on the PR** with pass/fail counts
+4. The **HTML report** is uploaded as a build artifact (`playwright-report-pr<N>-label`)
+
+In CI, `API_URL` points at the deployment under test. `E2E_CLEANUP_SECRET` is one stable value that every deploy writes into that stage's SST secret, so `pr{n}` previews, staging, and production all share it. Every Playwright step runs inside `pnpm sst shell`, so the test client reads `Resource.E2E_CLEANUP_SECRET.value` — the same value the cleanup/create-user API validates against. Previews used to self-provision a fresh random per deploy; that was dropped because it made manual QA against a preview a chore and let a redeploy invalidate the secret mid-run.
+
+## Debugging
+
+### Playwright UI Mode
+
+The most powerful debugging tool. Provides a visual test runner with time-travel, DOM snapshots, and network inspection:
+
+```bash
+pnpm test:e2e:ui
+```
+
+### Headed Mode
+
+Watch tests run in a real browser:
+
+```bash
+pnpm test:e2e:headed
+```
+
+### HTML Report
+
+After a test run, view the full report with screenshots and traces:
+
+```bash
+pnpm test:e2e:report
+```
+
+### Traces
+
+Traces are recorded **on first retry** (configured in `playwright.config.ts`). When a test fails and retries, the trace is saved to `e2e/test-results/` and viewable in the HTML report or at [trace.playwright.dev](https://trace.playwright.dev/).
+
+### Screenshots
+
+Screenshots are captured **on failure** and saved to `e2e/test-results/`. They're also included in the HTML report.
+
+### Run a Single Test
+
+```bash
+# By file
+pnpm test:e2e -- projects.spec.ts
+
+# By test name
+pnpm test:e2e -- -g "should rename a project"
+
+# Single worker for easier debugging
+PW_WORKERS=1 pnpm test:e2e -- projects.spec.ts
+```

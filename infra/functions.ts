@@ -1,0 +1,79 @@
+import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
+import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { eventBus } from './eventBus';
+import { slackEventBus } from './bus';
+import { imageProcessor } from './imageProcessor';
+import { mcpHandler } from './mcp';
+import { allSecrets } from './secrets';
+import { websocketApi } from './websocket';
+import { lambdaVpc } from './vpc';
+import { cdnUrlForLambdaEnv } from './router';
+import { toolRuntimeAssets } from './toolRuntimeAssets';
+
+// Re-export imageProcessor for other files that import from functions.ts
+export { imageProcessor };
+
+/**
+ * Slack Quest Processor Lambda Function
+ *
+ * Handles Slack-originated completion requests routed via SlackEventBus.
+ * Owns all Slack-specific logic (tools, pending actions, async notification).
+ * Web-originated completions are handled by the always-on ChatCompletion
+ * (infra/chatCompletion.ts), not a Lambda.
+ */
+export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
+  handler: 'apps/client/server/queueHandlers/slackQuestProcessor.handler',
+  runtime: 'nodejs24.x',
+  timeout: '15 minutes',
+  memory: '2048 MB',
+  vpc: lambdaVpc,
+  // See the note on AgentExecutor in infra/agentExecutor.ts: provisioned concurrency never served
+  // this function either (no alias, and every invoke is unqualified), and its orphaned configs
+  // saturate `reserved` and then fail the next deploy at the concurrency step.
+  concurrency: ['production', 'dev'].includes($app.stage) ? { reserved: 10 } : undefined,
+  link: [
+    ...allSecrets,
+    fabFileBucket,
+    generatedImagesBucket,
+    appFilesBucket,
+    websocketApi,
+    mcpHandler,
+    eventBus,
+    slackEventBus,
+    imageProcessor,
+  ],
+  logging: {
+    retention: '3 days',
+  },
+  environment: {
+    ...DEFAULT_LAMBDA_ENVIRONMENT,
+    // Personal sst dev stages serve files via the local proxy (apps/client/pages/api/app-files/serve); deployed stages use the real distribution.
+    NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
+  },
+  permissions: [
+    { actions: ['bedrock:*'], resources: ['*'] },
+    // Content moderation for images produced by the image_generation/edit_image tools
+    // (closes an agent-tool moderation bypass; the queue-handler imageGeneration/
+    // imageEdit queues already have this).
+    { actions: ['rekognition:DetectModerationLabels'], resources: ['*'] },
+    { actions: ['xray:*'], resources: ['*'] },
+    // ChatCompletionProcess resolves the session's pinned model here too, which
+    // emits Lumina5/ModelSunset. PutMetricData takes no resource scope.
+    { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
+    {
+      actions: [
+        'transcribe:StartTranscriptionJob',
+        'transcribe:GetTranscriptionJob',
+        'transcribe:ListTranscriptionJobs',
+        'transcribe:DeleteTranscriptionJob',
+      ],
+      resources: ['*'],
+    },
+    {
+      actions: ['aws-marketplace:ViewSubscriptions', 'aws-marketplace:Subscribe', 'aws-marketplace:Unsubscribe'],
+      resources: ['*'],
+    },
+    { actions: ['events:PutEvents'], resources: ['*'] },
+  ],
+  copyFiles: toolRuntimeAssets(),
+});

@@ -1,0 +1,113 @@
+/**
+ * Auth Parameters Parser Utility
+ *
+ * Parses the OAuth access token from the URL - supports both query params (legacy) and hash
+ * fragments (secure).
+ *
+ * Hash fragments are preferred because they:
+ * - Are not sent to servers in Referer headers
+ * - Are not logged in server access logs
+ * - Provide better security for OAuth token transport
+ *
+ * The refresh token is NOT carried here any more: SSO callbacks set it as an HttpOnly cookie
+ * (server/auth/refreshCookie.ts), so the long-lived credential never touches a URL at all.
+ */
+
+export interface AuthParams {
+  token?: string;
+  userId?: string;
+  error?: string;
+  /** True only when the OAuth callback just created a brand-new account. */
+  isNewUser?: boolean;
+  /** OAuth strategy that created the account (e.g. "google"); set with isNewUser. */
+  signupMethod?: string;
+}
+
+/**
+ * Parse auth parameters from a hash fragment string.
+ * Pure function for testability.
+ *
+ * @param hash - The hash fragment (with or without leading #)
+ * @returns Parsed auth parameters or null if incomplete
+ */
+export function parseHashParams(hash: string): AuthParams | null {
+  if (!hash) {
+    return null;
+  }
+
+  // Remove leading # if present
+  const hashContent = hash.startsWith('#') ? hash.slice(1) : hash;
+  if (!hashContent) {
+    return null;
+  }
+
+  const hashParams = new URLSearchParams(hashContent);
+  const token = hashParams.get('token');
+  const userId = hashParams.get('userId');
+  const error = hashParams.get('error');
+
+  // Only return hash params if we have complete token data
+  if (token && userId) {
+    return {
+      token,
+      userId,
+      error: error || undefined,
+      isNewUser: hashParams.get('isNewUser') === '1' || undefined,
+      signupMethod: hashParams.get('signupMethod') || undefined,
+    };
+  }
+
+  // If we only have an error in the hash, return that
+  if (error) {
+    return { error };
+  }
+
+  return null;
+}
+
+/**
+ * Parse auth parameters from query search params.
+ *
+ * @param search - Search params object (from router)
+ * @returns Parsed auth parameters
+ */
+export function parseQueryParams(search: Record<string, unknown>): AuthParams {
+  return {
+    token: typeof search.token === 'string' ? search.token : undefined,
+    userId: typeof search.userId === 'string' ? search.userId : undefined,
+    error: typeof search.error === 'string' ? search.error : undefined,
+  };
+}
+
+/**
+ * Parse auth parameters from URL, preferring hash fragments over query params.
+ * Also clears the hash fragment to minimize token exposure time.
+ *
+ * @param search - Search params from router
+ * @param windowRef - Window reference (for SSR safety and testability)
+ * @returns Parsed auth parameters
+ */
+export function parseAuthParams(search: Record<string, unknown>, windowRef?: Window): AuthParams {
+  // Use provided window or global window (SSR-safe)
+  const win = windowRef ?? (typeof window !== 'undefined' ? window : undefined);
+
+  // First, try to read from URL hash fragment (more secure, preferred)
+  if (win?.location?.hash) {
+    // Immediately capture and clear the hash to minimize token exposure time
+    const hash = win.location.hash;
+    win.history?.replaceState(null, '', win.location.pathname + win.location.search);
+
+    const hashResult = parseHashParams(hash);
+    if (hashResult) {
+      return hashResult;
+    }
+  }
+
+  // A URL-borne access token is only ever accepted from the hash fragment. The
+  // legacy query-string token fallback is removed: a token in the query string is
+  // logged in access logs and leaked via Referer, and was the vector for silently
+  // adopting a session from a crafted /auth/success?token=... link. Only an error
+  // code may still arrive via the query string.
+  const query = parseQueryParams(search);
+  return query.error ? { error: query.error } : {};
+}

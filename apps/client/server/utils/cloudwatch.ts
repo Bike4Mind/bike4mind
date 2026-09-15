@@ -1,0 +1,752 @@
+import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
+import type {
+  FeedbackDeliveryChannel,
+  FeedbackDeliveryStageClass,
+  FeedbackDeliverySkipReason,
+} from '@bike4mind/common';
+
+/**
+ * CloudWatch metric dimensions
+ */
+export interface MetricDimensions {
+  [key: string]: string;
+}
+
+/** One datapoint in a PutMetricData call, as the build* helpers below hand it to emitMetrics. */
+type MetricEntry = { name: string; value: number; dimensions?: MetricDimensions; unit: StandardUnit };
+
+/**
+ * Emit a metric to CloudWatch
+ *
+ * @param namespace - CloudWatch namespace (e.g., 'Lumina5/ModalGeneration')
+ * @param metricName - Name of the metric
+ * @param value - Numeric value
+ * @param dimensions - Optional dimensions for filtering/grouping
+ * @param unit - CloudWatch unit (default: None)
+ */
+export async function emitMetric(
+  namespace: string,
+  metricName: string,
+  value: number,
+  dimensions: MetricDimensions = {},
+  unit: StandardUnit = StandardUnit.None
+): Promise<void> {
+  try {
+    // Create client on each call to ensure fresh AWS credentials.
+    // Lambda containers can stay warm for extended periods (>15-60 min), causing
+    // module-level clients to capture expired credentials. This pattern prevents
+    // production failures: "InvalidSignatureException: Signature expired"
+    const client = new CloudWatchClient({
+      region: process.env.AWS_REGION || 'us-east-2',
+    });
+
+    const command = new PutMetricDataCommand({
+      Namespace: namespace,
+      MetricData: [
+        {
+          MetricName: metricName,
+          Value: value,
+          Unit: unit,
+          Timestamp: new Date(),
+          Dimensions: Object.entries(dimensions).map(([Name, Value]) => ({
+            Name,
+            Value,
+          })),
+        },
+      ],
+    });
+
+    await client.send(command);
+  } catch (error) {
+    // Log but don't throw - metrics failures shouldn't break the application
+    console.error('Failed to emit CloudWatch metric', {
+      namespace,
+      metricName,
+      value,
+      dimensions,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * Emit multiple metrics in a single API call for efficiency
+ */
+export async function emitMetrics(
+  namespace: string,
+  metrics: Array<{
+    name: string;
+    value: number;
+    dimensions?: MetricDimensions;
+    unit?: StandardUnit;
+  }>
+): Promise<void> {
+  if (metrics.length === 0) return;
+
+  try {
+    // Create client on each call to ensure fresh AWS credentials.
+    // Lambda containers can stay warm for extended periods (>15-60 min), causing
+    // module-level clients to capture expired credentials. This pattern prevents
+    // production failures: "InvalidSignatureException: Signature expired"
+    const client = new CloudWatchClient({
+      region: process.env.AWS_REGION || 'us-east-2',
+    });
+
+    const command = new PutMetricDataCommand({
+      Namespace: namespace,
+      MetricData: metrics.map(metric => ({
+        MetricName: metric.name,
+        Value: metric.value,
+        Unit: metric.unit || StandardUnit.None,
+        Timestamp: new Date(),
+        Dimensions: metric.dimensions
+          ? Object.entries(metric.dimensions).map(([Name, Value]) => ({
+              Name,
+              Value,
+            }))
+          : [],
+      })),
+    });
+
+    await client.send(command);
+  } catch (error) {
+    console.error('Failed to emit CloudWatch metrics', {
+      namespace,
+      metricsCount: metrics.length,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * Modal Generation specific metric emitter
+ */
+export async function emitModalGenerationMetric(
+  metricName: string,
+  value: number,
+  dimensions: MetricDimensions = {},
+  unit: StandardUnit = StandardUnit.None
+): Promise<void> {
+  return emitMetric('Lumina5/ModalGeneration', metricName, value, dimensions, unit);
+}
+
+/**
+ * Emit multiple modal generation metrics
+ */
+export async function emitModalGenerationMetrics(
+  metrics: Array<{
+    name: string;
+    value: number;
+    dimensions?: MetricDimensions;
+    unit?: StandardUnit;
+  }>
+): Promise<void> {
+  return emitMetrics('Lumina5/ModalGeneration', metrics);
+}
+
+// Webhook Delivery Metrics - Namespace: Lumina5/WebhookDelivery
+// DeliveryAttempted, DeliverySucceeded, DeliveryFailed, DeliverySkipped,
+// DeliveryLatency, HttpResponseCode, RetryCount, SubscriberCount
+
+const WEBHOOK_DELIVERY_NAMESPACE = 'Lumina5/WebhookDelivery';
+
+/**
+ * Webhook delivery specific metric emitter
+ */
+export async function emitWebhookDeliveryMetric(
+  metricName: string,
+  value: number,
+  dimensions: MetricDimensions = {},
+  unit: StandardUnit = StandardUnit.None
+): Promise<void> {
+  return emitMetric(WEBHOOK_DELIVERY_NAMESPACE, metricName, value, dimensions, unit);
+}
+
+/**
+ * Emit multiple webhook delivery metrics
+ */
+export async function emitWebhookDeliveryMetrics(
+  metrics: Array<{
+    name: string;
+    value: number;
+    dimensions?: MetricDimensions;
+    unit?: StandardUnit;
+  }>
+): Promise<void> {
+  return emitMetrics(WEBHOOK_DELIVERY_NAMESPACE, metrics);
+}
+
+/**
+ * Webhook delivery metric names (typed constants)
+ */
+export const WebhookMetrics = {
+  DELIVERY_ATTEMPTED: 'DeliveryAttempted',
+  DELIVERY_SUCCEEDED: 'DeliverySucceeded',
+  DELIVERY_FAILED: 'DeliveryFailed',
+  DELIVERY_SKIPPED: 'DeliverySkipped',
+  DELIVERY_LATENCY: 'DeliveryLatency',
+  HTTP_RESPONSE_CODE: 'HttpResponseCode',
+  RETRY_COUNT: 'RetryCount',
+  SUBSCRIBER_COUNT: 'SubscriberCount',
+} as const;
+
+/**
+ * Record a successful webhook delivery with all relevant metrics
+ */
+export async function recordWebhookDeliverySuccess(
+  orgId: string,
+  eventType: string,
+  latencyMs: number,
+  httpStatusCode: number,
+  retryCount: number
+): Promise<void> {
+  const baseDimensions = { orgId, eventType };
+
+  return emitWebhookDeliveryMetrics([
+    { name: WebhookMetrics.DELIVERY_ATTEMPTED, value: 1, dimensions: baseDimensions, unit: StandardUnit.Count },
+    { name: WebhookMetrics.DELIVERY_SUCCEEDED, value: 1, dimensions: baseDimensions, unit: StandardUnit.Count },
+    { name: WebhookMetrics.DELIVERY_LATENCY, value: latencyMs, dimensions: { orgId }, unit: StandardUnit.Milliseconds },
+    {
+      name: WebhookMetrics.HTTP_RESPONSE_CODE,
+      value: 1,
+      dimensions: { statusCode: String(httpStatusCode) },
+      unit: StandardUnit.Count,
+    },
+    { name: WebhookMetrics.RETRY_COUNT, value: retryCount, dimensions: { orgId }, unit: StandardUnit.Count },
+  ]);
+}
+
+/**
+ * Record a failed webhook delivery with error details
+ */
+export async function recordWebhookDeliveryFailure(
+  orgId: string,
+  eventType: string,
+  latencyMs: number,
+  httpStatusCode: number,
+  errorType: string
+): Promise<void> {
+  const baseDimensions = { orgId, eventType };
+
+  return emitWebhookDeliveryMetrics([
+    { name: WebhookMetrics.DELIVERY_ATTEMPTED, value: 1, dimensions: baseDimensions, unit: StandardUnit.Count },
+    {
+      name: WebhookMetrics.DELIVERY_FAILED,
+      value: 1,
+      dimensions: { ...baseDimensions, errorType },
+      unit: StandardUnit.Count,
+    },
+    // Dimensionless copy: webhookDeliveryHighFailures (infra/alarms.ts) alarms on this metric
+    // with no dimension filter, so it needs its own dimensionless data point to receive any data.
+    { name: WebhookMetrics.DELIVERY_FAILED, value: 1, dimensions: {}, unit: StandardUnit.Count },
+    { name: WebhookMetrics.DELIVERY_LATENCY, value: latencyMs, dimensions: { orgId }, unit: StandardUnit.Milliseconds },
+    ...(httpStatusCode > 0
+      ? [
+          {
+            name: WebhookMetrics.HTTP_RESPONSE_CODE,
+            value: 1,
+            dimensions: { statusCode: String(httpStatusCode) },
+            unit: StandardUnit.Count,
+          },
+        ]
+      : []),
+  ]);
+}
+
+/**
+ * Record a skipped webhook delivery
+ */
+export async function recordWebhookDeliverySkipped(orgId: string, eventType: string, reason: string): Promise<void> {
+  return emitWebhookDeliveryMetric(
+    WebhookMetrics.DELIVERY_SKIPPED,
+    1,
+    { orgId, eventType, reason },
+    StandardUnit.Count
+  );
+}
+
+/**
+ * Record subscriber count for a fan-out event
+ */
+export async function recordWebhookSubscriberCount(orgId: string, subscriberCount: number): Promise<void> {
+  return emitWebhookDeliveryMetric(WebhookMetrics.SUBSCRIBER_COUNT, subscriberCount, { orgId }, StandardUnit.Count);
+}
+
+// Rate Limit Metrics - Namespace: Lumina5/RateLimits
+// UsagePercent (0-100), Throttled (429 count), NearLimit (usage > 80%)
+
+const RATE_LIMIT_NAMESPACE = 'Lumina5/RateLimits';
+
+/**
+ * Rate limit metric names (typed constants)
+ */
+export const RateLimitMetrics = {
+  USAGE_PERCENT: 'UsagePercent',
+  THROTTLED: 'Throttled',
+  NEAR_LIMIT: 'NearLimit',
+} as const;
+
+/**
+ * Rate limit specific metric emitter
+ */
+export async function emitRateLimitMetric(
+  metricName: string,
+  value: number,
+  dimensions: MetricDimensions = {},
+  unit: StandardUnit = StandardUnit.None
+): Promise<void> {
+  return emitMetric(RATE_LIMIT_NAMESPACE, metricName, value, dimensions, unit);
+}
+
+/**
+ * Record a rate limit event (throttled or near-limit)
+ */
+export async function recordRateLimitEvent(
+  integration: string,
+  usagePercent: number | null,
+  wasThrottled: boolean,
+  endpoint?: string
+): Promise<void> {
+  const metrics: Array<{
+    name: string;
+    value: number;
+    dimensions?: MetricDimensions;
+    unit?: StandardUnit;
+  }> = [];
+
+  // Include normalized endpoint dimension when available for per-endpoint observability.
+  // Cardinality: ~4 integrations x ~15 endpoint patterns ≈ 60 unique dimension sets.
+  const dimensions: MetricDimensions = endpoint ? { integration, endpoint } : { integration };
+
+  if (usagePercent !== null) {
+    metrics.push({
+      name: RateLimitMetrics.USAGE_PERCENT,
+      value: usagePercent,
+      dimensions,
+      unit: StandardUnit.Percent,
+    });
+  }
+
+  if (wasThrottled) {
+    metrics.push({
+      name: RateLimitMetrics.THROTTLED,
+      value: 1,
+      dimensions,
+      unit: StandardUnit.Count,
+    });
+  }
+
+  if (usagePercent !== null && usagePercent >= 80) {
+    metrics.push({
+      name: RateLimitMetrics.NEAR_LIMIT,
+      value: 1,
+      dimensions,
+      unit: StandardUnit.Count,
+    });
+  }
+
+  if (metrics.length > 0) {
+    return emitMetrics(RATE_LIMIT_NAMESPACE, metrics);
+  }
+}
+
+// Token Rotation Metrics - Namespace: Lumina5/TokenRotation
+// RotationInitiated { integration, reason }, RotationFailed { integration, errorType }
+
+const TOKEN_ROTATION_NAMESPACE = 'Lumina5/TokenRotation';
+
+export const TokenRotationMetrics = {
+  ROTATION_INITIATED: 'RotationInitiated',
+  ROTATION_FAILED: 'RotationFailed',
+} as const;
+
+/**
+ * Token rotation specific metric emitter
+ */
+export async function emitTokenRotationMetric(
+  metricName: string,
+  value: number,
+  dimensions: MetricDimensions = {},
+  unit: StandardUnit = StandardUnit.None
+): Promise<void> {
+  return emitMetric(TOKEN_ROTATION_NAMESPACE, metricName, value, dimensions, unit);
+}
+
+/**
+ * Record a successful token rotation initiation
+ */
+export async function recordTokenRotationInitiated(integration: string, reason: string): Promise<void> {
+  return emitTokenRotationMetric(
+    TokenRotationMetrics.ROTATION_INITIATED,
+    1,
+    { integration, reason },
+    StandardUnit.Count
+  );
+}
+
+/**
+ * Record a failed token rotation attempt
+ */
+export async function recordTokenRotationFailed(integration: string, errorType: string): Promise<void> {
+  return emitTokenRotationMetric(
+    TokenRotationMetrics.ROTATION_FAILED,
+    1,
+    { integration, errorType },
+    StandardUnit.Count
+  );
+}
+
+// Circuit Breaker Metrics - Namespace: Lumina5/CircuitBreaker
+// StateTransition { Integration, FromState, ToState }, CircuitOpen (1/0 per integration), RejectedCalls
+
+const CIRCUIT_BREAKER_NAMESPACE = 'Lumina5/CircuitBreaker';
+
+export const CircuitBreakerMetrics = {
+  STATE_TRANSITION: 'StateTransition',
+  CIRCUIT_OPEN: 'CircuitOpen',
+  REJECTED_CALLS: 'RejectedCalls',
+} as const;
+
+/**
+ * Record a circuit breaker state transition
+ */
+export async function recordCircuitBreakerTransition(
+  integration: string,
+  fromState: string,
+  toState: string,
+  operationType?: string
+): Promise<void> {
+  const baseDimensions: MetricDimensions = { Integration: integration };
+  if (operationType) baseDimensions.OperationType = operationType;
+
+  return emitMetrics(CIRCUIT_BREAKER_NAMESPACE, [
+    {
+      name: CircuitBreakerMetrics.STATE_TRANSITION,
+      value: 1,
+      dimensions: { ...baseDimensions, FromState: fromState, ToState: toState },
+      unit: StandardUnit.Count,
+    },
+    {
+      name: CircuitBreakerMetrics.CIRCUIT_OPEN,
+      value: toState === 'OPEN' ? 1 : 0,
+      dimensions: baseDimensions,
+      unit: StandardUnit.None,
+    },
+  ]);
+}
+
+/**
+ * Record a call rejected by the circuit breaker
+ */
+export async function recordCircuitBreakerRejection(integration: string): Promise<void> {
+  return emitMetric(
+    CIRCUIT_BREAKER_NAMESPACE,
+    CircuitBreakerMetrics.REJECTED_CALLS,
+    1,
+    { Integration: integration },
+    StandardUnit.Count
+  );
+}
+
+// Data Lake Batch Metrics - Namespace: Lumina5/DataLakeBatch
+// ReconcilerForcedTerminal (a stuck batch the reconciler forced terminal - work lost),
+// BatchCompleted (normal pipeline completion, split by outcome), StuckBatches (gauge sampled by
+// the reconciler cron), ReconcileRuns (cron heartbeat, emitted even on zero work for alarm-on-silence),
+// ChunkRescueRuns/ChunkRescueEnqueued/ChunkRescueFailures (the un-chunked rescue sweep - the Runs
+// metric carries the outcome dimension that tells a gated-off sweep from an idle or failing one).
+// Dimensions stay low-cardinality on purpose - batchId/dataLakeId live in logs, never in metrics.
+
+const DATA_LAKE_BATCH_NAMESPACE = 'Lumina5/DataLakeBatch';
+
+export const DataLakeBatchMetrics = {
+  RECONCILER_FORCED_TERMINAL: 'ReconcilerForcedTerminal',
+  BATCH_COMPLETED: 'BatchCompleted',
+  STUCK_BATCHES: 'StuckBatches',
+  RECONCILE_RUNS: 'ReconcileRuns',
+  TAXONOMY_DAILY_CAP_EXCEEDED: 'TaxonomyDailyCapExceeded',
+  TAXONOMY_TAGS_APPLY_SKIPPED: 'TaxonomyTagsApplySkipped',
+  CHUNK_RESCUE_RUNS: 'ChunkRescueRuns',
+  CHUNK_RESCUE_ENQUEUED: 'ChunkRescueEnqueued',
+  CHUNK_RESCUE_FAILURES: 'ChunkRescueFailures',
+} as const;
+
+/**
+ * How one un-chunked-rescue tick ended. Low-cardinality on purpose (three values), so it is safe
+ * as a metric dimension: `disabled` = the enableAutoChunk gate short-circuited the sweep,
+ * `swept` = it ran (finding nothing is still a sweep), `failed` = it threw and the caller caught.
+ *
+ * Kept here rather than imported from the worker so a metrics module never depends on a worker:
+ * `ChunkRescueSweepResult` in server/worker/chunkRescueSweep.ts declares the first two and the
+ * reconciler cron supplies the third, and assignability to this union is what keeps them in sync.
+ */
+export type ChunkRescueOutcome = 'disabled' | 'swept' | 'failed';
+
+export async function emitDataLakeBatchMetric(
+  metricName: string,
+  value: number,
+  dimensions: MetricDimensions = {},
+  unit: StandardUnit = StandardUnit.None
+): Promise<void> {
+  return emitMetric(DATA_LAKE_BATCH_NAMESPACE, metricName, value, dimensions, unit);
+}
+
+/** A stuck batch was forced terminal by the reconciler (always completed_with_errors; work lost). */
+export async function recordReconcilerForcedTerminal(): Promise<void> {
+  return emitDataLakeBatchMetric(
+    DataLakeBatchMetrics.RECONCILER_FORCED_TERMINAL,
+    1,
+    { actor: 'reconciler' },
+    StandardUnit.Count
+  );
+}
+
+/** Normal (non-reconciler) batch completion, split by outcome for clean-vs-error visibility. */
+export async function recordBatchCompletion(outcome: 'completed' | 'completed_with_errors'): Promise<void> {
+  return emitDataLakeBatchMetric(DataLakeBatchMetrics.BATCH_COMPLETED, 1, { outcome }, StandardUnit.Count);
+}
+
+/** Gauge: count of currently-stuck batches, sampled on a fixed cadence by the reconciler cron. */
+export async function recordStuckBatchGauge(count: number): Promise<void> {
+  return emitDataLakeBatchMetric(DataLakeBatchMetrics.STUCK_BATCHES, count, {}, StandardUnit.Count);
+}
+
+/** A batch's automatic AI-tag-suggestion enqueue was blocked by the shared per-user daily cap. */
+export async function recordTaxonomyDailyCapExceeded(): Promise<void> {
+  return emitDataLakeBatchMetric(DataLakeBatchMetrics.TAXONOMY_DAILY_CAP_EXCEEDED, 1, {}, StandardUnit.Count);
+}
+
+/** Heartbeat: the reconciler cron ran. Emit even on zero work so absence-of-data can alarm. */
+export async function recordReconcileRun(): Promise<void> {
+  return emitDataLakeBatchMetric(DataLakeBatchMetrics.RECONCILE_RUNS, 1, {}, StandardUnit.Count);
+}
+
+/**
+ * The exact MetricData shape one rescue tick emits - exported so the two alarms' dimension
+ * contract is unit-testable on its own, without mocking the AWS SDK (same reason
+ * buildFeedbackDeliveryFailureMetrics below is exported).
+ *
+ * Each of the three counters is emitted TWICE: once on the stage-less stream it has always
+ * written, and once with the raw deploy stage added as a `Stage` dimension. A dimensioned metric
+ * is a DISTINCT stream in CloudWatch, so the stage-less stream cannot be scoped in place - every
+ * deployed stage writes it, which is how a dev-stage rescue failure ends up counting toward
+ * production's threshold. Emitting both streams is what lets the alarms move to the scoped one
+ * without a deploy window where an alarm reads a stream nobody writes yet, and it leaves the
+ * stage-less stream as the cross-stage total. Note the cost of that: a query that sums ACROSS
+ * dimension sets (a SEARCH expression, not a plain metric selection) now counts every run twice.
+ *
+ * NOTE the asymmetry with the feedback-delivery builders below: those add a COARSE `{ Stage }`-only
+ * rollup, and copying that shape here would break an alarm. dataLakeChunkRescueSweepFailing reads
+ * ChunkRescueRuns at outcome=failed with `Sum > 0`, so a `{ Stage }`-only Runs stream - which
+ * counts every run, the healthy ones included - would page daily on a working sweep. The scoped
+ * Runs entry therefore keeps `outcome` alongside `Stage`.
+ */
+export function buildChunkRescueSweepMetrics(
+  outcome: ChunkRescueOutcome,
+  enqueued: number,
+  failed: number,
+  stage: string | undefined
+): MetricEntry[] {
+  // `||` not `??`: PutMetricData validates the request as a whole and rejects an empty dimension
+  // value, so an empty-string stage would drop all six datapoints - including the alarm-critical
+  // failure counters. Degrading to an unread `Stage=unknown` stream loses the alarm for that run;
+  // rejecting the call loses the record of the run entirely.
+  const scoped = stage || 'unknown';
+  return [
+    {
+      name: DataLakeBatchMetrics.CHUNK_RESCUE_RUNS,
+      value: 1,
+      dimensions: { outcome },
+      unit: StandardUnit.Count,
+    },
+    {
+      name: DataLakeBatchMetrics.CHUNK_RESCUE_RUNS,
+      value: 1,
+      dimensions: { outcome, Stage: scoped },
+      unit: StandardUnit.Count,
+    },
+    { name: DataLakeBatchMetrics.CHUNK_RESCUE_ENQUEUED, value: enqueued, unit: StandardUnit.Count },
+    {
+      name: DataLakeBatchMetrics.CHUNK_RESCUE_ENQUEUED,
+      value: enqueued,
+      dimensions: { Stage: scoped },
+      unit: StandardUnit.Count,
+    },
+    { name: DataLakeBatchMetrics.CHUNK_RESCUE_FAILURES, value: failed, unit: StandardUnit.Count },
+    {
+      name: DataLakeBatchMetrics.CHUNK_RESCUE_FAILURES,
+      value: failed,
+      dimensions: { Stage: scoped },
+      unit: StandardUnit.Count,
+    },
+  ];
+}
+
+/**
+ * One un-chunked rescue tick: its outcome, and what it moved. Emitted every run including the
+ * zero-work ones, because "no files needed rescuing" and "the sweep is switched off or broken"
+ * are the two readings an operator has to be able to tell apart, and both report zero enqueued.
+ *
+ * One PutMetricData call carries every datapoint - the sweep runs on a daily cron, so there is no
+ * reason to spend several API calls on it, and a partial failure across several would leave the
+ * counters disagreeing with the outcome.
+ *
+ * Covers the HOSTED daily cron only. runChunkRescueSweep has a second driver, the self-host
+ * worker tick in server/worker/main.ts, which deliberately emits nothing - there is no CloudWatch
+ * on a self-host install. So a zero here means the hosted cron found no work, never that no
+ * install swept.
+ *
+ * Alarms, both in infra/alarms.ts and both reading the stage-scoped streams:
+ * dataLakeChunkRescueFailuresHigh reads ChunkRescueFailures at `{ Stage }`, and
+ * dataLakeChunkRescueSweepFailing reads ChunkRescueRuns at `{ outcome: 'failed', Stage }`.
+ */
+export async function recordChunkRescueSweep(
+  outcome: ChunkRescueOutcome,
+  enqueued: number,
+  failed: number,
+  stage: string | undefined
+): Promise<void> {
+  return emitMetrics(DATA_LAKE_BATCH_NAMESPACE, buildChunkRescueSweepMetrics(outcome, enqueued, failed, stage));
+}
+
+/**
+ * Count of files an apply-taxonomy call skipped because bulkUpdateTags' optimistic-concurrency
+ * check lost the race (the file's tags changed between the read and the write) - a benign,
+ * expected-under-load outcome, not a failure. Value is the per-call skip count so this is a
+ * real rate over time, not just a per-batch log line.
+ */
+export async function recordTaxonomyTagsApplySkipped(count: number): Promise<void> {
+  return emitDataLakeBatchMetric(DataLakeBatchMetrics.TAXONOMY_TAGS_APPLY_SKIPPED, count, {}, StandardUnit.Count);
+}
+
+// Feedback Delivery Metrics - Namespace: Lumina5/FeedbackDelivery
+// DeliverySucceeded, DeliveryFailed, DeliverySkipped, each split by channel (slack|email) and
+// stageClass (production|nonprod). DeliveryFailed and DeliverySkipped-for-an-alarm-worthy-reason
+// additionally emit a coarse `{ Stage }`-only rollup entry, which is what feedbackDeliveryFailures
+// and feedbackDeliveryMisconfigured (infra/alarms.ts) actually read - see
+// buildFeedbackDeliveryFailureMetrics / buildFeedbackDeliverySkippedMetrics below.
+
+const FEEDBACK_DELIVERY_NAMESPACE = 'Lumina5/FeedbackDelivery';
+
+export const FeedbackDeliveryMetrics = {
+  DELIVERY_SUCCEEDED: 'DeliverySucceeded',
+  DELIVERY_FAILED: 'DeliveryFailed',
+  DELIVERY_SKIPPED: 'DeliverySkipped',
+} as const;
+
+// Skip reasons that mean "enabled but actually broken" - worth paging on. 'disabled' and
+// 'nonprod_unconfigured' are deliberate, expected-silent operator choices, not incidents. Exported
+// so callers deciding LOG severity (not just metric emission) can reuse the same taxonomy instead
+// of drifting from it - see pages/api/feedback/index.ts's isIncident check.
+export const ALARM_WORTHY_SKIP_REASONS: readonly FeedbackDeliverySkipReason[] = [
+  'unconfigured_webhook',
+  'no_recipients',
+];
+
+export async function emitFeedbackDeliveryMetric(
+  metricName: string,
+  value: number,
+  dimensions: MetricDimensions = {},
+  unit: StandardUnit = StandardUnit.Count
+): Promise<void> {
+  return emitMetric(FEEDBACK_DELIVERY_NAMESPACE, metricName, value, dimensions, unit);
+}
+
+export async function emitFeedbackDeliveryMetrics(
+  metrics: Array<{ name: string; value: number; dimensions?: MetricDimensions; unit?: StandardUnit }>
+): Promise<void> {
+  return emitMetrics(FEEDBACK_DELIVERY_NAMESPACE, metrics);
+}
+
+/**
+ * The exact MetricData shape a delivery failure emits - exported so the alarm's dimension
+ * contract is unit-testable on its own, without mocking the AWS SDK.
+ *
+ * A dimensioned metric is a DISTINCT stream from one with fewer dimensions in CloudWatch (see
+ * `webhookDeliveryHighFailures`, an existing sibling alarm that alarms on a dimensionless
+ * `DeliveryFailed` stream `recordWebhookDeliveryFailure` never populates - it always emits WITH
+ * dimensions, so that alarm can never receive data). This always emits a full drill-down entry
+ * PLUS a coarse `{ Stage: <raw deploy stage> }`-only rollup that `feedbackDeliveryFailures`
+ * (infra/alarms.ts) reads, matching the `Stage`-dimension pattern `anthropicRateLimitErrors`
+ * already uses to scope an alarm to its own deploying stage. Scoping the rollup by the RAW stage
+ * (not the binary `stageClass`) matters: `stageClass` alone can't tell the 'dev'-stage alarm's own
+ * failures apart from an unrelated PR-preview's, since both classify as 'nonprod' - keying by the
+ * real stage value means each deployed stage's alarm only ever matches its own stage's failures.
+ */
+export function buildFeedbackDeliveryFailureMetrics(
+  channel: FeedbackDeliveryChannel,
+  stageClass: FeedbackDeliveryStageClass,
+  errorType: string,
+  stage: string | undefined
+): MetricEntry[] {
+  return [
+    {
+      name: FeedbackDeliveryMetrics.DELIVERY_FAILED,
+      value: 1,
+      dimensions: { channel, stageClass, errorType },
+      unit: StandardUnit.Count,
+    },
+    {
+      name: FeedbackDeliveryMetrics.DELIVERY_FAILED,
+      value: 1,
+      dimensions: { Stage: stage ?? 'unknown' },
+      unit: StandardUnit.Count,
+    },
+  ];
+}
+
+/**
+ * Same twin-entry shape as failures, for the acceptance criterion the diff's own tests can't
+ * exercise directly: a delivery that is quietly SKIPPED (an admin left it enabled but broken -
+ * `unconfigured_webhook`, `no_recipients`) is exactly the silent-failure mode the ticket opens
+ * with, not merely a hard error. `disabled` and `nonprod_unconfigured` are deliberate operator
+ * choices, so no rollup entry is added for those - a page for a setting an admin chose is noise.
+ */
+export function buildFeedbackDeliverySkippedMetrics(
+  channel: FeedbackDeliveryChannel,
+  stageClass: FeedbackDeliveryStageClass,
+  reason: FeedbackDeliverySkipReason,
+  stage: string | undefined
+): MetricEntry[] {
+  const metrics: MetricEntry[] = [
+    {
+      name: FeedbackDeliveryMetrics.DELIVERY_SKIPPED,
+      value: 1,
+      dimensions: { channel, stageClass, reason },
+      unit: StandardUnit.Count,
+    },
+  ];
+  if (ALARM_WORTHY_SKIP_REASONS.includes(reason)) {
+    metrics.push({
+      name: FeedbackDeliveryMetrics.DELIVERY_SKIPPED,
+      value: 1,
+      dimensions: { Stage: stage ?? 'unknown' },
+      unit: StandardUnit.Count,
+    });
+  }
+  return metrics;
+}
+
+export async function recordFeedbackDeliverySuccess(
+  channel: FeedbackDeliveryChannel,
+  stageClass: FeedbackDeliveryStageClass
+): Promise<void> {
+  return emitFeedbackDeliveryMetric(FeedbackDeliveryMetrics.DELIVERY_SUCCEEDED, 1, { channel, stageClass });
+}
+
+export async function recordFeedbackDeliveryFailure(
+  channel: FeedbackDeliveryChannel,
+  stageClass: FeedbackDeliveryStageClass,
+  errorType: string,
+  stage: string | undefined
+): Promise<void> {
+  return emitFeedbackDeliveryMetrics(buildFeedbackDeliveryFailureMetrics(channel, stageClass, errorType, stage));
+}
+
+export async function recordFeedbackDeliverySkipped(
+  channel: FeedbackDeliveryChannel,
+  stageClass: FeedbackDeliveryStageClass,
+  reason: FeedbackDeliverySkipReason,
+  stage: string | undefined
+): Promise<void> {
+  return emitFeedbackDeliveryMetrics(buildFeedbackDeliverySkippedMetrics(channel, stageClass, reason, stage));
+}

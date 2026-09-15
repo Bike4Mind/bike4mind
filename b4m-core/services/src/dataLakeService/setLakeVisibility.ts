@@ -1,0 +1,195 @@
+import type { IDataLakeAccessGrantRepository, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
+import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { canManageLake, isEffectiveOwner, type ManageActor } from './manageRule';
+import { loadActiveLakeGrants } from './authorizeLakeManage';
+import { findCollidingPrefixLakes } from './tagPrefixCollision';
+import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
+import { diffLakeConfig } from './diffLakeConfig';
+import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
+
+/**
+ * Private = owner-only (no org, not public); organization = scoped to the actor's own org;
+ * public = readable app-wide (directory-listed, cross-org). The three are mutually exclusive.
+ */
+export type LakeVisibility = 'private' | 'organization' | 'public';
+
+interface SetLakeVisibilityAdapters extends LakeConfigAuditAdapters {
+  // The event repo is REQUIRED here, unlike the optional shape LakeConfigAuditAdapters carries
+  // for recomputeLakeStats: every caller of this service is an API route (there is exactly one
+  // per service), so nothing is spared by making it optional and a route that forgot to wire it
+  // would go dark silently - the one failure mode an audit must not have. Required here turns
+  // that into a compile error.
+  db: LakeConfigAuditAdapters['db'] & {
+    lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'find'>;
+    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+  };
+}
+
+/**
+ * Set a lake's visibility across the tri-state private | organization | public. Org promotion
+ * targets `actor.organizationId` - the caller's active-switcher org, which the route already
+ * authorization-validated (resolveActiveOrg) to be one they belong to, so a user can't plant a
+ * lake into an org they're not a member of (same rule as createDataLake).
+ *
+ * Any promotion that EXPOSES the lake beyond the owner (org OR public) is owner-only: a platform
+ * admin must not share/expose someone else's lake on their behalf. Demotion to private stays
+ * owner/admin (it only removes exposure). Publishing is refused for a gated lake - a gate
+ * (PHI/entitlement boundary) must never be exposed app-wide; gated cross-org sharing already
+ * exists via `requiredEntitlement`, so `public` here means truly open/gate-less.
+ *
+ * Keeps the existing `datalakeTag` (an opaque join key - nothing parses it for org), so no file
+ * re-tag/migration is needed; the access paths scope by the `organizationId`/`isPublic` fields.
+ * Only those two fields change.
+ */
+export const setLakeVisibility = async (
+  // `organizationId` here is the WRITE TARGET - the per-request-validated active org
+  // (resolveActiveOrg) an org promotion moves the lake into. It is deliberately a single id
+  // and deliberately NOT from AccessContext, which carries only the membership SET and no
+  // singular org since #1674 (the pointer is a display preference, never an authorization read).
+  actor: ManageActor & { organizationId?: string },
+  dataLakeId: string,
+  visibility: LakeVisibility,
+  { db, logger }: SetLakeVisibilityAdapters
+): Promise<IDataLakeDocument> => {
+  const existing = await db.dataLakes.findById(dataLakeId);
+  if (!existing) {
+    throw new NotFoundError('Data lake not found');
+  }
+  const grants = await loadActiveLakeGrants(existing, { db });
+  if (!canManageLake(existing, actor, grants)) {
+    throw new BadRequestError('You do not have permission to change the visibility of this data lake');
+  }
+  const exposes = visibility === 'organization' || visibility === 'public';
+  // Exposing (org or public) targets the ACTOR's own scope, so only the OWNER may do it -
+  // otherwise a platform admin (or a curator/org-admin who can otherwise manage) acting on the
+  // lake would expose it without the owner consenting (and org promotion would pull it into the
+  // actor org). Demotion to private stays full-manage. Deliberately isEffectiveOwner, not
+  // canManageLake: it is the grant-aware owner check (a transferred owner qualifies, the creator
+  // once superseded does not) WITHOUT the admin / curator / org-admin bypasses this must exclude.
+  // TRANSFER cannot route around this: transferLakeOwnership's consent guard forbids an org admin
+  // from transferring a lake to THEMSELVES (they must name another member). See
+  // transferLakeOwnership.ts.
+  //
+  // DEPARTURE can, and deliberately so. `lapseDepartedMemberLakeAccess` phase 2 mints an owner
+  // grant for the org's billing owner when a lake's creator leaves, with no consent step - because
+  // there is no longer an owner to consent, which is the premise the transfer guard rests on. The
+  // alternative is worse, not safer: ownership would stay resolved to the departed creator through
+  // resolveEffectiveOwnerIds' fallback, and canManageLake is consulted BEFORE the org prerequisite
+  // (classifyLakeAccess.ts:45 vs :66), so a FORMER member would keep full read and manage - and
+  // this very gate. So the expose capability moves to the billing owner rather than being denied to
+  // everyone. Narrower than it looks: an org admin can already share a lake org-wide via an
+  // organization-principal reader grant (lakeGrantWriteRule.ts:58-67), so `public` is the only
+  // genuinely new reach, and the gated-lake refusal below still blocks the PHI case.
+  if (exposes && !isEffectiveOwner(existing, actor, grants)) {
+    throw new BadRequestError('Only the lake’s owner can change how it is shared.');
+  }
+  if (visibility === 'organization' && !actor.organizationId) {
+    throw new BadRequestError('You are not part of an organization, so this lake can’t be shared to one.');
+  }
+  // PHI/access-gate guardrail: a gated lake must not be exposed app-wide. Refuse to publish it -
+  // gated cross-org sharing is the `requiredEntitlement` path, not `public`.
+  if (visibility === 'public' && (existing.requiredUserTag || existing.requiredEntitlement)) {
+    throw new BadRequestError(
+      'A data lake with an access tag or required entitlement can’t be made public. Remove the gate first, or share it through the entitlement instead.'
+    );
+  }
+
+  const targetIsPublic = visibility === 'public';
+  const targetOrg = visibility === 'organization' ? actor.organizationId : undefined;
+  const currentIsPublic = !!existing.isPublic;
+  const currentOrg = existing.organizationId || undefined;
+  if (currentIsPublic === targetIsPublic && currentOrg === targetOrg) {
+    return existing; // already in the requested visibility - no-op
+  }
+
+  // Slug uniqueness is scoped by (organizationId, slug). Only a scope MOVE (org change) can
+  // introduce a collision; flipping isPublic within the same org scope cannot. Guard the move
+  // and surface a clear error instead of a raw E11000. (Same scope shape as createDataLake.)
+  if (currentOrg !== targetOrg) {
+    const scope = targetOrg ? { organizationId: targetOrg } : { organizationId: { $in: [null, ''] } };
+    const clashes = await db.dataLakes.find({ ...scope, slug: existing.slug });
+    if (clashes.some(l => l.id !== existing.id)) {
+      throw new BadRequestError(
+        `A data lake with the slug “${existing.slug}” already exists in the target scope — rename one first.`
+      );
+    }
+
+    // fileTagPrefix has the same problem and is checked at create time, but create only sees the
+    // scope the lake started in. Moving into an org is the other way two lakes end up sharing a
+    // prefix, and then permanently deleting one destroys files only the other holds.
+    const [prefixClash] = await findCollidingPrefixLakes(db, existing.fileTagPrefix, {
+      createdByUserId: existing.createdByUserId,
+      organizationId: targetOrg,
+      excludeLakeId: existing.id,
+    });
+    if (prefixClash) {
+      // Unnamed unless the mover created it, for the same reason as createDataLake.
+      const naming = prefixClash.createdByUserId === existing.createdByUserId ? ` ("${prefixClash.name}")` : '';
+      throw new BadRequestError(
+        `The tag prefix "${existing.fileTagPrefix}" overlaps an existing data lake${naming} in the target scope - change one first.`
+      );
+    }
+  }
+
+  // null (not undefined) clears organizationId: Mongoose $set skips undefined but writes null,
+  // and the access queries treat null/'' as org-less. isPublic is always set explicitly (false
+  // on demotion clears a prior publish). Cast: organizationId is typed optional-string.
+  let updated: IDataLakeDocument | null;
+  try {
+    updated = await db.dataLakes.update({
+      id: dataLakeId,
+      organizationId: targetOrg ?? null,
+      isPublic: targetIsPublic,
+      ...lakeConfigWriteStamp(actor),
+    } as Partial<IDataLakeDocument>);
+  } catch (err) {
+    // A concurrent create/rename can win the (organizationId, slug) unique index between the
+    // find pre-check above and this write (TOCTOU) - map the raw duplicate-key to the same
+    // friendly error rather than surfacing a 500.
+    if ((err as { code?: number })?.code === 11000) {
+      throw new BadRequestError(
+        `A data lake with the slug “${existing.slug}” already exists in the target scope — rename one first.`
+      );
+    }
+    throw err;
+  }
+  if (!updated) {
+    throw new NotFoundError('Data lake not found after visibility change');
+  }
+
+  // Reuses the grants already loaded for the gate above, so the recorded rung is the one that
+  // actually authorized this write rather than a second, later read of the grant set.
+  await recordLakeConfigChange(
+    {
+      actor,
+      lake: existing,
+      grants,
+      action: 'visibility',
+      // Diffed against THIS write's own fields, never against `updated`: `BaseModel.update` is a
+      // `findOneAndUpdate` returning the merged document, so a concurrent writer's `$set` landing in
+      // the gap would be recorded under this caller's principal and rung. Same reasoning, and the
+      // same fix, as `updateDataLake` - see its note. The field set here is fixed and small, so the
+      // projection is exact rather than reconstructed.
+      // `undefined` rather than the write's `null`: the write needs `null` to actually unset the
+      // field in Mongo, while `diffLakeConfig` collapses `null` and `undefined` onto the same
+      // "not set" value, so the recorded change is identical either way.
+      changes: diffLakeConfig(existing, {
+        ...existing,
+        organizationId: targetOrg ?? undefined,
+        isPublic: targetIsPublic,
+      }),
+      // No `manageRung` override, either direction. An EXPOSING write is gated on
+      // `isEffectiveOwner` alone ("WITHOUT the admin / curator / org-admin bypasses this must
+      // exclude"), and `resolveLakeManageRung` now checks the admin rung LAST, so for an actor who
+      // cleared that gate it reports `grant-owner`/`creator` on its own - the branch that actually
+      // let the call through. Demotion to private stays full `canManageLake`, where the resolver's
+      // wider ladder is the honest answer. Overriding here would have to restate the resolver to
+      // stay right, and the two drifting apart is exactly how one direction of the SAME edit by the
+      // SAME owner came to record a different authority than the other.
+    },
+    { db, logger }
+  );
+
+  return updated;
+};

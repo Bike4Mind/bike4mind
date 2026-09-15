@@ -1,0 +1,475 @@
+import { describe, it, expect, vi } from 'vitest';
+import type { IDataLakeBatchDocument, IDataLakeDocument, TaxonomyTag } from '@bike4mind/common';
+import { folderTagForFile, submittedTagPrefix } from '@bike4mind/common';
+import { applyTaxonomySuggestions } from './applyTaxonomySuggestions';
+
+const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
+  ({
+    id: 'lake1',
+    name: 'Lake',
+    slug: 'lake',
+    fileTagPrefix: 'acme:',
+    datalakeTag: 'datalake:lake',
+    createdByUserId: 'owner',
+    status: 'active',
+    ...overrides,
+  }) as IDataLakeDocument;
+
+const tag = (overrides: Partial<TaxonomyTag> & { suffix: string }): TaxonomyTag => ({
+  originalName: `acme:${overrides.suffix}`,
+  strength: 0.9,
+  source: 'ai',
+  matchingFolders: [],
+  deleted: false,
+  ...overrides,
+});
+
+// Defaults to actually having suggested the tag most tests below submit as acceptedTags -
+// applyTaxonomySuggestions cross-checks originalName against this list, so a test exercising
+// something else (e.g. "no files failed") doesn't have to separately wire up a matching
+// suggestion just to avoid being filtered out.
+const batch = (overrides: Partial<IDataLakeBatchDocument> = {}): IDataLakeBatchDocument =>
+  ({
+    id: 'b1',
+    dataLakeId: 'lake1',
+    taxonomyStatus: 'ready',
+    taxonomySuggestions: {
+      tags: [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      fileAssignments: [],
+    },
+    ...overrides,
+  }) as IDataLakeBatchDocument;
+
+const file = (overrides: Record<string, unknown> = {}) => ({
+  id: 'f1',
+  relativePath: 'legal/vendor.pdf',
+  fileName: 'vendor.pdf',
+  tags: [{ name: 'acme:legal', strength: 1 }],
+  ...overrides,
+});
+
+const makeAdapters = (opts?: {
+  batchDoc?: IDataLakeBatchDocument | null;
+  lakeDoc?: IDataLakeDocument | null;
+  files?: ReturnType<typeof file>[];
+  bulkUpdateTagsResult?: number;
+  /** Other lakes in the prefix-collision scope `decideStampPrefix` queries. */
+  scopeLakes?: IDataLakeDocument[];
+}) => ({
+  db: {
+    dataLakes: {
+      findById: vi.fn().mockResolvedValue(opts && 'lakeDoc' in opts ? opts.lakeDoc : lake()),
+      // `decideStampPrefix`'s dynamic overlap lookup. Empty by default: the fixture lake's `acme:`
+      // prefix collides with nothing, so the gate permits and every other test reads as before.
+      find: vi.fn().mockResolvedValue(opts?.scopeLakes ?? []),
+    },
+    batches: {
+      findById: vi.fn().mockResolvedValue(opts && 'batchDoc' in opts ? opts.batchDoc : batch()),
+      setTaxonomyStatusIfActive: vi.fn().mockResolvedValue(batch({ taxonomyStatus: 'applying' })),
+    },
+    fabFiles: {
+      findByBatchId: vi.fn().mockResolvedValue(opts?.files ?? [file()]),
+      bulkUpdateTags: vi
+        .fn()
+        .mockImplementation((updates: unknown[]) => Promise.resolve(opts?.bulkUpdateTagsResult ?? updates.length)),
+    },
+  },
+  logger: { warn: vi.fn() },
+  metrics: { recordTagsApplySkipped: vi.fn().mockResolvedValue(undefined) },
+});
+
+describe('applyTaxonomySuggestions', () => {
+  it('adds only the taxonomy-derived tags on top of the existing folder tag, merged by name', async () => {
+    const adapters = makeAdapters({
+      files: [file({ tags: [{ name: 'acme:legal', strength: 1 }] })],
+    });
+
+    const result = await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 0, skipped: 0 });
+    const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
+    expect(updates).toHaveLength(1);
+    expect(updates[0].id).toBe('f1');
+    const names = updates[0].tags.map((t: { name: string }) => t.name).sort();
+    // Folder tag kept (unchanged), category tag added - never duplicated.
+    expect(names).toEqual(['acme:legal', 'acme:type:contract']);
+  });
+
+  it('lands under one namespace for a lake whose stored prefix has edge whitespace (#2467)', async () => {
+    // The end-to-end shape of the bug, for a lake row predating the create schema's trim.
+    //
+    // The upload pipeline normalizes before it builds anything - `runUploadPipeline` passes
+    // `submittedTagPrefix(config.tagPrefix)` to folderTagForFile, and in append mode
+    // config.tagPrefix is seeded from lake.fileTagPrefix - so the file already carries
+    // `acme:legal`, under the same form every read arm matches. This door was the one on the
+    // other side: it built from the RAW stored value, so the taxonomy tags it added landed under
+    // ` acme:` while the folder tag beside them stayed under `acme:`. One file, two namespaces,
+    // and the taxonomy half invisible to `satisfiesTagPrefix`, the tag-tree roots and the
+    // tag-count aggregates. Deriving the fixture from the pipeline's own normalizer is what pins
+    // that asymmetry - hand-writing the name would hide which side was wrong.
+    //
+    // The folder-tag subtraction did NOT break pre-fix: it compared the door's own two raw
+    // computations against each other, so it stayed self-consistent while both were wrong.
+    const RAW_PREFIX = ' acme:';
+    const uploadedFolderTags = folderTagForFile('legal/vendor.pdf', submittedTagPrefix(RAW_PREFIX));
+    expect(uploadedFolderTags).toEqual([{ name: 'acme:legal', strength: 1 }]);
+
+    const adapters = makeAdapters({
+      lakeDoc: lake({ fileTagPrefix: RAW_PREFIX }),
+      files: [file({ tags: uploadedFolderTags })],
+    });
+
+    const result = await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 0, skipped: 0 });
+    const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
+    const names = updates[0].tags.map((t: { name: string }) => t.name).sort();
+    // Every tag under `acme:`, the form the read arms and the tag-count aggregates match, and
+    // exactly ONE folder tag - the pre-fix door also emitted " acme:legal" here.
+    expect(names).toEqual(['acme:legal', 'acme:type:contract']);
+  });
+
+  it('skips a file with nothing new to add (no wasted write)', async () => {
+    const adapters = makeAdapters({
+      files: [file({ relativePath: 'other/vendor.pdf', tags: [{ name: 'acme:other', strength: 1 }] })],
+    });
+
+    await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })], // doesn't match "other"
+      adapters as any
+    );
+
+    expect(adapters.db.fabFiles.bulkUpdateTags).toHaveBeenCalledWith([]);
+  });
+
+  it('counts a file that already carries every tag as unchanged, and writes nothing for it (#2093)', async () => {
+    // The idempotent re-apply. Reachable only through the documented retry in the catch below: a
+    // successful apply leaves the batch 'applied', which both apply ('ready') and re-analyze
+    // ('ready'|'failed') refuse.
+    //
+    // Emitting an op here did NOT under-report. An identical-value write still bumps `updatedAt`
+    // (FabFileSchema has timestamps: true), so it counted as modified and the batch reported every
+    // file as freshly tagged. Suppressing the op is what stops that over-report, stops the
+    // pointless updatedAt churn, and leaves `skipped` meaning only "lost a CAS race".
+    const alreadyTagged = file({
+      tags: [
+        { name: 'acme:legal', strength: 1 },
+        { name: 'acme:type:contract', strength: 1 },
+      ],
+    });
+    const adapters = makeAdapters({ files: [alreadyTagged] });
+
+    const result = await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    expect(result).toEqual({ success: true, filesUpdated: 0, unchanged: 1, skipped: 0 });
+    // No op emitted at all - a write that cannot change anything is not worth a round trip.
+    expect(adapters.db.fabFiles.bulkUpdateTags).toHaveBeenCalledWith([]);
+    // Still no lost-race warning and no metric - same as `main`, and it has to stay that way now
+    // that `skipped` reaches the user.
+    expect(adapters.logger.warn).not.toHaveBeenCalled();
+    expect(adapters.metrics.recordTagsApplySkipped).not.toHaveBeenCalled();
+  });
+
+  it('separates unchanged files from genuinely updated ones in the same batch', async () => {
+    // The mixed case a single counter cannot express: one file gains the tag, one already had it.
+    const adapters = makeAdapters({
+      files: [
+        file({ id: 'f1', tags: [{ name: 'acme:legal', strength: 1 }] }),
+        file({
+          id: 'f2',
+          tags: [
+            { name: 'acme:legal', strength: 1 },
+            { name: 'acme:type:contract', strength: 1 },
+          ],
+        }),
+      ],
+    });
+
+    const result = await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 1, skipped: 0 });
+    const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
+    expect(updates.map((u: { id: string }) => u.id)).toEqual(['f1']);
+    expect(adapters.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('still writes a file whose stored tags hold a duplicate name, since the merge dedupes it', async () => {
+    // A legacy row carrying the same name twice collapses in the merge Map, so the arrays differ in
+    // length. That must read as a CHANGE, not as unchanged - otherwise the dedupe never lands.
+    const adapters = makeAdapters({
+      files: [
+        file({
+          tags: [
+            { name: 'acme:legal', strength: 1 },
+            { name: 'acme:type:contract', strength: 1 },
+            { name: 'acme:type:contract', strength: 1 },
+          ],
+        }),
+      ],
+    });
+
+    const result = await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 0, skipped: 0 });
+    const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
+    expect(updates[0].tags).toHaveLength(2);
+  });
+
+  it('rejects a non-owner, non-admin caller', async () => {
+    const adapters = makeAdapters();
+
+    await expect(
+      applyTaxonomySuggestions({ userId: 'stranger', isAdmin: false }, 'b1', [], adapters as any)
+    ).rejects.toThrow(/do not have permission to apply/i);
+    expect(adapters.db.batches.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
+  });
+
+  // The four `decideStampPrefix` refusals, each of which this door used to ignore except the
+  // registry one (#2398). Refused BEFORE the guarded claim, so a bad prefix cannot leave the batch
+  // parked in 'applying'. `tagWriteDoorPrefixGate.test.ts` is what pins these to the identical
+  // refusal from `setDataLakeFileTags`; these cases pin that this door reaches the gate at all.
+  it.each([
+    // No owning document behind a static-registry prefix, so its read arm is an ownership bypass.
+    ['registry-prefix-overlap', 'opti:', /registry-prefix-overlap/],
+    // Would be dropped by every read arm, so the tags would be invisible to every query.
+    ['unusable-prefix', 'acme', /unusable-prefix/],
+    // Reaches the `datalake:` membership namespace.
+    ['reserved-namespace', 'datalake:acme:', /reserved-namespace/],
+  ])('refuses to apply tags for a lake whose prefix is %s', async (_reason, fileTagPrefix, expected) => {
+    const adapters = makeAdapters({ lakeDoc: lake({ fileTagPrefix }) });
+
+    await expect(
+      applyTaxonomySuggestions({ userId: 'owner', isAdmin: false }, 'b1', [], adapters as any)
+    ).rejects.toThrow(expected);
+    expect(adapters.db.batches.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
+  });
+
+  it('refuses to apply tags for a lake whose prefix overlaps another lake in scope', async () => {
+    const adapters = makeAdapters({
+      scopeLakes: [lake({ id: 'lake2', name: 'Lake Two', fileTagPrefix: 'acme:sub:' })],
+    });
+
+    await expect(
+      applyTaxonomySuggestions({ userId: 'owner', isAdmin: false }, 'b1', [], adapters as any)
+    ).rejects.toThrow(/prefix-overlap.*Lake Two/i);
+    expect(adapters.db.batches.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the overlap check itself fails, rather than writing across an unverified overlap', async () => {
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.find = vi.fn().mockRejectedValue(new Error('boom'));
+
+    await expect(
+      applyTaxonomySuggestions({ userId: 'owner', isAdmin: false }, 'b1', [], adapters as any)
+    ).rejects.toThrow(/could not verify/i);
+    expect(adapters.db.batches.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
+  });
+
+  it('allows an admin to apply suggestions for a lake they do not own', async () => {
+    const adapters = makeAdapters();
+
+    await expect(
+      applyTaxonomySuggestions({ userId: 'root', isAdmin: true }, 'b1', [], adapters as any)
+    ).resolves.toMatchObject({ success: true });
+  });
+
+  it('refuses when the batch is not ready (guarded claim lost)', async () => {
+    const adapters = makeAdapters();
+    adapters.db.batches.setTaxonomyStatusIfActive = vi.fn().mockResolvedValue(null);
+
+    await expect(
+      applyTaxonomySuggestions({ userId: 'owner', isAdmin: false }, 'b1', [], adapters as any)
+    ).rejects.toThrow(/not ready/i);
+    expect(adapters.db.fabFiles.findByBatchId).not.toHaveBeenCalled();
+  });
+
+  it('throws NotFoundError for a missing batch or lake', async () => {
+    const missingBatch = makeAdapters({ batchDoc: null });
+    await expect(
+      applyTaxonomySuggestions({ userId: 'owner', isAdmin: false }, 'b1', [], missingBatch as any)
+    ).rejects.toThrow(/batch not found/i);
+
+    const missingLake = makeAdapters({ lakeDoc: null });
+    await expect(
+      applyTaxonomySuggestions({ userId: 'owner', isAdmin: false }, 'b1', [], missingLake as any)
+    ).rejects.toThrow(/data lake not found/i);
+  });
+
+  it('marks the batch applied once every file has been processed', async () => {
+    const adapters = makeAdapters({ files: [file(), file({ id: 'f2', relativePath: 'legal/2.pdf' })] });
+
+    await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    expect(adapters.db.batches.setTaxonomyStatusIfActive).toHaveBeenNthCalledWith(
+      1,
+      'b1',
+      ['ready'],
+      'applying',
+      expect.objectContaining({ taxonomyStartedAt: expect.any(Date) })
+    );
+    expect(adapters.db.batches.setTaxonomyStatusIfActive).toHaveBeenNthCalledWith(2, 'b1', ['applying'], 'applied');
+  });
+
+  it('refreshes taxonomyStartedAt on the claim, so the stuck-job reconciler times out from now', async () => {
+    const adapters = makeAdapters();
+
+    await applyTaxonomySuggestions({ userId: 'owner', isAdmin: false }, 'b1', [], adapters as any);
+
+    expect(adapters.db.batches.setTaxonomyStatusIfActive).toHaveBeenNthCalledWith(
+      1,
+      'b1',
+      ['ready'],
+      'applying',
+      expect.objectContaining({ taxonomyStartedAt: expect.any(Date) })
+    );
+  });
+
+  it('reverts the claim to ready and rethrows when the bulk write fails, instead of stranding the batch in applying', async () => {
+    const adapters = makeAdapters();
+    const writeError = new Error('bulkWrite failed');
+    adapters.db.fabFiles.bulkUpdateTags = vi.fn().mockRejectedValue(writeError);
+
+    await expect(
+      applyTaxonomySuggestions({ userId: 'owner', isAdmin: false }, 'b1', [], adapters as any)
+    ).rejects.toThrow(writeError);
+
+    expect(adapters.db.batches.setTaxonomyStatusIfActive).toHaveBeenNthCalledWith(2, 'b1', ['applying'], 'ready');
+  });
+
+  // The review panel only ever edits a suggested tag's suffix, never fabricates a new
+  // originalName - so an accepted tag whose originalName the batch never actually suggested
+  // must not be trusted, regardless of what the request schema allowed through.
+  it('drops an accepted tag whose originalName was never actually suggested for this batch', async () => {
+    const adapters = makeAdapters({
+      files: [file({ tags: [] })],
+    });
+
+    await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'made:up', originalName: 'acme:made:up', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    expect(adapters.db.fabFiles.bulkUpdateTags).toHaveBeenCalledWith([]);
+  });
+
+  it("passes each file's pre-merge tags snapshot as expectedTags, for bulkUpdateTags' optimistic concurrency check", async () => {
+    const existingTags = [{ name: 'acme:legal', strength: 1 }];
+    const adapters = makeAdapters({
+      files: [file({ tags: existingTags })],
+    });
+
+    await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
+    expect(updates[0].expectedTags).toEqual(existingTags);
+  });
+
+  it('warns with the skip count when bulkUpdateTags reports fewer modified than matched (a race lost)', async () => {
+    const adapters = makeAdapters({
+      files: [file(), file({ id: 'f2', relativePath: 'legal/2.pdf' })],
+      bulkUpdateTagsResult: 1, // 2 files matched, only 1 actually written - 1 lost a concurrency race
+    });
+
+    const result = await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    // The cause clause is the half an operator reads: '1/2' alone survives a rewrite that drops it.
+    expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('1/2'));
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('tags changed or file deleted since read')
+    );
+    expect(adapters.metrics.recordTagsApplySkipped).toHaveBeenCalledWith(1);
+    // Returned, not only logged: the caller has no other way to know the run was incomplete, and
+    // the batch is 'applied' afterwards so there is no in-product retry.
+    expect(result).toEqual({ success: true, filesUpdated: 1, unchanged: 0, skipped: 1 });
+  });
+
+  it('does not warn or record a metric when every matched file was actually updated', async () => {
+    const adapters = makeAdapters({
+      files: [file({ tags: [{ name: 'acme:legal', strength: 1 }] })],
+    });
+
+    await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    expect(adapters.logger.warn).not.toHaveBeenCalled();
+    expect(adapters.metrics.recordTagsApplySkipped).not.toHaveBeenCalled();
+  });
+
+  it('keeps a genuinely suggested tag even after its suffix was edited by the reviewer', async () => {
+    const adapters = makeAdapters({
+      files: [file({ tags: [] })],
+    });
+
+    // Same originalName as the default suggestion (the stable join key), edited suffix.
+    await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'contract:legal', originalName: 'acme:type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
+    expect(updates[0].tags.map((t: { name: string }) => t.name)).toContain('acme:contract:legal');
+  });
+
+  it('throws instead of silently reporting success when the final applying -> applied transition loses the race', async () => {
+    const adapters = makeAdapters();
+    adapters.db.batches.setTaxonomyStatusIfActive = vi
+      .fn()
+      .mockResolvedValueOnce(batch({ taxonomyStatus: 'applying' })) // claim wins
+      .mockResolvedValueOnce(null) // final transition loses (e.g. reconciler force-failed it first)
+      .mockResolvedValue(null); // the resulting error path's best-effort revert-to-ready call
+
+    await expect(
+      applyTaxonomySuggestions({ userId: 'owner', isAdmin: false }, 'b1', [], adapters as any)
+    ).rejects.toThrow(/changed unexpectedly/i);
+  });
+});

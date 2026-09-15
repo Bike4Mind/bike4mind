@@ -1,0 +1,137 @@
+import { AvailableMigrations, type MigrationFile } from './migrations';
+import { Migration, connectDB, getDB } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
+import { seeders } from '../seeders';
+import { Resource } from 'sst';
+import { Config } from '../utils/config';
+
+// Shared applied-SET selection (not a high-water-mark) - see up()'s comment for why. Exported so
+// `migrate/index.ts`'s `list --pending` preview uses the exact same semantics as `up()` actually
+// runs; the two drifting apart (list() kept the old high-water-mark filter after up()/down() moved
+// to applied-set) is what caused list() to report nothing pending while up() silently ran an
+// overlay migration - a real gap caught in review of the PR that introduced applied-set selection.
+export function selectPending(
+  available: MigrationFile[],
+  appliedIds: Set<number>,
+  target: number | null = null
+): MigrationFile[] {
+  return available
+    .filter(m => !appliedIds.has(m.id))
+    .filter(m => target === null || m.id <= target)
+    .sort((a, b) => a.id - b.id);
+}
+
+export class MigrationManager {
+  private logger: Logger;
+
+  constructor(logger: Logger) {
+    this.logger = logger;
+  }
+
+  async seed(): Promise<void> {
+    this.logger.log(`Seeding database...`);
+
+    await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage), this.logger);
+
+    for (const seeder of seeders) {
+      const seederInstance = new seeder(this.logger);
+      await seederInstance.seed();
+    }
+  }
+
+  async up(target: number | null): Promise<void> {
+    // Applied-SET semantics, not a high-water-mark: core migrations get monotonic ids per
+    // commit, but overlay migrations pin-bump on an independent cadence, so an overlay
+    // migration id can land below the current max applied id. A `m.id > max(applied)` filter
+    // would then skip it forever, silently. Selecting by "not yet in the applied set" runs any
+    // registered migration regardless of where its id falls relative to the max.
+    const appliedMigrations = await Migration.find();
+    const appliedIds = new Set(appliedMigrations.map(m => m.id));
+    const lastAppliedId = appliedIds.size > 0 ? Math.max(...appliedIds) : null;
+
+    const migrations = selectPending(AvailableMigrations, appliedIds, target);
+
+    this.logger.log(`Total migrations known: ${AvailableMigrations.length}`);
+    this.logger.log(`Last migration: ${lastAppliedId ?? 'none'}`);
+    this.logger.log(`Target migration: ${target === null ? 'all' : target}`);
+    this.logger.log(`Migrations to run: ${migrations.length}`);
+    this.logger.log('');
+
+    for (const migration of migrations) {
+      const logger = this.logger.withMetadata({
+        migrationId: migration.id,
+        migrationName: migration.name,
+      });
+
+      logger.log(`Running migration ${migration.id}: ${migration.name}`);
+      try {
+        await migration.up();
+        await Migration.create({ id: migration.id, name: migration.name });
+        logger.log(`Migration ${migration.id} ${migration.name} completed`);
+      } catch (error: unknown) {
+        logger.error(`Error running migration ${migration.id} ${migration.name}`);
+        throw error;
+      }
+    }
+
+    this.logger.log(`Migrations completed`);
+  }
+
+  async down(target: number | null): Promise<void> {
+    // Mirror of up()'s applied-set selection - see comment there.
+    const appliedMigrations = await Migration.find();
+    const appliedIds = new Set(appliedMigrations.map(m => m.id));
+
+    const migrationsToRemove = AvailableMigrations.filter(m => appliedIds.has(m.id))
+      .filter(m => target === null || m.id > target)
+      .sort((a, b) => b.id - a.id);
+
+    for (const migration of migrationsToRemove) {
+      const logger = this.logger.withMetadata({
+        migrationId: migration.id,
+        migrationName: migration.name,
+      });
+
+      logger.log(`Undoing migration ${migration.id}: ${migration.name}`);
+      try {
+        await migration.down();
+        await Migration.deleteOne({ id: migration.id });
+        logger.log(`Down-migration ${migration.id} ${migration.name} completed`);
+      } catch (error: unknown) {
+        logger.error(`Error reverting migration ${migration.id} ${migration.name}`);
+        throw error;
+      }
+    }
+
+    this.logger.log(`Migrations completed`);
+  }
+
+  async cleanup(): Promise<void> {
+    this.logger.log(`Cleaning up database for stage: ${Resource.App.stage}`);
+
+    // Safety check: only allow cleanup if MONGODB_URI contains %STAGE% placeholder
+    if (!Resource.MONGODB_URI.value.includes('%STAGE%')) {
+      this.logger.log('Skipping cleanup: Database URI does not contain %STAGE% placeholder');
+      return;
+    }
+
+    await connectDB(Resource.MONGODB_URI.value.replace('%STAGE%', Resource.App.stage));
+    const mongoose = getDB();
+    if (!mongoose.connection.db) {
+      throw new Error('Database connection not established');
+    }
+
+    this.logger.log('Dropping all collections...');
+    const collections = await mongoose.connection.db.collections();
+
+    for (const collection of collections) {
+      this.logger.log(`Dropping collection: ${collection.collectionName}`);
+      await collection.drop();
+    }
+
+    this.logger.log('Dropping database...');
+    await mongoose.connection.db.dropDatabase();
+
+    this.logger.log(`Database cleanup completed for stage: ${Resource.App.stage}`);
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalEnv": ["CI"],
+  "globalPassThroughEnv": ["NODE_OPTIONS"],
+  // dataLakeSearchMetrics.test.ts reads infra/dataLakeSearchDashboard.ts to pin the metric names
+  // the dashboard graphs, because infra/ cannot import the constants. That file sits outside every
+  // package, so without it here a dashboard-only edit is a cache hit for the very test meant to
+  // catch it. Global rather than a task input: package-relative escapes resolve differently for
+  // the depth-3 overlay packages, and this file changes rarely enough that the blunt key is cheap.
+  "globalDependencies": ["infra/dataLakeSearchDashboard.ts"],
+  "tasks": {
+    "codegen": {
+      // Not cacheable: output depends on node_modules link state (which overlay
+      // packages resolve), which no input glob can capture. A cache replay would
+      // restore glue for the WRONG link state. The script is sub-second.
+      "cache": false,
+      "inputs": [
+        "scripts/generate-premium-glue.mjs",
+        "../../packages/premium/*/package.json",
+        "../../sst.config.ts"
+      ],
+      "outputs": [
+        "app/premium-generated/**",
+        "pages/api/premium-*/**",
+        "server/premium-generated/**",
+        "../../infra/premium-generated/**",
+        "../../packages/scripts/migrate/migrations/premium.generated.ts"
+      ]
+    },
+    "build": {
+      "dependsOn": ["codegen", "^build"],
+      "outputs": ["dist/**"],
+      "inputs": ["src/**", "tsconfig.json", "tsdown.config.ts", "package.json"]
+    },
+    "typecheck": {
+      "dependsOn": ["codegen", "^build"]
+    },
+    "//#typecheck": {
+      "dependsOn": ["^build"]
+    },
+    "typecheck:native": {
+      "dependsOn": ["codegen", "^build"]
+    },
+    "//#typecheck:native": {
+      "dependsOn": ["^build"]
+    },
+    "typecheck:fast": {
+      "dependsOn": ["codegen", "^build"]
+    },
+    "//#typecheck:fast": {
+      "dependsOn": ["^build"]
+    },
+    // @bike4mind/scripts consumes packages/scripts/migrate/migrations/premium.generated.ts
+    // (written by @bike4mind/client's codegen task, see the "codegen" task above) even though
+    // it has no ordinary dependency on @bike4mind/client - the generic "typecheck" task above
+    // only depends on EACH package's own (same-package) "codegen" task, which is a no-op for
+    // @bike4mind/scripts. These package-specific overrides add the missing cross-package edge;
+    // package-specific config REPLACES the generic entry, so ^build is repeated here.
+    "@bike4mind/scripts#typecheck": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"]
+    },
+    "@bike4mind/scripts#typecheck:native": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"]
+    },
+    "@bike4mind/scripts#typecheck:fast": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"]
+    },
+    // migrations/index.test.ts statically imports the same premium.generated.ts stub - same
+    // cross-package edge as the typecheck overrides above, for the same reason.
+    "@bike4mind/scripts#test": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"]
+    },
+    "test": {
+      "dependsOn": ["^build"]
+    },
+    "openapi:generate": {
+      "cache": false
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "clean": {
+      "cache": false
+    }
+  }
+}

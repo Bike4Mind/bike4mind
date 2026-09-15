@@ -1,0 +1,59 @@
+{
+  "data": [
+    {
+      "id": "grok-4.5",
+      "aliases": ["grok-4.5-latest", "grok-latest"],
+      "context_length": 500000,
+      "created": 1783900800,
+      "object": "model",
+      "owned_by": "xai",
+      "prompt_text_token_price": 20000,
+      "cached_prompt_text_token_price": 5000,
+      "completion_text_token_price": 60000,
+      "prompt_text_token_price_long_context": 40000,
+      "completion_text_token_price_long_context": 120000,
+      "long_context_threshold": 200000
+    },
+    {
+      "id": "grok-4-0709",
+      "aliases": ["grok-4", "grok-4-latest"],
+      "context_length": 256000,
+      "created": 1752019200,
+      "object": "model",
+      "owned_by": "xai",
+      "prompt_text_token_price": 30000,
+      "cached_prompt_text_token_price": 0,
+      "completion_text_token_price": 150000
+    },
+    {
+      "id": "grok-3-mini",
+      "aliases": ["grok-3-mini-latest"],
+      "context_length": 131072,
+      "created": 1744329600,
+      "object": "model",
+      "owned_by": "xai",
+      "prompt_text_token_price": 3000,
+      "completion_text_token_price": 5000
+    },
+    {
+      "id": "grok-imagine-image-quality",
+      "aliases": [],
+      "context_length": 1024,
+      "created": 1769472000,
+      "object": "model",
+      "owned_by": "xai",
+      "image_price": 7000000
+    },
+    {
+      "id": "grok-4.30-preview",
+      "aliases": [],
+      "context_length": 2000000,
+      "created": 1785000000,
+      "object": "model",
+      "owned_by": "xai",
+      "prompt_text_token_price": 25000,
+      "completion_text_token_price": 75000
+    }
+  ],
+  "object": "list"
+}

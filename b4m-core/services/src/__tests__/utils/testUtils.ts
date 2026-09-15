@@ -1,0 +1,336 @@
+import {
+  IBaseRepository,
+  IProjectDocument,
+  IProjectRepository,
+  IShareableStaticMethods,
+  IFabFileRepository,
+  IFabFileDocument,
+  ISessionRepository,
+  ISessionDocument,
+  IUserRepository,
+  IUserDocument,
+  IOrganizationRepository,
+  IOrganizationDocument,
+  ICreditTransactionRepository,
+  ICreditTransactionDocument,
+  IAuthSessionRepository,
+  IAuthSessionDocument,
+} from '@bike4mind/common';
+import {
+  IResearchTask,
+  ResearchTaskStatus,
+  ResearchTaskType,
+  ResearchTaskExecutionType,
+  IResearchAgent,
+} from '@bike4mind/common';
+import { MockedFunction, MockedObject, vi } from 'vitest';
+
+export const createMockRepository = <T>(): IBaseRepository<T> => ({
+  findById: vi.fn(),
+  findOne: vi.fn(),
+  find: vi.fn(),
+  create: vi.fn(),
+  update: vi.fn(),
+  updateGuarded: vi.fn(),
+  delete: vi.fn(),
+  updateMany: vi.fn(),
+  count: vi.fn(),
+});
+
+export const createMockShareableRepository = <T>(): IShareableStaticMethods<T> => ({
+  findAllAccessible: vi.fn(),
+  findAllShared: vi.fn(),
+  findAccessibleById: vi.fn(),
+  findAllAccessibleByIds: vi.fn(),
+  findUpdateAccessById: vi.fn(),
+  findAllUpdateAccessByIds: vi.fn(),
+  findShareAccessById: vi.fn(),
+});
+
+export const createMockProjectRepository = (): IProjectRepository => ({
+  ...createMockRepository<IProjectDocument>(),
+  shareable: createMockShareableRepository<IProjectDocument>(),
+  findByIdAndUserId: vi.fn(),
+  searchAccessible: vi.fn(),
+  removeSession: vi.fn(),
+  findAllBySessionId: vi.fn(),
+});
+
+export const createMockFabFileRepository = (): IFabFileRepository => ({
+  ...createMockRepository<IFabFileDocument>(),
+  shareable: createMockShareableRepository<IFabFileDocument>(),
+  getAccessibleFiles: vi.fn(),
+  // Default true ("I still own my claim") rather than the vi.fn() default of undefined/falsy,
+  // which would otherwise silently read as "claim lost" for any test that reaches this guard
+  // through the shared mock without overriding it.
+  confirmChunkClaim: vi.fn().mockResolvedValue(true),
+  findByIdAndUserId: vi.fn(),
+  findAllInIds: vi.fn(),
+  findAccessibleInIds: vi.fn(),
+  findMetadataByIds: vi.fn(),
+  findMetadataBySessionId: vi.fn(),
+  deleteManyInIds: vi.fn(),
+  softDeleteByIdsForUserBatch: vi.fn(),
+  findAllByIds: vi.fn(),
+  findExistingIdsByIds: vi.fn(),
+  findCitableFieldsByIds: vi.fn(),
+  findByBatchId: vi.fn(),
+  claimIndexNotification: vi.fn(),
+  search: vi.fn(),
+  executeSearch: vi.fn(),
+  countByUserIdAndTag: vi.fn(),
+  countFilesByTagForUser: vi.fn(),
+  countDataLakeTagsByPrefix: vi.fn(),
+  countDataLakeUniqueFilesByPrefix: vi.fn(),
+  countUniqueFilesByNamespaceForUser: vi.fn(),
+  removeTagByUserId: vi.fn(),
+  updateTagsByUserId: vi.fn(),
+  dedupeTagByUserId: vi.fn(),
+  pullTagsByFabFileId: vi.fn(),
+  pushTagsByFabFileId: vi.fn(),
+  bulkUpdateTags: vi.fn(),
+  findByContentHashes: vi.fn(),
+  findByContentHashesInDataLake: vi.fn(),
+  findByServerTextHashesInDataLake: vi.fn(),
+  isLiveDataLakeMember: vi.fn(),
+  findByDriveFileIdsInDataLake: vi.fn(),
+  findByDriveConnectionIdInDataLake: vi.fn(),
+  findDriveFileIdsByBatchId: vi.fn(),
+  markUploaded: vi.fn(),
+  markFailedIfNotAlready: vi.fn(),
+  advanceVectorizeProgress: vi.fn(),
+  setChunkPolicyConflict: vi.fn(),
+  computeDataLakeStats: vi.fn(),
+  countDataLakeTopicTags: vi.fn().mockResolvedValue([]),
+  summarizeDataLakeIndexingHealth: vi.fn().mockResolvedValue({
+    chunkedFiles: 0,
+    fullyVectorizedFiles: 0,
+    failedFiles: 0,
+    inFlightFiles: 0,
+    unmeasuredFiles: 0,
+    retrievalOnlyFiles: 0,
+    totalChunks: 0,
+    totalEmbeddedChunks: 0,
+  }),
+  findDataLakeHealthMembers: vi.fn(),
+  findDataLakeMembershipMembers: vi.fn().mockResolvedValue([]),
+  findLakeMemberSiblingsByFileName: vi.fn().mockResolvedValue([]),
+  findLakeConvergenceMembers: vi.fn(),
+  findLakeMemoryExtractionMembers: vi.fn(),
+  findFileIdsMissingChunkedCharCount: vi.fn(),
+  setChunkedCharCount: vi.fn(),
+  findFileIdsMissingChunkRollups: vi.fn(),
+  setChunkRollups: vi.fn(),
+  findFileIdsWithPositiveVectorizedCount: vi.fn(),
+  findChunkedFilesByScope: vi.fn(),
+  findConvergencePausedFilesByScope: vi.fn(),
+  resetChunkStateByIds: vi.fn(),
+  markConvergencePaused: vi.fn(),
+  countFailedFilesByScope: vi.fn(),
+  countDataLakeFilesByMembership: vi.fn(),
+  countDataLakeFilesByMembershipArm: vi.fn(),
+  countDistinctDataLakeFilesByMembership: vi.fn(),
+  countDistinctUncategorizedDataLakeFilesByMembership: vi.fn(),
+  archiveByDataLakeTag: vi.fn(),
+  unarchiveByDataLakeTag: vi.fn(),
+  findArchivedByDataLakeTag: vi.fn(),
+  hasArchivedMemberExclusiveToDataLakeTag: vi.fn(),
+  findDeletedByDataLakeTag: vi.fn(),
+  undeleteByDataLakeTag: vi.fn(),
+  softDeleteByDataLakeTag: vi.fn(),
+  hardDeleteByDataLakeTag: vi.fn(),
+  hardDeleteByIds: vi.fn(),
+  hardDeleteOneById: vi.fn(),
+  findIdsByDataLakeTag: vi.fn(),
+  findByUserId: vi.fn(),
+  sumFileSizeByUserId: vi.fn(),
+});
+
+export const createMockUser = (overrides = {}) => ({
+  _id: 'test-user-id',
+  email: 'test@example.com',
+  name: 'Test User',
+  ...overrides,
+});
+
+export const createMockAdapters = (overrides = {}) => ({
+  db: {
+    someRepo: createMockRepository(),
+    ...overrides,
+  },
+});
+
+export const createMockSessionRepository = (): MockedObject<ISessionRepository> =>
+  vi.mocked({
+    ...createMockRepository<ISessionDocument>(),
+    shareable: createMockShareableRepository<ISessionDocument>(),
+    upsertByOpenaiConversationId: vi.fn() as MockedFunction<ISessionRepository['upsertByOpenaiConversationId']>,
+    upsertByClaudeConversationId: vi.fn() as MockedFunction<ISessionRepository['upsertByClaudeConversationId']>,
+    search: vi.fn(),
+    findByIdAndUserId: vi.fn(),
+    findAllWithKnowledgeId: vi.fn(),
+    searchByUserId: vi.fn(),
+    findRecentlyUpdatedByUserId: vi.fn(),
+    findAllByIds: vi.fn(),
+    findSessionIdsByUserId: vi.fn(),
+    attachAgent: vi.fn(),
+    detachAgent: vi.fn(),
+    getAttachedAgents: vi.fn(),
+    addArtifact: vi.fn(),
+    removeArtifact: vi.fn(),
+    getAttachedArtifacts: vi.fn(),
+    ensureMessageCount: vi.fn(),
+    populateMessageCounts: vi.fn(),
+    countByUserId: vi.fn(),
+    countActiveVoiceSessionsByUserId: vi.fn(),
+  });
+
+export const createMockAuthSessionRepository = (): MockedObject<IAuthSessionRepository> =>
+  vi.mocked({
+    ...createMockRepository<IAuthSessionDocument>(),
+    findBySid: vi.fn(),
+    findActiveByUserId: vi.fn(),
+    rotateHash: vi.fn(),
+    recoverRotateHash: vi.fn(),
+    registerReplayUse: vi.fn(),
+    revokeBySid: vi.fn(),
+    revokeAllByUserId: vi.fn(),
+  });
+
+export const createMockUserRepository = (): MockedObject<IUserRepository> =>
+  vi.mocked({
+    ...createMockRepository<IUserDocument>(),
+    findByEmail: vi.fn(),
+    removeGroupsFromAllUsers: vi.fn(),
+    addGroupToUser: vi.fn(),
+    removeGroupFromUser: vi.fn(),
+    removeGroupsFromUser: vi.fn(),
+    findUserIdsByGroupIds: vi.fn(),
+    findByIds: vi.fn(),
+    findActiveEmailsByIds: vi.fn(),
+    findByUsernameOrEmail: vi.fn(),
+    findByIdWithPassword: vi.fn(),
+    findByEmailVerificationToken: vi.fn(),
+    findByPendingEmailToken: vi.fn(),
+    findAllByEmailsOrUsernames: vi.fn(),
+    searchCollections: vi.fn(),
+    findByStripeCustomerId: vi.fn(),
+    incrementCredits: vi.fn(),
+    incrementCurrentStorage: vi.fn(),
+    incrementTokenVersion: vi.fn(),
+    findBySlackUserId: vi.fn(),
+    findByIdWithNotionToken: vi.fn(),
+    findByIdWithMfaSecrets: vi.fn(),
+    atomicRecordMfaFailedAttempt: vi.fn(),
+    findOrCreateByEmail: vi.fn(),
+    recordModerationHit: vi.fn(),
+    setModerationStatus: vi.fn(),
+    recordModerationAppeal: vi.fn(),
+  });
+
+export const createMockOrganizationRepository = (): MockedObject<IOrganizationRepository> =>
+  vi.mocked({
+    ...createMockRepository<IOrganizationDocument>(),
+    shareable: createMockShareableRepository<IOrganizationDocument>(),
+    search: vi.fn(),
+    findByStripeCustomerId: vi.fn(),
+    addMemberRaisingSeats: vi.fn(),
+    addMemberIfUnderCeiling: vi.fn(),
+    findIdsAdministeredBy: vi.fn(),
+    findIdsWithAdminRights: vi.fn(),
+    incrementCredits: vi.fn(),
+    incrementCurrentStorage: vi.fn(),
+    findByIdAndUserId: vi.fn(),
+    ensureUserDetails: vi.fn(),
+    updateUserDetails: vi.fn(),
+    findMembershipOrgIds: vi.fn(),
+  });
+
+export const createMockCreditTransactionRepository = (): MockedObject<ICreditTransactionRepository> =>
+  vi.mocked({
+    ...createMockRepository<ICreditTransactionDocument>(),
+    createTransaction: vi.fn() as MockedFunction<ICreditTransactionRepository['createTransaction']>,
+    findByUserId: vi.fn(),
+    findByPaymentIntentId: vi.fn(),
+    updateTransactionStatus: vi.fn(),
+    findByOwnerWithFilters: vi.fn(),
+    queryLedgerPage: vi.fn(),
+    queryAdminAdjustmentsPage: vi.fn(),
+    apiKeyUsageForOwner: vi.fn(),
+    sourceUsageForOwner: vi.fn(),
+  });
+
+/**
+ * Mock a research task
+ * @param value - Partial<IResearchTask> - The value to override the default data
+ * @returns IResearchTask - The mock research task
+ */
+export const mockResearchTask = (value: Partial<IResearchTask> = {}): IResearchTask => {
+  const baseTask = {
+    id: 'test-task-id',
+    userId: 'test-user-id',
+    researchAgentId: 'test-research-agent-id',
+    title: 'test-research-task-title',
+    description: 'test-research-task-description',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    status: ResearchTaskStatus.PENDING,
+    executionType: ResearchTaskExecutionType.ON_DEMAND,
+  };
+
+  // Default to SCRAPE type with scrape-specific properties
+  if (!value.type || value.type === ResearchTaskType.SCRAPE) {
+    const scrapeTask = {
+      ...baseTask,
+      type: ResearchTaskType.SCRAPE,
+      url: 'https://example.com',
+      urls: ['https://example.com'],
+      canDiscoverLinks: true,
+      discoveredLinks: [],
+      content: '',
+    };
+    return Object.assign(scrapeTask, value) as IResearchTask;
+  }
+
+  // Handle DEEP_RESEARCH type with deep research specific properties
+  if (value.type === ResearchTaskType.DEEP_RESEARCH) {
+    const deepResearchTask = {
+      ...baseTask,
+      type: ResearchTaskType.DEEP_RESEARCH,
+      topic: 'test research topic',
+      maxDepth: 7,
+    };
+    return Object.assign(deepResearchTask, value) as IResearchTask;
+  }
+
+  // Default fallback
+  const mock = {
+    ...baseTask,
+    type: ResearchTaskType.SCRAPE,
+    url: 'https://example.com',
+    urls: ['https://example.com'],
+    canDiscoverLinks: true,
+    discoveredLinks: [],
+    content: '',
+  };
+
+  return Object.assign(mock, value) as IResearchTask;
+};
+
+/**
+ * Mock a research agent
+ * @param value - Partial<IResearchAgent> - The value to override the default data
+ * @returns IResearchAgent - The mock research agent
+ */
+export const mockResearchAgent = (value: Partial<IResearchAgent> = {}): IResearchAgent => {
+  const mock = {
+    id: 'test-agent-id',
+    userId: 'test-user-id',
+    name: 'test-research-agent-name',
+    description: 'test-research-agent-description',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  return Object.assign(mock, value) as IResearchAgent;
+};

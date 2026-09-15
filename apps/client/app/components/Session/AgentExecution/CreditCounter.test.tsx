@@ -1,0 +1,89 @@
+import React from 'react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes';
+
+const mocks = vi.hoisted(() => ({
+  totalCreditsUsed: undefined as number | undefined,
+  enforceCredits: true as unknown,
+}));
+
+vi.mock('@client/app/stores/useAgentExecutionStore', () => {
+  const selectExecution = () => () => ({ totalCreditsUsed: mocks.totalCreditsUsed });
+  const useAgentExecutionStore = (selector: (s: unknown) => unknown) => selector({});
+  return { useAgentExecutionStore, selectExecution };
+});
+
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useGetSettingsValue: () => mocks.enforceCredits,
+}));
+
+import CreditCounter from './CreditCounter';
+
+const appTheme = extendTheme({ ...getThemeConfig() });
+const TestWrapper = ({ children }: { children: React.ReactNode }) => (
+  <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+);
+
+const EXECUTION_ID = 'exec-credit-1';
+
+describe('CreditCounter', () => {
+  beforeEach(() => {
+    mocks.totalCreditsUsed = undefined;
+    mocks.enforceCredits = true;
+  });
+
+  it('renders null when execution is missing from the store', () => {
+    const { container } = render(
+      <TestWrapper>
+        <CreditCounter executionId={EXECUTION_ID} />
+      </TestWrapper>
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('renders 0 credits even on a fresh execution (immediate feedback)', () => {
+    mocks.totalCreditsUsed = 0;
+    render(
+      <TestWrapper>
+        <CreditCounter executionId={EXECUTION_ID} />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId(`credit-counter-${EXECUTION_ID}`)).toBeInTheDocument();
+    // Matches the per-reply chip: bare number (with the Bike4Mind icon + tooltip).
+    expect(screen.getByText('0')).toBeInTheDocument();
+  });
+
+  it('rounds fractional credits to a whole number', () => {
+    mocks.totalCreditsUsed = 1234.7;
+    render(
+      <TestWrapper>
+        <CreditCounter executionId={EXECUTION_ID} />
+      </TestWrapper>
+    );
+    expect(screen.getByText('1235')).toBeInTheDocument();
+  });
+
+  it('renders null when enforceCredits is off, even mid-run', () => {
+    mocks.enforceCredits = false;
+    mocks.totalCreditsUsed = 42;
+    const { container } = render(
+      <TestWrapper>
+        <CreditCounter executionId={EXECUTION_ID} />
+      </TestWrapper>
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('renders null when enforceCredits is undefined (settings still resolving)', () => {
+    mocks.enforceCredits = undefined;
+    mocks.totalCreditsUsed = 42;
+    const { container } = render(
+      <TestWrapper>
+        <CreditCounter executionId={EXECUTION_ID} />
+      </TestWrapper>
+    );
+    expect(container.firstChild).toBeNull();
+  });
+});

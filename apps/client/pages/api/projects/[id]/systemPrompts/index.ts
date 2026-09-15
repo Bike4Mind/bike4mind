@@ -1,0 +1,101 @@
+import { fabFileRepository, projectRepository, withTransaction } from '@bike4mind/database';
+import { projectService } from '@bike4mind/services';
+import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { baseApi } from '@server/middlewares/baseApi';
+import { logEvent } from '@server/utils/analyticsLog';
+import { ProjectEvents } from '@bike4mind/common';
+import { BadRequestError } from '@server/utils/errors';
+import { ProjectFilesRequestBody } from '../../../../../types/api';
+
+const handler = baseApi()
+  .post(
+    asyncHandler<{ id: string }>(async (req, res) => {
+      const { id } = req.query as { id: string };
+      const { fileIds } = req.body as ProjectFilesRequestBody;
+
+      const project = await withTransaction(() =>
+        projectService.addSystemPrompts(
+          req.user,
+          {
+            projectId: id,
+            fileIds,
+          },
+          {
+            db: {
+              fabFiles: fabFileRepository,
+              projects: projectRepository,
+            },
+          }
+        )
+      );
+
+      await Promise.all(
+        fileIds.map((fileId: string) =>
+          logEvent(
+            {
+              userId: req.user.id,
+              type: ProjectEvents.ADD_SYSTEM_PROMPT,
+              metadata: {
+                projectId: project.id,
+                projectName: project.name,
+                promptId: fileId,
+              },
+            },
+            { ability: req.ability }
+          )
+        )
+      );
+
+      return res.json(project);
+    })
+  )
+  .delete(
+    asyncHandler<{ id: string }>(async (req, res) => {
+      const { id } = req.query as { id: string };
+      // Accept a batch { fileIds } and fall back to the legacy single { fileId }.
+      // Validate shape here so a malformed body (e.g. fileIds as a string) fails as a
+      // clean 400 rather than slipping to the service's zod parse a layer deeper.
+      const { fileIds, fileId } = req.body as { fileIds?: unknown; fileId?: unknown };
+      const ids = Array.isArray(fileIds) ? fileIds : typeof fileId === 'string' ? [fileId] : [];
+      if (ids.length === 0 || !ids.every((fid): fid is string => typeof fid === 'string')) {
+        throw new BadRequestError('fileIds must be a non-empty array of strings');
+      }
+
+      const project = await withTransaction(() =>
+        projectService.removeSystemPrompts(
+          req.user,
+          {
+            projectId: id,
+            fileIds: ids,
+          },
+          {
+            db: {
+              fabFiles: fabFileRepository,
+              projects: projectRepository,
+            },
+          }
+        )
+      );
+
+      await Promise.all(
+        ids.map(promptId =>
+          logEvent(
+            {
+              userId: req.user.id,
+              type: ProjectEvents.REMOVE_SYSTEM_PROMPT,
+              metadata: {
+                projectId: project.id,
+                projectName: project.name,
+                promptId,
+              },
+            },
+            { ability: req.ability }
+          )
+        )
+      );
+
+      return res.json(project);
+    })
+  );
+
+export default handler;

@@ -1,0 +1,70 @@
+import { baseApi } from '@server/middlewares/baseApi';
+import { userRepository } from '@bike4mind/database';
+import { McpServerName } from '@bike4mind/common';
+import { McpServer } from '@bike4mind/database/ai';
+
+/**
+ * Disconnects the Notion integration for the current user.
+ *
+ * DELETE /api/mcp-servers/notion/disconnect
+ *
+ * Notion does expose a revocation endpoint (POST /v1/oauth/revoke), but this handler
+ * does not call it yet: it only removes our copy of the credentials. The token stays
+ * valid until the user removes the integration from Notion's settings page, which the
+ * response message tells them how to do.
+ */
+const handler = baseApi().delete(async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Fetch current Notion connection info for logging
+    const user = await userRepository.findById(userId);
+    const notionConnect = user?.notionConnect;
+
+    if (notionConnect) {
+      console.log(
+        `[Notion Disconnect] Disconnecting workspace: ${notionConnect.workspaceName} (${notionConnect.workspaceId})`
+      );
+    }
+
+    await userRepository.update({
+      id: userId,
+      notionConnect: null,
+      pendingNotionOAuthNonce: null,
+    });
+
+    console.log(`[Notion Disconnect] Removed notionConnect for user ${userId}`);
+
+    // Remove Notion MCP server using Mongoose's findOneAndDelete (hard delete)
+    try {
+      const deletedMcpServer = await McpServer.findOneAndDelete({
+        name: McpServerName.Notion,
+        userId,
+      });
+
+      if (deletedMcpServer) {
+        console.log('[Notion Disconnect] MCP server permanently deleted.');
+      } else {
+        console.log('[Notion Disconnect] No Notion MCP server found - nothing to delete');
+      }
+    } catch (mcpError) {
+      // Log the MCP error but don't fail the disconnect operation
+      console.error('[Notion Disconnect] Failed to delete Notion MCP server:', mcpError);
+    }
+
+    res.status(200).json({
+      success: true,
+      message:
+        'Notion disconnected from Bike4Mind. Note: the token may still be valid in Notion until you revoke it ' +
+        'at notion.so > Settings & members > My connections.',
+    });
+  } catch (error) {
+    console.error('[Notion Disconnect] Fatal error during disconnect:', error);
+    const detail = error instanceof Error ? error.message : 'Unknown error';
+    res.status(500).json({
+      error: `Failed to disconnect Notion: ${detail}. Please try again or contact support.`,
+    });
+  }
+});
+
+export default handler;

@@ -1,0 +1,127 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Open-core snapshot exclusions (b4m-infra#507).
+#
+# `export-ignore` tells `git archive` to OMIT these paths. The open-core launch
+# cuts the public repo via `git archive HEAD`, so anything marked here does not
+# ship in the snapshot. This is the documented, in-tree BACKSTOP; the cut script
+# (scratchpad/cut-snapshot.sh) also rm's the same set as a second pass, and a
+# recon/secret scan gates the cut. `export-ignore` only affects `git archive`
+# (not a plain clone/copy), which is exactly the snapshot mechanism.
+#
+# Validated by scripts/check-export-ignore.sh (asserts every entry below is
+# absent from `git archive HEAD`). Keep this list in sync with that script and
+# with scratchpad/cut-snapshot.sh.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# NOTE: dead-client / live-served docs are DELETED outright (PR #9805), not
+# export-ignore'd — a customer-deployment DB doc, apps/client/public/docs/roadmap/,
+# an internal infosec package, and an internal SVG design-system doc. cut-snapshot.sh
+# keeps a guarded `rm` for them as a belt.
+
+# NOTE: the internal working-docs tree (top-level docs/, formerly export-ignored
+# here) and rawScreenshots/ were moved OUT of the repo entirely for the freeze —
+# archived to the private cpo repo (cpo/lumina5-archive/), along with
+# the OptiHashi overlay's {VISION,IDEATION,EXTRACTION,BUILD_PLAN}.md and two stray
+# internal plan docs. Physically absent, so no export-ignore entry is needed.
+
+# ── docs-site — the Docusaurus source for docs.bike4mind.com, excluded WHOLESALE ──
+# The published docs site is internal-heavy (security control objectives, AWS
+# onboarding/process runbooks, DocumentDB solution summaries, and the internal
+# roadmap that names a customer + @milliononmars.com emails). Rather than
+# triage it page-by-page, the whole tree is dropped from the public snapshot.
+# This is SNAPSHOT-ONLY: `export-ignore` affects `git archive` alone (not the
+# working tree, not any clone/copy), and `git archive` runs nowhere in lumina5's
+# CI/deploy/build — so docs.bike4mind.com keeps deploying from lumina5 exactly as
+# today, untouched. docs-site is also excluded from the pnpm workspace
+# (pnpm-workspace.yaml `- '!docs-site'`, zero lockfile refs), so dropping it does
+# not affect `pnpm install --frozen-lockfile` on the snapshot. This supersedes
+# the narrower per-page and roadmap/ entries from #9748/#9909. The standalone
+# docs-deploy workflow is excluded too (below). _verify-docs-build.yml is NOT
+# excluded: deploy.yml `uses:` it as a local reusable workflow, and GitHub
+# resolves that reference at trigger time even when the job's `if:` is false —
+# export-ignoring it makes every deploy.yml run on the snapshot repo fail at
+# 0s with "workflow file issue". It ships instead; its canonical-repo guard
+# (vars.CANONICAL_REPO) keeps the docs job permanently skipped off-repo.
+docs-site/** export-ignore
+.github/workflows/deploy-docs.yml export-ignore
+# ── EXCEPT the in-app help corpus ───────────────────────────────────────────
+# The Help Panel's articles ARE docs-site/docs/{features,admin} — loadHelpArticles.ts
+# reads them, and two CI gates (helpContentRendering.test.tsx, help-corpus-
+# validation.test.ts) fail on an empty corpus, which is exactly what the wholesale
+# exclusion shipped. Carve the two category trees back in (later lines win), then
+# re-exclude the loader's own EXCLUDED_FILES + quest-examples — internal
+# design/roadmap/plan docs parked in the category dirs that the loader never
+# serves (three carry flavor text from the hard-blocked identity set).
+# Keep this list in sync with EXCLUDED_FILES/EXCLUDED_DIRS in
+# packages/scripts/help/loadHelpArticles.ts.
+#
+# Directory-prune gotcha: `git archive` does NOT descend into an export-ignored
+# directory, so a file-level `-export-ignore` under `docs-site/**` alone never
+# gets consulted. Un-ignore each intermediate directory, then re-ignore its
+# contents, then carve the kept subtrees back in (last matching line wins).
+docs-site/docs -export-ignore
+docs-site/docs/** export-ignore
+docs-site/docs/features -export-ignore
+docs-site/docs/features/** -export-ignore
+docs-site/docs/admin -export-ignore
+docs-site/docs/admin/** -export-ignore
+docs-site/docs/features/to-do.md export-ignore
+docs-site/docs/features/system-secrets-management.md export-ignore
+docs-site/docs/features/research-mode-implementation.md export-ignore
+docs-site/docs/features/notebook-splash-design.md export-ignore
+docs-site/docs/features/notebook-import-export.md export-ignore
+docs-site/docs/features/gamedev-powered-roadmap.md export-ignore
+docs-site/docs/features/artifacts-system-roadmap.md export-ignore
+docs-site/docs/features/feature-flags.md export-ignore
+docs-site/docs/features/questmaster-export.md export-ignore
+docs-site/docs/admin/accounts.md export-ignore
+docs-site/docs/features/quest-examples/** export-ignore
+
+# ── Internal config / scripts / CI ──
+# .claude/ is internal dev-agent tooling (commands/skills/agents/settings) — same
+# class as .cursor/ below. tfg-invoice.md notably embeds real AWS account ids.
+.claude/** export-ignore
+# CLAUDE.md is the repo's internal dev-agent config (same class as .claude/). It
+# embeds a live x-e2e-cleanup-secret curl example, internal employee emails, a
+# private-repo name, and dense staging/preview-topology prose — none of which
+# belongs in the public snapshot. (The secret is separately rotated under #505/#506;
+# this only keeps it out of the archive.)
+CLAUDE.md export-ignore
+.github/tenants.yml export-ignore
+.github/customer-forks.json export-ignore
+.github/scripts/fork-sync/** export-ignore
+.github/workflows/fork-sync.yml export-ignore
+.github/workflows/sre-autofix*.yml export-ignore
+# Customer-fork-only workflow: sets SST secrets for a customer fork, gated by a
+# repository-name check so it's inert on the public repo anyway. Its only content is
+# that customer fork name — drop it from the snapshot.
+.github/workflows/set-sst-secrets.yml export-ignore
+for-env export-ignore
+get-cloudfront-id.sh export-ignore
+go-groktool.sh export-ignore
+scripts/check-export-ignore.sh export-ignore
+*waf*.sh export-ignore
+.cursor/** export-ignore
+
+# ── Ops/internal residue (small-items audit, #507 addenda) ──
+# Verified not referenced by any shipping workflow/package (apply-sre-fix is used
+# only by the already-export-ignored sre-autofix*.yml). Excludes internal-only
+# residue that would otherwise ride along in the public snapshot.
+# infra/waf/*.json must ship: config-eval reads the policy JSON when ENABLE_WAF=true.
+scripts/apply-sre-fix.cjs export-ignore
+scripts/liveops-fetch.mjs export-ignore
+# Open-core cut tooling (the scripts that BUILD the snapshot). Internal-only; the
+# snapshot they produce must not contain them. Team-runnable from here so the cut
+# isn't gated on one person's laptop.
+scripts/opencore/** export-ignore
+# apply-sre-fix.test.cjs spawns the dropped apply-sre-fix.cjs — would ENOENT in the snapshot.
+scripts/__tests__/apply-sre-fix.test.cjs export-ignore
+
+# ── Package CHANGELOGs — auto-generated release notes, excluded WHOLESALE (#9983) ──
+# The changeset-generated per-package CHANGELOG.md files record the internal release
+# history, which names the pre-rename product package and internal feature/commit lines
+# from the extracted overlay. They carry ZERO build/runtime dependency —
+# not imported by code, and changesets regenerate them against the working tree, which
+# `git archive` never touches. Dropped from the public snapshot rather than rewriting the
+# release history line-by-line. Keep in sync with scripts/check-export-ignore.sh INTENDED.
+**/CHANGELOG.md export-ignore

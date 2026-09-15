@@ -1,0 +1,935 @@
+import { IShareableDocument, IShareableStaticMethods, IUserShare } from './ShareableDocumentTypes';
+import { IBaseRepository, IMongoDocument } from '.';
+import { IFabFileDocument } from './FabFileTypes';
+import { IToolDocument } from './ToolTypes';
+import { PromptMeta } from './PromptMetaTypes';
+import { SearchOptions } from '../../search';
+import { ChatModelName } from '../../models';
+import { MessageContentObject } from './MessageTypes';
+import type { DataLakeGroundingMode } from '../../constants/dataLakes';
+import type { ApiErrorCode } from '../../apiErrorCodes';
+
+/** Pending action for Slack/Web button-based confirmation flow */
+export interface IPendingAction {
+  tool: string;
+  params: Record<string, unknown>;
+  /** Unix timestamp in milliseconds for 15-min expiration check */
+  ts: number;
+}
+
+/**
+ * Generalized UI side-effect protocol.
+ * Tools return a __uiSideEffect sentinel in their result; ChatCompletionProcess
+ * extracts it, persists it on the quest, and the client dispatches it.
+ * Discriminated union - add new variants here as needed.
+ */
+
+/** A job-shop scheduling problem - the bare payload a formulate/edit tool populates. */
+export type SchedulingProblemPayload = {
+  name: string;
+  description?: string;
+  jobs: Array<{
+    id: number;
+    name: string;
+    operations: Array<{ jobId: number; machineId: number; duration: number }>;
+  }>;
+  machines: Array<{ id: number; name: string }>;
+};
+
+/**
+ * Optional solver-run outputs a solve tool can carry alongside a populated problem so the
+ * client can surface the run without re-solving. `results`/`result` are opaque here (the
+ * full set and/or a single winner; their shape is validated by the tool that emits them),
+ * `errors` are per-solver failure messages, and `solvedAt` is an ISO solve timestamp.
+ */
+export type PopulatedSolveOutputs = {
+  results?: unknown[];
+  result?: unknown;
+  errors?: string[];
+  solvedAt?: string;
+};
+
+export type UiSideEffect =
+  | {
+      // A BARE scheduling problem populated by a formulate/edit tool. A solve tool's problem +
+      // race rides `populateScheduleRace` (below), NOT this type, so this payload is never a
+      // wrapper — a client bundle that predates the race feature reads it as the bare problem
+      // and stays correct.
+      type: 'populateProblem';
+      payload: SchedulingProblemPayload;
+    }
+  | {
+      // A solve tool's scheduling problem WRAPPED with its solver-run outputs. Deliberately a
+      // distinct type from populateProblem: routing a wrapper through populateProblem would let
+      // an older client persist the wrapper as the active brief. A client that predates this
+      // type ignores it (its handler has no case) instead of mis-applying it.
+      type: 'populateScheduleRace';
+      payload: { problem: SchedulingProblemPayload } & PopulatedSolveOutputs;
+    }
+  | {
+      // The unified families carry their familyId alongside the family-specific problem
+      // shape, optionally wrapped with solve outputs. `problem` is validated server-side
+      // before serialization.
+      type: 'populateFamilyProblem';
+      payload: { familyId: string; problem: unknown } & PopulatedSolveOutputs;
+    };
+
+export type SessionProps = {
+  sessionName: string;
+  dateStarted: string;
+  user: string;
+};
+
+/**
+ * Machine-readable error classifiers for `type: 'error'` quests. Set server-side
+ * so the client can branch to a targeted error UI (see `IChatHistoryItem.errorCode`).
+ * Single source of truth: the streamed-action Zod enum in `schemas/actions.ts`
+ * derives its values from this tuple, so the two can never drift.
+ *
+ * SSE-frame scoped, and a NARROWING of the platform-wide `API_ERROR_CODES`: a
+ * quest fails for billing reasons, never for the provider-configuration reasons
+ * the HTTP surface reports. The `satisfies` is what keeps it a narrowing rather
+ * than a second vocabulary - a code added here that is not in `API_ERROR_CODES`
+ * fails the build.
+ */
+export const QUEST_ERROR_CODES = [
+  'insufficient_credits',
+  'spend_cap_exceeded',
+] as const satisfies readonly ApiErrorCode[];
+export type QuestErrorCode = (typeof QUEST_ERROR_CODES)[number];
+
+/**
+ * Requested-vs-delivered counts for one turn's attachments. `IChatHistoryItem.attachmentNotices`
+ * explains the failures; this is the affirmative half, and it is the only thing that separates
+ * "nothing was attached" from "everything attached was refused" - a distinction
+ * `promptMeta.context.tokensBySource.fabFiles` cannot make, because it aggregates session,
+ * message and system files into one count alongside the turn's own attachments.
+ */
+export interface IAttachmentDelivery {
+  /**
+   * Ids the turn tried to inline, after dedup - NOT just what the caller attached. The chat door
+   * counts session and message fab files plus the user's enabled and the admin's global system
+   * files plus the inline knowledge subset; the agent door counts message and session fab files
+   * plus every session knowledge id, and no system files. So `requested` is a denominator for
+   * "what this turn tried to put in the prompt", and the two doors do not compute it the same way.
+   * `droppedIds` is what answers "did MY file arrive" exactly, and is per-id exact on both.
+   */
+  requested: number;
+  /** Of `requested`, how many placed any content into the prompt. */
+  delivered: number;
+  /** Of `delivered`, how many placed their ENTIRE content - the rest are excerpts or head slices. */
+  fullyDelivered: number;
+  /** `requested - delivered`. Every one of these also has a line in `attachmentNotices`. */
+  dropped: number;
+  /** The undelivered ids, so a caller can react without parsing the notice prose. */
+  droppedIds: string[];
+}
+
+export interface IChatHistoryItem {
+  id?: string;
+  sessionId: string;
+  conversationItemId?: string;
+  openaiMessageId?: string;
+  claudeMessageId?: string;
+
+  /** Chat item type:
+   * - message: A message from the user
+   * - system: A prompt generated by the system
+   * - oob: Out-of-band data such as a link to a website
+   * - error: An error message
+   */
+  type: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
+
+  /** When the prompt was captured/generated */
+  timestamp: Date;
+
+  /** The prompt text. This may be generated by a user or system (see .type),
+   * and intended for either (see .next) */
+  prompt: string;
+  fabFileIds?: string[];
+  agentIds?: string[];
+
+  /** Reply/Replies to the prompt from LLM - only one will be used */
+  reply?: string | null;
+  replies?: string[];
+
+  /**
+   * Structured content blocks for assistant replies (tool_use, thinking, etc.)
+   * This preserves the full message structure needed for Anthropic API tool pairing.
+   */
+  structuredReplies?: Array<{
+    role: 'assistant';
+    content: MessageContentObject[];
+  }>;
+
+  /**
+   * Tool results corresponding to tool_use blocks in structuredReplies.
+   * Stored separately to enable proper message reconstruction with correct ordering.
+   */
+  toolResults?: Array<{
+    tool_use_id: string;
+    content: string;
+    is_error?: boolean;
+  }>;
+
+  /** QuestMaster's formatted reply, if QuestMaster is enabled */
+  questMasterReply?: string | null;
+
+  /** Path to the image in the storage bucket */
+  images?: string[];
+
+  /** Path to the video in the storage bucket */
+  videos?: string[];
+
+  /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
+  oob?: string;
+  promptMeta?: PromptMeta;
+
+  status?: 'stopped' | 'running' | 'done';
+  creditsUsed?: number;
+  deletedAt?: Date;
+
+  /**
+   * Machine-readable classifier for an `type: 'error'` quest, set server-side so
+   * the client can render a targeted error state instead of the raw `reply` text.
+   * Currently only `insufficient_credits` (drives the inline "Add Credits" CTA in
+   * the reply bubble); extend the union as other errors gain bespoke UI.
+   */
+  errorCode?: QuestErrorCode;
+
+  /**
+   * The ID of the QuestMaster plan that was created from this chat history item
+   */
+  questMasterPlanId?: string;
+
+  /**
+   * Set when this Quest was created by `persistRunAsQuest` (the agent_execute
+   * completion/failure/abort path). Points to the originating `AgentExecution`
+   * document so the client can lazy-load the iteration trace on demand for
+   * a "Show reasoning" disclosure under the reply bubble. Undefined for
+   * normal `chat_completion` quests.
+   */
+  agentExecutionId?: string;
+
+  /**
+   * Provenance of the routing decision that produced this quest (M4).
+   * Drives the `AutoRouteBadge` rendering above auto-routed responses
+   * (classifier- or rule-based complexity-routed) so users see when
+   * Agent mode was auto-engaged and can dismiss it for the remainder of the
+   * session.
+   */
+  routingSource?: 'mention' | 'agent_literal' | 'toggle' | 'classifier' | 'user-default' | 'complexity';
+
+  /**
+   * Whether this quest/message is pinned by the user
+   */
+  pinned?: boolean;
+
+  /**
+   * Research Mode results when parallel processing is used
+   */
+  researchModeResults?: Array<{
+    configurationId: string;
+    success: boolean;
+    response?: string;
+    error?: string;
+    completionInfo?: {
+      inputTokens: number;
+      outputTokens: number;
+    };
+  }>;
+
+  /**
+   * Deep Research state containing complete research information
+   */
+  deepResearchState?: {
+    findings: Array<{
+      text: string;
+      source: string;
+    }>;
+    activities: Array<{
+      type: 'search' | 'extract' | 'analyze' | 'reasoning' | 'synthesis' | 'thought';
+      status: 'pending' | 'complete' | 'error';
+      message: string;
+      timestamp: string;
+      depth: number;
+    }>;
+    sources: Array<{
+      url: string;
+      title: string;
+      description: string;
+      status: 'found' | 'analyzing' | 'complete' | 'error';
+      timestamp: string;
+    }>;
+    depth: number;
+    completed: boolean;
+    nextSearchQueries: string[];
+    completedSteps: number;
+    totalExpectedSteps: number;
+    topic?: string;
+    startTime?: number;
+    endTime?: number;
+  };
+
+  /**
+   * Fallback model information when a fallback occurred during generation
+   */
+  fallbackInfo?: {
+    sessionId: string;
+    primaryModel: string;
+    primaryModelName: string;
+    fallbackModel: string;
+    fallbackModelName: string;
+    /** Provider path of each side; see FallbackInfoSchema for why these are optional. */
+    primaryModelBackend?: string;
+    fallbackModelBackend?: string;
+    timestamp: number;
+  };
+
+  /**
+   * Prompt enhancement information for image generation
+   */
+  promptEnhancement?: {
+    originalPrompt: string;
+    enhancedPrompt: string;
+    promptWasEnhanced: boolean;
+    /** Resolver intent - drives the banner's framing (continuation = "context applied" vs fresh = "enhanced"). */
+    intent?: 'fresh' | 'continuation';
+  };
+
+  /**
+   * Pre-computed embedding for semantic search
+   * Generated by Zen Garden Spider grooming operation
+   */
+  embedding?: {
+    /** The embedding vector (e.g., 1536 dimensions for OpenAI ada-002) */
+    vector: number[];
+    /** The embedding model used (e.g., 'text-embedding-ada-002') */
+    model: string;
+    /** When the embedding was generated */
+    generatedAt: Date;
+    /** MD5 hash of the content that was embedded (to detect if re-generation needed) */
+    contentHash: string;
+  };
+
+  /**
+   * Pending action for button-based confirmation flow.
+   * Used for MCP tool confirmations and image model selection.
+   * Discriminated by `tool`:
+   *   - `'image_generation'`: awaiting model selection via picker UI (params.prompt, params.userId)
+   *   - other: MCP tool confirmation (params contain tool arguments)
+   */
+  pendingAction?: IPendingAction;
+
+  /**
+   * Slack notification info for async message editing
+   * Used by Quest Processor to edit the status message with final response
+   * Enables handling large tables that exceed Frontend Lambda timeout
+   */
+  slackNotification?: {
+    workspaceId: string; // Slack workspace ID to look up bot token
+    channelId: string; // Slack channel ID
+    threadTs: string; // Thread timestamp for replies
+    messageTs: string; // Message timestamp to edit
+    isPaintCommand?: boolean; // Whether this quest was triggered by /paint command
+  };
+
+  /**
+   * User-facing lines for attachments submitted with this turn that did not arrive intact - not
+   * found, unreadable, unsupported, or delivered only in part. Rendered under the reply; the same
+   * text is also given to the model in a system message, so an attachment failure is never silent
+   * and never surface-specific.
+   */
+  attachmentNotices?: string[];
+
+  /**
+   * Affirmative delivery report for this turn's attachments - see {@link IAttachmentDelivery}.
+   * Written whenever the turn carried any attachment, including the all-succeeded case that
+   * produces no notices at all; that case is exactly the one nothing else records.
+   */
+  attachmentDelivery?: IAttachmentDelivery;
+
+  /**
+   * Navigation intents from the navigate_view tool.
+   * Rendered as inline action buttons in the chat response.
+   */
+  navigationIntents?: Array<{
+    viewId: string;
+    label: string;
+    description: string;
+    navigationType: 'route' | 'tab' | 'action';
+    target: string;
+    reason: string;
+  }>;
+
+  /**
+   * Attachment list for interactive download buttons (Slack and web UI)
+   * Stores attachment metadata from MCP list tools (jira_list_attachments, confluence_list_attachments)
+   * for generating interactive download buttons
+   */
+  attachmentList?: {
+    source: 'jira' | 'confluence';
+    issueKey?: string; // For Jira attachments
+    pageId?: string; // For Confluence attachments
+    pageTitle?: string; // For Confluence (user-friendly display name)
+    attachments: Array<{
+      id: string;
+      filename: string;
+      emoji: string;
+      sizeFormatted: string;
+      mimeType?: string;
+      author?: string; // Who uploaded the attachment
+    }>;
+  };
+
+  /**
+   * Generalized UI side-effects from tool results.
+   * Extracted by ChatCompletionProcess from __uiSideEffect sentinels and
+   * dispatched client-side by UiSideEffectDispatcher.
+   */
+  uiSideEffects?: UiSideEffect[];
+
+  /**
+   * Jupyter notebook execution state.
+   * Tracks the status of notebook generation and execution via Keep commands.
+   */
+  jupyterNotebook?: IJupyterNotebookState;
+}
+
+/**
+ * Jupyter notebook execution state interface.
+ * Used for tracking notebook generation and execution progress.
+ */
+export interface IJupyterNotebookState {
+  /** Current status of the notebook execution */
+  status: 'pending' | 'generating' | 'executing' | 'completed' | 'failed';
+  /** Local path where the notebook is stored */
+  notebookPath?: string;
+  /** FabFile ID of the stored executed notebook */
+  fabFileId?: string;
+  /** Jupyter kernel name used for execution */
+  kernelName?: string;
+  /** Total number of cells in the notebook */
+  cellCount?: number;
+  /** Number of cells successfully executed */
+  executedCells?: number;
+  /** Last error message if execution failed */
+  lastError?: string;
+  /** Number of retry attempts for failed cells */
+  retryCount?: number;
+  /** When execution started */
+  startedAt?: Date;
+  /** When execution completed (success or failure) */
+  completedAt?: Date;
+}
+
+export interface IChatHistoryItemDocument extends Omit<IChatHistoryItem, 'id'>, IMongoDocument {}
+
+////////
+
+/**
+ * Entity mention source - where the entity was mentioned
+ */
+export type EntityMentionSource = 'user' | 'assistant' | 'tool_result';
+
+/**
+ * GitHub repository entity
+ */
+export interface IGitHubRepoEntity {
+  owner: string;
+  repo: string;
+  mentionedAt: Date;
+  source: EntityMentionSource;
+}
+
+/**
+ * GitHub PR entity
+ */
+export interface IGitHubPREntity {
+  owner: string;
+  repo: string;
+  number: number;
+  title?: string;
+  mentionedAt: Date;
+  source: EntityMentionSource;
+}
+
+/**
+ * GitHub issue entity
+ */
+export interface IGitHubIssueEntity {
+  owner: string;
+  repo: string;
+  number: number;
+  title?: string;
+  mentionedAt: Date;
+  source: EntityMentionSource;
+}
+
+/**
+ * Jira project entity
+ */
+export interface IJiraProjectEntity {
+  key: string;
+  name?: string;
+  mentionedAt: Date;
+  source: EntityMentionSource;
+}
+
+/**
+ * Jira issue entity
+ */
+export interface IJiraIssueEntity {
+  key: string;
+  summary?: string;
+  mentionedAt: Date;
+  source: EntityMentionSource;
+}
+
+/**
+ * Confluence space entity
+ */
+export interface IConfluenceSpaceEntity {
+  key: string;
+  name?: string;
+  mentionedAt: Date;
+  source: EntityMentionSource;
+}
+
+/**
+ * Confluence page entity
+ */
+export interface IConfluencePageEntity {
+  id: string;
+  title: string;
+  spaceKey?: string;
+  mentionedAt: Date;
+  source: EntityMentionSource;
+}
+
+/**
+ * Conversation context for low-effort prompt handling.
+ * Tracks recently mentioned entities from GitHub, Jira, and Confluence
+ * to enable reference resolution (e.g., "review that PR").
+ */
+export interface IConversationContext {
+  github?: {
+    repos: IGitHubRepoEntity[];
+    prs: IGitHubPREntity[];
+    issues: IGitHubIssueEntity[];
+  };
+  jira?: {
+    projects: IJiraProjectEntity[];
+    issues: IJiraIssueEntity[];
+  };
+  confluence?: {
+    spaces: IConfluenceSpaceEntity[];
+    pages: IConfluencePageEntity[];
+  };
+  lastUpdated: Date;
+}
+
+////////
+
+export interface ISession {
+  id: string;
+  name: string;
+  userId: string;
+  lastUpdated: Date;
+  firstCreated: Date;
+  language?: string;
+  knowledgeIds?: Array<IFabFileDocument['id']>;
+  artifactIds?: string[];
+  toolIds?: Array<IToolDocument['id']>;
+  agentIds?: string[];
+  /**
+   * Optional session-level system prompt, injected verbatim as a system message
+   * during chat completion (alongside org/project prompts). Generic capability -
+   * lets a product surface scope a session's behavior without a project record.
+   */
+  systemPromptText?: string;
+  /**
+   * Optional reference to a curated system prompt in the admin registry (SystemPromptModel), by
+   * `promptId`. When set to a session-activatable id (e.g. 'triage_router'), that registry prompt's
+   * current content is injected as the session's system message - the versioned, admin-editable
+   * counterpart to the raw `systemPromptText`, so the prompt can be tuned with no deploy. Like
+   * `systemPromptText`, it suppresses the generic brand-identity prompt.
+   */
+  systemPromptId?: string;
+  /**
+   * Optional product surface that owns this session (e.g. 'libreoncology').
+   * Default sessions have no surface. Generic capability - lets any product surface
+   * mark its sessions so they stay out of the main B4M list and can scope their own
+   * session rail (consumed branchlessly by the surface filter in `SessionModel`).
+   */
+  surface?: string;
+  /**
+   * Optional session-level tool allowlist that is always offered to the model,
+   * unioned with the per-request tool selection. Generic capability - lets a
+   * product surface guarantee certain tools (e.g. knowledge retrieval) are
+   * available regardless of the client's Smart/Fast toggle. Holds B4MLLMTools
+   * names. Mirrors how `systemPromptText` scopes a session without a project.
+   */
+  enabledTools?: string[];
+  /**
+   * Tools that must NOT be offered to the model for this session, even if the
+   * request or global auto-adds include them. Applied as a denylist after all
+   * other tool resolution. Generic capability - lets a product surface restrict
+   * to an approved toolset (e.g. "curated sources only": no web search).
+   */
+  disabledTools?: string[];
+  /**
+   * When true, suppress the user's personal integrations for this session - their
+   * MCP servers and agent delegation are not layered onto the session's toolset, so
+   * it runs only its curated, server-owned tools. Generic capability - lets a product
+   * surface (e.g. /opti) guarantee an isolated toolset, honored branchlessly by the
+   * completion path. Mirrors how `enabledTools`/`disabledTools` scope a session.
+   *
+   * Intentionally bundles two capabilities (suppress MCP servers AND disable agent
+   * delegation) because /opti - the only consumer today - needs both. If a future surface
+   * needs to isolate one without the other, split this into two fields rather than overloading
+   * it further.
+   */
+  disableUserIntegrations?: boolean;
+  /**
+   * When true, every user turn forces a server-side retrieval against the user's
+   * tag-scoped data lakes, injecting the results as grounded context with citations
+   * before the model answers. Generic capability - guarantees grounded, cited
+   * answers for reference-product surfaces independent of model tool-use choices.
+   */
+  forceKnowledgeRetrieval?: boolean;
+  /**
+   * Optional tag allowlist that scopes forced knowledge retrieval to a subset of the
+   * user's accessible lake (e.g. a single disease-site course: ['mock:breast']).
+   * When set, only files carrying one of these tags are candidates for retrieval.
+   * Generic capability - lets a surface focus the grounded tutor on one topic.
+   */
+  retrievalTags?: string[];
+  /**
+   * Whether `retrievalTags` above is a deliberate lake selection rather than an absent or derived
+   * default. It is what makes "the user deselected every lake" expressible: Mongoose hydrates an
+   * omitted array to `[]`, so an empty `retrievalTags` cannot say that on its own, and the
+   * lake-memory hot card would otherwise read it as "no scoping wanted" and widen to every entitled
+   * lake (see resolveLakeMemoryScope). Also suppresses the file-driven scope derivation, so
+   * attaching a lake file does not silently re-scope a session the user scoped by hand.
+   */
+  lakeScopeExplicit?: boolean;
+  /**
+   * Lake ids a manager was admitted to for THIS session even though they are not a member of the
+   * lake (manage-but-not-member admission) - set ONLY by pages/api/sessions/create.ts, AFTER its
+   * own canManageLake check, as a write separate from session creation. Never part of
+   * createSession's input type (fork/clone/snip cannot copy it - a type error, not a runtime
+   * check) and never part of SessionUpdateRequestSchema (no session can grant itself this after
+   * the fact). Consumed only by the retrieval/injection widening in getDynamicDataLakeTags and
+   * getDataLakePrompts, and only once re-vetted against the request's authenticated principal -
+   * see ToolContext.sessionPreauthorizedLakeIds. Absent/empty = no widening.
+   */
+  preauthorizedLakeIds?: string[];
+  /**
+   * How this session grounds an attached data-lake corpus (inline vs retrieve vs auto-by-size),
+   * resolved ONCE at create time from the lake this session was created for (see
+   * resolveLakeSessionDefaults). The completion path's corpus defer plan reads this to decide
+   * whether to keep the corpus inlined or defer the tool-retrievable subset to
+   * search_knowledge_base, generalizing the size-only rule to an explicit per-lake choice. Unset on
+   * a session not created for a lake, which the plan treats as its pre-existing size-only behavior.
+   */
+  corpusGroundingMode?: DataLakeGroundingMode;
+  /**
+   * Generic retrieval exclusion: filename markers (case-insensitive, matched as a LEADING
+   * marker at a word boundary - the marker must start the name and be followed by end-of-string
+   * or a non-word character, so `MARK - x.pdf` matches while `MARKdown.pdf` does not; NOT a bare
+   * prefix) whose files are kept OUT of session-scoped knowledge retrieval, so retrieval agrees
+   * with the surface's document-listing predicate. Coverage: the chat-completion path and agent
+   * execution (parent toolbelt + delegated subagents). Owner-scoped charter/deep-agent tools run
+   * without a session and honor it only when a caller passes it explicitly. Host core carries no
+   * product-specific marker literals; a consumer supplies them at session-create time and MUST
+   * keep them in sync with its own listing predicate. Neutral default (unset/empty) = no exclusion.
+   */
+  retrievalExcludeFilenameMarkers?: string[];
+  /**
+   * When true, only vectorized lake files are retrievable in the session-scoped retrieval arms
+   * (unvectorized files are excluded), matching a listing predicate that hides not-yet-vectorized
+   * documents. Generic capability; neutral default (unset) = vectorized and unvectorized both
+   * retrievable.
+   */
+  retrievalVectorizedOnly?: boolean;
+  /**
+   * How forced knowledge retrieval instructs the model to cite sources.
+   * 'named' (default when unset) - cite by readable document name, today's behavior.
+   * 'indexed' - the injected retrieval context numbers each distinct source document
+   * and instructs the model to cite by bracketed index `[N]` only; the emitted
+   * citables array order is the index order, so `[N]` resolves to `citables[N-1]`.
+   * INVARIANT (load-bearing for that lookup): the forced-retrieval citables must
+   * remain the contiguous, index-aligned PREFIX of `quest.promptMeta.citables` -
+   * tool-contributed citables may only append after them. A merge-order change that
+   * breaks this misaligns every marker in-range (wrong document on click) with no
+   * client-side way to detect it.
+   * Generic capability - any surface that renders numbered citation markers can set
+   * it (set by LibreOncology pathway sessions today); unset sessions are unaffected.
+   */
+  citationStyle?: 'named' | 'indexed';
+  /**
+   * Optional fixed sampling temperature for this session, applied server-side with
+   * precedence over the request's value. Generic capability - lets a product surface
+   * pin lower variance for accuracy-sensitive domains (e.g. clinical reference).
+   */
+  temperature?: number;
+  /**
+   * Optional cap on the number of tool-call rounds for this session, applied
+   * server-side. Generic capability - lets a product surface bound an eager model's
+   * tool loop (e.g. a latency-sensitive sales/demo surface) regardless of the request.
+   * Neutral default (unset) = the engine's normal unbounded tool loop.
+   */
+  maxToolCalls?: number;
+  /**
+   * The placeholder name a product surface stamped on this session at create
+   * time. Generic capability - auto-naming treats a session still bearing its
+   * placeholder as rename-eligible (bypassing the recent-update duplicate
+   * guard), while a session the user has renamed keeps that protection.
+   * Neutral default (unset) = only the core placeholder names apply.
+   */
+  autoNamePlaceholder?: string;
+  openaiConversationId?: string;
+  claudeConversationId?: string;
+  summary?: string;
+  summaryAt?: Date;
+  summaryTrigger?: 'manual' | 'project' | 'earlyMilestone' | 'contentGrowth' | 'throttling';
+  contextSummary?: string;
+  contextSummaryUpToQuestId?: string; // string ObjectId — boundary; messages ≤ this are excluded from verbatim history
+  contextSummaryAt?: Date;
+  contextSummaryModelId?: ChatModelName;
+  deletedAt?: Date;
+  tags?: { name: string; strength: number }[];
+  taggedAt?: Date; // When tags were last generated for this session
+  clonedSourceId?: string | null;
+  forkedSourceId?: string | null;
+  isAutoNamed?: boolean;
+  lastUsedModel?: string | null;
+  summaryModelId?: ChatModelName;
+  curatedNotebookFileId?: string; // Points to the latest curated markdown file
+  curatedAt?: Date; // When the notebook was last curated
+  curationContentHash?: string; // Hash of the last curation's inputs (content + type + options); lets an unchanged re-curation reuse the file and skip the LLM
+  messageCount?: number; // Lazy-loaded count of messages in this session - calculated on first read
+  slackMetadata?: {
+    channelId: string;
+    threadTs?: string; // Optional - undefined for non-threaded DMs
+    createdFromSlack: boolean;
+    workspaceId?: string; // Slack workspace ID for async notification
+  };
+  /**
+   * Conversation context for low-effort prompt handling.
+   * Tracks recently mentioned entities to enable reference resolution.
+   */
+  conversationContext?: IConversationContext;
+
+  /**
+   * Credits reserved at voice session start for pre-payment.
+   * Reconciled against actual cost at session end.
+   * Set to null after reconciliation.
+   */
+  voiceReservedCredits?: number | null;
+
+  /**
+   * Timestamp when the voice session started.
+   * Used to enforce the 60-minute hard cap.
+   */
+  voiceSessionStartedAt?: Date | null;
+}
+
+///////////
+
+export interface ISessionDocument extends ISession, IShareableDocument {}
+
+export interface ISessionFavoriteItem {
+  _id: string;
+  id: string;
+  name: string;
+  userId: string;
+  lastUpdated: Date;
+  surface?: string;
+  deletedAt?: Date;
+  tags?: { name: string; strength: number }[];
+  users?: IUserShare[];
+}
+
+export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
+  shareable: IShareableStaticMethods<ISessionDocument>;
+  upsertByOpenaiConversationId: <Txn>(
+    openaiConversationId: string,
+    update: Partial<ISession>,
+    ctx?: Txn | null
+  ) => Promise<ISessionDocument>;
+  upsertByClaudeConversationId: <Txn>(
+    claudeConversationId: string,
+    update: Partial<ISession>,
+    ctx?: Txn | null
+  ) => Promise<ISessionDocument>;
+  /**
+   * Search for sessions accessible by the user
+   *
+   * @param userId - The user ID
+   * @param search - The search string
+   * @param filters - The filters
+   * @param pagination - The pagination
+   * @param order - The order
+   * @returns The sessions
+   */
+  search: (
+    search: string,
+    filters: {
+      userId?: string;
+      shared?: boolean;
+    },
+    pagination: {
+      page: number;
+      limit: number;
+    },
+    orderBy: {
+      field: string;
+      direction: 'asc' | 'desc';
+    }
+  ) => Promise<{
+    data: ISessionDocument[];
+    hasMore: boolean;
+    total: number;
+  }>;
+  /**
+   * Find a session by ID and user ID
+   *
+   * @param id - The session ID
+   * @param userId - The user ID
+   * @returns The session
+   */
+  findByIdAndUserId: (id: string, userId: string) => Promise<ISessionDocument | null>;
+
+  /**
+   * Find all sessions with a knowledge ID
+   *
+   * @param knowledgeId - The knowledge ID
+   * @returns The sessions
+   */
+  findAllWithKnowledgeId: (knowledgeId: string) => Promise<ISessionDocument[]>;
+
+  /**
+   * Search for sessions by user ID
+   *
+   * @param search - The search query
+   * @param userId - The user ID
+   * @param options - The search options
+   * @returns The sessions
+   */
+  searchByUserId: (
+    search: string | undefined,
+    userId: string,
+    options: SearchOptions<ISessionDocument>
+  ) => Promise<{ data: ISessionDocument[]; hasMore: boolean }>;
+
+  /**
+   * Find the most recently updated session by user ID
+   *
+   * @param userId - The user ID
+   * @returns The session
+   */
+  findRecentlyUpdatedByUserId: (userId: string) => Promise<ISessionDocument | null>;
+
+  /**
+   * Find all sessions by IDs
+   *
+   * @param ids - The session IDs
+   * @param options - `includeDeleted` opts into soft-deleted sessions (default: exclude)
+   * @returns The sessions
+   */
+  findAllByIds: (ids: string[], options?: { includeDeleted?: boolean }) => Promise<ISessionDocument[]>;
+
+  /**
+   * Find all session IDs by user ID
+   *
+   * @param userId - The user ID
+   * @returns The session IDs
+   */
+  findSessionIdsByUserId: (userId: string) => Promise<string[]>;
+
+  /**
+   * Attach an agent to a session
+   *
+   * @param sessionId - The session ID
+   * @param agentId - The agent ID to attach
+   * @returns The updated session
+   */
+  attachAgent: (sessionId: string, agentId: string) => Promise<ISessionDocument>;
+
+  /**
+   * Detach an agent from a session
+   *
+   * @param sessionId - The session ID
+   * @param agentId - The agent ID to detach
+   * @returns The updated session
+   */
+  detachAgent: (sessionId: string, agentId: string) => Promise<ISessionDocument>;
+
+  /**
+   * Get all agents attached to a session
+   *
+   * @param sessionId - The session ID
+   * @returns Array of agent IDs
+   */
+  getAttachedAgents: (sessionId: string) => Promise<string[]>;
+
+  /**
+   * Add an artifact to a session
+   *
+   * @param sessionId - The session ID
+   * @param artifactId - The artifact ID to add
+   * @returns The updated session
+   */
+  addArtifact: (sessionId: string, artifactId: string) => Promise<ISessionDocument>;
+
+  /**
+   * Remove an artifact from a session
+   *
+   * @param sessionId - The session ID
+   * @param artifactId - The artifact ID to remove
+   * @returns The updated session
+   */
+  removeArtifact: (sessionId: string, artifactId: string) => Promise<ISessionDocument>;
+
+  /**
+   * Get all artifacts attached to a session
+   *
+   * @param sessionId - The session ID
+   * @returns Array of artifact IDs
+   */
+  getAttachedArtifacts: (sessionId: string) => Promise<string[]>;
+
+  /**
+   * Lazy-load message count for a session if not already calculated
+   *
+   * @param sessionId - The session ID
+   * @returns The message count
+   */
+  ensureMessageCount: (sessionId: string) => Promise<number>;
+
+  /**
+   * Populate message counts for an array of sessions (lazy-load pattern)
+   *
+   * @param sessions - Array of session documents
+   * @returns The same array with messageCount populated
+   */
+  populateMessageCounts: (sessions: ISessionDocument[]) => Promise<ISessionDocument[]>;
+
+  /**
+   * Count sessions for a user (excludes soft-deleted)
+   *
+   * @param userId - The user ID
+   * @returns The count of active sessions
+   */
+  countByUserId: (userId: string) => Promise<number>;
+
+  /**
+   * Count active voice sessions for a user (sessions with voiceSessionStartedAt set within the last 60 minutes)
+   *
+   * @param userId - The user ID
+   * @returns The count of active voice sessions
+   */
+  countActiveVoiceSessionsByUserId: (userId: string) => Promise<number>;
+}

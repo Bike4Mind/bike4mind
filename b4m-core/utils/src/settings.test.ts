@@ -1,0 +1,125 @@
+import { describe, it, expect, vi } from 'vitest';
+import { getSettingsValue, getSettingByName, getSettingsByNames } from './settings';
+import { KNOWLEDGE_BASE_RETRIEVAL_PROMPT, WEB_SEARCH_FRESHNESS_PROMPT } from '@bike4mind/common';
+import { AdminSettingsCache } from './cache/AdminSettingsCache';
+import { Logger } from '@bike4mind/observability';
+
+/**
+ * Regression coverage for the "cleared string setting must revert to the built-in default" contract.
+ *
+ * A cleared admin setting is stored as an empty string '', which passes `z.string()` validation, so
+ * the resolver used to return '' verbatim - silently stripping prompts like ArtifactEmissionPrompt /
+ * HelpCenterPrompt from completions even though every such setting's description promises "clearing
+ * reverts to the built-in default". getSettingsValue now treats a blank stored value as "use the
+ * default" WHEN the caller passed one, while leaving '' intact for callers that omit a default (e.g.
+ * FormatPromptTemplate, whose sole reader applies its own fallback).
+ */
+describe('getSettingsValue - blank string reverts to a provided default', () => {
+  const DEFAULT = 'BUILT_IN_DEFAULT_PROMPT';
+
+  it('returns the provided default when the stored value is an empty string', () => {
+    expect(getSettingsValue('ArtifactEmissionPrompt', { ArtifactEmissionPrompt: '' }, DEFAULT)).toBe(DEFAULT);
+  });
+
+  it('returns the provided default when the setting is unset (key absent)', () => {
+    expect(getSettingsValue('ArtifactEmissionPrompt', {}, DEFAULT)).toBe(DEFAULT);
+  });
+
+  it('returns a real stored value unchanged (a non-blank custom value wins over the default)', () => {
+    expect(getSettingsValue('ArtifactEmissionPrompt', { ArtifactEmissionPrompt: 'custom prompt' }, DEFAULT)).toBe(
+      'custom prompt'
+    );
+  });
+
+  it('applies the same blank->default behavior to HelpCenterPrompt', () => {
+    expect(getSettingsValue('HelpCenterPrompt', { HelpCenterPrompt: '' }, DEFAULT)).toBe(DEFAULT);
+  });
+
+  it('applies the same blank->default behavior to AbstentionPrompt', () => {
+    // The abstention licence must survive a cleared row - it is the only counterweight to the
+    // completeness pressure the rest of the system prompt applies.
+    expect(getSettingsValue('AbstentionPrompt', { AbstentionPrompt: '' }, DEFAULT)).toBe(DEFAULT);
+    expect(getSettingsValue('AbstentionPrompt', {}, DEFAULT)).toBe(DEFAULT);
+  });
+
+  it('keeps an empty string when NO default is provided (blank is a legitimate value here)', () => {
+    // No third arg: a cleared FormatPromptTemplate stays ''. Its only reader,
+    // includeHardcodedSystemMessage, substitutes FORMAT_PROMPT_TEMPLATE for the blank itself.
+    expect(getSettingsValue('FormatPromptTemplate', { FormatPromptTemplate: '' })).toBe('');
+  });
+
+  // The two tool-prompt sections (web-search freshness, knowledge-base retrieval) are read 2-arg
+  // ON PURPOSE: neither has a companion boolean, so clearing the field is the section's only off
+  // switch, and that off switch is what makes the wording A/B-able with no deploy. Both halves are
+  // pinned here because both are load-bearing and neither is reachable from a ToolBuilder unit
+  // test - that test can only be handed a string, never the resolver that produces it. Hardening
+  // the blank->default guard to fire when no default was passed would make these sections
+  // impossible to turn off, and every other test in the suite would still pass.
+  it('leaves the tool-prompt sections turn-off-able: absent row -> constant, cleared row -> blank', () => {
+    expect(getSettingsValue('KnowledgeBaseRetrievalPrompt', {})).toBe(KNOWLEDGE_BASE_RETRIEVAL_PROMPT);
+    expect(getSettingsValue('KnowledgeBaseRetrievalPrompt', { KnowledgeBaseRetrievalPrompt: '' })).toBe('');
+    expect(getSettingsValue('WebSearchFreshnessPrompt', {})).toBe(WEB_SEARCH_FRESHNESS_PROMPT);
+    expect(getSettingsValue('WebSearchFreshnessPrompt', { WebSearchFreshnessPrompt: '' })).toBe('');
+  });
+
+  it('does NOT apply blank->default to a non-string setting - a stored boolean false still wins', () => {
+    // The fix is guarded by a strict `parsed.data === ''`, which only a string schema can produce.
+    // A stored boolean `false` must be returned as-is, not collapsed to the default. This pins that
+    // guard: a future `!parsed.data` simplification would re-open the fail-open bug (false -> default).
+    expect(getSettingsValue('EnableArtifacts', { EnableArtifacts: false }, true)).toBe(false);
+    expect(getSettingsValue('EnableArtifacts', {}, true)).toBe(true);
+  });
+});
+
+// Regression: a setting stored as boolean `false` (e.g. an admin-disabled defaultValue:true
+// flag) must come back as `false`, not `null`. The old `|| null` collapsed it, letting callers
+// fall back to the default and silently re-enable a disabled flag (fail-open).
+const repoReturning = (settingValue: unknown) => ({
+  findBySettingName: vi.fn().mockResolvedValue(settingValue === undefined ? null : { settingName: 'k', settingValue }),
+});
+
+describe('getSettingByName - stored boolean false survives the round-trip', () => {
+  it('skipCache path returns false, not null', async () => {
+    const db = { adminSettings: repoReturning(false) };
+    const v: unknown = await getSettingByName('EnableQuestMaster', db, { skipCache: true });
+    expect(v).toBe(false);
+  });
+
+  it('skipCache path returns null when the setting is absent', async () => {
+    const db = { adminSettings: repoReturning(undefined) };
+    const v: unknown = await getSettingByName('EnableQuestMaster', db, { skipCache: true });
+    expect(v).toBeNull();
+  });
+
+  it('cached path (AdminSettingsCache) returns false, not null', async () => {
+    const cache = new AdminSettingsCache(new Logger());
+    // Unique name so the module-scope-free instance cache doesn't collide with other tests.
+    const db = { adminSettings: repoReturning(false) };
+    const v: unknown = await cache.getSettingByName('EnableFalseFlagRegression', db);
+    expect(v).toBe(false);
+  });
+});
+
+// Same regression class as above, one function over: getSettingsByNames' cached path used
+// `|| null`, so a stored numeric 0 (e.g. a spend budget meaning "stop") or boolean false
+// collapsed to null and read as "absent" - the caller then resumed at its coded default.
+describe('getSettingsByNames - stored falsy values survive the cached path', () => {
+  it('returns 0 and false as themselves, and null only for truly absent settings', async () => {
+    const db = {
+      adminSettings: {
+        findAll: vi.fn().mockResolvedValue([
+          { settingName: 'zeroBudgetRegression', settingValue: 0 },
+          { settingName: 'falseSwitchRegression', settingValue: false },
+        ]),
+        findBySettingNames: vi.fn(),
+      },
+    };
+    const values: Record<string, unknown> = await getSettingsByNames(
+      ['zeroBudgetRegression', 'falseSwitchRegression', 'absentRegression'] as never,
+      db as never
+    );
+    expect(values.zeroBudgetRegression).toBe(0);
+    expect(values.falseSwitchRegression).toBe(false);
+    expect(values.absentRegression).toBeNull();
+  });
+});

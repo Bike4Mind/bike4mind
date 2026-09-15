@@ -1,0 +1,157 @@
+name: Self-host image freshness
+
+# The self-host image (selfhost-image.yml) publishes ghcr.io/<owner>/bike4mind-selfhost
+# on every push to main that touches the build inputs. That publish can silently
+# stall - the way it did for ~29 days from 2026-07-21, when a typo'd arm64 runner
+# label left the arm build queued forever and every run was CANCELLED, never failed.
+# Cancelled runs stay green, so nothing went red and nobody noticed the frozen tag.
+#
+# This job is the missing signal: it measures how long since the last SUCCESSFUL
+# selfhost-image run on main and fails loudly (red run + a tracking issue) once
+# that exceeds the freshness window. Success there is what actually moves the
+# multi-arch `latest` tag, so its age is a faithful proxy for image freshness and
+# it needs only actions:read - no GHCR packages API, no PAT.
+#
+# It is time-based, so it can false-fire during a genuinely quiet stretch where no
+# build input changed for the whole window. On this repo those paths change many
+# times a day, so 48h is safe; tune via the SELFHOST_FRESHNESS_MAX_AGE_HOURS var.
+
+on:
+  schedule:
+    - cron: '0 9 * * *' # 09:00 UTC daily
+  workflow_dispatch: {}
+
+# Serialize the daily cron against a manual dispatch so two runs can't both
+# take the "no tracking issue found" branch and open a duplicate.
+concurrency:
+  group: selfhost-image-freshness
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  issues: write
+
+jobs:
+  freshness:
+    # Only the publishing repo owns the image and the tracking issue; forks skip.
+    if: ${{ github.repository == (vars.SELFHOST_IMAGE_REPO || 'Bike4Mind/bike4mind') }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    steps:
+      - name: Check last successful publish age
+        uses: actions/github-script@v8
+        env:
+          MAX_AGE_HOURS: ${{ vars.SELFHOST_FRESHNESS_MAX_AGE_HOURS || '48' }}
+        with:
+          script: |
+            // Fail loud on our own misconfiguration. A set-but-non-numeric
+            // window (`48h`, `2d`, a stray space) makes maxAgeHours NaN, and
+            // `age > NaN` is always false - which would silently take this alarm
+            // offline the same way a mistyped runner label took the build
+            // offline for 29 days. Do not fall back to a default and hide it.
+            const maxAgeHours = Number(process.env.MAX_AGE_HOURS);
+            if (!Number.isFinite(maxAgeHours) || maxAgeHours <= 0) {
+              core.setFailed(
+                `SELFHOST_FRESHNESS_MAX_AGE_HOURS must be a positive number, got ${JSON.stringify(process.env.MAX_AGE_HOURS)}.`
+              );
+              return;
+            }
+
+            const workflowFile = 'selfhost-image.yml';
+            const marker = '<!-- selfhost-image-freshness -->';
+            const title = 'Self-host image is stale';
+
+            // Only a same-repo push or workflow_dispatch actually moves `latest`
+            // (the merge job is gated on `event_name != 'pull_request'`). The
+            // `branch` filter matches head_branch, so a fork PR opened from a
+            // branch literally named `main` also concludes `success` while
+            // publishing nothing - filter those out by event and head repo.
+            const runs = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowFile,
+              branch: 'main',
+              status: 'success',
+              per_page: 30,
+            });
+            const repoFullName = `${context.repo.owner}/${context.repo.repo}`;
+            const last = runs.data.workflow_runs.find(
+              r => (r.event === 'push' || r.event === 'workflow_dispatch')
+                && r.head_repository?.full_name === repoFullName
+            );
+            const now = Date.now();
+            const ageHours = last ? (now - new Date(last.updated_at).getTime()) / 3.6e6 : Infinity;
+            const stale = ageHours > maxAgeHours;
+
+            const lastLine = last
+              ? `Last successful publish: [run ${last.id}](${last.html_url}) at ${last.updated_at} (${ageHours.toFixed(1)}h ago).`
+              : 'No successful `selfhost-image.yml` run on `main` was found at all.';
+            core.info(lastLine);
+            core.info(`Freshness window: ${maxAgeHours}h. Stale: ${stale}.`);
+
+            // Find any existing tracking issue by marker. Paginate: this repo
+            // carries well over 100 open issues, so a single page would miss an
+            // older tracking issue and open a duplicate.
+            const openIssues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            // Exclude PRs: listForRepo returns them too, and issues.update
+            // accepts a PR number - a PR quoting this marker in its body must
+            // not get its description overwritten or get closed as "recovered".
+            const found = openIssues.find(i => !i.pull_request && i.body && i.body.includes(marker));
+
+            if (!stale) {
+              if (found) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: found.number,
+                  body: `Recovered. ${lastLine}`,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: found.number,
+                  state: 'closed',
+                });
+                core.info(`Closed tracking issue #${found.number}.`);
+              }
+              return;
+            }
+
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              marker,
+              '',
+              `The self-host Docker image (\`ghcr.io/${context.repo.owner.toLowerCase()}/bike4mind-selfhost\`) has not had a successful publish on \`main\` within the last ${maxAgeHours}h, so the \`latest\` tag self-hosters pull is stale.`,
+              '',
+              lastLine,
+              '',
+              '**Likely causes:** the arm64/amd64 build leg cannot be scheduled (bad `RUNNER_LABEL_ARM` / `RUNNER_LABEL_HEAVY` variable pointing at a nonexistent runner label), or builds are being cancelled by `concurrency` before the `merge` job publishes. Check the recent `Self-host image` runs on `main` for cancelled runs or a job stuck queued with zero steps.',
+              '',
+              `**Freshness check:** ${runUrl}`,
+              '',
+              '_This issue is auto-managed by `.github/workflows/selfhost-image-freshness.yml` and auto-closes when publishing recovers._',
+            ].join('\n');
+
+            if (found) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: found.number,
+                body,
+              });
+              core.info(`Updated tracking issue #${found.number}.`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+              });
+              core.info(`Opened tracking issue #${created.data.number}.`);
+            }
+
+            core.setFailed(lastLine);

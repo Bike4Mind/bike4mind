@@ -1,0 +1,973 @@
+import { Logger } from '@bike4mind/observability';
+import { ChatModels, IMessage, ModelBackend, PermissionDeniedError, type ModelInfo } from '@bike4mind/common';
+import { stripAllToolBlocks, stripToolDependentMessages } from '../toolPairingUtils';
+import { executeToolsBatch } from '../executeToolsBatch';
+import { recordToolResult, type RecordableToolUse } from '../recordToolResult';
+import {
+  ChoiceEndReason,
+  type CompletionInfo,
+  DEFAULT_MAX_TOOL_CALLS,
+  IChoiceEndToolUse,
+  ICompletionBackend,
+  ICompletionOptions,
+  ICompletionResponseChunk,
+} from '../backend';
+import { getCachingAdapter } from '../caching/adapters';
+import { handleToolResultStreaming } from '../toolStreamingHelper';
+import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from '../responseFormatHelpers';
+import {
+  BedrockRuntimeClient,
+  InvokeModelCommand,
+  InvokeModelWithResponseStreamCommand,
+} from '@aws-sdk/client-bedrock-runtime';
+
+interface BedrockOptions {
+  region: string;
+  stream: boolean;
+}
+
+// Harden Bedrock retries for transient 503 (ServiceUnavailableException) and
+// throttling. The AWS SDK default is maxAttempts:3 with sub-second standard backoff -
+// too shallow for brief Bedrock capacity blips.
+//
+// NOTE the unit difference: AWS `maxAttempts` is TOTAL attempts (initial call + retries),
+// whereas the Anthropic SDK's `maxRetries` counts retries only. So maxAttempts:6 = 5
+// retries, matching the Anthropic client's `maxRetries:5` in actual retry count.
+// Adaptive mode adds AWS's token-bucket backoff + client-side rate limiting
+// (recommended for throttle/503-prone workloads). This absorbs brief blips; sustained
+// outages still need provider/model fallback (tracked separately).
+const BEDROCK_RETRY_CONFIG = { maxAttempts: 6, retryMode: 'adaptive' as const };
+
+/**
+ * The subset of @smithy's NodeHttp2HandlerOptions that BEDROCK_REQUEST_HANDLER sets. Declared
+ * here rather than imported: adding @smithy/node-http-handler to this package's manifest was
+ * measured to re-resolve the lockfile and unify the transitive copies the repo currently carries
+ * (4.8.2, 4.9.3, 4.9.4 all collapsed onto 4.9.13), which silently changes the transport version
+ * other packages' AWS clients get. That is a repo-wide change with no place in this fix - not a
+ * claim that pnpm cannot hold several versions at once, which it plainly does today.
+ * Deliberately narrow, so `satisfies` rejects an h1 knob.
+ *
+ * The names are covered at runtime by base.requestTimeout.integration.test.ts, which drives a
+ * REAL BedrockRuntimeClient built from this config against a stalled h2 server. If upstream
+ * renames one, that test fails instead of the timeout silently disarming.
+ */
+type BedrockHttp2HandlerOptions = {
+  requestTimeout: number;
+  sessionTimeout: number;
+  disableConcurrentStreams: boolean;
+};
+
+// Bound every Bedrock call so a stalled connection cannot hang forever. Without this the SDK
+// arms NO timer at all (@smithy DEFAULT_REQUEST_TIMEOUT is 0, and the defaults-mode provider
+// contributes only retryMode plus a connectionTimeout the h2 handler ignores), so a dead socket
+// never errors, never returns, and the retry config above never engages.
+//
+// CRITICAL - client-bedrock-runtime builds a NodeHttp2Handler, NOT a NodeHttpHandler, so the h1
+// knobs are silently DROPPED here: `socketTimeout`, `connectionTimeout` and
+// `throwOnRequestTimeout` configure nothing on this client. Keep the `satisfies` below, and do
+// not inline this as a bare object literal: the SDK types `requestHandler` as loosely as
+// Record<string, unknown>, so any wrong key would type-check and quietly do nothing.
+//
+// On h2 `requestTimeout` is a per-stream INACTIVITY timeout (Http2Stream.setTimeout), not a
+// total-duration cap, and it rejects with a TimeoutError. Hence it is safe for long streaming
+// chat: a completion that keeps producing tokens keeps resetting it, and the handler never
+// clears it once headers arrive, so it guards the response body too. The non-streaming Invoke
+// path has no intermediate activity, so there it effectively bounds total generation time -
+// which is what sets the value, matching the slow-model ceiling in anthropicBackend.ts.
+//
+// Caveat: a stall AFTER headers closes the stream gracefully, so it truncates the response
+// rather than raising - bounded, but silent. Only a pre-response stall throws.
+//
+// TimeoutError is retryable (@smithy TRANSIENT_ERROR_CODES), so worst-case pre-response latency
+// is maxAttempts x requestTimeout plus adaptive backoff. A caller needing a tighter deadline
+// should pass `options.abortSignal`, which every send() below forwards.
+//
+// `disableConcurrentStreams` is NOT optional: supplying our own requestHandler replaces the
+// SDK's default config object, which sets it. Dropping it would silently move Bedrock from an
+// isolated session per request to multiplexed sessions.
+export const BEDROCK_REQUEST_HANDLER = {
+  requestTimeout: 120_000,
+  // Above requestTimeout so the stream timer normally wins (clearer error); this is the
+  // backstop for a hung TCP/TLS connect, the gap h1's connectionTimeout would have covered.
+  sessionTimeout: 130_000,
+  disableConcurrentStreams: true,
+} satisfies BedrockHttp2HandlerOptions;
+
+/**
+ * Detect cancellation errors so they propagate past tool-error containment to
+ * the outer catch (which has dedicated abort handling). Without this, aborts
+ * would be converted into tool_result strings and the model would keep
+ * responding to a cancelled request.
+ *
+ * Prefer structured fields (`name`, `code`) - the canonical signals from
+ * AbortController/DOMException and Node. The message-substring fallback
+ * preserves compatibility with upstream callers that wrap aborts and lose
+ * `name`/`code` (mirrors `retry.ts` and `anthropicBackend.ts`). Tool errors
+ * whose message happens to contain "aborted" will be misclassified by the
+ * fallback - accepted risk, same as those sibling backends.
+ */
+function isAbortError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err.name === 'AbortError') return true;
+  const code = (err as { code?: string }).code;
+  if (code === 'ABORT_ERR' || code === 'ERR_ABORTED') return true;
+  return err.message.includes('aborted');
+}
+
+export abstract class BaseBedrockBackend implements ICompletionBackend {
+  private _options: BedrockOptions;
+  protected _bedrockRuntime: BedrockRuntimeClient;
+  private _usEast1Models: string[] = [];
+  public currentModel: string = '';
+
+  constructor(options?: Partial<BedrockOptions>) {
+    this._usEast1Models = [
+      ChatModels.CLAUDE_3_5_SONNET_BEDROCK,
+      ChatModels.CLAUDE_3_HAIKU_BEDROCK,
+      ChatModels.LLAMA3_INSTRUCT_8B_V1,
+      ChatModels.LLAMA3_INSTRUCT_70B_V1,
+      ChatModels.TITAN_TEXT_G1_EXPRESS,
+      ChatModels.TITAN_TEXT_G1_LITE,
+    ];
+
+    this._options = {
+      region: 'us-east-2', // Default region, will be updated per model
+      stream: true,
+      ...options,
+    };
+    this._bedrockRuntime = new BedrockRuntimeClient({
+      region: this._options.region,
+      ...BEDROCK_RETRY_CONFIG,
+      requestHandler: BEDROCK_REQUEST_HANDLER,
+    });
+  }
+
+  protected getRegionForModel(model: string): string {
+    return this._usEast1Models.includes(model) ? 'us-east-1' : 'us-east-2';
+  }
+
+  /**
+   * Sends a non-streaming completion request. Subclasses whose Bedrock model doesn't support
+   * the raw Invoke API's response format (e.g. DeepSeek, which reports no usage on Invoke and
+   * must use Converse instead) override this - and invokeModelStream - to call a different
+   * Bedrock command while reusing the tool-loop/pruning/accumulation logic in complete() below.
+   */
+  protected async invokeModel(
+    input: { modelId: string; contentType: string; accept: string; body: string },
+    abortSignal?: AbortSignal
+  ): Promise<{ body?: Uint8Array }> {
+    const command = new InvokeModelCommand(input);
+    return this._bedrockRuntime.send(command, { abortSignal });
+  }
+
+  /** @see invokeModel */
+  protected async invokeModelStream(
+    input: { modelId: string; contentType: string; accept: string; body: string },
+    abortSignal?: AbortSignal
+  ): Promise<{ body?: AsyncIterable<{ chunk?: { bytes?: Uint8Array } }> }> {
+    const command = new InvokeModelWithResponseStreamCommand(input);
+    return this._bedrockRuntime.send(command, { abortSignal });
+  }
+
+  /**
+   * The reasoning blocks the just-translated assistant turn produced, cleared as they are
+   * taken. A backend whose provider signs thinking blocks overrides this so the tool loop
+   * below can replay them onto the assistant turns it rebuilds; providers that sign nothing
+   * keep the default. @see AnthropicBedrockBackend.takeReasoningBlocks
+   */
+  protected takeReasoningBlocks(): unknown[] {
+    return [];
+  }
+
+  /**
+   * Whether this adapter's `translateStreamChunk` reports `done: true` ONLY on the provider's
+   * terminal event. When true, complete() treats a stream that produced output but never
+   * reported done as a TRUNCATED response and throws instead of returning the partial text.
+   *
+   * Opt-in rather than the default because "reports done terminally" is a per-adapter contract
+   * the base class cannot infer, and getting it wrong turns every healthy completion into an
+   * error. Three groups exist today:
+   *   - terminal-only, so they override this to true: anthropic, deepseek, llama, jurassicTwo
+   *   - `done: true` on EVERY content chunk, so the check would be inert: titan, moonshot
+   *     (the better fix for those is a stopReason passthrough, as moonshot.ts already does)
+   *   - never report done, incl. the test doubles in this directory: left false
+   *
+   * A new streaming backend must opt in deliberately; silence keeps the old behaviour.
+   */
+  protected get signalsStreamTermination(): boolean {
+    return false;
+  }
+
+  protected updateClientForModel(model: string): void {
+    const requiredRegion = this.getRegionForModel(model);
+    this._options.region = requiredRegion;
+    // Always create a fresh client to avoid stale credentials in warm Lambdas
+    this._bedrockRuntime = new BedrockRuntimeClient({
+      region: this._options.region,
+      ...BEDROCK_RETRY_CONFIG,
+      requestHandler: BEDROCK_REQUEST_HANDLER,
+    });
+  }
+
+  async complete(
+    model: string,
+    messages: IMessage[],
+    options: Partial<ICompletionOptions>,
+    callback: (text: (string | null | undefined)[], completionInfo?: CompletionInfo) => Promise<void>,
+    toolsUsed: Array<RecordableToolUse> = []
+  ): Promise<void> {
+    this.currentModel = model;
+    // Update client region if needed for this specific model
+    this.updateClientForModel(model);
+
+    // Tool chaining safeguard: Track and limit recursive tool calls
+    const toolCallCount = options._internal?.toolCallCount ?? 0;
+    const maxToolCalls = options._internal?.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
+
+    // Multi-turn token accumulators. Each Bedrock InvokeModel call (every
+    // recursive tool round-trip) is billed independently, so we add each
+    // turn's usage and emit the running total. cliCompletions' assign-not-add
+    // wrappedOnChunk means the last cb's tokens win - emitting accum+thisTurn
+    // keeps the running total across recursive turns.
+    const accumInputTokens = options._internal?.accumInputTokens ?? 0;
+    const accumOutputTokens = options._internal?.accumOutputTokens ?? 0;
+
+    // Check if we've exceeded the tool call limit (only when there are tools to execute)
+    if (toolCallCount >= maxToolCalls && options.tools?.length) {
+      Logger.globalInstance.warn(
+        `⚠️ Max tool calls limit (${maxToolCalls}) reached. Disabling tools to prevent infinite loops.`
+      );
+      // Remove tools when limit is hit and continue, preserving _internal settings
+      await this.complete(
+        model,
+        // Tools are going away, so the prompts that order the model to use one have to go with them.
+        stripToolDependentMessages(messages),
+        {
+          ...options,
+          tools: undefined,
+          // Defensive parity with the OpenAI/Anthropic backends: reset tool_choice on
+          // recursion. Bedrock doesn't send request-side tool_choice, so this is a no-op
+          // today, but it keeps the recursion invariant uniform across backends.
+          tool_choice: 'auto',
+          _internal: options._internal,
+        },
+        callback,
+        toolsUsed
+      );
+      return;
+    }
+
+    // Best-effort response_format support: Bedrock doesn't have a
+    // native structured-output API, so we inject the schema as a system-level
+    // instruction and surface `responseFormatMode: 'best-effort'` so callers
+    // know to post-validate.
+    let messagesWithFormat = injectJsonSchemaInstruction(messages, options.responseFormat);
+    const bestEffortFormat = isBestEffortJsonSchema(options.responseFormat);
+
+    // A replayed history turn (utils.ts Priority 2) can carry perfectly-paired tool_use/
+    // tool_result blocks from a PRIOR turn, even when THIS turn offers no tools - Bedrock talks
+    // the same Anthropic Messages API as anthropicBackend.ts and rejects any tool block when
+    // `tools` is absent regardless of pairing. Mirrors the same proactive strip added there;
+    // the reactive count-mismatch warning below only logs, it never stripped this case either.
+    if (!options.tools?.length) {
+      const hasToolBlocks = messagesWithFormat.some(
+        m =>
+          Array.isArray(m.content) &&
+          m.content.some((b: { type?: string }) => b.type === 'tool_use' || b.type === 'tool_result')
+      );
+      if (hasToolBlocks) {
+        Logger.globalInstance.warn(
+          '[BaseBedrockBackend Pre-API #6181] Tool blocks present but no tools offered this turn. Stripping all tool blocks.'
+        );
+        messagesWithFormat = stripAllToolBlocks(messagesWithFormat, Logger.globalInstance);
+      }
+    }
+
+    let formattedMessages = this.formatMessages(messagesWithFormat);
+    let input = this.getPayload(model, formattedMessages, options);
+
+    // Pre-flight context window check - avoids a Bedrock round-trip for payloads
+    // that will certainly overflow. Uses 4 chars/token (standard rule of thumb;
+    // JSON framing inflates char count slightly, making this a conservative over-estimate).
+    // Note: 4 chars/token is accurate for English/Latin text. CJK, emoji, and math
+    // symbols tokenize at ~1 token/char, so non-Latin payloads can under-estimate -
+    // the reactive ValidationException catches below remain the safety net for those cases.
+    const contextWindow = this.getModelContextWindow(model);
+    if (contextWindow > 0) {
+      const baseOutputTokens = typeof options.maxTokens === 'number' ? options.maxTokens : 4096;
+      // Extended thinking reserves additional tokens on top of max_tokens in the actual payload.
+      const thinkingBudget = options.thinking?.budget_tokens ?? 0;
+      const reservedOutputTokens = baseOutputTokens + thinkingBudget;
+      const maxInputTokens = contextWindow - reservedOutputTokens;
+      let estimatedInputTokens = Math.ceil(input.body.length / 4);
+
+      if (estimatedInputTokens > maxInputTokens) {
+        // Graceful degradation: rather than failing the completion outright,
+        // drop the oldest non-system messages and retry. This is the last-resort
+        // safety net that protects EVERY Bedrock caller - including paths that bypass
+        // the ChatCompletionProcess token budgeting (voice proxy, agent/sub-agent
+        // calls, summarization, utility "base model" calls). The user keeps a working
+        // (if context-trimmed) conversation instead of an unrecoverable error.
+        Logger.globalInstance.warn(
+          `[ContextOverflow] Pre-flight check failed for ${model}: ~${estimatedInputTokens} estimated input tokens > ${maxInputTokens} available (${contextWindow} context − ${reservedOutputTokens} reserved output). Pruning oldest messages.`
+        );
+
+        let prunedMessages = messagesWithFormat;
+        const MAX_PRUNE_ITERATIONS = 100;
+        let iterations = 0;
+
+        while (estimatedInputTokens > maxInputTokens && iterations < MAX_PRUNE_ITERATIONS) {
+          iterations++;
+          // Drop a chunk sized to the byte overage so we converge quickly on long
+          // conversations instead of trimming one message at a time (O(n²) payloads).
+          const conversationCount = prunedMessages.filter(m => m.role !== 'system').length;
+          const dropCount = Math.max(2, Math.ceil(conversationCount * (1 - maxInputTokens / estimatedInputTokens)));
+
+          const next = this.pruneOldestConversationMessages(prunedMessages, dropCount);
+          if (next.length === prunedMessages.length) {
+            // Only system messages + the final user turn remain - can't prune further.
+            break;
+          }
+          prunedMessages = next;
+          formattedMessages = this.formatMessages(prunedMessages);
+          input = this.getPayload(model, formattedMessages, options);
+          estimatedInputTokens = Math.ceil(input.body.length / 4);
+        }
+
+        if (estimatedInputTokens > maxInputTokens) {
+          Logger.globalInstance.error(
+            `[ContextOverflow] Unable to prune ${model} payload below the context window after ${iterations} iteration(s): ~${estimatedInputTokens} estimated input tokens still > ${maxInputTokens} available.`
+          );
+          throw new Error(
+            `Context overflow: the conversation is too long for the current model ${model}: ~${estimatedInputTokens} estimated input tokens + ${reservedOutputTokens} reserved output tokens > ${contextWindow} context window. Please start a new quest or shorten the conversation.`
+          );
+        }
+
+        Logger.globalInstance.warn(
+          `[ContextOverflow] Pruned ${model} conversation to fit after ${iterations} iteration(s): ~${estimatedInputTokens} estimated input tokens ≤ ${maxInputTokens} available.`
+        );
+      }
+    }
+
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheWriteTokens = 0;
+    // Last normalized stop reason a translate() reported, on either transport. Only
+    // the final frame of a stream carries one, so keeping the last non-empty value is
+    // what makes it available on the callbacks that follow. ChatCompletionProcess reads this to
+    // flag a truncated reply ('max_tokens'); adapters that do not set it leave the
+    // reply on the client's truncation heuristic instead.
+    let stopReason: string | undefined;
+
+    const buildCompletionInfo = (): CompletionInfo => {
+      // Emit accum + this turn's running tokens. wrappedOnChunk's assign-not-add
+      // means the last cb's tokens win; emitting accum+thisTurn at every site
+      // keeps the running cross-turn total correct across recursive turns.
+      const info: CompletionInfo = {
+        inputTokens: accumInputTokens + inputTokens,
+        outputTokens: accumOutputTokens + outputTokens,
+        toolsUsed,
+        // Cache counts here come from Anthropic-native fields (input_tokens EXCLUDES
+        // cache), so forwarding them is billing-safe. A Bedrock model reporting cache
+        // with cache-INCLUSIVE input must not forward without subtracting (see the
+        // warnings in openaiBackend/geminiBackend). This is one of the two adapters
+        // covered by the disjoint-fields assumption in ChatCompletionProcess.ts.
+        ...(cacheReadTokens > 0 ? { cacheReadInputTokens: cacheReadTokens } : {}),
+        ...(cacheWriteTokens > 0 ? { cacheCreationInputTokens: cacheWriteTokens } : {}),
+        ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
+        ...(stopReason ? { stopReason } : {}),
+      };
+
+      if (options.cacheStrategy?.enableCaching && (cacheReadTokens > 0 || cacheWriteTokens > 0)) {
+        const adapter = getCachingAdapter(ModelBackend.Bedrock);
+        const cacheStats = adapter.extractCacheStats(
+          {
+            usage: {
+              input_tokens: inputTokens,
+              output_tokens: outputTokens,
+              cache_read_input_tokens: cacheReadTokens,
+              cache_creation_input_tokens: cacheWriteTokens,
+            },
+          },
+          model
+        );
+        if (cacheStats) {
+          info.cacheStats = cacheStats;
+        }
+      }
+
+      return info;
+    };
+
+    // Pre-API diagnostic logging - count tool blocks before sending
+    const toolUseCount = formattedMessages.reduce((count, msg) => {
+      if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+        return count + msg.content.filter((b: { type?: string }) => b.type === 'tool_use').length;
+      }
+      return count;
+    }, 0);
+    const toolResultCount = formattedMessages.reduce((count, msg) => {
+      if (msg.role === 'user' && Array.isArray(msg.content)) {
+        return count + msg.content.filter((b: { type?: string }) => b.type === 'tool_result').length;
+      }
+      return count;
+    }, 0);
+
+    if (toolUseCount > 0 || toolResultCount > 0) {
+      Logger.globalInstance.log(
+        `[BaseBedrockBackend Pre-API #6181] Sending ${formattedMessages.length} messages with ${toolUseCount} tool_use and ${toolResultCount} tool_result blocks`
+      );
+      if (toolUseCount !== toolResultCount) {
+        Logger.globalInstance.warn(
+          `[BaseBedrockBackend Pre-API #6181] Tool block mismatch! tool_use: ${toolUseCount}, tool_result: ${toolResultCount}. This may cause API errors.`
+        );
+      }
+    }
+
+    try {
+      Logger.globalInstance.log(
+        `[BaseBedrockBackend] Invoking model: ${model} with stream=${options.stream} in region: ${this._options.region}`
+      );
+
+      if (options.stream) {
+        let response;
+        try {
+          response = await this.invokeModelStream(input, options.abortSignal);
+        } catch (err: unknown) {
+          this.handleBedrockError(err);
+        }
+        if (!response.body) throw new Error('No response body');
+
+        const func: { name?: string; id?: string; parameters?: string }[] = [];
+        // Did this stream actually produce anything? A "global." cross-region inference profile invoked
+        // from a region that does not serve it comes back as an EMPTY stream - no chunks, no error - and
+        // the old code returned silently, so the chat had nothing to render and hung until the client
+        // timed out (~2 min). Track real output so we can fail LOUD instead. See the guard after the loop.
+        let emittedTextChars = 0;
+        // @see signalsStreamTermination - only meaningful for adapters that opt in.
+        let sawTerminalEvent = false;
+
+        for await (const streamEvent of response.body) {
+          if (streamEvent.chunk?.bytes) {
+            const json = new TextDecoder().decode(streamEvent.chunk.bytes);
+            const { done, chunk } = this.translateStreamChunk(model, JSON.parse(json));
+            sawTerminalEvent ||= done;
+            if (chunk?.stopReason) stopReason = chunk.stopReason;
+
+            chunk?.choices?.forEach(choice => {
+              func[choice.index] ||= {};
+              func[choice.index].name ||= choice.tool?.name;
+              func[choice.index].id ||= choice.tool?.id;
+              if (func[choice.index].name && choice.statusEndReason !== ChoiceEndReason.TOOL_USE) {
+                func[choice.index].parameters ??= choice.chunkText || '';
+                func[choice.index].parameters += choice.chunkText || '';
+              }
+              inputTokens = Math.max(inputTokens, choice.usage?.input_tokens || 0);
+              outputTokens = Math.max(outputTokens, choice.usage?.output_tokens || 0);
+              cacheReadTokens = Math.max(cacheReadTokens, choice.usage?.cache_read_input_tokens || 0);
+              cacheWriteTokens = Math.max(cacheWriteTokens, choice.usage?.cache_creation_input_tokens || 0);
+            });
+
+            // Skip callback when there is a tool being streamed
+            if (func.some(f => f.name)) {
+              continue;
+            }
+
+            const streamedText: string[] = [];
+            chunk?.choices.forEach(choice => {
+              streamedText[choice.index] = choice.chunkText || '';
+            });
+            emittedTextChars += streamedText.reduce((n, t) => n + (t?.length ?? 0), 0);
+
+            // Send streamed text from chunk text data
+            await callback(streamedText, buildCompletionInfo());
+          }
+        }
+
+        // FAIL LOUD on an empty completion. No text AND no tool call means the model produced nothing a
+        // user or the pipeline can use - almost always a misrouted inference profile (a "global." model
+        // served from a region that does not host it) or an unavailable model. Returning silently makes
+        // the chat hang with no output and no error; throwing surfaces a clear, actionable message. Token
+        // count is deliberately NOT part of the condition: an empty response can still report phantom
+        // usage, and a real assistant turn ALWAYS has text or a tool call, so this cannot false-positive.
+        // Ordering note: a stall that lands BEFORE the first token also arrives here with zero
+        // output and no terminal event, so it is reported as EMPTY rather than TRUNCATED and
+        // misses the retry below. That is deliberate, not an oversight - a misrouted "global."
+        // profile produces literally the same observable (no chunks, no terminal event), so the
+        // two are indistinguishable at this layer and the more actionable message should win.
+        if (emittedTextChars === 0 && !func.some(f => f.name)) {
+          throw new Error(
+            `[BaseBedrockBackend] model "${model}" returned an EMPTY response in region ${this._options.region} ` +
+              `(no text, no tool call, no output tokens). A "global." cross-region inference profile served ` +
+              `from a region that does not host it does exactly this - try the "us." variant, or confirm the ` +
+              `model/profile is granted in ${this._options.region}.`
+          );
+        }
+
+        // FAIL LOUD on a TRUNCATED completion. A transport stall mid-body closes the h2 stream
+        // gracefully (NGHTTP2_NO_ERROR), so the loop above just ends: the send() promise has
+        // already resolved, nothing rejects, and a half-finished answer would be delivered as a
+        // complete one. The guard above only catches a stream that produced NOTHING, and
+        // stopReason is absent on healthy turns for most adapters, so the terminal event is the
+        // only trustworthy signal that the model actually finished. @see BEDROCK_REQUEST_HANDLER
+        //
+        // A user Stop is EXCLUDED, and must stay excluded. In the h2 handler the abort callback
+        // and the requestTimeout callback do the same two things (close the stream, then reject an
+        // already-settled promise), so a cancel reaches this point looking exactly like a stall:
+        // verified against the real event-stream path, where BOTH end the body iterator cleanly
+        // with no throw. Without this check a routine cancel would discard the partial reply, log
+        // at ERROR, and trigger the retry below - re-running a completion the user just stopped.
+        //
+        // Worded to include "stream timeout" on purpose: that is the substring
+        // ChatCompletionProcess's isStreamIdleTimeoutError matches, which buys the existing
+        // retry-once-then-fallback path. Keep the phrase if you reword this. Note it is NOT in
+        // logToSlackClassify's skip list and does not satisfy isAbortError, so a genuine
+        // truncation logs at ERROR and is alert-visible - deliberate, since a truncated answer
+        // that survived a retry and a provider fallback is worth seeing.
+        if (this.signalsStreamTermination && !sawTerminalEvent && !options.abortSignal?.aborted) {
+          throw new Error(
+            `[BaseBedrockBackend] stream timeout - model "${model}" in region ${this._options.region} ` +
+              `ended after ${emittedTextChars} chars without a terminal event, so the response is ` +
+              `TRUNCATED. Usually a stalled Bedrock socket cut the stream short; the partial text is ` +
+              `withheld deliberately rather than returned as a finished answer.`
+          );
+        }
+
+        // If there is a tool being used, then
+        // callback the complete function with the tool messages included
+        if (func.some(f => f.name)) {
+          // Track all tool usage first (including ID for history reconstruction, allow empty parameters)
+          for await (const tool of func) {
+            const { id, name, parameters } = tool;
+            if (name) {
+              toolsUsed.push({ name, arguments: parameters || '{}', id });
+            }
+          }
+
+          // Check if we should execute tools or just report them
+          if (options.executeTools !== false) {
+            // Resolve all executable tools from the func array
+            type ResolvedTool = {
+              id: string;
+              name: string;
+              parameters: string;
+              parsedParams: Record<string, unknown>;
+              toolFn: (params: Record<string, unknown>) => Promise<{ toString(): string }>;
+            };
+            const resolvedTools: ResolvedTool[] = [];
+            for (const tool of func) {
+              const { id, name } = tool;
+              if (!id || !name) continue;
+              const parameters = tool.parameters || '{}';
+              const toolFn = options.tools?.find(t => t.toolSchema.name === name)?.toolFn;
+              if (!toolFn) continue;
+              try {
+                resolvedTools.push({ id, name, parameters, parsedParams: JSON.parse(parameters), toolFn });
+              } catch {
+                Logger.globalInstance.warn('[BaseBedrockBackend] Tool parameter parse error, skipping tool:', name);
+                const entry = toolsUsed.find(t => t.name === name && t.id === id);
+                if (entry) entry.arguments = '{}';
+                recordToolResult(
+                  toolsUsed,
+                  { id, name },
+                  'Error: Tool arguments were malformed and could not be parsed.',
+                  false
+                );
+              }
+            }
+
+            // Execute tools - parallel by default, sequential when opted out
+            const parallelEnabled = options.parallelToolExecution !== false;
+
+            type ToolPayload = { id: string; name: string; parameters: string; result: { toString(): string } };
+
+            Logger.globalInstance.debug('[BaseBedrockBackend] Executing tools:', {
+              mode: parallelEnabled && resolvedTools.length > 1 ? 'parallel' : 'sequential',
+              tools: resolvedTools.map(t => t.name),
+            });
+
+            const batchOutcomes = await executeToolsBatch<ToolPayload>(
+              resolvedTools.map(({ id, name, parameters, parsedParams, toolFn }) => async () => {
+                const result = await toolFn(parsedParams);
+                return { id, name, parameters, result };
+              }),
+              { parallel: parallelEnabled, maxConcurrency: options.maxParallelTools }
+            );
+
+            type ToolOutcome =
+              | { ok: true; id: string; name: string; parameters: string; result: { toString(): string } }
+              | { ok: false; id: string; name: string; parameters: string; error: unknown };
+
+            const outcomes: ToolOutcome[] = batchOutcomes.map((outcome, i) =>
+              outcome.ok
+                ? { ok: true as const, ...outcome.result }
+                : {
+                    ok: false as const,
+                    id: resolvedTools[i].id,
+                    name: resolvedTools[i].name,
+                    parameters: resolvedTools[i].parameters,
+                    error: outcome.error,
+                  }
+            );
+
+            // Taken ONCE for the whole round, not once per tool: every assistant message
+            // rebuilt below stands in for the same provider turn, so they all have to replay
+            // that turn's reasoning blocks. Taking inside the loop gives them to the first
+            // tool only and sends the rest as a bare tool_use - the shape that makes the
+            // continuation round come back empty.
+            const roundReasoningBlocks = this.takeReasoningBlocks();
+
+            // Inject results in original order
+            for (const outcome of outcomes) {
+              if (outcome.ok) {
+                // For tools that return artifacts (like recharts), stream the result directly
+                await handleToolResultStreaming(outcome.name, outcome.result, async results => {
+                  await callback(results, buildCompletionInfo());
+                });
+
+                const resultStr = outcome.result.toString();
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
+                this.pushToolMessages(
+                  messages,
+                  { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
+                  resultStr,
+                  roundReasoningBlocks
+                );
+              } else {
+                if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
+                if (isAbortError(outcome.error)) throw outcome.error;
+                Logger.globalInstance.error(
+                  `[BaseBedrockBackend] Tool ${outcome.name} failed:`,
+                  outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
+                );
+                const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
+                // Push error result so the model can continue
+                this.pushToolMessages(
+                  messages,
+                  { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
+                  observation,
+                  roundReasoningBlocks
+                );
+              }
+            }
+
+            // Add newline separator before recursive call to ensure proper markdown rendering
+            await callback(['\n\n'], buildCompletionInfo());
+
+            // Carry this turn's tokens forward so the terminal recursive call
+            // emits the full multi-turn billable total to cb.
+            await this.complete(
+              model,
+              messages,
+              {
+                ...options,
+                // `thinking` carries forward rather than being forced off: pushToolMessages
+                // replays this turn's signed thinking blocks, and those belong on a request
+                // that declares thinking the same way the round that produced them did.
+                // Matches anthropicBackend, which spreads options unchanged on its recursion.
+                //
+                // Defensive parity with OpenAI/Anthropic; Bedrock doesn't send request-side
+                // tool_choice, so this is a no-op today but keeps the recursion uniform.
+                tool_choice: 'auto',
+                _internal: {
+                  ...options._internal,
+                  toolCallCount: toolCallCount + 1,
+                  accumInputTokens: accumInputTokens + inputTokens,
+                  accumOutputTokens: accumOutputTokens + outputTokens,
+                },
+              },
+              callback,
+              toolsUsed
+            );
+          } else {
+            // New behavior: just pass tool calls through callback, don't execute
+            Logger.globalInstance.log('[BaseBedrockBackend] executeTools=false, passing tool calls to callback');
+            await callback([null], buildCompletionInfo());
+          }
+          return; // Exit after handling tools
+        }
+      } else {
+        let response;
+        try {
+          response = await this.invokeModel(input, options.abortSignal);
+        } catch (err: unknown) {
+          this.handleBedrockError(err);
+        }
+        if (!response.body) throw new Error('No response body');
+        const json = new TextDecoder().decode(response.body);
+        const { chunk } = this.translateChunk(model, JSON.parse(json));
+        if (chunk?.stopReason) stopReason = chunk.stopReason;
+        const streamedText: string[] = [];
+        chunk?.choices.forEach(choice => {
+          streamedText[choice.index] = choice.chunkText || '';
+        });
+
+        inputTokens = chunk?.choices[0].usage?.input_tokens || 0;
+        outputTokens = chunk?.choices[0].usage?.output_tokens || 0;
+        cacheReadTokens = chunk?.choices[0].usage?.cache_read_input_tokens || 0;
+        cacheWriteTokens = chunk?.choices[0].usage?.cache_creation_input_tokens || 0;
+
+        // Collect EVERY tool call, not just the first. A provider that emits
+        // parallel calls returns one TOOL_USE choice per call, and the old
+        // `.find()` silently dropped all but the first with no result message.
+        const toolChoices = (chunk?.choices ?? []).filter(
+          choice => choice.statusEndReason === ChoiceEndReason.TOOL_USE && (choice as IChoiceEndToolUse).tool
+        ) as IChoiceEndToolUse[];
+
+        if (toolChoices.length > 0) {
+          // Track tool usage (including ID for history reconstruction, allow empty parameters)
+          for (const { tool } of toolChoices) {
+            if (tool.name) toolsUsed.push({ name: tool.name, arguments: tool.parameters || '{}', id: tool.id });
+          }
+
+          // Check if we should execute tools or just report them
+          if (options.executeTools !== false) {
+            const executable = toolChoices
+              .map(tc => tc.tool)
+              .filter(tool => tool.id && tool.name && options.tools?.some(o => o.toolSchema.name === tool.name));
+
+            if (executable.length > 0) {
+              // One take for the whole round - see the streaming path above.
+              const roundReasoningBlocks = this.takeReasoningBlocks();
+
+              // Execute each resolved call and push its result, so the model sees
+              // every tool it invoked on the recursive turn, then recurse once.
+              for (const { id, name, parameters } of executable) {
+                const toolFn = options.tools?.find(o => o.toolSchema.name === name)?.toolFn;
+                if (!toolFn) continue;
+                const safeParameters = parameters || '{}';
+                let result: { toString(): string };
+                let succeeded = true;
+                try {
+                  result = await toolFn(JSON.parse(safeParameters));
+                } catch (err) {
+                  if (err instanceof PermissionDeniedError) throw err;
+                  if (isAbortError(err)) throw err;
+                  Logger.globalInstance.error(
+                    `[BaseBedrockBackend] Tool ${name} failed:`,
+                    err instanceof Error ? err.message : String(err)
+                  );
+                  succeeded = false;
+                  result = `Error processing ${name} tool: ${err instanceof Error ? err.message : 'Unknown error'}`;
+                }
+
+                // For tools that return artifacts (like recharts), stream the result directly
+                await handleToolResultStreaming(name, result, async results => {
+                  await callback(results, buildCompletionInfo());
+                });
+
+                recordToolResult(toolsUsed, { id, name }, result.toString(), succeeded);
+                this.pushToolMessages(messages, { id, name, parameters }, result.toString(), roundReasoningBlocks);
+              }
+
+              // Add newline separator before recursive call to ensure proper markdown rendering
+              await callback(['\n\n'], buildCompletionInfo());
+
+              // Recursively call complete to continue the conversation.
+              // Carry this turn's tokens forward so the terminal recursive call
+              // emits the full multi-turn billable total to cb.
+              await this.complete(
+                model,
+                messages,
+                {
+                  ...options,
+                  // `thinking` carries forward, not forced off - see the streaming recursion above.
+                  //
+                  // Defensive parity with OpenAI/Anthropic; Bedrock doesn't send request-side
+                  // tool_choice, so this is a no-op today but keeps the recursion uniform.
+                  tool_choice: 'auto',
+                  _internal: {
+                    ...options._internal,
+                    toolCallCount: toolCallCount + 1,
+                    accumInputTokens: accumInputTokens + inputTokens,
+                    accumOutputTokens: accumOutputTokens + outputTokens,
+                  },
+                },
+                callback,
+                toolsUsed
+              );
+              return; // Exit after recursive call
+            }
+          } else {
+            // New behavior: just pass tool calls through callback, don't execute
+            Logger.globalInstance.log('[BaseBedrockBackend] executeTools=false, passing tool calls to callback');
+            await callback([null], buildCompletionInfo());
+            return; // Exit after passing tools
+          }
+        }
+
+        await callback(streamedText, buildCompletionInfo());
+      }
+    } catch (error) {
+      // Log detailed error information
+      if (error instanceof Error) {
+        if (error.message.includes('aborted')) {
+          Logger.globalInstance.log('[BaseBedrockBackend] Request aborted, skipping error logging');
+          throw error;
+        }
+        Logger.globalInstance.error(`[BaseBedrockBackend] Error invoking model ${model}:`, error);
+        Logger.globalInstance.error(`[BaseBedrockBackend] Error details:`, {
+          name: error.name,
+          message: error.message,
+          stack: error.stack,
+          // Add more properties that might be available on the specific error type
+          ...(error as any),
+        });
+
+        // Log the request payload for debugging
+        Logger.globalInstance.error(`[BaseBedrockBackend] Request payload:`, {
+          modelId: input.modelId,
+          contentType: input.contentType,
+          bodyPreview: input.body.substring(0, 500) + (input.body.length > 500 ? '...' : ''),
+        });
+      }
+
+      throw error;
+    }
+  }
+
+  /**
+   * Format the messages to be sent to the Bedrock runtime.
+   * Since different LLM handles has there own structure of messages.
+   *
+   * @param messages The messages to format
+   */
+  abstract formatMessages(message: IMessage[]): IMessage[];
+
+  /**
+   * Get the payload to send to the Bedrock runtime.
+   *
+   * @param model AI Model being used
+   * @params messages The messages to send to the model
+   */
+  abstract getPayload(
+    model: string,
+    messages: IMessage[],
+    options: Partial<ICompletionOptions>
+  ): {
+    modelId: string;
+    contentType: string;
+    accept: string;
+    body: string;
+  };
+
+  /**
+   * Translate a stream chunk from the Bedrock runtime to a completion response chunk.
+   * which will be used as a callback from the completion function.
+   *
+   * @param model AI Model being used.
+   * @param chunk The stream chunk
+   */
+  abstract translateStreamChunk(model: string, chunk: unknown): { done: boolean; chunk?: ICompletionResponseChunk };
+
+  /**
+   * [NON-STREAM]
+   * Translate a chunk from the Bedrock runtime to a completion response chunk.
+   * which will be used as a callback from the completion function.
+   * This is used when the stream option is set to false.
+   *
+   * @param model The model ID.
+   * @param chunk The response
+   */
+  abstract translateChunk(model: string, chunk: unknown): { done: boolean; chunk?: ICompletionResponseChunk };
+
+  /**
+   * Push the tool messages to the messages array.
+   * This is used to push the tool messages to the messages array.
+   */
+  abstract pushToolMessages(
+    messages: IMessage[],
+    tool: IChoiceEndToolUse['tool'],
+    result: string,
+    thinkingBlocks?: unknown[]
+  ): unknown;
+
+  /**
+   * Get the models supported by this backend
+   */
+  abstract getModelInfo(): Promise<ModelInfo[]>;
+
+  /**
+   * Translates a Bedrock send error into a user-friendly context overflow error,
+   * or re-throws the original. Always throws - return type is `never`.
+   */
+  private handleBedrockError(err: unknown): never {
+    const errName = (err as { name?: string })?.name;
+    const errMsg = (err as { message?: string })?.message ?? '';
+    if (errName === 'ValidationException' && errMsg.includes('Input is too long')) {
+      Logger.globalInstance.warn(
+        '[ContextOverflow] Bedrock ValidationException: input too long — surfacing user-friendly error'
+      );
+      throw new Error(
+        `Context overflow: the conversation is too long for the current model. Please start a new quest or shorten the conversation.`,
+        { cause: err }
+      );
+    }
+    // Log unmatched ValidationExceptions so any future Bedrock message rewording is
+    // immediately visible in CloudWatch rather than silently falling through.
+    if (errName === 'ValidationException') {
+      Logger.globalInstance.warn(
+        `[BedrockValidationException] Unrecognized ValidationException — update match string if this is a context overflow: ${errMsg}`
+      );
+    }
+    throw err;
+  }
+
+  /**
+   * Returns the context window size (in tokens) for the given model.
+   * Returns 0 if unknown - pre-flight check is skipped in that case.
+   * Subclasses override to enable proactive context overflow detection.
+   */
+  protected getModelContextWindow(_model: string): number {
+    return 0;
+  }
+
+  /**
+   * Prune the oldest non-system conversation messages to shrink an over-budget
+   * payload. System messages (prompt/instructions) and the final message
+   * (the current user turn, or the trailing tool_result during recursive tool
+   * calls) are always preserved. After dropping the oldest `dropCount` conversation
+   * messages, leading orphans are cascade-dropped so the kept window starts with a
+   * clean `user` turn - Anthropic/Bedrock rejects a window that starts with an
+   * assistant message or with an unmatched `tool_result`.
+   */
+  protected pruneOldestConversationMessages(messages: IMessage[], dropCount: number): IMessage[] {
+    // Preserve all leading system messages - the prompt/instructions live at the top.
+    let systemEnd = 0;
+    while (systemEnd < messages.length && messages[systemEnd].role === 'system') {
+      systemEnd++;
+    }
+    const systemMessages = messages.slice(0, systemEnd);
+    const conversation = messages.slice(systemEnd);
+
+    // Never drop the final message - the model must respond to it.
+    const maxDroppable = conversation.length - 1;
+    if (maxDroppable <= 0) {
+      return messages;
+    }
+
+    let kept = conversation.slice(Math.min(dropCount, maxDroppable));
+
+    // Cascade-drop leading orphans: an assistant message or an unmatched tool_result
+    // at the head of the window is invalid. Dropping an assistant tool_use exposes
+    // its following tool_result (now also a leading orphan), dropped on the next
+    // pass - leaving a clean user turn. The length guard protects the final message.
+    while (kept.length > 1 && (kept[0].role === 'assistant' || this.isToolResultMessage(kept[0]))) {
+      kept = kept.slice(1);
+    }
+
+    return [...systemMessages, ...kept];
+  }
+
+  /** True when a user message carries a tool_result block (needs a preceding tool_use). */
+  private isToolResultMessage(message: IMessage): boolean {
+    return (
+      message.role === 'user' &&
+      Array.isArray(message.content) &&
+      message.content.some((block: { type?: string }) => block.type === 'tool_result')
+    );
+  }
+}

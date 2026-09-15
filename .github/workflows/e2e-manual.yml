@@ -1,0 +1,154 @@
+name: E2E Tests (Manual)
+
+# Thin caller for the advisory full suite + nightly run. Posts e2e/smoke. The prep
+# job resolves the test_project dropdown to Playwright args and computes the
+# per-run booleans; the run job calls the shared e2e-run workflow.
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # 2am UTC, 10am SGT
+    - cron: '0 12 * * *'  # 12pm UTC, 8pm SGT
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: 'Target environment'
+        type: choice
+        options: [dev]
+        default: dev
+      test_project:
+        description: 'Specific test to run (leave as "All tests" to run the full suite)'
+        type: choice
+        options:
+          - All tests
+          - Auth
+          - Signup
+          - Admin
+          - Notebook
+          - Prompts
+          - Notebook Files
+          - Projects
+          - Agents
+          - Image Generation
+          - Profile
+          - Tavern
+          - Search
+          - Data Lake
+          - Skills
+          - WebSocket Auth
+        default: All tests
+      pr_number:
+        description: 'PR number for preview env (overrides stage, e.g. 123)'
+        type: string
+        required: false
+      e2e_test_id:
+        description: 'Optional extra tester prefix for test user isolation (e.g. alice). Leave blank - e2e-run always appends a per-run id, so runs are already isolated from each other.'
+        type: string
+        required: false
+      gate_run:
+        description: 'Internal: deploy-triggered gate run (leave false for manual runs)'
+        type: string
+        default: 'false'
+        required: false
+
+jobs:
+  prep:
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    outputs:
+      playwright_args:    ${{ steps.resolve.outputs.playwright_args }}
+      stamp_promotable:   ${{ steps.resolve.outputs.stamp_promotable }}
+      show_credits:       ${{ steps.resolve.outputs.show_credits }}
+      trigger_label:      ${{ steps.resolve.outputs.trigger_label }}
+      concurrency_group:  ${{ steps.resolve.outputs.concurrency_group }}
+      cancel_in_progress: ${{ steps.resolve.outputs.cancel_in_progress }}
+    steps:
+      - name: Resolve run parameters
+        id: resolve
+        env:
+          TEST_PROJECT: ${{ inputs.test_project }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          STAGE_INPUT: ${{ inputs.stage }}
+          GATE_RUN: ${{ inputs.gate_run }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          # Map the dropdown to Playwright args (whole projects; Auth/Signup add a
+          # spec-file filter). Scheduled runs have no test_project -> full suite.
+          case "$TEST_PROJECT" in
+            ""|"All tests")     ARGS="" ;;
+            "Auth")             ARGS="--project=unauthenticated e2e/auth.spec.ts" ;;
+            "Signup")           ARGS="--project=unauthenticated e2e/signup.spec.ts" ;;
+            "Admin")            ARGS="--project=admin" ;;
+            "Notebook")         ARGS="--project=notebook" ;;
+            "Prompts")          ARGS="--project=prompts" ;;
+            "Notebook Files")   ARGS="--project=notebook-files" ;;
+            "Projects")         ARGS="--project=projects" ;;
+            "Agents")           ARGS="--project=agents" ;;
+            "Image Generation") ARGS="--project=image-gen" ;;
+            "Profile")          ARGS="--project=profile" ;;
+            "Tavern")           ARGS="--project=tavern" ;;
+            "Search")           ARGS="--project=search" ;;
+            "Data Lake")        ARGS="--project=data-lake" ;;
+            "Skills")           ARGS="--project=skills" ;;
+            "WebSocket Auth")   ARGS="--project=websocket-auth" ;;
+            *)                  ARGS="" ; echo "Unknown selection '$TEST_PROJECT' — running full suite" ;;
+          esac
+          echo "playwright_args=$ARGS" >> "$GITHUB_OUTPUT"
+
+          # Stamp e2e/smoke only for the promotable frontier: scheduled, or a
+          # dev/staging All-tests dispatch. Skip previews and scoped single tests.
+          if [ "$EVENT_NAME" = "schedule" ] || { [ -z "$PR_NUMBER" ] && { [ -z "$TEST_PROJECT" ] || [ "$TEST_PROJECT" = "All tests" ]; }; }; then
+            echo "stamp_promotable=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "stamp_promotable=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Credits block only when the notebook spec ran (full suite or Notebook).
+          case "$TEST_PROJECT" in
+            ""|"All tests"|"Notebook") echo "show_credits=true"  >> "$GITHUB_OUTPUT" ;;
+            *)                         echo "show_credits=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+          # Trigger label: dispatch vs scheduled.
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "trigger_label=Run via Dispatch" >> "$GITHUB_OUTPUT"
+          else
+            echo "trigger_label=Run via Schedule" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Concurrency: gate runs coalesce to one group; else per-target, no cancel.
+          if [ "$GATE_RUN" = "true" ]; then
+            echo "concurrency_group=e2e-manual-gate" >> "$GITHUB_OUTPUT"
+            echo "cancel_in_progress=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "concurrency_group=e2e-manual-${PR_NUMBER:-${STAGE_INPUT:-dev}}" >> "$GITHUB_OUTPUT"
+            echo "cancel_in_progress=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  run:
+    needs: prep
+    # Grant the reusable workflow the token scopes it needs: id-token for OIDC AWS
+    # auth and statuses for the e2e/smoke commit status. A called workflow's
+    # permissions can only be downgraded from the caller's, and this repo's default
+    # token is read-only — so without this block the reusable job loses OIDC (no
+    # tests run) and can't stamp e2e/smoke.
+    permissions:
+      contents: read
+      id-token: write
+      statuses: write
+    uses: ./.github/workflows/e2e-run.yml
+    secrets: inherit
+    with:
+      stage:              ${{ inputs.stage }}
+      pr_number:          ${{ inputs.pr_number }}
+      e2e_test_id:        ${{ inputs.e2e_test_id }}
+      gate_run:           ${{ inputs.gate_run }}
+      playwright_args:    ${{ needs.prep.outputs.playwright_args }}
+      status_context:     'e2e/smoke'
+      suite_name:         ''
+      artifact_suffix:    ''
+      timeout_minutes:    60
+      stamp_promotable:   ${{ needs.prep.outputs.stamp_promotable == 'true' }}
+      wait_for_deploy:    ${{ github.event_name == 'schedule' || inputs.pr_number == '' }}
+      show_credits:       ${{ needs.prep.outputs.show_credits == 'true' }}
+      trigger_label:      ${{ needs.prep.outputs.trigger_label }}
+      concurrency_group:  ${{ needs.prep.outputs.concurrency_group }}
+      cancel_in_progress: ${{ needs.prep.outputs.cancel_in_progress == 'true' }}

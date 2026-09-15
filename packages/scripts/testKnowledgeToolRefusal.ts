@@ -1,0 +1,536 @@
+#!/usr/bin/env tsx
+/**
+ * Live-model reproduction for the fresh-upload knowledge-tool refusal (issue #1163).
+ *
+ * Uploads a small file with a unique canary fact, attaches it to a BRAND-NEW session
+ * (mirroring session.knowledgeIds, the field the auto-offer gate reads), and asks about it
+ * in the same request before the file has finished chunking. Before the fix, a tool-eager
+ * model would call search_knowledge_base/retrieve_knowledge_content, get a zero-content
+ * reply, and refuse - discarding the file's raw content that was already inlined into the
+ * same prompt. Llama-on-Bedrock cannot call tools at all (LlamaBedrockBackend.formatTools
+ * throws), so it is a CONTROL arm proving inline delivery still works, NOT evidence the
+ * gating fix works - do not read a green Llama column as proof.
+ *
+ * Deterministic proof, independent of any model's mood: GET /api/quests/{id} afterward and
+ * assert promptMeta.offeredTools does NOT contain search_knowledge_base while the file was
+ * still unvectorized. That is the live-HTTP signal the gating fix actually landed.
+ *
+ * The treatment arm must be a model whose CURRENT catalog entry on the target stage has
+ * supportsTools: true, or the request never reaches the tool-offer code at all and the run
+ * proves nothing - GET /api/models (with a valid token) to check. The catalog moves: a bare
+ * "gpt-4" id can flip to supportsTools:false on a stage as newer variants (e.g. gpt-4o)
+ * become the tool-capable default. Verify the id on the target stage before trusting the
+ * default below.
+ *
+ * Usage:
+ *   pnpm --filter @bike4mind/scripts test:kb-refusal \
+ *     -- --base-url=https://app.pr<N>.preview.bike4mind.com --trials=10 --arms=gpt-4o
+ *
+ * A quiet/fast preview can vectorize the fixture inside the script's own upload-to-ask round
+ * trip, which INVALIDates a trial without exercising the gate at all (see runTrial). Rather than
+ * require a human to guess a large-enough --trials, each non-control arm keeps running numbered
+ * attempts past --trials until it collects --min-valid (default 5) genuinely-valid trials, up to
+ * a generous attempt ceiling - so the SAME command self-scales on a fast stage instead of coming
+ * back inconclusive. Add --arms=<model>,meta.llama3-70b-instruct-v1:0 (or another Bedrock Llama
+ * id) ONLY if that model is actually present on the target stage's catalog (GET /api/models) -
+ * it is an OPTIONAL control arm proving inline delivery still works, not part of the default, and
+ * is exempt from --min-valid since it cannot call tools and its invalid rate never touches the
+ * gate either way. Do not read a green Llama column as evidence the gating fix works.
+ *
+ * Add --search-my-files to also run one "search my files for..." phrased trial per arm,
+ * exercising the tool-recommender bypass path (a caller-requested tool survives the
+ * auto-offer gate) - this is the wording fix's coverage, not the gate's.
+ *
+ * Auth: mints a throwaway test user via /api/test/create-user by default - set E2E_CLEANUP_SECRET
+ * for the target env. Pass --auth=otc on a PR preview instead: /api/test/create-user 500s there
+ * (a stage-config fault), so that mode logs in as the pre-seeded qa-admin-e2e@test.com via OTC,
+ * caching that one login across every trial in the run - /api/otc/verify is rate-limited to 10
+ * calls per 15 minutes per IP, shared with any other otc/verify traffic from the same egress IP
+ * (including manual debugging), so a fresh OTC login per trial exhausts it almost immediately.
+ * Prerequisites (verify on the target stage, do not assume):
+ *   - the `openaiDemoKey` admin setting is populated - OPENAI_API_KEY env is ignored unless
+ *     B4M_SELF_HOST=true, so a plain env var is a no-op on any hosted SST stage.
+ *   - AWS Bedrock model access granted for the Llama arn/id in $AWS_REGION (default us-east-2),
+ *     only if you explicitly add a Llama/Bedrock control arm.
+ */
+
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import path from 'node:path';
+
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
+type CliArgs = {
+  baseUrl: string;
+  trials: number;
+  minValid: number;
+  arms: string[];
+  searchMyFiles: boolean;
+  timeoutMs: number;
+  outDir: string;
+  auth: 'create-user' | 'otc';
+};
+
+function parseArgs(): CliArgs {
+  const flagPattern = /^--([\w-]+)(?:=(.*))?$/;
+  const flags: Record<string, string> = {};
+  for (const arg of process.argv.slice(2)) {
+    const m = arg.match(flagPattern);
+    if (m) flags[m[1]] = m[2] ?? 'true';
+  }
+  const baseUrl = (flags['base-url'] ?? process.env.BASE_URL ?? '').replace(/\/$/, '');
+  if (!baseUrl) throw new Error('--base-url=<url> or BASE_URL env is required');
+  // No Llama/Bedrock id by default: it is an OPTIONAL control arm, and hardcoding one here means
+  // the copy-paste default errors the moment a stage's catalog does not carry that exact id.
+  const arms = (flags.arms ?? process.env.ARMS ?? 'gpt-4o')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  const auth = flags.auth ?? process.env.AUTH ?? 'create-user';
+  if (auth !== 'create-user' && auth !== 'otc') throw new Error(`--auth must be create-user or otc, got: ${auth}`);
+  return {
+    baseUrl,
+    trials: Number(flags.trials ?? process.env.TRIALS ?? 10),
+    minValid: Number(flags['min-valid'] ?? process.env.MIN_VALID ?? 5),
+    arms,
+    searchMyFiles: flags['search-my-files'] === 'true' || process.env.SEARCH_MY_FILES === '1',
+    timeoutMs: Number(flags.timeout ?? process.env.TIMEOUT_MS ?? 60_000),
+    outDir: flags['out-dir'] ?? process.env.OUT_DIR ?? path.join(process.cwd(), 'out'),
+    auth,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// HTTP helpers
+// ---------------------------------------------------------------------------
+
+type HttpInit = RequestInit & { token?: string };
+
+async function httpJson<T>(baseUrl: string, urlPath: string, init: HttpInit = {}): Promise<T> {
+  const res = await fetch(`${baseUrl}${urlPath}`, {
+    ...init,
+    headers: {
+      'content-type': 'application/json',
+      ...(init.token ? { authorization: `Bearer ${init.token}` } : {}),
+      ...init.headers,
+    },
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`${init.method ?? 'GET'} ${urlPath} -> ${res.status}: ${text.slice(0, 400)}`);
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`${urlPath} returned non-JSON: ${text.slice(0, 200)}`);
+  }
+}
+
+/** Mirrors testAgentExecuteWs.ts's login() - the test-only token-mint path (password login was removed). */
+async function loginViaCreateUser(baseUrl: string, label: string): Promise<{ token: string }> {
+  const secret = process.env.E2E_CLEANUP_SECRET;
+  if (!secret) {
+    throw new Error('E2E_CLEANUP_SECRET env is required to mint a test-user token.');
+  }
+  const stamp = `${Date.now().toString(36)}-${process.pid}-${label}`;
+  const username = `kb-refusal-${stamp}`.replace(/[^a-z0-9-]/gi, '');
+  const email = `${username}-e2e@test.com`;
+  const body = await httpJson<{ accessToken?: string }>(baseUrl, '/api/test/create-user', {
+    method: 'POST',
+    headers: { 'x-e2e-cleanup-secret': secret },
+    body: JSON.stringify({ username, email, name: username, password: 'Testing12345!', isAdmin: false }),
+  });
+  if (!body.accessToken) throw new Error('create-user response missing accessToken');
+  return { token: body.accessToken };
+}
+
+/**
+ * Preview path: /api/test/create-user 500s on previews (a stage-config fault, not a credential
+ * problem), so a preview run logs in as the pre-seeded qa-admin-e2e@test.com via OTC instead.
+ * apiAcceptPolicies is not optional - create-user stamps consent for you and OTC does not, so
+ * skipping it parks every later request behind the "Before you continue" interstitial.
+ */
+async function loginViaOtc(baseUrl: string, email = 'qa-admin-e2e@test.com'): Promise<{ token: string }> {
+  const secret = process.env.E2E_CLEANUP_SECRET;
+  if (!secret) {
+    throw new Error('E2E_CLEANUP_SECRET env is required to fetch the OTC code.');
+  }
+  const sendResponse = await httpJson<{ pendingToken: string }>(baseUrl, '/api/otc/send', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+  const codeResponse = await httpJson<{ code: string }>(
+    baseUrl,
+    `/api/test/otc-code?email=${encodeURIComponent(email)}`,
+    { headers: { 'x-e2e-cleanup-secret': secret } }
+  );
+  const verifyResponse = await httpJson<{ accessToken?: string }>(baseUrl, '/api/otc/verify', {
+    method: 'POST',
+    body: JSON.stringify({ email, code: codeResponse.code, pendingToken: sendResponse.pendingToken }),
+  });
+  if (!verifyResponse.accessToken) throw new Error('OTC verify response missing accessToken');
+  await httpJson(baseUrl, '/api/user/accept-policies', {
+    method: 'POST',
+    token: verifyResponse.accessToken,
+    body: JSON.stringify({ ageAttestation: true }),
+  });
+  return { token: verifyResponse.accessToken };
+}
+
+// OTC logs in as the one pre-seeded qa-admin account (create-user mode mints a fresh user per
+// call instead), and /api/otc/send is rate-limited per account - minting a fresh OTC login per
+// trial exhausts it after roughly ten calls. Cache and reuse the one OTC token across the whole
+// run; each trial still gets its own fresh file and session, which is what "brand-new notebook"
+// actually requires.
+let cachedOtcToken: string | undefined;
+
+async function login(baseUrl: string, label: string, auth: 'create-user' | 'otc'): Promise<{ token: string }> {
+  if (auth === 'create-user') return loginViaCreateUser(baseUrl, label);
+  if (!cachedOtcToken) cachedOtcToken = (await loginViaOtc(baseUrl)).token;
+  return { token: cachedOtcToken };
+}
+
+// Normalizes to NFKC and strips invisible Unicode chars before matching - innerText/model
+// output can differ invisibly and break a plain .includes(). Mirrors ai-latency-suite-factory.ts.
+function normalizeForMatch(text: string): string {
+  return text
+    .normalize('NFKC')
+    .replace(/[\u00AD\u200B-\u200F\u202A-\u202E\u2060\uFEFF]/g, '')
+    .toLowerCase();
+}
+
+const REFUSAL_PATTERN =
+  /cannot access|can't access|do not have access|don't have access|unable to access|no access to|not able to (?:access|read|see)|wasn't provided|was not provided|hasn't been (?:processed|uploaded)|may not have been processed|no indexed content/i;
+
+// ---------------------------------------------------------------------------
+// Trial steps
+// ---------------------------------------------------------------------------
+
+interface FileResult {
+  fileId: string;
+  canary: string;
+}
+
+// A one-line fixture chunks and vectorizes fast enough on a low-traffic preview to often finish
+// inside this script's own upload-to-ask round trip, closing the very race this test exists to
+// exercise. Padding to multiple chunks' worth of filler text buys enough embedding time that the
+// precondition/post-check reliably observes the file still unvectorized.
+const FILLER_PARAGRAPH =
+  'This section of the calibration manual is boilerplate padding included only to extend ' +
+  'document length for internal processing benchmarks and carries no operational meaning. ';
+
+async function createUnvectorizedFile(baseUrl: string, token: string, runId: string, n: number): Promise<FileResult> {
+  const canary = randomBytes(4).toString('hex');
+  const filler = FILLER_PARAGRAPH.repeat(400);
+  const content = `Zephyr Protocol - internal calibration record.\nThe calibration constant for unit QX-9 is ${canary}.\n${filler}\n`;
+  const body = await httpJson<{ id?: string; _id?: string }>(baseUrl, '/api/files/createFabFile', {
+    method: 'POST',
+    token,
+    body: JSON.stringify({
+      fileName: `zephyr-${runId}-${n}.txt`,
+      mimeType: 'text/plain',
+      fileSize: Buffer.byteLength(content, 'utf-8'),
+      type: 'FILE',
+      content,
+    }),
+  });
+  const fileId = body.id ?? body._id;
+  if (!fileId) throw new Error('createFabFile response missing id');
+  return { fileId, canary };
+}
+
+async function isFileVectorized(baseUrl: string, token: string, fileId: string): Promise<boolean> {
+  // The real frontend serializes array query params via qs.stringify(params, { arrayFormat:
+  // 'brackets' }) (see ApiContext.tsx), which percent-encodes the key to ids%5B%5D=<id>. A
+  // literal, unencoded ids[]=<id> is rejected upstream of the route handler (no application log
+  // line at all) - percent-encode the key, not just the value.
+  const results = await httpJson<Array<{ id?: string; _id?: string; vectorized?: boolean }>>(
+    baseUrl,
+    `/api/files/byIds?${encodeURIComponent('ids[]')}=${encodeURIComponent(fileId)}`,
+    { token }
+  );
+  const file = results.find(f => (f.id ?? f._id) === fileId);
+  return Boolean(file?.vectorized);
+}
+
+async function createSessionWithAttachment(
+  baseUrl: string,
+  token: string,
+  fileId: string,
+  name: string
+): Promise<string> {
+  const body = await httpJson<{ id?: string; _id?: string }>(baseUrl, '/api/sessions/create', {
+    method: 'POST',
+    token,
+    body: JSON.stringify({ name, knowledgeIds: [fileId] }),
+  });
+  const id = body.id ?? body._id;
+  if (!id) throw new Error('session create response missing id');
+  return id;
+}
+
+interface ChatResult {
+  questId: string;
+  response: string;
+}
+
+async function askInSameRequest(
+  baseUrl: string,
+  token: string,
+  sessionId: string,
+  model: string,
+  message: string,
+  timeoutMs: number
+): Promise<ChatResult> {
+  const body = await httpJson<{
+    id?: string;
+    response?: string | null;
+    responses?: string[];
+    tracking_info?: { quest_id?: string };
+  }>(baseUrl, '/api/chat', {
+    method: 'POST',
+    token,
+    // QuestMaster (enabled by default on this route) turns a plain factual question into a
+    // multi-step plan document instead of answering it directly - unrelated to the knowledge
+    // tool this script tests, and it swallows the reply entirely (quest completes with
+    // response: null). Disable it so the request exercises a normal chat turn.
+    body: JSON.stringify({
+      sessionId,
+      model,
+      message,
+      wait: true,
+      enableTools: true,
+      enableQuestMaster: false,
+    }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const questId = body.tracking_info?.quest_id ?? body.id;
+  if (!questId) throw new Error('chat response missing quest id');
+  // The singular `response` field can be null even when the turn produced real content - the
+  // plural `responses` array is the reliable source; fall back to joining it.
+  const response = body.response ?? body.responses?.join('\n') ?? '';
+  return { questId, response };
+}
+
+async function getOfferedTools(baseUrl: string, token: string, questId: string): Promise<string[]> {
+  const quest = await httpJson<{ promptMeta?: { offeredTools?: string[] } }>(baseUrl, `/api/quests/${questId}`, {
+    token,
+  });
+  return quest.promptMeta?.offeredTools ?? [];
+}
+
+// ---------------------------------------------------------------------------
+// Trial runner
+// ---------------------------------------------------------------------------
+
+type Verdict = 'PASS' | 'FAIL' | 'INVALID';
+
+interface TrialRecord {
+  n: number;
+  model: string;
+  phrasing: 'plain' | 'search-my-files';
+  offeredTools: string[];
+  // On an INVALID verdict these two are placeholder `false` set before the model's reply was ever
+  // inspected, not a measurement - the precondition failed before there was anything to check.
+  // Do not read a run's INVALID rows as "the model failed to answer".
+  refusalMatched: boolean;
+  canaryFound: boolean;
+  verdict: Verdict;
+  note?: string;
+}
+
+async function runTrial(
+  args: CliArgs,
+  runId: string,
+  model: string,
+  n: number,
+  phrasing: 'plain' | 'search-my-files'
+): Promise<TrialRecord> {
+  const { token } = await login(args.baseUrl, `${model.replace(/[^a-z0-9]/gi, '')}-${n}-${phrasing}`, args.auth);
+  const file = await createUnvectorizedFile(args.baseUrl, token, runId, n);
+
+  // Precondition: the file must genuinely still be unvectorized when we ask about it.
+  // Vectorization is an async race - a trial where it already finished is INVALID, not FAIL.
+  if (await isFileVectorized(args.baseUrl, token, file.fileId)) {
+    return {
+      n,
+      model,
+      phrasing,
+      offeredTools: [],
+      refusalMatched: false,
+      canaryFound: false,
+      verdict: 'INVALID',
+      note: 'file vectorized before the chat request fired',
+    };
+  }
+
+  const sessionId = await createSessionWithAttachment(args.baseUrl, token, file.fileId, `kb-refusal-${runId}-${n}`);
+  const message =
+    phrasing === 'search-my-files'
+      ? `Search my files for the calibration constant for unit QX-9.`
+      : `What is the calibration constant for unit QX-9 in the attached file?`;
+
+  const { questId, response } = await askInSameRequest(args.baseUrl, token, sessionId, model, message, args.timeoutMs);
+  const offeredTools = await getOfferedTools(args.baseUrl, token, questId);
+
+  // The offer is evaluated live inside the chat request, which is one HTTP round trip (plus
+  // session creation) after the precondition check above - long enough for a tiny fixture file
+  // to finish chunking in the interim. If that happened, offering search_knowledge_base is the
+  // CORRECT behavior (the file really is indexed by then), not a gate violation - re-check and
+  // reclassify as INVALID rather than let a benign race masquerade as a gating bug.
+  if (
+    phrasing === 'plain' &&
+    offeredTools.includes('search_knowledge_base') &&
+    (await isFileVectorized(args.baseUrl, token, file.fileId))
+  ) {
+    return {
+      n,
+      model,
+      phrasing,
+      offeredTools,
+      refusalMatched: false,
+      canaryFound: false,
+      verdict: 'INVALID',
+      note: 'file finished vectorizing during the request (race, not a gate violation)',
+    };
+  }
+
+  const normalized = normalizeForMatch(response);
+  const refusalMatched = REFUSAL_PATTERN.test(normalized);
+  const canaryFound = normalized.includes(file.canary);
+
+  const verdict: Verdict = !refusalMatched && canaryFound ? 'PASS' : 'FAIL';
+  return { n, model, phrasing, offeredTools, refusalMatched, canaryFound, verdict };
+}
+
+// ---------------------------------------------------------------------------
+// Entry
+// ---------------------------------------------------------------------------
+
+async function main(): Promise<void> {
+  const args = parseArgs();
+  const runId = `${Date.now().toString(36)}-${process.pid}`;
+  console.log(`BASE_URL  = ${args.baseUrl}`);
+  console.log(`TRIALS    = ${args.trials}`);
+  console.log(`MIN_VALID = ${args.minValid}`);
+  console.log(`ARMS      = ${args.arms.join(', ')}`);
+  console.log(`RUN_ID    = ${runId}`);
+
+  const armResults: Record<string, TrialRecord[]> = {};
+
+  // Runs one trial and always pushes a record (a caught error becomes a synthesized FAIL row) so
+  // a thrown trial can never silently vanish from the results/summary.
+  async function runAndRecord(
+    model: string,
+    n: number,
+    phrasing: 'plain' | 'search-my-files',
+    trials: TrialRecord[]
+  ): Promise<void> {
+    const label = phrasing === 'plain' ? `trial ${n}` : 'search-my-files trial';
+    try {
+      const record = await runTrial(args, runId, model, n, phrasing);
+      trials.push(record);
+      console.log(`[${model}] ${label}: ${record.verdict}${record.note ? ` (${record.note})` : ''}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      trials.push({
+        n,
+        model,
+        phrasing,
+        offeredTools: [],
+        refusalMatched: false,
+        canaryFound: false,
+        verdict: 'FAIL',
+        note: message,
+      });
+      console.error(`[${model}] ${label}: ERROR ${message}`);
+    }
+  }
+
+  for (const model of args.arms) {
+    const trials: TrialRecord[] = [];
+    // Llama-family control arms cannot call tools at all, so their invalid rate never touches the
+    // gate either way (see the hardFail exemption below) - run exactly --trials for them. Every
+    // other arm keeps going past --trials, up to a generous ceiling, until it collects --min-valid
+    // genuinely-valid trials: a fast preview can lose the vectorization race on nearly every
+    // attempt, and a FIXED trial count can never adapt to that, no matter how large (QA: 10 and 30
+    // trials both landed a ~90% invalid rate). Attempting more trials is the correct response to a
+    // fast environment, not a bigger --trials the tester has to guess.
+    const isControlArm = model.toLowerCase().includes('llama');
+    const maxAttempts = isControlArm ? args.trials : Math.max(args.trials, args.minValid * 20);
+    let n = 0;
+    let validCount = 0;
+    while (n < maxAttempts && (isControlArm ? n < args.trials : validCount < args.minValid)) {
+      n++;
+      await runAndRecord(model, n, 'plain', trials);
+      if (trials[trials.length - 1].verdict !== 'INVALID') validCount++;
+    }
+    if (args.searchMyFiles) {
+      await runAndRecord(model, n + 1, 'search-my-files', trials);
+    }
+    armResults[model] = trials;
+  }
+
+  // Deterministic pass criterion, independent of any model's mood: zero PLAIN trials show
+  // search_knowledge_base offered while the file was genuinely unvectorized (INVALID trials are
+  // excluded - the precondition already failed there, or the file finished vectorizing mid-
+  // request, so the gate was never meaningfully exercised). The search-my-files phrasing is
+  // excluded from this count on purpose: the tool-recommender bypass means an explicit request
+  // legitimately survives the auto-offer gate (Milestone 2 covers that path with wording, not
+  // withholding), so an offer there is expected, not a violation.
+  let anyGateViolation = false;
+  const summary: Array<{ model: string; pass: number; fail: number; invalid: number; gateViolations: number }> = [];
+  for (const [model, trials] of Object.entries(armResults)) {
+    const valid = trials.filter(t => t.verdict !== 'INVALID');
+    const pass = valid.filter(t => t.verdict === 'PASS').length;
+    const fail = valid.filter(t => t.verdict === 'FAIL').length;
+    const invalid = trials.length - valid.length;
+    const gateViolations = valid.filter(
+      t => t.phrasing === 'plain' && t.offeredTools.includes('search_knowledge_base')
+    ).length;
+    if (gateViolations > 0) anyGateViolation = true;
+    summary.push({ model, pass, fail, invalid, gateViolations });
+  }
+
+  console.log('\n---------- summary ----------');
+  console.table(summary);
+  if (anyGateViolation) {
+    console.error('FAIL: search_knowledge_base was offered on at least one trial while the file was unvectorized.');
+  }
+  for (const row of summary) {
+    if (!row.model.toLowerCase().includes('llama') && row.pass + row.fail < args.minValid) {
+      console.error(
+        `FAIL: ${row.model} collected only ${row.pass + row.fail} valid trial(s) (need >= ${args.minValid}) ` +
+          `after ${row.pass + row.fail + row.invalid} attempts - run is inconclusive, not green.`
+      );
+    }
+  }
+
+  mkdirSync(args.outDir, { recursive: true });
+  const outPath = path.join(args.outDir, `kb-refusal-${runId}.json`);
+  writeFileSync(outPath, JSON.stringify({ runId, args, armResults, summary }, null, 2));
+  console.log(`\nWrote ${outPath}`);
+
+  // An absolute floor, not a rate: the trial loop above already retries past --trials until it
+  // collects --min-valid valid trials, so a fixed valid-count requirement can never become
+  // unsatisfiable just because the environment is fast (a RATE like "invalid/total >= 0.3" is -
+  // it stays constant no matter how many attempts run, which is exactly what QA's #1163 report
+  // caught: 10 and 30 trials both landed the same ~90% invalid rate). Hitting this now means the
+  // attempt ceiling was exhausted, a genuinely rare case worth surfacing rather than rounding up.
+  const hardFail =
+    anyGateViolation ||
+    // Llama arms are a control (cannot call tools) - they only prove raw-content delivery still
+    // works, not the auto-offer gate, so neither their pass rate nor their invalid count (a
+    // vectorization race that never touches the gate either way) should fail the run.
+    summary.some(r => !r.model.toLowerCase().includes('llama') && r.pass + r.fail < args.minValid) ||
+    summary.some(
+      r => !r.model.toLowerCase().includes('llama') && r.pass + r.fail > 0 && r.pass / (r.pass + r.fail) < 0.8
+    );
+
+  if (hardFail) process.exit(1);
+}
+
+main().catch((err: unknown) => {
+  console.error('FATAL', err instanceof Error ? (err.stack ?? err.message) : String(err));
+  process.exit(1);
+});

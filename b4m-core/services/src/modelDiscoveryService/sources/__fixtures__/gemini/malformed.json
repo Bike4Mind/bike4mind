@@ -1,0 +1,15 @@
+{
+  "models": [
+    {
+      "name": "models/gemini-2.5-pro",
+      "displayName": "Gemini 2.5 Pro",
+      "inputTokenLimit": 1048576,
+      "outputTokenLimit": 65536,
+      "supportedGenerationMethods": ["generateContent"]
+    },
+    { "displayName": "No Name Field", "inputTokenLimit": 1000 },
+    { "name": "models/", "displayName": "Empty Id" },
+    { "name": "models/gemini-bad-limits", "inputTokenLimit": -5, "outputTokenLimit": "many", "supportedGenerationMethods": "generateContent" },
+    null
+  ]
+}

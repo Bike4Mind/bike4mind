@@ -1,0 +1,138 @@
+{
+  "thresholdSec": 30,
+  "prompts": [
+    {
+      "id": "primes-under-100",
+      "prompt": "Give me the last 5 prime numbers under 100",
+      "expectedKeywords": [
+        "97",
+        "89",
+        "83",
+        "79",
+        "73"
+      ]
+    },
+    {
+      "id": "newest-countries",
+      "prompt": "Name the 5 newest countries in the world",
+      "expectedKeywords": [
+        "South Sudan",
+        "Kosovo",
+        "Montenegro",
+        "Serbia",
+        "Timor"
+      ]
+    },
+    {
+      "id": "top-companies",
+      "prompt": "List the 5 highest valued public companies globally",
+      "expectedKeywords": [
+        "Apple",
+        "Microsoft",
+        "Nvidia",
+        "Alphabet",
+        "Amazon"
+      ]
+    },
+    {
+      "id": "periodic-table",
+      "prompt": "What are the first 5 elements on the periodic table?",
+      "expectedKeywords": [
+        "Hydrogen",
+        "Helium",
+        "Lithium",
+        "Beryllium",
+        "Boron"
+      ]
+    },
+    {
+      "id": "planets-closest",
+      "prompt": "Name the 5 planets closest to the Sun in order",
+      "expectedKeywords": [
+        "Mercury",
+        "Venus",
+        "Earth",
+        "Mars",
+        "Jupiter"
+      ]
+    },
+    {
+      "id": "spoken-languages",
+      "prompt": "What are the 5 most spoken languages in the world?",
+      "expectedKeywords": [
+        "Mandarin",
+        "English",
+        "Spanish",
+        "Hindi",
+        "Arabic"
+      ]
+    },
+    {
+      "id": "tallest-mountains",
+      "prompt": "List the 5 tallest mountains in the world",
+      "expectedKeywords": [
+        "Everest",
+        "K2",
+        "Kangchenjunga",
+        "Lhotse",
+        "Makalu"
+      ]
+    },
+    {
+      "id": "largest-countries",
+      "prompt": "Name the 5 largest countries by land area",
+      "expectedKeywords": [
+        "Russia",
+        "Canada",
+        "United States",
+        "China",
+        "Brazil"
+      ]
+    },
+    {
+      "id": "longest-rivers",
+      "prompt": "What are the 5 longest rivers in the world?",
+      "expectedKeywords": [
+        "Nile",
+        "Amazon",
+        "Yangtze",
+        "Mississippi",
+        "Yenisei"
+      ]
+    },
+    {
+      "id": "world-cup-hosts",
+      "prompt": "Name the last 5 FIFA World Cup host countries in reverse chronological order",
+      "expectedKeywords": [
+        "Qatar",
+        "Russia",
+        "Brazil",
+        "South Africa",
+        "Germany"
+      ]
+    },
+    {
+      "id": "most-populated-cities",
+      "prompt": "What are the 5 most populated cities in the world?",
+      "expectedKeywords": [
+        "Tokyo",
+        "Delhi",
+        "Shanghai",
+        "Dhaka",
+        "São Paulo"
+      ]
+    },
+    {
+      "id": "noble-gases",
+      "prompt": "List the 6 noble gases on the periodic table",
+      "expectedKeywords": [
+        "Helium",
+        "Neon",
+        "Argon",
+        "Krypton",
+        "Xenon",
+        "Radon"
+      ]
+    }
+  ]
+}

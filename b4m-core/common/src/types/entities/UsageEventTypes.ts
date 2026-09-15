@@ -1,0 +1,620 @@
+import { z } from 'zod';
+import { IBaseRepository } from './BaseTypes';
+import { IMongoDocument } from './common';
+import { CreditHolderType } from './CreditHolderTypes';
+import { NamedApiKeyUsage, ISourceUsage } from './CreditTransactionTypes';
+import { COMPLETION_SOURCES, CompletionSource, IPlatformEndpointUsage } from '../analytics';
+
+/**
+ * Which product surface generated the provider call.
+ */
+export const USAGE_EVENT_FEATURES = [
+  'chat',
+  'image_generation',
+  'image_edit',
+  'video_generation',
+  'voice',
+  'transcription',
+  'text_to_speech',
+  'sound_effects',
+  'music_generation',
+  'agent_execution',
+  'completion_api',
+  'tool',
+  // Operational-model spend the app incurs on the user's behalf outside a direct
+  // chat turn (auto-naming, summarization, tagging, context summarization). Billed
+  // to the user/org only when the billOperationalUsage admin setting is on.
+  'operations',
+  // Query-embedding spend (e.g. every search_knowledge_base semantic search).
+  'embedding',
+] as const;
+
+export type UsageEventFeature = (typeof USAGE_EVENT_FEATURES)[number];
+
+export const USAGE_EVENT_STATUSES = ['ok', 'error', 'timeout', 'refusal'] as const;
+
+export type UsageEventStatus = (typeof USAGE_EVENT_STATUSES)[number];
+
+/**
+ * One row per provider API call. Ties true COGS (costUsd, frozen
+ * at write time) to what the user was debited (creditsCharged) so margin per
+ * model/user is queryable. Dual-written at settlement time; never part of the
+ * billing path itself.
+ */
+export const UsageEvent = z.object({
+  id: z.string().optional(), // MongoDB ObjectId
+  /** App-level correlation id: questId for chat/image/video, session/run id otherwise. */
+  requestId: z.string(),
+  userId: z.string(),
+  /** Credit holder actually debited (user or organization). */
+  ownerId: z.string(),
+  ownerType: z.enum(CreditHolderType),
+  sessionId: z.string().optional(),
+  /**
+   * Data lake this call is 1:1 attributable to (ingestion embeds only - a query
+   * embedding can span multiple lakes and is never attributed here). Unset for
+   * every other feature/call.
+   */
+  dataLakeId: z.string().optional(),
+  feature: z.enum(USAGE_EVENT_FEATURES),
+  /** Provider/backend, e.g. 'bedrock', 'openai', 'gemini'. */
+  provider: z.string(),
+  /** Exact model id string used for the call. */
+  model: z.string(),
+
+  // Token quantities. inputTokens/outputTokens are ALWAYS the local tokenizer
+  // estimate and providerInputTokens/providerOutputTokens ALWAYS the provider's
+  // counts, so the delta stays a comparable estimate-quality metric across all
+  // rows. settledBasis says which of the two priced costUsd/creditsCharged.
+  inputTokens: z.number().default(0),
+  outputTokens: z.number().default(0),
+  cachedInputTokens: z.number().default(0),
+  cacheWriteTokens: z.number().default(0),
+  providerInputTokens: z.number().optional(),
+  providerOutputTokens: z.number().optional(),
+  settledBasis: z.enum(['provider', 'local']).optional(),
+  /** Images generated / video seconds, for per-unit modalities. */
+  units: z.number().optional(),
+
+  /** True provider COGS in USD, computed and frozen at write time. */
+  costUsd: z.number(),
+  /** Credits actually debited from the owner for this call. */
+  creditsCharged: z.number(),
+  /**
+   * Credits written off by the zero-balance shortfall clamp (quest-level,
+   * recorded on the settlement event). Collected revenue is
+   * sum(creditsCharged) - sum(writtenOffCredits); absent means nothing written off.
+   */
+  writtenOffCredits: z.number().optional(),
+
+  status: z.enum(USAGE_EVENT_STATUSES).default('ok'),
+  latencyMs: z.number().optional(),
+
+  // Denormalized origin, copied from the same call's ledger write so a single
+  // UsageEvent aggregation can co-slice by feature AND source AND consumer with
+  // frozen COGS. Invariant: these must match the paired CreditTransaction's
+  // source/apiKeyId. Both optional: recorders whose ledger write carries no
+  // source leave them unset, and those rows fall into the UNCLASSIFIED_SOURCE
+  // bucket in aggregation (mirrors the ledger).
+  /** Originating surface (web/cli/api/agent/system); unset => unclassified. */
+  source: z.enum(COMPLETION_SOURCES).optional(),
+  /** API key that authed the call; present only for API-key-authed usage. */
+  apiKeyId: z.string().optional(),
+
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+export type IUsageEvent = z.infer<typeof UsageEvent>;
+
+export type IUsageEventDocument = IUsageEvent & IMongoDocument;
+
+/** Input for recording an event (server sets id/timestamps). */
+export type IUsageEventInput = Omit<IUsageEvent, 'id' | 'createdAt' | 'updatedAt'>;
+
+/** One aggregation bucket of v_margin_by_model_day (schema-doc naming). */
+export interface IModelDayMargin {
+  day: string; // YYYY-MM-DD (UTC)
+  provider: string;
+  model: string;
+  requests: number;
+  cogsUsd: number;
+  creditsCharged: number;
+}
+
+/** One aggregation bucket of margin-by-user. */
+export interface IUserMargin {
+  userId: string;
+  requests: number;
+  cogsUsd: number;
+  creditsCharged: number;
+}
+
+/** One aggregation bucket of monthly COGS by provider (invoice reconciliation). */
+export interface IProviderMonthCogs {
+  month: string; // YYYY-MM (UTC)
+  provider: string;
+  requests: number;
+  cogsUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteTokens: number;
+}
+
+/**
+ * One aggregation bucket of settlement basis (provider vs local pricing).
+ * Rows with settledBasis unset (events predating this field) are excluded,
+ * not bucketed as a third basis - they'd misrepresent estimate quality.
+ */
+export interface ISettlementBreakdown {
+  settledBasis: 'provider' | 'local';
+  requests: number;
+  creditsCharged: number;
+  writtenOffCredits: number;
+  /** Total (providerInputTokens - inputTokens) across bucketed rows; only rows with both counts > 0 contribute. */
+  inputTokenDelta: number;
+  /** Total (providerOutputTokens - outputTokens) across bucketed rows; only rows with both counts > 0 contribute. */
+  outputTokenDelta: number;
+  /** Count of rows contributing to the token deltas above (providerInputTokens/providerOutputTokens both > 0). */
+  deltaSampleSize: number;
+}
+
+/** Shared spend totals for any owner-scoped usage aggregation bucket. */
+export interface IUsageSpendBucket {
+  requests: number;
+  /** True provider COGS in USD over the bucket. */
+  cogsUsd: number;
+  /** Credits debited from the owner over the bucket. */
+  creditsCharged: number;
+}
+
+/** Owner spend for one UTC day (burn chart point). */
+export interface IOwnerSpendDay extends IUsageSpendBucket {
+  day: string; // YYYY-MM-DD (UTC)
+}
+
+/** Owner spend attributed to one member (the user who ran the call). */
+export interface IOwnerSpendMember extends IUsageSpendBucket {
+  userId: string;
+}
+
+/** Owner spend for one provider/model pair. */
+export interface IOwnerSpendModel extends IUsageSpendBucket {
+  provider: string;
+  model: string;
+}
+
+/** Owner spend for one product surface (chat, agent_execution, operations, embedding, ...). */
+export interface IOwnerSpendFeature extends IUsageSpendBucket {
+  feature: UsageEventFeature;
+}
+
+/**
+ * One owner's usage rolled up every way the dashboard needs it, computed in a
+ * single pass so the cuts always reconcile against the same event set.
+ * `overTime` is ascending by day (chart order); the breakdowns are descending
+ * by creditsCharged (biggest spenders first).
+ */
+export interface IOwnerUsageSummary {
+  overTime: IOwnerSpendDay[];
+  byMember: IOwnerSpendMember[];
+  byModel: IOwnerSpendModel[];
+  byFeature: IOwnerSpendFeature[];
+  totals: IUsageSpendBucket;
+}
+
+/**
+ * Same rollup as IOwnerUsageSummary minus byMember: the data-lake spend view has no UI that
+ * reads per-uploader-user rows, so the wire shape omits them rather than exposing raw userIds
+ * to any owner/curator/org-admin who can view a lake's spend.
+ */
+export type ILakeUsageSummary = Omit<IOwnerUsageSummary, 'byMember'>;
+
+/** A member spend bucket with the user id resolved to a display name by the API. */
+export type NamedOwnerSpendMember = IOwnerSpendMember & { userName?: string };
+
+/**
+ * Platform-wide spend attributed to one API-key consumer. Only completion_api
+ * events carry an apiKeyId, so this is the programmatic-consumer cut with frozen
+ * COGS the ledger alone cannot give (the ledger has the key but not COGS/feature).
+ */
+export interface IPlatformConsumerUsage extends IUsageSpendBucket {
+  apiKeyId: string;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/** A consumer bucket with the API key + owner resolved to display labels by the API. */
+export type NamedPlatformConsumerUsage = IPlatformConsumerUsage & {
+  keyName?: string;
+  keyPrefix?: string;
+  ownerId?: string;
+  ownerType?: CreditHolderType;
+  ownerName?: string;
+};
+
+/**
+ * Optional platform-summary filters. `source` and `ownerType` are applied as the
+ * same kind of $match addition - not separate query paths - so omitting either
+ * spans all sources / all owner types.
+ */
+export interface IPlatformUsageParams {
+  days?: number;
+  source?: CompletionSource;
+  ownerType?: CreditHolderType;
+}
+
+/**
+ * Cross-owner platform usage rolled up every way the admin view needs it, in a
+ * single pass so all cuts reconcile against the same event set. `overTime` is
+ * ascending by day; breakdowns are descending by creditsCharged.
+ */
+export interface IPlatformUsageSummary {
+  overTime: IOwnerSpendDay[];
+  byFeature: IOwnerSpendFeature[];
+  byConsumer: IPlatformConsumerUsage[];
+  byModel: IOwnerSpendModel[];
+  totals: IUsageSpendBucket;
+}
+
+/**
+ * Owners the usage dashboard serves. Agent-held credit pools have no dashboard,
+ * so the wire contract narrows to the two owners a human can view.
+ */
+export type UsageOwnerType = CreditHolderType.User | CreditHolderType.Organization;
+
+/**
+ * Wire shape of GET /api/usage: one owner's usage summary with member ids
+ * resolved to names, plus the echo of the query that produced it. The shape is
+ * identical for User and Organization owners. A User owner's `byMember` collapses
+ * to a single self-row (the summary groups on userId unconditionally), which is
+ * not meaningful, so the client renders the by-member cut only for Organizations.
+ */
+export interface IUsageDashboardResponse {
+  ownerId: string;
+  ownerType: UsageOwnerType;
+  /** Trailing window the summary covers. */
+  days: number;
+  overTime: IOwnerSpendDay[];
+  byMember: NamedOwnerSpendMember[];
+  byModel: IOwnerSpendModel[];
+  byFeature: IOwnerSpendFeature[];
+  /** API-token spend grouped by key (from the ledger; only completion_api_usage carries a key). */
+  byApiKey: NamedApiKeyUsage[];
+  /**
+   * Spend grouped by originating surface (from the ledger, the only source
+   * carrying `source`; credits only, no COGS). Sums to the owner's ledger AI
+   * spend, which can drift from `totals` - that comes from UsageEvent.
+   */
+  bySource: ISourceUsage[];
+  totals: IUsageSpendBucket;
+}
+
+/**
+ * Wire shape of GET /api/admin/platform-usage: the platform-wide usage summary
+ * (feature/COGS/credits from UsageEvent, source- and ownerType-filterable) with
+ * consumers resolved to key/owner labels, plus a distinct endpoint/latency
+ * section (request counts only, from ApiKeyUsageLog). The two sections are kept
+ * separate on purpose so the frontend never implies COGS-per-endpoint.
+ */
+export interface IPlatformUsageDashboardResponse {
+  /** Trailing window the UsageEvent summary covers. */
+  days: number;
+  /** Echo of the source filter, if any (default: all sources). */
+  source?: CompletionSource;
+  /** Echo of the ownerType filter, if any (default: all owner types). */
+  ownerType?: CreditHolderType;
+  overTime: IOwnerSpendDay[];
+  byFeature: IOwnerSpendFeature[];
+  byConsumer: NamedPlatformConsumerUsage[];
+  byModel: IOwnerSpendModel[];
+  totals: IUsageSpendBucket;
+  /**
+   * Endpoint/latency section from ApiKeyUsageLog (request counts only, no
+   * COGS/credits). Null when the source filter excludes API-key traffic (only
+   * api/cli requests are logged there). `endpointWindowDays` is clamped to the
+   * collection's 90-day TTL.
+   */
+  endpoints: IPlatformEndpointUsage | null;
+  endpointWindowDays: number;
+}
+
+/** A spend bucket that also carries token quantities, for session-level detail. */
+export interface IUsageSpendWithTokens extends IUsageSpendBucket {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+}
+
+/** Session spend for one quest (requestId is the questId for chat/image/video). */
+export interface ISessionQuestUsage extends IUsageSpendWithTokens {
+  requestId: string;
+}
+
+/** Session spend for one provider/model pair. */
+export interface ISessionModelUsage extends IUsageSpendWithTokens {
+  provider: string;
+  model: string;
+}
+
+/**
+ * One session's usage rolled up by quest and by model in a single pass, plus
+ * totals. Powers the per-session usage-detail drill-down.
+ */
+export interface ISessionUsageSummary {
+  totals: IUsageSpendWithTokens;
+  byQuest: ISessionQuestUsage[];
+  byModel: ISessionModelUsage[];
+}
+
+/**
+ * Filters for the admin Spend rollup. Date bounds map to `createdAt` as the half-open
+ * window `[from, to)` - the upper bound is exclusive so a window and the equal-length
+ * prior window before it (whose `to` is this window's `from`) don't both count an event
+ * at the shared instant. Omitting a field spans all. `userId`/`model` mirror the
+ * ModelMetrics user/model filters. Status is intentionally not a filter here: it would
+ * distort the error-rate KPI, which is derived from the same event set.
+ */
+export interface ISpendSummaryFilters {
+  from?: Date;
+  to?: Date;
+  userId?: string;
+  model?: string;
+}
+
+/** Spend for one credit holder (the account behind the events) over the window. */
+export interface ISpendAccountBucket extends IUsageSpendBucket {
+  ownerId: string;
+  ownerType: CreditHolderType;
+}
+
+/** COGS for one UTC day (Spend daily-cost line point). */
+export interface ISpendCostDay {
+  day: string; // YYYY-MM-DD (UTC)
+  cogsUsd: number;
+}
+
+/** p50/p95 request latency in ms over the window; 0 when no event carries latencyMs. */
+export interface ISpendLatency {
+  p50: number;
+  p95: number;
+}
+
+/**
+ * Request-outcome counts over the window. The error rate folds `errors` and
+ * `timeouts` together (both are failed calls); `refusals` are counted separately
+ * so a model refusal reads as its own rate rather than an error.
+ */
+export interface ISpendStatusCounts {
+  total: number;
+  errors: number;
+  timeouts: number;
+  refusals: number;
+}
+
+/**
+ * One window's spend rolled up every way the admin Spend tab needs it, in a
+ * single aggregation so all cuts reconcile against the same event set. `byModel`
+ * and `byAccount` are descending by cogsUsd (both are capped, and the tab ranks
+ * and truncates them by cost); `dailyCost` is ascending by day. p50/p95 latency
+ * and status counts are not available from the margin rollups, hence this
+ * dedicated summary. The API layer adds vs-prior deltas, owner-name resolution,
+ * and the client SpendData shape on top.
+ */
+export interface ISpendSummary {
+  totals: IUsageSpendBucket;
+  /** Distinct credit holders (ownerId) with at least one event in the window. */
+  activeAccounts: number;
+  latency: ISpendLatency;
+  status: ISpendStatusCounts;
+  byModel: IOwnerSpendModel[];
+  byAccount: ISpendAccountBucket[];
+  dailyCost: ISpendCostDay[];
+}
+
+/*
+ * Spend-tab wire contract. This is the shape GET /api/admin/spend returns and the
+ * admin Spend tab renders - the single source of truth shared by the handler and
+ * the client. The handler maps the raw ISpendSummary rollups (above) into this,
+ * layering display labels, formatting hints, and vs-prior deltas.
+ */
+
+/** How a KPI's raw numeric value should be rendered. */
+export type SpendKpiFormat = 'currency' | 'currencyPrecise' | 'number' | 'ms' | 'percent';
+
+/** Stable identifier for each KPI card so wiring can map query results by key. */
+export type SpendKpiKey =
+  | 'estCost'
+  | 'requests'
+  | 'costPerRequest'
+  | 'creditsUsed'
+  | 'activeAccounts'
+  | 'p50Latency'
+  | 'p95Latency'
+  | 'errorRate'
+  | 'refusalRate';
+
+export interface SpendKpi {
+  key: SpendKpiKey;
+  label: string;
+  /** Raw value for the current period; the component handles formatting. */
+  value: number;
+  /** Raw value for the immediately prior period, used to compute the delta. */
+  priorValue: number;
+  format: SpendKpiFormat;
+  /**
+   * Whether an increase is a good thing. Drives the delta color: cost/latency
+   * rising is bad (red), requests/credits rising is good (green).
+   */
+  higherIsBetter: boolean;
+}
+
+export interface SpendByAccountRow {
+  accountId: string;
+  accountName: string;
+  estCost: number;
+  requests: number;
+  creditsUsed: number;
+  costPerRequest: number;
+}
+
+export interface CostByModelRow {
+  modelId: string;
+  modelName: string;
+  estCost: number;
+  requests: number;
+  /** Share of total est. cost across all models, 0..1. */
+  share: number;
+}
+
+export interface DailyCostPoint {
+  /** ISO date, YYYY-MM-DD. */
+  date: string;
+  cost: number;
+}
+
+/** Default spend window (in days) when no explicit range is selected. */
+export const SPEND_DEFAULT_WINDOW_DAYS = 30;
+
+export interface SpendData {
+  /**
+   * Human label for the selected period, echoing the ControlPanel range. Formatted
+   * on the CLIENT in the viewer's local timezone (see spendPeriodLabels / useSpend),
+   * NOT part of the server payload: the handler only has UTC instants and never
+   * receives the caller's timezone, so a local-midnight range formatted server-side
+   * lands a day early east of UTC. See SpendServerPayload.
+   */
+  periodLabel: string;
+  /** Human label for the prior comparison period; client-formatted, see periodLabel. */
+  priorPeriodLabel: string;
+  /**
+   * Whether any events settled in the window. Authoritative empty-state signal
+   * so the tab does not have to infer it from whichever derived cut happens to be
+   * empty.
+   */
+  hasData: boolean;
+  /**
+   * True distinct credit-holder count in the window. `byAccount` is capped to the
+   * top spenders, so the tab compares this against `byAccount.length` to tell when
+   * the table is partial.
+   */
+  activeAccounts: number;
+  kpis: SpendKpi[];
+  byAccount: SpendByAccountRow[];
+  byModel: CostByModelRow[];
+  dailyCost: DailyCostPoint[];
+}
+
+/**
+ * What GET /api/admin/spend actually returns. The tz-local period labels are added
+ * by the client (they can't be formatted server-side, and are omitted from the 12h
+ * response cache so a label can't leak across callers in different timezones).
+ */
+export type SpendServerPayload = Omit<SpendData, 'periodLabel' | 'priorPeriodLabel'>;
+
+/** One model's slice of an agent execution's iteration billing. */
+export interface ISessionAgentModelUsage {
+  model: string;
+  iterations: number;
+  credits: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+/**
+ * An agent execution that ran in a session, with its iteration billing rolled
+ * up by model. `totalCreditsUsed` is the execution's own atomic total (includes
+ * children rolled up on completion); `parentExecutionId` marks subagent runs.
+ */
+export interface ISessionAgentExecution {
+  executionId: string;
+  status?: string;
+  parentExecutionId?: string;
+  totalCreditsUsed: number;
+  iterationCount: number;
+  byModel: ISessionAgentModelUsage[];
+}
+
+/** Wire shape of GET /api/admin/session-usage. */
+export interface ISessionUsageResponse {
+  sessionId: string;
+  usage: ISessionUsageSummary;
+  executions: ISessionAgentExecution[];
+}
+
+export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocument> {
+  /** Append one event. Must never throw into the billing path; callers fire-and-forget. */
+  record(event: IUsageEventInput): Promise<IUsageEventDocument | null>;
+
+  /** Margin buckets per model per day since the given date (default 30 days back). */
+  marginByModelDay(since?: Date): Promise<IModelDayMargin[]>;
+
+  /** Margin buckets per user over the trailing N days (default 30), worst margin first. */
+  marginByUser(days?: number): Promise<IUserMargin[]>;
+
+  /**
+   * Monthly COGS per provider for invoice reconciliation, newest month first, over the
+   * trailing N whole UTC months including the current one (default 12).
+   */
+  monthlyCogsByProvider(months?: number): Promise<IProviderMonthCogs[]>;
+
+  /**
+   * Spend rollup for the admin Spend tab over a bounded window, honoring optional
+   * user/model filters, in a single aggregation. Includes p50/p95 latency and
+   * status-outcome counts (neither available from the margin rollups). Call once
+   * per window (current + prior) to build vs-prior KPI deltas.
+   */
+  spendSummary(filters?: ISpendSummaryFilters): Promise<ISpendSummary>;
+
+  /** Settlement-basis rollup over the trailing N days (default 30): provider-vs-local token delta and written-off credits. */
+  settlementBreakdown(days?: number): Promise<ISettlementBreakdown[]>;
+
+  /**
+   * All spend for one credit holder (org/user/agent) over the trailing N days
+   * (default 30), rolled up by day, member, model, and feature in a single
+   * aggregation. Powers the per-org usage dashboard.
+   */
+  ownerUsageSummary(ownerId: string, ownerType: CreditHolderType, days?: number): Promise<IOwnerUsageSummary>;
+
+  /**
+   * Cross-owner platform-wide usage over the trailing N days (default 30),
+   * rolled up by day, feature, API-key consumer, and model in a single
+   * aggregation. `source` and `ownerType` are optional $match filters applied
+   * the same way (not separate query paths); omitting them spans all
+   * sources / all owner types. Admin-only surface.
+   */
+  platformUsageSummary(params?: IPlatformUsageParams): Promise<IPlatformUsageSummary>;
+
+  /**
+   * One session's usage rolled up by quest and by model. Defaults to all events
+   * for the session; pass `owner` to scope to a single credit holder - a session
+   * can carry events billed to more than one owner (billing owner is resolved
+   * per-request, not pinned to the session), so a non-admin caller must scope to
+   * their org or they would see another owner's spend in the same session.
+   */
+  sessionUsageSummary(
+    sessionId: string,
+    owner?: { ownerId: string; ownerType: CreditHolderType }
+  ): Promise<ISessionUsageSummary>;
+
+  /**
+   * True if any usage event for the session was billed to (ownerId, ownerType).
+   * Sessions carry no org of their own; the billing owner lives on the usage
+   * events, so this is how a non-admin caller proves a session's spend belongs
+   * to an org they can access (session-usage detail authorization).
+   */
+  sessionBelongsToOwner(sessionId: string, ownerId: string, ownerType: CreditHolderType): Promise<boolean>;
+
+  /**
+   * One data lake's ledgered spend (ingestion embeds only, see `dataLakeId` on
+   * UsageEvent) rolled up by day, model, and feature, over the trailing N days
+   * (default 30). Same $facet shape as `ownerUsageSummary` minus byMember - a lake
+   * is just a different $match key over the same event set, but the owner-facing
+   * spend view has no use for raw per-uploader userIds. Powers the owner-facing
+   * data-lake spend view.
+   */
+  lakeUsageSummary(dataLakeId: string, days?: number): Promise<ILakeUsageSummary>;
+}

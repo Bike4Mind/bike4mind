@@ -1,0 +1,161 @@
+import { RequestHandler } from 'express';
+import { ForbiddenError } from '@server/utils/errors';
+import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
+import { isLocalAppUrl } from '@server/utils/validators';
+
+/**
+ * CSRF Protection Middleware
+ *
+ * Validates Origin and Referer headers to prevent Cross-Site Request Forgery attacks.
+ * This is a simple but effective approach for same-site requests.
+ *
+ * For more complex scenarios, consider using the 'csurf' package with tokens.
+ */
+export const csrfProtection = (): RequestHandler => {
+  return (req, res, next) => {
+    // Skip CSRF check for GET, HEAD, OPTIONS requests (safe methods)
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+      return next();
+    }
+
+    // API key requests use a bearer token that a cross-site attacker cannot
+    // read or forge, so they are not vulnerable to CSRF. Applying origin checks
+    // to API key requests breaks all server-to-server integrations. Uses the same
+    // extractor as apiKeyAuth so every accepted form (x-api-key, `Authorization:
+    // ApiKey`, and the canonical `Authorization: Bearer b4m_<key>`) is exempt -
+    // sniffing x-api-key alone would CSRF-block the form the spec advertises.
+    if (extractApiKeyFromHeaders(req.headers)) {
+      return next();
+    }
+
+    // `Sec-Fetch-Site` is set by every current-gen browser and cannot be
+    // spoofed from JS. Rejecting non-`same-origin` is a cheap pre-check
+    // that catches most cross-site submits even if Origin/Referer parsing
+    // below has a gap. Missing header -> fall through to origin check for
+    // older clients (curl, legacy browsers).
+    const secFetchSite = req.headers['sec-fetch-site'];
+    if (typeof secFetchSite === 'string' && secFetchSite !== 'same-origin' && secFetchSite !== 'none') {
+      throw new ForbiddenError(`Cross-site request rejected (sec-fetch-site=${secFetchSite}).`);
+    }
+
+    // `Sec-Fetch-Mode: no-cors` is the classic CSRF vector - it's how tags
+    // like <img>, <script>, <link>, <video> trigger cross-origin requests
+    // without a preflight. A state-changing API only ever legitimately sees
+    // `cors`, `same-origin`, or `navigate` (form POST). Missing header ->
+    // skip (server-to-server, older clients).
+    const secFetchMode = req.headers['sec-fetch-mode'];
+    if (secFetchMode === 'no-cors') {
+      throw new ForbiddenError(`Unsafe fetch mode rejected (sec-fetch-mode=${secFetchMode}).`);
+    }
+
+    // `Sec-Fetch-Dest` describes how the browser will use the response.
+    // For a state-changing API endpoint the only legitimate destinations are
+    // `empty` (fetch/XHR) and `document` (form submission). Anything else -
+    // `image`, `script`, `style`, `audio`, `video`, `font`, `object`,
+    // `embed`, `iframe` - indicates someone is trying to smuggle the request
+    // through a resource-loading tag, which is a CSRF tell.
+    const secFetchDest = req.headers['sec-fetch-dest'];
+    if (typeof secFetchDest === 'string' && secFetchDest !== 'empty' && secFetchDest !== 'document') {
+      throw new ForbiddenError(`Unsafe fetch destination rejected (sec-fetch-dest=${secFetchDest}).`);
+    }
+
+    const origin = req.headers['origin'] as string | undefined;
+    const referer = req.headers['referer'] as string | undefined;
+
+    // Build allowed origins from environment variable and localhost for development
+    const allowedOrigins: string[] = [];
+
+    if (!process.env.APP_URL) {
+      // Fail closed: an unset APP_URL previously produced an empty allow-list
+      // that would reject all requests, but made misconfiguration silent.
+      // Failing loudly here surfaces the missing env var on the first
+      // state-changing request rather than burying it under 403s.
+      throw new ForbiddenError('CSRF: APP_URL is not configured on this deployment.');
+    }
+
+    // Normalize to an origin before comparing. The check below tests against
+    // `new URL(header).origin`, which is always scheme + host + optional port with
+    // no trailing slash and a lowercased host. Pushing the raw env value made the
+    // comparison sensitive to how APP_URL happens to be written: a single trailing
+    // slash produced an allow-list entry no request could ever match, so every
+    // state-changing request ON THE ROUTES THAT OPT INTO THIS MIDDLEWARE returned
+    // 403 while reads kept working. That is a scattered handful of routes, not the
+    // whole app (csrfProtection is opt-in, wired into a few dozen route files), so
+    // the symptom is "these particular saves fail" rather than an outage - which is
+    // harder to place, since a partial write failure reads as an auth or per-route
+    // bug rather than as one misformatted configuration value.
+    //
+    // A malformed APP_URL now fails the same way an unset one does - loudly, naming
+    // the variable - rather than being buried under origin-rejection 403s.
+    let appOrigin: string;
+    try {
+      appOrigin = new URL(process.env.APP_URL).origin;
+    } catch {
+      throw new ForbiddenError('CSRF: APP_URL is not a valid absolute URL on this deployment.');
+    }
+    if (appOrigin === 'null') {
+      // `new URL()` accepts some non-http schemes whose origin serializes to the
+      // string "null" (e.g. `file:`). Treat that as misconfiguration too: it would
+      // otherwise sit in the allow-list matching nothing, which is the exact silent
+      // failure this normalization exists to remove.
+      throw new ForbiddenError('CSRF: APP_URL does not resolve to a usable origin on this deployment.');
+    }
+    allowedOrigins.push(appOrigin);
+
+    // In dev, allow any localhost origin (Next.js may start on any available port).
+    // Reads the normalized origin, not the raw env value, so this branch cannot
+    // disagree with the allow-list entry above about what APP_URL points at, and
+    // shares one predicate with the OAuth callback sites AND with the inner
+    // origin/referer match below (isLocalAppUrl), so none of them can drift on
+    // what counts as local.
+    if (isLocalAppUrl(appOrigin)) {
+      if (origin) {
+        try {
+          const url = new URL(origin);
+          if (isLocalAppUrl(url.origin)) {
+            allowedOrigins.push(url.origin);
+          }
+        } catch {
+          /* ignore invalid origin */
+        }
+      }
+      if (referer) {
+        try {
+          const url = new URL(referer);
+          if (isLocalAppUrl(url.origin)) {
+            allowedOrigins.push(url.origin);
+          }
+        } catch {
+          /* ignore invalid referer */
+        }
+      }
+    }
+
+    // Check if request has valid origin or referer
+    // Use URL parsing to prevent subdomain bypass attacks (e.g., app.example.com.attacker.com)
+    const isValidOriginOrReferer = (header: string | undefined): boolean => {
+      if (!header) return false;
+      try {
+        const url = new URL(header);
+        return allowedOrigins.includes(url.origin);
+      } catch {
+        return false;
+      }
+    };
+
+    const hasValidOrigin = isValidOriginOrReferer(origin);
+    const hasValidReferer = isValidOriginOrReferer(referer);
+
+    if (!hasValidOrigin && !hasValidReferer) {
+      // Names the allowed origin. Without it this message describes only the caller,
+      // so a deployment whose APP_URL points somewhere users never arrive from reads
+      // as an attack on every request instead of as a configuration mismatch - and
+      // the two have completely different remedies. The value is our own configured
+      // origin, not anything caller-supplied, so echoing it discloses nothing the
+      // client did not already connect to.
+      throw new ForbiddenError(`Invalid request origin. CSRF protection triggered (expected ${appOrigin}).`);
+    }
+
+    next();
+  };
+};

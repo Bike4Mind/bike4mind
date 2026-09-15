@@ -1,0 +1,40 @@
+This is real code from the Bike4Mind repo: the POST /api/tavern/generate-quests endpoint, which asks an LLM to generate a quest and returns it as JSON. It shipped with a production bug (issue #8022): the endpoint returns HTTP 500 and crashes whenever the LLM replies with anything that isn't clean JSON.
+
+Here is the relevant code:
+
+```js
+const QuestGenerationSchema = z.object({
+  title: z.string().max(100),
+  description: z.string().max(500),
+  difficulty: z.enum(['easy', 'medium', 'hard']).catch('medium'),
+});
+
+// ...after `result` (a raw string) comes back from the LLM:
+const cleaned = result
+  .trim()
+  .replace(/^```json?\s*/, '')
+  .replace(/\s*```$/, '');
+const quest = QuestGenerationSchema.parse(JSON.parse(cleaned));
+```
+
+The bug: `JSON.parse(cleaned)` throws on any non-JSON output. LLMs intermittently ignore the "JSON only" instruction and reply with prose ("I appreciate the request, but…"), wrap the JSON in markdown fences, or surround it with explanation. The fence-stripping regex is also fragile. That uncaught exception 500s the endpoint.
+
+## Your task
+
+Implement a robust replacement: `parseQuestResponse(raw)` in plain JavaScript (CommonJS, NO external libraries — do not use zod). It must turn raw LLM output into a validated quest object or `null`, and must NEVER throw.
+
+Return `{ title, description, difficulty }` (exactly those three keys) when a valid quest can be recovered, otherwise return `null`.
+
+Rules:
+1. **Locate the quest JSON object** even when it is: the whole string; wrapped in a ```json … ``` (or plain ``` … ```) markdown fence; or embedded in surrounding prose ("Sure! Here is your quest: {…}").
+2. **Ignore decoy braces.** Surrounding prose may contain an unrelated brace group before the real object, e.g. `Here is a {placeholder}: {"title":…}`. You must still recover the real quest object, not the decoy.
+3. **Validate shape.** `title` and `description` are required strings — if either is missing, return `null` (even if the JSON parsed fine).
+4. **Normalize difficulty.** `difficulty` must be one of `'easy'`, `'medium'`, `'hard'`. If it is missing or any other value, default it to `'medium'`.
+5. Return `null` for: plain prose with no JSON, empty/whitespace input, malformed JSON, and valid JSON of the wrong shape.
+6. **Never throw** on any input.
+
+## Output format
+
+Return ONLY one JavaScript code block, no prose before or after. End the module with:
+
+module.exports = { parseQuestResponse };

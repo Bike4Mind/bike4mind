@@ -1,0 +1,344 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { IUserDocument } from '@bike4mind/common';
+import { api } from '@client/app/contexts/ApiContext';
+import {
+  useUser,
+  migrateUserContext,
+  UserContextProps,
+  resolveIdentifyEffect,
+  shouldAdoptIdentifyToken,
+  shouldRevokeForTokenVersion,
+  applyUserPush,
+} from './UserContext';
+
+// Builds a JWT-shaped string (unsigned - decodeTokenVersion never verifies the
+// signature) so shouldRevokeForTokenVersion can decode a `tokenVersion` claim,
+// or omit it entirely to simulate a legacy pre-tokenVersion token.
+const fakeToken = (payload: Record<string, unknown> = {}): string => {
+  const b64url = (obj: unknown) =>
+    Buffer.from(JSON.stringify(obj)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return `${b64url({ alg: 'HS256', typ: 'JWT' })}.${b64url(payload)}.sig`;
+};
+
+// UserProvider is not exercised here - mock its heavier transitive imports so
+// importing the module only constructs the zustand store.
+vi.mock('../components/ExpiredSession', () => ({ default: () => null }));
+vi.mock('@client/app/hooks/data/user', () => ({
+  useGetIdentify: vi.fn(),
+  useReturnTokenValidation: vi.fn(),
+}));
+// refreshUser calls api.get('/api/identify'); mock the axios instance so the single-flight
+// guard can be exercised without a network layer (and to avoid ApiContext's module-scope
+// interceptor registration side effects).
+vi.mock('@client/app/contexts/ApiContext', () => ({
+  api: { get: vi.fn() },
+  isPublicPath: () => false,
+  getAxiosErrorStatus: (error: { response?: { status?: number } } | undefined) => error?.response?.status,
+}));
+
+// Minimal stand-in for a user record. The store actions only read `tags`,
+// `isAdmin`, `isBanned`, `isModerated` - all optional-chained downstream.
+const fakeUser = (overrides: Partial<IUserDocument> = {}): IUserDocument =>
+  ({ id: 'u1', name: 'Test User', ...overrides }) as unknown as IUserDocument;
+
+describe('migrateUserContext', () => {
+  it('nulls currentUser for a v0 blob (version undefined)', () => {
+    const result = migrateUserContext({ currentUser: { id: 'u1' } }, undefined);
+    expect(result.currentUser).toBeNull();
+  });
+
+  it('nulls currentUser for a v1 blob', () => {
+    const result = migrateUserContext({ currentUser: { id: 'u1' } }, 1);
+    expect(result.currentUser).toBeNull();
+  });
+
+  it('passes a v2 blob through unchanged', () => {
+    const blob = { currentUser: { id: 'u1', preferences: {} } } as unknown as UserContextProps;
+    expect(migrateUserContext(blob, 2)).toBe(blob);
+  });
+
+  it('handles a null persisted state without throwing', () => {
+    expect(migrateUserContext(null, 1).currentUser).toBeNull();
+  });
+});
+
+describe('resolveIdentifyEffect — mfaPending gate + cross-tab guard + stale-cache guard', () => {
+  it('skips the bootstrap while this tab is mid-MFA, even on identify success', () => {
+    // The load-bearing gate: local mfaPending must win so the MFA modal isn't unmounted.
+    expect(resolveIdentifyEffect({ mfaPending: true, hasToken: true, isSuccess: true, isError: false })).toBe('skip');
+  });
+
+  it('skips while mid-MFA even if identify errored', () => {
+    expect(resolveIdentifyEffect({ mfaPending: true, hasToken: true, isSuccess: false, isError: true })).toBe('skip');
+  });
+
+  it('sets the user on identify success with a live, verified token', () => {
+    expect(
+      resolveIdentifyEffect({
+        mfaPending: false,
+        hasToken: true,
+        isSuccess: true,
+        isError: false,
+        tokenMfaPending: false,
+      })
+    ).toBe('setUser');
+    // tokenMfaPending omitted (undefined) is treated as verified.
+    expect(resolveIdentifyEffect({ mfaPending: false, hasToken: true, isSuccess: true, isError: false })).toBe(
+      'setUser'
+    );
+  });
+
+  it('restores mfaPending (not setUser) when the live token still carries the mfaPending claim — cross-tab rehydrate', () => {
+    expect(
+      resolveIdentifyEffect({
+        mfaPending: false,
+        hasToken: true,
+        isSuccess: true,
+        isError: false,
+        tokenMfaPending: true,
+      })
+    ).toBe('setMfaPending');
+  });
+
+  it('clears the user on a STALE identify success with no live token — MFA cancel / logout (the bypass fix)', () => {
+    // useGetIdentify keeps its last success in cache after the token is cleared.
+    // Without a live token the session is not authenticated, so it must NOT setUser.
+    expect(resolveIdentifyEffect({ mfaPending: false, hasToken: false, isSuccess: true, isError: false })).toBe(
+      'clearUser'
+    );
+    // Even if the stale cache's token decoded as mfaPending, no live token wins.
+    expect(
+      resolveIdentifyEffect({
+        mfaPending: false,
+        hasToken: false,
+        isSuccess: true,
+        isError: false,
+        tokenMfaPending: true,
+      })
+    ).toBe('clearUser');
+  });
+
+  it('clears the user on a non-429 identify error', () => {
+    expect(
+      resolveIdentifyEffect({ mfaPending: false, hasToken: true, isSuccess: false, isError: true, errorStatus: 500 })
+    ).toBe('clearUser');
+  });
+
+  it('skips (keeps the user) on a 429 identify error - a rate-limit blip is not a dead session', () => {
+    expect(
+      resolveIdentifyEffect({ mfaPending: false, hasToken: true, isSuccess: false, isError: true, errorStatus: 429 })
+    ).toBe('skip');
+  });
+
+  it('skips while identify is still loading (neither success nor error)', () => {
+    expect(resolveIdentifyEffect({ mfaPending: false, hasToken: true, isSuccess: false, isError: false })).toBe('skip');
+  });
+});
+
+describe('shouldAdoptIdentifyToken - cached identify must never downgrade a live credential', () => {
+  it("adopts identify's token when this tab holds none (the mint case)", () => {
+    expect(shouldAdoptIdentifyToken(null)).toBe(true);
+    expect(shouldAdoptIdentifyToken(undefined)).toBe(true);
+    expect(shouldAdoptIdentifyToken('')).toBe(true);
+  });
+
+  it('refuses to overwrite a token we already hold', () => {
+    // The regression: the identify effect re-runs on every accessToken change, so an
+    // unconditional write puts each freshly rotated token back to the older one sitting in the
+    // react-query cache. The store lands on an expired credential, the next request 401s on a
+    // session that just refreshed fine, and the interceptor signs the user out.
+    expect(shouldAdoptIdentifyToken(fakeToken({ tokenVersion: 0 }))).toBe(false);
+  });
+});
+
+describe('shouldRevokeForTokenVersion — JWT kill switch (legacy-token gap fix)', () => {
+  it('does not revoke when there is no access token (logged-out tab)', () => {
+    expect(shouldRevokeForTokenVersion({ accessToken: null, userTokenVersion: 5 })).toBe(false);
+  });
+
+  it('does not revoke when the DB tokenVersion is not a number', () => {
+    expect(
+      shouldRevokeForTokenVersion({ accessToken: fakeToken({ tokenVersion: 0 }), userTokenVersion: undefined })
+    ).toBe(false);
+  });
+
+  it('does not revoke a current versioned token', () => {
+    const token = fakeToken({ tokenVersion: 1 });
+    expect(shouldRevokeForTokenVersion({ accessToken: token, userTokenVersion: 1 })).toBe(false);
+  });
+
+  it('revokes a versioned token once the DB version advances past it', () => {
+    const token = fakeToken({ tokenVersion: 1 });
+    expect(shouldRevokeForTokenVersion({ accessToken: token, userTokenVersion: 2 })).toBe(true);
+  });
+
+  it('revokes a legacy (version-less) token once the DB version is bumped - the bug this fixes', () => {
+    // Before the fix, a legacy token decoded to `null` and was exempted from the
+    // kill switch entirely, leaving the session 401-ing on every request with no
+    // graceful sign-out. It must now normalize to 0, matching every server-side
+    // surface (auth.ts, refreshToken.ts, websocket connect.ts).
+    const legacyToken = fakeToken({ id: 'u1' });
+    expect(shouldRevokeForTokenVersion({ accessToken: legacyToken, userTokenVersion: 1 })).toBe(true);
+  });
+
+  it('does not revoke a legacy token while the DB version is still 0/unset', () => {
+    const legacyToken = fakeToken({ id: 'u1' });
+    expect(shouldRevokeForTokenVersion({ accessToken: legacyToken, userTokenVersion: 0 })).toBe(false);
+  });
+});
+
+describe('applyUserPush - merge a users WS push onto the store user (#1632)', () => {
+  it('preserves fields absent from the push (the projection-wipe bug)', () => {
+    // A full document from /api/identify, then a push that omits some of its fields (the real
+    // push carries the full user doc minus the server's security exclusions).
+    const existing = fakeUser({
+      lastNotebookId: 'nb-1',
+      blogIntegration: { enabled: true },
+      isBanned: true,
+    } as Partial<IUserDocument>);
+    const pushed = { id: 'u1', currentCredits: 42 } as unknown as IUserDocument;
+
+    const merged = applyUserPush(existing, pushed) as unknown as Record<string, unknown>;
+
+    // Pushed field updates...
+    expect(merged.currentCredits).toBe(42);
+    // ...while every field absent from the push survives instead of being wiped to undefined.
+    expect(merged.lastNotebookId).toBe('nb-1');
+    expect(merged.blogIntegration).toEqual({ enabled: true });
+    expect(merged.isBanned).toBe(true);
+  });
+
+  it('lets a field present in the push win, so server-side clears still propagate', () => {
+    const existing = fakeUser({ lastNotebookId: 'nb-1' } as Partial<IUserDocument>);
+    // The field is present in the push and was cleared server-side: present-as-null overwrites.
+    const pushed = { id: 'u1', lastNotebookId: null } as unknown as IUserDocument;
+
+    const merged = applyUserPush(existing, pushed) as unknown as Record<string, unknown>;
+
+    expect(merged.lastNotebookId).toBeNull();
+  });
+
+  it('adopts the pushed subset as-is when there is no existing user', () => {
+    const pushed = { id: 'u1', currentCredits: 7 } as unknown as IUserDocument;
+
+    const merged = applyUserPush(null, pushed) as unknown as Record<string, unknown>;
+
+    expect(merged).toEqual({ id: 'u1', currentCredits: 7 });
+  });
+
+  it('keeps store-derived flags (isBanned/isModerated) intact when the push omits them', () => {
+    // The blast-radius trap: these flags are absent from the push, so a replace reset them to
+    // false. Fed through setCurrentUser, the merged object must keep the real values.
+    useUser.setState({ currentUser: null, isHydrated: false });
+    const existing = fakeUser({ isBanned: true, isModerated: true } as Partial<IUserDocument>);
+    const pushed = { id: 'u1', currentCredits: 1 } as unknown as IUserDocument;
+
+    useUser.getState().setCurrentUser(applyUserPush(existing, pushed));
+
+    expect(useUser.getState().isBanned).toBe(true);
+    expect(useUser.getState().isModerated).toBe(true);
+  });
+});
+
+describe('useUser store — isHydrated flag', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useUser.setState({ currentUser: null, isHydrated: false });
+  });
+
+  it('starts false', () => {
+    expect(useUser.getState().isHydrated).toBe(false);
+  });
+
+  it('flips to true when setCurrentUser is called with a non-null user', () => {
+    useUser.getState().setCurrentUser(fakeUser());
+    expect(useUser.getState().isHydrated).toBe(true);
+  });
+
+  it('stays false when setCurrentUser is called with null', () => {
+    useUser.getState().setCurrentUser(null);
+    expect(useUser.getState().isHydrated).toBe(false);
+  });
+
+  it('stays latched true after a later setCurrentUser(null)', () => {
+    useUser.getState().setCurrentUser(fakeUser());
+    expect(useUser.getState().isHydrated).toBe(true);
+
+    useUser.getState().setCurrentUser(null);
+    // Latched: a transient null (e.g. a WebSocket reset) must not re-flash gates.
+    expect(useUser.getState().isHydrated).toBe(true);
+  });
+
+  // P0-B abuse gate: aupAcceptedVersion MUST survive persist, or the sync router
+  // `beforeLoad` consent guard reads a rehydrated user missing the field, treats an
+  // already-consented user as un-consented, and flashes the /accept-policies interstitial on every
+  // hard reload until /api/identify refetches. Guards the persisted-field whitelist regression.
+  it('persists aupAcceptedVersion so the consent guard does not re-flash on reload', () => {
+    useUser.getState().setCurrentUser(fakeUser({ aupAcceptedVersion: 'v1' }));
+    const persisted = JSON.parse(localStorage.getItem('user-context') as string);
+    expect(persisted.state.currentUser.aupAcceptedVersion).toBe('v1');
+  });
+});
+
+describe('refreshUser single-flight guard', () => {
+  const mockGet = api.get as unknown as ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    mockGet.mockReset();
+    useUser.setState({ currentUser: null });
+  });
+
+  it('collapses concurrent calls into a single /api/identify request', async () => {
+    let resolveGet!: (value: unknown) => void;
+    mockGet.mockReturnValue(
+      new Promise(resolve => {
+        resolveGet = resolve;
+      })
+    );
+
+    const { refreshUser } = useUser.getState();
+    const first = refreshUser();
+    const second = refreshUser();
+
+    // Both callers share the one in-flight request instead of each firing its own.
+    expect(mockGet).toHaveBeenCalledTimes(1);
+
+    resolveGet({ data: { user: fakeUser() } });
+    await Promise.all([first, second]);
+    expect(mockGet).toHaveBeenCalledTimes(1);
+  });
+
+  it('dedups while in flight, then clears the guard on settle so a later refresh re-requests', async () => {
+    // Interleaved (not sequential) so it actually probes the guard: a concurrent call MUST
+    // dedup to 1 while the first is in flight, and only AFTER the first settles may a new call
+    // make a second request. With the guard deleted the concurrent call would already be 2.
+    let resolveFirst!: (value: unknown) => void;
+    mockGet.mockReturnValueOnce(
+      new Promise(resolve => {
+        resolveFirst = resolve;
+      })
+    );
+    mockGet.mockResolvedValueOnce({ data: { user: fakeUser() } });
+    const { refreshUser } = useUser.getState();
+
+    const first = refreshUser();
+    const concurrent = refreshUser();
+    expect(mockGet).toHaveBeenCalledTimes(1); // deduped while in flight
+
+    resolveFirst({ data: { user: fakeUser() } });
+    await Promise.all([first, concurrent]);
+
+    await refreshUser(); // guard cleared on settle -> a genuinely new request
+    expect(mockGet).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears the guard even when the request rejects, so a retry can still fire', async () => {
+    mockGet.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce({ data: { user: fakeUser() } });
+    const { refreshUser } = useUser.getState();
+
+    await refreshUser(); // swallows the error (logged), then clears the guard
+    await refreshUser();
+
+    expect(mockGet).toHaveBeenCalledTimes(2);
+  });
+});

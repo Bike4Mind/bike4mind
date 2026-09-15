@@ -1,0 +1,203 @@
+import { ApiKeyScope } from '@bike4mind/common';
+
+export interface ApiKeyScopeOption {
+  value: ApiKeyScope;
+  label: string;
+  description: string;
+  endpoints: string[];
+}
+
+/**
+ * Single source of truth for the API key scopes a user can self-select when
+ * creating a key (profile + admin modals + the Scopes documentation tab).
+ *
+ * Intentionally excludes the privileged `ApiKeyScope.ADMIN` (`admin:*`) and the
+ * bridge-only `ApiKeyScope.CC_BRIDGE` (`cc-bridge:connect`), which are granted
+ * through dedicated flows, not user-facing key creation.
+ *
+ * `embed:chat` is a member of this catalog (the source of truth for the scope) but
+ * is a dedicated-flow scope: it is filtered out of the generic New-Key modals AND
+ * the Scopes docs tab (via GENERIC_MODAL_API_KEY_SCOPES) until its mint flow ships,
+ * because an embed key needs an agentId + origin allow-list those surfaces do not
+ * collect and its endpoint lands in Phase B. Embed keys are minted through the
+ * dedicated embed flow (epic #41 Phase E), not here.
+ */
+export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
+  {
+    value: ApiKeyScope.READ_NOTEBOOKS,
+    label: 'Read Notebooks',
+    description: 'View notebooks and sessions',
+    endpoints: ['GET /api/sessions', 'GET /api/sessions/:id'],
+  },
+  {
+    value: ApiKeyScope.WRITE_NOTEBOOKS,
+    label: 'Write Notebooks',
+    description: 'Create and modify notebooks',
+    endpoints: ['POST /api/sessions/create', 'PUT /api/sessions/:id'],
+  },
+  {
+    value: ApiKeyScope.READ_FILES,
+    label: 'Read Files',
+    description: 'Download and view files',
+    endpoints: ['GET /api/files', 'GET /api/files/:id'],
+  },
+  {
+    value: ApiKeyScope.WRITE_FILES,
+    label: 'Write Files',
+    description: 'Upload and modify files',
+    endpoints: ['POST /api/files', 'PUT /api/files/:id'],
+  },
+  {
+    value: ApiKeyScope.AI_GENERATE,
+    label: 'AI Generate',
+    description: 'Use AI generation features',
+    endpoints: ['POST /api/ai/generate-image'],
+  },
+  {
+    value: ApiKeyScope.AI_CHAT,
+    label: 'AI Chat',
+    description: 'Use AI chat features',
+    endpoints: ['POST /api/ai/llm'],
+  },
+  {
+    value: ApiKeyScope.READ_PROJECTS,
+    label: 'Read Projects',
+    description: 'View projects',
+    endpoints: ['GET /api/projects'],
+  },
+  {
+    value: ApiKeyScope.WRITE_PROJECTS,
+    label: 'Write Projects',
+    description: 'Create and modify projects',
+    endpoints: ['POST /api/projects', 'PUT /api/projects/:id'],
+  },
+  {
+    value: ApiKeyScope.MARKETING_REPORTS_READ,
+    label: 'Marketing Reports: Read',
+    description: 'Read published marketing reports',
+    endpoints: ['GET /api/overwatch/marketing-reports', 'GET /api/overwatch/marketing-reports/:id'],
+  },
+  {
+    value: ApiKeyScope.MARKETING_REPORTS_WRITE,
+    label: 'Marketing Reports: Write',
+    description: 'Create and update marketing reports',
+    endpoints: ['POST /api/overwatch/marketing-reports', 'PUT /api/overwatch/marketing-reports/:id'],
+  },
+  {
+    value: ApiKeyScope.EMBED_CHAT,
+    label: 'Embedded Agent Chat',
+    description: 'Chat with a single bound agent from an embedded widget on an allow-listed site',
+    endpoints: ['POST /api/embed/chat'],
+  },
+  {
+    value: ApiKeyScope.HEARTH_READ,
+    label: 'Hearth: Read',
+    description: 'List Hearth channels and replay their events without advancing any cursor',
+    endpoints: ['GET /api/hearth/channels', 'POST /api/hearth/catchup'],
+  },
+  {
+    value: ApiKeyScope.HEARTH_WRITE,
+    label: 'Hearth: Write',
+    description: 'Append Hearth events, create channels, and advance actor cursors',
+    endpoints: ['POST /api/hearth/events', 'POST /api/hearth/channels', 'POST /api/hearth/catchup'],
+  },
+  {
+    value: ApiKeyScope.OPTIHASHI_READ,
+    label: 'OptiHashi: Read',
+    description: 'Inspect OptiHashi problems, runs, and run artifacts without commissioning any compute',
+    endpoints: [
+      'GET /api/premium-optihashi/quantum/runs',
+      'GET /api/premium-optihashi/quantum/runs/:id',
+      'GET /api/premium-optihashi/quantum/problems',
+    ],
+  },
+  {
+    value: ApiKeyScope.OPTIHASHI_COMPUTE,
+    label: 'OptiHashi: Compute',
+    description: 'Submit OptiHashi compute runs and cancel them. Spends credits - grant only to keys that must solve',
+    endpoints: [
+      'POST /api/premium-optihashi/quantum/qwork/submit',
+      'POST /api/premium-optihashi/quantum/runs/:id/cancel',
+    ],
+  },
+  {
+    value: ApiKeyScope.DATALAKE_READ,
+    label: 'Data Lakes: Read',
+    description: 'List and browse data lakes the key owner can already reach',
+    endpoints: ['GET /api/data-lakes', 'GET /api/data-lakes/:id'],
+  },
+  {
+    value: ApiKeyScope.DATALAKE_QUERY,
+    label: 'Data Lakes: Query',
+    description:
+      'Run a retrieval query against a lake, and read lakes to support it. Spends credits - not part of the Read-only preset',
+    endpoints: ['POST /api/data-lakes/semantic-search', 'POST /api/data-lakes/rlm-answer'],
+  },
+  {
+    value: ApiKeyScope.DATALAKE_WRITE,
+    label: 'Data Lakes: Write',
+    description: 'Create and update lakes, and attach, retag, or remove their files',
+    endpoints: ['POST /api/data-lakes', 'PUT /api/data-lakes/:id', 'POST /api/data-lakes/:id/files/:fabFileId'],
+  },
+  {
+    value: ApiKeyScope.DATALAKE_SHARE,
+    label: 'Data Lakes: Share',
+    description:
+      'Change who can reach a lake - its visibility and its ownership. Not implied by write: grant only to keys that must re-share',
+    endpoints: ['POST /api/data-lakes/:id/visibility', 'POST /api/data-lakes/:id/transfer-ownership'],
+  },
+  {
+    value: ApiKeyScope.OVERWATCH_READ,
+    label: 'Overwatch: Read',
+    description:
+      'Explore the Overwatch analytics surface read-only - overview, products, metrics, funnel, pipeline freshness. Grants no ability to report stats or publish anything',
+    endpoints: [
+      'GET /api/premium-overwatch/agent/overview',
+      'GET /api/premium-overwatch/agent/products',
+      'GET /api/premium-overwatch/agent/products/:productId',
+      'GET /api/premium-overwatch/agent/timeseries',
+      'POST /api/premium-overwatch/agent/mcp',
+    ],
+  },
+];
+
+/** All user-selectable scope values, e.g. for a "Select All" action. */
+export const USER_API_KEY_SCOPE_VALUES: ApiKeyScope[] = USER_API_KEY_SCOPES.map(s => s.value);
+
+/**
+ * Scopes that are minted only through a dedicated flow (not the generic New-Key
+ * modals), because they require extra binding the modals do not collect. Embed
+ * keys need an agentId + origin allow-list (epic #41 Phase E).
+ */
+export const DEDICATED_FLOW_SCOPES: ReadonlySet<ApiKeyScope> = new Set([ApiKeyScope.EMBED_CHAT]);
+
+/** Scopes offered in the generic profile/admin New-Key modals (excludes dedicated-flow scopes). */
+export const GENERIC_MODAL_API_KEY_SCOPES: ApiKeyScopeOption[] = USER_API_KEY_SCOPES.filter(
+  s => !DEDICATED_FLOW_SCOPES.has(s.value)
+);
+
+/**
+ * Scopes no mint route may ever issue: they are granted by a flow of their own
+ * (`admin:*` is provisioned out of band, `cc-bridge:connect` by the bridge
+ * pairing handshake) and must stay outside every allowlist. Listed explicitly so
+ * the coverage test in apiKeyScopes.test.ts can tell "deliberately unmintable"
+ * from "someone added an enum value and forgot to register it" - the failure mode
+ * that once left the `datalake:*` scopes impossible to mint.
+ */
+export const NON_MINTABLE_API_KEY_SCOPES: ReadonlySet<ApiKeyScope> = new Set([
+  ApiKeyScope.ADMIN,
+  ApiKeyScope.CC_BRIDGE,
+]);
+
+/**
+ * Scopes that are provisioned by admins only and must never appear in the user-facing
+ * key creation UI. The ingest scope is excluded from USER_API_KEY_SCOPES by design.
+ */
+export const ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] = [
+  {
+    value: ApiKeyScope.OVERWATCH_INGEST_WRITE,
+    label: 'Overwatch: Ingest',
+    description: 'Server-to-server event ingestion for Overwatch analytics',
+    endpoints: ['POST /api/overwatch/v1/events'],
+  },
+];

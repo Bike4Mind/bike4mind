@@ -1,0 +1,472 @@
+import { describe, it, expect, vi, beforeEach, MockedObject } from 'vitest';
+import { deductCreditsWithOrgSupport, DeductCreditsAdapters, DeductCreditsParams } from './deductCreditsWithOrgSupport';
+import {
+  CreditHolderType,
+  ICreditHolder,
+  ICreditHolderMethods,
+  IOrganizationDocument,
+  IUserDocument,
+} from '@bike4mind/common';
+import { createMockCreditTransactionRepository, createMockOrganizationRepository } from '../__tests__/utils/testUtils';
+
+// Mock subtractCredits to isolate unit tests
+vi.mock('./subtractCredits', () => ({
+  subtractCredits: vi.fn().mockResolvedValue(undefined),
+}));
+
+import { subtractCredits } from './subtractCredits';
+
+const mockSubtractCredits = vi.mocked(subtractCredits);
+
+describe('creditService - deductCreditsWithOrgSupport', () => {
+  const mockUser = {
+    id: 'user1',
+    name: 'Test User',
+    email: 'user1@example.com',
+    currentCredits: 100,
+  } as IUserDocument;
+
+  const mockOrganization = {
+    id: 'org1',
+    currentCredits: 500,
+    userDetails: [
+      { id: 'user1', name: 'Test User', usedCredits: 50, lastCreditUsedAt: null },
+      { id: 'user2', name: 'Other User', usedCredits: 20, lastCreditUsedAt: null },
+    ],
+  } as unknown as IOrganizationDocument;
+
+  let mockAdapters: DeductCreditsAdapters;
+  let mockUserCreditHolderMethods: MockedObject<ICreditHolderMethods>;
+  let mockOrgRepo: ReturnType<typeof createMockOrganizationRepository>;
+  let mockCreditTransactionRepo: ReturnType<typeof createMockCreditTransactionRepository>;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+
+    mockUserCreditHolderMethods = vi.mocked({
+      incrementCredits: vi.fn().mockResolvedValue(mockUser),
+    });
+    mockOrgRepo = createMockOrganizationRepository();
+    mockOrgRepo.incrementCredits.mockResolvedValue(mockOrganization as unknown as ICreditHolder);
+    mockCreditTransactionRepo = createMockCreditTransactionRepository();
+
+    mockAdapters = {
+      db: {
+        creditTransactions: mockCreditTransactionRepo,
+        users: mockUserCreditHolderMethods,
+        organizations: mockOrgRepo,
+      },
+    };
+  });
+
+  describe('user-only deduction (no organization)', () => {
+    it('should deduct credits from user when no organization is present', async () => {
+      const params: DeductCreditsParams = {
+        type: 'text_generation_usage',
+        user: mockUser,
+        organization: null,
+        credits: 25,
+        sessionId: 'session1',
+        questId: 'quest1',
+        model: 'claude-3-sonnet',
+        inputTokens: 1000,
+        outputTokens: 500,
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      expect(mockOrgRepo.updateUserDetails).not.toHaveBeenCalled();
+      // Pin the FULL arg shape on at least one case so extra/unexpected params
+      // don't pass silently. Other cases below use `objectContaining` to focus
+      // on the field under test.
+      expect(mockSubtractCredits).toHaveBeenCalledWith(
+        {
+          type: 'text_generation_usage',
+          ownerId: 'user1',
+          ownerType: CreditHolderType.User,
+          credits: 25,
+          sessionId: 'session1',
+          questId: 'quest1',
+          model: 'claude-3-sonnet',
+          inputTokens: 1000,
+          outputTokens: 500,
+          // Defaults to 'web' when not supplied - web chat is the dominant
+          // caller of this helper.
+          source: 'web',
+        },
+        {
+          db: { creditTransactions: mockCreditTransactionRepo },
+          creditHolderMethods: mockUserCreditHolderMethods,
+          skipBalanceUpdate: undefined,
+          currentCreditHolder: undefined,
+        }
+      );
+    });
+
+    it('should handle undefined organization the same as null', async () => {
+      const params: DeductCreditsParams = {
+        type: 'image_generation_usage',
+        user: mockUser,
+        organization: undefined,
+        credits: 100,
+        sessionId: 'session1',
+        questId: 'quest1',
+        model: 'dall-e-3',
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      expect(mockOrgRepo.updateUserDetails).not.toHaveBeenCalled();
+      expect(mockSubtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ownerId: 'user1',
+          ownerType: CreditHolderType.User,
+        }),
+        expect.objectContaining({
+          creditHolderMethods: mockUserCreditHolderMethods,
+        })
+      );
+    });
+  });
+
+  describe('organization deduction', () => {
+    it('should deduct credits from organization and update userDetails atomically', async () => {
+      const params: DeductCreditsParams = {
+        type: 'text_generation_usage',
+        user: mockUser,
+        organization: mockOrganization,
+        credits: 30,
+        sessionId: 'session1',
+        questId: 'quest1',
+        model: 'claude-3-sonnet',
+        inputTokens: 800,
+        outputTokens: 200,
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      // Should use $inc (creditsDelta) for atomic increment, not $set with computed value
+      expect(mockOrgRepo.updateUserDetails).toHaveBeenCalledWith('org1', 'user1', {
+        creditsDelta: 30,
+        lastCreditUsedAt: expect.any(Date),
+      });
+
+      // Member already has a userDetails row, so no self-heal seed is issued.
+      expect(mockOrgRepo.ensureUserDetails).not.toHaveBeenCalled();
+
+      expect(mockSubtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'text_generation_usage',
+          ownerId: 'org1',
+          ownerType: CreditHolderType.Organization,
+          credits: 30,
+          sessionId: 'session1',
+          questId: 'quest1',
+          model: 'claude-3-sonnet',
+          inputTokens: 800,
+          outputTokens: 200,
+          source: 'web',
+        }),
+        expect.objectContaining({
+          db: { creditTransactions: mockCreditTransactionRepo },
+          creditHolderMethods: mockOrgRepo,
+        })
+      );
+    });
+
+    it('tracks usage even when the member is over their per-member cap (#1536)', async () => {
+      // Regression: the settlement write must NOT re-enforce maxCreditsPerMember. It used to
+      // throw here before updateUserDetails ran, so an over-cap member's usedCredits stayed 0
+      // forever - which kept the cap read at 0 and meant the cap never actually tripped.
+      // Enforcement now lives at reservation; this write only tracks and deducts.
+      const cappedOrg = {
+        id: 'org1',
+        currentCredits: 500,
+        maxCreditsPerMember: 10,
+        userDetails: [{ id: 'user1', name: 'Test User', usedCredits: 9, lastCreditUsedAt: null }],
+      } as unknown as IOrganizationDocument;
+
+      const params: DeductCreditsParams = {
+        type: 'text_generation_usage',
+        user: mockUser,
+        organization: cappedOrg,
+        credits: 57, // well over the cap of 10
+        sessionId: 'session1',
+        questId: 'quest1',
+        model: 'claude-3-sonnet',
+        inputTokens: 100,
+        outputTokens: 50,
+      };
+
+      await expect(deductCreditsWithOrgSupport(params, mockAdapters)).resolves.toBeUndefined();
+
+      expect(mockOrgRepo.updateUserDetails).toHaveBeenCalledWith('org1', 'user1', {
+        creditsDelta: 57,
+        lastCreditUsedAt: expect.any(Date),
+      });
+      expect(mockSubtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ ownerId: 'org1', ownerType: CreditHolderType.Organization, credits: 57 }),
+        expect.any(Object)
+      );
+    });
+
+    it('self-heals a missing userDetails row before incrementing, so the positional $inc lands (#1460)', async () => {
+      const orgWithoutUser = {
+        id: 'org1',
+        currentCredits: 500,
+        userDetails: [{ id: 'other-user', name: 'Other', usedCredits: 10, lastCreditUsedAt: null }],
+      } as unknown as IOrganizationDocument;
+
+      const params: DeductCreditsParams = {
+        type: 'image_generation_usage',
+        user: mockUser,
+        organization: orgWithoutUser,
+        credits: 50,
+        sessionId: 'session1',
+        questId: 'quest1',
+        model: 'dall-e-3',
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      // The member has no row, so seed one first - otherwise the positional $inc below no-ops and
+      // the spend (and the cap) never track for them.
+      expect(mockOrgRepo.ensureUserDetails).toHaveBeenCalledWith('org1', {
+        id: 'user1',
+        email: 'user1@example.com',
+        name: 'Test User',
+      });
+      expect(mockOrgRepo.updateUserDetails).toHaveBeenCalledWith('org1', 'user1', {
+        creditsDelta: 50,
+        lastCreditUsedAt: expect.any(Date),
+      });
+    });
+  });
+
+  describe('transaction type handling', () => {
+    it('should pass inputTokens and outputTokens for text_generation_usage', async () => {
+      const params: DeductCreditsParams = {
+        type: 'text_generation_usage',
+        user: mockUser,
+        organization: null,
+        credits: 15,
+        sessionId: 'session1',
+        questId: 'quest1',
+        model: 'gpt-4',
+        inputTokens: 500,
+        outputTokens: 250,
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      expect(mockSubtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'text_generation_usage',
+          inputTokens: 500,
+          outputTokens: 250,
+        }),
+        expect.any(Object)
+      );
+    });
+
+    it('should handle image_generation_usage type', async () => {
+      const params: DeductCreditsParams = {
+        type: 'image_generation_usage',
+        user: mockUser,
+        organization: null,
+        credits: 100,
+        sessionId: 'session1',
+        questId: 'quest1',
+        model: 'dall-e-3',
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      expect(mockSubtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'image_generation_usage' }),
+        expect.any(Object)
+      );
+    });
+
+    it('should handle image_edit_usage type', async () => {
+      const params: DeductCreditsParams = {
+        type: 'image_edit_usage',
+        user: mockUser,
+        organization: null,
+        credits: 75,
+        sessionId: 'session1',
+        questId: 'quest1',
+        model: 'dall-e-2-edit',
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      expect(mockSubtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'image_edit_usage' }),
+        expect.any(Object)
+      );
+    });
+
+    it('should handle video_generation_usage type', async () => {
+      const params: DeductCreditsParams = {
+        type: 'video_generation_usage',
+        user: mockUser,
+        organization: null,
+        credits: 200,
+        sessionId: 'session1',
+        questId: 'quest1',
+        model: 'sora',
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      expect(mockSubtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'video_generation_usage' }),
+        expect.any(Object)
+      );
+    });
+
+    it('should handle sound_effects_usage type (quest-less, questId omitted)', async () => {
+      const params: DeductCreditsParams = {
+        type: 'sound_effects_usage',
+        user: mockUser,
+        organization: null,
+        credits: 20,
+        sessionId: 'session1',
+        model: 'elevenlabs',
+        source: 'api',
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      const [calledWith] = mockSubtractCredits.mock.calls.at(-1)!;
+      expect(calledWith).toMatchObject({
+        type: 'sound_effects_usage',
+        ownerId: 'user1',
+        ownerType: CreditHolderType.User,
+        credits: 20,
+      });
+      // Quest-less: no questId key is forwarded for sound effects.
+      expect('questId' in calledWith).toBe(false);
+    });
+
+    it('should bill the org pool and track userDetails for org-billed sound effects', async () => {
+      const params: DeductCreditsParams = {
+        type: 'sound_effects_usage',
+        user: mockUser,
+        organization: mockOrganization,
+        credits: 20,
+        sessionId: 'session1',
+        model: 'elevenlabs',
+        source: 'api',
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      expect(mockOrgRepo.updateUserDetails).toHaveBeenCalledWith(
+        'org1',
+        'user1',
+        expect.objectContaining({ creditsDelta: 20 })
+      );
+      expect(mockSubtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'sound_effects_usage',
+          ownerId: 'org1',
+          ownerType: CreditHolderType.Organization,
+        }),
+        expect.any(Object)
+      );
+    });
+
+    it('should handle music_generation_usage type (quest-less, questId omitted)', async () => {
+      const params: DeductCreditsParams = {
+        type: 'music_generation_usage',
+        user: mockUser,
+        organization: null,
+        credits: 150,
+        sessionId: 'session1',
+        model: 'music_v1',
+        source: 'api',
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      const [calledWith] = mockSubtractCredits.mock.calls.at(-1)!;
+      expect(calledWith).toMatchObject({
+        type: 'music_generation_usage',
+        ownerId: 'user1',
+        ownerType: CreditHolderType.User,
+        credits: 150,
+      });
+      // Quest-less: no questId key is forwarded for music generation.
+      expect('questId' in calledWith).toBe(false);
+    });
+
+    it('should bill the org pool and track userDetails for org-billed music generation', async () => {
+      const params: DeductCreditsParams = {
+        type: 'music_generation_usage',
+        user: mockUser,
+        organization: mockOrganization,
+        credits: 150,
+        sessionId: 'session1',
+        model: 'music_v1',
+        source: 'api',
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      expect(mockOrgRepo.updateUserDetails).toHaveBeenCalledWith(
+        'org1',
+        'user1',
+        expect.objectContaining({ creditsDelta: 150 })
+      );
+      expect(mockSubtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'music_generation_usage',
+          ownerId: 'org1',
+          ownerType: CreditHolderType.Organization,
+        }),
+        expect.any(Object)
+      );
+    });
+  });
+
+  describe('error handling', () => {
+    it('should propagate errors from updateUserDetails', async () => {
+      mockOrgRepo.updateUserDetails.mockRejectedValue(new Error('DB connection failed'));
+
+      const params: DeductCreditsParams = {
+        type: 'text_generation_usage',
+        user: mockUser,
+        organization: mockOrganization,
+        credits: 25,
+        sessionId: 'session1',
+        questId: 'quest1',
+        model: 'claude-3-sonnet',
+        inputTokens: 100,
+        outputTokens: 50,
+      };
+
+      await expect(deductCreditsWithOrgSupport(params, mockAdapters)).rejects.toThrow('DB connection failed');
+
+      // subtractCredits should not be called if userDetails update fails
+      expect(mockSubtractCredits).not.toHaveBeenCalled();
+    });
+
+    it('should propagate errors from subtractCredits', async () => {
+      mockSubtractCredits.mockRejectedValue(new Error('Credit deduction failed'));
+
+      const params: DeductCreditsParams = {
+        type: 'image_generation_usage',
+        user: mockUser,
+        organization: null,
+        credits: 50,
+        sessionId: 'session1',
+        questId: 'quest1',
+        model: 'dall-e-3',
+      };
+
+      await expect(deductCreditsWithOrgSupport(params, mockAdapters)).rejects.toThrow('Credit deduction failed');
+    });
+  });
+});

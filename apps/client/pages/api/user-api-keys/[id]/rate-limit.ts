@@ -1,0 +1,83 @@
+import { userApiKeyService } from '@bike4mind/services';
+import { userApiKeyRepository } from '@bike4mind/database/auth';
+import { baseApi } from '@server/middlewares/baseApi';
+import { logEventSafe } from '@server/utils/analyticsLog';
+import { UserApiKeyEvents } from '@bike4mind/common';
+import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { csrfProtection } from '@server/middlewares/csrfProtection';
+import { BadRequestError } from '@server/utils/errors';
+
+interface UpdateRateLimitRequest {
+  requestsPerMinute?: number;
+  requestsPerDay?: number;
+}
+
+/**
+ * PATCH /api/user-api-keys/[id]/rate-limit
+ *
+ * Change a key's request ceilings in place, so raising or lowering a limit no
+ * longer means revoking and re-minting. Only the fields sent change.
+ *
+ * Not admin-gated: minter-scoped self-service. `updateApiKeyRateLimit` resolves
+ * the key via findByUserIdAndId, so a caller can only ever retarget their own
+ * key. Deliberately narrower than the sibling embed-config PATCH, which also
+ * resolves org-administered keys because it backs the org-wide embed-key admin
+ * table; rate limits are not on that table. Bounds are the service's (shared
+ * with mint); out-of-range values come back 422.
+ *
+ * csrfProtection is defense in depth rather than a live hole - a cross-site
+ * PATCH carrying JSON cannot get past preflight anyway - but it costs the
+ * browser client nothing, since the check reads Sec-Fetch and Origin headers
+ * and exchanges no token.
+ *
+ * meterAsKeyManagement charges an API-key caller to the separate management
+ * quota: metered on the key's own quota, the escape hatch sat behind the gate
+ * it opens, so a headless client holding one exhausted key had no API path
+ * back until the window rolled. It changes only which counter is charged -
+ * csrfProtection and the findByUserIdAndId scoping above still decide who may
+ * call this.
+ */
+const handler = baseApi({ meterAsKeyManagement: true })
+  .use(csrfProtection())
+  .patch(
+    asyncHandler<{}, unknown, UpdateRateLimitRequest, { id: string }>(async (req, res) => {
+      const userId = req.user?.id;
+      const keyId = req.query.id;
+      const { requestsPerMinute, requestsPerDay } = req.body;
+
+      if (!keyId) throw new BadRequestError('Invalid key ID');
+
+      const updated = await userApiKeyService.updateApiKeyRateLimit(
+        userId,
+        { keyId, requestsPerMinute, requestsPerDay },
+        { db: { userApiKeys: userApiKeyRepository } }
+      );
+
+      await logEventSafe(
+        {
+          userId,
+          type: UserApiKeyEvents.UPDATED,
+          metadata: {
+            keyId,
+            name: updated.name,
+            updatedFields: [
+              ...(requestsPerMinute !== undefined ? ['rateLimit.requestsPerMinute'] : []),
+              ...(requestsPerDay !== undefined ? ['rateLimit.requestsPerDay'] : []),
+            ],
+          },
+        },
+        { ability: req.ability },
+        req.logger
+      );
+
+      return res.status(200).json(updated);
+    })
+  );
+
+export const config = {
+  api: {
+    externalResolver: true,
+  },
+};
+
+export default handler;

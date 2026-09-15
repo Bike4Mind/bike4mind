@@ -1,0 +1,59 @@
+name: Auto-Assign PR Author
+
+# Every PR should have an assignee; default it to whoever opened it.
+#
+# pull_request_target (not pull_request) because this repo is public: a fork PR
+# under pull_request gets a read-only GITHUB_TOKEN and the assignment 403s.
+# This is the safe use of pull_request_target: the job never checks out the head
+# ref and never runs PR-controlled code, it only reads event metadata and calls
+# the assignees API. Do not add actions/checkout to this workflow.
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  assign-author:
+    name: Assign PR Author
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const author = pr.user.login;
+
+            if (pr.assignees?.length) {
+              core.info(`PR #${pr.number} already assigned; leaving it alone`);
+              return;
+            }
+
+            // GitHub silently drops bot accounts from an assignees request, so
+            // skip explicitly rather than logging a no-op success. Covers
+            // dependabot[bot] and changeset-release "Version Packages" PRs.
+            if (pr.user.type === 'Bot') {
+              core.info(`PR #${pr.number} authored by bot ${author}; not assignable`);
+              return;
+            }
+
+            const { data } = await github.rest.issues.addAssignees({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              assignees: [author],
+            });
+
+            // The API also silently ignores assignees who lack repo access,
+            // the common case for an outside contributor here. Warn rather than
+            // fail their PR over something they can't fix.
+            if (data.assignees?.some((a) => a.login === author)) {
+              core.info(`Assigned PR #${pr.number} to ${author}`);
+            } else {
+              core.warning(
+                `Could not assign PR #${pr.number} to ${author}: GitHub ignored the assignee, ` +
+                  `which usually means they lack access to this repository.`
+              );
+            }

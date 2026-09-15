@@ -1,0 +1,741 @@
+import { z } from 'zod';
+// Type-only: ModelCatalogTypes imports ModelBackend from this module, so a value
+// import here would close a runtime cycle. These two are erased at compile time.
+import type { AdapterFamily, ModelDispatchProfile } from './types/entities/ModelCatalogTypes';
+
+/**
+ * Model backends
+ */
+export enum ModelBackend {
+  OpenAI = 'openai',
+  Bedrock = 'bedrock',
+  Anthropic = 'anthropic',
+  Gemini = 'gemini',
+  Ollama = 'ollama',
+  BFL = 'bfl',
+  XAI = 'xai',
+  // Moonshot AI's Kimi models, served from their OpenAI-compatible endpoint.
+  // Distinct from Bedrock-served Kimi (moonshotai.kimi-*), which routes through
+  // ModelBackend.Bedrock on the same vendor.
+  Kimi = 'kimi',
+  // DeepSeek's own OpenAI-compatible endpoint. Distinct from the Bedrock-served
+  // DeepSeek rows (deepseek.*), which route through ModelBackend.Bedrock, and
+  // from the Ollama alias for a locally pulled deepseek-r1.
+  DeepSeek = 'deepseek',
+  VoyageAI = 'voyageai',
+  AWS = 'aws',
+  // Self-hosted Stable-Diffusion image backend (A1111-compatible REST API),
+  // gated by IMAGE_GEN_BASE_URL. Mirrors Ollama's local-text role for images.
+  LocalImage = 'local-image',
+}
+
+/**
+ * Image Models
+ */
+export enum ImageModels {
+  GPT_IMAGE_1 = 'gpt-image-1',
+  GPT_IMAGE_1_5 = 'gpt-image-1.5',
+  GPT_IMAGE_1_MINI = 'gpt-image-1-mini',
+  GPT_IMAGE_2 = 'gpt-image-2',
+  DALL_E_2 = 'dall-e-2',
+  FLUX_PRO = 'flux-pro',
+  FLUX_PRO_1_1 = 'flux-pro-1.1',
+  FLUX_PRO_ULTRA = 'flux-pro-1.1-ultra',
+  FLUX_PRO_FILL = 'flux-pro-1.0-fill',
+  FLUX_KONTEXT_PRO = 'flux-kontext-pro',
+  FLUX_KONTEXT_MAX = 'flux-kontext-max',
+  GROK_IMAGINE_IMAGE_QUALITY = 'grok-imagine-image-quality',
+  GEMINI_2_5_FLASH_IMAGE = 'gemini-2.5-flash-image',
+  GEMINI_3_PRO_IMAGE_PREVIEW = 'gemini-3-pro-image-preview',
+  GEMINI_3_1_FLASH_IMAGE = 'gemini-3.1-flash-image', // Nano Banana 2
+  GEMINI_3_PRO_IMAGE = 'gemini-3-pro-image', // Nano Banana Pro
+}
+export const IMAGE_MODELS = Object.values(ImageModels);
+export const supportedImageModels = z.enum(ImageModels);
+export type ImageModelName = z.infer<typeof supportedImageModels>;
+
+/**
+ * Image size constraints and options
+ */
+export const IMAGE_SIZE_CONSTRAINTS = {
+  BFL: {
+    minWidth: 256,
+    maxWidth: 1440,
+    minHeight: 256,
+    maxHeight: 1440,
+    stepSize: 32,
+    defaultSize: '1280x960',
+    sizes: [
+      '1280x960', // Default - higher quality 4:3
+      '1024x768', // Standard 4:3
+      '800x600', // Smaller 4:3
+      '1280x720', // HD 16:9
+      '1024x576', // Smaller 16:9
+      '1440x810', // Larger 16:9
+      '1024x1024', // Large square
+      '768x768', // Medium square
+      '512x512', // Small square
+      '960x1280', // Large portrait
+      '768x1024', // Standard portrait
+      '600x800', // Small portrait
+    ] as const,
+  },
+  GPT_IMAGE_1: {
+    sizes: ['1024x1024', '1024x1536', '1536x1024'] as const,
+    defaultSize: '1024x1024',
+  },
+  GPT_IMAGE_2: {
+    /** Popular preset sizes shown in the UI. The API accepts any resolution meeting the constraints. */
+    sizes: ['1024x1024', '1536x1024', '1024x1536', '2048x2048', '2048x1152', '3840x2160', '2160x3840'] as const,
+    defaultSize: '1024x1024',
+    /** Constraints for custom/flexible sizes */
+    constraints: {
+      maxEdge: 3840,
+      minTotalPixels: 655_360,
+      maxTotalPixels: 8_294_400,
+      edgeMultiple: 16,
+      maxAspectRatio: 3,
+    },
+  },
+} as const;
+
+export type GPTImage1Size = (typeof IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes)[number];
+export type GPTImage2Size = (typeof IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.sizes)[number] | `${number}x${number}`;
+export type BFLSize = `${number}x${number}`;
+
+export type ImageSize = GPTImage1Size | GPTImage2Size | BFLSize;
+
+/**
+ * Chat Models
+ *
+ * https://platform.openai.com/docs/models/continuous-model-upgrades
+ */
+export enum ChatModels {
+  GPT4_1 = 'gpt-4.1-2025-04-14',
+  GPT4_1_MINI = 'gpt-4.1-mini-2025-04-14',
+  GPT4_1_NANO = 'gpt-4.1-nano-2025-04-14',
+  O1 = 'o1-2024-12-17',
+  O3 = 'o3-2025-04-16',
+  GPT4o = 'gpt-4o',
+  GPT4o_MINI = 'gpt-4o-mini',
+  O1_PREVIEW = 'o1-preview-2024-09-12',
+  O1_MINI = 'o1-mini-2024-09-12',
+  O3_MINI = 'o3-mini-2025-01-31',
+  O4_MINI = 'o4-mini-2025-04-16',
+  GPT4_5_PREVIEW = 'gpt-4.5-preview-2025-02-27',
+  GPT4_TURBO = 'gpt-4-turbo',
+  GPT4 = 'gpt-4',
+
+  // GPT-5 family
+  GPT5 = 'gpt-5',
+  GPT5_MINI = 'gpt-5-mini',
+  GPT5_NANO = 'gpt-5-nano',
+  GPT5_CHAT_LATEST = 'gpt-5-chat-latest',
+
+  //GPT 5.1
+  GPT5_1 = 'gpt-5.1',
+  GPT5_1_CHAT_LATEST = 'gpt-5.1-chat-latest',
+
+  // GPT 5.2
+  GPT5_2 = 'gpt-5.2',
+  GPT5_2_CHAT_LATEST = 'gpt-5.2-chat-latest',
+
+  // GPT 5.4
+  GPT5_4 = 'gpt-5.4',
+  GPT5_4_MINI = 'gpt-5.4-mini',
+  GPT5_4_NANO = 'gpt-5.4-nano',
+
+  // GPT 5.5
+  GPT5_5 = 'gpt-5.5',
+
+  // GPT 5.6 (Sol / Luna / Terra) - reasoning flagships; fixed temperature, and
+  // function tools must go through /v1/responses (see RESPONSES_API_TOOL_MODELS).
+  GPT5_6_SOL = 'gpt-5.6-sol',
+  GPT5_6_LUNA = 'gpt-5.6-luna',
+  GPT5_6_TERRA = 'gpt-5.6-terra',
+
+  LLAMA3_INSTRUCT_8B_V1 = 'meta.llama3-8b-instruct-v1:0',
+  LLAMA3_INSTRUCT_70B_V1 = 'meta.llama3-70b-instruct-v1:0',
+
+  // Llama 4 models on Bedrock
+  LLAMA4_MAVERICK_17B_INSTRUCT_BEDROCK = 'us.meta.llama4-maverick-17b-instruct-v1:0',
+  LLAMA4_SCOUT_17B_INSTRUCT_BEDROCK = 'us.meta.llama4-scout-17b-instruct-v1:0',
+
+  // Local Ollama models
+  LLAMA3_LOCAL = 'llama3.3',
+  DEEPSEEK_R1 = 'deepseek-r1:latest',
+  TINYLLAMA = 'tinyllama',
+  // End Local Ollama models
+
+  // Bedrock hosted DeepSeek models
+  DEEPSEEK_R1_BEDROCK = 'us.deepseek.r1-v1:0',
+  DEEPSEEK_V3_1 = 'deepseek.v3-v1:0',
+
+  TITAN_TEXT_G1_LITE = 'amazon.titan-text-lite-v1',
+  TITAN_TEXT_G1_EXPRESS = 'amazon.titan-text-express-v1',
+  // Bedrock hosted Anthropic models
+  CLAUDE_3_HAIKU_BEDROCK = 'anthropic.claude-3-haiku-20240307-v1:0',
+  CLAUDE_3_5_HAIKU_BEDROCK = 'us.anthropic.claude-3-5-haiku-20241022-v1:0',
+  CLAUDE_3_5_SONNET_BEDROCK = 'anthropic.claude-3-5-sonnet-20240620-v1:0',
+
+  // Claude 4 series on Bedrock
+  CLAUDE_4_OPUS_BEDROCK = 'us.anthropic.claude-opus-4-20250514-v1:0',
+  CLAUDE_4_1_OPUS_BEDROCK = 'us.anthropic.claude-opus-4-1-20250805-v1:0',
+  CLAUDE_4_SONNET_BEDROCK = 'us.anthropic.claude-sonnet-4-20250514-v1:0',
+  CLAUDE_3_5_SONNET_V2_BEDROCK = 'us.anthropic.claude-3-5-sonnet-20241022-v2:0',
+  CLAUDE_3_7_SONNET_BEDROCK = 'us.anthropic.claude-3-7-sonnet-20250219-v1:0',
+  CLAUDE_4_5_SONNET_BEDROCK = 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+  CLAUDE_4_5_HAIKU_BEDROCK = 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+  CLAUDE_4_5_OPUS_BEDROCK = 'global.anthropic.claude-opus-4-5-20251101-v1:0',
+  CLAUDE_4_6_SONNET_BEDROCK = 'global.anthropic.claude-sonnet-4-6',
+  CLAUDE_5_SONNET_BEDROCK = 'global.anthropic.claude-sonnet-5',
+  CLAUDE_4_6_OPUS_BEDROCK = 'global.anthropic.claude-opus-4-6-v1',
+  CLAUDE_4_7_OPUS_BEDROCK = 'global.anthropic.claude-opus-4-7',
+  CLAUDE_4_8_OPUS_BEDROCK = 'global.anthropic.claude-opus-4-8',
+
+  // Anthropic hosted Anthropic models
+  CLAUDE_3_OPUS = 'claude-3-opus-20240229',
+  CLAUDE_3_5_HAIKU_ANTHROPIC = 'claude-3-5-haiku-20241022',
+  CLAUDE_3_5_SONNET_ANTHROPIC = 'claude-3-5-sonnet-20241022',
+  CLAUDE_3_7_SONNET_ANTHROPIC = 'claude-3-7-sonnet-20250219',
+  CLAUDE_4_OPUS = 'claude-opus-4-20250514',
+  CLAUDE_4_1_OPUS = 'claude-opus-4-1-20250805',
+  CLAUDE_4_SONNET = 'claude-sonnet-4-20250514',
+  CLAUDE_4_5_SONNET = 'claude-sonnet-4-5-20250929',
+  CLAUDE_4_5_HAIKU = 'claude-haiku-4-5-20251001',
+  CLAUDE_4_5_OPUS = 'claude-opus-4-5-20251101',
+  CLAUDE_4_6_SONNET = 'claude-sonnet-4-6',
+  CLAUDE_5_SONNET = 'claude-sonnet-5',
+  CLAUDE_4_6_OPUS = 'claude-opus-4-6',
+  CLAUDE_4_7_OPUS = 'claude-opus-4-7',
+  CLAUDE_4_8_OPUS = 'claude-opus-4-8',
+  CLAUDE_FABLE_5 = 'claude-fable-5',
+  CLAUDE_5_OPUS = 'claude-opus-5',
+
+  JURASSIC2_ULTRA = 'ai21.j2-ultra-v1',
+  JURASSIC2_MID = 'ai21.j2-mid-v1',
+
+  // GEMINI
+  // Gemini 3.5
+  GEMINI_3_5_FLASH = 'gemini-3.5-flash',
+
+  // Gemini 3.1
+  GEMINI_3_1_PRO_PREVIEW = 'gemini-3.1-pro-preview',
+  GEMINI_3_1_FLASH_LITE = 'gemini-3.1-flash-lite',
+
+  // Gemini 3
+  GEMINI_3_FLASH_PREVIEW = 'gemini-3-flash-preview',
+
+  // Gemini Legacy/Experimental/Deprecated Models
+  GEMINI_3_PRO_PREVIEW = 'gemini-3-pro-preview',
+  GEMINI_2_5_PRO = 'gemini-2.5-pro',
+  GEMINI_2_5_FLASH = 'gemini-2.5-flash',
+  GEMINI_2_5_FLASH_LITE = 'gemini-2.5-flash-lite',
+  GEMINI_2_5_FLASH_PREVIEW = 'gemini-2.5-flash-preview-09-25',
+  GEMINI_2_5_PRO_PREVIEW = 'gemini-2.5-pro-preview-05-06',
+  GEMINI_2_0_FLASH_EXP = 'gemini-2.0-flash-exp',
+  GEMINI_1_5_FLASH = 'gemini-1.5-flash',
+  GEMINI_1_5_FLASH_8B = 'gemini-1.5-flash-8b',
+  GEMINI_1_5_PRO = 'gemini-1.5-pro',
+  GROK_1 = 'grok-1',
+
+  // xAI Models
+  GROK_3 = 'grok-3',
+  GROK_3_FAST = 'grok-3-fast',
+  GROK_3_MINI = 'grok-3-mini',
+  GROK_3_MINI_FAST = 'grok-3-mini-fast',
+  GROK_2 = 'grok-2-1212',
+  GROK_2_VISION = 'grok-2-vision-1212',
+  GROK_4 = 'grok-4-0709',
+  GROK_4_5 = 'grok-4.5',
+  GROK_BETA = 'grok-beta',
+  GROK_VISION_BETA = 'grok-vision-beta',
+
+  // Moonshot AI (Kimi) models, direct from api.moonshot.ai. Ids are unversioned
+  // and unhyphenated-date, matching what GET /v1/models returns verbatim.
+  KIMI_K3 = 'kimi-k3',
+  KIMI_K2_7_CODE = 'kimi-k2.7-code',
+  KIMI_K2_7_CODE_HIGHSPEED = 'kimi-k2.7-code-highspeed',
+  KIMI_K2_6 = 'kimi-k2.6',
+  KIMI_K2_5 = 'kimi-k2.5',
+
+  // Bedrock-served Kimi. Same vendor, different backend, different limits (256K
+  // context but only 16K output against Moonshot's 262K), so these never share a
+  // catalog or price row with the direct ids above.
+  //
+  // The prefixes genuinely disagree and this is NOT a typo: AWS publishes k2.5 as
+  // `moonshotai.` on both endpoints but k2-thinking as `moonshot.` on
+  // bedrock-runtime and `moonshotai.` on bedrock-mantle. These are the
+  // bedrock-runtime spellings, which is the endpoint InvokeModel uses.
+  // @see https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-5.html
+  // @see https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-thinking.html
+  KIMI_K2_5_BEDROCK = 'moonshotai.kimi-k2.5',
+  KIMI_K2_THINKING_BEDROCK = 'moonshot.kimi-k2-thinking',
+
+  // DeepSeek direct from api.deepseek.com, the only two ids it still serves.
+  // Neither collides with the Bedrock-served DEEPSEEK_R1_BEDROCK / DEEPSEEK_V3_1
+  // above or the Ollama DEEPSEEK_R1: those are other people's copies on other
+  // backends, with their own limits and their own prices.
+  //
+  // The vendor's legacy aliases deepseek-v4-flash and deepseek-v4-flash-vision-exp
+  // route to deepseek-flash and are deliberately not separate members.
+  DEEPSEEK_FLASH = 'deepseek-flash',
+  DEEPSEEK_V4_PRO = 'deepseek-v4-pro',
+}
+export const CHAT_MODELS = Object.values(ChatModels);
+export const supportedChatModels = z.enum(ChatModels);
+export type ChatModelName = z.infer<typeof supportedChatModels>;
+
+/**
+ * Every `ChatModels` Gemini entry is named `gemini...` (see the GEMINI block above) - a prefix
+ * check tracks that naming convention automatically as new Gemini models are added, unlike an
+ * explicit id list that would need updating in lockstep and could silently miss one.
+ */
+export const isGeminiModelId = (model: string): boolean => model.startsWith('gemini');
+
+/**
+ * Models that support the reasoning_effort parameter.
+ * o1-preview and o1-mini do NOT support reasoning_effort.
+ */
+export const REASONING_SUPPORTED_MODELS: ReadonlySet<string> = new Set([
+  ChatModels.O1,
+  ChatModels.O3_MINI,
+  ChatModels.O3,
+  ChatModels.O4_MINI,
+  ChatModels.GPT5,
+  ChatModels.GPT5_MINI,
+  ChatModels.GPT5_NANO,
+  ChatModels.GPT5_1,
+  ChatModels.GPT5_2,
+  ChatModels.GPT5_4,
+  ChatModels.GPT5_4_MINI,
+  ChatModels.GPT5_4_NANO,
+  ChatModels.GPT5_6_SOL,
+  ChatModels.GPT5_6_LUNA,
+  ChatModels.GPT5_6_TERRA,
+]);
+
+/**
+ * GPT-5-family reasoning models whose tool calling breaks on
+ * `/v1/chat/completions` when `reasoning_effort` is also sent. OpenAI requires
+ * this combination to go through `/v1/responses` instead. The failure mode
+ * differs by model:
+ *   - GPT-5.4 (and -mini/-nano) hard-reject with a 400:
+ *       "Function tools with reasoning_effort are not supported for <model> in
+ *        /v1/chat/completions. Please use /v1/responses instead."
+ *   - GPT-5 / -mini / -nano / 5.1 / 5.2 return 200 but silently degrade: the
+ *     model *narrates* the tool call in its text ("Calling the tool now...")
+ *     instead of emitting a real `tool_calls` entry, so no tool ever executes.
+ *     This surfaced as the /opti optimizer's "Draft with AI" doing nothing on
+ *     GPT-5: the same request on a model with `reasoning_effort`
+ *     dropped (or on Claude) fires the tool correctly.
+ *
+ * We drop `reasoning_effort` when tools are sent for these models so tool
+ * calling continues to work on `/v1/chat/completions`. Dropping it only forgoes
+ * explicit effort control - the model still reasons at its default.
+ *
+ * NOTE: for the base GPT-5 narrator family (`RESPONSES_API_TOOL_MODELS`), the
+ * adapter now routes tool turns to `/v1/responses` instead - where reasoning +
+ * tools work together, so `reasoning_effort` is kept. This drop remains as
+ * defense-in-depth for the (now-unreached) chat path and covers the GPT-5.4
+ * family, which is NOT routed to Responses (its drop-path already works).
+ *
+ * O-series reasoning models (o1/o3/o4) are intentionally excluded: they call
+ * tools correctly with `reasoning_effort` on `/v1/chat/completions`.
+ *
+ * Invariant: every member here MUST also be in `REASONING_SUPPORTED_MODELS`.
+ * The gate in `openaiBackend.ts` short-circuits when a model doesn't support
+ * reasoning at all, so adding a non-reasoning model here would make the gate
+ * a no-op and silently leak `reasoning_effort` to the request.
+ */
+export const REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS: ReadonlySet<string> = new Set([
+  ChatModels.GPT5,
+  ChatModels.GPT5_MINI,
+  ChatModels.GPT5_NANO,
+  ChatModels.GPT5_1,
+  ChatModels.GPT5_2,
+  ChatModels.GPT5_4,
+  ChatModels.GPT5_4_MINI,
+  ChatModels.GPT5_4_NANO,
+  // GPT-5.6 (Sol/Luna/Terra) also hard-reject tools+reasoning_effort with a 400, but
+  // unlike the 5.4 family the chat-path drop does NOT rescue them (they still 400 with
+  // no reasoning_effort - the model reasons by default). They route to /v1/responses
+  // instead (RESPONSES_API_TOOL_MODELS); membership here is the required invariant.
+  ChatModels.GPT5_6_SOL,
+  ChatModels.GPT5_6_LUNA,
+  ChatModels.GPT5_6_TERRA,
+]);
+
+/**
+ * GPT-5 reasoning models that silently *narrate* tool calls on
+ * `/v1/chat/completions` (return 200 with the call written as text instead of a
+ * real `tool_calls` entry, so nothing executes). The adapter
+ * routes these to OpenAI's `/v1/responses` API when function tools are present,
+ * where reasoning + tools work together and `reasoning_effort` can be kept.
+ *
+ * Deliberately excludes the GPT-5.4 family: it *hard-errors* (400) on that
+ * combination and is already handled by dropping `reasoning_effort` on the chat
+ * path (see `REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS`), so it stays on
+ * the working chat path to keep this routing's blast radius small. Also excludes
+ * `*-chat-latest` (non-reasoning) and O-series (tools work there already).
+ *
+ * Invariant: every member MUST also be in `REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS`
+ * so the chat path still drops `reasoning_effort` as a fallback if routing is bypassed.
+ */
+export const RESPONSES_API_TOOL_MODELS: ReadonlySet<string> = new Set([
+  ChatModels.GPT5,
+  ChatModels.GPT5_MINI,
+  ChatModels.GPT5_NANO,
+  ChatModels.GPT5_1,
+  ChatModels.GPT5_2,
+  // GPT-5.6 (Sol/Luna/Terra): tools+reasoning hard-400 on /v1/chat/completions
+  // ("use /v1/responses or set reasoning_effort to 'none'"), and dropping
+  // reasoning_effort does not clear it (verified against the live API). Routing
+  // to /v1/responses keeps tools AND reasoning working, so unlike the 5.4 family
+  // (which the chat-path drop rescues) these belong here.
+  ChatModels.GPT5_6_SOL,
+  ChatModels.GPT5_6_LUNA,
+  ChatModels.GPT5_6_TERRA,
+]);
+
+/**
+ * Models that only support temperature=1 (no custom temperature).
+ * Includes:
+ *  - All reasoning models (OpenAI requires temp=1 when reasoning is active)
+ *  - chat-latest variants that enforce this constraint
+ *  - GPT-5.5, which rejects custom temperature even though it does not expose
+ *    reasoning controls
+ */
+export const FIXED_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
+  ...Array.from(REASONING_SUPPORTED_MODELS),
+  ChatModels.GPT5_1_CHAT_LATEST,
+  ChatModels.GPT5_2_CHAT_LATEST,
+  ChatModels.GPT5_5,
+]);
+
+/**
+ * Models that do not accept the temperature parameter at all.
+ * The API will reject requests that include temperature for these models.
+ */
+export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
+  // Opus 4.7+, Sonnet 5, Fable 5, and Opus 5 remove temperature/top_p/top_k (adaptive-thinking-only surface) - sending any returns 400
+  ChatModels.CLAUDE_4_7_OPUS,
+  ChatModels.CLAUDE_4_7_OPUS_BEDROCK,
+  ChatModels.CLAUDE_4_8_OPUS,
+  ChatModels.CLAUDE_4_8_OPUS_BEDROCK,
+  ChatModels.CLAUDE_5_SONNET,
+  ChatModels.CLAUDE_5_SONNET_BEDROCK,
+  ChatModels.CLAUDE_FABLE_5,
+  ChatModels.CLAUDE_5_OPUS,
+  // Moonshot pins temperature and top_p on every current Kimi and documents them
+  // as unmodifiable: the chat API reference states only the moonshot-v1 family
+  // accepts them, and the thinking guide says outright that for kimi-k2.7-code
+  // and kimi-k2.6 temperature is not modifiable and should not be passed. k2.6
+  // was briefly excluded here on the strength of models.dev reporting
+  // `temperature: true`; the primary docs are the authority and the aggregator is
+  // the outlier.
+  ChatModels.KIMI_K3,
+  ChatModels.KIMI_K2_7_CODE,
+  ChatModels.KIMI_K2_7_CODE_HIGHSPEED,
+  ChatModels.KIMI_K2_6,
+  ChatModels.KIMI_K2_5,
+  // DeepSeek reasons by default on both ids, and its docs state temperature,
+  // presence_penalty and frequency_penalty are unsupported in thinking mode.
+  // Unlike Kimi these are silent no-ops rather than a 400, which is the worse
+  // failure: the knob moves, the answer does not. Listed here so the picker
+  // stops offering it. Thinking CAN be turned off on either id, and a caller who
+  // does so gets the group back - see deepseekSamplingParams, which gates on the
+  // turn's resolved thinking state rather than on membership here.
+  ChatModels.DEEPSEEK_FLASH,
+  ChatModels.DEEPSEEK_V4_PRO,
+]);
+
+/**
+ * Models whose safety classifiers can decline a request with `stop_reason: 'refusal'`
+ * (HTTP 200, empty or partial content) - Claude Fable 5's GA classifiers target research
+ * biology and most cybersecurity content and occasionally false-positive on benign adjacent
+ * work. Per Anthropic's GA guidance a refusal from these is opt-in recoverable: rather than
+ * surfacing a hard refusal, the backend throws so the completion loop's existing fallback
+ * machinery continues the request on Opus 5 (whose classifiers intervene far less often).
+ * A refusal from any *other* model is a genuine decline and surfaces unchanged. Keep in
+ * sync with the `claude-fable-5` fallback preference chain in `adminSettings/fallback.ts`.
+ */
+export const REFUSAL_FALLBACK_MODELS: ReadonlySet<string> = new Set([ChatModels.CLAUDE_FABLE_5]);
+
+/**
+ * Bedrock-hosted Claude models that do NOT support prompt caching (`cache_control`).
+ * Sending `cache_control` to these models triggers a Bedrock deserialization error:
+ *   `tools.N.cache_control: Extra inputs are not permitted`
+ *
+ * AWS Bedrock added prompt caching for Claude 3.5 Haiku and Claude 3.7 Sonnet (and later);
+ * the OG Claude 3 Haiku and the v1 Claude 3.5 Sonnet were not retrofitted.
+ *
+ * Keep this set narrow - default behavior is to apply caching when `cacheStrategy.enableCaching`
+ * is true. Add a model here only when we have concrete evidence (a Bedrock validation error)
+ * that it rejects `cache_control`.
+ */
+export const BEDROCK_NO_PROMPT_CACHING_MODELS: ReadonlySet<string> = new Set([
+  ChatModels.CLAUDE_3_HAIKU_BEDROCK,
+  ChatModels.CLAUDE_3_5_SONNET_BEDROCK,
+]);
+
+/**
+ * Speech to Text Models
+ *
+ */
+
+export enum SpeechToTextModels {
+  WHISPER_1 = 'whisper-1',
+  AWS_TRANSCRIBE = 'transcribe',
+}
+
+export const SPEECH_TO_TEXT_MODELS = Object.values(SpeechToTextModels);
+export const supportedSpeechToTextModels = z.enum(SpeechToTextModels);
+export type SpeechToTextModelName = z.infer<typeof supportedSpeechToTextModels>;
+
+/**
+ * Video Models
+ */
+export enum VideoModels {
+  SORA_2 = 'sora-2',
+  SORA_2_PRO = 'sora-2-pro',
+}
+
+export const VIDEO_MODELS = Object.values(VideoModels);
+export const supportedVideoModels = z.enum(VideoModels);
+export type VideoModelName = z.infer<typeof supportedVideoModels>;
+
+/**
+ * Video size constraints and options for Sora
+ */
+export const VIDEO_SIZE_CONSTRAINTS = {
+  SORA: {
+    durations: [4, 8, 12] as const,
+    sizes: ['720x1280', '1280x720', '1024x1792', '1792x1024'] as const,
+    defaultDuration: 4,
+    defaultSize: '720x1280' as const,
+  },
+} as const;
+
+export type SoraDuration = (typeof VIDEO_SIZE_CONSTRAINTS.SORA.durations)[number];
+export type SoraVideoSize = (typeof VIDEO_SIZE_CONSTRAINTS.SORA.sizes)[number];
+
+/**
+ * All supported models
+ */
+export const supportedModels = z.enum({
+  ...ChatModels,
+  ...ImageModels,
+  ...SpeechToTextModels,
+  ...VideoModels,
+});
+
+export type ModelName = z.infer<typeof supportedModels>;
+
+export type ModelInfo = {
+  id: ModelName;
+  type: 'text' | 'image' | 'speech-to-text' | 'video';
+  name: string;
+  backend: ModelBackend;
+  private?: boolean;
+  /**
+   * The length of the context window.
+   * This specifies the number of tokens or characters that the model
+   * considers as context for generating the response.
+   */
+  contextWindow: number;
+  /**
+   * The maximum number of tokens.
+   * This defines the highest number of tokens allowed in the
+   * generated response.
+   */
+  max_tokens: number;
+  can_stream?: boolean;
+  /**
+   * Whether the model supports the thinking feature.
+   * This allows the model to perform extended reasoning before responding.
+   */
+  can_think?: boolean;
+  /**
+   * The thinking API style for this model. Only meaningful when can_think is true.
+   * - 'legacy': Uses `thinking: { type: "enabled", budget_tokens }` (Claude 3.7 through 4.6)
+   * - 'adaptive': Uses `thinking: { type: "adaptive" }` + `output_config: { effort }` (Claude 4.7+)
+   * Defaults to 'legacy' if unset and can_think is true.
+   */
+  thinkingStyle?: 'legacy' | 'adaptive';
+  pricing: Record<number, PricingInfo>;
+  /**
+   * Marks a model as deliberately costless (e.g. local Ollama), so zero-rate
+   * pricing is intent, not a gap. Without this, a $0 cost for real usage
+   * trips the [UNPRICED_MODEL] alarm in getTextModelCost.
+   */
+  freeToRun?: boolean;
+  /**
+   * Whether the model supports vision tasks.
+   */
+  supportsVision?: boolean;
+  /**
+   * Whether the model supports function calls and tools.
+   */
+  supportsTools?: boolean;
+  /**
+   * Whether the model accepts an image input alongside the text prompt
+   * (image-to-image, image variation, or image-grounded editing).
+   * False for text-to-image-only models.
+   */
+  supportsImageVariation: boolean;
+  /**
+   * Whether the model supports safety tolerance settings.
+   * This is specific to BFL models.
+   */
+  supportsSafetyTolerance?: boolean;
+  /**
+   * The cutoff date for the model's training data.
+   * This indicates when the model's knowledge stops.
+   * Format: YYYY-MM-DD
+   */
+  trainingCutoff?: string;
+  /**
+   * Optional date when the model was released.
+   * Helps the UI show the <NEW> badge for the model.
+   * Format: YYYY-MM-DD
+   */
+  releaseDate?: string;
+  /**
+   * Optional date when the model is no longer available.
+   * If present and today's date is on/after this date, the model should be hidden.
+   * Format: YYYY-MM-DD
+   */
+  deprecationDate?: string;
+  /**
+   * Successor id for a model this adapter table is sunsetting. Rides into
+   * `lifecycle.replacedBy` on the seed row, which is what feeds
+   * resolveDeprecatedModelId's catalog overlay - a `deprecationDate` alone only
+   * hides the model, leaving a session pinned to it to fail at dispatch.
+   */
+  replacedBy?: string;
+  logoFile?: string;
+  rank?: number;
+  description?: string;
+  isSlowModel?: boolean;
+  /**
+   * When true, the model is still listed in the picker but rendered as disabled and
+   * non-selectable, and the server rejects completions to it. Use for a model that is
+   * unavailable to this deployment (e.g. gated or retired upstream) but that we still
+   * want users to see - so its absence is explained rather than silently hidden.
+   * This is distinct from `deprecationDate`, which hides the model entirely.
+   */
+  disabled?: boolean;
+  /** Human-readable reason surfaced in the picker (tooltip) and the server-side rejection when `disabled` is true. */
+  disabledReason?: string;
+  /**
+   * Which backend constructor serves this model. Present only on models the
+   * catalog resolved; getLlmByModel dispatches on it and falls back to the
+   * legacy id switch when it is absent (see llm-adapters/src/index.ts).
+   */
+  adapterFamily?: AdapterFamily;
+  /**
+   * How to shape a request for this model. Present only on models the catalog
+   * resolved; every request builder that reads it prefers it over its hardcoded
+   * id tables, and reproduces today's behavior exactly when it is absent.
+   */
+  dispatchProfile?: ModelDispatchProfile;
+};
+
+// Pricing info type. Optional cache_read / cache_write override the defaults
+// (0.1x input for read, 1.25x input for write) when a provider publishes
+// non-standard rates.
+type PricingInfo = {
+  input: number;
+  output: number;
+  cache_read?: number;
+  cache_write?: number;
+};
+
+/** Anthropic-published default multipliers for prompt cache pricing. */
+export const CACHE_READ_MULTIPLIER = 0.1; // 90% discount on cached tokens
+export const CACHE_WRITE_MULTIPLIER = 1.25; // 25% surcharge per cached chunk
+
+/**
+ * Compute USD cost for a text model call.
+ *
+ * Cache token accounting: Anthropic returns
+ * `cache_read_input_tokens` and `cache_creation_input_tokens` separately from
+ * `input_tokens` (they're already excluded from the input total). When provided,
+ * we apply 0.1x input rate to reads and 1.25x input rate to writes. Models can
+ * publish explicit `cache_read` / `cache_write` rates in their pricing tier to
+ * override the multipliers.
+ */
+export const getTextModelCost = (
+  model: ModelInfo,
+  inputTokens: number,
+  outputTokens: number,
+  cacheReadTokens: number = 0,
+  cacheCreationTokens: number = 0
+): number => {
+  // $0 for real usage on a model not marked freeToRun means a missing or
+  // zero-rate pricing map: the call settles free (stochastic rounding has no
+  // 1-credit floor) and the published cost-plus markup is silently false.
+  // Alarm-only: billing behavior is unchanged.
+  const alarmIfUnpriced = (cost: number): number => {
+    const usage = inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens;
+    if (cost === 0 && usage > 0 && !model.freeToRun) {
+      console.error(
+        `[UNPRICED_MODEL] ${model.id} (${model.backend}) computed $0 for ${usage} tokens; its pricing map is missing or zero`
+      );
+    }
+    return cost;
+  };
+
+  const thresholds: number[] = Object.keys(model.pricing)
+    .map(Number)
+    .sort((a, b) => a - b);
+
+  const tierForTokens = (tokens: number): number | null => {
+    for (const threshold of thresholds) {
+      if (tokens <= threshold) return threshold;
+    }
+    return thresholds.length > 0 ? thresholds[thresholds.length - 1] : null;
+  };
+
+  const tier = tierForTokens(inputTokens);
+  if (tier === null) return alarmIfUnpriced(0);
+
+  // Guard against a malformed or non-tiered pricing map (e.g. a flat
+  // {input:0,output:0} instead of a numeric-keyed tier). Missing tier pricing
+  // means "no cost", not a crash in post-processing.
+  const tierPricing = model.pricing[tier];
+  if (!tierPricing) return alarmIfUnpriced(0);
+
+  const cacheReadRate = tierPricing.cache_read ?? tierPricing.input * CACHE_READ_MULTIPLIER;
+  const cacheWriteRate = tierPricing.cache_write ?? tierPricing.input * CACHE_WRITE_MULTIPLIER;
+
+  return alarmIfUnpriced(
+    tierPricing.input * inputTokens +
+      tierPricing.output * outputTokens +
+      cacheReadRate * cacheReadTokens +
+      cacheWriteRate * cacheCreationTokens
+  );
+};
+
+/**
+ * A model that is no longer the right thing to run, paired with what should replace it.
+ * Served alongside the model list so the client can recognize a session pinned to a model
+ * the picker has already hidden. Built by buildSupersededIndex in @bike4mind/llm-adapters, so
+ * the replacement named here is the same one resolveDeprecatedModelId sends a pinned request to.
+ */
+export interface SupersededModelInfo {
+  id: string;
+  /** Display name, or the raw id when this deployment does not list the model. */
+  name: string;
+  replacementId: string;
+  replacementName: string;
+}
+
+/** Returns true if the model is deprecated on or before the provided date (default: now). */
+export const isModelDeprecated = (model: ModelInfo, now: Date = new Date()): boolean => {
+  if (!model.deprecationDate) return false;
+  const todayYMD = new Date(now.toISOString().slice(0, 10));
+  const cutoff = new Date(model.deprecationDate + 'T00:00:00Z');
+  return todayYMD.getTime() >= cutoff.getTime();
+};

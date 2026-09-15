@@ -1,0 +1,274 @@
+import { z } from 'zod';
+import {
+  CurationType,
+  CurationTypeSchema,
+  CurationArtifactTypeSchema,
+  DATA_LAKE_GROUNDING_MODES,
+  ExportFormatSchema,
+} from '@bike4mind/common';
+import {
+  RETRIEVAL_EXCLUDE_MARKER_MAX_LENGTH,
+  RETRIEVAL_EXCLUDE_MARKERS_MAX,
+} from '@bike4mind/utils/retrievalExclusion';
+
+export const ApiErrorSchema = z.object({
+  status: z.number(),
+  message: z.string(),
+  code: z.string().optional(),
+});
+
+export const CreateApiKeyRequestSchema = z.object({
+  type: z.string(),
+  description: z.string(),
+  apiKey: z.string(),
+  isActive: z.boolean(),
+  expireDays: z.number().positive(),
+});
+
+export const UpdateUserRequestSchema = z.object({
+  password: z.string().nullable().optional(),
+  username: z.string().optional(),
+  name: z.string().optional(),
+  email: z.email().optional(),
+  profilePicture: z.url().optional(),
+  id: z.string().optional(),
+});
+
+export const CreateSessionRequestSchema = z.object({
+  name: z.string().min(1),
+  tags: z
+    .array(
+      z.object({
+        name: z.string(),
+        strength: z.number().min(0).max(1),
+      })
+    )
+    .optional(),
+  knowledgeIds: z.array(z.string()).optional(),
+  artifactIds: z.array(z.string()).optional(),
+  projectId: z.string().optional(),
+  systemPromptText: z.string().optional(),
+  systemPromptId: z.string().optional(),
+  // Create a session "for" this data lake: the route resolves the lake's session defaults
+  // (forced retrieval scoped to it + its preferred prompt id) server-side. Consumed at the route
+  // and NOT persisted as a session field (core's createSessionParametersSchema strips it).
+  dataLakeId: z.string().optional(),
+  surface: z.string().optional(),
+  enabledTools: z.array(z.string()).optional(),
+  disabledTools: z.array(z.string()).optional(),
+  forceKnowledgeRetrieval: z.boolean().optional(),
+  retrievalTags: z.array(z.string()).optional(),
+  // Marks `retrievalTags` as a deliberate selection: an empty one then scopes the lake-memory card
+  // to no lake at all instead of widening to every entitled lake (see resolveLakeMemoryScope).
+  lakeScopeExplicit: z.boolean().optional(),
+  // Resolved from the lake by the create route (resolveLakeSessionDefaults) so the merged create
+  // params carry it through to core; declared here for the shared type only. The route strips a
+  // client-sent value whenever `dataLakeId` is set, leaving the lake authoritative; a session that
+  // names a lake by `retrievalTags` alone is the one case where the caller's own mode survives.
+  corpusGroundingMode: z.enum(DATA_LAKE_GROUNDING_MODES).optional(),
+  retrievalExcludeFilenameMarkers: z
+    .array(z.string().trim().min(1).max(RETRIEVAL_EXCLUDE_MARKER_MAX_LENGTH))
+    .max(RETRIEVAL_EXCLUDE_MARKERS_MAX)
+    .optional(),
+  retrievalVectorizedOnly: z.boolean().optional(),
+  temperature: z.number().optional(),
+  // Lake ids the caller wants this session admitted to despite not being a member (manage-but-not-
+  // member admission). Consumed and authorized (canManageLake) at the create route, which writes it
+  // onto the session as a SEPARATE authorized write AFTER creation - never persisted through
+  // createSession's own input, so this field is declared here for the shared request type only.
+  preauthorizedLakeIds: z.array(z.string()).optional(),
+});
+
+export const ProjectFilesRequestSchema = z.object({
+  fileIds: z.array(z.string().min(1)),
+});
+
+export const ProjectSessionsRequestSchema = z.object({
+  sessionIds: z.array(z.string().min(1)).min(1).max(50),
+});
+
+export const FileTagToggleRequestSchema = z.object({
+  ids: z.array(z.string().min(1)),
+  tags: z.array(z.string().min(1)),
+});
+
+export const FileTagCreateRequestSchema = z.object({
+  id: z.string().min(1),
+  description: z.string().optional(),
+  name: z.string().optional(),
+  icon: z.string().optional(),
+  color: z
+    .string()
+    .regex(/^#[0-9A-Fa-f]{6}$/)
+    .optional(),
+});
+
+export const ProjectCreateRequestSchema = z.object({
+  description: z.string().min(1),
+  name: z.string().min(1),
+  sessionIds: z.array(z.string()).optional(),
+  fileIds: z.array(z.string()).optional(),
+});
+
+export const ProjectInviteRequestSchema = z.object({
+  permissions: z.array(z.string().min(1)),
+  description: z.string().optional(),
+  expiresAt: z.date().optional(),
+  recipients: z.array(z.email()).optional(),
+  available: z.number().positive().optional(),
+});
+
+// `offset: true` because the default rejects "+09:00", which the docs table advertises and a
+// zone-aware caller is the most likely one to send.
+// Labelled deliberately: a bare union reports only zod's generic "Invalid input", losing the
+// "Invalid ISO datetime" a lone datetime schema gave. The route copies issue.message into errors[]
+// and the modal renders it, so this string is what an API caller sending "15/01/2026" actually reads.
+const DATE_OR_DATETIME = z.union([z.iso.date(), z.iso.datetime({ offset: true })], {
+  error: 'must be YYYY-MM-DD or a full ISO datetime',
+});
+
+export const NotebookExportRequestSchema = z.object({
+  includeKnowledge: z.boolean().optional().prefault(true),
+  includeArtifacts: z.boolean().optional().prefault(true),
+  includeTools: z.boolean().optional().prefault(true),
+  includeAgents: z.boolean().optional().prefault(true),
+  anonymize: z.boolean().optional().prefault(false),
+  includeMetadata: z.boolean().optional().prefault(true),
+  includeImages: z.boolean().optional().prefault(true),
+  maxFileSize: z
+    .number()
+    .positive()
+    .optional()
+    .prefault(10 * 1024 * 1024), // 10MB default
+  // These feed `_id: { $in: ... }` on ObjectId-keyed SessionModel, so one non-hex entry rejects the
+  // whole query with a CastError the route could only answer as a 500. Empty is rejected rather
+  // than treated as "all": getSessionsToExport only adds the `_id` filter when the array is
+  // non-empty, so `[]` and an omitted field produce the same bare `{ userId }` query - a caller
+  // who named zero notebooks would receive an archive of every one they own.
+  notebookIds: z
+    .array(z.string().regex(/^[0-9a-fA-F]{24}$/, 'must be a 24-character hex notebook id'))
+    .min(1, 'name at least one notebook, or omit notebookIds to export all')
+    .max(50, 'Maximum 50 notebooks per export request')
+    .optional(),
+  // A bare "2026-01-15" is accepted alongside a full timestamp, since that is what an
+  // `<input type="date">` produces and a datetime-only schema rejected every such value. The
+  // export modal no longer sends that form - it resolves the picked day in the viewer's own zone,
+  // the only place that zone is known - so this now serves API callers, whose bare date the
+  // service reads as a UTC day: the only defensible reading when no offset was supplied.
+  fromDate: DATE_OR_DATETIME.optional(),
+  toDate: DATE_OR_DATETIME.optional(),
+});
+
+export const NotebookCurateRequestSchema = z.object({
+  sessionIds: z
+    .array(z.string().min(1))
+    .min(1, 'At least one session ID is required')
+    .max(50, 'Maximum 50 sessions per curation request'),
+  curationType: CurationTypeSchema.optional().prefault(CurationType.TRANSCRIPT),
+  artifactTypes: z.array(CurationArtifactTypeSchema).optional(),
+  exportFormat: ExportFormatSchema.optional().prefault('markdown'),
+  customNotebookName: z.string().optional(),
+});
+
+export const NotebookDownloadRequestSchema = z.object({
+  sessionIds: z
+    .array(z.string().min(1))
+    .min(1, 'At least one session ID is required')
+    .max(50, 'Maximum 50 sessions per download'),
+  format: ExportFormatSchema.optional().prefault('markdown'),
+  downloadAsZip: z.boolean().optional().prefault(false), // If true, zip all files together
+});
+
+const BaseEmailRequestSchema = z.object({
+  recipients: z.array(z.email()).min(1, 'At least one recipient email is required'),
+  message: z.string().optional(),
+});
+
+export const EmailSendRequestSchema = z.discriminatedUnion('type', [
+  BaseEmailRequestSchema.extend({
+    type: z.literal('notebooks'),
+    sessionIds: z
+      .array(z.string().min(1))
+      .min(1, 'At least one session ID is required')
+      .max(50, 'Maximum 50 sessions per email'),
+    format: ExportFormatSchema.optional().prefault('markdown'),
+  }),
+  BaseEmailRequestSchema.extend({
+    type: z.literal('files'),
+    fileIds: z.array(z.string().min(1)).min(1, 'At least one file ID is required'),
+  }),
+]);
+
+// Legacy schemas for backward compatibility (deprecated - use EmailSendRequestSchema)
+export const NotebookEmailRequestSchema = z.object({
+  sessionIds: z.array(z.string().min(1)).min(1, 'At least one session ID is required'),
+  recipients: z.array(z.email()).min(1, 'At least one recipient email is required'),
+  format: ExportFormatSchema.optional().prefault('markdown'),
+  message: z.string().optional(),
+});
+
+export const FabFileEmailRequestSchema = z.object({
+  fileIds: z.array(z.string().min(1)).min(1, 'At least one file ID is required'),
+  recipients: z.array(z.email()).min(1, 'At least one recipient email is required'),
+  message: z.string().optional(),
+});
+
+export const ProjectQueryParamsSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const ProjectInviteQueryParamsSchema = z.object({
+  id: z.string().min(1),
+  page: z.number().positive(),
+  limit: z.number().positive().max(100),
+  statuses: z.string(),
+});
+
+export const FileTagQueryParamsSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const ReportQueryParamsSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be in YYYY-MM-DD format'),
+});
+
+export type ApiError = z.infer<typeof ApiErrorSchema>;
+export type CreateApiKeyRequestBody = z.infer<typeof CreateApiKeyRequestSchema>;
+export type UpdateUserRequestBody = z.infer<typeof UpdateUserRequestSchema>;
+export type CreateSessionRequestBody = z.infer<typeof CreateSessionRequestSchema>;
+export type ProjectFilesRequestBody = z.infer<typeof ProjectFilesRequestSchema>;
+export type ProjectSessionsRequestBody = z.infer<typeof ProjectSessionsRequestSchema>;
+export type FileTagToggleRequestBody = z.infer<typeof FileTagToggleRequestSchema>;
+export type FileTagCreateRequestBody = z.infer<typeof FileTagCreateRequestSchema>;
+export type ProjectCreateRequestBody = z.infer<typeof ProjectCreateRequestSchema>;
+export type ProjectInviteRequestBody = z.infer<typeof ProjectInviteRequestSchema>;
+export type NotebookExportRequestBody = z.infer<typeof NotebookExportRequestSchema>;
+export type NotebookCurateRequestBody = z.infer<typeof NotebookCurateRequestSchema>;
+export type NotebookDownloadRequestBody = z.infer<typeof NotebookDownloadRequestSchema>;
+export type EmailSendRequestBody = z.infer<typeof EmailSendRequestSchema>;
+export type NotebookEmailRequestBody = z.infer<typeof NotebookEmailRequestSchema>;
+export type FabFileEmailRequestBody = z.infer<typeof FabFileEmailRequestSchema>;
+
+export type ProjectQueryParams = z.infer<typeof ProjectQueryParamsSchema>;
+export type ProjectInviteQueryParams = z.infer<typeof ProjectInviteQueryParamsSchema>;
+export type FileTagQueryParams = z.infer<typeof FileTagQueryParamsSchema>;
+export type ReportQueryParams = z.infer<typeof ReportQueryParamsSchema>;
+
+export function isApiError(error: unknown): error is ApiError {
+  return ApiErrorSchema.safeParse(error).success;
+}
+
+export function hasStatus(error: unknown): error is { status: number } {
+  return typeof error === 'object' && error !== null && 'status' in error && typeof (error as any).status === 'number';
+}
+
+export function validateApiRequest<T>(
+  schema: z.ZodType<T>,
+  data: unknown
+): { success: true; data: T } | { success: false; errors: z.ZodError } {
+  const result = schema.safeParse(data);
+  if (result.success) {
+    return { success: true, data: result.data };
+  }
+  return { success: false, errors: result.error };
+}

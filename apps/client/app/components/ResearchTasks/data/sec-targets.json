@@ -1,0 +1,133 @@
+{
+  "category": "sec",
+  "title": "SEC Filings",
+  "description": "Official regulatory filings and disclosures from EDGAR database",
+  "targets": [
+    {
+      "company": "Microsoft",
+      "ticker": "MSFT",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=789019",
+      "category": "tech"
+    },
+    {
+      "company": "Apple",
+      "ticker": "AAPL",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=320193",
+      "category": "tech"
+    },
+    {
+      "company": "Amazon",
+      "ticker": "AMZN",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=1018724",
+      "category": "tech"
+    },
+    {
+      "company": "Alphabet (Google)",
+      "ticker": "GOOG",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=1652044",
+      "category": "tech"
+    },
+    {
+      "company": "Meta Platforms (Facebook)",
+      "ticker": "META",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=1326801",
+      "category": "tech"
+    },
+    {
+      "company": "NVIDIA",
+      "ticker": "NVDA",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=1045810",
+      "category": "tech"
+    },
+    {
+      "company": "Tesla",
+      "ticker": "TSLA",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=1318605",
+      "category": "tech"
+    },
+    {
+      "company": "SAP",
+      "ticker": "SAP",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=1000184",
+      "category": "tech"
+    },
+    {
+      "company": "Oracle",
+      "ticker": "ORCL",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=1341439",
+      "category": "tech"
+    },
+    {
+      "company": "Salesforce",
+      "ticker": "CRM",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=1108524",
+      "category": "tech"
+    },
+    {
+      "company": "IBM",
+      "ticker": "IBM",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=51143",
+      "category": "tech"
+    },
+    {
+      "company": "ServiceNow",
+      "ticker": "NOW",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=1373715",
+      "category": "tech"
+    },
+    {
+      "company": "Palantir",
+      "ticker": "PLTR",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=1321655",
+      "category": "tech"
+    },
+    {
+      "company": "Adobe",
+      "ticker": "ADBE",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=796343",
+      "category": "tech"
+    },
+    {
+      "company": "Uber",
+      "ticker": "UBER",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=1543151",
+      "category": "tech"
+    },
+    {
+      "company": "AMD",
+      "ticker": "AMD",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=2488",
+      "category": "tech"
+    },
+    {
+      "company": "CrowdStrike",
+      "ticker": "CRWD",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=1535527",
+      "category": "tech"
+    },
+    {
+      "company": "Palo Alto Networks",
+      "ticker": "PANW",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=1327567",
+      "category": "tech"
+    },
+    {
+      "company": "Snowflake",
+      "ticker": "SNOW",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=1640147",
+      "category": "tech"
+    },
+    {
+      "company": "Zoom",
+      "ticker": "ZM",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=1585521",
+      "category": "tech"
+    },
+    {
+      "company": "Dropbox",
+      "ticker": "DBX",
+      "url": "https://www.sec.gov/edgar/browse/?CIK=1467623",
+      "category": "tech"
+    }
+  ]
+}

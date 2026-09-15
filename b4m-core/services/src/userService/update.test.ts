@@ -1,0 +1,636 @@
+import { describe, it, expect, vi } from 'vitest';
+import { updateUser, applyBaseUserUpdates, type UpdateUserParameters } from './update';
+import { IUserDocument } from '@bike4mind/common';
+import bcrypt from 'bcryptjs';
+
+describe('applyBaseUserUpdates', () => {
+  it('should update user fields without password', () => {
+    // Arrange - OAuth user without password
+    const oauthUser: IUserDocument = {
+      id: 'user1',
+      username: 'oauthuser',
+      name: 'OAuth User',
+      email: 'oauth@example.com',
+      password: undefined,
+      isAdmin: false,
+      authProviders: ['google'],
+      storageLimit: 1000,
+      currentStorageSize: 0,
+      currentCredits: 0,
+      tags: [],
+      level: 'DemoUser',
+      isBanned: false,
+      isModerated: false,
+      systemFiles: [],
+      oauthCredentials: {},
+      counters: { counters: [] },
+      numReferralsAvailable: 0,
+      regInvites: [],
+      loginRecords: [],
+      showCreditsUsed: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as IUserDocument;
+
+    const params = {
+      name: 'Updated OAuth User',
+      isAdmin: true,
+    };
+
+    // Act
+    const result = applyBaseUserUpdates(oauthUser, params);
+
+    // Assert
+    expect(result.name).toBe('Updated OAuth User');
+    expect(result.isAdmin).toBe(true);
+  });
+
+  it('should update password for user with existing password', () => {
+    // Arrange
+    const hashedPassword = bcrypt.hashSync('oldpassword', 10);
+    const regularUser: IUserDocument = {
+      id: 'user2',
+      username: 'regularuser',
+      name: 'Regular User',
+      email: 'regular@example.com',
+      password: hashedPassword,
+      isAdmin: false,
+      authProviders: [],
+      storageLimit: 1000,
+      currentStorageSize: 0,
+      currentCredits: 0,
+      tags: [],
+      level: 'DemoUser',
+      isBanned: false,
+      isModerated: false,
+      systemFiles: [],
+      oauthCredentials: {},
+      counters: { counters: [] },
+      numReferralsAvailable: 0,
+      regInvites: [],
+      loginRecords: [],
+      showCreditsUsed: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as IUserDocument;
+
+    const params = {
+      password: 'newpassword',
+    };
+
+    // Act
+    const result = applyBaseUserUpdates(regularUser, params);
+
+    // Assert
+    expect(result.password).toBeDefined();
+    expect(result.password).not.toBe(hashedPassword);
+    expect(bcrypt.compareSync('newpassword', result.password!)).toBe(true);
+  });
+
+  it('should throw error when trying to set password for OAuth user', () => {
+    // Arrange - OAuth user without password
+    const oauthUser: IUserDocument = {
+      id: 'user3',
+      username: 'oauthuser2',
+      name: 'OAuth User 2',
+      email: 'oauth2@example.com',
+      password: undefined,
+      isAdmin: false,
+      authProviders: ['google'],
+      storageLimit: 1000,
+      currentStorageSize: 0,
+      currentCredits: 0,
+      tags: [],
+      level: 'DemoUser',
+      isBanned: false,
+      isModerated: false,
+      systemFiles: [],
+      oauthCredentials: {},
+      counters: { counters: [] },
+      numReferralsAvailable: 0,
+      regInvites: [],
+      loginRecords: [],
+      showCreditsUsed: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as IUserDocument;
+
+    const params = {
+      password: 'newpassword',
+    };
+
+    // Act & Assert
+    expect(() => applyBaseUserUpdates(oauthUser, params)).toThrow(
+      'User does not have a password. Cannot update password for OAuth users.'
+    );
+  });
+
+  it('should throw (not crash) when setting a password on a passwordless shell account (password: null)', () => {
+    // Shell/provisioned accounts now store password: null (not a fake hash).
+    // The password-change path must reject cleanly, never bcrypt.compare against null.
+    const shellUser: IUserDocument = {
+      id: 'user-shell',
+      username: 'shelluser',
+      name: 'Shell User',
+      email: 'shell@example.com',
+      password: null,
+      isAdmin: false,
+      authProviders: [],
+      storageLimit: 1000,
+      currentStorageSize: 0,
+      currentCredits: 0,
+      tags: [],
+      level: 'DemoUser',
+      isBanned: false,
+      isModerated: false,
+      systemFiles: [],
+      oauthCredentials: {},
+      counters: { counters: [] },
+      numReferralsAvailable: 0,
+      regInvites: [],
+      loginRecords: [],
+      showCreditsUsed: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as IUserDocument;
+
+    expect(() => applyBaseUserUpdates(shellUser, { password: 'newpassword' })).toThrow(
+      'User does not have a password. Cannot update password for OAuth users.'
+    );
+  });
+
+  it('should throw error when new password matches old password', () => {
+    // Arrange
+    const hashedPassword = bcrypt.hashSync('samepassword', 10);
+    const regularUser: IUserDocument = {
+      id: 'user4',
+      username: 'regularuser2',
+      name: 'Regular User 2',
+      email: 'regular2@example.com',
+      password: hashedPassword,
+      isAdmin: false,
+      authProviders: [],
+      storageLimit: 1000,
+      currentStorageSize: 0,
+      currentCredits: 0,
+      tags: [],
+      level: 'DemoUser',
+      isBanned: false,
+      isModerated: false,
+      systemFiles: [],
+      oauthCredentials: {},
+      counters: { counters: [] },
+      numReferralsAvailable: 0,
+      regInvites: [],
+      loginRecords: [],
+      showCreditsUsed: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as IUserDocument;
+
+    const params = {
+      password: 'samepassword',
+    };
+
+    // Act & Assert
+    expect(() => applyBaseUserUpdates(regularUser, params)).toThrow(
+      'New password cannot be the same as the old password'
+    );
+  });
+
+  it('should update multiple fields at once', () => {
+    // Arrange
+    const oauthUser: IUserDocument = {
+      id: 'user5',
+      username: 'oauthuser3',
+      name: 'OAuth User 3',
+      email: 'oauth3@example.com',
+      password: undefined,
+      isAdmin: false,
+      authProviders: ['google'],
+      storageLimit: 1000,
+      currentStorageSize: 0,
+      currentCredits: 0,
+      tags: [],
+      level: 'DemoUser',
+      isBanned: false,
+      isModerated: false,
+      systemFiles: [],
+      oauthCredentials: {},
+      counters: { counters: [] },
+      numReferralsAvailable: 0,
+      regInvites: [],
+      loginRecords: [],
+      showCreditsUsed: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as IUserDocument;
+
+    const params = {
+      name: 'Updated Name',
+      email: 'newemail@example.com',
+      phone: '+1234567890',
+      preferredLanguage: 'en',
+    };
+
+    // Act
+    const result = applyBaseUserUpdates(oauthUser, params);
+
+    // Assert
+    expect(result.name).toBe('Updated Name');
+    expect(result.email).toBe('newemail@example.com');
+    expect(result.phone).toBe('+1234567890');
+    expect(result.preferredLanguage).toBe('en');
+  });
+
+  it('should handle null password parameter without error', () => {
+    // Arrange - OAuth user
+    const oauthUser: IUserDocument = {
+      id: 'user6',
+      username: 'oauthuser4',
+      name: 'OAuth User 4',
+      email: 'oauth4@example.com',
+      password: undefined,
+      isAdmin: false,
+      authProviders: ['google'],
+      storageLimit: 1000,
+      currentStorageSize: 0,
+      currentCredits: 0,
+      tags: [],
+      level: 'DemoUser',
+      isBanned: false,
+      isModerated: false,
+      systemFiles: [],
+      oauthCredentials: {},
+      counters: { counters: [] },
+      numReferralsAvailable: 0,
+      regInvites: [],
+      loginRecords: [],
+      showCreditsUsed: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as IUserDocument;
+
+    const params = {
+      name: 'Updated Name',
+      password: null,
+    };
+
+    // Act
+    const result = applyBaseUserUpdates(oauthUser, params);
+
+    // Assert
+    expect(result.name).toBe('Updated Name');
+    expect(() => applyBaseUserUpdates(oauthUser, params)).not.toThrow();
+  });
+});
+
+describe('applyBaseUserUpdates - preferences merge', () => {
+  const storedPreferences = {
+    language: 'en',
+    showDebug: true,
+    showHelp: false,
+    maxVisibleLines: 20,
+    favoriteTags: ['alpha', 'beta'],
+    optiSessionId: 'session-1',
+    fileBrowserViewMode: 'grid' as const,
+    experimentalFeatures: { agentMode: true, newComposer: false },
+  };
+
+  const makeUser = (preferences: IUserDocument['preferences']): IUserDocument =>
+    ({
+      id: 'user-prefs',
+      username: 'prefsuser',
+      name: 'Prefs User',
+      email: 'prefs@example.com',
+      password: undefined,
+      isAdmin: false,
+      tags: [],
+      level: 'DemoUser',
+      systemFiles: [],
+      preferences,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }) as unknown as IUserDocument;
+
+  it('keeps omitted stored keys when a partial preferences object is written', () => {
+    const result = applyBaseUserUpdates(makeUser(storedPreferences), { preferences: { showHelp: true } });
+
+    expect(result.preferences).toEqual({ ...storedPreferences, showHelp: true });
+  });
+
+  it('keeps other experimental flags when a partial experimentalFeatures object is written', () => {
+    const result = applyBaseUserUpdates(makeUser(storedPreferences), {
+      preferences: { experimentalFeatures: { newComposer: true } },
+    });
+
+    expect(result.preferences?.experimentalFeatures).toEqual({ agentMode: true, newComposer: true });
+    expect(result.preferences?.language).toBe('en');
+  });
+
+  it('produces the same result as a replace when the caller sends the full object', () => {
+    const fullObject = { ...storedPreferences, showDebug: false };
+
+    const result = applyBaseUserUpdates(makeUser(storedPreferences), { preferences: fullObject });
+
+    expect(result.preferences).toEqual(fullObject);
+  });
+
+  it('clears the whole object when preferences is explicitly null', () => {
+    const result = applyBaseUserUpdates(makeUser(storedPreferences), { preferences: null });
+
+    expect(result.preferences).toBeNull();
+  });
+
+  it('leaves stored preferences untouched when preferences is absent', () => {
+    const result = applyBaseUserUpdates(makeUser(storedPreferences), { name: 'Renamed' });
+
+    expect(result.preferences).toEqual(storedPreferences);
+  });
+
+  it('clears a single nullable sub-key when it is explicitly null', () => {
+    const result = applyBaseUserUpdates(makeUser(storedPreferences), { preferences: { optiSessionId: null } });
+
+    expect(result.preferences?.optiSessionId).toBeNull();
+    expect(result.preferences?.language).toBe('en');
+  });
+
+  it('replaces array-valued prefs wholesale rather than merging elements', () => {
+    const result = applyBaseUserUpdates(makeUser(storedPreferences), { preferences: { favoriteTags: ['gamma'] } });
+
+    expect(result.preferences?.favoriteTags).toEqual(['gamma']);
+  });
+
+  it('merges onto a user that has no preferences at all', () => {
+    const result = applyBaseUserUpdates(makeUser(undefined), {
+      preferences: { showHelp: true, experimentalFeatures: { agentMode: true } },
+    });
+
+    expect(result.preferences).toEqual({ showHelp: true, experimentalFeatures: { agentMode: true } });
+  });
+});
+
+describe('updateUser', () => {
+  it('should update OAuth user without password', async () => {
+    // Arrange
+    const oauthUser: IUserDocument = {
+      id: 'user1',
+      username: 'oauthuser',
+      name: 'OAuth User',
+      email: 'oauth@example.com',
+      password: undefined,
+      isAdmin: false,
+      authProviders: ['google'],
+      storageLimit: 1000,
+      currentStorageSize: 0,
+      currentCredits: 0,
+      tags: [],
+      level: 'DemoUser',
+      isBanned: false,
+      isModerated: false,
+      systemFiles: [],
+      oauthCredentials: {},
+      counters: { counters: [] },
+      numReferralsAvailable: 0,
+      regInvites: [],
+      loginRecords: [],
+      showCreditsUsed: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as IUserDocument;
+
+    const mockUserRepository = {
+      findByIdWithPassword: vi.fn().mockResolvedValue(oauthUser),
+      update: vi.fn().mockResolvedValue(oauthUser),
+    };
+
+    const params = {
+      name: 'Updated OAuth User',
+    };
+
+    // Act
+    const result = await updateUser('user1', params, {
+      db: { users: mockUserRepository as any },
+    });
+
+    // Assert
+    expect(mockUserRepository.findByIdWithPassword).toHaveBeenCalledWith('user1');
+    expect(mockUserRepository.update).toHaveBeenCalled();
+    expect(result.name).toBe('Updated OAuth User');
+  });
+
+  it('should throw error when user not found', async () => {
+    // Arrange
+    const mockUserRepository = {
+      findByIdWithPassword: vi.fn().mockResolvedValue(null),
+      update: vi.fn(),
+    };
+
+    // Act & Assert
+    await expect(
+      updateUser('nonexistent', { name: 'Test' }, { db: { users: mockUserRepository as any } })
+    ).rejects.toThrow('User not found');
+  });
+
+  it('strips `tags` from a non-admin self-update — cannot self-assign access-control tags (#9342)', async () => {
+    // A non-admin updating their own profile must not be able to set `tags`, which
+    // feed the entitlement registry (tag->key passthrough) and dev-bypass gates.
+    // `tags` was removed from updateUserSchema, so secureParameters drops it here.
+    const user = {
+      id: 'user-tags',
+      username: 'normaluser',
+      name: 'Normal User',
+      email: 'normal@example.com',
+      password: undefined,
+      isAdmin: false,
+      tags: ['Customer'],
+      level: 'DemoUser',
+      systemFiles: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as unknown as IUserDocument;
+
+    const mockUserRepository = {
+      findByIdWithPassword: vi.fn().mockResolvedValue(user),
+      update: vi.fn().mockImplementation((u: IUserDocument) => Promise.resolve(u)),
+    };
+
+    // Malicious raw body: a legitimate field plus arbitrary access-control tags a
+    // non-admin is trying to self-grant. The strip is value-agnostic, so the test uses
+    // neutral placeholders rather than real entitlement keys - re-typing those keys
+    // outside the entitlement registry is exactly what the libonc module-boundary guard
+    // forbids, and the assertion is identical either way. Cast via `unknown` (repo
+    // avoids `any`) since `tags` is no longer part of UpdateUserParameters.
+    const result = await updateUser(
+      'user-tags',
+      { name: 'Renamed', tags: ['injected-admin', 'gated-product:pro'] } as unknown as UpdateUserParameters,
+      { db: { users: mockUserRepository as any } }
+    );
+
+    // The benign field is applied; the injected tags are stripped (untouched).
+    expect(result.name).toBe('Renamed');
+    expect(result.tags).toEqual(['Customer']);
+    // Targeted write: an unchanged field is not written at all. `tags` is left untouched
+    // in the DB rather than round-tripped, which is also what stops a concurrent admin
+    // tag change from being reverted by a self-service profile save.
+    const persisted = mockUserRepository.update.mock.calls[0][0] as IUserDocument;
+    expect(persisted).not.toHaveProperty('tags');
+    expect(persisted.name).toBe('Renamed');
+  });
+
+  it('strips `photoUrl` from a self-update - cannot point the profile photo at a foreign S3 key', async () => {
+    // photoUrl is an S3 key that upload-photo.ts later dereferences for deletion. A self-set
+    // value could target a file the caller does not own; it was removed from updateUserSchema,
+    // so secureParameters drops it here while leaving any pre-existing value untouched.
+    const user = {
+      id: 'user-photo',
+      username: 'photouser',
+      name: 'Photo User',
+      email: 'photo@example.com',
+      password: undefined,
+      isAdmin: false,
+      tags: [],
+      level: 'DemoUser',
+      systemFiles: [],
+      photoUrl: 'profile-photos/user-photo/own.png',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as unknown as IUserDocument;
+
+    const mockUserRepository = {
+      findByIdWithPassword: vi.fn().mockResolvedValue(user),
+      update: vi.fn().mockImplementation((u: IUserDocument) => Promise.resolve(u)),
+    };
+
+    const result = await updateUser(
+      'user-photo',
+      { name: 'Renamed', photoUrl: 'profile-photos/victim/secret.png' } as unknown as UpdateUserParameters,
+      { db: { users: mockUserRepository as any } }
+    );
+
+    expect(result.name).toBe('Renamed');
+    // The injected foreign key is stripped, so it is not a changed field and the targeted
+    // write never touches photoUrl - the caller's own stored key is left untouched in the DB.
+    expect(result.photoUrl).toBe('profile-photos/user-photo/own.png');
+    const persisted = mockUserRepository.update.mock.calls[0][0] as IUserDocument;
+    expect(persisted).not.toHaveProperty('photoUrl');
+    expect(persisted.name).toBe('Renamed');
+  });
+
+  it('strips `preferences.docxTemplateFileId` from a self-update - cannot point the template at a foreign file', async () => {
+    // docxTemplateFileId is an AppFile id docx-template.ts later dereferences. A self-set value
+    // could target a foreign file; it was removed from the preferences schema, so it is stripped
+    // while the caller's own stored value is preserved by the preferences merge.
+    const user = {
+      id: 'user-docx',
+      username: 'docxuser',
+      name: 'Docx User',
+      email: 'docx@example.com',
+      password: undefined,
+      isAdmin: false,
+      tags: [],
+      level: 'DemoUser',
+      systemFiles: [],
+      preferences: { docxTemplateFileId: 'own-file-id', language: 'en' },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as unknown as IUserDocument;
+
+    const mockUserRepository = {
+      findByIdWithPassword: vi.fn().mockResolvedValue(user),
+      update: vi.fn().mockImplementation((u: IUserDocument) => Promise.resolve(u)),
+    };
+
+    await updateUser(
+      'user-docx',
+      { preferences: { docxTemplateFileId: 'victim-file-id', showHelp: true } } as unknown as UpdateUserParameters,
+      { db: { users: mockUserRepository as any } }
+    );
+
+    const persisted = mockUserRepository.update.mock.calls[0][0] as IUserDocument;
+    // The injected foreign id is stripped; the benign pref applies and the own id is preserved.
+    expect(persisted.preferences?.docxTemplateFileId).toBe('own-file-id');
+    expect(persisted.preferences?.showHelp).toBe(true);
+    expect(persisted.preferences?.language).toBe('en');
+  });
+
+  it('coerces an ISO-string contextTelemetryConsentedAt on write (telemetry level is not write-once)', async () => {
+    // The settings UI echoes the whole `preferences` object back on each write, so
+    // `contextTelemetryConsentedAt` round-trips from GET /users/{id} as an ISO string.
+    // A strict z.date() rejected it with a 422 on every write after the first, stranding
+    // users on the level they first picked. z.coerce.date() must accept and coerce it.
+    const isoConsentedAt = '2026-07-31T04:40:29.874Z';
+    const user = {
+      id: 'user-telemetry',
+      username: 'telemetryuser',
+      name: 'Telemetry User',
+      email: 'telemetry@example.com',
+      password: undefined,
+      isAdmin: false,
+      tags: [],
+      level: 'DemoUser',
+      systemFiles: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as unknown as IUserDocument;
+
+    const mockUserRepository = {
+      findByIdWithPassword: vi.fn().mockResolvedValue(user),
+      update: vi.fn().mockImplementation((u: IUserDocument) => Promise.resolve(u)),
+    };
+
+    const result = await updateUser(
+      'user-telemetry',
+      {
+        preferences: {
+          contextTelemetryLevel: 'basic',
+          contextTelemetryConsentedAt: isoConsentedAt,
+        },
+      } as unknown as UpdateUserParameters,
+      { db: { users: mockUserRepository as any } }
+    );
+
+    const persisted = mockUserRepository.update.mock.calls[0][0] as IUserDocument;
+    expect(persisted.preferences?.contextTelemetryLevel).toBe('basic');
+    expect(persisted.preferences?.contextTelemetryConsentedAt).toBeInstanceOf(Date);
+    expect((persisted.preferences?.contextTelemetryConsentedAt as Date).toISOString()).toBe(isoConsentedAt);
+    expect(result.preferences?.contextTelemetryLevel).toBe('basic');
+  });
+
+  it('preserves boolean display preferences that the client sends through', async () => {
+    // updateUserSchema is an allowlist: Zod strips any preference key not declared on
+    // it, so a pref added only to the client types silently never persists (the toggle
+    // reverts on reload). Remove showSplashCards from the schema and this fails.
+    const user = {
+      id: 'user-prefs',
+      username: 'prefsuser',
+      name: 'Prefs User',
+      email: 'prefs@example.com',
+      password: undefined,
+      isAdmin: false,
+      tags: [],
+      level: 'DemoUser',
+      systemFiles: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as unknown as IUserDocument;
+
+    const mockUserRepository = {
+      findByIdWithPassword: vi.fn().mockResolvedValue(user),
+      update: vi.fn().mockImplementation((u: IUserDocument) => Promise.resolve(u)),
+    };
+
+    await updateUser(
+      'user-prefs',
+      {
+        preferences: { showSplashCards: true, showFunTools: false, saveGeneratedAudio: true },
+      } as unknown as UpdateUserParameters,
+      { db: { users: mockUserRepository as any } }
+    );
+
+    const persisted = mockUserRepository.update.mock.calls[0][0] as IUserDocument;
+    expect(persisted.preferences?.showSplashCards).toBe(true);
+    expect(persisted.preferences?.showFunTools).toBe(false);
+    expect(persisted.preferences?.saveGeneratedAudio).toBe(true);
+  });
+});

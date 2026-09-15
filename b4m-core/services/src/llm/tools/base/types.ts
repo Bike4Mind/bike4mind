@@ -1,0 +1,326 @@
+import { BaseStorage } from '@bike4mind/utils';
+import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
+import { type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import type { Logger } from '@bike4mind/observability';
+import { GetEffectiveApiKeyAdapters } from '../../../apiKeyService';
+import {
+  IChatHistoryItemDocument,
+  ILatticeModel,
+  IUserDocument,
+  IFabFileRepository,
+  IFabFileChunkRepository,
+  IUserRepository,
+  IProjectRepository,
+  IDataLakeAccessGrantRepository,
+  IDataLakeRepository,
+  IFallbackLakeSettingsRepository,
+  ISkillRepository,
+  ImageModerationIncident,
+  IUsageEventRepository,
+  IOrganizationRepository,
+  ILakeAccessEventRepository,
+  IScopedSettingsRepository,
+  ModelInfo,
+} from '@bike4mind/common';
+
+/**
+ * Strips comments from source code, returning the stripped text, or `null` when the
+ * language is unsupported or unparsable (caller falls back to whitespace-only
+ * normalization). Injected by the CLI host, which owns the web-tree-sitter dependency;
+ * absent in other harnesses. Used by the opt-in `minified` mode of `file_read`.
+ */
+export type CodeMinifier = (source: string, ext: string) => Promise<string | null>;
+
+/**
+ * Agent-scoped knowledge-base restriction, honored by the KB tools (search + retrieve).
+ * Tri-state contract - presence of the OBJECT is the scoping signal, so emptiness stays
+ * meaningful (a bare string[] would collapse "unscoped" and "scoped-to-nothing"):
+ *   - undefined          => UNSCOPED: normal KB behavior (owner + shared + data lakes).
+ *   - { fileIds: [...] } => HARD-SCOPED to exactly those files; never widens beyond them.
+ *   - { fileIds: [] }    => SCOPED-TO-NOTHING: KB returns nothing, never falls back owner-wide.
+ */
+export interface KbScope {
+  fileIds: string[];
+}
+
+/**
+ * Token + cost report for a single tool-internal `llm.complete()` call. Tools that
+ * generate via their own LLM (deep_research, blog_draft, edit_file, ...) emit one of
+ * these through `ToolContext.onToolLlmUsage` so a billing host can fold nested spend
+ * into its ledger. `costUsd` is priced with the tool's OWN model (see
+ * recordToolOperationalUsage), so consumers must accumulate the USD directly rather
+ * than re-pricing the tokens at some other model's rate.
+ *
+ * The agent executor accumulates these into `ToolUsageTotals`
+ * (apps/client agentExecutor.iterationBilling.ts) - same five fields, kept in sync by
+ * hand. Keep both in step on a rename.
+ */
+export type ToolLlmUsage = {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+};
+
+export interface ToolContext {
+  /** The only principal signal a tool call carries - identical whether this turn is a live chat
+   * message or an autonomous agent-executor run. Lake access audit events (recordLakeAccessEvent)
+   * record every ToolContext-driven read as principalKind: 'user' for this reason; distinguishing
+   * an agent run would need a new marker threaded through here first. */
+  userId: string;
+  user: IUserDocument; // Full user document for tools that need user data (e.g., blog integration)
+  /**
+   * Session (notebook) id of the current chat. Threaded through so file-generating tools
+   * can persist their output as a session-scoped FabFile (see persistGeneratedFileAsFabFile).
+   * Optional because some non-chat tool harnesses build a context without a session.
+   */
+  sessionId?: string;
+  /**
+   * Quest (turn) id of the current chat, for lake-access audit rows (recordLakeAccessEvent) to
+   * join back to their turn - a diagnostic join key, never authorization data. Optional for the
+   * same reason as `sessionId`, plus one agent-mode-specific case: an agent execution's real Quest
+   * id is only known from the point `agentExecutor` resolves it (see the dispatch-time capture in
+   * `agentExecute.ts` and its resume-path fallback) - a tool call before that point genuinely has
+   * none to supply. On the agent path this must come from that resolved id
+   * (`AgentExecution.linkedQuestId`), never from `AgentExecution.questId`, which holds different
+   * things depending on which dispatcher created the execution and so cannot be interpreted by any
+   * consumer - see its own doc comment.
+   */
+  questId?: string;
+  logger: Logger;
+  db: GetEffectiveApiKeyAdapters['db'] & {
+    latticeModels?: {
+      create: (data: any) => Promise<ILatticeModel>;
+      findById: (id: string) => Promise<ILatticeModel | null>;
+      update: (data: any) => Promise<ILatticeModel | null>;
+    };
+    // Extended db adapters for tools that need them
+    fabfiles?: IFabFileRepository;
+    fabfilechunks?: Pick<
+      IFabFileChunkRepository,
+      | 'findByFabFileId'
+      | 'findVectorsByFabFileIds'
+      | 'findTextsByFabFileId'
+      | 'countByFabFileId'
+      // The models a corpus was ACTUALLY embedded with (describe_knowledge_base). Optional like
+      // the rest of this repo: absent, that tool reports the platform default alone and says so.
+      | 'distinctRetrievalIndexModelsByFabFileIds'
+    >;
+    users?: Pick<IUserRepository, 'findById'>;
+    projects?: IProjectRepository;
+    // 'find' is forwarded straight to createFabFile (persistGeneratedFileAsFabFile), for its
+    // fallback tagger's prefix-overlap check.
+    dataLakes?: Pick<
+      IDataLakeRepository,
+      'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag' | 'findById' | 'find'
+    >;
+    /**
+     * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
+     * IFallbackLakeSetting). Used only by getAccessibleDataLakePrompts' registry-candidate branch;
+     * absent means zero registry lakes ever contribute an injected prompt.
+     */
+    fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeIds'>;
+    /** Optional skill repository - present when the host wires `/api/skills`. Used by the `skill` LLM tool. */
+    skills?: Pick<ISkillRepository, 'findAccessibleByNameForUser' | 'listAccessibleInvocableForUser'>;
+    /**
+     * Audit-trail repo for blocked images. Optional - the image_generation/edit_image
+     * tools construct their own RekognitionImageModerationService inline and call it regardless
+     * of whether this is wired (fail-closed on the block itself); a missing repo only drops the
+     * incident audit record, not the block.
+     */
+    imageModerationIncidents?: { record(input: ImageModerationIncident): Promise<unknown> };
+    /**
+     * Analytics sink for recording non-chat AI spend (e.g. KB query embeddings). Present on
+     * the chat/agent paths (the full service db flows in); absent on lean tool harnesses,
+     * where recording degrades to a no-op.
+     */
+    usageEvents?: Pick<IUsageEventRepository, 'record'>;
+    /**
+     * Owner lookup for usage attribution (`findById`) plus the org-membership resolution the
+     * data-lake retrieval resolver needs internally (`findMembershipOrgIds`, #1674). Required -
+     * an absent resolver would silently drop every org lake from retrieval.
+     */
+    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds' | 'findIdsWithAdminRights'>;
+    /**
+     * Access-grant lookup shared by two independent optional features:
+     * - the retrieval resolver's grant arm, so a lake the caller reaches only by an
+     *   owner/curator grant grounds chat as it browses (`listByPrincipal`, see
+     *   getDynamicDataLakeAccess);
+     * - the per-turn manage re-check on a session's `preauthorizedLakeIds`
+     *   (`listActiveByLakes`, filterStillManagedLakes). REQUIRED in practice on any host that
+     *   creates pre-authorized sessions: without it the curator / org-grant / transferred-owner
+     *   rungs cannot resolve, so the re-check revokes a maintainer whose rights are in fact intact.
+     * Optional here - absent means both features resolve lake access with no grant arm.
+     */
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listActiveByLakes'>;
+    /**
+     * Lake access audit sink. Optional - a host that hasn't wired it in degrades to a
+     * silent no-op (see recordLakeAccessEvent) rather than blocking retrieval.
+     */
+    lakeAccessEvents?: Pick<ILakeAccessEventRepository, 'record'>;
+    /**
+     * Scoped-settings overlay for org/owner setting rungs (epic #1658 seam). Optional -
+     * `resolveSearchBudgets` falls back to the byte-identical platform path when this is absent,
+     * so a lean tool harness that omits it keeps platform-only resolution rather than failing.
+     */
+    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
+  };
+  /**
+   * Caller's RESOLVED entitlement keys (subscription- + tag-derived), resolved app-side
+   * and passed down so entitlement-gated data lakes resolve in retrieval tools. Empty/
+   * absent means tag-only matching (the neutral default). See getDynamicDataLakeAccess.
+   */
+  entitlementKeys?: string[];
+  /**
+   * Generic retrieval-exclusion filter for the knowledge tools (search + retrieve arms),
+   * resolved from the session and threaded down via the tool-builder deps (mirrors
+   * entitlementKeys). Keeps excluded/unvectorized lake files out of retrieval AND citations so
+   * the tools agree with the surface's listing predicate. Every tool-build path that serves a
+   * session (chat completion, agent execution, delegated subagents) must populate this from the
+   * session or the knowledge tools fail OPEN. Absent = no exclusion (default).
+   */
+  retrievalFilter?: RetrievalExclusionOptions;
+  /**
+   * Agent-scoped KB restriction (see KbScope). Set server-side from trusted agent config
+   * (never from request input) and threaded down via the tool-builder deps like
+   * retrievalFilter. When present, the KB tools read ONLY the listed files and must never
+   * consult owner-wide access (getDynamicDataLakeAccess). Absent on all non-agent paths.
+   *
+   * INVARIANT: any NEW tool that reads db.fabfiles / db.fabfilechunks must honor kbScope
+   * (reject / restrict to scope.fileIds) - today only search_knowledge_base,
+   * retrieve_knowledge_content, count_knowledge_base and describe_knowledge_base do, and the embed
+   * surface stays safe only because its tool resolver excludes every other fabfiles-reading tool.
+   * Enforcement is per-tool, not per-repository, so a new fabfiles tool added to a scoped surface
+   * without this handling would silently read unscoped.
+   */
+  kbScope?: KbScope;
+  /**
+   * True when this session's attached corpus is entirely PERSONAL - nothing belonging to a data
+   * lake the caller can reach (see ChatCompletionProcess.personalCorpusOnly). The knowledge tools
+   * then search WITHOUT their lake arms, so a notebook about its own uploads stops grounding on an
+   * unrelated product's lake.
+   *
+   * Deliberately a flag and NOT a file-id scope. Routing it through `kbScope` made the attached ids
+   * the sole authority (`restrictToFileIds` + `skipOwnership`, no owner/shared expansion), which
+   * suppressed the lakes AND the rest of the caller's own library - so a user who attached one file
+   * could no longer find anything in the other fifty they own. Suppressing the lake arms is the
+   * whole of the fix; narrowing to the attachments was collateral.
+   *
+   * Distinct from `kbScope` for the same reason: that one is a hard, fail-closed agent restriction
+   * where an empty list reads NOTHING, and this is a corpus-shaping hint on an ordinary session.
+   */
+  suppressLakeArms?: boolean;
+  /**
+   * The session's lake scope (`session.retrievalTags`). Narrows the knowledge tools' owner-wide lake
+   * access to the lake(s) this session is FOR, so a session created for one lake stops searching
+   * every lake its owner can reach. Purely subtractive - see narrowLakeAccessToSession, which also
+   * documents why the prefix buckets are filtered rather than rebuilt. Absent/empty = unscoped.
+   */
+  sessionRetrievalTags?: string[];
+  /**
+   * Lake ids this session was pre-authorized for at session-create time (a manager admitted to a
+   * lake they can manage but are not a member of - see canManageLake, checked once at
+   * pages/api/sessions/create.ts, never re-derived here). Unioned into the resolved lake access
+   * set BEFORE narrowLakeAccessToSession runs (see unionPreauthorizedLakeAccess) so the lake's
+   * files and prompt become reachable for exactly this session. Absent/empty = no widening - the
+   * ordinary case for every session that isn't a maintainer's admitted test session.
+   *
+   * Vetted against the request's authenticated principal at the point this field is populated
+   * (ChatCompletionProcess, agentExecutor); a worker path with no authenticated principal (a
+   * scheduled/proactive job) must leave this unset even when the session itself carries the
+   * field, since there is no principal to vet it against.
+   */
+  sessionPreauthorizedLakeIds?: string[];
+  /**
+   * FabFile ids attached to THIS session whose text was actually delivered into this turn's
+   * prompt (the `sessionKnowledgeIds` subset that is both NOT deferred to retrieval and NOT
+   * silently dropped by `processFabFilesServer` - see `buildDataSources`'s
+   * `actuallyInlinedKnowledgeIds`). The knowledge tools use this to tell a caller "that file's
+   * content is already above" without lying about a deferred OR undeliverable (audio,
+   * unserveable image, unsupported/corrupted file) attachment. The agent executor populates this
+   * too (see `agentExecutor.attachmentContent.ts`); absent/empty on surfaces that inline nothing.
+   */
+  inlinedAttachmentIds?: string[];
+  /**
+   * Subset of `inlinedAttachmentIds` whose ENTIRE content is in the prompt - excludes a cosine
+   * excerpt or a raw-content read truncated to fit the token budget (see `buildDataSources`'s
+   * `fullyInlinedAttachmentIds`). A file can be in `inlinedAttachmentIds` but NOT here, meaning
+   * only part of it reached the prompt; only THIS set is safe to tell a caller "you already have
+   * everything, no need to search/retrieve further" (#1163 review: that claim was being made for
+   * a merely-inlined, possibly-partial file).
+   */
+  fullyInlinedAttachmentIds?: string[];
+  storage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;
+  imageGenerateStorage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;
+  statusUpdate: (q: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>;
+  onStart?: (toolName: string, data: any) => Promise<void>;
+  onFinish?: (toolName: string, data: any) => Promise<void>;
+  llm: Pick<ICompletionBackend, 'complete'>;
+  model?: string; // User's selected model for the current quest
+  /**
+   * Model catalog for the current request, used to resolve provider + COGS pricing when a
+   * tool records its own operational llm.complete spend (see recordToolOperationalUsage).
+   * Present on the chat/agent path (from precomputed models); absent on lean harnesses,
+   * where cost degrades to 0 but the usage event is still written.
+   */
+  availableModels?: ModelInfo[];
+  /**
+   * Optional sink for tool-internal LLM spend. Invoked by recordToolOperationalUsage
+   * after a tool's own `llm.complete()` call so a billing host (the agent executor)
+   * can fold nested generation into iteration billing instead of charging it at zero
+   * (#630). Absent on hosts that don't fold nested tool spend into a customer charge -
+   * e.g. the chat path, which records tool COGS as analytics-only operational usage and
+   * leaves this unset (its up-front credit enforcement covers only image_generation /
+   * edit_image, not the text-gen tools this callback measures).
+   *
+   * Must not throw: recordToolOperationalUsage invokes it inside its best-effort
+   * try/catch, so a throwing callback is swallowed AND drops the subsequent analytics
+   * write. Keep implementations pure arithmetic (see agentExecutor's addToolUsage).
+   */
+  onToolLlmUsage?: (usage: ToolLlmUsage) => void;
+  imageProcessorLambdaName?: string; // Lambda function name for image processing (edit_image, image_generation)
+  /**
+   * List of allowed directories for file operations.
+   * Primary working directory (cwd) is always implicitly included.
+   * Additional directories can be added via --add-dir or /add-dir.
+   */
+  allowedDirectories?: string[];
+  /** Optional code minifier for `file_read`'s opt-in `minified` mode. See CodeMinifier. */
+  codeMinifier?: CodeMinifier;
+  /**
+   * Cancellation signal for the turn that invoked this tool, for tools that run their own
+   * `llm.complete()` (deep_research, blog_draft, edit_file, jupyter_notebook, ...). Pass the
+   * result as `abortSignal` on those sub-calls, or pressing Stop settles the chat turn while
+   * the tool's nested generation keeps billing until the provider finishes on its own.
+   *
+   * A getter, not an `AbortSignal`: tools are built before the turn's AbortController exists
+   * (ChatCompletionProcess builds tools during `tool_setup` and only creates the controller
+   * once it is about to call the model), so a captured value would be a permanent `undefined`.
+   * Hosts supply a closure over a mutable holder they fill in later - the shape the
+   * delegate_to_agent / coordinate_task path already uses.
+   *
+   * IT CAN RETURN UNDEFINED EVEN WHEN THE HOST PASSED A GETTER, so treat a missing signal as
+   * normal rather than as a bug. Three cases, and the third is the surprising one:
+   *   - the host wires no controller at all (see below);
+   *   - the holder is not filled yet (a tool somehow invoked during tool setup);
+   *   - ChatCompletionProcess's Research Mode branch, which returns before it ever assigns
+   *     the holder, yet hands `allTools` - these same tool instances - to ResearchModeService.
+   *     That service takes no signal today and the cancellation watcher starts after the
+   *     branch returns, so Research Mode has no cancellation of any kind; tool sub-calls on
+   *     that path stay uninterruptible across every parallel configuration. Fixing it means
+   *     giving Research Mode a controller and a watcher of its own, not changing this contract.
+   *
+   * Absent entirely on hosts with no per-turn controller to hand over - the top-level
+   * agent-executor loop, which cancels via a polled `AgentExecution` abort flag rather than an
+   * AbortSignal, and the headless deep-agent runner. Those paths get nothing until they grow a
+   * controller of their own; the dispatched-subagent path already has one and passes it.
+   */
+  getAbortSignal?: () => AbortSignal | undefined;
+}
+
+export interface ToolDefinition {
+  name: string;
+  implementation: (context: Omit<ToolContext, 'config'>, config: any) => ICompletionOptionTools;
+}

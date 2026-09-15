@@ -1,0 +1,66 @@
+// GET /api/users/:id/invites - Retrieves all pending invitations
+
+import { baseApi } from '@server/middlewares/baseApi';
+import { inviteRepository, cacheRepository } from '@bike4mind/database';
+import { UnauthorizedError } from '@server/utils/errors';
+import { sharingService, cacheService } from '@bike4mind/services';
+import { filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
+import { z } from 'zod';
+import { CacheKeys } from '@server/utils/cacheKeys';
+
+const paginationSchema = z.object({
+  limit: z.coerce.number().min(1).max(100).prefault(20),
+  page: z.coerce.number().min(1).prefault(1),
+});
+
+const handler = baseApi().get(async (req, res) => {
+  const currentUser = req.user;
+  const id = req.query.id! as string;
+  const { limit, page } = paginationSchema.parse(req.query);
+
+  if (!((currentUser && currentUser?.id === id) || currentUser?.isAdmin)) throw new UnauthorizedError('Unauthorized');
+
+  // Key on the identity whose invites are actually fetched -- listOwnPendingInvites always
+  // reads `currentUser`, never the route's target. Keying on `id` meant an admin's request
+  // for another user's invites cached the ADMIN's invites under the target's key, and the
+  // target then read them back for the next 60s.
+  const cacheKey = CacheKeys.userInvites(currentUser.id, limit, page);
+
+  const result = await cacheService.getCachedData(
+    cacheKey,
+    async () =>
+      await sharingService.listOwnPendingInvites(
+        currentUser,
+        { limit, page },
+        {
+          db: {
+            invites: inviteRepository,
+          },
+        }
+      ),
+    {
+      db: { caches: cacheRepository },
+      expiry: 60 * 1000, // 1 minute
+    }
+  );
+
+  // The cache stores the raw invites; strip co-recipients' emails per-response,
+  // keeping only the caller's own entry so the inbox pending self-check still works.
+  return res.json({
+    data: result.data.map(invite => filterInviteRecipientsToSelf(invite, currentUser.email)),
+    pagination: {
+      total: result.total,
+      page,
+      limit,
+      totalPages: Math.ceil(result.total / limit),
+    },
+  });
+});
+
+export const config = {
+  api: {
+    externalResolver: true,
+  },
+};
+
+export default handler;

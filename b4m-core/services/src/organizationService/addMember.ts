@@ -1,0 +1,104 @@
+import { Permission, IUserDocument, IOrganizationRepository, IUserRepository } from '@bike4mind/common';
+import { secureParameters } from '@bike4mind/utils';
+import { NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
+import { z } from 'zod';
+import { canAdministerOrganization } from './orgAuthority';
+
+const addMemberSchema = z.object({
+  userId: z.string().optional(),
+  email: z.string().optional(),
+  organizationId: z.string(),
+  // Seat-ceiling override. SERVER-SIDE CALLERS ONLY - reg-invites/migrate.ts (platform-admin
+  // migration) is the sole legitimate user. It must never be reachable from a request body: the
+  // HTTP route's own schema deliberately omits it, so a client cannot buy seats it has not paid
+  // for by setting a flag.
+  force: z.boolean().optional(),
+});
+
+type AddMemberParameters = z.infer<typeof addMemberSchema>;
+
+interface AddMemberAdapters {
+  db: {
+    users: IUserRepository;
+    organizations: IOrganizationRepository;
+  };
+  logger?: {
+    info: (message: string) => void;
+  };
+}
+
+/**
+ * Adds a user to an organization, returning the updated organization and user.
+ */
+export async function addMember(user: IUserDocument, parameters: AddMemberParameters, adapters: AddMemberAdapters) {
+  const { db, logger } = adapters;
+  const { userId, email, organizationId, force } = secureParameters(parameters, addMemberSchema);
+
+  const userToAdd = userId ? await db.users.findById(userId) : email ? await db.users.findByEmail(email) : null;
+  if (!userToAdd) throw new NotFoundError('User not found');
+
+  const organization = await db.organizations.findById(organizationId);
+  if (!organization) throw new NotFoundError('Organization not found');
+
+  // Roster administration is owner/manager/platform-admin only. This previously gated on
+  // `shareable.findAccessibleById`, a MEMBERSHIP ACL that admits any `users[]` entry holding
+  // `read` - and this function only ever grants `[Permission.read]` - so every ordinary member
+  // could enroll arbitrary accounts into the org. Same NotFoundError as a missing org, so the
+  // route is not an existence oracle (matches revokeAccess).
+  if (!canAdministerOrganization(user, organization)) {
+    logger?.info(`User ${user.id} may not administer organization ${organizationId}`);
+    throw new NotFoundError('Organization not found');
+  }
+
+  // Owner-inclusive team size: the owner is not a `users[]` row (see organizationService/create.ts)
+  // but still occupies a seat, so full means owner + members >= seats (#1423). This matches the
+  // canonical accounting in sharingService/accept.ts and validateSeatChange.
+  if (!force && organization.users.length + 1 >= organization.seats) {
+    throw new UnprocessableEntityError('Organization is at full capacity');
+  }
+
+  // Add the user to the organization's users array
+  const userIndex = organization.users.findIndex(f => f.userId === userToAdd.id);
+
+  if (userIndex >= 0) {
+    // Already a member - just refresh their permissions
+    organization.users[userIndex].permissions = [Permission.read];
+  } else {
+    organization.users.push({ userId: userToAdd.id, permissions: [Permission.read] });
+  }
+
+  // Persist ONLY the users[] edit with a targeted write. A whole-document write would $set the entire
+  // userDetails array from this stale snapshot and could revert a concurrent credit increment
+  // (updateUserDetails' atomic positional $inc), defeating the very cap this seeding enables.
+  await db.organizations.update({ id: organization.id, users: organization.users });
+
+  // Seed the per-member credit side-table so `users[]` and `userDetails[]` stay in sync at the grant
+  // point. Without a row, `updateUserDetails`'s positional $inc no-ops and the member escapes
+  // `maxCreditsPerMember` entirely (reads as 0 spend forever). ensureUserDetails is an idempotent
+  // guarded $push: a re-add never duplicates, and an existing member who predates this seeding is
+  // backfilled - all as a targeted atomic op, never a whole-doc overwrite.
+  await db.organizations.ensureUserDetails(organizationId, {
+    id: userToAdd.id,
+    email: userToAdd.email ?? userToAdd.username,
+    name: userToAdd.name,
+  });
+
+  // Establish the selected-org display preference on the user document. This is
+  // the field the UI reads for the active-org switcher; lake authorization reads
+  // the membership set via findMembershipOrgIds (#1674), not this pointer. Without
+  // this, members added via this path stay organizationId: null and have no org
+  // selected in the UI - the same defect fixed for invite acceptance in
+  // sharingService/accept.ts.
+  //
+  // Only ever FILLS a vacant pointer, never repoints one. Being added to a second org is not
+  // consent to be moved out of the one you are working in: overwriting would silently switch the
+  // target's active-org billing and team prompt context out from under them mid-session. Adding
+  // them to the roster is the administrator's call; which org they are currently acting in is
+  // theirs, and they change it through the switcher.
+  if (!userToAdd.organizationId) {
+    userToAdd.organizationId = organizationId;
+    await db.users.update(userToAdd);
+  }
+
+  return { organization, user: userToAdd };
+}

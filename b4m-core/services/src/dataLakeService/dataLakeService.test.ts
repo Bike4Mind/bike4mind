@@ -1,0 +1,5017 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { BadRequestError } from '@bike4mind/utils';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  DATA_LAKES,
+  DATA_LAKE_TRANSITIONAL_STATUSES,
+  strandedCutoffMsFor,
+  UpdateDataLakeRequestInput,
+  type AccessContext,
+  type DataLakeStatus,
+  type IDataLakeDocument,
+  type IDataLakeBatchDocument,
+  FIND_ACCESSIBLE_ARMS,
+  type FindAccessibleArm,
+} from '@bike4mind/common';
+import {
+  canAccessLake,
+  assertLakeAccess,
+  assertLakeWritable,
+  assertLakeGrantable,
+  isFallbackLake,
+} from './assertLakeAccess';
+import {
+  canManageLake,
+  assertLakeWriteAccess,
+  assertLakeRebuildAccess,
+  assertCanWriteDataLakeTags,
+} from './authorizeLakeWrite';
+import { createDataLake } from './createDataLake';
+import { archiveDataLake } from './archiveDataLake';
+import { deleteDataLake } from './deleteDataLake';
+import type { RetrievalIndexRemoval } from './ports';
+import { unarchiveDataLake } from './unarchiveDataLake';
+import { restoreDeletedDataLake } from './restoreDeletedDataLake';
+import { cleanupDeletedDataLake } from './cleanupDeletedDataLake';
+import { acceptDataLakePurge } from './acceptDataLakePurge';
+import { removeFileFromDataLake } from './removeFileFromDataLake';
+import { setLakeVisibility } from './setLakeVisibility';
+import { updateDataLake } from './updateDataLake';
+import { reconcileStuckBatches, DEFAULT_STUCK_BATCH_TIMEOUT_MS } from './reconcileStuckBatches';
+import {
+  listDataLakes,
+  listAllDataLakes,
+  listArchivedDataLakes,
+  listDeletedDataLakes,
+  listTransitionalDataLakes,
+} from './listDataLakes';
+import { redactLakeForActor, READER_LAKE_FIELDS, LAKE_FIELD_VISIBILITY } from './redactLakeForActor';
+import { browsePublicDataLakes } from './browsePublicDataLakes';
+
+const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
+  ({
+    id: 'lake1',
+    name: 'Lake',
+    slug: 'lake',
+    fileTagPrefix: 'lk:',
+    datalakeTag: 'datalake:lake',
+    createdByUserId: 'owner',
+    status: 'active',
+    ...overrides,
+  }) as IDataLakeDocument;
+
+/** The membership scope the `lake()` fixture yields. A DB lake, so the `owned` model. */
+const lakeScope = {
+  kind: 'owned',
+  datalakeTag: 'datalake:lake',
+  fileTagPrefix: 'lk:',
+  creatorUserId: 'owner',
+};
+
+/**
+ * What findIdsByDataLakeTag resolves for the `lake()` fixture. The second is the member a
+ * meta-tag-keyed removal could never reach; that the Mongo predicate genuinely selects a
+ * prefix-only file is proved real-DB in FabFileModel.dataLakeLifecycle.test.ts, not here.
+ */
+const memberIds = ['meta-tagged-file', 'prefix-only-file'];
+
+const indexPort = (behavior: 'ok' | 'fails' = 'ok') => ({
+  removeForDataLake:
+    behavior === 'ok'
+      ? vi.fn().mockResolvedValue(undefined)
+      : vi.fn().mockRejectedValue(new Error('index unreachable')),
+});
+
+const removalInput = (port: ReturnType<typeof indexPort>): RetrievalIndexRemoval =>
+  port.removeForDataLake.mock.calls[0][0];
+
+const ctx = (overrides: Partial<AccessContext> = {}): AccessContext => ({
+  userId: 'someone',
+  isAdmin: false,
+  userTags: [],
+  organizationIds: [],
+  ...overrides,
+});
+
+describe('canAccessLake — the single access gate rule', () => {
+  it('grants the owner', () => {
+    expect(canAccessLake(lake(), ctx({ userId: 'owner' }))).toBe(true);
+  });
+
+  it('grants an admin', () => {
+    expect(canAccessLake(lake({ requiredUserTag: 'secret', organizationId: 'orgA' }), ctx({ isAdmin: true }))).toBe(
+      true
+    );
+  });
+
+  it('now delegates the owner arm to canManageLake, so a blank identity fails closed (#1153)', () => {
+    // Before: `ctx.isAdmin || lake.createdByUserId === ctx.userId` granted when both sides were
+    // blank/undefined. A revert back to that bare form would flip this to true.
+    expect(canAccessLake(lake({ createdByUserId: '' }), ctx({ userId: '' }))).toBe(false);
+  });
+
+  it('grants a non-owner who satisfies BOTH org and tag', () => {
+    const l = lake({ organizationId: 'orgA', requiredUserTag: 'Opti' });
+    expect(canAccessLake(l, ctx({ organizationIds: ['orgA'], userTags: ['opti'] }))).toBe(true);
+  });
+
+  it('DENIES a tag-holder in a DIFFERENT org (org is a hard prerequisite, not a flat OR)', () => {
+    const l = lake({ organizationId: 'orgA', requiredUserTag: 'Opti' });
+    expect(canAccessLake(l, ctx({ organizationIds: ['orgB'], userTags: ['opti'] }))).toBe(false);
+  });
+
+  it('DENIES a same-org user missing the required tag', () => {
+    const l = lake({ organizationId: 'orgA', requiredUserTag: 'Opti' });
+    expect(canAccessLake(l, ctx({ organizationIds: ['orgA'], userTags: ['other'] }))).toBe(false);
+  });
+
+  it('grants an org lake to a member of that org regardless of any other memberships', () => {
+    const l = lake({ organizationId: 'org-a', requiredUserTag: '', requiredEntitlement: '' });
+    expect(canAccessLake(l, ctx({ organizationIds: ['org-b', 'org-a'] }))).toBe(true);
+  });
+
+  it('denies an org lake to a caller whose membership set does not include it (empty set included)', () => {
+    const l = lake({ organizationId: 'org-a', requiredUserTag: '', requiredEntitlement: '' });
+    expect(canAccessLake(l, ctx({ organizationIds: ['org-b'] }))).toBe(false);
+    expect(canAccessLake(l, ctx({ organizationIds: [] }))).toBe(false);
+  });
+
+  it('Private-by-default: a gateless, org-less lake is owner/admin-only', () => {
+    const priv = lake(); // no org, no requiredUserTag, no requiredEntitlement
+    // Owner and admin still reach it.
+    expect(canAccessLake(priv, ctx({ userId: 'owner' }))).toBe(true);
+    expect(canAccessLake(priv, ctx({ isAdmin: true }))).toBe(true);
+    // Every other caller is denied - this is the single-lake gate matching the rule the
+    // collection paths enforce, so a guessed-slug private lake can't be reached.
+    expect(canAccessLake(priv, ctx())).toBe(false);
+    expect(canAccessLake(priv, ctx({ organizationIds: ['orgA'], userTags: ['anything'] }))).toBe(false);
+  });
+
+  it('Public: an isPublic lake is readable by any caller, cross-org, bypassing Private-by-default', () => {
+    // isPublic with NO org and NO gate would be Private-by-default; the public arm must run
+    // first so it is readable by everyone, in any org, regardless of tags/keys.
+    const pub = lake({ isPublic: true, createdByUserId: 'alice' });
+    expect(canAccessLake(pub, ctx({ userId: 'stranger' }))).toBe(true);
+    expect(canAccessLake(pub, ctx({ userId: 'stranger', organizationIds: ['orgB'] }))).toBe(true);
+  });
+
+  it('Public + a (post-publish) gate still enforces the gate — defense in depth', () => {
+    // Publishing a gated lake is refused by setLakeVisibility, but if a gate is added AFTER
+    // publishing, the read gate must still hold: only a key-holder reads it, and org is bypassed.
+    const pubGated = lake({ isPublic: true, requiredEntitlement: 'product:pro', createdByUserId: 'alice' });
+    expect(canAccessLake(pubGated, ctx({ userId: 'stranger' }))).toBe(false);
+    expect(canAccessLake(pubGated, ctx({ userId: 'stranger', entitlementKeys: ['product:pro'] }))).toBe(true);
+    // Cross-org key-holder still reads it: public bypasses the org prerequisite.
+    expect(
+      canAccessLake(pubGated, ctx({ userId: 'stranger', organizationIds: ['orgB'], entitlementKeys: ['product:pro'] }))
+    ).toBe(true);
+  });
+
+  it('an entitlement-gated lake is NOT swept up as private — the private rule keys off field PRESENCE', () => {
+    // The private-by-default rule denies only lakes with NO org and NO gate. A lake declaring
+    // requiredEntitlement has a gate, so the private rule never touches it: a key-holder is
+    // granted, while a non-holder is denied by the entitlement gate (lakeMatchesAccess) - NOT
+    // by the private rule.
+    const gated = lake({ requiredEntitlement: 'product:pro' });
+    expect(canAccessLake(gated, ctx({ entitlementKeys: ['product:pro'] }))).toBe(true);
+    expect(canAccessLake(gated, ctx())).toBe(false);
+  });
+});
+
+// Generic placeholder keys (product:pro / medlib) - no product literals, to keep this core
+// test boundary-clean (the same convention as getAccessibleDataLakes' tests).
+describe('canAccessLake — entitlement-aware any-of (tag-retirement)', () => {
+  it('grants a non-owner via requiredEntitlement (no tag held — the tag-less subscriber)', () => {
+    const l = lake({ requiredEntitlement: 'product:pro' });
+    expect(canAccessLake(l, ctx({ entitlementKeys: ['product:pro'] }))).toBe(true);
+  });
+
+  it('grants via EITHER the required tag OR the required entitlement (any-of)', () => {
+    const l = lake({ requiredUserTag: 'medlib', requiredEntitlement: 'product:pro' });
+    // entitlement only
+    expect(canAccessLake(l, ctx({ entitlementKeys: ['product:pro'] }))).toBe(true);
+    // tag only
+    expect(canAccessLake(l, ctx({ userTags: ['medlib'] }))).toBe(true);
+  });
+
+  it('matches the required entitlement case-insensitively (normalized)', () => {
+    const l = lake({ requiredEntitlement: 'product:pro' });
+    expect(canAccessLake(l, ctx({ entitlementKeys: ['Product:Pro'] }))).toBe(true);
+  });
+
+  it('treats a lake declaring ONLY requiredEntitlement as NOT public (gated by the key)', () => {
+    const l = lake({ requiredEntitlement: 'product:pro' });
+    expect(canAccessLake(l, ctx())).toBe(false); // no tag, no key
+    expect(canAccessLake(l, ctx({ entitlementKeys: ['other:pro'] }))).toBe(false);
+  });
+
+  it('DENIES an entitlement-holder in a DIFFERENT org (org stays a hard prerequisite)', () => {
+    const l = lake({ organizationId: 'orgA', requiredEntitlement: 'product:pro' });
+    expect(canAccessLake(l, ctx({ organizationIds: ['orgB'], entitlementKeys: ['product:pro'] }))).toBe(false);
+  });
+
+  it('grants a same-org entitlement-holder when the lake is org-scoped', () => {
+    const l = lake({ organizationId: 'orgA', requiredEntitlement: 'product:pro' });
+    expect(canAccessLake(l, ctx({ organizationIds: ['orgA'], entitlementKeys: ['product:pro'] }))).toBe(true);
+  });
+
+  it('no-tag-only-access: holding ONLY the bare tag (not the namespaced :pro key) is denied a :pro-gated lake', () => {
+    // The retired-tag invariant, generically: a lake gated by `product:pro` is NOT reachable by
+    // a user who holds only the bare `product` tag/key (the 1:1 passthrough) without `product:pro`.
+    const l = lake({ requiredEntitlement: 'product:pro' });
+    expect(canAccessLake(l, ctx({ userTags: ['product'], entitlementKeys: ['product'] }))).toBe(false);
+  });
+});
+
+describe('canAccessLake - lake org id shape parity with the casting collection query', () => {
+  // findAccessible matches an org lake via a Mongo query that CASTS types, so a lake whose
+  // organizationId is an ObjectId or a populated Organization doc still lands in the list.
+  // canAccessLake compares in memory, so it must normalize THAT side to reach the SAME grant
+  // for every shape - otherwise the single-lake gate 404s a lake the caller's own list returns.
+  // ctx.organizationIds itself is NOT re-normalized here: it is documented as already-normalized
+  // strings, resolved once at context construction (#1674).
+  const orgHex = '507f1f77bcf86cd799439011';
+
+  it('grants a member when the lake org id is a matching string', () => {
+    const orgLake = lake({ id: 'orgLake', organizationId: orgHex, createdByUserId: 'admin' });
+    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationIds: [orgHex] }))).toBe(true);
+  });
+
+  it('grants a member when the lake org id is an ObjectId', () => {
+    const objectId = { toHexString: () => orgHex } as unknown as string;
+    const orgLake = lake({ id: 'orgLake', organizationId: objectId, createdByUserId: 'admin' });
+    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationIds: [orgHex] }))).toBe(true);
+  });
+
+  it('grants a member when the lake org id is a populated Organization document', () => {
+    const populated = { _id: { toHexString: () => orgHex }, name: 'Acme' } as unknown as string;
+    const orgLake = lake({ id: 'orgLake', organizationId: populated, createdByUserId: 'admin' });
+    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationIds: [orgHex] }))).toBe(true);
+  });
+
+  it('still DENIES a member whose set does not include the lake org, across every lake-side shape', () => {
+    const otherHex = '507f191e810c19729de860ea';
+    const stringOrgLake = lake({ id: 'orgLakeStr', organizationId: orgHex, createdByUserId: 'admin' });
+    const objectIdOrgLake = lake({
+      id: 'orgLakeObj',
+      organizationId: { toHexString: () => orgHex } as unknown as string,
+      createdByUserId: 'admin',
+    });
+    const populatedOrgLake = lake({
+      id: 'orgLakePop',
+      organizationId: { _id: { toHexString: () => orgHex } } as unknown as string,
+      createdByUserId: 'admin',
+    });
+    expect(canAccessLake(stringOrgLake, ctx({ userId: 'member', organizationIds: [otherHex] }))).toBe(false);
+    expect(canAccessLake(objectIdOrgLake, ctx({ userId: 'member', organizationIds: [otherHex] }))).toBe(false);
+    expect(canAccessLake(populatedOrgLake, ctx({ userId: 'member', organizationIds: [otherHex] }))).toBe(false);
+  });
+
+  it('fails CLOSED: a lake with a truthy-but-not-id-shaped org and no gate denies a non-owner', () => {
+    // Guards the fail-open asymmetry: private-by-default and the org-match check must both read
+    // the SAME normalized lake org id. A garbage org (normalizes to undefined) with no gate must
+    // deny a non-owner, not fall through to public.
+    const garbageOrgLake = lake({
+      id: 'garbageOrg',
+      organizationId: { not: 'an id' } as unknown as string,
+      createdByUserId: 'owner',
+    });
+    expect(canAccessLake(garbageOrgLake, ctx({ userId: 'member', organizationIds: ['orgA'] }))).toBe(false);
+    expect(canAccessLake(garbageOrgLake, ctx({ userId: 'owner' }))).toBe(true); // owner still in
+  });
+});
+
+describe('assertLakeAccess — not-found-style denial', () => {
+  it('throws a not-found-style error for a denied non-member (does not disclose existence)', async () => {
+    const l = lake({ organizationId: 'orgA', requiredUserTag: 'Opti' });
+    const db = {
+      dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn(), findBySlugAmongIds: vi.fn() },
+    };
+    await expect(
+      assertLakeAccess('lake1', ctx({ organizationIds: ['orgB'], userTags: ['opti'] }), { db })
+    ).rejects.toThrow(/not found/i);
+  });
+
+  it('returns the lake on grant', async () => {
+    const l = lake();
+    const db = {
+      dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn(), findBySlugAmongIds: vi.fn() },
+    };
+    await expect(assertLakeAccess('lake1', ctx({ userId: 'owner' }), { db })).resolves.toBe(l);
+  });
+});
+
+describe('assertLakeAccess — hardcoded fallback lakes (no backing document)', () => {
+  // The DB knows nothing: both lookups miss, as they do for the seeded opti-knowledge lake. No
+  // dataLakeAccessGrants wired, so the #2425 grant-fallback arm never calls findBySlugAmongIds -
+  // it's mocked only to satisfy the adapter type.
+  const emptyDb = () => ({
+    dataLakes: {
+      findById: vi.fn().mockRejectedValue(new Error('bad id')),
+      findBySlug: vi.fn().mockResolvedValue(null),
+      findBySlugAmongIds: vi.fn().mockResolvedValue(null),
+    },
+  });
+
+  it('resolves opti-knowledge for a tag-holder as a synthetic read-only lake', async () => {
+    const resolved = await assertLakeAccess('opti-knowledge', ctx({ userTags: ['opti'] }), { db: emptyDb() });
+    expect(resolved.id).toBe('opti-knowledge');
+    expect(resolved.datalakeTag).toBe('datalake:opti-knowledge');
+    expect(resolved.fileTagPrefix).toBe('opti:');
+    expect(resolved.status).toBe('active');
+    expect(resolved.createdByUserId).toBe('');
+  });
+
+  it('resolves opti-knowledge for a tag-less entitlement holder (any-of parity with the list path)', async () => {
+    const resolved = await assertLakeAccess('opti-knowledge', ctx({ entitlementKeys: ['optihashi:pro'] }), {
+      db: emptyDb(),
+    });
+    expect(resolved.id).toBe('opti-knowledge');
+  });
+
+  it('resolves opti-knowledge for an admin without the tag or entitlement', async () => {
+    const resolved = await assertLakeAccess('opti-knowledge', ctx({ isAdmin: true }), { db: emptyDb() });
+    expect(resolved.id).toBe('opti-knowledge');
+  });
+
+  it('still denies (not-found-style) a caller who satisfies neither gate', async () => {
+    await expect(assertLakeAccess('opti-knowledge', ctx(), { db: emptyDb() })).rejects.toThrow(/not found/i);
+  });
+
+  it('a DB lake shadowing a fallback slug takes precedence over the fallback', async () => {
+    const dbLake = lake({ id: 'real-id', slug: 'opti-knowledge', createdByUserId: 'owner' });
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: vi.fn().mockResolvedValue(dbLake),
+        findBySlugAmongIds: vi.fn().mockResolvedValue(null),
+      },
+    };
+    await expect(assertLakeAccess('opti-knowledge', ctx({ userId: 'owner' }), { db })).resolves.toBe(dbLake);
+  });
+
+  it('a denied DB lake shadowing a fallback slug is FINAL — no fallback retry around the denial', async () => {
+    const dbLake = lake({ id: 'real-id', slug: 'opti-knowledge', createdByUserId: 'owner', organizationId: 'orgA' });
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: vi.fn().mockResolvedValue(dbLake),
+        findBySlugAmongIds: vi.fn().mockResolvedValue(null),
+      },
+    };
+    await expect(
+      assertLakeAccess('opti-knowledge', ctx({ userTags: ['opti'], organizationIds: ['orgB'] }), { db })
+    ).rejects.toThrow(/not found/i);
+  });
+
+  // #2510: the grant arm must NOT be skipped just because the slug matches a registry id.
+  // disambiguateSlug only reserves the org-less meta-tag (datalake:<slug>), so an ORG-SCOPED lake
+  // may legitimately carry a registry slug; skipping the query for it hands back the synthetic
+  // registry lake in place of the caller's own grant-held lake - a wrong lake, not a denial.
+  it('an org-scoped DB lake carrying a registry slug still resolves via a foreign-org grant', async () => {
+    const shadow = lake({
+      id: 'real-db-id',
+      slug: 'opti-knowledge',
+      createdByUserId: 'other',
+      organizationId: 'orgA',
+    });
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: vi.fn().mockResolvedValue(null),
+        findBySlugAmongIds: vi
+          .fn()
+          .mockImplementation(async (_s: string, ids: string[]) => (ids.includes(shadow.id) ? shadow : null)),
+      },
+      dataLakeAccessGrants: {
+        listByPrincipal: vi.fn().mockResolvedValue([{ dataLakeId: shadow.id, role: 'owner' }]),
+        listByLake: vi
+          .fn()
+          .mockResolvedValue([{ dataLakeId: shadow.id, principalType: 'user', principalId: 'grantee', role: 'owner' }]),
+      },
+    };
+
+    // The Opti tag is held on purpose: it is what would make the fallback resolve and mask the bug.
+    const resolved = await assertLakeAccess(
+      'opti-knowledge',
+      ctx({ userId: 'grantee', organizationIds: ['orgB'], userTags: ['opti'] }),
+      { db }
+    );
+    expect(resolved.id).toBe('real-db-id');
+  });
+
+  // #2510 follow-up (human review): a slug colliding with a DATA_LAKES id/slug must not degrade on
+  // a grants-query failure the way every other slug does - degrading would return null here and let
+  // resolveLakeAccessWithGrants's ?? chain fall through to resolveFallbackLake, silently swapping the
+  // caller's own grant-held lake for the generic registry fallback (a 200 with the wrong content,
+  // not an error).
+  it('rethrows the grants-query failure instead of degrading when the slug collides with a fallback lake', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: vi.fn().mockResolvedValue(null),
+        findBySlugAmongIds: vi.fn().mockResolvedValue(null),
+      },
+      dataLakeAccessGrants: {
+        listByPrincipal: vi.fn().mockRejectedValue(new Error('grants collection unavailable')),
+        listByLake: vi.fn().mockResolvedValue([]),
+      },
+    };
+    const logger = { warn: vi.fn() };
+
+    // The Opti tag is held on purpose: it is what would make the fallback resolve and mask the bug
+    // if the failure were degraded instead of rethrown.
+    await expect(
+      assertLakeAccess('opti-knowledge', ctx({ userId: 'grantee', organizationIds: ['orgB'], userTags: ['opti'] }), {
+        db,
+        logger,
+      })
+    ).rejects.toThrow('grants collection unavailable');
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * #2425: a lake scoped to an org the caller does not belong to is invisible to findBySlug's own-org
+ * and org-less arms. A real owner/curator grant on it (a cross-org transferLakeOwnership) is still
+ * legitimate access - canManageLake already admits it once the lake resolves - so on a findBySlug
+ * miss, assertLakeAccess resolves the grant-held id set itself and retries via
+ * `findBySlugAmongIds`, a separate repository method (its own real query logic is proved against a
+ * real Mongo in DataLakeModel.test.ts). This suite pins that assertLakeAccess only calls it on a
+ * miss, and only when a grant repo is wired.
+ */
+describe('assertLakeAccess - foreign-org grant resolves by slug (#2425)', () => {
+  const theirs = lake({
+    id: 'foreign-granted',
+    slug: 'foreign-granted',
+    createdByUserId: 'other',
+    organizationId: 'orgA',
+  });
+
+  // `findBySlug` mocks the own-org/org-less arms directly (real shape, real signature - no thunk
+  // param): a miss for anyone not in orgA. `findBySlugAmongIds` is the separate #2425 last-resort
+  // method `assertLakeAccess` calls itself on that miss, mirroring DataLakeModel's own split.
+  const findBySlugMiss = () => vi.fn().mockResolvedValue(null);
+  const findBySlugAmongIdsFake = () =>
+    vi.fn().mockImplementation(async (_slug: string, ids: string[]) => (ids.includes(theirs.id) ? theirs : null));
+
+  const grantRepo = (role: 'owner' | 'curator') => ({
+    listByPrincipal: vi.fn().mockResolvedValue([{ dataLakeId: theirs.id, role }]),
+    listByLake: vi
+      .fn()
+      .mockResolvedValue([{ dataLakeId: theirs.id, principalType: 'user', principalId: 'grantee', role }]),
+  });
+
+  it('resolves the lake for a foreign-org owner-grant holder', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: findBySlugMiss(),
+        findBySlugAmongIds: findBySlugAmongIdsFake(),
+      },
+      dataLakeAccessGrants: grantRepo('owner'),
+    };
+
+    await expect(
+      assertLakeAccess('foreign-granted', ctx({ userId: 'grantee', organizationIds: ['orgB'] }), { db })
+    ).resolves.toBe(theirs);
+  });
+
+  it('resolves the lake for a foreign-org curator-grant holder', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: findBySlugMiss(),
+        findBySlugAmongIds: findBySlugAmongIdsFake(),
+      },
+      dataLakeAccessGrants: grantRepo('curator'),
+    };
+
+    await expect(
+      assertLakeAccess('foreign-granted', ctx({ userId: 'grantee', organizationIds: ['orgB'] }), { db })
+    ).resolves.toBe(theirs);
+  });
+
+  it('still denies (not-found-style) a foreign-org caller with NO grant - no enumeration widening', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: findBySlugMiss(),
+        findBySlugAmongIds: findBySlugAmongIdsFake(),
+      },
+      dataLakeAccessGrants: {
+        listByPrincipal: vi.fn().mockResolvedValue([]),
+        listByLake: vi.fn().mockResolvedValue([]),
+      },
+    };
+
+    await expect(
+      assertLakeAccess('foreign-granted', ctx({ userId: 'stranger', organizationIds: ['orgB'] }), { db })
+    ).rejects.toThrow(/not found/i);
+  });
+
+  it('never calls findBySlugAmongIds when no grant repo is wired - back-compat for callers that have not', async () => {
+    const findBySlugAmongIds = findBySlugAmongIdsFake();
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: findBySlugMiss(),
+        findBySlugAmongIds,
+      },
+    };
+
+    await expect(
+      assertLakeAccess('foreign-granted', ctx({ userId: 'grantee', organizationIds: ['orgB'] }), { db })
+    ).rejects.toThrow(/not found/i);
+    expect(findBySlugAmongIds).not.toHaveBeenCalled();
+  });
+
+  it('never calls findBySlugAmongIds when findBySlug already resolved the lake (laziness)', async () => {
+    // The extra grants query must only run on a MISS - if it ran unconditionally, the common
+    // own-org/org-less hit path would pay for a listByPrincipal call it never needed.
+    const findBySlugAmongIds = findBySlugAmongIdsFake();
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: vi.fn().mockResolvedValue(theirs),
+        findBySlugAmongIds,
+      },
+      dataLakeAccessGrants: grantRepo('owner'),
+    };
+
+    await expect(
+      assertLakeAccess('foreign-granted', ctx({ userId: 'grantee', organizationIds: ['orgA'] }), { db })
+    ).resolves.toBe(theirs);
+    expect(findBySlugAmongIds).not.toHaveBeenCalled();
+  });
+
+  // #2510: previously uncaught - a transient grants-collection failure propagated straight out of
+  // assertLakeAccess, 500ing a request path (e.g. sessions/create.ts) that had no prior dependency
+  // on that collection. It must degrade like every other optional-adapter read in this file.
+  it('degrades to no grant-held match when the grants query fails, rather than throwing raw', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: findBySlugMiss(),
+        findBySlugAmongIds: findBySlugAmongIdsFake(),
+      },
+      dataLakeAccessGrants: {
+        listByPrincipal: vi.fn().mockRejectedValue(new Error('grants collection unavailable')),
+        listByLake: vi.fn().mockResolvedValue([]),
+      },
+    };
+    const logger = { warn: vi.fn() };
+
+    await expect(
+      assertLakeAccess('foreign-granted', ctx({ userId: 'grantee', organizationIds: ['orgB'] }), { db, logger })
+    ).rejects.toThrow(/not found/i);
+    // A dropped warn call would go unnoticed - it's the only signal an operator gets that this
+    // degrade path fired at all, since the caller-facing result is identical to "no grant exists".
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[dataLakes] grant-held slug fallback query failed; resolving with no grant reach',
+      expect.any(Error)
+    );
+  });
+});
+
+describe('assertLakeWritable / isFallbackLake — fallback lakes are read-only', () => {
+  it('identifies a fallback lake by config id and refuses the write with a clear read-only error', () => {
+    expect(isFallbackLake({ id: 'opti-knowledge' })).toBe(true);
+    expect(() => assertLakeWritable({ id: 'opti-knowledge' })).toThrow(/read-only/i);
+  });
+
+  it('passes a persisted (ObjectId-style) lake through untouched', () => {
+    expect(isFallbackLake({ id: '507f1f77bcf86cd799439011' })).toBe(false);
+    expect(() => assertLakeWritable({ id: '507f1f77bcf86cd799439011' })).not.toThrow();
+  });
+});
+
+describe('assertLakeGrantable - fallback lakes cannot hold access grants (#1667 carve-out)', () => {
+  it('refuses a grant against a fallback lake (no backing document to attach membership to)', () => {
+    expect(() => assertLakeGrantable({ id: 'opti-knowledge' })).toThrow(/built into the platform/i);
+  });
+
+  it('passes a persisted (ObjectId-style) lake through untouched', () => {
+    expect(() => assertLakeGrantable({ id: '507f1f77bcf86cd799439011' })).not.toThrow();
+  });
+});
+
+describe('canManageLake — the single write/manage rule (creator or admin)', () => {
+  it('grants the creator', () => {
+    expect(canManageLake(lake({ createdByUserId: 'owner' }), { userId: 'owner', isAdmin: false })).toBe(true);
+  });
+
+  it('grants any admin (even a non-creator)', () => {
+    expect(canManageLake(lake({ createdByUserId: 'owner' }), { userId: 'other', isAdmin: true })).toBe(true);
+  });
+
+  it('denies a non-creator non-admin — even one who can READ via a tag grant', () => {
+    // The read gate (canAccessLake) would grant this caller, but write must not.
+    const gated = lake({ createdByUserId: 'owner', requiredUserTag: 'Opti' });
+    expect(canAccessLake(gated, ctx({ userId: 'reader', userTags: ['opti'] }))).toBe(true);
+    expect(canManageLake(gated, { userId: 'reader', isAdmin: false })).toBe(false);
+  });
+
+  it('denies a stranger on a PUBLIC lake — the read-can-write asymmetry now that public grants read', () => {
+    // A public lake grants READ to any caller (canAccessLake true), but managing it stays
+    // owner/admin only. Pins the asymmetry for the new public surface.
+    const pub = lake({ createdByUserId: 'alice', isPublic: true });
+    expect(canAccessLake(pub, ctx({ userId: 'stranger' }))).toBe(true);
+    expect(canManageLake(pub, { userId: 'stranger', isAdmin: false })).toBe(false);
+  });
+});
+
+describe('canManageLake - fails closed on a blank identity', () => {
+  it('denies an actor with no userId on an owner-less lake, rather than matching blank to blank', () => {
+    // The synthetic fallback document carries createdByUserId: ''. A bare === would have granted
+    // manage (and, since this predicate now gates prompt disclosure, the prompt with it).
+    expect(canManageLake(lake({ createdByUserId: '' }), { userId: '', isAdmin: false })).toBe(false);
+    expect(
+      canManageLake({ createdByUserId: undefined } as unknown as IDataLakeDocument, {
+        userId: undefined as unknown as string,
+        isAdmin: false,
+      })
+    ).toBe(false);
+  });
+
+  it('still grants an admin on an owner-less lake', () => {
+    expect(canManageLake(lake({ createdByUserId: '' }), { userId: '', isAdmin: true })).toBe(true);
+  });
+});
+
+describe('listDataLakes - per-lake canManage flag for the UI', () => {
+  it("marks the caller's own lakes manageable and strangers' (public) lakes read-only", async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine, theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.canManage).toBe(true);
+    expect(result.find(l => l.id === 'theirs')?.canManage).toBe(false);
+  });
+
+  it('marks every DB lake manageable for an admin', async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
+
+    expect(result.find(l => l.id === 'theirs')?.canManage).toBe(true);
+  });
+
+  it('now delegates to canManageLake, so a blank-identity lake stays unmanageable (#1153)', async () => {
+    const blank = lake({ id: 'blank', slug: 'blank', createdByUserId: '' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([blank]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: '' }), { db });
+
+    expect(result.find(l => l.id === 'blank')?.canManage).toBe(false);
+  });
+
+  it('marks built-in fallback lakes read-only even for their access holders', async () => {
+    // No DB lakes; the Opti-gated fallback surfaces because the caller holds the tag. It has no
+    // backing document (assertLakeWritable refuses it), so it must never be manageable.
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me', userTags: ['Opti'] }), { db });
+    const fallback = result.find(l => l.id === 'opti-knowledge');
+
+    expect(fallback).toBeDefined();
+    expect(fallback?.canManage).toBe(false);
+  });
+});
+
+/**
+ * Both of this function's grant reads degrade to empty when no grant repo is wired - correct for a
+ * caller that has not threaded one, and invisible when a caller forgets to. The degradation had no
+ * coverage at all, so a caller could pass the repo, stop passing it, and every test still pass while
+ * grant-held lakes silently dropped out of its list (#2034).
+ */
+describe('listDataLakes - grant-reachable lakes (#2034)', () => {
+  const theirs = lake({ id: 'granted', slug: 'granted', createdByUserId: 'other', organizationId: 'orgA' });
+
+  const grantRepo = (role: 'owner' | 'curator' | 'reader') => ({
+    listByPrincipal: vi.fn().mockResolvedValue([{ dataLakeId: 'granted', role }]),
+    listActiveByLakes: vi
+      .fn()
+      .mockResolvedValue([{ dataLakeId: 'granted', principalType: 'user', principalId: 'me', role }]),
+  });
+
+  // findAccessible's non-owner id arm is driven ENTIRELY by grantedLakeIds, so a fake that returns
+  // the lake unconditionally could not tell a threaded repo from a missing one.
+  const dbFor = (grants?: ReturnType<typeof grantRepo>) => ({
+    dataLakes: {
+      findAccessible: vi.fn().mockImplementation(async (_ctx, opts) => (opts?.grantedLakeIds?.length ? [theirs] : [])),
+      find: vi.fn(),
+    },
+    ...(grants ? { dataLakeAccessGrants: grants } : {}),
+  });
+
+  it('omits the lake entirely when no grant repo is wired', async () => {
+    const db = dbFor();
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'granted')).toBeUndefined();
+    expect(db.dataLakes.findAccessible).toHaveBeenCalledWith(expect.anything(), {
+      statuses: ['draft', 'active'],
+      grantedLakeIds: [],
+      orgGrantedLakes: {},
+    });
+  });
+
+  it('returns a curator-granted lake the caller did not create, labelled manageable', async () => {
+    const db = dbFor(grantRepo('curator'));
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+    const row = result.find(l => l.id === 'granted');
+
+    expect(row).toBeDefined();
+    // Reaching the row set is only half of it: without the per-lake grant load the row would come
+    // back canManage:false, which a write-gated caller like the Slack `list` reply then drops.
+    expect(row?.canManage).toBe(true);
+    // A curator is not an owner, so the manage right must not be reported as ownership.
+    expect(row?.isOwn).toBe(false);
+  });
+
+  it('reports a transferred owner as both manageable and own', async () => {
+    const db = dbFor(grantRepo('owner'));
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+    const row = result.find(l => l.id === 'granted');
+
+    expect(row?.canManage).toBe(true);
+    // An owner grant supersedes createdByUserId, so this is the one grant role that is ownership.
+    expect(row?.isOwn).toBe(true);
+  });
+
+  it('excludes a reader-only granted lake while the read-grant cutover is off', async () => {
+    // No settings adapter, so resolveEnforceReadGrants is false and reader rows are not admitted.
+    // This is the guard on a caller that must not advertise what it cannot write: a reader grant
+    // never satisfies canManageLake, so listing it would promise a write that gets refused.
+    const db = dbFor(grantRepo('reader'));
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'granted')).toBeUndefined();
+  });
+
+  const orgGrantDb = () => {
+    const findAccessible = vi.fn().mockResolvedValue([]);
+    return {
+      findAccessible,
+      db: {
+        dataLakes: { findAccessible, find: vi.fn() },
+        settings: { getSettingsValue: vi.fn().mockResolvedValue(true) },
+        dataLakeAccessGrants: {
+          listActiveByLakes: vi.fn().mockResolvedValue([]),
+          listByPrincipal: vi.fn(async (type: string, id: string) =>
+            type === 'organization' && id === 'orgA'
+              ? [{ dataLakeId: 'granted', principalType: type, principalId: id, role: 'reader' }]
+              : []
+          ),
+        },
+      },
+    };
+  };
+
+  it('listDataLakes hands findAccessible an org grant keyed by the ISSUING org', async () => {
+    // The issuer is the only thing that makes the org half safe: the datastore ANDs each org's ids
+    // with `organizationId: <that org>` (DataLakeModel `orgGrantArms`), which is the only place the
+    // lake's own org is known. Flattening the map into `grantedLakeIds` on the way here routes it
+    // into the unconditional USER arm, and an orgA grant then lifts an orgB lake's gate for a caller
+    // who belongs to both. Deep equality on purpose - `objectContaining` on `grantedLakeIds` alone
+    // cannot see the org half move.
+    const { findAccessible, db } = orgGrantDb();
+
+    await listDataLakes(ctx({ userId: 'me', organizationIds: ['orgA', 'orgB'] }), { db } as never);
+
+    expect(findAccessible.mock.calls[0]![1]).toMatchObject({
+      grantedLakeIds: [],
+      orgGrantedLakes: { orgA: ['granted'] },
+    });
+  });
+
+  it.each([
+    ['listArchivedDataLakes', listArchivedDataLakes] as const,
+    ['listDeletedDataLakes', listDeletedDataLakes] as const,
+  ])('%s hands findAccessible no org reach at all, and no reader row', async (_name, listFn) => {
+    // The management views ask the MANAGE reach, which is user-principal owner/curator only. The org
+    // half is not merely empty here, it is never resolved: `findAccessible` drops `orgGrantArms`
+    // under includePublic:false, so passing one would be inert, and an org grant carries no role to
+    // narrow it by. Absence rather than a flattened id list is the point - flattening would route it
+    // into the unconditional USER arm, which is the hazard the sibling test above describes.
+    const { findAccessible, db } = orgGrantDb();
+
+    await listFn(ctx({ userId: 'me', organizationIds: ['orgA', 'orgB'] }), { db } as never);
+
+    const opts = findAccessible.mock.calls[0]![1];
+    expect(opts).toMatchObject({ includePublic: false, grantedLakeIds: [] });
+    expect(opts.orgGrantedLakes).toBeUndefined();
+    expect(db.dataLakeAccessGrants.listByPrincipal).not.toHaveBeenCalledWith(
+      'organization',
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('labels a reader-granted lake unmanageable even when another arm returns it', async () => {
+    // The org/public arms can surface the same lake independently of grantedLakeIds, so the reader
+    // exclusion above is not the only thing standing between a reader and a write-gated list.
+    const grants = grantRepo('reader');
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() },
+      dataLakeAccessGrants: grants,
+    };
+
+    const result = await listDataLakes(ctx({ userId: 'me', organizationIds: ['orgA'] }), { db });
+
+    expect(result.find(l => l.id === 'granted')?.canManage).toBe(false);
+  });
+});
+
+describe('listDataLakes - precomputed grantedLakeIds (#2425 P3)', () => {
+  const dbFor = () => ({ dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() } });
+
+  it('reuses a precomputed grantedLakeIds set instead of re-resolving it', async () => {
+    const db = dbFor();
+    const grantedLakeIds = ['granted-1'];
+
+    await listDataLakes(ctx({ userId: 'me' }), { db, grantedLakeIds });
+
+    // The org half is explicitly empty, not absent: the precomputed set carries the USER half only,
+    // and the guard below forces includeReaders=false, which is the only condition under which the
+    // recomputing branch would resolve an org arm at all.
+    expect(db.dataLakes.findAccessible).toHaveBeenCalledWith(expect.anything(), {
+      statuses: ['draft', 'active'],
+      grantedLakeIds,
+      orgGrantedLakes: {},
+    });
+  });
+
+  it('throws when a precomputed set and a settings adapter are supplied together', async () => {
+    const db = { ...dbFor(), settings: { getSettingsValue: vi.fn() } };
+
+    await expect(listDataLakes(ctx({ userId: 'me' }), { db, grantedLakeIds: ['granted-1'] })).rejects.toThrow(
+      /grantedLakeIds and db.settings cannot both be supplied/
+    );
+  });
+});
+
+// systemPrompt is EDITOR-ONLY: it steers every answer drawn from the lake, but only the lake's
+// creator or an admin may read the wording. The list endpoint is where the editor UI gets the
+// value to seed its form, and it is also the endpoint that surfaces strangers' public lakes.
+describe('listDataLakes - pending proposal count is the queue discovery surface', () => {
+  const counts = (byLake: Record<string, number>) => ({
+    countPendingByLakes: vi.fn(async () => byLake),
+  });
+
+  it('carries the count for a lake the caller manages', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() },
+      dataLakeProposals: counts({ mine: 4 }),
+    };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.pendingProposalCount).toBe(4);
+  });
+
+  // Deciding what enters a lake is a management right, so a reader must not learn a queue exists -
+  // let alone how deep it is. Same gate as systemPrompt.
+  it('withholds the count from a caller who can only read the lake', async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() },
+      dataLakeProposals: counts({ theirs: 9 }),
+    };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'theirs')?.canManage).toBe(false);
+    expect(result.find(l => l.id === 'theirs')?.pendingProposalCount).toBeUndefined();
+  });
+
+  // Absent rather than 0 so the client can treat presence as "there is work here", and so a row with
+  // nothing waiting renders exactly as it did before this field existed.
+  it('omits the field entirely when nothing is pending', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() },
+      dataLakeProposals: counts({}),
+    };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')).not.toHaveProperty('pendingProposalCount');
+  });
+
+  it('is optional - a caller that wires no proposal repo pays for no read', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.pendingProposalCount).toBeUndefined();
+  });
+
+  // The count is a discovery hint; the list is the page. A failing count read must never take the
+  // lake list down with it.
+  it('still returns the list when the count read throws', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() },
+      dataLakeProposals: {
+        countPendingByLakes: vi.fn(async () => {
+          throw new Error('aggregate unavailable');
+        }),
+      },
+    };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.canManage).toBe(true);
+    expect(result.find(l => l.id === 'mine')?.pendingProposalCount).toBeUndefined();
+  });
+
+  // #2005: the queue's reviewer of last resort is an org admin who did NOT create the lake - the
+  // succession role - and every existing case above describes a creator, so nothing pinned that the
+  // count reaches this one. Two gates have to agree for it to arrive: `findAccessible` must return
+  // the lake at all (pinned against a real Mongo in DataLakeModel.orgScopeAgreement.test.ts, which
+  // is where the bug was) and `canManageLake` must then rate the caller an editor, which is what
+  // admits the count. This covers the second half; `findAccessible` is mocked here, so it cannot
+  // and does not stand in for the first.
+  it('carries the count for an org admin who did not create the lake', async () => {
+    const orgLake = lake({ id: 'org-lake', slug: 'org-lake', createdByUserId: 'creator', organizationId: 'org-a' });
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([orgLake]), find: vi.fn() },
+      dataLakeProposals: counts({ 'org-lake': 2 }),
+    };
+
+    // administeredOrgIds ONLY, with an empty membership set - exactly the principal #2005 describes
+    // (a team manager or appointed admin who sits on no read/write users[] ACL row).
+    const result = await listDataLakes(ctx({ userId: 'manager', administeredOrgIds: ['org-a'] }), { db });
+
+    expect(result.find(l => l.id === 'org-lake')?.canManage).toBe(true);
+    expect(result.find(l => l.id === 'org-lake')?.pendingProposalCount).toBe(2);
+  });
+});
+
+describe('listDataLakes - systemPrompt is returned to a lake EDITOR only', () => {
+  const withPrompt = (overrides: Partial<IDataLakeDocument>) =>
+    lake({ systemPrompt: 'Always cite the source file.', ...overrides });
+
+  it("returns the prompt for the caller's own lake (seeds the Settings editor)", async () => {
+    const mine = withPrompt({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.systemPrompt).toBe('Always cite the source file.');
+  });
+
+  it("WITHHOLDS the prompt from a stranger reading someone else's PUBLIC lake", async () => {
+    const theirs = withPrompt({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'stranger' }), { db });
+    const entry = result.find(l => l.id === 'theirs');
+
+    expect(entry?.canManage).toBe(false);
+    expect(entry?.systemPrompt).toBeUndefined();
+    // Absent, not blanked: the client must not be able to tell "unset" from "withheld".
+    expect(entry && 'systemPrompt' in entry).toBe(false);
+  });
+
+  it('WITHHOLDS the prompt from a non-owner ORG member (read access is not manage access)', async () => {
+    const theirs = withPrompt({ id: 'org', slug: 'org', createdByUserId: 'other', organizationId: 'orgA' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'member', organizationIds: ['orgA'] }), { db });
+
+    expect(result.find(l => l.id === 'org')?.systemPrompt).toBeUndefined();
+  });
+
+  it("returns the prompt to an admin on another user's lake (admin is an editor)", async () => {
+    const theirs = withPrompt({ id: 'theirs', slug: 'theirs', createdByUserId: 'other' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
+
+    expect(result.find(l => l.id === 'theirs')?.systemPrompt).toBe('Always cite the source file.');
+  });
+
+  it('omits a whitespace-only prompt so the client never distinguishes blank from unset', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me', systemPrompt: '   \n ' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.systemPrompt).toBeUndefined();
+  });
+});
+
+// preferredSystemPromptId is EDITOR-ONLY too (same rule as systemPrompt): a reader gets its
+// effect on a session created for the lake, never the binding itself. The list endpoint is where
+// the Settings picker seeds its current selection.
+describe('listDataLakes - preferredSystemPromptId is returned to a lake EDITOR only', () => {
+  it("returns the bound prompt id for the caller's own lake (seeds the picker)", async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me', preferredSystemPromptId: 'triage_router' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.preferredSystemPromptId).toBe('triage_router');
+  });
+
+  it("WITHHOLDS the bound prompt id from a stranger reading someone else's PUBLIC lake", async () => {
+    const theirs = lake({
+      id: 'theirs',
+      slug: 'theirs',
+      createdByUserId: 'other',
+      isPublic: true,
+      preferredSystemPromptId: 'triage_router',
+    });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'stranger' }), { db });
+    const entry = result.find(l => l.id === 'theirs');
+
+    expect(entry?.preferredSystemPromptId).toBeUndefined();
+    // Absent, not blanked - "unset" and "withheld" must stay indistinguishable to a reader.
+    expect(entry && 'preferredSystemPromptId' in entry).toBe(false);
+  });
+
+  it('omits an empty stored value so the picker shows "None" rather than a blank binding', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me', preferredSystemPromptId: '' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.preferredSystemPromptId).toBeUndefined();
+  });
+});
+
+// groundingMode is EDITOR-ONLY too (same rule as the prompt fields): a reader gets its EFFECT
+// (inline vs retrieve, resolved server-side on a session created for the lake), never the setting.
+describe('listDataLakes - groundingMode is returned to a lake EDITOR only', () => {
+  it("returns the stored mode for the caller's own lake (seeds the picker)", async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me', groundingMode: 'inline' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.groundingMode).toBe('inline');
+  });
+
+  it("WITHHOLDS the mode from a stranger reading someone else's PUBLIC lake", async () => {
+    const theirs = lake({
+      id: 'theirs',
+      slug: 'theirs',
+      createdByUserId: 'other',
+      isPublic: true,
+      groundingMode: 'inline',
+    });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'stranger' }), { db });
+    const entry = result.find(l => l.id === 'theirs');
+
+    expect(entry?.groundingMode).toBeUndefined();
+    // Absent, not blanked - a reader must not tell "unset" from "withheld".
+    expect(entry && 'groundingMode' in entry).toBe(false);
+  });
+});
+
+// embeddingSpendMicroUsd is EDITOR-ONLY too, but unlike the fields above it is ALWAYS present
+// (defaulted to 0) when manageable, since its presence vs. absence is itself the client's
+// spend-tab visibility signal - a zero-spend manageable lake must not look identical to
+// a non-manageable one.
+describe('listDataLakes - embeddingSpendMicroUsd is returned to a lake EDITOR only, always defaulted', () => {
+  it("returns the real meter for the caller's own lake with nonzero spend", async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me', embeddingSpendMicroUsd: 5_000_000 });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.embeddingSpendMicroUsd).toBe(5_000_000);
+  });
+
+  it('defaults to 0 (never absent) for a manageable lake that has spent nothing yet', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+    const entry = result.find(l => l.id === 'mine');
+
+    expect(entry?.embeddingSpendMicroUsd).toBe(0);
+    expect(entry && 'embeddingSpendMicroUsd' in entry).toBe(true);
+  });
+
+  it("WITHHOLDS the meter from a stranger reading someone else's PUBLIC lake", async () => {
+    const theirs = lake({
+      id: 'theirs',
+      slug: 'theirs',
+      createdByUserId: 'other',
+      isPublic: true,
+      embeddingSpendMicroUsd: 5_000_000,
+    });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'stranger' }), { db });
+    const entry = result.find(l => l.id === 'theirs');
+
+    expect(entry?.embeddingSpendMicroUsd).toBeUndefined();
+    // Absent, not zeroed - a reader must not tell "no spend" from "withheld".
+    expect(entry && 'embeddingSpendMicroUsd' in entry).toBe(false);
+  });
+});
+
+describe('listAllDataLakes - the admin list still gates the prompt on canManage', () => {
+  it('returns the prompt on every DB lake, since an admin manages them all', async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', systemPrompt: 'Cite sources.' });
+    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([theirs]) } };
+
+    const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
+
+    // Pins the manage flag AND the disclosure it now gates: flipping this projection to
+    // canManage:false would silently strip prompts from every admin and break the admin editor.
+    expect(result.find(l => l.id === 'theirs')?.canManage).toBe(true);
+    expect(result.find(l => l.id === 'theirs')?.systemPrompt).toBe('Cite sources.');
+  });
+
+  it('never carries a prompt on a built-in fallback lake, whatever the registry holds', async () => {
+    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) } };
+
+    const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
+    const fallback = result.find(l => l.id === 'opti-knowledge');
+
+    // The registry is JSON.parse'd from env and keeps unknown keys, so an overlay entry could
+    // arrive carrying a systemPrompt. Routing fallbacks through the projection is what stops it.
+    expect(fallback).toBeDefined();
+    expect(fallback?.canManage).toBe(false);
+    expect(fallback && 'systemPrompt' in fallback).toBe(false);
+  });
+});
+
+// The manager list is "lakes I can REACH", not "lakes I own": org lakes, strangers' public
+// lakes, and - for a global admin - every tenant's (even private) lakes surface here. isOwn +
+// ownerDisplayName are what let the UI flag a not-own lake so it can't be managed by mistake.
+describe('listDataLakes / listAllDataLakes - owner labelling (isOwn + ownerDisplayName)', () => {
+  const usersPort = (owners: { id: string; name?: string; username?: string; email?: string }[]) => ({
+    findByIds: vi.fn().mockResolvedValue(owners),
+  });
+
+  it("marks the caller's own lakes isOwn:true and others isOwn:false", async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine, theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.isOwn).toBe(true);
+    expect(result.find(l => l.id === 'theirs')?.isOwn).toBe(false);
+  });
+
+  it('labels a not-own lake with the creator name (name || username, never email) when a user lookup is supplied', async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const users = usersPort([{ id: 'other', name: 'Ada Owner', email: 'ada@example.com' }]);
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs, mine]), find: vi.fn() }, users };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    // Own lake is excluded from the owner lookup (it renders as "you"), never labelled.
+    expect(users.findByIds).toHaveBeenCalledWith(['other']);
+    const theirsResult = result.find(l => l.id === 'theirs');
+    expect(theirsResult?.ownerDisplayName).toBe('Ada Owner');
+    // The address never leaves the service, even though findByIds' projection carries it.
+    expect(JSON.stringify(theirsResult)).not.toContain('ada@example.com');
+    expect(result.find(l => l.id === 'mine')?.ownerDisplayName).toBeUndefined();
+  });
+
+  it('falls back to username when the owner has no name', async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const users = usersPort([{ id: 'other', username: 'ada99' }]);
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() }, users };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'theirs')?.ownerDisplayName).toBe('ada99');
+  });
+
+  it('omits ownerDisplayName entirely when NO user lookup is supplied (the content-scope path pays nothing)', async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+    const theirsResult = result.find(l => l.id === 'theirs');
+
+    expect(theirsResult?.isOwn).toBe(false);
+    expect(theirsResult && 'ownerDisplayName' in theirsResult).toBe(false);
+  });
+
+  it("listAllDataLakes marks the admin's own vs others and labels the others when a lookup is supplied", async () => {
+    const adminOwn = lake({ id: 'adminOwn', slug: 'adminOwn', createdByUserId: 'admin' });
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other' });
+    const users = usersPort([{ id: 'other', name: 'Ada Owner' }]);
+    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([adminOwn, theirs]) }, users };
+
+    const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
+
+    expect(result.find(l => l.id === 'adminOwn')?.isOwn).toBe(true);
+    expect(result.find(l => l.id === 'adminOwn')?.ownerDisplayName).toBeUndefined();
+    expect(result.find(l => l.id === 'theirs')?.isOwn).toBe(false);
+    expect(result.find(l => l.id === 'theirs')?.ownerDisplayName).toBe('Ada Owner');
+  });
+
+  it('a built-in fallback lake is never own and carries no owner label', async () => {
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me', userTags: ['Opti'] }), { db });
+    const fallback = result.find(l => l.id === 'opti-knowledge');
+
+    expect(fallback?.isOwn).toBe(false);
+    expect(fallback && 'ownerDisplayName' in fallback).toBe(false);
+  });
+});
+
+// The raw-document exits (GET /api/data-lakes/:id, /archived, /deleted) are gated on READ
+// access, which is deliberately wider than manage - so each one must redact before serializing.
+// The redaction is an ALLOW-LIST (toReaderLake): a non-editor receives only the named fields, so
+// a field added to IDataLake later is withheld by default rather than shipped.
+describe('redactLakeForActor - editor-only fields on the raw-document exits', () => {
+  const prompted = (overrides: Partial<IDataLakeDocument> = {}) =>
+    lake({ createdByUserId: 'owner', systemPrompt: 'Answer only from this lake.', ...overrides });
+
+  it('leaves the document untouched for the owner', () => {
+    const l = prompted();
+    expect(redactLakeForActor(l, { userId: 'owner', isAdmin: false })).toBe(l);
+  });
+
+  it('leaves the document untouched for an admin', () => {
+    const l = prompted();
+    const visible = redactLakeForActor(l, { userId: 'admin', isAdmin: true });
+    expect(visible).toBe(l);
+    expect((visible as IDataLakeDocument).systemPrompt).toBe('Answer only from this lake.');
+  });
+
+  it('strips the prompt for a stranger who can READ a published lake', () => {
+    const l = prompted({ isPublic: true });
+    const visible = redactLakeForActor(l, { userId: 'stranger', isAdmin: false }) as IDataLakeDocument;
+
+    expect(visible.systemPrompt).toBeUndefined();
+    expect('systemPrompt' in visible).toBe(false);
+    // Everything a reader is entitled to must survive the redaction.
+    expect(visible.name).toBe('Lake');
+    expect(visible.datalakeTag).toBe('datalake:lake');
+  });
+
+  it('serves a stranger ONLY the allow-listed fields, never an unlisted one', () => {
+    // An extra own-enumerable key (as a hydrated document could carry) must not pass through: the
+    // allow-list emits named fields only, so the deny-list's "unlisted field leaks" failure is gone.
+    const l = prompted({ isPublic: true, secretField: 'leak-me' } as unknown as Partial<IDataLakeDocument>);
+    const visible = redactLakeForActor(l, { userId: 'stranger', isAdmin: false });
+
+    expect('secretField' in visible).toBe(false);
+    expect('systemPrompt' in visible).toBe(false);
+    expect(Object.keys(visible).every(k => (READER_LAKE_FIELDS as readonly string[]).includes(k))).toBe(true);
+  });
+
+  it('reports a whitespace-only prompt as absent for the OWNER too, matching the list projection', () => {
+    // Without this the same lake reads as "has a prompt" on GET /:id and "has none" in the list.
+    const blank = lake({ createdByUserId: 'owner', systemPrompt: '   \n ' });
+    const visible = redactLakeForActor(blank, { userId: 'owner', isAdmin: false });
+    expect('systemPrompt' in visible).toBe(false);
+  });
+
+  it('reports an EMPTY-STRING prompt as absent for the OWNER, like the list projection does', () => {
+    // '' must be normalized identically to whitespace: the list omits it (''?.trim() is falsy), so
+    // GET /:id must not echo it back as a present-but-empty field for an editor.
+    const empty = lake({ createdByUserId: 'owner', systemPrompt: '' });
+    const visible = redactLakeForActor(empty, { userId: 'owner', isAdmin: false });
+    expect('systemPrompt' in visible).toBe(false);
+  });
+
+  it('trims a padded-but-non-blank prompt for the OWNER, matching the list projection', () => {
+    // GET /:id must not echo stored padding an editor never typed while the list sends it trimmed.
+    const padded = lake({ createdByUserId: 'owner', systemPrompt: '  Cite the source.  ' });
+    const visible = redactLakeForActor(padded, { userId: 'owner', isAdmin: false }) as IDataLakeDocument;
+    expect(visible.systemPrompt).toBe('Cite the source.');
+    // A copy, not the source - the padded original is left intact for any write path still holding it.
+    expect(visible).not.toBe(padded);
+    expect(padded.systemPrompt).toBe('  Cite the source.  ');
+  });
+
+  it('treats a null prompt as blank for an editor rather than throwing on .trim()', () => {
+    // Only a direct DB write or migration produces null; the predicate must stay null-safe regardless.
+    const nulled = lake({ createdByUserId: 'owner', systemPrompt: null as unknown as string });
+    const visible = redactLakeForActor(nulled, { userId: 'owner', isAdmin: false });
+    expect('systemPrompt' in visible).toBe(false);
+  });
+
+  it('keeps the field classification and the allow-list in step', () => {
+    // LAKE_FIELD_VISIBILITY is what actually forces a decision on a new IDataLake field (it is keyed
+    // by `keyof IDataLake`, so an unclassified field fails to compile - in the source module, which
+    // tsc checks; this file is excluded from typecheck). This pins the two against each other.
+    const readable = Object.entries(LAKE_FIELD_VISIBILITY)
+      .filter(([, visibility]) => visibility === 'reader')
+      .map(([field]) => field);
+    // READER_LAKE_FIELDS also carries the IMongoDocument keys (id/createdAt/updatedAt), which are
+    // not IDataLake fields, so compare on the intersection.
+    expect(readable.sort()).toEqual(
+      (READER_LAKE_FIELDS as readonly string[]).filter(f => f in LAKE_FIELD_VISIBILITY).sort()
+    );
+  });
+
+  it('pins the reader allow-list against an accidental widening', () => {
+    // The list itself, so adding a field to READER_LAKE_FIELDS is a deliberate edit here too.
+    expect([...READER_LAKE_FIELDS].sort()).toEqual(
+      [
+        'auditQueryTextEnabled',
+        'createdAt',
+        'createdByUserId',
+        'datalakeTag',
+        'description',
+        'fileCount',
+        'fileTagPrefix',
+        'id',
+        'isPublic',
+        'lakeMemoryEnabled',
+        'lastSyncAt',
+        'name',
+        'organizationId',
+        'requiredEntitlement',
+        'requiredUserTag',
+        'slug',
+        'status',
+        'totalChunkedChars',
+        'totalSizeBytes',
+        'updatedAt',
+      ].sort()
+    );
+    expect((READER_LAKE_FIELDS as readonly string[]).includes('systemPrompt')).toBe(false);
+    // The new editor-only binding must never join the reader allow-list either.
+    expect((READER_LAKE_FIELDS as readonly string[]).includes('preferredSystemPromptId')).toBe(false);
+    expect(LAKE_FIELD_VISIBILITY.preferredSystemPromptId).toBe('withheld');
+    // Same for the grounding mode: editor-only, never shipped to a reader.
+    expect((READER_LAKE_FIELDS as readonly string[]).includes('groundingMode')).toBe(false);
+    expect(LAKE_FIELD_VISIBILITY.groundingMode).toBe('withheld');
+    // Who last changed the lake's config is editor-only: a reader gets the config history surface,
+    // never a raw actor id on the lake document.
+    expect((READER_LAKE_FIELDS as readonly string[]).includes('lastUpdatedByUserId')).toBe(false);
+    expect(LAKE_FIELD_VISIBILITY.lastUpdatedByUserId).toBe('withheld');
+  });
+
+  it('withholds lastUpdatedByUserId from a reader while serving it to an editor', () => {
+    const stamped = lake({ isPublic: true, lastUpdatedByUserId: 'admin1' });
+
+    const reader = redactLakeForActor(stamped, { userId: 'stranger', isAdmin: false });
+    expect(reader).not.toHaveProperty('lastUpdatedByUserId');
+
+    const editor = redactLakeForActor(stamped, { userId: 'stranger', isAdmin: true });
+    expect(editor).toHaveProperty('lastUpdatedByUserId', 'admin1');
+  });
+
+  it('does not mutate the source document (the caller may still hold it for a write path)', () => {
+    const l = prompted({ isPublic: true });
+    redactLakeForActor(l, { userId: 'stranger', isAdmin: false });
+    expect(l.systemPrompt).toBe('Answer only from this lake.');
+  });
+
+  it('redacts per lake in the archived management view', async () => {
+    const mine = prompted({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const orgLake = prompted({ id: 'org', slug: 'org', createdByUserId: 'other', organizationId: 'orgA' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine, orgLake]), find: vi.fn() } };
+
+    const result = await listArchivedDataLakes(ctx({ userId: 'me', organizationIds: ['orgA'] }), { db });
+
+    expect((result.find(l => l.id === 'mine') as IDataLakeDocument)?.systemPrompt).toBe('Answer only from this lake.');
+    // Key absence, not undefined: blanking instead of deleting would pass the weaker assertion.
+    const redactedArchived = result.find(l => l.id === 'org')!;
+    expect('systemPrompt' in redactedArchived).toBe(false);
+  });
+
+  it('redacts per lake in the deleted management view', async () => {
+    const orgLake = prompted({ id: 'org', slug: 'org', createdByUserId: 'other', organizationId: 'orgA' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([orgLake]), find: vi.fn() } };
+
+    const result = await listDeletedDataLakes(ctx({ userId: 'me', organizationIds: ['orgA'] }), { db });
+
+    expect('systemPrompt' in result[0]!).toBe(false);
+  });
+});
+
+/**
+ * The archived/deleted views pass includePublic:false on the stated ground that restore/cleanup is
+ * owner/admin-only, so a stranger must not see someone else's lake there - and then handed
+ * findAccessible the full READ reach, which admits `reader` rows and any-role org rows. A reader
+ * grant therefore did through the grant arm exactly what includePublic:false suppressed through the
+ * public arm. These pin the reach split by ROLE.
+ *
+ * Asserted on the findAccessible spy's `opts`, not on the returned rows: the reach is the thing
+ * under test, and a stub that echoed its input could not tell a narrowed reach from a wide one.
+ */
+describe('management views - the grant reach is manage-scoped, not read-scoped', () => {
+  // Dispatches on the principal so a membership org and an administered org are distinguishable -
+  // a stub returning one row for every call could not tell which arm asked.
+  const grantRepoFor = (rows: Record<string, { dataLakeId: string; role: string }[]>) => ({
+    listByPrincipal: vi
+      .fn()
+      .mockImplementation(
+        async (principalType: string, principalId: string) => rows[`${principalType}:${principalId}`] ?? []
+      ),
+    listActiveByLakes: vi.fn().mockResolvedValue([]),
+  });
+
+  // The read-grant setting is ON here to prove the manage reach does not consult it. That is the
+  // only thing it proves at this level. The reaches are compared where they provably differ in
+  // resolveLakeReadAccess.test.ts; these cases guard the wiring and the role split.
+  const dbFor = (grants: ReturnType<typeof grantRepoFor>) => ({
+    dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() },
+    dataLakeAccessGrants: grants,
+    settings: { getSettingsValue: vi.fn().mockResolvedValue(true) },
+  });
+
+  const reachPassedTo = (db: ReturnType<typeof dbFor>): string[] =>
+    db.dataLakes.findAccessible.mock.calls[0][1].grantedLakeIds;
+
+  it('withholds a reader-granted lake from the archived view even with the cutover ON', async () => {
+    const db = dbFor(grantRepoFor({ 'user:me': [{ dataLakeId: 'granted', role: 'reader' }] }));
+
+    await listArchivedDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(reachPassedTo(db)).toEqual([]);
+  });
+
+  it('still reaches an owner/curator-granted lake (the reach is narrowed, not closed)', async () => {
+    const db = dbFor(grantRepoFor({ 'user:me': [{ dataLakeId: 'granted', role: 'curator' }] }));
+
+    await listArchivedDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(reachPassedTo(db)).toEqual(['granted']);
+  });
+
+  it('withholds an ORG-principal grant whatever the caller holds in the granting org', async () => {
+    const orgRows = { 'organization:orgA': [{ dataLakeId: 'granted', role: 'owner' }] };
+
+    // Not by admin rights and not by membership: with no lake document in hand the reach cannot
+    // apply canManageLake's lake-org containment, and these views redact rather than exclude, so an
+    // org grant admitted here would disclose a lake in a DIFFERENT org (see the cross-org case
+    // below). A same-org lake is unaffected - findAccessible's own administeredOrgIds arm carries it.
+    const asAdmin = dbFor(grantRepoFor(orgRows));
+    await listArchivedDataLakes(ctx({ userId: 'me', administeredOrgIds: ['orgA'] }), { db: asAdmin });
+    expect(reachPassedTo(asAdmin)).toEqual([]);
+
+    const asMember = dbFor(grantRepoFor(orgRows));
+    await listDeletedDataLakes(ctx({ userId: 'me', organizationIds: ['orgA'] }), { db: asMember });
+    expect(reachPassedTo(asMember)).toEqual([]);
+  });
+
+  // The deleted view's docblock claims the archived view's rationale, so it must behave the same way.
+  it('applies the same split in the deleted view', async () => {
+    const reader = dbFor(grantRepoFor({ 'user:me': [{ dataLakeId: 'granted', role: 'reader' }] }));
+    await listDeletedDataLakes(ctx({ userId: 'me' }), { db: reader });
+    expect(reachPassedTo(reader)).toEqual([]);
+
+    const curator = dbFor(grantRepoFor({ 'user:me': [{ dataLakeId: 'granted', role: 'curator' }] }));
+    await listDeletedDataLakes(ctx({ userId: 'me' }), { db: curator });
+    expect(reachPassedTo(curator)).toEqual(['granted']);
+  });
+
+  // The transitional view post-filters on canManageLake, so narrowing its reach cannot change its
+  // output - but it must not go the other way and start withholding a lake the filter would keep.
+  it('keeps a curator-granted lake reachable in the transitional view', async () => {
+    const db = dbFor(grantRepoFor({ 'user:me': [{ dataLakeId: 'granted', role: 'curator' }] }));
+
+    await listTransitionalDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(reachPassedTo(db)).toEqual(['granted']);
+  });
+
+  it('does not read the read-grant cutover flag at all', async () => {
+    const db = dbFor(grantRepoFor({ 'user:me': [{ dataLakeId: 'granted', role: 'curator' }] }));
+
+    await listArchivedDataLakes(ctx({ userId: 'me' }), { db });
+
+    // A flag read here would mean an owner/curator grant - whose producers are live and unflagged -
+    // could be withheld by an operator toggle that has nothing to do with management.
+    expect(db.settings.getSettingsValue).not.toHaveBeenCalled();
+  });
+
+  it('degrades to an empty reach when no grant repo is wired', async () => {
+    const db = {
+      dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() },
+      settings: { getSettingsValue: vi.fn().mockResolvedValue(true) },
+    };
+
+    await listArchivedDataLakes(ctx({ userId: 'me', administeredOrgIds: ['orgA'] }), { db });
+
+    expect(db.dataLakes.findAccessible.mock.calls[0][1].grantedLakeIds).toEqual([]);
+  });
+});
+
+/**
+ * The cases above assert the reach on findAccessible's INPUT. These assert the views' output,
+ * because what the org arm's removal closes is a disclosure: the archived/deleted views redact
+ * fields and keep the row, so every lake the reach admits is a lake whose name and slug leave the
+ * service, however little the caller may then do with it.
+ *
+ * findAccessible is faked rather than stubbed here, so the fake has to take a position on each arm
+ * of the real DataLakeModel.findAccessible. It deliberately models a SUBSET of them - see
+ * ARM_COVERAGE below, whose keys are pinned to the shared FIND_ACCESSIBLE_ARMS inventory by a test
+ * in this file. What is enforced is arm AWARENESS, not output equality: matching the real query
+ * arm-for-arm would mean re-implementing the requirement gate, the not-private exclusion and the
+ * isAdmin bypass in JS, a second copy that can drift on its own with nothing proving the two agree.
+ * The database side of the same inventory is pinned in DataLakeModel.accessArms.test.ts.
+ */
+describe("management views - an org grant on another org's lake discloses nothing", () => {
+  // One line per arm of the real findAccessible, saying how this fake models it or why these
+  // scenarios do not need it. Adding an arm to that method therefore fails HERE, next to the fake
+  // that would otherwise have silently stopped covering it.
+  const ARM_COVERAGE: Record<FindAccessibleArm, string> = {
+    owner: 'modeled: createdByUserId === actor.userId',
+    public:
+      'not modeled - no scenario here uses a public lake, and the management views these ' +
+      'cases exercise pass includePublic:false, which drops the arm from the real query too',
+    orgGate:
+      'modeled as membership only (actor.organizationIds contains the lake org); the real arm is ' +
+      'wider - it also admits an ORG-LESS lake, and ANDs the requirement gate and the not-private ' +
+      'exclusion, none of which these lakes exercise (every lake here is org-scoped and gate-less)',
+    orgAdmin: 'modeled: actor.administeredOrgIds contains the lake org - the arm these cases turn on',
+    grant: 'modeled: opts.grantedLakeIds contains the lake id, which is what the reach under test feeds it',
+    orgGrant:
+      'not modeled, deliberately - the management views under test pass includePublic:false and no ' +
+      'orgGrantedLakes, so the real query drops this arm too. That suppression is the property these ' +
+      "cases assert: an org grant on another org's lake must not name it in a restore/cleanup list",
+  };
+
+  it('accounts for every arm of the real findAccessible', () => {
+    // Fails when FIND_ACCESSIBLE_ARMS grows, which is the point: the new arm needs a decision here
+    // before the disclosure cases below can go on claiming what they claim.
+    expect(Object.keys(ARM_COVERAGE).sort()).toEqual([...FIND_ACCESSIBLE_ARMS].sort());
+  });
+
+  const findAccessibleFake = (all: IDataLakeDocument[]) =>
+    vi
+      .fn()
+      .mockImplementation(async (actor: AccessContext, opts: { grantedLakeIds?: string[] }) =>
+        all.filter(
+          l =>
+            l.createdByUserId === actor.userId ||
+            (!!l.organizationId &&
+              ((actor.organizationIds ?? []).includes(l.organizationId) ||
+                (actor.administeredOrgIds ?? []).includes(l.organizationId))) ||
+            (opts.grantedLakeIds ?? []).includes(l.id)
+        )
+      );
+
+  const dbWith = (all: IDataLakeDocument[], rows: Record<string, { dataLakeId: string; role: string }[]>) => ({
+    dataLakes: { findAccessible: findAccessibleFake(all), find: vi.fn() },
+    dataLakeAccessGrants: {
+      listByPrincipal: vi
+        .fn()
+        .mockImplementation(
+          async (principalType: string, principalId: string) => rows[`${principalType}:${principalId}`] ?? []
+        ),
+      listActiveByLakes: vi.fn().mockResolvedValue([]),
+    },
+    settings: { getSettingsValue: vi.fn().mockResolvedValue(true) },
+  });
+
+  // orgB's lake, an orgA owner grant, an orgA admin who has nothing else on it: canManageLake denies
+  // the manage, so the list must not name the lake either.
+  const crossOrg = () => ({
+    lakes: [lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', organizationId: 'orgB' })],
+    grants: { 'organization:orgA': [{ dataLakeId: 'theirs', role: 'owner' }] },
+    actor: ctx({ userId: 'me', administeredOrgIds: ['orgA'] }),
+  });
+
+  it('keeps it out of the archived view', async () => {
+    const { lakes, grants, actor } = crossOrg();
+    const db = dbWith(lakes, grants);
+
+    expect(await listArchivedDataLakes(actor, { db })).toEqual([]);
+  });
+
+  it('keeps it out of the deleted view', async () => {
+    const { lakes, grants, actor } = crossOrg();
+    const db = dbWith(lakes, grants);
+
+    expect(await listDeletedDataLakes(actor, { db })).toEqual([]);
+  });
+
+  it("still shows an org MEMBER their own org's archived lake (the membership arm is untouched)", async () => {
+    const theirs = lake({ id: 'ours', slug: 'ours', createdByUserId: 'other', organizationId: 'orgA' });
+    const db = dbWith([theirs], {});
+
+    const result = await listArchivedDataLakes(ctx({ userId: 'me', organizationIds: ['orgA'] }), { db });
+
+    expect(result.map(l => l.id)).toEqual(['ours']);
+  });
+
+  it('still shows a USER owner grant, which carries its own authorization', async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', organizationId: 'orgB' });
+    const db = dbWith([theirs], { 'user:me': [{ dataLakeId: 'theirs', role: 'owner' }] });
+
+    const result = await listArchivedDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.map(l => l.id)).toEqual(['theirs']);
+  });
+});
+
+describe('assertLakeWriteAccess — read-then-manage gate for the upload doors', () => {
+  it('returns the lake for the creator', async () => {
+    const l = lake({ createdByUserId: 'owner' });
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn() } };
+    await expect(assertLakeWriteAccess('lake1', ctx({ userId: 'owner' }), { db })).resolves.toBe(l);
+  });
+
+  it('not-found for a caller who cannot even read the lake (no existence leak)', async () => {
+    const l = lake({ organizationId: 'orgA', requiredUserTag: 'Opti', createdByUserId: 'owner' });
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn() } };
+    await expect(
+      assertLakeWriteAccess('lake1', ctx({ userId: 'x', organizationIds: ['orgB'], userTags: ['opti'] }), { db })
+    ).rejects.toThrow(/not found/i);
+  });
+
+  it('manage-denied for a reader who is not the creator (the manage-access asymmetry)', async () => {
+    const l = lake({ organizationId: 'orgA', requiredUserTag: 'Opti', createdByUserId: 'owner' });
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn() } };
+    await expect(
+      assertLakeWriteAccess('lake1', ctx({ userId: 'reader', organizationIds: ['orgA'], userTags: ['opti'] }), { db })
+    ).rejects.toThrow(/do not have permission to add files/i);
+  });
+
+  it('manage-denied for a stranger on a PUBLIC lake — read passes the gate, write must not', async () => {
+    const l = lake({ createdByUserId: 'owner', isPublic: true });
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn() } };
+    await expect(assertLakeWriteAccess('lake1', ctx({ userId: 'stranger' }), { db })).rejects.toThrow(
+      /do not have permission to add files/i
+    );
+  });
+
+  it('refuses a fallback lake as read-only even for an admin (no document to write into)', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: vi.fn().mockResolvedValue(null),
+      },
+    };
+    await expect(assertLakeWriteAccess('opti-knowledge', ctx({ isAdmin: true }), { db })).rejects.toThrow(/read-only/i);
+  });
+});
+
+// This gate is the one exception to "fallback lakes are read-only for everyone" - rebuild
+// re-chunks files without touching the lake document, so it gates on ctx.isAdmin directly for a
+// fallback lake instead of assertLakeWritable + resolveCanManageLake.
+describe('assertLakeRebuildAccess - narrower-than-write gate that DOES reach fallback lakes', () => {
+  const fallbackDb = () => ({
+    dataLakes: {
+      findById: vi.fn().mockRejectedValue(new Error('bad id')),
+      findBySlug: vi.fn().mockResolvedValue(null),
+    },
+  });
+
+  it('returns the lake for the creator on a DB lake (same as assertLakeWriteAccess)', async () => {
+    const l = lake({ createdByUserId: 'owner' });
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn() } };
+    await expect(assertLakeRebuildAccess('lake1', ctx({ userId: 'owner' }), { db })).resolves.toBe(l);
+  });
+
+  it('manage-denied for a reader who is not the creator, on a DB lake', async () => {
+    const l = lake({ organizationId: 'orgA', requiredUserTag: 'Opti', createdByUserId: 'owner' });
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn() } };
+    await expect(
+      assertLakeRebuildAccess('lake1', ctx({ userId: 'reader', organizationIds: ['orgA'], userTags: ['opti'] }), {
+        db,
+      })
+    ).rejects.toThrow(/permission to rebuild/i);
+  });
+
+  // The headline behaviour this gate exists for.
+  it('a platform admin CAN rebuild a fallback lake', async () => {
+    const resolved = await assertLakeRebuildAccess('opti-knowledge', ctx({ isAdmin: true }), { db: fallbackDb() });
+    expect(resolved.id).toBe('opti-knowledge');
+  });
+
+  it('a non-admin WITH lake access (tag/entitlement) still CANNOT rebuild a fallback lake', async () => {
+    await expect(
+      assertLakeRebuildAccess('opti-knowledge', ctx({ userTags: ['opti'] }), { db: fallbackDb() })
+    ).rejects.toThrow(/permission to rebuild/i);
+  });
+
+  // administeredOrgIds has no effect on opti-knowledge specifically, since it carries no
+  // organizationId at all - resolveCanManageLake's org rung has nothing to key on either way, so
+  // this does NOT distinguish ctx.isAdmin from resolveCanManageLake (see the positive control
+  // below, which does, via a synthetic org-scoped fallback lake).
+  it('administeredOrgIds has no effect on a fallback lake with no organizationId (opti-knowledge)', async () => {
+    await expect(
+      assertLakeRebuildAccess('opti-knowledge', ctx({ userTags: ['opti'], administeredOrgIds: ['orgA'] }), {
+        db: fallbackDb(),
+      })
+    ).rejects.toThrow(/permission to rebuild/i);
+  });
+
+  // POSITIVE CONTROL for the design decision that reversed this gate's first draft:
+  // resolveFallbackLake spreads a config's organizationId onto the synthetic doc, so
+  // canManageLake's org-admin rung WOULD grant a customer-side org admin (not a platform admin) if
+  // this gate consulted resolveCanManageLake for a fallback lake. The test above cannot prove that,
+  // because opti-knowledge has no organizationId - the org rung never gets a chance to fire either
+  // way. This one pushes a synthetic org-scoped fallback lake into the real (mutable) DATA_LAKES
+  // registry so the two predicates can actually diverge, confirms canManageLake WOULD have granted
+  // the actor (so the refusal below is a genuine choice, not an unrelated denial), then confirms
+  // assertLakeRebuildAccess refuses them anyway.
+  //
+  // TRAP FOR A FUTURE TEST: only gates that read DATA_LAKES LIVE (isFallbackLake,
+  // resolveFallbackLake, used here) see this synthetic entry. assertCanWriteDataLakeTags
+  // (authorizeLakeWrite.ts) checks STATIC_REGISTRY_DATALAKE_TAGS, a Set snapshotted from
+  // DATA_LAKES at MODULE LOAD - a test reusing this push-into-DATA_LAKES pattern against that
+  // gate would get a passing test via the WRONG branch (falls through to findByDatalakeTag ->
+  // null -> "no such lake", not "static registry lake is admin-only"), with no signal that
+  // anything is wrong.
+  describe('org-scoped fallback lake (synthetic registry entry - proves the org rung is truly bypassed)', () => {
+    const ORG_LAKE_ID = 'test-only-org-scoped-fallback';
+    const orgLakeConfig = {
+      id: ORG_LAKE_ID,
+      slug: ORG_LAKE_ID,
+      name: 'Test-only org-scoped fallback',
+      fileTagPrefix: 'testorgfallback:',
+      datalakeTag: `datalake:${ORG_LAKE_ID}`,
+      organizationId: 'orgA',
+    };
+
+    beforeEach(() => {
+      DATA_LAKES.push(orgLakeConfig);
+    });
+
+    afterEach(() => {
+      const idx = DATA_LAKES.indexOf(orgLakeConfig);
+      if (idx !== -1) DATA_LAKES.splice(idx, 1);
+    });
+
+    const orgAdminCtx = ctx({ userId: 'org-admin', organizationIds: ['orgA'], administeredOrgIds: ['orgA'] });
+
+    it('canManageLake WOULD grant this actor via the org rung (the case this gate must not reach)', () => {
+      // The org rung only fires because this synthetic lake carries organizationId: 'orgA' AND the
+      // actor administers 'orgA' - the exact shape resolveFallbackLake would produce if this gate
+      // consulted resolveCanManageLake instead of ctx.isAdmin directly.
+      expect(canManageLake({ createdByUserId: '', organizationId: 'orgA' }, orgAdminCtx)).toBe(true);
+    });
+
+    it('assertLakeRebuildAccess refuses this org admin anyway - the org rung is truly bypassed', async () => {
+      await expect(assertLakeRebuildAccess(ORG_LAKE_ID, orgAdminCtx, { db: fallbackDb() })).rejects.toThrow(
+        /permission to rebuild/i
+      );
+    });
+
+    it('a platform admin still CAN rebuild the org-scoped fallback lake', async () => {
+      const resolved = await assertLakeRebuildAccess(ORG_LAKE_ID, ctx({ isAdmin: true, organizationIds: ['orgA'] }), {
+        db: fallbackDb(),
+      });
+      expect(resolved.id).toBe(ORG_LAKE_ID);
+    });
+  });
+
+  // The regression that matters most: this gate must not have weakened assertLakeWritable itself.
+  // A single call to the shared primitive proves it, rather than exercising each of the four
+  // route handlers (rename/describe, archive/delete, visibility, file-removal) that call it - they
+  // all delegate to this one function, so this is not four assertions in one, it is the same
+  // regression pin as the 'assertLakeWritable / isFallbackLake' describe block above, kept local
+  // to this describe block too since it is the fact this gate must never weaken.
+  it('assertLakeWritable itself still refuses a fallback lake (untouched by this gate)', () => {
+    expect(() => assertLakeWritable({ id: 'opti-knowledge' })).toThrow(/read-only/i);
+  });
+});
+
+describe('listDataLakes / listAllDataLakes - canRebuild flag for fallback (built-in) lakes', () => {
+  it('canManage stays false for a fallback lake even for an admin (listAllDataLakes)', async () => {
+    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) } };
+    const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
+    expect(result.find(l => l.id === 'opti-knowledge')?.canManage).toBe(false);
+  });
+
+  it('canRebuild is true for an admin on a fallback lake (listAllDataLakes)', async () => {
+    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) } };
+    const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
+    expect(result.find(l => l.id === 'opti-knowledge')?.canRebuild).toBe(true);
+  });
+
+  it('canRebuild is false for a non-admin reader on a fallback lake (listDataLakes)', async () => {
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() } };
+    const result = await listDataLakes(ctx({ userId: 'me', userTags: ['Opti'] }), { db });
+    const fallback = result.find(l => l.id === 'opti-knowledge');
+    expect(fallback?.canManage).toBe(false);
+    expect(fallback?.canRebuild).toBe(false);
+  });
+
+  it('canRebuild === canManage for a DB lake (both true for the owner, both false for a stranger)', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine, theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    const own = result.find(l => l.id === 'mine');
+    expect(own?.canManage).toBe(true);
+    expect(own?.canRebuild).toBe(true);
+
+    const stranger = result.find(l => l.id === 'theirs');
+    expect(stranger?.canManage).toBe(false);
+    expect(stranger?.canRebuild).toBe(false);
+  });
+});
+
+describe('updateDataLake - now delegates the manage gate to canManageLake (#1153)', () => {
+  it('denies a blank-identity lake rather than granting on the both-unset match', async () => {
+    const blank = lake({ createdByUserId: '' });
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(blank), update: vi.fn() } };
+    await expect(updateDataLake({ userId: '', isAdmin: false }, 'lake1', { name: 'Renamed' }, { db })).rejects.toThrow(
+      /do not have permission to update/i
+    );
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('updateDataLake — gate-after-publish guardrail', () => {
+  it('refuses adding a required tag or entitlement to a public lake (mirrors setLakeVisibility)', async () => {
+    const l = lake({ createdByUserId: 'owner', isPublic: true });
+    const update = vi.fn();
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { requiredUserTag: 'Opti' }, { db })
+    ).rejects.toThrow(/public/i);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('allows a metadata-only update (rename) on a public lake', async () => {
+    const l = lake({ createdByUserId: 'owner', isPublic: true });
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { name: 'Renamed' }, { db })
+    ).resolves.toMatchObject({ name: 'Renamed' });
+  });
+});
+
+describe('updateDataLake - config-write actor stamp', () => {
+  const makeDb = (l: IDataLakeDocument) => {
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    return { db: { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } }, update };
+  };
+
+  it('records the acting principal, not the creator', async () => {
+    // The admin arm is the whole point: it grants manage over every tenant's data, and it is the
+    // one path where nothing else in the document would say a stranger had been here.
+    const { db, update } = makeDb(lake({ createdByUserId: 'owner' }));
+    await updateDataLake({ userId: 'platformAdmin', isAdmin: true }, 'lake1', { groundingMode: 'inline' }, { db });
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ lastUpdatedByUserId: 'platformAdmin' }));
+    // Every call, not just one of them: `toHaveBeenCalledWith(not.objectContaining(...))` passes as
+    // soon as ANY recorded call lacks the key, so it would go vacuous the moment a second update is
+    // added. Same loop shape as the guard in transferLakeOwnership.test.ts.
+    for (const [payload] of update.mock.calls) {
+      expect(payload).not.toHaveProperty('createdByUserId');
+    }
+  });
+
+  it('ignores a lastUpdatedByUserId supplied in the request body', async () => {
+    // Belt and braces: UpdateDataLakeRequestInput declares no such field, so secureParameters
+    // strips it - and the stamp is spread AFTER params, so even a schema change could not let a
+    // crafted body attribute its own write to someone else.
+    const { db, update } = makeDb(lake({ createdByUserId: 'owner' }));
+    await updateDataLake(
+      { userId: 'owner', isAdmin: false },
+      'lake1',
+      { name: 'Renamed', lastUpdatedByUserId: 'someoneElse' } as never,
+      { db }
+    );
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ lastUpdatedByUserId: 'owner' }));
+  });
+
+  it('writes no stamp key at all for an actor with no id, leaving a prior stamp intact', async () => {
+    const { db, update } = makeDb(lake({ createdByUserId: '', lastUpdatedByUserId: 'earlierAdmin' }));
+    await updateDataLake({ userId: '', isAdmin: true }, 'lake1', { name: 'Renamed' }, { db });
+
+    // Absent, not '': a stored empty id would read as a real principal whose identity was lost,
+    // and it would overwrite the last write that WAS attributable.
+    expect(update).toHaveBeenCalledWith(expect.not.objectContaining({ lastUpdatedByUserId: expect.anything() }));
+  });
+});
+
+describe('updateDataLake — per-lake systemPrompt (#843)', () => {
+  it('persists a systemPrompt set by the lake creator', async () => {
+    const l = lake({ createdByUserId: 'owner' });
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { systemPrompt: 'Answer as an HR rep.' }, { db })
+    ).resolves.toMatchObject({ systemPrompt: 'Answer as an HR rep.' });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: 'Answer as an HR rep.' }));
+  });
+
+  it('lets an admin set the systemPrompt on a lake they did not create', async () => {
+    const l = lake({ createdByUserId: 'owner' });
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'other', isAdmin: true }, 'lake1', { systemPrompt: 'Be concise.' }, { db })
+    ).resolves.toMatchObject({ systemPrompt: 'Be concise.' });
+  });
+
+  it('rejects a non-creator non-admin editing the systemPrompt (canManageLake gate)', async () => {
+    const l = lake({ createdByUserId: 'owner' });
+    const update = vi.fn();
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'intruder', isAdmin: false }, 'lake1', { systemPrompt: 'Ignore all rules.' }, { db })
+    ).rejects.toThrow(/do not have permission to update/i);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('allows clearing the systemPrompt with an empty string (no cap, no min)', async () => {
+    const l = lake({ createdByUserId: 'owner', systemPrompt: 'old prompt' });
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { systemPrompt: '' }, { db })
+    ).resolves.toMatchObject({ systemPrompt: '' });
+  });
+});
+
+describe('updateDataLake — clearing an access gate', () => {
+  const gated = () => lake({ createdByUserId: 'owner', requiredUserTag: 'Opti', requiredEntitlement: 'product:pro' });
+  const makeDb = (l: IDataLakeDocument) => {
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    return { db: { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } }, update };
+  };
+
+  it('writes the empty string so the gate is actually removed', async () => {
+    const { db, update } = makeDb(gated());
+    await updateDataLake(
+      { userId: 'owner', isAdmin: false },
+      'lake1',
+      { requiredUserTag: '', requiredEntitlement: '' },
+      { db }
+    );
+    // '' (not undefined) is what reaches Mongo: $set drops undefined, so an omitted field
+    // would silently leave the gate in place. Read paths already treat '' as ungated.
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'lake1', requiredUserTag: '', requiredEntitlement: '' })
+    );
+  });
+
+  it('leaves an omitted gate field untouched (omit = unchanged, blank = clear)', async () => {
+    const { db, update } = makeDb(gated());
+    await updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { requiredUserTag: '' }, { db });
+    const written = update.mock.calls[0][0];
+    expect(written).toMatchObject({ requiredUserTag: '' });
+    expect(written).not.toHaveProperty('requiredEntitlement');
+  });
+
+  it("lets an admin clear a gate on someone else's lake, and refuses a non-owner", async () => {
+    const { db, update } = makeDb(gated());
+    await expect(
+      updateDataLake({ userId: 'admin', isAdmin: true }, 'lake1', { requiredUserTag: '' }, { db })
+    ).resolves.toMatchObject({ requiredUserTag: '' });
+
+    const other = makeDb(gated());
+    await expect(
+      updateDataLake({ userId: 'stranger', isAdmin: false }, 'lake1', { requiredUserTag: '' }, { db: other.db })
+    ).rejects.toThrow(/do not have permission to update/i);
+    expect(other.update).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it('clearing a gate on a public lake is allowed (the guardrail only blocks ADDING one)', async () => {
+    const { db } = makeDb(lake({ createdByUserId: 'owner', isPublic: true, requiredUserTag: 'Opti' }));
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { requiredUserTag: '' }, { db })
+    ).resolves.toMatchObject({ requiredUserTag: '' });
+  });
+
+  it('an ungated, org-less lake is owner-only - clearing does not make it world-readable', async () => {
+    const cleared = lake({ createdByUserId: 'owner', requiredUserTag: '', requiredEntitlement: '' });
+    expect(canAccessLake(cleared, ctx({ userId: 'stranger' }))).toBe(false);
+    expect(canAccessLake(cleared, ctx({ userId: 'owner' }))).toBe(true);
+  });
+});
+
+describe('updateDataLake - lake memory platform kill-switch is retain-but-inert', () => {
+  const makeDb = (l: IDataLakeDocument, platformEnabled: boolean) => {
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const getSettingsValue = vi.fn().mockResolvedValue(platformEnabled);
+    return {
+      db: { dataLakes: { findById: vi.fn().mockResolvedValue(l), update }, adminSettings: { getSettingsValue } },
+      update,
+      getSettingsValue,
+    };
+  };
+
+  it('records lakeMemoryEnabled ON even while the platform flag is off, so the opt-in survives', async () => {
+    // The platform flag gates BEHAVIOUR, not the stored preference: recall, the build door, the
+    // extraction chain and the health state each check it independently, so a stored `true` under a
+    // disabled platform is inert on its own. Dropping the write instead would defeat the very contract
+    // the kill-switch's retain-but-inert design exists for - the platform coming back on would have no
+    // memory of who had opted in.
+    const l = lake({ createdByUserId: 'owner', lakeMemoryEnabled: false, name: 'Old Name' });
+    const { db, update } = makeDb(l, false);
+
+    await updateDataLake(
+      { userId: 'owner', isAdmin: false },
+      'lake1',
+      { name: 'New Name', lakeMemoryEnabled: true },
+      { db }
+    );
+
+    expect(update.mock.calls[0][0]).toMatchObject({ name: 'New Name', lakeMemoryEnabled: true });
+  });
+
+  it('does not consult the platform flag at all on this route', async () => {
+    // Not merely unused: the adapter no longer requires an adminSettings port, so a route wiring one
+    // would be wiring something this service does not read. Asserted so the check cannot creep back in
+    // without someone deciding to.
+    const l = lake({ createdByUserId: 'owner', lakeMemoryEnabled: false });
+    const { db, getSettingsValue } = makeDb(l, false);
+
+    await updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { lakeMemoryEnabled: true }, { db });
+
+    expect(getSettingsValue).not.toHaveBeenCalled();
+  });
+
+  it('never writes lakeMemoryEnabled false as a side effect of the platform flag being off', async () => {
+    // Retain-but-inert, from the destructive side: an unrelated edit while the kill-switch is off must
+    // not clear anyone's opt-in. Re-asserting the value the lake already holds is a harmless idempotent
+    // $set (the audit diff sees no movement, since nothing moved); writing `false` would not be.
+    const l = lake({ createdByUserId: 'owner', lakeMemoryEnabled: true });
+    const { db, update } = makeDb(l, false);
+
+    await updateDataLake(
+      { userId: 'owner', isAdmin: false },
+      'lake1',
+      { name: 'Renamed', lakeMemoryEnabled: true },
+      { db }
+    );
+
+    expect(update.mock.calls[0][0]).not.toMatchObject({ lakeMemoryEnabled: false });
+    expect(l.lakeMemoryEnabled).toBe(true);
+  });
+
+  it('allows turning lakeMemoryEnabled OFF regardless of the platform flag', async () => {
+    const l = lake({ createdByUserId: 'owner', lakeMemoryEnabled: true });
+    const { db, update } = makeDb(l, false);
+
+    await updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { lakeMemoryEnabled: false }, { db });
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ lakeMemoryEnabled: false }));
+  });
+
+  it('applies a request to turn lakeMemoryEnabled ON when the platform flag is on', async () => {
+    const l = lake({ createdByUserId: 'owner', lakeMemoryEnabled: false });
+    const { db, update } = makeDb(l, true);
+
+    await updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { lakeMemoryEnabled: true }, { db });
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ lakeMemoryEnabled: true }));
+  });
+});
+
+describe('UpdateDataLakeRequestInput — gate clear sentinel', () => {
+  it('accepts the empty string for both gate fields', () => {
+    const parsed = UpdateDataLakeRequestInput.parse({ requiredUserTag: '', requiredEntitlement: '' });
+    expect(parsed).toEqual({ requiredUserTag: '', requiredEntitlement: '' });
+  });
+
+  it('still rejects a non-namespaced entitlement (the sentinel is not a validation hole)', () => {
+    expect(() => UpdateDataLakeRequestInput.parse({ requiredEntitlement: 'pro' })).toThrow();
+  });
+});
+
+describe('assertCanWriteDataLakeTags — gate on the file-tag write paths', () => {
+  const makeDb = (found: IDataLakeDocument | null) => ({
+    dataLakes: { findByDatalakeTag: vi.fn().mockResolvedValue(found) },
+  });
+
+  it('ignores non-meta tags entirely (no lookup, no throw)', async () => {
+    const db = makeDb(null);
+    await expect(
+      assertCanWriteDataLakeTags({ userId: 'anyone', isAdmin: false }, ['acme:sales', 'notes'], { db })
+    ).resolves.toBeUndefined();
+    expect(db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
+  });
+
+  it('allows the creator to apply the lake meta-tag', async () => {
+    const db = makeDb(lake({ createdByUserId: 'owner', datalakeTag: 'datalake:lake' }));
+    await expect(
+      assertCanWriteDataLakeTags({ userId: 'owner', isAdmin: false }, ['datalake:lake'], { db })
+    ).resolves.toBeUndefined();
+  });
+
+  it('allows an admin to apply the lake meta-tag', async () => {
+    const db = makeDb(lake({ createdByUserId: 'owner', datalakeTag: 'datalake:lake' }));
+    await expect(
+      assertCanWriteDataLakeTags({ userId: 'other', isAdmin: true }, ['datalake:lake'], { db })
+    ).resolves.toBeUndefined();
+  });
+
+  it('rejects a read-only member injecting into a lake they do not own', async () => {
+    const db = makeDb(lake({ createdByUserId: 'owner', datalakeTag: 'datalake:lake' }));
+    await expect(
+      assertCanWriteDataLakeTags({ userId: 'reader', isAdmin: false }, ['datalake:lake'], { db })
+    ).rejects.toThrow(/do not have permission to change/i);
+  });
+
+  it('rejects a meta-tag that resolves to no lake (forged/stale tag)', async () => {
+    const db = makeDb(null);
+    await expect(
+      assertCanWriteDataLakeTags({ userId: 'owner', isAdmin: false }, ['datalake:ghost'], { db })
+    ).rejects.toThrow(/do not have permission to change/i);
+  });
+
+  it('tolerates malformed (non-string) tag entries — fails closed as 400, never a TypeError', async () => {
+    const db = makeDb(lake({ createdByUserId: 'owner', datalakeTag: 'datalake:lake' }));
+    // A raw, un-validated payload with null/number/object entries must not crash the guard.
+    await expect(
+      assertCanWriteDataLakeTags({ userId: 'owner', isAdmin: false }, [null, undefined, 42, {}, 'notes'] as unknown[], {
+        db,
+      })
+    ).resolves.toBeUndefined();
+    expect(db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
+  });
+
+  it('normalizes a mixed-case meta-tag to its canonical (lowercase) lake key before lookup', async () => {
+    const db = makeDb(lake({ createdByUserId: 'owner', datalakeTag: 'datalake:lake' }));
+    await assertCanWriteDataLakeTags({ userId: 'owner', isAdmin: false }, ['DataLake:Lake'], { db });
+    expect(db.dataLakes.findByDatalakeTag).toHaveBeenCalledWith('datalake:lake');
+  });
+
+  it('rejects when ANY meta-tag among several is unauthorized (mixed batch)', async () => {
+    const db = {
+      dataLakes: {
+        findByDatalakeTag: vi.fn(async (tag: string) =>
+          tag === 'datalake:mine'
+            ? lake({ createdByUserId: 'owner', datalakeTag: 'datalake:mine' })
+            : lake({ createdByUserId: 'someone-else', datalakeTag: 'datalake:theirs' })
+        ),
+      },
+    };
+    await expect(
+      assertCanWriteDataLakeTags({ userId: 'owner', isAdmin: false }, ['datalake:mine', 'datalake:theirs'], { db })
+    ).rejects.toThrow(/do not have permission to change/i);
+  });
+});
+
+describe('createDataLake', () => {
+  it('creates the lake in DRAFT status (draft -> active is implicit on first batch)', async () => {
+    const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
+    const db = { dataLakes: { create, find: vi.fn().mockResolvedValue([]) } };
+    await createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db });
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ status: 'draft' }));
+  });
+
+  it('refuses a tag prefix that overlaps a lake in scope, before touching the slug', async () => {
+    // The helper is unit-tested separately; this proves createDataLake actually calls it. Deleting
+    // the guard makes this pass a create through, so the assertion kills the mutant.
+    const create = vi.fn();
+    const find = vi.fn().mockResolvedValue([lake({ id: 'other', name: 'Sibling', fileTagPrefix: 'xy:' })]);
+    await expect(
+      createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db: { dataLakes: { create, find } } })
+    ).rejects.toThrow(/overlaps an existing data lake/i);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('maps a concurrent-create prefix-index collision to the same friendly error, not a raw 500', async () => {
+    // assertPrefixAvailable's read arm passed (find() sees nothing yet), but another request
+    // from the same creator won the { createdByUserId, fileTagPrefix } unique index between that
+    // read and this write - exactly the race the index exists to catch.
+    const create = vi.fn().mockRejectedValue(
+      Object.assign(new Error('E11000 duplicate key error'), {
+        code: 11000,
+        keyPattern: { createdByUserId: 1, fileTagPrefix: 1 },
+      })
+    );
+    const find = vi.fn().mockResolvedValue([]);
+    await expect(
+      createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db: { dataLakes: { create, find } } })
+    ).rejects.toThrow(/overlaps an existing data lake/i);
+  });
+
+  it('does not mislabel a duplicate-key collision on a DIFFERENT index as a prefix overlap', async () => {
+    // This collection also has unique indexes on datalakeTag and { organizationId, slug } -
+    // disambiguateSlug's 50-attempt pre-check makes hitting either here vanishingly rare, but
+    // a rare hit must still surface as itself, not get relabeled "prefix overlaps".
+    const create = vi.fn().mockRejectedValue(
+      Object.assign(new Error('E11000 duplicate key error'), {
+        code: 11000,
+        keyPattern: { organizationId: 1, slug: 1 },
+      })
+    );
+    const find = vi.fn().mockResolvedValue([]);
+    await expect(
+      createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db: { dataLakes: { create, find } } })
+    ).rejects.toThrow('E11000 duplicate key error');
+  });
+
+  it('names the clashing lake only when the caller created it', async () => {
+    // An org lake gated by a tag the caller lacks is invisible to them everywhere else, so echoing
+    // its name here would confirm it exists.
+    const theirs = lake({ id: 'other', name: 'Project Zephyr', fileTagPrefix: 'xy:', createdByUserId: 'someone-else' });
+    const find = vi.fn().mockResolvedValue([theirs]);
+    await expect(
+      createDataLake(
+        'owner',
+        { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' },
+        { db: { dataLakes: { create: vi.fn(), find } } },
+        'orgA'
+      )
+    ).rejects.toThrow(/overlaps an existing data lake in this organization/i);
+
+    const mine = lake({ id: 'other', name: 'My Other Lake', fileTagPrefix: 'xy:', createdByUserId: 'owner' });
+    await expect(
+      createDataLake(
+        'owner',
+        { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' },
+        { db: { dataLakes: { create: vi.fn(), find: vi.fn().mockResolvedValue([mine]) } } }
+      )
+    ).rejects.toThrow(/"My Other Lake"/);
+  });
+
+  it('allows a prefix that only collides outside the create scope', async () => {
+    const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
+    // find() answers the scoped query, so an out-of-scope lake simply is not in the result.
+    const find = vi.fn().mockResolvedValue([]);
+    await createDataLake(
+      'owner',
+      { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' },
+      { db: { dataLakes: { create, find } } }
+    );
+    expect(create).toHaveBeenCalled();
+  });
+
+  it('scopes the meta-tag by org and disambiguates a slug collision deterministically', async () => {
+    const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
+    // Call order: the tag-prefix availability check, then the slug probes - first slug taken,
+    // second free. `lake()` uses prefix `lk:`, which cannot collide with this lake's `xy:`.
+    const find = vi.fn().mockResolvedValueOnce([lake()]).mockResolvedValueOnce([lake()]).mockResolvedValueOnce([]);
+    const db = { dataLakes: { create, find } };
+    // org comes from the principal (4th arg), never the request body.
+    await createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db }, 'orgA');
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ slug: 'xy-1', datalakeTag: 'datalake:orgA:xy-1' }));
+  });
+
+  it('refuses to mint a meta-tag the static registry owns, even though no document holds it', () => {
+    // The meta-tag is an ownership bypass downstream, and the registry has no Mongo row for
+    // the unique index to collide with - so a lake slugged after a registry lake would read
+    // every tenant's files in it.
+    const registrySlug = DATA_LAKES[0].slug;
+    const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
+    const db = { dataLakes: { create, find: vi.fn().mockResolvedValue([]) } };
+
+    return createDataLake('mallory', { name: 'X', slug: registrySlug, fileTagPrefix: 'mine:' }, { db }).then(() => {
+      const written = create.mock.calls[0][0] as IDataLakeDocument;
+      expect(written.datalakeTag).not.toBe(DATA_LAKES[0].datalakeTag);
+      expect(written.slug).toBe(`${registrySlug}-1`);
+    });
+  });
+
+  it('still allows a registry slug inside an org, where the minted tag cannot collide', async () => {
+    // An org lake mints `datalake:<org>:<slug>`, which no registry entry can equal.
+    const registrySlug = DATA_LAKES[0].slug;
+    const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
+    const db = { dataLakes: { create, find: vi.fn().mockResolvedValue([]) } };
+
+    await createDataLake('owner', { name: 'X', slug: registrySlug, fileTagPrefix: 'mine:' }, { db }, 'orgA');
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ slug: registrySlug }));
+  });
+});
+
+describe('unarchiveDataLake - now delegates the manage gate to canManageLake (#1153)', () => {
+  it('denies a blank-identity lake rather than granting on the both-unset match', async () => {
+    const blank = lake({ createdByUserId: '', status: 'archived' });
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(blank), update: vi.fn(), setStats: vi.fn() } };
+    await expect(unarchiveDataLake({ userId: '', isAdmin: false }, 'lake1', { db } as any)).rejects.toThrow(
+      /do not have permission to restore/i
+    );
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
+  it('discards archived duplicates and restores the rest', async () => {
+    const archived = [
+      { id: 'a1', contentHash: 'h1' },
+      { id: 'a2', contentHash: 'h2' },
+    ];
+    const fabFiles = {
+      findArchivedByDataLakeTag: vi.fn().mockResolvedValue(archived),
+      // a live file with hash h1 exists (re-uploaded while archived) -> a1 is a dup.
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([{ id: 'live1', contentHash: 'h1' }]),
+      unarchiveByDataLakeTag: vi.fn().mockResolvedValue(1),
+      deleteManyInIds: vi.fn().mockResolvedValue(undefined),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 1, totalSizeBytes: 10, totalChunkedChars: 0 }),
+    };
+    const dataLakes = {
+      // The entry read sees 'archived'; every read after it sees the status claimUnarchiving
+      // claimed. The dedup pass re-reads before its hard delete and runs it only while this caller
+      // still holds 'unarchiving', so a mock that never advanced would skip the delete entirely.
+      findById: vi
+        .fn()
+        .mockResolvedValueOnce(lake({ status: 'archived' }))
+        .mockResolvedValue(lake({ status: 'unarchiving' })),
+      update: vi.fn().mockResolvedValue(lake()),
+      settleLifecycleStatus: vi
+        .fn()
+        .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      claimUnarchiving: vi.fn().mockResolvedValue(true),
+      activateIfDraft: vi.fn(),
+    };
+    const result = await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      db: { dataLakes, fabFiles },
+    });
+    // The dedup probe stays on the bare meta-tag: it decides which copy gets soft-deleted, and
+    // fileTagPrefix is not unique, so a widened probe could nominate another lake's file.
+    expect(fabFiles.findByContentHashesInDataLake).toHaveBeenCalledWith(['h1', 'h2'], 'datalake:lake');
+    // No filesArchivedAt on this lake (a lake archived before the field existed), so both the
+    // dedup read and the reversal stay unbounded, unchanged from before this stamp was threaded
+    // through.
+    expect(fabFiles.findArchivedByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
+    expect(fabFiles.unarchiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
+    expect(fabFiles.deleteManyInIds).toHaveBeenCalledWith(['a1']);
+    expect(result.skippedDuplicates).toBe(1);
+    expect(result.restoredCount).toBe(1);
+  });
+
+  it("passes this lake's own filesArchivedAt stamp through to both the dedup read and the reversal", async () => {
+    const STAMP = new Date('2026-05-01');
+    const fabFiles = {
+      findArchivedByDataLakeTag: vi.fn().mockResolvedValue([]),
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
+      unarchiveByDataLakeTag: vi.fn().mockResolvedValue(1),
+      deleteManyInIds: vi.fn().mockResolvedValue(undefined),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 1, totalSizeBytes: 10 }),
+    };
+    const dataLakes = {
+      findById: vi.fn().mockResolvedValue(lake({ status: 'archived', filesArchivedAt: STAMP })),
+      update: vi.fn().mockResolvedValue(lake()),
+      settleLifecycleStatus: vi
+        .fn()
+        .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      claimUnarchiving: vi.fn().mockResolvedValue(true),
+      activateIfDraft: vi.fn(),
+    };
+
+    await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { db: { dataLakes, fabFiles } });
+
+    expect(fabFiles.findArchivedByDataLakeTag).toHaveBeenCalledWith(lakeScope, STAMP);
+    expect(fabFiles.unarchiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, STAMP);
+  });
+
+  it('clears filesArchivedAt so a later re-archive claims a fresh stamp, not a stale reused one', async () => {
+    const fabFiles = {
+      findArchivedByDataLakeTag: vi.fn().mockResolvedValue([]),
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
+      unarchiveByDataLakeTag: vi.fn().mockResolvedValue(0),
+      deleteManyInIds: vi.fn().mockResolvedValue(undefined),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+    };
+    const dataLakes = {
+      findById: vi.fn().mockResolvedValue(lake({ status: 'archived', filesArchivedAt: new Date('2026-05-01') })),
+      update: vi.fn().mockResolvedValue(lake()),
+      settleLifecycleStatus: vi
+        .fn()
+        .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      claimUnarchiving: vi.fn().mockResolvedValue(true),
+      activateIfDraft: vi.fn(),
+    };
+    await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { db: { dataLakes, fabFiles } });
+
+    // The transitional 'unarchiving' hop is a CLAIM, not an update, so it carries no operator stamp
+    // by construction - which is the one-stamp-per-operator-action rule this block exists to hold.
+    // Asserting `update` wrote nothing at all keeps that rule pinned: reinstating a plain $set for
+    // either hop (the race in #2086, or the terminal one this issue closes) would fail this.
+    expect(dataLakes.claimUnarchiving).toHaveBeenCalledWith('lake1');
+    expect(dataLakes.update).not.toHaveBeenCalled();
+
+    const [, from, settle] = dataLakes.settleLifecycleStatus.mock.calls.at(-1) ?? [];
+    expect(from).toBe('unarchiving');
+    expect(settle).toEqual({ status: 'active', filesArchivedAt: null, lastUpdatedByUserId: 'owner' });
+  });
+
+  it('refuses the restore when claimUnarchiving LOSES to a delete accepted mid-call (#2086)', async () => {
+    // deleteDataLake accepts 'archived' too, so it can run to completion between this caller's
+    // status read and its transitional write. Before the claim, that write was a blind $set: the
+    // unarchive carried on to settle 'active' over a lake whose members were already soft-deleted,
+    // and restoreDeletedDataLake refuses an 'active' lake - the files had no route back.
+    const fabFiles = {
+      findArchivedByDataLakeTag: vi.fn(),
+      findByContentHashesInDataLake: vi.fn(),
+      unarchiveByDataLakeTag: vi.fn(),
+      deleteManyInIds: vi.fn(),
+      computeDataLakeStats: vi.fn(),
+    };
+    const dataLakes = {
+      // Read as 'archived' (the guard passes), but the delete won the race and it is now 'deleted'.
+      findById: vi
+        .fn()
+        .mockResolvedValueOnce(lake({ status: 'archived' }))
+        .mockResolvedValue(lake({ status: 'deleted' })),
+      claimUnarchiving: vi.fn().mockResolvedValue(false),
+      update: vi.fn(),
+      setStats: vi.fn(),
+      activateIfDraft: vi.fn(),
+    };
+
+    await expect(
+      unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { db: { dataLakes, fabFiles } } as never)
+    ).rejects.toThrow(/Cannot restore a data lake in 'deleted' status/i);
+
+    // Losing the claim must abort before any file work AND before the terminal 'active' write -
+    // settling 'active' is what made the delete's soft-deleted members unreachable.
+    expect(fabFiles.unarchiveByDataLakeTag).not.toHaveBeenCalled();
+    expect(fabFiles.deleteManyInIds).not.toHaveBeenCalled();
+    expect(dataLakes.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('unarchiveDataLake - Drive connection re-enable', () => {
+  const makeAdapters = () => {
+    const fabFiles = {
+      findArchivedByDataLakeTag: vi.fn().mockResolvedValue([]),
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
+      unarchiveByDataLakeTag: vi.fn().mockResolvedValue(0),
+      deleteManyInIds: vi.fn().mockResolvedValue(undefined),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+    };
+    const dataLakes = {
+      findById: vi.fn().mockResolvedValue(lake({ status: 'archived' })),
+      update: vi.fn().mockResolvedValue(lake()),
+      settleLifecycleStatus: vi
+        .fn()
+        .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      claimUnarchiving: vi.fn().mockResolvedValue(true),
+      activateIfDraft: vi.fn(),
+    };
+    return { db: { dataLakes, fabFiles } };
+  };
+
+  it('re-enables the Drive connection once the lake has settled back to active', async () => {
+    const adapters = makeAdapters();
+    const enableDriveConnection = vi.fn().mockResolvedValue(undefined);
+
+    await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, enableDriveConnection });
+
+    expect(enableDriveConnection).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
+  });
+
+  it('survives a rejecting port when the caller passed no logger at all', async () => {
+    // The port's logger is doubly optional (`logger?.warn?.`) because unarchive/restore inherit an
+    // audit logger whose own `warn` is optional - a required-shape call would throw here instead.
+    const adapters = makeAdapters();
+    const enableDriveConnection = vi.fn().mockRejectedValue(new Error('drive down'));
+
+    await expect(
+      unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, enableDriveConnection })
+    ).resolves.toBeTruthy();
+    expect(enableDriveConnection).toHaveBeenCalled();
+  });
+
+  it('does not re-enable when the lake vanished mid-unarchive (lenient path, no throw)', async () => {
+    // The vanished branch returns normally rather than throwing, so without this a lost settle over a
+    // deleted lake would still look like a completed unarchive AND re-enable its poll.
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.settleLifecycleStatus = vi.fn().mockResolvedValue(null);
+    adapters.db.dataLakes.findById = vi
+      .fn()
+      .mockResolvedValueOnce(lake({ status: 'archived' }))
+      .mockResolvedValue(null);
+    const enableDriveConnection = vi.fn().mockResolvedValue(undefined);
+
+    await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, enableDriveConnection });
+
+    expect(enableDriveConnection).not.toHaveBeenCalled();
+  });
+
+  it('does not re-enable when the settle is lost (lake moved mid-restore)', async () => {
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.settleLifecycleStatus = vi.fn().mockResolvedValue(null);
+    adapters.db.dataLakes.findById = vi
+      .fn()
+      .mockResolvedValueOnce(lake({ status: 'archived' }))
+      .mockResolvedValue(lake({ status: 'deleted' }));
+    const enableDriveConnection = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, enableDriveConnection })
+    ).rejects.toThrow(/moved to 'deleted'/i);
+    expect(enableDriveConnection).not.toHaveBeenCalled();
+  });
+});
+
+describe('restoreDeletedDataLake - now delegates the manage gate to canManageLake (#1153)', () => {
+  it('denies a blank-identity lake rather than granting on the both-unset match', async () => {
+    const blank = lake({ createdByUserId: '', status: 'deleted' });
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(blank), update: vi.fn(), setStats: vi.fn() } };
+    await expect(restoreDeletedDataLake({ userId: '', isAdmin: false }, 'lake1', { db } as any)).rejects.toThrow(
+      /do not have permission to restore/i
+    );
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('restoreDeletedDataLake — deleted→active with dedup', () => {
+  it('rejects a lake that is not soft-deleted', async () => {
+    const dataLakes = {
+      findById: vi.fn().mockResolvedValue(lake({ status: 'active' })),
+      update: vi.fn(),
+      setStats: vi.fn(),
+      activateIfDraft: vi.fn(),
+    };
+    const fabFiles = {
+      findDeletedByDataLakeTag: vi.fn(),
+      findByContentHashesInDataLake: vi.fn(),
+      undeleteByDataLakeTag: vi.fn(),
+      computeDataLakeStats: vi.fn(),
+    };
+    await expect(
+      restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { db: { dataLakes, fabFiles } })
+    ).rejects.toThrow(/'active' status/i);
+  });
+
+  it('un-deletes non-duplicates and excludes live-re-upload duplicates', async () => {
+    const deleted = [
+      { id: 'd1', contentHash: 'h1' },
+      { id: 'd2', contentHash: 'h2' },
+    ];
+    const fabFiles = {
+      findDeletedByDataLakeTag: vi.fn().mockResolvedValue(deleted),
+      // a live file with hash h1 exists -> d1 is a dup and must be excluded from un-delete.
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([{ id: 'live1', contentHash: 'h1' }]),
+      undeleteByDataLakeTag: vi.fn().mockResolvedValue(1),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 1, totalSizeBytes: 10, totalChunkedChars: 0 }),
+    };
+    const dataLakes = {
+      findById: vi.fn().mockResolvedValue(lake({ status: 'deleted' })),
+      update: vi.fn().mockResolvedValue(lake()),
+      settleLifecycleStatus: vi
+        .fn()
+        .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      activateIfDraft: vi.fn(),
+      claimRestoring: vi.fn().mockResolvedValue(true),
+    };
+    const result = await restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      db: { dataLakes, fabFiles },
+    });
+    expect(fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, ['d1'], undefined, undefined);
+    // Same narrow probe as the unarchive path, for the same reason.
+    expect(fabFiles.findByContentHashesInDataLake).toHaveBeenCalledWith(['h1', 'h2'], 'datalake:lake');
+    expect(result.skippedDuplicates).toBe(1);
+    expect(result.restoredCount).toBe(1);
+  });
+});
+
+describe('restoreDeletedDataLake - Drive connection re-enable', () => {
+  it('re-enables the Drive connection once the lake has settled back to active', async () => {
+    const fabFiles = {
+      findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
+      undeleteByDataLakeTag: vi.fn().mockResolvedValue(0),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+    };
+    const dataLakes = {
+      findById: vi.fn().mockResolvedValue(lake({ status: 'deleted' })),
+      update: vi.fn().mockResolvedValue(lake()),
+      settleLifecycleStatus: vi
+        .fn()
+        .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      activateIfDraft: vi.fn(),
+      claimRestoring: vi.fn().mockResolvedValue(true),
+    };
+    const enableDriveConnection = vi.fn().mockResolvedValue(undefined);
+
+    await restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      db: { dataLakes, fabFiles },
+      enableDriveConnection,
+    });
+
+    expect(enableDriveConnection).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
+  });
+
+  it.each([
+    ['moved', 'purging', /moved to 'purging'/i],
+    ['vanished', null, null],
+  ])('does not re-enable when the settle is lost and the lake %s', async (_label, movedTo, throws) => {
+    // The flip must follow the settle: a restore that lost the race leaves the lake soft-deleted (or
+    // gone), so re-enabling its poll there is blocker-2's dead-poll state reached from the other side.
+    const fabFiles = {
+      findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
+      undeleteByDataLakeTag: vi.fn().mockResolvedValue(0),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+    };
+    let settled = false;
+    const dataLakes = {
+      findById: vi
+        .fn()
+        .mockImplementation(async () =>
+          settled
+            ? movedTo
+              ? lake({ status: movedTo as IDataLakeDocument['status'] })
+              : null
+            : lake({ status: 'deleted' })
+        ),
+      update: vi.fn().mockResolvedValue(lake()),
+      settleLifecycleStatus: vi.fn().mockImplementation(async () => ((settled = true), null)),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      activateIfDraft: vi.fn(),
+      claimRestoring: vi.fn().mockResolvedValue(true),
+    };
+    const enableDriveConnection = vi.fn().mockResolvedValue(undefined);
+    const call = () =>
+      restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+        db: { dataLakes, fabFiles },
+        enableDriveConnection,
+      });
+
+    if (throws) await expect(call()).rejects.toThrow(throws);
+    else await call();
+
+    expect(enableDriveConnection).not.toHaveBeenCalled();
+  });
+});
+
+describe('archiveDataLake - now delegates the manage gate to canManageLake (#1153)', () => {
+  it('denies a blank-identity lake rather than granting on the both-unset match', async () => {
+    const blank = lake({ createdByUserId: '' });
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(blank), update: vi.fn(), setStats: vi.fn() } };
+    await expect(archiveDataLake({ userId: '', isAdmin: false }, 'lake1', { db } as any)).rejects.toThrow(
+      /do not have permission to archive/i
+    );
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('archiveDataLake - retrieval-index removal', () => {
+  const makeAdapters = () => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake()),
+        update: vi
+          .fn()
+          .mockImplementation(async ({ status }: { status: IDataLakeDocument['status'] }) => lake({ status })),
+        settleLifecycleStatus: vi
+          .fn()
+          .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+        setStats: vi.fn().mockResolvedValue(undefined),
+        activateIfDraft: vi.fn(),
+        find: vi.fn().mockResolvedValue([]),
+        claimFilesArchivedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
+        claimArchiving: vi.fn().mockResolvedValue(true),
+      },
+      batches: {
+        findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
+        markTerminalIfActive: vi.fn().mockResolvedValue(undefined),
+      },
+      fabFiles: {
+        archiveByDataLakeTag: vi.fn().mockResolvedValue(2),
+        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+        findIdsByDataLakeTag: vi.fn().mockResolvedValue(memberIds),
+        hasArchivedMemberExclusiveToDataLakeTag: vi.fn().mockResolvedValue(false),
+      },
+    },
+    logger: { warn: vi.fn() },
+  });
+
+  it('hands the index the whole membership scope and every member id', async () => {
+    const adapters = makeAdapters();
+    const retrievalIndex = indexPort();
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex });
+
+    // The scope, not the meta-tag: stripped of fileTagPrefix and creatorUserId an implementer
+    // cannot reach the prefix-only member the sweep just archived.
+    expect(removalInput(retrievalIndex)).toEqual({ scope: lakeScope, fabFileIds: memberIds });
+    expect(removalInput(retrievalIndex).fabFileIds).toContain('prefix-only-file');
+  });
+
+  it('still settles the lake to archived when the index removal throws', async () => {
+    const adapters = makeAdapters();
+    await expect(
+      archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+        ...adapters,
+        retrievalIndex: indexPort('fails'),
+      })
+    ).resolves.toMatchObject({ status: 'archived' });
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Best-effort index removal failed for datalake:lake'),
+      expect.any(Error)
+    );
+  });
+
+  it('resolves no member ids when no index is wired', async () => {
+    const adapters = makeAdapters();
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+    expect(adapters.db.fabFiles.findIdsByDataLakeTag).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, expect.any(Date));
+  });
+
+  it('stamps the actor on the terminal transition only, never on the transitional hop', async () => {
+    // One stamp per operator action: a crashed run that never settles must leave no record of an
+    // archive that did not happen. Both hops are conditional now - a claim in and a settle out - so
+    // the rule is a call count on the settle, which must carry the terminal write and nothing else.
+    const adapters = makeAdapters();
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    expect(adapters.db.dataLakes.claimArchiving).toHaveBeenCalledWith('lake1');
+    expect(adapters.db.dataLakes.settleLifecycleStatus.mock.calls).toEqual([
+      ['lake1', 'archiving', { status: 'archived', lastUpdatedByUserId: 'owner' }],
+    ]);
+  });
+
+  it('survives a member-id lookup that itself fails', async () => {
+    const adapters = makeAdapters();
+    // The resolver is lazy and inside the try precisely so this cannot abort a best-effort op.
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockRejectedValue(new Error('mongo down'));
+    await expect(
+      archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex: indexPort() })
+    ).resolves.toMatchObject({ status: 'archived' });
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Best-effort index removal failed for datalake:lake'),
+      expect.any(Error)
+    );
+  });
+
+  // Covers a legacy pre-field lake and a claim-without-sweep crash alike (see archiveDataLake's
+  // hasUnstampedArchive guard): naming a fresh batch here would be narrower than what's archived.
+  it('skips the claim when THIS lake already has an unstamped archived member of its own, archiving unstamped instead', async () => {
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ filesArchivedAt: undefined }));
+    adapters.db.fabFiles.hasArchivedMemberExclusiveToDataLakeTag = vi.fn().mockResolvedValue(true);
+
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    // Scoped to the meta-tag alone, not the full scope - see the call site's own comment for why
+    // the full scope would make this trip on every second archiver in a live collision.
+    expect(adapters.db.fabFiles.hasArchivedMemberExclusiveToDataLakeTag).toHaveBeenCalledWith({
+      kind: 'owned',
+      datalakeTag: 'datalake:lake',
+    });
+    expect(adapters.db.dataLakes.claimFilesArchivedAt).not.toHaveBeenCalled();
+    // No stamp to give these rows, so archiveDataLake generates an orphaned one visibly at the
+    // call site rather than relying on archiveByDataLakeTag's own default.
+    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, expect.any(Date));
+  });
+
+  it('claims its own stamp even when a prefix-sharing sibling already has an archived row, so the second lake to archive in a collision is not left permanently unstamped', async () => {
+    // The regression this guards against: a meta-tag-scoped hasArchivedMemberExclusiveToDataLakeTag
+    // mock returning false (this lake's OWN meta-tag has no archived member) even though a
+    // sibling's prefix-only row is already archived - the full-scope version would have returned
+    // true here and skipped the claim on every archive this lake ever runs while the sibling stays
+    // archived.
+    const adapters = makeAdapters();
+    const stamp = new Date('2026-05-01');
+    adapters.db.fabFiles.hasArchivedMemberExclusiveToDataLakeTag = vi.fn().mockResolvedValue(false);
+    adapters.db.dataLakes.claimFilesArchivedAt = vi.fn().mockResolvedValue(stamp);
+
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    expect(adapters.db.dataLakes.claimFilesArchivedAt).toHaveBeenCalledWith('lake1', expect.any(Date));
+    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, stamp);
+  });
+
+  it("claims its own stamp when a co-owning lake already archived a file carrying THIS lake's meta-tag too, since that row is the co-owner's under its own stamp (#1729)", async () => {
+    // Two-part proof: the DISCRIMINATION lives in the repo query, which this file mocks, so the
+    // mocked `false` is the assumption here - that the query genuinely excludes a co-tagged row is
+    // proved real-DB by "ignores an archived member that also carries another lake's meta-tag" in
+    // FabFileModel.dataLakeLifecycle.test.ts. What this pins is the DECISION: a false probe on a
+    // lake with no mark must claim, so its own later unarchive is bounded and stops freeing the
+    // co-owner's rows - the pre-fix unbounded fallback this whole guard exists to avoid.
+    const adapters = makeAdapters();
+    const stamp = new Date('2026-05-01');
+    adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ filesArchivedAt: undefined }));
+    adapters.db.fabFiles.hasArchivedMemberExclusiveToDataLakeTag = vi.fn().mockResolvedValue(false);
+    adapters.db.dataLakes.claimFilesArchivedAt = vi.fn().mockResolvedValue(stamp);
+
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    expect(adapters.db.fabFiles.hasArchivedMemberExclusiveToDataLakeTag).toHaveBeenCalledWith({
+      kind: 'owned',
+      datalakeTag: 'datalake:lake',
+    });
+    expect(adapters.db.fabFiles.hasArchivedMemberExclusiveToDataLakeTag).toHaveBeenCalledTimes(1);
+    expect(adapters.db.dataLakes.claimFilesArchivedAt).toHaveBeenCalledWith('lake1', expect.any(Date));
+    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, stamp);
+  });
+
+  it('claims normally when the lake has no unstamped archived members', async () => {
+    const adapters = makeAdapters();
+    const stamp = new Date('2026-05-01');
+    adapters.db.dataLakes.claimFilesArchivedAt = vi.fn().mockResolvedValue(stamp);
+
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    expect(adapters.db.fabFiles.hasArchivedMemberExclusiveToDataLakeTag).toHaveBeenCalledWith({
+      kind: 'owned',
+      datalakeTag: 'datalake:lake',
+    });
+    expect(adapters.db.dataLakes.claimFilesArchivedAt).toHaveBeenCalledWith('lake1', expect.any(Date));
+    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, stamp);
+  });
+
+  it('claims normally on a re-run that already holds a mark, even with archived members present (they already carry that mark)', async () => {
+    const adapters = makeAdapters();
+    const stamp = new Date('2026-05-01');
+    adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ status: 'archiving', filesArchivedAt: stamp }));
+    adapters.db.dataLakes.claimFilesArchivedAt = vi.fn().mockResolvedValue(stamp);
+    adapters.db.fabFiles.hasArchivedMemberExclusiveToDataLakeTag = vi.fn().mockResolvedValue(true);
+    // Realistic for this scenario: a crashed prior attempt already stamped every row before it
+    // died, so the re-entered sweep (still filtering archivedAt: null) matches nothing new - not
+    // because the batch was never written. The base mock's default (2) would never exercise the
+    // zero-swept branch and let a regression on this exact path slip past (caught in review).
+    adapters.db.fabFiles.archiveByDataLakeTag = vi.fn().mockResolvedValue(0);
+
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    // filesArchivedAt is already set, so the unstamped-archive check short-circuits false without
+    // even needing to ask - the lake already knows the mark those rows carry.
+    expect(adapters.db.fabFiles.hasArchivedMemberExclusiveToDataLakeTag).not.toHaveBeenCalled();
+    expect(adapters.db.dataLakes.claimFilesArchivedAt).toHaveBeenCalledWith('lake1', expect.any(Date));
+    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, stamp);
+    // The echoed stamp still names every row (they were stamped before the crash) - clearing it
+    // here, despite sweeping zero, would strand them all on a later restore.
+    expect(adapters.db.dataLakes.settleLifecycleStatus).not.toHaveBeenCalledWith(
+      'lake1',
+      'archiving',
+      expect.objectContaining({ filesArchivedAt: null })
+    );
+  });
+
+  it('warns and archives unstamped when the claim comes back empty (the lake vanished under a concurrent delete)', async () => {
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.claimFilesArchivedAt = vi.fn().mockResolvedValue(null);
+
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('archive recorded no stamp'), {
+      dataLakeId: 'lake1',
+    });
+    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, expect.any(Date));
+    expect(adapters.db.dataLakes.settleLifecycleStatus).not.toHaveBeenCalledWith(
+      'lake1',
+      'archiving',
+      expect.objectContaining({ filesArchivedAt: null })
+    );
+  });
+
+  it('keeps a freshly-minted stamp even when the sweep matches nothing (an empty lake, or a concurrent sibling/same-lake claim that swept first)', async () => {
+    // Clearing this back to null used to be the behavior - it now reads downstream as "this lake
+    // predates filesArchivedAt" and makes a later unarchive run unbounded, freeing whatever a
+    // sibling or a co-owning lake legitimately holds archived under its OWN stamp. The regression
+    // this test guards against: archiving an ordinary empty lake, in isolation, must never leave it
+    // in a state where its own later unarchive call can reach outside its own batch.
+    const adapters = makeAdapters();
+    const stamp = new Date('2026-05-01');
+    adapters.db.dataLakes.claimFilesArchivedAt = vi.fn().mockResolvedValue(stamp);
+    adapters.db.fabFiles.archiveByDataLakeTag = vi.fn().mockResolvedValue(0);
+
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    expect(adapters.db.dataLakes.settleLifecycleStatus).not.toHaveBeenCalledWith(
+      'lake1',
+      'archiving',
+      expect.objectContaining({ filesArchivedAt: null })
+    );
+  });
+
+  it('leaves the stamp alone when the sweep matches at least one row', async () => {
+    const adapters = makeAdapters();
+    adapters.db.fabFiles.archiveByDataLakeTag = vi.fn().mockResolvedValue(1);
+
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    expect(adapters.db.dataLakes.settleLifecycleStatus).not.toHaveBeenCalledWith(
+      'lake1',
+      'archiving',
+      expect.objectContaining({ filesArchivedAt: null })
+    );
+  });
+});
+
+describe('archiveDataLake - Drive connection disable', () => {
+  const makeAdapters = () => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake()),
+        settleLifecycleStatus: vi
+          .fn()
+          .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+        setStats: vi.fn().mockResolvedValue(undefined),
+        activateIfDraft: vi.fn(),
+        find: vi.fn().mockResolvedValue([]),
+        claimFilesArchivedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
+        claimArchiving: vi.fn().mockResolvedValue(true),
+      },
+      batches: {
+        findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
+        markTerminalIfActive: vi.fn().mockResolvedValue(undefined),
+      },
+      fabFiles: {
+        archiveByDataLakeTag: vi.fn().mockResolvedValue(0),
+        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+        findIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
+        hasArchivedMemberExclusiveToDataLakeTag: vi.fn().mockResolvedValue(false),
+      },
+    },
+    logger: { warn: vi.fn() },
+  });
+
+  it('disables the Drive connection once the lake has settled to archived', async () => {
+    const adapters = makeAdapters();
+    const disableDriveConnection = vi.fn().mockResolvedValue(undefined);
+
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, disableDriveConnection });
+
+    expect(disableDriveConnection).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
+  });
+
+  it('does not fail the archive when disabling the Drive connection throws (defense in depth only)', async () => {
+    const adapters = makeAdapters();
+    const disableDriveConnection = vi.fn().mockRejectedValue(new Error('drive down'));
+
+    await expect(
+      archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, disableDriveConnection })
+    ).resolves.toMatchObject({ status: 'archived' });
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to update Drive connection enabled state for lake lake1'),
+      expect.any(Error)
+    );
+  });
+
+  it('is a no-op when no Drive connection port is wired', async () => {
+    const adapters = makeAdapters();
+    await expect(archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters)).resolves.toMatchObject({
+      status: 'archived',
+    });
+  });
+
+  it.each([
+    ['moved', 'deleted', /moved to 'deleted'/i],
+    ['vanished', null, /not found after archive/i],
+  ])('does not disable when the settle is lost and the lake %s', async (_label, movedTo, throws) => {
+    // The flip must follow the settle. Flip first and an archive that loses the race (a concurrent
+    // delete or purge won) leaves the lake live with a dead Drive connection, and no later lifecycle
+    // transition ever re-enables it.
+    const adapters = makeAdapters();
+    let settled = false;
+    adapters.db.dataLakes.settleLifecycleStatus = vi.fn().mockImplementation(async () => ((settled = true), null));
+    adapters.db.dataLakes.findById = vi
+      .fn()
+      .mockImplementation(async () =>
+        settled ? (movedTo ? lake({ status: movedTo as IDataLakeDocument['status'] }) : null) : lake()
+      );
+    const disableDriveConnection = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, disableDriveConnection })
+    ).rejects.toThrow(throws);
+    expect(disableDriveConnection).not.toHaveBeenCalled();
+  });
+});
+
+describe('deleteDataLake - now delegates the manage gate to canManageLake (#1153)', () => {
+  it('denies a blank-identity lake rather than granting on the both-unset match', async () => {
+    const blank = lake({ createdByUserId: '' });
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(blank), update: vi.fn() } };
+    await expect(deleteDataLake({ userId: '', isAdmin: false }, 'lake1', { db } as any)).rejects.toThrow(
+      /do not have permission to delete/i
+    );
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('deleteDataLake - phase 1 retrieval-index removal', () => {
+  const makeAdapters = () => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake()),
+        update: vi
+          .fn()
+          .mockImplementation(async ({ status }: { status: IDataLakeDocument['status'] }) => lake({ status })),
+        settleLifecycleStatus: vi
+          .fn()
+          .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+        find: vi.fn().mockResolvedValue([]),
+        claimFilesDeletedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
+        claimDeleting: vi.fn().mockResolvedValue(true),
+      },
+      batches: {
+        findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
+        markTerminalIfActive: vi.fn().mockResolvedValue(undefined),
+      },
+      fabFiles: {
+        // Empty is the re-run shape - a crashed prior attempt already flipped these files, so the
+        // flip reports nothing. Sourcing ids from it would send the index an empty set.
+        softDeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
+        findIdsByDataLakeTag: vi.fn().mockResolvedValue(memberIds),
+      },
+    },
+    logger: { warn: vi.fn() },
+  });
+
+  it('hands the index every member id even when the soft-delete flipped nothing', async () => {
+    const adapters = makeAdapters();
+    const retrievalIndex = indexPort();
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex });
+
+    expect(removalInput(retrievalIndex)).toEqual({ scope: lakeScope, fabFileIds: memberIds });
+    expect(removalInput(retrievalIndex).fabFileIds).toContain('prefix-only-file');
+  });
+
+  it('still settles the lake to deleted when the index removal throws', async () => {
+    const adapters = makeAdapters();
+    await expect(
+      deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+        ...adapters,
+        retrievalIndex: indexPort('fails'),
+      })
+    ).resolves.toMatchObject({ status: 'deleted' });
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Best-effort index removal failed for datalake:lake'),
+      expect.any(Error)
+    );
+  });
+
+  it('resolves no member ids when no index is wired', async () => {
+    const adapters = makeAdapters();
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+    expect(adapters.db.fabFiles.findIdsByDataLakeTag).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, expect.any(Date));
+  });
+
+  it('survives a member-id lookup that itself fails', async () => {
+    const adapters = makeAdapters();
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockRejectedValue(new Error('mongo down'));
+    await expect(
+      deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex: indexPort() })
+    ).resolves.toMatchObject({ status: 'deleted' });
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Best-effort index removal failed for datalake:lake'),
+      expect.any(Error)
+    );
+  });
+});
+
+describe('deleteDataLake - Drive connection disable', () => {
+  const makeAdapters = () => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake()),
+        settleLifecycleStatus: vi
+          .fn()
+          .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+        find: vi.fn().mockResolvedValue([]),
+        claimFilesDeletedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
+        claimDeleting: vi.fn().mockResolvedValue(true),
+      },
+      batches: {
+        findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
+        markTerminalIfActive: vi.fn().mockResolvedValue(undefined),
+      },
+      fabFiles: {
+        softDeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
+        findIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
+      },
+    },
+    logger: { warn: vi.fn() },
+  });
+
+  it('disables the Drive connection once the lake has settled to deleted', async () => {
+    const adapters = makeAdapters();
+    const disableDriveConnection = vi.fn().mockResolvedValue(undefined);
+
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, disableDriveConnection });
+
+    expect(disableDriveConnection).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
+  });
+
+  it.each([
+    ['moved', 'archived', /moved to 'archived'/i],
+    ['vanished', null, /not found after delete/i],
+  ])('does not disable when the settle is lost and the lake %s', async (_label, movedTo, throws) => {
+    // Same ordering rule as archive: a phase-1 delete that lost the race must not leave a live lake
+    // with a disabled Drive connection nothing will re-enable.
+    const adapters = makeAdapters();
+    let settled = false;
+    adapters.db.dataLakes.settleLifecycleStatus = vi.fn().mockImplementation(async () => ((settled = true), null));
+    adapters.db.dataLakes.findById = vi
+      .fn()
+      .mockImplementation(async () =>
+        settled ? (movedTo ? lake({ status: movedTo as IDataLakeDocument['status'] }) : null) : lake()
+      );
+    const disableDriveConnection = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, disableDriveConnection })
+    ).rejects.toThrow(throws);
+    expect(disableDriveConnection).not.toHaveBeenCalled();
+  });
+});
+
+describe('teardown stamp bookkeeping', () => {
+  const RECORDED = new Date('2026-06-01T00:00:00.000Z');
+  const ARCHIVE_RECORDED = new Date('2026-05-01T00:00:00.000Z');
+
+  const teardownAdapters = (existing: IDataLakeDocument) => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(existing),
+        update: vi
+          .fn()
+          .mockImplementation(async ({ status }: { status: IDataLakeDocument['status'] }) => lake({ status })),
+        settleLifecycleStatus: vi
+          .fn()
+          .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+        find: vi.fn().mockResolvedValue([]),
+        // The real claim echoes back the stamp in force, which is the offered one when unclaimed.
+        claimFilesDeletedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
+        claimDeleting: vi.fn().mockResolvedValue(true),
+      },
+      batches: {
+        findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
+        markTerminalIfActive: vi.fn().mockResolvedValue(undefined),
+      },
+      fabFiles: {
+        softDeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
+        findIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
+      },
+    },
+  });
+
+  const reversalAdapters = (existing: IDataLakeDocument) => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(existing),
+        update: vi.fn().mockResolvedValue(lake()),
+        settleLifecycleStatus: vi
+          .fn()
+          .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+        setStats: vi.fn().mockResolvedValue(undefined),
+        activateIfDraft: vi.fn(),
+        claimRestoring: vi.fn().mockResolvedValue(true),
+      },
+      fabFiles: {
+        findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
+        findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
+        undeleteByDataLakeTag: vi.fn().mockResolvedValue(2),
+        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 2, totalSizeBytes: 20, totalChunkedChars: 0 }),
+      },
+    },
+  });
+
+  const owner = { userId: 'owner', isAdmin: false };
+
+  describe('deleteDataLake', () => {
+    it('claims the stamp before it sweeps', async () => {
+      const adapters = teardownAdapters(lake());
+      await deleteDataLake(owner, 'lake1', adapters);
+
+      const claim = adapters.db.dataLakes.claimFilesDeletedAt;
+      const sweep = adapters.db.fabFiles.softDeleteByDataLakeTag;
+      expect(claim).toHaveBeenCalledWith('lake1', expect.any(Date));
+      expect(claim.mock.invocationCallOrder[0]).toBeLessThan(sweep.mock.invocationCallOrder[0]);
+    });
+
+    it('sweeps with the stamp the claim RETURNED, not the one it offered', async () => {
+      // The race: a concurrent teardown already holds the mark, so the claim hands this one the
+      // winner's stamp. Sweeping with its own Date instead would stamp rows under a mark the lake
+      // does not name, and the restore keyed to that mark reverses nothing - permanently.
+      const adapters = teardownAdapters(lake());
+      adapters.db.dataLakes.claimFilesDeletedAt = vi.fn().mockResolvedValue(RECORDED);
+
+      await deleteDataLake(owner, 'lake1', adapters);
+
+      const offered = adapters.db.dataLakes.claimFilesDeletedAt.mock.calls[0][1];
+      expect(adapters.db.fabFiles.softDeleteByDataLakeTag.mock.calls[0][1]).toBe(RECORDED);
+      expect(adapters.db.fabFiles.softDeleteByDataLakeTag.mock.calls[0][1]).not.toBe(offered);
+    });
+
+    it('settles to deleted without touching the stamp', async () => {
+      const adapters = teardownAdapters(lake());
+      await deleteDataLake(owner, 'lake1', adapters);
+
+      expect(adapters.db.dataLakes.claimDeleting).toHaveBeenCalledWith('lake1');
+      // The terminal transition carries the actor stamp, and it is the ONLY settle: the
+      // transitional 'deleting' hop is a claim, which carries no payload to stamp (one stamp per
+      // operator action - see lakeConfigWriteStamp). Conditional on 'deleting', so an archive that
+      // interleaved with this teardown cannot have its own settle land here instead.
+      expect(adapters.db.dataLakes.settleLifecycleStatus.mock.calls).toEqual([
+        ['lake1', 'deleting', { status: 'deleted', lastUpdatedByUserId: 'owner' }],
+      ]);
+    });
+
+    it('leaves a teardown that predates the stamp unmarked, so its restore stays unbounded', async () => {
+      // Mid-flight when this shipped: rows already carry a stamp nothing recorded, and marking them
+      // now with a later one would strand them deleted forever.
+      //
+      // This fixture describes the LEGACY lake and nothing else, and that is only true because the
+      // stamp is claimed before the status hop - so {deleting, unstamped} cannot also be a live
+      // second teardown's snapshot. Reorder those two and this fixture silently starts naming both
+      // states, with this test asserting the unmarked sweep is fine for a case where it is not.
+      const adapters = teardownAdapters(lake({ status: 'deleting', filesDeletedAt: undefined }));
+      await deleteDataLake(owner, 'lake1', adapters);
+
+      expect(adapters.db.dataLakes.claimFilesDeletedAt).not.toHaveBeenCalled();
+      expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
+    });
+
+    it('warns when no stamp comes back, since that lake restores unbounded', async () => {
+      // The claim lost AND its fallback read found nothing, so a restore cleared the mark between
+      // the two round trips. The sweep still runs unmarked and the only other symptom is a restore
+      // that over-restores much later, which is why this one has to be audible.
+      const adapters = teardownAdapters(lake());
+      adapters.db.dataLakes.claimFilesDeletedAt = vi.fn().mockResolvedValue(null);
+      const logger = { warn: vi.fn() };
+
+      await deleteDataLake(owner, 'lake1', { ...adapters, logger });
+
+      expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('restore unbounded'), {
+        dataLakeId: 'lake1',
+      });
+    });
+
+    it('says nothing when the claim succeeds', async () => {
+      // A warning that fires on the healthy path is one nobody reads on the unhealthy one.
+      const adapters = teardownAdapters(lake());
+      const logger = { warn: vi.fn() };
+
+      await deleteDataLake(owner, 'lake1', { ...adapters, logger });
+
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('restoreDeletedDataLake', () => {
+    it('hands the recorded stamp to the dedup read and the flip', async () => {
+      const adapters = reversalAdapters(lake({ status: 'deleted', filesDeletedAt: RECORDED }));
+      await restoreDeletedDataLake(owner, 'lake1', adapters);
+
+      expect(adapters.db.fabFiles.findDeletedByDataLakeTag).toHaveBeenCalledWith(lakeScope, RECORDED);
+      expect(adapters.db.fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, [], RECORDED, undefined);
+    });
+
+    it('clears the spent delete AND archive stamps with null as it settles', async () => {
+      const adapters = reversalAdapters(lake({ status: 'deleted', filesDeletedAt: RECORDED }));
+      await restoreDeletedDataLake(owner, 'lake1', adapters);
+
+      // The transitional hop is now the CLAIM (#1744), which takes an id and nothing else - so the
+      // one-stamp-per-operator-action rule the sibling unarchive test pins with an object assertion
+      // holds structurally here: there is no payload on this hop to attach a write stamp to. What
+      // still needs pinning is that the hop happened and that the settle is the only other write.
+      expect(adapters.db.dataLakes.claimRestoring).toHaveBeenCalledWith('lake1');
+      expect(adapters.db.dataLakes.settleLifecycleStatus).toHaveBeenCalledTimes(1);
+
+      const [, from, settle] = adapters.db.dataLakes.settleLifecycleStatus.mock.calls.at(-1) ?? [];
+      // Conditional on the hop this caller claimed: a purge accepted mid-restore moves the lake off
+      // 'restoring', and settling 'active' over it would un-purge an irreversible hard delete.
+      expect(from).toBe('restoring');
+      expect(settle).toEqual({
+        status: 'active',
+        filesDeletedAt: null,
+        filesArchivedAt: null,
+        lastUpdatedByUserId: 'owner',
+      });
+      // undefined would be dropped on the way to mongo and leave the spent mark in place.
+      expect(settle.filesDeletedAt).toBeNull();
+      expect(settle.filesArchivedAt).toBeNull();
+    });
+
+    it('reverses unbounded when the lake carries no stamp', async () => {
+      const adapters = reversalAdapters(lake({ status: 'deleted' }));
+      await restoreDeletedDataLake(owner, 'lake1', adapters);
+
+      expect(adapters.db.fabFiles.findDeletedByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
+      expect(adapters.db.fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, [], undefined, undefined);
+    });
+
+    it('hands the recorded archive stamp to the flip, bounding the archive-clear to this lake', async () => {
+      const adapters = reversalAdapters(
+        lake({ status: 'deleted', filesDeletedAt: RECORDED, filesArchivedAt: ARCHIVE_RECORDED })
+      );
+      await restoreDeletedDataLake(owner, 'lake1', adapters);
+
+      expect(adapters.db.fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(
+        lakeScope,
+        [],
+        RECORDED,
+        ARCHIVE_RECORDED
+      );
+    });
+  });
+});
+
+describe('acceptDataLakePurge - the accept-time status transition (#1744)', () => {
+  const owner = { userId: 'owner', isAdmin: false };
+  const makeAdapters = (existing: IDataLakeDocument, claimed = true) => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(existing),
+        claimPurging: vi.fn().mockResolvedValue(claimed),
+      },
+      dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+      lakeConfigChangeEvents: { record: vi.fn().mockResolvedValue(undefined) },
+    },
+  });
+
+  it('claims deleted -> purging so the lake leaves the deleted list before the sweep runs', async () => {
+    const adapters = makeAdapters(lake({ status: 'deleted' }));
+    await expect(acceptDataLakePurge(owner, 'lake1', adapters as never)).resolves.toBeUndefined();
+    expect(adapters.db.dataLakes.claimPurging).toHaveBeenCalledWith('lake1');
+  });
+
+  it('refuses when the claim is LOST, which is what stops a purge racing a concurrent restore', async () => {
+    // The whole point of the claim: the guards above it ran against a document read moments earlier,
+    // so a restore landing in that gap must make this refuse rather than overwrite it. A bare status
+    // write here would leave #1744 in place behind a narrower window.
+    const adapters = makeAdapters(lake({ status: 'deleted' }), false);
+    await expect(acceptDataLakePurge(owner, 'lake1', adapters as never)).rejects.toThrow(/soft-deleted/i);
+  });
+
+  it('records no audit event when the claim is lost, so the trail never shows a refused purge', async () => {
+    const adapters = makeAdapters(lake({ status: 'deleted' }), false);
+    await expect(acceptDataLakePurge(owner, 'lake1', adapters as never)).rejects.toThrow();
+    expect(adapters.db.lakeConfigChangeEvents.record).not.toHaveBeenCalled();
+  });
+
+  it("records the purge under its own action, not the recoverable phase-1 'delete'", async () => {
+    // This is the only audit record a purge ever leaves: the sweep records nothing and then deletes
+    // the lake, so folding it into 'delete' would make the irreversible request indistinguishable
+    // from the reversible one for the rest of time.
+    const adapters = makeAdapters(lake({ status: 'deleted' }));
+    await acceptDataLakePurge(owner, 'lake1', adapters as never);
+    expect(adapters.db.lakeConfigChangeEvents.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'purge' })
+    );
+  });
+
+  it('refuses a caller who cannot manage the lake, and never claims', async () => {
+    const adapters = makeAdapters(lake({ status: 'deleted', createdByUserId: 'someone-else' }));
+    await expect(
+      acceptDataLakePurge({ userId: 'intruder', isAdmin: false }, 'lake1', adapters as never)
+    ).rejects.toThrow(/do not have permission to clean up/i);
+    expect(adapters.db.dataLakes.claimPurging).not.toHaveBeenCalled();
+  });
+});
+
+describe('restore, delete and archive against a purge-accepted lake (#1744)', () => {
+  const owner = { userId: 'owner', isAdmin: false };
+
+  it('refuses to restore a purging lake, with a message that says the purge is irreversible', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake({ status: 'purging' })),
+        update: vi.fn(),
+        setStats: vi.fn(),
+      },
+    };
+    await expect(restoreDeletedDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
+      /being permanently deleted and can no longer be restored/i
+    );
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses the restore when claimRestoring LOSES to a purge accepted mid-call', async () => {
+    // The mirror of the accept-side race: this lake still read as 'deleted', so the status guard
+    // passed, and the claim is the only thing standing between the restore and a lake whose purge
+    // is already accepted.
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake({ status: 'deleted' })),
+        claimRestoring: vi.fn().mockResolvedValue(false),
+        update: vi.fn(),
+        setStats: vi.fn(),
+        activateIfDraft: vi.fn(),
+      },
+      fabFiles: { findDeletedByDataLakeTag: vi.fn(), undeleteByDataLakeTag: vi.fn() },
+    };
+    await expect(restoreDeletedDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
+      /being permanently deleted and can no longer be restored/i
+    );
+    // Nothing may have been un-deleted: losing the claim must abort before any file work.
+    expect(db.fabFiles.undeleteByDataLakeTag).not.toHaveBeenCalled();
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a soft-delete of a purging lake rather than reporting success over it', async () => {
+    // Falling through would re-run phase 1 and settle on 'deleted', silently reversing an accepted
+    // purge. Returning the lake unchanged would avoid that but report SUCCESS, which the client
+    // renders as 'Data lake deleted (recoverable)' over an irreversible purge - so this refuses,
+    // the same answer archive gives for the same reason.
+    const db = {
+      dataLakes: { findById: vi.fn().mockResolvedValue(lake({ status: 'purging' })), update: vi.fn() },
+      dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+      batches: { findActiveByDataLakeId: vi.fn(), markTerminalIfActive: vi.fn() },
+      fabFiles: { softDeleteByDataLakeTag: vi.fn() },
+    };
+    await expect(deleteDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
+      /being permanently deleted and can no longer be deleted/i
+    );
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+    expect(db.fabFiles.softDeleteByDataLakeTag).not.toHaveBeenCalled();
+  });
+
+  it('refuses to archive a purging lake instead of clobbering the claim to archived', async () => {
+    // Without this guard the archive settles on 'archived', and the consumer's rescue release is
+    // conditional on 'purging' so it no-ops - the accepted purge is then silently abandoned, which
+    // is the exact failure #1744 exists to close. Unreachable from the UI; the server is the guard.
+    const db = {
+      dataLakes: { findById: vi.fn().mockResolvedValue(lake({ status: 'purging' })), update: vi.fn() },
+      dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+      batches: { findActiveByDataLakeId: vi.fn(), markTerminalIfActive: vi.fn() },
+      fabFiles: { archiveByDataLakeTag: vi.fn() },
+    };
+    await expect(archiveDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
+      /being permanently deleted and can no longer be archived/i
+    );
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+    expect(db.fabFiles.archiveByDataLakeTag).not.toHaveBeenCalled();
+    expect(db.batches.markTerminalIfActive).not.toHaveBeenCalled();
+  });
+});
+
+describe('the archive-axis lifecycle claims - a raced delete and unarchive', () => {
+  const owner = { userId: 'owner', isAdmin: false };
+
+  it('refuses the unarchive when claimUnarchiving LOSES to a delete settled mid-call', async () => {
+    // The bug this closes: the lake still read as 'archived', so the status guard passed, and the
+    // plain 'restoring' write revived a lake the teardown had already settled. It then ran the
+    // reversal and wrote its terminal 'active', leaving a lake that reads live but holds only
+    // soft-deleted files and appears in no deleted list - unrecoverable by either restore path.
+    const db = {
+      dataLakes: {
+        // Two reads, two answers: the guard sees the stale 'archived', the loss-path re-read sees the
+        // status that actually won. Serving both from one mockResolvedValue would let the refusal
+        // name 'archived' and still pass, which is the whole point of that re-read.
+        findById: vi
+          .fn()
+          .mockResolvedValueOnce(lake({ status: 'archived' }))
+          .mockResolvedValue(lake({ status: 'deleting' })),
+        claimUnarchiving: vi.fn().mockResolvedValue(false),
+        update: vi.fn(),
+        setStats: vi.fn(),
+        activateIfDraft: vi.fn(),
+      },
+      dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+      fabFiles: { findArchivedByDataLakeTag: vi.fn(), unarchiveByDataLakeTag: vi.fn(), deleteManyInIds: vi.fn() },
+    };
+    await expect(unarchiveDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
+      /cannot restore a data lake in 'deleting' status/i
+    );
+    // Losing the claim must abort before any file work: an un-archive that half-ran is what left
+    // the two states disagreeing in the first place.
+    expect(db.fabFiles.unarchiveByDataLakeTag).not.toHaveBeenCalled();
+    expect(db.fabFiles.deleteManyInIds).not.toHaveBeenCalled();
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a soft-delete of a lake already being restored, rather than tearing it down anyway', async () => {
+    // The other interleaving of the same race: phase 1 used to refuse only 'deleted' and 'purging',
+    // so a lake sitting in 'restoring' was torn down and the in-flight restore's terminal 'active'
+    // write landed last regardless.
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake({ status: 'restoring' })),
+        claimDeleting: vi.fn(),
+        update: vi.fn(),
+      },
+      dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+      batches: { findActiveByDataLakeId: vi.fn(), markTerminalIfActive: vi.fn() },
+      fabFiles: { softDeleteByDataLakeTag: vi.fn() },
+    };
+    await expect(deleteDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
+      /being restored and cannot be deleted right now/i
+    );
+    expect(db.dataLakes.claimDeleting).not.toHaveBeenCalled();
+    expect(db.fabFiles.softDeleteByDataLakeTag).not.toHaveBeenCalled();
+  });
+
+  it('refuses the soft-delete when claimDeleting LOSES to an unarchive that claimed first', async () => {
+    // The guard above only sees the document as it was read; this is the atomic half. Pinned
+    // separately because a lake can enter 'restoring' after that read and before this claim.
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake({ status: 'archived' })),
+        claimDeleting: vi.fn().mockResolvedValue(false),
+        claimFilesDeletedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
+        settleLifecycleStatus: vi.fn(),
+      },
+      dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+      batches: { findActiveByDataLakeId: vi.fn().mockResolvedValue([]), markTerminalIfActive: vi.fn() },
+      fabFiles: { softDeleteByDataLakeTag: vi.fn() },
+    };
+    await expect(deleteDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
+      /changed status mid-request and can no longer be deleted/i
+    );
+    // The claim sits BELOW the batch quiesce and the stamp block, so a loss here does cancel batches
+    // and does spend a `filesDeletedAt`. That is the deliberate cost of keeping 'deleting' implying
+    // the stamp is in force - asserted rather than lamented, so a future reorder has to face it.
+    // What a loss must still guarantee is that nothing DESTRUCTIVE or terminal ran.
+    expect(db.dataLakes.claimFilesDeletedAt).toHaveBeenCalledWith('lake1', expect.any(Date));
+    expect(db.fabFiles.softDeleteByDataLakeTag).not.toHaveBeenCalled();
+    expect(db.dataLakes.settleLifecycleStatus).not.toHaveBeenCalled();
+  });
+
+  it('two concurrent teardowns: one wins, the other is refused, and no row is swept unmarked', async () => {
+    // The pair no test composed before this, which is exactly why a reordering that let the second
+    // entrant sweep unmarked passed both suites green. Both prior delete-race tests pit delete
+    // against a DIFFERENT operation, and the model-layer re-entrancy test asserts claimDeleting
+    // returns true twice from 'deleting' - correct there (a crash retry and a live second entrant
+    // are genuinely indistinguishable to the model) but it green-lights the mechanism.
+    //
+    // The interleaving is forced at the batch quiesce, the one await between the guards and the
+    // stamp block. With claimDeleting hoisted above that quiesce, B's snapshot reads
+    // { status: 'deleting', filesDeletedAt: unset }, takes the pre-mark branch, and sweeps every row
+    // under softDeleteByDataLakeTag's fallback `new Date()` - an orphan mark the lake does not name,
+    // which restore (exact equality on `deletedAt`) recovers none of while its unconditional settle
+    // spends the only stamp. Terminal, not retryable. With the claim below the stamp, the loser
+    // never reaches its sweep at all.
+    const doc = lake({ status: 'active' });
+    const sweptWith: (Date | undefined)[] = [];
+    let entrantB: Promise<unknown> | undefined;
+
+    const db = {
+      dataLakes: {
+        // A fresh copy per call, so each entrant carries its own guard-time snapshot.
+        findById: vi.fn().mockImplementation(async () => ({ ...doc })),
+        // Set-if-unset with read-back, the real claimFilesDeletedAt contract.
+        claimFilesDeletedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => {
+          doc.filesDeletedAt ??= at;
+          return doc.filesDeletedAt;
+        }),
+        // matchedCount semantics: admitted statuses win, anything else loses.
+        claimDeleting: vi.fn().mockImplementation(async () => {
+          if (!['draft', 'active', 'archiving', 'archived', 'deleting'].includes(doc.status)) return false;
+          doc.status = 'deleting';
+          return true;
+        }),
+        // Conditional on the claimed status, the real settleLifecycleStatus contract: the entrant
+        // that still holds 'deleting' records the outcome, a later one gets null.
+        settleLifecycleStatus: vi
+          .fn()
+          .mockImplementation(
+            async (_id: string, from: IDataLakeDocument['status'], set: { status: IDataLakeDocument['status'] }) => {
+              if (doc.status !== from) return null;
+              doc.status = set.status;
+              return { ...doc };
+            }
+          ),
+        find: vi.fn().mockResolvedValue([]),
+      },
+      dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+      batches: {
+        findActiveByDataLakeId: vi.fn().mockImplementation(async () => {
+          // Only the FIRST entrant opens the window. B re-enters this very mock, so it has to fall
+          // straight through: awaiting `entrantB` there would be B awaiting its own promise, which
+          // is a deadlock rather than an interleaving. B's rejection is swallowed here so it cannot
+          // surface as A's error and mask which entrant actually lost; the bare `await entrantB`
+          // after the assertion is what still makes a failed B fail this test.
+          if (!entrantB) {
+            entrantB = deleteDataLake(owner, 'lake1', { db } as never);
+            await entrantB.catch(() => {});
+          }
+          return [];
+        }),
+        markTerminalIfActive: vi.fn(),
+      },
+      fabFiles: {
+        softDeleteByDataLakeTag: vi.fn().mockImplementation(async (_scope: unknown, at?: Date) => {
+          sweptWith.push(at);
+          return [];
+        }),
+        findIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
+      },
+    };
+
+    await expect(deleteDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
+      /changed status mid-request and can no longer be deleted/i
+    );
+    await entrantB;
+
+    // Exactly one sweep, carrying exactly the mark the lake records - so restore's equality filter
+    // reaches every row it soft-deleted.
+    expect(sweptWith).toEqual([doc.filesDeletedAt]);
+    expect(sweptWith).not.toContain(undefined);
+    expect(doc.status).toBe('deleted');
+  });
+
+  it.each(['deleting', 'deleted', 'restoring'] as const)(
+    'refuses to archive a lake in %s rather than settling it on archived',
+    async status => {
+      const db = {
+        dataLakes: { findById: vi.fn().mockResolvedValue(lake({ status })), claimArchiving: vi.fn(), update: vi.fn() },
+        dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+        batches: { findActiveByDataLakeId: vi.fn(), markTerminalIfActive: vi.fn() },
+        fabFiles: { archiveByDataLakeTag: vi.fn() },
+      };
+      await expect(archiveDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
+        new RegExp(`Cannot archive a data lake in '${status}' status`)
+      );
+      expect(db.dataLakes.claimArchiving).not.toHaveBeenCalled();
+      expect(db.fabFiles.archiveByDataLakeTag).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses the archive when claimArchiving LOSES to a delete settled mid-call', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake({ status: 'active' })),
+        claimArchiving: vi.fn().mockResolvedValue(false),
+        claimFilesArchivedAt: vi.fn(),
+        update: vi.fn(),
+      },
+      dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+      batches: { findActiveByDataLakeId: vi.fn(), markTerminalIfActive: vi.fn() },
+      fabFiles: { archiveByDataLakeTag: vi.fn(), hasArchivedMemberExclusiveToDataLakeTag: vi.fn() },
+    };
+    await expect(archiveDataLake(owner, 'lake1', { db } as never)).rejects.toThrow(
+      /changed status mid-request and can no longer be archived/i
+    );
+    expect(db.batches.markTerminalIfActive).not.toHaveBeenCalled();
+    expect(db.dataLakes.claimFilesArchivedAt).not.toHaveBeenCalled();
+    expect(db.fabFiles.archiveByDataLakeTag).not.toHaveBeenCalled();
+  });
+});
+
+describe('cleanupDeletedDataLake - now delegates the manage gate to canManageLake (#1153)', () => {
+  it('denies a blank-identity lake rather than granting on the both-unset match', async () => {
+    const blank = lake({ createdByUserId: '', status: 'deleted' });
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(blank) } };
+    await expect(cleanupDeletedDataLake({ userId: '', isAdmin: false }, 'lake1', { db } as any)).rejects.toThrow(
+      /do not have permission to clean up/i
+    );
+  });
+});
+
+describe('cleanupDeletedDataLake — phase 2 sweep', () => {
+  const makeAdapters = (status: IDataLakeDocument['status']) => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake({ status })),
+        delete: vi.fn().mockResolvedValue(undefined),
+      },
+      dataLakeAccessGrants: {
+        listByLake: vi.fn().mockResolvedValue([]),
+        removeAllForLake: vi.fn().mockResolvedValue(0),
+      },
+      batches: { find: vi.fn().mockResolvedValue([{ id: 'b1' }]), delete: vi.fn().mockResolvedValue(undefined) },
+      fabFiles: {
+        // Second call is the post-purge survivor resolve: nothing joined mid-sweep by default.
+        findIdsByDataLakeTag: vi.fn().mockResolvedValueOnce(['f1', 'f2']).mockResolvedValue([]),
+        hardDeleteOneById: vi.fn().mockResolvedValue(true),
+        findById: vi.fn().mockResolvedValue(null),
+        pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+      },
+      fabFileChunks: { deleteManyByFabFileId: vi.fn().mockResolvedValue(undefined) },
+    },
+  });
+
+  it('refuses to purge a lake that is not soft-deleted', async () => {
+    const adapters = makeAdapters('active');
+    await expect(cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters)).rejects.toThrow(
+      /soft-deleted/i
+    );
+  });
+
+  it('sweeps a lake in purging, the state the accept now leaves it in (#1744)', async () => {
+    const adapters = makeAdapters('purging');
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+    expect(adapters.db.dataLakes.delete).toHaveBeenCalledWith('lake1');
+  });
+
+  it('still sweeps a lake in deleted, which keeps DLQ replay and in-flight messages working', async () => {
+    // Load-bearing, not leniency: a message enqueued before #1744, or one replayed by an admin after
+    // the consumer released a refused purge back to 'deleted', arrives with this status. Narrowing
+    // the guard to 'purging' alone would make the DLQ replay path fail on arrival.
+    const adapters = makeAdapters('deleted');
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+    expect(adapters.db.dataLakes.delete).toHaveBeenCalledWith('lake1');
+  });
+
+  it("lets a mid-sweep failure escape as a NON-BadRequestError, which is what makes the consumer's release safe (#1744)", async () => {
+    // Pins an invariant the consumer's release path depends on and cannot check for itself:
+    // cleanupDeletedDataLake throws BadRequestError ONLY from its two entry guards, before anything
+    // is destroyed. dataLakeCleanup.ts releases 'purging' -> 'deleted' on BadRequestError, so if a
+    // BadRequestError were ever raised from inside the sweep instead, that release would advertise
+    // a HALF-PURGED lake as restorable. Anything failing after the guards must therefore surface as
+    // some other error, so the consumer rethrows it to the DLQ rather than releasing.
+    const adapters = makeAdapters('purging');
+    adapters.db.fabFiles.hardDeleteOneById = vi.fn().mockRejectedValue(new Error('mongo went away'));
+    const err = await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters).catch(
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(BadRequestError);
+    // The lake record must still be there: a sweep that died mid-way has not finished the job.
+    expect(adapters.db.dataLakes.delete).not.toHaveBeenCalled();
+  });
+
+  it('purges chunks, files, batches, then the lake when soft-deleted', async () => {
+    const adapters = makeAdapters('deleted');
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+    expect(adapters.db.fabFileChunks.deleteManyByFabFileId).toHaveBeenCalledTimes(2);
+    expect(adapters.db.fabFiles.hardDeleteOneById).toHaveBeenCalled();
+    expect(adapters.db.batches.delete).toHaveBeenCalledWith('b1');
+    expect(adapters.db.dataLakes.delete).toHaveBeenCalledWith('lake1');
+  });
+
+  it('releases the lake Drive connection, and does it BEFORE the file sweep', async () => {
+    // The row is what holds the GLOBAL driveFolderId claim, and the only surface that can release a
+    // connection resolves it through its lake - so a row surviving the purge makes that Drive folder
+    // permanently unconnectable by any org, with the encrypted credential still in it. Ordering
+    // matters too: the re-sync poll can claim a still-live connection mid-purge and start recreating
+    // the very files being deleted.
+    const adapters = makeAdapters('purging');
+    const order: string[] = [];
+    const releaseDriveConnection = vi.fn(async () => {
+      order.push('release-drive');
+    });
+    adapters.db.fabFiles.hardDeleteOneById = vi.fn(async () => {
+      order.push('hard-delete');
+      return true;
+    });
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      ...adapters,
+      releaseDriveConnection,
+    });
+    expect(releaseDriveConnection).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
+    // One hard-delete per member id (the row/chunk writes are paired per file, #2583), so what is
+    // pinned here is that the release precedes ALL of them, not the call count.
+    expect(order).toEqual(['release-drive', 'hard-delete', 'hard-delete']);
+  });
+
+  it('aborts the sweep when the Drive release fails, rather than purging the lake around it', async () => {
+    // A retry can re-run the release (it is a no-op once the row is gone); deleting the lake record
+    // with the row still there is the one outcome nothing can recover from.
+    const adapters = makeAdapters('purging');
+    const err = await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      ...adapters,
+      releaseDriveConnection: vi.fn().mockRejectedValue(new Error('mongo went away')),
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    // Must not be a BadRequestError, or the consumer would release the half-done purge as restorable.
+    expect(err).not.toBeInstanceOf(BadRequestError);
+    expect(adapters.db.dataLakes.delete).not.toHaveBeenCalled();
+  });
+
+  it('sweeps normally when no Drive release port is wired', async () => {
+    const adapters = makeAdapters('purging');
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+    expect(adapters.db.dataLakes.delete).toHaveBeenCalledWith('lake1');
+  });
+
+  it('is idempotent: already-gone lake is a no-op success', async () => {
+    const adapters = makeAdapters('deleted');
+    adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(null);
+    await expect(
+      cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters)
+    ).resolves.toBeUndefined();
+    expect(adapters.db.dataLakes.delete).not.toHaveBeenCalled();
+  });
+
+  it('hands the index the whole membership scope and every member id, before it destroys any of them', async () => {
+    const adapters = makeAdapters('deleted');
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce(memberIds).mockResolvedValue([]);
+    const retrievalIndex = indexPort();
+
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex });
+
+    expect(removalInput(retrievalIndex)).toEqual({ scope: lakeScope, fabFileIds: memberIds });
+    expect(removalInput(retrievalIndex).fabFileIds).toContain('prefix-only-file');
+
+    const indexRemove = retrievalIndex.removeForDataLake.mock.invocationCallOrder[0];
+    expect(indexRemove).toBeLessThan(
+      Math.min(...adapters.db.fabFileChunks.deleteManyByFabFileId.mock.invocationCallOrder)
+    );
+    expect(indexRemove).toBeLessThan(adapters.db.fabFiles.hardDeleteOneById.mock.invocationCallOrder[0]);
+  });
+
+  it('purges exactly the ids it announced, so a mid-sweep joiner is not destroyed unaccounted for', async () => {
+    const adapters = makeAdapters('deleted');
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce(memberIds).mockResolvedValue([]);
+    const retrievalIndex = indexPort();
+
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex });
+
+    // By id, never by re-running the predicate: a file tagged into the lake after the resolve
+    // would otherwise be hard-deleted with its chunks intact and the index never told.
+    expect(adapters.db.fabFiles.hardDeleteOneById.mock.calls.map(([id]) => id)).toEqual(memberIds);
+    expect(removalInput(retrievalIndex).fabFileIds).toEqual(memberIds);
+    // Resolved once for the purge and reused. Re-resolving BEFORE the hard delete would pass the
+    // assertions above while reopening the window they exist to close; the only other resolve is
+    // the survivor sweep, which runs after.
+    const resolves = adapters.db.fabFiles.findIdsByDataLakeTag.mock.invocationCallOrder;
+    const hardDelete = adapters.db.fabFiles.hardDeleteOneById.mock.invocationCallOrder[0];
+    expect(resolves.filter(order => order < hardDelete)).toHaveLength(1);
+  });
+
+  it('strips its own membership signals off a mid-sweep joiner, so no tag outlives the lake', async () => {
+    const adapters = makeAdapters('deleted');
+    const joiner = { id: 'joiner', userId: 'owner', tags: [{ name: 'lk:late' }, { name: 'unrelated' }] };
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce(memberIds).mockResolvedValue(['joiner']);
+    adapters.db.fabFiles.findById = vi.fn().mockResolvedValue(joiner);
+
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    // The survivor keeps its bytes but stops matching a lake that no longer exists, so a later
+    // lake claiming 'lk:' cannot adopt it - the create-time guard only sees surviving lakes.
+    expect(adapters.db.fabFiles.hardDeleteOneById.mock.calls.map(([id]) => id)).toEqual(memberIds);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('joiner', [lake().datalakeTag, 'lk:late']);
+    const pull = adapters.db.fabFiles.pullTagsByFabFileId.mock.invocationCallOrder[0];
+    expect(pull).toBeLessThan(adapters.db.dataLakes.delete.mock.invocationCallOrder[0]);
+  });
+
+  it('leaves a stranger-owned same-prefix file alone: the prefix arm never admitted it', async () => {
+    const adapters = makeAdapters('deleted');
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce(memberIds).mockResolvedValue(['theirs']);
+    adapters.db.fabFiles.findById = vi
+      .fn()
+      .mockResolvedValue({ id: 'theirs', userId: 'someone-else', tags: [{ name: 'lk:theirs' }] });
+
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('aborts the purge with nothing destroyed when the index removal fails', async () => {
+    const adapters = makeAdapters('deleted');
+    await expect(
+      cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+        ...adapters,
+        retrievalIndex: indexPort('fails'),
+      })
+    ).rejects.toThrow(/index unreachable/);
+
+    // Unlike the reversible doors this one propagates, because an entry pointing at a purged file
+    // can never be reconciled. The queue retry re-runs the whole sweep, so leaving it zero-progress
+    // is what makes propagating safe.
+    expect(adapters.db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
+    expect(adapters.db.batches.delete).not.toHaveBeenCalled();
+    expect(adapters.db.dataLakes.delete).not.toHaveBeenCalled();
+  });
+
+  it('chunks the fan-outs yet processes every item and preserves step ordering', async () => {
+    const adapters = makeAdapters('deleted');
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce(['f1', 'f2', 'f3']).mockResolvedValue([]);
+    adapters.db.batches.find = vi.fn().mockResolvedValue([{ id: 'b1' }, { id: 'b2' }, { id: 'b3' }]);
+
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, chunkSize: 2 });
+
+    // Every file's chunks and every batch are still deleted, despite the chunk size < count.
+    expect(adapters.db.fabFileChunks.deleteManyByFabFileId).toHaveBeenCalledTimes(3);
+    expect(adapters.db.batches.delete).toHaveBeenCalledTimes(3);
+
+    // Ordering contract: hard-delete files -> last chunk delete -> first batch delete -> lake last.
+    // Rows before chunks is the #2583 invariant: see cleanupDeletedDataLake.test.ts for why.
+    const firstChunk = Math.min(...adapters.db.fabFileChunks.deleteManyByFabFileId.mock.invocationCallOrder);
+    const lastChunk = Math.max(...adapters.db.fabFileChunks.deleteManyByFabFileId.mock.invocationCallOrder);
+    const hardDelete = Math.min(...adapters.db.fabFiles.hardDeleteOneById.mock.invocationCallOrder);
+    const firstBatch = Math.min(...adapters.db.batches.delete.mock.invocationCallOrder);
+    const lakeDelete = adapters.db.dataLakes.delete.mock.invocationCallOrder[0];
+    expect(hardDelete).toBeLessThan(firstChunk);
+    expect(lastChunk).toBeLessThan(firstBatch);
+    expect(firstBatch).toBeLessThan(lakeDelete);
+    // Per file, not just in aggregate: each row delete precedes ITS OWN chunk delete. The two are
+    // paired inside one iteration so a DLQ retry can still re-derive the ids this run never
+    // reached - a bulk row delete followed by a separate chunk fan-out would satisfy the aggregate
+    // check above while leaving the retry nothing to resolve.
+    const rowOrderById = new Map(
+      adapters.db.fabFiles.hardDeleteOneById.mock.calls.map(([id]: [string], i: number) => [
+        id,
+        adapters.db.fabFiles.hardDeleteOneById.mock.invocationCallOrder[i],
+      ])
+    );
+    adapters.db.fabFileChunks.deleteManyByFabFileId.mock.calls.forEach(([id]: [string], i: number) => {
+      const chunkOrder = adapters.db.fabFileChunks.deleteManyByFabFileId.mock.invocationCallOrder[i];
+      expect(rowOrderById.get(id)).toBeLessThan(chunkOrder);
+    });
+  });
+});
+
+describe('reconcileStuckBatches — guarded read-time reconciliation', () => {
+  const batch = (overrides: Partial<IDataLakeBatchDocument> = {}): IDataLakeBatchDocument =>
+    ({
+      id: 'b1',
+      dataLakeId: 'lake1',
+      status: 'processing',
+      updatedAt: new Date(0),
+      ...overrides,
+    }) as IDataLakeBatchDocument;
+
+  const makeDb = () => ({
+    dataLakes: { findById: vi.fn().mockResolvedValue(lake()), setStats: vi.fn(), activateIfDraft: vi.fn() },
+    batches: { markTerminalIfActive: vi.fn().mockResolvedValue(batch({ status: 'completed_with_errors' })) },
+    fabFiles: {
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+    },
+  });
+  let db: ReturnType<typeof makeDb>;
+  beforeEach(() => {
+    db = makeDb();
+  });
+
+  it('is at least the worst-case chunk-queue SQS retry window (2 full visibility waits + the final Lambda run), so a legitimately-retrying batch is never forced terminal mid-retry (#1412)', () => {
+    // infra/queues.ts constructs real SST cloud resources at import time, so it can't be
+    // imported here - read its source text instead, so a future change to the visibility
+    // timeout, Lambda timeout, or retry count actually moves this test rather than leaving two
+    // hardcoded numbers to silently drift from the config they claim to mirror.
+    const infraSrc = readFileSync(join(__dirname, '../../../../infra/queues.ts'), 'utf8');
+    const visibilityMatch = infraSrc.match(
+      /const fabFileChunkQueue\s*=\s*new sst\.aws\.Queue\([^)]*?visibilityTimeout:\s*'(\d+) minutes'/
+    );
+    const lambdaTimeoutMatch = infraSrc.match(/fabFileChunkQueue\.subscribe\([\s\S]*?timeout:\s*'(\d+) minutes'/);
+    const retryMatch = infraSrc.match(
+      /const fabFileChunkQueue\s*=\s*new sst\.aws\.Queue\([^)]*?dlq:\s*\{[^}]*?retry:\s*(\d+)/
+    );
+    if (!visibilityMatch || !lambdaTimeoutMatch || !retryMatch) {
+      throw new Error('Could not find fabFileChunkQueue visibility/timeout/retry in infra/queues.ts');
+    }
+    const visibilityMinutes = Number(visibilityMatch[1]);
+    const lambdaTimeoutMinutes = Number(lambdaTimeoutMatch[1]);
+    const retryCount = Number(retryMatch[1]);
+
+    // Each visibility wait already covers that attempt's own Lambda execution time (the timeout
+    // starts at receipt, not completion), so only the FINAL attempt's own run adds on top of the
+    // waits between the (retryCount - 1) earlier attempts - mirrors this constant's own doc comment.
+    const chunkQueueWorstCaseMs = ((retryCount - 1) * visibilityMinutes + lambdaTimeoutMinutes) * 60 * 1000;
+    expect(DEFAULT_STUCK_BATCH_TIMEOUT_MS).toBeGreaterThan(chunkQueueWorstCaseMs);
+  });
+
+  it('forces a stuck non-terminal batch terminal (marked reconciler) and recomputes stats', async () => {
+    const now = DEFAULT_STUCK_BATCH_TIMEOUT_MS + 10_000;
+    const forced = await reconcileStuckBatches([batch()], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db }, now);
+    // The completionReason 'reconciler' is what distinguishes a forced terminal from normal completion.
+    expect(db.batches.markTerminalIfActive).toHaveBeenCalledWith('b1', 'completed_with_errors', 'reconciler');
+    expect(db.fabFiles.computeDataLakeStats).toHaveBeenCalled();
+    expect(forced).toEqual(['b1']);
+  });
+
+  it('leaves a recently-updated batch alone', async () => {
+    const recent = batch({ updatedAt: new Date(1000) });
+    const now = 2000; // within timeout
+    const forced = await reconcileStuckBatches([recent], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db }, now);
+    expect(db.batches.markTerminalIfActive).not.toHaveBeenCalled();
+    expect(forced).toEqual([]);
+  });
+
+  it('does NOT recompute when the guarded transition is lost (a real increment finalized first)', async () => {
+    db.batches.markTerminalIfActive = vi.fn().mockResolvedValue(null); // lost the guard
+    const now = DEFAULT_STUCK_BATCH_TIMEOUT_MS + 10_000;
+    const forced = await reconcileStuckBatches([batch()], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db }, now);
+    expect(db.fabFiles.computeDataLakeStats).not.toHaveBeenCalled();
+    expect(forced).toEqual([]);
+  });
+
+  const late = DEFAULT_STUCK_BATCH_TIMEOUT_MS + 10_000;
+
+  it('emits the forced-terminal metric (passed the full post-transition batch) and the stuck gauge', async () => {
+    const metrics = { emitForcedTerminal: vi.fn(), emitStuckGauge: vi.fn() };
+    await reconcileStuckBatches([batch()], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db, metrics }, late);
+    // The full batch, not just its ids: app callers use this to also backstop the taxonomy
+    // enqueue, which needs wantsTaxonomy/dataLakeId/userId off the doc.
+    expect(metrics.emitForcedTerminal).toHaveBeenCalledWith(batch({ status: 'completed_with_errors' }));
+    expect(metrics.emitStuckGauge).toHaveBeenCalledWith(1);
+  });
+
+  it('gauges the stuck count but does NOT emit forced-terminal when the guard is lost', async () => {
+    db.batches.markTerminalIfActive = vi.fn().mockResolvedValue(null);
+    const metrics = { emitForcedTerminal: vi.fn(), emitStuckGauge: vi.fn() };
+    await reconcileStuckBatches([batch()], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db, metrics }, late);
+    expect(metrics.emitStuckGauge).toHaveBeenCalledWith(1);
+    expect(metrics.emitForcedTerminal).not.toHaveBeenCalled();
+  });
+
+  it('gauges zero when nothing is stuck', async () => {
+    const metrics = { emitForcedTerminal: vi.fn(), emitStuckGauge: vi.fn() };
+    await reconcileStuckBatches(
+      [batch({ updatedAt: new Date(1000) })],
+      DEFAULT_STUCK_BATCH_TIMEOUT_MS,
+      { db, metrics },
+      2000
+    );
+    expect(metrics.emitStuckGauge).toHaveBeenCalledWith(0);
+    expect(metrics.emitForcedTerminal).not.toHaveBeenCalled();
+  });
+
+  it('still reconciles when a metric hook throws (metrics must never break reconcile)', async () => {
+    const metrics = {
+      emitForcedTerminal: vi.fn(() => {
+        throw new Error('cloudwatch down');
+      }),
+      emitStuckGauge: vi.fn(() => {
+        throw new Error('cloudwatch down');
+      }),
+    };
+    const forced = await reconcileStuckBatches([batch()], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db, metrics }, late);
+    expect(forced).toEqual(['b1']);
+    expect(db.fabFiles.computeDataLakeStats).toHaveBeenCalled();
+  });
+});
+
+describe('removeFileFromDataLake — single-file removal', () => {
+  // A wizard-ingested file as it really looks: the lake meta-tag AND a folder tag under the
+  // lake's fileTagPrefix (both are membership signals the read path ORs). Also in a second
+  // lake, and carrying that lake's prefixed tag, to prove removal is lake-scoped.
+  const fileInLake = {
+    id: 'f1',
+    userId: 'owner',
+    tags: [
+      { name: 'datalake:lake', strength: 1 },
+      { name: 'lk:invoices', strength: 1 },
+      { name: 'datalake:other', strength: 1 },
+      { name: 'other:keepme', strength: 1 },
+    ],
+  };
+
+  const makeAdapters = (file: unknown = fileInLake) => ({
+    db: {
+      dataLakes: { findById: vi.fn().mockResolvedValue(lake()), setStats: vi.fn(), activateIfDraft: vi.fn() },
+      fabFiles: {
+        findById: vi.fn().mockResolvedValue(file),
+        pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+      },
+      // Stubbed so these exercise a WORKING restore write. Omitted, the call threw on an undefined
+      // repo and the door's catch swallowed it, so every test here silently covered the degraded
+      // path - invisible until `restoreTokenMinted` made the difference observable.
+      lakeMembershipRemovals: { upsertRemoval: vi.fn().mockResolvedValue(undefined) },
+    },
+  });
+
+  it('clears BOTH membership signals for this lake, keeps other lakes, and recomputes stats (owner)', async () => {
+    const adapters = makeAdapters();
+    const result = await removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any);
+    // The read path admits a file on the meta-tag OR the lake's fileTagPrefix, so both go in
+    // ONE atomic $pull - never a whole-array rewrite (which could clobber a concurrent
+    // removal) and never a soft-delete. The other lake's tags are untouched.
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalled();
+    expect(result).toEqual({
+      success: true,
+      fileCount: 0,
+      totalSizeBytes: 0,
+      totalChunkedChars: 0,
+      restoreTokenMinted: true,
+    });
+  });
+
+  it('removes a file whose only membership signal is a prefixed tag', async () => {
+    // These exist in quantity (see getDynamicDataLakeAccess): the lake browse lists them, so
+    // testing membership on the meta-tag alone made them permanently unremovable.
+    const prefixOnly = { id: 'f1', userId: 'owner', tags: [{ name: 'lk:invoices', strength: 1 }] };
+    const adapters = makeAdapters(prefixOnly);
+    await expect(
+      removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any)
+    ).resolves.toMatchObject({ success: true });
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
+  });
+
+  it('refuses to strip a prefixed tag off a file the actor does not own', async () => {
+    // fileTagPrefix is user-chosen and neither unique nor reserved, so a prefix match alone is
+    // not proof of membership. Without the ownership conjunct, minting a lake with someone
+    // else's prefix would be a licence to strip their tags.
+    const someoneElses = { id: 'f1', userId: 'victim', tags: [{ name: 'lk:invoices', strength: 1 }] };
+    const adapters = makeAdapters(someoneElses);
+    await expect(
+      removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any)
+    ).rejects.toThrow(/not found in this data lake/i);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+  });
+
+  it('treats a file with no owner as unowned rather than matching the prefix arm', async () => {
+    const ownerless = { id: 'f1', tags: [{ name: 'lk:invoices', strength: 1 }] };
+    const adapters = makeAdapters(ownerless);
+    await expect(
+      removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any)
+    ).rejects.toThrow(/not found in this data lake/i);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('refuses even an admin removing a prefix-only file the lake creator does not own', async () => {
+    // The prefix arm is anchored to the LAKE'S CREATOR, matching the read path's own membership
+    // predicate - an admin bypass here would let an admin strip a tag off a file the read path
+    // never actually admitted to this lake.
+    const someoneElses = { id: 'f1', userId: 'victim', tags: [{ name: 'lk:invoices', strength: 1 }] };
+    const adapters = makeAdapters(someoneElses);
+    await expect(
+      removeFileFromDataLake({ userId: 'root', isAdmin: true }, 'lake1', 'f1', adapters as any)
+    ).rejects.toThrow(/not found in this data lake/i);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin remove a prefix-only file the lake creator DOES own', async () => {
+    const creatorsFile = { id: 'f1', userId: 'owner', tags: [{ name: 'lk:invoices', strength: 1 }] };
+    const adapters = makeAdapters(creatorsFile);
+    await expect(
+      removeFileFromDataLake({ userId: 'root', isAdmin: true }, 'lake1', 'f1', adapters as any)
+    ).resolves.toMatchObject({ success: true });
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
+  });
+
+  it('ignores a fileTagPrefix no read arm would match, rather than clearing every tag', async () => {
+    // An empty prefix contributes no read arm, so there is nothing for removal to clear. It
+    // must not become a wildcard that empties the file's tags.
+    const adapters = makeAdapters({ id: 'f1', userId: 'owner', tags: [{ name: 'anything', strength: 1 }] });
+    adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ fileTagPrefix: '' }));
+    await expect(
+      removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any)
+    ).rejects.toThrow(/not found in this data lake/i);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  // The next two pin removal to the SAME normalization the read arms apply, so the prefixes a
+  // query matches are exactly the ones a removal clears - neither more nor fewer.
+  it('ignores a prefix missing its trailing colon, which no read arm honors either', async () => {
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ fileTagPrefix: 'lk' }));
+    await removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any);
+    // `lk` would match `lk:invoices` on a bare startsWith, but the read path drops the prefix
+    // outright, so clearing that tag would be removing a tag membership never depended on.
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake']);
+  });
+
+  it('clears prefixed tags for a padded prefix, matching the trim the read arms do', async () => {
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ fileTagPrefix: '  lk:  ' }));
+    await removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
+  });
+
+  it('never strips another lake meta-tag, even when this lake claims the reserved prefix', async () => {
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ fileTagPrefix: 'datalake:' }));
+    await removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any);
+    // Only this lake's own tag: `datalake:other` belongs to a lake the actor may not manage.
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake']);
+  });
+
+  it('reports success when the pull modified nothing (a concurrent removal won the race)', async () => {
+    const adapters = makeAdapters();
+    adapters.db.fabFiles.pullTagsByFabFileId = vi.fn().mockResolvedValue(0);
+    await expect(
+      removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any)
+    ).resolves.toMatchObject({ success: true });
+  });
+
+  it('removing the file from its ONLY lake still just pulls the tag — never cascade-deletes the file', async () => {
+    // Guards the invariant that a file's existence is independent of any lake: even when this
+    // is the last lake it belongs to, removal drops the tag and leaves the FabFile intact.
+    const fileInOnlyThisLake = { id: 'f1', tags: [{ name: 'datalake:lake', strength: 1 }] };
+    const adapters = makeAdapters(fileInOnlyThisLake);
+    const result = await removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any);
+    // Same tag-pull path as the multi-lake case - the service has no cascade-delete branch,
+    // so "last lake" is not special: the tag is pulled and the file is left to exist.
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake']);
+    expect(result).toEqual({
+      success: true,
+      fileCount: 0,
+      totalSizeBytes: 0,
+      totalChunkedChars: 0,
+      restoreTokenMinted: true,
+    });
+  });
+
+  it('allows an admin who is not the creator', async () => {
+    const adapters = makeAdapters();
+    await expect(
+      removeFileFromDataLake({ userId: 'other', isAdmin: true }, 'lake1', 'f1', adapters as any)
+    ).resolves.toMatchObject({ success: true });
+  });
+
+  it('rejects a non-creator non-admin (no teardown)', async () => {
+    const adapters = makeAdapters();
+    await expect(
+      removeFileFromDataLake({ userId: 'intruder', isAdmin: false }, 'lake1', 'f1', adapters as any)
+    ).rejects.toThrow(/do not have permission to remove files/i);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+    // The gate runs before any write, so a denial leaves the lake's stats alone too.
+    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+  });
+
+  it('404s when the file does not carry the lake tag (not in this lake)', async () => {
+    const adapters = makeAdapters({ id: 'f1', tags: [{ name: 'datalake:other', strength: 1 }] });
+    await expect(
+      removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any)
+    ).rejects.toThrow(/not found in this data lake/i);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('404s when the lake does not exist', async () => {
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(null);
+    await expect(
+      removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any)
+    ).rejects.toThrow(/Data lake not found/i);
+  });
+});
+
+describe('setLakeVisibility - now delegates the manage gate to canManageLake (#1153)', () => {
+  it('denies a blank-identity lake rather than granting on the both-unset match', async () => {
+    const blank = lake({ createdByUserId: '' });
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(blank), update: vi.fn() } };
+    await expect(setLakeVisibility({ userId: '', isAdmin: false }, 'lake1', 'private', { db } as any)).rejects.toThrow(
+      /do not have permission to change the visibility/i
+    );
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('the separate owner-only expose check ALSO fails closed on a blank identity, without an admin bypass', async () => {
+    // Line 50 is deliberately NOT canManageLake (no admin bypass), so pin it with its own case:
+    // an admin with a blank userId must still be refused when exposing a blank-owner lake.
+    const blank = lake({ createdByUserId: '' });
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(blank), update: vi.fn() } };
+    await expect(setLakeVisibility({ userId: '', isAdmin: true }, 'lake1', 'public', { db } as any)).rejects.toThrow(
+      /owner/i
+    );
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('setLakeVisibility — personal ↔ org promotion', () => {
+  const makeDb = (existing: Partial<IDataLakeDocument> = {}, clashes: IDataLakeDocument[] = []) => ({
+    dataLakes: {
+      findById: vi.fn().mockResolvedValue(lake(existing)),
+      find: vi.fn().mockResolvedValue(clashes),
+      update: vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => lake(d)),
+    },
+  });
+
+  it('promotes a personal lake to the actor’s org (org from principal, not the body)', async () => {
+    const db = makeDb(); // existing lake is org-less (private)
+    await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'organization', {
+      db,
+    } as any);
+    expect(db.dataLakes.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'lake1', organizationId: 'orgA' }));
+  });
+
+  /** The move runs the slug query first, then the prefix query; answer them separately. */
+  const makeMoveDb = (prefixClashes: IDataLakeDocument[]) => ({
+    dataLakes: {
+      findById: vi.fn().mockResolvedValue(lake()),
+      find: vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce(prefixClashes),
+      update: vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => lake(d)),
+    },
+  });
+
+  it('refuses an org move whose tag prefix overlaps a lake already in the target scope', async () => {
+    // Create-time is not enough: this is the other way two lakes end up sharing a prefix, and then
+    // permanently deleting one takes files only the other holds.
+    const db = makeMoveDb([lake({ id: 'other', name: 'Sibling', fileTagPrefix: 'lk:' })]);
+    await expect(
+      setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'organization', {
+        db,
+      } as any)
+    ).rejects.toThrow(/overlaps an existing data lake/i);
+    expect(db.dataLakes.update).not.toHaveBeenCalledWith(expect.objectContaining({ organizationId: 'orgA' }));
+  });
+
+  it('allows an org move when nothing in the target scope shares the prefix', async () => {
+    const db = makeMoveDb([lake({ id: 'other', fileTagPrefix: 'other-prefix:' })]);
+    await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'organization', {
+      db,
+    } as any);
+    expect(db.dataLakes.update).toHaveBeenCalledWith(expect.objectContaining({ organizationId: 'orgA' }));
+  });
+
+  it('stamps the actor on a visibility change (who exposed this lake, not just when)', async () => {
+    const db = makeDb({ organizationId: 'orgA' });
+    await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'private', {
+      db,
+    } as any);
+    expect(db.dataLakes.update).toHaveBeenCalledWith(expect.objectContaining({ lastUpdatedByUserId: 'owner' }));
+  });
+
+  it('demotes an org lake back to private by clearing organizationId (null, not undefined)', async () => {
+    const db = makeDb({ organizationId: 'orgA' });
+    await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'private', {
+      db,
+    } as any);
+    expect(db.dataLakes.update.mock.calls[0][0].organizationId).toBeNull();
+  });
+
+  it('rejects a non-creator non-admin', async () => {
+    const db = makeDb();
+    await expect(
+      setLakeVisibility({ userId: 'intruder', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'organization', {
+        db,
+      } as any)
+    ).rejects.toThrow(/do not have permission to change the visibility/i);
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects promotion when the actor has no organization', async () => {
+    const db = makeDb();
+    await expect(
+      setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: undefined }, 'lake1', 'organization', {
+        db,
+      } as any)
+    ).rejects.toThrow(/organization/i);
+  });
+
+  it('rejects when the target scope already has a lake with that slug (collision guard)', async () => {
+    const db = makeDb({}, [lake({ id: 'other', slug: 'lake', organizationId: 'orgA' })]);
+    await expect(
+      setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'organization', {
+        db,
+      } as any)
+    ).rejects.toThrow(/already exists/i);
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when already in the requested visibility (no update)', async () => {
+    const db = makeDb({ organizationId: 'orgA' });
+    await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'organization', {
+      db,
+    } as any);
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('blocks a non-owner admin from PROMOTING (no cross-org steal into the admin’s org)', async () => {
+    const db = makeDb(); // lake owned by 'owner'
+    await expect(
+      setLakeVisibility({ userId: 'admin', isAdmin: true, organizationId: 'orgZ' }, 'lake1', 'organization', {
+        db,
+      } as any)
+    ).rejects.toThrow(/owner/i);
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('lets a non-owner admin DEMOTE a lake to private (removes scope, writes null — no steal)', async () => {
+    const db = makeDb({ organizationId: 'orgA' });
+    await setLakeVisibility({ userId: 'admin', isAdmin: true, organizationId: 'orgZ' }, 'lake1', 'private', {
+      db,
+    } as any);
+    expect(db.dataLakes.update.mock.calls[0][0].organizationId).toBeNull();
+  });
+
+  it('maps a TOCTOU duplicate-key (E11000) on write to the friendly collision error', async () => {
+    const db = makeDb(); // find pre-check passes, but the write loses the race
+    db.dataLakes.update = vi.fn().mockRejectedValue(Object.assign(new Error('E11000 dup key'), { code: 11000 }));
+    await expect(
+      setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'organization', {
+        db,
+      } as any)
+    ).rejects.toThrow(/already exists/i);
+  });
+
+  it('publishes a private lake: sets isPublic=true and clears org (no slug-collision round-trip)', async () => {
+    const db = makeDb(); // existing lake is org-less, not public
+    await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: undefined }, 'lake1', 'public', {
+      db,
+    } as any);
+    // private -> public keeps the same (org-less) slug scope, so no collision query is needed.
+    expect(db.dataLakes.find).not.toHaveBeenCalled();
+    const written = db.dataLakes.update.mock.calls[0][0];
+    expect(written.isPublic).toBe(true);
+    expect(written.organizationId).toBeNull();
+  });
+
+  it('un-publishes: public -> private writes isPublic=false', async () => {
+    const db = makeDb({ isPublic: true });
+    await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: undefined }, 'lake1', 'private', {
+      db,
+    } as any);
+    const written = db.dataLakes.update.mock.calls[0][0];
+    expect(written.isPublic).toBe(false);
+    expect(written.organizationId).toBeNull();
+  });
+
+  it('promoting to org clears any prior public flag (mutually exclusive tri-state)', async () => {
+    const db = makeDb({ isPublic: true });
+    await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'organization', {
+      db,
+    } as any);
+    const written = db.dataLakes.update.mock.calls[0][0];
+    expect(written).toMatchObject({ organizationId: 'orgA', isPublic: false });
+  });
+
+  it('refuses to publish a lake gated by a required tag (PHI/access-gate guardrail)', async () => {
+    const db = makeDb({ requiredUserTag: 'Opti' });
+    await expect(
+      setLakeVisibility({ userId: 'owner', isAdmin: false }, 'lake1', 'public', { db } as any)
+    ).rejects.toThrow(/can’t be made public/i);
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses to publish a lake gated by a required entitlement', async () => {
+    const db = makeDb({ requiredEntitlement: 'product:pro' });
+    await expect(
+      setLakeVisibility({ userId: 'owner', isAdmin: false }, 'lake1', 'public', { db } as any)
+    ).rejects.toThrow(/can’t be made public/i);
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('blocks a non-owner admin from PUBLISHING (no exposing someone else’s lake app-wide)', async () => {
+    const db = makeDb(); // lake owned by 'owner'
+    await expect(
+      setLakeVisibility({ userId: 'admin', isAdmin: true, organizationId: 'orgZ' }, 'lake1', 'public', { db } as any)
+    ).rejects.toThrow(/owner/i);
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when already public (no update)', async () => {
+    const db = makeDb({ isPublic: true });
+    await setLakeVisibility({ userId: 'owner', isAdmin: false }, 'lake1', 'public', { db } as any);
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('browsePublicDataLakes - canManage now delegates to canManageLake (#1153)', () => {
+  it('a blank-identity lake reports canManage: false rather than granting on the both-unset match', async () => {
+    const blank = lake({
+      id: 'pub-blank',
+      slug: 'pub-blank',
+      createdByUserId: '',
+      isPublic: true,
+    });
+    const db = { dataLakes: { findPublicLakes: vi.fn().mockResolvedValue({ lakes: [blank], total: 1 }) }, users: {} };
+    const { data } = await browsePublicDataLakes({ userId: '', isAdmin: false }, {}, { db } as any);
+    expect(data[0].canManage).toBe(false);
+  });
+});
+
+describe('browsePublicDataLakes — public discover catalog projection', () => {
+  const publicLake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
+    lake({
+      id: 'pub1',
+      slug: 'pub1',
+      name: 'Public One',
+      description: 'a shared lake',
+      createdByUserId: 'owner1',
+      isPublic: true,
+      fileCount: 3,
+      totalSizeBytes: 2048,
+      ...overrides,
+    });
+
+  const makeDb = (lakes: IDataLakeDocument[], total = lakes.length) => ({
+    dataLakes: { findPublicLakes: vi.fn().mockResolvedValue({ lakes, total }) },
+    users: {
+      findByIds: vi.fn().mockResolvedValue([
+        { id: 'owner1', name: 'Ada Owner', username: 'ada', email: 'ada@example.com' },
+        { id: 'owner2', username: 'onlyuser', email: 'nn@example.com' },
+        { id: 'owner3', email: 'ghost@example.com' },
+      ]),
+    },
+  });
+
+  it('maps a lake to its card summary with owner name, counts, and per-caller flags', async () => {
+    const db = makeDb([publicLake()]);
+    const { data, total } = await browsePublicDataLakes(ctx({ userId: 'someone-else' }), {}, { db } as any);
+    expect(total).toBe(1);
+    expect(data[0]).toMatchObject({
+      id: 'pub1',
+      name: 'Public One',
+      description: 'a shared lake',
+      ownerDisplayName: 'Ada Owner',
+      fileCount: 3,
+      totalSizeBytes: 2048,
+      isOwn: false,
+      canManage: false,
+    });
+  });
+
+  it('never exposes the owner email; falls back to username when name is absent', async () => {
+    const db = makeDb([publicLake({ id: 'pub2', slug: 'pub2', createdByUserId: 'owner2' })]);
+    const { data } = await browsePublicDataLakes(ctx({ userId: 'x' }), {}, { db } as any);
+    expect(data[0].ownerDisplayName).toBe('onlyuser');
+    // No summary field should ever carry an email address.
+    expect(JSON.stringify(data)).not.toContain('@example.com');
+  });
+
+  it('yields undefined (never the email) when the owner has neither name nor username', async () => {
+    const db = makeDb([publicLake({ id: 'pub3', slug: 'pub3', createdByUserId: 'owner3' })]);
+    const { data } = await browsePublicDataLakes(ctx({ userId: 'x' }), {}, { db } as any);
+    expect(data[0].ownerDisplayName).toBeUndefined();
+    expect(JSON.stringify(data)).not.toContain('@example.com');
+  });
+
+  it('marks the caller’s own lake and grants manage to owner and admin', async () => {
+    const db = makeDb([publicLake({ createdByUserId: 'owner1' })]);
+    const asOwner = await browsePublicDataLakes(ctx({ userId: 'owner1' }), {}, { db } as any);
+    expect(asOwner.data[0]).toMatchObject({ isOwn: true, canManage: true });
+
+    const asAdmin = await browsePublicDataLakes(ctx({ userId: 'someone', isAdmin: true }), {}, { db } as any);
+    expect(asAdmin.data[0]).toMatchObject({ isOwn: false, canManage: true });
+  });
+
+  it('defaults missing counts to 0 and skips the owner lookup when there are no lakes', async () => {
+    const empty = makeDb([], 0);
+    const { data, total } = await browsePublicDataLakes(ctx({ userId: 'x' }), {}, { db: empty } as any);
+    expect(data).toEqual([]);
+    expect(total).toBe(0);
+    expect(empty.users.findByIds).not.toHaveBeenCalled();
+
+    const noStats = makeDb([publicLake({ fileCount: undefined, totalSizeBytes: undefined })]);
+    const res = await browsePublicDataLakes(ctx({ userId: 'x' }), {}, { db: noStats } as any);
+    expect(res.data[0]).toMatchObject({ fileCount: 0, totalSizeBytes: 0 });
+  });
+
+  it('threads search + paging through to the repository', async () => {
+    const db = makeDb([publicLake()]);
+    await browsePublicDataLakes(ctx({ userId: 'x' }), { search: 'widgets', limit: 10, offset: 20 }, {
+      db,
+    } as any);
+    expect(db.dataLakes.findPublicLakes).toHaveBeenCalledWith(ctx({ userId: 'x' }), {
+      search: 'widgets',
+      limit: 10,
+      offset: 20,
+      grantedLakeIds: [],
+      orgGrantedLakes: {},
+    });
+  });
+
+  it("resolves the caller's owner/curator grants and passes them to the repository", async () => {
+    // The arm listDataLakes already feeds findAccessible: without it a transferred owner opens a
+    // gated public lake from their lake list but cannot find it in discover. Reader and org rows
+    // stay out here because no settings adapter is wired, so resolveEnforceReadGrants reports
+    // report-only regardless of what the platform setting says.
+    const db = {
+      ...makeDb([publicLake()]),
+      dataLakeAccessGrants: {
+        listActiveByLakes: vi.fn().mockResolvedValue([]),
+        listByPrincipal: vi.fn().mockResolvedValue([
+          { dataLakeId: 'granted-lake', role: 'curator', principalType: 'user', principalId: 'x' },
+          { dataLakeId: 'reader-only-lake', role: 'reader', principalType: 'user', principalId: 'x' },
+        ]),
+      },
+    };
+
+    await browsePublicDataLakes(ctx({ userId: 'x' }), {}, { db } as any);
+
+    // Both halves, not `objectContaining` on the user half: the org half is where containment
+    // lives, and an assertion that never names it cannot see it get flattened away.
+    expect(db.dataLakes.findPublicLakes).toHaveBeenCalledWith(
+      ctx({ userId: 'x' }),
+      expect.objectContaining({ grantedLakeIds: ['granted-lake'], orgGrantedLakes: {} })
+    );
+  });
+
+  it('carries an org grant through to discover keyed by the ISSUING org', async () => {
+    // Same containment wire as the lake list: the datastore ANDs each org's ids with
+    // `organizationId: <that org>`, so flattening the map here would let an orgA grant discover an
+    // orgB lake for a caller in both. Enforce is on, since the org half is gated behind it.
+    const db = {
+      ...makeDb([publicLake()]),
+      settings: { getSettingsValue: vi.fn().mockResolvedValue(true) },
+      dataLakeAccessGrants: {
+        listActiveByLakes: vi.fn().mockResolvedValue([]),
+        listByPrincipal: vi.fn(async (type: string, id: string) =>
+          type === 'organization' && id === 'orgA'
+            ? [{ dataLakeId: 'orgA-lake', principalType: type, principalId: id, role: 'reader' }]
+            : []
+        ),
+      },
+    };
+
+    await browsePublicDataLakes(ctx({ userId: 'x', organizationIds: ['orgA', 'orgB'] }), {}, { db } as any);
+
+    expect(db.dataLakes.findPublicLakes).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ grantedLakeIds: [], orgGrantedLakes: { orgA: ['orgA-lake'] } })
+    );
+  });
+});
+
+// The closing half of the conditional-claim pattern. Claiming the transitional status stops two
+// operations from STARTING on top of each other; it does not stop one that already started from
+// settling over the other's result, because both sweeps run to completion regardless. What these
+// pin is that the terminal write is conditional on the hop the caller claimed, so exactly one
+// operation records an outcome and the loser says so instead of silently returning a lake it did
+// not settle.
+describe('terminal lifecycle settles are conditional on the claimed transitional status', () => {
+  const owner: AccessContext = { userId: 'owner', isAdmin: false } as AccessContext;
+
+  /** A settle that always LOSES - the lake moved on between the claim and the terminal write. */
+  const lostSettle = () => vi.fn().mockResolvedValue(null);
+
+  it('archive reports the winner rather than settling archived over it', async () => {
+    // The reachable pair: claimDeleting admits 'archiving' deliberately (a lake stranded there by a
+    // crashed attempt has to stay deletable), and deleteDataLake has no 'archiving' entry guard, so
+    // a teardown starts on top of an in-flight archive and both sweeps run.
+    const db = {
+      dataLakes: {
+        findById: vi
+          .fn()
+          .mockResolvedValueOnce(lake())
+          .mockResolvedValue(lake({ status: 'deleted' })),
+        settleLifecycleStatus: lostSettle(),
+        setStats: vi.fn(),
+        activateIfDraft: vi.fn(),
+        find: vi.fn().mockResolvedValue([]),
+        claimFilesArchivedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
+        claimArchiving: vi.fn().mockResolvedValue(true),
+      },
+      dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+      batches: { findActiveByDataLakeId: vi.fn().mockResolvedValue([]), markTerminalIfActive: vi.fn() },
+      fabFiles: {
+        archiveByDataLakeTag: vi.fn().mockResolvedValue(2),
+        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+        findIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
+        hasArchivedMemberExclusiveToDataLakeTag: vi.fn().mockResolvedValue(false),
+      },
+    };
+
+    await expect(archiveDataLake(owner, 'lake1', { db } as any)).rejects.toThrow(
+      /moved to 'deleted' while it was being archived/
+    );
+    expect(db.dataLakes.settleLifecycleStatus).toHaveBeenCalledWith('lake1', 'archiving', expect.anything());
+  });
+
+  it('delete reports the winner rather than settling deleted over it', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi
+          .fn()
+          .mockResolvedValueOnce(lake())
+          .mockResolvedValue(lake({ status: 'archived' })),
+        settleLifecycleStatus: lostSettle(),
+        find: vi.fn().mockResolvedValue([]),
+        claimFilesDeletedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
+        claimDeleting: vi.fn().mockResolvedValue(true),
+      },
+      dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+      batches: { findActiveByDataLakeId: vi.fn().mockResolvedValue([]), markTerminalIfActive: vi.fn() },
+      fabFiles: {
+        softDeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
+        findIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
+      },
+    };
+
+    await expect(deleteDataLake(owner, 'lake1', { db } as any)).rejects.toThrow(
+      /moved to 'archived' while it was being deleted/
+    );
+    expect(db.dataLakes.settleLifecycleStatus).toHaveBeenCalledWith('lake1', 'deleting', expect.anything());
+  });
+
+  it('unarchive reports the winner rather than settling active over a soft-deleted membership', async () => {
+    // The write this refuses is exactly #2086's symptom one step later: 'active' over a lake whose
+    // members a delete already soft-deleted, which restoreDeletedDataLake then refuses.
+    const db = {
+      dataLakes: {
+        findById: vi
+          .fn()
+          .mockResolvedValueOnce(lake({ status: 'archived' }))
+          .mockResolvedValue(lake({ status: 'deleted' })),
+        settleLifecycleStatus: lostSettle(),
+        setStats: vi.fn(),
+        activateIfDraft: vi.fn(),
+        claimUnarchiving: vi.fn().mockResolvedValue(true),
+      },
+      fabFiles: {
+        findArchivedByDataLakeTag: vi.fn().mockResolvedValue([]),
+        findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
+        unarchiveByDataLakeTag: vi.fn().mockResolvedValue(0),
+        deleteManyInIds: vi.fn(),
+        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+      },
+    };
+
+    await expect(unarchiveDataLake(owner, 'lake1', { db } as any)).rejects.toThrow(
+      /moved to 'deleted' while it was being restored/
+    );
+    expect(db.dataLakes.settleLifecycleStatus).toHaveBeenCalledWith('lake1', 'unarchiving', expect.anything());
+  });
+
+  it('restore reports the winner rather than settling active over an accepted purge', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi
+          .fn()
+          .mockResolvedValueOnce(lake({ status: 'deleted' }))
+          .mockResolvedValue(lake({ status: 'purging' })),
+        settleLifecycleStatus: lostSettle(),
+        setStats: vi.fn(),
+        activateIfDraft: vi.fn(),
+        claimRestoring: vi.fn().mockResolvedValue(true),
+      },
+      fabFiles: {
+        findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
+        findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
+        undeleteByDataLakeTag: vi.fn().mockResolvedValue(0),
+        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+      },
+    };
+
+    await expect(restoreDeletedDataLake(owner, 'lake1', { db } as any)).rejects.toThrow(
+      /moved to 'purging' while it was being restored/
+    );
+    expect(db.dataLakes.settleLifecycleStatus).toHaveBeenCalledWith('lake1', 'restoring', expect.anything());
+  });
+
+  // The interleaving the issue names, run end to end against ONE shared status cell rather than two
+  // independent mocks: whichever operation still holds its transitional hop settles, the other is
+  // refused, and the lake is never left reporting a status whose file state belongs to the loser.
+  it('leaves the lake status agreeing with its files when an archive and a delete interleave', async () => {
+    let status: IDataLakeDocument['status'] = 'active';
+    const files = { archived: false, softDeleted: false };
+
+    const sharedDataLakes = {
+      findById: vi.fn().mockImplementation(async () => lake({ status })),
+      claimArchiving: vi.fn().mockImplementation(async () => {
+        if (!['draft', 'active', 'archiving'].includes(status)) return false;
+        status = 'archiving';
+        return true;
+      }),
+      claimDeleting: vi.fn().mockImplementation(async () => {
+        if (!['draft', 'active', 'archiving', 'archived', 'deleting'].includes(status)) return false;
+        status = 'deleting';
+        return true;
+      }),
+      settleLifecycleStatus: vi
+        .fn()
+        .mockImplementation(async (_id: string, from: string, set: { status: IDataLakeDocument['status'] }) => {
+          if (status !== from) return null;
+          status = set.status;
+          return lake({ status });
+        }),
+      find: vi.fn().mockResolvedValue([]),
+      setStats: vi.fn(),
+      activateIfDraft: vi.fn(),
+      claimFilesArchivedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
+      claimFilesDeletedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
+    };
+    const common = {
+      dataLakes: sharedDataLakes,
+      dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
+      batches: { findActiveByDataLakeId: vi.fn().mockResolvedValue([]), markTerminalIfActive: vi.fn() },
+      fabFiles: {
+        archiveByDataLakeTag: vi.fn().mockImplementation(async () => {
+          files.archived = true;
+          return 1;
+        }),
+        softDeleteByDataLakeTag: vi.fn().mockImplementation(async () => {
+          files.softDeleted = true;
+          return [];
+        }),
+        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+        findIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
+        hasArchivedMemberExclusiveToDataLakeTag: vi.fn().mockResolvedValue(false),
+      },
+    };
+
+    // The archive claims first; the delete then claims on top of it, exactly as claimDeleting
+    // admits. Both sweeps run - that is not what this fixes - and both then try to settle.
+    const results = await Promise.allSettled([
+      archiveDataLake(owner, 'lake1', { db: common } as any),
+      deleteDataLake(owner, 'lake1', { db: common } as any),
+    ]);
+
+    const settled = results.filter(r => r.status === 'fulfilled');
+    const refused = results.filter(r => r.status === 'rejected');
+    expect(settled).toHaveLength(1);
+    expect(refused).toHaveLength(1);
+    // Whichever lost says so rather than reporting a success it did not record.
+    expect((refused[0] as PromiseRejectedResult).reason).toBeInstanceOf(BadRequestError);
+
+    // The lake reports a terminal status, never a transitional one left behind by the loser.
+    expect(['archived', 'deleted']).toContain(status);
+    // And it agrees with the sweep that ran under the winning claim: the delete claimed last, so it
+    // is the one holding 'deleting' at settle time.
+    expect(status).toBe('deleted');
+    expect(files.softDeleted).toBe(true);
+  });
+
+  // The dedup pass holds the only HARD delete in the lifecycle family, so it is the one side effect
+  // that must not run on a lost claim - rows removed while another caller is un-deleting them are
+  // gone for good, and no settle can put them back.
+  it('skips the unarchive dedup hard delete when the claim was lost before it', async () => {
+    const fabFiles = {
+      findArchivedByDataLakeTag: vi.fn().mockResolvedValue([{ id: 'a1', contentHash: 'h1' }]),
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([{ id: 'live1', contentHash: 'h1' }]),
+      unarchiveByDataLakeTag: vi.fn().mockResolvedValue(0),
+      deleteManyInIds: vi.fn(),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+    };
+    const db = {
+      dataLakes: {
+        // Entry read passes the guard; by the dedup pass a restore-from-deleted has taken the lake.
+        findById: vi
+          .fn()
+          .mockResolvedValueOnce(lake({ status: 'archived' }))
+          .mockResolvedValue(lake({ status: 'restoring' })),
+        settleLifecycleStatus: lostSettle(),
+        setStats: vi.fn(),
+        activateIfDraft: vi.fn(),
+        claimUnarchiving: vi.fn().mockResolvedValue(true),
+      },
+      fabFiles,
+    };
+    const logger = { warn: vi.fn() };
+
+    await expect(unarchiveDataLake(owner, 'lake1', { db, logger } as any)).rejects.toThrow(/moved to 'restoring'/);
+    expect(fabFiles.deleteManyInIds).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('lost its claim before the dedup pass'), {
+      dataLakeId: 'lake1',
+      status: 'restoring',
+    });
+  });
+});
+
+describe('listTransitionalDataLakes - the only list a stranded lake appears in', () => {
+  // Per status, since `purging` sweeps on a queue consumer and gets a longer cutoff than the four
+  // that run inline in the request Lambda.
+  const staleFor = (status: DataLakeStatus) => new Date(Date.now() - strandedCutoffMsFor(status) - 1_000);
+  const stranded = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
+    lake({ updatedAt: staleFor(overrides.status ?? 'archiving'), ...overrides });
+  const dbWith = (lakes: IDataLakeDocument[]) => ({
+    dataLakes: { findAccessible: vi.fn().mockResolvedValue(lakes), find: vi.fn() },
+  });
+
+  it('asks the datastore for exactly the transitional statuses, management-scoped', async () => {
+    const db = dbWith([]);
+    await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db });
+    expect(db.dataLakes.findAccessible).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ statuses: [...DATA_LAKE_TRANSITIONAL_STATUSES], includePublic: false })
+    );
+    // Pinned as a set too: a status silently dropped from the query is a lake that goes back to
+    // rendering in no list at all, which is the whole bug.
+    const asked = db.dataLakes.findAccessible.mock.calls[0][1].statuses;
+    expect([...asked].sort()).toEqual(['archiving', 'deleting', 'purging', 'restoring', 'unarchiving']);
+  });
+
+  // The issue's "coverage for each transitional status" criterion: no status may be the one that
+  // stays invisible.
+  it('lists a lake stranded in EVERY transitional status', async () => {
+    const lakes = DATA_LAKE_TRANSITIONAL_STATUSES.map(status =>
+      stranded({ id: `lake-${status}`, slug: `lake-${status}`, status })
+    );
+    const result = await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith(lakes) });
+    expect(result.map(l => l.status).sort()).toEqual([...DATA_LAKE_TRANSITIONAL_STATUSES].sort());
+  });
+
+  it('withholds a lake still inside the staleness cutoff, and lists the same lake once it is past it', async () => {
+    const busy = stranded({ status: 'archiving', updatedAt: new Date() });
+    expect(await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith([busy]) })).toEqual([]);
+
+    const stale = stranded({ status: 'archiving' });
+    const listed = await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith([stale]) });
+    expect(listed.map(l => l.id)).toEqual(['lake1']);
+  });
+
+  // The one transitional status whose work does NOT run inline in the request Lambda: it is swept
+  // on the cleanup consumer (12-minute visibility x 3 attempts), so the inline cutoff would flag a
+  // healthy long purge in a list whose whole meaning is "something is wrong".
+  it('holds a purging lake past the inline cutoff, and lists it only past the consumer budget', async () => {
+    const midSweep = lake({ status: 'purging', updatedAt: new Date(Date.now() - 6 * 60_000) });
+    expect(await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith([midSweep]) })).toEqual([]);
+
+    const abandoned = stranded({ status: 'purging' });
+    const listed = await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith([abandoned]) });
+    expect(listed.map(l => l.id)).toEqual(['lake1']);
+  });
+
+  it('accepts an ISO-string timestamp, not only a Date', async () => {
+    const wireShaped = stranded({
+      status: 'deleting',
+      updatedAt: staleFor('deleting').toISOString() as unknown as Date,
+    });
+    const result = await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith([wireShaped]) });
+    expect(result).toHaveLength(1);
+  });
+
+  // Fail-visible, deliberately: the cutoff withholds a lake we can PROVE is busy, and no timestamp
+  // proves nothing. Hiding it would suppress exactly the lake this list exists to surface.
+  it('lists a lake whose timestamp is missing rather than hiding it', async () => {
+    const noStamp = lake({ status: 'archiving', updatedAt: undefined as unknown as Date });
+    const result = await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith([noStamp]) });
+    expect(result).toHaveLength(1);
+  });
+
+  it('serves nothing to a reader who cannot MANAGE the lake', async () => {
+    // An org member the read gate admits, but who is neither creator nor an admin of that org -
+    // so the retry this list offers would be refused for them anyway.
+    const orgLake = stranded({ status: 'archiving', createdByUserId: 'other', organizationId: 'orgA' });
+    const result = await listTransitionalDataLakes(
+      ctx({ userId: 'member', organizationIds: ['orgA'], administeredOrgIds: [] }),
+      { db: dbWith([orgLake]) }
+    );
+    expect(result).toEqual([]);
+  });
+
+  it('serves the same lake to an admin of its org', async () => {
+    const orgLake = stranded({ status: 'archiving', createdByUserId: 'other', organizationId: 'orgA' });
+    const result = await listTransitionalDataLakes(
+      ctx({ userId: 'mgr', organizationIds: ['orgA'], administeredOrgIds: ['orgA'] }),
+      { db: dbWith([orgLake]) }
+    );
+    expect(result.map(l => l.id)).toEqual(['lake1']);
+  });
+
+  it('returns the narrow DTO only - no editor-only field, even for the owner', async () => {
+    const prompt = stranded({ status: 'archiving', systemPrompt: 'Answer only from this lake.' });
+    const [row] = await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith([prompt]) });
+    expect(Object.keys(row!).sort()).toEqual([
+      'fileTagPrefix',
+      'id',
+      'name',
+      'retryAction',
+      'slug',
+      'status',
+      'updatedAt',
+    ]);
+    expect('systemPrompt' in row!).toBe(false);
+  });
+
+  it('names the retry action on each row, and withholds it where none is safe', async () => {
+    const lakes = DATA_LAKE_TRANSITIONAL_STATUSES.map(status =>
+      stranded({ id: `lake-${status}`, slug: `lake-${status}`, status })
+    );
+    const result = await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith(lakes) });
+    expect(Object.fromEntries(result.map(l => [l.status, l.retryAction]))).toEqual({
+      archiving: 'archive',
+      unarchiving: 'unarchive',
+      deleting: 'delete',
+      // Neither sweep mark is set on these fixtures, so 'restoring' has no provable axis; 'purging'
+      // has no retry at all.
+      restoring: undefined,
+      purging: undefined,
+    });
+  });
+
+  // 'restoring' is the pre-split shared value both reversal axes still admit as a claim source, so
+  // the action cannot come from the status. Running the wrong axis is not a refusal - the delete-
+  // axis restore would clear this lake's filesArchivedAt while its deletedAt-gated file update
+  // matched nothing, leaving files stamped archivedAt with no route back.
+  it('resolves a restoring lake to the axis its own sweep mark proves', async () => {
+    const archiveAxis = stranded({ status: 'restoring', filesArchivedAt: new Date('2020-01-01') });
+    const [fromArchive] = await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith([archiveAxis]) });
+    expect(fromArchive!.retryAction).toBe('unarchive');
+
+    const deleteAxis = stranded({ status: 'restoring', filesDeletedAt: new Date('2020-01-01') });
+    const [fromDelete] = await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith([deleteAxis]) });
+    expect(fromDelete!.retryAction).toBe('restore');
+
+    // Both marks is the shape a UI-driven delete leaves (it admits an 'archived' source and clears
+    // neither mark), and it is still the delete axis - nothing settling to 'archived' can write
+    // filesDeletedAt. Reading the archive mark first would answer 'unarchive' and strand it.
+    const archiveThenDelete = stranded({
+      status: 'restoring',
+      filesArchivedAt: new Date('2020-01-01'),
+      filesDeletedAt: new Date('2020-01-02'),
+    });
+    const [fromBoth] = await listTransitionalDataLakes(ctx({ userId: 'owner' }), {
+      db: dbWith([archiveThenDelete]),
+    });
+    expect(fromBoth!.retryAction).toBe('restore');
+  });
+
+  it('still lists a restoring lake whose axis is not provable, with no retry offered', async () => {
+    const noMarks = stranded({ status: 'restoring' });
+    const [row] = await listTransitionalDataLakes(ctx({ userId: 'owner' }), { db: dbWith([noMarks]) });
+    expect(row!.id).toBe('lake1');
+    expect(row!.retryAction).toBeUndefined();
+  });
+
+  // The manage predicate's grant rungs, which the adapter-less fixtures above never reach: without
+  // these, narrowing the manage filter could silently drop every curator-granted lake and the rest
+  // of this block would stay green.
+  const dbWithGrant = (lakes: IDataLakeDocument[], role: 'owner' | 'curator' | 'reader') => ({
+    ...dbWith(lakes),
+    dataLakeAccessGrants: {
+      listActiveByLakes: vi
+        .fn()
+        .mockResolvedValue(lakes.map(l => ({ dataLakeId: l.id, role, principalType: 'user', principalId: 'guest' }))),
+      listByPrincipal: vi
+        .fn()
+        .mockResolvedValue(lakes.map(l => ({ dataLakeId: l.id, role, principalType: 'user', principalId: 'guest' }))),
+    },
+  });
+
+  it('serves a lake the caller neither created nor administers when a curator grant says they manage it', async () => {
+    const foreign = stranded({ status: 'archiving', createdByUserId: 'other', organizationId: 'orgA' });
+    const result = await listTransitionalDataLakes(ctx({ userId: 'guest', administeredOrgIds: [] }), {
+      db: dbWithGrant([foreign], 'curator'),
+    });
+    expect(result.map(l => l.id)).toEqual(['lake1']);
+  });
+
+  it('withholds that same lake when the grant is read-only', async () => {
+    const foreign = stranded({ status: 'archiving', createdByUserId: 'other', organizationId: 'orgA' });
+    const result = await listTransitionalDataLakes(ctx({ userId: 'guest', administeredOrgIds: [] }), {
+      db: dbWithGrant([foreign], 'reader'),
+    });
+    expect(result).toEqual([]);
+  });
+});

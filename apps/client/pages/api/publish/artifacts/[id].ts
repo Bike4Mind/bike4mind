@@ -1,0 +1,273 @@
+import { baseApi } from '@server/middlewares/baseApi';
+import { z } from 'zod';
+import bcrypt from 'bcryptjs';
+import { PublishedArtifact } from '@bike4mind/database';
+import {
+  VisibilitySchema,
+  CommentPolicySchema,
+  EMBED_ORIGINS_MAX,
+  PublishTagsSchema,
+  normalizePublishTags,
+} from '@bike4mind/common';
+import { resolveVisibility, invalidatePublishCdn, toCacheTarget, validateEmbedOrigins } from '@server/services/publish';
+import { registrableDomain } from '@bike4mind/utils/registrableDomain';
+
+/**
+ * /api/publish/artifacts/[id] - manage one published artifact by its publicId.
+ *   GET    -> full record (owner/admin, or anyone if public)
+ *   PATCH  -> update title/description/visibility/commentPolicy (owner/admin)
+ *   DELETE -> soft-delete / archive (owner/admin)
+ */
+
+/** Syntactic domain check: labels + a real TLD, lowercase-normalized before test.
+ *  A pre-filter only - entries are then validated as real registrable domains below
+ *  and stored AS ENTERED (never reduced); matching is exact-or-subdomain. */
+const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
+
+/**
+ * Access gate on top of `visibility: 'public'` (issue #383). The passphrase
+ * arrives in plaintext ONCE here and is bcrypt-hashed before it touches the
+ * document; `null` clears the gate. Only valid while visibility is public.
+ */
+const AccessGatePatchSchema = z.union([
+  z.object({
+    kind: z.literal('passphrase'),
+    passphrase: z.string().min(8, 'Passphrase must be at least 8 characters').max(128),
+  }),
+  z.object({
+    kind: z.literal('domain'),
+    allowedDomains: z
+      .array(z.string().trim().toLowerCase().pipe(z.string().regex(DOMAIN_RE, 'Invalid domain')))
+      .min(1)
+      .max(20),
+  }),
+  z.null(),
+]);
+
+const PatchSchema = z.object({
+  title: z.string().min(1).max(200).optional(),
+  description: z.string().max(1000).optional(),
+  // Full replace, not a merge: `[]` clears every tag. A merge semantics would leave no way to
+  // REMOVE a tag through the API, which is half of the CRUD the owner needs.
+  tags: PublishTagsSchema.optional(),
+  visibility: VisibilitySchema.optional(),
+  commentPolicy: CommentPolicySchema.optional(),
+  // Search-engine opt-in. Accepted at any visibility (owners commonly set it before
+  // flipping to public), but only has an effect while the artifact is open-public -
+  // the serve route ANDs it with isOpenPublic on every request.
+  discoverable: z.boolean().optional(),
+  accessGate: AccessGatePatchSchema.optional(),
+  // Raw strings; validateEmbedOrigins normalizes and applies the host/open-public
+  // rules server-side. `[]` clears the allowlist. Bounded here so a huge payload
+  // is rejected before per-origin parsing.
+  embedOrigins: z.array(z.string()).max(EMBED_ORIGINS_MAX).optional(),
+});
+
+function canManage(artifact: { ownerId: string }, user: { id: string; isAdmin?: boolean }): boolean {
+  return artifact.ownerId === String(user.id) || !!user.isAdmin;
+}
+
+// Public viewers (anyone hitting a `visibility: 'public'` artifact) get only these
+// display fields. Everything else -- ownerId, lastPublishedBy, storageKeyPrefix,
+// moderation internals (reportCount/takedownReason/deletedBy/moderationStatus),
+// source, tier/scopeId/slug, manifest/renderedBody, etc. -- is owner/admin-only.
+//
+// `tags` travels to public viewers DELIBERATELY, matching what the list route already projects on
+// its non-`mine` branch: they are artifact metadata in the same class as title and description,
+// which are on this path too, and a public browse surface will want to filter on them. So an owner
+// labelling a public artifact is publishing that label - nothing in the tag editor claims
+// otherwise, and it must not start to. (The owner-scoped property belongs to the VOCABULARY
+// endpoint, GET /api/publish/tags, which reads only the caller's own id; it never described tags on
+// an artifact document.)
+const PUBLIC_ARTIFACT_FIELDS = [
+  'publicId',
+  'title',
+  'description',
+  'tags',
+  'visibility',
+  'commentPolicy',
+  'embedOrigins',
+  'publishedAt',
+] as const;
+
+function toPublicArtifact(artifact: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const field of PUBLIC_ARTIFACT_FIELDS) {
+    if (artifact[field] !== undefined) out[field] = artifact[field];
+  }
+  return out;
+}
+
+const handler = baseApi()
+  .get(async (req, res) => {
+    const publicId = String(req.query.id);
+    // Exclude the share-token capability: this GET is reachable by ANY viewer of a public
+    // artifact, and .lean() bypasses the schema's toJSON strip - so project it out here.
+    const artifact = await PublishedArtifact.findOne({ publicId, deletedAt: null })
+      .select('-shareToken -shareTokenUpdatedAt')
+      .lean<(Record<string, unknown> & { ownerId: string; visibility: string }) | null>();
+    if (!artifact) {
+      return res.status(404).json({ error: 'Artifact not found' });
+    }
+    const isManager = !!req.user && canManage(artifact, req.user);
+    // Non-public artifacts require an owner/admin viewer on this management route.
+    if (artifact.visibility !== 'public') {
+      if (!req.user) return res.status(401).json({ error: 'Authentication required' });
+      if (!isManager) {
+        return res.status(403).json({ error: 'Not authorized to view this artifact' });
+      }
+    }
+    // A gated public artifact must not leak even display metadata to a non-manager
+    // who merely knows the publicId - the gate is enforced on the serve path, so
+    // treat it as not-found here (indistinguishable from a private artifact).
+    if (artifact.visibility === 'public' && artifact.accessGate && !isManager) {
+      return res.status(404).json({ error: 'Artifact not found' });
+    }
+    // Owner/admin get the full record (the manage modal needs it); any other viewer
+    // of an ungated public artifact gets only the public display DTO.
+    return res.status(200).json({ artifact: isManager ? artifact : toPublicArtifact(artifact) });
+  })
+  .patch(async (req, res) => {
+    if (!req.user) return res.status(401).json({ error: 'Authentication required' });
+    const publicId = String(req.query.id);
+    const parsed = PatchSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
+    }
+    const artifact = await PublishedArtifact.findOne({ publicId, deletedAt: null });
+    if (!artifact) return res.status(404).json({ error: 'Artifact not found' });
+    if (!canManage(artifact, req.user)) {
+      return res.status(403).json({ error: 'Not authorized to update this artifact' });
+    }
+    if (parsed.data.title !== undefined) artifact.title = parsed.data.title;
+    if (parsed.data.description !== undefined) artifact.description = parsed.data.description;
+    // Normalize at the write site rather than in the schema: the API conventions forbid a
+    // top-level .transform() in a public request schema, and every other write path (the publish
+    // call, the UI) runs the same helper so one label cannot end up stored two ways.
+    if (parsed.data.tags !== undefined) artifact.tags = normalizePublishTags(parsed.data.tags);
+    // "Open public" = cacheable, anonymous, ungated. Adding a gate to a public
+    // artifact leaves `visibility` alone but must still purge the CDN, so track
+    // the gate in the before/after comparison, not just the visibility level.
+    const wasOpenPublic = artifact.visibility === 'public' && !artifact.accessGate;
+    if (parsed.data.visibility !== undefined) {
+      // Validate the requested visibility against the artifact's scope-tier policy
+      // (same rules as publish) so PATCH can't set a tier-invalid visibility.
+      const viz = resolveVisibility(artifact.tier, parsed.data.visibility);
+      if (!viz.ok) {
+        return res.status(400).json({ error: viz.error, code: viz.code });
+      }
+      artifact.visibility = parsed.data.visibility;
+    }
+    if (parsed.data.accessGate !== undefined) {
+      if (parsed.data.accessGate === null) {
+        artifact.accessGate = null;
+      } else if (parsed.data.accessGate.kind === 'passphrase') {
+        artifact.accessGate = {
+          kind: 'passphrase',
+          passphraseHash: await bcrypt.hash(parsed.data.accessGate.passphrase, 10),
+        };
+      } else {
+        // Validate each entry is a real registrable domain (rejects a bare public/
+        // private suffix like co.uk or github.io that would admit an entire suffix),
+        // but STORE IT AS ENTERED - never reduce to the registrable domain. Reducing
+        // e.g. `acme.onmicrosoft.com` to the shared `onmicrosoft.com` would let every
+        // other tenant in; matching is exact-or-subdomain against the stored entry.
+        const entries = parsed.data.accessGate.allowedDomains.map(d => d.trim().toLowerCase());
+        if (entries.some(d => registrableDomain(d, { allowPrivateDomains: true }) === null)) {
+          return res.status(400).json({
+            error:
+              'Each allowed domain must be a registrable domain (e.g. acme.com or a specific subdomain), not a public suffix like co.uk',
+            code: 'INVALID_DOMAIN',
+          });
+        }
+        artifact.accessGate = {
+          kind: 'domain',
+          allowedDomains: [...new Set(entries)],
+        };
+      }
+    }
+    // A gate only means something on the public tier - reject a combination that
+    // would silently never apply (fail loud beats a gate the owner thinks is on).
+    if (artifact.accessGate && artifact.visibility !== 'public') {
+      return res.status(400).json({
+        error: 'An access gate requires visibility "public" - clear the gate or set visibility to public',
+        code: 'GATE_REQUIRES_PUBLIC',
+      });
+    }
+    if (parsed.data.commentPolicy !== undefined) artifact.commentPolicy = parsed.data.commentPolicy;
+    const discoverableBefore = !!artifact.discoverable;
+    if (parsed.data.discoverable !== undefined) artifact.discoverable = parsed.data.discoverable;
+
+    // Embed allowlist. Validated against the artifact's FINAL open-public state
+    // (after any visibility/gate change above), so a gate + embed grant in the
+    // same PATCH is rejected as a pair rather than by apply order.
+    const isOpenPublicNow = artifact.visibility === 'public' && !artifact.accessGate;
+
+    // DE-ARM on leaving open-public. `discoverable` only has an effect while an artifact
+    // is public AND ungated, so a downgrade or a new gate leaves it set but inert - and
+    // widening the artifact again later would silently re-arm indexing that nobody chose
+    // in that context. Clearing it here (the authoritative layer) means the flag never
+    // outlives the exposure it was granted against, and the client's optimistic reset
+    // when the user picks Private / adds a gate becomes a truthful view of storage
+    // rather than local-only state. The owner re-opts-in explicitly if they want it back.
+    if (!isOpenPublicNow && artifact.discoverable) artifact.discoverable = false;
+
+    // Tracked for the CDN purge below: this flag changes the served X-Robots-Tag AND the
+    // in-document robots <meta>, both of which are part of the cached public bytes.
+    // Compared against the pre-PATCH value so an implicit de-arm counts as a change too.
+    const discoverableChanged = !!artifact.discoverable !== discoverableBefore;
+    let embedOriginsChanged = false;
+    if (parsed.data.embedOrigins !== undefined) {
+      const check = validateEmbedOrigins(parsed.data.embedOrigins, { isOpenPublic: isOpenPublicNow });
+      if (!check.ok) {
+        return res.status(400).json({ error: check.error, code: check.code });
+      }
+      const before = [...(artifact.embedOrigins ?? [])].sort();
+      const after = [...check.value].sort();
+      embedOriginsChanged = before.join('\n') !== after.join('\n');
+      // Absent (undefined) when empty so the field stays off the document.
+      artifact.embedOrigins = check.value.length > 0 ? check.value : undefined;
+    }
+    await artifact.save();
+
+    // Any change that alters the CACHED public response must purge the CDN, or the
+    // stale copy keeps serving up to its TTL. Three triggers: (a) leaving open-public
+    // (downgrade OR newly-gated) removes the page from cache-eligibility; (b) the
+    // embed allowlist changed while still open-public - the served frame-ancestors
+    // CSP header is part of the cached bytes; (c) discoverability changed - the robots
+    // header and <meta> are cached too, and an owner turning discovery OFF must not
+    // keep serving an indexable copy for up to an hour. Fire-and-forget, best-effort.
+    if ((wasOpenPublic && !isOpenPublicNow) || (isOpenPublicNow && (embedOriginsChanged || discoverableChanged))) {
+      void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
+    }
+    const json = artifact.toJSON() as Record<string, unknown> & {
+      accessGate?: { passphraseHash?: string | null } | null;
+    };
+    // Defense in depth: the hash is select:false, but this doc was loaded in this
+    // request's write path - never echo it.
+    if (json.accessGate && 'passphraseHash' in json.accessGate) delete json.accessGate.passphraseHash;
+    return res.status(200).json({ artifact: json });
+  })
+  .delete(async (req, res) => {
+    if (!req.user) return res.status(401).json({ error: 'Authentication required' });
+    const publicId = String(req.query.id);
+    const artifact = await PublishedArtifact.findOne({ publicId, deletedAt: null });
+    if (!artifact) return res.status(404).json({ error: 'Artifact not found' });
+    if (!canManage(artifact, req.user)) {
+      return res.status(403).json({ error: 'Not authorized to delete this artifact' });
+    }
+    const wasPublic = artifact.visibility === 'public';
+    await artifact.softDelete(String(req.user.id));
+    // Purge the CDN so a deleted public page stops serving from cache immediately
+    // (fire-and-forget - best-effort, never blocks the delete).
+    if (wasPublic) {
+      void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
+    }
+    return res.status(200).json({ ok: true });
+  });
+
+export const config = {
+  api: { externalResolver: true },
+};
+
+export default handler;

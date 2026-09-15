@@ -1,0 +1,202 @@
+import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { baseApi } from '@server/middlewares/baseApi';
+import {
+  Organization,
+  User,
+  userRepository,
+  friendshipRepository,
+  creditTransactionRepository,
+  withTransaction,
+  TelemetryAuditLogModel,
+} from '@bike4mind/database';
+import { userService } from '@bike4mind/services';
+import { redactUserSecretsForSelf } from '@bike4mind/common';
+import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
+import { getClientIp, truncateIp } from '@server/utils/ip';
+import * as z from 'zod';
+
+const idParamSchema = z.object({ id: z.string() });
+
+async function getPreviousConsentLevel(
+  userId: string,
+  incomingLevel: string,
+  prefs: { contextTelemetryConsentedAt?: Date } | null | undefined
+): Promise<string | undefined> {
+  const currentUserDoc = await User.findById(userId).select('preferences.contextTelemetryLevel').lean();
+  const previousLevel =
+    (currentUserDoc as Record<string, unknown> & { preferences?: { contextTelemetryLevel?: string } })?.preferences
+      ?.contextTelemetryLevel ?? 'basic';
+  if (previousLevel !== incomingLevel && prefs) {
+    prefs.contextTelemetryConsentedAt = new Date();
+  }
+  return previousLevel;
+}
+
+/**
+ * Log a telemetry consent level change for GDPR compliance.
+ * Fire-and-forget - never blocks the response.
+ */
+function logConsentToggle(
+  userId: string,
+  previousLevel: string,
+  newLevel: string,
+  req: { ip?: string; headers: Record<string, unknown> }
+) {
+  TelemetryAuditLogModel.create({
+    action: 'consent_toggle',
+    userId: userId,
+    questId: 'N/A',
+    sourceIp: truncateIp(getClientIp(req as Parameters<typeof getClientIp>[0])),
+    userAgent: (req.headers['user-agent'] as string) ?? 'unknown',
+    outcome: 'success',
+    durationMs: 0,
+    metadata: { previousLevel, newLevel, source: 'user_preferences' },
+  }).catch(err =>
+    console.warn('[TelemetryAudit] Failed to log consent toggle:', err instanceof Error ? err.message : 'Unknown error')
+  );
+}
+
+/**
+ * Handle telemetry consent changes: log the toggle and trigger deletion if opted out.
+ * Deletion is awaited (GDPR Article 17 requires verified deletion).
+ * On failure, preference is still set to 'none' (stops future collection) and failure is audited.
+ */
+async function handleTelemetryConsentChange(
+  userId: string,
+  previousLevel: string | undefined,
+  newLevel: string,
+  req: { ip?: string; headers: Record<string, unknown> }
+) {
+  if (!previousLevel || previousLevel === newLevel) return;
+  logConsentToggle(userId, previousLevel, newLevel, req);
+  if (newLevel === 'none') {
+    try {
+      await triggerTelemetryDeletion(userId, req);
+    } catch (err) {
+      console.error(
+        '[Telemetry] Deletion failed, user preference still set to none:',
+        err instanceof Error ? err.message : 'Unknown error'
+      );
+      // Audit the failure so admins can monitor and manually retry
+      await TelemetryAuditLogModel.create({
+        action: 'delete',
+        userId,
+        questId: 'bulk-opt-out',
+        sourceIp: truncateIp(getClientIp(req as Parameters<typeof getClientIp>[0])),
+        userAgent: (req.headers['user-agent'] as string) ?? 'unknown',
+        outcome: 'failure',
+        durationMs: 0,
+        metadata: { error: err instanceof Error ? err.message : 'Unknown error', reason: 'user_opt_out' },
+      }).catch(() => {}); // Audit failure is truly non-blocking
+    }
+  }
+}
+
+const handler = baseApi().put(
+  asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
+    const { id: userId } = idParamSchema.parse(req.query);
+    const currentUser = req.user;
+
+    // Non-admin users can only update their own profile
+    if (!currentUser.isAdmin && currentUser.id !== userId) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    if (currentUser.isAdmin) {
+      // Parse with the admin schema -- includes email, isAdmin, tags, credits, etc.
+      // id comes from the route param; the spread ensures it wins over any id in the body.
+      const body = userService.adminUpdateUserSchema.parse({ ...(req.body as Record<string, unknown>), id: userId });
+
+      // Lockout guard: an explicit demote (isAdmin -> false) must not remove the
+      // ONLY remaining Super Admin, and an admin must not remove their OWN Super
+      // Admin role (self-demote). The old checkbox UI allowed both - a pre-existing
+      // footgun the Roles radio (admin-roles-product-access-redesign M1) closes here,
+      // at the actual write path, not just in the UI.
+      if (body.isAdmin === false) {
+        const targetUser = (await User.findById(userId).select('isAdmin').lean()) as Record<string, unknown> | null;
+        if (targetUser?.isAdmin) {
+          if (currentUser.id === userId) {
+            return res.status(400).json({ error: 'You cannot remove your own Super Admin role.' });
+          }
+          const adminCount = await userRepository.count({ isAdmin: true });
+          if (adminCount <= 1) {
+            return res.status(400).json({ error: 'Cannot remove the last remaining Super Admin.' });
+          }
+        }
+      }
+
+      const incomingTelemetryLevel = body.preferences?.contextTelemetryLevel;
+      const previousTelemetryLevel = incomingTelemetryLevel
+        ? await getPreviousConsentLevel(userId, incomingTelemetryLevel, body.preferences)
+        : undefined;
+
+      req.logger.updateMetadata({ body: req.body });
+      await withTransaction(() =>
+        userService.adminUpdateUser(currentUser.id, body, {
+          db: {
+            users: userRepository,
+            organizations: Organization,
+            friendship: friendshipRepository,
+            // Audits admin `currentCredits` changes as CreditTransactions.
+            creditTransactions: creditTransactionRepository,
+          },
+        })
+      );
+
+      // Log consent change only after successful update
+      if (incomingTelemetryLevel) {
+        await handleTelemetryConsentChange(userId, previousTelemetryLevel, incomingTelemetryLevel, req);
+      }
+
+      // Double-check we have the latest state
+      const finalUser = await User.findById(userId);
+      // Admin branch: symmetric with the admin view of GET /users/[id].
+      return res.json(
+        redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions'], keepAdminOnly: ['userNotes'] })
+      );
+    } else {
+      // Parse with the self-service schema -- excludes isAdmin, tags, email, etc.
+      // secureParameters inside the service strips any keys not in this allowlist.
+      const rawBody = (req.body ?? {}) as Record<string, unknown>;
+      // A non-admin key here (creditDelta, tags, isAdmin, ...) parses away silently
+      // below -- surface it in the response so a 200 can't read as "fully applied"
+      // when part of the request was discarded.
+      const selfServiceKeys = new Set(Object.keys(userService.updateUserSchema.shape));
+      const ignoredFields = Object.keys(rawBody).filter(key => !selfServiceKeys.has(key));
+
+      const body = userService.updateUserSchema.parse(rawBody);
+
+      const incomingTelemetryLevel = body.preferences?.contextTelemetryLevel;
+      const previousTelemetryLevel = incomingTelemetryLevel
+        ? await getPreviousConsentLevel(userId, incomingTelemetryLevel, body.preferences)
+        : undefined;
+
+      await userService.updateUser(userId, body, {
+        db: {
+          users: userRepository,
+        },
+      });
+
+      // Log consent change only after successful update
+      if (incomingTelemetryLevel) {
+        await handleTelemetryConsentChange(userId, previousTelemetryLevel, incomingTelemetryLevel, req);
+      }
+
+      // Non-admin self-update: symmetric with the self view of GET /users/[id], which means
+      // no userNotes. This branch's own schema cannot write them either, so nothing is lost.
+      const finalUser = await User.findById(userId);
+      const safeUser = redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions'] });
+      // safeUser is null when the row vanished mid-request; spreading null there would
+      // turn the response into a bare { ignoredFields } that reads as a user document.
+      return res.json(safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser);
+    }
+  })
+);
+
+export const config = {
+  api: {
+    externalResolver: true,
+  },
+};
+
+export default handler;

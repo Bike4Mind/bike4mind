@@ -1,0 +1,169 @@
+# Importing Your Chat History
+
+[Home](/) · [Guide](guide) · [FAQ](faq)
+
+## Overview
+
+Bike4Mind allows you to import your chat history from other AI platforms like OpenAI (ChatGPT) and Claude. This feature helps you consolidate all your AI conversations in one place.
+
+## Supported Platforms
+
+- ✅ **OpenAI (ChatGPT)** - Full conversation history import
+- ✅ **Claude (Anthropic)** - Full conversation history import
+
+## How to Export Your History
+
+### From OpenAI/ChatGPT
+
+1. Log in to [ChatGPT](https://chat.openai.com)
+2. Click on your profile icon (bottom left)
+3. Go to **Settings** → **Data controls**
+4. Click **Export data**
+5. OpenAI will email you a download link (usually within 24 hours)
+6. Download the zip file from the email
+
+### From Claude
+
+1. Log in to [Claude.ai](https://claude.ai)
+2. Click on your profile
+3. Go to **Settings** → **Data & Privacy**
+4. Click **Export data**
+5. Anthropic will email you a download link
+6. Download the zip file from the email
+
+## Important: File Size Optimization
+
+⚠️ **Large File Warning**: OpenAI exports with voice conversations can be **very large** (1+ GB) and may crash your browser during upload.
+
+### The Problem
+
+OpenAI exports include all audio recordings from voice conversations. These audio files:
+- Can make the zip file over 1 GB
+- Cause browser crashes during upload
+- **Are not needed for import** (only text data is imported)
+
+### The Solution
+
+We provide a free optimization tool that reduces file size by **~95%** (1.1 GB → 51 MB) by removing unnecessary audio/video files.
+
+## Using the Optimization Tool
+
+### Option 1: Download the Script
+
+1. Download the optimization script from our [GitHub repository](https://github.com/Bike4Mind/bike4mind/blob/main/scripts/optimize-openai-history.py)
+2. Save it to your computer
+3. Run the script:
+
+```bash
+python3 optimize-openai-history.py /path/to/your-export.zip
+```
+
+### Option 2: Manual Instructions
+
+If you prefer to do it manually:
+
+1. Unzip your OpenAI export
+2. Keep only these files at the root level:
+   - `conversations.json` ⭐ **(Required)**
+   - `chat.html`
+   - `message_feedback.json`
+   - `shared_conversations.json`
+   - `user.json`
+3. Delete all conversation folders (folders with UUID names like `68b1167c-...`)
+4. Delete all `file-*_data` folders
+5. Re-zip the remaining files
+
+**Note:** Only `conversations.json` is required for import. All other files are optional.
+
+## Importing to Bike4Mind
+
+### Step 1: Navigate to Settings
+
+1. Click on your profile icon
+2. Go to **Settings** or **Profile**
+3. Look for **Import History** or **Upload LLM History**
+
+### Step 2: Upload Your File
+
+1. Click **Upload LLM History**
+2. Select the source (OpenAI or Claude)
+3. Choose your file:
+   - **Recommended**: Use the optimized zip file (~50 MB)
+   - **Not recommended**: Original large zip (may crash browser)
+4. Click **Upload**
+
+### Step 3: Wait for Processing
+
+- Small files (< 100 MB): Usually complete in 1-5 minutes
+- Large files (> 500 MB): May take 10-30 minutes
+- You'll receive a notification when import is complete
+
+## What Gets Imported?
+
+### Conversations
+- ✅ All conversation titles and timestamps
+- ✅ Your prompts (messages you sent)
+- ✅ AI responses
+- ✅ Conversation history and context
+- ✅ Created/updated dates
+
+### Not Imported
+- ❌ Audio/video files (not supported)
+- ❌ Shared conversation settings
+- ❌ Custom instructions or system prompts
+- ❌ Temporary or deleted conversations
+
+## Troubleshooting
+
+### "Browser crashed during upload"
+**Solution**: Your file is too large. Use the optimization tool to reduce file size.
+
+### "Upload failed"
+**Possible causes**:
+1. File is corrupted - Try re-downloading from OpenAI/Claude
+2. Invalid file format - Make sure it's a .zip file
+3. Network timeout - Try uploading on a faster connection
+
+### "Import completed but conversations are missing"
+**Check**:
+1. Was `conversations.json` in your zip file?
+2. Did you export the correct date range?
+3. Some very old conversations may not be included in exports
+
+### "conversations.json not found"
+**Solution**: Your zip file structure may be incorrect. Make sure `conversations.json` is at the root level of the zip, not in a subfolder.
+
+## FAQ
+
+**Q: Will this delete my conversations from OpenAI/Claude?**
+A: No! Importing only creates a copy in Bike4Mind. Your original conversations remain unchanged.
+
+**Q: Can I import multiple times?**
+A: Yes, but duplicate conversations will be skipped or updated based on their IDs.
+
+**Q: How long does import take?**
+A: Typically 1-10 minutes depending on file size and number of conversations.
+
+**Q: Is my data secure during import?**
+A: Yes! Your data is encrypted during upload and stored securely. We never share or sell your data.
+
+**Q: Can I export my Bike4Mind history?**
+A: Yes! You can export your conversations at any time from your profile settings.
+
+**Q: What about images in my conversations?**
+A: Currently, only text content is imported. Image support is coming soon.
+
+**Q: Can I delete imported conversations?**
+A: Yes, you can delete individual conversations or all imported conversations from your session history.
+
+## Need Help?
+
+If you encounter issues not covered here:
+
+1. Check our [FAQ](faq) page
+2. Contact support at [support@bike4mind.com](mailto:support@bike4mind.com)
+3. Report issues on our [GitHub](https://github.com/Bike4Mind/bike4mind/issues)
+
+---
+
+**Privacy Note**: Bike4Mind processes your chat history locally and securely. We never access, read, or share your imported conversations. Your data belongs to you.

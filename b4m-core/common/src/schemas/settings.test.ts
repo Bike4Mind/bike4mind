@@ -1,0 +1,1191 @@
+import { describe, it, expect } from 'vitest';
+import {
+  settingsMap,
+  publicSafeSettingKeys,
+  userReadableSettingKeys,
+  redactSettingSecrets,
+  redactSettingSecretsForBroadcast,
+  buildPublicSettingsProjection,
+  experimentalFeatureSettingKeys,
+  experimentalNonGroupSettingKeys,
+  API_SERVICE_GROUPS,
+  SENSITIVE_SETTING_MASK,
+  maskSensitiveSettingValue,
+  isMaskedSensitiveSettingValue,
+  type AdminSettingDoc,
+  ABSTENTION_PROMPT,
+  WEB_SEARCH_FRESHNESS_PROMPT,
+  KNOWLEDGE_BASE_RETRIEVAL_PROMPT,
+  DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
+  SEARCH_BUDGET_SETTING_KEYS,
+  FORCED_RETRIEVAL_SETTING_KEYS,
+  type SettingKey,
+} from './settings';
+import {
+  DEFAULT_PASSAGE_TOKEN_TARGET,
+  MIN_PASSAGE_TOKEN_TARGET,
+  OVERSIZED_PASSAGE_TOKEN_THRESHOLD,
+} from '../constants/chunking';
+import {
+  LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS,
+  LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
+} from '../constants/lakeAccessAudit';
+import {
+  FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
+  FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT,
+  FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
+  FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+} from '../constants/forcedRetrieval';
+import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE } from '../constants/embeddingSpaceFloors';
+import { LAKE_RECALL_K_DEFAULT, LAKE_RECALL_K_MAX } from '../constants/lakeMemory';
+import {
+  KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
+  KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
+  KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT,
+} from '../constants/knowledgeBaseSearch';
+import { SRE_SECRET_PLACEHOLDER } from '../types/entities/SreTypes';
+import { SettingScopeLevel } from '../types/entities/ScopedSettingTypes';
+
+describe('makeObjectSetting JSON preprocess', () => {
+  // Test using contextTelemetryAlerts as a representative object setting
+  const schema = settingsMap.contextTelemetryAlerts.schema;
+
+  describe('JSON string parsing', () => {
+    it('should parse valid JSON string into object', () => {
+      const jsonString = JSON.stringify({ enabled: true, alertThreshold: 50 });
+      const result = schema.safeParse(jsonString);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.enabled).toBe(true);
+        expect(result.data.alertThreshold).toBe(50);
+      }
+    });
+
+    it('should handle complex nested JSON strings', () => {
+      const jsonString = JSON.stringify({
+        enabled: true,
+        autoCreateIssues: true,
+        alertThreshold: 30,
+        criticalThreshold: 50,
+        temperature: 0.5,
+        maxTokens: 1500,
+        timeoutMs: 90000,
+        dedupWindowMinutes: 10,
+        slackWorkspaceId: 'workspace-123',
+        slackChannelId: 'C123456',
+        githubOwner: 'TestOrg',
+        githubRepo: 'test-repo',
+        modelId: 'gpt-4',
+      });
+      const result = schema.safeParse(jsonString);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.enabled).toBe(true);
+        expect(result.data.slackWorkspaceId).toBe('workspace-123');
+        expect(result.data.githubOwner).toBe('TestOrg');
+      }
+    });
+
+    it('should fail gracefully on invalid JSON string', () => {
+      const invalidJson = '{invalid json}';
+      const result = schema.safeParse(invalidJson);
+
+      // Should fail validation (invalid JSON passed to schema as-is)
+      expect(result.success).toBe(false);
+    });
+
+    it('should fail on malformed JSON string', () => {
+      const malformedJson = '{"enabled": true,}'; // trailing comma
+      const result = schema.safeParse(malformedJson);
+
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('object pass-through', () => {
+    it('should accept object directly without double-parsing', () => {
+      const obj = { enabled: true, alertThreshold: 40 };
+      const result = schema.safeParse(obj);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.enabled).toBe(true);
+        expect(result.data.alertThreshold).toBe(40);
+      }
+    });
+
+    it('should apply defaults for missing fields', () => {
+      const result = schema.safeParse({});
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.enabled).toBe(false);
+        expect(result.data.autoCreateIssues).toBe(false);
+        expect(typeof result.data.alertThreshold).toBe('number');
+      }
+    });
+  });
+
+  describe('edge cases', () => {
+    it('should handle empty JSON object string', () => {
+      const result = schema.safeParse('{}');
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        // Should have defaults applied
+        expect(result.data.enabled).toBe(false);
+      }
+    });
+
+    it('should reject null', () => {
+      const result = schema.safeParse(null);
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject undefined', () => {
+      const result = schema.safeParse(undefined);
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject non-object primitives', () => {
+      expect(schema.safeParse(123).success).toBe(false);
+      expect(schema.safeParse(true).success).toBe(false);
+      expect(schema.safeParse([]).success).toBe(false);
+    });
+  });
+});
+
+describe('other object settings use makeObjectSetting', () => {
+  // Verify all object settings benefit from the JSON preprocess fix
+  const objectSettings = [
+    'contextTelemetryAlerts',
+    'logoSettings',
+    'RapidReplySettings',
+    'whatsNewConfig',
+    'whatsNewSyncConfig',
+  ] as const;
+
+  it.each(objectSettings)('%s should parse JSON strings', settingKey => {
+    const schema = settingsMap[settingKey].schema;
+    // All object settings should handle JSON strings
+    const result = schema.safeParse('{}');
+    expect(result.success).toBe(true);
+  });
+});
+
+describe('public settings projection (M2.5 security boundary)', () => {
+  describe('userReadableSettingKeys', () => {
+    it('excludes admin-only operational config a non-admin has no claim to', () => {
+      // These carry no `isSensitive` flag, which is exactly why the previous opt-OUT
+      // filter served them to every authenticated caller.
+      const keys = new Set(userReadableSettingKeys());
+      for (const adminOnly of [
+        'sreAgentConfig',
+        'secopsTriageConfig',
+        'contextTelemetryAlerts',
+        'prReportIdentityMap',
+        'prReportRepo',
+        'prReportEgressAllowlist',
+      ]) {
+        expect(keys.has(adminOnly)).toBe(false);
+      }
+    });
+
+    it('excludes every isSensitive setting', () => {
+      const keys = new Set(userReadableSettingKeys());
+      const sensitive = (Object.values(settingsMap) as Array<{ key: string; isSensitive?: boolean }>).filter(
+        s => s.isSensitive === true
+      );
+      expect(sensitive.length).toBeGreaterThan(0);
+      for (const s of sensitive) expect(keys.has(s.key)).toBe(false);
+    });
+
+    it('covers the whole experimental block except its sensitive members', () => {
+      // useExperimentalFeatureSettings selects these by group membership. Dropping one
+      // would not throw - it would silently serve the compiled default and discard the
+      // admin's override - so the block must be allowed as a block. The one exception is a
+      // member carrying a secret (ollamaBackend is an internal backend URL): isSensitive
+      // subtracts last, and no client hook reads that key by name.
+      const keys = new Set(userReadableSettingKeys());
+      const sensitive = new Set(
+        (Object.values(settingsMap) as Array<{ key: string; isSensitive?: boolean }>)
+          .filter(s => s.isSensitive === true)
+          .map(s => s.key)
+      );
+      const expected = experimentalFeatureSettingKeys.filter(k => !sensitive.has(k));
+      expect(expected.length).toBeGreaterThan(0);
+      for (const k of expected) expect(keys.has(k)).toBe(true);
+    });
+
+    it('includes the publicSafe keys, which already ship unauthenticated', () => {
+      const keys = new Set(userReadableSettingKeys());
+      for (const k of publicSafeSettingKeys()) expect(keys.has(k)).toBe(true);
+    });
+
+    it('includes the explicitly tagged non-experimental keys the app needs', () => {
+      const keys = new Set(userReadableSettingKeys());
+      for (const k of [
+        'enforceCredits',
+        'pricePerCredit',
+        'MaxFileSize',
+        'defaultEmbeddingModel',
+        // ReferralModal and useSystemPromptFiles() both read these by name with no
+        // admin guard - carry no secret, but were missed by the initial opt-in pass.
+        'ReferralCreditsAmount',
+        'SystemFiles',
+      ]) {
+        expect(keys.has(k)).toBe(true);
+      }
+    });
+
+    it('is a strict subset of the catalog', () => {
+      const all = new Set((Object.values(settingsMap) as Array<{ key: string }>).map(s => s.key));
+      const keys = userReadableSettingKeys();
+      for (const k of keys) expect(all.has(k)).toBe(true);
+      expect(keys.length).toBeLessThan(all.size);
+    });
+  });
+
+  describe('publicSafeSettingKeys', () => {
+    it('returns only keys explicitly tagged publicSafe', () => {
+      const keys = publicSafeSettingKeys();
+      // Seeded allowlist - startup-critical, non-sensitive.
+      expect(keys).toContain('enforceMFA');
+      expect(keys).toContain('DefaultAPIModel');
+      // Every returned key must actually carry the flag.
+      for (const k of keys) {
+        expect((settingsMap as Record<string, { publicSafe?: boolean }>)[k].publicSafe).toBe(true);
+      }
+    });
+
+    it('NEVER includes a setting that is also marked isSensitive (fail-closed invariant)', () => {
+      const sensitiveAndPublic = (
+        Object.values(settingsMap) as Array<{ key: string; isSensitive?: boolean; publicSafe?: boolean }>
+      ).filter(s => s.publicSafe === true && s.isSensitive === true);
+      expect(sensitiveAndPublic).toEqual([]);
+    });
+
+    it('does not expose any known secret-bearing API key settings', () => {
+      const keys = publicSafeSettingKeys();
+      for (const secret of [
+        'openaiDemoKey',
+        'anthropicDemoKey',
+        'xaiApiKey',
+        'moonshotApiKey',
+        'deepseekApiKey',
+        'geminiDemoKey',
+        'voyageApiKey',
+      ]) {
+        expect(keys).not.toContain(secret);
+      }
+    });
+
+    it('does not expose operational config (sreAgentConfig is !isSensitive but must stay private)', () => {
+      expect(publicSafeSettingKeys()).not.toContain('sreAgentConfig');
+    });
+  });
+
+  describe('buildPublicSettingsProjection', () => {
+    // Inputs carry Mongo/soft-delete metadata to prove it is stripped from the public file.
+    const input: AdminSettingDoc[] = [
+      {
+        settingName: 'enforceMFA',
+        settingValue: 'true',
+        _id: 'abc123',
+        __v: 0,
+        createdAt: 'x',
+        updatedAt: 'y',
+        deletedAt: null,
+      },
+      { settingName: 'DefaultAPIModel', settingValue: 'gpt-5', _id: 'def456', __v: 2 },
+      { settingName: 'openaiDemoKey', settingValue: 'sk-SHOULD-NEVER-LEAK' },
+      {
+        settingName: 'sreAgentConfig',
+        settingValue: {
+          repos: [{ owner: 'acme', repo: 'secret-repo', webhookSecret: 'hunter2', callbackToken: 'tok' }],
+        },
+      },
+      { settingName: 'someUnknownSetting', settingValue: 'x' },
+    ];
+
+    it('includes only publicSafe keys', () => {
+      const out = buildPublicSettingsProjection(input);
+      const names = out.map(s => s.settingName).sort();
+      expect(names).toEqual(['DefaultAPIModel', 'enforceMFA']);
+    });
+
+    it('never emits a sensitive secret value even if present in the input', () => {
+      const serialized = JSON.stringify(buildPublicSettingsProjection(input));
+      expect(serialized).not.toContain('sk-SHOULD-NEVER-LEAK');
+      expect(serialized).not.toContain('hunter2');
+      expect(serialized).not.toContain('secret-repo');
+    });
+
+    it('slims to exactly {settingName, settingValue} — no Mongo/soft-delete metadata leaks', () => {
+      const out = buildPublicSettingsProjection(input);
+      for (const setting of out) {
+        expect(Object.keys(setting).sort()).toEqual(['settingName', 'settingValue']);
+      }
+      const serialized = JSON.stringify(out);
+      for (const meta of ['_id', '__v', 'createdAt', 'updatedAt', 'deletedAt', 'abc123', 'def456']) {
+        expect(serialized).not.toContain(meta);
+      }
+    });
+  });
+
+  describe('redactSettingSecrets', () => {
+    it('masks sreAgentConfig per-repo secrets', () => {
+      const redacted = redactSettingSecrets({
+        settingName: 'sreAgentConfig',
+        settingValue: { repos: [{ owner: 'a', repo: 'b', webhookSecret: 'hunter2', callbackToken: 'tok' }] },
+      });
+      const repo = (redacted.settingValue as { repos: Array<{ webhookSecret: string; callbackToken: string }> })
+        .repos[0];
+      expect(repo.webhookSecret).toBe(SRE_SECRET_PLACEHOLDER);
+      expect(repo.callbackToken).toBe(SRE_SECRET_PLACEHOLDER);
+    });
+
+    it('passes non-sre settings through untouched', () => {
+      const setting: AdminSettingDoc = { settingName: 'enforceMFA', settingValue: 'true' };
+      expect(redactSettingSecrets(setting)).toEqual(setting);
+    });
+
+    it('masks EVERY isSensitive setting, not a hand-listed subset', () => {
+      const sensitiveKeys = (Object.values(settingsMap) as Array<{ key: string; isSensitive?: boolean }>)
+        .filter(s => s.isSensitive === true)
+        .map(s => s.key);
+      expect(sensitiveKeys.length).toBeGreaterThan(0);
+
+      for (const key of sensitiveKeys) {
+        const secret = `sk-live-${key}-tail`;
+        const redacted = redactSettingSecrets({ settingName: key, settingValue: secret });
+        expect(redacted.settingValue).not.toBe(secret);
+        expect(redacted.settingValue).toBe(`${SENSITIVE_SETTING_MASK}tail`);
+      }
+    });
+
+    it('leaves an unset sensitive setting empty rather than showing a mask', () => {
+      expect(redactSettingSecrets({ settingName: 'anthropicDemoKey', settingValue: '' }).settingValue).toBe('');
+    });
+
+    it('masks a settingName absent from settingsMap instead of returning it in cleartext (fail closed)', () => {
+      const secret = 'sk-live-orphaned-credential-tail';
+      const redacted = redactSettingSecrets({ settingName: 'someRemovedOrRenamedKey', settingValue: secret });
+      expect(redacted.settingValue).not.toBe(secret);
+      expect(redacted.settingValue).toBe(`${SENSITIVE_SETTING_MASK}tail`);
+    });
+
+    it('every isSensitive setting is a plain free-text string setting', () => {
+      // The whole mask/preserve protocol assumes a string. A sensitive setting that is a
+      // number, boolean, object, or a string with `options` breaks three ways at once: it
+      // masks to '' and renders as unset, it never routes through the input's focus/blur
+      // edit tracking, and isMaskedSensitiveSettingValue('') is false so the preserve branch
+      // can never fire - leaving it one Save away from being wiped. Fail here instead.
+      const offenders = (
+        Object.values(settingsMap) as Array<{
+          key: string;
+          isSensitive?: boolean;
+          type?: string;
+          options?: unknown[];
+        }>
+      )
+        .filter(s => s.isSensitive === true && (s.type !== 'string' || s.options !== undefined))
+        .map(s => s.key);
+
+      expect(offenders, `isSensitive settings that are not plain string inputs: ${offenders.join(', ')}`).toEqual([]);
+    });
+  });
+
+  describe('redactSettingSecretsForBroadcast', () => {
+    it('emits a bare mask with NO tail for a sensitive setting (browser cannot decrypt ciphertext)', () => {
+      // The WS fanout carries the raw stored document - ciphertext post-migration. Masking its
+      // tail would surface a wrong "last 4"; a bare mask cannot be mis-verified.
+      const ciphertext = 'a'.repeat(32) + ':' + 'b'.repeat(32) + ':deadbeef';
+      const redacted = redactSettingSecretsForBroadcast({ settingName: 'anthropicDemoKey', settingValue: ciphertext });
+      expect(redacted.settingValue).toBe(SENSITIVE_SETTING_MASK);
+      // Never the ciphertext tail (the whole point of the fix).
+      expect(redacted.settingValue).not.toBe(`${SENSITIVE_SETTING_MASK}beef`);
+    });
+
+    it('leaves an unset sensitive setting empty', () => {
+      expect(redactSettingSecretsForBroadcast({ settingName: 'anthropicDemoKey', settingValue: '' }).settingValue).toBe(
+        ''
+      );
+    });
+
+    it('still masks sreAgentConfig per-repo secrets (delegates to redactSettingSecrets)', () => {
+      const redacted = redactSettingSecretsForBroadcast({
+        settingName: 'sreAgentConfig',
+        settingValue: { repos: [{ owner: 'a', repo: 'b', webhookSecret: 'hunter2', callbackToken: 'tok' }] },
+      });
+      const repo = (redacted.settingValue as { repos: Array<{ webhookSecret: string; callbackToken: string }> })
+        .repos[0];
+      expect(repo.webhookSecret).toBe(SRE_SECRET_PLACEHOLDER);
+      expect(repo.callbackToken).toBe(SRE_SECRET_PLACEHOLDER);
+    });
+
+    it('passes a non-sensitive setting through untouched', () => {
+      const setting: AdminSettingDoc = { settingName: 'enforceMFA', settingValue: 'true' };
+      expect(redactSettingSecretsForBroadcast(setting)).toEqual(setting);
+    });
+
+    it('masks a settingName absent from settingsMap instead of broadcasting it in cleartext (fail closed)', () => {
+      const redacted = redactSettingSecretsForBroadcast({
+        settingName: 'someRemovedOrRenamedKey',
+        settingValue: 'a'.repeat(32) + ':' + 'b'.repeat(32) + ':deadbeef',
+      });
+      expect(redacted.settingValue).toBe(SENSITIVE_SETTING_MASK);
+    });
+  });
+});
+
+describe('sensitive setting masking', () => {
+  it('pins the literal mask, because its exact shape is a wire contract', () => {
+    // Every other assertion is written relative to the constant, so lengthening or changing
+    // it would silently turn every stale browser tab's write-back into a literal overwrite
+    // of a live credential. Pin the literal so that change has to be deliberate.
+    expect(SENSITIVE_SETTING_MASK).toBe('********');
+  });
+
+  it('treats the shorter SystemSecrets mask as a placeholder too', () => {
+    // system-secrets/index.ts masks with FOUR asterisks. Both screens can show the same
+    // credential, so a value copied from there must never be stored literally.
+    expect(isMaskedSensitiveSettingValue('****abcd')).toBe(true);
+    expect(isMaskedSensitiveSettingValue('****')).toBe(true);
+  });
+
+  it('does not treat a short asterisk run as a placeholder', () => {
+    expect(isMaskedSensitiveSettingValue('***')).toBe(false);
+    expect(isMaskedSensitiveSettingValue('a****bcd')).toBe(false);
+  });
+
+  it('keeps only the last 4 characters', () => {
+    expect(maskSensitiveSettingValue('sk-ant-api03-abcdefgh')).toBe(`${SENSITIVE_SETTING_MASK}efgh`);
+  });
+
+  it('reveals nothing at all for a short value', () => {
+    // 4 of 8 chars would be half the secret, so the tail is dropped entirely.
+    expect(maskSensitiveSettingValue('12345678')).toBe(SENSITIVE_SETTING_MASK);
+  });
+
+  it('maps a missing or non-string value to empty', () => {
+    expect(maskSensitiveSettingValue('')).toBe('');
+    expect(maskSensitiveSettingValue(undefined)).toBe('');
+    expect(maskSensitiveSettingValue(null)).toBe('');
+    expect(maskSensitiveSettingValue({ nested: 'x' })).toBe('');
+  });
+
+  it('recognizes its own output as a write-back placeholder', () => {
+    expect(isMaskedSensitiveSettingValue(maskSensitiveSettingValue('sk-ant-api03-abcdefgh'))).toBe(true);
+    expect(isMaskedSensitiveSettingValue(maskSensitiveSettingValue('12345678'))).toBe(true);
+  });
+
+  it('does not mistake a real secret for a placeholder', () => {
+    expect(isMaskedSensitiveSettingValue('sk-ant-api03-abcdefgh')).toBe(false);
+    expect(isMaskedSensitiveSettingValue('')).toBe(false);
+    expect(isMaskedSensitiveSettingValue(undefined)).toBe(false);
+  });
+});
+
+describe('experimentalFeatureSettingKeys (#9516)', () => {
+  it('surfaces every EXPERIMENTAL-group setting (no silently-dead flag)', () => {
+    const groupKeys = Object.values(settingsMap)
+      .filter(s => s.group === API_SERVICE_GROUPS.EXPERIMENTAL.id)
+      .map(s => s.key);
+
+    expect(groupKeys.length).toBeGreaterThan(0);
+    for (const key of groupKeys) {
+      expect(experimentalFeatureSettingKeys).toContain(key);
+    }
+  });
+
+  it('surfaces the #9506 motivating flag (EnableInertArtifactRender) via group membership', () => {
+    // The original silently-dead flag. It lives in the EXPERIMENTAL group, so the
+    // group rule must keep surfacing it without any explicit allowlist entry.
+    expect(settingsMap.EnableInertArtifactRender.group).toBe(API_SERVICE_GROUPS.EXPERIMENTAL.id);
+    expect(experimentalFeatureSettingKeys).toContain('EnableInertArtifactRender');
+  });
+
+  it('carries the documented non-group extras', () => {
+    expect(experimentalNonGroupSettingKeys.length).toBeGreaterThan(0);
+    for (const key of experimentalNonGroupSettingKeys) {
+      expect(experimentalFeatureSettingKeys).toContain(key);
+    }
+  });
+
+  it('contains only valid settingsMap keys', () => {
+    for (const key of experimentalFeatureSettingKeys) {
+      expect(settingsMap[key]).toBeDefined();
+    }
+  });
+
+  it('has no duplicate keys', () => {
+    expect(new Set(experimentalFeatureSettingKeys).size).toBe(experimentalFeatureSettingKeys.length);
+  });
+});
+
+describe('DefaultChunkSize agrees with the chunker', () => {
+  // The whole point of moving DEFAULT_PASSAGE_TOKEN_TARGET into this package: before it, the
+  // number was hand-copied and had drifted four ways, and the admin setting is sent to
+  // /api/files/chunk as an explicit chunkSize override - so a divergence here silently produces a
+  // different chunk granularity through the UI than through /api/files/reprocess. Nothing tested
+  // that invariant, which is exactly how it drifted the first time.
+  it('defaults to the chunker passage target, not a hand-copied literal', () => {
+    expect(settingsMap.DefaultChunkSize.defaultValue).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
+  });
+
+  it('cannot be set below the floor the chunker would silently clamp to', () => {
+    // Without a min, an admin could save 10, the UI would report 10, and chunk.ts would quietly
+    // use MIN_PASSAGE_TOKEN_TARGET instead - the same class of silent disagreement.
+    expect(settingsMap.DefaultChunkSize.min).toBe(MIN_PASSAGE_TOKEN_TARGET);
+    expect(() => settingsMap.DefaultChunkSize.schema.parse(MIN_PASSAGE_TOKEN_TARGET - 1)).toThrow();
+    expect(settingsMap.DefaultChunkSize.schema.parse(MIN_PASSAGE_TOKEN_TARGET)).toBe(MIN_PASSAGE_TOKEN_TARGET);
+  });
+
+  it('prefaults to the chunker target rather than makeNumberSetting fallback 0', () => {
+    // makeNumberSetting does `prefault(config.defaultValue ?? 0)`, so a broken import resolves to
+    // 0 silently instead of throwing. Pin it.
+    expect(settingsMap.DefaultChunkSize.schema.parse(undefined)).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
+  });
+
+  it('cannot be set above the under-chunked detection threshold (#1804)', () => {
+    // Above it, a file re-chunks to a size that is correct per policy and STILL trips detection
+    // (findUnderChunkedFabFileIds matches tokenCount $gt threshold), so "Rebuild passages" never
+    // converges and each click destructively re-chunks and re-embeds the same files.
+    expect(settingsMap.DefaultChunkSize.max).toBe(OVERSIZED_PASSAGE_TOKEN_THRESHOLD);
+    expect(() => settingsMap.DefaultChunkSize.schema.parse(OVERSIZED_PASSAGE_TOKEN_THRESHOLD + 1)).toThrow();
+    // Detection is $gt, so the threshold ITSELF is convergent and must stay accepted.
+    expect(settingsMap.DefaultChunkSize.schema.parse(OVERSIZED_PASSAGE_TOKEN_THRESHOLD)).toBe(
+      OVERSIZED_PASSAGE_TOKEN_THRESHOLD
+    );
+  });
+
+  it('CLAMPS an already-stored oversized value, so the bound is retroactive (#1804)', () => {
+    // `max` only rejects new writes. A value saved before this shipped would otherwise keep
+    // resolving at its stored size and keep the badge non-convergent, which is the actual defect.
+    const clamp = settingsMap.DefaultChunkSize.scope?.clamp;
+    expect(clamp).toBeDefined();
+    expect(clamp!(8192)).toBe(OVERSIZED_PASSAGE_TOKEN_THRESHOLD);
+    expect(clamp!(2048)).toBe(OVERSIZED_PASSAGE_TOKEN_THRESHOLD);
+    // Still clamps up at the floor, and leaves an in-range value alone.
+    expect(clamp!(1)).toBe(MIN_PASSAGE_TOKEN_TARGET);
+    expect(clamp!(DEFAULT_PASSAGE_TOKEN_TARGET)).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
+  });
+});
+
+describe('forcedRetrievalCharBudget agrees with the forced-retrieval fallback (#1831)', () => {
+  // Same drift class as DefaultChunkSize above: before this setting existed, the char budget was a
+  // hand-copied literal (12000) in ChatCompletionFeatures.ts. Both now import
+  // FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT from the same constants module, so this pins that the
+  // setting's default cannot silently diverge from the coded fallback a settings outage returns to.
+  it('defaults to the shared constant, not a hand-copied literal', () => {
+    expect(settingsMap.forcedRetrievalCharBudget.defaultValue).toBe(FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT);
+  });
+
+  it('is settable at the org/owner (caller) altitude, but deliberately not at Lake (#2572)', () => {
+    // Same rung set as the two relevance floors it is resolved alongside, and for the same reason
+    // there is no Lake rung: a forced-retrieval turn pools an uncapped SET of lakes, so no single
+    // lake can key a narrower rung. Was platform-only until #2572 pointed the read at
+    // resolveScopedSettingValues - the rungs and the read path have to move together, since
+    // settableAt is metadata only the scoped resolver honors.
+    expect(settingsMap.forcedRetrievalCharBudget.scope?.settableAt).toEqual([
+      SettingScopeLevel.Organization,
+      SettingScopeLevel.Owner,
+    ]);
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback 0', () => {
+    expect(settingsMap.forcedRetrievalCharBudget.schema.parse(undefined)).toBe(FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT);
+  });
+
+  it('rejects a value below the declared floor at write time', () => {
+    // Same pattern as DefaultChunkSize above: the write path (settings/update.ts) calls
+    // schema.parse and throws on failure, so this is what actually stops an admin from saving an
+    // unusably small budget - positiveIntOr's own floor is defense-in-depth, not the real gate.
+    expect(settingsMap.forcedRetrievalCharBudget.min).toBe(1_000);
+    expect(() => settingsMap.forcedRetrievalCharBudget.schema.parse(999)).toThrow();
+    expect(settingsMap.forcedRetrievalCharBudget.schema.parse(1_000)).toBe(1_000);
+  });
+
+  it('rejects a value above the declared ceiling at write time (#1860 P2-1)', () => {
+    // Without this, a fat-fingered extra zero (24000 -> 240000) passed write-time validation
+    // cleanly and silently shed conversation history via ChatCompletionProcess's overflow-recovery
+    // loop before eventually hard-erroring - the retrieval block itself is never shed, only prior
+    // turns are.
+    expect(settingsMap.forcedRetrievalCharBudget.max).toBe(100_000);
+    expect(() => settingsMap.forcedRetrievalCharBudget.schema.parse(100_001)).toThrow();
+    expect(settingsMap.forcedRetrievalCharBudget.schema.parse(100_000)).toBe(100_000);
+  });
+});
+
+describe('scoped retrieval settings are caller-altitude, not per-lake (#2624, #2572)', () => {
+  // Both reads that resolve settings for one retrieval turn, each derived from the list its
+  // production caller actually passes: resolveSearchBudgets (b4m-core/services) and
+  // readForcedRetrievalSettings (ChatCompletionFeatures.ts). Individual keys below have their own
+  // describe blocks carrying their own reasoning; this block is the NET that catches a key nobody
+  // wrote a bespoke assertion for.
+  const SCOPED_RETRIEVAL_KEYS = [...SEARCH_BUDGET_SETTING_KEYS, ...FORCED_RETRIEVAL_SETTING_KEYS];
+
+  it('covers the keys whose Lake rung has already had to be removed by hand', () => {
+    // Anti-vacuity guard for the loops below, and the reason this suite reads the production lists
+    // rather than its own: a for-of over an emptied or shortened list asserts nothing and still
+    // passes green. The keys named here are the ones with history - #2707 removed the Lake rung
+    // from the first two, #2465 shipped the third WITH one (merged textually clean, corrected in
+    // review rather than by this guard), and #2572 is why the forced-retrieval budget has none.
+    expect(SCOPED_RETRIEVAL_KEYS).toContain('dataLakeSearchMaxFiles');
+    expect(SCOPED_RETRIEVAL_KEYS).toContain('dataLakeSearchMaxChunks');
+    expect(SCOPED_RETRIEVAL_KEYS).toContain('dataLakeSearchMaxChunksPerFile');
+    expect(SCOPED_RETRIEVAL_KEYS).toContain('forcedRetrievalCharBudget');
+  });
+
+  it('declares Organization and Owner but NOT Lake', () => {
+    // These advertised a Lake rung that no retrieval caller ever resolved, so an operator could
+    // save a Lake-scoped override, see it in the admin UI, and have every search keep using the
+    // platform value. The rung is not merely unwired: resolveRetrievalLakeScope hands one scan every
+    // lake the caller can reach as a single dataLakeTags array, so there is no lakeId to key on, and
+    // one forced-retrieval turn scans an uncapped SET of lakes into a single pool for the same
+    // reason. Restoring Lake on either without per-lake sub-budgets would re-create that same lie.
+    // Driven off the lists the reads actually pass, so a NEW key declared with a Lake rung is
+    // covered the moment it becomes resolvable - which a literal here was not.
+    for (const key of SCOPED_RETRIEVAL_KEYS) {
+      expect(settingsMap[key].scope?.settableAt).toEqual([SettingScopeLevel.Organization, SettingScopeLevel.Owner]);
+      expect(settingsMap[key].scope?.settableAt).not.toContain(SettingScopeLevel.Lake);
+    }
+  });
+
+  it('still declares a scope, so the read path must stay on the scoped resolver', () => {
+    // Dropping the block entirely would be the wrong fix: the Org and Owner rungs are resolvable
+    // (the caller is known) and both reads honor them. Only Lake was unkeyable.
+    for (const key of SCOPED_RETRIEVAL_KEYS) {
+      expect(settingsMap[key].scope).toBeDefined();
+    }
+  });
+
+  it('no setting outside the convergence allowlist declares a Lake rung at all', () => {
+    // The loops above are list-gated, so the #2465 failure mode survives in two steps: declare a
+    // Lake-scoped setting in one PR, wire its read in a later one, and nothing forces it into either
+    // key list until the read exists. This assertion is the fail-CLOSED half and needs no list
+    // maintenance - it walks every setting and requires a Lake rung to be justified HERE, so a new
+    // one fails on the commit that declares it rather than on the commit that reads it.
+    //
+    // The allowlist is lake-convergence policy: these three take a lake as their SUBJECT (a lake is
+    // the thing being paused, rate-limited or admission-gated), which is exactly what a retrieval
+    // budget is not - retrieval spans every lake the caller can reach at once. Adding an entry here
+    // should mean answering that question, not silencing this test.
+    const LAKE_SUBJECT_SETTINGS: readonly SettingKey[] = [
+      'PauseLakeConvergence',
+      'LakeConvergenceBulkChangeSharePct',
+      'EnforceLakeAdmission',
+    ];
+
+    const declaringLake = (Object.keys(settingsMap) as SettingKey[]).filter(key =>
+      settingsMap[key].scope?.settableAt?.includes(SettingScopeLevel.Lake)
+    );
+
+    expect(declaringLake.sort()).toEqual([...LAKE_SUBJECT_SETTINGS].sort());
+  });
+});
+
+describe('forced-retrieval relevance floors are levers (#2497)', () => {
+  const FLOOR_KEYS = ['forcedRetrievalRelativeFloorPct', 'forcedRetrievalMinSimilarityPct'] as const;
+
+  it('defaults to the shared constants rather than hand-copied literals', () => {
+    expect(settingsMap.forcedRetrievalRelativeFloorPct.defaultValue).toBe(FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT);
+    expect(settingsMap.forcedRetrievalMinSimilarityPct.defaultValue).toBe(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT);
+  });
+
+  it('describes the per-space floors from the table rather than restating them in prose', () => {
+    // The description tells operators which floor actually applies per space, and those numbers are
+    // expected to move (35 is provisional until re-derived against a production lake). Hand-written
+    // prose would become a wrong number in the admin UI with nothing failing, so assert the
+    // description carries every value the table holds - and would catch a new space added without it.
+    const { description } = settingsMap.forcedRetrievalMinSimilarityPct;
+    for (const [space, pct] of Object.entries(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE)) {
+      expect(description).toContain(`${pct} for ${space}`);
+    }
+  });
+
+  it('keeps the absolute floor percent in step with the cosine fraction it replaced', () => {
+    // The percent is what an admin edits; the fraction is what the retrieval path compares against.
+    // Pinned together because the setting exists to REPLACE a hardcoded use of the fraction, and a
+    // change to one that missed the other would silently move the floor.
+    expect(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT / 100).toBe(FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT);
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback 0', () => {
+    // 0 is a MEANINGFUL value for both (disabled relative floor / absent absolute floor), so a
+    // prefault that silently landed on it would disable the lever instead of defaulting it.
+    expect(settingsMap.forcedRetrievalRelativeFloorPct.schema.parse(undefined)).toBe(
+      FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT
+    );
+    expect(settingsMap.forcedRetrievalMinSimilarityPct.schema.parse(undefined)).toBe(
+      FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT
+    );
+  });
+
+  it('bounds both floors at write time, integrally, and floors them differently at the bottom', () => {
+    // The 100 ceiling is load-bearing, not cosmetic: the relative floor is multiplied by the turn's
+    // top score, so a value above 100 would put the cutoff ABOVE the best candidate and starve
+    // every turn.
+    for (const key of FLOOR_KEYS) {
+      expect(settingsMap[key].max).toBe(100);
+      expect(() => settingsMap[key].schema.parse(-1)).toThrow();
+      expect(() => settingsMap[key].schema.parse(101)).toThrow();
+      expect(settingsMap[key].schema.parse(100)).toBe(100);
+      // Integral at the write boundary rather than floored later by a reader, so the percent an
+      // admin sees is the percent the retrieval path actually compares against.
+      expect(settingsMap[key].int).toBe(true);
+      expect(() => settingsMap[key].schema.parse(85.5)).toThrow();
+    }
+
+    // The two differ at the bottom of the range, and deliberately. 0 is what makes the RELATIVE
+    // floor's "disabled" expressible.
+    expect(settingsMap.forcedRetrievalRelativeFloorPct.min).toBe(0);
+    expect(settingsMap.forcedRetrievalRelativeFloorPct.schema.parse(0)).toBe(0);
+
+    // The ABSOLUTE floor stops at 1, because clearing a number field in the admin UI coerces to 0,
+    // so 0 reads as an emptied field rather than as intent. 1% still effectively disables the gate.
+    expect(settingsMap.forcedRetrievalMinSimilarityPct.min).toBe(1);
+    expect(() => settingsMap.forcedRetrievalMinSimilarityPct.schema.parse(0)).toThrow();
+    expect(settingsMap.forcedRetrievalMinSimilarityPct.schema.parse(1)).toBe(1);
+  });
+
+  it('is settable at org and owner but NOT per lake', () => {
+    // Deliberate, and the reason is structural rather than an oversight: one forced-retrieval turn
+    // scans an uncapped SET of lakes into a single pool with a single top score, so there is no one
+    // lake for a narrower rung to key on. Same call as kbSearchMinRelevancePct, whose corpus has the
+    // same shape. If a per-lake floor is ever wanted it needs per-lake top scores first, not just
+    // this rung.
+    for (const key of FLOOR_KEYS) {
+      expect(settingsMap[key].scope?.settableAt).toEqual([SettingScopeLevel.Organization, SettingScopeLevel.Owner]);
+      expect(settingsMap[key].scope?.settableAt).not.toContain(SettingScopeLevel.Lake);
+    }
+  });
+
+  it('declares a scope, so the read path must go through the scoped resolver', () => {
+    // These two and forcedRetrievalCharBudget above are read together, in one
+    // resolveScopedSettingValues call, which is what honors settableAt. A future change that
+    // pointed any of them back at getSettingsValue would silently drop every override, so the
+    // scope block is the signal that the resolver is required. lakeMemoryRecallK below is the
+    // live counterexample: no scope block, because its read is still the plain one.
+    for (const key of FLOOR_KEYS) {
+      expect(settingsMap[key].scope).toBeDefined();
+    }
+  });
+
+  it('defaults the relative floor low enough to preserve behavior on the measured band', () => {
+    // The shipped default is a mechanism plus a safe starting point, NOT a tuned value. On the
+    // production lake this issue was measured against (166 injected chunks) the weakest accepted
+    // score was 0.8025 against a per-turn best of 0.9140, so anything at or below that ratio admits
+    // everything the absolute floor admitted and changes no production behavior on its own.
+    // Raising this default is a deliberate tuning decision that should follow the embedding
+    // migration, not precede it - this test is what makes such a change visible in review.
+    const weakestAcceptedRatio = 0.8025 / 0.914;
+    expect(FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT / 100).toBeLessThan(weakestAcceptedRatio);
+  });
+
+  it('renders in the embedding group so an admin can actually reach both', () => {
+    // A lever nobody can find is the failure mode this issue cites in its own Related section.
+    // The two assertions below are not the same check, and only the second one is the runtime gate:
+    // AdminSettingsTab enumerates `Object.values(settingsMap)` and buckets each entry by its OWN
+    // `group` field (AdminSettingsTab.tsx:134 and :407), then orders within a group by its `order`
+    // (:571) - which is also what makes the two descriptions' "above"/"below" wording true. The
+    // group's `settings` array is never dereferenced by the render path; it is a hand-maintained
+    // index that only this suite enforces, so it is checked here to keep the two from drifting.
+    const keys = API_SERVICE_GROUPS.EMBEDDING.settings.map(entry => entry.key);
+    for (const key of FLOOR_KEYS) {
+      expect(keys).toContain(key);
+      expect(settingsMap[key].group).toBe(API_SERVICE_GROUPS.EMBEDDING.id);
+    }
+  });
+});
+
+describe('kbSearchDefaultResults agrees with the search_knowledge_base tool fallback (#1831)', () => {
+  // Same drift class as forcedRetrievalCharBudget above: before this setting existed,
+  // KB_SEARCH_DEFAULT_RESULTS was a hand-copied literal (5) local to the tool's own file. Both now
+  // import KB_SEARCH_DEFAULT_RESULTS_DEFAULT from the same constants module, so this pins that the
+  // setting's default cannot silently diverge from the coded fallback a settings outage returns to.
+  it('defaults to the shared constant, not a hand-copied literal', () => {
+    expect(settingsMap.kbSearchDefaultResults.defaultValue).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+  });
+
+  it('is settable at the org/owner (caller) altitude, but deliberately not at Lake (#1955)', () => {
+    // A knowledge-base search spans a mixed multi-lake corpus plus the caller's own/shared files -
+    // there is no single lake for a Lake rung to key on. dataLakeSearchMaxFiles/MaxChunks were once
+    // believed to differ (one lake at a time) and declared Lake on that basis; #2624 found the
+    // premise false and they now match. Pinned so adding Lake later is a deliberate decision
+    // rather than silent drift.
+    expect(settingsMap.kbSearchDefaultResults.scope?.settableAt).toEqual([
+      SettingScopeLevel.Organization,
+      SettingScopeLevel.Owner,
+    ]);
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback 0', () => {
+    expect(settingsMap.kbSearchDefaultResults.schema.parse(undefined)).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+  });
+
+  it('rejects a value below the declared floor at write time', () => {
+    expect(settingsMap.kbSearchDefaultResults.min).toBe(1);
+    expect(() => settingsMap.kbSearchDefaultResults.schema.parse(0)).toThrow();
+    expect(settingsMap.kbSearchDefaultResults.schema.parse(1)).toBe(1);
+  });
+
+  it('rejects a value above the tool ceiling at write time', () => {
+    // Without this, an admin could store a default above KB_SEARCH_MAX_RESULTS (10) that the tool
+    // would then clamp down on every call, making the stored value silently misleading.
+    expect(settingsMap.kbSearchDefaultResults.max).toBe(10);
+    expect(() => settingsMap.kbSearchDefaultResults.schema.parse(11)).toThrow();
+    expect(settingsMap.kbSearchDefaultResults.schema.parse(10)).toBe(10);
+  });
+});
+
+describe('kbSearchResultTokenBudget (#1955)', () => {
+  it('defaults to the shared off-sentinel constant, not a hand-copied literal', () => {
+    expect(settingsMap.kbSearchResultTokenBudget.defaultValue).toBe(KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT);
+    // The constant IS 0 today, so the assertion above alone would pass even if someone hand-wrote
+    // a literal 0 instead of importing the constant. Pin the value directly too, with the intent
+    // spelled out: 0 is a deliberate "no budget" sentinel, not "forgot to set a default".
+    expect(settingsMap.kbSearchResultTokenBudget.defaultValue).toBe(0);
+  });
+
+  it('is settable at the org/owner (caller) altitude, not Lake', () => {
+    expect(settingsMap.kbSearchResultTokenBudget.scope?.settableAt).toEqual([
+      SettingScopeLevel.Organization,
+      SettingScopeLevel.Owner,
+    ]);
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback', () => {
+    expect(settingsMap.kbSearchResultTokenBudget.schema.parse(undefined)).toBe(KB_SEARCH_RESULT_TOKEN_BUDGET_DEFAULT);
+  });
+
+  it('accepts 0 (the off sentinel) at write time without throwing', () => {
+    expect(settingsMap.kbSearchResultTokenBudget.min).toBe(0);
+    expect(settingsMap.kbSearchResultTokenBudget.schema.parse(0)).toBe(0);
+  });
+
+  it('rejects a negative value and enforces the declared ceiling at write time', () => {
+    expect(() => settingsMap.kbSearchResultTokenBudget.schema.parse(-1)).toThrow();
+    expect(settingsMap.kbSearchResultTokenBudget.max).toBe(20_000);
+    expect(() => settingsMap.kbSearchResultTokenBudget.schema.parse(20_001)).toThrow();
+    expect(settingsMap.kbSearchResultTokenBudget.schema.parse(20_000)).toBe(20_000);
+  });
+});
+
+describe('kbSearchMinRelevancePct (#1955)', () => {
+  it('defaults to the shared off-sentinel constant, not a hand-copied literal', () => {
+    expect(settingsMap.kbSearchMinRelevancePct.defaultValue).toBe(KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT);
+    // Same vacuous-drift-guard caveat as the token budget above: the constant is 0 today, so pin
+    // the literal too and say why - 0 matches today's hardcoded minScore: 0, not an oversight.
+    expect(settingsMap.kbSearchMinRelevancePct.defaultValue).toBe(0);
+  });
+
+  it('is settable at the org/owner (caller) altitude, not Lake', () => {
+    expect(settingsMap.kbSearchMinRelevancePct.scope?.settableAt).toEqual([
+      SettingScopeLevel.Organization,
+      SettingScopeLevel.Owner,
+    ]);
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback', () => {
+    expect(settingsMap.kbSearchMinRelevancePct.schema.parse(undefined)).toBe(KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT);
+  });
+
+  it('accepts 0 and 100 at write time; rejects outside that range', () => {
+    expect(settingsMap.kbSearchMinRelevancePct.min).toBe(0);
+    expect(settingsMap.kbSearchMinRelevancePct.max).toBe(100);
+    expect(settingsMap.kbSearchMinRelevancePct.schema.parse(0)).toBe(0);
+    expect(settingsMap.kbSearchMinRelevancePct.schema.parse(100)).toBe(100);
+    expect(() => settingsMap.kbSearchMinRelevancePct.schema.parse(-1)).toThrow();
+    expect(() => settingsMap.kbSearchMinRelevancePct.schema.parse(101)).toThrow();
+  });
+});
+
+describe('lakeMemoryRecallK agrees with the lake-memory recall fallback (#2496)', () => {
+  // Same drift class as forcedRetrievalCharBudget above: before this setting existed the belief
+  // budget was a literal 8 in recallLakeMemory.ts. The setting's default and the coded fallback a
+  // settings outage returns to now both import LAKE_RECALL_K_DEFAULT, so this pins that they
+  // cannot silently diverge.
+  it('defaults to the shared constant, not a hand-copied literal', () => {
+    expect(settingsMap.lakeMemoryRecallK.defaultValue).toBe(LAKE_RECALL_K_DEFAULT);
+    // Pin the literal too, and say why: the whole point of the change is that the budget is no
+    // longer 8, so a default that drifted back down to the old value should fail here.
+    expect(settingsMap.lakeMemoryRecallK.defaultValue).toBeGreaterThan(8);
+  });
+
+  it('is platform-only, unlike its sibling forcedRetrievalCharBudget', () => {
+    // Deliberate, not an oversight - see the setting's own description. LakeMemoryFeature reads it
+    // via getSettingsValue, which ignores settableAt, so a scope block here would be silently
+    // inert: every override written against it would resolve to nothing. Its sibling was in the
+    // same position until #2572 moved BOTH its rungs and its read at once, which is what giving
+    // this one org/owner rungs would also take.
+    expect(settingsMap.lakeMemoryRecallK.scope).toBeUndefined();
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback 0', () => {
+    // 0 would be worse than the old hardcoded 8: it disables the card outright, and silently.
+    expect(settingsMap.lakeMemoryRecallK.schema.parse(undefined)).toBe(LAKE_RECALL_K_DEFAULT);
+  });
+
+  it('rejects 0 and negatives at write time', () => {
+    expect(settingsMap.lakeMemoryRecallK.min).toBe(1);
+    expect(() => settingsMap.lakeMemoryRecallK.schema.parse(0)).toThrow();
+    expect(() => settingsMap.lakeMemoryRecallK.schema.parse(-1)).toThrow();
+    expect(settingsMap.lakeMemoryRecallK.schema.parse(1)).toBe(1);
+  });
+
+  it('rejects a value above the declared ceiling at write time', () => {
+    // A fat-fingered extra zero (24 -> 240) otherwise passes validation cleanly and then sheds
+    // conversation history via the overflow-recovery loop, which looks nothing like a
+    // misconfigured setting. Same reasoning as forcedRetrievalCharBudget's max.
+    expect(settingsMap.lakeMemoryRecallK.max).toBe(LAKE_RECALL_K_MAX);
+    expect(() => settingsMap.lakeMemoryRecallK.schema.parse(LAKE_RECALL_K_MAX + 1)).toThrow();
+    expect(settingsMap.lakeMemoryRecallK.schema.parse(LAKE_RECALL_K_MAX)).toBe(LAKE_RECALL_K_MAX);
+  });
+
+  it('rejects a fractional budget rather than letting a reader floor it', () => {
+    // A belief count has no fractional meaning, so 1.5 is a typo, not a lower setting. Without the
+    // `int` flag it passes min/max cleanly and is then floored to 1 by positiveIntOr at read time -
+    // a 24x cut to lake grounding that reports as a successful save. Verified live: the real
+    // PUT /api/settings/update returns 422 for 1.5 and leaves the stored value untouched.
+    expect(() => settingsMap.lakeMemoryRecallK.schema.parse(1.5)).toThrow();
+    // The admin UI submits its number field as a string, so coercion must still work.
+    expect(settingsMap.lakeMemoryRecallK.schema.parse('24')).toBe(24);
+  });
+
+  it('does not make integrality the default for every number setting', () => {
+    // `int` is opt-in on makeNumberSetting precisely because genuine fractions exist. If a future
+    // change flips it to the factory default, this fails instead of silently rejecting every
+    // fraction setting's own default value.
+    expect(settingsMap.ContextVerbatimWindowFraction.schema.parse(0.55)).toBe(0.55);
+  });
+
+  it('is registered in the EMBEDDING group at the order the admin UI actually sorts by', () => {
+    // Two surfaces that can disagree: AdminSettingsTab buckets by `settingsMap[key].group` and
+    // sorts by `settingsMap[key].order`, while API_SERVICE_GROUPS.settings is the declared
+    // manifest. A setting present in only one, or carrying two different orders, renders somewhere
+    // nobody intended - so pin that both agree and the order is still unique in the group.
+    const entry = API_SERVICE_GROUPS.EMBEDDING.settings.find(s => s.key === 'lakeMemoryRecallK');
+    expect(entry).toBeDefined();
+    expect(settingsMap.lakeMemoryRecallK.group).toBe(API_SERVICE_GROUPS.EMBEDDING.id);
+    expect(settingsMap.lakeMemoryRecallK.order).toBe(entry!.order);
+    const orders = API_SERVICE_GROUPS.EMBEDDING.settings.map(s => s.order);
+    expect(new Set(orders).size).toBe(orders.length);
+  });
+});
+
+describe('dataLakeSearchMaxChunksPerFile (#1422)', () => {
+  it('ships DISABLED, so enabling the diversity cap is an operator decision', () => {
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.defaultValue).toBe(DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT);
+    // Pin the literal too: 0 here means "no cap", matching pre-#1422 retrieval exactly. Crowding
+    // was measured absent on a 47-document corpus, so a default that changed what installs serve
+    // would be a behavior change nobody asked for.
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.defaultValue).toBe(0);
+  });
+
+  it('accepts 0 at write time - the schema must not treat the disabled value as invalid', () => {
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.min).toBe(0);
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.schema.parse(0)).toBe(0);
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.schema.parse(3)).toBe(3);
+    expect(() => settingsMap.dataLakeSearchMaxChunksPerFile.schema.parse(-1)).toThrow();
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback', () => {
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.schema.parse(undefined)).toBe(
+      DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT
+    );
+  });
+
+  it('is settable at org and owner but NOT per lake, like the scan budgets it sits with', () => {
+    // A per-lake cap reads as the natural shape - one lake of long documents wants it, the rest of
+    // an org does not - but it is unkeyable: the cap is enforced at a merge whose pool spans EVERY
+    // lake the caller can reach in one pass, so there is no lakeId to resolve an override against.
+    // dataLakeSearchMaxFiles/MaxChunks shipped that rung on the same intuition and it resolved
+    // nothing (#2624). Pinned so restoring Lake is a deliberate decision, not silent drift.
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.scope?.settableAt).toEqual([
+      SettingScopeLevel.Organization,
+      SettingScopeLevel.Owner,
+    ]);
+  });
+});
+
+describe('EMBEDDING settings group registration (#1955)', () => {
+  it('lists kbSearchDefaultResults, kbSearchResultTokenBudget and kbSearchMinRelevancePct with unique order values', () => {
+    const keys = ['kbSearchDefaultResults', 'kbSearchResultTokenBudget', 'kbSearchMinRelevancePct'];
+    const entries = API_SERVICE_GROUPS.EMBEDDING.settings.filter(s => keys.includes(s.key));
+    expect(entries.map(s => s.key).sort()).toEqual([...keys].sort());
+    expect(new Set(entries.map(s => s.order)).size).toBe(entries.length);
+  });
+
+  it('registers dataLakeSearchMaxChunksPerFile in the group, with an order no sibling reuses', () => {
+    // A setting absent from the group renders nowhere in the admin UI - it resolves correctly and
+    // is simply unreachable, which is the failure mode this pins.
+    const entry = API_SERVICE_GROUPS.EMBEDDING.settings.find(s => s.key === 'dataLakeSearchMaxChunksPerFile');
+    expect(entry).toBeDefined();
+    const orders = API_SERVICE_GROUPS.EMBEDDING.settings.map(s => s.order);
+    expect(new Set(orders).size).toBe(orders.length);
+  });
+});
+
+describe('LakeAccessAuditRetentionDays cannot be configured below the floor', () => {
+  // Same drift class as DefaultChunkSize: the floor is enforced in two places (this schema's
+  // `min`, and the write path's unconditional clamp), and both must agree with the exported
+  // constant or an admin could save a value the write path silently overrides without complaint.
+  it('min matches the exported floor constant', () => {
+    expect(settingsMap.LakeAccessAuditRetentionDays.min).toBe(LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS);
+  });
+
+  it('rejects a save below the floor and accepts the floor itself', () => {
+    expect(() =>
+      settingsMap.LakeAccessAuditRetentionDays.schema.parse(LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS - 1)
+    ).toThrow();
+    expect(settingsMap.LakeAccessAuditRetentionDays.schema.parse(LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS)).toBe(
+      LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS
+    );
+  });
+
+  it('prefaults to the default constant rather than makeNumberSetting fallback 0', () => {
+    expect(settingsMap.LakeAccessAuditRetentionDays.schema.parse(undefined)).toBe(
+      LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS
+    );
+  });
+});
+
+describe('MaxFileSize cannot coerce a cleared field to a real 0', () => {
+  // A cleared admin field is stored as '', which z.coerce.number() reads as 0 - a value that
+  // PASSES validation, so the schema's own `.prefault(30)` (undefined-only) never fires and
+  // every caller sees a real 0MB limit instead of the intended default. The `min: 1` floor
+  // makes that coerced 0 fail validation instead, so callers (getSettingsValue's safeParse
+  // fallback) land on the default the way an unset row already does.
+  it('rejects both a cleared field and an explicit 0, unlike prefault-only defaulting', () => {
+    expect(() => settingsMap.MaxFileSize.schema.parse('')).toThrow();
+    expect(() => settingsMap.MaxFileSize.schema.parse(0)).toThrow();
+  });
+
+  it('still prefaults an unset row to 30', () => {
+    expect(settingsMap.MaxFileSize.schema.parse(undefined)).toBe(30);
+  });
+
+  it('accepts a genuinely configured value', () => {
+    expect(settingsMap.MaxFileSize.schema.parse('50')).toBe(50);
+  });
+});
+
+describe('AbstentionPrompt default carries the anti-invention licence', () => {
+  // The always-on backstop is the ONLY anti-invention text on a normal turn that answers WITHOUT
+  // searching the knowledge base. (A promptMode session strips it like any authored prompt, so that
+  // surface is an uncovered gap by design - not something this backstop routes around.) Guard that
+  // its default still both licenses abstention AND bars volunteering a specific unsourced fact. The
+  // grounded-surface half ships two tests; without this, blanking this clause would pass unnoticed.
+  it('licenses saying "not enough to answer" instead of inventing', () => {
+    expect(ABSTENTION_PROMPT).toContain('I do not have enough to answer that');
+    expect(ABSTENTION_PROMPT).toMatch(/never invent facts/i);
+  });
+
+  it('bars stating - or citing a source for - a specific customer/competitor/deal/figure', () => {
+    for (const noun of ['customer', 'competitor', 'deal', 'figure']) {
+      expect(ABSTENTION_PROMPT.toLowerCase()).toContain(noun);
+    }
+    expect(ABSTENTION_PROMPT).toMatch(/cite a source/i);
+  });
+
+  it('ships as the AbstentionPrompt setting default (no drift between const and setting)', () => {
+    expect(settingsMap.AbstentionPrompt.defaultValue).toBe(ABSTENTION_PROMPT);
+  });
+});
+
+describe('WebSearchFreshnessPrompt default tells the model when to search', () => {
+  // The measured failure it exists to fix is under-SELECTION, not weak search: web_search was
+  // offered on every turn of a 200-question internal eval and called on 16% of them, and the
+  // tool prompt instructed the model about clock time and chess and nothing about staleness.
+  // Two clauses carry the whole effect, so pin both.
+  it('directs the model to search before answering a time-sensitive question', () => {
+    expect(WEB_SEARCH_FRESHNESS_PROMPT).toMatch(/web_search/);
+    expect(WEB_SEARCH_FRESHNESS_PROMPT).toMatch(/training data has a cutoff/i);
+  });
+
+  // Without the negative clause the nudge over-triggers and every turn pays for a search it did
+  // not need; on the same eval it held the rate to 31% on questions with nothing to look up.
+  it('names the cases that do NOT need a search', () => {
+    expect(WEB_SEARCH_FRESHNESS_PROMPT).toMatch(/do not need to search/i);
+  });
+
+  it('requires an as-of date on any time-sensitive fact it reports', () => {
+    // Not /as of/i - that also matches "as of today" in the search-trigger list, so the pin would
+    // survive deleting the reporting clause this test is named for.
+    expect(WEB_SEARCH_FRESHNESS_PROMPT).toMatch(/state what it is as of/i);
+  });
+
+  it('ships as the WebSearchFreshnessPrompt setting default (no drift between const and setting)', () => {
+    expect(settingsMap.WebSearchFreshnessPrompt.defaultValue).toBe(WEB_SEARCH_FRESHNESS_PROMPT);
+  });
+});
+
+describe('KnowledgeBaseRetrievalPrompt default tells the model when to retrieve', () => {
+  // Same shape of failure as the web-search nudge, measured the same way: search_knowledge_base
+  // was offered on 1,591 optional-path production turns over 30 days and called on 319 of them
+  // (20.1%), while its tool description covered only HOW to search and never WHEN. Two clauses
+  // carry the whole effect, so pin both.
+  it('directs the model to search before answering from its weights', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/search_knowledge_base/);
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/labels, not content/i);
+  });
+
+  // Without the negative clause the nudge over-triggers and every turn pays for a retrieval it did
+  // not need - the same failure global forced retrieval already showed on out-of-corpus questions,
+  // arriving by a different route.
+  it('names the cases that do NOT need a search', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/do not search when/i);
+  });
+
+  // A small attached corpus is INLINED rather than deferred to retrieval, and forced retrieval
+  // steps aside entirely on an attached-files turn. Without these two clauses the section sends
+  // the model searching for text already sitting in its context, and its opening paragraph asserts
+  // the documents are invisible - which on that path is simply false.
+  it('exempts content already placed in the conversation', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/from an attached document/i);
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/unless its content has been placed in this conversation/i);
+  });
+
+  // On a forced turn that retrieved nothing, forcedRetrievalNoContextPrompt instructs the model to
+  // say the library does not cover the question. Without this clause the nudge invites a second
+  // identical search: a billed query embedding, and a chance to hedge out of a correct abstention.
+  it('forbids re-searching a library already searched this turn', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/already been searched on this turn/i);
+  });
+
+  // The abstention half. Without it a nudge to search converts a clean "I could not find that"
+  // into an ungrounded answer wearing the corpus's authority.
+  it('requires saying so when the corpus does not cover the question', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).toMatch(/does not turn up what was asked for/i);
+  });
+
+  // Naming retrieve_knowledge_content here would instruct the model to call a tool a session
+  // denylist can strip while search survives (ChatCompletionProcess warns on exactly that pair),
+  // and a model told to call a tool it was not given emits the call as leaked JSON text.
+  it('names no knowledge tool the gate does not guarantee', () => {
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).not.toMatch(/retrieve_knowledge_content/);
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).not.toMatch(/count_knowledge_base/);
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).not.toMatch(/describe_knowledge_base/);
+  });
+
+  it('ships as the KnowledgeBaseRetrievalPrompt setting default (no drift between const and setting)', () => {
+    expect(settingsMap.KnowledgeBaseRetrievalPrompt.defaultValue).toBe(KNOWLEDGE_BASE_RETRIEVAL_PROMPT);
+  });
+});
+
+describe('bflApiKey spells the vendor the way the rest of the app does', () => {
+  // The vendor's own name is three words, and two client surfaces already render it that way
+  // (ApiKeysSection.tsx's PROVIDER_LABELS, ModelSelection.tsx's FLUX section header). This admin
+  // label is a third independent hardcoding of the same string with nothing forcing it to agree,
+  // so pin the spelling here rather than let it drift back.
+  for (const field of ['name', 'description'] as const) {
+    it(`${field} says "Black Forest Labs", not "BlackForest"`, () => {
+      expect(settingsMap.bflApiKey[field]).toContain('Black Forest Labs');
+      expect(settingsMap.bflApiKey[field]).not.toContain('BlackForest');
+    });
+  }
+});

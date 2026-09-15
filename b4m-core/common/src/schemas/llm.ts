@@ -1,0 +1,128 @@
+import { z } from 'zod';
+
+/**
+ * Official B4M LLM tools.
+ */
+export const b4mLLMTools = z.enum([
+  'dice_roll',
+  'image_generation',
+  'edit_image',
+  // Background-music generation (ElevenLabs); mirrors image_generation
+  'music_generation',
+  // Model-callable TTS + sound effects (OpenAI / ElevenLabs); mirrors image_generation
+  'audio_generation',
+  'weather_info',
+  'web_search',
+  'web_fetch',
+  'wolfram_alpha',
+  'math_evaluate',
+  'mermaid_chart',
+  'current_datetime',
+  'deep_research',
+  'prompt_enhancement',
+  'recharts',
+  'edit_file',
+  'blog_publish',
+  'blog_edit',
+  'blog_draft',
+  // Time Machine & Night Sky tools
+  'wikipedia_on_this_day',
+  'moon_phase',
+  'sunrise_sunset',
+  'iss_tracker',
+  'planet_visibility',
+  // Knowledge base search
+  'search_knowledge_base',
+  // Chess engine
+  'chess_engine',
+  'retrieve_knowledge_content',
+  // Cardinality - the one knowledge-base question ranked retrieval cannot answer
+  'count_knowledge_base',
+  // Corpus shape - topics, folders, pipeline health (#1292), alongside the cardinality tool above
+  'describe_knowledge_base',
+  // Agent delegation
+  'delegate_to_agent',
+  // OptiHashi optimization tools
+  'optihashi_schedule',
+  'optihashi_formulate',
+  'optihashi_edit_problem',
+  // Navigation tool
+  'navigate_view',
+  // Jupyter notebook generation
+  'generate_jupyter_notebook',
+  // Excel generation
+  'excel_generation',
+  // Financial data
+  'fmp_financial_data',
+  // Bob synthetic-persona panel (premium overlay tool)
+  'bob_panel_read',
+  // User-defined skills - LLM-invocable instruction templates
+  'skill',
+]);
+export type B4MLLMTools = z.infer<typeof b4mLLMTools>;
+
+export const B4MLLMToolsList = b4mLLMTools.options.map(tool => tool);
+
+/** Keep only recognized tool ids, dropping unknowns. Used by handlers to sanitize
+ *  a caller-supplied `tools` list (validation keeps it a plain string[] so the
+ *  wire schema stays OpenAPI-representable; the domain filter lives here). */
+export function filterKnownTools(tools: readonly string[] | undefined): B4MLLMTools[] {
+  return (tools ?? []).filter((t): t is B4MLLMTools => B4MLLMToolsList.includes(t as B4MLLMTools));
+}
+
+/**
+ * Tool names implemented by premium overlay packages rather than by the core
+ * tool registry. Implementations reach the chat pipeline at runtime via the
+ * `externalTools` merge (premium glue codegen); core ships no implementation.
+ * The names stay in b4mLLMTools for now so persisted session settings and
+ * briefcase prompts that reference them keep parsing - the boundary cleanup
+ * sweep removes them from the enum together with this type.
+ */
+export type PremiumOverlayToolName = Extract<
+  B4MLLMTools,
+  'optihashi_schedule' | 'optihashi_formulate' | 'optihashi_edit_problem' | 'bob_panel_read'
+>;
+
+/**
+ * Recharts chart types.
+ */
+
+export const RechartsChartTypeSchema = z.enum([
+  'LineChart',
+  'AreaChart',
+  'BarChart',
+  'PieChart',
+  'ScatterChart',
+  'RadialBarChart',
+  'ComposedChart',
+  'Treemap',
+  'FunnelChart',
+  'RadarChart',
+]);
+export type RechartsChartType = z.infer<typeof RechartsChartTypeSchema>;
+
+export const RechartsChartTypeList = RechartsChartTypeSchema.enum;
+
+/**
+ * Schema for LLM model fallback information
+ */
+export const FallbackInfoSchema = z.object({
+  sessionId: z.string(),
+  primaryModel: z.string(),
+  primaryModelName: z.string(),
+  fallbackModel: z.string(),
+  fallbackModelName: z.string(),
+  /**
+   * Backend of each side, so the badge can name the provider path without
+   * inferring it from the id - a bare `deepseek-*` slug is the direct API on a
+   * hosted deployment and an Ollama pull on a self-hosted one. Optional and
+   * loosely typed: these payloads are persisted in browser storage, so a record
+   * written by an older build has neither field and an unknown backend name from
+   * a newer one must not fail the parse.
+   */
+  primaryModelBackend: z.string().optional(),
+  fallbackModelBackend: z.string().optional(),
+  timestamp: z.number(),
+});
+
+export type FallbackInfo = z.infer<typeof FallbackInfoSchema>;

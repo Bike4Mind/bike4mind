@@ -1,0 +1,768 @@
+import { describe, it, expect, vi } from 'vitest';
+import {
+  shouldTriggerFallback,
+  isOverloadedError,
+  validateFallbackModel,
+  getLlmWithFallback,
+  findFallbackForMissingModel,
+} from './fallback';
+import { AxiosError } from 'axios';
+import { ModelInfo, ModelBackend } from '@bike4mind/common';
+import { toProviderEndUserId } from '../llm';
+
+// Helper to create mock Axios errors
+function createAxiosError(status: number, code?: string): AxiosError {
+  const error = new Error(`Request failed with status ${status}`) as AxiosError;
+  error.isAxiosError = true;
+  error.response = {
+    status,
+    statusText: 'Error',
+    headers: {},
+    data: {},
+    config: {} as any,
+  };
+  if (code) {
+    error.code = code;
+  }
+  return error;
+}
+
+// Helper to create mock AWS SDK v3 service exceptions (e.g. Bedrock). These are plain Error
+// subclasses with the failure type on `.name` and the HTTP status on `$metadata.httpStatusCode`,
+// NOT the Axios `response.status` shape.
+function createAwsSdkError(name: string, httpStatusCode?: number, message?: string): Error {
+  const error = new Error(message ?? 'Bedrock is unable to process your request.');
+  error.name = name;
+  if (httpStatusCode !== undefined) {
+    (error as Error & { $metadata?: { httpStatusCode: number } }).$metadata = { httpStatusCode };
+  }
+  return error;
+}
+
+describe('shouldTriggerFallback', () => {
+  describe('Anthropic API errors', () => {
+    it('should return true for overloaded_error from Anthropic API', () => {
+      const error = new Error(
+        '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_123"}'
+      );
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for "Overloaded" message (case insensitive)', () => {
+      const error = new Error('Overloaded');
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for model overloaded errors', () => {
+      const error = new Error('Model overloaded, please try again later');
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for a Fable 5 safety-classifier refusal (routes to Opus 4.8)', () => {
+      const error = new Error(
+        'Anthropic safety classifier refusal for claude-fable-5 — falling back to an alternative model'
+      );
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for a gated-model availability 404 (routes to fallback)', () => {
+      // Anthropic's 404 for an account/env lacking access to an un-gated model.
+      const error = new Error('Claude Fable 5 is not available. Please use Opus 4.8');
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+  });
+
+  describe('Axios HTTP errors', () => {
+    it('should return true for 429 rate limit errors', () => {
+      const error = createAxiosError(429);
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for 502 bad gateway errors', () => {
+      const error = createAxiosError(502);
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for 503 service unavailable errors', () => {
+      const error = createAxiosError(503);
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for 504 gateway timeout errors', () => {
+      const error = createAxiosError(504);
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for ECONNREFUSED errors', () => {
+      const error = createAxiosError(0, 'ECONNREFUSED');
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for ETIMEDOUT errors', () => {
+      const error = createAxiosError(0, 'ETIMEDOUT');
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for ECONNRESET errors', () => {
+      const error = createAxiosError(0, 'ECONNRESET');
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+  });
+
+  describe('AWS SDK v3 service exceptions (e.g. Bedrock)', () => {
+    // Regression for the Bedrock 503 incident: the SDK throws a non-Axios error whose status
+    // lives on $metadata.httpStatusCode and whose message ("Bedrock is unable to process your
+    // request.") matches none of the substring triggers. Before the fix this returned false,
+    // so the request never fell back to a healthy model.
+    it('should return true for ServiceUnavailableException with 503 metadata status', () => {
+      const error = createAwsSdkError('ServiceUnavailableException', 503);
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for ServiceUnavailableException by name even without $metadata', () => {
+      const error = createAwsSdkError('ServiceUnavailableException');
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for ThrottlingException (429)', () => {
+      const error = createAwsSdkError('ThrottlingException', 429, 'Too many requests, please wait.');
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for InternalServerException (500)', () => {
+      const error = createAwsSdkError('InternalServerException', 500);
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return false for a non-transient SDK error (e.g. ValidationException 400)', () => {
+      const error = createAwsSdkError('ValidationException', 400, 'Invalid request parameters.');
+      expect(shouldTriggerFallback(error)).toBe(false);
+    });
+  });
+
+  describe('bare `status` error shapes', () => {
+    // The provider SDKs' own error classes and SemaphoreBusyError put the code directly on
+    // `.status`, with no Axios `response` and no AWS `$metadata` to read it from.
+    it('should return true for a bare 429 (e.g. the Anthropic pool rejecting a full queue)', () => {
+      const error = Object.assign(new Error('Anthropic request queue is full for this tenant'), { status: 429 });
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return false for a bare 400', () => {
+      const error = Object.assign(new Error('bad request'), { status: 400 });
+      expect(shouldTriggerFallback(error)).toBe(false);
+    });
+  });
+
+  describe('Network and connection errors', () => {
+    it('should return true for ECONNRESET in error code (non-Axios)', () => {
+      const error = new Error('Connection reset');
+      (error as any).code = 'ECONNRESET';
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return false for ECONNRESET with aborted message', () => {
+      const error = new Error('Request aborted');
+      (error as any).code = 'ECONNRESET';
+      expect(shouldTriggerFallback(error)).toBe(false);
+    });
+
+    it('should return true for TypeError: terminated (undici/fetch)', () => {
+      const error = new TypeError('terminated');
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+  });
+
+  describe('Model-specific error messages', () => {
+    it('should return true for "model not available"', () => {
+      const error = new Error('Error: model not available');
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for "capacity" errors', () => {
+      const error = new Error('Insufficient capacity to process request');
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for "rate limit" errors', () => {
+      const error = new Error('Rate limit exceeded');
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for "service unavailable" errors', () => {
+      const error = new Error('Service unavailable');
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for "timeout" errors', () => {
+      const error = new Error('Request timeout');
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for "connection refused" errors', () => {
+      const error = new Error('Connection refused');
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for "token limit exceeded" errors', () => {
+      const error = new Error('Token limit exceeded');
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for "quota exceeded" errors', () => {
+      const error = new Error('Quota exceeded');
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for "model not found" errors', () => {
+      const error = new Error('Model not found');
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+  });
+
+  describe('Deprecated model errors', () => {
+    it('should return true for "model not found" error text', () => {
+      const error = new Error('model not found: claude-3-5-haiku-20241022');
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return true for "does not exist" errors', () => {
+      const error = new Error('The model claude-3-5-haiku-20241022 does not exist');
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+  });
+
+  describe('Non-retryable errors', () => {
+    it('should return false for generic errors', () => {
+      const error = new Error('Something went wrong');
+      expect(shouldTriggerFallback(error)).toBe(false);
+    });
+
+    it('should return false for 400 bad request', () => {
+      const error = createAxiosError(400);
+      expect(shouldTriggerFallback(error)).toBe(false);
+    });
+
+    it('should return false for 401 unauthorized', () => {
+      const error = createAxiosError(401);
+      expect(shouldTriggerFallback(error)).toBe(false);
+    });
+
+    it('should return false for 404 not found (without message match)', () => {
+      const error = createAxiosError(404);
+      expect(shouldTriggerFallback(error)).toBe(false);
+    });
+  });
+});
+
+describe('isOverloadedError', () => {
+  it('should return true for Axios 503', () => {
+    expect(isOverloadedError(createAxiosError(503))).toBe(true);
+  });
+
+  it('should return true for Axios 429', () => {
+    expect(isOverloadedError(createAxiosError(429))).toBe(true);
+  });
+
+  it('should return true for Bedrock ServiceUnavailableException (503 metadata)', () => {
+    expect(isOverloadedError(createAwsSdkError('ServiceUnavailableException', 503))).toBe(true);
+  });
+
+  it('should return true for Bedrock ServiceUnavailableException by name', () => {
+    expect(isOverloadedError(createAwsSdkError('ServiceUnavailableException'))).toBe(true);
+  });
+
+  it('should return true for ThrottlingException (429)', () => {
+    expect(isOverloadedError(createAwsSdkError('ThrottlingException', 429, 'Throttled'))).toBe(true);
+  });
+
+  it('should return true for "overloaded" message', () => {
+    expect(isOverloadedError(new Error('Model overloaded'))).toBe(true);
+  });
+
+  it('should return false for a generic error', () => {
+    expect(isOverloadedError(new Error('Something went wrong'))).toBe(false);
+  });
+
+  it('should return false for a non-transient SDK error (ValidationException 400)', () => {
+    expect(isOverloadedError(createAwsSdkError('ValidationException', 400, 'Invalid'))).toBe(false);
+  });
+});
+
+// Helper to create minimal ModelInfo objects for testing
+function createModelInfo(overrides: Partial<ModelInfo> & { id: string; backend: ModelBackend }): ModelInfo {
+  return {
+    type: 'text',
+    name: overrides.id,
+    contextWindow: 200000,
+    max_tokens: 8192,
+    supportsImageVariation: false,
+    pricing: { 200000: { input: 0.001, output: 0.005 } },
+    ...overrides,
+  } as ModelInfo;
+}
+
+const mockLogger = {
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+} as unknown as import('@bike4mind/observability').Logger;
+
+describe('validateFallbackModel', () => {
+  const haiku45 = createModelInfo({ id: 'claude-haiku-4-5-20251001', backend: ModelBackend.Anthropic });
+  const gptMini = createModelInfo({ id: 'gpt-4o-mini', backend: ModelBackend.OpenAI });
+  const availableModels = [haiku45, gptMini];
+  const apiKeyTable = { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>;
+
+  it('should return model when it exists and has valid API key', () => {
+    const result = validateFallbackModel('claude-haiku-4-5-20251001', availableModels, apiKeyTable, mockLogger);
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe('claude-haiku-4-5-20251001');
+  });
+
+  it('should return null when model is not in available models', () => {
+    const result = validateFallbackModel('claude-3-5-haiku-20241022', availableModels, apiKeyTable, mockLogger);
+    expect(result).toBeNull();
+  });
+
+  it('should return null when API key is missing for the model backend', () => {
+    const noKeyTable = { openai: 'valid-key' } as Record<string, string>;
+    const result = validateFallbackModel('claude-haiku-4-5-20251001', availableModels, noKeyTable, mockLogger);
+    expect(result).toBeNull();
+  });
+
+  it('should return null when API key is expired', () => {
+    const expiredKeyTable = { anthropic: 'expired', openai: 'valid-key' } as Record<string, string>;
+    const result = validateFallbackModel('claude-haiku-4-5-20251001', availableModels, expiredKeyTable, mockLogger);
+    expect(result).toBeNull();
+  });
+});
+
+describe('getLlmWithFallback - forceSwitch option', () => {
+  // Tests verify that forceSwitch:true skips the original model check and forces a model switch.
+  // This is critical for overloaded_error recovery: without forceSwitch, getLlmWithFallback
+  // always returns attempt:0 (same model) when the original backend has a valid API key.
+
+  const opus45 = createModelInfo({
+    id: 'claude-opus-4-5-20251101',
+    name: 'Claude Opus 4.5',
+    backend: ModelBackend.Anthropic,
+  });
+  const sonnet46 = createModelInfo({
+    id: 'claude-sonnet-4-6',
+    name: 'Claude Sonnet 4.6',
+    backend: ModelBackend.Anthropic,
+  });
+  const availableModels = [opus45, sonnet46];
+  const apiKeyTable = { anthropic: 'valid-key' } as Record<string, string>;
+
+  it('should return attempt:0 (same model) without forceSwitch when original backend is available', async () => {
+    const result = await getLlmWithFallback(opus45, undefined, availableModels, apiKeyTable, mockLogger);
+    expect(result).not.toBeNull();
+    expect(result!.attempt).toBe(0);
+    expect(result!.model.id).toBe('claude-opus-4-5-20251101');
+  });
+
+  it('should return attempt:1 (different model) with forceSwitch:true even when original backend is available', async () => {
+    const result = await getLlmWithFallback(opus45, undefined, availableModels, apiKeyTable, mockLogger, {
+      forceSwitch: true,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.attempt).toBe(1);
+    expect(result!.model.id).not.toBe('claude-opus-4-5-20251101');
+    expect(result!.model.id).toBe('claude-sonnet-4-6');
+  });
+
+  it('should use frontend-provided fallback model with forceSwitch:true', async () => {
+    const result = await getLlmWithFallback(opus45, 'claude-sonnet-4-6', availableModels, apiKeyTable, mockLogger, {
+      forceSwitch: true,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.attempt).toBe(1);
+    expect(result!.model.id).toBe('claude-sonnet-4-6');
+  });
+
+  it('should return null with forceSwitch:true when no fallback models are available', async () => {
+    const result = await getLlmWithFallback(
+      opus45,
+      undefined,
+      [opus45], // only the original model available
+      apiKeyTable,
+      mockLogger,
+      { forceSwitch: true }
+    );
+    expect(result).toBeNull();
+  });
+});
+
+describe('getLlmWithFallback - deprecated model fallback preferences', () => {
+  // These tests verify that the fallback preferences map correctly routes
+  // deprecated Haiku 3.5 to Haiku 4.5 through the automatic fallback path.
+
+  const haiku35 = createModelInfo({
+    id: 'claude-3-5-haiku-20241022',
+    name: 'Claude 3.5 Haiku',
+    backend: ModelBackend.Anthropic,
+  });
+  const haiku45 = createModelInfo({
+    id: 'claude-haiku-4-5-20251001',
+    name: 'Claude 4.5 Haiku',
+    backend: ModelBackend.Anthropic,
+  });
+  const gptMini = createModelInfo({
+    id: 'gpt-4o-mini',
+    name: 'GPT-4o Mini',
+    backend: ModelBackend.OpenAI,
+  });
+  const availableModels = [haiku35, haiku45, gptMini];
+
+  it('should fall back from Haiku 3.5 to Haiku 4.5 when original backend fails', async () => {
+    // Simulate: original model has no working backend (retired), no frontend fallback provided
+    const apiKeyTable = { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>;
+
+    // getLlmWithFallback calls getLlmByModel internally which we can't easily mock
+    // without restructuring. Instead, test the validateFallbackModel path which is
+    // the public API for frontend-provided fallbacks.
+    const result = validateFallbackModel('claude-haiku-4-5-20251001', availableModels, apiKeyTable, mockLogger);
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe('claude-haiku-4-5-20251001');
+  });
+
+  it('should fall back to gpt-4o-mini when Haiku 4.5 is also unavailable', () => {
+    const modelsWithoutHaiku45 = [haiku35, gptMini];
+    const apiKeyTable = { openai: 'valid-key' } as Record<string, string>;
+
+    const result = validateFallbackModel('gpt-4o-mini', modelsWithoutHaiku45, apiKeyTable, mockLogger);
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe('gpt-4o-mini');
+  });
+});
+
+describe('getLlmWithFallback - Bedrock cross-path fallback chains', () => {
+  // A sustained Bedrock outage must degrade to the equivalent Anthropic-direct model
+  // (same model, other provider path) before dropping tier or crossing providers. The
+  // chains are keyed on the Bedrock-hosted Claude IDs and lead with the direct twin.
+  // Bedrock is never a fallback target: it has no apiKeyTable entry (IAM-auth), so the
+  // key gate always skips it - a Bedrock model is reachable as the primary only.
+  // Every current-gen Bedrock-hosted Claude ID paired with the Anthropic-direct twin its
+  // chain must lead with. Keep in sync with fallbackPreferences in fallback.ts.
+  const BEDROCK_TO_DIRECT_TWIN: Array<[string, string]> = [
+    ['global.anthropic.claude-opus-4-8', 'claude-opus-4-8'],
+    ['global.anthropic.claude-opus-4-7', 'claude-opus-4-7'],
+    ['global.anthropic.claude-opus-4-6-v1', 'claude-opus-4-6'],
+    ['global.anthropic.claude-opus-4-5-20251101-v1:0', 'claude-opus-4-5-20251101'],
+    ['global.anthropic.claude-sonnet-5', 'claude-sonnet-5'],
+    ['global.anthropic.claude-sonnet-4-6', 'claude-sonnet-4-6'],
+    ['us.anthropic.claude-sonnet-4-5-20250929-v1:0', 'claude-sonnet-4-5-20250929'],
+    ['us.anthropic.claude-haiku-4-5-20251001-v1:0', 'claude-haiku-4-5-20251001'],
+  ];
+
+  const bedrockModels = BEDROCK_TO_DIRECT_TWIN.map(([id]) => createModelInfo({ id, backend: ModelBackend.Bedrock }));
+  const directModels = BEDROCK_TO_DIRECT_TWIN.map(([, id]) => createModelInfo({ id, backend: ModelBackend.Anthropic }));
+  const openaiModels = [
+    createModelInfo({ id: 'gpt-5', backend: ModelBackend.OpenAI }),
+    createModelInfo({ id: 'gpt-4o-mini', backend: ModelBackend.OpenAI }),
+  ];
+  const allModels = [...bedrockModels, ...directModels, ...openaiModels];
+  const findBedrock = (id: string) => bedrockModels.find(m => m.id === id)!;
+
+  it.each(BEDROCK_TO_DIRECT_TWIN)(
+    'degrades a Bedrock %s outage to its reachable Anthropic-direct twin %s first',
+    async (bedrockId, directTwinId) => {
+      const apiKeyTable = { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>;
+      const result = await getLlmWithFallback(findBedrock(bedrockId), undefined, allModels, apiKeyTable, mockLogger, {
+        forceSwitch: true,
+      });
+      expect(result).not.toBeNull();
+      expect(result!.attempt).toBe(1);
+      expect(result!.model.id).toBe(directTwinId);
+      // Never a Bedrock target: Bedrock has no apiKeyTable entry, so the key gate skips it.
+      expect(result!.model.backend).toBe(ModelBackend.Anthropic);
+    }
+  );
+
+  it('skips key-less Anthropic targets and degrades to the cross-provider tail (gpt-5)', async () => {
+    // No Anthropic key: every direct-Anthropic twin in the chain is skipped by the key
+    // gate, so the request degrades to the cross-provider tail that does have a key.
+    const apiKeyTable = { openai: 'valid-key' } as Record<string, string>;
+    const result = await getLlmWithFallback(
+      findBedrock('global.anthropic.claude-opus-4-8'),
+      undefined,
+      allModels,
+      apiKeyTable,
+      mockLogger,
+      { forceSwitch: true }
+    );
+    expect(result).not.toBeNull();
+    expect(result!.model.id).toBe('gpt-5');
+  });
+});
+
+describe('getLlmWithFallback - excludeModelIds (multi-hop traversal)', () => {
+  // A provider-wide outage walks the preference chain one model per hop. excludeModelIds
+  // carries every already-failed model so each hop advances instead of re-picking a dead model.
+  const opus48 = createModelInfo({ id: 'claude-opus-4-8', backend: ModelBackend.Anthropic });
+  const opus47 = createModelInfo({ id: 'claude-opus-4-7', backend: ModelBackend.Anthropic });
+  const opus46 = createModelInfo({ id: 'claude-opus-4-6', backend: ModelBackend.Anthropic });
+  const sonnet5 = createModelInfo({ id: 'claude-sonnet-5', backend: ModelBackend.Anthropic });
+  const gpt5 = createModelInfo({ id: 'gpt-5', backend: ModelBackend.OpenAI });
+  const allModels = [opus48, opus47, opus46, sonnet5, gpt5];
+  const apiKeyTable = { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>;
+
+  it('skips an already-tried model and returns the next chain entry', async () => {
+    // opus-4-8 chain leads with opus-4-7; excluding it must advance to opus-4-6.
+    const result = await getLlmWithFallback(opus48, undefined, allModels, apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      excludeModelIds: new Set(['claude-opus-4-7']),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.model.id).toBe('claude-opus-4-6');
+  });
+
+  it('treats an already-tried frontend fallback id as absent and falls through to automatic', async () => {
+    // The frontend keeps sending the same body.fallbackModel each hop; once tried it must
+    // not dead-end the traversal - automatic selection picks the next live chain entry.
+    const result = await getLlmWithFallback(opus48, 'claude-opus-4-7', allModels, apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      excludeModelIds: new Set(['claude-opus-4-7']),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.model.id).toBe('claude-opus-4-6');
+  });
+
+  it('respects the exclusion on the last-resort path', async () => {
+    // Unknown model with no preference chain falls to the last-resort scan; the excluded
+    // keyed model is skipped in favor of the next available one.
+    const unknown = createModelInfo({ id: 'unknown-model-x', backend: ModelBackend.OpenAI });
+    const modelA = createModelInfo({ id: 'vendor-model-a', backend: ModelBackend.OpenAI });
+    const modelB = createModelInfo({ id: 'vendor-model-b', backend: ModelBackend.OpenAI });
+    const result = await getLlmWithFallback(unknown, undefined, [unknown, modelA, modelB], apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      excludeModelIds: new Set(['vendor-model-a']),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.model.id).toBe('vendor-model-b');
+  });
+
+  it('walks the full chain across successive hops until a live cross-provider model remains', async () => {
+    // Simulate a provider-wide Anthropic outage: every Anthropic hop is added to the set,
+    // so the traversal ends on the OpenAI tail rather than re-picking a failed Anthropic model.
+    const tried = new Set<string>(['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5']);
+    const result = await getLlmWithFallback(opus48, undefined, allModels, apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      excludeModelIds: tried,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.model.id).toBe('gpt-5');
+    expect(result!.model.backend).toBe(ModelBackend.OpenAI);
+  });
+
+  it('skips an already-tried original with forceSwitch:false (multi-hop passes the failed model as original)', async () => {
+    // The non-overload retryable path (e.g. a 502) calls with forceSwitch:false. On a fallback hop
+    // the just-failed model is passed as `originalModel` AND is in excludeModelIds, so the
+    // original-return clause must be skipped and automatic selection must advance instead.
+    const result = await getLlmWithFallback(opus48, undefined, allModels, apiKeyTable, mockLogger, {
+      forceSwitch: false,
+      excludeModelIds: new Set(['claude-opus-4-8']),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.attempt).toBe(1); // advanced, did NOT return the excluded original as attempt:0
+    expect(result!.model.id).not.toBe('claude-opus-4-8');
+  });
+});
+
+describe('getLlmWithFallback - cross-provider guarantee (preferUntriedBackend)', () => {
+  // Reproduces the reviewer's blocking finding and its fix: a bounded multi-hop traversal must
+  // reach the cross-provider tail on the REAL, untrimmed preference roster instead of burning the
+  // whole hop budget on same-provider models and hard-failing before it.
+  const MAX_FALLBACK_HOPS = 5; // keep in sync with ChatCompletionProcess.ts
+  const anthropicIds = [
+    'claude-fable-5',
+    'claude-opus-4-8',
+    'claude-opus-4-7',
+    'claude-opus-4-6',
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+  ];
+  const fable = createModelInfo({ id: 'claude-fable-5', backend: ModelBackend.Anthropic });
+  const roster = [
+    ...anthropicIds.map(id => createModelInfo({ id, backend: ModelBackend.Anthropic })),
+    createModelInfo({ id: 'gpt-5', backend: ModelBackend.OpenAI }),
+  ];
+  const apiKeyTable = { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>;
+
+  // Mirror the real ChatCompletionProcess loop: seed the primary, then on each hop pass the
+  // just-failed model as `originalModel` with the accumulated exclusion set, flipping
+  // preferUntriedBackend on the final allowed hop.
+  async function runTraversal(preferOnFinal: boolean) {
+    const tried = new Set<string>([fable.id]);
+    let current = fable;
+    let hops = 0;
+    for (let attempt = 0; attempt < MAX_FALLBACK_HOPS; attempt++) {
+      const isFinal = attempt >= MAX_FALLBACK_HOPS - 1;
+      const res = await getLlmWithFallback(current, undefined, roster, apiKeyTable, mockLogger, {
+        forceSwitch: false,
+        excludeModelIds: tried,
+        preferUntriedBackend: preferOnFinal && isFinal,
+      });
+      if (!res || res.attempt === 0) break;
+      current = res.model;
+      tried.add(current.id);
+      hops++;
+    }
+    return { current, hops };
+  }
+
+  it('reaches the cross-provider tail within the hop budget on the full roster', async () => {
+    const { current, hops } = await runTraversal(true);
+    expect(current.backend).toBe(ModelBackend.OpenAI);
+    expect(current.id).toBe('gpt-5');
+    expect(hops).toBeLessThanOrEqual(MAX_FALLBACK_HOPS);
+  });
+
+  it('WITHOUT the final-hop guarantee, exhausts the budget on same-provider models (the bug)', async () => {
+    // Documents why the fix is needed: the same traversal without preferUntriedBackend never
+    // crosses providers on this roster - it ends on an Anthropic model after MAX hops.
+    const { current, hops } = await runTraversal(false);
+    expect(current.backend).toBe(ModelBackend.Anthropic);
+    expect(hops).toBe(MAX_FALLBACK_HOPS);
+  });
+
+  it('preferUntriedBackend forces the fallback onto a backend not yet tried', async () => {
+    // All Anthropic ids tried; only the OpenAI tail remains on an untried backend.
+    const allAnthropicTried = new Set<string>(anthropicIds.filter(id => id !== 'claude-sonnet-4-6'));
+    const sonnet46 = roster.find(m => m.id === 'claude-sonnet-4-6')!;
+    const crossed = await getLlmWithFallback(sonnet46, undefined, roster, apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      excludeModelIds: allAnthropicTried,
+      preferUntriedBackend: true,
+    });
+    expect(crossed!.model.backend).toBe(ModelBackend.OpenAI);
+    expect(crossed!.model.id).toBe('gpt-5');
+  });
+
+  it('returns null when every candidate is excluded (traversal exhausted)', async () => {
+    const allTried = new Set<string>(roster.map(m => m.id));
+    const result = await getLlmWithFallback(fable, undefined, roster, apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      excludeModelIds: allTried,
+      preferUntriedBackend: true,
+    });
+    expect(result).toBeNull();
+  });
+});
+
+describe('getLlmWithFallback - tenant key across the hop', () => {
+  // Guards the plumbing, not the pool: an unforwarded endUserId drops every fallen-back
+  // request into the Anthropic semaphore's shared anonymous tenant, collapsing its per-tenant
+  // fair scheduling during exactly the provider overload that triggered the fallback. The
+  // hashed id is only observable on the constructed backend, hence the narrow cast.
+  const readTenantKey = (backend: unknown) => (backend as { _endUserId?: string })._endUserId;
+  const expectedKey = toProviderEndUserId('internal-user-1');
+  const anthropicKeys = { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>;
+  const opus = createModelInfo({ id: 'claude-opus-5', backend: ModelBackend.Anthropic });
+  const sonnet = createModelInfo({ id: 'claude-sonnet-5', backend: ModelBackend.Anthropic });
+
+  it('forwards endUserId to the original model backend', async () => {
+    const result = await getLlmWithFallback(opus, undefined, [opus, sonnet], anthropicKeys, mockLogger, {
+      endUserId: 'internal-user-1',
+    });
+
+    expect(result!.attempt).toBe(0);
+    expect(readTenantKey(result!.backend)).toBe(expectedKey);
+  });
+
+  it('forwards endUserId to an automatically selected fallback', async () => {
+    const result = await getLlmWithFallback(opus, undefined, [opus, sonnet], anthropicKeys, mockLogger, {
+      forceSwitch: true,
+      excludeModelIds: new Set([opus.id]),
+      endUserId: 'internal-user-1',
+    });
+
+    expect(result!.model.id).not.toBe(opus.id);
+    expect(readTenantKey(result!.backend)).toBe(expectedKey);
+  });
+
+  it('forwards endUserId to a frontend-provided fallback', async () => {
+    const result = await getLlmWithFallback(opus, sonnet.id, [opus, sonnet], anthropicKeys, mockLogger, {
+      forceSwitch: true,
+      endUserId: 'internal-user-1',
+    });
+
+    expect(result!.model.id).toBe(sonnet.id);
+    expect(readTenantKey(result!.backend)).toBe(expectedKey);
+  });
+});
+
+describe('findFallbackForMissingModel', () => {
+  // The position getLlmWithFallback cannot serve: the requested id is not in availableModels
+  // at all, so there is no ModelInfo to pass as its `originalModel`. Reproduces the production
+  // shape - a catalog lifecycle row hid the Bedrock Haiku 4.5 id, and every consumer holding
+  // that id (a rapid-reply mapping row, a session pin) needs a substitute rather than a throw.
+  const haiku45Direct = createModelInfo({ id: 'claude-haiku-4-5-20251001', backend: ModelBackend.Anthropic });
+  const gptMini = createModelInfo({ id: 'gpt-4o-mini', backend: ModelBackend.OpenAI });
+  const sonnet5 = createModelInfo({ id: 'claude-sonnet-5', backend: ModelBackend.Anthropic });
+  const BEDROCK_HAIKU_45 = 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
+
+  it('leads with the Anthropic-direct twin for a hidden Bedrock Haiku id', () => {
+    const result = findFallbackForMissingModel(
+      BEDROCK_HAIKU_45,
+      [haiku45Direct, gptMini, sonnet5],
+      { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>,
+      mockLogger
+    );
+
+    expect(result).not.toBeNull();
+    // Same model family, same latency class - what the optimization depends on.
+    expect(result!.model.id).toBe('claude-haiku-4-5-20251001');
+    expect(result!.attempt).toBe(1);
+  });
+
+  it('advances to the next chain entry when the twin has no key', () => {
+    const result = findFallbackForMissingModel(
+      BEDROCK_HAIKU_45,
+      [haiku45Direct, gptMini],
+      { openai: 'valid-key' } as Record<string, string>,
+      mockLogger
+    );
+
+    expect(result!.model.id).toBe('gpt-4o-mini');
+  });
+
+  it('skips a disabled chain entry rather than returning a model that must never run', () => {
+    // A disabled model is still listed so the picker can grey it out. Selecting one here would
+    // trade a clean substitution for a raw provider error on dispatch.
+    const disabledTwin = { ...haiku45Direct, disabled: true, disabledReason: 'gated' };
+    const result = findFallbackForMissingModel(
+      BEDROCK_HAIKU_45,
+      [disabledTwin, gptMini],
+      { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>,
+      mockLogger
+    );
+
+    expect(result!.model.id).toBe('gpt-4o-mini');
+  });
+
+  it('returns null when no candidate has a usable key', () => {
+    const result = findFallbackForMissingModel(
+      BEDROCK_HAIKU_45,
+      [haiku45Direct, gptMini],
+      { anthropic: 'expired' } as Record<string, string>,
+      mockLogger
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it('falls back through DEFAULT_FALLBACK_CHAIN for an id with no chain of its own', () => {
+    const result = findFallbackForMissingModel(
+      'some.retired.vendor.model-v1:0',
+      [sonnet5, gptMini],
+      { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>,
+      mockLogger
+    );
+
+    expect(result!.model.id).toBe('claude-sonnet-5');
+  });
+});

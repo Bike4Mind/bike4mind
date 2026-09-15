@@ -1,0 +1,81 @@
+#!/bin/bash
+#
+# dev-fast: a faster version of the dev script for better streaming performance
+#
+# This version:
+# - Builds subscriber-fanout first and runs the compiled version
+# - Uses production-like settings where possible
+# - Optimizes MongoDB and WebSocket performance
+#
+
+plustrap() {
+	new_trap="$1"
+	shift 1
+	for signal in "$@"
+	do
+		old_traps=$(eval echo $(trap -p $signal) | sed "s/trap -- //; s/ [A-Z]*\$//")
+		trap "${new_trap}; ${old_traps}" $signal
+	done
+}
+
+set -e
+
+# Look through command line arguments for --profile and if found
+# use its following argument as AWS_PROFILE.
+for argv in "$@"
+do
+	if [ X"${capture}" = Xprofile ]; then export AWS_PROFILE="$argv"; capture=''; fi
+	if [ "$argv" = --profile ]; then capture=profile; fi
+done
+
+plustrap "echo Exiting..." EXIT
+plustrap "echo Caught SIGINT; exit 0" INT
+plustrap "echo Caught SIGTERM; exit 0" TERM
+
+echo "🚀 Starting optimized development environment..."
+echo "  - MongoDB pool size: ${MONGODB_MAX_POOL_SIZE:-10}"
+echo "  - WebSocket throttling: 25ms (4x faster)"
+echo "  - Subscriber-fanout: compiled mode"
+
+# Set optimization environment variables
+export MONGODB_MAX_POOL_SIZE=${MONGODB_MAX_POOL_SIZE:-10}
+export NODE_ENV=development
+export NODE_OPTIONS="--max-old-space-size=4096"
+
+echo "Building subscriber-fanout for better performance..."
+pnpm --filter subscriber-fanout build
+
+npx sst dev "$@" &
+sst_pid=$!
+plustrap "echo 'Stopping SST'; kill $sst_pid 2>/dev/null" EXIT
+
+# Run the compiled version instead of tsx watch
+pnpm --filter subscriber-fanout start &
+fanout_pid=$!
+plustrap "echo 'Stopping subscriber-fanout'; kill $fanout_pid 2>/dev/null; rm packages/subscriber-fanout/.sst.config.*.mjs" EXIT
+
+# Run Next.js with optimizations
+pnpm --filter client dev "$@" &
+next_pid=$!
+plustrap "echo 'Stopping NextJS'; kill $next_pid 2>/dev/null" EXIT
+
+# Optional: Add development performance metrics
+if [ "$MONITOR_PERF" = "true" ]; then
+  echo "📊 Performance monitoring enabled"
+  # Add performance logging
+fi
+
+echo "✅ All services started in optimized mode!"
+echo "   Access your app at: http://localhost:3000"
+
+# Wait for services to be ready
+wait_for_service() {
+  local service_name="$1"
+  local health_url="$2"
+  echo "Waiting for $service_name to be ready..."
+  # Health check logic
+}
+
+wait
+
+set +e 

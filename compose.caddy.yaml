@@ -1,0 +1,94 @@
+# Bike4Mind self-host: public HTTPS reverse proxy (Caddy) - OPT-IN override.
+#
+# Adds a Caddy reverse proxy in front of the stack with automatic HTTPS
+# (Let's Encrypt / ZeroSSL) so you can share your instance on a real public
+# domain. Use it as an EXTRA -f alongside the base stack, gated by the `proxy`
+# profile (same -f override pattern as compose.ollama-gpu.yaml):
+#
+#   docker compose -f compose.selfhost.yaml -f compose.caddy.yaml \
+#     --env-file .env.selfhost --profile proxy up -d
+#
+# Prerequisites (see "Share your instance with friends" in SELF_HOST.md):
+#   - A DNS A/AAAA record for B4M_DOMAIN pointing at this host's public IP.
+#   - Ports 80 and 443 reachable from the internet (the ONLY ports you open).
+#   - B4M_DOMAIN set, and WEBSOCKET_URL changed to wss://<domain>/ws, in
+#     .env.selfhost (see selfhost/env-additions.txt).
+#
+# What this file does:
+#   - Runs `caddy`, publishing 80 + 443, terminating TLS, and reverse-proxying
+#     to the app (app:3000) and the realtime ws gateway (ws:3001) over the
+#     compose network. TLS certs are provisioned and renewed automatically.
+#   - REBINDS the app / ws / chatcompletion HOST port publishes to 127.0.0.1 so
+#     the only thing reachable off-host is Caddy on 80/443. This matters on
+#     Linux: Docker's published ports are DNAT'd through Docker's own iptables
+#     chain BEFORE the filter table, so a "deny incoming" ufw/firewalld policy
+#     does NOT block 3000/3001/8788 - leaving them on 0.0.0.0 would expose the
+#     app straight to the internet regardless of your firewall. Binding to
+#     loopback is the reliable fix; Caddy still reaches the services by name over
+#     the compose network (host publishing is independent of that). The rebind
+#     uses the Compose `!override` merge tag, which needs Docker Compose v2.24+
+#     (older versions reject it at parse time). Always include this file WITH
+#     `--profile proxy`: the port rebind applies whenever the file is included, so
+#     using it without the proxy profile binds the app to loopback with no Caddy in
+#     front (reachable only from the host - fail-safe, but not what you want).
+#
+# What this file does NOT do (do these yourself - see the SELF_HOST.md checklist):
+#   - It does not enable Mongo auth, change MinIO credentials, or configure SMTP.
+#   - It does not expose the chatcompletion API (:8788) publicly. If you want the
+#     CLI / low-level completions API reachable from outside, add a route for
+#     /api/ai/v1/* to chatcompletion:8080 and set CHAT_COMPLETION_PUBLIC_URL
+#     (see the optional snippet in SELF_HOST.md); otherwise it stays internal.
+#   - It is defense-in-depth, not a substitute for a host/cloud firewall. Keep a
+#     cloud security group (or DOCKER-USER rules) allowing only 80/443 inbound.
+name: bike4mind-selfhost
+
+services:
+  caddy:
+    image: caddy:2
+    profiles: ['proxy']
+    restart: unless-stopped
+    # 80  = ACME HTTP-01 challenge + automatic HTTP->HTTPS redirect.
+    # 443 = HTTPS (TCP) and HTTP/3 (UDP). These are the ONLY ports to open
+    # to the internet; everything else stays on the compose network / loopback.
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    environment:
+      # Caddy reads {$B4M_DOMAIN} from its environment as the site address.
+      # Fail loud at config time if it is not set in .env.selfhost.
+      B4M_DOMAIN: ${B4M_DOMAIN:?set B4M_DOMAIN to your public domain in .env.selfhost}
+    volumes:
+      # Site config, mounted read-only. See selfhost/caddy/Caddyfile.
+      - ./selfhost/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Persist issued certificates + the ACME account key across restarts, so a
+      # re-`up` does not re-request certs (and risk Let's Encrypt rate limits).
+      - caddy-data:/data
+      # Caddy's autosaved runtime config / state.
+      - caddy-config:/config
+    depends_on:
+      - app
+      - ws
+
+  # Rebind the app's HOST publish to loopback (see header). Caddy reaches the app
+  # as app:3000 over the compose network regardless; this only closes the public
+  # 0.0.0.0 surface. `curl localhost:3000` on the host still works for debugging.
+  app:
+    ports: !override
+      - '127.0.0.1:${APP_HOST_PORT:-3000}:3000'
+
+  # Same for the realtime ws gateway. Caddy proxies the /ws path to ws:3001 over
+  # the compose network (see Caddyfile); the host publish is loopback-only.
+  ws:
+    ports: !override
+      - '127.0.0.1:${WS_HOST_PORT:-3001}:3001'
+
+  # Same for the chatcompletion service. The app reaches it as chatcompletion:8080
+  # over the compose network; it is NOT proxied publicly by default (see header).
+  chatcompletion:
+    ports: !override
+      - '127.0.0.1:${CHATCOMPLETION_HOST_PORT:-8788}:8080'
+
+volumes:
+  caddy-data:
+  caddy-config:

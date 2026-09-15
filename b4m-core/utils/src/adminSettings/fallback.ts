@@ -1,0 +1,543 @@
+import { ModelInfo } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
+import { isAxiosError } from 'axios';
+import { ApiKeyTable, getLlmByModel, ICompletionBackend } from '../llm';
+
+/**
+ * Fallback attempt result
+ */
+export interface FallbackAttempt {
+  model: ModelInfo;
+  backend: ICompletionBackend;
+  attempt: number;
+}
+
+/**
+ * AWS SDK v3 service exceptions (Bedrock, etc.) are plain Error subclasses, not Axios errors:
+ * their HTTP status lives on `$metadata.httpStatusCode`, not `response.status`. Read both
+ * shapes so a Bedrock 503 ServiceUnavailableException (whose message matches no substring
+ * trigger) still falls back instead of hard-failing.
+ */
+function getHttpStatus(error: Error): number | undefined {
+  if (isAxiosError(error)) {
+    return error.response?.status;
+  }
+  const metadata = (error as { $metadata?: { httpStatusCode?: number } }).$metadata;
+  if (metadata?.httpStatusCode !== undefined) {
+    return metadata.httpStatusCode;
+  }
+  // Bare `status`: the shape used by the provider SDKs' own error classes and by
+  // SemaphoreBusyError, neither of which wraps the code in Axios or AWS metadata.
+  const { status } = error as { status?: unknown };
+  return typeof status === 'number' ? status : undefined;
+}
+
+/**
+ * Transient AWS SDK v3 exception names worth retrying/falling back on. These carry the
+ * failure type in `.name` even when `$metadata` is absent, so we match on it as a backstop
+ * to the HTTP status check.
+ */
+const TRANSIENT_AWS_SDK_ERROR_NAMES = new Set([
+  'ServiceUnavailableException', // 503 — Bedrock capacity/availability
+  'ThrottlingException', // 429 — account/model throttling
+  'TooManyRequestsException', // 429
+  'InternalServerException', // 500 — transient server-side error
+  'ModelNotReadyException', // model still scaling up
+  'ModelTimeoutException', // upstream model timeout
+]);
+
+function isTransientAwsSdkError(error: Error): boolean {
+  return TRANSIENT_AWS_SDK_ERROR_NAMES.has(error.name);
+}
+
+/**
+ * Error types that should trigger fallback attempts
+ */
+export function shouldTriggerFallback(error: Error): boolean {
+  const message = error.message.toLowerCase();
+
+  // Rate limiting, server errors, timeouts. Status sourced from both Axios and AWS SDK
+  // (e.g. Bedrock's 503 ServiceUnavailableException) error shapes.
+  const status = getHttpStatus(error);
+  if (status === 429 || status === 502 || status === 503 || status === 504) {
+    return true;
+  }
+
+  // Transient AWS SDK v3 service exceptions (recognized by name when no usable status).
+  if (isTransientAwsSdkError(error)) {
+    return true;
+  }
+
+  // Network connection errors (Axios)
+  if (isAxiosError(error)) {
+    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT' || error.code === 'ECONNRESET') {
+      return true;
+    }
+  }
+
+  // Check for ECONNRESET in error code property (non-Axios errors)
+  // Ignore aborted errors as they are expected when the request is cancelled
+  if ('code' in error && error.code === 'ECONNRESET' && !message.includes('aborted')) {
+    return true;
+  }
+
+  // Check for TypeError: terminated (from undici/fetch)
+  if (error.name === 'TypeError' && message.includes('terminated')) {
+    return true;
+  }
+
+  // Model-specific errors
+  const fallbackTriggers = [
+    'model not available',
+    'overloaded',
+    'capacity',
+    'rate limit',
+    'service unavailable',
+    'internal server error',
+    'timeout',
+    'connection refused',
+    'connection error',
+    'connection reset',
+    'econnreset',
+    'terminated',
+    'token limit exceeded',
+    'authentication failed',
+    'api key',
+    'quota exceeded',
+    'model not found',
+    'does not exist',
+    // Gated-model availability 404 (e.g. Anthropic's "Claude Fable 5 is not available. Please
+    // use Opus 4.8"). Degrade to the fallback chain instead of hard-failing. The 'model not
+    // available' trigger requires the literal word "model"; this provider message says
+    // "<name> is not available", so it needs its own substring.
+    'is not available',
+    // Claude Fable 5 GA safety-classifier refusal: the Anthropic backend surfaces a
+    // stop_reason: 'refusal' as a thrown error for REFUSAL_FALLBACK_MODELS so blocked
+    // requests continue on Opus 5 via the claude-fable-5 fallback chain below.
+    'safety classifier refusal',
+  ];
+
+  return fallbackTriggers.some(trigger => message.includes(trigger));
+}
+
+/**
+ * Detect overloaded/rate-limit errors that are likely transient and worth retrying
+ * with the same model before falling back to a different one.
+ */
+export function isOverloadedError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+
+  // Check HTTP status codes from both Axios and AWS SDK (e.g. Bedrock 503) error shapes.
+  const status = getHttpStatus(error);
+  if (status === 429 || status === 529 || status === 503) {
+    return true;
+  }
+
+  // Bedrock/AWS SDK transient capacity exceptions (ServiceUnavailable, Throttling, etc.).
+  if (isTransientAwsSdkError(error)) {
+    return true;
+  }
+
+  const overloadedTriggers = ['overloaded', 'rate limit', 'capacity', 'too many requests', '529'];
+
+  return overloadedTriggers.some(trigger => message.includes(trigger));
+}
+
+/**
+ * Validate fallback model passed from frontend
+ */
+export function validateFallbackModel(
+  fallbackModelId: string,
+  availableModels: ModelInfo[],
+  apiKeyTable: ApiKeyTable,
+  logger: Logger
+): ModelInfo | null {
+  logger.info(`🔄 Validating fallback model ${fallbackModelId} from frontend`);
+
+  // Find the model in available models
+  const model = availableModels.find(m => m.id === fallbackModelId);
+
+  if (!model) {
+    logger.warn(`⚠️ Fallback model ${fallbackModelId} not found in available models`);
+    return null;
+  }
+
+  // Check if we have API key for this model's backend
+  const hasApiKey = apiKeyTable[model.backend] && apiKeyTable[model.backend] !== 'expired';
+  if (!hasApiKey) {
+    logger.warn(`⚠️ No valid API key for fallback model ${fallbackModelId} (backend: ${model.backend})`);
+    return null;
+  }
+
+  logger.info(`✅ Validated fallback model:`, {
+    id: model.id,
+    backend: model.backend,
+    contextWindow: model.contextWindow,
+  });
+
+  return model;
+}
+
+/**
+ * Fallback preferences per model: where traffic goes when this model fails.
+ *
+ * Module-level and exported because it is a hardcoded model-id surface the
+ * nightly stale-reference report audits (llm-adapters/staleReferences.ts) -
+ * a chain pointing at a retired model is an outage waiting for an incident.
+ */
+export const FALLBACK_PREFERENCES: Record<string, string[]> = {
+  // Gemini models fallback to Claude or GPT
+  'gemini-2.5-pro-preview-05-06': ['claude-sonnet-4-6', 'gpt-4o', 'claude-opus-4-6'],
+  'gemini-2.5-flash-preview-05-20': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
+  'gemini-1.5-pro': ['claude-sonnet-4-6', 'gpt-4o', 'claude-opus-4-6'],
+  'gemini-1.5-flash': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
+
+  // Top tier (Fable 5 / Opus 4.7-5) degrades within the Opus tier before dropping to Sonnet.
+  // Fable 5 leads with Opus 5: same price as 4.8, near-Fable capability, and its safety
+  // classifiers intervene far less often - so a Fable refusal is most likely to succeed there.
+  'claude-fable-5': [
+    'claude-opus-5',
+    'claude-opus-4-8',
+    'claude-opus-4-7',
+    'claude-opus-4-6',
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+    'gpt-5',
+  ],
+  'claude-opus-5': [
+    'claude-opus-4-8',
+    'claude-opus-4-7',
+    'claude-opus-4-6',
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+    'gpt-5',
+  ],
+  'claude-opus-4-8': ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
+  'claude-opus-4-7': ['claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
+
+  // Bedrock-hosted Claude leads its chain with the Anthropic-direct twin (same model,
+  // other provider path) so a sustained Bedrock outage (503/500/529) degrades to the
+  // direct API before dropping tier or crossing providers. Bedrock<->direct twin IDs
+  // per models.ts. Targets are direct-Anthropic / OpenAI, never Bedrock: Bedrock has no
+  // entry in the apiKeyTable (IAM-auth, not a key), so findAutomaticFallback's key gate
+  // always skips a Bedrock target - a Bedrock model is reachable as the primary, not as
+  // an automatic fallback destination.
+  'global.anthropic.claude-opus-4-8': [
+    'claude-opus-4-8',
+    'claude-opus-4-7',
+    'claude-opus-4-6',
+    'claude-sonnet-5',
+    'gpt-5',
+  ],
+  'global.anthropic.claude-opus-4-7': ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'gpt-5'],
+  'global.anthropic.claude-opus-4-6-v1': ['claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
+  'global.anthropic.claude-opus-4-5-20251101-v1:0': [
+    'claude-opus-4-5-20251101',
+    'claude-sonnet-4-6',
+    'claude-sonnet-4-5-20250929',
+    'gpt-5',
+  ],
+  'global.anthropic.claude-sonnet-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
+  'global.anthropic.claude-sonnet-4-6': ['claude-sonnet-4-6', 'claude-sonnet-5', 'gpt-5'],
+  'us.anthropic.claude-sonnet-4-5-20250929-v1:0': [
+    'claude-sonnet-4-5-20250929',
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+    'gpt-5',
+  ],
+  'us.anthropic.claude-haiku-4-5-20251001-v1:0': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
+
+  // Claude 4.5/4.6 models fallback hierarchy
+  'claude-opus-4-5-20251101': ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5', 'claude-haiku-4-5-20251001'],
+  'claude-opus-4-6': [
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+    'claude-sonnet-4-5-20250929',
+    'gpt-5',
+    'claude-haiku-4-5-20251001',
+  ],
+  'claude-sonnet-5': ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5'],
+  'claude-sonnet-4-6': ['claude-sonnet-5', 'claude-sonnet-4-5-20250929', 'claude-opus-4-5-20251101', 'gpt-5'],
+  'claude-sonnet-4-5-20250929': ['claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'gpt-5'],
+
+  // Deprecated Claude models fallback to modern versions
+  'claude-3-5-haiku-20241022': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
+  'us.anthropic.claude-3-5-haiku-20241022-v1:0': ['us.anthropic.claude-haiku-4-5-20251001-v1:0', 'gpt-4o-mini'],
+  'claude-3-5-sonnet-20241022': ['claude-sonnet-4-6', 'gpt-4o', 'claude-haiku-4-5-20251001'],
+  'claude-3-7-sonnet-20250219': ['claude-sonnet-4-6', 'gpt-4o', 'claude-haiku-4-5-20251001'],
+  'claude-3-opus-20240229': ['claude-opus-4-6', 'claude-sonnet-4-6', 'gpt-4o'],
+  'claude-3-haiku-20240307': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
+  'us.anthropic.claude-3-5-sonnet-20241022-v2:0': ['global.anthropic.claude-sonnet-4-6', 'gpt-4o'],
+  'us.anthropic.claude-3-7-sonnet-20250219-v1:0': ['global.anthropic.claude-sonnet-4-6', 'gpt-4o'],
+
+  // GPT models fallback to Claude
+  'gpt-4o': ['claude-sonnet-4-6', 'claude-opus-4-6', 'gpt-5.5'],
+  'gpt-4o-mini': ['claude-haiku-4-5-20251001', 'gpt-5.4-mini'],
+};
+
+/** Modern, reliable models: where a model with no chain of its own goes. */
+export const DEFAULT_FALLBACK_CHAIN: string[] = [
+  'claude-sonnet-5',
+  'claude-sonnet-4-6',
+  'claude-sonnet-4-5-20250929',
+  'gpt-5',
+  'claude-haiku-4-5-20251001',
+];
+
+/**
+ * Just enough of a model to pick a fallback for it: an id to look its chain up by,
+ * and the backend it would have run on. `backend` is absent when the original is
+ * not in the caller's model list at all - a sunset id the deprecation filter has
+ * already hidden - so there is no backend to exclude from the cross-provider hop.
+ * `ModelInfo` is assignable, so the multi-hop traversal passes one unchanged.
+ */
+type FallbackOrigin = { id: string; backend?: string };
+
+/**
+ * Find a suitable automatic fallback model based on the original model
+ */
+function findAutomaticFallback(
+  originalModel: FallbackOrigin,
+  availableModels: ModelInfo[],
+  apiKeyTable: ApiKeyTable,
+  logger: Logger,
+  excludeModelIds?: Set<string>,
+  preferUntriedBackend?: boolean
+): ModelInfo | null {
+  logger.info(`🔍 Finding automatic fallback for ${originalModel.id}`);
+
+  // A disabled model is still listed so the picker can grey it out, but it must never
+  // run (see ChatCompletionInvoke). Selecting one here would trade a clean fallback for
+  // a raw provider error on the next hop, so it is not a candidate.
+  const hasValidKey = (m: ModelInfo) => !m.disabled && !!apiKeyTable[m.backend] && apiKeyTable[m.backend] !== 'expired';
+
+  // Get preference list for this model. Copied because the table is shared and
+  // the generic tail below is pushed onto this list.
+  const preferences = [...(FALLBACK_PREFERENCES[originalModel.id] ?? [])];
+
+  // Add generic fallbacks if no specific preferences
+  if (preferences.length === 0) {
+    preferences.push(...DEFAULT_FALLBACK_CHAIN);
+  }
+
+  // Provider-wide-outage guarantee (used on the final allowed hop): prefer a candidate on a
+  // backend NOT yet tried, so a bounded traversal is guaranteed to cross to a different provider
+  // (e.g. OpenAI) within the hop budget instead of burning every hop on same-provider models and
+  // hard-failing before the cross-provider tail. Same-provider tier degradation still happens on
+  // earlier hops, where preferUntriedBackend is false.
+  if (preferUntriedBackend) {
+    const triedBackends = new Set<string>(originalModel.backend ? [originalModel.backend] : []);
+    for (const id of excludeModelIds ?? []) {
+      const tried = availableModels.find(m => m.id === id);
+      if (tried) triedBackends.add(tried.backend);
+    }
+    const crossProvider =
+      preferences
+        .filter(id => !excludeModelIds?.has(id))
+        .map(id => availableModels.find(m => m.id === id))
+        .find((m): m is ModelInfo => !!m && !triedBackends.has(m.backend) && hasValidKey(m)) ??
+      availableModels.find(
+        m => m.id !== originalModel.id && !excludeModelIds?.has(m.id) && !triedBackends.has(m.backend) && hasValidKey(m)
+      );
+    if (crossProvider) {
+      logger.info(`✅ Found cross-provider fallback on untried backend ${crossProvider.backend}: ${crossProvider.id}`);
+      return crossProvider;
+    }
+    // No untried-backend candidate available; fall through to the normal in-order selection.
+  }
+
+  // Find first available fallback. Skip any model already tried this request so a
+  // multi-hop traversal (provider-wide outage) always advances to the next candidate.
+  for (const modelId of preferences) {
+    if (excludeModelIds?.has(modelId)) continue;
+
+    const fallbackModel = availableModels.find(m => m.id === modelId);
+
+    if (fallbackModel && hasValidKey(fallbackModel)) {
+      logger.info(`✅ Found automatic fallback: ${fallbackModel.id}`);
+      return fallbackModel;
+    }
+  }
+
+  // Last resort: find ANY model with valid API key
+  for (const model of availableModels) {
+    if (model.id === originalModel.id) continue; // Skip the original model
+    if (excludeModelIds?.has(model.id)) continue; // Skip already-tried models
+
+    if (hasValidKey(model)) {
+      logger.info(`✅ Found last-resort fallback: ${model.id}`);
+      return model;
+    }
+  }
+
+  // warn, not error: severity is the caller's call, not this selector's. Exhausting the chain
+  // is fatal to a chat completion - getLlmWithFallback still logs its own error for that path
+  // and ChatCompletionProcess rethrows - but to rapid reply it is only a skipped optimization.
+  // An error line here would page the alert channel for the latter no matter what the caller
+  // decides, which is the recurring alert this whole change exists to stop.
+  logger.warn('⚠️ No suitable automatic fallback model found');
+  return null;
+}
+
+export type LlmWithFallbackOptions = {
+  /**
+   * When true, skip the original model check and force a switch to a fallback model.
+   * Use this when the original model is temporarily unavailable (e.g. overloaded)
+   * but its backend configuration is still valid.
+   */
+  forceSwitch?: boolean;
+  /**
+   * Model ids already tried (and failed) this request. Excluded from every selection
+   * path so a bounded multi-hop traversal never re-picks a model that just failed.
+   */
+  excludeModelIds?: Set<string>;
+  /**
+   * On the final allowed hop of a multi-hop traversal, prefer an automatic fallback on a backend
+   * not yet tried, so a provider-wide outage is guaranteed to cross to a different provider within
+   * the hop budget rather than exhausting it on same-provider models. Only affects automatic
+   * selection (no frontend fallback id).
+   */
+  preferUntriedBackend?: boolean;
+  /**
+   * Forwarded so provider abuse enforcement AND the Anthropic concurrency pool's per-tenant
+   * fair scheduling stay scoped to the user across the hop. Omitting it collapses every
+   * fallen-back request into the shared anonymous tenant - which bites hardest during the
+   * provider overload that triggered the fallback in the first place.
+   */
+  endUserId?: string | null;
+};
+
+/**
+ * Attempt to get a working LLM backend with fallback support using frontend-provided model
+ */
+export async function getLlmWithFallback(
+  originalModel: ModelInfo,
+  fallbackModelId: string | undefined,
+  availableModels: ModelInfo[],
+  apiKeyTable: ApiKeyTable,
+  logger: Logger,
+  options: LlmWithFallbackOptions = {}
+): Promise<FallbackAttempt | null> {
+  const excludeModelIds = options.excludeModelIds;
+
+  // Try original model first, unless forceSwitch is requested (e.g. after overload retries
+  // exhausted) or the original was already tried this request (a multi-hop fallback passes the
+  // just-failed model as `originalModel`, which must never be re-selected).
+  if (!options.forceSwitch && !excludeModelIds?.has(originalModel.id)) {
+    const originalBackend = getLlmByModel(apiKeyTable, {
+      modelInfo: originalModel,
+      logger,
+      endUserId: options.endUserId,
+    });
+    if (originalBackend) {
+      return { model: originalModel, backend: originalBackend, attempt: 0 };
+    }
+  }
+
+  // A frontend-provided fallback that was already tried is treated as absent so the traversal
+  // advances via automatic selection instead of dead-ending on the same repeated id each hop.
+  if (fallbackModelId && excludeModelIds?.has(fallbackModelId)) {
+    fallbackModelId = undefined;
+  }
+
+  // If no fallback model provided, try to find one automatically
+  if (!fallbackModelId) {
+    logger.warn('⚠️ No fallback model provided, attempting automatic fallback selection');
+    const automaticFallback = findAutomaticFallback(
+      originalModel,
+      availableModels,
+      apiKeyTable,
+      logger,
+      excludeModelIds,
+      options.preferUntriedBackend
+    );
+
+    if (!automaticFallback) {
+      logger.error('❌ No fallback model available (neither provided nor automatic)');
+      return null;
+    }
+
+    // Use the automatic fallback
+    const backend = getLlmByModel(apiKeyTable, {
+      modelInfo: automaticFallback,
+      logger,
+      endUserId: options.endUserId,
+    });
+    if (backend) {
+      logger.info(`✅ Using automatic fallback: ${automaticFallback.id}`);
+      return { model: automaticFallback, backend, attempt: 1 };
+    }
+
+    logger.error('❌ Automatic fallback model failed to initialize');
+    return null;
+  }
+
+  // Validate fallback model provided by frontend
+  const fallbackModel = validateFallbackModel(fallbackModelId, availableModels, apiKeyTable, logger);
+
+  if (!fallbackModel) {
+    logger.error('❌ No valid fallback model available after validation');
+    return null;
+  }
+
+  // Try the fallback model
+  const backend = getLlmByModel(apiKeyTable, {
+    modelInfo: fallbackModel,
+    logger,
+    endUserId: options.endUserId,
+  });
+
+  if (backend) {
+    logger.info(`✅ Fallback successful: Using ${fallbackModel.id}`, {
+      originalModel: originalModel.id,
+      fallbackModel: fallbackModel.id,
+      attempt: 1,
+    });
+
+    return { model: fallbackModel, backend, attempt: 1 };
+  }
+
+  logger.error('❌ Fallback attempt failed', {
+    originalModel: originalModel.id,
+    attemptedFallback: fallbackModel.id,
+  });
+
+  return null;
+}
+
+/**
+ * Pick a runnable substitute for a model id that is NOT in `availableModels` at all -
+ * a sunset id a catalog lifecycle row has hidden, or one disabled since whatever
+ * persisted it (a session pin, a stored mapping row) was written.
+ *
+ * `getLlmWithFallback` cannot serve this case: its `originalModel` is a `ModelInfo`,
+ * which by definition does not exist here. This walks the same
+ * `FALLBACK_PREFERENCES` -> `DEFAULT_FALLBACK_CHAIN` -> any-keyed-model selection
+ * through the same `findAutomaticFallback`, so the substitute a hidden id lands on
+ * cannot diverge from the one a listed-but-failing id would.
+ *
+ * Callers should run `resolveDeprecatedModelId` first: a sunset id with a known
+ * successor should be forwarded to it (and counted as a `[model-sunset]`) rather
+ * than treated as a model with no answer.
+ */
+export function findFallbackForMissingModel(
+  missingModelId: string,
+  availableModels: ModelInfo[],
+  apiKeyTable: ApiKeyTable,
+  logger: Logger,
+  /** Forwarded so provider abuse enforcement stays scoped to the user across the hop. */
+  endUserId?: string | null
+): FallbackAttempt | null {
+  const fallbackModel = findAutomaticFallback({ id: missingModelId }, availableModels, apiKeyTable, logger);
+  if (!fallbackModel) {
+    return null;
+  }
+
+  const backend = getLlmByModel(apiKeyTable, { modelInfo: fallbackModel, logger, endUserId });
+  if (!backend) {
+    logger.warn(`⚠️ Fallback for unavailable model ${missingModelId} failed to initialize: ${fallbackModel.id}`);
+    return null;
+  }
+
+  return { model: fallbackModel, backend, attempt: 1 };
+}

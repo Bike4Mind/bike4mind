@@ -1,0 +1,391 @@
+{
+  "category": "ai",
+  "title": "AI News",
+  "description": "Latest artificial intelligence and machine learning announcements",
+  "targets": [
+    {
+      "company": "OpenAI",
+      "ticker": "OPENAI",
+      "url": "https://openai.com/blog",
+      "category": "tech"
+    },
+    {
+      "company": "Google AI",
+      "ticker": "GOOGL",
+      "url": "https://ai.googleblog.com/",
+      "category": "tech"
+    },
+    {
+      "company": "Anthropic",
+      "ticker": "ANTHROPIC",
+      "url": "https://www.anthropic.com/news",
+      "category": "tech"
+    },
+    {
+      "company": "Meta AI",
+      "ticker": "META",
+      "url": "https://ai.meta.com/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Microsoft AI",
+      "ticker": "MSFT",
+      "url": "https://blogs.microsoft.com/ai/",
+      "category": "tech"
+    },
+    {
+      "company": "Amazon AI/ML",
+      "ticker": "AMZN",
+      "url": "https://aws.amazon.com/blogs/machine-learning/",
+      "category": "tech"
+    },
+    {
+      "company": "NVIDIA AI",
+      "ticker": "NVDA",
+      "url": "https://blogs.nvidia.com/blog/category/ai/",
+      "category": "tech"
+    },
+    {
+      "company": "IBM Research AI",
+      "ticker": "IBM",
+      "url": "https://research.ibm.com/blog/category/ai",
+      "category": "tech"
+    },
+    {
+      "company": "DeepMind",
+      "ticker": "GOOGL",
+      "url": "https://deepmind.google/discover/",
+      "category": "tech"
+    },
+    {
+      "company": "Salesforce AI",
+      "ticker": "CRM",
+      "url": "https://www.salesforce.com/news/topics/artificial-intelligence/",
+      "category": "tech"
+    },
+    {
+      "company": "Databricks",
+      "ticker": "DBRX",
+      "url": "https://databricks.com/blog/category/product",
+      "category": "tech"
+    },
+    {
+      "company": "Hugging Face",
+      "ticker": "HF",
+      "url": "https://huggingface.co/blog",
+      "category": "tech"
+    },
+    {
+      "company": "Cohere",
+      "ticker": "COHERE",
+      "url": "https://cohere.com/blog",
+      "category": "tech"
+    },
+    {
+      "company": "Adept AI",
+      "ticker": "ADEPT",
+      "url": "https://www.adept.ai/blog",
+      "category": "tech"
+    },
+    {
+      "company": "Inflection AI",
+      "ticker": "INFLECTION",
+      "url": "https://inflection.ai/news",
+      "category": "tech"
+    },
+    {
+      "company": "Mistral AI",
+      "ticker": "MISTRAL",
+      "url": "https://mistral.ai/news/",
+      "category": "tech"
+    },
+    {
+      "company": "Scale AI",
+      "ticker": "SCALE",
+      "url": "https://scale.com/blog",
+      "category": "tech"
+    },
+    {
+      "company": "Runway ML",
+      "ticker": "RUNWAY",
+      "url": "https://runwayml.com/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Stability AI",
+      "ticker": "STABILITY",
+      "url": "https://stability.ai/news",
+      "category": "tech"
+    },
+    {
+      "company": "Character.AI",
+      "ticker": "CHARACTER",
+      "url": "https://blog.character.ai/",
+      "category": "tech"
+    },
+    {
+      "company": "Perplexity AI",
+      "ticker": "PERPLEXITY",
+      "url": "https://www.perplexity.ai/blog",
+      "category": "tech"
+    },
+    {
+      "company": "EleutherAI",
+      "ticker": "ELEUTHER",
+      "url": "https://www.eleuther.ai/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "AI21 Labs",
+      "ticker": "AI21",
+      "url": "https://www.ai21.com/blog",
+      "category": "tech"
+    },
+    {
+      "company": "Reka AI",
+      "ticker": "REKA",
+      "url": "https://reka.ai/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Abacus AI",
+      "ticker": "ABACUS",
+      "url": "https://abacus.ai/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Midjourney",
+      "ticker": "MIDJOURNEY",
+      "url": "https://docs.midjourney.com/docs/changelog",
+      "category": "tech"
+    },
+    {
+      "company": "Deepgram",
+      "ticker": "DEEPGRAM",
+      "url": "https://deepgram.com/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "LangChain",
+      "ticker": "LANGCHAIN",
+      "url": "https://blog.langchain.dev/",
+      "category": "tech"
+    },
+    {
+      "company": "Weights & Biases",
+      "ticker": "WANDB",
+      "url": "https://wandb.ai/site/blog",
+      "category": "tech"
+    },
+    {
+      "company": "Notion AI",
+      "ticker": "NOTION",
+      "url": "https://www.notion.so/blog",
+      "category": "tech"
+    },
+    {
+      "company": "Quora Poe",
+      "ticker": "QUORA",
+      "url": "https://blog.poe.com/",
+      "category": "tech"
+    },
+    {
+      "company": "You.com AI",
+      "ticker": "YOU",
+      "url": "https://about.you.com/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Zapier AI",
+      "ticker": "ZAPIER",
+      "url": "https://zapier.com/blog/tags/ai/",
+      "category": "tech"
+    },
+    {
+      "company": "Glean",
+      "ticker": "GLEAN",
+      "url": "https://www.glean.com/blog",
+      "category": "tech"
+    },
+    {
+      "company": "AssemblyAI",
+      "ticker": "ASSEMBLY",
+      "url": "https://www.assemblyai.com/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Descript AI",
+      "ticker": "DESCRIPT",
+      "url": "https://www.descript.com/blog",
+      "category": "tech"
+    },
+    {
+      "company": "Writer.com AI",
+      "ticker": "WRITER",
+      "url": "https://writer.com/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Synthesia",
+      "ticker": "SYNTHESIA",
+      "url": "https://www.synthesia.io/post/",
+      "category": "tech"
+    },
+    {
+      "company": "Otter.ai",
+      "ticker": "OTTER",
+      "url": "https://blog.otter.ai/",
+      "category": "tech"
+    },
+    {
+      "company": "Oracle AI",
+      "ticker": "ORCL",
+      "url": "https://blogs.oracle.com/ai/",
+      "category": "tech"
+    },
+    {
+      "company": "SAP AI",
+      "ticker": "SAP",
+      "url": "https://news.sap.com/topics/artificial-intelligence/",
+      "category": "tech"
+    },
+    {
+      "company": "Adobe AI",
+      "ticker": "ADBE",
+      "url": "https://blog.adobe.com/en/topics/artificial-intelligence",
+      "category": "tech"
+    },
+    {
+      "company": "Atlassian AI",
+      "ticker": "TEAM",
+      "url": "https://www.atlassian.com/blog/ai",
+      "category": "tech"
+    },
+    {
+      "company": "DataRobot",
+      "ticker": "DTRB",
+      "url": "https://www.datarobot.com/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "UiPath AI",
+      "ticker": "PATH",
+      "url": "https://www.uipath.com/blog/artificial-intelligence",
+      "category": "tech"
+    },
+    {
+      "company": "C3.ai",
+      "ticker": "AI",
+      "url": "https://c3.ai/newsroom/",
+      "category": "tech"
+    },
+    {
+      "company": "Palantir AI",
+      "ticker": "PLTR",
+      "url": "https://www.palantir.com/news/",
+      "category": "tech"
+    },
+    {
+      "company": "Pinecone",
+      "ticker": "PINECONE",
+      "url": "https://www.pinecone.io/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Chroma AI",
+      "ticker": "CHROMA",
+      "url": "https://blog.trychroma.com/",
+      "category": "tech"
+    },
+    {
+      "company": "Redis AI",
+      "ticker": "REDIS",
+      "url": "https://redis.com/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "OpenRouter",
+      "ticker": "OPENROUTER",
+      "url": "https://openrouter.ai/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Vercel AI",
+      "ticker": "VERCEL",
+      "url": "https://vercel.com/blog/tags/ai",
+      "category": "tech"
+    },
+    {
+      "company": "Stripe AI",
+      "ticker": "STRIPE",
+      "url": "https://stripe.com/blog/topics/ai",
+      "category": "tech"
+    },
+    {
+      "company": "Cloudflare AI",
+      "ticker": "NET",
+      "url": "https://blog.cloudflare.com/tag/ai/",
+      "category": "tech"
+    },
+    {
+      "company": "Replit AI",
+      "ticker": "REPLIT",
+      "url": "https://blog.replit.com/tags/ai",
+      "category": "tech"
+    },
+    {
+      "company": "Nomic AI",
+      "ticker": "NOMIC",
+      "url": "https://nomic.ai/blog",
+      "category": "tech"
+    },
+    {
+      "company": "Jasper AI",
+      "ticker": "JASPER",
+      "url": "https://www.jasper.ai/blog",
+      "category": "tech"
+    },
+    {
+      "company": "H2O.ai",
+      "ticker": "H2O",
+      "url": "https://h2o.ai/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "SambaNova Systems",
+      "ticker": "SAMBANOVA",
+      "url": "https://sambanova.ai/news/",
+      "category": "tech"
+    },
+    {
+      "company": "AI Weekly",
+      "ticker": "AIWEEKLY",
+      "url": "https://aiweekly.co/",
+      "category": "tech"
+    },
+    {
+      "company": "The Gradient",
+      "ticker": "GRADIENT",
+      "url": "https://thegradient.pub/",
+      "category": "tech"
+    },
+    {
+      "company": "ArXiv AI",
+      "ticker": "ARXIV",
+      "url": "https://arxiv.org/list/cs.AI/recent",
+      "category": "tech"
+    },
+    {
+      "company": "Import AI",
+      "ticker": "IMPORTAI",
+      "url": "https://www.importai.com/",
+      "category": "tech"
+    },
+    {
+      "company": "Ben's Bites",
+      "ticker": "BENSBITES",
+      "url": "https://bensbites.co/",
+      "category": "tech"
+    }
+  ]
+} 

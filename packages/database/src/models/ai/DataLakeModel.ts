@@ -1,0 +1,1564 @@
+import mongoose from 'mongoose';
+import BaseRepository from '@bike4mind/db-core';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
+// Grant-held ids arrive as plain Strings (DataLakeAccessGrantModel.dataLakeId has no ObjectId
+// validation), so every grant arm below filters them - see usableObjectIds.
+import { usableObjectIds } from '../../utils/mongo';
+import type {
+  IDataLakeDocument,
+  IDataLakeRepository,
+  IDataLakeBatchDocument,
+  IDataLakeBatchSummary,
+  IDataLakeBatchRepository,
+  IDataLakeBatchFile,
+  BatchFileStatus,
+  BatchStatus,
+  BatchCompletionReason,
+  BatchCounterField,
+  AccessContext,
+  DataLakeStatus,
+  FindAccessibleArm,
+  LakeSettleFields,
+  TaxonomyStatus,
+  IDataLakeBatch,
+} from '@bike4mind/common';
+import {
+  BATCH_NON_TERMINAL_STATUSES,
+  TAXONOMY_NON_TERMINAL_STATUSES,
+  TAXONOMY_ATTENTION_STATUSES,
+  normalizeEntitlementKey,
+  DATA_LAKE_GROUNDING_MODES,
+  DATA_LAKE_STATUSES,
+  DEFAULT_DATA_LAKE_GROUNDING_MODE,
+} from '@bike4mind/common';
+
+// --- Data Lake Schema ---
+
+const DataLakeSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true },
+    // Slug uniqueness is scoped per organization (compound index below), NOT global,
+    // so two orgs may share a slug. Org-less lakes (organizationId missing) collide
+    // with each other on slug - this is the desired behavior.
+    slug: { type: String, required: true },
+    description: { type: String },
+    // Per-lake system prompt, injected RETRIEVAL-SCOPED at answer time (see
+    // IDataLake.systemPrompt for the full contract). Stored uncapped, matching the other
+    // system-prompt fields.
+    systemPrompt: { type: String },
+    // Preferred registry system-prompt id for sessions created for this lake (see
+    // IDataLake.preferredSystemPromptId). Validated against the session-activatable allowlist at
+    // the write boundary; resolved to session.systemPromptId once at create time.
+    preferredSystemPromptId: { type: String },
+    // Per-lake grounding mode (see IDataLake.groundingMode). Resolved to session.corpusGroundingMode
+    // once at create time and enforced by the completion path's corpus defer plan. The default sets
+    // the value on NEW lakes; lakes predating this field read back undefined and the resolver
+    // applies the same default, so both ground identically. Spread to a mutable array - mongoose's
+    // enum option types reject the `as const` readonly tuple.
+    groundingMode: {
+      type: String,
+      enum: [...DATA_LAKE_GROUNDING_MODES],
+      default: DEFAULT_DATA_LAKE_GROUNDING_MODE,
+    },
+    // Chunk passage target (TOKENS) this lake REQUIRES of its member files (see
+    // IDataLake.requiredPassageTokenTarget). A constraint the chunk handler checks, NOT an override
+    // (#1662): a member file whose effective target differs is reported as a conflict, never
+    // re-chunked. No index (tiny collection, only read from a lake already in hand).
+    requiredPassageTokenTarget: { type: Number },
+    // Last inconsistency report and when it ran. `mongoose.Schema.Types.Mixed` deliberately: this is a
+    // report payload the pure detector owns the shape of, and re-declaring its fields here would give
+    // two sources of truth that drift.
+    //
+    // BOUNDED BY THE WRITER, and the only writer that bounds it today is
+    // `detectLakeInconsistencies`, which passes INCONSISTENCY_FINDINGS_CAP as `maxFindings` and caps
+    // evidence per finding at EVIDENCE_MAX. Nothing in this schema or in the pure detector enforces a
+    // size on a caller that omits the cap - so a second writer (a cron, a queue handler, another
+    // route) must pass it too. Said explicitly because the previous wording implied the detector
+    // enforced the persisted size, which would have let the next writer add no cap of its own.
+    //
+    // Excluded from every multi-document read on DataLakeRepository - the named list methods via
+    // LIST_PROJECTION, and the inherited `find` via an override that injects the same exclusion.
+    // Both are needed: the exclusion has to live on the class that owns the field, so naming it in a
+    // DataLakeBatchRepository projection is a silent no-op, and naming it only on the named methods
+    // misses the door every service outside this file actually uses. The override yields to a caller
+    // that names ANY projection of its own, including an exclusion-only one that could safely have
+    // been merged - see its docblock for why it does not try to tell the two apart.
+    inconsistencyReport: { type: mongoose.Schema.Types.Mixed, default: null },
+    inconsistencyComputedAt: { type: Date, default: null },
+    fileTagPrefix: { type: String, required: true },
+    datalakeTag: { type: String, required: true },
+    requiredUserTag: { type: String },
+    // Generic entitlement gate (see IDataLake.requiredEntitlement). No dedicated index:
+    // the lakes collection is tiny (a handful of docs) so a collscan beats index-union on
+    // the two-clause $or in findActiveByUserTagsAndEntitlements.
+    // Normalized at the SCHEMA layer (setter) so EVERY write path - service code, the stamp
+    // script, direct repo.create/save, fixtures - persists a canonical lowercase key. The
+    // entitlement-key $in query is case-sensitive, so an un-normalized stored value would
+    // silently never match. The query side normalizes keys identically.
+    requiredEntitlement: {
+      type: String,
+      set: (v: unknown) => (typeof v === 'string' ? normalizeEntitlementKey(v) : v),
+    },
+    createdByUserId: { type: String, required: true },
+    // Last principal to write this lake's config (see IDataLake.lastUpdatedByUserId). Server-set
+    // from the authenticated actor by every config-write service; no index (tiny collection, only
+    // ever read from a lake already in hand, same rationale as the fields below).
+    lastUpdatedByUserId: { type: String },
+    organizationId: { type: String },
+    // Public opt-in (see IDataLake.isPublic): a true value makes the lake readable app-wide,
+    // bypassing the org prerequisite + Private-by-default. No dedicated index (tiny collection,
+    // same rationale as requiredEntitlement); the public arm in the access filters keys off it.
+    isPublic: { type: Boolean, default: false },
+    // Per-lake opt-in to query-text audit logging (see IDataLake.auditQueryTextEnabled). No
+    // dedicated index - same rationale as isPublic/requiredEntitlement (tiny collection).
+    auditQueryTextEnabled: { type: Boolean, default: false },
+    status: { type: String, enum: [...DATA_LAKE_STATUSES], default: 'draft' },
+    fileCount: { type: Number, default: 0 },
+    totalSizeBytes: { type: Number, default: 0 },
+    totalChunkedChars: { type: Number, default: 0 },
+    // Lifetime embedding spend, integer micro-USD - see IDataLake.embeddingSpendMicroUsd.
+    embeddingSpendMicroUsd: { type: Number, default: 0 },
+    lastSyncAt: { type: Date },
+    // Teardown batch key (see IDataLake.filesDeletedAt): the exact stamp phase-1 delete wrote on
+    // the lake's member files, matched by equality on restore. Set only through
+    // claimFilesDeletedAt, never a plain update - a stamp written past the claim can name a batch
+    // no sweep ever wrote, and the restore keyed to it reverses nothing. Restore clears it to null.
+    // No index - the lakes collection is tiny, and it is only ever read from a lake already in hand.
+    filesDeletedAt: { type: Date },
+    // Archive batch key (see IDataLake.filesArchivedAt): mirrors filesDeletedAt but on the
+    // archive axis. Set only through claimFilesArchivedAt; cleared by unarchive and by restore.
+    filesArchivedAt: { type: Date },
+    // Per-lake opt-in to lake memory (see IDataLake.lakeMemoryEnabled). Gates both extraction-on-ingest
+    // and recall injection for this lake; `EnableLakeMemory` gates availability of the option at all. No
+    // dedicated index - same rationale as isPublic/auditQueryTextEnabled (tiny collection).
+    lakeMemoryEnabled: { type: Boolean, default: false },
+    // Lake-memory producer (#1440) bookkeeping - server-managed, never client-writable. No index
+    // (tiny collection, only read from a lake already in hand, same rationale as filesDeletedAt).
+    // lakeMemoryExtractionAt is a concurrency lease; lakeMemoryCursor is the bounded-continuation
+    // watermark (last attempted doc id); lakeMemoryPurgedAt is the purge fence a running extraction
+    // re-checks per document. See IDataLake for the full contract.
+    lakeMemoryExtractionAt: { type: Date },
+    lakeMemoryCursor: { type: String },
+    lakeMemoryPurgedAt: { type: Date },
+  },
+  {
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
+  }
+);
+
+// Performance indexes
+DataLakeSchema.index({ requiredUserTag: 1, status: 1 });
+DataLakeSchema.index({ organizationId: 1, status: 1 });
+DataLakeSchema.index({ createdByUserId: 1 });
+// The meta-tag is the join key - globally unique.
+DataLakeSchema.index({ datalakeTag: 1 }, { unique: true, sparse: true });
+// Slug is unique PER SCOPE (org). Replaces the former global unique on `slug`.
+// NOTE: deploying this requires dropping the legacy `slug_1` unique index in Mongo.
+DataLakeSchema.index({ organizationId: 1, slug: 1 }, { unique: true });
+// Backstop for the create-time collision guard in createDataLake.ts (assertPrefixAvailable),
+// which is read-then-write and can race under two concurrent creates by the same user.
+// Creator-scope only: createDataLake.ts always sets createdByUserId from the authenticated
+// actor, never empty, for every document this index actually covers (the only
+// createdByUserId: '' in this codebase is a synthetic registry-lake fallback with no backing
+// document - see assertLakeAccess.ts - so it never reaches this index). There is deliberately
+// NO org-scope companion index - org-less lakes persist with organizationId as an explicit null
+// OR empty string (see the `$in: [null, '']` scope elsewhere in this file), so a partial index
+// on `{ $exists: true }` would fold every personal lake in the system into one collision group
+// and fail to build. Org-scope collisions stay app-level only: tagPrefixCollision.ts's
+// creator-OR-org scope rule is an OR, which no single Mongo unique index key can express.
+DataLakeSchema.index({ createdByUserId: 1, fileTagPrefix: 1 }, { unique: true });
+
+export const DataLakeModel =
+  (mongoose.models['DataLake'] as unknown as mongoose.Model<IDataLakeDocument>) ||
+  mongoose.model<IDataLakeDocument>('DataLake', DataLakeSchema);
+
+/**
+ * Shared reserve-first spend meter behind both tryAddEmbeddingSpend implementations (lake and
+ * batch - the per-lake and per-run budget levers share one contract). Atomically adds
+ * `amountMicroUsd` to the document's embeddingSpendMicroUsd ONLY if the total stays within
+ * `limitMicroUsd`; all-or-nothing, so two concurrent reservations can never jointly breach the
+ * budget. The $or arm covers documents created before the field existed (an absent field fails
+ * plain comparison queries in Mongo, which would permanently deny legacy lakes/batches).
+ *
+ * amount <= 0 is a no-op success (a fully-cached run spends nothing); limit <= 0 always denies
+ * BEFORE checking amount - 0 is the operator's "stop" value, and it must win even for a
+ * zero-cost call so "stopped" reads unambiguously as "no provider calls at all".
+ */
+/**
+ * Exact-inverse of a reservation made by tryAddSpendWithinLimit, for the caller that reserved
+ * and then watched the provider call fail: the money was never spent, so the meter must give it
+ * back or ordinary provider errors permanently poison a lifetime budget (x3 under SQS retries).
+ * Guarded on `spend >= amount` so a concurrent admin reset can never drive the meter negative;
+ * an unmatched release is logged by the caller and skipped - the meter is already lower than
+ * the reservation being returned.
+ */
+async function releaseSpend(
+  model: mongoose.Model<IDataLakeDocument> | mongoose.Model<IDataLakeBatchDocument>,
+  id: string,
+  amountMicroUsd: number
+): Promise<boolean> {
+  if (amountMicroUsd <= 0) return true;
+  const res = await (model as mongoose.Model<IDataLakeDocument>).updateOne(
+    { _id: id, embeddingSpendMicroUsd: { $gte: amountMicroUsd } },
+    { $inc: { embeddingSpendMicroUsd: -amountMicroUsd } }
+  );
+  return res.modifiedCount === 1;
+}
+
+async function tryAddSpendWithinLimit(
+  model: mongoose.Model<IDataLakeDocument> | mongoose.Model<IDataLakeBatchDocument>,
+  id: string,
+  amountMicroUsd: number,
+  limitMicroUsd: number
+): Promise<boolean> {
+  if (limitMicroUsd <= 0) return false;
+  if (amountMicroUsd <= 0) return true;
+  // Denied before the query: the $exists arm below would otherwise let a legacy document
+  // seed a first reservation larger than the whole budget.
+  if (amountMicroUsd > limitMicroUsd) return false;
+  const res = await (model as mongoose.Model<IDataLakeDocument>).updateOne(
+    {
+      _id: id,
+      $or: [
+        { embeddingSpendMicroUsd: { $exists: false } },
+        { embeddingSpendMicroUsd: { $lte: limitMicroUsd - amountMicroUsd } },
+      ],
+    },
+    { $inc: { embeddingSpendMicroUsd: amountMicroUsd } }
+  );
+  return res.modifiedCount === 1;
+}
+
+/**
+ * Metered twin of tryAddSpendWithinLimit: same atomic reserve-first contract (identical filter
+ * and update - the atomicity argument is unchanged), but returns the post-increment total via
+ * `findOneAndUpdate({new: true})` instead of a modified-count boolean, so a caller can compute
+ * "what % of budget is this lake at now" without a second, racy read. `spendMicroUsd` is `null`
+ * for the amount<=0 no-op-success branch (no document read happened) and for a denial - callers
+ * must skip any %-of-budget check on `null` rather than treat it as zero spend.
+ */
+async function tryAddSpendWithinLimitMetered(
+  model: mongoose.Model<IDataLakeDocument>,
+  id: string,
+  amountMicroUsd: number,
+  limitMicroUsd: number
+): Promise<{ granted: boolean; spendMicroUsd: number | null }> {
+  if (limitMicroUsd <= 0) return { granted: false, spendMicroUsd: null };
+  if (amountMicroUsd <= 0) return { granted: true, spendMicroUsd: null };
+  if (amountMicroUsd > limitMicroUsd) return { granted: false, spendMicroUsd: null };
+  const doc = await model.findOneAndUpdate(
+    {
+      _id: id,
+      $or: [
+        { embeddingSpendMicroUsd: { $exists: false } },
+        { embeddingSpendMicroUsd: { $lte: limitMicroUsd - amountMicroUsd } },
+      ],
+    },
+    { $inc: { embeddingSpendMicroUsd: amountMicroUsd } },
+    { new: true }
+  );
+  if (!doc) return { granted: false, spendMicroUsd: null };
+  return { granted: true, spendMicroUsd: doc.embeddingSpendMicroUsd ?? null };
+}
+
+/** Both gate fields blank, in the null/'' form used across this model for DocumentDB safety. */
+const GATELESS = {
+  $and: [
+    { $or: [{ requiredUserTag: null }, { requiredUserTag: '' }] },
+    { $or: [{ requiredEntitlement: null }, { requiredEntitlement: '' }] },
+  ],
+};
+
+/**
+ * Mongo mirror of the in-memory `lakeMatchesAccess` any-of: the lake has NO gate (BOTH
+ * requiredUserTag and requiredEntitlement blank), OR the caller holds the required tag, OR the
+ * caller holds the required entitlement. Requiring BOTH blank for the gate-less arm is what
+ * keeps an entitlement-only lake from leaking via the legacy blank-tag arm.
+ *
+ * Shared by every access filter in this repository (findAccessible, the public arms of
+ * findActiveByUserTagsAndEntitlements and findPublicLakes) so the DB paths cannot drift from
+ * each other. NOT byte-parity with the in-memory filter: `requiredUserTag` has no normalizing
+ * setter, so this matches the STORED value against the caller's tags in both casings while
+ * lakeMatchesAccess lowercases the stored value - a mixed-case stored tag held only in
+ * lowercase is filtered out here but admitted by the gate. Fails closed; entitlements are
+ * exempt (schema setter). Closing it needs a requiredUserTag setter plus a backfill.
+ */
+const requirementConstraint = (userTags: string[], entitlementKeys?: string[]): Record<string, unknown> => {
+  const normalizedTags = userTags.map(t => t.toLowerCase());
+  const allTags = Array.from(new Set(userTags.concat(normalizedTags)));
+  // Use the ONE canonical normalization (shared with the in-memory filter + write path).
+  const keys = (entitlementKeys ?? []).map(normalizeEntitlementKey);
+  const arms: Record<string, unknown>[] = [GATELESS, { requiredUserTag: { $in: allTags } }];
+  // Guard: `$in: []` is a harmless no-match but `$in: undefined` throws.
+  if (keys.length > 0) arms.push({ requiredEntitlement: { $in: keys } });
+  return { $or: arms };
+};
+
+// The lakes collection's only unbounded field. Every multi-document read on this class excludes it:
+// the two routes that read a report (health, inconsistencies) each load a SINGLE lake by id or slug,
+// so no list path has a reader, and without this a per-lake report multiplies by the result size on
+// reads that never look at it.
+//
+// Two forms because there are two ways out of this class. The named methods below use the string on
+// `.select()`; the `find` OVERRIDE covers the inherited one, which is published on
+// IDataLakeRepository and is how every service outside this file reads lakes - except when that
+// caller names a projection itself, in which case the override steps aside entirely.
+/**
+ * Mongo mirror of the gate's `containedGrants` (b4m-core/services `resolveLakeReadAccess`): ONE arm
+ * per granting org, so an org-principal grant reaches only a lake inside the org that issued it. The
+ * granting org has to be compared here because it is the only place the lake's own org is known; a
+ * flat id list under the caller's own org constraint asks the weaker question "is the lake in ANY of
+ * my orgs", which a caller belonging to two orgs passes with a grant from the wrong one. An org-less
+ * lake matches no arm, matching the writer's refusal to grant an org a lake that has none.
+ *
+ * Each arm bypasses the requirement gate and Private-by-default, never the org.
+ */
+const orgGrantArms = (orgGrantedLakes?: Record<string, string[]>): Record<string, unknown>[] =>
+  Object.entries(orgGrantedLakes ?? {}).flatMap(([orgId, lakeIds]) => {
+    // Filtered BEFORE the emptiness check, so an org whose every id is unusable emits no arm at
+    // all rather than an `$in: []` that matches nothing.
+    const usable = usableObjectIds(lakeIds, 'DataLakeModel.orgGrantArms');
+    return orgId && usable.length > 0 ? [{ organizationId: orgId, _id: { $in: usable } }] : [];
+  });
+
+const LIST_PROJECTION = '-inconsistencyReport';
+const LIST_PROJECTION_FIELDS = { inconsistencyReport: 0 } as const;
+
+/**
+ * The pure filter build behind `findAccessible` - see that method's docblock for what the arms
+ * mean and why the unconstrained ones are unconstrained.
+ *
+ * Returns the Mongo `filter` plus `arms`: the names of the disjuncts in `filter.$or`, in the same
+ * order, drawn from `FIND_ACCESSIBLE_ARMS`. The labels exist so a new arm cannot be added here
+ * without being declared in that inventory and taken a position on by the service-layer fake -
+ * `DataLakeModel.accessArms.test.ts` asserts the two stay parallel. An `isAdmin` context emits no
+ * `$or` at all and therefore no arms.
+ */
+export const buildAccessibleQuery = (
+  ctx: AccessContext,
+  opts?: {
+    statuses?: DataLakeStatus[];
+    includePublic?: boolean;
+    grantedLakeIds?: string[];
+    orgGrantedLakes?: Record<string, string[]>;
+  }
+): { filter: Record<string, unknown>; arms: FindAccessibleArm[] } => {
+  const statuses = opts?.statuses ?? (['draft', 'active'] as DataLakeStatus[]);
+
+  // The isAdmin bypass replaces the whole $or rather than adding a disjunct to it, so it labels
+  // no arm.
+  if (ctx.isAdmin) return { filter: { status: { $in: statuses } }, arms: [] };
+
+  // Public lakes belong in the browse/read list, NOT the archived/deleted MANAGEMENT views:
+  // restore/cleanup are owner/admin-only, so a stranger has no role on someone else's public
+  // lake there. Those views pass includePublic:false; the owner still sees their own via the
+  // owner arm, and org members keep org lakes via the org arm (pre-existing, intended).
+  const includePublic = opts?.includePublic ?? true;
+
+  // Org constraint: lake has no org OR the lake's org is one the caller is a MEMBER of.
+  // `?? []`: a runtime belt against a malformed ctx, not a widening of the declared (required)
+  // type - a missing set must deny org-scoped lakes, not throw or vacuously allow them.
+  const memberOrgIds = ctx.organizationIds ?? [];
+  const orgConstraint =
+    memberOrgIds.length > 0
+      ? { $or: [{ organizationId: { $in: [null, ''] } }, { organizationId: { $in: memberOrgIds } }] }
+      : { organizationId: { $in: [null, ''] } };
+
+  const requirement = requirementConstraint(ctx.userTags, ctx.entitlementKeys);
+
+  // Not-private: exclude lakes with no org AND no gate at all. Such a lake grants a
+  // non-owner nothing, so it must stay owner-only rather than read-by-anyone. Uses the
+  // null/'' form + $nor (DocumentDB-safe) consistent with the rest of this model.
+  const notPrivate = {
+    $nor: [
+      {
+        $and: [
+          { $or: [{ organizationId: null }, { organizationId: '' }] },
+          { $or: [{ requiredUserTag: null }, { requiredUserTag: '' }] },
+          { $or: [{ requiredEntitlement: null }, { requiredEntitlement: '' }] },
+        ],
+      },
+    ],
+  };
+
+  // Public arm: an isPublic lake is accessible app-wide - it bypasses the org prerequisite
+  // AND the not-private exclusion (a public gateless lake IS meant to be world-readable). The
+  // requirement constraint is still ANDed as defense in depth, so a gate added after publishing
+  // keeps holding while a normal (gate-less) public lake passes via requirementConstraint's
+  // both-blank arm.
+  const publicArm = { $and: [{ isPublic: true }, requirement] };
+
+  // Non-owner arms: the org/gate arm always applies; the public arm only in browse/read views
+  // (dropped for management views via includePublic - see the note at the top of this method).
+  const nonOwnerArms: [FindAccessibleArm, Record<string, unknown>][] = [
+    ['orgGate', { $and: [orgConstraint, requirement, notPrivate] }],
+  ];
+  if (includePublic) nonOwnerArms.unshift(['public', publicArm]);
+
+  // Org-admin arm (#2005): a lake in an org the caller holds ADMIN rights in, reachable by those
+  // rights alone - the analog of the owner arm, for the same reason (the gate admits them via
+  // canManageLake before it ever reaches the org prerequisite). Keyed off `administeredOrgIds`
+  // (billing owner OR managerId OR adminUserIds), deliberately a DIFFERENT set from the
+  // `organizationIds` membership the org arm above uses: membership also decides what the account
+  // switcher offers as a write target (see `orgMembershipFilter`), so widening membership to fix
+  // this would have handed a team manager the org as somewhere to write as. The two sets are meant
+  // to differ; what was wrong was that only one of them reached this query. Applies to the
+  // management views too (includePublic:false): restore/cleanup are owner/admin-only and an org
+  // admin is in that class - `redactLakesForActor` agrees, keying off the same `canManageLake`.
+  // Served by the existing { organizationId: 1, status: 1 } index.
+  const administeredOrgIds = ctx.administeredOrgIds ?? [];
+  if (administeredOrgIds.length > 0) nonOwnerArms.push(['orgAdmin', { organizationId: { $in: administeredOrgIds } }]);
+
+  // Explicit-grant arm (#1668): a lake the caller holds an active access grant on is reachable by
+  // that grant alone - the grant IS the authorization, so it needs none of the org/gate constraints
+  // (it is the analog of the createdByUserId owner bypass, extended to a transferred/delegated
+  // owner-curator-reader). The ids are pre-resolved by the caller from listByPrincipal; an empty
+  // list adds no arm, and so does one whose every id is unusable. This covers ONLY persisted grant
+  // rows; the ephemeral tag/entitlement view is #1673's separate concern.
+  const grantedLakeIds = usableObjectIds(opts?.grantedLakeIds, 'DataLakeModel.buildAccessibleQuery');
+  if (grantedLakeIds.length > 0) nonOwnerArms.push(['grant', { _id: { $in: grantedLakeIds } }]);
+
+  // ORG-principal grant arms, one per granting org (see `orgGrantArms`), so this is the one arm
+  // name that can label MORE than one disjunct. Suppressed alongside the public arm in the
+  // archived/deleted MANAGEMENT views: an org grant carries no role here, so a reader-level one
+  // must not surface someone else's lake in a restore/cleanup list.
+  if (includePublic) {
+    for (const arm of orgGrantArms(opts?.orgGrantedLakes)) nonOwnerArms.push(['orgGrant', arm]);
+  }
+
+  const labelled: [FindAccessibleArm, Record<string, unknown>][] = [
+    ['owner', { createdByUserId: ctx.userId }],
+    ...nonOwnerArms,
+  ];
+
+  return {
+    filter: { status: { $in: statuses }, $or: labelled.map(([, arm]) => arm) },
+    arms: labelled.map(([name]) => name),
+  };
+};
+
+class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements IDataLakeRepository {
+  constructor(private dataLakeModel: mongoose.Model<IDataLakeDocument>) {
+    super(dataLakeModel);
+  }
+
+  /**
+   * Inherited `find`, narrowed to exclude the report - the projection on the named methods below
+   * cannot reach here, and this is the door nearly every caller uses.
+   *
+   * `IBaseRepository.find` declares no options parameter, so services read lakes through it with no
+   * projection and get whole documents; one of them (`listDataLakes.listAllDataLakes`) reads every
+   * draft+active lake unpaginated. Excluding at the six named methods left that path carrying the
+   * full report, which is the same silent no-op this exclusion was written to fix, one level up.
+   *
+   * Injected ONLY when the caller named no projection of its own: Mongo refuses a projection mixing
+   * inclusion with exclusion, so a caller that arrives with an inclusion set has to win outright
+   * rather than be merged with. No caller passes one today; this keeps the first one that does from
+   * failing at the server.
+   */
+  async find(filter: Record<string, unknown>, options: Record<string, unknown> = {}) {
+    const { skip, limit, sort, ...projection } = options;
+    if (Object.keys(projection).length > 0) return super.find(filter, options);
+    return super.find(filter, { ...options, ...LIST_PROJECTION_FIELDS });
+  }
+
+  async findBySlug(slug: string, organizationIds?: string[]): Promise<IDataLakeDocument | null> {
+    // Slug is unique per (organizationId, slug). Prefer a lake in one of the caller's own
+    // orgs, then fall back to an org-less lake with the same slug. Sorted so two own-org
+    // matches resolve deterministically rather than by document order.
+    if (organizationIds && organizationIds.length > 0) {
+      const own = await this.dataLakeModel
+        .findOne({ slug, organizationId: { $in: organizationIds } })
+        .sort({ organizationId: 1 });
+      if (own) return own.toJSON() as IDataLakeDocument;
+    }
+    // Sorted too (#2425 review): `organizationId: null` and `organizationId: ''` are both stored
+    // as "org-less" but are distinct index keys, so two org-less lakes CAN share a slug. Without
+    // this, which one wins would depend on document order rather than being merely unspecified.
+    const orgless = await this.dataLakeModel
+      .findOne({ slug, organizationId: { $in: [null, ''] } })
+      .sort({ organizationId: 1 });
+    return (orgless?.toJSON() as IDataLakeDocument) ?? null;
+  }
+
+  /**
+   * Last-resort slug resolution (#2425): a lake in an org the caller is not a member of is
+   * invisible to `findBySlug`, but a real owner/curator grant on it is still legitimate access -
+   * canManageLake already admits it once the lake resolves. The caller (`assertLakeAccess`)
+   * decides whether it is worth resolving the grant-held id set at all, so this method takes the
+   * ALREADY-resolved candidates rather than a thunk - keeping the "when to pay for the extra
+   * grants query" decision in the service layer instead of hidden inside the data layer.
+   */
+  async findBySlugAmongIds(slug: string, ids: string[]): Promise<IDataLakeDocument | null> {
+    const usable = usableObjectIds(ids, 'DataLakeModel.findBySlugAmongIds');
+    if (usable.length === 0) return null;
+    // Sorted for the same reason as the own-org arm above: two granted lakes can share a slug
+    // across two different non-member orgs (e.g. two independent transferLakeOwnership calls),
+    // and an unsorted `$in` match has no ordering guarantee - without a tie-break, which lake
+    // wins would be nondeterministic rather than merely unspecified-but-stable.
+    const granted = await this.dataLakeModel.findOne({ slug, _id: { $in: usable } }).sort({ _id: 1 });
+    return (granted?.toJSON() as IDataLakeDocument) ?? null;
+  }
+
+  async findByDatalakeTag(datalakeTag: string): Promise<IDataLakeDocument | null> {
+    // datalakeTag carries a globally-unique index, so at most one lake matches.
+    const doc = await this.dataLakeModel.findOne({ datalakeTag });
+    return (doc?.toJSON() as IDataLakeDocument) ?? null;
+  }
+
+  async findByDatalakeTags(datalakeTags: string[]): Promise<IDataLakeDocument[]> {
+    if (datalakeTags.length === 0) return [];
+    // Same globally-unique index as findByDatalakeTag, so the result carries at most one lake
+    // per tag and a caller can key it by `datalakeTag` without losing a match.
+    // Sorted so a caller picking `[0]` on a multi-match (e.g. notifySlackIndexingComplete.ts) gets
+    // a stable result across reads, rather than whatever order Mongo happens to return.
+    const docs = await this.dataLakeModel
+      .find({ datalakeTag: { $in: datalakeTags } })
+      .select(LIST_PROJECTION)
+      .sort({ _id: 1 });
+    return docs.map(doc => doc.toJSON() as IDataLakeDocument);
+  }
+
+  /**
+   * Legacy tag-only filter, currently UNUSED - prefer findActiveByUserTagsAndEntitlements.
+   * It predates entitlements, org scoping, and Private-by-default, so it returns every
+   * gateless lake to every caller (including other users' private ones). Don't wire it into
+   * a user-facing path without adding those constraints.
+   *
+   * Returns active data lakes matching any of the user's tags (case-insensitive), plus any
+   * with no requiredUserTag restriction. The null/empty-string arms cover both
+   * representations of "no restriction."
+   */
+  async findActiveByUserTags(userTags: string[]): Promise<IDataLakeDocument[]> {
+    const normalizedTags = userTags.map(t => t.toLowerCase());
+    const allTags = Array.from(new Set(userTags.concat(normalizedTags)));
+    const results = await this.dataLakeModel
+      .find({
+        status: 'active',
+        $or: [{ requiredUserTag: { $in: allTags } }, { requiredUserTag: null }, { requiredUserTag: '' }],
+      })
+      .select(LIST_PROJECTION);
+    return results.map(r => r.toJSON() as IDataLakeDocument);
+  }
+
+  /**
+   * Entitlement-aware variant of findActiveByUserTags. Returns active lakes the user can
+   * reach by a matching requiredUserTag OR a matching requiredEntitlement, plus lakes with
+   * NO restriction at all (BOTH fields null/empty). Mirrors the pure getAccessibleDataLakes
+   * rule so the DB pre-filter and the in-memory filter agree - an entitlement-only lake is
+   * NOT returned to a user lacking the key (the both-empty arm requires both fields blank).
+   */
+  async findActiveByUserTagsAndEntitlements(
+    userTags: string[],
+    entitlementKeys: string[],
+    organizationIds?: string[] | null,
+    userId?: string | null,
+    opts?: { grantedLakeIds?: string[]; orgGrantedLakes?: Record<string, string[]> }
+  ): Promise<IDataLakeDocument[]> {
+    const normalizedTags = userTags.map(t => t.toLowerCase());
+    const allTags = Array.from(new Set(userTags.concat(normalizedTags)));
+    // Use the ONE canonical normalization rule (shared with the in-memory filter + write
+    // path) so stored values and query keys can't drift.
+    const keys = (entitlementKeys ?? []).map(normalizeEntitlementKey);
+    // Empty/absent never widens access: both org arms below collapse to their org-less-only
+    // form when the caller belongs to no org (#1674).
+    const memberOrgIds = organizationIds ?? [];
+
+    // Non-owner grants, each evaluated under the org prerequisite below. A non-owner reaches
+    // a lake only when it grants them something - a held tag, a held entitlement, or (for a
+    // gateless ORG lake) membership in its org. A gateless, org-less lake grants nothing here,
+    // so it resolves ONLY via the owner bypass -> Private-by-default, not world-readable.
+    const nonOwnerArms: Record<string, unknown>[] = [{ requiredUserTag: { $in: allTags } }];
+    if (memberOrgIds.length > 0) {
+      // Gateless lake (no tag, no entitlement) scoped to one of the caller's orgs -> membership
+      // is its grant.
+      nonOwnerArms.push({ $and: [GATELESS, { organizationId: { $in: memberOrgIds } }] });
+    }
+    // Only add the entitlement arm when there are keys - `$in: []` is a harmless no-match
+    // but `$in: undefined` throws, so guard explicitly.
+    if (keys.length > 0) {
+      nonOwnerArms.push({ requiredEntitlement: { $in: keys } });
+    }
+    // Org prerequisite (hard): org-less lakes OR lakes in one of the caller's orgs. null/'' form
+    // for DocumentDB safety. Combined with the grants via $and - two top-level $or keys collide.
+    const orgConstraint =
+      memberOrgIds.length > 0
+        ? { $or: [{ organizationId: null }, { organizationId: '' }, { organizationId: { $in: memberOrgIds } }] }
+        : { $or: [{ organizationId: null }, { organizationId: '' }] };
+
+    const accessArms: Record<string, unknown>[] = [{ $and: [orgConstraint, { $or: nonOwnerArms }] }];
+
+    // Public arm (mirrors findAccessible): an isPublic lake is reachable app-wide - it bypasses
+    // the org prerequisite AND Private-by-default. The requirement gate is STILL enforced
+    // (both-blank OR held tag OR held key), so a gate added after publishing keeps holding; a
+    // normal public lake is gate-less and matches the both-blank sub-arm.
+    accessArms.push({ $and: [{ isPublic: true }, requirementConstraint(userTags, entitlementKeys)] });
+
+    // Explicit USER-grant arm (mirrors findAccessible's, #1668): a lake the caller holds an active
+    // user-principal grant on is reachable by that grant alone - the grant IS the authorization, so
+    // it needs none of the org/gate constraints (the analog of the createdByUserId owner bypass,
+    // extended to a transferred/delegated owner-curator-reader, and it is MEANT to cross orgs).
+    // Ids are pre-resolved by the caller from listByPrincipal (grantedLakeReachFor); an empty list
+    // adds no arm, and so does one whose every id is unusable. This is what keeps RETRIEVAL in step
+    // with browse - without it a transferred owner can open a lake but not ground on it.
+    const grantedLakeIds = usableObjectIds(opts?.grantedLakeIds, 'DataLakeModel.findActiveByUserTagsAndEntitlements');
+    if (grantedLakeIds.length > 0) accessArms.push({ _id: { $in: grantedLakeIds } });
+
+    // The ORG-principal half. Each arm carries its own `organizationId: <granting org>` conjunct, so
+    // it needs no separate org prerequisite - see `orgGrantArms`.
+    accessArms.push(...orgGrantArms(opts?.orgGrantedLakes));
+
+    // Owner bypass (mirrors findAccessible): the creator always retrieves their own lakes,
+    // including private gateless ones. Only when a userId is supplied.
+    if (userId) accessArms.unshift({ createdByUserId: userId });
+
+    const results = await this.dataLakeModel.find({ status: 'active', $or: accessArms }).select(LIST_PROJECTION);
+    return results.map(r => r.toJSON() as IDataLakeDocument);
+  }
+
+  async findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]> {
+    const results = await this.dataLakeModel.find({ organizationId: orgId }).select(LIST_PROJECTION);
+    return results.map(r => r.toJSON() as IDataLakeDocument);
+  }
+
+  /**
+   * Datastore-side accessibility filter mirroring the single access gate:
+   * owner OR org-admin OR (org-constraint AND requirement-constraint AND not-private). The org and
+   * requirement arms are ANDed for non-owners, so a tag/entitlement-holder in a different
+   * org never receives the lake. The requirement arm is the Mongo mirror of the in-memory
+   * `lakeMatchesAccess` any-of (shared with findActiveByUserTagsAndEntitlements).
+   *
+   * "Private" = a lake with NO org and NO gate (requiredUserTag/requiredEntitlement all
+   * blank). Such a lake is owner/admin-only - it is NOT world-readable. A non-owner reaches
+   * a lake only when it grants them something: their org (org-scoped lake) or a gate they
+   * hold. This is the Private-by-default rule; the owner still matches via the separate arm.
+   *
+   * The unconstrained arms (owner, org-admin, grant) are unconstrained because the gate this
+   * mirrors resolves MANAGE first (`classifyLakeAccess` -> `canManageLake`, before its own
+   * org prerequisite) and manage grants read - so ANDing the org/requirement constraints onto
+   * them would hide a lake the gate then opens. Keeping the mirror faithful is the whole
+   * contract of this method, and the failure is quiet when it breaks: a lake missing here is
+   * still reachable by direct id, so the caller keeps every right they had and simply loses
+   * the only surface that would have told them the lake exists (#2005).
+   */
+  async findAccessible(
+    ctx: AccessContext,
+    opts?: {
+      statuses?: DataLakeStatus[];
+      includePublic?: boolean;
+      grantedLakeIds?: string[];
+      orgGrantedLakes?: Record<string, string[]>;
+    }
+  ): Promise<IDataLakeDocument[]> {
+    const { filter } = buildAccessibleQuery(ctx, opts);
+    const results = await this.dataLakeModel.find(filter).select(LIST_PROJECTION);
+    return results.map(r => r.toJSON() as IDataLakeDocument);
+  }
+
+  async findPublicLakes(
+    viewer: AccessContext,
+    opts?: {
+      search?: string;
+      limit?: number;
+      offset?: number;
+      grantedLakeIds?: string[];
+      orgGrantedLakes?: Record<string, string[]>;
+    }
+  ): Promise<{ lakes: IDataLakeDocument[]; total: number }> {
+    // Clamp paging here (defense in depth) even though the route also validates: a caller
+    // reaching the repo directly can't request an unbounded page. Default one screenful.
+    const limit = Math.min(Math.max(opts?.limit ?? 24, 1), 60);
+    const offset = Math.max(opts?.offset ?? 0, 0);
+
+    // Public + active, with the SAME per-caller gate findAccessible's public arm applies, so
+    // discover and access agree: a lake gated after publishing stays out of the catalog for
+    // everyone except the callers who actually hold the gate (plus its owner, its grant holders
+    // and admins, who reach it via findAccessible's own bypass arms). The catalog is therefore
+    // per-caller - `total` included - which is the price of not showing a lake in one surface
+    // while the other insists it does not exist. `grantedLakeIds` is pre-resolved by the caller
+    // from listByPrincipal exactly as findAccessible's grant arms are (grantedLakeReachFor); an
+    // unwired/empty list simply adds no arm.
+    const filter: Record<string, unknown> = {
+      status: 'active',
+      isPublic: true,
+      $and: [] as Record<string, unknown>[],
+    };
+    if (!viewer.isAdmin) {
+      const grantedLakeIds = usableObjectIds(opts?.grantedLakeIds, 'DataLakeModel.findPublicLakes');
+      const reachArms: Record<string, unknown>[] = [
+        { createdByUserId: viewer.userId },
+        requirementConstraint(viewer.userTags, viewer.entitlementKeys),
+      ];
+      if (grantedLakeIds.length > 0) reachArms.push({ _id: { $in: grantedLakeIds } });
+      // The org-principal half carries the granting-org conjunct the user half does not, same rule
+      // as findAccessible's. Like the user arm, it is an $or sibling of the requirement constraint,
+      // so the grant DOES lift a public lake's post-publish gate - the grant is the authorization.
+      // What the conjunct denies is reach: only the org that issued the grant, so a member of some
+      // other org never gets the gate lifted for them.
+      reachArms.push(...orgGrantArms(opts?.orgGrantedLakes));
+      (filter.$and as Record<string, unknown>[]).push({ $or: reachArms });
+    }
+
+    const search = opts?.search?.trim();
+    if (search) {
+      // Escape so a user query can't inject regex metacharacters. Case-insensitive substring
+      // match on name OR description - the two fields the browse card previews.
+      const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rx = { $regex: escaped, $options: 'i' };
+      // Nest under $and to compose with the gate $and above without a top-level $or/$and clash.
+      (filter.$and as Record<string, unknown>[]).push({ $or: [{ name: rx }, { description: rx }] });
+    }
+
+    // An empty `$and: []` is a Mongo error, so drop the key when no clause was added (an admin
+    // with no search term).
+    if ((filter.$and as Record<string, unknown>[]).length === 0) delete filter.$and;
+
+    // total is the unpaged count so the UI can show "showing X of Y" and drive load-more.
+    const total = await this.dataLakeModel.countDocuments(filter);
+    // `_id` breaks name ties so the ordering is total: without it, same-named lakes have no
+    // stable order under skip/limit, and one could appear on two pages or be skipped between them.
+    const results = await this.dataLakeModel
+      .find(filter)
+      .select(LIST_PROJECTION)
+      .sort({ name: 1, _id: 1 })
+      .skip(offset)
+      .limit(limit);
+    return { lakes: results.map(r => r.toJSON() as IDataLakeDocument), total };
+  }
+
+  async claimFilesDeletedAt(id: string, at: Date): Promise<Date | null> {
+    // Conditional on the field being unset, so two teardowns racing on the same lake cannot both
+    // win: the loser's findOneAndUpdate matches nothing and it reads back the winner's stamp. A
+    // plain $set would let the loser record a stamp its sweep never wrote on any row, and the
+    // restore keyed to it would then reverse nothing.
+    const claimed = await this.dataLakeModel.findOneAndUpdate(
+      { _id: id, $or: [{ filesDeletedAt: null }, { filesDeletedAt: { $exists: false } }] },
+      { $set: { filesDeletedAt: at } },
+      { new: true }
+    );
+    if (claimed) return claimed.filesDeletedAt ?? null;
+    const holder = await this.dataLakeModel.findById(id);
+    return holder?.filesDeletedAt ?? null;
+  }
+
+  async claimPurging(id: string): Promise<boolean> {
+    // Conditional on 'deleted' in the FILTER, never on a status the caller read earlier: the
+    // lifecycle route pre-checks a lake document it fetched before this call, so a restore landing
+    // in that gap must make this claim LOSE rather than be overwritten by it. A plain $set here
+    // would reintroduce #1744 - the restore's terminal 'active' write would clobber 'purging', the
+    // sweep would fail its guard, and the consumer would swallow the purge with a WARN.
+    const res = await this.dataLakeModel.updateOne({ _id: id, status: 'deleted' }, { $set: { status: 'purging' } });
+    return res.modifiedCount === 1;
+  }
+
+  async claimRestoring(id: string): Promise<boolean> {
+    // 'restoring' is admitted alongside 'deleted' so a crashed prior restore can re-enter, matching
+    // the guard in restoreDeletedDataLake. What the filter EXCLUDES is the point: a lake that went
+    // 'purging' after the caller read it is no longer restorable, and this is where that is
+    // enforced atomically rather than against a stale copy of the document.
+    const res = await this.dataLakeModel.updateOne(
+      { _id: id, status: { $in: ['deleted', 'restoring'] } },
+      { $set: { status: 'restoring' } }
+    );
+    // matchedCount, not modifiedCount: re-entering from 'restoring' is a legitimate retry that
+    // changes nothing, and reporting it as a loss would refuse a restore the guard allows.
+    return res.matchedCount === 1;
+  }
+
+  async claimArchiving(id: string): Promise<boolean> {
+    return this.claimLifecycleStatus(id, ['draft', 'active', 'archiving'], 'archiving');
+  }
+
+  async claimDeleting(id: string): Promise<boolean> {
+    // 'restoring' and 'unarchiving' are deliberately absent: a teardown must lose to a reversal on
+    // either axis already in flight rather than plain-write over it, which is what left a lake
+    // 'active' with every one of its files soft-deleted. 'deleted'/'purging' are handled by
+    // deleteDataLake's own guards.
+    //
+    // 'archiving' IS admitted, and that asymmetry is deliberate: a delete may take the lake out
+    // from under an in-flight archive. The archive's own sweep is write-once, and its terminal
+    // settle is conditional on 'archiving', so once this claim lands the archive loses that settle
+    // and reports the conflict instead of converging back on 'archived'.
+    return this.claimLifecycleStatus(id, ['draft', 'active', 'archiving', 'archived', 'deleting'], 'deleting');
+  }
+
+  async claimUnarchiving(id: string): Promise<boolean> {
+    // The archive-axis twin of claimRestoring. What the filter EXCLUDES is the point: deleteDataLake
+    // also accepts 'archived', so a delete accepted between unarchiveDataLake's status read and this
+    // write must win. Losing here yields the same refusal the caller's guard would have given, where
+    // a plain $set would instead leave the lake 'active' with every member soft-deleted and
+    // restoreDeletedDataLake refusing it - unreachable files with no route back.
+    //
+    // Lands on 'unarchiving', NOT the 'restoring' claimRestoring uses: sharing one value let an
+    // unarchive and a restore-from-deleted both hold it (each admits it for crash re-entry) and
+    // both settle 'active'. 'restoring' is still admitted as a SOURCE so an archive-axis reversal
+    // caught mid-flight by the deploy that split them converts onto this axis rather than
+    // stranding; that also demotes any delete-axis claimant holding it to a lost terminal settle.
+    return this.claimLifecycleStatus(id, ['archived', 'unarchiving', 'restoring'], 'unarchiving');
+  }
+
+  /**
+   * Conditional status hop: `$set` the new status only for a lake still sitting in one of `from`.
+   * matchedCount, not modifiedCount, so a re-entry that changes nothing (retrying a crashed
+   * transitional attempt) still reports as won - see claimRestoring's note.
+   */
+  private async claimLifecycleStatus(id: string, from: DataLakeStatus[], to: DataLakeStatus): Promise<boolean> {
+    const res = await this.dataLakeModel.updateOne({ _id: id, status: { $in: from } }, { $set: { status: to } });
+    return res.matchedCount === 1;
+  }
+
+  async settleLifecycleStatus(
+    id: string,
+    from: DataLakeStatus,
+    set: LakeSettleFields
+  ): Promise<IDataLakeDocument | null> {
+    // The closing half of claimLifecycleStatus, and conditional for the mirror reason: the claim
+    // decides who may START, this decides who may RECORD the outcome. Both sweeps run regardless -
+    // an operation that lost here has already applied its side effects - so settling
+    // unconditionally would let the loser stamp its own terminal status over the winner's, leaving
+    // a lake whose status and file state come from different operations.
+    //
+    // findOneAndUpdate rather than updateOne so the settled document comes back for the audit diff,
+    // matching what the plain `update` call this replaced returned.
+    return this.dataLakeModel.findOneAndUpdate({ _id: id, status: from }, { $set: set }, { new: true });
+  }
+
+  async releasePurgingToDeleted(id: string): Promise<boolean> {
+    // Mirror of claimPurging, and conditional for the same reason: only a lake still sitting in
+    // 'purging' may be released, so this can never resurrect one another transition has moved on.
+    const res = await this.dataLakeModel.updateOne({ _id: id, status: 'purging' }, { $set: { status: 'deleted' } });
+    return res.modifiedCount === 1;
+  }
+
+  async claimFilesArchivedAt(id: string, at: Date): Promise<Date | null> {
+    // Same set-if-unset contract as claimFilesDeletedAt (see its comment above).
+    const claimed = await this.dataLakeModel.findOneAndUpdate(
+      { _id: id, $or: [{ filesArchivedAt: null }, { filesArchivedAt: { $exists: false } }] },
+      { $set: { filesArchivedAt: at } },
+      { new: true }
+    );
+    if (claimed) return claimed.filesArchivedAt ?? null;
+    const holder = await this.dataLakeModel.findById(id);
+    return holder?.filesArchivedAt ?? null;
+  }
+
+  async setStats(
+    id: string,
+    stats: { fileCount: number; totalSizeBytes: number; totalChunkedChars: number }
+  ): Promise<IDataLakeDocument | null> {
+    const doc = await this.dataLakeModel.findByIdAndUpdate(
+      id,
+      {
+        $set: {
+          fileCount: stats.fileCount,
+          totalSizeBytes: stats.totalSizeBytes,
+          totalChunkedChars: stats.totalChunkedChars,
+          lastSyncAt: new Date(),
+        },
+      },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeDocument) ?? null;
+  }
+
+  async tryAddEmbeddingSpend(id: string, amountMicroUsd: number, limitMicroUsd: number): Promise<boolean> {
+    // Thin wrapper over the metered twin (no production caller needs the lake-level boolean
+    // form anymore - the gate only calls tryAddEmbeddingSpendMetered), so there is exactly one
+    // atomic-write code path for this meter instead of two, while keeping the boolean form and
+    // its existing test coverage intact for any future non-metered caller.
+    return (await this.tryAddEmbeddingSpendMetered(id, amountMicroUsd, limitMicroUsd)).granted;
+  }
+
+  async tryAddEmbeddingSpendMetered(
+    id: string,
+    amountMicroUsd: number,
+    limitMicroUsd: number
+  ): Promise<{ granted: boolean; spendMicroUsd: number | null }> {
+    return tryAddSpendWithinLimitMetered(this.dataLakeModel, id, amountMicroUsd, limitMicroUsd);
+  }
+
+  async releaseEmbeddingSpend(id: string, amountMicroUsd: number): Promise<boolean> {
+    return releaseSpend(this.dataLakeModel, id, amountMicroUsd);
+  }
+
+  /** Admin remedy for a poisoned meter (see resetEmbeddingSpend on the repository interface). */
+  async resetEmbeddingSpend(id: string): Promise<boolean> {
+    const res = await this.dataLakeModel.updateOne({ _id: id }, { $set: { embeddingSpendMicroUsd: 0 } });
+    return res.matchedCount === 1;
+  }
+
+  async activateIfDraft(id: string): Promise<boolean> {
+    // The status guard lives in the FILTER, not in a prior read: the membership doors that call
+    // this hand over a lake document they fetched before their own status writes, so testing the
+    // caller's copy could flip a lake that is already archiving. `null` also matches a missing
+    // field - lakes written before `status` existed have none, and they are just as invisible to
+    // the catalog as a draft.
+    const res = await this.dataLakeModel.updateOne(
+      { _id: id, status: { $in: ['draft', null] } },
+      { $set: { status: 'active' } }
+    );
+    return res.modifiedCount === 1;
+  }
+
+  async claimLakeMemoryExtraction(id: string, at: Date, staleBefore: Date): Promise<boolean> {
+    // Guard in the FILTER, not a prior read: an unset/missing field OR a stamp older than staleBefore (a
+    // crashed run's expired lease) is claimable. A concurrent claimer that already wrote a FRESH stamp
+    // fails this filter and loses, so exactly one run holds the lease. Mirrors activateIfDraft's
+    // guarded-in-query idiom.
+    const res = await this.dataLakeModel.updateOne(
+      {
+        _id: id,
+        $or: [
+          { lakeMemoryExtractionAt: null },
+          { lakeMemoryExtractionAt: { $exists: false } },
+          { lakeMemoryExtractionAt: { $lt: staleBefore } },
+        ],
+      },
+      { $set: { lakeMemoryExtractionAt: at } }
+    );
+    return res.modifiedCount === 1;
+  }
+
+  async releaseLakeMemoryExtraction(id: string, claimedAt: Date): Promise<void> {
+    // Compare-and-clear: only release if our stamp is still the one in force. If a stale takeover
+    // replaced it, clearing would strand the newer run's lease.
+    await this.dataLakeModel.updateOne(
+      { _id: id, lakeMemoryExtractionAt: claimedAt },
+      { $set: { lakeMemoryExtractionAt: null } }
+    );
+  }
+
+  async setLakeMemoryCursor(id: string, cursor: string | null): Promise<void> {
+    await this.dataLakeModel.updateOne({ _id: id }, { $set: { lakeMemoryCursor: cursor } });
+  }
+
+  /**
+   * Advance the continuation cursor ONLY IF the purge fence still reads what the caller snapshotted.
+   * Returns false when it moved (or the lake is gone), meaning the caller lost the race and must not
+   * chain a continuation.
+   *
+   * The unguarded setter cannot express this: an extraction re-reads the fence and then writes, and a
+   * purge landing in that gap has its cursor clear immediately reinstated - so the next build resumes
+   * mid-lake, past documents whose beliefs the purge destroyed, and those stay missing until two
+   * further runs walk the cursor off the end.
+   *
+   * `matchedCount`, not `modifiedCount`: re-writing the same cursor value is a legitimate no-op that
+   * mongo may elide, so only the match tells you whether the fence held.
+   *
+   * An equality match on `null` also matches an ABSENT field, which is what makes one filter shape
+   * cover both a never-purged lake and one whose fence was cleared.
+   */
+  async setLakeMemoryCursorIfFenceUnmoved(id: string, cursor: string | null, fenceAt: Date | null): Promise<boolean> {
+    const res = await this.dataLakeModel.updateOne(
+      { _id: id, lakeMemoryPurgedAt: fenceAt },
+      { $set: { lakeMemoryCursor: cursor } }
+    );
+    return res.matchedCount === 1;
+  }
+
+  /**
+   * Raise the purge fence and clear the continuation cursor in ONE write (see
+   * IDataLake.lakeMemoryPurgedAt). Both halves belong to the same fact - this lake's learned state was
+   * discarded - and splitting them leaves a window where a fresh build resumes from the old cursor.
+   *
+   * The extraction LEASE is deliberately left alone: an in-flight run notices the moved fence at its
+   * next document boundary and releases the lease itself via its own compare-and-clear. Clearing it
+   * here would instead let a post-purge build start alongside the still-unwinding run, which is the
+   * exact concurrency the lease exists to prevent.
+   */
+  async stampLakeMemoryPurge(id: string, at: Date): Promise<void> {
+    // `$max`, not `$set`: two purges racing on one lake would otherwise let the later WRITE land the
+    // earlier TIMESTAMP, so the stamp would read as a purge that never happened last. The field is
+    // the honest answer to "when was this last purged", and $max is what keeps it monotonic.
+    await this.dataLakeModel.updateOne(
+      { _id: id },
+      { $max: { lakeMemoryPurgedAt: at }, $set: { lakeMemoryCursor: null } }
+    );
+  }
+
+  /**
+   * The current purge fence, read fresh and projected. Called once per document by a running
+   * extraction, so it reads only the one field rather than the whole lake document.
+   *
+   * `exists` is returned separately because a MISSING lake document and one that was never purged
+   * both have no stamp, and they mean opposite things to a caller: the lake-deletion sweep shreds the
+   * memory profile and then deletes the record, so a run that reads `exists: false` is extracting
+   * into a lake that is being purged out from under it. Collapsing the two into `null` would let that
+   * run keep appending facts to a deleted lake's ledger - exactly the "facts extracted from a deleted
+   * lake alive forever" outcome cleanupDeletedDataLake orders its steps to prevent.
+   */
+  async getLakeMemoryFence(id: string): Promise<{ exists: boolean; purgedAt: Date | null }> {
+    const doc = (await this.dataLakeModel.findById(id).select('lakeMemoryPurgedAt').lean().exec()) as {
+      lakeMemoryPurgedAt?: Date | null;
+    } | null;
+    return { exists: !!doc, purgedAt: doc?.lakeMemoryPurgedAt ?? null };
+  }
+}
+
+export const dataLakeRepository = new DataLakeRepository(DataLakeModel);
+
+// --- Data Lake Batch Schema ---
+
+const DataLakeBatchFileSchema = new mongoose.Schema(
+  {
+    fabFileId: { type: String, required: true },
+    fileName: { type: String, required: true },
+    relativePath: { type: String },
+    contentHash: { type: String },
+    status: {
+      type: String,
+      enum: ['pending', 'uploaded', 'chunking', 'vectorizing', 'complete', 'failed', 'skipped'],
+      default: 'pending',
+    },
+    error: { type: String },
+    failureCounted: { type: Boolean },
+  },
+  { _id: false }
+);
+
+const DataLakeBatchSchema = new mongoose.Schema(
+  {
+    dataLakeId: { type: String, required: true },
+    userId: { type: String, required: true },
+    status: {
+      type: String,
+      enum: ['preparing', 'uploading', 'processing', 'completed', 'completed_with_errors', 'failed', 'cancelled'],
+      default: 'preparing',
+    },
+    conflictResolution: { type: String, enum: ['skip', 'update', 'duplicate'], default: 'skip' },
+    totalFiles: { type: Number, default: 0 },
+    uploadedFiles: { type: Number, default: 0 },
+    chunkedFiles: { type: Number, default: 0 },
+    vectorizedFiles: { type: Number, default: 0 },
+    failedFiles: { type: Number, default: 0 },
+    failedFileNames: [{ type: String }],
+    // Subset of failedFiles caused by the chunk/vectorize pipeline (as opposed to a browser
+    // upload failure) - lets the UI say WHICH stage a file failed at instead of a bare "failed"
+    // (#1412). Only ever incremented by fabFileChunk.ts/fabFileVectorize.ts's final-attempt
+    // accounting; upload-complete.ts's browser-reported failures never touch it.
+    processingFailedFiles: { type: Number, default: 0 },
+    skippedFiles: { type: Number, default: 0 },
+    // Drive-ingest-only: candidates a continuation chain planned and then wrote off unfinished, so a
+    // `completed` batch that is SHORT can be told apart from one that ingested all it planned. Kept out
+    // of the finalize gate's sum on purpose - see IDataLakeBatch.deferredFiles for why folding it in
+    // would strand every stopped-short batch in `processing`.
+    deferredFiles: { type: Number, default: 0 },
+    // Drive-ingest-only: the driveFileIds skip() has already counted into skippedFiles, so a later
+    // slice of the same chain can subtract them (see IDataLakeBatch.skippedDriveFileIds) instead of
+    // re-fetching and re-skipping (and re-incrementing) the same permanently-unsupported file.
+    skippedDriveFileIds: [{ type: String }],
+    totalSizeBytes: { type: Number, default: 0 },
+    uploadedSizeBytes: { type: Number, default: 0 },
+    // Embedding spend metered against this run, integer micro-USD - see IDataLakeBatch.
+    embeddingSpendMicroUsd: { type: Number, default: 0 },
+    files: [DataLakeBatchFileSchema],
+    appliedTags: [
+      {
+        name: { type: String, required: true },
+        strength: { type: Number, required: true },
+        _id: false,
+      },
+    ],
+    startedAt: { type: Date },
+    completedAt: { type: Date },
+    // Set only on a non-normal terminal transition (e.g. 'reconciler'); absent on normal completion.
+    completionReason: { type: String, enum: ['reconciler'] },
+    // Background AI-tagging phase - orthogonal to `status` (see TaxonomyStatus's doc
+    // comment for why it isn't layered onto the ingest status instead).
+    wantsTaxonomy: { type: Boolean, default: false },
+    taxonomyStatus: {
+      type: String,
+      enum: ['none', 'queued', 'analyzing', 'ready', 'applying', 'applied', 'failed', 'dismissed'],
+      default: 'none',
+    },
+    taxonomyStartedAt: { type: Date },
+    taxonomySuggestions: { type: Object },
+    taxonomyError: { type: String },
+  },
+  {
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
+  }
+);
+
+// Performance indexes
+DataLakeBatchSchema.index({ userId: 1, status: 1 });
+DataLakeBatchSchema.index({ dataLakeId: 1, status: 1 });
+// Read-time reconciler scan: non-terminal batches ordered by staleness.
+DataLakeBatchSchema.index({ status: 1, updatedAt: 1 });
+// findTaxonomyAttentionByUserId's list-response query (userId equality + taxonomyStatus $in,
+// sorted updatedAt desc) - the batches-list poll hits this on every call. Previously this was
+// { taxonomyStatus: 1, updatedAt: 1 }, which was never actually an equality prefix for that
+// query (userId comes first) - replaced rather than just re-commented, since the old shape
+// served no query at all. NOT the stuck-job reconciler scan, which needs taxonomyStartedAt
+// (see the index below).
+DataLakeBatchSchema.index({ userId: 1, taxonomyStatus: 1, updatedAt: -1 });
+// findStuckTaxonomy's staleness scan - see its doc comment for why taxonomyStartedAt, not
+// updatedAt, is the correct clock for "how long has this taxonomy attempt been stuck."
+DataLakeBatchSchema.index({ taxonomyStatus: 1, taxonomyStartedAt: 1 });
+
+// Exported like its sibling `DataLakeModel` above: app code goes through
+// `dataLakeBatchRepository`, but the operator scripts under packages/scripts/migrate read models
+// directly (see check-datalake-prefix-whitespace.ts, which reads stored taxonomy suffixes).
+export const DataLakeBatchModel =
+  (mongoose.models['DataLakeBatch'] as unknown as mongoose.Model<IDataLakeBatchDocument>) ||
+  mongoose.model<IDataLakeBatchDocument>('DataLakeBatch', DataLakeBatchSchema);
+
+class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> implements IDataLakeBatchRepository {
+  constructor(private batchModel: mongoose.Model<IDataLakeBatchDocument>) {
+    super(batchModel);
+  }
+
+  async findActiveByUserId(userId: string): Promise<IDataLakeBatchSummary[]> {
+    // Excludes `files`: this feeds the batches-list poll, which only ever renders counters and
+    // status - never the per-file manifest. A batch with thousands of files turns that manifest
+    // into a multi-MB response on its own; there is no reason to pay for it here.
+    // Also excludes `taxonomySuggestions.fileAssignments`: ingest (`status`) and taxonomy
+    // (`taxonomyStatus`) are independent clocks - taxonomy analysis starts as soon as the browser
+    // upload phase finishes, not gated on chunk/vectorize - so a batch can reach
+    // `taxonomyStatus: 'applied'` (fileAssignments populated, never cleared) while still showing
+    // up here with `status` non-terminal. Matches IDataLakeBatchSummary's contract.
+    const results = await this.batchModel
+      .find({
+        userId,
+        status: { $in: BATCH_NON_TERMINAL_STATUSES },
+      })
+      .select('-files -taxonomySuggestions.fileAssignments');
+    return results.map(r => r.toJSON() as IDataLakeBatchSummary);
+  }
+
+  async findActiveByDataLakeId(dataLakeId: string): Promise<IDataLakeBatchSummary[]> {
+    // Both callers (archive/delete-lake teardown) only read `.id` to cancel batches - same
+    // payload-size reasoning as findActiveByUserId, including the fileAssignments exclusion.
+    const results = await this.batchModel
+      .find({
+        dataLakeId,
+        status: { $in: BATCH_NON_TERMINAL_STATUSES },
+      })
+      .select('-files -taxonomySuggestions.fileAssignments');
+    return results.map(r => r.toJSON() as IDataLakeBatchSummary);
+  }
+
+  async findStuck(cutoff: Date, limit = 500): Promise<IDataLakeBatchSummary[]> {
+    // status equality prefix + updatedAt range -> served by the { status:1, updatedAt:1 } index.
+    // Projects out the per-file manifest and fileAssignments like the sibling finders:
+    // reconcileStuckBatches only reads scalars, and this scan pulls up to `limit` docs per run.
+    const results = await this.batchModel
+      .find({ status: { $in: BATCH_NON_TERMINAL_STATUSES }, updatedAt: { $lt: cutoff } })
+      .sort({ updatedAt: 1 })
+      .limit(limit)
+      .select('-files -taxonomySuggestions.fileAssignments');
+    return results.map(r => r.toJSON() as IDataLakeBatchSummary);
+  }
+
+  async updateFileStatus(batchId: string, fabFileId: string, status: BatchFileStatus, error?: string): Promise<void> {
+    const update: Record<string, unknown> = { 'files.$.status': status };
+    if (error) update['files.$.error'] = error;
+    // Pessimistic pairing with the failure $inc that follows this write: that $inc is guarded on a
+    // non-terminal batch while this write is not, so stamping "not charged" in the SAME document
+    // write as the status means every crash point classifies safely - a lost markFailureCounted
+    // leaves the entry conservatively uncounted rather than falsely counted (see revertFileFailure).
+    if (status === 'failed') update['files.$.failureCounted'] = false;
+
+    await this.batchModel.updateOne({ _id: batchId, 'files.fabFileId': fabFileId }, { $set: update });
+  }
+
+  async appendFiles(batchId: string, files: IDataLakeBatchFile[]): Promise<void> {
+    if (files.length === 0) return;
+    await this.batchModel.updateOne({ _id: batchId }, { $push: { files: { $each: files } } });
+  }
+
+  /**
+   * Atomic file claim: transition a manifest file from one of `from` to `to`,
+   * succeeding only if the file is currently in a `from` state. `modifiedCount === 1`
+   * means THIS caller won - the redelivery-safety primitive that gates the counter
+   * increment so a re-delivered message is a true no-op.
+   */
+  async claimFileStatus(
+    batchId: string,
+    fabFileId: string,
+    from: BatchFileStatus[],
+    to: BatchFileStatus
+  ): Promise<boolean> {
+    const res = await this.batchModel.updateOne(
+      { _id: batchId, files: { $elemMatch: { fabFileId, status: { $in: from } } } },
+      { $set: { 'files.$.status': to } }
+    );
+    return res.modifiedCount === 1;
+  }
+
+  /**
+   * Exact inverse of the per-file failure accounting in fabFileChunk.ts's accountFileFailure:
+   * pull ONE manifest entry back out of 'failed' into `to`, drop the error text it carries, and
+   * hand back the failedFiles/processingFailedFiles that entry took - all in one write, so the
+   * manifest and the tally can never disagree. `alsoIncrement` carries whatever the new status
+   * itself owes the batch (a file whose chunks already hold every vector lands straight on
+   * 'complete', which owes a vectorizedFiles).
+   *
+   * Why this exists at all: claimFileStatus can only move an entry BETWEEN the states it is given,
+   * and no success path lists 'failed' as a legal `from` - so without an explicit revoke, a file
+   * that recovers after a failure was recorded is counted failed forever (#1412 is the same gate
+   * seen from the other side).
+   *
+   * `errorPrefix` is the ownership guard, mirroring the FabFile-side rule in fabFileChunk.ts: only
+   * the caller whose own failure text is on the entry may revoke it, so a real chunking failure
+   * recorded by something else is never quietly un-counted.
+   *
+   * Deliberately NOT guarded on a non-terminal batch, unlike incrementCounters: a strand that
+   * finalized the batch 'completed_with_errors' is exactly the case this has to repair. Callers
+   * reopen the batch first (see reopenFinalizedWithErrors) - and a reopen makes
+   * finalizeBatchIfComplete's whole post-finalize block run a second time, which for
+   * enqueueLakeMemoryExtractionIfWanted means a full-lake extraction may re-fire (bounded by the
+   * per-lake daily cap and de-duped by its ledger).
+   *
+   * It IS guarded on 'cancelled'/'failed', the same invariant reopenFinalizedWithErrors protects:
+   * those are decisions, not tallies, and a late recovery must not rewrite a batch someone
+   * deliberately settled (#2102) - cancel is a status-only transition that neither stops in-flight
+   * messages nor clears the FabFile markers, so the rescue sweep does reach files on one.
+   */
+  async revertFileFailure(
+    batchId: string,
+    fabFileId: string,
+    to: Extract<BatchFileStatus, 'complete' | 'chunking'>,
+    opts: {
+      errorPrefix: string;
+      // The failure counters are excluded because alsoIncrement is spread into the same $inc
+      // literal as the -1s below, where a later key would silently cancel the revoke.
+      alsoIncrement?: Partial<Record<Exclude<BatchCounterField, 'failedFiles' | 'processingFailedFiles'>, number>>;
+    }
+  ): Promise<IDataLakeBatchDocument | null> {
+    const entry = { fabFileId, status: 'failed', error: { $regex: `^${escapeRegex(opts.errorPrefix)}` } };
+    const match = { _id: batchId, status: { $nin: ['cancelled', 'failed'] } };
+    const set = {
+      $set: { 'files.$.status': to },
+      $unset: { 'files.$.error': 1, 'files.$.failureCounted': 1 },
+    };
+
+    // Whether to give the counters back is a PER-ENTRY fact, not a batch-level one: two entries can
+    // sit at 'failed' with only one of them charged (accountFileFailure's manifest write is
+    // unguarded while its $inc is guarded on a non-terminal batch), and a global failedFiles >= 1
+    // would happily spend the other file's counters - dropping the tally to 0 while that file is
+    // still genuinely failed. `failureCounted` is written false by updateFileStatus alongside the
+    // 'failed' status and raised to true once the $inc lands (markFailureCounted); absent can only
+    // mean an entry that pre-dates the flag, so trust the counters as before.
+    const counted = { ...match, files: { $elemMatch: { ...entry, failureCounted: { $ne: false } } } };
+
+    // $inc has no clamp, so the counters must still be there to give back.
+    const doc = await this.batchModel.findOneAndUpdate(
+      { ...counted, failedFiles: { $gte: 1 }, processingFailedFiles: { $gte: 1 } },
+      { ...set, $inc: { failedFiles: -1, processingFailedFiles: -1, ...opts.alsoIncrement } },
+      { new: true }
+    );
+    if (doc) return doc.toJSON() as IDataLakeBatchDocument;
+
+    // Nothing was charged for this entry (or the counters are already gone): repair the status
+    // alone rather than pushing a tally that belongs to another file's failure negative.
+    const repaired = await this.batchModel.findOneAndUpdate(
+      { ...match, files: { $elemMatch: entry } },
+      opts.alsoIncrement ? { ...set, $inc: opts.alsoIncrement } : set,
+      { new: true }
+    );
+    return (repaired?.toJSON() as IDataLakeBatchDocument) ?? null;
+  }
+
+  /**
+   * Record on the manifest entry itself whether the failure counters were actually charged for it,
+   * so revertFileFailure can tell whose counters it is handing back (see the attribution note
+   * there). Must stay paired with accountFileFailure's guarded incrementCounters call.
+   */
+  async markFailureCounted(batchId: string, fabFileId: string, counted: boolean): Promise<void> {
+    await this.batchModel.updateOne(
+      { _id: batchId, 'files.fabFileId': fabFileId },
+      { $set: { 'files.$.failureCounted': counted } }
+    );
+  }
+
+  /**
+   * Reopen a batch whose ONLY terminal outcome was 'completed_with_errors', so a file that has
+   * since recovered can still be counted: every counter write here is guarded on a non-terminal
+   * batch, so a settled batch would otherwise swallow the increment that makes it 'completed'.
+   *
+   * Narrow on purpose. 'cancelled' and 'failed' are decisions, not tallies, and 'completed' cannot
+   * be reached with a failed file in the first place - only the errors variant is a verdict that a
+   * recovery can legitimately overturn. Everything else stays settled (#2102).
+   *
+   * `owner` is the same eligibility predicate revertFileFailure applies, so the reopen never fires
+   * blind: without it a resume with no failure of ours to revoke (a non-final attempt stamps the
+   * stranded marker before any accounting is written) would flip a batch out of and straight back
+   * into its verdict, paying a second recordBatchCompletion and a lake-memory extraction slot.
+   */
+  async reopenFinalizedWithErrors(
+    batchId: string,
+    owner: { fabFileId: string; errorPrefix: string }
+  ): Promise<IDataLakeBatchDocument | null> {
+    const doc = await this.batchModel.findOneAndUpdate(
+      {
+        _id: batchId,
+        status: 'completed_with_errors',
+        files: {
+          $elemMatch: {
+            fabFileId: owner.fabFileId,
+            status: 'failed',
+            error: { $regex: `^${escapeRegex(owner.errorPrefix)}` },
+          },
+        },
+      },
+      { $set: { status: 'processing' }, $unset: { completedAt: 1, completionReason: 1 } },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
+  }
+
+  async incrementCounter(
+    batchId: string,
+    field: BatchCounterField,
+    amount: number = 1
+  ): Promise<IDataLakeBatchDocument | null> {
+    return this.incrementCounters(batchId, { [field]: amount });
+  }
+
+  /**
+   * Drive-ingest-only: record a skipped driveFileId and increment `skippedFiles` in one atomic
+   * write, gated on that driveFileId not already being recorded. Without the gate, a chain that
+   * re-diffs the same permanently-unsupported file on every slice (skip() mints no FabFile, so the
+   * ordinary alreadyIngested subtraction can't see it) would increment skippedFiles once per slice
+   * for one file. Returns false when the driveFileId was already recorded (a genuine no-op, not an
+   * error) so the caller can tell a fresh skip from a repeat.
+   */
+  async recordSkippedDriveFile(batchId: string, driveFileId: string): Promise<boolean> {
+    const res = await this.batchModel.updateOne(
+      { _id: batchId, status: { $in: BATCH_NON_TERMINAL_STATUSES }, skippedDriveFileIds: { $ne: driveFileId } },
+      { $addToSet: { skippedDriveFileIds: driveFileId }, $inc: { skippedFiles: 1 } }
+    );
+    return res.modifiedCount === 1;
+  }
+
+  /**
+   * Increment multiple counters in ONE atomic $inc, so a crash between two sequential
+   * incrementCounter calls can never leave a caller's counters partially applied (e.g.
+   * failedFiles bumped but processingFailedFiles not, misclassifying a processing failure
+   * as an upload failure with no automatic recovery). Guarded on non-terminal status like every
+   * other mutator here - without it, a late-arriving increment (e.g. a final-attempt failure that
+   * lands after the reconciler already forced the batch terminal) could push a counter past what
+   * a caller already treated as the batch's final tally, even though the terminal status itself
+   * cannot be re-flipped (finalizeBatchIfComplete's own transition is separately guarded).
+   */
+  async incrementCounters(
+    batchId: string,
+    fields: Partial<Record<BatchCounterField, number>>
+  ): Promise<IDataLakeBatchDocument | null> {
+    if (Object.keys(fields).length === 0) return null; // $inc: {} throws; nothing to apply anyway.
+    const doc = await this.batchModel.findOneAndUpdate(
+      { _id: batchId, status: { $in: BATCH_NON_TERMINAL_STATUSES } },
+      { $inc: fields },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
+  }
+
+  // Deliberately NOT guarded on non-terminal status like incrementCounters: the reserve
+  // happens before a provider call that is about to spend real money, and a batch the
+  // reconciler just forced terminal must still meter (never lose) that spend.
+  async tryAddEmbeddingSpend(batchId: string, amountMicroUsd: number, limitMicroUsd: number): Promise<boolean> {
+    return tryAddSpendWithinLimit(this.batchModel, batchId, amountMicroUsd, limitMicroUsd);
+  }
+
+  async releaseEmbeddingSpend(batchId: string, amountMicroUsd: number): Promise<boolean> {
+    return releaseSpend(this.batchModel, batchId, amountMicroUsd);
+  }
+
+  /**
+   * Shared guard behind markTerminalIfActive/setStatusIfActive/touchIfActive: apply `set` only
+   * while the batch is still non-terminal, so a redelivered message, a reconciler race, or a
+   * client-driven status flip can never resurrect or double-finalize a batch another caller
+   * already settled.
+   */
+  private async guardedActiveUpdate(
+    batchId: string,
+    set: Record<string, unknown>
+  ): Promise<IDataLakeBatchDocument | null> {
+    const doc = await this.batchModel.findOneAndUpdate(
+      { _id: batchId, status: { $in: BATCH_NON_TERMINAL_STATUSES } },
+      { $set: set },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
+  }
+
+  /**
+   * Guarded terminal transition: only succeeds if the batch is still non-terminal,
+   * so exactly one caller wins the finalization (the completion-crossing increment
+   * OR the reconciler), never both. Returns the post-update doc to the winner.
+   */
+  async markTerminalIfActive(
+    batchId: string,
+    status: Extract<BatchStatus, 'completed' | 'completed_with_errors' | 'failed' | 'cancelled'>,
+    completionReason?: BatchCompletionReason
+  ): Promise<IDataLakeBatchDocument | null> {
+    const set: Record<string, unknown> = { status, completedAt: new Date() };
+    if (completionReason) set.completionReason = completionReason;
+    return this.guardedActiveUpdate(batchId, set);
+  }
+
+  async setStatusIfActive(
+    batchId: string,
+    status: Extract<BatchStatus, 'preparing' | 'uploading' | 'processing'>
+  ): Promise<IDataLakeBatchDocument | null> {
+    // The client flips a batch to 'processing' after the browser upload phase, but a fast
+    // pipeline can finalize it first - an unguarded $set would revive the dead batch and
+    // strand it (no further events arrive).
+    return this.guardedActiveUpdate(batchId, { status });
+  }
+
+  async updateIfActive(
+    batchId: string,
+    fields: Partial<Pick<IDataLakeBatch, 'status' | 'failedFiles' | 'failedFileNames' | 'completedAt'>>
+  ): Promise<IDataLakeBatchDocument | null> {
+    // Same guard as markTerminalIfActive/setStatusIfActive, but carrying the PUT route's whole field
+    // set: that route accepts any BatchStatus plus the client's failure tallies, so neither of the
+    // narrower methods fits, and a plain update there let a client (or a read-then-write race with
+    // the queue finalizer) write a settled batch back to a non-terminal status - resurrecting it into
+    // findActiveByUserId, where reconcileStuckBatches would later force-fail a batch that succeeded.
+    return this.guardedActiveUpdate(batchId, fields as Record<string, unknown>);
+  }
+
+  /**
+   * Re-plan a still-active batch's expected file count. Only the multi-run Drive ingest needs this:
+   * its batch is created from the first slice's candidate list, and later slices re-walk a folder that
+   * may have grown, so `totalFiles` has to be raised before the chain can overrun it (finalizing the
+   * batch mid-chain) and set exactly once the chain ends. Guarded like every other write here, so it
+   * cannot re-plan a batch someone already settled.
+   *
+   * `deferredFiles` rides along on the end-of-chain call because that set is a NARROWING: recording the
+   * shortfall in the SAME update is what stops a short chain from finalizing as a clean success. Left
+   * untouched when omitted, so the mid-chain raise cannot zero a count a later settle will write.
+   */
+  async setTotalFilesIfActive(
+    batchId: string,
+    totalFiles: number,
+    deferredFiles?: number
+  ): Promise<IDataLakeBatchDocument | null> {
+    return this.guardedActiveUpdate(batchId, {
+      totalFiles,
+      ...(deferredFiles !== undefined && { deferredFiles }),
+    });
+  }
+
+  async touchIfActive(batchId: string): Promise<void> {
+    await this.guardedActiveUpdate(batchId, { updatedAt: new Date() });
+  }
+
+  /**
+   * Guarded taxonomy-phase transition, mirroring markTerminalIfActive/setStatusIfActive: only
+   * succeeds if `taxonomyStatus` is still one of `from`, so a redelivered queue message or a
+   * race with the stuck-job reconciler can only let one caller win.
+   */
+  async setTaxonomyStatusIfActive(
+    batchId: string,
+    from: TaxonomyStatus[],
+    to: TaxonomyStatus,
+    extra?: Partial<Pick<IDataLakeBatch, 'taxonomyStartedAt' | 'taxonomySuggestions' | 'taxonomyError'>>
+  ): Promise<IDataLakeBatchDocument | null> {
+    const doc = await this.batchModel.findOneAndUpdate(
+      { _id: batchId, taxonomyStatus: { $in: from } },
+      { $set: { taxonomyStatus: to, ...extra } },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
+  }
+
+  async findStuckTaxonomy(cutoff: Date, limit = 500): Promise<IDataLakeBatchSummary[]> {
+    // taxonomyStatus equality prefix + taxonomyStartedAt range -> served by the
+    // { taxonomyStatus:1, taxonomyStartedAt:1 } index, mirroring findStuck. Deliberately NOT
+    // updatedAt: an unrelated write to the batch (an ingest counter tick) keeps bumping that
+    // while taxonomyStartedAt - when this taxonomy attempt actually began - stays fixed, so
+    // filtering on updatedAt could let a genuinely stuck batch dodge every scan.
+    // $not/$gte (not $lt), matching forceFailStuckTaxonomy's write guard: a plain $lt never
+    // matches a document missing taxonomyStartedAt entirely, which would let such a batch dodge
+    // this scan forever - the write guard's missing-field handling is dead code otherwise, since
+    // the scan is what selects candidates for it in the first place.
+    const results = await this.batchModel
+      .find({
+        taxonomyStatus: { $in: TAXONOMY_NON_TERMINAL_STATUSES },
+        taxonomyStartedAt: { $not: { $gte: cutoff } },
+      })
+      .sort({ taxonomyStartedAt: 1 })
+      .limit(limit)
+      .select('-files -taxonomySuggestions.fileAssignments');
+    return results.map(r => r.toJSON() as IDataLakeBatchSummary);
+  }
+
+  /**
+   * Force a stuck taxonomy job to 'failed', guarded on BOTH status and staleness - see the
+   * interface doc comment for why the staleness guard is needed on top of a status-only one.
+   */
+  async forceFailStuckTaxonomy(
+    batchId: string,
+    from: TaxonomyStatus[],
+    startedBefore: Date,
+    taxonomyError: string
+  ): Promise<IDataLakeBatchDocument | null> {
+    const doc = await this.batchModel.findOneAndUpdate(
+      // $not/$gte (not $lt) so a batch with no taxonomyStartedAt at all still matches - every
+      // current writer sets it alongside a non-terminal status, but a doc missing it shouldn't
+      // be able to dodge this guard the way it dodges a plain $lt (Mongo's range operators never
+      // match a missing field).
+      { _id: batchId, taxonomyStatus: { $in: from }, taxonomyStartedAt: { $not: { $gte: startedBefore } } },
+      { $set: { taxonomyStatus: 'failed', taxonomyError } },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
+  }
+
+  async findTaxonomyAttentionByUserId(userId: string, limit = 500): Promise<IDataLakeBatchSummary[]> {
+    // Unlike findActiveByUserId's ingest-active set (self-limiting - a batch leaves it as soon
+    // as ingest reaches a terminal status), a 'ready'/'failed' taxonomy batch has no such exit
+    // until it's applied, re-analyzed, or dismissed - so without a bound this list only grows.
+    // Most-recently-updated first and capped so a user who never clears old suggestions still
+    // gets a fast, bounded response instead of their entire unbounded history. The cap is global
+    // per-user, but the UI derives one chip per LAKE from it - a cap too close to a realistic
+    // per-lake backlog could starve a quiet lake's chip behind a couple of busy ones, so this
+    // defaults high (matching findStuckTaxonomy's default) rather than tight; `limit` is
+    // overridable for tests. The real fix for unbounded growth is the planned "dismiss" action -
+    // once shipped, this cap stops being load-bearing since old suggestions get an exit path.
+    // `files` is excluded for the same reason as findActiveByUserId: this is a list view, never
+    // a per-file read. `taxonomySuggestions.fileAssignments` (up to maxTotal=50 per-file entries
+    // from runTaxonomyInference's sampling) is excluded too - only `tags` is ever read by any
+    // list/chip consumer; the one caller that needs fileAssignments (applyTaxonomySuggestions)
+    // does its own findById, so dropping it here costs that path nothing.
+    const results = await this.batchModel
+      .find({
+        userId,
+        taxonomyStatus: { $in: TAXONOMY_ATTENTION_STATUSES },
+      })
+      .select('-files -taxonomySuggestions.fileAssignments')
+      .sort({ updatedAt: -1 })
+      .limit(limit);
+    return results.map(r => r.toJSON() as IDataLakeBatchSummary);
+  }
+
+  async findActiveTaxonomyByUserId(userId: string): Promise<IDataLakeBatchSummary[]> {
+    // Separate from findTaxonomyAttentionByUserId's cap: that cap serves the list response, but
+    // the read-time reconciler needs the FULL non-terminal working set regardless of recency - a
+    // batch stuck in 'analyzing' for hours has an old updatedAt and would otherwise be pushed out
+    // before the reconciler ever sees it. 'ready'/'failed' are excluded here (unlike the
+    // attention set) since they're already terminal and irrelevant to stuck-job detection.
+    // No explicit limit: the set is queued/analyzing/applying only, and the 10-minute reconciler
+    // this feeds is what drains it, so - unlike the attention set, which has no exit until
+    // applied/dismissed - it's self-limiting without a cap. `files` and
+    // `taxonomySuggestions.fileAssignments` are excluded for the same reason as
+    // findTaxonomyAttentionByUserId; the reconciler only reads taxonomyStatus/taxonomyStartedAt/id.
+    const results = await this.batchModel
+      .find({
+        userId,
+        taxonomyStatus: { $in: TAXONOMY_NON_TERMINAL_STATUSES },
+      })
+      .select('-files -taxonomySuggestions.fileAssignments');
+    return results.map(r => r.toJSON() as IDataLakeBatchSummary);
+  }
+}
+
+export const dataLakeBatchRepository = new DataLakeBatchRepository(DataLakeBatchModel);

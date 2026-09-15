@@ -1,0 +1,69 @@
+import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD, Permission } from '@bike4mind/common';
+import { getFabFileById } from '@server/managers/fabFileManager';
+import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { baseApi } from '@server/middlewares/baseApi';
+import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { sendToQueue } from '@server/utils/sqs';
+import { sendToClient } from '@server/websocket/utils';
+import { Request } from 'express';
+import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { Resource } from 'sst';
+
+const handler = baseApi().post(
+  asyncHandler(async (req: Request<{ fabFileId: string; chunkSize?: string }>, res) => {
+    const { fabFileId, chunkSize } = req.body;
+    if (!fabFileId || !chunkSize) throw new BadRequestError('Missing parameters: fabFileId or chunkSize');
+    // chunkSize is the passage target in TOKENS. Reject a malformed value here with a clear
+    // 400 - the queue consumer fails soft on bad input (fabFileChunk.ts), which would silently
+    // chunk at the default instead of what the caller asked for.
+    if (!/^\d+$/.test(String(chunkSize)) || Number(chunkSize) < 1) {
+      throw new BadRequestError('chunkSize must be a positive integer (tokens)');
+    }
+    // This payload value overrides the resolved chunk-size policy entirely (fabFileChunk.ts:
+    // requestedPassageTokenTarget = chunkSize ?? resolvedChunkPolicy.value), so it is the one
+    // door the policy's own ceiling (DefaultChunkSize's max) cannot reach. Enforce the same
+    // detection-threshold ceiling here, or a caller can still make "Rebuild passages"
+    // non-convergent for this file. Detection is `$gt`, so the threshold itself is accepted.
+    if (Number(chunkSize) > OVERSIZED_PASSAGE_TOKEN_THRESHOLD) {
+      throw new BadRequestError(`chunkSize must not exceed ${OVERSIZED_PASSAGE_TOKEN_THRESHOLD} tokens`);
+    }
+    // Below MIN_PASSAGE_TOKEN_TARGET, the chunker (effectiveChunkTokenLimit) silently raises the
+    // value instead of honoring it - reject here rather than letting a caller's request get
+    // ignored with no signal, same reasoning as the ceiling above.
+    if (Number(chunkSize) < MIN_PASSAGE_TOKEN_TARGET) {
+      throw new BadRequestError(`chunkSize must be at least ${MIN_PASSAGE_TOKEN_TARGET} tokens`);
+    }
+
+    const fabFile = await getFabFileById(fabFileId, req.ability!, Permission.update);
+    if (!fabFile) throw new NotFoundError('FabFile not found');
+
+    if (!req.ability?.can?.(Permission.update, fabFile)) throw new BadRequestError('Unauthorized');
+
+    if (fabFile.isChunking) throw new BadRequestError('FabFile is currently being chunked');
+
+    await sendToClient(req.user.id, Resource.websocket.managementEndpoint, {
+      action: 'update_file_chunk_vector_status',
+      fabFileId,
+      chunkStatus: 'ongoing',
+    });
+
+    const queueUrl = getSourceQueueUrl('fabFileChunkQueue');
+    if (!queueUrl) throw new Error('Chunk queue URL not found');
+
+    const messageId = await sendToQueue(queueUrl, {
+      fabFileId: fabFile._id,
+      userId: fabFile.userId,
+      chunkSize,
+    });
+
+    return res.json({ messageId });
+  })
+);
+
+export const config = {
+  api: {
+    externalResolver: true,
+  },
+};
+
+export default handler;

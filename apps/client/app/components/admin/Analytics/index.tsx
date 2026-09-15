@@ -1,0 +1,101 @@
+import React, { useCallback } from 'react';
+import { Sheet, Stack, LinearProgress, Box, Grid, Tabs, TabList, Tab } from '@mui/joy';
+import DescriptionIcon from '@mui/icons-material/Description';
+import PeopleIcon from '@mui/icons-material/People';
+import AnalyticsIcon from '@mui/icons-material/Analytics';
+import { UserActivityTab } from './tabs/UserActivityTab';
+import { DailyReportTab } from './tabs/DailyReportTab';
+import { WeeklyReportTab } from './tabs/WeeklyReportTab';
+import { useAnalyticsData } from '@client/app/hooks/useAnalyticsData';
+import { AnalyticsSubTab, TABS } from './types';
+import { useAnalyticsStore } from './store';
+import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+
+const AnalyticsTab: React.FC = () => {
+  const { activeSubTab, setActiveSubTab } = useAnalyticsStore();
+
+  const analyticsQuery = useAnalyticsData();
+
+  const { isLoading, isFetching, refetch } = analyticsQuery;
+
+  const handleRefresh = useCallback(() => {
+    refetch();
+  }, [refetch]);
+
+  const getTabIcon = (tabId: AnalyticsSubTab) => {
+    switch (tabId) {
+      case AnalyticsSubTab.UserActivity:
+        return <PeopleIcon sx={{ fontSize: '18px' }} />;
+      case AnalyticsSubTab.DailyReport:
+        return <DescriptionIcon sx={{ fontSize: '18px' }} />;
+      case AnalyticsSubTab.WeeklyReport:
+        return <AnalyticsIcon sx={{ fontSize: '18px' }} />;
+      default:
+        return <AnalyticsIcon sx={{ fontSize: '18px' }} />;
+    }
+  };
+
+  return (
+    <Sheet sx={{ overflow: 'hidden', width: '100%', px: 2 }}>
+      <Grid container>
+        <Grid xs={12}>
+          <Stack direction="column" justifyContent={'center'} spacing={1} sx={{ width: '100%' }}>
+            <Stack direction="column" spacing={1} sx={{ mb: 3, pt: 1 }}>
+              {/* Analytics Tabs */}
+              <Tabs
+                value={activeSubTab}
+                onChange={(_, value) => setActiveSubTab(value as AnalyticsSubTab)}
+                sx={{ mb: 2, overflowX: { xs: 'auto', sm: 'visible' } }}
+              >
+                <TabList sx={{ minWidth: { xs: 'max-content', sm: 'auto' } }}>
+                  {Object.values(TABS).map(tab => (
+                    <Tab key={tab.id} value={tab.id}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        {getTabIcon(tab.id)}
+                        <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>{tab.label}</Box>
+                      </Box>
+                    </Tab>
+                  ))}
+                  <Box sx={{ ml: '5px', display: 'flex', alignItems: 'center' }}>
+                    <ContextHelpButton helpId="admin/analytics" tooltipText="Analytics Help" />
+                  </Box>
+                </TabList>
+              </Tabs>
+            </Stack>
+          </Stack>
+        </Grid>
+
+        {/* Reserved height keeps the bar from shifting the content below it on every page turn. */}
+        <Box data-testid="analytics-progress-slot" sx={{ width: '100%', height: 4, mx: '5px' }}>
+          {isFetching && <LinearProgress size={'sm'} sx={{ width: '100%' }} />}
+        </Box>
+
+        {!isLoading && (
+          <Grid xs={12} mt={0.5}>
+            <Sheet sx={{ width: '100%' }}>
+              {activeSubTab === AnalyticsSubTab.UserActivity && (
+                <UserActivityTab
+                  rows={analyticsQuery.data?.logs || []}
+                  total={analyticsQuery.data?.total || 0}
+                  isFetching={isFetching}
+                  error={analyticsQuery.error}
+                  onRefresh={handleRefresh}
+                />
+              )}
+
+              {activeSubTab === AnalyticsSubTab.DailyReport && (
+                <DailyReportTab error={analyticsQuery.error} onRefresh={handleRefresh} />
+              )}
+
+              {activeSubTab === AnalyticsSubTab.WeeklyReport && (
+                <WeeklyReportTab error={analyticsQuery.error} onRefresh={handleRefresh} />
+              )}
+            </Sheet>
+          </Grid>
+        )}
+      </Grid>
+    </Sheet>
+  );
+};
+
+export default AnalyticsTab;

@@ -1,0 +1,1749 @@
+import { baseApi } from '@server/middlewares/baseApi';
+import { apiKeyAuth } from '@server/middlewares/apiKeyAuth';
+import { optionalJwtAuth } from '@server/middlewares/optionalJwtAuth';
+import { rateLimit } from '@server/middlewares/rateLimit';
+import type { Request, Response, NextFunction } from 'express';
+import { marked } from 'marked';
+import { getPublishedArtifactsStorage } from '@server/utils/storage';
+import { PublishedArtifact } from '@bike4mind/database';
+import {
+  buildPublishUrlPath,
+  checkShareGrant,
+  checkVisibility,
+  collectInlineAssets,
+  prepareShareMeta,
+  recordGatedView,
+  renderBundleLoaderShell,
+  renderSandboxedBundle,
+  stripToText,
+  type PublishUser,
+  type SandboxAsset,
+} from '@server/services/publish';
+import { getClientIp } from '@server/utils/ip';
+import { parsePublishPath } from '@server/services/publish/parsePublishPath';
+import { HASH_BRIDGE_JS } from '@server/services/publish/fragmentNav';
+import { requestHasGateProof } from '@server/services/publish/publishGateToken';
+import { renderPassphraseShell } from '@server/services/publish/renderPassphraseShell';
+import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
+import {
+  buildBundleScriptSrc,
+  escapeHtml,
+  resolveDocOrigin,
+  sanitizeRenderedHtml,
+  usercontentHostFor,
+  publicIdFromUsercontentHost,
+  isAppWrapperHost,
+  VIEWER_SANDBOX,
+} from '@server/services/publish/viewerSecurity';
+import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
+import {
+  EXPORT_CONTENT_TYPE,
+  buildExportActionsHtml,
+  buildMarkdownExport,
+  exportFilename,
+  exportFormatsFor,
+  exportHref,
+  parseExportFormat,
+  supportsExport,
+  type PublishExportFormat,
+} from '@client/app/utils/publishExport';
+import {
+  parseArtifacts,
+  parseArtifactsWithFallback,
+  type ParsedArtifact,
+  type ArtifactParseResult,
+} from '@client/app/utils/artifactParser';
+import { B4M_HORIZONTAL_LOGO_SVG } from '@client/app/utils/b4mLogo';
+import { WEBSITE_URL, getBrandName } from '@client/config/general';
+import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
+
+/**
+ * GET /api/publish/serve/[...path] - the public viewer for published artifacts.
+ * Mapped to the pretty `/p/*` URL via the rewrite in next.config.mjs. Ported
+ * from Polaris Publish v1 via the artifact-publishing blueprint.
+ *
+ * Unified namespace:
+ *   /p/u|pj|o/{scopeId}/{slug}[/asset]  -> hosted HTML bundle
+ *   /p/r/{publicId}                     -> published reply (rendered markdown)
+ *   /p/f/{publicId}                     -> published fabfile (rendered text)
+ *
+ * `?export=md|html` on any of the above (and on `/a/<shareToken>`) returns the artifact's
+ * CONTENT as an attachment, in the formats that convert faithfully for its kind - see
+ * `exportFormatsFor`. It is resolved after the visibility gate, so it is reachable on
+ * exactly the paths the page itself is.
+ *
+ * Bundles are served inside a sandboxed iframe: the `/p/...` HTML response
+ * is a minimal trusted wrapper page whose only content is an
+ * `<iframe sandbox={VIEWER_SANDBOX} srcdoc=...>` (NO `allow-same-origin`). The
+ * bundle therefore runs on an opaque (`null`) origin - author inline JS executes,
+ * but it cannot read the app origin's localStorage/cookies or call `/api/*` with
+ * the viewer's credentials. The visibility check still runs on the app origin
+ * (parent) for the HTML AND every asset request; gated bundles inline their assets
+ * (fetched here, credentialed) so the opaque origin never makes a gated request,
+ * while public bundles load assets back through this same route via an injected
+ * `<base>`. Individual assets are still served with a strict `script-src 'none'`.
+ *
+ * Auth: baseApi({ auth: false }) so anonymous viewers can read public artifacts.
+ * Two optional shims populate req.user for gated views: an Authorization: Bearer
+ * JWT (optionalJwtAuth) and an X-API-Key (apiKeyAuth). A top-level browser
+ * NAVIGATION carries neither, so for a gated bundle index with no credential we
+ * return a small PUBLIC bootstrap shell (no secret) instead of 401; its inline
+ * script reads the app's localStorage JWT and re-fetches this same route with
+ * `?raw=1` + Authorization: Bearer, then injects the rendered srcdoc into the
+ * sandboxed iframe client-side. The opaque-origin model is unchanged: the
+ * bundle still runs in `sandbox={VIEWER_SANDBOX}` with NO allow-same-origin, the
+ * token is read only by the trusted shell on the app origin (never the iframe),
+ * and the visibility gate still runs for the HTML AND every asset. `?raw=1` is
+ * served as inert text/plain so direct navigation can't execute it on the app origin.
+ *
+ * The loader shell covers bundles AND reply/fabfile. A gated reply/fabfile navigated with no
+ * credential gets the same shell, which re-fetches `?raw=1` and injects the rendered page as the
+ * iframe srcdoc; `renderViewerPage` carries a `script-src 'none'` CSP meta so it stays
+ * script-free inside the shell's sandboxed iframe.
+ *
+ * Printing: the browser's own File > Print on this wrapper paginates only the iframe's visible
+ * first screen, so "Save as PDF" prints the FRAME's live document instead - `VIEWER_SANDBOX`
+ * carries `allow-modals` (without it `print()` is a silent no-op in a sandbox), every render
+ * carries the in-frame trigger (`printBridge.ts`), and the wrapper button that asks for it
+ * lives in the widget, the only script the Approach-B wrapper CSP admits.
+ *
+ * Outbound links: a framed render (shelled or not, public or gated) obeys the iframe sandbox,
+ * and framing another origin stays refused by `frame-src`. So `VIEWER_SANDBOX` carries
+ * `allow-popups`/`allow-popups-to-escape-sandbox` and `renderSandboxedBundle` retargets a
+ * bundle's off-origin `<a href>`s to a new tab. Two things are still framed-only breakage:
+ * author JS that assigns `location` off-origin, and a plain (no `target`) off-origin link in
+ * a reply/fabfile body, which renders as markdown rather than through the bundle path.
+ */
+
+// Bearer-JWT first (browser/client loader), then X-API-Key (programmatic). apiKeyAuth
+// early-returns when req.user is already set, so the order lets Bearer win.
+const optionalJwtShim = optionalJwtAuth();
+const optionalAuthShim = apiKeyAuth();
+
+// Anonymous `/a/<shareToken>` requests are the abuse/DoS surface for share links.
+// Bound them per client (keyed by IP for anonymous viewers); a bundle load fans out
+// into one request per asset, so the limit is generous. Fixed bucket (not the path)
+// so every token shares one counter per client rather than one counter per token.
+const SHARE_RATE_LIMIT_WINDOW_MS = 60_000;
+const SHARE_RATE_LIMIT_MAX = 600;
+const shareRateLimitShim = rateLimit({
+  limit: SHARE_RATE_LIMIT_MAX,
+  windowMs: SHARE_RATE_LIMIT_WINDOW_MS,
+  bucket: 'publish-share-token',
+});
+
+/** Run an Express-style middleware as a promise; resolves on next(), rejects on next(err). */
+function runShim(
+  shim: (req: Request, res: Response, next: NextFunction) => unknown,
+  req: Request,
+  res: Response
+): Promise<void> {
+  let resolved = false;
+  return new Promise<void>((resolve, reject) => {
+    const next: NextFunction = (err?: unknown) => {
+      resolved = true;
+      if (err) return reject(err instanceof Error ? err : new Error(String(err)));
+      resolve();
+    };
+    Promise.resolve(shim(req, res, next))
+      .then(() => {
+        if (!resolved) resolve();
+      })
+      .catch(reject);
+  });
+}
+
+/** CSP for bundle ASSETS - `script-src 'none'` so an HTML/SVG asset can never
+ *  execute JS on the app origin (the index path is validated + script-stripped
+ *  separately; assets are not validated, so they get the strictest policy). */
+// App origin for CSP allowlists, derived from the account-tied PUBLISH_HOST (SERVER_DOMAIN,
+// no brand fallback). Empty when unconfigured, in which case 'self'/data: still cover
+// same-origin assets and the cross-origin app host is simply not allowlisted.
+const APP_HOST_SRC = PUBLISH_HOST ? `https://${PUBLISH_HOST}` : '';
+// Brand-driven fallback for shared-artifact titles; neutral when APP_NAME is unset.
+const SHARED_FALLBACK_TITLE = process.env.APP_NAME ? `Shared from ${process.env.APP_NAME}` : 'Shared';
+const withAppHost = (base: string) => (APP_HOST_SRC ? `${base} ${APP_HOST_SRC}` : base);
+const ASSET_CSP = [
+  "default-src 'none'",
+  "script-src 'none'",
+  withAppHost("style-src 'unsafe-inline'") + ' https://fonts.googleapis.com',
+  withAppHost("img-src 'self' data:"),
+  withAppHost("media-src 'self' data:"),
+  withAppHost("font-src 'self'") + ' https://fonts.gstatic.com',
+  "base-uri 'none'",
+  "form-action 'none'",
+  withAppHost("frame-ancestors 'self'"),
+].join('; ');
+
+// Share links are served same-origin, sandboxed, and must never be cached: no-store
+// is what makes a token rotation/revoke take effect immediately (no stale CDN/browser copy).
+const SHARE_CACHE_CONTROL = 'private, no-store, must-revalidate';
+// In-document belt-and-suspenders for the X-Robots-Tag header, for UAs that honor the
+// <meta> but not the header (and vice versa). Emitted on every page that is not opted
+// into discovery (see `searchIndexable`).
+const NOINDEX_META = '<meta name="robots" content="noindex,nofollow">';
+// Referrer suppression, kept SEPARATE from NOINDEX_META and scoped to share links only.
+// These two are independent decisions that must not ride along with each other:
+//   - noindex applies to the default state of every public page.
+//   - no-referrer exists to stop a /a/<shareToken> CAPABILITY leaking to third parties
+//     via the Referer header on an outbound link the artifact author included.
+// Applying no-referrer to all public pages would silently kill outbound referral
+// attribution for every author, and would blank `document.referrer` inside the isolated
+// bundle - which makes PIN_BRIDGE_JS fall back to `PO = '*'` and skip its inbound
+// `e.origin` check. Pairing it with the noindex meta is what made that the DEFAULT
+// configuration rather than a deliberate choice. Emitted alongside the matching
+// Referrer-Policy header, so meta and header always agree.
+const NO_REFERRER_META = '<meta name="referrer" content="no-referrer">';
+
+const handler = baseApi({ auth: false }).get(async (req: Request, res: Response) => {
+  // Optional-auth shims populate req.user from a Bearer JWT or X-API-Key; anonymous
+  // passes through. An INVALID X-API-Key short-circuits with 401 inside apiKeyAuth.
+  await runShim(optionalJwtShim, req, res);
+  if (res.headersSent) return;
+  await runShim(optionalAuthShim, req, res);
+  if (res.headersSent) return;
+
+  const rawPath = req.query.path;
+  const segments: string[] = Array.isArray(rawPath) ? rawPath.map(p => String(p)) : rawPath ? [String(rawPath)] : [];
+
+  const resolved = parsePublishPath(segments);
+  if (!resolved) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+
+  // No-sign-in share link (`/a/<shareToken>`). Possession of the token IS the read
+  // capability, so share links are served same-origin + sandboxed and the special
+  // serve modes below - the loader shell, `?format=raw`, `?raw=1`, and the isolated
+  // `/uc` origin - are ALL disabled: none of them should widen a token link's surface,
+  // and the token must never leak into a `*.usercontent` Host.
+  const isShare = resolved.kind === 'share';
+  const shareToken = resolved.kind === 'share' ? resolved.shareToken : '';
+  const shareAssetPath = resolved.kind === 'share' ? resolved.assetPath : null;
+
+  // Rate-limit share links before touching the DB (throttled requests never query).
+  // The shim rejects (via next(err)) once the bucket is full; map that to a 429 with
+  // the Retry-After it already set.
+  if (isShare) {
+    try {
+      await runShim(shareRateLimitShim, req, res);
+    } catch {
+      const retryAfter = res.getHeader('Retry-After');
+      return res.status(429).json({ error: 'Too many requests', retryAfter });
+    }
+    if (res.headersSent) return;
+  }
+
+  // `?raw=1` is the authenticated re-fetch issued by the client-side loader shell:
+  // it returns just the inner srcdoc (not the iframe wrapper) so the shell can inject it.
+  // The visibility gate is UNCHANGED for raw requests - an unauthorized raw request still
+  // 401/403s and NEVER falls back to the shell (that would loop the loader). Honored for
+  // share links too: the gate runs FIRST on every request (raw included), so a raw
+  // re-fetch returns only content the caller is already authorized for and never widens
+  // a token link's surface - this is what lets a DOMAIN-gated /a/<token> link recover via
+  // the loader shell (the shell re-fetches ?raw=1 with the viewer's Bearer).
+  const isRaw = req.query.raw === '1';
+  // `?format=raw` is the PUBLIC plain-text alternate advertised via `<link rel="alternate">`
+  // on the wrapper. Distinct from `?raw=1`: format=raw exposes a stable text/plain view of the
+  // artifact for agents/unfurlers/answer engines; raw=1 is the loader shell's internal
+  // authenticated re-fetch. Only ever honored for artifacts with visibility === 'public'.
+  const isFormatRaw = !isShare && req.query.format === 'raw';
+  // Approach B: set by the `/uc/*` rewrite - this request is for the bundle on
+  // its per-artifact isolated origin ({publicId}.usercontent.app.<domain>), served AS the page.
+  const isIsolated = !isShare && req.query.__uc === '1';
+  // `?export=md|html` (issue #1142) - hand the artifact's CONTENT back as a downloaded
+  // file. Distinct from `?format=raw` (a public plain-text alternate for agents and
+  // unfurlers): an export is an attachment, is offered on share links and gated pages the
+  // viewer is already authorized for, and only in formats that convert faithfully for the
+  // artifact's kind. An empty `?export=` falls through to the normal page render.
+  const rawExport = typeof req.query.export === 'string' ? req.query.export : '';
+
+  // Resolve the artifact.
+  let artifact: PublishedArtifactLean | null = null;
+  if (resolved.kind === 'share') {
+    artifact = await PublishedArtifact.findOne({
+      shareToken: resolved.shareToken,
+      deletedAt: null,
+    }).lean<PublishedArtifactLean>();
+  } else if (resolved.kind === 'bundle') {
+    artifact = await PublishedArtifact.findOne({
+      tier: resolved.tier,
+      scopeId: resolved.scopeId,
+      slug: resolved.slug,
+      deletedAt: null,
+    }).lean<PublishedArtifactLean>();
+  } else {
+    artifact = await PublishedArtifact.findOne({
+      publicId: resolved.publicId,
+      'source.kind': resolved.kind,
+      deletedAt: null,
+    }).lean<PublishedArtifactLean>();
+  }
+  if (!artifact) {
+    // Unknown OR revoked token -> plain 404 (never 401/403), so a prober can't
+    // distinguish a revoked/never-existed token from a private artifact.
+    return res.status(404).json({ error: 'Not found' });
+  }
+
+  // A `public` artifact with an access gate must NOT serve like open-public:
+  // no CDN caching, no isolated public origin, and bundles inline their assets
+  // (the opaque-origin iframe can't carry the proof cookie on subresource
+  // fetches).
+  // Share links have their own always-no-store policy and are handled by kind.
+  const isOpenPublic = artifact.visibility === 'public' && !artifact.accessGate;
+
+  // Search-engine indexability is an explicit owner opt-in (`discoverable`), NOT a
+  // side effect of being public. "Anyone with the link may view" and "listed in every
+  // search engine" are different promises, and owners reliably read the first as the
+  // second; defaulting to noindex means the surprising outcome requires a deliberate
+  // choice. Everything not opted in - gated, private, share-token links, and public
+  // artifacts whose owner never asked for it - is noindexed at BOTH layers (this
+  // header and the in-document <meta>), since a UA may honor one and not the other.
+  //
+  // Set ONCE here, before any response branch below, so a new branch inherits the safe
+  // default instead of having to remember the header. Only an opted-in open-public
+  // artifact skips it.
+  //
+  // Deliberately NOT paired with a robots.txt Disallow. A crawler blocked from FETCHING
+  // a page can still index the URL from a link it found elsewhere, and will never read
+  // the noindex it was blocked from seeing. Allowing the crawl and serving noindex is
+  // the combination that actually keeps a page out of the index; disallow-without-
+  // noindex is the misconfiguration that has burned several LLM share features.
+  // Opting in makes exactly ONE url indexable: the artifact's canonical `/p/...` page.
+  // `isCanonicalDoc` below is that page and nothing else. Every other surface this route
+  // can serve is a duplicate, a fragment, or a superseded copy of it, and each would
+  // compete with the real page in results while lacking its wrapper, branding, and (for
+  // the non-HTML ones) any way to carry a canonical link at all:
+  //  - isShare:      a /a/<token> link can resolve to an artifact that is ALSO open-public
+  //                  and opted in. Possession of the token is the grant; a search result
+  //                  would hand that grant to everyone.
+  //  - isIsolated:   the `{publicId}.usercontent...` origin serves the BARE bundle.
+  //  - embed=1:      built to be framed inside someone else's page, not to stand alone.
+  //  - ?v=<sha>:     a SUPERSEDED version. The version switcher emits real crawlable
+  //                  <a> anchors, so a replaced v1 is reachable and would otherwise be
+  //                  indexed alongside the v2 that replaced it. rel=canonical is a hint,
+  //                  not a guarantee - this is the one that actually bites.
+  //  - ?format=raw:  text/plain, so it can carry NEITHER a robots meta nor a canonical
+  //                  tag - the header here is its only control. Advertised to crawlers
+  //                  via rel="alternate" on the page that just became indexable.
+  //  - ?raw=1:       the loader shell's internal srcdoc fetch, not a page.
+  //  - ?a=<N>:       one embedded sub-artifact as a bare srcdoc document.
+  //  - ?export=<f>:  an attachment copy of the page, not the page.
+  //  - assetPath:    an individual bundle file. A bundle may ship .html assets, which
+  //                  would otherwise be standalone indexable pages with no wrapper.
+  // Read `embed` off the query directly: the `isEmbed` binding is computed further down,
+  // after several response branches that must already carry the right header.
+  const isCanonicalDoc =
+    !isShare &&
+    !isIsolated &&
+    !isRaw &&
+    !isFormatRaw &&
+    req.query.embed !== '1' &&
+    !req.query.v &&
+    !req.query.a &&
+    !rawExport &&
+    !(resolved.kind === 'bundle' && resolved.assetPath);
+  const searchIndexable = isCanonicalDoc && isOpenPublic && artifact.discoverable === true;
+  if (!searchIndexable) {
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  }
+
+  // The isolated `/uc` origin is an OPEN-public-only surface (a distinct SOP
+  // partition with no /api routes and an app-host-scoped proof cookie). If an
+  // artifact was embedded open-public and later GAINED a gate, existing /uc
+  // embeds/bookmarks must NOT try to serve the gate here - the passphrase shell
+  // would render on *.usercontent where its POST 404s and the proof cookie is
+  // scoped to the wrong host (infinite re-prompt). 404 instead, so the embed
+  // fails cleanly and the viewer uses the canonical /p URL (which gates properly).
+  if (isIsolated && !isOpenPublic) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  const effectiveVisibility: PublishVisibility = isOpenPublic
+    ? 'public'
+    : artifact.visibility === 'public'
+      ? 'private'
+      : artifact.visibility;
+
+  // Access gate - runs on the HTML AND every asset request. Share links go through
+  // checkShareGrant (token possession = read, even for a non-public artifact); every
+  // other path uses the visibility-enum ladder. BOTH honor the artifact's accessGate:
+  // the passphrase proof cookie is verified here (per-artifact, audience-scoped JWT)
+  // and passed in as an established fact, never the raw cookie.
+  const passphraseVerified = artifact.accessGate?.kind === 'passphrase' && requestHasGateProof(req, artifact.publicId);
+  // Normalize accessGate to explicit null (a lean read of a pre-gate doc may omit
+  // it) - VisibilityCheckArtifact now REQUIRES the field so a missing projection
+  // can't silently bypass the gate.
+  const gateArtifact = { ...artifact, accessGate: artifact.accessGate ?? null };
+  const access = isShare
+    ? await checkShareGrant(gateArtifact, { user: req.user as PublishUser | undefined, passphraseVerified })
+    : await checkVisibility(gateArtifact, req.user as PublishUser | undefined, { passphraseVerified });
+  if (!access.ok) {
+    // Passphrase-gated item navigated without a valid proof -> serve the PUBLIC
+    // passphrase prompt shell (no artifact data) instead of a bare 401. Takes
+    // precedence over the JWT loader shell below: a Bearer re-fetch can never
+    // satisfy a passphrase gate, so the loader would dead-end at "sign in".
+    // Applies to /p AND /a navigations; assets, ?raw=1 and ?format=raw hard-fail.
+    const wantsPassphrasePrompt =
+      access.reason === 'passphrase' &&
+      !isRaw &&
+      !isFormatRaw &&
+      !(resolved.kind === 'bundle' && resolved.assetPath) &&
+      !(isShare && shareAssetPath);
+    if (wantsPassphrasePrompt) {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      // The passphrase prompt is the one page with a CREDENTIAL input, so it must
+      // not be frame-able (clickjacking the passphrase field). frame-ancestors
+      // 'self' + a tight static-page policy; form-action 'self' since the inline
+      // script POSTs same-origin to /api/publish/gate/passphrase (PR #390 review).
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'"
+      );
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      // X-Robots-Tag already set above: a gated artifact is never searchIndexable.
+      if (isShare) res.setHeader('Referrer-Policy', 'no-referrer');
+      return res.status(200).send(renderPassphraseShell());
+    }
+    // Gated INDEX/page navigated with NO credential -> return the PUBLIC client-side loader
+    // shell instead of a hard 401. Its inline script reads the localStorage JWT and re-fetches
+    // `?raw=1` with Authorization: Bearer, then injects the result as the iframe srcdoc. The
+    // discriminator is `!req.user` (no usable credential on this request): re-fetching only
+    // helps when none was presented. A request that DID carry a credential and still failed
+    // (403 - authed-but-unauthorized) re-fetches to no avail, so it falls through to the hard
+    // status below. Applies to bundle indexes AND reply/fabfile pages: all are top-level
+    // navigations that carry no Authorization header, so the same token-recovery works. The
+    // reply/fabfile `?raw=1` render carries its own `script-src 'none'` meta (renderViewerPage),
+    // so it stays script-free even inside the shell's allow-scripts iframe. NOT for: bundle
+    // ASSETS (gated bundles inline their assets, so the opaque iframe never requests them),
+    // `?raw=1` (the loader's own fetch - a shell there would loop), or `?format=raw` (a
+    // plain-text API surface - an HTML shell would violate the caller's Accept expectation,
+    // and format=raw is public-only anyway, so it falls through to the hard status).
+    // Share links reach here only for a DOMAIN gate with no credential (Tier-1 open
+    // links grant unconditionally; passphrase share links took the prompt branch
+    // above). The loader shell's localStorage-JWT re-fetch is exactly the recovery a
+    // domain gate needs, so share navigations (not share asset sub-paths) get it too.
+    // `?export=` is excluded for the same reason as `?raw=1`: the shell recovers a
+    // NAVIGATION by re-fetching `?raw=1`, which yields the page, not the export - so an
+    // export request would dead-end on an HTML shell delivered as a download. Hard-fail
+    // instead. (The passphrase prompt above is different: it reloads the SAME url on
+    // success, so a gated export URL genuinely unlocks through it.)
+    const isShareAsset = isShare && !!shareAssetPath;
+    const wantsLoaderShell =
+      !isRaw &&
+      !isFormatRaw &&
+      !rawExport &&
+      !req.user &&
+      !isShareAsset &&
+      (resolved.kind === 'bundle' ? !resolved.assetPath : true);
+    if (wantsLoaderShell) {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Content-Security-Policy', buildWrapperCsp(req));
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      // Static shell - intentionally carries no artifact data (title/id), so an anonymous
+      // viewer of a gated bundle learns nothing; the real title appears only once the
+      // authenticated ?raw=1 srcdoc renders.
+      return res.status(200).send(renderBundleLoaderShell());
+    }
+    return res.status(access.status).json({ error: access.error });
+  }
+
+  // #408: audit an authenticated view of a DOMAIN-gated artifact. Access is granted
+  // here, so bumpViewCount below records both the aggregate count and (for domain
+  // gates) the per-account audit row. Computed once so whichever view-serving branch
+  // runs records it exactly once (assets of gated bundles are inlined, so no
+  // sub-request double-counts). Fire-and-forget inside bumpViewCount.
+  const gateViewAudit =
+    gateArtifact.accessGate?.kind === 'domain'
+      ? { gateKind: 'domain' as const, sourceIp: getClientIp(req), viewerEmailDomain: access.viewerEmailDomain }
+      : undefined;
+
+  if (isShare) {
+    // No-sign-in links are unlisted capabilities: stop the token leaking to third
+    // parties via the Referer header on any outbound link the artifact author
+    // included. Set once here so every share response below (viewer page, asset,
+    // wrapper) inherits it. The matching X-Robots-Tag is already set above - a share
+    // link resolves through the token, never through `discoverable`, so it can never
+    // be searchIndexable.
+    res.setHeader('Referrer-Policy', 'no-referrer');
+  }
+
+  // Resolve `?export=` only AFTER the gate above, so an export can never be reachable
+  // on a path the viewer page itself isn't - it hands back the whole content, so it must
+  // sit behind exactly the same visibility/share/passphrase check. Reject anything we
+  // cannot answer honestly: an unknown format, a format with no faithful conversion for
+  // this kind (see exportFormatsFor), or the isolated origin, which serves the bare
+  // bundle and carries none of the app's affordances.
+  const exportFormat: PublishExportFormat | null = rawExport ? parseExportFormat(rawExport) : null;
+  if (rawExport && (!exportFormat || !supportsExport(artifact.source.kind, exportFormat) || isIsolated)) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  // Exports are always no-store, even for an open-public artifact - the same reasoning that
+  // made `?v=` a no-store cold path: if the shared cache does not key on the query string, a
+  // cached `?export=` response would be an ATTACHMENT served in place of the page. A
+  // user-initiated download is not a hot path, so there is nothing to trade away.
+  const exportCacheControl = 'private, no-store, must-revalidate';
+
+  // Whether a plain, credential-free navigation to this artifact re-authorizes - the
+  // condition for OFFERING an export link on a viewer surface. A `?export=` click is a
+  // fresh top-level request with no Authorization header, so anything that needs a Bearer
+  // would answer it with a 401 instead of a file; those owners export from the Published
+  // tab, which does send one. Cookies DO ride along, so a verified passphrase counts, and
+  // an open share token counts because possession IS the grant. A share link with a DOMAIN
+  // gate does NOT: that gate reads `req.user`, which a navigation cannot supply.
+  // Deliberately stricter than `canFrameArtifacts` below, which treats every share link as
+  // self-authorizing and has the same domain-gate gap for its `?a=` frames.
+  const exportSelfAuthorizes = isOpenPublic || passphraseVerified || (isShare && !artifact.accessGate);
+
+  // -- Reply / fabfile: render the snapshot body to a sanitized viewer page. --
+  if (artifact.source.kind === 'reply' || artifact.source.kind === 'fabfile') {
+    if (exportFormat) {
+      // Markdown is offered for replies only - `renderedBody` is the assistant's own
+      // markdown there, so the export is the source text, not a conversion of it. The
+      // HTML export is the viewer page rendered standalone (embedded artifacts inlined,
+      // app-origin chrome dropped) so the saved file stands on its own offline.
+      const body =
+        exportFormat === 'md'
+          ? buildMarkdownExport(
+              artifact.title || SHARED_FALLBACK_TITLE,
+              artifact.description,
+              artifact.renderedBody ?? ''
+            )
+          : renderViewerPage(artifact, { noindex: true, noReferrer: isShare, standalone: true });
+      bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
+      return sendExport(res, exportFormat, artifact.title, body, exportCacheControl);
+    }
+    // Reply/fabfile artifact sub-document (`?a={index}`): serve one embedded HTML/SVG artifact as a
+    // standalone SANDBOXED document for the viewer page's iframe. Author JS runs, but the
+    // response's `sandbox allow-scripts` CSP forces an opaque origin (NO allow-same-origin)
+    // even on a direct top-level navigation, so it can never read the app origin's token -
+    // the same isolation the bundle path relies on. The viewer only emits `?a` for html/svg
+    // artifacts, so an out-of-range or non-embeddable index is a 404. The visibility gate already
+    // ran above, so this reads only content the caller is authorized for. Require a non-empty `a`
+    // so `?a=` doesn't coerce to index 0 (Number('') === 0); an empty value falls through to the
+    // normal page render instead.
+    if (typeof req.query.a === 'string' && req.query.a !== '') {
+      const idx = Number(req.query.a);
+      const { artifacts } = extractViewerArtifacts(artifact.renderedBody ?? '', artifact.source.kind);
+      const target = Number.isInteger(idx) && idx >= 0 ? artifacts[idx] : undefined;
+      if (!target || (target.type !== 'html' && target.type !== 'svg')) {
+        return res.status(404).json({ error: 'Not found' });
+      }
+      const docOrigin = resolveDocOrigin(req.headers.host, req.headers['x-forwarded-proto']);
+      const { srcdoc } = renderSandboxedBundle({
+        indexHtml: target.content,
+        urlBase: '',
+        origin: docOrigin,
+        visibility: effectiveVisibility,
+        // Self-contained artifact (no manifest assets): inline mode with an empty asset
+        // map only absolutizes blessed-lib scripts and drops any stray relative refs.
+        assetMode: 'inline',
+      });
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Content-Security-Policy', buildReplyArtifactCsp(req));
+      res.setHeader('Cache-Control', isShare ? SHARE_CACHE_CONTROL : cacheControlFor(effectiveVisibility));
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      // No bumpViewCount here: this sub-document is a sub-resource of the reply page (the iframe),
+      // which already counted the view; counting again would double every framed-artifact view.
+      return res.status(200).send(srcdoc);
+    }
+    if (isFormatRaw) {
+      if (!isOpenPublic) {
+        return res.status(404).json({ error: 'Not found' });
+      }
+      return sendRawArtifact(
+        res,
+        artifact,
+        artifact.renderedBody ?? '',
+        req.user as { id?: string } | undefined,
+        req.headers['user-agent']
+      );
+    }
+    // Base URL this page was reached at, so the embedded-artifact iframes point back to the
+    // same route (`/p/r|f/{publicId}` or the `/a/{token}` share) carrying the same authorization.
+    // Both the reply and fabfile branches of renderViewerPage consume selfPath + canFrameArtifacts
+    // to frame embedded html/svg artifacts (fabfile keeps its non-artifact text as escaped <pre>).
+    const sourcePrefix = artifact.source.kind === 'reply' ? 'r' : 'f';
+    const selfPath = isShare ? `/a/${encodeURIComponent(shareToken)}` : `/p/${sourcePrefix}/${artifact.publicId}`;
+    // Whether an embedded artifact can be framed via its `?a=` sub-document. The artifact iframe
+    // is a fresh same-origin request that carries only what the browser attaches automatically:
+    // an open-public page has no gate, a `/a/{token}` share re-authorizes by the token IN the
+    // path, and a passphrase gate re-verifies from the same-origin proof COOKIE. A Bearer-gated
+    // reply (org/domain visibility) authorizes off `req.user` from the Authorization header, which
+    // an iframe navigation cannot send - so it would dead-end at a nested loader shell. For those
+    // we render the placeholder card instead of a frame that can never load.
+    const canFrameArtifacts = isOpenPublic || isShare || passphraseVerified;
+    const exportFormats = exportSelfAuthorizes ? exportFormatsFor(artifact.source.kind) : [];
+    const page = renderViewerPage(artifact, {
+      noindex: !searchIndexable,
+      noReferrer: isShare,
+      selfPath,
+      canFrameArtifacts,
+      exportFormats,
+    });
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    // The page itself stays script-free (`script-src 'none'` neutralizes any markup that
+    // slipped past the sanitizer); embedded artifacts run only inside their own sandboxed
+    // `?a=` iframe, permitted via `frame-src`/`child-src 'self'` (child-src for older UAs).
+    res.setHeader(
+      'Content-Security-Policy',
+      [
+        "default-src 'none'",
+        "script-src 'none'",
+        "style-src 'unsafe-inline'",
+        withAppHost("img-src 'self' data:"),
+        "font-src 'self' https://fonts.gstatic.com",
+        "frame-src 'self'",
+        "child-src 'self'",
+        "base-uri 'self'",
+        "form-action 'none'",
+        "frame-ancestors 'self'",
+      ].join('; ')
+    );
+    res.setHeader('Cache-Control', isShare ? SHARE_CACHE_CONTROL : cacheControlFor(effectiveVisibility));
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
+    return res.status(200).send(page);
+  }
+
+  // ?format=raw is a public-only surface; reject before touching storage on gated bundles
+  // so a private artifact can never be pulled from S3 by a raw request (defense in depth on
+  // top of the format=raw text-extraction gate later).
+  if (isFormatRaw && !isOpenPublic) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+
+  // -- Bundle: serve HTML (asset rewrite + inline-script strip) or stream an asset. --
+  const storage = getPublishedArtifactsStorage();
+
+  // Asset sub-path for a bundle, whether reached via `/p/...` or a `/a/<token>/...`
+  // share link. Share bundles use the <base> asset model, so their assets re-enter
+  // HERE carrying the token and are authorized by the same checkShareGrant above.
+  const assetPath = resolved.kind === 'bundle' ? resolved.assetPath : shareAssetPath;
+  if (assetPath) {
+    const fileEntry = artifact.manifest.find(f => f.path === assetPath);
+    if (!fileEntry) {
+      return res.status(404).json({ error: 'Asset not in artifact manifest' });
+    }
+    try {
+      const buf = await storage.download(`${artifact.storageKeyPrefix}${assetPath}`);
+      res.setHeader('Content-Type', fileEntry.mimeType);
+      res.setHeader('Content-Length', String(buf.length));
+      res.setHeader('Cache-Control', isShare ? SHARE_CACHE_CONTROL : cacheControlFor(effectiveVisibility));
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      // SECURITY: assets are served same-origin and validateBundle only vets
+      // index.html - so an attacker could ship a second `evil.html` or `evil.svg`
+      // with inline scripts. Enforce `script-src 'none'` on EVERY asset so HTML/SVG
+      // assets can never execute JS on the app origin (css/img/fonts unaffected).
+      res.setHeader('Content-Security-Policy', ASSET_CSP);
+      return res.status(200).send(buf);
+    } catch {
+      return res.status(404).json({ error: 'Asset not found' });
+    }
+  }
+
+  // Version selection (?v={sha}): serve a historical index from the archive when
+  // the requested sha is a KNOWN version and not the current one. The sha must be
+  // in the artifact's version list (prevents arbitrary archive reads). Only
+  // index.html is versioned - assets resolve against the current manifest.
+  // "Current" sha = the index anchor, or the latest history entry if the anchor is
+  // missing (defensive - older rows may lack sha256Index). Comparing against this
+  // prevents misclassifying ?v=<latest> as older and reading a non-existent
+  // versions/<latest>.html (latest bytes live at index.html).
+  const versionsList = artifact.versions ?? [];
+  const currentSha = artifact.sha256Index ?? versionsList[versionsList.length - 1]?.sha256Index;
+  const requestedVersion = typeof req.query.v === 'string' ? req.query.v : '';
+  const isKnownOlderVersion =
+    !!requestedVersion && requestedVersion !== currentSha && versionsList.some(v => v.sha256Index === requestedVersion);
+  const indexKey = isKnownOlderVersion
+    ? `${artifact.storageKeyPrefix}versions/${requestedVersion}.html`
+    : `${artifact.storageKeyPrefix}index.html`;
+
+  let indexHtml: string;
+  try {
+    indexHtml = (await storage.download(indexKey)).toString('utf-8');
+  } catch {
+    return res.status(isKnownOlderVersion ? 404 : 500).json({
+      error: isKnownOlderVersion ? 'Version not found' : 'Artifact index.html missing from storage',
+    });
+  }
+
+  if (isFormatRaw) {
+    if (!isOpenPublic) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    return sendRawArtifact(
+      res,
+      artifact,
+      stripToText(indexHtml, 50000),
+      req.user as { id?: string } | undefined,
+      req.headers['user-agent']
+    );
+  }
+
+  // Approach B: on the per-artifact isolated origin the bundle is served at a
+  // DISTINCT path (`/uc/...`) so the CDN can't collide the app-origin wrapper with the
+  // isolated bundle even on a cache policy that doesn't key on Host. Assets resolve
+  // against this same base, so they stay on the isolated origin too.
+  const canonicalPath = buildPublishUrlPath(artifact.tier, artifact.scopeId, artifact.slug); // /p/{prefix}/{scope}/{slug}
+  const isolatedPath = canonicalPath.replace(/^\/p\b/, '/uc');
+  // Share bundles resolve their <base>-relative assets back through `/a/<token>/...`
+  // (self-authorized by the token); /p uses the canonical path (or isolated /uc path).
+  const shareBase = isShare ? `/a/${encodeURIComponent(shareToken)}` : '';
+  const urlBase = isShare ? shareBase : isIsolated ? isolatedPath : canonicalPath;
+
+  // Document origin the sandboxed bundle resolves absolute URLs against (blessed libs, the
+  // public-tier <base>). resolveDocOrigin treats Host / X-Forwarded-Proto as untrusted: it
+  // format-validates AND allowlists the host, so a crafted `Host: attacker.com`
+  // can't mint a CSP whitelisting attacker.com - it falls back to the app host.
+  const docOrigin = resolveDocOrigin(req.headers.host, req.headers['x-forwarded-proto']);
+
+  // Bundle export (`?export=html` - the only faithful format for a bundle; the guard above
+  // already rejected `md`). Assets are inlined REGARDLESS of visibility, unlike the served
+  // view: a downloaded file has no route to fetch them back through, so the export is only
+  // faithful if it is self-contained. Blessed-library <script> refs still absolutize to the
+  // app host, so a saved bundle that used one needs network to render fully.
+  if (exportFormat) {
+    const collected = await collectInlineAssets({
+      manifest: artifact.manifest,
+      load: path => storage.download(`${artifact.storageKeyPrefix}${path}`),
+    });
+    const skipped = [...collected.oversized, ...collected.failed];
+    if (skipped.length) {
+      // No silent truncation - the download is missing bytes, so say which.
+      console.warn(`[publish] export ${artifact.publicId} dropped ${skipped.length} asset(s):`, skipped);
+      res.setHeader('X-Publish-Dropped-Assets', String(skipped.length));
+      res.setHeader('X-Publish-Dropped-Asset-Names', truncateHeaderList(skipped, 1024));
+    }
+    const { srcdoc: exportHtml } = renderSandboxedBundle({
+      indexHtml,
+      urlBase: '',
+      origin: docOrigin,
+      visibility: effectiveVisibility,
+      assetMode: 'inline',
+      assets: collected.assets,
+    });
+    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
+    return sendExport(res, exportFormat, artifact.title, exportHtml, exportCacheControl);
+  }
+
+  // Gated (non-public) bundles: the opaque-origin iframe can't fetch assets through the
+  // gated route (uncredentialed -> 401/403), so pre-fetch them HERE (post-gate, credentialed)
+  // and inline them. Public bundles load assets back through this route via an injected <base>.
+  // Share links use the <base> asset model (assets self-authorize via the token), so
+  // they never inline - only gated `/p` bundles pre-fetch + inline their assets here.
+  let inlineAssets: Map<string, SandboxAsset> | undefined;
+  let droppedAssets: string[] = [];
+  if (isShare ? !!artifact.accessGate : !isOpenPublic) {
+    const collected = await collectInlineAssets({
+      manifest: artifact.manifest,
+      load: path => storage.download(`${artifact.storageKeyPrefix}${path}`),
+    });
+    inlineAssets = collected.assets;
+    droppedAssets = [...collected.oversized, ...collected.failed];
+  }
+
+  const { srcdoc: baseSrcdoc } = renderSandboxedBundle({
+    indexHtml,
+    urlBase,
+    origin: docOrigin,
+    visibility: effectiveVisibility,
+    assetMode: isShare ? (artifact.accessGate ? 'inline' : 'base') : undefined,
+    assets: inlineAssets,
+    // Same-page fragment links must scroll in place, not re-navigate the sandboxed
+    // iframe (an opaque-origin navigation drops the SameSite proof cookie and
+    // dead-ends a gated bundle at its prompt shell). Both the canonical /p path and
+    // the path this render is reached at (share token / isolated alias) count.
+    pagePaths: [urlBase, canonicalPath],
+  });
+
+  // Comment-pin bridge: when comments are enabled, inject a tiny trusted script INTO the
+  // sandboxed bundle so pin-drop works over the iframe. Clicks over the iframe are consumed
+  // by its own document, never reaching the parent overlay - so the bridge captures the
+  // pin-drop click inside the iframe and postMessages the coords up to the wrapper widget,
+  // and renders existing pin markers inside the bundle doc (scroll-correct). It exchanges
+  // only non-sensitive UI data with the parent; it cannot read the app token (opaque origin).
+  const commentsEnabled = !!artifact.commentPolicy && artifact.commentPolicy !== 'none';
+  const srcdoc = commentsEnabled ? injectPinBridge(baseSrcdoc) : baseSrcdoc;
+
+  if (droppedAssets.length) {
+    // No silent truncation - surface skipped assets to operators and reviewers, both the
+    // count and the names (truncated to keep the header well under typical 8KB limits).
+    console.warn(
+      `[publish] bundle ${artifact.publicId} dropped ${droppedAssets.length} oversized/failed asset(s):`,
+      droppedAssets
+    );
+    res.setHeader('X-Publish-Dropped-Assets', String(droppedAssets.length));
+    res.setHeader('X-Publish-Dropped-Asset-Names', truncateHeaderList(droppedAssets, 1024));
+  }
+
+  // Raw mode: return ONLY the inner srcdoc for the loader shell to inject. Served as
+  // inert text/plain + nosniff so a DIRECT navigation to `?raw=1` renders source text and
+  // cannot execute on the app origin; `sandbox` in the CSP forces an opaque origin with no
+  // script execution were a UA to ignore nosniff. fetch().text() is unaffected by either.
+  if (isRaw) {
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
+    return res.status(200).send(srcdoc);
+  }
+
+  // `?v={sha}` historical views are a cold path served `no-store` (removes the
+  // dependency on whether the CDN keys on the `v` query string).
+  const bundleCacheControl = isShare
+    ? SHARE_CACHE_CONTROL
+    : isKnownOlderVersion
+      ? 'private, no-store'
+      : cacheControlFor(effectiveVisibility);
+
+  // The per-artifact isolated origin (Approach B), e.g. `abc123.usercontent.app.<domain>`.
+  // Empty when SERVER_DOMAIN is unset (Approach B disabled) OR the artifact is non-public:
+  // GATED bundles keep the same-origin sandboxed-srcdoc model (Approach A) because a
+  // cross-origin iframe can't carry the viewer's app credentials to load a gated bundle
+  // (and the app-origin handler is where the gated assets get inlined post-auth).
+  // Share links stay on the same-origin sandboxed-srcdoc model (Approach A): never the
+  // per-artifact isolated origin, so the token can't leak into a `*.usercontent` Host.
+  const artifactHost = !isShare && isOpenPublic ? usercontentHostFor(artifact.publicId) : '';
+  // Embed allowlist applies ONLY to an open-public artifact (a gated page is
+  // no-store and never framed). Appended to frame-ancestors on both the wrapper
+  // and, for the ancestor chain, the isolated bundle.
+  const embedGrants = isOpenPublic ? (artifact.embedOrigins ?? []) : [];
+  // Chrome-less render for an allowlisted embed (`?embed=1`): drop the version bar
+  // and comment overlay so the widget is just the content (the canonical link back
+  // to the real page still ships via shareMeta). Open-public, non-share only - the
+  // query flag can't relax any gate.
+  const isEmbed = !isShare && isOpenPublic && req.query.embed === '1';
+
+  // -- Approach B: serve the bundle AS the page on its isolated origin. --
+  // Reached via the `/uc/*` rewrite on `{publicId}.usercontent.app.<domain>`. The bundle runs
+  // as a TRUE separate origin (its own SOP partition) - author inline JS executes, but it
+  // cannot read the APP origin's localStorage/token (different origin). We validate the
+  // host's publicId matches this artifact so one artifact's subdomain can't serve another's.
+  if (isIsolated) {
+    if (!artifactHost || publicIdFromUsercontentHost(req.headers.host) !== artifact.publicId) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Content-Security-Policy', buildIsolatedBundleCsp(req, embedGrants));
+    res.setHeader('Cache-Control', bundleCacheControl);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    // No bumpViewCount here: the isolated bundle is loaded as a sub-resource of the
+    // app-origin wrapper, which already counts the view. Counting here too would
+    // double every view; a rare direct hit on the /uc URL goes uncounted (acceptable
+    // undercount vs systematic 2x). View count is best-effort/non-authoritative anyway.
+    return res.status(200).send(srcdoc);
+  }
+
+  // -- App origin: the trusted WRAPPER page (comment overlay reads the token here). --
+  // Approach B -> embed the bundle via a CROSS-ORIGIN `<iframe src={isolatedSrc}>` (the
+  // isolated origin provides the isolation; `allow-same-origin` there is safe because it
+  // resolves to the usercontent origin, NOT the app origin -> no ATO). Gated on
+  // isAppWrapperHost: only stages that PROVISION the `*.usercontent` alias serve the app at
+  // `app.<domain>`, so if this wrapper is served from any other host (e.g. shared-dev's
+  // `files.dev.<domain>`, which has no usercontent alias) we fall back to the same-origin
+  // `sandbox="allow-scripts"` srcdoc model rather than point an iframe at an unprovisioned
+  // (403-ing) host. SERVER_DOMAIN unset (local/dev/forks) -> artifactHost empty -> same fallback.
+  const useIsolatedEmbed = !!artifactHost && isAppWrapperHost(req.headers.host);
+  const isolatedSrc = useIsolatedEmbed
+    ? `https://${artifactHost}${isolatedPath}${requestedVersion ? `?v=${encodeURIComponent(requestedVersion)}` : ''}`
+    : '';
+  // OPEN-public shares emit full server-rendered meta + a noscript body + a link to
+  // the raw plain-text variant so unfurlers, LLM URL fetchers, and non-JS crawlers see
+  // more than the JS shell. Gated shares (access gate OR non-public) deliberately do
+  // not - the pre-auth shells carry no artifact data, and even post-auth renders skip
+  // the SEO surface so a gate regression can never leak meta to crawlers.
+  //
+  // Intentionally keyed on isOpenPublic and NOT on `discoverable`: unfurling and search
+  // indexing are different things. Pasting a link into Slack should still produce a
+  // title card for a non-discoverable artifact - unfurlers read OG tags and ignore
+  // robots directives, while search crawlers honor the noindex above. Owners who opt
+  // out of discovery are opting out of the index, not out of link previews.
+  const shareMeta =
+    !isShare && isOpenPublic
+      ? prepareShareMeta({
+          title: artifact.title || SHARED_FALLBACK_TITLE,
+          description: artifact.description,
+          bodyForExcerpt: indexHtml,
+          canonicalUrl: `${docOrigin}${canonicalPath}`,
+          rawUrl: `${docOrigin}${canonicalPath}?format=raw`,
+          siteName: process.env.APP_NAME || '',
+        })
+      : null;
+  // Lead-gen targets, both runtime-derived (no hardcoded brand host): the marketing
+  // site with UTM attribution when configured, else a branded fallback. The embed
+  // pill falls back to the artifact's canonical page; the own-tab bar falls back to
+  // the app root (the viewer is already on the canonical page). The bar only renders
+  // for an own-tab open-public artifact.
+  const marketing = (medium: string) =>
+    WEBSITE_URL
+      ? `${WEBSITE_URL.replace(/\/+$/, '')}/?utm_source=shared-artifact&utm_medium=${medium}&utm_campaign=publish`
+      : '';
+  const pillHref = isEmbed ? marketing('embed-badge') || `${docOrigin}${canonicalPath}` : '';
+  const barHref = !isEmbed && isOpenPublic ? marketing('share-bar') || `${docOrigin}/` : '';
+  // "Save as HTML" on the wrapper - see `exportSelfAuthorizes`. Dropped in embed mode,
+  // which is chrome-less by design.
+  const exportHtmlHref =
+    !isEmbed && exportSelfAuthorizes ? exportHref(isShare ? shareBase : canonicalPath, 'html') : '';
+  const wrapperPage = renderBundleWrapper(
+    artifact,
+    srcdoc,
+    requestedVersion,
+    isolatedSrc,
+    shareMeta,
+    !searchIndexable,
+    isShare,
+    isEmbed,
+    pillHref,
+    barHref,
+    pillHref || barHref ? getBrandName() : '',
+    exportHtmlHref
+  );
+
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Content-Security-Policy', buildWrapperCsp(req, isolatedSrc ? artifactHost : '', embedGrants));
+  res.setHeader('Cache-Control', bundleCacheControl);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
+  return res.status(200).send(wrapperPage);
+});
+
+// Lead-gen livery palette. Reuses the SAME env knobs as the baked share footer
+// (buildShareFooterHtml), so a fork rebrands the footer and the wrapper pill/bar
+// with one set of vars; defaults are the project palette.
+const LIVERY_NAVY = process.env.NEXT_PUBLIC_SHARE_BRAND_NAVY || '#0d1830';
+const LIVERY_ORANGE = process.env.NEXT_PUBLIC_SHARE_BRAND_ORANGE || '#F26C1F';
+// Whether to ship the project's OWN brand artwork (the bicycle-spoke wordmark) and
+// registered mark on the livery. Same opt-in as the baked share footer: a fork does
+// NOT ship the upstream logo, and its brand name is not the registered mark, so both
+// are gated on this flag (fork -> text wordmark, no (R)).
+const LIVERY_BUILTIN_LOGO = process.env.NEXT_PUBLIC_SHARE_BUILTIN_LOGO === 'true';
+const LIVERY_REG = LIVERY_BUILTIN_LOGO ? '<span class="b4m-reg">&reg;</span>' : '';
+
+/** Brand mark for the navy bar: the inlined spoke-wheel logo (built-in) or a text
+ *  wordmark of the brand name (fork). The logo's white artwork suits the navy bar. */
+function liveryBarMark(brandName: string): string {
+  return LIVERY_BUILTIN_LOGO
+    ? `<span class="b4m-bar-logo">${B4M_HORIZONTAL_LOGO_SVG}</span>`
+    : `<strong>${escapeHtml(brandName)}</strong>`;
+}
+
+/**
+ * Minimal trusted wrapper page hosting the bundle in an iframe. Its only script is the
+ * first-party widget (`/api/publish/widget`), which binds the comment overlay when the
+ * artifact has comments and, on every non-embed wrapper, the "Save as PDF" button - the
+ * button asks the frame to print ITSELF, because printing the wrapper captures only the
+ * frame's visible first screen. Two isolation modes:
+ *   - Approach B (`isolatedSrc` set): a CROSS-ORIGIN `<iframe src={isolatedSrc}>` to
+ *     `{publicId}.usercontent.app.<domain>`. The separate origin is the isolation boundary;
+ *     `allow-same-origin` is SAFE here (resolves to the usercontent origin, not the app).
+ *   - Fallback (no isolatedSrc - SERVER_DOMAIN unset): the same-origin sandboxed
+ *     `srcdoc` model - `VIEWER_SANDBOX` WITHOUT `allow-same-origin` (opaque origin;
+ *     NEVER add allow-same-origin here - it would reclaim the app origin -> ATO).
+ */
+function renderBundleWrapper(
+  artifact: PublishedArtifactLean,
+  srcdoc: string,
+  requestedVersion: string,
+  isolatedSrc: string,
+  shareMeta: { metaTags: string; noscriptBody: string; alternateLink: string } | null,
+  noindex: boolean,
+  /** Share links only - suppresses Referer so the capability token can't leak outbound. */
+  noReferrer: boolean,
+  embed = false,
+  pillHref = '',
+  barHref = '',
+  brandName = '',
+  /** `?export=html` href for the "Save as HTML" affordance; '' hides it. */
+  exportHtmlHref = ''
+): string {
+  const titleHtml = escapeHtml(artifact.title || SHARED_FALLBACK_TITLE);
+  // HTML attribute escape: inside a double-quoted attribute value only `&` and `"` are
+  // unsafe - `<`/`>` are literal data here. Do NOT add them: the srcdoc already contains
+  // escaped entities (e.g. `&lt;`), and re-escaping `&` after adding `<`/`>` would corrupt
+  // the framed document. Order matters - `&` first so it doesn't double-escape the `&quot;`.
+  const srcdocAttr = srcdoc.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  // Approach B: cross-origin src. `allow-same-origin` is REQUIRED (and safe) here - it keeps
+  // the framed doc on its usercontent origin (isolated from the app by SOP), which is what
+  // lets the bundle load its own `<base>`-relative assets same-origin. Still NO allow-forms
+  // (the isolated CSP sets `form-action 'none'`, so it'd be dead capability).
+  // Fallback: opaque-origin srcdoc (no allow-same-origin - that would reclaim the app origin).
+  const iframeTag = isolatedSrc
+    ? `<iframe sandbox="${VIEWER_SANDBOX} allow-same-origin" title="${titleHtml}" src="${escapeHtml(
+        isolatedSrc
+      )}"></iframe>`
+    : `<iframe sandbox="${VIEWER_SANDBOX}" title="${titleHtml}" srcdoc="${srcdocAttr}"></iframe>`;
+  // Hash bridge (srcdoc mode only): forwards the page fragment into the sandboxed
+  // bundle (initial deep link + hashchange) and mirrors in-bundle fragment jumps
+  // back into the address bar. Approach B's wrapper CSP drops 'unsafe-inline', so
+  // isolated embeds skip it - in-bundle # clicks still scroll via the injected
+  // helper (fragmentNav.ts); only address-bar deep links stay a known gap there.
+  const hashBridge = isolatedSrc ? '' : `\n<script>${HASH_BRIDGE_JS}</script>`;
+  // The comment overlay lives in this trusted wrapper (app origin), floating over the
+  // sandboxed iframe - never inside it (the opaque-origin bundle can't read the token).
+  const overlay = buildAnnotateOverlayHtml(artifact);
+  // The one script on the wrapper, and the only one the Approach-B wrapper CSP admits.
+  // Emitted for every non-embed render, not just commented ones: it also binds "Save as
+  // PDF" (the mount node above stays conditional, and the widget no-ops without it).
+  const widgetScript = embed ? '' : `\n<script src="/api/publish/widget" defer></script>`;
+  // Abuse-report affordance: a plain anchor floats over the iframe. It is a
+  // top-level navigation (not blocked by the wrapper's script-src/form-action CSP) to
+  // the app-origin report flow. The bundle in the opaque-origin iframe can't reach it.
+  const reportHref = `/report/${encodeURIComponent(artifact.publicId)}`;
+  const versionBar = buildVersionSwitcherHtml(artifact, requestedVersion);
+  const metaHead = shareMeta ? `\n${shareMeta.metaTags}\n${shareMeta.alternateLink}` : '';
+  const noindexHead = `${noindex ? `\n${NOINDEX_META}` : ''}${noReferrer ? `\n${NO_REFERRER_META}` : ''}`;
+  const noscriptBody = shareMeta ? `\n${shareMeta.noscriptBody}` : '';
+  // Embedded render drops the interactive chrome (version switcher + comment
+  // overlay) so the widget is just the content. The canonical link back to the
+  // real page is already emitted for open-public renders via shareMeta.
+  const chromeBody = embed ? '' : `\n${overlay}\n${versionBar}`;
+
+  // Lead-gen livery. The bundle's own "powered-by" footer is baked into the CONTENT
+  // and absent from externally-built bundles, so the wrapper carries brand itself:
+  //   - embed (chrome-less): a small floating "Built with {brand}" pill.
+  //   - own-tab open-public: a persistent bottom bar with a "Try {brand}" CTA
+  //     (Anthropic-style); the iframe is shortened so the bar covers nothing.
+  // Both are top-level links (CSP-safe, no JS); only "Save as PDF" alongside them needs
+  // the widget. barPresent also relocates the Report affordance INTO the bar and lifts
+  // the version switcher above it.
+  const brandBadge =
+    embed && pillHref && brandName
+      ? `\n<a class="b4m-brand" href="${escapeHtml(pillHref)}" rel="noopener" target="_top">Built with ${escapeHtml(
+          brandName
+        )}${LIVERY_REG}</a>`
+      : '';
+  const barPresent = !embed && !!barHref && !!brandName;
+  // Plain top-level `download` anchor - no JS, so it works under the tightened
+  // Approach-B wrapper CSP (script-src admits only the first-party widget).
+  const barExport = exportHtmlHref
+    ? `\n    <a class="b4m-bar-export" href="${escapeHtml(exportHtmlHref)}" download target="_top">Save as HTML</a>`
+    : '';
+  // "Save as PDF" prints the LIVE frame document via the widget, so unlike `?export=` it
+  // needs no re-authorization and rides along on every own-tab render. `hidden` until the
+  // widget binds it - a button that does nothing without JS is worse than no button.
+  const barPrint = `\n    <button class="b4m-bar-print" type="button" hidden>Save as PDF</button>`;
+  const bar = barPresent
+    ? `\n<div class="b4m-bar">
+  <span class="b4m-bar-l">Built with ${liveryBarMark(brandName)}${LIVERY_REG}</span>
+  <span class="b4m-bar-r">${barPrint}${barExport}
+    <a class="b4m-bar-report" href="${reportHref}" rel="nofollow" target="_top">Report</a>
+    <a class="b4m-bar-cta" href="${escapeHtml(
+      barHref
+    )}" target="_blank" rel="noopener noreferrer">Try ${escapeHtml(brandName)}${LIVERY_REG} &rarr;</a>
+  </span>
+</div>`
+    : '';
+  const floatingExport = exportHtmlHref
+    ? `<a class="b4m-export" href="${escapeHtml(exportHtmlHref)}" download target="_top">&#8681; HTML</a>`
+    : '';
+  const floatingPrint = embed ? '' : `<button class="b4m-print" type="button" hidden>&#8681; PDF</button>`;
+  const floatingReport = barPresent
+    ? ''
+    : `\n<div class="b4m-actions">${floatingPrint}${floatingExport}<a class="b4m-report" href="${reportHref}" rel="nofollow" target="_top">&#9873; Report</a></div>`;
+  const iframeHeight = barPresent ? 'calc(100vh - 52px)' : '100vh';
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">${noindexHead}
+<title>${titleHtml}</title>${metaHead}
+<style>html,body{margin:0;padding:0;height:100%}iframe{border:0;display:block;width:100%;height:${iframeHeight}}
+.b4m-actions{position:fixed;bottom:10px;right:10px;z-index:2147483647;display:flex;gap:8px}
+.b4m-report,.b4m-export,.b4m-print{font:500 11px/1 ui-sans-serif,system-ui,-apple-system,sans-serif;
+  color:#cbd5e1;background:rgba(13,24,48,.78);padding:5px 9px;border-radius:8px;text-decoration:none;backdrop-filter:blur(4px)}
+.b4m-print{border:0;cursor:pointer}
+.b4m-report:hover,.b4m-export:hover,.b4m-print:hover{color:#fff;background:rgba(13,24,48,.95)}
+.b4m-bar-print[hidden],.b4m-print[hidden]{display:none}
+.b4m-brand{position:fixed;bottom:10px;left:10px;z-index:2147483647;font:600 11px/1 ui-sans-serif,system-ui,-apple-system,sans-serif;
+  color:#fff;background:${LIVERY_ORANGE};padding:6px 11px;border-radius:8px;text-decoration:none;box-shadow:0 2px 10px rgba(0,0,0,.28)}
+.b4m-brand:hover{filter:brightness(1.07)}
+.b4m-bar{position:fixed;left:0;right:0;bottom:0;height:52px;box-sizing:border-box;z-index:2147483647;display:flex;
+  align-items:center;justify-content:space-between;gap:12px;padding:0 16px;background:${LIVERY_NAVY};color:#e2e8f0;
+  border-top:1px solid rgba(255,255,255,.12);font:600 13px/1 ui-sans-serif,system-ui,-apple-system,sans-serif}
+.b4m-bar strong{color:#fff}
+.b4m-bar-l{display:flex;align-items:center;gap:7px}
+.b4m-bar-logo{display:inline-flex;align-items:center}
+.b4m-bar-logo svg{height:22px;width:auto;display:block}
+.b4m-reg{font-size:.62em;vertical-align:super;font-weight:400;margin-left:1px}
+.b4m-bar-r{display:flex;align-items:center;gap:14px}
+.b4m-bar-report,.b4m-bar-export,.b4m-bar-print{color:#94a3b8;text-decoration:none;font-weight:500;font-size:12px}
+.b4m-bar-print{background:none;border:0;padding:0;cursor:pointer;font-family:inherit}
+.b4m-bar-report:hover,.b4m-bar-export:hover,.b4m-bar-print:hover{color:#cbd5e1}
+.b4m-bar-cta{padding:8px 14px;border-radius:9px;background:${LIVERY_ORANGE};color:#fff;font-weight:700;text-decoration:none;white-space:nowrap}
+.b4m-bar-cta:hover{filter:brightness(1.07)}
+.b4m-ver{position:fixed;bottom:${barPresent ? '62px' : '10px'};left:10px;z-index:2147483647;display:flex;align-items:center;gap:8px;
+  font:500 11px/1 ui-sans-serif,system-ui,-apple-system,sans-serif;color:#cbd5e1;background:rgba(13,24,48,.78);
+  padding:5px 9px;border-radius:8px;backdrop-filter:blur(4px)}
+.b4m-ver a{color:#8ab4ff;text-decoration:none;font-weight:600}
+.b4m-ver .b4m-vd{opacity:.4}</style>
+</head>
+<body>
+${iframeTag}${hashBridge}${chromeBody}${brandBadge}${floatingReport}${bar}${widgetScript}
+${noscriptBody}
+</body>
+</html>`;
+}
+
+/**
+ * Version switcher (shown only when >1 version). Plain top-level-navigation
+ * anchors to `?v={sha}` (latest drops the param) - no script, matching the
+ * report affordance. Only index.html is versioned; assets stay current.
+ */
+function buildVersionSwitcherHtml(artifact: PublishedArtifactLean, requestedVersion: string): string {
+  // Dedup by sha at read time (keep first occurrence / order). The write-side
+  // dedup isn't concurrency-safe - two concurrent finalizes (finalize takes no
+  // revise lock) could push the same sha twice - so collapsing here keeps the
+  // ordinal math and the prev/next/latest links correct regardless.
+  const seen = new Set<string>();
+  const versions = (artifact.versions ?? []).filter(v => {
+    if (seen.has(v.sha256Index)) return false;
+    seen.add(v.sha256Index);
+    return true;
+  });
+  if (versions.length < 2) return '';
+  const latestSha = versions[versions.length - 1].sha256Index;
+  const currentSha = requestedVersion || artifact.sha256Index || latestSha;
+  const idxRaw = versions.findIndex(v => v.sha256Index === currentSha);
+  const idx = idxRaw === -1 ? versions.length - 1 : idxRaw;
+  const base = buildPublishUrlPath(artifact.tier, artifact.scopeId, artifact.slug);
+  const hrefFor = (sha: string) => escapeHtml(sha === latestSha ? base : `${base}?v=${encodeURIComponent(sha)}`);
+  const link = (sha: string | undefined, label: string) =>
+    sha ? `<a target="_top" href="${hrefFor(sha)}">${label}</a>` : `<span class="b4m-vd">${label}</span>`;
+  const prev = idx > 0 ? versions[idx - 1].sha256Index : undefined;
+  const next = idx < versions.length - 1 ? versions[idx + 1].sha256Index : undefined;
+  const latestTag = idx === versions.length - 1 ? ' (latest)' : '';
+  return (
+    `<div class="b4m-ver">` +
+    link(prev, '◀') +
+    `<span>v${idx + 1} of ${versions.length}${latestTag}</span>` +
+    link(next, '▶') +
+    (latestTag ? '' : ` ${link(latestSha, 'latest')}`) +
+    `</div>`
+  );
+}
+
+/**
+ * CSP for the bundle wrapper AND the public loader shell. A `srcdoc` iframe INHERITS the
+ * embedder's CSP (HTML spec: about:srcdoc documents inherit the parent policy and can only
+ * further restrict it via their own <meta>), so this single header must permit what the
+ * BUNDLE needs (inline scripts + the blessed libs + app-origin/data: assets + the public-tier
+ * <base>), not just the wrapper. That is safe: the wrapper/shell are fully server-generated
+ * with no injection vector, and the opaque sandbox origin - not this CSP - is the ATO boundary.
+ * The values derive only from the (allowlisted) Host/proto headers - no credentials - so the
+ * shell (returned pre-gate for a no-credential navigation) can reuse the same policy.
+ */
+/**
+ * CSP for the bundle served on its ISOLATED per-artifact origin (Approach B). Author inline
+ * JS is ALLOWED here - the isolation boundary is the separate origin (its own SOP partition,
+ * no access to the app token), NOT script-stripping. `'self'` is the usercontent origin, so
+ * the bundle's own assets + inline scripts run; blessed libs load from the app host. connect-src
+ * is restricted to 'self' (the bundle has no app credentials, but we still bound beaconing).
+ * frame-ancestors permits ONLY the exact app host that renders the wrapper - `app.<domain>`
+ * (PUBLISH_HOST). It intentionally uses NO wildcard: the isolated origins are
+ * nested under the app host (`*.usercontent.app.<domain>`), so a `*.app.<domain>` source would
+ * SUFFIX-MATCH every bundle host (CSP host wildcards match any subdomain depth), re-permitting
+ * bundle-on-bundle clickjacking. An exact host can't match a bundle origin, so one published
+ * bundle can never frame another. If a deployment ever serves the wrapper from additional
+ * hosts, enumerate them here explicitly rather than reintroducing a wildcard.
+ */
+/**
+ * frame-ancestors suffix for an open-public artifact's embed allowlist. Each
+ * entry is already a normalized exact https origin (validateEmbedOrigins), never
+ * a wildcard, so appending them preserves the no-wildcard property that keeps one
+ * bundle from framing another. Empty string when there are no grants.
+ */
+function embedGrantsSuffix(embedOrigins: string[]): string {
+  return embedOrigins.length ? ` ${embedOrigins.join(' ')}` : '';
+}
+
+function buildIsolatedBundleCsp(req: Request, embedOrigins: string[] = []): string {
+  const appHost = PUBLISH_HOST ? `https://${PUBLISH_HOST}` : '';
+  const appHostSrc = appHost ? ` ${appHost}` : '';
+  const blessedScriptSrc = buildBundleScriptSrc(req.headers.host, req.headers['x-forwarded-proto']);
+  // frame-ancestors is evaluated against EVERY ancestor in the chain, not just the
+  // direct parent. When an external site embeds the wrapper, the embedder is an
+  // ancestor of THIS isolated bundle too, so its origin must be listed here as well
+  // as on the wrapper - otherwise the browser blocks the nested bundle frame.
+  const grants = embedGrantsSuffix(embedOrigins);
+  return [
+    "default-src 'none'",
+    `script-src 'unsafe-inline' 'self' ${blessedScriptSrc}`,
+    `style-src 'unsafe-inline' 'self'${appHostSrc} https://fonts.googleapis.com`,
+    `img-src 'self' data:${appHostSrc}`,
+    `media-src 'self' data:${appHostSrc}`,
+    `font-src 'self' data:${appHostSrc} https://fonts.gstatic.com`,
+    "connect-src 'self'",
+    "base-uri 'self'",
+    "form-action 'none'",
+    appHost ? `frame-ancestors ${appHost}${grants}` : `frame-ancestors 'self'${grants}`,
+  ].join('; ');
+}
+
+function buildWrapperCsp(req: Request, artifactHost?: string, embedOrigins: string[] = []): string {
+  const docOrigin = resolveDocOrigin(req.headers.host, req.headers['x-forwarded-proto']);
+  // Approach B: the wrapper embeds the bundle via a cross-origin iframe to the artifact's
+  // isolated host, so frame-src must permit it. Only the exact per-artifact host is added.
+  const frameSrc = artifactHost ? `frame-src 'self' https://${artifactHost}` : "frame-src 'self'";
+  // App host derived from PUBLISH_HOST (SERVER_DOMAIN, no brand fallback). Empty when
+  // unconfigured; `appHostSrc` then contributes nothing rather than a bare `https://` token.
+  const appHost = PUBLISH_HOST ? `https://${PUBLISH_HOST}` : '';
+  const appHostSrc = appHost ? ` ${appHost}` : '';
+  // blessed libs at both the document origin and the canonical app host.
+  const blessedScriptSrc = buildBundleScriptSrc(req.headers.host, req.headers['x-forwarded-proto']);
+  // The trusted first-party widget (comment overlay + the Save as PDF button) loads from
+  // /api/publish/widget on the app origin (and doc origin for preview/staging hosts).
+  // Allowlisted explicitly - it runs in the wrapper (parent), never the sandboxed bundle.
+  // The app-host variant is added only when PUBLISH_HOST is configured.
+  const widgetSrc = `${docOrigin}/api/publish/widget${appHost ? ` ${appHost}/api/publish/widget` : ''}`;
+  // script-src: in Approach B (artifactHost set) the bundle runs on its OWN cross-origin
+  // iframe, so the wrapper carries NO inline scripts and NO bundle libs - tighten to just the
+  // external widget (drop 'unsafe-inline' + blessed libs -> smaller XSS blast radius). In the
+  // srcdoc fallback (and the loader shell, which passes no artifactHost) the bundle inherits
+  // this CSP, so it must still permit the bundle's inline scripts + blessed libs.
+  const scriptSrc = artifactHost ? widgetSrc : `'unsafe-inline' ${blessedScriptSrc} ${widgetSrc}`;
+  return [
+    "default-src 'none'",
+    frameSrc,
+    `script-src ${scriptSrc}`,
+    `style-src 'unsafe-inline' ${docOrigin}${appHostSrc} https://fonts.googleapis.com`,
+    `img-src data: ${docOrigin}${appHostSrc}`,
+    `media-src data: ${docOrigin}${appHostSrc}`,
+    `font-src data: ${docOrigin}${appHostSrc} https://fonts.gstatic.com`,
+    `connect-src ${docOrigin}${appHostSrc}`,
+    `base-uri ${docOrigin}${appHostSrc}`,
+    "form-action 'none'",
+    // App host derived from PUBLISH_HOST; 'self' alone when unconfigured. Embed
+    // grants (open-public only) are appended so an allowlisted external site can
+    // frame the wrapper - the isolated bundle CSP lists them too (ancestor chain).
+    PUBLISH_HOST
+      ? `frame-ancestors 'self' ${appHost}${embedGrantsSuffix(embedOrigins)}`
+      : `frame-ancestors 'self'${embedGrantsSuffix(embedOrigins)}`,
+  ].join('; ');
+}
+
+/**
+ * CSP for a reply's embedded-artifact sub-document (`/p/r/{publicId}?a={i}`). Author inline JS
+ * is ALLOWED here (an HTML/SVG artifact is meant to run), but the `sandbox` directive
+ * forces an OPAQUE origin with NO `allow-same-origin` - so even a DIRECT navigation
+ * to this URL can never read the app origin's token/cookies (the sandbox, not script-src, is the
+ * ATO boundary, exactly as on the bundle path). Blessed libs load from their absolute app-host
+ * URLs (renderSandboxedBundle absolutizes them); everything else is self-contained/data:.
+ */
+function buildReplyArtifactCsp(req: Request): string {
+  const blessedScriptSrc = buildBundleScriptSrc(req.headers.host, req.headers['x-forwarded-proto']);
+  return [
+    "default-src 'none'",
+    `script-src 'unsafe-inline' ${blessedScriptSrc}`.trim(),
+    withAppHost("style-src 'unsafe-inline'") + ' https://fonts.googleapis.com',
+    withAppHost("img-src 'self' data:"),
+    withAppHost("media-src 'self' data:"),
+    withAppHost("font-src 'self'") + ' https://fonts.gstatic.com',
+    "connect-src 'self'",
+    "base-uri 'self'",
+    "form-action 'none'",
+    "frame-ancestors 'self'",
+    // Opaque origin even on direct navigation; allow-scripts re-enables the artifact's own JS.
+    `sandbox ${VIEWER_SANDBOX}`,
+  ].join('; ');
+}
+
+// -- Types ---------------------------------------------------------------------
+interface PublishedArtifactLean {
+  publicId: string;
+  tier: PublishScopeTier;
+  scopeId: string;
+  slug: string;
+  title: string;
+  description?: string;
+  visibility: PublishVisibility;
+  /** Optional gate on top of `public` (issue #383). passphraseHash is select:false
+   *  on the schema, so it never appears in this lean read. */
+  accessGate?: { kind: 'passphrase' | 'domain'; allowedDomains?: string[] } | null;
+  /** External https origins allowed to frame this artifact (open-public only).
+   *  Appended to frame-ancestors on both the wrapper and the isolated bundle. */
+  embedOrigins?: string[];
+  commentPolicy?: 'none' | 'open' | 'restricted';
+  /** Owner opt-in to search-engine indexing. Absent on rows predating the field,
+   *  which reads as false - the safe direction (see the model's field comment). */
+  discoverable?: boolean;
+  ownerId: string;
+  storageKeyPrefix: string;
+  manifest: Array<{ path: string; mimeType: string }>;
+  renderedBody?: string;
+  source: { kind: 'bundle' | 'reply' | 'fabfile' };
+  sha256Index?: string;
+  versions?: Array<{ sha256Index: string }>;
+}
+
+// -- Helpers -----------------------------------------------------------------
+/** Join paths into a comma-separated header value, capped at maxLen chars (adds a `...(+N)` tail). */
+function truncateHeaderList(paths: string[], maxLen: number): string {
+  const full = paths.join(', ');
+  if (full.length <= maxLen) return full;
+  const kept: string[] = [];
+  let len = 0;
+  for (let i = 0; i < paths.length; i++) {
+    const add = (kept.length ? 2 : 0) + paths[i].length;
+    if (len + add > maxLen - 16) break; // reserve room for the `...(+N more)` tail
+    kept.push(paths[i]);
+    len += add;
+  }
+  return `${kept.join(', ')} ...(+${paths.length - kept.length} more)`;
+}
+
+function cacheControlFor(visibility: PublishVisibility): string {
+  // Public pages stay cacheable for performance. Immediacy on removal comes from
+  // an explicit CloudFront invalidation (takedown / delete / visibility-downgrade
+  // call invalidatePublishCdn), so the shared cache can keep a long s-maxage. We
+  // still DROP stale-while-revalidate (the old `=86400` let a removed page serve
+  // stale for a day) and keep the per-viewer browser window short (max-age=60) as
+  // the backstop if an invalidation is ever skipped/throttled.
+  if (visibility === 'public') return 'public, max-age=60, s-maxage=3600';
+  return 'private, no-store, must-revalidate';
+}
+
+/** Link-preview crawlers and indexers fetch every pasted URL automatically -
+ *  merely PASTING your own link into Slack must not count as "someone saw it".
+ *  Substring match on the UA, lowercased; the generic bot/crawler/spider tail
+ *  catches the long tail of unfurlers. */
+const CRAWLER_UA_RE =
+  /slackbot|discordbot|twitterbot|facebookexternalhit|linkedinbot|whatsapp|telegrambot|skypeuripreview|googlebot|bingbot|applebot|duckduckbot|yandex|baiduspider|petalbot|bot\b|crawler|spider|preview/i;
+
+/**
+ * Best-effort, non-authoritative view counters. Never blocks the response.
+ *
+ * `viewCount` counts everything. `externalViewCount` feeds the Published gear
+ * ("someone else saw your page") and MUST resist self-granting: a top-level
+ * browser navigation to /p/... carries no Authorization header, so the serve
+ * route cannot tell the owner apart from a stranger on an anonymous request -
+ * counting anonymous views as external let every publisher pay themselves the
+ * 5,000-credit reward by opening their own freshly-published link (verified
+ * gate-bypass, PR #390 review). So externalViewCount increments ONLY for an
+ * AUTHENTICATED, non-owner, non-crawler viewer - a request that actually
+ * carries a credential we can attribute to a different user. Domain-gated
+ * views satisfy this (the loader shell re-fetches with the viewer's Bearer);
+ * purely-anonymous public views no longer count, and stronger proof-of-human
+ * is tracked as strategy P1 (b4m-strategy#93).
+ */
+function bumpViewCount(
+  artifact: { publicId: string; ownerId: string },
+  viewer: { id?: string } | undefined,
+  userAgent?: string,
+  // #408: when the served view passed a gate, record per-account attribution
+  // alongside the aggregate counter. Only set for authenticated gate views.
+  gateView?: { gateKind: 'domain'; sourceIp?: string; viewerEmailDomain?: string }
+): void {
+  const isAuthed = !!viewer?.id;
+  const isOwner = isAuthed && String(viewer!.id) === String(artifact.ownerId);
+  const isCrawler = !!userAgent && CRAWLER_UA_RE.test(userAgent);
+  const countsAsExternal = isAuthed && !isOwner && !isCrawler;
+  const inc = countsAsExternal ? { viewCount: 1, externalViewCount: 1 } : { viewCount: 1 };
+  void PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: inc }).catch(() => undefined);
+  // Audit non-owner authenticated gate views only: the point is who OTHER than the
+  // owner reached a gated artifact, and the owner bypasses their own gate anyway.
+  if (gateView && viewer?.id && !isOwner) {
+    void recordGatedView({
+      publicId: artifact.publicId,
+      viewerId: String(viewer.id),
+      gateKind: gateView.gateKind,
+      viewerEmailDomain: gateView.viewerEmailDomain,
+      sourceIp: gateView.sourceIp,
+      userAgent,
+    });
+  }
+}
+
+/**
+ * Serve a plain-text alternate for a public artifact (?format=raw). Author-supplied text is
+ * inert as text/plain, but we still emit `default-src 'none'; sandbox` + nosniff so a UA
+ * that ignored the type couldn't parse it as HTML on the app origin. Callers must gate on
+ * `visibility === 'public'` and pass the already-plain body (post-HTML-strip for bundles,
+ * as-is for reply/fabfile renderedBody).
+ */
+function sendRawArtifact(
+  res: Response,
+  artifact: PublishedArtifactLean,
+  body: string,
+  viewer: { id?: string } | undefined,
+  userAgent?: string
+): void {
+  const title = artifact.title || SHARED_FALLBACK_TITLE;
+  const description = artifact.description?.trim();
+  const parts = [`# ${title}`];
+  if (description) parts.push('', description);
+  const trimmedBody = body.trim();
+  if (trimmedBody) parts.push('', trimmedBody);
+  const content = parts.join('\n') + '\n';
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // Reached only for OPEN-public artifacts (every ?format=raw caller now guards
+  // on !isOpenPublic), so the shared-cacheable public policy is correct here.
+  res.setHeader('Cache-Control', cacheControlFor('public'));
+  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+  bumpViewCount(artifact, viewer, userAgent);
+  res.status(200).send(content);
+}
+
+/**
+ * Send an `?export=` payload as a downloaded file.
+ *
+ * `Content-Disposition: attachment` + `nosniff` + `default-src 'none'; sandbox` is what
+ * makes it safe to hand author-controlled HTML back on the APP origin: the browser saves
+ * the bytes instead of parsing them as a document, so they never execute here (the same
+ * reasoning as the `?raw=1` text/plain response, which cannot use attachment because the
+ * loader shell fetch()es it). Callers must have cleared the visibility gate first.
+ */
+function sendExport(
+  res: Response,
+  format: PublishExportFormat,
+  title: string,
+  body: string,
+  cacheControl: string
+): void {
+  res.setHeader('Content-Type', EXPORT_CONTENT_TYPE[format]);
+  // exportFilename is ASCII and quote-free by construction, so no header escaping is needed.
+  res.setHeader('Content-Disposition', `attachment; filename="${exportFilename(title || 'artifact', format)}"`);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+  res.setHeader('Cache-Control', cacheControl);
+  res.status(200).send(body);
+}
+
+/**
+ * Extract embedded artifacts for the viewer, in DOCUMENT order. Parser choice is kind-dependent:
+ * - reply: `parseArtifactsWithFallback` also promotes fenced code / bare-HTML docs to artifacts,
+ *   matching the in-app render of agent markdown.
+ * - fabfile: `parseArtifacts` (explicit `<artifact>` blocks ONLY). A fabfile is literal file text,
+ *   so a ```code``` fence in an uploaded markdown file is file content, not an artifact, and must
+ *   stay verbatim in the <pre> - fence promotion would wrongly hoist it into a card.
+ * Both parsers return artifacts reverse-sorted by position (a side effect of the back-to-front
+ * tag-removal pass); sorting by `startIndex` restores document order. The viewer render and the
+ * `?a=` sub-document handler BOTH extract via this helper with the SAME kind, so an iframe's
+ * `?a={i}` always indexes the same artifact the viewer framed at slot i.
+ */
+function extractViewerArtifacts(body: string, kind: string): ArtifactParseResult {
+  const result = kind === 'fabfile' ? parseArtifacts(body) : parseArtifactsWithFallback(body);
+  return { ...result, artifacts: [...result.artifacts].sort((a, b) => a.startIndex - b.startIndex) };
+}
+
+/**
+ * Clean a snapshot title for display. A reply that LEADS with an `<artifact ...>` tag was
+ * snapshotted with the raw wrapper tag as its title (deriveTitle took the first line); recover
+ * a sensible title from the first named embedded artifact, else the neutral fallback. New
+ * publishes no longer hit this (deriveTitle now skips artifact tags), but existing rows do.
+ */
+function cleanViewerTitle(rawTitle: string | undefined, artifacts: ParsedArtifact[]): string {
+  const t = (rawTitle ?? '').trim();
+  if (t && !/^<artifact\b/i.test(t)) return t;
+  const named = artifacts.find(a => a.title && a.title !== 'Untitled Artifact');
+  return named?.title || SHARED_FALLBACK_TITLE;
+}
+
+/** An artifact carrying its own JS. Non-global so `.test` stays stateless across calls. */
+const ARTIFACT_HAS_SCRIPT = /<script[\s>]/i;
+
+/**
+ * How one embedded artifact renders. Single source of truth so `renderArtifactBlock` and the
+ * lead-artifact hero check in `renderViewerPage` can never disagree about what appears:
+ * - `sub-document`: an iframe at `?a={index}`, which needs a path whose fresh, credential-free
+ *   sub-request re-authorizes (`canFrame`).
+ * - `srcdoc`: the document inlined into the frame, so no sub-request happens at all.
+ * - `card`: a placeholder, for a type the static viewer cannot host or a document whose JS
+ *   would not survive inlining.
+ */
+type ArtifactRenderMode = 'sub-document' | 'srcdoc' | 'card';
+
+function artifactRenderMode(
+  artifact: ParsedArtifact,
+  selfPath: string,
+  canFrame: boolean,
+  standalone: boolean
+): ArtifactRenderMode {
+  if (artifact.type !== 'html' && artifact.type !== 'svg') return 'card';
+  if (standalone) return 'srcdoc';
+  if (canFrame && selfPath) return 'sub-document';
+  // Bearer-gated page: no `?a=` sub-request can carry the header, but a script-free document
+  // renders identically inline. A scripted one would not (see renderArtifactBlock), so: card.
+  return ARTIFACT_HAS_SCRIPT.test(artifact.content) ? 'card' : 'srcdoc';
+}
+
+/** Whether this artifact renders as a frame rather than a placeholder card. */
+function willFrame(artifact: ParsedArtifact, selfPath: string, canFrame: boolean, standalone: boolean): boolean {
+  return artifactRenderMode(artifact, selfPath, canFrame, standalone) !== 'card';
+}
+
+/** Opaque-origin frame whose document travels in the attribute, so it needs no sub-request. */
+function srcdocFrame(titleHtml: string, content: string, extraClass = ''): string {
+  // srcdoc attribute escape: inside a double-quoted value only `&` and `"` are unsafe -
+  // `<`/`>` are literal data. Escaping them would corrupt the framed document (see the
+  // identical note in renderBundleWrapper). `&` first so it can't double-escape `&quot;`.
+  const doc = content.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  return `<iframe class="${artifactFrameClass(
+    extraClass
+  )}" sandbox="${VIEWER_SANDBOX}" title="${titleHtml}" srcdoc="${doc}"></iframe>`;
+}
+
+function artifactFrameClass(extraClass: string): string {
+  return extraClass ? `b4m-artifact ${extraClass}` : 'b4m-artifact';
+}
+
+/**
+ * Render one embedded artifact as viewer markup. An HTML/SVG artifact renders in its own
+ * SANDBOXED iframe pointed at the `?a={index}` sub-document (so its JS runs isolated on an
+ * opaque origin, never on the script-free reply page) - but ONLY when `canFrame` says the
+ * sub-request will authorize (see the call site). Every other type (react/code/python/
+ * mermaid/recharts) needs the app runtime the static viewer can't provide, so it gets a
+ * clean placeholder card instead of leaking raw markup. `index` MUST match the position in the
+ * same parseArtifactsWithFallback result the `?a` handler indexes into.
+ *
+ * `standalone` (the `?export=html` download) has no `?a=` route to point at, so an html/svg
+ * artifact is inlined as an iframe `srcdoc` instead - same `VIEWER_SANDBOX` opaque-origin
+ * posture, but self-contained, so the saved file renders offline.
+ *
+ * A Bearer-gated page (org/domain visibility, reached through the loader shell) can't frame
+ * `?a=` either, since an iframe navigation carries no Authorization header. There it inlines
+ * the SAME srcdoc, which is the identical opaque-origin posture minus script execution: the
+ * page's `script-src 'none'` CSP is inherited by an about:srcdoc child, so a SCRIPTED artifact
+ * would render half-broken (markup and CSS, dead JS) and is kept as a card instead. Script-free
+ * documents (a styled report, an SVG) render fully, which is what the gated owner came for.
+ */
+function renderArtifactBlock(
+  artifact: ParsedArtifact,
+  index: number,
+  selfPath: string,
+  canFrame: boolean,
+  standalone = false,
+  opts: { hero?: boolean } = {}
+): string {
+  const title = escapeHtml(artifact.title || 'Artifact');
+  const extraClass = opts.hero ? 'b4m-hero' : '';
+  const mode = artifactRenderMode(artifact, selfPath, canFrame, standalone);
+  if (mode === 'srcdoc') {
+    return srcdocFrame(title, artifact.content, extraClass);
+  }
+  if (mode === 'sub-document') {
+    const src = escapeHtml(`${selfPath}?a=${index}`);
+    return `<iframe class="${artifactFrameClass(
+      extraClass
+    )}" sandbox="${VIEWER_SANDBOX}" loading="lazy" title="${title}" src="${src}"></iframe>`;
+  }
+  return `<div class="b4m-artifact-card"><strong>${title}</strong><span>${escapeHtml(
+    artifact.type
+  )} artifact - open in the app to view</span></div>`;
+}
+
+/**
+ * Render a reply/fabfile snapshot to a standalone HTML page. Replies are markdown (rendered via
+ * marked) with any embedded `<artifact>` blocks extracted: the surrounding prose renders inline,
+ * and each HTML/SVG artifact renders in its own sandboxed iframe (non-embeddable types get a
+ * placeholder card). A reply that OPENS with a frameable artifact leads with it as a full-bleed
+ * hero above the prose; every other reply keeps prose-then-artifacts order. Fabfiles render
+ * their literal text as an escaped <pre> in the original order, with only explicit
+ * embedded `<artifact>` blocks extracted and framed the same way. The PAGE is served with
+ * script-src 'none' so injected markup cannot execute; artifact JS runs only inside the sandbox.
+ */
+function renderViewerPage(
+  artifact: PublishedArtifactLean,
+  opts: {
+    noindex: boolean;
+    /** Share links only - see NO_REFERRER_META. */
+    noReferrer: boolean;
+    /** Path this page was reached at, so embedded artifacts frame back through it. */
+    selfPath?: string;
+    canFrameArtifacts?: boolean;
+    /** Formats to offer as footer download links; empty hides the row. */
+    exportFormats?: readonly PublishExportFormat[];
+    /**
+     * The `?export=html` download rather than a served page. A saved file resolves
+     * nothing against the app origin, so embedded artifacts inline as `srcdoc` and the
+     * served-page-only chrome is dropped: the CSP meta (which exists for the loader
+     * shell's srcdoc injection, and would neutralize the inlined artifacts' own JS), the
+     * root-relative report link, and the export links themselves.
+     */
+    standalone?: boolean;
+  }
+): string {
+  const {
+    noindex,
+    noReferrer,
+    selfPath = '',
+    canFrameArtifacts = false,
+    exportFormats = [],
+    standalone = false,
+  } = opts;
+  const body = artifact.renderedBody ?? '';
+  let contentHtml: string;
+  let displayTitle = artifact.title || SHARED_FALLBACK_TITLE;
+  if (artifact.source.kind === 'reply') {
+    const { artifacts, cleanedContent } = extractViewerArtifacts(body, 'reply');
+    const article = cleanedContent
+      ? sanitizeRenderedHtml(marked.parse(cleanedContent, { async: false }) as string)
+      : '';
+    const block = (a: ParsedArtifact, i: number, hero = false) =>
+      renderArtifactBlock(a, i, selfPath, canFrameArtifacts, standalone, { hero });
+    // A reply that LEADS with an html/svg artifact IS that artifact; the prose after it is the
+    // text fallback. Hoist that first block above the article as a full-bleed hero, but only if
+    // it actually renders as a frame - promoting a placeholder card to hero would be a downgrade.
+    // Ordering only; `i` stays the artifact's position in this same parser result, so `?a={i}`
+    // still resolves to the block rendered at slot i.
+    const leadsWithArtifact =
+      /^<artifact\b/i.test(body.trim()) &&
+      artifacts.length > 0 &&
+      willFrame(artifacts[0], selfPath, canFrameArtifacts, standalone);
+    if (leadsWithArtifact) {
+      const rest = artifacts
+        .slice(1)
+        .map((a, i) => block(a, i + 1))
+        .join('\n');
+      contentHtml = `${block(artifacts[0], 0, true)}${article}${rest}`;
+    } else {
+      contentHtml = `${article}${artifacts.map((a, i) => block(a, i)).join('\n')}`;
+    }
+    displayTitle = cleanViewerTitle(artifact.title, artifacts);
+  } else {
+    // Fabfile: a file is literal text, not markdown prose, so the non-artifact remainder stays an
+    // escaped <pre> (no marked). Only EXPLICIT <artifact> blocks are extracted (parseArtifacts via
+    // extractViewerArtifacts('fabfile')) - a code fence in an uploaded file is file content, not an
+    // artifact. Embedded html/svg artifacts frame via the same sandboxed `?a=` path as the reply
+    // branch, and the SAME parser+kind runs here and in the `?a=` handler, so `?a={i}` resolves to
+    // the block rendered at index i.
+    const { artifacts, cleanedContent } = extractViewerArtifacts(body, 'fabfile');
+    if (artifacts.length === 0) {
+      // No embedded artifacts: render the file body exactly as before, verbatim (parseArtifacts
+      // trims cleanedContent, so use the raw body to preserve leading/trailing whitespace).
+      contentHtml = `<pre class="b4m-pre">${escapeHtml(body)}</pre>`;
+    } else {
+      // All non-artifact text collapses into one <pre> rendered BEFORE the artifact frames (same
+      // shape as the reply branch's article-then-blocks). So text interleaved between multiple
+      // artifacts loses document order; the common case (prose then one trailing artifact) is fine.
+      // Revisit if fabfiles ever need interleaved text/artifact authoring.
+      const pre = cleanedContent ? `<pre class="b4m-pre">${escapeHtml(cleanedContent)}</pre>` : '';
+      const blocks = artifacts
+        .map((a, i) => renderArtifactBlock(a, i, selfPath, canFrameArtifacts, standalone))
+        .join('\n');
+      contentHtml = `${pre}${blocks}`;
+    }
+    displayTitle = cleanViewerTitle(artifact.title, artifacts);
+  }
+  const titleHtml = escapeHtml(displayTitle);
+  const noindexHead = `${noindex ? `\n${NOINDEX_META}` : ''}${noReferrer ? `\n${NO_REFERRER_META}` : ''}`;
+  // CSP as a meta so the no-JS posture survives when this page is injected as the loader
+  // shell's iframe srcdoc (a srcdoc carries no HTTP CSP header, and the shell's iframe is
+  // sandbox="allow-scripts"). Mirrors the direct-serve HTTP header's script-src 'none'.
+  // Omitted for a standalone export: no shell injects it, and `script-src 'none'` would be
+  // inherited by the inlined artifact srcdoc frames and kill their JS.
+  const cspMeta = standalone
+    ? ''
+    : `\n<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; ${withAppHost(
+        "img-src 'self' data:"
+      )}; font-src 'self' https://fonts.gstatic.com; frame-src 'self'; child-src 'self'; base-uri 'self'; form-action 'none'">`;
+  const footer = standalone
+    ? buildShareFooterHtml({ source: artifact.source.kind === 'reply' ? 'reply' : 'fabfile' })
+    : buildShareFooterHtml({
+        source: artifact.source.kind === 'reply' ? 'reply' : 'fabfile',
+        reportPublicId: artifact.publicId,
+      }) + buildExportActionsHtml(selfPath, exportFormats);
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">${noindexHead}${cspMeta}
+<meta property="og:title" content="${titleHtml}">
+<meta property="og:description" content="${escapeHtml(SHARED_FALLBACK_TITLE)}">
+<title>${titleHtml}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; line-height: 1.6;
+         max-width: 760px; margin: 0 auto; padding: 2rem 1.25rem 4rem; color: #1a1a2e; background: #fff; }
+  @media (prefers-color-scheme: dark) { body { color: #e6e6f0; background: #0f0f1a; } a { color: #8ab4ff; } }
+  h1, h2, h3 { line-height: 1.25; }
+  pre.b4m-pre, pre { background: rgba(127,127,127,.12); padding: 1rem; border-radius: 8px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }
+  code { background: rgba(127,127,127,.15); padding: .15em .35em; border-radius: 4px; }
+  img { max-width: 100%; height: auto; }
+  iframe.b4m-artifact { display: block; width: 100%; height: 600px; margin: 1.5rem 0; border: 1px solid rgba(127,127,127,.3);
+         border-radius: 8px; background: #fff; }
+  /* Lead artifact: break out of the 760px column to full-bleed. The negative top margin
+     cancels the body's 2rem top padding so the hero starts at the very top of the page. */
+  iframe.b4m-artifact.b4m-hero { width: 100vw; margin: -2rem 0 2rem calc(50% - 50vw); height: 100vh; border: 0; border-radius: 0; }
+  .b4m-artifact-card { display: flex; flex-direction: column; gap: .25rem; margin: 1.5rem 0; padding: 1rem 1.25rem;
+         border: 1px solid rgba(127,127,127,.3); border-radius: 8px; background: rgba(127,127,127,.08); }
+  .b4m-artifact-card span { font-size: .85rem; opacity: .75; }
+  .b4m-footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid rgba(127,127,127,.3); font-size: .85rem; opacity: .7; }
+</style>
+</head>
+<body>
+<article>${contentHtml}</article>
+${footer}
+</body>
+</html>`;
+}
+
+/**
+ * Build the comment-overlay MOUNT NODE for the WRAPPER page (app origin) - config passed
+ * via data-* attributes. Returns '' when commentPolicy is `none`, which is what opts an
+ * artifact out: the widget script itself now ships on every non-embed wrapper (it also
+ * binds "Save as PDF") and early-returns when this node is absent. escapeHtml is shared
+ * from viewerSecurity.
+ */
+/**
+ * Trusted pin-bridge script injected INTO the sandboxed bundle (the iframe srcdoc) when
+ * comments are enabled. It runs on the opaque origin - it cannot read the app token - and
+ * only exchanges UI messages with the parent wrapper widget:
+ *   parent -> iframe : { b4m:'pinmode', on } | { b4m:'pins', pins:[{id,x,y,pending}] } | { b4m:'scrollto', y }
+ *   (GEOMETRY ONLY - never comment text/author: the iframe runs untrusted author JS)
+ *   iframe -> parent : { b4m:'ready' } | { b4m:'pin-dropped', x, y } | { b4m:'pin-activate', id }
+ * Coords are normalized 0..1 against the bundle document's scroll size. Both sides validate
+ * the message source AND origin (parent <-> iframe). In Approach B the iframe is a TRUE
+ * cross-origin frame, so the bridge pins its parent's origin from `document.referrer` (the
+ * embedding wrapper, trimmed to origin under the default cross-origin referrer policy) and
+ * uses it as the postMessage targetOrigin + an inbound `event.origin` allowlist. In the
+ * same-origin srcdoc fallback (Approach A) the sandboxed doc has no referrer -> PO stays '*'
+ * (target opaque origin) and the origin check is skipped, leaving the source check as before.
+ * Contains no `</script>` so it can't break out of the tag.
+ */
+const PIN_BRIDGE_JS = String.raw`(function(){
+  'use strict';
+  var pinMode=false,pins=[],layer=null;
+  var PO=(function(){try{return document.referrer?new URL(document.referrer).origin:'*';}catch(e){return '*';}})();
+  function L(){if(!layer){layer=document.createElement('div');layer.style.cssText='position:absolute;top:0;left:0;width:0;height:0;z-index:2147482000;pointer-events:none';(document.body||document.documentElement).appendChild(layer);}return layer;}
+  function W(){return Math.max(document.documentElement.scrollWidth,document.documentElement.clientWidth);}
+  function H(){return Math.max(document.documentElement.scrollHeight,document.documentElement.clientHeight);}
+  function post(m){try{parent.postMessage(m,PO);}catch(e){}}
+  function setMode(on){pinMode=on;var c=on?'crosshair':'';document.documentElement.style.cursor=c;if(document.body){document.body.style.cursor=c;}}
+  function draw(){var l=L();l.textContent='';pins.forEach(function(p){if(typeof p.x!=='number'||typeof p.y!=='number'){return;}var m=document.createElement('div');m.style.cssText='position:absolute;width:22px;height:22px;margin:-11px 0 0 -11px;border:2px solid #fff;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:pointer;pointer-events:auto;background:'+(p.pending?'#e0a800':'#3949d4');m.style.left=(p.x*W())+'px';m.style.top=(p.y*H())+'px';m.addEventListener('click',function(e){e.stopPropagation();post({b4m:'pin-activate',id:p.id});});l.appendChild(m);});}
+  document.addEventListener('click',function(e){if(!pinMode){return;}e.preventDefault();e.stopPropagation();var x=e.pageX/W(),y=e.pageY/H();setMode(false);post({b4m:'pin-dropped',x:Math.max(0,Math.min(1,x)),y:Math.max(0,Math.min(1,y))});},true);
+  window.addEventListener('message',function(e){if(e.source!==window.parent){return;}if(PO!=='*'&&e.origin!==PO){return;}var d=e.data||{};if(d.b4m==='pinmode'){setMode(!!d.on);}else if(d.b4m==='pins'){pins=Array.isArray(d.pins)?d.pins:[];draw();}else if(d.b4m==='scrollto'&&typeof d.y==='number'){window.scrollTo({top:d.y*H()-window.innerHeight/2,behavior:'smooth'});}});
+  window.addEventListener('resize',draw);
+  post({b4m:'ready'});
+})();`;
+
+/** Inject the pin bridge as an inline <script> at the end of the bundle body (before </body>
+ *  if present, else appended). Allowed by the wrapper CSP's `script-src 'unsafe-inline'`. */
+function injectPinBridge(srcdoc: string): string {
+  const tag = `<script>${PIN_BRIDGE_JS}</script>`;
+  return /<\/body>/i.test(srcdoc) ? srcdoc.replace(/<\/body>/i, `${tag}</body>`) : srcdoc + tag;
+}
+
+function buildAnnotateOverlayHtml(artifact: PublishedArtifactLean): string {
+  if (!artifact.commentPolicy || artifact.commentPolicy === 'none') return '';
+  const publicId = escapeHtml(artifact.publicId);
+  const policy = escapeHtml(artifact.commentPolicy);
+  const title = escapeHtml(artifact.title || '');
+  return (
+    `<div id="b4m-annotate-root" data-public-id="${publicId}" ` +
+    `data-comment-policy="${policy}" data-title="${title}"></div>`
+  );
+}
+
+export const config = {
+  api: {
+    externalResolver: true,
+    responseLimit: '15mb',
+  },
+};
+
+export default handler;

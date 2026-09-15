@@ -1,0 +1,268 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { api } from '@client/app/contexts/ApiContext';
+import { IUserApiKeyDocument, ApiKeyScope, IEmbedBranding } from '@bike4mind/common';
+import { toast } from 'sonner';
+
+function parseValidationError(error: any): string {
+  const errorMessage = error.response?.data?.error;
+
+  if (typeof errorMessage === 'string' && errorMessage.includes(':')) {
+    // Parse multiple validation errors separated by commas
+    return errorMessage
+      .split(', ')
+      .map((msg: string) => {
+        const [field, ...messageParts] = msg.split(': ');
+        console.log(field, messageParts);
+        const message = messageParts.join(': ');
+
+        // Format field names nicely (e.g., "rateLimit.requestsPerMinute" -> "Rate limit requests per minute")
+        const formattedField = field
+          .split('.')
+          .map(part => part.replace(/([A-Z])/g, ' $1').toLowerCase())
+          .join(' ')
+          .replace(/^\w/, c => c.toUpperCase());
+
+        return `${formattedField}: ${message}`;
+      })
+      .join('\n');
+  }
+
+  return errorMessage || error.message || 'An error occurred';
+}
+
+export interface CreateUserApiKeyRequest {
+  name: string;
+  scopes: ApiKeyScope[];
+  expiresAt?: Date;
+  rateLimit?: {
+    requestsPerMinute: number;
+    requestsPerDay: number;
+  };
+  /** When set, mint an org-billed key charging this organization's credit pool. */
+  organizationId?: string;
+  /** Embed key (epic #41): the agent to bind, its https origin allow-list, and optional branding. */
+  agentId?: string;
+  allowedOrigins?: string[];
+  branding?: IEmbedBranding;
+}
+
+/**
+ * Admin-only mint request: the self-service shape plus `preauthorizedLakeIds` (manage-but-not-member
+ * session admission, see pages/api/sessions/create.ts). Kept out of `CreateUserApiKeyRequest` so the
+ * self-service mint path can't accept this field even at the type level.
+ */
+export interface AdminCreateUserApiKeyRequest extends CreateUserApiKeyRequest {
+  preauthorizedLakeIds?: string[];
+}
+
+/** Configure an existing embed key - only the provided fields change. */
+export interface UpdateEmbedKeyRequest {
+  keyId: string;
+  agentId?: string;
+  allowedOrigins?: string[];
+  branding?: IEmbedBranding;
+}
+
+/** What the PATCH route returns - mirrors the service's `UpdateEmbedKeyResult`, not the full key document. */
+export interface UpdateEmbedKeyResponse {
+  id: string;
+  name: string;
+  agentId?: string;
+  allowedOrigins?: string[];
+  branding?: IEmbedBranding;
+}
+
+/** An organization the current user may bill API-key usage to. */
+export interface BillingOrganization {
+  id: string;
+  name: string;
+}
+
+export interface CreateUserApiKeyResponse extends IUserApiKeyDocument {
+  key: string; // Only returned once during creation
+}
+
+export interface RotateUserApiKeyResponse {
+  id: string;
+  name: string;
+  keyPrefix: string;
+  key: string; // Only returned once during rotation
+}
+
+/**
+ * Includes revoked (`disabled`) keys - the management tables render them as a
+ * `Revoked` row with the actions disabled, so revocation stays visible instead
+ * of the key silently dropping out of the list. Hiding them is a per-table
+ * client-side filter (see UserApiKeysTab's Show revoked toggle), deliberately
+ * NOT a narrower fetch: every mutation here invalidates the single
+ * `['user-api-keys']` entry, so two tables asking for different slices under
+ * one key would clobber each other's cache.
+ */
+export function useGetUserApiKeys() {
+  return useQuery<IUserApiKeyDocument[]>({
+    queryKey: ['user-api-keys'],
+    queryFn: async () => {
+      const response = await api.get('/api/user-api-keys', { params: { includeDisabled: true } });
+      return response.data;
+    },
+  });
+}
+
+export function useBillingOrganizations() {
+  return useQuery<BillingOrganization[]>({
+    queryKey: ['user-api-keys', 'billing-organizations'],
+    queryFn: async () => {
+      const response = await api.get('/api/user-api-keys/billing-organizations');
+      return response.data;
+    },
+  });
+}
+
+export function useCreateUserApiKey({ onSuccess }: { onSuccess?: (result: CreateUserApiKeyResponse) => void } = {}) {
+  const queryClient = useQueryClient();
+
+  return useMutation<CreateUserApiKeyResponse, Error, CreateUserApiKeyRequest>({
+    mutationFn: async data => {
+      const response = await api.post('/api/user-api-keys', data);
+      return response.data;
+    },
+    onSuccess: result => {
+      queryClient.invalidateQueries({ queryKey: ['user-api-keys'] });
+      if (onSuccess) onSuccess(result);
+    },
+    onError: (error: Error) => {
+      toast.error(parseValidationError(error));
+    },
+  });
+}
+
+export function useRotateUserApiKey({ onSuccess }: { onSuccess?: (result: RotateUserApiKeyResponse) => void } = {}) {
+  const queryClient = useQueryClient();
+
+  return useMutation<RotateUserApiKeyResponse, Error, string>({
+    mutationFn: async keyId => {
+      const response = await api.post(`/api/user-api-keys/${keyId}/rotate`);
+      return response.data;
+    },
+    onSuccess: result => {
+      queryClient.invalidateQueries({ queryKey: ['user-api-keys'] });
+      if (onSuccess) onSuccess(result);
+    },
+    onError: (error: Error) => {
+      toast.error(parseValidationError(error));
+    },
+  });
+}
+
+export function useUpdateEmbedKey({ onSuccess }: { onSuccess?: () => void } = {}) {
+  const queryClient = useQueryClient();
+
+  return useMutation<UpdateEmbedKeyResponse, Error, UpdateEmbedKeyRequest>({
+    mutationFn: async ({ keyId, ...data }) => {
+      const response = await api.patch(`/api/user-api-keys/${keyId}`, data);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['user-api-keys'] });
+      if (onSuccess) onSuccess();
+    },
+    onError: (error: Error) => {
+      toast.error(parseValidationError(error));
+    },
+  });
+}
+
+export function useAdminGenerateApiKey({ onSuccess }: { onSuccess?: (result: CreateUserApiKeyResponse) => void } = {}) {
+  const queryClient = useQueryClient();
+
+  return useMutation<CreateUserApiKeyResponse, Error, { userId: string; data: AdminCreateUserApiKeyRequest }>({
+    mutationFn: async ({ userId, data }) => {
+      const response = await api.post(`/api/admin/users/${userId}/generate-api-key`, data);
+      return response.data;
+    },
+    onSuccess: result => {
+      // Keep the admin key list coherent when both modals are in play.
+      queryClient.invalidateQueries({ queryKey: ['admin', 'user-api-keys'] });
+      if (onSuccess) onSuccess(result);
+    },
+    onError: (error: Error) => {
+      toast.error(parseValidationError(error));
+    },
+  });
+}
+
+/** Response of GET /api/admin/users/[userId]/user-api-keys: the user's keys plus
+ * each key's live minute/day rate-limit counters (keyed by key id) - the
+ * usage fields on the key doc itself are not maintained. */
+export interface AdminUserApiKeysResponse {
+  apiKeys: IUserApiKeyDocument[];
+  liveUsage: Record<string, { minute: number; day: number }>;
+}
+
+export function useAdminGetUserApiKeys(userId: string | undefined) {
+  return useQuery<AdminUserApiKeysResponse>({
+    queryKey: ['admin', 'user-api-keys', userId],
+    queryFn: async () => {
+      const response = await api.get(`/api/admin/users/${userId}/user-api-keys`);
+      return response.data;
+    },
+    enabled: typeof userId === 'string' && userId.length > 0,
+  });
+}
+
+export function useAdminResetApiKeyRateLimit({ onSuccess }: { onSuccess?: () => void } = {}) {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ success: boolean; id: string }, Error, string>({
+    mutationFn: async keyId => {
+      const response = await api.post(`/api/admin/user-api-keys/${keyId}/reset-rate-limit`);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'user-api-keys'] });
+      if (onSuccess) onSuccess();
+    },
+    onError: (error: Error) => {
+      toast.error(parseValidationError(error));
+    },
+  });
+}
+
+/**
+ * Permanently remove an already-revoked key's row. The route refuses a key that
+ * is still active (409), so the table's delete action stays disabled until the
+ * key is revoked - same rule, enforced on both sides.
+ */
+export function useDeleteUserApiKey({ onSuccess }: { onSuccess?: () => void } = {}) {
+  const queryClient = useQueryClient();
+
+  return useMutation<void, Error, string>({
+    mutationFn: async keyId => {
+      await api.delete(`/api/user-api-keys/${keyId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['user-api-keys'] });
+      if (onSuccess) onSuccess();
+    },
+    onError: (error: Error) => {
+      toast.error(parseValidationError(error));
+    },
+  });
+}
+
+export function useRevokeUserApiKey({ onSuccess }: { onSuccess?: () => void } = {}) {
+  const queryClient = useQueryClient();
+
+  return useMutation<void, Error, { keyId: string; reason?: string }>({
+    mutationFn: async ({ keyId, reason }) => {
+      await api.post(`/api/user-api-keys/${keyId}/revoke`, { reason });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['user-api-keys'] });
+      if (onSuccess) onSuccess();
+    },
+    onError: (error: Error) => {
+      toast.error(parseValidationError(error));
+    },
+  });
+}

@@ -1,0 +1,15 @@
+{
+  "models": [
+    {
+      "id": "grok-embedding-1",
+      "fingerprint": "fp_9a2c1d4e70",
+      "created": 1780000000,
+      "object": "model",
+      "owned_by": "xai",
+      "version": "1.0.0",
+      "input_modalities": ["text"],
+      "output_modalities": ["embedding"],
+      "prompt_text_token_price": 2
+    }
+  ]
+}

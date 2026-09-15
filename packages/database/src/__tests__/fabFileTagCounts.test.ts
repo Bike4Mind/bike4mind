@@ -1,0 +1,473 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import { FabFile, fabFileRepository } from '../models/content/FabFileModel';
+import { setupMongoTest } from '../__test__/utils';
+import { KnowledgeType } from '@bike4mind/common';
+
+/**
+ * Real-Mongo coverage for the aggregate that tagService/listFileTags serves as `fileCount`.
+ * A mock cannot prove what the $unwind/$group actually returns, and two of the facts pinned here
+ * are load-bearing for the caller: that a tag removed by $pull immediately stops counting (the
+ * whole point of recomputing instead of maintaining a stored counter), and that names differing
+ * only in case come back as SEPARATE buckets, which is why listFileTags sums them.
+ */
+// One server for both describes below - setupMongoTest registers beforeAll/afterAll, so calling
+// it per describe would start and stop a second mongodb-memory-server for no reason.
+setupMongoTest();
+
+describe('FabFileRepository.countFilesByTagForUser', () => {
+  const userId = 'tag-counts-user';
+  const otherUserId = 'someone-else';
+  const OPTIONS = { userGroups: [], dataLakeTags: [] };
+  // GET /api/files/tags/counts's actual scope - the only caller that opts into the exclusion.
+  const OPTIONS_EXCLUDE_PERSONAL = { ...OPTIONS, excludePersonalShares: true };
+
+  const seed = async (tags: string[], overrides: Record<string, unknown> = {}): Promise<string> => {
+    const doc = await FabFile.create({
+      userId,
+      fileName: 'seed.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: tags.map(name => ({ name, strength: 1 })),
+      ...overrides,
+    });
+    return doc.id as string;
+  };
+
+  const countOf = async (tag: string, options?: Parameters<typeof fabFileRepository.countFilesByTagForUser>[1]) => {
+    const counts = await fabFileRepository.countFilesByTagForUser(userId, options);
+    return counts.find(c => c.tag === tag)?.count ?? 0;
+  };
+
+  beforeEach(async () => {
+    await FabFile.deleteMany({});
+  });
+
+  // The acceptance criterion for the drift this replaces: the $pull removal path never touched
+  // the stored counter, so a tag removed that way stayed one too high forever.
+  it('drops a tag removed by pullTagsByFabFileId on the very next read', async () => {
+    const first = await seed(['invoices']);
+    await seed(['invoices']);
+    await seed(['invoices']);
+    expect(await countOf('invoices', OPTIONS)).toBe(3);
+
+    await fabFileRepository.pullTagsByFabFileId(first, ['invoices']);
+
+    expect(await countOf('invoices', OPTIONS)).toBe(2);
+  });
+
+  it('stops counting a soft-deleted file', async () => {
+    const id = await seed(['invoices']);
+    await seed(['invoices']);
+
+    await FabFile.updateOne({ _id: id }, { $set: { deletedAt: new Date() } });
+
+    expect(await countOf('invoices', OPTIONS)).toBe(1);
+  });
+
+  it('returns names differing only in case as separate buckets', async () => {
+    await seed(['Invoices']);
+    await seed(['invoices']);
+
+    const counts = await fabFileRepository.countFilesByTagForUser(userId, OPTIONS);
+    const invoiceBuckets = counts.filter(c => c.tag.toLowerCase() === 'invoices');
+
+    expect(invoiceBuckets).toHaveLength(2);
+    expect(invoiceBuckets.reduce((sum, c) => sum + c.count, 0)).toBe(2);
+  });
+
+  it('counts a file once however many tags it carries', async () => {
+    await seed(['invoices', 'receipts', 'invoices-archive']);
+
+    expect(await countOf('invoices', OPTIONS)).toBe(1);
+    expect(await countOf('receipts', OPTIONS)).toBe(1);
+  });
+
+  it('excludes session-attached files unless they are curated notebooks', async () => {
+    await seed(['invoices'], { sessionId: 'session-1' });
+    expect(await countOf('invoices', OPTIONS)).toBe(0);
+
+    await seed(['invoices', 'curated-notebook'], { sessionId: 'session-2' });
+    expect(await countOf('invoices', OPTIONS)).toBe(1);
+  });
+
+  it('still counts the caller own files when scoping options are supplied', async () => {
+    await seed(['invoices']);
+
+    expect(await countOf('invoices')).toBe(1);
+    expect(await countOf('invoices', OPTIONS)).toBe(1);
+  });
+
+  it('ignores files belonging to another user', async () => {
+    await seed(['invoices'], { userId: otherUserId });
+
+    expect(await countOf('invoices', OPTIONS)).toBe(0);
+  });
+
+  // The orphan-bucket regression: a tag the caller can never rewrite (they don't own the file)
+  // must not keep counting once the caller's own tag by that name is gone, or WORKSPACES shows
+  // a bucket that renaming/deleting their tag can never clear. Only a caller that opts into
+  // excludePersonalShares gets this - see the next test for the default (opted-out) behavior.
+  it('does not count a tag surviving only on a file merely shared with the caller, when excluded', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'invoices', strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
+    });
+
+    expect(await countOf('invoices', OPTIONS_EXCLUDE_PERSONAL)).toBe(0);
+  });
+
+  // listFileTags (GET /api/files/tags, backing the TagSidebar and "Shared with me" view) calls
+  // this WITHOUT excludePersonalShares, so its fileCount must keep agreeing with the file list -
+  // including a file reachable only via a personal share. This is the regression a human review
+  // caught: the exclusion was originally hardcoded, silently changing listFileTags's count too.
+  it('still counts a tag on a personally-shared file when excludePersonalShares is not set', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'invoices', strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
+    });
+
+    expect(await countOf('invoices', OPTIONS)).toBe(1);
+  });
+
+  // Regression guard: the exclusion must be scoped to personal shares only - a group-shared
+  // file's tag still has to count, since a group workspace is the caller's own, not orphanable.
+  it('still counts a tag on a file shared via group access', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'group-shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'reports', strength: 1 }],
+      groups: [{ groupId: 'group-1', permissions: ['read'] }],
+    });
+
+    expect(await countOf('reports', { userGroups: ['group-1'], dataLakeTags: [], excludePersonalShares: true })).toBe(
+      1
+    );
+  });
+
+  // A file can be BOTH shared 1:1 AND reachable another way - the exclusion must not swallow
+  // that other, legitimate arm just because a personal share is also present.
+  it('still counts a file that is shared 1:1 AND group-shared, via the group arm', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'both-shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'contracts', strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
+      groups: [{ groupId: 'group-1', permissions: ['read'] }],
+    });
+
+    expect(await countOf('contracts', { userGroups: ['group-1'], dataLakeTags: [], excludePersonalShares: true })).toBe(
+      1
+    );
+  });
+
+  it('still counts a file that is shared 1:1 AND carries a data-lake meta-tag, via the data-lake arm', async () => {
+    const lakeTag = 'datalake:acme:handbook';
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'both-shared-lake.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: lakeTag, strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
+    });
+
+    expect(await countOf(lakeTag, { userGroups: [], dataLakeTags: [lakeTag], excludePersonalShares: true })).toBe(1);
+  });
+
+  it('omits a tag no live file carries rather than reporting it as zero', async () => {
+    await seed(['invoices']);
+
+    const counts = await fabFileRepository.countFilesByTagForUser(userId, OPTIONS);
+
+    expect(counts.some(c => c.tag === 'never-used')).toBe(false);
+  });
+
+  // The badge is compared against a list built by buildFabFileSearchQuery, which filters
+  // archivedAt: null. Archiving a data lake stamps archivedAt on every file it holds, so without
+  // the matching conjunct the tag keeps counting while the list it labels shows nothing.
+  describe('archived files', () => {
+    const archive = (id: string) => FabFile.updateOne({ _id: id }, { $set: { archivedAt: new Date() } });
+
+    it('stops counting a file once it is archived', async () => {
+      const id = await seed(['invoices']);
+      await seed(['invoices']);
+      expect(await countOf('invoices', OPTIONS)).toBe(2);
+
+      await archive(id);
+
+      expect(await countOf('invoices', OPTIONS)).toBe(1);
+    });
+
+    it('drops the tag entirely when every file carrying it is archived', async () => {
+      const id = await seed(['invoices']);
+
+      await archive(id);
+
+      const counts = await fabFileRepository.countFilesByTagForUser(userId, OPTIONS);
+      expect(counts.some(c => c.tag === 'invoices')).toBe(false);
+    });
+
+    it('counts the file again once it is unarchived', async () => {
+      const id = await seed(['invoices']);
+      await archive(id);
+      expect(await countOf('invoices', OPTIONS)).toBe(0);
+
+      await FabFile.updateOne({ _id: id }, { $set: { archivedAt: null } });
+
+      expect(await countOf('invoices', OPTIONS)).toBe(1);
+    });
+
+    // The conjunct is written as equality to null, which also matches documents that have no
+    // archivedAt field at all - every file that predates the data-lake archive feature.
+    it('still counts a file that has no archivedAt field', async () => {
+      const id = await seed(['invoices']);
+      await FabFile.updateOne({ _id: id }, { $unset: { archivedAt: 1 } });
+
+      expect(await countOf('invoices', OPTIONS)).toBe(1);
+    });
+  });
+});
+
+/**
+ * Served in the same response as the tag counts above, and the client sizes its workspace rows
+ * from these numbers while keying the rows off the tag counts - so the two have to cover one file
+ * set. Both halves of that are pinned here: the shared scope, and the archived exclusion.
+ */
+describe('FabFileRepository.countUniqueFilesByNamespaceForUser', () => {
+  const userId = 'namespace-counts-user';
+  const otherUserId = 'someone-else';
+  const LAKE_TAG = 'datalake:acme:handbook';
+
+  const seed = async (tags: string[], overrides: Record<string, unknown> = {}): Promise<string> => {
+    const doc = await FabFile.create({
+      userId,
+      fileName: 'seed.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: tags.map(name => ({ name, strength: 1 })),
+      ...overrides,
+    });
+    return doc.id as string;
+  };
+
+  const countOf = async (
+    namespace: string,
+    options?: Parameters<typeof fabFileRepository.countUniqueFilesByNamespaceForUser>[1]
+  ) => {
+    const counts = await fabFileRepository.countUniqueFilesByNamespaceForUser(userId, options);
+    return counts.find(c => c.namespace === namespace)?.fileCount ?? 0;
+  };
+
+  beforeEach(async () => {
+    await FabFile.deleteMany({});
+  });
+
+  it('counts a file once per namespace however many tags it carries there', async () => {
+    await seed(['clients:acme', 'clients:globex', 'projects:apollo']);
+
+    expect(await countOf('clients')).toBe(1);
+    expect(await countOf('projects')).toBe(1);
+  });
+
+  it('stops counting an archived file', async () => {
+    const id = await seed(['clients:acme']);
+    await seed(['clients:globex']);
+    expect(await countOf('clients')).toBe(2);
+
+    await FabFile.updateOne({ _id: id }, { $set: { archivedAt: new Date() } });
+
+    expect(await countOf('clients')).toBe(1);
+  });
+
+  it('omits a namespace whose every file is archived rather than reporting it as zero', async () => {
+    const id = await seed(['clients:acme']);
+
+    await FabFile.updateOne({ _id: id }, { $set: { archivedAt: new Date() } });
+
+    const counts = await fabFileRepository.countUniqueFilesByNamespaceForUser(userId);
+    expect(counts.some(c => c.namespace === 'clients')).toBe(false);
+  });
+
+  // A data-lake file is reachable through the dataLakeTags ownership arm, not through userId.
+  // Without the scope the namespace renders as zero next to a non-zero tag count.
+  it('counts a data-lake file the caller does not own only when the scope is supplied', async () => {
+    await seed([LAKE_TAG, 'handbook:onboarding'], { userId: otherUserId });
+
+    expect(await countOf('handbook')).toBe(0);
+    expect(await countOf('handbook', { userGroups: [], dataLakeTags: [LAKE_TAG] })).toBe(1);
+  });
+
+  it('excludes session-attached files unless they are curated notebooks', async () => {
+    await seed(['clients:acme'], { sessionId: 'session-1' });
+    expect(await countOf('clients')).toBe(0);
+
+    await seed(['clients:globex', 'curated-notebook'], { sessionId: 'session-2' });
+    expect(await countOf('clients')).toBe(1);
+  });
+
+  it('stops counting a soft-deleted file', async () => {
+    const id = await seed(['clients:acme']);
+    await seed(['clients:globex']);
+
+    await FabFile.updateOne({ _id: id }, { $set: { deletedAt: new Date() } });
+
+    expect(await countOf('clients')).toBe(1);
+  });
+
+  it('ignores another user files when no scope is supplied', async () => {
+    await seed(['clients:acme'], { userId: otherUserId });
+
+    expect(await countOf('clients')).toBe(0);
+  });
+
+  // Mirrors the countFilesByTagForUser orphan-bucket regression: the two must move in lockstep
+  // (see this function's own doc comment) or a namespace disappears from one count but not the
+  // other, rendering a workspace row with the wrong size. Only a caller opting into
+  // excludePersonalShares gets this - the next test pins the default (opted-out) behavior.
+  it('does not count a namespace surviving only on a file merely shared with the caller, when excluded', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'clients:acme', strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
+    });
+
+    expect(await countOf('clients', { userGroups: [], dataLakeTags: [], excludePersonalShares: true })).toBe(0);
+  });
+
+  // GET /api/files/tags does not opt in, so a personally-shared file's namespace must still count.
+  it('still counts a namespace on a personally-shared file when excludePersonalShares is not set', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'clients:acme', strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
+    });
+
+    expect(await countOf('clients', { userGroups: [], dataLakeTags: [] })).toBe(1);
+  });
+
+  it('still counts a namespace on a file shared via group access', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'group-shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'clients:acme', strength: 1 }],
+      groups: [{ groupId: 'group-1', permissions: ['read'] }],
+    });
+
+    expect(await countOf('clients', { userGroups: ['group-1'], dataLakeTags: [], excludePersonalShares: true })).toBe(
+      1
+    );
+  });
+
+  it('still counts a namespace on a file that is shared 1:1 AND group-shared, via the group arm', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'both-shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'clients:acme', strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
+      groups: [{ groupId: 'group-1', permissions: ['read'] }],
+    });
+
+    expect(await countOf('clients', { userGroups: ['group-1'], dataLakeTags: [], excludePersonalShares: true })).toBe(
+      1
+    );
+  });
+
+  // Test asymmetry a human review flagged: the tag-count sibling has a 1:1-share + data-lake
+  // combination test; this function's doc comment says the two move in lockstep, so it needs one.
+  it('still counts a namespace on a file that is shared 1:1 AND carries a data-lake meta-tag, via the data-lake arm', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'both-shared-lake.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: LAKE_TAG, strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
+    });
+
+    expect(await countOf('datalake', { userGroups: [], dataLakeTags: [LAKE_TAG], excludePersonalShares: true })).toBe(
+      1
+    );
+  });
+});
+
+/**
+ * The single-tag counterpart. It queries the same `tags.name` data as the tag-lifecycle writes and
+ * carried the same unescaped, unanchored regex they did, so it is pinned here rather than left to
+ * re-seed the bug for its first caller - it has none yet.
+ */
+describe('FabFileRepository.countByUserIdAndTag', () => {
+  const userId = 'single-tag-count-user';
+
+  const seedFor = async (owner: string, tags: string[], overrides: Record<string, unknown> = {}) => {
+    await FabFile.create({
+      userId: owner,
+      fileName: 'seed.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: tags.map(name => ({ name, strength: 1 })),
+      ...overrides,
+    });
+  };
+
+  beforeEach(async () => {
+    await FabFile.deleteMany({});
+  });
+
+  it('counts only files carrying the whole name, not a neighbour containing it', async () => {
+    await seedFor(userId, ['test']);
+    await seedFor(userId, ['testing']);
+    await seedFor(userId, ['unit-test']);
+
+    expect(await fabFileRepository.countByUserIdAndTag(userId, 'test')).toBe(1);
+  });
+
+  it('counts casing variants as the same tag', async () => {
+    await seedFor(userId, ['Invoices']);
+    await seedFor(userId, ['invoices']);
+
+    expect(await fabFileRepository.countByUserIdAndTag(userId, 'INVOICES')).toBe(2);
+  });
+
+  it('treats regex metacharacters literally', async () => {
+    await seedFor(userId, ['.*']);
+    await seedFor(userId, ['anything']);
+
+    expect(await fabFileRepository.countByUserIdAndTag(userId, '.*')).toBe(1);
+  });
+
+  it('excludes soft-deleted files and other users', async () => {
+    await seedFor(userId, ['invoices']);
+    await seedFor(userId, ['invoices'], { deletedAt: new Date() });
+    await seedFor('someone-else', ['invoices']);
+
+    expect(await fabFileRepository.countByUserIdAndTag(userId, 'invoices')).toBe(1);
+  });
+
+  it('reports zero for an empty name rather than counting everything', async () => {
+    await seedFor(userId, ['invoices']);
+
+    expect(await fabFileRepository.countByUserIdAndTag(userId, '')).toBe(0);
+  });
+});

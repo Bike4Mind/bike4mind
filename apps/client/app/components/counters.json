@@ -1,0 +1,222 @@
+[
+  {
+    "counterName": "downloadFailed",
+    "file": "../client/app/hooks/useDownload.ts",
+    "line": 26
+  },
+  {
+    "counterName": "<variable>: counterName",
+    "file": "../client/app/contexts/DashboardContext.tsx",
+    "line": 1977
+  },
+  {
+    "counterName": "feedbackSent",
+    "file": "../client/app/components/HelpModal.tsx",
+    "line": 132
+  },
+  {
+    "counterName": "<variable>: counterName",
+    "file": "../client/app/components/polaris/AskExperts.tsx",
+    "line": 87
+  },
+  {
+    "counterName": "<expression>",
+    "file": "../client/app/components/polaris/dashboards/common/CommonExportData.tsx",
+    "line": 266
+  },
+  {
+    "counterName": "marketData_RBVC_marketSizing_ResetFilters",
+    "file": "../client/app/components/polaris/dashboards/WorkplaceCollaborationIQ/MarketData/common/MetricFilters.tsx",
+    "line": 26
+  },
+  {
+    "counterName": "marketData_AP_Trends_ResetFilters",
+    "file": "../client/app/components/polaris/dashboards/WorkplaceCollaborationIQ/MarketData/WCApplicationPlatforms/common/TrendsFilter.tsx",
+    "line": 26
+  },
+  {
+    "counterName": "marketData_AP_OverallSnapshot_ResetFilters",
+    "file": "../client/app/components/polaris/dashboards/WorkplaceCollaborationIQ/MarketData/WCApplicationPlatforms/common/SnapshotFilter.tsx",
+    "line": 28
+  },
+  {
+    "counterName": "marketData_AP_MarketSizing_ResetFilters",
+    "file": "../client/app/components/polaris/dashboards/WorkplaceCollaborationIQ/MarketData/WCApplicationPlatforms/common/SizingFilters.tsx",
+    "line": 32
+  },
+  {
+    "counterName": "marketData_AP_MarketMix_ResetFilters",
+    "file": "../client/app/components/polaris/dashboards/WorkplaceCollaborationIQ/MarketData/WCApplicationPlatforms/common/MarketMixFilter.tsx",
+    "line": 29
+  },
+  {
+    "counterName": "marketData_AC_AnnualForecast_ResetFilters",
+    "file": "../client/app/components/polaris/dashboards/WorkplaceCollaborationIQ/MarketData/WCApplicationPlatforms/common/ForecastFilters.tsx",
+    "line": 26
+  },
+  {
+    "counterName": "workplace_market_tree",
+    "file": "../client/app/components/polaris/dashboards/WorkplaceCollaborationIQ/MarketData/UCMarketTree/MarketTreeChart.tsx",
+    "line": 72
+  },
+  {
+    "counterName": "marketData_RBVC_QuarterlyTrends_ResetFilters",
+    "file": "../client/app/components/polaris/dashboards/WorkplaceCollaborationIQ/MarketData/RoomBasedCollaboration/common/TrendsFilters.tsx",
+    "line": 26
+  },
+  {
+    "counterName": "marketData_RBVC_MarketMix_ResetFilters",
+    "file": "../client/app/components/polaris/dashboards/WorkplaceCollaborationIQ/MarketData/RoomBasedCollaboration/common/MixFilters.tsx",
+    "line": 22
+  },
+  {
+    "counterName": "marketData_RBVC_AnnualForecast_ResetFilters",
+    "file": "../client/app/components/polaris/dashboards/WorkplaceCollaborationIQ/MarketData/RoomBasedCollaboration/common/ForecastFilters.tsx",
+    "line": 26
+  },
+  {
+    "counterName": "${...}||export_data",
+    "file": "../client/app/components/polaris/AccountOverview/common/ExportDataButton.tsx",
+    "line": 40
+  },
+  {
+    "counterName": "<expression>",
+    "file": "../client/app/components/modals/ModalManager.tsx",
+    "line": 162
+  },
+  {
+    "counterName": "<expression>",
+    "file": "../client/app/components/modals/ModalManager.tsx",
+    "line": 174
+  },
+  {
+    "counterName": "<expression>",
+    "file": "../client/app/components/modals/ModalManager.tsx",
+    "line": 183
+  },
+  {
+    "counterName": "moreCreditsClicked",
+    "file": "../client/app/components/SideNav/index.tsx",
+    "line": 144
+  },
+  {
+    "counterName": "subscribeClicked",
+    "file": "../client/app/components/SideNav/index.tsx",
+    "line": 151
+  },
+  {
+    "counterName": "profileClicked",
+    "file": "../client/app/components/SideNav/index.tsx",
+    "line": 171
+  },
+  {
+    "counterName": "whatsNewClicked",
+    "file": "../client/app/components/SideNav/index.tsx",
+    "line": 179
+  },
+  {
+    "counterName": "viewDashboard",
+    "file": "../client/app/components/Session/List/Dashboards.tsx",
+    "line": 53
+  },
+  {
+    "counterName": "banner_views",
+    "file": "../client/app/components/Session/List/ConfigurableBanner.tsx",
+    "line": 50
+  },
+  {
+    "counterName": "<variable>: action",
+    "file": "../server/managers/countersManager.ts",
+    "line": 32
+  },
+  {
+    "counterName": "heardPrompt",
+    "file": "../server/events/quest-started.ts",
+    "line": 90
+  },
+  {
+    "counterName": "model",
+    "file": "../server/events/quest-started.ts",
+    "line": 226
+  },
+  {
+    "counterName": "autoNamedSession",
+    "file": "../server/events/quest-started.ts",
+    "line": 341
+  },
+  {
+    "counterName": "createImage",
+    "file": "../server/events/image-generation-started.ts",
+    "line": 83
+  },
+  {
+    "counterName": "numLogins",
+    "file": "../server/auth/auth.ts",
+    "line": 98
+  },
+  {
+    "counterName": "logout",
+    "file": "../server/api/logout.ts",
+    "line": 21
+  },
+  {
+    "counterName": "<variable>: action",
+    "file": "../server/api/users/activities/update.ts",
+    "line": 46
+  },
+  {
+    "counterName": "createInvite",
+    "file": "../server/api/tools/create.ts",
+    "line": 24
+  },
+  {
+    "counterName": "createNotebook",
+    "file": "../server/api/sessions/create.ts",
+    "line": 28
+  },
+  {
+    "counterName": "sendReferral",
+    "file": "../server/api/reg-invites/refer.ts",
+    "line": 175
+  },
+  {
+    "counterName": "migrationEmailSent",
+    "file": "../server/api/reg-invites/migrate.ts",
+    "line": 79
+  },
+  {
+    "counterName": "downloadDashboardData",
+    "file": "../server/api/polaris/export-report.ts",
+    "line": 51
+  },
+  {
+    "counterName": "addFile",
+    "file": "../server/api/files/generate-presigned-url.ts",
+    "line": 106
+  },
+  {
+    "counterName": "addFile",
+    "file": "../server/api/files/createFabFileURL.ts",
+    "line": 70
+  },
+  {
+    "counterName": "addFile",
+    "file": "../server/api/files/createFabFile.ts",
+    "line": 111
+  },
+  {
+    "counterName": "sendFeedback",
+    "file": "../server/api/feedback/create.ts",
+    "line": 57
+  },
+  {
+    "counterName": "createVoice",
+    "file": "../server/api/elabs/voice/create.ts",
+    "line": 31
+  },
+  {
+    "counterName": "createInvite",
+    "file": "../server/api/[type]/[id]/invites/create.ts",
+    "line": 115
+  }
+]

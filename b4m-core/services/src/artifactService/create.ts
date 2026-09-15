@@ -1,0 +1,174 @@
+import {
+  IArtifactRepository,
+  IArtifactContentRepository,
+  IArtifactVersionRepository,
+  IArtifactDocument,
+  IArtifactContentDocument,
+  IArtifactVersionDocument,
+  createArtifactId,
+  calculateContentHash,
+  calculateContentSize,
+  createDefaultPermissions,
+  ArtifactTypeSchema,
+  ArtifactType,
+  getArtifactMimeType,
+} from '@bike4mind/common';
+import { secureParameters } from '@bike4mind/utils';
+import { z } from 'zod';
+
+const createArtifactSchema = z.object({
+  id: z.string().optional(), // Allow custom ID for AI-generated artifacts
+  type: ArtifactTypeSchema,
+  title: z.string().min(1).max(255),
+  description: z.string().max(1000).optional(),
+  content: z.string().min(1),
+  projectId: z.string().optional(),
+  organizationId: z.string().optional(),
+  visibility: z.enum(['private', 'project', 'organization', 'public']).prefault('private'),
+  tags: z.array(z.string().max(50)).max(20).prefault([]),
+  versionTag: z.string().max(100).optional(),
+  sourceQuestId: z.string().optional(),
+  sessionId: z.string().optional(),
+  parentArtifactId: z.string().optional(),
+  permissions: z
+    .object({
+      canRead: z.array(z.string()).prefault([]),
+      canWrite: z.array(z.string()).prefault([]),
+      canDelete: z.array(z.string()).prefault([]),
+      isPublic: z.boolean().prefault(false),
+      inheritFromProject: z.boolean().prefault(true),
+    })
+    .optional(),
+  metadata: z.record(z.string(), z.unknown()).prefault({}),
+});
+
+type CreateArtifactParameters = z.infer<typeof createArtifactSchema>;
+
+/**
+ * Only `create` is used, so only `create` is asked for. Declaring the full repositories would make
+ * a caller that legitimately has just the one method - the notebook import, which hands over three
+ * models each bound to its transaction session - cast to satisfy an interface it never calls the
+ * rest of.
+ */
+interface CreateArtifactAdapters {
+  db: {
+    artifacts: Pick<IArtifactRepository, 'create'>;
+    artifactContents: Pick<IArtifactContentRepository, 'create'>;
+    artifactVersions: Pick<IArtifactVersionRepository, 'create'>;
+  };
+}
+
+// Repo.create() input: the persisted doc minus fields absent from a create
+// payload -- the datastore-generated _id and timestamps, plus the caller-owned
+// id (supplied separately). Cast to the repo's create() param at the call site,
+// since IBaseRepository.create still lists _id as required.
+type CreateInput<T> = Omit<T, '_id' | 'id' | 'createdAt' | 'updatedAt'>;
+
+/**
+ * Creates a new artifact with content and initial version
+ */
+export const create = async (
+  userId: string,
+  parameters: CreateArtifactParameters,
+  adapters: CreateArtifactAdapters
+) => {
+  const { db } = adapters;
+  const {
+    id: providedId,
+    type,
+    title,
+    description,
+    content,
+    projectId,
+    organizationId,
+    visibility,
+    tags,
+    versionTag,
+    sourceQuestId,
+    sessionId,
+    parentArtifactId,
+    permissions,
+    metadata,
+  } = secureParameters(parameters, createArtifactSchema);
+
+  // Use provided ID if available (for AI-generated artifacts), otherwise generate one. The type and
+  // title are what make the minted id parseable by the client; see createArtifactId.
+  const artifactId = providedId || createArtifactId(type, title);
+
+  // Calculate content metadata
+  const contentHash = calculateContentHash(content);
+  const contentSize = calculateContentSize(content);
+
+  // Create content record first
+  const artifactContent = await db.artifactContents.create({
+    artifactId,
+    version: 1,
+    content,
+    contentHash,
+    contentSize,
+    mimeType: getContentMimeType(type),
+    encoding: 'utf8',
+  } satisfies CreateInput<IArtifactContentDocument> as Parameters<IArtifactContentRepository['create']>[0]);
+
+  // Create version record
+  const artifactVersion = await db.artifactVersions.create({
+    artifactId,
+    version: 1,
+    contentId: artifactContent._id,
+    changes: ['Initial version'],
+    changeDescription: 'Created artifact',
+    createdBy: userId,
+    isActive: true,
+  } satisfies CreateInput<IArtifactVersionDocument> as Parameters<IArtifactVersionRepository['create']>[0]);
+
+  // Set up permissions
+  const artifactPermissions = permissions || createDefaultPermissions(userId);
+
+  // Create main artifact record. `id` is re-added because CreateInput strips it
+  // (it's caller-supplied and a distinct field from Mongo's _id). `contentId` is
+  // a denormalized pointer the Mongoose ArtifactModel persists but that isn't on
+  // the IArtifactDocument type yet, so it's typed on top of the create input.
+  const artifact: CreateInput<IArtifactDocument> & { id: string; contentId: string } = {
+    id: artifactId,
+    type,
+    title,
+    description,
+    version: 1,
+    versionTag,
+    currentVersionId: artifactVersion._id,
+    contentId: artifactContent._id,
+    userId,
+    projectId,
+    organizationId,
+    visibility,
+    permissions: artifactPermissions,
+    sourceQuestId,
+    sessionId,
+    parentArtifactId,
+    status: 'draft',
+    tags,
+    contentHash,
+    contentSize,
+    metadata,
+  };
+
+  // Object already validated by its annotation above; `as unknown as` just
+  // bridges the id/_id shape gap the create() param type can't express.
+  const createdArtifact = await db.artifacts.create(
+    artifact as unknown as Parameters<IArtifactRepository['create']>[0]
+  );
+
+  return {
+    artifact: createdArtifact,
+    content: artifactContent,
+    version: artifactVersion,
+  };
+};
+
+/**
+ * Determines MIME type based on artifact type
+ * Uses centralized registry from @bike4mind/common
+ */
+function getContentMimeType(type: ArtifactType): string {
+  return getArtifactMimeType(type);
+}

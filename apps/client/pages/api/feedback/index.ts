@@ -1,0 +1,718 @@
+import { FeedbackModel, FeedbackTextModel, User } from '@bike4mind/database';
+import {
+  classifyStage,
+  FEEDBACK_LIST_DEFAULT_LIMIT,
+  FEEDBACK_LIST_MAX_LIMIT,
+  FEEDBACK_SUBJECTS,
+  FeedbackEvents,
+  FeedbackStatus,
+  IOrganizationDocument,
+  Permission,
+  PromptMetaZodSchema,
+  feedbackContentExpiresAt,
+  redactFunctionCallsForViewer,
+  truncateFeedbackContent,
+} from '@bike4mind/common';
+import type {
+  FeedbackChannelDelivery,
+  FeedbackDeliveryResult,
+  FeedbackDeliveryStageClass,
+  FeedbackDeliverySkipReason,
+} from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
+import { logEvent } from '@server/utils/analyticsLog';
+import { escapeRegex, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { adminSettingsRepository } from '@bike4mind/database';
+import { baseApi } from '@server/middlewares/baseApi';
+import { EmailEvents } from '@server/utils/eventBus';
+import { postFeedbackToSlack } from '@server/integrations/slack/slack';
+import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
+import { Config } from '@server/utils/config';
+import { resolveFeedbackContext } from '@server/utils/feedbackContext';
+import { buildFeedbackDeepLinks, FEEDBACK_LINK_LABELS, type FeedbackDeepLinks } from '@server/utils/feedbackDeepLinks';
+import {
+  recordFeedbackDeliverySuccess,
+  recordFeedbackDeliveryFailure,
+  buildFeedbackDeliveryFailureMetrics,
+  buildFeedbackDeliverySkippedMetrics,
+  emitFeedbackDeliveryMetrics,
+  ALARM_WORTHY_SKIP_REASONS,
+} from '@server/utils/cloudwatch';
+import { accessibleBy } from '@casl/mongoose';
+import mongoose from 'mongoose';
+import qs from 'qs';
+import type { FilterQuery } from 'mongoose';
+import sanitizeHtml from 'sanitize-html';
+import { z } from 'zod';
+
+/**
+ * Fields the admin triage table and its CSV export actually read, as an allowlist.
+ *
+ * `promptMeta` is deliberately absent: it is the largest field on the document and no list row
+ * renders it (it is read one record at a time through feedback/[id]/read), so projecting it here
+ * would ship the per-report diagnostic blob with every row of every page. `contentStored` is
+ * required by hydrateFeedbackText to tell an expired report from one that never had text.
+ */
+export const FEEDBACK_LIST_FIELDS = [
+  'userId',
+  'content',
+  'contentStored',
+  'status',
+  'tags',
+  'username',
+  'userEmail',
+  'organization',
+  'organizationId',
+  'type',
+  'subject',
+  'sessionId',
+  'questId',
+  'createdAt',
+  'updatedAt',
+].join(' ');
+
+/**
+ * Query contract for the feedback list. Every filter keys off a field #1864 indexed
+ * (`userId`/`sessionId`/`questId`/`organizationId`, each paired with `createdAt`) so a scoped
+ * read walks an index rather than the collection.
+ *
+ * Sort is `createdAt` only, and that is a deliberate narrowing of what the client used to do
+ * in-browser (status rank first, then date). A status-rank sort is a computed field, which no
+ * index can serve - it would force a blocking in-memory sort of every matching document on every
+ * page, defeating the four `{ key, createdAt }` indexes this endpoint exists to use. The status
+ * *filter* below covers the triage need the grouping was standing in for.
+ */
+const ListFeedbackQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).prefault(1),
+  limit: z.coerce.number().int().min(1).max(FEEDBACK_LIST_MAX_LIMIT).prefault(FEEDBACK_LIST_DEFAULT_LIMIT),
+  userId: z.string().min(1).optional(),
+  sessionId: z.string().min(1).optional(),
+  questId: z.string().min(1).optional(),
+  organizationId: z.string().min(1).optional(),
+  // Legacy free-text org label. The admin dropdown builds its options out of the documents
+  // themselves, so it still selects on this; `organizationId` is the key programmatic callers
+  // (rollups, deep links) should use.
+  organization: z.union([z.string(), z.array(z.string())]).optional(),
+  status: z.union([z.enum(FeedbackStatus), z.array(z.enum(FeedbackStatus))]).optional(),
+  subject: z.enum(FEEDBACK_SUBJECTS).optional(),
+  // Capped: the value reaches a Mongo regex, so an unbounded pattern is a CPU sink even escaped.
+  search: z.string().min(1).max(200).optional(),
+  sort: z.enum(['asc', 'desc']).prefault('desc'),
+  // Opt-in because the facet is a `distinct` over the caller's WHOLE accessible set, which for an
+  // admin is the unindexed full collection - and every caller but the admin org-filter menu throws
+  // the result away (the paged list, the CSV export loop, the per-session "Reported" read).
+  // An explicit enum rather than z.coerce.boolean(), which reads the string "false" as true.
+  includeOrganizations: z.enum(['true', 'false']).optional(),
+});
+
+/** `qs.parse` hands back a lone value or an array depending on how many times a key repeats. */
+function toArray<T>(value: T | T[] | undefined): T[] {
+  if (value === undefined) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+const CreateFeedbackRequestSchema = z.object({
+  userId: z.string(),
+  content: z.string(),
+  tags: z.array(z.string()),
+  username: z.string(),
+  userEmail: z.string(),
+  type: z.string().optional(),
+  promptMeta: PromptMetaZodSchema.optional(),
+  // Untrusted pointers, not authorization keys - resolveFeedbackContext re-reads and
+  // ownership-checks whichever of these (or their promptMeta fallback) is present before any of
+  // it survives onto the saved document.
+  questId: z.string().min(1).optional(),
+  sessionId: z.string().min(1).optional(),
+});
+
+// Trim each address and drop blanks so 'a@x.com, b@x.com' doesn't leave a leading space on every
+// entry after the first, and a whitespace-only entry (',' or ' ') resolves to zero recipients.
+function splitRecipients(raw: string | undefined): string[] {
+  return (raw || '')
+    .split(',')
+    .map(email => email.trim())
+    .filter(Boolean);
+}
+
+type FeedbackEmailRoute =
+  | { kind: 'send'; recipients: string[]; stageClass: FeedbackDeliveryStageClass }
+  | { kind: 'skip'; stageClass: FeedbackDeliveryStageClass; reason: FeedbackDeliverySkipReason };
+
+// Every value below reaches the email as a raw string interpolation, and on the unauthenticated
+// submission path every one of them (including userId) is attacker-controlled request-body input.
+// disallowedTagsMode: 'escape' (rather than sanitize-html's default 'discard') turns a tag into
+// its visible, inert entity form instead of deleting it - this template has no legitimate use for
+// any markup, but the promptMeta JSON dump is a diagnostic field where silently deleting a
+// bracketed substring would hide information from the staff reading it.
+function sanitizeForEmail(value: string): string {
+  return sanitizeHtml(value, { allowedTags: [], allowedAttributes: {}, disallowedTagsMode: 'escape' });
+}
+
+/**
+ * `href` lives in a double-quoted attribute, which sanitizeForEmail does not cover: it is a
+ * text-node sanitizer (allowedTags: []), documented to neutralize markup rather than to make a
+ * string safe inside an attribute. The deep-link builders percent-encode every id they
+ * interpolate, so this is defense in depth for the day one of them stops.
+ */
+function escapeHtmlAttribute(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/**
+ * The email's counterpart to renderLinksLine in feedbackMessage.ts - same two targets, and the
+ * labels come from the same constant, so a report triaged from the inbox and one triaged from
+ * Slack lead to the same places by the same names.
+ * Empty string when there is nothing to link to, which collapses the row out of the template.
+ */
+function renderFeedbackLinksHtml(links: FeedbackDeepLinks | null): string {
+  if (!links) return '';
+  const anchors = [`<a href="${escapeHtmlAttribute(links.record)}">${FEEDBACK_LINK_LABELS.record}</a>`];
+  if (links.conversation) {
+    const label = links.conversationIsTurn ? FEEDBACK_LINK_LABELS.turn : FEEDBACK_LINK_LABELS.session;
+    anchors.push(`<a href="${escapeHtmlAttribute(links.conversation)}">${label}</a>`);
+  }
+  return `<p><strong>Links:</strong> ${anchors.join(' - ')}</p>`;
+}
+
+/**
+ * Decides where feedback-to-email sends go for a given deploy stage, mirroring
+ * resolveFeedbackSlackRoute (@server/integrations/slack/slack) so the two channels can't drift
+ * apart on the same stage-leak bug. Non-production stages deliberately do NOT fall back to
+ * FeedbackReceiveEmail - that fallback is exactly the leak this resolver closes (a real internal
+ * recipient list otherwise inherited from a non-prod stage into the prod feedback inbox).
+ *
+ * `singleEnvironmentInstall` (a self-host deploy) routes like production for the same reason as
+ * resolveFeedbackSlackRoute: one environment, no separate non-prod recipient list to leak into.
+ * `stageClass` itself stays the true classifyStage() result for metrics/logs.
+ */
+export function resolveFeedbackEmailRoute(
+  stage: string | undefined,
+  settings: Record<string, string>,
+  singleEnvironmentInstall = false
+): FeedbackEmailRoute {
+  const stageClass = classifyStage(stage);
+
+  if (stageClass === 'production' || singleEnvironmentInstall) {
+    const recipients = splitRecipients(getSettingsValue('FeedbackReceiveEmail', settings));
+    return recipients.length > 0
+      ? { kind: 'send', recipients, stageClass }
+      : { kind: 'skip', stageClass, reason: 'no_recipients' };
+  }
+
+  const recipients = splitRecipients(getSettingsValue('FeedbackReceiveEmailNonProd', settings));
+  return recipients.length > 0
+    ? { kind: 'send', recipients, stageClass }
+    : { kind: 'skip', stageClass, reason: 'nonprod_unconfigured' };
+}
+
+const handler = baseApi()
+  .get(async (req, res) => {
+    if (!req.ability) {
+      throw new Error('Ability not found');
+    }
+
+    const query = ListFeedbackQuerySchema.parse(qs.parse(req.query as Record<string, string>));
+
+    // The ability rules ARE the scope: an admin holds an unconditional read grant, so this
+    // narrows to {} and they see every report; everyone else holds only the { userId } grant, so
+    // it narrows to their own. A caller with no read grant at all narrows to an unsatisfiable
+    // filter rather than an empty one, so this fails closed - which is why there is no separate
+    // by-class permission check here (a by-class check would ignore the ownership condition and
+    // pass for every logged-in user).
+    const readable = accessibleBy(req.ability, Permission.read).ofType(FeedbackModel);
+
+    const clauses: FilterQuery<unknown>[] = [readable];
+
+    if (query.userId) clauses.push({ userId: query.userId });
+    if (query.sessionId) clauses.push({ sessionId: query.sessionId });
+    if (query.questId) clauses.push({ questId: query.questId });
+    if (query.organizationId) clauses.push({ organizationId: query.organizationId });
+    if (query.subject) clauses.push({ subject: query.subject });
+
+    const organizations = toArray(query.organization);
+    if (organizations.length > 0) clauses.push({ organization: { $in: organizations } });
+
+    const statuses = toArray(query.status);
+    if (statuses.length > 0) clauses.push({ status: { $in: statuses } });
+
+    if (query.search) {
+      const pattern = new RegExp(escapeRegex(query.search), 'i');
+
+      // `content` lives on the TTL'd FeedbackText sibling rather than on the report, so a text
+      // search has to resolve ids over there first and cannot be expressed as one filter. The
+      // regex is unindexed, but this is an admin triage surface and the path it replaces shipped
+      // the entire collection to the browser to search it client-side. Projecting only _id keeps
+      // the intermediate small; FeedbackText is itself bounded by the 90-day content TTL.
+      const matchingText = await FeedbackTextModel.find({ content: pattern }).select('_id').lean();
+
+      const searchClauses: FilterQuery<unknown>[] = [{ username: pattern }, { userEmail: pattern }];
+      if (matchingText.length > 0) {
+        searchClauses.push({ _id: { $in: matchingText.map(text => text._id) } });
+      }
+      clauses.push({ $or: searchClauses });
+    }
+
+    // $and rather than a merged object literal: the CASL scope carries its own $or arm and a
+    // spread would silently drop one side of it. Same reason as pages/api/files/index.ts.
+    const filter = { $and: clauses };
+
+    const [items, total, organizationFacet] = await Promise.all([
+      FeedbackModel.find(filter)
+        .select(FEEDBACK_LIST_FIELDS)
+        .sort({ createdAt: query.sort === 'asc' ? 1 : -1 })
+        .skip((query.page - 1) * query.limit)
+        .limit(query.limit),
+      FeedbackModel.countDocuments(filter),
+      // Facet options come from the caller's whole accessible set, NOT from `filter` - otherwise
+      // selecting an organization would prune every other option out of the dropdown that
+      // selected it. Which is also why it is opt-in: `readable` is `{}` for an admin, so this is a
+      // full-collection scan on an unindexed field and must not ride along on unrelated reads.
+      query.includeOrganizations === 'true' ? FeedbackModel.distinct('organization', readable) : undefined,
+    ]);
+
+    return res.json({
+      items: await hydrateFeedbackText(items.map(toRedactedFeedback)),
+      total,
+      page: query.page,
+      limit: query.limit,
+      // Omitted rather than [] when not requested: an empty array is indistinguishable from "no
+      // organizations have any feedback", which would empty the filter menu.
+      ...(organizationFacet && {
+        organizations: organizationFacet
+          .filter((name): name is string => typeof name === 'string' && name.length > 0)
+          .sort((a, b) => a.localeCompare(b)),
+      }),
+    });
+  })
+  .post(async (req, res) => {
+    const newFeedbackData = CreateFeedbackRequestSchema.parse(req.body);
+    const authenticated = req.isAuthenticated();
+    if (authenticated) {
+      console.log('Authenticated');
+    }
+
+    const { userId, content, tags, username, userEmail, promptMeta, type, questId, sessionId } = newFeedbackData;
+
+    // The org lookup must key off the resolved identity too, not the raw body userEmail -- otherwise
+    // two authenticated submissions from the same account can be stamped with different organizations
+    // depending on whatever email string the client happened to send.
+    const existingUser = authenticated
+      ? await User.findById(req.user.id).populate('organizationId')
+      : await User.findOne({ email: userEmail }).populate('organizationId');
+
+    const organizationDoc = existingUser?.organizationId as unknown as IOrganizationDocument | undefined;
+    const organization = organizationDoc?.name || 'Unknown';
+
+    // Text-first (mirrors LakeAccessEventModel.record()): a FeedbackText write failure just
+    // leaves contentStored false rather than failing the submission, but a Feedback save failure
+    // after a successful text write must not leave an orphaned, unattributable text row behind.
+    const feedbackId = new mongoose.Types.ObjectId();
+    // Computed once, outside the write, so the response below can echo the same truncated string
+    // that was (or would have been) persisted, not the raw untruncated request body.
+    const { content: truncatedContent, contentTruncated } = truncateFeedbackContent(content);
+    const writeFeedbackText = async (): Promise<boolean> => {
+      if (content.trim().length === 0) return false;
+      try {
+        await FeedbackTextModel.create({
+          _id: feedbackId,
+          content: truncatedContent,
+          contentTruncated,
+          expiresAt: feedbackContentExpiresAt(new Date()),
+        });
+        return true;
+      } catch (error) {
+        req.logger.error('Failed to write FeedbackText sibling', error);
+        return false;
+      }
+    };
+
+    // organizationId/questId/sessionId become authorization keys for downstream scoped readers,
+    // so they are derived server-side here rather than trusted from the request body - see
+    // feedbackContext.ts for the full security rationale. `organization` above (the display
+    // string) is unaffected: it keeps its existing email-fallback resolution regardless.
+    // Independent of the text write above, so the two run concurrently.
+    const [feedbackContext, contentStored] = await Promise.all([
+      resolveFeedbackContext({
+        authenticatedUserId: authenticated ? req.user.id : undefined,
+        organizationId: organizationDoc?.id ?? null,
+        claims: {
+          questId: questId ?? promptMeta?.questId,
+          sessionId: sessionId ?? promptMeta?.session?.id,
+        },
+        logger: req.logger,
+      }),
+      writeFeedbackText(),
+    ]);
+
+    const newFeedback = new FeedbackModel({
+      _id: feedbackId,
+      userId: req.isAuthenticated() ? req.user.id : userId,
+      tags,
+      status: FeedbackStatus.New,
+      username: req.isAuthenticated() ? req.user.username : username,
+      userEmail: req.isAuthenticated() ? req.user.email : userEmail,
+      organization: organization,
+      promptMeta: promptMeta,
+      type,
+      sessionId: feedbackContext.sessionId,
+      questId: feedbackContext.questId,
+      organizationId: feedbackContext.organizationId,
+      subject: feedbackContext.subject,
+      contentStored,
+    });
+    try {
+      await newFeedback.save();
+    } catch (error) {
+      if (contentStored) {
+        await FeedbackTextModel.deleteOne({ _id: feedbackId }).catch(cleanupError => {
+          req.logger.warn('Failed to delete orphaned FeedbackText sibling after a failed save', cleanupError);
+        });
+      }
+      throw error;
+    }
+
+    const stageClass = classifyStage(Config.STAGE);
+
+    // Use the same resolved id already computed for the saved document, not the raw request-body
+    // userId: an untrusted body value that isn't a valid ObjectId threw a Mongoose CastError deep
+    // in the analytics side-effect, which errorHandler maps to a 404 - masking a save that had
+    // already succeeded. That cast is a findById, so it is on `_id` and errorHandler still maps
+    // it; the resolved id plus the try/catch below are what actually contain it. logEvent is
+    // still a post-save side-effect that can fail for other reasons (e.g. a transient write
+    // failure inside incrementUserCounter) -- same containment as the Slack/email side-effects
+    // below.
+    if (authenticated) {
+      try {
+        // Never log the verbatim report text: CounterLog carries no TTL of its own, and doing so
+        // would defeat the 90-day retention the FeedbackText split otherwise enforces.
+        await logEvent(
+          {
+            userId: newFeedback.userId,
+            type: FeedbackEvents.CREATE_FEEDBACK,
+            metadata: { id: newFeedback.id },
+          },
+          { ability: req.ability }
+        );
+      } catch (error) {
+        req.logger.error('Failed to log feedback analytics event', error);
+      }
+    }
+
+    // Reading the settings store is the last post-save await that could still propagate: the
+    // feedback is already durable here, so a settings-store outage must not surface as a 5xx that
+    // makes the client retry and file the report twice. Neither channel's configuration is
+    // knowable without it, so both are reported failed (alarm-worthy) rather than silently
+    // 'disabled', and the submission still answers 201.
+    let settings: Record<string, string>;
+    try {
+      settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+    } catch (error) {
+      req.logger.error('Failed to load admin settings for feedback delivery', error);
+      const unavailable: FeedbackChannelDelivery = { outcome: 'failed', reason: 'error' };
+      const delivery: FeedbackDeliveryResult = {
+        delivered: false,
+        channels: { slack: unavailable, email: unavailable },
+      };
+      await emitFeedbackDeliveryMetrics([
+        ...buildFeedbackDeliveryFailureMetrics('slack', stageClass, 'settings_unavailable', Config.STAGE),
+        ...buildFeedbackDeliveryFailureMetrics('email', stageClass, 'settings_unavailable', Config.STAGE),
+      ]);
+      Logger.error('[feedback] delivery failed: admin settings unavailable', {
+        feedbackId: newFeedback.id,
+        delivery,
+      });
+      // Same body shape as the success path below - content/contentTruncated live on the
+      // FeedbackText sibling, so they have to be echoed explicitly on this early return too.
+      return res.status(201).json({ ...newFeedback.toJSON(), content: truncatedContent, contentTruncated, delivery });
+    }
+
+    // A bug report leaves the product entirely (third-party Slack workspace, unencrypted email
+    // to a static recipient list). functionCalls[].returnValue can hold verbatim tool output -
+    // private corpus chunks, file contents - that the reporter never chose to disclose to those
+    // destinations just by clicking "report a bug". Redact only for these two egress points; the
+    // FeedbackModel record saved above keeps the full promptMeta, gated by the existing
+    // admin-only read check on this same route.
+    const promptMetaForExternalEgress = promptMeta
+      ? { ...promptMeta, functionCalls: redactFunctionCallsForViewer(promptMeta.functionCalls) }
+      : promptMeta;
+
+    // Built once for both channels so a link in Slack and the same link in the email can never
+    // disagree. Null on a deploy with no APP_URL: both channels then render no link section
+    // rather than an unfollowable relative path, and the notification still goes out.
+    const deepLinks = buildFeedbackDeepLinks({
+      feedbackId: newFeedback.id,
+      sessionId: newFeedback.sessionId,
+      questId: newFeedback.questId,
+    });
+    if (!deepLinks) {
+      Logger.warn('[feedback] APP_URL is unset - delivering the notification without deep links', {
+        feedbackId: newFeedback.id,
+      });
+    }
+
+    // Send feedback to Slack if enabled. postFeedbackToSlack records its own
+    // success/failure/skip metrics and reports its own outcome; the 'disabled' skip is
+    // recorded here since it never even calls into postFeedbackToSlack. Collected below (with the
+    // email 'disabled'/'no_recipients' skips) into one batched PutMetricData call rather than one
+    // per channel - on a fresh install with both channels off by default, that's the difference
+    // between one CloudWatch call and two per feedback submission.
+    const disabledChannelMetrics: ReturnType<typeof buildFeedbackDeliverySkippedMetrics> = [];
+
+    let slack: FeedbackChannelDelivery;
+    if (getSettingsValue('EnableFeedBackToSlack', settings)) {
+      console.log('Sending feedback to Slack is enabled');
+      slack = await postFeedbackToSlack({
+        type: type || 'CS',
+        organization,
+        username: newFeedback.username,
+        userEmail: newFeedback.userEmail ?? '',
+        userId: newFeedback.userId,
+        content: truncatedContent,
+        promptMeta: promptMetaForExternalEgress,
+        links: deepLinks,
+      });
+    } else {
+      slack = { outcome: 'skipped', reason: 'disabled' };
+      disabledChannelMetrics.push(
+        ...buildFeedbackDeliverySkippedMetrics('slack', stageClass, 'disabled', Config.STAGE)
+      );
+    }
+
+    let email: FeedbackChannelDelivery;
+    const emailEnabled = getSettingsValue('EnableFeedBackToEmail', settings);
+    const emailRoute = resolveFeedbackEmailRoute(Config.STAGE, settings, process.env.B4M_SELF_HOST === 'true');
+    if (!emailEnabled) {
+      email = { outcome: 'skipped', reason: 'disabled' };
+      disabledChannelMetrics.push(
+        ...buildFeedbackDeliverySkippedMetrics('email', emailRoute.stageClass, 'disabled', Config.STAGE)
+      );
+    } else if (emailRoute.kind === 'skip') {
+      email = { outcome: 'skipped', reason: emailRoute.reason };
+      disabledChannelMetrics.push(
+        ...buildFeedbackDeliverySkippedMetrics('email', emailRoute.stageClass, emailRoute.reason, Config.STAGE)
+      );
+    } else {
+      const feedbackEmails = emailRoute.recipients;
+      console.log(`Sending feedback to all of these folks: ${feedbackEmails}`);
+      console.log('Sending feedback to email is enabled');
+      // Content is sanitized from truncatedContent (not the raw request body) so the email
+      // never carries more text than the reporter was told was saved - see the create-response
+      // comment below for why the same truncated string is used everywhere.
+      const sanitizedContent = sanitizeForEmail(truncatedContent);
+      const sanitizedUsername = sanitizeForEmail(newFeedback.username);
+      const sanitizedUserEmail = sanitizeForEmail(newFeedback.userEmail ?? '');
+      const sanitizedUserId = sanitizeForEmail(newFeedback.userId);
+      const sanitizedType = type ? sanitizeForEmail(type) : '';
+      const sanitizedTags = tags ? tags.map(tag => sanitizeForEmail(tag)) : [];
+      const sanitizedPromptMeta = promptMetaForExternalEgress
+        ? sanitizeForEmail(JSON.stringify(promptMetaForExternalEgress, null, 2))
+        : '';
+
+      // allSettled (not all): one rejected recipient must not take down the whole handler
+      // after Slack has already fired, and partial success/failure both need recording.
+      const emailResults = await Promise.allSettled(
+        feedbackEmails.map((recipientEmail: string) =>
+          EmailEvents.Send.publish({
+            to: recipientEmail,
+            subject: 'New Feedback Received',
+            body: `
+              <!DOCTYPE html>
+              <html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+              <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>New Feedback Submission</title>
+                <style>
+                  @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
+                  body {
+                    margin: 0;
+                    padding: 0;
+                    background-color: #f5f7fa;
+                    font-family: 'Roboto', sans-serif;
+                    color: #333;
+                  }
+                  .container {
+                    width: 100%;
+                    max-width: 600px;
+                    margin: 30px auto;
+                    background-color: #ffffff;
+                    border-radius: 8px;
+                    overflow: hidden;
+                    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.15);
+                  }
+                  .header {
+                    background-color: #007bff;
+                    color: #ffffff;
+                    text-align: center;
+                    padding: 30px 20px;
+                  }
+                  .header h1 {
+                    margin: 0;
+                    font-size: 28px;
+                  }
+                  .content {
+                    padding: 30px 20px;
+                  }
+                  .content h2 {
+                    font-size: 22px;
+                    margin-bottom: 20px;
+                  }
+                  .content p {
+                    font-size: 16px;
+                    line-height: 1.6;
+                    margin-bottom: 15px;
+                  }
+                  .info {
+                    background-color: #f1f1f1;
+                    padding: 20px;
+                    border-radius: 5px;
+                    margin-bottom: 20px;
+                  }
+                  .info p {
+                    margin: 5px 0;
+                  }
+                  .tags {
+                    margin-top: 10px;
+                  }
+                  .tag {
+                    display: inline-block;
+                    background: #28a745;
+                    color: #fff;
+                    padding: 5px 10px;
+                    border-radius: 15px;
+                    font-size: 12px;
+                    margin: 5px 5px 0 0;
+                  }
+                  .footer {
+                    text-align: center;
+                    padding: 20px;
+                    background-color: #e9ecef;
+                    font-size: 14px;
+                    color: #6c757d;
+                  }
+                  @media (max-width: 600px) {
+                    .content h2 {
+                      font-size: 20px;
+                    }
+                    .header h1 {
+                      font-size: 24px;
+                    }
+                  }
+                </style>
+              </head>
+              <body>
+                <div class="container">
+                  <div class="header">
+                    <h1>You've Got Feedback from ${sanitizedUsername}</h1>
+                  </div>
+                  <div class="content">
+                    <h2>New Feedback Submission</h2>
+                    <div class="info">
+                      <p><strong>From:</strong> ${sanitizedUsername} (ID: ${sanitizedUserId})</p>
+                      <p><strong>Email:</strong> ${sanitizedUserEmail}</p>
+                      ${sanitizedType ? `<p><strong>Type:</strong> ${sanitizedType}</p>` : ''}
+                      ${renderFeedbackLinksHtml(deepLinks)}
+                    </div>
+                    <p><strong>Message:</strong></p>
+                    <p>${sanitizedContent}</p>
+                    ${
+                      sanitizedTags.length
+                        ? `<div class="tags">
+                            <strong>Tags:</strong>
+                            ${sanitizedTags.map(tag => `<span class="tag">${tag}</span>`).join('')}
+                          </div>`
+                        : ''
+                    }
+                    ${
+                      promptMeta
+                        ? `<div class="info">
+                            <p><strong>Prompt Meta:</strong></p>
+                            <pre style="white-space: pre-wrap; word-wrap: break-word;">${sanitizedPromptMeta}</pre>
+                          </div>`
+                        : ''
+                    }
+                  </div>
+                  <div class="footer">
+                    <p>This is an automated email from [Your Company]. Please do not reply directly to this message.</p>
+                  </div>
+                </div>
+              </body>
+              </html>
+              `,
+          })
+        )
+      );
+      const succeeded = emailResults.filter(r => r.status === 'fulfilled').length;
+      // emailResults is index-aligned with feedbackEmails (allSettled preserves order), which is
+      // what lets a rejection be tied back to the recipient it actually failed for.
+      const rejected = emailResults
+        .map((result, i) => ({ result, email: feedbackEmails[i] }))
+        .filter((r): r is { result: PromiseRejectedResult; email: string } => r.result.status === 'rejected');
+      await Promise.all([
+        succeeded > 0 ? recordFeedbackDeliverySuccess('email', stageClass) : undefined,
+        succeeded < emailResults.length
+          ? recordFeedbackDeliveryFailure('email', stageClass, 'publish_error', Config.STAGE)
+          : undefined,
+      ]);
+      // A partial failure still trips the alarm-worthy metric above, but the channel-level
+      // outcome below reports 'delivered' (some recipients did get it), so isIncident() never
+      // sees it - log the actual rejection reasons here, the one place that still has them
+      // (an all-fail send also lands here rather than only in the generic isIncident log below,
+      // which never reads emailResults[i].reason).
+      if (rejected.length > 0) {
+        Logger.error('[feedback] email publish rejected for one or more recipients', {
+          feedbackId: newFeedback.id,
+          succeeded,
+          attempted: emailResults.length,
+          failedRecipients: rejected.map(r => r.email),
+          reasons: rejected.map(r => String(r.result.reason)),
+        });
+      }
+      // 'email delivered' means the outbound-mail event was attempted (EmailEvents.Send.publish
+      // resolved), not that it was actually enqueued or sent - the underlying PutEvents call can
+      // return success with a rejected entry that nothing in this repo currently checks for, and
+      // SMTP delivery itself happens in a separate, uninstrumented subsystem.
+      email = succeeded > 0 ? { outcome: 'delivered' } : { outcome: 'failed', reason: 'error' };
+    }
+
+    if (disabledChannelMetrics.length > 0) {
+      await emitFeedbackDeliveryMetrics(disabledChannelMetrics);
+    }
+
+    const delivery: FeedbackDeliveryResult = {
+      delivered: slack.outcome === 'delivered' || email.outcome === 'delivered',
+      channels: { slack, email },
+    };
+    // Reuse the alarm's own taxonomy so log severity can't drift from alarm severity: a
+    // deliberately-silent skip (both channels disabled, or a non-prod stage with no webhook
+    // configured) is expected and logs at most a warning, while a hard failure or an
+    // enabled-but-actually-broken skip is the incident the alarm pages on.
+    const isIncident = (c: FeedbackChannelDelivery): boolean =>
+      c.outcome === 'failed' || (c.outcome === 'skipped' && ALARM_WORTHY_SKIP_REASONS.some(r => r === c.reason));
+    if ([slack, email].some(isIncident)) {
+      Logger.error('[feedback] delivery failed for a submitted feedback record', {
+        feedbackId: newFeedback.id,
+        delivery,
+      });
+    } else if (!delivery.delivered) {
+      Logger.warn('[feedback] no delivery path configured', { feedbackId: newFeedback.id, delivery });
+    }
+
+    // newFeedback.toJSON() (not a spread of the hydrated doc) - the schema sets
+    // toJSON: { virtuals: true }, which is what produces `id`; spreading the doc directly
+    // yields Mongoose's internal _doc/$__ fields instead. `content` is echoed as the truncated
+    // string actually persisted (or that would have been), not the raw request body, since it
+    // now lives on the FeedbackText sibling. `contentTruncated` is surfaced here explicitly since
+    // it lives only on that sibling, never on newFeedback itself - without it, a caller has no way
+    // to tell the submitter their text was cut.
+    return res.status(201).json({ ...newFeedback.toJSON(), content: truncatedContent, contentTruncated, delivery });
+  });
+
+export const config = {
+  api: {
+    externalResolver: true,
+  },
+};
+
+export default handler;

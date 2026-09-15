@@ -1,0 +1,294 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import { cacheRepository, Cache } from './CacheModel';
+import { setupMongoTest } from '../../../__test__/utils';
+
+// Single mongo lifecycle for both describe blocks - calling setupMongoTest()
+// twice in one file creates two MongoMemoryServer lifecycles that disconnect
+// each other mid-suite.
+setupMongoTest();
+
+// setupMongoTest's beforeEach calls dropDatabase(), which drops the unique
+// index on `key` along with the data. Re-sync indexes before every test so
+// the upsert-on-conflict path can rely on a 11000 duplicate-key error and
+// the buggy non-atomic create path would actually trip the unique constraint.
+beforeEach(async () => {
+  await Cache.syncIndexes();
+});
+
+describe('CacheRepository.incrementCounterConditional', () => {
+  const limit = 5;
+  const ttlMs = 60_000;
+
+  it('first request seeds the counter at 1', async () => {
+    const key = `rl:${Date.now()}-1`;
+    const result = await cacheRepository.incrementCounterConditional(key, limit, ttlMs);
+
+    expect(result).toEqual({ success: true, count: 1 });
+  });
+
+  it('sequential requests increment until limit, then reject', async () => {
+    const key = `rl:${Date.now()}-2`;
+
+    for (let i = 1; i <= limit; i++) {
+      const r = await cacheRepository.incrementCounterConditional(key, limit, ttlMs);
+      expect(r).toEqual({ success: true, count: i });
+    }
+
+    const blocked = await cacheRepository.incrementCounterConditional(key, limit, ttlMs);
+    expect(blocked).toEqual({ success: false, count: limit });
+  });
+
+  it('returns success=false when limit < 1', async () => {
+    const key = `rl:${Date.now()}-3`;
+    const result = await cacheRepository.incrementCounterConditional(key, 0, ttlMs);
+
+    expect(result).toEqual({ success: false, count: 0 });
+    // Should not create a document
+    expect(await Cache.findOne({ key })).toBeNull();
+  });
+
+  // The original race: two concurrent requests both miss the doc and both
+  // call create() against the unique-indexed key - the loser throws E11000.
+  // The intermediate fix swapped the throw for a silent false-rejection of
+  // the race-loser. This test guards against both.
+  it('concurrent burst against a fresh key produces exactly limit successes (no throws, no false rejects)', async () => {
+    const key = `rl:${Date.now()}-4`;
+    const concurrentCount = 50;
+
+    const results = await Promise.all(
+      Array.from({ length: concurrentCount }, () => cacheRepository.incrementCounterConditional(key, limit, ttlMs))
+    );
+
+    const successes = results.filter(r => r.success);
+    const failures = results.filter(r => !r.success);
+
+    expect(successes.length).toBe(limit);
+    expect(failures.length).toBe(concurrentCount - limit);
+
+    // Every success must report a unique count in [1..limit]
+    const successCounts = successes.map(r => r.count).sort((a, b) => a - b);
+    expect(successCounts).toEqual([1, 2, 3, 4, 5]);
+
+    // Failures all see the saturated counter
+    failures.forEach(r => expect(r.count).toBe(limit));
+
+    // Final stored count matches the limit - no double-counting, no lost increments
+    const doc = await Cache.findOne({ key });
+    expect((doc?.result as { count: number }).count).toBe(limit);
+  });
+
+  it('concurrent burst smaller than limit lets all requests through', async () => {
+    const key = `rl:${Date.now()}-5`;
+    const concurrentCount = 3;
+
+    const results = await Promise.all(
+      Array.from({ length: concurrentCount }, () => cacheRepository.incrementCounterConditional(key, limit, ttlMs))
+    );
+
+    expect(results.every(r => r.success)).toBe(true);
+    const counts = results.map(r => r.count).sort((a, b) => a - b);
+    expect(counts).toEqual([1, 2, 3]);
+  });
+});
+
+describe('CacheRepository.tryIncrementWithinLimitFixedWindow', () => {
+  const limit = 5;
+  const windowMs = 60_000;
+
+  it('first request seeds the window with count=1', async () => {
+    const key = `rate-limit:test:${Date.now()}-1`;
+    const result = await cacheRepository.tryIncrementWithinLimitFixedWindow(key, limit, windowMs);
+
+    expect(result.success).toBe(true);
+    expect(result.count).toBe(1);
+    expect(result.expiresAt.getTime()).toBeGreaterThan(Date.now() + windowMs - 1000);
+    expect(result.expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + windowMs + 100);
+  });
+
+  it('increments preserve the original expiresAt (fixed window)', async () => {
+    const key = `rate-limit:test:${Date.now()}-2`;
+
+    const first = await cacheRepository.tryIncrementWithinLimitFixedWindow(key, limit, windowMs);
+    const firstExpiresAt = first.expiresAt.getTime();
+
+    // Wait long enough that a sliding window would visibly drift forward.
+    await new Promise(r => setTimeout(r, 50));
+
+    const second = await cacheRepository.tryIncrementWithinLimitFixedWindow(key, limit, windowMs);
+
+    expect(second.success).toBe(true);
+    expect(second.count).toBe(2);
+    expect(second.expiresAt.getTime()).toBe(firstExpiresAt);
+  });
+
+  it('rejects with success=false once limit is reached', async () => {
+    const key = `rate-limit:test:${Date.now()}-3`;
+
+    for (let i = 1; i <= limit; i++) {
+      const r = await cacheRepository.tryIncrementWithinLimitFixedWindow(key, limit, windowMs);
+      expect(r.success).toBe(true);
+      expect(r.count).toBe(i);
+    }
+
+    const blocked = await cacheRepository.tryIncrementWithinLimitFixedWindow(key, limit, windowMs);
+    expect(blocked.success).toBe(false);
+    expect(blocked.count).toBe(limit);
+    expect(blocked.expiresAt.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('resets when the window has expired (handles TTL lag)', async () => {
+    const key = `rate-limit:test:${Date.now()}-4`;
+
+    // Manually seed a doc that's "expired in time" but not yet TTL-deleted.
+    await Cache.create({
+      key,
+      result: { count: limit },
+      expiresAt: new Date(Date.now() - 1000),
+    });
+
+    const result = await cacheRepository.tryIncrementWithinLimitFixedWindow(key, limit, windowMs);
+
+    expect(result.success).toBe(true);
+    expect(result.count).toBe(1);
+    expect(result.expiresAt.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('overwrites legacy numeric `result` shape on first contact', async () => {
+    const key = `rate-limit:test:${Date.now()}-5`;
+
+    // Old shape - what the pre-migration rateLimit middleware wrote.
+    await Cache.create({
+      key,
+      result: 3,
+      expiresAt: new Date(Date.now() + windowMs),
+    });
+
+    const result = await cacheRepository.tryIncrementWithinLimitFixedWindow(key, limit, windowMs);
+
+    expect(result.success).toBe(true);
+    expect(result.count).toBe(1);
+
+    const doc = await Cache.findOne({ key });
+    expect(doc?.result).toEqual({ count: 1 });
+  });
+
+  it('concurrent burst never exceeds the limit', async () => {
+    const key = `rate-limit:test:${Date.now()}-6`;
+    const concurrentCount = 50;
+
+    const results = await Promise.all(
+      Array.from({ length: concurrentCount }, () =>
+        cacheRepository.tryIncrementWithinLimitFixedWindow(key, limit, windowMs)
+      )
+    );
+
+    const successes = results.filter(r => r.success);
+    const failures = results.filter(r => !r.success);
+
+    expect(successes.length).toBe(limit);
+    expect(failures.length).toBe(concurrentCount - limit);
+
+    const successCounts = successes.map(r => r.count).sort((a, b) => a - b);
+    expect(successCounts).toEqual([1, 2, 3, 4, 5]);
+
+    failures.forEach(r => expect(r.count).toBe(limit));
+  });
+});
+
+describe('CacheRepository.findByKey', () => {
+  it('returns a live entry', async () => {
+    const key = `cache:live:${Date.now()}`;
+    await Cache.create({ key, result: { value: 'fresh' }, expiresAt: new Date(Date.now() + 60_000) });
+
+    const doc = await cacheRepository.findByKey(key);
+
+    expect(doc?.result).toEqual({ value: 'fresh' });
+  });
+
+  it('does not return an entry that has expired but is awaiting TTL cleanup', async () => {
+    // Mongo's TTL monitor sweeps about once a minute, so a row can outlive its own expiresAt by
+    // that long. Before the expiresAt guard, findByKey handed those out as hits - which meant a
+    // stale analytics report served as fresh and a closed rate-limit window reading as open.
+    const key = `cache:stale:${Date.now()}`;
+    await Cache.create({ key, result: { value: 'stale' }, expiresAt: new Date(Date.now() - 1000) });
+
+    // Falsy, not null: the underlying findOne yields undefined for a miss.
+    expect(await cacheRepository.findByKey(key)).toBeFalsy();
+    // Still physically present - the guard is what excludes it, not a deletion.
+    expect(await Cache.findOne({ key })).not.toBeNull();
+  });
+
+  it('returns an entry written with no expiresAt', async () => {
+    // createOrUpdate upserts without running validators, so rows with no expiry exist. The TTL
+    // index skips those, so they never expire and the guard must not hide them.
+    const key = `cache:noexpiry:${Date.now()}`;
+    await Cache.collection.insertOne({ key, result: { value: 'permanent' } });
+
+    expect(await cacheRepository.findByKey(key)).toBeTruthy();
+  });
+});
+
+describe('CacheRepository.tryAddWithinLimitFixedWindow', () => {
+  const windowMs = 60_000;
+
+  it('meters weighted amounts and denies all-or-nothing at the boundary', async () => {
+    const key = `spend:${Date.now()}-1`;
+    const limit = 100;
+
+    expect((await cacheRepository.tryAddWithinLimitFixedWindow(key, 60, limit, windowMs)).success).toBe(true);
+    expect(await cacheRepository.tryAddWithinLimitFixedWindow(key, 40, limit, windowMs)).toMatchObject({
+      success: true,
+      count: 100,
+    });
+
+    // Exactly at the limit now - any further amount is denied and nothing is applied.
+    const denied = await cacheRepository.tryAddWithinLimitFixedWindow(key, 1, limit, windowMs);
+    expect(denied.success).toBe(false);
+    expect(denied.count).toBe(100);
+  });
+
+  it('denies an amount that cannot fit even in a fresh window instead of seeding count > limit', async () => {
+    const key = `spend:${Date.now()}-2`;
+    const denied = await cacheRepository.tryAddWithinLimitFixedWindow(key, 200, 100, windowMs);
+    expect(denied.success).toBe(false);
+    // Nothing was seeded - a subsequent fitting amount opens the window normally.
+    const fits = await cacheRepository.tryAddWithinLimitFixedWindow(key, 100, 100, windowMs);
+    expect(fits).toMatchObject({ success: true, count: 100 });
+  });
+
+  it('treats amount <= 0 as a no-op success that consumes nothing', async () => {
+    const key = `spend:${Date.now()}-3`;
+    await cacheRepository.tryAddWithinLimitFixedWindow(key, 100, 100, windowMs);
+    const noop = await cacheRepository.tryAddWithinLimitFixedWindow(key, 0, 100, windowMs);
+    expect(noop).toMatchObject({ success: true, count: 100 });
+  });
+
+  it('denies on limit <= 0 (the operator STOP value)', async () => {
+    const key = `spend:${Date.now()}-4`;
+    expect((await cacheRepository.tryAddWithinLimitFixedWindow(key, 1, 0, windowMs)).success).toBe(false);
+  });
+
+  it('never jointly breaches the limit under concurrent reservations', async () => {
+    const key = `spend:${Date.now()}-5`;
+    const limit = 100;
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => cacheRepository.tryAddWithinLimitFixedWindow(key, 30, limit, windowMs))
+    );
+    const granted = results.filter(r => r.success).length;
+    expect(granted).toBe(3); // 4 x 30 would breach 100
+
+    const state = await cacheRepository.findByKey(key);
+    expect((state?.result as { count: number }).count).toBe(90);
+  });
+
+  it('keeps tryIncrementWithinLimitFixedWindow behavior as the amount=1 case', async () => {
+    const key = `spend:${Date.now()}-6`;
+    for (let i = 1; i <= 3; i++) {
+      expect(await cacheRepository.tryIncrementWithinLimitFixedWindow(key, 3, windowMs)).toMatchObject({
+        success: true,
+        count: i,
+      });
+    }
+    expect((await cacheRepository.tryIncrementWithinLimitFixedWindow(key, 3, windowMs)).success).toBe(false);
+  });
+});

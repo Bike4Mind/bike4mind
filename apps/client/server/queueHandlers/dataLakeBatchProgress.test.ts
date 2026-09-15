@@ -1,0 +1,376 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const h = vi.hoisted(() => ({
+  markTerminalIfActive: vi.fn(),
+  setTaxonomyStatusIfActive: vi.fn(),
+  touchIfActive: vi.fn(async () => undefined),
+  findById: vi.fn(),
+  recomputeLakeStats: vi.fn(),
+  recordBatchCompletion: vi.fn(),
+  recordTaxonomyDailyCapExceeded: vi.fn(),
+  sendToQueue: vi.fn(),
+  sendToClient: vi.fn(),
+  tryIncrementWithinLimitFixedWindow: vi.fn(),
+}));
+
+vi.mock('@bike4mind/database', () => ({
+  // The config-audit repos the code under test now wires (see lakeConfigAuditDb). Stubbed
+  // rather than omitted because this mock REPLACES the whole module: a missing export is an
+  // import-time failure, not a silent undefined.
+  lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
+  dataLakeBatchRepository: {
+    markTerminalIfActive: h.markTerminalIfActive,
+    setTaxonomyStatusIfActive: h.setTaxonomyStatusIfActive,
+    touchIfActive: h.touchIfActive,
+  },
+  dataLakeRepository: { findById: h.findById },
+  fabFileRepository: {},
+  cacheRepository: { tryIncrementWithinLimitFixedWindow: h.tryIncrementWithinLimitFixedWindow },
+}));
+vi.mock('@bike4mind/services', () => ({ dataLakeService: { recomputeLakeStats: h.recomputeLakeStats } }));
+vi.mock('@server/utils/cloudwatch', () => ({
+  recordBatchCompletion: (...a: unknown[]) => h.recordBatchCompletion(...a),
+  recordTaxonomyDailyCapExceeded: (...a: unknown[]) => h.recordTaxonomyDailyCapExceeded(...a),
+}));
+vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
+vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
+vi.mock('sst', () => ({
+  Resource: {
+    dataLakeTaxonomyQueue: { url: 'http://sqs.example/taxonomy' },
+    websocket: { managementEndpoint: 'http://ws.example' },
+  },
+}));
+
+import {
+  finalizeBatchIfComplete,
+  enqueueTaxonomyAnalysisIfWanted,
+  deferFailureIfRetryable,
+  isBatchComplete,
+  completedBatchStatus,
+} from './dataLakeBatchProgress';
+
+// `warn` as well as `error`, matching what the real callers pass (the Lambda logger): the audit
+// write inside recomputeLakeStats reports failures through `warn`, and a fixture without it would
+// let the code under test silently fall back to console.warn while the test still passed.
+const logger = { warn: vi.fn(), error: vi.fn() };
+// A batch at its completion threshold (vectorized+failed+skipped >= total).
+// `userId` is deliberately a real user, not absent: the invariant this file pins is that batch
+// completion attributes its auto-activate to NOBODY even when the batch has a known owner, because
+// the queue handler is not acting for that person at completion time. A userId-less fixture would
+// satisfy the assertion below for the wrong reason.
+const batch = (overrides: Record<string, unknown> = {}) =>
+  ({
+    id: 'b1',
+    dataLakeId: 'lake1',
+    userId: 'u1',
+    totalFiles: 2,
+    vectorizedFiles: 2,
+    failedFiles: 0,
+    skippedFiles: 0,
+    ...overrides,
+  }) as never;
+
+describe('finalizeBatchIfComplete - batch-completion metric parity', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.markTerminalIfActive.mockResolvedValue(batch());
+    h.findById.mockResolvedValue({ id: 'lake1', datalakeTag: 'datalake:x' });
+    h.recordBatchCompletion.mockResolvedValue(undefined); // real emitter returns a Promise
+    h.recomputeLakeStats.mockResolvedValue(undefined);
+  });
+
+  it('records a clean completion when no files failed', async () => {
+    await finalizeBatchIfComplete(batch(), logger as never);
+    expect(h.markTerminalIfActive).toHaveBeenCalledWith('b1', 'completed');
+    expect(h.recordBatchCompletion).toHaveBeenCalledWith('completed');
+  });
+
+  // Batch completion is the dominant producer of the auto-activate config event, so this is the
+  // worst place for the audit to go dark. Both adapters are named explicitly: `adminSettings` is
+  // optional and the event repo degrades to recording nothing, so dropping either from the shared
+  // `db` literal would still compile and no other assertion would notice. The logger is pinned too
+  // - unthreaded, a best-effort audit failure falls to console.warn where alerting cannot see it.
+  it('wires the audit repositories and a real logger into the stats recompute', async () => {
+    await finalizeBatchIfComplete(batch(), logger as never);
+
+    expect(h.recomputeLakeStats).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        db: expect.objectContaining({
+          lakeConfigChangeEvents: expect.anything(),
+          adminSettings: expect.anything(),
+        }),
+        logger: expect.objectContaining({ warn: expect.any(Function) }),
+      })
+    );
+    // No third argument, so no actor: the batch above IS owned by 'u1', and the flip still records
+    // under a `system` principal. Threading the batch owner here would name someone who was not
+    // present at completion time - see recomputeLakeStats' note on the honest answer.
+    expect(h.recomputeLakeStats.mock.calls[0][2]).toBeUndefined();
+  });
+
+  it('records an errored completion when a file failed', async () => {
+    h.markTerminalIfActive.mockResolvedValue(batch({ failedFiles: 1 }));
+    await finalizeBatchIfComplete(batch({ failedFiles: 1, vectorizedFiles: 1 }), logger as never);
+    expect(h.markTerminalIfActive).toHaveBeenCalledWith('b1', 'completed_with_errors');
+    expect(h.recordBatchCompletion).toHaveBeenCalledWith('completed_with_errors');
+  });
+
+  it('does not record when the batch has not reached the completion threshold', async () => {
+    await finalizeBatchIfComplete(batch({ vectorizedFiles: 1 }), logger as never);
+    expect(h.markTerminalIfActive).not.toHaveBeenCalled();
+    expect(h.recordBatchCompletion).not.toHaveBeenCalled();
+  });
+
+  // A Drive continuation chain that stopped short re-plans totalFiles down to what it produced, so it
+  // DOES cross the threshold - by construction, since the shortfall was subtracted from the total. The
+  // only thing separating it from a clean run is deferredFiles, so if the outcome ignores that field a
+  // 3-of-500 sync settles as a green 'completed' and no surface anywhere says files are missing (#2394).
+  it('settles a chain that wrote files off unfinished as completed_with_errors, not completed', async () => {
+    const short = batch({ totalFiles: 3, vectorizedFiles: 3, deferredFiles: 497 });
+    h.markTerminalIfActive.mockResolvedValue(short);
+
+    await finalizeBatchIfComplete(short, logger as never);
+
+    expect(h.markTerminalIfActive).toHaveBeenCalledWith('b1', 'completed_with_errors');
+    expect(h.recordBatchCompletion).toHaveBeenCalledWith('completed_with_errors');
+  });
+
+  // The degenerate chain: nothing produced, so the re-plan lands on 0 and the threshold is met at 0.
+  it('settles a chain that ingested nothing as completed_with_errors rather than an empty success', async () => {
+    const nothing = batch({ totalFiles: 0, vectorizedFiles: 0, deferredFiles: 2 });
+    h.markTerminalIfActive.mockResolvedValue(nothing);
+
+    await finalizeBatchIfComplete(nothing, logger as never);
+
+    expect(h.markTerminalIfActive).toHaveBeenCalledWith('b1', 'completed_with_errors');
+  });
+
+  // deferredFiles must stay OUT of the completion threshold. A deferred candidate mints no manifest
+  // entry and no counter, so no later event can ever satisfy a gate that counted it - the batch would
+  // sit in 'processing' until the stuck-batch reconciler force-failed it, which is a worse outcome than
+  // the one this field exists to report. The threshold decides WHETHER it is done; the outcome decides
+  // whether it went well.
+  it('does not let a deferred count hold a batch open past its completion threshold', async () => {
+    const short = batch({ totalFiles: 3, vectorizedFiles: 3, deferredFiles: 497 }) as unknown as never;
+    expect(isBatchComplete(short)).toBe(true);
+    expect(completedBatchStatus(short)).toBe('completed_with_errors');
+  });
+
+  // The six websocket progress payloads report the outcome through this helper, so the client cannot
+  // be told 'completed' about a batch the database settled as 'completed_with_errors'.
+  it('reports no status at all while a batch is still short of its threshold', () => {
+    expect(completedBatchStatus(batch({ vectorizedFiles: 1 }))).toBeUndefined();
+    expect(completedBatchStatus(null)).toBeUndefined();
+    expect(completedBatchStatus(batch())).toBe('completed');
+  });
+
+  it('does not record when another handler already finalized (guard lost)', async () => {
+    h.markTerminalIfActive.mockResolvedValue(null);
+    await finalizeBatchIfComplete(batch(), logger as never);
+    expect(h.recordBatchCompletion).not.toHaveBeenCalled();
+  });
+
+  it('does not enqueue taxonomy analysis either when this handler loses the terminal-transition race', async () => {
+    h.markTerminalIfActive.mockResolvedValue(null);
+    await finalizeBatchIfComplete(batch({ wantsTaxonomy: true }), logger as never);
+    expect(h.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
+  });
+
+  // Backstop for upload-complete.ts's own call: if that request never lands (network blip,
+  // tab closed) but chunk/vectorize finish here on their own, this is the only other
+  // guaranteed-to-run path left that can still enqueue taxonomy analysis for the batch.
+  it('also enqueues taxonomy analysis for the winning batch when it opted in', async () => {
+    h.markTerminalIfActive.mockResolvedValue(batch({ wantsTaxonomy: true, userId: 'u1' }));
+    h.setTaxonomyStatusIfActive.mockResolvedValue(batch({ taxonomyStatus: 'queued' }));
+    h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: true, count: 1, expiresAt: new Date() });
+    h.sendToQueue.mockResolvedValue('msg-id');
+
+    await finalizeBatchIfComplete(batch(), logger as never);
+
+    expect(h.setTaxonomyStatusIfActive).toHaveBeenCalledWith('b1', ['none'], 'queued', {
+      taxonomyStartedAt: expect.any(Date),
+    });
+    expect(h.sendToQueue).toHaveBeenCalled();
+  });
+
+  it('does not enqueue taxonomy analysis for a batch that never opted in', async () => {
+    h.markTerminalIfActive.mockResolvedValue(batch({ wantsTaxonomy: false }));
+    await finalizeBatchIfComplete(batch(), logger as never);
+    expect(h.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Deliberately NOT gated on ingest completion - called from upload-complete.ts right
+ * after the browser upload phase ends, and as a reconciler backstop, neither of which cares
+ * whether chunk/vectorize have finished.
+ */
+describe('enqueueTaxonomyAnalysisIfWanted - guarded, ingest-independent enqueue', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.setTaxonomyStatusIfActive.mockResolvedValue(batch({ taxonomyStatus: 'queued' }));
+    h.sendToQueue.mockResolvedValue('msg-id');
+    h.sendToClient.mockResolvedValue(undefined);
+    h.recordTaxonomyDailyCapExceeded.mockResolvedValue(undefined);
+    h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: true, count: 1, expiresAt: new Date() });
+  });
+
+  it('no-ops for a null batch or one that never opted in', async () => {
+    await enqueueTaxonomyAnalysisIfWanted(null, logger as never);
+    await enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: false }), logger as never);
+    expect(h.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('claims the taxonomy phase and enqueues, regardless of chunk/vectorize progress', async () => {
+    // vectorizedFiles is nowhere near totalFiles - would never pass finalizeBatchIfComplete's
+    // own threshold, proving this function truly does not depend on it.
+    await enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: true, vectorizedFiles: 0 }), logger as never);
+
+    expect(h.setTaxonomyStatusIfActive).toHaveBeenCalledWith('b1', ['none'], 'queued', {
+      taxonomyStartedAt: expect.any(Date),
+    });
+    // The batch OWNER is carried onto the queue message. This previously asserted `undefined`, which
+    // held only because the fixture had no owner - it pinned the absence of a field rather than the
+    // propagation of one. The distinction matters here: taxonomy analysis runs as work requested by
+    // this user, unlike the auto-activate above, which deliberately records no principal.
+    expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs.example/taxonomy', {
+      batchId: 'b1',
+      dataLakeId: 'lake1',
+      userId: 'u1',
+    });
+  });
+
+  it('does not enqueue when the guarded claim is lost (already queued/analyzing/etc.), and never even checks the cap', async () => {
+    h.setTaxonomyStatusIfActive.mockResolvedValue(null);
+    await enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: true }), logger as never);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(h.tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
+  });
+
+  it('logs rather than throws when the queue send fails (never blocks the caller)', async () => {
+    h.sendToQueue.mockRejectedValue(new Error('sqs down'));
+    await expect(
+      enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: true }), logger as never)
+    ).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalled();
+  });
+
+  // The automatic path is the primary OpenAI-cost driver (fires once per opted-in upload),
+  // unlike the manual re-analyze endpoint which was already capped - this closes that gap.
+  // Claims BEFORE checking the cap so an over-cap batch still lands on a real terminal status
+  // ('failed', recoverable via Re-analyze) instead of being silently stranded at 'none' forever.
+  it('claims first, then reverts to a real failed status (with a real message) when the daily cap is exceeded', async () => {
+    h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: false, count: 50, expiresAt: new Date() });
+    h.setTaxonomyStatusIfActive
+      .mockResolvedValueOnce(batch({ taxonomyStatus: 'queued' })) // the claim
+      .mockResolvedValueOnce(batch({ taxonomyStatus: 'failed' })); // the revert-to-failed
+
+    await enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: true, userId: 'u1' }), logger as never);
+
+    expect(h.setTaxonomyStatusIfActive).toHaveBeenNthCalledWith(1, 'b1', ['none'], 'queued', {
+      taxonomyStartedAt: expect.any(Date),
+    });
+    expect(h.tryIncrementWithinLimitFixedWindow).toHaveBeenCalledWith(
+      'rate-limit:u1:data-lakes/reanalyze-taxonomy',
+      50,
+      24 * 60 * 60 * 1000
+    );
+    expect(h.recordTaxonomyDailyCapExceeded).toHaveBeenCalledTimes(1);
+    expect(h.setTaxonomyStatusIfActive).toHaveBeenNthCalledWith(2, 'b1', ['queued'], 'failed', {
+      taxonomyError: 'Daily AI tag-suggestion limit reached - try again tomorrow',
+    });
+    // Notified live (mirrors analyzeBatchTaxonomy's fail()), since this transition won the race.
+    expect(h.sendToClient).toHaveBeenCalledWith('u1', 'http://ws.example', {
+      action: 'data_lake_batch_progress',
+      batchId: 'b1',
+      taxonomyStatus: 'failed',
+    });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('does not notify when the revert-to-failed write loses its own guard (something else already resolved it)', async () => {
+    h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: false, count: 50, expiresAt: new Date() });
+    h.setTaxonomyStatusIfActive
+      .mockResolvedValueOnce(batch({ taxonomyStatus: 'queued' })) // the claim
+      .mockResolvedValueOnce(null); // revert-to-failed guard lost
+
+    await enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: true, userId: 'u1' }), logger as never);
+
+    expect(h.sendToClient).not.toHaveBeenCalled();
+  });
+
+  it('swallows a failed revert-to-failed write instead of throwing, but logs it (never blocks the caller, never silent)', async () => {
+    h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: false, count: 50, expiresAt: new Date() });
+    h.setTaxonomyStatusIfActive
+      .mockResolvedValueOnce(batch({ taxonomyStatus: 'queued' })) // the claim
+      .mockRejectedValueOnce(new Error('mongo down')); // revert-to-failed write itself errors
+
+    await expect(
+      enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: true, userId: 'u1' }), logger as never)
+    ).resolves.toBeUndefined();
+    expect(h.sendToClient).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('mongo down'));
+  });
+
+  it('shares its rate-limit bucket with the manual reanalyze endpoint (same key format)', async () => {
+    await enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: true, userId: 'u2' }), logger as never);
+
+    expect(h.tryIncrementWithinLimitFixedWindow).toHaveBeenCalledWith(
+      'rate-limit:u2:data-lakes/reanalyze-taxonomy',
+      expect.any(Number),
+      expect.any(Number)
+    );
+  });
+});
+
+describe('deferFailureIfRetryable - shared non-final-attempt guard (#1412)', () => {
+  const makeEvent = (receiveCount?: number) =>
+    ({
+      Records: [
+        {
+          ...(receiveCount !== undefined ? { attributes: { ApproximateReceiveCount: String(receiveCount) } } : {}),
+        },
+      ],
+    }) as never;
+  const logger2 = { warn: vi.fn(), error: vi.fn() };
+  const params = (batchId: string | undefined) => ({
+    fabFileId: 'ff1',
+    batchId,
+    action: 'Chunking',
+    errorMessage: 'boom',
+    logger: logger2,
+  });
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([1, 2])('returns true (defer) on a non-final attempt %i of 3, and heartbeats the batch', async count => {
+    const deferred = await deferFailureIfRetryable(makeEvent(count), 3, params('batch-1'));
+    expect(deferred).toBe(true);
+    expect(h.touchIfActive).toHaveBeenCalledWith('batch-1');
+    expect(logger2.warn).toHaveBeenCalledWith(expect.stringContaining('attempt ' + count + '/3'));
+  });
+
+  it('does not heartbeat when there is no batchId', async () => {
+    await deferFailureIfRetryable(makeEvent(1), 3, params(undefined));
+    expect(h.touchIfActive).not.toHaveBeenCalled();
+  });
+
+  it('a heartbeat failure never replaces the deferral - still returns true, logs, does not throw', async () => {
+    h.touchIfActive.mockRejectedValueOnce(new Error('mongo blip'));
+    await expect(deferFailureIfRetryable(makeEvent(1), 3, params('batch-1'))).resolves.toBe(true);
+    expect(logger2.error).toHaveBeenCalledWith(expect.stringContaining('batch-1'));
+  });
+
+  it.each([3, 4, undefined])('returns false (final) on attempt %s of 3, without heartbeating', async count => {
+    const deferred = await deferFailureIfRetryable(makeEvent(count), 3, params('batch-1'));
+    expect(deferred).toBe(false);
+    expect(h.touchIfActive).not.toHaveBeenCalled();
+    expect(logger2.warn).not.toHaveBeenCalled();
+  });
+});

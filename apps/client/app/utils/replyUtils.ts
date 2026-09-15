@@ -1,0 +1,65 @@
+import { THINK_CLOSE_TAG, THINK_OPEN_TAG, visibleReplyText } from '@bike4mind/common';
+
+export function extractReplies(messageData: { reply?: string | null; replies?: string[] | undefined }) {
+  // Prefer the authoritative array when present, because the server streams into replies[0]
+  const sourceReplies =
+    Array.isArray(messageData.replies) && messageData.replies.length > 0
+      ? messageData.replies
+      : messageData.reply
+        ? [messageData.reply]
+        : [];
+
+  // Process and deduplicate short repeated segments that can occur during streaming
+  const processedParts: string[] = [];
+  for (const part of sourceReplies) {
+    if (!part || !part.trim()) continue;
+
+    // Shared with the TTFVT latency metric, which must consider text "seen" only once this
+    // renders it - see visibleReplyText in @bike4mind/common.
+    const cleaned = visibleReplyText(part);
+
+    if (!cleaned) continue;
+
+    // Drop exact duplicates of the immediately previous segment
+    const prev = processedParts.length > 0 ? processedParts[processedParts.length - 1] : '';
+    if (prev && prev === cleaned) {
+      continue;
+    }
+
+    processedParts.push(cleaned);
+  }
+
+  const combined = processedParts.join('');
+  return combined ? [combined] : [];
+}
+
+export function extractThinking(messageData: { reply?: string | null; replies?: string[] | undefined }) {
+  // Handle both reply and replies arrays
+  let initialReplies: string[] = [];
+
+  if (messageData.reply) {
+    initialReplies.push(messageData.reply);
+  }
+
+  if (messageData.replies && messageData.replies.length > 0) {
+    initialReplies = messageData.reply ? initialReplies.concat(messageData.replies) : messageData.replies;
+  }
+
+  // Extract thinking content from each reply
+  const thinkingParts = initialReplies
+    .filter(r => r && r.trim()) // Remove empty or null replies
+    .map(reply => {
+      if (reply.includes(THINK_OPEN_TAG) && reply.includes(THINK_CLOSE_TAG)) {
+        const thinkStartIndex = reply.indexOf(THINK_OPEN_TAG);
+        const thinkEndIndex = reply.indexOf(THINK_CLOSE_TAG);
+        return reply.substring(thinkStartIndex + THINK_OPEN_TAG.length, thinkEndIndex).trim();
+      }
+      if (reply.startsWith(THINK_OPEN_TAG) && !reply.includes(THINK_CLOSE_TAG)) {
+        return reply.substring(THINK_OPEN_TAG.length).trim();
+      }
+      return ''; // No thinking content in this reply
+    })
+    .filter(thinking => thinking && thinking.trim());
+
+  return thinkingParts.join('\n\n');
+}

@@ -1,0 +1,394 @@
+import { SupportedFabFileMimeTypes, readZipEntryBounded, type BoundedZipEntry } from '@bike4mind/common';
+import { BadRequestError } from '../errors';
+import { isForbiddenObjectKey } from '../safeObjectKey';
+
+/**
+ * Round-trip AI editing for Office documents (.docx, .xlsx). The AI edit flow works on a
+ * flat text representation: `extractEditableText` turns the binary into editable text, the
+ * LLM rewrites that text, and `applyEditedText` merges the rewrite back into the ORIGINAL
+ * binary so structure/formatting the edit did not touch is preserved.
+ *
+ * - docx: text-run surgery on `word/document.xml` (same OOXML approach as chunkPPTX in
+ *   fab-pipeline). Only the text inside `<w:t>` runs changes; tables, styles, headers, and
+ *   every other element stay byte-for-byte. An edited paragraph's mixed inline formatting
+ *   collapses onto its first run (documented limitation).
+ * - xlsx: SheetJS reads the workbook, and only cells whose text representation actually
+ *   changed are written back into the loaded worksheet objects, so untouched formulas,
+ *   number formats, and structure survive. A changed cell keeps the original cell's number
+ *   format (`.z`) where present.
+ *
+ * Known limitation: the pinned `xlsx` build is the SheetJS Community Edition, which does not
+ * WRITE cell styling (fonts/fills/borders). Editing an .xlsx therefore drops sheet styling on
+ * save; cell values, formulas, and structure are preserved. .xls (legacy BIFF) is intentionally
+ * NOT editable here (SheetJS BIFF write fidelity is weak; the ticket targets .docx/.xlsx only).
+ */
+
+/** Per-paragraph marker used in the docx text representation, e.g. `[1] Heading text`. */
+const DOCX_PARA_MARKER_RE = /^\s*\[(\d+)\]\s?([\s\S]*)$/;
+/** Sheet delimiter used in the xlsx text representation. */
+const XLSX_SHEET_HEADER = '### Sheet: ';
+
+export function isAiEditableOfficeMime(mime?: string | null): boolean {
+  return mime === SupportedFabFileMimeTypes.DOCX || mime === SupportedFabFileMimeTypes.XLSX;
+}
+
+/**
+ * Hard server-side cap on the raw Office binary an edit route will read into memory. The
+ * editable-text representation has its own (smaller) size gate, but that only applies AFTER
+ * the full binary is parsed - this bounds the pre-parse buffer so a direct API caller can't
+ * force an unbounded read (the client UI also gates, but that is bypassable). 10 MB.
+ */
+export const MAX_OFFICE_EDIT_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Cap on the number of cells a workbook's declared `!ref` ranges may span IN AGGREGATE. A .xlsx
+ * can declare a range far larger than its populated cells (the full grid, `A1:XFD1048576`, is
+ * ~17e9 cells); extractXlsxText iterates the DECLARED range, so an unbounded `!ref` turns a tiny
+ * upload into minutes of event-loop work. The cap has to be a running total rather than per sheet:
+ * a worksheet part that declares a huge range and populates nothing is a couple of hundred bytes,
+ * so within MAX_OFFICE_EDIT_BYTES an attacker multiplies sheets instead of enlarging one. Well
+ * above any human-scale AI-editable workbook.
+ */
+export const MAX_XLSX_CELLS = 1_000_000;
+
+/**
+ * Max decompressed size of a single OOXML zip entry we read into a string (the docx
+ * `word/document.xml`). The 10 MB binary cap bounds the compressed upload, not what an entry
+ * decompresses to - a small zip can inflate an entry by ~1000x (zip-bomb shape), so the inflate
+ * itself is bounded as it runs (see readZipEntryBounded).
+ */
+export const MAX_OFFICE_ENTRY_BYTES = 32 * 1024 * 1024;
+
+/**
+ * Decode a worksheet's declared `!ref`, rejecting it once the workbook's cells cross
+ * MAX_XLSX_CELLS in total. Both the read (extractXlsxText, which iterates the range) and write
+ * (applyXlsxText) paths take their ranges through here, each threading its own running total, so
+ * a crafted `!ref` is bounded before it drives any work.
+ */
+function decodeBoundedRange(
+  XLSX: typeof import('xlsx'),
+  ref: string,
+  sheetName: string,
+  cellsSoFar: number
+): { range: import('xlsx').Range; cellsSoFar: number } {
+  const range = XLSX.utils.decode_range(ref);
+  const total = cellsSoFar + (range.e.r - range.s.r + 1) * (range.e.c - range.s.c + 1);
+  if (total > MAX_XLSX_CELLS) {
+    throw new BadRequestError(
+      `Spreadsheet declares ${total.toLocaleString()} cells through sheet "${sheetName}", over the ${MAX_XLSX_CELLS.toLocaleString()}-cell limit`
+    );
+  }
+  return { range, cellsSoFar: total };
+}
+
+/**
+ * Read a named zip entry to a string, bounded at `maxBytes` of DECOMPRESSED output. The bound is
+ * enforced during the inflate rather than against the entry's self-declared uncompressed size,
+ * which is attacker-controlled and which jszip only validates after allocating in full - see
+ * readZipEntryBounded in @bike4mind/common.
+ */
+async function readOfficeEntryBounded(
+  entry: import('jszip').JSZipObject,
+  maxBytes: number,
+  label: string
+): Promise<string> {
+  // `internalStream` is documented ZipObject API but is missing from the `jszip` types.
+  const result = await readZipEntryBounded(entry as unknown as BoundedZipEntry, maxBytes);
+  if (!result.ok) {
+    throw new BadRequestError(`${label} is over the ${maxBytes.toLocaleString()}-byte decompressed limit`);
+  }
+  return result.text;
+}
+
+export async function extractEditableText(buffer: Buffer, mime: string): Promise<string> {
+  if (mime === SupportedFabFileMimeTypes.DOCX) return extractDocxText(buffer);
+  if (mime === SupportedFabFileMimeTypes.XLSX) return extractXlsxText(buffer);
+  throw new BadRequestError(`Office AI-editing is not supported for mime type: ${mime}`);
+}
+
+export async function applyEditedText(originalBuffer: Buffer, editedText: string, mime: string): Promise<Buffer> {
+  if (mime === SupportedFabFileMimeTypes.DOCX) return applyDocxText(originalBuffer, editedText);
+  if (mime === SupportedFabFileMimeTypes.XLSX) return applyXlsxText(originalBuffer, editedText);
+  throw new BadRequestError(`Office AI-editing is not supported for mime type: ${mime}`);
+}
+
+// ---------------------------------------------------------------------------
+// XML helpers (shared by the docx path)
+// ---------------------------------------------------------------------------
+
+const xmlUnescape = (s: string): string =>
+  s
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+
+const xmlEscape = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// A paragraph is either self-closing (`<w:p/>`) or a normal `<w:p>...</w:p>`. Paragraphs do
+// not nest, so a non-greedy body up to the first `</w:p>` is safe. Table-cell paragraphs are
+// matched too (they are `<w:p>` nested inside `<w:tc>`), so table text is editable in order.
+const DOCX_PARA_RE = /<w:p\b[^>]*\/>|<w:p\b[^>]*>[\s\S]*?<\/w:p>/g;
+// Text run: `<w:t/>`, or `<w:t ...>text</w:t>` (attrs like xml:space are common).
+const DOCX_T_RE = /<w:t\b[^>]*\/>|<w:t\b[^>]*>[\s\S]*?<\/w:t>/g;
+
+const paragraphText = (paraXml: string): string => {
+  const runs = paraXml.match(DOCX_T_RE) ?? [];
+  return runs.map(r => xmlUnescape(r.replace(/<w:t\b[^>]*\/>|<w:t\b[^>]*>|<\/w:t>/g, ''))).join('');
+};
+
+/**
+ * Replace a paragraph's text: write `text` into its FIRST `<w:t>` run and blank the rest so
+ * paragraph-level formatting is kept while intra-paragraph run splits collapse. If the
+ * paragraph has no run yet, inject one (expanding a self-closing `<w:p/>` when needed).
+ */
+const setParagraphText = (paraXml: string, text: string): string => {
+  const escaped = xmlEscape(text);
+  if (DOCX_T_RE.test(paraXml)) {
+    DOCX_T_RE.lastIndex = 0; // reset: .test() advances lastIndex on a /g regex
+    let first = true;
+    return paraXml.replace(DOCX_T_RE, () => {
+      if (first) {
+        first = false;
+        return `<w:t xml:space="preserve">${escaped}</w:t>`;
+      }
+      return '<w:t xml:space="preserve"></w:t>';
+    });
+  }
+  DOCX_T_RE.lastIndex = 0;
+  if (!text) return paraXml; // nothing to inject
+  const run = `<w:r><w:t xml:space="preserve">${escaped}</w:t></w:r>`;
+  const selfClosing = paraXml.match(/^<w:p\b([^>]*)\/>$/);
+  if (selfClosing) return `<w:p${selfClosing[1]}>${run}</w:p>`;
+  return paraXml.replace(/<\/w:p>$/, `${run}</w:p>`);
+};
+
+// ---------------------------------------------------------------------------
+// docx
+// ---------------------------------------------------------------------------
+
+async function loadDocumentXml(buffer: Buffer): Promise<{ zip: import('jszip'); xml: string }> {
+  const JSZip = (await import('jszip')).default;
+  let zip: import('jszip');
+  try {
+    zip = await JSZip.loadAsync(buffer);
+  } catch {
+    throw new BadRequestError('File is not a valid .docx document');
+  }
+  const entry = zip.file('word/document.xml');
+  if (!entry) throw new BadRequestError('File is not a valid .docx document (missing word/document.xml)');
+  const xml = await readOfficeEntryBounded(entry, MAX_OFFICE_ENTRY_BYTES, 'word/document.xml');
+  return { zip, xml };
+}
+
+async function extractDocxText(buffer: Buffer): Promise<string> {
+  const { xml } = await loadDocumentXml(buffer);
+  const paras = xml.match(DOCX_PARA_RE) ?? [];
+  return paras.map((p, i) => `[${i + 1}] ${paragraphText(p)}`).join('\n');
+}
+
+/** Parse the docx text representation into a 1-based paragraph-index -> new-text map. */
+const parseDocxMarkers = (editedText: string): Map<number, string> => {
+  const map = new Map<number, string>();
+  for (const line of editedText.split(/\r?\n/)) {
+    const m = line.match(DOCX_PARA_MARKER_RE);
+    if (m) map.set(Number(m[1]), m[2]);
+  }
+  return map;
+};
+
+async function applyDocxText(originalBuffer: Buffer, editedText: string): Promise<Buffer> {
+  const { zip, xml } = await loadDocumentXml(originalBuffer);
+  const edits = parseDocxMarkers(editedText);
+  // Markers are the only supported mapping; if none survived, do nothing rather than risk
+  // corrupting the document by guessing positional alignment.
+  if (edits.size === 0) return originalBuffer;
+
+  const paras = xml.match(DOCX_PARA_RE) ?? [];
+  const originalCount = paras.length;
+
+  let idx = 0;
+  let newXml = xml.replace(DOCX_PARA_RE, para => {
+    idx++;
+    return edits.has(idx) ? setParagraphText(para, edits.get(idx) ?? '') : para;
+  });
+
+  // Appended paragraphs (indices beyond the original count). Build minimal fresh body
+  // paragraphs (a cloned template could carry table-cell properties that are invalid at body
+  // level). Insert them at BODY level: immediately before the final `<w:sectPr>` (the
+  // document's section properties, which must remain the last child of `<w:body>`), else before
+  // `</w:body>`. NOT after the last `</w:p>` - that closer may belong to a table-cell paragraph
+  // when the document ends with a table, which would splice the new content inside the cell.
+  const appendedIndices = [...edits.keys()].filter(i => i > originalCount).sort((a, b) => a - b);
+  if (appendedIndices.length > 0) {
+    const freshParagraph = (text: string) => `<w:p><w:r><w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r></w:p>`;
+    const appended = appendedIndices.map(i => freshParagraph(edits.get(i) ?? '')).join('');
+    const sectPrIdx = newXml.lastIndexOf('<w:sectPr');
+    if (sectPrIdx !== -1) {
+      newXml = newXml.slice(0, sectPrIdx) + appended + newXml.slice(sectPrIdx);
+    } else {
+      newXml = newXml.replace(/<\/w:body>/, `${appended}</w:body>`);
+    }
+  }
+
+  zip.file('word/document.xml', newXml);
+  return zip.generateAsync({ type: 'nodebuffer' });
+}
+
+// ---------------------------------------------------------------------------
+// xlsx
+// ---------------------------------------------------------------------------
+
+const csvEscape = (s: string): string => (/[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+
+/** Text shown for a cell: a leading-`=` formula, or its formatted/raw value, or empty. */
+const cellToText = (cell: import('xlsx').CellObject | undefined): string => {
+  if (!cell) return '';
+  if (cell.f) return `=${cell.f}`;
+  if (cell.w !== undefined) return cell.w;
+  if (cell.v === undefined || cell.v === null) return '';
+  return String(cell.v);
+};
+
+async function extractXlsxText(buffer: Buffer): Promise<string> {
+  const XLSX = await import('xlsx');
+  let workbook: import('xlsx').WorkBook;
+  try {
+    workbook = XLSX.read(buffer, { type: 'buffer', cellFormula: true });
+  } catch {
+    throw new BadRequestError('File is not a valid .xlsx spreadsheet');
+  }
+
+  const blocks: string[] = [];
+  let cellsSoFar = 0;
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    const lines = [`${XLSX_SHEET_HEADER}${sheetName}`];
+    const ref = sheet['!ref'];
+    if (ref) {
+      const decoded = decodeBoundedRange(XLSX, ref, sheetName, cellsSoFar);
+      cellsSoFar = decoded.cellsSoFar;
+      const range = decoded.range;
+      for (let r = range.s.r; r <= range.e.r; r++) {
+        const row: string[] = [];
+        for (let c = range.s.c; c <= range.e.c; c++) {
+          const addr = XLSX.utils.encode_cell({ r, c });
+          row.push(csvEscape(cellToText(sheet[addr])));
+        }
+        lines.push(row.join(','));
+      }
+    }
+    blocks.push(lines.join('\n'));
+  }
+  return blocks.join('\n\n');
+}
+
+/** Split the xlsx text representation into { sheetName -> raw CSV block } in document order. */
+const splitXlsxSheets = (editedText: string): { name: string; csv: string }[] => {
+  const sheets: { name: string; csv: string }[] = [];
+  let current: { name: string; lines: string[] } | null = null;
+  for (const line of editedText.split(/\r?\n/)) {
+    if (line.startsWith(XLSX_SHEET_HEADER)) {
+      if (current) sheets.push({ name: current.name, csv: current.lines.join('\n') });
+      current = { name: line.slice(XLSX_SHEET_HEADER.length).trim(), lines: [] };
+    } else if (current) {
+      current.lines.push(line);
+    }
+  }
+  if (current) sheets.push({ name: current.name, csv: current.lines.join('\n') });
+  return sheets;
+};
+
+/** Build a SheetJS cell object for a changed text value (formula, number, or string). */
+const cellFromText = (text: string): import('xlsx').CellObject | null => {
+  if (text.startsWith('=')) return { t: 'n', f: text.slice(1) };
+  if (text === '') return null; // cleared
+  const num = Number(text);
+  if (text.trim() !== '' && !Number.isNaN(num)) return { t: 'n', v: num };
+  return { t: 's', v: text };
+};
+
+async function applyXlsxText(originalBuffer: Buffer, editedText: string): Promise<Buffer> {
+  const XLSX = await import('xlsx');
+  const { parse } = await import('csv-parse/sync');
+
+  let workbook: import('xlsx').WorkBook;
+  try {
+    workbook = XLSX.read(originalBuffer, { type: 'buffer', cellFormula: true });
+  } catch {
+    throw new BadRequestError('File is not a valid .xlsx spreadsheet');
+  }
+
+  let cellsSoFar = 0;
+  for (const { name, csv } of splitXlsxSheets(editedText)) {
+    const rows = parse(csv.replace(/\s+$/, ''), { relax_column_count: true, skip_empty_lines: false }) as string[][];
+
+    // Own-property test rather than `workbook.Sheets[name]`: a plain-object index resolves
+    // through the prototype chain, so a sheet name of `__proto__` reads back Object.prototype
+    // as an existing sheet and the cell writes below would land on it process-wide.
+    const sheet = Object.hasOwn(workbook.Sheets, name) ? workbook.Sheets[name] : undefined;
+    if (!sheet) {
+      // New sheet introduced by the edit (`### Sheet: <name>` in the edited text). book_append_sheet
+      // assigns `Sheets[name]`, which for a reserved name reassigns the container's prototype
+      // instead of adding a sheet, so reject rather than silently corrupt the workbook.
+      if (isForbiddenObjectKey(name)) {
+        throw new BadRequestError(`Invalid sheet name "${name}"`);
+      }
+
+      // Build it cell-by-cell via cellFromText so a formula cell keeps its `.f`
+      // (aoa_to_sheet on `.v` alone would drop the formula).
+      const created: import('xlsx').WorkSheet = {};
+      let nr = 0;
+      let nc = 0;
+      for (let r = 0; r < rows.length; r++) {
+        for (let c = 0; c < rows[r].length; c++) {
+          const cell = cellFromText(rows[r][c]);
+          if (!cell) continue;
+          created[XLSX.utils.encode_cell({ r, c })] = cell;
+          nr = Math.max(nr, r);
+          nc = Math.max(nc, c);
+        }
+      }
+      created['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: nr, c: nc } });
+      XLSX.utils.book_append_sheet(workbook, created, name);
+      continue;
+    }
+
+    let existingRef: import('xlsx').Range = { s: { r: 0, c: 0 }, e: { r: 0, c: 0 } };
+    if (sheet['!ref']) {
+      const decoded = decodeBoundedRange(XLSX, sheet['!ref'], name, cellsSoFar);
+      cellsSoFar = decoded.cellsSoFar;
+      existingRef = decoded.range;
+    }
+    let maxR = existingRef.e.r;
+    let maxC = existingRef.e.c;
+
+    for (let r = 0; r < rows.length; r++) {
+      const row = rows[r];
+      for (let c = 0; c < row.length; c++) {
+        const addr = XLSX.utils.encode_cell({ r, c });
+        const original = sheet[addr] as import('xlsx').CellObject | undefined;
+        const newText = row[c];
+        // Only write cells that actually changed; this keeps untouched formula cells (shown
+        // as `=...`) intact rather than clobbering them with their computed value.
+        if (newText === cellToText(original)) continue;
+        const newCell = cellFromText(newText);
+        if (newCell === null) {
+          delete sheet[addr];
+        } else {
+          // Carry the original cell's number format forward so a changed value keeps its
+          // display (e.g. currency/leading-zero formatting), rather than reverting to raw.
+          if (original?.z) newCell.z = original.z;
+          sheet[addr] = newCell;
+          maxR = Math.max(maxR, r);
+          maxC = Math.max(maxC, c);
+        }
+      }
+    }
+
+    sheet['!ref'] = XLSX.utils.encode_range({ s: existingRef.s, e: { r: maxR, c: maxC } });
+  }
+
+  return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+}

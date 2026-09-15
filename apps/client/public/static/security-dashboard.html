@@ -1,0 +1,2835 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Dashboard - Bike4Mind Admin</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #e0e7ff 0%, #ddd6fe 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 24px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            color: #2d3748;
+            font-size: 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .top-section {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .summary-card {
+            background: white;
+            padding: 24px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+        }
+
+        .security-score {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .score-circle {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            color: white;
+            box-shadow: 0 4px 12px rgba(72, 187, 120, 0.3);
+        }
+
+        .score-value {
+            font-size: 36px;
+            font-weight: 700;
+        }
+
+        .score-label {
+            font-size: 11px;
+            opacity: 0.9;
+            margin-top: -4px;
+        }
+
+        .score-text {
+            color: #2d3748;
+            font-weight: 600;
+            font-size: 16px;
+        }
+
+        .score-subtext {
+            color: #718096;
+            font-size: 13px;
+            margin-top: 4px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #2d3748;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            position: relative;
+        }
+
+        .info-icon {
+            width: 16px;
+            height: 16px;
+            color: #a0aec0;
+            cursor: help;
+            position: relative;
+        }
+
+        .tooltip {
+            visibility: hidden;
+            opacity: 0;
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            margin-bottom: 8px;
+            padding: 12px 16px;
+            background: #2d3748;
+            color: white;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 400;
+            line-height: 1.5;
+            width: 280px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            z-index: 10000;
+            transition: opacity 0.2s, visibility 0.2s;
+            pointer-events: none;
+        }
+
+        .tooltip::after {
+            content: '';
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            border: 6px solid transparent;
+            border-top-color: #2d3748;
+        }
+
+        .info-icon:hover .tooltip {
+            visibility: visible;
+            opacity: 1;
+        }
+
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-badge.success {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+
+        .status-badge.warning {
+            background: #feebc8;
+            color: #7c2d12;
+        }
+
+        .status-badge.error {
+            background: #fed7d7;
+            color: #742a2a;
+        }
+
+        .status-badge.info {
+            background: #bee3f8;
+            color: #2c5282;
+        }
+
+        .metric {
+            margin-bottom: 16px;
+        }
+
+        .metric-label {
+            font-size: 13px;
+            color: #718096;
+            margin-bottom: 4px;
+        }
+
+        .metric-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #2d3748;
+        }
+
+        .metric-value.success {
+            color: #38a169;
+        }
+
+        .metric-value.warning {
+            color: #dd6b20;
+        }
+
+        .metric-value.error {
+            color: #e53e3e;
+        }
+
+        .metric-value-part {
+            margin-right: 4px;
+        }
+
+        .metric-value-part.critical,
+        .metric-value-part.high {
+            color: #e53e3e;
+        }
+
+        .metric-value-part.medium {
+            color: #dd6b20;
+        }
+
+        .metric-value-part.low {
+            color: #38a169;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e2e8f0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: #48bb78;
+            transition: width 0.3s ease;
+        }
+
+        .progress-fill.warning {
+            background: #ed8936;
+        }
+
+        .progress-fill.error {
+            background: #f56565;
+        }
+
+        .scan-list {
+            list-style: none;
+        }
+
+        .scan-item {
+            padding: 12px;
+            border-left: 3px solid #e2e8f0;
+            margin-bottom: 10px;
+            background: #f7fafc;
+            border-radius: 4px;
+        }
+
+        .scan-item.critical {
+            border-left-color: #f56565;
+            background: #fff5f5;
+        }
+
+        .scan-item.high {
+            border-left-color: #ed8936;
+            background: #fffaf0;
+        }
+
+        .scan-item.medium {
+            border-left-color: #ecc94b;
+            background: #fffff0;
+        }
+
+        .scan-item.low {
+            border-left-color: #48bb78;
+            background: #f0fff4;
+        }
+
+        .scan-item-title {
+            font-weight: 600;
+            color: #2d3748;
+            font-size: 14px;
+            margin-bottom: 4px;
+        }
+
+        .scan-item-detail {
+            font-size: 12px;
+            color: #718096;
+        }
+
+        .timestamp {
+            font-size: 12px;
+            color: #a0aec0;
+            margin-top: 16px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .icon {
+            width: 20px;
+            height: 20px;
+        }
+
+        .deployment-status {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px;
+            background: #f7fafc;
+            border-radius: 8px;
+            margin-bottom: 12px;
+        }
+
+        .deployment-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #48bb78;
+            animation: pulse 2s infinite;
+        }
+
+        .deployment-indicator.failed {
+            background: #f56565;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .wide-card {
+            grid-column: 1 / -1;
+        }
+
+        .compliance-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-top: 16px;
+        }
+
+        .compliance-item {
+            text-align: center;
+            padding: 16px;
+            background: #f7fafc;
+            border-radius: 8px;
+        }
+
+        .compliance-percentage {
+            font-size: 32px;
+            font-weight: 700;
+            color: #48bb78;
+        }
+
+        .compliance-label {
+            font-size: 13px;
+            color: #718096;
+            margin-top: 8px;
+        }
+
+        .vulnerability-chart {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .chart-bar {
+            flex: 1;
+            min-height: 100px;
+            background: #e2e8f0;
+            border-radius: 4px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 8px 28px 8px;
+            position: relative;
+        }
+
+        .chart-bar-fill {
+            width: 100%;
+            background: #4299e1;
+            border-radius: 4px;
+            transition: height 0.3s ease;
+            margin-top: auto;
+        }
+
+        .chart-bar.critical .chart-bar-fill {
+            background: #f56565;
+        }
+
+        .chart-bar.high .chart-bar-fill {
+            background: #ed8936;
+        }
+
+        .chart-bar.medium .chart-bar-fill {
+            background: #ecc94b;
+        }
+
+        .chart-bar.low .chart-bar-fill {
+            background: #48bb78;
+        }
+
+        .chart-label {
+            font-size: 11px;
+            color: #718096;
+            position: absolute;
+            bottom: 4px;
+            left: 50%;
+            transform: translateX(-50%);
+            white-space: nowrap;
+        }
+
+        .chart-value {
+            font-size: 14px;
+            font-weight: 600;
+            color: #2d3748;
+            margin-bottom: 8px;
+        }
+
+        .quick-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 20px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 14px;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+        }
+
+        .btn-secondary {
+            background: #e2e8f0;
+            color: #2d3748;
+        }
+
+        .btn-secondary:hover {
+            background: #cbd5e0;
+        }
+
+        .certificate-info {
+            background: #f7fafc;
+            padding: 16px;
+            border-radius: 8px;
+            margin-top: 12px;
+        }
+
+        .cert-detail {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .cert-detail:last-child {
+            border-bottom: none;
+        }
+
+        .cert-label {
+            font-size: 13px;
+            color: #718096;
+        }
+
+        .cert-value {
+            font-size: 13px;
+            font-weight: 600;
+            color: #2d3748;
+        }
+
+        .infrastructure-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-top: 16px;
+        }
+
+        .infra-metric {
+            background: #f7fafc;
+            padding: 16px;
+            border-radius: 8px;
+        }
+
+        .infra-metric-value {
+            font-size: 20px;
+            font-weight: 700;
+            color: #2d3748;
+            margin-bottom: 4px;
+        }
+
+        .infra-metric-label {
+            font-size: 12px;
+            color: #718096;
+        }
+
+        .ai-assessment {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 24px;
+            border-radius: 12px;
+            color: white;
+        }
+
+        .ai-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .ai-header h2 {
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .ai-badge {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .ai-suggestions {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+            margin-top: 16px;
+        }
+
+        .ai-suggestion-card {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            padding: 16px;
+            backdrop-filter: blur(10px);
+        }
+
+        .ai-suggestion-header {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .ai-icon-wrapper {
+            width: 32px;
+            height: 32px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .ai-suggestion-title {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .ai-suggestion-priority {
+            font-size: 11px;
+            opacity: 0.8;
+        }
+
+        .ai-suggestion-body {
+            font-size: 13px;
+            line-height: 1.5;
+            opacity: 0.9;
+            margin-bottom: 12px;
+        }
+
+        .ai-suggestion-action {
+            background: rgba(255, 255, 255, 0.9);
+            color: #667eea;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+        }
+
+        .ai-suggestion-action:hover {
+            background: white;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12);
+        }
+
+        .ai-suggestion-action:active {
+            transform: translateY(0);
+            box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.9);
+        }
+
+        .web-scan-run-card,
+        .code-scan-run-card {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.16), rgba(118, 75, 162, 0.22));
+            box-shadow: 0 2px 8px rgba(99, 102, 241, 0.25);
+        }
+
+        .web-scan-run-card-icon,
+        .code-scan-run-card-icon {
+            width: 18px;
+            height: 18px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: #4c51bf;
+        }
+
+        .ai-footer {
+            margin-top: 16px;
+            font-size: 12px;
+            opacity: 0.8;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .mockup-banner {
+            background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+            color: #78350f;
+            padding: 16px 24px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(251, 191, 36, 0.3);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            border: 2px solid #fcd34d;
+        }
+
+        .mockup-banner-icon {
+            width: 24px;
+            height: 24px;
+            flex-shrink: 0;
+        }
+
+        .mockup-banner-content {
+            flex: 1;
+        }
+
+        .mockup-banner-title {
+            font-weight: 700;
+            font-size: 16px;
+            margin-bottom: 4px;
+        }
+
+        .mockup-banner-text {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .tabs-container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            overflow: visible;
+            position: relative;
+            z-index: 1;
+        }
+
+        .tabs-header {
+            display: flex;
+            background: #f7fafc;
+            border-bottom: 2px solid #e2e8f0;
+            overflow-x: auto;
+        }
+
+        .tab-button {
+            flex: 1;
+            min-width: 150px;
+            padding: 16px 20px;
+            background: none;
+            border: none;
+            border-bottom: 3px solid transparent;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            color: #718096;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            white-space: nowrap;
+        }
+
+        .tab-button:hover {
+            background: #edf2f7;
+            color: #4a5568;
+        }
+
+        .tab-button.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+            background: white;
+        }
+
+        .tab-content {
+            display: none;
+            padding: 32px;
+            min-height: 500px;
+            position: relative;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            gap: 24px;
+            margin-bottom: 32px;
+        }
+
+        .mini-cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-top: 24px;
+        }
+
+        .mini-card {
+            background: linear-gradient(135deg, #f7fafc 0%, #edf2f7 100%);
+            padding: 24px 20px;
+            border-radius: 12px;
+            display: flex;
+            align-items: flex-start; /* align icon and text block along the top edge, matching original mock */
+            gap: 16px;
+            transition: all 0.2s;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+
+        .mini-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        .mini-card.success {
+            background: linear-gradient(135deg, #c6f6d5 0%, #9ae6b4 100%);
+        }
+
+        .mini-card.warning {
+            background: linear-gradient(135deg, #feebc8 0%, #fbd38d 100%);
+        }
+
+        .mini-card.error {
+            background: linear-gradient(135deg, #fed7d7 0%, #fc8181 100%);
+        }
+
+        .mini-card-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            background: rgba(255, 255, 255, 0.9);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            margin-top: 2px; /* visually center icon against the card title, as in the mock */
+        }
+
+        .mini-card.success .mini-card-icon {
+            color: #22543d;
+        }
+
+        .mini-card.warning .mini-card-icon {
+            color: #7c2d12;
+        }
+
+        .mini-card.error .mini-card-icon {
+            color: #742a2a;
+        }
+
+        .mini-card-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .mini-card-label {
+            font-size: 15px; /* larger, more prominent section titles */
+            color: #2d3748;
+            font-weight: 600;
+            opacity: 0.9;
+        }
+
+        .mini-card-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #2d3748;
+            line-height: 1;
+        }
+
+        .mini-card-status {
+            font-size: 13px;
+            font-weight: 500;
+            color: #2d3748;
+            opacity: 0.8; /* make findings text lighter / more translucent */
+            margin-top: 16px; /* slightly larger, consistent vertical gap between title/score and findings text */
+            padding: 0; /* keep findings left-aligned with the rest of the card text */
+        }
+
+        .mini-card.success .mini-card-status,
+        .mini-card.success .mini-card-label,
+        .mini-card.success .mini-card-value {
+            color: #22543d;
+        }
+
+        .mini-card.warning .mini-card-status,
+        .mini-card.warning .mini-card-label,
+        .mini-card.warning .mini-card-value {
+            color: #7c2d12;
+        }
+
+        .mini-card.error .mini-card-status,
+        .mini-card.error .mini-card-label,
+        .mini-card.error .mini-card-value {
+            color: #742a2a;
+        }
+
+        .tab-icon {
+            width: 18px;
+            height: 18px;
+        }
+
+        .expandable-section {
+            margin-top: 24px;
+        }
+
+        .expandable-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px;
+            background: #f7fafc;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .expandable-header:hover {
+            background: #edf2f7;
+        }
+
+        .expandable-title {
+            font-weight: 600;
+            color: #2d3748;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .expandable-content {
+            display: none;
+            padding: 20px;
+            border: 1px solid #e2e8f0;
+            border-top: none;
+            border-radius: 0 0 8px 8px;
+        }
+
+        .expandable-content.active {
+            display: block;
+        }
+
+        .expand-icon {
+            width: 20px;
+            height: 20px;
+            transition: transform 0.2s;
+        }
+
+        .expand-icon.rotated {
+            transform: rotate(180deg);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Mockup Banner (hidden in live mode via JavaScript) -->
+        <div class="mockup-banner" data-role="mockup-banner">
+            <svg class="mockup-banner-icon" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+            </svg>
+            <div class="mockup-banner-content">
+                <div class="mockup-banner-title">⚠️ MOCKUP ONLY - Not Functional</div>
+                <div class="mockup-banner-text">This is a design preview for a future security dashboard feature. No data shown here is real or functional.</div>
+            </div>
+        </div>
+
+        <div class="header">
+            <h1>
+                <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
+                </svg>
+                Security Dashboard
+            </h1>
+        </div>
+
+        <!-- Tabs Container -->
+        <div class="tabs-container">
+            <div class="tabs-header">
+                <button class="tab-button active" onclick="switchTab(event, 'overview')">
+                    <svg class="tab-icon" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z"/>
+                    </svg>
+                    Overview
+                </button>
+                <button class="tab-button" onclick="switchTab(event, 'web-scan')">
+                    <svg class="tab-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+                    </svg>
+                    Website Security
+                </button>
+                <button class="tab-button" onclick="switchTab(event, 'code-scan')">
+                    <svg class="tab-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
+                    </svg>
+                    Code Analysis
+                </button>
+                <button class="tab-button" onclick="switchTab(event, 'dependencies')">
+                    <svg class="tab-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                    </svg>
+                    Packages
+                </button>
+                <button class="tab-button" onclick="switchTab(event, 'secrets')">
+                    <svg class="tab-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>
+                    </svg>
+                    Secrets
+                </button>
+                <button class="tab-button" onclick="switchTab(event, 'infrastructure')">
+                    <svg class="tab-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"/>
+                    </svg>
+                    Cloud
+                </button>
+                <button class="tab-button" onclick="switchTab(event, 'waf')">
+                    <svg class="tab-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.618 5.984A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016zM12 9v2m0 4h.01"/>
+                    </svg>
+                    Firewall
+                </button>
+            </div>
+
+            <!-- Overview Tab -->
+            <div id="overview" class="tab-content active">
+                <div class="summary-grid">
+                    <div class="summary-card">
+                        <div class="security-score">
+                            <div class="score-circle" data-role="overall-score-circle">
+                                <div class="score-value" data-role="overall-score">94</div>
+                                <div class="score-label">/ 100</div>
+                            </div>
+                            <div class="score-text" data-role="score-label">Excellent</div>
+                            <div class="score-subtext">Security Status</div>
+                        </div>
+                        <div style="margin-top: 24px; padding-top: 24px; border-top: 1px solid #e2e8f0; width: 100%;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 12px;">
+                                <span style="font-size: 12px; color: #718096;">Last Updated</span>
+                                <span style="font-size: 12px; font-weight: 600; color: #2d3748;" data-role="last-updated">5 min ago</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 12px;">
+                                <span style="font-size: 12px; color: #718096;">Security Checks</span>
+                                <span style="font-size: 12px; font-weight: 600; color: #48bb78;" data-role="checks-summary">6/6 Passed</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between;">
+                                <span style="font-size: 12px; color: #718096;">Next Scan</span>
+                                <span style="font-size: 12px; font-weight: 600; color: #2d3748;" data-role="next-scan">6 days</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- AI Security Assessment -->
+        <div class="ai-assessment">
+            <div class="ai-header">
+                <svg style="width: 28px; height: 28px;" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M13 7H7v6h6V7z"/>
+                    <path fill-rule="evenodd" d="M7 2a1 1 0 012 0v1h2V2a1 1 0 112 0v1h2a2 2 0 012 2v2h1a1 1 0 110 2h-1v2h1a1 1 0 110 2h-1v2a2 2 0 01-2 2h-2v1a1 1 0 11-2 0v-1H9v1a1 1 0 11-2 0v-1H5a2 2 0 01-2-2v-2H2a1 1 0 110-2h1V9H2a1 1 0 010-2h1V5a2 2 0 012-2h2V2zM5 5h10v10H5V5z" clip-rule="evenodd"/>
+                </svg>
+                <h2>AI Security Assessment</h2>
+                <span class="ai-badge">Powered by Bike4Mind</span>
+            </div>
+            <p style="opacity: 0.9; font-size: 14px; margin-bottom: 8px;">
+                Our AI agent has analyzed your security posture and identified 3 actionable recommendations to enhance protection.
+            </p>
+
+            <div class="ai-suggestions">
+                <div class="ai-suggestion-card">
+                    <div class="ai-suggestion-header">
+                        <div class="ai-icon-wrapper">
+                            <svg style="width: 18px; height: 18px;" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                            </svg>
+                        </div>
+                        <div>
+                            <div class="ai-suggestion-title">Enable Database Encryption</div>
+                            <div class="ai-suggestion-priority">Priority: High</div>
+                        </div>
+                    </div>
+                    <div class="ai-suggestion-body">
+                        Session storage database lacks encryption at rest. Enabling this adds an additional security layer for sensitive user data.
+                    </div>
+                    <button class="ai-suggestion-action">View Solution</button>
+                </div>
+
+                <div class="ai-suggestion-card">
+                    <div class="ai-suggestion-header">
+                        <div class="ai-icon-wrapper">
+                            <svg style="width: 18px; height: 18px;" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                            </svg>
+                        </div>
+                        <div>
+                            <div class="ai-suggestion-title">Update Vulnerable Dependencies</div>
+                            <div class="ai-suggestion-priority">Priority: Medium</div>
+                        </div>
+                    </div>
+                    <div class="ai-suggestion-body">
+                        2 dependencies have known vulnerabilities. Automated patches are available for both packages without breaking changes.
+                    </div>
+                    <button class="ai-suggestion-action">Apply Patches</button>
+                </div>
+
+                <div class="ai-suggestion-card">
+                    <div class="ai-suggestion-header">
+                        <div class="ai-icon-wrapper">
+                            <svg style="width: 18px; height: 18px;" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd"/>
+                            </svg>
+                        </div>
+                        <div>
+                            <div class="ai-suggestion-title">Upgrade WAF Bot Protection</div>
+                            <div class="ai-suggestion-priority">Priority: Medium</div>
+                        </div>
+                    </div>
+                    <div class="ai-suggestion-body">
+                        Enhanced bot detection can reduce malicious bot traffic by up to 40% based on current threat patterns.
+                    </div>
+                    <button class="ai-suggestion-action">Learn More</button>
+                </div>
+            </div>
+
+            <div class="ai-footer">
+                <svg style="width: 14px; height: 14px;" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"/>
+                </svg>
+                AI assessment last updated: 5 minutes ago • Next analysis in 55 minutes
+            </div>
+        </div>
+                </div>
+
+                <!-- Quick Stats -->
+                <div class="mini-cards-grid">
+                    <div class="mini-card success" data-role="mini-web">
+                        <div class="mini-card-icon">
+                            <svg style="width: 24px; height: 24px;" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                            </svg>
+                        </div>
+                        <div class="mini-card-content">
+                            <div class="mini-card-label">Website Security</div>
+                            <div class="mini-card-status" data-role="mini-web-status">Passed</div>
+                        </div>
+                    </div>
+                    <div class="mini-card success" data-role="mini-code">
+                        <div class="mini-card-icon">
+                            <svg style="width: 24px; height: 24px;" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                            </svg>
+                        </div>
+                        <div class="mini-card-content">
+                            <div class="mini-card-label">Code Analysis</div>
+                            <div class="mini-card-status" data-role="mini-code-status">Passed</div>
+                        </div>
+                    </div>
+                    <div class="mini-card warning" data-role="mini-packages">
+                        <div class="mini-card-icon">
+                            <svg style="width: 24px; height: 24px;" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                            </svg>
+                        </div>
+                        <div class="mini-card-content">
+                            <div class="mini-card-label">Package Security</div>
+                            <div class="mini-card-value" data-role="mini-packages-count">2</div>
+                            <div class="mini-card-status" data-role="mini-packages-status">Moderate Issues</div>
+                        </div>
+                    </div>
+                    <div class="mini-card success" data-role="mini-secrets">
+                        <div class="mini-card-icon">
+                            <svg style="width: 24px; height: 24px;" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                            </svg>
+                        </div>
+                        <div class="mini-card-content">
+                            <div class="mini-card-label">Secrets Protection</div>
+                            <div class="mini-card-status" data-role="mini-secrets-status">Clean</div>
+                        </div>
+                    </div>
+                    <div class="mini-card success" data-role="mini-cloud">
+                        <div class="mini-card-icon">
+                            <svg style="width: 24px; height: 24px;" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                            </svg>
+                        </div>
+                        <div class="mini-card-content">
+                            <div class="mini-card-label">Cloud Security</div>
+                            <div class="mini-card-value" data-role="mini-cloud-score">96%</div>
+                            <div class="mini-card-status" data-role="mini-cloud-status">Compliant</div>
+                        </div>
+                    </div>
+                    <div class="mini-card success" data-role="mini-waf">
+                        <div class="mini-card-icon">
+                            <svg style="width: 24px; height: 24px;" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                            </svg>
+                        </div>
+                        <div class="mini-card-content">
+                            <div class="mini-card-label">Firewall</div>
+                            <div class="mini-card-status" data-role="mini-waf-status">Active</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Website Security Tab -->
+            <div id="web-scan" class="tab-content">
+                <div class="card-header">
+                    <div class="card-title">
+                        Website Security Scan
+                        <div class="info-icon">
+                            <svg fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="tooltip">
+                                We automatically test your live website for common security weaknesses like SQL injection and cross-site scripting. This helps catch issues before hackers do.
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <div class="web-scan-run-card">
+                            <div class="web-scan-run-card-icon">
+                                <svg style="width: 16px; height: 16px;" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v3a1 1 0 00.293.707l2 2a1 1 0 001.414-1.414L11 8.586V7z" clip-rule="evenodd"/>
+                                </svg>
+                            </div>
+                            <button
+                              class="ai-suggestion-action"
+                              data-role="web-scan-run-btn"
+                              data-testid="web-security-run-scan-btn"
+                              type="button"
+                            >
+                              Run Website Scan
+                            </button>
+                    </div>
+                    <span class="status-badge success">Passed</span>
+                    </div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Vulnerabilities Found</div>
+                    <div class="metric-value success">0 findings</div>
+                </div>
+                <div class="vulnerability-chart" style="height: 120px; position: relative; margin-bottom: 20px;">
+                    <div class="chart-bar critical" style="flex: 1;">
+                        <div class="chart-value">0</div>
+                        <div class="chart-bar-fill" style="height: 0%;"></div>
+                        <div class="chart-label">Critical</div>
+                    </div>
+                    <div class="chart-bar high" style="flex: 1;">
+                        <div class="chart-value">0</div>
+                        <div class="chart-bar-fill" style="height: 0%;"></div>
+                        <div class="chart-label">High</div>
+                    </div>
+                    <div class="chart-bar medium" style="flex: 1;">
+                        <div class="chart-value">0</div>
+                        <div class="chart-bar-fill" style="height: 0%;"></div>
+                        <div class="chart-label">Medium</div>
+                    </div>
+                    <div class="chart-bar low" style="flex: 1;">
+                        <div class="chart-value">0</div>
+                        <div class="chart-bar-fill" style="height: 0%;"></div>
+                        <div class="chart-label">Low</div>
+                    </div>
+                </div>
+
+                <div style="margin-bottom: 24px;">
+                    <div style="font-weight: 600; color: #2d3748; margin-bottom: 12px; font-size: 15px;">Scan Details</div>
+                    <ul class="scan-list"></ul>
+                </div>
+
+                <div style="background: #f7fafc; padding: 16px; border-radius: 8px; margin-bottom: 16px;">
+                    <div style="font-weight: 600; color: #2d3748; margin-bottom: 8px; font-size: 14px;">Scan Configuration</div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px;">
+                        <div>
+                            <span style="color: #718096;">Spider Depth:</span>
+                            <span style="font-weight: 600; color: #2d3748; margin-left: 8px;">5 levels</span>
+                        </div>
+                        <div>
+                            <span style="color: #718096;">Pages Scanned:</span>
+                            <span style="font-weight: 600; color: #2d3748; margin-left: 8px;">247</span>
+                        </div>
+                        <div>
+                            <span style="color: #718096;">Duration:</span>
+                            <span style="font-weight: 600; color: #2d3748; margin-left: 8px;">12 min 34 sec</span>
+                        </div>
+                        <div>
+                            <span style="color: #718096;">Rules Applied:</span>
+                            <span style="font-weight: 600; color: #2d3748; margin-left: 8px;">142 checks</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="timestamp">
+                    <svg class="icon" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"></path>
+                    </svg>
+                    Last scan: Nov 24, 2025 1:00 AM UTC (Weekly) • Next scan: Dec 1, 2025
+                </div>
+            </div>
+
+            <!-- Code Analysis Tab -->
+            <div id="code-scan" class="tab-content">
+                <div class="card-header">
+                    <div class="card-title">
+                        Code Security Analysis
+                        <div class="info-icon">
+                            <svg fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="tooltip">
+                                We review your source code for security issues and coding mistakes that could lead to vulnerabilities. Think of it as a spell-checker for security.
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <div class="code-scan-run-card">
+                            <div class="code-scan-run-card-icon">
+                                <svg style="width: 16px; height: 16px;" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v3a1 1 0 00.293.707l2 2a1 1 0 001.414-1.414L11 8.586V7z" clip-rule="evenodd"/>
+                                </svg>
+                            </div>
+                            <button
+                              class="ai-suggestion-action"
+                              data-role="code-scan-run-btn"
+                              data-testid="code-security-run-scan-btn"
+                              type="button"
+                            >
+                              Run Code Scan
+                            </button>
+                    </div>
+                    <span class="status-badge success">Passed</span>
+                    </div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Code Security Issues</div>
+                    <div class="metric-value success">0 Critical</div>
+                </div>
+                <ul class="scan-list">
+                    <li class="scan-item medium">
+                        <div class="scan-item-title">Potential SQL Injection Pattern</div>
+                        <div class="scan-item-detail">Server API layer - Review recommended</div>
+                    </li>
+                    <li class="scan-item low">
+                        <div class="scan-item-title">Code Quality Issue</div>
+                        <div class="scan-item-detail">Client authentication utilities - Minor optimization available</div>
+                    </li>
+                </ul>
+                <div class="timestamp">
+                    <svg class="icon" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"></path>
+                    </svg>
+                    Last scan: Nov 24, 2025 1:05 AM UTC
+                </div>
+            </div>
+            <!-- Packages Tab -->
+            <div id="dependencies" class="tab-content">
+                <div class="card-header">
+                    <div class="card-title">
+                        Third-Party Package Check
+                        <div class="info-icon">
+                            <svg fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="tooltip">
+                                Your app uses external software libraries (like building blocks). We check if any of these have known security problems and need updating.
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <div class="web-scan-run-card">
+                            <div class="web-scan-run-card-icon">
+                                <svg style="width: 16px; height: 16px;" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v3a1 1 0 00.293.707l2 2a1 1 0 001.414-1.414L11 8.586V7z" clip-rule="evenodd"/>
+                                </svg>
+                            </div>
+                            <button
+                              class="ai-suggestion-action"
+                              data-role="packages-scan-run-btn"
+                              data-testid="packages-security-run-scan-btn"
+                              type="button"
+                            >
+                              Run Packages Scan
+                            </button>
+                        </div>
+                        <span class="status-badge warning" data-role="packages-status-badge">2 Moderate</span>
+                    </div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Known Vulnerabilities</div>
+                    <div class="metric-value" data-role="packages-metric-value">
+                        <span class="warning">2</span> / 847 packages
+                    </div>
+                </div>
+                <ul class="scan-list" data-role="packages-scan-list">
+                    <li class="scan-item medium">
+                        <div class="scan-item-title">Prototype Pollution Vulnerability</div>
+                        <div class="scan-item-detail">Utility library - Security update available</div>
+                    </li>
+                    <li class="scan-item medium">
+                        <div class="scan-item-title">ReDoS Vulnerability</div>
+                        <div class="scan-item-detail">Version parsing library - Patch available</div>
+                    </li>
+                </ul>
+                <div class="timestamp" data-role="packages-timestamp">
+                    <svg class="icon" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"></path>
+                    </svg>
+                    Last scan: Nov 24, 2025 1:02 AM UTC
+                </div>
+            </div>
+            <!-- Secrets Tab -->
+            <div id="secrets" class="tab-content">
+                <div class="card-header">
+                    <div class="card-title">
+                        Password & Key Protection
+                        <div class="info-icon">
+                            <svg fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="tooltip">
+                                We scan your code to make sure no passwords, API keys, or other sensitive credentials were accidentally left in your source code.
+                            </div>
+                        </div>
+                    </div>
+                    <span class="status-badge success">Clean</span>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Exposed Secrets</div>
+                    <div class="metric-value success">0 Found</div>
+                </div>
+                <div style="text-align: center; padding: 20px; color: #48bb78;">
+                    <svg style="width: 48px; height: 48px; margin: 0 auto;" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                    </svg>
+                    <div style="margin-top: 8px; font-weight: 600;">No secrets detected</div>
+                </div>
+                <div class="timestamp">
+                    <svg class="icon" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"></path>
+                    </svg>
+                    Last scan: Nov 24, 2025 1:03 AM UTC
+                </div>
+            </div>
+            <!-- Cloud Infrastructure Tab -->
+            <div id="infrastructure" class="tab-content">
+                <div class="card-header">
+                    <div class="card-title">
+                        Cloud Infrastructure Security
+                        <div class="info-icon">
+                            <svg fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="tooltip">
+                                Your app runs on cloud servers. We check that storage, databases, and other cloud resources follow security best practices to keep your data safe.
+                            </div>
+                        </div>
+                    </div>
+                    <span class="status-badge success">96% Compliant</span>
+                </div>
+                <div class="compliance-grid">
+                    <div class="compliance-item">
+                        <div class="compliance-percentage">100%</div>
+                        <div class="compliance-label">IAM Security</div>
+                    </div>
+                    <div class="compliance-item">
+                        <div class="compliance-percentage">98%</div>
+                        <div class="compliance-label">S3 Bucket Security</div>
+                    </div>
+                    <div class="compliance-item">
+                        <div class="compliance-percentage">100%</div>
+                        <div class="compliance-label">API Gateway</div>
+                    </div>
+                    <div class="compliance-item">
+                        <div class="compliance-percentage">87%</div>
+                        <div class="compliance-label">DynamoDB</div>
+                    </div>
+                </div>
+                <ul class="scan-list" style="margin-top: 16px;">
+                    <li class="scan-item high">
+                        <div class="scan-item-title">Database Encryption Enhancement Available</div>
+                        <div class="scan-item-detail">Session storage - Enable encryption at rest recommended</div>
+                    </li>
+                    <li class="scan-item medium">
+                        <div class="scan-item-title">Storage Versioning Improvement</div>
+                        <div class="scan-item-detail">Backup storage - Enable versioning for enhanced data recovery</div>
+                    </li>
+                </ul>
+                <div class="timestamp">
+                    <svg class="icon" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"></path>
+                    </svg>
+                    Last audit: Nov 24, 2025 1:15 AM UTC
+                </div>
+            </div>
+            <!-- WAF Tab -->
+            <div id="waf" class="tab-content">
+                <div class="card-header">
+                    <div class="card-title">
+                        Web Traffic Protection
+                        <div class="info-icon">
+                            <svg fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="tooltip">
+                                Acts as a security guard for your website, blocking malicious traffic, bots, and attacks before they reach your application. Running 24/7.
+                            </div>
+                        </div>
+                    </div>
+                    <span class="status-badge success">Active</span>
+                </div>
+                <div class="compliance-grid">
+                    <div class="compliance-item">
+                        <div class="compliance-percentage" style="color: #2d3748;">12,847</div>
+                        <div class="compliance-label">Requests Blocked (24h)</div>
+                    </div>
+                    <div class="compliance-item">
+                        <div class="compliance-percentage" style="color: #2d3748;">99.2%</div>
+                        <div class="compliance-label">Legitimate Traffic</div>
+                    </div>
+                    <div class="compliance-item">
+                        <div class="compliance-percentage" style="color: #2d3748;">847</div>
+                        <div class="compliance-label">Bot Blocks (24h)</div>
+                    </div>
+                    <div class="compliance-item">
+                        <div class="compliance-percentage" style="color: #2d3748;">23</div>
+                        <div class="compliance-label">Countries Blocked</div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 24px;">
+                    <div style="font-weight: 600; color: #2d3748; margin-bottom: 12px;">Active WAF Rules</div>
+                    <ul class="scan-list">
+                        <li class="scan-item low">
+                            <div class="scan-item-title">AWS Managed - Core Rule Set (CRS)</div>
+                            <div class="scan-item-detail">Protects against OWASP Top 10 - 42 rules active</div>
+                        </li>
+                        <li class="scan-item low">
+                            <div class="scan-item-title">AWS Managed - Known Bad Inputs</div>
+                            <div class="scan-item-detail">Blocks requests with invalid patterns - 18 rules active</div>
+                        </li>
+                        <li class="scan-item low">
+                            <div class="scan-item-title">AWS Managed - SQL Injection Protection</div>
+                            <div class="scan-item-detail">Advanced SQL injection detection - 12 rules active</div>
+                        </li>
+                        <li class="scan-item low">
+                            <div class="scan-item-title">Rate Limiting (Custom)</div>
+                            <div class="scan-item-detail">Prevents request flooding - Active</div>
+                        </li>
+                        <li class="scan-item low">
+                            <div class="scan-item-title">Geo-Blocking (Custom)</div>
+                            <div class="scan-item-detail">Blocking high-risk countries - 23 countries blocked</div>
+                        </li>
+                        <li class="scan-item medium">
+                            <div class="scan-item-title">Bot Control (AWS Managed)</div>
+                            <div class="scan-item-detail">⚠️ Enhanced bot protection recommended - Upgrade available</div>
+                        </li>
+                    </ul>
+                </div>
+
+                <div style="margin-top: 24px;">
+                    <div style="font-weight: 600; color: #2d3748; margin-bottom: 12px;">Recent Threat Activity (Last 24h)</div>
+                    <div class="vulnerability-chart" style="height: 120px; position: relative;">
+                        <div class="chart-bar critical" style="flex: 1;">
+                            <div class="chart-value">342</div>
+                            <div class="chart-bar-fill" style="height: 65%;"></div>
+                            <div class="chart-label">SQL Injection</div>
+                        </div>
+                        <div class="chart-bar high" style="flex: 1;">
+                            <div class="chart-value">189</div>
+                            <div class="chart-bar-fill" style="height: 35%;"></div>
+                            <div class="chart-label">XSS Attempts</div>
+                        </div>
+                        <div class="chart-bar medium" style="flex: 1;">
+                            <div class="chart-value">847</div>
+                            <div class="chart-bar-fill" style="height: 100%;"></div>
+                            <div class="chart-label">Bad Bots</div>
+                        </div>
+                        <div class="chart-bar medium" style="flex: 1;">
+                            <div class="chart-value">521</div>
+                            <div class="chart-bar-fill" style="height: 58%;"></div>
+                            <div class="chart-label">Rate Limit</div>
+                        </div>
+                        <div class="chart-bar low" style="flex: 1;">
+                            <div class="chart-value">78</div>
+                            <div class="chart-bar-fill" style="height: 15%;"></div>
+                            <div class="chart-label">Geo-Block</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="timestamp">
+                    <svg class="icon" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"></path>
+                    </svg>
+                    WAF metrics updated: Real-time monitoring
+                </div>
+            </div>
+        </div>
+
+        <!-- Hidden original content for reference -->
+        <div style="display: none;">
+        <!-- Top Row: Critical Metrics -->
+        <div class="grid">
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                        </svg>
+                        Website Security Scan
+                        <div class="info-icon">
+                            <svg fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="tooltip">
+                                We automatically test your live website for common security weaknesses like SQL injection and cross-site scripting. This helps catch issues before hackers do.
+                            </div>
+                        </div>
+                    </div>
+                    <span class="status-badge success">Passed</span>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Vulnerabilities Found</div>
+                    <div class="metric-value success">0 Critical</div>
+                </div>
+                <div class="vulnerability-chart" style="height: 120px; position: relative; margin-bottom: 12px;">
+                    <div class="chart-bar critical" style="flex: 1;">
+                        <div class="chart-value">0</div>
+                        <div class="chart-bar-fill" style="height: 0%;"></div>
+                        <div class="chart-label">Critical</div>
+                    </div>
+                    <div class="chart-bar high" style="flex: 1;">
+                        <div class="chart-value">2</div>
+                        <div class="chart-bar-fill" style="height: 40%;"></div>
+                        <div class="chart-label">High</div>
+                    </div>
+                    <div class="chart-bar medium" style="flex: 1;">
+                        <div class="chart-value">5</div>
+                        <div class="chart-bar-fill" style="height: 60%;"></div>
+                        <div class="chart-label">Medium</div>
+                    </div>
+                    <div class="chart-bar low" style="flex: 1;">
+                        <div class="chart-value">3</div>
+                        <div class="chart-bar-fill" style="height: 30%;"></div>
+                        <div class="chart-label">Low</div>
+                    </div>
+                </div>
+                <div class="timestamp">
+                    <svg class="icon" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"></path>
+                    </svg>
+                    Last scan: Nov 24, 2025 1:00 AM UTC (Weekly)
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"></path>
+                        </svg>
+                        Code Security Analysis
+                        <div class="info-icon">
+                            <svg fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="tooltip">
+                                We review your source code for security issues and coding mistakes that could lead to vulnerabilities. Think of it as a spell-checker for security.
+                            </div>
+                        </div>
+                    </div>
+                    <span class="status-badge success">Passed</span>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Code Security Issues</div>
+                    <div class="metric-value success">0 Critical</div>
+                </div>
+                <ul class="scan-list">
+                    <li class="scan-item medium">
+                        <div class="scan-item-title">Potential SQL Injection Pattern</div>
+                        <div class="scan-item-detail">Server API layer - Review recommended</div>
+                    </li>
+                    <li class="scan-item low">
+                        <div class="scan-item-title">Code Quality Issue</div>
+                        <div class="scan-item-detail">Client authentication utilities - Minor optimization available</div>
+                    </li>
+                </ul>
+                <div class="timestamp">
+                    <svg class="icon" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"></path>
+                    </svg>
+                    Last scan: Nov 24, 2025 1:05 AM UTC
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                        </svg>
+                        Third-Party Package Check
+                        <div class="info-icon">
+                            <svg fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="tooltip">
+                                Your app uses external software libraries (like building blocks). We check if any of these have known security problems and need updating.
+                            </div>
+                        </div>
+                    </div>
+                    <span class="status-badge warning">2 Moderate</span>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Known Vulnerabilities</div>
+                    <div class="metric-value">
+                        <span class="warning">2</span> / 847 packages
+                    </div>
+                </div>
+                <ul class="scan-list">
+                    <li class="scan-item medium">
+                        <div class="scan-item-title">Prototype Pollution Vulnerability</div>
+                        <div class="scan-item-detail">Utility library - Security update available</div>
+                    </li>
+                    <li class="scan-item medium">
+                        <div class="scan-item-title">ReDoS Vulnerability</div>
+                        <div class="scan-item-detail">Version parsing library - Patch available</div>
+                    </li>
+                </ul>
+                <div class="timestamp">
+                    <svg class="icon" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"></path>
+                    </svg>
+                    Last scan: Nov 24, 2025 1:02 AM UTC
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"></path>
+                        </svg>
+                        Password & Key Protection
+                        <div class="info-icon">
+                            <svg fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="tooltip">
+                                We scan your code to make sure no passwords, API keys, or other sensitive credentials were accidentally left in your source code.
+                            </div>
+                        </div>
+                    </div>
+                    <span class="status-badge success">Clean</span>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Exposed Secrets</div>
+                    <div class="metric-value success">0 Found</div>
+                </div>
+                <div style="text-align: center; padding: 20px; color: #48bb78;">
+                    <svg style="width: 48px; height: 48px; margin: 0 auto;" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                    </svg>
+                    <div style="margin-top: 8px; font-weight: 600;">No secrets detected</div>
+                </div>
+                <div class="timestamp">
+                    <svg class="icon" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"></path>
+                    </svg>
+                    Last scan: Nov 24, 2025 1:03 AM UTC
+                </div>
+            </div>
+        </div>
+
+        <!-- AWS Infrastructure Security -->
+        <div class="grid">
+            <div class="card wide-card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"></path>
+                        </svg>
+                        Cloud Infrastructure Security
+                        <div class="info-icon">
+                            <svg fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="tooltip">
+                                Your app runs on cloud servers. We check that storage, databases, and other cloud resources follow security best practices to keep your data safe.
+                            </div>
+                        </div>
+                    </div>
+                    <span class="status-badge success">96% Compliant</span>
+                </div>
+                <div class="compliance-grid">
+                    <div class="compliance-item">
+                        <div class="compliance-percentage">100%</div>
+                        <div class="compliance-label">IAM Security</div>
+                    </div>
+                    <div class="compliance-item">
+                        <div class="compliance-percentage">98%</div>
+                        <div class="compliance-label">S3 Bucket Security</div>
+                    </div>
+                    <div class="compliance-item">
+                        <div class="compliance-percentage">100%</div>
+                        <div class="compliance-label">API Gateway</div>
+                    </div>
+                    <div class="compliance-item">
+                        <div class="compliance-percentage">87%</div>
+                        <div class="compliance-label">DynamoDB</div>
+                    </div>
+                </div>
+                <ul class="scan-list" style="margin-top: 16px;">
+                    <li class="scan-item high">
+                        <div class="scan-item-title">Database Encryption Enhancement Available</div>
+                        <div class="scan-item-detail">Session storage - Enable encryption at rest recommended</div>
+                    </li>
+                    <li class="scan-item medium">
+                        <div class="scan-item-title">Storage Versioning Improvement</div>
+                        <div class="scan-item-detail">Backup storage - Enable versioning for enhanced data recovery</div>
+                    </li>
+                </ul>
+                <div class="timestamp">
+                    <svg class="icon" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"></path>
+                    </svg>
+                    Last audit: Nov 24, 2025 1:15 AM UTC
+                </div>
+            </div>
+        </div>
+
+        <!-- WAF & Certificate Status -->
+        <div class="grid">
+            <div class="card wide-card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.618 5.984A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016zM12 9v2m0 4h.01"></path>
+                        </svg>
+                        Web Traffic Protection
+                        <div class="info-icon">
+                            <svg fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="tooltip">
+                                Acts as a security guard for your website, blocking malicious traffic, bots, and attacks before they reach your application. Running 24/7.
+                            </div>
+                        </div>
+                    </div>
+                    <span class="status-badge success">Active</span>
+                </div>
+                <div class="compliance-grid">
+                    <div class="compliance-item">
+                        <div class="compliance-percentage" style="color: #2d3748;">12,847</div>
+                        <div class="compliance-label">Requests Blocked (24h)</div>
+                    </div>
+                    <div class="compliance-item">
+                        <div class="compliance-percentage" style="color: #2d3748;">99.2%</div>
+                        <div class="compliance-label">Legitimate Traffic</div>
+                    </div>
+                    <div class="compliance-item">
+                        <div class="compliance-percentage" style="color: #2d3748;">847</div>
+                        <div class="compliance-label">Bot Blocks (24h)</div>
+                    </div>
+                    <div class="compliance-item">
+                        <div class="compliance-percentage" style="color: #2d3748;">23</div>
+                        <div class="compliance-label">Countries Blocked</div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 24px;">
+                    <div style="font-weight: 600; color: #2d3748; margin-bottom: 12px;">Active WAF Rules</div>
+                    <ul class="scan-list">
+                        <li class="scan-item low">
+                            <div class="scan-item-title">AWS Managed - Core Rule Set (CRS)</div>
+                            <div class="scan-item-detail">Protects against OWASP Top 10 - 42 rules active</div>
+                        </li>
+                        <li class="scan-item low">
+                            <div class="scan-item-title">AWS Managed - Known Bad Inputs</div>
+                            <div class="scan-item-detail">Blocks requests with invalid patterns - 18 rules active</div>
+                        </li>
+                        <li class="scan-item low">
+                            <div class="scan-item-title">AWS Managed - SQL Injection Protection</div>
+                            <div class="scan-item-detail">Advanced SQL injection detection - 12 rules active</div>
+                        </li>
+                        <li class="scan-item low">
+                            <div class="scan-item-title">Rate Limiting (Custom)</div>
+                            <div class="scan-item-detail">Prevents request flooding - Active</div>
+                        </li>
+                        <li class="scan-item low">
+                            <div class="scan-item-title">Geo-Blocking (Custom)</div>
+                            <div class="scan-item-detail">Blocking high-risk countries - 23 countries blocked</div>
+                        </li>
+                        <li class="scan-item medium">
+                            <div class="scan-item-title">Bot Control (AWS Managed)</div>
+                            <div class="scan-item-detail">⚠️ Enhanced bot protection recommended - Upgrade available</div>
+                        </li>
+                    </ul>
+                </div>
+
+                <div style="margin-top: 24px;">
+                    <div style="font-weight: 600; color: #2d3748; margin-bottom: 12px;">Recent Threat Activity (Last 24h)</div>
+                    <div class="vulnerability-chart" style="height: 120px; position: relative;">
+                        <div class="chart-bar critical" style="flex: 1;">
+                            <div class="chart-value">342</div>
+                            <div class="chart-bar-fill" style="height: 65%;"></div>
+                            <div class="chart-label">SQL Injection</div>
+                        </div>
+                        <div class="chart-bar high" style="flex: 1;">
+                            <div class="chart-value">189</div>
+                            <div class="chart-bar-fill" style="height: 35%;"></div>
+                            <div class="chart-label">XSS Attempts</div>
+                        </div>
+                        <div class="chart-bar medium" style="flex: 1;">
+                            <div class="chart-value">847</div>
+                            <div class="chart-bar-fill" style="height: 100%;"></div>
+                            <div class="chart-label">Bad Bots</div>
+                        </div>
+                        <div class="chart-bar medium" style="flex: 1;">
+                            <div class="chart-value">521</div>
+                            <div class="chart-bar-fill" style="height: 58%;"></div>
+                            <div class="chart-label">Rate Limit</div>
+                        </div>
+                        <div class="chart-bar low" style="flex: 1;">
+                            <div class="chart-value">78</div>
+                            <div class="chart-bar-fill" style="height: 15%;"></div>
+                            <div class="chart-label">Geo-Block</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="timestamp">
+                    <svg class="icon" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"></path>
+                    </svg>
+                    WAF metrics updated: Real-time monitoring
+                </div>
+            </div>
+        </div>
+
+        <!-- Certificate & Infrastructure Status -->
+        <div class="grid">
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
+                        </svg>
+                        Encrypted Connection
+                        <div class="info-icon">
+                            <svg fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="tooltip">
+                                This is the padlock you see in your browser. It encrypts all data between users and your website so no one can spy on conversations or steal information.
+                            </div>
+                        </div>
+                    </div>
+                    <span class="status-badge success">Valid</span>
+                </div>
+                <div class="certificate-info">
+                    <div class="cert-detail">
+                        <span class="cert-label">Certificate Status</span>
+                        <span class="cert-value" style="color: #48bb78;">✓ Valid</span>
+                    </div>
+                    <div class="cert-detail">
+                        <span class="cert-label">Issuer</span>
+                        <span class="cert-value">AWS Certificate Manager</span>
+                    </div>
+                    <div class="cert-detail">
+                        <span class="cert-label">Expiration</span>
+                        <span class="cert-value">82 days remaining</span>
+                    </div>
+                    <div class="cert-detail">
+                        <span class="cert-label">Encryption</span>
+                        <span class="cert-value">TLS 1.3, RSA 2048-bit</span>
+                    </div>
+                    <div class="cert-detail">
+                        <span class="cert-label">Auto-Renewal</span>
+                        <span class="cert-value" style="color: #48bb78;">✓ Enabled</span>
+                    </div>
+                </div>
+                <div class="timestamp">
+                    <svg class="icon" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"></path>
+                    </svg>
+                    Last verified: Nov 23, 2025
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"></path>
+                        </svg>
+                        System Health
+                        <div class="info-icon">
+                            <svg fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="tooltip">
+                                Overview of your app's uptime, speed, and security features that are currently active and protecting your users.
+                            </div>
+                        </div>
+                    </div>
+                    <span class="status-badge info">Monitoring</span>
+                </div>
+                <div class="infrastructure-grid">
+                    <div class="infra-metric">
+                        <div class="infra-metric-value">99.97%</div>
+                        <div class="infra-metric-label">Uptime (30 days)</div>
+                    </div>
+                    <div class="infra-metric">
+                        <div class="infra-metric-value">28ms</div>
+                        <div class="infra-metric-label">Avg Response Time</div>
+                    </div>
+                    <div class="infra-metric">
+                        <div class="infra-metric-value">CDN</div>
+                        <div class="infra-metric-label">CloudFront (Active)</div>
+                    </div>
+                    <div class="infra-metric">
+                        <div class="infra-metric-value">OIDC</div>
+                        <div class="infra-metric-label">AWS Auth Method</div>
+                    </div>
+                    <div class="infra-metric">
+                        <div class="infra-metric-value">VPC</div>
+                        <div class="infra-metric-label">Network Isolation</div>
+                    </div>
+                    <div class="infra-metric">
+                        <div class="infra-metric-value">WAF</div>
+                        <div class="infra-metric-label">Firewall (Active)</div>
+                    </div>
+                </div>
+                <div class="timestamp">
+                    <svg class="icon" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"></path>
+                    </svg>
+                    Real-time monitoring active
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // Tab switching function
+        function switchTab(event, tabId) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+
+            // Remove active class from all buttons
+            document.querySelectorAll('.tab-button').forEach(button => {
+                button.classList.remove('active');
+            });
+
+            // Show selected tab content
+            const tabContent = document.getElementById(tabId);
+            tabContent.classList.add('active');
+
+            // Add active class to clicked button
+            event.currentTarget.classList.add('active');
+        }
+
+        // Expandable sections toggle
+        function toggleSection(element) {
+            const content = element.nextElementSibling;
+            const icon = element.querySelector('.expand-icon');
+
+            content.classList.toggle('active');
+            icon.classList.toggle('rotated');
+        }
+
+        // Add click handlers for buttons
+        document.querySelectorAll('.ai-suggestion-action').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                console.log('AI action clicked:', e.target.textContent.trim());
+                // In real implementation, this would call API endpoints
+            });
+        });
+
+        // Live data hydration when loaded with ?mode=live
+        (function () {
+            try {
+                const params = new URLSearchParams(window.location.search || '');
+                const mode = params.get('mode');
+
+                // Hide the mockup banner in live mode, but keep it for static design preview
+                if (mode === 'live') {
+                    const banner = document.querySelector('[data-role="mockup-banner"]');
+                    if (banner && banner.parentNode) {
+                        banner.parentNode.removeChild(banner);
+                    }
+                }
+
+                if (mode !== 'live') {
+                    return;
+                }
+
+                function formatNextScan(minutes) {
+                    if (minutes == null) return 'Scheduled';
+                    if (minutes >= 1440) return Math.round(minutes / 1440) + ' days';
+                    if (minutes >= 60) return Math.round(minutes / 60) + ' hours';
+                    return minutes + ' min';
+                }
+
+                function labelForScore(score) {
+                    if (score >= 90) return 'Excellent';
+                    if (score >= 75) return 'Strong';
+                    if (score >= 50) return 'Moderate';
+                    return 'Needs attention';
+                }
+
+                function applyMiniCardStatus(cardEl, status) {
+                    if (!cardEl) return;
+                    cardEl.classList.remove('success', 'warning', 'error');
+                    if (status === 'fail') {
+                        cardEl.classList.add('error');
+                    } else if (status === 'warning') {
+                        cardEl.classList.add('warning');
+                    } else {
+                        cardEl.classList.add('success');
+                    }
+                }
+
+                function getAccessToken() {
+                    try {
+                        const raw = window.localStorage.getItem('access-token-storage');
+                        if (!raw) return null;
+                        const parsed = JSON.parse(raw);
+                        return parsed && parsed.state && parsed.state.accessToken ? parsed.state.accessToken : null;
+                    } catch (e) {
+                        console.warn('Failed to read access token from localStorage', e);
+                        return null;
+                    }
+                }
+
+                async function authorizedFetch(url, options = {}) {
+                    const token = getAccessToken();
+                    const headers = Object.assign({}, options.headers || {});
+                    if (token) {
+                        headers['Authorization'] = 'Bearer ' + token;
+                    }
+                    return fetch(url, {
+                        ...options,
+                        headers,
+                        credentials: 'include',
+                    });
+                }
+
+                async function hydrateOverview() {
+                    try {
+                        const res = await authorizedFetch('/api/admin/security-dashboard/overview');
+                        if (!res.ok) {
+                            console.warn('Failed to load security overview data', res.status);
+                            return;
+                        }
+                        const data = await res.json();
+
+                        const scoreValue = document.querySelector('[data-role=\"overall-score\"]');
+                        const scoreLabel = document.querySelector('[data-role=\"score-label\"]');
+                        const lastUpdated = document.querySelector('[data-role=\"last-updated\"]');
+                        const checksSummary = document.querySelector('[data-role=\"checks-summary\"]');
+                        const nextScan = document.querySelector('[data-role=\"next-scan\"]');
+
+                        if (scoreValue) scoreValue.textContent = String(data.overallScore ?? 0);
+                        if (scoreLabel) scoreLabel.textContent = labelForScore(data.overallScore ?? 0);
+                        if (lastUpdated && data.lastUpdated) {
+                            lastUpdated.textContent = new Date(data.lastUpdated).toLocaleString();
+                        }
+                        if (checksSummary) {
+                            checksSummary.textContent = `${data.passedChecks ?? 0}/${data.totalChecks ?? 0} Passed`;
+                        }
+                        if (nextScan) {
+                            nextScan.textContent = formatNextScan(data.nextScanInMinutes);
+                        }
+
+                        const checks = Array.isArray(data.checks) ? data.checks : [];
+                        const getCheck = id => checks.find(c => c.id === id);
+
+                        const web = getCheck('web');
+                        const code = getCheck('code');
+                        const packages = getCheck('packages');
+                        const secrets = getCheck('secrets');
+                        const cloud = getCheck('cloud');
+                        const waf = getCheck('waf');
+
+                        const miniWeb = document.querySelector('[data-role="mini-web"]');
+                        const miniWebStatus = document.querySelector('[data-role="mini-web-status"]');
+                        if (web) {
+                            applyMiniCardStatus(miniWeb, web.status);
+                            if (miniWebStatus) {
+                                const base =
+                                    web.status === 'pass'
+                                        ? 'Passed'
+                                        : web.status === 'warning'
+                                        ? 'Review recommended'
+                                        : 'Attention required';
+                                miniWebStatus.textContent = web.summary ? `${base} – ${web.summary}` : base;
+                            }
+                        }
+
+                        const miniCode = document.querySelector('[data-role="mini-code"]');
+                        const miniCodeStatus = document.querySelector('[data-role="mini-code-status"]');
+                        if (code) {
+                            applyMiniCardStatus(miniCode, code.status);
+                            if (miniCodeStatus) {
+                                const base =
+                                    code.status === 'pass'
+                                        ? 'Passed'
+                                        : code.status === 'warning'
+                                        ? 'Review recommended'
+                                        : 'Attention required';
+                                miniCodeStatus.textContent = code.summary ? `${base} – ${code.summary}` : base;
+                            }
+                        }
+
+                        const miniPackages = document.querySelector('[data-role="mini-packages"]');
+                        const miniPackagesCount = document.querySelector('[data-role="mini-packages-count"]');
+                        const miniPackagesStatus = document.querySelector('[data-role="mini-packages-status"]');
+                        if (packages) {
+                            applyMiniCardStatus(miniPackages, packages.status);
+                            if (miniPackagesCount) miniPackagesCount.textContent = String(packages.score ?? 0);
+                            if (miniPackagesStatus) {
+                                const base =
+                                    packages.status === 'warning'
+                                        ? 'Moderate issues'
+                                        : packages.status === 'fail'
+                                        ? 'Critical issues'
+                                        : 'Up to date';
+                                miniPackagesStatus.textContent = packages.summary ? `${base} – ${packages.summary}` : base;
+                            }
+                        }
+
+                        const miniSecrets = document.querySelector('[data-role="mini-secrets"]');
+                        const miniSecretsStatus = document.querySelector('[data-role="mini-secrets-status"]');
+                        if (secrets) {
+                            applyMiniCardStatus(miniSecrets, secrets.status);
+                            if (miniSecretsStatus) {
+                                const base =
+                                    secrets.status === 'pass'
+                                        ? 'Clean'
+                                        : secrets.status === 'warning'
+                                        ? 'Review recommended'
+                                        : 'Attention required';
+                                miniSecretsStatus.textContent = secrets.summary ? `${base} – ${secrets.summary}` : base;
+                            }
+                        }
+
+                        const miniCloud = document.querySelector('[data-role="mini-cloud"]');
+                        const miniCloudScore = document.querySelector('[data-role="mini-cloud-score"]');
+                        const miniCloudStatus = document.querySelector('[data-role="mini-cloud-status"]');
+                        if (cloud) {
+                            applyMiniCardStatus(miniCloud, cloud.status);
+                            if (miniCloudScore) miniCloudScore.textContent = `${cloud.score ?? 0}%`;
+                            if (miniCloudStatus) {
+                                const base =
+                                    cloud.status === 'pass'
+                                        ? 'Compliant'
+                                        : cloud.status === 'warning'
+                                        ? 'Drift detected'
+                                        : 'Misconfigured';
+                                miniCloudStatus.textContent = cloud.summary ? `${base} – ${cloud.summary}` : base;
+                            }
+                        }
+
+                        const miniWaf = document.querySelector('[data-role="mini-waf"]');
+                        const miniWafStatus = document.querySelector('[data-role="mini-waf-status"]');
+                        if (waf) {
+                            applyMiniCardStatus(miniWaf, waf.status);
+                            if (miniWafStatus) {
+                                const base =
+                                    waf.status === 'pass'
+                                        ? 'Active'
+                                        : waf.status === 'warning'
+                                        ? 'Review recommended'
+                                        : 'Attention required';
+                                miniWafStatus.textContent = waf.summary ? `${base} – ${waf.summary}` : base;
+                            }
+                        }
+                    } catch (err) {
+                        console.error('Error hydrating security dashboard overview', err);
+                    }
+                }
+
+                if (document.readyState === 'complete' || document.readyState === 'interactive') {
+                    hydrateOverview();
+                } else {
+                    window.addEventListener('load', hydrateOverview);
+                }
+
+                function formatUtcDateTimeForLastScan(date) {
+                    const datePart = date.toLocaleDateString(undefined, {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric',
+                        timeZone: 'UTC',
+                    });
+                    const timePart = date.toLocaleTimeString(undefined, {
+                        hour: 'numeric',
+                        minute: '2-digit',
+                        hour12: true,
+                        timeZone: 'UTC',
+                    });
+                    return datePart + ' ' + timePart + ' UTC';
+                }
+
+                function formatUtcDateForNextScan(date) {
+                    return date.toLocaleDateString(undefined, {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric',
+                        timeZone: 'UTC',
+                    });
+                }
+
+                function computeNextWeeklyScanDate(fromDate) {
+                    const now = fromDate || new Date();
+                    const day = now.getUTCDay(); // 0 = Sunday
+
+                    const base = new Date(Date.UTC(
+                        now.getUTCFullYear(),
+                        now.getUTCMonth(),
+                        now.getUTCDate(),
+                        1, // 1 AM UTC
+                        0,
+                        0,
+                        0
+                    ));
+
+                    if (day === 0) {
+                        // Today is Sunday
+                        if (now.getTime() < base.getTime()) {
+                            // Upcoming Sunday 1 AM UTC later today
+                            return base;
+                        }
+                        // Already past this week's Sunday 1 AM UTC; schedule for next week
+                        base.setUTCDate(base.getUTCDate() + 7);
+                        return base;
+                    }
+
+                    const daysUntilSunday = (7 - day) % 7;
+                    base.setUTCDate(base.getUTCDate() + daysUntilSunday);
+                    return base;
+                }
+
+                async function hydrateWebTab() {
+                    try {
+                        const res = await authorizedFetch('/api/admin/security-dashboard/web');
+                        if (!res.ok) {
+                            console.warn('Failed to load web security snapshot', res.status);
+                            return;
+                        }
+                        const snapshot = await res.json();
+
+                        const badge = document.querySelector('#web-scan .status-badge');
+                        if (badge) {
+                            badge.classList.remove('success', 'warning', 'error');
+                            if (snapshot.status === 'fail') {
+                                badge.classList.add('error');
+                                badge.textContent = 'Issues detected';
+                            } else if (snapshot.status === 'warning') {
+                                badge.classList.add('warning');
+                                badge.textContent = 'Review recommended';
+                            } else {
+                                badge.classList.add('success');
+                                badge.textContent = 'Passed';
+                            }
+                        }
+
+                        const metricValue = document.querySelector('#web-scan .metric-value');
+                        if (metricValue) {
+                            if (snapshot.findings && snapshot.findings.length > 0) {
+                                const highCount = snapshot.findings.filter(f => f.severity === 'high' || f.severity === 'critical').length;
+                                const mediumCount = snapshot.findings.filter(f => f.severity === 'medium').length;
+                                const lowCount = snapshot.findings.filter(f => f.severity === 'low').length;
+                                metricValue.textContent = `${highCount} High, ${mediumCount} Medium, ${lowCount} Low`;
+                                if (highCount > 0) {
+                                    metricValue.classList.remove('success');
+                                    metricValue.classList.add('error');
+                                } else if (mediumCount > 0 || lowCount > 0) {
+                                    metricValue.classList.remove('success');
+                                    metricValue.classList.add('warning');
+                                } else {
+                                    metricValue.classList.remove('warning', 'error');
+                                    metricValue.classList.add('success');
+                                }
+                            } else {
+                                metricValue.textContent = '0 findings';
+                                metricValue.classList.remove('warning', 'error');
+                                metricValue.classList.add('success');
+                            }
+                        }
+
+                        const criticalBar = document.querySelector('#web-scan .chart-bar.critical .chart-bar-fill');
+                        const criticalValue = document.querySelector('#web-scan .chart-bar.critical .chart-value');
+                        const highBar = document.querySelector('#web-scan .chart-bar.high .chart-bar-fill');
+                        const highValue = document.querySelector('#web-scan .chart-bar.high .chart-value');
+                        const mediumBar = document.querySelector('#web-scan .chart-bar.medium .chart-bar-fill');
+                        const mediumValue = document.querySelector('#web-scan .chart-bar.medium .chart-value');
+                        const lowBar = document.querySelector('#web-scan .chart-bar.low .chart-bar-fill');
+                        const lowValue = document.querySelector('#web-scan .chart-bar.low .chart-value');
+
+                        const criticalCount = snapshot.findings.filter(f => f.severity === 'critical').length;
+                        const highCountOnly = snapshot.findings.filter(f => f.severity === 'high').length;
+                        const mediumCountOnly = snapshot.findings.filter(f => f.severity === 'medium').length;
+                        const lowCountOnly = snapshot.findings.filter(f => f.severity === 'low').length;
+
+                        const maxCount = Math.max(criticalCount, highCountOnly, mediumCountOnly, lowCountOnly, 1);
+                        const scale = 100 / maxCount;
+
+                        if (criticalBar && criticalValue) {
+                            criticalValue.textContent = String(criticalCount);
+                            criticalBar.style.height = `${criticalCount * scale}%`;
+                        }
+                        if (highBar && highValue) {
+                            highValue.textContent = String(highCountOnly);
+                            highBar.style.height = `${highCountOnly * scale}%`;
+                        }
+                        if (mediumBar && mediumValue) {
+                            mediumValue.textContent = String(mediumCountOnly);
+                            mediumBar.style.height = `${mediumCountOnly * scale}%`;
+                        }
+                        if (lowBar && lowValue) {
+                            lowValue.textContent = String(lowCountOnly);
+                            lowBar.style.height = `${lowCountOnly * scale}%`;
+                        }
+
+                        const scanList = document.querySelector('#web-scan .scan-list');
+                        if (scanList) {
+                            while (scanList.firstChild) {
+                                scanList.removeChild(scanList.firstChild);
+                            }
+
+                            (snapshot.findings || []).forEach(finding => {
+                                const li = document.createElement('li');
+                                li.className = 'scan-item ' + (finding.severity === 'critical' || finding.severity === 'high'
+                                    ? 'high'
+                                    : finding.severity === 'medium'
+                                        ? 'medium'
+                                        : 'low');
+
+                                const titleDiv = document.createElement('div');
+                                titleDiv.className = 'scan-item-title';
+                                titleDiv.textContent = finding.title;
+
+                                const detailDiv = document.createElement('div');
+                                detailDiv.className = 'scan-item-detail';
+                                detailDiv.textContent = finding.description;
+
+                                li.appendChild(titleDiv);
+                                li.appendChild(detailDiv);
+                                scanList.appendChild(li);
+                            });
+                        }
+
+                        const timestamp = document.querySelector('#web-scan .timestamp');
+                        if (timestamp && snapshot.checkedAt) {
+                            const lastScanDate = new Date(snapshot.checkedAt);
+                            const lastScanText = formatUtcDateTimeForLastScan(lastScanDate);
+                            const nextScanDate = computeNextWeeklyScanDate(new Date());
+                            const nextScanText = formatUtcDateForNextScan(nextScanDate);
+                            const baseText = `Last scan: ${lastScanText} (Weekly) • Next scan: ${nextScanText}`;
+
+                            let cooldownText = '';
+                            const now = new Date();
+                            const diffMs = now.getTime() - lastScanDate.getTime();
+                            const twentyFourHoursMs = 24 * 60 * 60 * 1000;
+                            const runScanButton = document.querySelector('[data-role="web-scan-run-btn"]');
+
+                            if (diffMs < twentyFourHoursMs) {
+                                const remainingMs = twentyFourHoursMs - diffMs;
+                                const hoursRemaining = Math.ceil(remainingMs / (60 * 60 * 1000));
+                                cooldownText = ` A scan was completed recently. You can run another scan in ${hoursRemaining} hour${hoursRemaining === 1 ? '' : 's'}.`;
+                                if (runScanButton) {
+                                    runScanButton.disabled = true;
+                                }
+                            } else if (runScanButton) {
+                                runScanButton.disabled = false;
+                            }
+
+                            const fullText = baseText + cooldownText;
+
+                            timestamp.querySelector('span')
+                              ? (timestamp.querySelector('span').textContent = fullText)
+                              : (timestamp.innerHTML =
+                                  '<svg class="icon" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"></path></svg> <span>' +
+                                  fullText +
+                                  '</span>');
+                        }
+                    } catch (err) {
+                        console.error('Error hydrating web security tab', err);
+                    }
+                }
+
+                async function hydrateCodeTab() {
+                    try {
+                        const res = await authorizedFetch('/api/admin/security-dashboard/code');
+                        if (!res.ok) {
+                            console.warn('Failed to load code analysis snapshot', res.status);
+                            return;
+                        }
+
+                        const snapshot = await res.json();
+
+                        const badge = document.querySelector('#code-scan .status-badge');
+                        if (badge) {
+                            badge.classList.remove('success', 'warning', 'error');
+                            if (snapshot.status === 'fail') {
+                                badge.classList.add('error');
+                                badge.textContent = 'Issues detected';
+                            } else if (snapshot.status === 'warning') {
+                                badge.classList.add('warning');
+                                badge.textContent = 'Review recommended';
+                            } else {
+                                badge.classList.add('success');
+                                badge.textContent = 'Passed';
+                            }
+                        }
+
+                        const findings = Array.isArray(snapshot.findings) ? snapshot.findings : [];
+
+                        const criticalCount = findings.filter(f => f.severity === 'critical').length;
+                        const highCount = findings.filter(f => f.severity === 'high').length;
+                        const mediumCount = findings.filter(f => f.severity === 'medium').length;
+                        const lowCount = findings.filter(f => f.severity === 'low').length;
+
+                        const metricValue = document.querySelector('#code-scan .metric-value');
+                        if (metricValue) {
+                            metricValue.classList.remove('success', 'warning', 'error');
+
+                            if (
+                                criticalCount === 0 &&
+                                highCount === 0 &&
+                                mediumCount === 0 &&
+                                lowCount === 0
+                            ) {
+                                metricValue.textContent = '0 Code issues detected';
+                                metricValue.classList.add('success');
+                            } else {
+                                const segments = [];
+
+                                if (criticalCount > 0) {
+                                    segments.push(
+                                        `<span class="metric-value-part critical">${criticalCount} Critical</span>`
+                                    );
+                                }
+                                if (highCount > 0) {
+                                    segments.push(
+                                        `<span class="metric-value-part high">${highCount} High</span>`
+                                    );
+                                }
+                                if (mediumCount > 0) {
+                                    segments.push(
+                                        `<span class="metric-value-part medium">${mediumCount} Medium</span>`
+                                    );
+                                }
+                                if (lowCount > 0) {
+                                    segments.push(
+                                        `<span class="metric-value-part low">${lowCount} Low</span>`
+                                    );
+                                }
+
+                                metricValue.innerHTML = `${segments.join(
+                                    ', '
+                                )} <span class="metric-value-part">code issues</span>`;
+                            }
+                        }
+
+                        const scanList = document.querySelector('#code-scan .scan-list');
+                        if (scanList) {
+                            while (scanList.firstChild) {
+                                scanList.removeChild(scanList.firstChild);
+                            }
+
+                            findings.forEach(finding => {
+                                const li = document.createElement('li');
+                                li.className =
+                                    'scan-item ' +
+                                    (finding.severity === 'critical' || finding.severity === 'high'
+                                        ? 'high'
+                                        : finding.severity === 'medium'
+                                            ? 'medium'
+                                            : 'low');
+
+                                const titleDiv = document.createElement('div');
+                                titleDiv.className = 'scan-item-title';
+                                titleDiv.textContent = finding.title;
+
+                                const detailDiv = document.createElement('div');
+                                detailDiv.className = 'scan-item-detail';
+                                detailDiv.textContent = finding.description;
+
+                                li.appendChild(titleDiv);
+                                li.appendChild(detailDiv);
+                                scanList.appendChild(li);
+                            });
+                        }
+
+                        const timestamp = document.querySelector('#code-scan .timestamp');
+                        if (timestamp && snapshot.checkedAt) {
+                            const lastScanDate = new Date(snapshot.checkedAt);
+                            const lastScanText = formatUtcDateTimeForLastScan(lastScanDate);
+                            const now = new Date();
+                            const diffMs = now.getTime() - lastScanDate.getTime();
+                            const twentyFourHoursMs = 24 * 60 * 60 * 1000;
+                            const runCodeScanButton = document.querySelector('[data-role=\"code-scan-run-btn\"]');
+
+                            let cooldownText = '';
+                            if (diffMs < twentyFourHoursMs) {
+                                const remainingMs = twentyFourHoursMs - diffMs;
+                                const hoursRemaining = Math.ceil(remainingMs / (60 * 60 * 1000));
+                                cooldownText = ` A scan was completed recently. You can run another scan in ${hoursRemaining} hour${hoursRemaining === 1 ? '' : 's'}.`;
+                                if (runCodeScanButton) {
+                                    runCodeScanButton.disabled = true;
+                                }
+                            } else if (runCodeScanButton) {
+                                runCodeScanButton.disabled = false;
+                            }
+
+                            const fullText = `Last scan: ${lastScanText}${cooldownText}`;
+
+                            timestamp.querySelector('span')
+                                ? (timestamp.querySelector('span').textContent = fullText)
+                                : (timestamp.innerHTML =
+                                      '<svg class=\"icon\" fill=\"currentColor\" viewBox=\"0 0 20 20\"><path fill-rule=\"evenodd\" d=\"M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z\" clip-rule=\"evenodd\"></path></svg> <span>' +
+                                      fullText +
+                                      '</span>');
+                        }
+                    } catch (err) {
+                        console.error('Error hydrating code analysis tab', err);
+                    }
+                }
+
+                async function hydratePackagesTab() {
+                    try {
+                        const res = await authorizedFetch('/api/admin/security-dashboard/packages');
+                        if (!res.ok) {
+                            console.warn('Failed to load packages security snapshot', res.status);
+                            return;
+                        }
+
+                        const snapshot = await res.json();
+                        const findings = Array.isArray(snapshot.findings) ? snapshot.findings : [];
+
+                        const badge = document.querySelector('#dependencies .status-badge');
+                        if (badge) {
+                            badge.classList.remove('success', 'warning', 'error');
+                            if (snapshot.status === 'fail') {
+                                badge.classList.add('error');
+                                badge.textContent = 'Issues detected';
+                            } else if (snapshot.status === 'warning') {
+                                badge.classList.add('warning');
+                                badge.textContent = 'Review recommended';
+                            } else {
+                                badge.classList.add('success');
+                                badge.textContent = 'Passed';
+                            }
+                        }
+
+                        const metricValue = document.querySelector('#dependencies .metric-value');
+                        if (metricValue) {
+                            const vulnerableCount = findings.length;
+                            if (vulnerableCount === 0) {
+                                metricValue.textContent = '0 packages with known vulnerabilities';
+                                metricValue.classList.remove('warning', 'error');
+                                metricValue.classList.add('success');
+                            } else {
+                                metricValue.textContent = `${vulnerableCount} packages with known vulnerabilities`;
+                                metricValue.classList.remove('success');
+                                metricValue.classList.add('warning');
+                            }
+                        }
+
+                        const scanList = document.querySelector('#dependencies .scan-list');
+                        if (scanList) {
+                            while (scanList.firstChild) {
+                                scanList.removeChild(scanList.firstChild);
+                            }
+
+                            findings.forEach(finding => {
+                                const li = document.createElement('li');
+                                li.className =
+                                    'scan-item ' +
+                                    (finding.severity === 'critical' || finding.severity === 'high'
+                                        ? 'high'
+                                        : finding.severity === 'medium'
+                                            ? 'medium'
+                                            : 'low');
+
+                                const titleDiv = document.createElement('div');
+                                titleDiv.className = 'scan-item-title';
+                                titleDiv.textContent = finding.title;
+
+                                const detailDiv = document.createElement('div');
+                                detailDiv.className = 'scan-item-detail';
+                                detailDiv.textContent = finding.description;
+
+                                li.appendChild(titleDiv);
+                                li.appendChild(detailDiv);
+                                scanList.appendChild(li);
+                            });
+                        }
+
+                        const timestamp = document.querySelector('#dependencies .timestamp');
+                        if (timestamp && snapshot.checkedAt) {
+                            const lastScanDate = new Date(snapshot.checkedAt);
+                            const lastScanText = formatUtcDateTimeForLastScan(lastScanDate);
+                            const now = new Date();
+                            const diffMs = now.getTime() - lastScanDate.getTime();
+                            const twentyFourHoursMs = 24 * 60 * 60 * 1000;
+                            const runPackagesScanButton = document.querySelector('[data-role="packages-scan-run-btn"]');
+
+                            let cooldownText = '';
+                            if (diffMs < twentyFourHoursMs) {
+                                const remainingMs = twentyFourHoursMs - diffMs;
+                                const hoursRemaining = Math.ceil(remainingMs / (60 * 60 * 1000));
+                                cooldownText = ` A scan was completed recently. You can run another scan in ${hoursRemaining} hour${hoursRemaining === 1 ? '' : 's'}.`;
+                                if (runPackagesScanButton) {
+                                    runPackagesScanButton.disabled = true;
+                                }
+                            } else if (runPackagesScanButton) {
+                                runPackagesScanButton.disabled = false;
+                            }
+
+                            const fullText = `Last scan: ${lastScanText}${cooldownText}`;
+
+                            timestamp.querySelector('span')
+                                ? (timestamp.querySelector('span').textContent = fullText)
+                                : (timestamp.innerHTML =
+                                      '<svg class="icon" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"></path></svg> <span>' +
+                                      fullText +
+                                      '</span>');
+                        }
+                    } catch (err) {
+                        console.error('Error hydrating packages tab', err);
+                    }
+                }
+
+                // If we start on the overview tab, hydrate overview immediately.
+                // The Website Security tab will hydrate when the user clicks it.
+                const webTabButton = document.querySelector('.tab-button[onclick*="web-scan"]');
+                if (webTabButton) {
+                    webTabButton.addEventListener('click', () => {
+                        hydrateWebTab();
+                    });
+                }
+
+                const codeTabButton = document.querySelector('.tab-button[onclick*="code-scan"]');
+                if (codeTabButton) {
+                    codeTabButton.addEventListener('click', () => {
+                        hydrateCodeTab();
+                    });
+                }
+
+                const packagesTabButton = document.querySelector('.tab-button[onclick*="dependencies"]');
+                if (packagesTabButton) {
+                    packagesTabButton.addEventListener('click', () => {
+                        hydratePackagesTab();
+                    });
+                }
+
+                // Run Website Scan button inside the Website Security tab
+                const runScanButton = document.querySelector('[data-role="web-scan-run-btn"]');
+                if (runScanButton) {
+                    runScanButton.addEventListener('click', async () => {
+                        if (runScanButton.disabled) return;
+                        const originalText = runScanButton.textContent;
+                        runScanButton.disabled = true;
+                        runScanButton.textContent = 'Scanning...';
+                        try {
+                            const res = await authorizedFetch('/api/admin/security-dashboard/web', {
+                                method: 'POST',
+                            });
+                            if (!res.ok) {
+                                console.warn('Failed to run website security scan', res.status);
+                                return;
+                            }
+                            await hydrateOverview();
+                            await hydrateWebTab();
+                        } catch (err) {
+                            console.error('Error running website security scan', err);
+                        } finally {
+                            runScanButton.disabled = false;
+                            runScanButton.textContent = originalText;
+                        }
+                    });
+                }
+
+                // Run Code Scan button inside the Code Analysis tab
+                const runCodeScanButton = document.querySelector('[data-role="code-scan-run-btn"]');
+                if (runCodeScanButton) {
+                    runCodeScanButton.addEventListener('click', async () => {
+                        if (runCodeScanButton.disabled) return;
+                        const originalText = runCodeScanButton.textContent;
+                        runCodeScanButton.disabled = true;
+                        runCodeScanButton.textContent = 'Scanning...';
+                        try {
+                            const res = await authorizedFetch('/api/admin/security-dashboard/code', {
+                                method: 'POST',
+                            });
+                            if (!res.ok) {
+                                console.warn('Failed to run code security scan', res.status);
+                                return;
+                            }
+                            await hydrateOverview();
+                            await hydrateCodeTab();
+                        } catch (err) {
+                            console.error('Error running code security scan', err);
+                        } finally {
+                            runCodeScanButton.disabled = false;
+                            runCodeScanButton.textContent = originalText;
+                        }
+                    });
+                }
+
+                // Run Packages Scan button inside the Packages tab
+                const runPackagesScanButton = document.querySelector('[data-role="packages-scan-run-btn"]');
+                if (runPackagesScanButton) {
+                    runPackagesScanButton.addEventListener('click', async () => {
+                        if (runPackagesScanButton.disabled) return;
+                        const originalText = runPackagesScanButton.textContent;
+                        runPackagesScanButton.disabled = true;
+                        runPackagesScanButton.textContent = 'Scanning...';
+                        try {
+                            const res = await authorizedFetch('/api/admin/security-dashboard/packages', {
+                                method: 'POST',
+                            });
+                            if (!res.ok) {
+                                console.warn('Failed to run packages security scan', res.status);
+                                return;
+                            }
+                            await hydrateOverview();
+                            await hydratePackagesTab();
+                        } catch (err) {
+                            console.error('Error running packages security scan', err);
+                        } finally {
+                            runPackagesScanButton.disabled = false;
+                            runPackagesScanButton.textContent = originalText;
+                        }
+                    });
+                }
+            } catch (e) {
+                console.error('Failed to initialize live security overview hydration', e);
+            }
+        })();
+    </script>
+</body>
+</html>

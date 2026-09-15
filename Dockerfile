@@ -1,0 +1,86 @@
+# syntax=docker/dockerfile:1
+#
+# Bike4Mind self-host image: run anywhere, no AWS account required.
+# Builds the Next.js app with B4M_SELF_HOST=true so `sst` is aliased to the
+# env-backed @bike4mind/resource shim and Next emits a standalone server.
+# Runs against the Docker Compose stack (Mongo + MinIO + ElasticMQ + Mailpit);
+# see compose.selfhost.yaml and .env.selfhost.example.
+
+ARG NODE_VERSION=24
+
+# ── Base: pnpm via corepack, self-host flag on for every stage ──────────────
+FROM node:${NODE_VERSION}-slim AS base
+# NEXT_PUBLIC_CDN_URL is baked so `next build` inlines the self-host asset-proxy path
+# into client bundles (e.g. the deprecated getAppFileUrl helper, which has no runtime
+# fallback). Server code reads it at runtime too; the compose env can override it if you
+# front the app with a real CDN.
+ENV PNPM_HOME=/pnpm \
+    PATH=/pnpm:$PATH \
+    B4M_SELF_HOST=true \
+    NEXT_PUBLIC_CDN_URL=/api/app-files/serve
+RUN corepack enable
+WORKDIR /app
+
+# ── Deps: install the full workspace (cached on the lockfile) ────────────────
+FROM base AS deps
+# Native-addon build toolchain (node-gyp deps: some transitive packages need it)
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
+# Copy the workspace manifests + sources needed to resolve the graph. The
+# .dockerignore keeps node_modules/dist/.next/.env* out of the build context.
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json turbo.json ./
+COPY apps ./apps
+COPY b4m-core ./b4m-core
+COPY packages ./packages
+# pnpm hashes every patchedDependencies entry during install, so a missing patches/
+# fails the install with ENOENT rather than silently skipping the patch.
+COPY patches ./patches
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
+
+# ── Builder: build all @bike4mind/* packages, then the Next app (shim active) ─
+FROM deps AS builder
+# Build every workspace package except the client (incl. @bike4mind/resource).
+RUN pnpm turbo:build
+# The client `prebuild` regenerates the help index and bundles the help markdown from
+# docs-site/docs; .dockerignore admits only the two help categories, so this stays small.
+# Copied after turbo:build so a docs edit doesn't invalidate the package build layer.
+COPY docs-site/docs ./docs-site/docs
+# Build the Next.js client in standalone mode; B4M_SELF_HOST (base ENV) turns on
+# both the sst→shim turbopack alias and `output: 'standalone'`.
+RUN NODE_OPTIONS='--max-old-space-size=12288' pnpm --filter @bike4mind/client build
+# Strip compiled test routes: pages/__tests__ files build into routable entries
+# and the standalone server preloads them at boot, running test-only module
+# side effects in production (see the script header for the S3 stub failure).
+RUN node apps/client/scripts/pruneTestRoutes.mjs apps/client/.next/standalone/apps/client/.next
+# Strip Next's file-tracing metadata: .nft.json is ~66% of the tree the runner
+# copies below, and only the bundler reads it (in next 16.2.11 the name resolves
+# solely under next/dist/build/**, never under dist/server/**). Must stay in this
+# builder stage: the hosted OpenNext path reads these same files back out of
+# .next/standalone in copyTracedFiles, and never runs through this image.
+RUN set -eu; \
+    before=$(du -sb apps/client/.next/standalone | cut -f1); \
+    find apps/client/.next/standalone -name '*.nft.json' -type f -delete; \
+    echo "stripped traces: ${before} -> $(du -sb apps/client/.next/standalone | cut -f1) bytes"
+# Then assert what actually ships: anything beyond the five entries a healthy standalone build
+# emits means file tracing swept the app source tree in behind us.
+RUN node apps/client/scripts/check-standalone-tree.mjs apps/client/.next/standalone/apps/client
+
+# ── Runner: minimal image, standalone output only ───────────────────────────
+FROM node:${NODE_VERSION}-slim AS runner
+ENV NODE_ENV=production \
+    B4M_SELF_HOST=true \
+    NEXT_PUBLIC_CDN_URL=/api/app-files/serve \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
+WORKDIR /app
+RUN groupadd -r nodejs && useradd -r -g nodejs nextjs
+
+# Next standalone output is rooted at the monorepo root (outputFileTracingRoot),
+# so it contains apps/client/server.js + traced node_modules + b4m-core/*.
+COPY --from=builder --chown=nextjs:nodejs /app/apps/client/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/apps/client/.next/static ./apps/client/.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/apps/client/public ./apps/client/public
+
+USER nextjs
+EXPOSE 3000
+CMD ["node", "apps/client/server.js"]

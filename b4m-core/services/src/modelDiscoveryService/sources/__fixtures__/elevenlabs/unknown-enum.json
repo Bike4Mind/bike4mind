@@ -1,0 +1,11 @@
+[
+  {
+    "model_id": "eleven_v4",
+    "name": "Eleven v4",
+    "can_do_text_to_speech": true,
+    "can_do_singing": true,
+    "concurrency_group": "quantum",
+    "model_rates": { "character_cost_multiplier": 1.5, "phoneme_cost_multiplier": 2 },
+    "maximum_text_length_per_request": 80000
+  }
+]

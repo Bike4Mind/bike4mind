@@ -1,0 +1,138 @@
+name: SST / infra preview gate
+
+# A PR that changes an sst pin or anything under infra/ must have a preview
+# deploy behind it before it can merge. The one that bit us (an app-only sst
+# bump with no matching overlay pins) was invisible until a real deploy ran,
+# and it ran for the first time on staging. This gate reuses the deployer's
+# `preview-deployed` label as the "a real hydrate+deploy has happened" signal.
+#
+# The job ALWAYS runs (no path filter) and decides applicability internally, so
+# that as a required check it reports success on unrelated PRs instead of
+# hanging pending. The `labeled`/`unlabeled` triggers re-evaluate the moment the
+# deployer adds/removes the label. It also fires on `merge_group` (main uses a
+# merge queue): the detection step is gated to `pull_request`, so the queue run
+# is a no-op that still reports the required check green.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  merge_group:
+    branches: [main]
+
+# A label swap - one label removed and another added in the same instant - emits
+# `unlabeled` and `labeled` together, which starts two identical runs on the same SHA.
+# Keyed per PR so they serialize, and on the PR specifically because a constant key
+# would let one PR cancel another.
+#
+# NOT cancel-in-progress. Cancelling the twin saves the minutes but leaves a CANCELLED
+# check run behind, and as a required check GitHub can read that as the current verdict
+# - blocking a PR whose real verdict was a pass. Queueing costs one extra short run and
+# both report the truth.
+concurrency:
+  group: preview-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  preview-gate:
+    name: preview gate
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    steps:
+      - name: Require a preview for sst / infra changes
+        # merge_group has no pull_request context; skipping here still reports
+        # the required check as passed, so the merge queue is not blocked.
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.head_ref }}
+          IS_SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          set -euo pipefail
+
+          # Single fetch of changed files (with patches). No `|| true`: a fetch
+          # failure must redden this gate (fail closed), never silently pass.
+          gh api "repos/$REPO/pulls/$PR/files" --paginate > /tmp/pr_files_raw.json
+
+          # The changesets "version packages" PR bumps versions + CHANGELOGs; its
+          # b4m-core/infra/package.json bump trips the infra glob below with no real
+          # infra change. Exempt those ARTIFACTS on a same-repo release PR rather
+          # than trusting the branch name: `github.head_ref` is attacker-chosen on a
+          # fork (this public repo takes external PRs), and the release branch is
+          # long-lived and human-pushed -- so a real infra change riding it must
+          # still redden. Filtering the diff instead of short-circuiting the whole
+          # PR preserves that. Same-repo predicate mirrors auto-changeset.yml.
+          if [ "$IS_SAME_REPO" = "true" ] && [ "$HEAD_REF" = "changeset-release/main" ]; then
+            # Drop CHANGELOGs entirely (pure release artifacts, no deploy surface).
+            # Keep b4m-core/infra/package.json in pr_files.json so the sst-pin patch
+            # check below still inspects it; exclude it only from the path-glob input
+            # (files.txt), so its version bump does not trip the glob while a
+            # hand-pushed sst pin on that same file still reddens the gate.
+            jq '[.[] | select((.filename == "CHANGELOG.md" or (.filename | endswith("/CHANGELOG.md"))) | not)]' /tmp/pr_files_raw.json > /tmp/pr_files.json
+            jq -r '.[].filename' /tmp/pr_files.json > /tmp/files_all.txt
+            grep -v '^b4m-core/infra/package\.json$' /tmp/files_all.txt > /tmp/files.txt || true
+            echo "Release PR: excluded CHANGELOGs from detection; b4m-core/infra/package.json excluded from the path glob but still patch-inspected for sst pins."
+          else
+            cp /tmp/pr_files_raw.json /tmp/pr_files.json
+            jq -r '.[].filename' /tmp/pr_files.json > /tmp/files.txt
+          fi
+          echo "Changed files considered:"; sed 's/^/  /' /tmp/files.txt || true
+
+          # Tests under the gated paths have no deploy surface: sst.config.ts and the infra
+          # modules never import them (only comments reference them), and they already run in
+          # `Run Tests`. Left in the glob they make a test-only change demand a throwaway
+          # preview deploy that cannot tell anyone anything, which is what happened to the WAF
+          # shadow-rule test. Filtered out of the path-glob input ONLY, so the package.json
+          # sst-pin patch inspection below still sees every file. Kept to test dirs and
+          # *.test/*.spec files so all 51 real files under these paths still redden the gate.
+          # An empty result is correct, not a failure: a tests-only PR is not applicable.
+          grep -vE '(^|/)__tests__/|\.(test|spec)\.[cm]?[jt]sx?$' /tmp/files.txt > /tmp/files_glob.txt || true
+          if ! cmp -s /tmp/files.txt /tmp/files_glob.txt; then
+            echo "Excluded from the path glob as non-deploy-surface tests:"
+            comm -23 <(sort /tmp/files.txt) <(sort /tmp/files_glob.txt) | sed 's/^/  /'
+          fi
+
+          applicable=0
+          reason=""
+
+          # Deploy-affecting paths that always need a preview: the root infra/
+          # dir, the @bike4mind/infra package (b4m-core/infra/, imported directly
+          # by the deploy layer), and sst.config.ts.
+          # Anchored so it does NOT match data-model dirs like
+          # packages/database/src/models/infra/.
+          if grep -qE '^(infra/|b4m-core/infra/|sst\.config\.ts$)' /tmp/files_glob.txt; then
+            applicable=1
+            reason="infra/, b4m-core/infra/, or sst.config.ts changed"
+          fi
+
+          # A changed sst pin in any package.json. Fail closed if a package.json
+          # changed but GitHub omitted its patch (oversized diff): treat as applicable.
+          if [ "$applicable" -eq 0 ]; then
+            if jq -e '.[] | select(.filename|test("package\\.json$")) | select((.patch // "") == "")' /tmp/pr_files.json >/dev/null; then
+              applicable=1
+              reason="a changed package.json had no inspectable patch (fail-closed)"
+            elif jq -r '.[] | select(.filename|test("package\\.json$")) | .patch // ""' /tmp/pr_files.json | grep -qE '^[+-].*"sst"[[:space:]]*:'; then
+              applicable=1
+              reason="an sst pin in a package.json changed"
+            fi
+          fi
+
+          if [ "$applicable" -eq 0 ]; then
+            echo "No sst / infra changes in this PR. Gate not applicable -> pass."
+            exit 0
+          fi
+
+          echo "This PR touches sst / infra ($reason); a preview deploy is required."
+
+          # The deployer adds `preview-deployed` on a successful preview deploy.
+          if gh api "repos/$REPO/issues/$PR/labels" -q '.[].name' | grep -qx 'preview-deployed'; then
+            echo "Found 'preview-deployed' label -> a preview has been deployed. Gate satisfied."
+            exit 0
+          fi
+
+          echo "::error title=Preview required::This PR changes sst pins or infra/ but no preview deploy has run. Trigger a preview (mention the preview bot on the PR) and let it finish; the 'preview-deployed' label the deployer adds will satisfy this gate. This catches an sst/overlay mismatch on a throwaway stage instead of on staging."
+          exit 1

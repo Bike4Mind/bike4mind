@@ -1,0 +1,463 @@
+{
+  "category": "products",
+  "title": "Product Updates",
+  "description": "Product launches, feature updates, and development announcements",
+  "targets": [
+    {
+      "company": "Microsoft",
+      "ticker": "MSFT",
+      "url": "https://techcommunity.microsoft.com/t5/azure-updates/bg-p/Azure-Updates",
+      "category": "tech"
+    },
+    {
+      "company": "Amazon AWS",
+      "ticker": "AMZN",
+      "url": "https://aws.amazon.com/new/",
+      "category": "tech"
+    },
+    {
+      "company": "Google Cloud",
+      "ticker": "GOOG",
+      "url": "https://cloud.google.com/release-notes",
+      "category": "tech"
+    },
+    {
+      "company": "Meta (Facebook)",
+      "ticker": "META",
+      "url": "https://engineering.fb.com/",
+      "category": "tech"
+    },
+    {
+      "company": "Apple",
+      "ticker": "AAPL",
+      "url": "https://developer.apple.com/news/",
+      "category": "tech"
+    },
+    {
+      "company": "Salesforce",
+      "ticker": "CRM",
+      "url": "https://releasenotes.docs.salesforce.com/en-us/summer24/release-notes/salesforce_release_notes.htm",
+      "category": "tech"
+    },
+    {
+      "company": "Oracle",
+      "ticker": "ORCL",
+      "url": "https://blogs.oracle.com/developers/",
+      "category": "tech"
+    },
+    {
+      "company": "SAP",
+      "ticker": "SAP",
+      "url": "https://blogs.sap.com/tags/73554900100800000697/",
+      "category": "tech"
+    },
+    {
+      "company": "NVIDIA",
+      "ticker": "NVDA",
+      "url": "https://developer.nvidia.com/blog",
+      "category": "tech"
+    },
+    {
+      "company": "IBM",
+      "ticker": "IBM",
+      "url": "https://community.ibm.com/community/user/datascience/blogs",
+      "category": "tech"
+    },
+    {
+      "company": "ServiceNow",
+      "ticker": "NOW",
+      "url": "https://devprogram.servicenow.com/connect.do#!/release-notes",
+      "category": "tech"
+    },
+    {
+      "company": "Adobe",
+      "ticker": "ADBE",
+      "url": "https://helpx.adobe.com/creative-cloud/release-note/cc-release-notes.html",
+      "category": "tech"
+    },
+    {
+      "company": "Atlassian",
+      "ticker": "TEAM",
+      "url": "https://community.atlassian.com/t5/Release-Notes/bg-p/release-notes",
+      "category": "tech"
+    },
+    {
+      "company": "OpenAI",
+      "ticker": "OPENAI",
+      "url": "https://openai.com/research",
+      "category": "tech"
+    },
+    {
+      "company": "Anthropic",
+      "ticker": "ANTHROPIC",
+      "url": "https://www.anthropic.com/news",
+      "category": "tech"
+    },
+    {
+      "company": "Hugging Face",
+      "ticker": "HF",
+      "url": "https://huggingface.co/blog",
+      "category": "tech"
+    },
+    {
+      "company": "Databricks",
+      "ticker": "DATABRICKS",
+      "url": "https://databricks.com/blog/category/product",
+      "category": "tech"
+    },
+    {
+      "company": "Scale AI",
+      "ticker": "SCALE",
+      "url": "https://scale.com/blog",
+      "category": "tech"
+    },
+    {
+      "company": "Runway",
+      "ticker": "RUNWAY",
+      "url": "https://runwayml.com/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Stripe",
+      "ticker": "STRIPE",
+      "url": "https://stripe.com/blog/categories/changelog",
+      "category": "tech"
+    },
+    {
+      "company": "UiPath",
+      "ticker": "PATH",
+      "url": "https://www.uipath.com/blog/automation-product-news",
+      "category": "tech"
+    },
+    {
+      "company": "Palantir",
+      "ticker": "PLTR",
+      "url": "https://www.palantir.com/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Arm",
+      "ticker": "ARM",
+      "url": "https://community.arm.com/arm-community-blogs/b/announcements",
+      "category": "tech"
+    },
+    {
+      "company": "Twilio",
+      "ticker": "TWLO",
+      "url": "https://www.twilio.com/changelog",
+      "category": "tech"
+    },
+    {
+      "company": "Slack",
+      "ticker": "SLACK",
+      "url": "https://slack.com/blog/productivity",
+      "category": "tech"
+    },
+    {
+      "company": "GitHub",
+      "ticker": "GITHUB",
+      "url": "https://github.blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Bitbucket",
+      "ticker": "BITBUCKET",
+      "url": "https://bitbucket.org/release-notes/",
+      "category": "tech"
+    },
+    {
+      "company": "Jira",
+      "ticker": "JIRA",
+      "url": "https://confluence.atlassian.com/jirasoftwarecloud/what-s-new-in-jira-software-cloud-764478339.html",
+      "category": "tech"
+    },
+    {
+      "company": "Trello",
+      "ticker": "TRELLO",
+      "url": "https://blog.trello.com/",
+      "category": "tech"
+    },
+    {
+      "company": "Figma",
+      "ticker": "FIGMA",
+      "url": "https://www.figma.com/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Notion",
+      "ticker": "NOTION",
+      "url": "https://www.notion.so/releases",
+      "category": "tech"
+    },
+    {
+      "company": "ClickUp",
+      "ticker": "CLICKUP",
+      "url": "https://clickup.com/blog/whats-new/",
+      "category": "tech"
+    },
+    {
+      "company": "Monday.com",
+      "ticker": "MNDY",
+      "url": "https://monday.com/blog/whats-new/",
+      "category": "tech"
+    },
+    {
+      "company": "Asana",
+      "ticker": "ASAN",
+      "url": "https://blog.asana.com/category/product/",
+      "category": "tech"
+    },
+    {
+      "company": "Zapier",
+      "ticker": "ZAPIER",
+      "url": "https://zapier.com/blog/whats-new/",
+      "category": "tech"
+    },
+    {
+      "company": "Intercom",
+      "ticker": "INTERCOM",
+      "url": "https://www.intercom.com/blog/product-news/",
+      "category": "tech"
+    },
+    {
+      "company": "Freshworks",
+      "ticker": "FRSH",
+      "url": "https://www.freshworks.com/whats-new/",
+      "category": "tech"
+    },
+    {
+      "company": "Zendesk",
+      "ticker": "ZEN",
+      "url": "https://www.zendesk.com/blog/topics/whats-new/",
+      "category": "tech"
+    },
+    {
+      "company": "Sentry",
+      "ticker": "SENTRY",
+      "url": "https://docs.sentry.io/changelog/",
+      "category": "tech"
+    },
+    {
+      "company": "Linear",
+      "ticker": "LINEAR",
+      "url": "https://linear.app/changelog",
+      "category": "tech"
+    },
+    {
+      "company": "Vercel",
+      "ticker": "VERCEL",
+      "url": "https://vercel.com/changelog",
+      "category": "tech"
+    },
+    {
+      "company": "Netlify",
+      "ticker": "NETLIFY",
+      "url": "https://www.netlify.com/changelog/",
+      "category": "tech"
+    },
+    {
+      "company": "Heroku",
+      "ticker": "HEROKU",
+      "url": "https://devcenter.heroku.com/changelog",
+      "category": "tech"
+    },
+    {
+      "company": "DigitalOcean",
+      "ticker": "DOCN",
+      "url": "https://www.digitalocean.com/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Fastly",
+      "ticker": "FSLY",
+      "url": "https://www.fastly.com/blog",
+      "category": "tech"
+    },
+    {
+      "company": "Cloudflare",
+      "ticker": "NET",
+      "url": "https://blog.cloudflare.com/tag/changelog/",
+      "category": "tech"
+    },
+    {
+      "company": "GitLab",
+      "ticker": "GTLB",
+      "url": "https://about.gitlab.com/releases/categories/releases/",
+      "category": "tech"
+    },
+    {
+      "company": "CircleCI",
+      "ticker": "CIRCLECI",
+      "url": "https://circleci.com/changelog/",
+      "category": "tech"
+    },
+    {
+      "company": "JetBrains",
+      "ticker": "JETBRAINS",
+      "url": "https://blog.jetbrains.com/",
+      "category": "tech"
+    },
+    {
+      "company": "IntelliJ IDEA",
+      "ticker": "INTELLIJ",
+      "url": "https://youtrack.jetbrains.com/articles/IDEA-A-84/IntelliJ-IDEA-Release-Notes",
+      "category": "tech"
+    },
+    {
+      "company": "PyCharm",
+      "ticker": "PYCHARM",
+      "url": "https://www.jetbrains.com/pycharm/whatsnew/",
+      "category": "tech"
+    },
+    {
+      "company": "Unity",
+      "ticker": "U",
+      "url": "https://blog.unity.com/",
+      "category": "tech"
+    },
+    {
+      "company": "Unreal Engine",
+      "ticker": "UNREAL",
+      "url": "https://www.unrealengine.com/en-US/blog",
+      "category": "tech"
+    },
+    {
+      "company": "Blender",
+      "ticker": "BLENDER",
+      "url": "https://www.blender.org/download/releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Autodesk",
+      "ticker": "ADSK",
+      "url": "https://knowledge.autodesk.com/support/autocad/learn-explore/caas/simplecontent/content/autocad-2025-release-notes.html",
+      "category": "tech"
+    },
+    {
+      "company": "Kaggle",
+      "ticker": "KAGGLE",
+      "url": "https://www.kaggle.com/product-updates",
+      "category": "tech"
+    },
+    {
+      "company": "Datadog",
+      "ticker": "DDOG",
+      "url": "https://www.datadoghq.com/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Snyk",
+      "ticker": "SNYK",
+      "url": "https://snyk.io/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Postman",
+      "ticker": "POSTMAN",
+      "url": "https://www.postman.com/changelog/",
+      "category": "tech"
+    },
+    {
+      "company": "MongoDB",
+      "ticker": "MDB",
+      "url": "https://www.mongodb.com/blog",
+      "category": "tech"
+    },
+    {
+      "company": "Redis",
+      "ticker": "REDIS",
+      "url": "https://redis.io/docs/latest/releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Elastic (Elasticsearch)",
+      "ticker": "ESTC",
+      "url": "https://www.elastic.co/blog/category/releases",
+      "category": "tech"
+    },
+    {
+      "company": "Confluent (Kafka)",
+      "ticker": "CFLT",
+      "url": "https://www.confluent.io/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "DataStax",
+      "ticker": "DATASTAX",
+      "url": "https://www.datastax.com/blog",
+      "category": "tech"
+    },
+    {
+      "company": "Snowplow",
+      "ticker": "SNOWPLOW",
+      "url": "https://snowplow.io/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Looker",
+      "ticker": "LOOKER",
+      "url": "https://cloud.google.com/blog/products/looker",
+      "category": "tech"
+    },
+    {
+      "company": "Segment",
+      "ticker": "SEGMENT",
+      "url": "https://segment.com/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Amplitude",
+      "ticker": "AMPL",
+      "url": "https://amplitude.com/blog",
+      "category": "tech"
+    },
+    {
+      "company": "Mixpanel",
+      "ticker": "MIXPANEL",
+      "url": "https://mixpanel.com/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Hotjar",
+      "ticker": "HOTJAR",
+      "url": "https://www.hotjar.com/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Optimizely",
+      "ticker": "OPTLY",
+      "url": "https://www.optimizely.com/insights/blog/",
+      "category": "tech"
+    },
+    {
+      "company": "Mailchimp",
+      "ticker": "MAILCHIMP",
+      "url": "https://mailchimp.com/resources/",
+      "category": "tech"
+    },
+    {
+      "company": "HubSpot",
+      "ticker": "HUBS",
+      "url": "https://blog.hubspot.com/new-feature-announcements",
+      "category": "tech"
+    },
+    {
+      "company": "Shopify",
+      "ticker": "SHOP",
+      "url": "https://changelog.shopify.com/",
+      "category": "tech"
+    },
+    {
+      "company": "Squarespace",
+      "ticker": "SQSP",
+      "url": "https://www.squarespace.com/blog",
+      "category": "tech"
+    },
+    {
+      "company": "Wix",
+      "ticker": "WIX",
+      "url": "https://www.wix.com/blog/category/product-news",
+      "category": "tech"
+    }
+  ]
+}

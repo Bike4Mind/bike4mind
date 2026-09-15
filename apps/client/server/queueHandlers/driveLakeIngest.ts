@@ -1,0 +1,1605 @@
+import type { drive_v3 } from '@googleapis/drive';
+import type { Logger } from '@bike4mind/observability';
+import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import {
+  User,
+  adminSettingsRepository,
+  changeStorageSize,
+  dataLakeRepository,
+  dataLakeBatchRepository,
+  fabFileChunkRepository,
+  fabFileRepository,
+  orgGoogleDriveConnectionRepository,
+  scopedSettingsRepository,
+  sessionRepository,
+  userRepository,
+  withTransaction,
+} from '@bike4mind/database';
+import {
+  BATCH_NON_TERMINAL_STATUSES,
+  DATALAKE_TAG_STRENGTH,
+  KnowledgeType,
+  FabFileSourceType,
+  isDataLakeTagName,
+  matchesTagPrefixArm,
+  type IUserDocument,
+  isLakeIngestable,
+} from '@bike4mind/common';
+import { BadRequestError, checkStorageLimit, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { dataLakeService, fabFilesService } from '@bike4mind/services';
+import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
+import { createFabFile } from '@server/managers/fabFileManager';
+import defineAbilitiesFor from '@server/auth/ability';
+import { getFilesStorage } from '@server/utils/storage';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
+import {
+  disableDriveConnectionForLake,
+  getValidConnectionDriveAccessToken,
+} from '@server/integrations/google/drive/common';
+import {
+  createDriveClient,
+  isDriveRateLimitError,
+  listChanges,
+  getStartPageToken,
+  isDriveInvalidCursorError,
+  isFolder,
+  type DriveChange,
+  type DriveFile,
+} from '@server/integrations/google/drive/driveClient';
+import {
+  walkFolder,
+  fetchDriveFileContent,
+  isUnderRoot,
+  DriveWalkTimeBudgetExceededError,
+  type WalkedDriveFile,
+} from '@server/integrations/google/drive/driveContent';
+import { finalizeBatchIfComplete } from '@server/queueHandlers/dataLakeBatchProgress';
+import { sendToQueue } from '@server/utils/sqs';
+import { Resource } from 'sst';
+import mime from 'mime-types';
+import { v4 as uuidv4 } from 'uuid';
+import { z, ZodError } from 'zod';
+
+const Payload = z.object({
+  connectionId: z.string(),
+  redriveCount: z.number().int().min(0).default(0),
+  // Set only on a self-re-enqueued continuation: the batch the previous slice was filling, and the
+  // record of what has already been ingested. Absent on every externally-triggered sync, so those
+  // always start a fresh chain.
+  resumeBatchId: z.string().optional(),
+  // The one-time CAS token adoptSyncClaim must present alongside resumeBatchId - see
+  // OrgGoogleDriveConnection.ingestClaimToken. Always set together with resumeBatchId.
+  claimToken: z.string().optional(),
+  // Continuation depth, incremented per self-re-enqueue and bounded by MAX_INGEST_SLICES.
+  slice: z.number().int().min(0).default(0),
+  // Bypass an existing syncCursor and run a full folder walk regardless. Set only by the manual
+  // "Re-sync" button (drive-sync.ts) on an already-connected folder - the explicit "re-sync
+  // everything" action (#2396) - never by the scheduled poll, which always prefers incremental.
+  forceFullWalk: z.boolean().default(false),
+});
+
+// A run that cannot proceed re-enqueues itself (with a delay) rather than dropping the work: a claim
+// loser, so a GENUINE second sync - files added to the folder while a long run is mid-loop - isn't
+// silently dropped until the next scheduled poll, and a walk Drive throttled, which defers on the
+// rate-limit backoff below instead of this delay. One counter bounds both, since both mean "this
+// message has come back around" and neither may spin: past this many redrives we give up and let the
+// next real sync pick the files up. Delay x max stays comfortably past the handler's 10-minute
+// in-flight ceiling.
+export const MAX_INGEST_REDRIVES = 12;
+const INGEST_REDRIVE_DELAY_SECONDS = 90;
+
+// Per-file hard cap. Files are fetched and uploaded ONE at a time (only one buffer is ever live),
+// so this bounds peak memory well under the ingest queue Lambda's 1024 MB default. An oversized
+// file is skipped-and-counted (before the download when the size is known up front), so the failure
+// mode is a skipped file rather than an OOM that kills the whole run mid-loop. A streaming path for
+// genuinely large files is the "very large folders" follow-up.
+const MAX_INGEST_FILE_BYTES = 50 * 1024 * 1024;
+
+// Stop starting another file once the invocation has less than this left, and yield to a continuation
+// slice instead of being killed mid-file. Sized for the slowest realistic single file: a
+// MAX_INGEST_FILE_BYTES download plus its upload, plus a retire that may run a full deleteFabFile
+// (chunks, search-index docs, S3 object, quota). Getting killed instead of yielding is what used to
+// duplicate the tail, so this buffer is the thing that actually keeps a large folder converging.
+const INGEST_DEADLINE_BUFFER_MS = 90_000;
+
+// Wait before the continuation slice when Drive throttled this one. The jitter is what makes it
+// shedding rather than a reschedule: several connections poll on the same tick against ONE Drive
+// project quota, so a fixed delay would just re-collide them at the new time. Shared by both shed
+// points: the throttled content fetch, and the throttled folder walk that has no slice to hand off to.
+const INGEST_RATE_LIMIT_DELAY_SECONDS = 60;
+const INGEST_RATE_LIMIT_JITTER_SECONDS = 30;
+const rateLimitBackoffSeconds = () =>
+  INGEST_RATE_LIMIT_DELAY_SECONDS + Math.floor(Math.random() * INGEST_RATE_LIMIT_JITTER_SECONDS);
+
+// Wall-clock budget when the caller cannot supply the Lambda's real remaining time (tests, the
+// self-host worker, any non-Lambda host). Keeps the guard active by default rather than silently
+// absent. Mirrors extractLakeMemory's DEFAULT_RUN_BUDGET_MS, against the same 10-minute ceiling.
+const DEFAULT_RUN_BUDGET_MS = 9 * 60_000;
+
+// Hard ceiling on how many slices ONE ingest chain runs before it stops re-enqueuing itself, so a
+// pathological folder cannot turn one sync into an unbounded run of invocations. Coverage is not lost
+// when it trips: the files earlier slices uploaded become durable, non-`pending` lake members, so the
+// next scheduled poll's walk no longer proposes them and the remainder ingests in a fresh chain. That
+// holds because the chunk pipeline each upload enqueues has drained by then - the same durability the
+// claim's staleness bound leans on, and the reason a chained claim must not be stolen mid-chain.
+export const MAX_INGEST_SLICES = 20;
+
+// Cap on the un-sliceable part of a sync: the folder walk and the diff against this connection's
+// stored set, both of which hold a full listing in memory in EVERY slice and must complete inside one
+// invocation before any file is touched - a folder-wide constant regardless of how small any one
+// slice's delta is. This is NO LONGER a throughput bound on the ingestable count - the deadline guard
+// above yields to a continuation slice rather than timing out mid-loop, so that count is bounded by
+// MAX_INGEST_SLICES x a slice's throughput (tens of thousands of files) and not by one invocation.
+// Checked against walked.length and existingDocs.length (see the enforcement below), not the delta
+// between them - gating on the delta would let a folder with a huge stable listing and a tiny delta
+// pay the walk+diff cost on every slice with the cap never tripping. Enforced up front, before any
+// membership write, so an over-cap folder is refused with nothing changed. Beyond it the folder should
+// be split into subfolders connected separately.
+//
+// Memory headroom at this value is not yet independently measured. findByDriveConnectionIdInDataLake
+// has no projection or limit, so existingDocs at the cap hydrates up to 20000 full FabFile documents
+// (previously 1500, ~13x) on the ingest queue Lambda's 1024 MB default (infra/queues.ts sets no
+// override for it, unlike most of its siblings there). If that turns out to be tight, either project
+// the query down to the fields the diff actually reads (driveFileId, md5Checksum, modifiedTime) or set
+// an explicit memory override on the Lambda - both are cheaper than lowering this constant.
+//
+// Also, indirectly, a bound on the size of ONE batch document: every candidate a chain ingests gets a
+// manifest entry in `files[]` on this same DataLakeBatch doc, and both claimFileStatus's positional
+// update and every finalize check read the whole document. Raising this constant further raises that
+// document's worst-case size (and, with failedFileNames also accumulating, moves it closer to the 16MB
+// BSON ceiling) as well as the walk+diff cost the comment above is about.
+export const MAX_INGEST_CANDIDATES = 20000;
+
+/**
+ * Has a Drive file changed since it was ingested? `md5Checksum` is exact, but Google Editors files
+ * (Docs/Sheets/Slides) carry no md5, so fall back to `modifiedTime` for those. Conservative by
+ * design: when neither signal can be compared (a pre-provenance row, or a file Drive reports with
+ * neither field) it returns false, so a re-sync never churns a file it cannot PROVE is stale.
+ * modifiedTime uses strict-newer so a re-listed-but-unedited file (same timestamp) is unchanged.
+ */
+export function hasDriveFileChanged(
+  prior: { driveMd5Checksum?: string; driveModifiedTime?: Date | string },
+  fresh: { md5Checksum?: string; modifiedTime?: string }
+): boolean {
+  if (fresh.md5Checksum && prior.driveMd5Checksum) {
+    return fresh.md5Checksum !== prior.driveMd5Checksum;
+  }
+  if (fresh.modifiedTime && prior.driveModifiedTime) {
+    return new Date(fresh.modifiedTime).getTime() > new Date(prior.driveModifiedTime).getTime();
+  }
+  return false;
+}
+
+export type DriveChangeClassification = {
+  /** Genuinely new files, resolved to live under the connected root - ready to ingest as ADDs. */
+  adds: WalkedDriveFile[];
+  /** Previously-tracked files whose content moved and are still under the connected root. */
+  changed: WalkedDriveFile[];
+  /** driveFileIds to prune: Drive deleted/trashed them, or they moved out of the connected tree. */
+  removedFileIds: string[];
+  /**
+   * Entries this run could not DECIDE: the ancestry lookup hit a transient Drive failure, so neither
+   * "under the root" nor "moved out" was proven and the entry was left unapplied. Non-zero means this
+   * run's delta is incomplete and the caller must hold the cursor back - see the note in the header.
+   */
+  ambiguous: number;
+};
+
+/**
+ * Strip a changes.list `file`'s ancestry-only fields (`parents`, `trashed`) down to the plain
+ * WalkedDriveFile shape `walkFolder` produces, so a candidate looks identical to downstream code
+ * regardless of which sync mode found it.
+ */
+function toWalkedDriveFile(file: DriveFile & { parents?: string[]; trashed?: boolean }): WalkedDriveFile {
+  const { parents: _parents, trashed: _trashed, ...driveFile } = file;
+  return { ...driveFile, relativePath: driveFile.name };
+}
+
+/**
+ * Turn one `changes.list` page into the same ADD/CHANGE/REMOVE shape a full-walk diff produces
+ * (driveLakeIngest's dispatch), so the candidate-cap check, the apply/retire logic and the per-file
+ * ingest loop run identically regardless of which one supplied the delta.
+ *
+ * The Changes API is Drive-wide, not folder-scoped (see driveClient.listChanges), so a file this
+ * connection has never seen has its live membership PROVEN via isUnderRoot - the one extra Drive cost
+ * incremental sync pays, and only for genuinely new candidates. An already-tracked file skips that
+ * check (newestCopyOf already proves it belongs here) unless it no longer resolves under the root, in
+ * which case it is folded into removedFileIds - matching what a full walk would report for a file
+ * that moved out of the tree (present elsewhere in Drive, but no longer a candidate here).
+ *
+ * The feed is a LOG, not a snapshot: one record per modification, and Drive only collapses records
+ * WITHIN a page. A file renamed and later edited, or edited either side of a page boundary, arrives
+ * as several entries for one fileId. They are collapsed to the last entry per id up front (last wins -
+ * it is the file's most recent state) because the downstream apply is not idempotent per id: a
+ * doubled add ingests two FabFiles for one Drive file, and a doubled removal makes the second
+ * removeFileFromLake throw NotFoundError mid-prune, outside the try that settles reclaimed bytes.
+ * Same hazard the full walk's `seenIds` de-dup exists to prevent.
+ *
+ * isUnderRoot can also throw (a TRANSIENT Drive failure mid ancestry-walk, not a confirmed answer -
+ * see its doc comment). That is caught here per-candidate rather than left to fail the whole batch:
+ * a new file is excluded from this run, and an already-tracked file is left untouched rather than
+ * evicted - misreading a Drive hiccup as "moved out of the tree" would silently drop a still-live
+ * file from the lake. Neither is a free skip: the feed reports a modification ONCE, so a caller that
+ * advanced its cursor past an unresolved entry would never be told about it again, and the file would
+ * sit missing (or stale) until a human clicked Re-sync. Every such entry is counted into `ambiguous`
+ * so the caller can hold the cursor and let the next poll replay the same window - cheap, and
+ * idempotent, since anything already applied diffs out as a no-op.
+ */
+export async function classifyDriveChanges(
+  drive: drive_v3.Drive,
+  changes: DriveChange[],
+  rootFolderId: string,
+  newestCopyOf: (driveFileId: string) => { driveMd5Checksum?: string; driveModifiedTime?: Date | string } | undefined,
+  logger: Pick<Logger, 'warn'>
+): Promise<DriveChangeClassification> {
+  const adds: WalkedDriveFile[] = [];
+  const changed: WalkedDriveFile[] = [];
+  const removedFileIds: string[] = [];
+  const ancestryCache = new Map<string, string[] | null>();
+  let ambiguous = 0;
+
+  // Last entry per fileId wins; Map.set keeps the first insertion's position, so feed order is
+  // otherwise preserved. See the header for why a repeated id is not survivable downstream.
+  const latestPerFileId = new Map<string, DriveChange>();
+  for (const change of changes) latestPerFileId.set(change.fileId, change);
+
+  for (const { fileId, removed, file } of latestPerFileId.values()) {
+    const tracked = newestCopyOf(fileId);
+    const gone = removed || file?.trashed === true;
+
+    if (tracked) {
+      if (gone) {
+        removedFileIds.push(fileId);
+        continue;
+      }
+      if (!file || isFolder(file)) continue; // nothing ingestible changed
+      let underRoot: boolean;
+      try {
+        underRoot = await isUnderRoot(drive, file.parents, rootFolderId, ancestryCache);
+      } catch (e) {
+        ambiguous++;
+        logger.warn('[driveLakeIngest] ancestry check failed for a tracked file; leaving it in place this run', {
+          fileId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+        continue;
+      }
+      if (!underRoot) {
+        removedFileIds.push(fileId); // moved out of the connected tree
+      } else if (hasDriveFileChanged(tracked, file)) {
+        changed.push(toWalkedDriveFile(file));
+      }
+      continue;
+    }
+
+    if (gone || !file || isFolder(file)) continue; // never tracked; nothing to remove or add
+    let underRoot: boolean;
+    try {
+      underRoot = await isUnderRoot(drive, file.parents, rootFolderId, ancestryCache);
+    } catch (e) {
+      ambiguous++;
+      logger.warn('[driveLakeIngest] ancestry check failed for a new file; excluding it from this run', {
+        fileId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      continue;
+    }
+    if (underRoot) {
+      // Flat relativePath (bare name, no ancestor path): reconstructing the full nested path here
+      // would cost the same ancestor walk again for display purposes only. A subsequent full walk
+      // (cursor invalidation, or an explicit Re-sync) fills in the real path - relativePath is
+      // display metadata, not an identity key (dedup and diff are keyed on driveFileId throughout).
+      adds.push(toWalkedDriveFile(file));
+    }
+  }
+
+  return { adds, changed, removedFileIds, ambiguous };
+}
+
+/**
+ * Background reconcile of an org Google Drive folder against a data lake (#1589, #1591, #2396). Gets
+ * this run's ADD/RE-INGEST/REMOVE delta one of two ways - a `changes.list` pull scoped to what
+ * happened since the connection's stored syncCursor (incremental; the common case once one exists),
+ * or a full recursive folder walk (first sync, an invalidated cursor, or an explicit "Re-sync
+ * everything") - then applies it identically either way: ADD a new file, RE-INGEST an edited one, and
+ * REMOVE from the lake one that is gone from the connected tree. See the mode branch just above the
+ * candidate-cap enforcement for how each one computes pureAdds/changed/removed/walkedIds, and
+ * classifyDriveChanges for how a Drive-wide changes feed is narrowed to this connection's own subtree.
+ * Adds/re-ingests fetch and upload ONE file at a time - creating a lake-tagged FabFile and its
+ * batch-manifest entry BEFORE the bytes land - and let the existing S3 objectCreated -> chunk ->
+ * vectorize -> finalize pipeline do the rest. Both the manual Re-sync button and the scheduled poll
+ * cron (driveLakeResyncPoll) enqueue onto this one handler, so there is a single delta-aware apply path.
+ *
+ * Apply order is deliberate. The candidate cap is enforced FIRST, before any membership write, so an
+ * over-cap folder is refused with nothing changed (an early removal on a run that then bails would evict
+ * files it never re-ingests). Genuine deletes (gone from the folder) are then unpicked up front - they
+ * have no replacement pending, so nothing is lost by removing them early. An EDITED file's stale copy is
+ * NOT retired until its fresh replacement has been uploaded in the loop below: retiring it up front would
+ * evict a working lake member for good on any run where the re-fetch then fails a deterministic gate
+ * (oversized / unsupported / export-too-large), since that skip creates no replacement.
+ *
+ * Retiring an edited file's stale copy is two steps, in this order, and the order is the point. FIRST an
+ * unpick from THIS lake (removeFileFromLake), which is per-lake by construction - see the reserved-namespace
+ * note in lakeMembership.ts. THEN, only when NO OTHER LAKE still claims the copy, a full delete through
+ * fabFileService.deleteFabFile. A superseded Drive doc must leave the owner's Files entirely (its pre-edit
+ * content must not stay retrievable, and one orphan copy per edit must not accumulate with its chunks,
+ * embeddings, S3 object and storage quota) - but a copy a human curated into a SECOND lake must not be
+ * yanked out of it by a background poll. A blanket soft-delete would do exactly that: `deletedAt` is
+ * filtered by EVERY lake's read path, so a per-lake operation would have become a global one. Keeping the
+ * membership unpick and gating the delete preserves the per-lake invariant instead of racing it.
+ *
+ * That gate has to test BOTH arms of the one membership predicate (buildDataLakeMembershipFilter), which is
+ * what dataLakeService.findOtherLakeClaims does: the `datalake:` meta-tag, AND a `fileTagPrefix` match on a
+ * file the other lake's creator owns. A meta-tag-only gate is a trap, because a file curated into a second
+ * lake through that lake's PREFIX carries no meta-tag for it - the gate would read "nobody else wants this"
+ * and delete a full member out of a lake it never looked at.
+ *
+ * The gate also refuses to delete a copy anyone but its owner can read - a direct user share, a group share,
+ * or isGlobalRead. The delete is global, so it would take the share vector with it, and the replacement is
+ * minted for connection.connectedBy alone and carries none, so there is nothing to hand the sharee instead;
+ * they would be left with a notebook reference that getAccessibleFiles silently drops. The trade is the same
+ * one the other-lake branch makes: a shared copy is left unpicked-but-alive, so it does accumulate one stale
+ * orphan per edit (it drops out of findByDriveConnectionIdInDataLake once unpicked, and no later poll revisits
+ * it), and the sharee reads pre-edit content. Recoverable staleness beats a silent, unrecoverable loss of
+ * access. If Drive-lake files turn out never to be shared directly, this branch simply never fires.
+ *
+ * The full delete goes through fabFileService.deleteFabFile rather than a bare `deletedAt` stamp because
+ * only that path also reaps the chunks, the per-model search-index docs, the session (notebook) links, the
+ * S3 object and the owner's counted storage. A bare stamp leaves all of it billed and orphaned forever -
+ * nothing reaps soft-deleted FabFiles outside whole-lake teardown. Two of those the user would MISS, so
+ * they are carried onto the fresh copy first (carryForwardToReplacement): the notebook attachments, and the
+ * tags a human applied by hand. Otherwise a one-character edit in Drive silently detaches the doc from
+ * every notebook holding it and drops its tags.
+ *
+ * The delete's actor is the retired ROW'S OWN owner, not `connection.connectedBy` - a reconnect re-stamps
+ * connectedBy (drive-sync.ts), and running as a non-owner would either deny (accumulating one orphan copy
+ * per edit) or take deleteFabFile's self-unshare branch and mutate the file instead of reaping it.
+ *
+ * A genuine delete (gone from the folder) keeps the membership-only unpick and never deletes - the file left
+ * the folder but the owner keeps their copy, which is not superseded by anything.
+ *
+ * OUT OF SCOPE for E1 (#1589 follow-ups): a rename/move in Drive (md5 unchanged, only modifiedTime
+ * moves) is classified unchanged, so the stale fileName/relativePath is not reconciled; a
+ * permanently-unsupported file (unsupported type, oversized Editors export) is never a durable member,
+ * so it re-appears as a candidate and re-skips on every poll - noise, not harm, but it never converges;
+ * and an unpicked file keeps its `driveConnectionId`/`sourceLakeId`, so one that leaves the folder and
+ * later returns is re-ingested as a brand-new FabFile while the unpicked original lingers in the owner's
+ * Files.
+ *
+ * Ordering is load-bearing. `storage.upload` fires `objectCreated` synchronously, which walks
+ * objectCreated -> chunk -> vectorize; each stage advances batch progress by claiming its manifest
+ * file (claimFileStatus). If the manifest entry does not exist yet those claims silently no-op, so
+ * vectorizedFiles never increments and the batch never crosses its finalize threshold. Hence the
+ * per-file `appendFiles` AHEAD of `storage.upload`, not a single append after the loop.
+ *
+ * totalFiles is seeded with the candidate count (adds + re-ingests); a PERMANENT skip (oversized,
+ * unsupported, a fetch that failed for this file's own sake) is folded into `skippedFiles` as it
+ * happens, so `vectorized + failed + skipped` still reaches totalFiles exactly
+ * (finalizeBatchIfComplete's gate) without the ingestable count being known up front. Removals happen
+ * outside the batch (immediate lake-membership pulls).
+ *
+ * A Drive RATE LIMIT is deliberately not one of those. recordSkippedDriveFile is idempotent per chain,
+ * so a skip is subtracted from every later slice's walk - recording a throttle as one drops the file
+ * from the lake for good while the batch still finalizes clean, which is a silently incomplete lake
+ * behind a green dashboard (#2394). It takes the deferral path below instead.
+ *
+ * A folder too large for one invocation ingests across SEVERAL, as a chain of slices. The loop yields
+ * on the Lambda deadline (INGEST_DEADLINE_BUFFER_MS) rather than being killed - or on a Drive rate
+ * limit, which additionally delays the continuation so the next slice is not hammering the same
+ * exhausted quota - then re-enqueues itself carrying the batch it was filling. Three things make
+ * that converge where a plain SQS retry did not:
+ *
+ *   - The next slice ADOPTS the batch instead of creating one, and subtracts the Drive ids that batch
+ *     has already UPLOADED or permanently skipped a FabFile for (findDriveFileIdsByBatchId,
+ *     skippedDriveFileIds) from its own fresh walk. That subtraction is load-bearing and cannot be
+ *     replaced by the ordinary diff: a file an earlier slice uploaded is still `pending` (so invisible
+ *     to findByDriveConnectionIdInDataLake) and its superseded copy has already been retired, which
+ *     makes it look like a brand-new ADD. Re-ingesting it is exactly the duplicate-tail spiral this
+ *     chain exists to avoid.
+ *   - The `syncing` claim is HANDED from slice to slice (renewSyncClaim -> adoptSyncClaim) and never
+ *     returns to 'connected' in between, so the re-sync poll cannot slip in and start a competing walk
+ *     mid-chain. The batch id names WHICH chain, but the actual CAS is a one-time `ingestClaimToken`
+ *     rotated on every hand-off - the batch id alone cannot be consumed (it has to stay fixed for the
+ *     whole chain to keep naming the same batch), so two deliveries of one continuation message would
+ *     otherwise both match it and both adopt. The batch id is also what tells claimForSync's staleness
+ *     arm to hold a chained claim for much longer than an unchained one - a continuation's un-refreshed
+ *     interval is its queue wait, not its run length.
+ *   - `totalFiles` is re-planned as the chain goes (raised when a later walk finds more, set exactly
+ *     when the chain ends), so the finalize gate is still reached exactly and the batch never settles
+ *     mid-chain or strands in `processing` afterwards. That final set is a NARROWING, so the same
+ *     settle records the shortfall it just wrote off as `deferredFiles` - otherwise a chain that
+ *     ingested 3 of 500 files finalizes as a clean 3-of-3, and the only account of the other 497 is a
+ *     connection field the next sync overwrites (#2394).
+ *
+ * A throw part-way through a CONTINUATION slice is rethrown for SQS retry as before, and that retry
+ * redelivers the same message - resumeBatchId included - so it adopts the batch and resumes instead of
+ * re-creating the un-uploaded tail. The remaining gap is unchanged from #1589: a throw inside the FIRST
+ * slice retries a message that names no batch, and can still duplicate what that slice had not uploaded.
+ * Resuming that too would need the batch pointer to survive the claim release, which reopens the
+ * stale-continuation race the claim token exists to close; the stuck-batch reconciler settles the
+ * abandoned batch meanwhile.
+ */
+export const dispatch = dispatchWithLogger(async (event, context, logger) => {
+  let connectionId: string | undefined;
+  // The CAS token this run HOLDS for the connection's sync claim, or undefined while it holds none.
+  // Every acquisition path mints one and every renew rotates it, so holding a token IS holding the
+  // claim - which is what the catch below reads to decide whether releasing is ours to do. Distinct
+  // from `payload.claimToken`, which a continuation only PRESENTS to adopt with; that becomes ours
+  // only once adoptSyncClaim consumes it and hands back a rotated one.
+  let ingestClaimToken: string | undefined;
+  try {
+    const payload = Payload.parse(JSON.parse(event.Records[0].body));
+    connectionId = payload.connectionId;
+    const { redriveCount, resumeBatchId, slice, forceFullWalk } = payload;
+    logger.updateMetadata({ handler: 'driveLakeIngest', connectionId });
+
+    // `?? ` alone is not enough: a non-finite reading is not nullish and every comparison against it
+    // is false, which would disable the deadline guard silently rather than fall back to the budget.
+    const runStartedAt = Date.now();
+    const remainingMs = () => {
+      const reported = context?.getRemainingTimeInMillis?.();
+      return typeof reported === 'number' && Number.isFinite(reported)
+        ? reported
+        : DEFAULT_RUN_BUDGET_MS - (Date.now() - runStartedAt);
+    };
+
+    /**
+     * Close out the batch a chain shares across its slices: re-plan `totalFiles` to what the chain
+     * ACTUALLY produced (manifest entries + skips) and nudge the finalize gate. A chain plans that
+     * total a slice at a time - the first from its own candidate list, later ones raising it as the
+     * folder grows - so a chain that ends having ingested fewer files than planned would otherwise sit
+     * in `processing` until the stuck-batch reconciler force-failed it.
+     *
+     * Defined up here, ahead of the connection/lake/user lookups below, so every early-return exit
+     * reachable by a continuation (including ones that fire before the connection, lake, or connecting
+     * user can even be resolved - a deleted connection, a purged lake) can still settle the batch it
+     * was adopting. Takes only a batch id, not the resolved `adoptedBatch`, for exactly that reason.
+     */
+    const settleChainedBatch = async (batchId: string) => {
+      const current = await dataLakeBatchRepository.findById(batchId);
+      if (!current) return;
+      // A manifest entry and a skippedFiles increment are NOT disjoint: objectCreated.ts marks an
+      // audio file (or every file with enableAutoChunk off) 'skipped' on an entry THIS handler already
+      // appended before upload, incrementing skippedFiles on top of it. Counting entries.length whole
+      // would double-count that file - once via the manifest, once via the counter - and the re-planned
+      // totalFiles would then sit one too high for the finalize gate to ever reach it. Only THIS
+      // handler's own skip() (drive-side: oversized/unsupported/fetch-failed) mints no manifest entry
+      // at all, so those are the only skippedFiles that need adding back in.
+      const produced = (current.files?.filter(f => f.status !== 'skipped').length ?? 0) + (current.skippedFiles ?? 0);
+      // What the chain PLANNED minus what it produced is exactly the work it gave up on, and it is
+      // derivable here at every exit - including the ones that cannot know a count (a continuation whose
+      // connection or lake was deleted mid-chain settles a batch it never got to walk). Recording it is
+      // what keeps the re-plan below honest: dropping totalFiles to `produced` is what lets the finalize
+      // gate be reached at all, but on its own it rewrites a chain that ingested 3 of 500 files into a
+      // clean 3-of-3 success, and in the degenerate case (throttled before the first file on every
+      // slice) into an empty folder. `max` because a mid-chain walk that finds MORE files raises the
+      // plan, never lowers it, so produced can never legitimately exceed it.
+      const deferredFiles = Math.max(0, current.totalFiles - produced);
+      const settled =
+        produced === current.totalFiles
+          ? current
+          : await dataLakeBatchRepository.setTotalFilesIfActive(batchId, produced, deferredFiles);
+      await finalizeBatchIfComplete(settled ?? current, logger);
+    };
+
+    /**
+     * End this run's claim: heal the connection back to 'connected' (or record why the sync stopped)
+     * and stamp lastPolledAt. Compare-and-set on the token this run holds, so a run that already lost
+     * the claim - to a stale-claim reclaim, or to a disconnect/reconnect landing mid-run - leaves the
+     * new owner alone instead of flipping a live ingest back to 'connected' for a poll to walk over.
+     * Losing it is an expected outcome, not a failure: the new owner releases when it finishes.
+     */
+    const releaseClaim = async (lastError: string | null) => {
+      if (!ingestClaimToken) return;
+      const released = await orgGoogleDriveConnectionRepository.releaseSyncClaim(
+        payload.connectionId,
+        ingestClaimToken,
+        lastError
+      );
+      if (!released) {
+        logger.warn('[driveLakeIngest] claim was taken away before release; leaving the new owner alone', {
+          connectionId,
+        });
+      }
+    };
+
+    const connection = await orgGoogleDriveConnectionRepository.findById(connectionId);
+    if (!connection) {
+      logger.warn('[driveLakeIngest] connection not found; dropping', { connectionId });
+      // Reachable by a continuation whose connection was deleted mid-chain (e.g. a lake purge) - its
+      // adopted batch still needs settling or it strands in `processing` until the reconciler force-fails it.
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+      return;
+    }
+
+    // Serialize ingest per connection: two rapid POSTs (a double-clicked button, a retried request)
+    // both walk and both create a full set of FabFiles otherwise, since the driveFileId dedup can't
+    // help while the first run's rows are still `pending`. The loser here is a cheap no-op.
+    // A continuation takes over the claim its own previous slice is still holding, matched on the
+    // batch id AND its one-time claim token, so the connection never passes through 'connected'
+    // mid-chain, and a redelivered duplicate of THIS SAME continuation message (which presents the
+    // same already-consumed token) loses rather than racing this run. Falling back to a fresh claim
+    // covers the one case where the chain's claim is genuinely gone: the previous slice threw,
+    // released, and SQS redelivered its message.
+    if (resumeBatchId && payload.claimToken) {
+      ingestClaimToken =
+        (await orgGoogleDriveConnectionRepository.adoptSyncClaim(connectionId, resumeBatchId, payload.claimToken)) ??
+        undefined;
+    }
+    if (!ingestClaimToken) {
+      ingestClaimToken = (await orgGoogleDriveConnectionRepository.claimForSync(connectionId)) ?? undefined;
+    }
+    if (!ingestClaimToken) {
+      // Someone else holds the claim. If a real ingest is in flight ('syncing'), DEFER this run by
+      // re-enqueuing with a delay so a genuine second sync (new files added mid-run) isn't dropped -
+      // bounded so it can't spin. If instead the connection is in an error state (claimForSync won't
+      // claim over one), there's nothing to defer behind, so just drop the duplicate.
+      const current = await orgGoogleDriveConnectionRepository.findById(connectionId);
+      if (current?.status === 'syncing' && redriveCount < MAX_INGEST_REDRIVES) {
+        await sendToQueue(
+          Resource.driveLakeIngestQueue.url,
+          {
+            connectionId,
+            redriveCount: redriveCount + 1,
+            // Forward the continuation's own identity, if this run had one: a continuation that
+            // loses this race must not come back as a FRESH first-slice sync, which would carry no
+            // resumeBatchId, subtract nothing, and re-ingest the chain's already-`pending` tail as
+            // duplicate ADDs - the exact spiral chaining exists to prevent.
+            ...(resumeBatchId && { resumeBatchId, slice, claimToken: payload.claimToken }),
+            // Forward an explicit "Re-sync everything" through the redrive too - dropping it here
+            // would silently downgrade a manual re-sync into a plain (possibly incremental) run the
+            // moment it lost a claim race, defeating the action the user just took (#2396).
+            ...(forceFullWalk && { forceFullWalk: true }),
+          },
+          INGEST_REDRIVE_DELAY_SECONDS
+        );
+        logger.info('[driveLakeIngest] another sync in flight; deferred', {
+          connectionId,
+          redriveCount: redriveCount + 1,
+          resumeBatchId,
+        });
+      } else {
+        logger.info('[driveLakeIngest] could not claim (not syncing or redrive exhausted); skipping', {
+          connectionId,
+          status: current?.status,
+          redriveCount,
+        });
+      }
+      return;
+    }
+
+    const lake = await dataLakeRepository.findById(connection.targetDataLakeId);
+    if (!lake) {
+      logger.warn('[driveLakeIngest] target data lake not found; dropping', { connectionId });
+      // Same reasoning as the connection-not-found exit above: a continuation reaching here still
+      // owns an adopted batch that needs settling.
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+      await releaseClaim(null);
+      return;
+    }
+    // A non-ingestable lake is a no-op here, not a failure.
+    // This is also the convergence point for the enabled flag: the lifecycle transition disables
+    // the connection write-time, but that only covers transitions after this shipped, and its port
+    // is best-effort (see dataLakeService/ports.ts). Having proven the lake is not writable, heal
+    // forward - the disable is idempotent, so one poll retires a connection archived before this
+    // deploy, a lost best-effort disable, or a connect/archive race that re-stamped enabled.
+    if (!isLakeIngestable(lake.status)) {
+      logger.info('[driveLakeIngest] target data lake is not writable; dropping', {
+        connectionId,
+        lakeStatus: lake.status,
+      });
+      try {
+        await disableDriveConnectionForLake(lake.id);
+      } catch (e) {
+        // Never fail the drop over the heal: the next poll drops again and retries the disable.
+        logger.warn('[driveLakeIngest] could not disable connection for a non-writable lake', {
+          connectionId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+      await releaseClaim(null);
+      return;
+    }
+    const user = await User.findById(connection.connectedBy);
+    if (!user) {
+      logger.warn('[driveLakeIngest] connecting user not found; dropping', { connectionId });
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+      await releaseClaim(null);
+      return;
+    }
+    const ability = defineAbilitiesFor(user as unknown as IUserDocument);
+
+    // Prefer the connection's own token; falls back to the connecting user's (D not built yet).
+    // A credential failure marks the connection credential_error and throws so SQS retries -> DLQ.
+    const accessToken = await getValidConnectionDriveAccessToken(connectionId, connection.organizationId);
+    const drive = createDriveClient(accessToken);
+
+    // 1) Resolve this run's Drive-side signal: an incremental `changes.list` pull (scoped to what
+    //    happened since the stored cursor) whenever the connection already carries one and the caller
+    //    did not force a full walk, otherwise the full recursive folder walk - first sync, an
+    //    invalidated cursor (Drive expires them - isDriveInvalidCursorError), or the manual "Re-sync
+    //    everything" action (drive-sync.ts sets forceFullWalk on its reconnect branch), or the poll
+    //    cron's periodic forced re-walk (driveLakeResyncPoll.FULL_WALK_INTERVAL_MS - the reconcile for
+    //    subtree moves, which Drive's per-file changes feed cannot report). Whichever mode runs,
+    //    `pendingSyncCursor` is only PERSISTED once this run's delta is fully applied with no
+    //    continuation pending (see the two call sites below) - advancing it any earlier would let a
+    //    chain that stops short skip the very changes it never got to ingest, and an incremental run
+    //    that could not resolve every entry drops it outright for the same reason.
+    let syncMode: 'full' | 'incremental' = 'full';
+    let rawChanges: DriveChange[] = [];
+    let pendingSyncCursor: string | undefined;
+
+    /**
+     * Shed this run instead of failing it: a throttle that outlived the per-call retries, or a walk
+     * that ran out of invocation time, is not a broken sync. Throwing it on would DLQ the connection
+     * after two flat SQS redeliveries - and each of those redoes the Drive pull from scratch, which
+     * ADDS load to a quota that may already be exhausted. Come back later instead, on the same
+     * jittered delay the content-fetch deferral uses - a timeout gets it too, not because it needs to
+     * dodge a quota, but so a folder that keeps outrunning its invocation budget doesn't spin straight
+     * back into the same wall. Shares redriveCount with the claim-contention deferral above, so a
+     * chain that keeps coming back around - for whatever reason - cannot spin forever.
+     *
+     * Callers MUST return immediately after awaiting this: the claim is released and the batch settled.
+     */
+    const deferDriveSync = async (
+      phase: 'incremental_pull' | 'folder_walk',
+      reason: 'rate_limited' | 'time_budget_exceeded',
+      err: unknown
+    ) => {
+      const delaySeconds = rateLimitBackoffSeconds();
+      const canDefer = redriveCount < MAX_INGEST_REDRIVES;
+      logger.warn('[driveLakeIngest] Drive sync deferred before any diff', {
+        connectionId,
+        slice,
+        redriveCount,
+        phase,
+        reason,
+        deferring: canDefer,
+        delaySeconds: canDefer ? delaySeconds : undefined,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // This pull is the first thing every slice does, so a continuation that dies here produced
+      // nothing: settle its batch rather than leave it `processing` for the reconciler to force-fail,
+      // and let the deferred message start a fresh chain.
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+      // Release BEFORE enqueuing: the delayed message has to find a 'connected' connection to claim
+      // when it lands, or it would just lose the claim and spend a deferral on the wrong problem. An
+      // enqueue that then throws falls to the catch below and out to SQS with the claim already
+      // released, so the redelivery can retry rather than the connection stranding at 'syncing'.
+      await releaseClaim(
+        canDefer
+          ? null
+          : // redriveCount is shared with the claim-contention deferral above, so a chain landing here
+            // may have spent most of its deferrals on someone else's sync being in flight, not on this -
+            // never attribute the full count to one cause the operator cannot verify.
+            `This sync never got as far as reading your folder's contents - Google Drive rate-limiting ` +
+              `and/or the invocation's time budget - and gave up after ${MAX_INGEST_REDRIVES} total ` +
+              `deferrals. Nothing was ingested. The next scheduled poll retries it; if it keeps happening, ` +
+              `sync fewer folders on the same schedule.`
+      );
+      ingestClaimToken = undefined;
+      if (canDefer) {
+        await sendToQueue(
+          Resource.driveLakeIngestQueue.url,
+          // Carry forceFullWalk across the deferral: a user who asked for "Re-sync everything" must
+          // still get a full walk when the retry lands, not a silent downgrade to incremental.
+          { connectionId, redriveCount: redriveCount + 1, ...(forceFullWalk && { forceFullWalk: true }) },
+          delaySeconds
+        );
+      }
+    };
+
+    if (!forceFullWalk && connection.syncCursor) {
+      try {
+        const pulled = await listChanges(drive, connection.syncCursor);
+        syncMode = 'incremental';
+        rawChanges = pulled.changes;
+        pendingSyncCursor = pulled.newStartPageToken;
+      } catch (e) {
+        if (isDriveInvalidCursorError(e)) {
+          logger.info('[driveLakeIngest] stored Drive cursor is invalid; falling back to a full walk', {
+            connectionId,
+          });
+        } else if (isDriveRateLimitError(e)) {
+          // Same shed as a throttled walk below. Deferring leaves syncCursor untouched, so the retry
+          // pulls the same delta from the same point rather than skipping past it.
+          await deferDriveSync('incremental_pull', 'rate_limited', e);
+          return;
+        } else {
+          throw e;
+        }
+      }
+    }
+
+    // De-dup by driveFileId: a legacy multi-parented Drive file surfaces once per parent inside the
+    // walked subtree, and a duplicate would otherwise double-ingest (two FabFiles for one add) and
+    // double-remove (the second removeFileFromLake throws NotFoundError, aborting mid-prune). Only
+    // meaningful in full-walk mode; incremental mode reassigns `walked` below, once its own delta is
+    // known, purely for the cap check and logging - it never populates walkedRaw/seenIds.
+    let walkedRaw: WalkedDriveFile[] = [];
+    if (syncMode === 'full') {
+      // Baseline cursor BEFORE the walk, not after. A file created mid-walk - after its parent folder
+      // was already listed - is in neither the walk's result nor, if the token were taken afterwards,
+      // the first incremental pull: its change record would already sit behind that cursor. On a large
+      // first sync that blind window is minutes wide. Taking it first inverts the error into a harmless
+      // one - the first incremental pull replays some changes this walk already covered, and they diff
+      // out as no-ops (hasDriveFileChanged) against the set this run is about to store.
+      //
+      // Not fatal on failure: the walk still reconciles, the connection just falls back to another full
+      // walk next time instead of going incremental.
+      pendingSyncCursor = await getStartPageToken(drive).catch(e => {
+        logger.warn('[driveLakeIngest] could not establish a Drive changes cursor before a full walk', {
+          connectionId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+        return undefined;
+      });
+      try {
+        walkedRaw = await walkFolder(drive, connection.driveFolderId, remainingMs);
+      } catch (err) {
+        const timedOut = err instanceof DriveWalkTimeBudgetExceededError;
+        if (!timedOut && !isDriveRateLimitError(err)) throw err;
+        await deferDriveSync('folder_walk', timedOut ? 'time_budget_exceeded' : 'rate_limited', err);
+        return;
+      }
+    }
+    const seenIds = new Set<string>();
+    let walked = walkedRaw.filter(f => {
+      if (seenIds.has(f.id)) return false;
+      seenIds.add(f.id);
+      return true;
+    });
+
+    // 2) Diff against everything THIS connection has in the lake, keyed by the stable driveFileId,
+    //    into ADD (new), UPDATE (same id, content moved) and REMOVE (gone from the tree). The stored
+    //    set is the connection's own files so a re-sync never touches files added by other means.
+    const datalakeTag = lake.datalakeTag;
+    const existingDocs = await fabFileRepository.findByDriveConnectionIdInDataLake(connectionId, datalakeTag);
+    //    One driveFileId can map to SEVERAL stored copies: `main`'s add-only handler had no walk
+    //    de-dup, so a multi-parented Drive file or an SQS retry after a partial run could already
+    //    have created a second non-pending row. Key to a list (not last-wins) so those duplicates
+    //    are visible here - otherwise they stay lake members holding pre-edit content that no
+    //    future walk can ever see again.
+    const existingByDriveId = new Map<string, (typeof existingDocs)[number][]>();
+    for (const doc of existingDocs) {
+      if (!doc.driveFileId) continue;
+      const copies = existingByDriveId.get(doc.driveFileId);
+      if (copies) copies.push(doc);
+      else existingByDriveId.set(doc.driveFileId, [doc]);
+    }
+    // Newest-first within each id: the head anchors change detection (it is what the last successful
+    // ingest wrote), and the tail is duplicates. Sorted rather than left in find() order so the
+    // representative is deterministic - an unsorted query could otherwise diff against an older row
+    // and re-ingest a file that is not actually stale.
+    for (const copies of existingByDriveId.values()) {
+      copies.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    }
+    const newestCopyOf = (driveFileId: string) => existingByDriveId.get(driveFileId)?.[0];
+
+    let pureAdds: WalkedDriveFile[];
+    let changed: WalkedDriveFile[];
+    let removed: (typeof existingDocs)[number][];
+    // Everything currently believed live, by driveFileId - what the cap check and the duplicate-retire
+    // scan below both mean by "still in the folder". A full walk answers this directly (walkedIds);
+    // incremental mode has no fresh listing to read it off, so it is reconstructed from what IS known
+    // (the existing set) adjusted by this run's own delta.
+    let walkedIds: Set<string>;
+
+    if (syncMode === 'incremental') {
+      const classified = await classifyDriveChanges(drive, rawChanges, connection.driveFolderId, newestCopyOf, logger);
+      pureAdds = classified.adds;
+      changed = classified.changed;
+      const removedIds = new Set(classified.removedFileIds);
+      // EVERY stored copy of a removed id, not just the newest - matching the full-walk arm below.
+      // The duplicate-retire sweep in step 4b deliberately skips an id gone from the folder (all of
+      // its copies are supposed to be here), and Drive never mentions a removed id again, so no later
+      // incremental run revisits it either. An older copy missed here would stay a live, searchable
+      // lake member holding content the user deleted from Drive, with nothing left to clean it up.
+      removed = classified.removedFileIds.flatMap(id => existingByDriveId.get(id) ?? []);
+      // An unresolved entry means this run's delta is INCOMPLETE, so do not advance past it: dropping
+      // pendingSyncCursor leaves the stored cursor where it is and the next poll re-pulls the same
+      // window. Re-applying a delta is idempotent; losing one of its changes is not (classifyDriveChanges).
+      if (classified.ambiguous > 0) {
+        logger.warn('[driveLakeIngest] holding the Drive cursor back; some changes could not be resolved', {
+          connectionId,
+          ambiguous: classified.ambiguous,
+        });
+        pendingSyncCursor = undefined;
+      }
+      walkedIds = new Set(existingByDriveId.keys());
+      for (const id of removedIds) walkedIds.delete(id);
+      for (const add of pureAdds) walkedIds.add(add.id);
+      // Log/cap-check stand-in for "what this run saw": the actual delta, not a corpus-wide listing
+      // (there isn't one to report - see walkAndDiffSize's use of existingDocs.length below).
+      walked = [...pureAdds, ...changed];
+    } else {
+      pureAdds = walked.filter(f => !existingByDriveId.has(f.id));
+      changed = walked.filter(f => {
+        const prior = newestCopyOf(f.id);
+        return prior != null && hasDriveFileChanged(prior, f);
+      });
+      removed = existingDocs.filter(doc => doc.driveFileId != null && !seenIds.has(doc.driveFileId));
+      walkedIds = seenIds;
+
+      // Transient-glitch guard: an EMPTY walk while the lake still holds this connection's files is
+      // far likelier a permission blip or a Drive hiccup than a real empty-out. walkFolder throws on a
+      // listing error (so an empty result is a genuine "no children", not a truncated one), but
+      // pruning an entire lake on one empty pass is too destructive to trust - refuse it. A real
+      // empty-out still reconciles once even one file remains to anchor the walk as trustworthy.
+      if (walked.length === 0 && existingDocs.length > 0) {
+        logger.warn('[driveLakeIngest] folder walk returned empty while lake holds files; skipping prune', {
+          connectionId,
+          existing: existingDocs.length,
+        });
+        removed = [];
+      }
+    }
+
+    // The batch a previous slice of this chain was filling, if this run is a continuation of one. Only
+    // adopted when it is still non-terminal and still belongs to this lake: the stuck-batch reconciler
+    // may have settled it while the message waited, and appending to a settled batch would strand
+    // manifest entries nothing will ever finalize. A rejected adoption is not fatal - the run simply
+    // starts a fresh batch, which converges because the earlier slices' files are durable by then.
+    const adoptedBatch = resumeBatchId
+      ? await dataLakeBatchRepository.findById(resumeBatchId).then(prior => {
+          if (!prior) return null;
+          if (prior.dataLakeId !== connection.targetDataLakeId) return null;
+          return BATCH_NON_TERMINAL_STATUSES.includes(prior.status) ? prior : null;
+        })
+      : null;
+    if (resumeBatchId && !adoptedBatch) {
+      logger.warn('[driveLakeIngest] continuation could not adopt its batch; starting a fresh one', {
+        connectionId,
+        resumeBatchId,
+        slice,
+      });
+    }
+
+    // Adds and edited files both ingest fresh; an edited file's stale copy is retired in the loop
+    // below, only after its replacement is uploaded (never up front - see the header for why).
+    //
+    // On a continuation, subtract every driveFileId the adopted batch has already DEALT WITH - either
+    // uploaded (still `pending`, its superseded copy already retired, so invisible to the diff above)
+    // or permanently skipped (skip() mints no FabFile at all, so it is invisible the same way). Without
+    // this every one of them reads as a fresh ADD and the chain would duplicate its own tail, or
+    // re-fetch-and-re-skip a file that can never succeed - see the header and skip()'s own comment.
+    const alreadyIngested = adoptedBatch
+      ? new Set([
+          ...(await fabFileRepository.findDriveFileIdsByBatchId(adoptedBatch.id)),
+          ...(adoptedBatch.skippedDriveFileIds ?? []),
+        ])
+      : new Set<string>();
+    const candidates = [...pureAdds, ...changed].filter(f => !alreadyIngested.has(f.id));
+
+    // A trusted system reconcile acts as admin for membership writes (canManageLake): the connection
+    // was authorized by an org owner/manager at connect time (verifyOrgAccess). Pass the resolved lake
+    // itself (not a hand-projection) so `organizationId` reaches the org-manageable manage rung.
+    const membershipActor = { userId: connection.connectedBy, isAdmin: true };
+    const recomputeStats = () =>
+      dataLakeService.recomputeLakeStats(lake, {
+        db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
+      });
+
+    // Bytes reclaimed by the full deletes below, accumulated PER OWNER: after a reconnect the copies
+    // one run retires can belong to more than one user (see retireSupersededCopy), and each one's
+    // quota has to be given back to the right document.
+    const reclaimedBytesByUserId = new Map<string, number>();
+
+    // Every lake whose PREFIX arm could reach a file owned by anyone in this connection's stored set,
+    // or by whoever is connected now. Memoized: resolved ONCE for the whole run rather than per retire,
+    // and not at all on a run that retires nothing - the common poll outcome. Membership is still
+    // re-asserted per lake, per owner, inside findOtherLakeClaims.
+    let candidateLakesOnce: ReturnType<typeof dataLakeService.loadPrefixArmCandidateLakes> | undefined;
+    const prefixArmCandidateLakes = () =>
+      (candidateLakesOnce ??= dataLakeService.loadPrefixArmCandidateLakes(
+        [connection.connectedBy, ...existingDocs.map(doc => doc.userId)],
+        { db: { dataLakes: dataLakeRepository } }
+      ));
+
+    // deleteFabFile throws when its actor no longer exists, which would fail the whole reconcile on a
+    // deterministic condition (an owner deleted since ingest) - retried to the DLQ, never converging.
+    // Resolve once per owner and skip that copy instead.
+    const ownerExists = new Map<string, boolean>();
+    const ownerStillExists = async (ownerId: string) => {
+      const cached = ownerExists.get(ownerId);
+      if (cached !== undefined) return cached;
+      const exists = !!(await userRepository.findById(ownerId));
+      ownerExists.set(ownerId, exists);
+      return exists;
+    };
+
+    /**
+     * Move what the hard delete is about to destroy onto the fresh copy superseding it: the notebook
+     * attachments (deleteFabFile strips the retired id from every session's `knowledgeIds`) and the
+     * tags a human applied by hand (the replacement is minted with this lake's tags only).
+     *
+     * Only ever called on the delete branch. On the unpicked branch the retired copy keeps living
+     * with its links and tags intact, so there is nothing to carry - and attaching the replacement
+     * alongside it would put the same document in a notebook twice.
+     */
+    const carryForwardToReplacement = async (
+      retiredCopy: (typeof existingDocs)[number],
+      replacementFabFileId: string
+    ) => {
+      // Link the replacement BEFORE the delete unlinks the stale id: deleteFabFile filters only the
+      // retired id out of `knowledgeIds`, so an entry appended here survives that same write.
+      const attached = await sessionRepository.findAllWithKnowledgeId(retiredCopy.id);
+      for (const notebook of attached) {
+        const knowledgeIds = notebook.knowledgeIds ?? [];
+        if (knowledgeIds.includes(replacementFabFileId)) continue;
+        await sessionRepository.update({ id: notebook.id, knowledgeIds: [...knowledgeIds, replacementFabFileId] });
+      }
+
+      // A meta-tag is membership, not content: this lake's was just pulled, the gate proved no other
+      // lake holds one, and a non-canonical leftover names no lake at all. None of them carry over.
+      //
+      // Nor may a carried tag enrol the REPLACEMENT in a lake of its own. The gate cleared the
+      // RETIRED copy's owner, and after a reconnect the replacement's owner differs (it is minted as
+      // connection.connectedBy), so a tag that conferred nothing there can still match a prefix arm
+      // of a lake the new owner created. Dropping those keeps this a pure carry-over, and keeps it
+      // out of the membership doors (reconcileLakeTags) a real join would have to go through.
+      const replacementOwnerLakes = (await prefixArmCandidateLakes()).filter(
+        candidate => candidate.createdByUserId === connection.connectedBy
+      );
+      const carried: { name: string; strength: number }[] = [];
+      for (const tag of retiredCopy.tags ?? []) {
+        const name = tag?.name;
+        if (typeof name !== 'string' || isDataLakeTagName(name)) continue;
+        if (replacementOwnerLakes.some(candidate => matchesTagPrefixArm([name], candidate.fileTagPrefix))) continue;
+        carried.push({ name, strength: typeof tag.strength === 'number' ? tag.strength : 0 });
+      }
+      // Grouped because pushTagsByFabFileId applies ONE strength per call, and a carried tag keeps
+      // the strength a human gave it rather than being flattened to the default.
+      const namesByStrength = new Map<number, string[]>();
+      for (const { name, strength } of carried) {
+        const names = namesByStrength.get(strength);
+        if (names) names.push(name);
+        else namesByStrength.set(strength, [name]);
+      }
+      for (const [strength, names] of namesByStrength) {
+        await fabFileRepository.pushTagsByFabFileId(replacementFabFileId, names, strength);
+      }
+    };
+
+    /**
+     * Retire a superseded copy of a Drive file: unpick it from THIS lake, then delete it outright
+     * only when nothing else claims it - no other lake under either membership arm, and no share
+     * granting a reader other than its owner. `replacementFabFileId`
+     * is the fresh copy that supersedes this one, and inherits its links and tags. The header covers
+     * why the two steps cannot collapse into one soft-delete, why both arms have to be tested, and
+     * why the actor is the row's own owner. Returns what it did, for the log.
+     */
+    const retireSupersededCopy = async (staleCopy: (typeof existingDocs)[number], replacementFabFileId: string) => {
+      // Per-lake by construction: clears this lake's meta-tag and prefixed content tags, nothing else.
+      await dataLakeService.removeFileFromLake(membershipActor, lake, staleCopy.id, {
+        db: { fabFiles: fabFileRepository },
+      });
+
+      // Re-read AFTER the unpick, so the gate runs against the tags that actually SURVIVE it. The
+      // question a hard delete must answer is "now that this file has left THIS lake, does any other
+      // lake still hold it", and only the stored document answers that without re-deriving which
+      // signals removeFileFromLake chose to pull.
+      const retiredCopy = await fabFileRepository.findById(staleCopy.id);
+      if (!retiredCopy) {
+        logger.warn('[driveLakeIngest] superseded copy vanished before retire; unpicked only', {
+          fabFileId: staleCopy.id,
+        });
+        return 'unpicked' as const;
+      }
+
+      // A grant to anyone other than the owner is a claim too, and the same argument the other-lake
+      // branch makes below applies: the delete is global, so it would take the share vector with it
+      // and leave the sharee holding a notebook reference they can no longer resolve - silently,
+      // because getAccessibleFiles just drops an id the reader has no grant on. The replacement
+      // carries no shares (it is minted for connection.connectedBy alone), so there is nothing to
+      // hand them instead. Keep the retired copy alive and merely unpicked: the sharee sees the
+      // PRE-EDIT content, which they can re-request, rather than losing the file outright.
+      const shareClaims = {
+        users: (retiredCopy.users ?? []).length,
+        groups: (retiredCopy.groups ?? []).length,
+        globalRead: !!retiredCopy.isGlobalRead,
+      };
+      if (shareClaims.users > 0 || shareClaims.groups > 0 || shareClaims.globalRead) {
+        logger.info('[driveLakeIngest] superseded copy is shared outside its owner; unpicked only', {
+          fabFileId: staleCopy.id,
+          ...shareClaims,
+        });
+        return 'unpicked' as const;
+      }
+
+      const tagNames = (retiredCopy.tags ?? [])
+        .map(tag => tag?.name)
+        .filter((name): name is string => typeof name === 'string');
+
+      const claims = await dataLakeService.findOtherLakeClaims({ userId: retiredCopy.userId, tagNames }, lake, {
+        db: { dataLakes: dataLakeRepository },
+        candidateLakes: await prefixArmCandidateLakes(),
+      });
+      if (dataLakeService.hasOtherLakeClaim(claims)) {
+        // Someone curated this file into another lake - by that lake's meta-tag, or by a tag under
+        // its fileTagPrefix. It leaves the Drive lake and keeps living there; deleting it would evict
+        // it from a lake this poll has no business touching. The consequence, deliberately: that lake
+        // keeps the PRE-EDIT copy, because the fresh replacement is tagged into this lake only.
+        // Propagating an edit into a hand-curated lake is a decision for whoever curated it, not for
+        // a background poll - and holding stale content is recoverable (re-add the new copy), whereas
+        // a silent eviction is not.
+        logger.info('[driveLakeIngest] superseded copy belongs to another lake; unpicked only', {
+          fabFileId: staleCopy.id,
+          otherLakeTags: claims.metaTagNames,
+          otherLakeIds: claims.prefixArmLakes.map(other => other.id),
+        });
+        return 'unpicked' as const;
+      }
+
+      const ownerId = retiredCopy.userId;
+      if (!ownerId || !(await ownerStillExists(ownerId))) {
+        logger.warn('[driveLakeIngest] superseded copy has no living owner; left unpicked', {
+          fabFileId: staleCopy.id,
+          ownerId,
+        });
+        return 'unpicked' as const;
+      }
+
+      await carryForwardToReplacement(retiredCopy, replacementFabFileId);
+
+      // Sole-lake copy: delete for real, so the chunks, search-index docs, notebook links, S3 object
+      // and storage quota go with it.
+      const { action } = await fabFilesService.deleteFabFile(
+        ownerId,
+        { id: staleCopy.id },
+        {
+          db: {
+            fabFiles: fabFileRepository,
+            fabFileChunks: fabFileChunkRepository,
+            users: userRepository,
+            sessions: sessionRepository,
+          },
+          storage: getFilesStorage(),
+          onDeleteComplete: async (_fabFile, size) => {
+            reclaimedBytesByUserId.set(ownerId, (reclaimedBytesByUserId.get(ownerId) ?? 0) + size);
+          },
+          searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
+        }
+      );
+      if (action !== 'deleted') {
+        logger.warn('[driveLakeIngest] superseded copy could not be deleted; left unpicked', {
+          fabFileId: staleCopy.id,
+          action,
+        });
+      }
+      return action;
+    };
+
+    // Best-effort, and deliberately non-fatal: the files are already gone, so a failed quota write
+    // must not throw the whole reconcile into an SQS retry that would re-walk and re-ingest.
+    const flushReclaimedStorage = async () => {
+      if (reclaimedBytesByUserId.size === 0) return;
+      // Drain before deducting: this also runs from a `finally`, and a partial failure must not leave
+      // bytes staged for a later flush to deduct a second time.
+      const pending = [...reclaimedBytesByUserId.entries()];
+      reclaimedBytesByUserId.clear();
+      for (const [ownerId, bytes] of pending) {
+        if (bytes <= 0) continue;
+        try {
+          // Load the owner HERE, never the document read at the top of this handler. changeStorageSize
+          // mutates in memory and save() writes an ABSOLUTE currentStorageSize, so a document read
+          // before the loop would overwrite the increments every storage.upload in it just made
+          // through objectCreated - which loads and saves its own copy of the same user. Same reason
+          // bulk-delete.ts re-reads immediately before deducting; the transaction makes this
+          // read-modify-write conflict-checked rather than merely narrow.
+          await withTransaction(async () => {
+            const owner = await User.findById(ownerId);
+            if (!owner) return;
+            await changeStorageSize(owner, -bytes);
+            await owner.save();
+          });
+        } catch (e) {
+          logger.error('[driveLakeIngest] failed to deduct reclaimed storage', {
+            connectionId,
+            ownerId,
+            bytes,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+    };
+
+    // 3) Enforce the candidate cap FIRST, before any membership write. Gated on walked.length and
+    //    existingDocs.length - not candidates.length - because those are the two quantities that are
+    //    actually un-sliceable: EVERY slice holds the whole folder listing and this connection's whole
+    //    stored set in memory before any file is touched, regardless of how small the delta between
+    //    them turns out to be. Gating on the delta would let a folder with tens of thousands of
+    //    unchanged files and a five-file delta through, paying that walk+diff cost every slice with
+    //    nothing to show the cap ever ran. A deterministic refusal - return cleanly rather than
+    //    DLQ-ing a retry - and refusing here guarantees nothing is changed on a run that cannot ingest,
+    //    not even an early removal that would strand files.
+    const walkAndDiffSize = Math.max(walked.length, existingDocs.length);
+    if (walkAndDiffSize > MAX_INGEST_CANDIDATES) {
+      logger.warn('[driveLakeIngest] folder exceeds the ingest walk/diff cap; refusing', {
+        connectionId,
+        walked: walked.length,
+        existing: existingDocs.length,
+        candidates: candidates.length,
+        cap: MAX_INGEST_CANDIDATES,
+      });
+      // A folder that grew past the cap mid-chain still owes its adopted batch a settlement - the
+      // same exit this cap refusal shares with the zero-candidate and admission-refusal returns below.
+      if (adoptedBatch) await settleChainedBatch(adoptedBatch.id);
+      await releaseClaim(
+        `Folder has ${walkAndDiffSize} files (folder listing or connection's stored set), over the ${MAX_INGEST_CANDIDATES}-file limit for one sync. Split it into subfolders and connect them separately.`
+      );
+      return;
+    }
+
+    // 4) Apply genuine deletes now: a file gone from the folder has no replacement pending, so the
+    //    membership-only unpick loses nothing (the FabFile stays in the owner's Files, chunks untouched).
+    //    Stats recompute is deferred to the end so it also reflects the stale copies retired in the loop.
+    for (const doc of removed) {
+      await dataLakeService.removeFileFromLake(membershipActor, lake, doc.id, {
+        db: { fabFiles: fabFileRepository },
+      });
+    }
+
+    let retired = 0;
+
+    // Everything that retires a copy runs inside this `try`, step 4b included, so that a throw part
+    // way through EITHER the duplicate sweep or the ingest loop still settles what the committed
+    // deletes changed: the reclaimed bytes (the retry re-walks without seeing those files, so they
+    // would stay counted against their owners forever) and the lake's stats.
+    try {
+      // 4b) Retire pre-existing duplicates: extra copies of a driveFileId that is STILL in the folder,
+      //     left behind by the add-only handler this replaced (a multi-parented file, or an SQS retry
+      //     after a partial run). They hold pre-edit content, stay lake members, and are invisible to
+      //     every future walk because the newest copy shadows them. Safe to retire up front and not
+      //     after an upload: the newest copy stays live either way, so nothing is left without a member.
+      //     A driveFileId gone from the folder is skipped here - all of its copies are already in
+      //     `removed` above.
+      for (const [driveFileId, copies] of existingByDriveId) {
+        if (!walkedIds.has(driveFileId) || copies.length < 2) continue;
+        //   The newest copy is what supersedes every duplicate, so it inherits their notebook links
+        //   and tags. If this driveFileId is ALSO an edit, the loop below carries that chain onward
+        //   from the newest copy to the fresh upload.
+        for (const duplicate of copies.slice(1)) {
+          await retireSupersededCopy(duplicate, copies[0].id);
+          retired++;
+        }
+      }
+
+      if (candidates.length === 0) {
+        logger.info('[driveLakeIngest] reconciled; no files to ingest', {
+          walked: walked.length,
+          existing: existingDocs.length,
+          removed: removed.length,
+          updated: changed.length,
+          retired,
+        });
+        // A chain whose last slice happened to consume the remainder exactly lands here, with its
+        // batch still open on the previous slice's plan. Settle it rather than leaving it processing.
+        if (adoptedBatch) await settleChainedBatch(adoptedBatch.id);
+        // Nothing was deferred - this run's delta (if any) is fully applied, so it is safe to advance
+        // past it now. Also the O(1) fast path for an incremental poll with zero relevant changes:
+        // nothing below this point runs.
+        if (pendingSyncCursor) {
+          await orgGoogleDriveConnectionRepository.updateSyncCursor(connectionId, pendingSyncCursor, new Date(), {
+            fullWalk: syncMode === 'full',
+          });
+        }
+        await releaseClaim(null);
+        return;
+      }
+
+      // This door still creates its FabFiles through the manager's direct `FabFile.create` rather
+      // than `fabFileService.createFabFile`, so it bypasses the meta-tag write-authorization
+      // chokepoint (assertCanWriteDataLakeTags) - see generate-presigned-urls-batch.ts's own
+      // explicit call for the same reason.
+      //
+      // Once per sync, before the batch: the lake and the owner-to-be are the same for every
+      // candidate, so a refusal is a property of the connection, not of any one file. No FabFile
+      // exists yet, so the subject is the owner-to-be and the gate predicts from THEIR chunk policy.
+      // It sits after the reconcile's removals on purpose - a file gone from the folder is retired
+      // whether or not the lake will accept new content, exactly as on the zero-candidate return.
+      //
+      // A refusal is DETERMINISTIC - retrying re-reads the same lever and the same policy - so it is
+      // recorded as guidance and returned cleanly rather than rethrown into an SQS retry that would
+      // spin to the DLQ. Same treatment as the candidate cap above.
+      try {
+        await dataLakeService.assertLakeAdmission([lake], [{ userId: connection.connectedBy }], {
+          db: { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository },
+          logger,
+        });
+      } catch (admissionError) {
+        if (!(admissionError instanceof BadRequestError)) throw admissionError;
+        logger.warn('[driveLakeIngest] data lake refused this content at admission; refusing the sync', {
+          connectionId,
+          dataLakeId: lake.id,
+          candidates: candidates.length,
+        });
+        // A lever flipped mid-chain refuses the remainder; the slices already ingested still have to
+        // settle their shared batch rather than leave it processing.
+        if (adoptedBatch) await settleChainedBatch(adoptedBatch.id);
+        await releaseClaim(admissionError.message);
+        return;
+      }
+
+      // 5) Adopt this chain's batch, or create one. totalFiles is the candidate count; a per-file skip
+      //    is folded into skippedFiles as it happens (see the loop below), so the finalize gate is still
+      //    reached exactly. totalSizeBytes is best-effort - Google Editors files carry no size at list time.
+      //
+      //    On adoption the plan is RAISED, never lowered: a later slice re-walks a folder that may have
+      //    gained files, and letting the recorded total fall behind what this chain will actually produce
+      //    would let the gate fire mid-chain and finalize a batch still being appended to. The exact set
+      //    happens once, when the chain ends (settleChainedBatch).
+      const batch =
+        adoptedBatch ??
+        (await dataLakeBatchRepository.create({
+          dataLakeId: connection.targetDataLakeId,
+          userId: connection.connectedBy,
+          status: 'processing',
+          conflictResolution: 'skip',
+          totalFiles: candidates.length,
+          totalSizeBytes: candidates.reduce((sum, f) => sum + (f.size ?? 0), 0),
+          uploadedFiles: 0,
+          chunkedFiles: 0,
+          vectorizedFiles: 0,
+          failedFiles: 0,
+          processingFailedFiles: 0,
+          skippedFiles: 0,
+          deferredFiles: 0,
+          uploadedSizeBytes: 0,
+          files: [],
+          appliedTags: [],
+          startedAt: new Date(),
+          wantsTaxonomy: false,
+          taxonomyStatus: 'none',
+        }));
+
+      if (adoptedBatch) {
+        // alreadyIngested already includes every driveFileId this chain has uploaded OR permanently
+        // skipped (see how it's built above), so it alone covers what earlier slices produced -
+        // adding adoptedBatch.skippedFiles on top would double-count them.
+        const planned = alreadyIngested.size + candidates.length;
+        if (planned > adoptedBatch.totalFiles) {
+          await dataLakeBatchRepository.setTotalFilesIfActive(adoptedBatch.id, planned);
+        }
+      }
+
+      const applyFallbackTags = dataLakeService.createDataLakeFallbackTagger({
+        db: { dataLakes: dataLakeRepository },
+        logger,
+      });
+      const storage = getFilesStorage();
+      let uploaded = 0;
+      let skipped = 0;
+
+      // Idempotent per driveFileId within this chain (recordSkippedDriveFile), so a file that keeps
+      // failing the same deterministic gate on every slice (see skip()'s own callers) is counted and
+      // subtracted exactly once instead of once per slice.
+      const skip = async (driveFileId: string, reason: string, extra?: Record<string, unknown>) => {
+        const recorded = await dataLakeBatchRepository.recordSkippedDriveFile(batch.id, driveFileId);
+        if (recorded) skipped++;
+        logger.info('[driveLakeIngest] skipping file', { driveFileId, reason, recorded, ...extra });
+      };
+
+      // Resolved once per run, not per file - the loop can walk hundreds of candidates.
+      const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+      const maxFileSize = getSettingsValue('MaxFileSize', settings, MAX_FILE_SIZE_DEFAULT_MB) * 1024 * 1024;
+
+      // 6) One file at a time: size-gate -> fetch -> create FabFile -> append its manifest entry ->
+      //    upload. Only one file's bytes are ever live, and the manifest entry precedes the upload so
+      //    the objectCreated/chunk/vectorize claims the upload fires can find it (see header).
+      let deferred = 0;
+      // Set when Drive throttled this slice, which changes both the continuation's delay and the
+      // message the operator sees if the chain runs out of slices still throttled.
+      let rateLimited = false;
+      // currentStorageSize is a snapshot read once per run, so several files that each pass the
+      // storage check individually would otherwise overshoot the quota together.
+      let acceptedBytes = 0;
+      for (const [index, file] of candidates.entries()) {
+        // Yield rather than get killed, checked BEFORE starting a file so the run never dies between
+        // creating a FabFile and uploading its bytes - including before the FIRST file: a slice whose
+        // walk+diff already ate the invocation (the large-folder case slicing exists for) can reach
+        // here with seconds left, and starting a file it cannot finish is worse than an empty slice.
+        // An all-deferred slice is bounded and self-announcing (at most MAX_INGEST_SLICES of them, then
+        // the ceiling's lastError), which is a better failure mode than a hard kill mid-upload.
+        if (remainingMs() < INGEST_DEADLINE_BUFFER_MS) {
+          deferred = candidates.length - index;
+          break;
+        }
+
+        // Native binaries carry a size, so skip the oversized ones BEFORE spending a Drive download.
+        // Editors exports have no size here; they are bounded by Drive's own ~10 MB export cap
+        // (surfaced as export_too_large) plus the post-fetch guard below.
+        if (file.size != null && file.size > MAX_INGEST_FILE_BYTES) {
+          await skip(file.id, 'oversized', { size: file.size });
+          continue;
+        }
+
+        if (file.size != null && file.size >= maxFileSize) {
+          await skip(file.id, 'exceeds_max_file_size', { size: file.size });
+          continue;
+        }
+
+        const result = await fetchDriveFileContent(drive, file);
+        if (!result.ok) {
+          // A throttle is transient, so it must never become a permanent skip (see header). Yield the
+          // whole remainder rather than just this file: the next candidates would hit the same
+          // exhausted quota, and deferred candidates are re-walked by the continuation, so they stay
+          // in play and the batch cannot finalize as a clean success without them.
+          if (result.reason === 'rate_limited') {
+            rateLimited = true;
+            deferred = candidates.length - index;
+            logger.warn('[driveLakeIngest] Drive rate-limited a content fetch; deferring the rest of the slice', {
+              connectionId,
+              batchId: batch.id,
+              driveFileId: file.id,
+              slice,
+              deferred,
+              detail: result.detail,
+            });
+            break;
+          }
+          await skip(file.id, result.reason);
+          continue;
+        }
+        if (result.bytes.length > MAX_INGEST_FILE_BYTES) {
+          await skip(file.id, 'oversized_after_fetch', { size: result.bytes.length });
+          continue;
+        }
+
+        const { bytes, mimeType } = result;
+
+        // Both size checks above only see file.size, which Drive omits for Docs/Sheets exports;
+        // this pair is the backstop that still catches those once the real byte count is known.
+        if (bytes.length >= maxFileSize) {
+          await skip(file.id, 'exceeds_max_file_size', { size: bytes.length });
+          continue;
+        }
+
+        // Checked against the user, not the connection's org: objectCreated debits the
+        // uploading user, and this handler's own reclaim path deducts from that same counter,
+        // so an org-scoped check here could never fire.
+        // Retires so far this run are already deleted, but their bytes are only staged in
+        // reclaimedBytesByUserId until flushReclaimedStorage after the loop - credit them now.
+        const stagedReclaim = reclaimedBytesByUserId.get(user.id) ?? 0;
+        try {
+          await checkStorageLimit(user, Math.max(0, acceptedBytes + bytes.length - stagedReclaim));
+        } catch (error) {
+          if (!(error instanceof BadRequestError)) throw error;
+          await skip(file.id, 'storage_limit', { size: bytes.length });
+          continue;
+        }
+
+        const ext = mime.extension(mimeType);
+        const fileKey = `${uuidv4()}${ext ? `.${ext}` : ''}`;
+        const tags = await applyFallbackTags([{ name: datalakeTag, strength: DATALAKE_TAG_STRENGTH }]);
+
+        const fabFile = await createFabFile(
+          {
+            userId: connection.connectedBy,
+            filePath: fileKey,
+            fileSize: bytes.length,
+            fileName: file.name,
+            mimeType,
+            type: KnowledgeType.FILE,
+            tags,
+            batchId: batch.id,
+            relativePath: file.relativePath,
+            status: 'pending',
+            // Drive provenance (#1589): dedup key + change detection + source.
+            sourceType: FabFileSourceType.GOOGLE_DRIVE,
+            driveFileId: file.id,
+            ...(file.modifiedTime && { driveModifiedTime: new Date(file.modifiedTime) }),
+            ...(file.md5Checksum && { driveMd5Checksum: file.md5Checksum }),
+            sourceLakeId: connection.targetDataLakeId,
+            driveConnectionId: connectionId,
+          },
+          ability
+        );
+
+        // Manifest entry BEFORE the bytes land - the upload fires objectCreated synchronously and its
+        // downstream claims need this entry to already exist (ordering is load-bearing; see header).
+        await dataLakeBatchRepository.appendFiles(batch.id, [
+          {
+            fabFileId: fabFile.id,
+            fileName: file.name,
+            relativePath: file.relativePath,
+            status: 'pending',
+          },
+        ]);
+
+        await storage.upload(bytes, fileKey, { ContentType: mimeType });
+        uploaded++;
+        acceptedBytes += bytes.length;
+
+        // Confirm the upload SYNCHRONOUSLY, right here - not left to the async S3 objectCreated
+        // event. findDriveFileIdsByBatchId (what a resumed slice subtracts) excludes 'pending' rows
+        // precisely so a FabFile whose storage.upload threw is not mistaken for an uploaded one; a
+        // continuation enqueued moments after this call cannot be trusted to race that event first.
+        await fabFileRepository.markUploaded(fabFile.id);
+
+        // Edited file: its fresh replacement is now durably uploaded, so retire the superseded copy
+        // (see retireSupersededCopy, and the header for the invariants it keeps). Done PER-FILE right
+        // after the upload, not batched at the end: a later file throwing then leaves every
+        // already-processed edit fully reconciled (old retired, new uploaded) instead of stranding the
+        // old copy as a duplicate lake member the next walk can no longer see (both share
+        // driveFileId). Only the newest copy is left to retire here - any older siblings went in 4b.
+        const staleCopy = newestCopyOf(file.id);
+        if (staleCopy) {
+          await retireSupersededCopy(staleCopy, fabFile.id);
+          retired++;
+        }
+      }
+
+      logger.info('[driveLakeIngest] uploaded; pipeline will chunk+vectorize', {
+        connectionId,
+        batchId: batch.id,
+        slice,
+        walked: walked.length,
+        existing: existingDocs.length,
+        removed: removed.length,
+        updated: changed.length,
+        uploaded,
+        skipped,
+        deferred,
+        rateLimited,
+        retired,
+      });
+
+      // 7) Files left over (out of time, or Drive throttling us): hand the claim and the batch to
+      //    another slice rather than finishing here. The claim is renewed (never released) so the
+      //    connection stays 'syncing' and no poll can start a competing walk in the gap, and the batch
+      //    stays open so the next slice appends to it instead of starting a second one.
+      if (deferred > 0 && slice + 1 < MAX_INGEST_SLICES) {
+        const renewedToken = await orgGoogleDriveConnectionRepository.renewSyncClaim(
+          connectionId,
+          batch.id,
+          ingestClaimToken
+        );
+        if (renewedToken) {
+          // The renew rotated the stored token, so the one this run was holding is no longer the claim.
+          // Adopt the rotated value BEFORE the enqueue can throw: the catch releases on whatever this
+          // holds, and releasing on a superseded token is a silent no-op that would strand the
+          // connection at 'syncing' with no continuation ever enqueued.
+          ingestClaimToken = renewedToken;
+          // Spread rather than passing `undefined`: the deadline yield wants SQS's own immediate
+          // delivery, and only a throttled slice asks for a delay.
+          const backoff: [number] | [] = rateLimited ? [rateLimitBackoffSeconds()] : [];
+          await sendToQueue(
+            Resource.driveLakeIngestQueue.url,
+            {
+              connectionId,
+              resumeBatchId: batch.id,
+              slice: slice + 1,
+              claimToken: renewedToken,
+              // Carry the CHAIN's mode forward, not the original payload's flag: syncCursor never
+              // advances mid-chain (see the cursor-persistence gate below), so a fresh read on the
+              // next slice would still see the SAME cursor and could wrongly take the incremental
+              // branch there - silently truncating a full walk (first sync, invalidated cursor, or an
+              // explicit "Re-sync everything") the moment it needs more than one slice (#2396).
+              ...(syncMode === 'full' && { forceFullWalk: true }),
+            },
+            ...backoff
+          );
+          // Handed off: the continuation owns the claim from here, so a later throw (the `finally`
+          // below) must NOT release it out from under that slice.
+          ingestClaimToken = undefined;
+          logger.info('[driveLakeIngest] enqueued continuation slice', {
+            connectionId,
+            batchId: batch.id,
+            slice: slice + 1,
+            deferred,
+            rateLimited,
+            delaySeconds: backoff[0],
+          });
+          // Deliberately NOT releasing the claim, and NOT finalizing: the chain owns both until it ends.
+          return;
+        }
+        // Either the claim went while this slice ran (a stale-claim reclaim, a disconnect), or this run
+        // still holds it but renewed a batch id the connection's pointer does not match - an adopt that
+        // won the claim and then could not adopt its batch plans a fresh one (see the warn above the
+        // batch resolution). Settle the batch and release: the release is a compare-and-set, so the
+        // genuine loser no-ops and logs, while the still-holding case heals the connection now instead
+        // of leaving it at 'syncing' until the chained-stale window reclaims it an hour later.
+        logger.warn('[driveLakeIngest] lost the sync claim mid-slice; ending the chain', {
+          connectionId,
+          batchId: batch.id,
+          slice,
+          deferred,
+        });
+        await settleChainedBatch(batch.id);
+        await releaseClaim(null);
+        ingestClaimToken = undefined;
+        return;
+      } else if (deferred > 0) {
+        // Chain ceiling. Coverage is not lost - the files this chain uploaded stop being candidates
+        // once they vectorize, so the next scheduled poll picks the remainder up in a fresh chain.
+        logger.warn('[driveLakeIngest] continuation chain hit the slice ceiling; stopping', {
+          connectionId,
+          batchId: batch.id,
+          slice,
+          deferred,
+          rateLimited,
+          maxSlices: MAX_INGEST_SLICES,
+        });
+      }
+
+      // A batch that only skipped (or whose uploads all vectorized before the loop ended) has already
+      // crossed the finalize gate, but nothing re-checks it - our skip increments don't fire the
+      // pipeline's finalize. Nudge it once; a guarded no-op if uploads are still in flight. A chained
+      // batch is re-planned to what the chain actually produced first (see settleChainedBatch),
+      // because its recorded total is a plan made slice by slice, not a count.
+      if (adoptedBatch || deferred > 0) await settleChainedBatch(batch.id);
+      else await finalizeBatchIfComplete(await dataLakeBatchRepository.findById(batch.id), logger);
+
+      // The one operator-visible account of a chain that stopped short, so it has to name the actual
+      // cause: "split the folder up" is wrong (and unactionable) advice for a quota problem.
+      const stoppedShort =
+        deferred === 0
+          ? null
+          : rateLimited
+            ? `Google Drive is rate-limiting this sync, and it stopped after ${MAX_INGEST_SLICES} continuation runs with ${deferred} files still to ingest. Those files are NOT in the lake yet. The next scheduled poll retries them; if it keeps happening, sync fewer folders on the same schedule.`
+            : `Sync stopped after ${MAX_INGEST_SLICES} continuation runs with ${deferred} files left. The next scheduled poll continues from here; split very large folders into subfolders to converge faster.`;
+      // Advance the cursor ONLY on a clean finish (deferred === 0, stoppedShort null): a chain that
+      // hit the slice ceiling still has files it never got to, and advancing past them here would
+      // make the "next scheduled poll continues from here" promise above false - a poll that goes
+      // incremental from an already-advanced cursor would never see them again.
+      if (deferred === 0 && pendingSyncCursor) {
+        await orgGoogleDriveConnectionRepository.updateSyncCursor(connectionId, pendingSyncCursor, new Date(), {
+          fullWalk: syncMode === 'full',
+        });
+      }
+      await releaseClaim(stoppedShort);
+    } finally {
+      await flushReclaimedStorage();
+
+      // Recompute for every membership change this run made - the genuine deletes above and every
+      // copy retired since. In the `finally` because a mid-loop throw is rethrown for SQS retry, and
+      // the retry re-walks a folder whose removals and retires are ALREADY applied: it finds nothing
+      // to do and skips the recompute too, leaving fileCount/totalSizeBytes overstated until some
+      // unrelated write happens to fix them. Swallowed like the flush above, and because a throw
+      // raised here would replace the original error on its way to SQS.
+      //
+      // The freshly-uploaded replacements are already 'complete' by this point (markUploaded confirms
+      // the upload synchronously, right after storage.upload, rather than waiting on the async S3
+      // objectCreated event), so this recompute already counts them - unlike a plain add on `main`,
+      // which stays 'pending' until objectCreated flips it and has to wait for that later recompute.
+      if (removed.length > 0 || retired > 0) {
+        await recomputeStats().catch(e =>
+          logger.error('[driveLakeIngest] failed to recompute lake stats', {
+            connectionId,
+            error: e instanceof Error ? e.message : String(e),
+          })
+        );
+      }
+    }
+  } catch (err) {
+    // Release the syncing claim so a retry can re-run - guarded so it can't clobber a
+    // credential_error that getValidConnectionDriveAccessToken set underneath us, nor a claim this
+    // run already lost. Carry the failure onto `lastError`: the release heals the status back to
+    // 'connected' and stamps lastPolledAt, so without this a deterministically-broken connection
+    // reads healthy and freshly-polled with no operator-visible sign that every sync is dying.
+    if (ingestClaimToken && connectionId) {
+      const released = await orgGoogleDriveConnectionRepository
+        .releaseSyncClaim(connectionId, ingestClaimToken, err instanceof Error ? err.message : String(err))
+        .catch(e => {
+          logger.error(`[driveLakeIngest] failed to release sync claim: ${e instanceof Error ? e.message : String(e)}`);
+          return undefined;
+        });
+      // null (rather than undefined) is the CAS losing: the claim moved on while this run was failing,
+      // so both the release and the lastError belong to a run that no longer owns the connection.
+      // Worth a line either way - it separates "released" from "someone took it" in the logs.
+      if (released === null) {
+        logger.warn('[driveLakeIngest] claim was taken away before the failure release; left the new owner alone', {
+          connectionId,
+        });
+      }
+    }
+    if (err instanceof ZodError || err instanceof SyntaxError) {
+      logger.warn(`Skipping drive-lake-ingest message: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    throw err; // DB / network / Drive - let SQS retry, then DLQ.
+  }
+});

@@ -1,0 +1,15 @@
+{
+  "models": [
+    {
+      "name": "models/gemini-4-omni-preview",
+      "displayName": "Gemini 4 Omni Preview",
+      "inputTokenLimit": 4194304,
+      "outputTokenLimit": 131072,
+      "supportedGenerationMethods": ["generateContent", "holographicGenerateContent", "countTokens"],
+      "temperature": 1,
+      "topP": 0.95,
+      "thinking": true,
+      "reasoningMode": "continuous"
+    }
+  ]
+}

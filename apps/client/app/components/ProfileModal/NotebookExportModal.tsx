@@ -1,0 +1,442 @@
+import React, { useState } from 'react';
+import {
+  Modal,
+  ModalDialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
+  Stack,
+  FormControl,
+  FormLabel,
+  Switch,
+  Input,
+  Typography,
+  Alert,
+  LinearProgress,
+  Box,
+  Select,
+  Option,
+} from '@mui/joy';
+import { CloudDownload } from '@mui/icons-material';
+import { toast } from 'sonner';
+import { ContextHelpButton } from '@client/app/components/help';
+import { api } from '@client/app/contexts/ApiContext';
+import {
+  notebooksToExcel,
+  notebooksToDocx,
+  notebooksToMarkdown,
+  downloadBlob,
+  BulkExportData,
+} from '@client/app/utils/bulkNotebookExport';
+import { openInNewTab } from '@client/app/utils/externalLinks';
+
+type ExportFormat = 'json' | 'excel' | 'word' | 'markdown';
+
+interface NotebookExportModalProps {
+  open: boolean;
+  onClose: () => void;
+}
+
+interface ExportOptions {
+  includeKnowledge: boolean;
+  includeArtifacts: boolean;
+  includeTools: boolean;
+  includeAgents: boolean;
+  anonymize: boolean;
+  includeMetadata: boolean;
+  includeImages: boolean;
+  maxFileSize: number;
+  fromDate?: string;
+  toDate?: string;
+  format: ExportFormat;
+}
+
+/**
+ * Resolve the calendar date an `<input type="date">` yields to an instant at the edge of that day
+ * in the viewer's own zone. A bare "2026-01-15" carries no offset, so whoever resolves it picks the
+ * zone; doing it here is the only place the user's actual zone is known. Omitting the `Z` is what
+ * makes Date parse the literal as local rather than UTC.
+ */
+const localDayBoundary = (value: string, edge: 'start' | 'end'): string | undefined => {
+  if (!value) return undefined;
+  const time = edge === 'start' ? '00:00:00.000' : '23:59:59.999';
+  const at = new Date(`${value}T${time}`);
+  return Number.isNaN(at.getTime()) ? undefined : at.toISOString();
+};
+
+const SIZE_MB = { default: 10, min: 1, max: 100 } as const;
+
+/**
+ * Resolve the size box's text to the megabytes the request carries. A box that holds no usable
+ * number falls back to the default rather than keeping whatever last parsed: backspacing "10" yields
+ * "1" before "", so a guard that only skips the unparseable step submits 1MB while the box shows
+ * nothing. `Number` rather than `parseInt`, which reads "1e3" as 1 instead of 1000.
+ */
+const resolveSizeMb = (text: string): number => {
+  const mb = Number(text);
+  if (!text.trim() || !Number.isFinite(mb)) return SIZE_MB.default;
+  return Math.min(Math.max(Math.floor(mb), SIZE_MB.min), SIZE_MB.max);
+};
+
+const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose }) => {
+  const [options, setOptions] = useState<ExportOptions>({
+    includeKnowledge: true,
+    includeArtifacts: true,
+    includeTools: true,
+    includeAgents: true,
+    anonymize: false,
+    includeMetadata: true,
+    includeImages: true,
+    maxFileSize: SIZE_MB.default * 1024 * 1024,
+    format: 'json',
+  });
+
+  // The date and size inputs display raw text while `options` holds the submitted value. Without
+  // that split, a value the input can show but the request cannot carry (an empty size box, a
+  // local calendar date) has nowhere to live, and the field becomes uneditable.
+  const [drafts, setDrafts] = useState({
+    fromDate: '',
+    toDate: '',
+    maxFileSizeMb: String(SIZE_MB.default),
+  });
+
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportResult, setExportResult] = useState<any>(null);
+
+  const handleExport = async () => {
+    try {
+      setIsExporting(true);
+      setExportResult(null);
+
+      const response = await api.post('/api/notebooks/export', options);
+
+      if (response.data.success) {
+        setExportResult(response.data.data);
+        toast.success('Notebooks exported successfully!');
+      } else {
+        throw new Error(response.data.message || 'Export failed');
+      }
+    } catch (error: any) {
+      console.error('Export error:', error);
+      // Most specific first. axios's own error.message is "Request failed with status code 404",
+      // and a ZodError's message is the generic "Invalid request body" - in both cases the useful
+      // text is further in. `error` is the shared errorHandler envelope, the rest this route's own.
+      const data = error?.response?.data;
+      const fieldErrors: string | undefined = data?.errors
+        ?.map((e: { field: string; message: string }) => `${e.field}: ${e.message}`)
+        .join(', ');
+      toast.error(fieldErrors || data?.error || data?.message || error.message || 'Failed to export notebooks');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const [isConverting, setIsConverting] = useState(false);
+
+  const handleDownload = async () => {
+    if (!exportResult?.downloadUrl) return;
+
+    if (options.format === 'json') {
+      // Direct download for JSON
+      openInNewTab(exportResult.downloadUrl);
+      return;
+    }
+
+    // For other formats, fetch JSON and convert client-side
+    try {
+      setIsConverting(true);
+      toast.info(`Converting to ${options.format.toUpperCase()} format...`);
+
+      const response = await fetch(exportResult.downloadUrl);
+      if (!response.ok) throw new Error('Failed to fetch export data');
+      const data: BulkExportData = await response.json();
+
+      const dateStr = new Date().toISOString().split('T')[0];
+      const baseFilename = `notebooks-export-${dateStr}`;
+
+      switch (options.format) {
+        case 'excel': {
+          const blob = await notebooksToExcel(data);
+          downloadBlob(blob, `${baseFilename}.xlsx`);
+          toast.success('Excel file downloaded!');
+          break;
+        }
+        case 'word': {
+          const blob = await notebooksToDocx(data);
+          downloadBlob(blob, `${baseFilename}.docx`);
+          toast.success('Word document downloaded!');
+          break;
+        }
+        case 'markdown': {
+          const markdown = notebooksToMarkdown(data);
+          const blob = new Blob([markdown], { type: 'text/markdown' });
+          downloadBlob(blob, `${baseFilename}.md`);
+          toast.success('Markdown file downloaded!');
+          break;
+        }
+      }
+    } catch (error) {
+      console.error('Conversion error:', error);
+      toast.error('Failed to convert export data');
+    } finally {
+      setIsConverting(false);
+    }
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  const updateOption = (key: keyof ExportOptions, value: any) => {
+    setOptions(prev => ({ ...prev, [key]: value }));
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} className="notebook-export-modal-root">
+      <ModalDialog
+        size="md"
+        sx={{ maxWidth: 600 }}
+        className="notebook-export-modal-dialog"
+        data-testid="notebook-export-modal"
+      >
+        <DialogTitle className="notebook-export-modal-title">
+          <Box display="flex" alignItems="center" gap={1}>
+            <CloudDownload sx={{ mr: 1 }} />
+            Export Notebooks
+            <ContextHelpButton helpId="features/notebook-export-import" tooltipText="Learn about Export & Import" />
+          </Box>
+        </DialogTitle>
+
+        <DialogContent className="notebook-export-modal-content">
+          <Stack spacing={3} className="notebook-export-modal-main-stack">
+            <Typography level="body-sm" color="neutral" className="notebook-export-modal-description">
+              Export your notebooks and chat sessions in a portable format. This allows you to backup your data or move
+              it between environments.
+            </Typography>
+
+            {/* Content Options */}
+            <Stack spacing={2} className="notebook-export-modal-section">
+              <Typography level="title-sm" className="notebook-export-modal-section-title">
+                Content to Include
+              </Typography>
+
+              <Stack spacing={1} className="notebook-export-modal-options">
+                <FormControl
+                  orientation="horizontal"
+                  sx={{ justifyContent: 'space-between' }}
+                  className="notebook-export-modal-form-control"
+                >
+                  <FormLabel className="notebook-export-modal-form-label">Knowledge Files</FormLabel>
+                  <Switch
+                    className="notebook-export-modal-switch"
+                    slotProps={{ input: { 'data-testid': 'notebook-export-knowledge-switch' } }}
+                    checked={options.includeKnowledge}
+                    onChange={e => updateOption('includeKnowledge', e.target.checked)}
+                  />
+                </FormControl>
+
+                <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
+                  <FormLabel>Artifacts</FormLabel>
+                  <Switch
+                    slotProps={{ input: { 'data-testid': 'notebook-export-artifacts-switch' } }}
+                    checked={options.includeArtifacts}
+                    onChange={e => updateOption('includeArtifacts', e.target.checked)}
+                  />
+                </FormControl>
+
+                <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
+                  <FormLabel>Tools</FormLabel>
+                  <Switch
+                    slotProps={{ input: { 'data-testid': 'notebook-export-tools-switch' } }}
+                    checked={options.includeTools}
+                    onChange={e => updateOption('includeTools', e.target.checked)}
+                  />
+                </FormControl>
+
+                <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
+                  <FormLabel>Agents</FormLabel>
+                  <Switch
+                    slotProps={{ input: { 'data-testid': 'notebook-export-agents-switch' } }}
+                    checked={options.includeAgents}
+                    onChange={e => updateOption('includeAgents', e.target.checked)}
+                  />
+                </FormControl>
+
+                <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
+                  <FormLabel>Images</FormLabel>
+                  <Switch
+                    slotProps={{ input: { 'data-testid': 'notebook-export-images-switch' } }}
+                    checked={options.includeImages}
+                    onChange={e => updateOption('includeImages', e.target.checked)}
+                  />
+                </FormControl>
+              </Stack>
+            </Stack>
+
+            {/* Privacy Options */}
+            <Stack spacing={2}>
+              <Typography level="title-sm">Privacy & Metadata</Typography>
+
+              <Stack spacing={1}>
+                <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
+                  <FormLabel>Include Usage Metadata</FormLabel>
+                  <Switch
+                    checked={options.includeMetadata}
+                    onChange={e => updateOption('includeMetadata', e.target.checked)}
+                  />
+                </FormControl>
+
+                <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
+                  <FormLabel>Anonymize Export</FormLabel>
+                  <Switch checked={options.anonymize} onChange={e => updateOption('anonymize', e.target.checked)} />
+                </FormControl>
+              </Stack>
+            </Stack>
+
+            {/* Export Format */}
+            <FormControl>
+              <FormLabel>Export Format</FormLabel>
+              <Select
+                value={options.format}
+                onChange={(_, value) => value && updateOption('format', value)}
+                className="notebook-export-modal-format-select"
+              >
+                <Option value="json">JSON (Full Data)</Option>
+                <Option value="excel">Excel (.xlsx)</Option>
+                <Option value="word">Word (.docx)</Option>
+                <Option value="markdown">Markdown (.md)</Option>
+              </Select>
+              <Typography level="body-xs" color="neutral">
+                {options.format === 'json' && 'Complete export with all metadata - best for backup and import'}
+                {options.format === 'excel' && 'Spreadsheet format with separate sheets for notebooks and messages'}
+                {options.format === 'word' && 'Document format with formatted conversations'}
+                {options.format === 'markdown' && 'Plain text format suitable for viewing and sharing'}
+              </Typography>
+            </FormControl>
+
+            {/* File Size Limit */}
+            <FormControl>
+              <FormLabel>Maximum File Size for Embedding</FormLabel>
+              <Input
+                className="notebook-export-modal-input"
+                type="number"
+                value={drafts.maxFileSizeMb}
+                onChange={e => {
+                  const text = e.target.value;
+                  setDrafts(d => ({ ...d, maxFileSizeMb: text }));
+                  updateOption('maxFileSize', resolveSizeMb(text) * 1024 * 1024);
+                }}
+                // The box must not show a number the request does not carry: resolveSizeMb clamps,
+                // so a typed 500 would sit on screen while 100 went out.
+                onBlur={() => setDrafts(d => ({ ...d, maxFileSizeMb: String(resolveSizeMb(d.maxFileSizeMb)) }))}
+                endDecorator="MB"
+                slotProps={{
+                  input: {
+                    min: SIZE_MB.min,
+                    max: SIZE_MB.max,
+                    'data-testid': 'notebook-export-size-input',
+                  },
+                }}
+              />
+              <Typography level="body-xs" color="neutral" className="notebook-export-modal-hint">
+                Files larger than this will be referenced by URL instead of embedded in the export
+              </Typography>
+            </FormControl>
+
+            {/* Date Range */}
+            <Stack spacing={2}>
+              <Typography level="title-sm">Date Range (Optional)</Typography>
+              <Stack direction="row" spacing={2} className="notebook-export-modal-row">
+                <FormControl sx={{ flex: 1 }} className="notebook-export-modal-form-control">
+                  <FormLabel>From Date</FormLabel>
+                  <Input
+                    type="date"
+                    value={drafts.fromDate}
+                    onChange={e => {
+                      setDrafts(d => ({ ...d, fromDate: e.target.value }));
+                      updateOption('fromDate', localDayBoundary(e.target.value, 'start'));
+                    }}
+                    slotProps={{ input: { 'data-testid': 'notebook-export-from-date-input' } }}
+                  />
+                </FormControl>
+                <FormControl sx={{ flex: 1 }}>
+                  <FormLabel>To Date</FormLabel>
+                  <Input
+                    type="date"
+                    value={drafts.toDate}
+                    onChange={e => {
+                      setDrafts(d => ({ ...d, toDate: e.target.value }));
+                      updateOption('toDate', localDayBoundary(e.target.value, 'end'));
+                    }}
+                    slotProps={{ input: { 'data-testid': 'notebook-export-to-date-input' } }}
+                  />
+                </FormControl>
+              </Stack>
+            </Stack>
+
+            {/* Progress */}
+            {isExporting && (
+              <Stack spacing={1}>
+                <Typography level="body-sm">Exporting notebooks...</Typography>
+                <LinearProgress className="notebook-export-modal-progress" />
+              </Stack>
+            )}
+
+            {/* Export Result */}
+            {exportResult && (
+              <Alert color="success" className="notebook-export-modal-alert" data-testid="notebook-export-result">
+                <Stack spacing={1}>
+                  <Typography level="title-sm">Export Complete!</Typography>
+                  <Stack spacing={0.5}>
+                    <Typography level="body-sm">
+                      Exported {exportResult.notebookCount} notebooks with {exportResult.messageCount} messages
+                    </Typography>
+                    <Typography level="body-sm">File size: {formatFileSize(exportResult.fileSize)}</Typography>
+                    <Typography level="body-sm">Attachments: {exportResult.attachmentCount}</Typography>
+                  </Stack>
+                  {exportResult.downloadUrl && (
+                    <Button
+                      className="notebook-export-modal-export-button"
+                      data-testid="notebook-export-download-btn"
+                      size="sm"
+                      startDecorator={!isConverting ? <CloudDownload /> : undefined}
+                      onClick={handleDownload}
+                      loading={isConverting}
+                      disabled={isConverting}
+                    >
+                      {isConverting ? 'Converting...' : 'Download Export File'}
+                    </Button>
+                  )}
+                </Stack>
+              </Alert>
+            )}
+          </Stack>
+        </DialogContent>
+
+        <DialogActions className="notebook-export-modal-actions">
+          <Button variant="plain" onClick={onClose} className="notebook-export-modal-close-button">
+            Close
+          </Button>
+          <Button
+            variant="solid"
+            color="primary"
+            data-testid="notebook-export-submit-btn"
+            onClick={handleExport}
+            loading={isExporting}
+            disabled={isExporting}
+            startDecorator={!isExporting ? <CloudDownload /> : undefined}
+          >
+            {isExporting ? 'Exporting...' : 'Export Notebooks'}
+          </Button>
+        </DialogActions>
+      </ModalDialog>
+    </Modal>
+  );
+};
+
+export default NotebookExportModal;

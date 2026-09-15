@@ -1,0 +1,33 @@
+import type { Request, Response } from 'express';
+import { baseApi } from '@server/middlewares/baseApi';
+import { ForbiddenError } from '@server/utils/errors';
+import { resolveStage } from '@server/security/resolveStage';
+import { getWafLogsInsightsOverview } from '@server/security/wafLogsInsights';
+import { parseRangeParam } from '@server/security/wafApiHelpers';
+
+const handler = baseApi<Request, Response>().get(async (req: Request, res: Response) => {
+  if (!req.user?.isAdmin) {
+    throw new ForbiddenError('Admin access required');
+  }
+
+  const stage = resolveStage();
+
+  const { range, error } = parseRangeParam(req);
+  if (!range) {
+    return res.status(400).json({ error });
+  }
+
+  // Debug mode is gated to non-production to prevent leaking internal metadata.
+  const debug = stage !== 'production' && req.query.debug === 'true';
+
+  const overview = await getWafLogsInsightsOverview({ stage, range, debug });
+  return res.status(200).json(overview);
+});
+
+export const config = {
+  api: {
+    externalResolver: true,
+  },
+};
+
+export default handler;

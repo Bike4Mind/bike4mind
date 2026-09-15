@@ -1,0 +1,73 @@
+# Cursor Rules for Bike4Mind/Lumina5 Project
+
+## 🚫 NEVER RUN SERVERS OR CLIENTS
+- Do NOT run `npx sst dev`, `pnpm dev`, `npm run dev`, or any server/client commands
+- Do NOT use `run_terminal_cmd` to start development servers
+- The user intentionally runs these from their own terminals to keep track of which stage is which
+- Only provide code changes, configuration updates, and debugging assistance
+
+## 🎯 DEVELOPMENT WORKFLOW
+- Focus on code changes, bug fixes, and feature implementation
+- Help with configuration files (sst.config.ts, package.json, etc.)
+- Assist with debugging and troubleshooting
+- Provide guidance on parallel development with different stages
+- Help with AWS/SST configuration and deployment issues
+
+## 🔧 ALLOWED TERMINAL COMMANDS
+- File operations (read, edit, search)
+- Git operations (status, log, etc.)
+- Package management (install, update)
+- Build processes (when explicitly requested)
+- Testing commands
+- Configuration validation
+- Code analysis and linting
+
+## 📁 PROJECT STRUCTURE AWARENESS
+- This is a Bike4Mind/Lumina5 project with SST infrastructure
+- Multiple parallel development stages are supported (lumina5-north, lumina5-west, etc.)
+- User has custom zsh functions: `b4mdev <stage>`, `b4mpreview <stage>`
+- Respect the user's stage management system
+
+## 🚀 STAGE MANAGEMENT
+- User manages stages manually: `b4mdev north`, `b4mdev west`, etc.
+- Each stage creates separate AWS resources
+- User runs servers in different terminals to avoid confusion
+- Do NOT interfere with this workflow
+
+## 💡 BEST PRACTICES
+- Always ask before making any changes that could affect running services
+- Provide clear explanations of what changes will do
+- Help with configuration but let user handle execution
+- Respect the user's terminal management preferences
+- Separation of Concerns. Put code to its proper package or app directory.
+- DRY (Do not Repeat Yourself) principle. Avoid duplicate code.
+- SOLID principle. Make the code more maintainable, flexible and scalable.
+
+## 🧪 TESTING GUIDELINES - data-testid REQUIRED
+### ⚠️ CRITICAL: ALWAYS ADD data-testid TO ALL INTERACTIVE UI COMPONENTS
+- **MANDATORY**: Every Button, MenuItem, Input, IconButton, Checkbox, Link, and any interactive element MUST include a `data-testid` attribute
+- **When to add**: Include `data-testid` when you first create the component, not later
+- **DO NOT** use CSS class names for test element selection
+- **Format**: `data-testid="component-action-element"` 
+
+### Why data-testid is required:
+- **Stability**: CSS classes can change due to styling updates or framework changes (MUI/Emotion generates random class names)
+- **Intent**: `data-testid` clearly indicates the element is intended for testing
+- **Separation of concerns**: Keeps test selectors separate from styling concerns
+- **Best practice**: Recommended by React Testing Library and widely adopted in the testing community
+
+### Examples of CORRECT usage:
+✅ `<Button data-testid="submit-btn" onClick={handleSubmit}>Submit</Button>`
+✅ `<MenuItem data-testid="delete-item" onClick={handleDelete}>Delete</MenuItem>`
+✅ `<Input data-testid="username-input" value={username} onChange={handleChange} />`
+✅ `<IconButton data-testid="close-modal-btn" onClick={onClose}><CloseIcon /></IconButton>`
+✅ `<Checkbox data-testid="accept-terms-checkbox" checked={accepted} />`
+
+### Examples of WRONG usage:
+❌ `<Button onClick={handleSubmit}>Submit</Button>` // Missing data-testid!
+❌ `<Button className="submit-button">Submit</Button>` // Don't rely on className for tests
+
+### Naming Convention:
+- Format: `component-action-element`
+- Examples: `"modal-confirm-btn"`, `"project-name-input"`, `"sidebar-toggle-btn"`
+- Be descriptive and specific to the element's purpose

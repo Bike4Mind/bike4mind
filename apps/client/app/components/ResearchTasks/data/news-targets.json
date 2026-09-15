@@ -1,0 +1,301 @@
+{
+  "category": "news",
+  "title": "Real News",
+  "description": "Global business news, geopolitics, markets, and policy intelligence",
+  "targets": [
+    {
+      "company": "Financial Times",
+      "ticker": "FT",
+      "url": "https://www.ft.com/world",
+      "category": "finance"
+    },
+    {
+      "company": "The Economist",
+      "ticker": "ECONOMIST",
+      "url": "https://www.economist.com/sections/business-finance",
+      "category": "finance"
+    },
+    {
+      "company": "Wall Street Journal",
+      "ticker": "WSJ",
+      "url": "https://www.wsj.com/news/business",
+      "category": "finance"
+    },
+    {
+      "company": "Bloomberg",
+      "ticker": "BLOOMBERG",
+      "url": "https://www.bloomberg.com/markets",
+      "category": "finance"
+    },
+    {
+      "company": "Reuters",
+      "ticker": "REUTERS",
+      "url": "https://www.reuters.com/business/",
+      "category": "finance"
+    },
+    {
+      "company": "Nikkei Asia",
+      "ticker": "NIKKEI",
+      "url": "https://asia.nikkei.com/",
+      "category": "finance"
+    },
+    {
+      "company": "Handelsblatt",
+      "ticker": "HANDELSBLATT",
+      "url": "https://www.handelsblatt.com/english/",
+      "category": "finance"
+    },
+    {
+      "company": "The Information",
+      "ticker": "THEINFORMATION",
+      "url": "https://www.theinformation.com/",
+      "category": "tech"
+    },
+    {
+      "company": "Semafor",
+      "ticker": "SEMAFOR",
+      "url": "https://www.semafor.com/business",
+      "category": "finance"
+    },
+    {
+      "company": "Axios Pro",
+      "ticker": "AXIOS",
+      "url": "https://www.axios.com/pro/",
+      "category": "finance"
+    },
+    {
+      "company": "Politico",
+      "ticker": "POLITICO",
+      "url": "https://www.politico.com/news",
+      "category": "finance"
+    },
+    {
+      "company": "Foreign Affairs",
+      "ticker": "FOREIGNAFFAIRS",
+      "url": "https://www.foreignaffairs.com/",
+      "category": "finance"
+    },
+    {
+      "company": "Stratfor (RANE)",
+      "ticker": "STRATFOR",
+      "url": "https://www.ranenetwork.com/stratfor",
+      "category": "finance"
+    },
+    {
+      "company": "Project Syndicate",
+      "ticker": "PROJECTSYNDICATE",
+      "url": "https://www.project-syndicate.org/",
+      "category": "finance"
+    },
+    {
+      "company": "Al Jazeera Business",
+      "ticker": "ALJAZEERA",
+      "url": "https://www.aljazeera.com/economy/",
+      "category": "finance"
+    },
+    {
+      "company": "Harvard Business Review",
+      "ticker": "HBR",
+      "url": "https://hbr.org/",
+      "category": "finance"
+    },
+    {
+      "company": "Barron's",
+      "ticker": "BARRONS",
+      "url": "https://www.barrons.com/",
+      "category": "finance"
+    },
+    {
+      "company": "The Times (London) Business",
+      "ticker": "TIMES",
+      "url": "https://www.thetimes.co.uk/business",
+      "category": "finance"
+    },
+    {
+      "company": "CNBC",
+      "ticker": "CNBC",
+      "url": "https://www.cnbc.com/world/?region=world",
+      "category": "finance"
+    },
+    {
+      "company": "Yahoo! Finance",
+      "ticker": "YAHOO",
+      "url": "https://finance.yahoo.com/",
+      "category": "finance"
+    },
+    {
+      "company": "Morning Brew",
+      "ticker": "MORNINGBREW",
+      "url": "https://www.morningbrew.com/daily",
+      "category": "finance"
+    },
+    {
+      "company": "Fortune",
+      "ticker": "FORTUNE",
+      "url": "https://fortune.com/",
+      "category": "finance"
+    },
+    {
+      "company": "MIT Technology Review",
+      "ticker": "MITTR",
+      "url": "https://www.technologyreview.com/",
+      "category": "tech"
+    },
+    {
+      "company": "Noahpinion (Noah Smith)",
+      "ticker": "NOAHPINION",
+      "url": "https://www.noahpinion.blog/",
+      "category": "finance"
+    },
+    {
+      "company": "The Diff (By Byrne Hobart)",
+      "ticker": "THEDIFF",
+      "url": "https://www.thediff.co/",
+      "category": "finance"
+    },
+    {
+      "company": "The Generalist",
+      "ticker": "GENERALIST",
+      "url": "https://www.generalist.com/briefings",
+      "category": "tech"
+    },
+    {
+      "company": "ChinaTalk",
+      "ticker": "CHINATALK",
+      "url": "https://www.chinatalk.media/",
+      "category": "finance"
+    },
+    {
+      "company": "Asia Times",
+      "ticker": "ASIATIMES",
+      "url": "https://asiatimes.com/category/business/",
+      "category": "finance"
+    },
+    {
+      "company": "The Diplomat",
+      "ticker": "DIPLOMAT",
+      "url": "https://thediplomat.com/",
+      "category": "finance"
+    },
+    {
+      "company": "European Council on Foreign Relations",
+      "ticker": "ECFR",
+      "url": "https://ecfr.eu/",
+      "category": "finance"
+    },
+    {
+      "company": "Brookings Institution",
+      "ticker": "BROOKINGS",
+      "url": "https://www.brookings.edu/topic/global-economy/",
+      "category": "finance"
+    },
+    {
+      "company": "McKinsey Insights",
+      "ticker": "MCKINSEY",
+      "url": "https://www.mckinsey.com/featured-insights",
+      "category": "finance"
+    },
+    {
+      "company": "Visual Capitalist",
+      "ticker": "VISUALCAPITALIST",
+      "url": "https://www.visualcapitalist.com/",
+      "category": "finance"
+    },
+    {
+      "company": "OECD Insights",
+      "ticker": "OECD",
+      "url": "https://oecdinsights.org/",
+      "category": "finance"
+    },
+    {
+      "company": "World Bank Blogs",
+      "ticker": "WORLDBANK",
+      "url": "https://blogs.worldbank.org/",
+      "category": "finance"
+    },
+    {
+      "company": "IMF Blog",
+      "ticker": "IMF",
+      "url": "https://www.imf.org/en/Blogs",
+      "category": "finance"
+    },
+    {
+      "company": "S&P Global",
+      "ticker": "SPGI",
+      "url": "https://www.spglobal.com/en/research-insights/",
+      "category": "finance"
+    },
+    {
+      "company": "DealBook (NYT)",
+      "ticker": "DEALBOOK",
+      "url": "https://www.nytimes.com/section/business/dealbook",
+      "category": "finance"
+    },
+    {
+      "company": "PE Hub",
+      "ticker": "PEHUB",
+      "url": "https://www.pehub.com/",
+      "category": "finance"
+    },
+    {
+      "company": "PitchBook News",
+      "ticker": "PITCHBOOK",
+      "url": "https://pitchbook.com/news",
+      "category": "finance"
+    },
+    {
+      "company": "Crunchbase News",
+      "ticker": "CRUNCHBASE",
+      "url": "https://news.crunchbase.com/",
+      "category": "tech"
+    },
+    {
+      "company": "CB Insights Research",
+      "ticker": "CBINSIGHTS",
+      "url": "https://www.cbinsights.com/research",
+      "category": "tech"
+    },
+    {
+      "company": "Quartz",
+      "ticker": "QUARTZ",
+      "url": "https://qz.com/",
+      "category": "finance"
+    },
+    {
+      "company": "TechCrunch",
+      "ticker": "TECHCRUNCH",
+      "url": "https://techcrunch.com/",
+      "category": "tech"
+    },
+    {
+      "company": "The Verge Policy",
+      "ticker": "VERGE",
+      "url": "https://www.theverge.com/policy",
+      "category": "tech"
+    },
+    {
+      "company": "Lawfare Blog",
+      "ticker": "LAWFARE",
+      "url": "https://www.lawfaremedia.org/",
+      "category": "finance"
+    },
+    {
+      "company": "Center for Strategic and International Studies (CSIS)",
+      "ticker": "CSIS",
+      "url": "https://www.csis.org/analysis",
+      "category": "finance"
+    },
+    {
+      "company": "Council on Foreign Relations (CFR)",
+      "ticker": "CFR",
+      "url": "https://www.cfr.org/",
+      "category": "finance"
+    },
+    {
+      "company": "Politico EU",
+      "ticker": "POLITICOEU",
+      "url": "https://www.politico.eu/",
+      "category": "finance"
+    }
+  ]
+} 

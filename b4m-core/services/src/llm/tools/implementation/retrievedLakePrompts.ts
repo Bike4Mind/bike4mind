@@ -1,0 +1,78 @@
+import type { ToolContext } from '../base/types';
+import { getAccessibleDataLakePrompts, grantedLakeIdsUsedFor } from '../../../dataLakeService/getDataLakePrompts';
+import { renderDataLakePromptSection } from '../../../dataLakeService/renderDataLakePromptBlock';
+
+/**
+ * Retrieval-scoped lake-prompt injection for the model-driven knowledge tools (#1108) - the
+ * analogue of the forced path's scoped injection in KnowledgeRetrievalFeature. Prepends the
+ * operating instructions of the trusted lakes whose files this tool call actually returned,
+ * identified by the `datalake:` provenance tags on those files.
+ *
+ * `injectedLakeTags` is a per-TOOL set shared across that tool's calls in a completion: only lakes
+ * NOT already injected by this tool contribute, so repeated calls to the SAME tool never restate a
+ * lake. It is deliberately per-tool, not per-completion: search and retrieve each own their own set,
+ * so a lake used by both within one turn is injected once per tool (idempotent, ~a few extra tokens).
+ * The block rides INSIDE a tool RESULT, which is model-facing content, so it MUST carry the
+ * renderDataLakePromptSection defenses (org-deference header + block-marker defang) - that is what
+ * keeps a lake owner from forging an organization block. Fail-safe: any RESOLUTION failure (and the
+ * agent-scoped case, which passes no tags) returns the tool result unchanged; the telemetry write is
+ * separately guarded, so recording can never drop the injection it records.
+ */
+export async function prependRetrievedLakePrompts(
+  context: ToolContext,
+  resultText: string,
+  datalakeTags: string[],
+  injectedLakeTags: Set<string>
+): Promise<string> {
+  try {
+    const fresh = datalakeTags.filter(tag => !injectedLakeTags.has(tag));
+    if (fresh.length === 0) return resultText;
+    // Mark every fresh RETRIEVED tag injected up front - including lakes that resolve to no prompt
+    // (untrusted, or empty systemPrompt) - so a later call over the same lake is not re-resolved.
+    for (const tag of fresh) injectedLakeTags.add(tag);
+
+    const prompts = await getAccessibleDataLakePrompts(context, {
+      restrictToDatalakeTags: fresh,
+      preauthorizedLakeIds: context.sessionPreauthorizedLakeIds,
+    });
+    const injectedLakePromptIds = prompts.map(p => p.id);
+    const preauthorizedSet = new Set(context.sessionPreauthorizedLakeIds ?? []);
+    const preauthorizedLakeIdsUsed = injectedLakePromptIds.filter(id => preauthorizedSet.has(id));
+    // Same `context` the resolver just got, so the grant reach is a per-turn memo hit rather than a
+    // second read (see grantedLakeIdsUsedFor). Never throws, so it cannot reach the outer catch and
+    // drop the injection.
+    const grantedLakeIdsUsed = await grantedLakeIdsUsedFor(context, injectedLakePromptIds);
+    // Recorded whenever this injection site ran, even if nothing qualified - see the field's own
+    // comment in promptMeta.ts. Merges onto whatever the tool's own retrieval outcome write already
+    // set (applyQuestStatusChanges / mergeRetrievalSummary), not a replacement. Its own try/catch:
+    // the fresh tags are marked injected above, so a recording failure reaching the outer catch
+    // would drop this turn's section with no way to re-resolve it. It stays ABOVE the render so the
+    // ran-but-nothing-qualified case is still recorded as present-and-empty.
+    try {
+      await context.statusUpdate({
+        promptMeta: {
+          retrieval: {
+            attempted: true,
+            surfaces: [],
+            dataLakeTags: [],
+            injectedLakePromptIds,
+            ...(preauthorizedLakeIdsUsed.length ? { preauthorizedLakeIdsUsed } : {}),
+            ...(grantedLakeIdsUsed.length ? { grantedLakeIdsUsed } : {}),
+          },
+        },
+      });
+    } catch (err) {
+      context.logger.warn('\u{1F4CB} KB tool: lake-prompt telemetry write failed; injecting anyway:', err);
+    }
+    const section = renderDataLakePromptSection(prompts);
+    if (!section) return resultText;
+
+    context.logger.log(
+      `📋 KB tool: injecting ${prompts.length} scoped data-lake prompt(s): ${prompts.map(p => p.name).join(', ')}`
+    );
+    return `${section}\n\n${resultText}`;
+  } catch (err) {
+    context.logger.warn('📋 KB tool: lake-prompt resolution failed; injecting no lake prompt:', err);
+    return resultText;
+  }
+}

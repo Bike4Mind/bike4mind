@@ -1,0 +1,370 @@
+import mongoose, { Schema, model, Document, Model } from 'mongoose';
+import { BaseArtifact, ArtifactTypeSchema } from '@bike4mind/common';
+import BaseRepository from '@bike4mind/db-core';
+
+// Mongoose document interface - omit 'id' from BaseArtifact to avoid conflict with Document._id
+export interface IArtifactDocument extends Omit<BaseArtifact, 'id'>, Document {
+  id: string; // Custom id field
+  softDelete(): Promise<IArtifactDocument>;
+  restore(): Promise<IArtifactDocument>;
+}
+
+// Permissions sub-schema
+const ArtifactPermissionsSchema = new Schema(
+  {
+    canRead: [{ type: String, required: true }],
+    canWrite: [{ type: String, required: true }],
+    canDelete: [{ type: String, required: true }],
+    isPublic: { type: Boolean, default: false },
+    inheritFromProject: { type: Boolean, default: true },
+  },
+  { _id: false }
+);
+
+// Main Artifact schema
+const ArtifactSchema = new Schema(
+  {
+    // Core identification
+    id: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+    },
+    type: {
+      type: String,
+      required: true,
+      enum: ArtifactTypeSchema.options,
+    },
+    title: {
+      type: String,
+      required: true,
+      maxlength: 255,
+      index: true, // For search
+    },
+    description: {
+      type: String,
+      maxlength: 1000,
+    },
+
+    // Versioning
+    version: {
+      type: Number,
+      required: true,
+      default: 1,
+      min: 1,
+    },
+    versionTag: {
+      type: String,
+      maxlength: 100,
+    },
+    currentVersionId: {
+      type: Schema.Types.ObjectId,
+      ref: 'ArtifactVersion',
+    },
+    parentVersionId: {
+      type: Schema.Types.ObjectId,
+      ref: 'ArtifactVersion',
+    },
+
+    // Timestamps
+    createdAt: {
+      type: Date,
+      default: Date.now,
+      index: true,
+    },
+    updatedAt: {
+      type: Date,
+      default: Date.now,
+      index: true,
+    },
+    publishedAt: {
+      type: Date,
+      index: true,
+    },
+    deletedAt: {
+      type: Date,
+      // Index defined separately below to avoid duplication warning
+    },
+
+    // Ownership & Access
+    userId: {
+      type: String,
+      required: true,
+    },
+    projectId: {
+      type: String,
+    },
+    organizationId: {
+      type: String,
+    },
+    visibility: {
+      type: String,
+      enum: ['private', 'project', 'organization', 'public'],
+      default: 'private',
+      index: true,
+    },
+    permissions: {
+      type: ArtifactPermissionsSchema,
+      required: true,
+    },
+
+    // Relationships
+    sourceQuestId: {
+      type: String,
+    },
+    sessionId: {
+      type: String,
+    },
+    parentArtifactId: {
+      type: String,
+      index: true,
+    },
+
+    // Status
+    status: {
+      type: String,
+      enum: ['draft', 'review', 'published', 'archived', 'deleted'],
+      default: 'draft',
+      index: true,
+    },
+    tags: [
+      {
+        type: String,
+        maxlength: 50,
+      },
+    ],
+
+    // Content metadata
+    contentId: {
+      type: Schema.Types.ObjectId,
+      ref: 'ArtifactContent',
+      required: true,
+    },
+    contentHash: {
+      type: String,
+      required: true,
+      // Index defined separately below to avoid duplication warning
+    },
+    contentSize: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+
+    // Artifact-specific metadata (stored as flexible object)
+    metadata: {
+      type: Schema.Types.Mixed,
+      default: {},
+    },
+  },
+  {
+    timestamps: true, // Automatically manages createdAt and updatedAt
+    collection: 'artifacts',
+    toJSON: {
+      virtuals: true,
+    },
+    toObject: {
+      virtuals: true,
+    },
+  }
+);
+
+// Compound indexes for common queries
+ArtifactSchema.index({ userId: 1, status: 1 }); // User's artifacts by status
+ArtifactSchema.index({ userId: 1, type: 1 }); // User's artifacts by type
+ArtifactSchema.index({ projectId: 1, status: 1 }); // Project artifacts by status
+ArtifactSchema.index({ organizationId: 1, visibility: 1 }); // Org artifacts by visibility
+ArtifactSchema.index({ type: 1, status: 1, visibility: 1 }); // Public artifacts by type
+ArtifactSchema.index({ sessionId: 1, createdAt: -1 }); // Session artifacts chronologically
+ArtifactSchema.index({ tags: 1, status: 1 }); // Tag-based discovery
+ArtifactSchema.index({ createdAt: -1, status: 1 }); // Recent artifacts
+ArtifactSchema.index({ updatedAt: -1, status: 1 }); // Recently updated
+ArtifactSchema.index({ contentHash: 1 }); // Content deduplication
+ArtifactSchema.index({ deletedAt: 1 }); // Soft delete queries
+// Artifacts produced by one agent run, looked up by the Quest that run wrote.
+// Read by QuestMaster v5 to attach a run's artifacts to its node, and by
+// persistAgentArtifacts' quest-level idempotency gate. Moved off the field's
+// `index: true` (see CLAUDE.md) - declaring it in both places is what produced
+// a duplicate-index warning at model load.
+ArtifactSchema.index({ sourceQuestId: 1 });
+
+// Text search index for title and description
+ArtifactSchema.index(
+  {
+    title: 'text',
+    description: 'text',
+  },
+  {
+    weights: {
+      title: 10,
+      description: 5,
+    },
+    name: 'artifact_text_search',
+  }
+);
+
+// Pre-save middleware to update timestamps
+ArtifactSchema.pre('save', function (next) {
+  if (this.isModified() && !this.isNew) {
+    this.updatedAt = new Date();
+  }
+  next();
+});
+
+// Pre-update middleware
+ArtifactSchema.pre(['updateOne', 'findOneAndUpdate'], function (next) {
+  this.set({ updatedAt: new Date() });
+  next();
+});
+
+// Virtual for checking if artifact is deleted
+ArtifactSchema.virtual('isDeleted').get(function () {
+  return this.deletedAt != null;
+});
+
+// Virtual for checking if artifact is public
+ArtifactSchema.virtual('isPublic').get(function () {
+  // Why `permissions` can be undefined: see isPublicArtifact in b4m-core/common artifactHelpers.
+  // Virtuals run on every toObject()/toJSON(), so dereferencing it unguarded turned one such row
+  // into a 500 for the whole notebook export rather than a missing field on one artifact.
+  // `=== true`, not a bare `?.`: the virtual has always returned a boolean, and `undefined`
+  // would serialize as a MISSING key rather than `false` for a row with no permissions.
+  return this.visibility === 'public' || this.permissions?.isPublic === true;
+});
+
+// Method to soft delete
+ArtifactSchema.methods.softDelete = function () {
+  this.deletedAt = new Date();
+  this.status = 'deleted';
+  return this.save();
+};
+
+// Method to restore from soft delete
+ArtifactSchema.methods.restore = function () {
+  this.deletedAt = undefined;
+  if (this.status === 'deleted') {
+    this.status = 'draft';
+  }
+  return this.save();
+};
+
+export const Artifact =
+  (mongoose.models.Artifact as mongoose.Model<IArtifactDocument>) ||
+  model<IArtifactDocument>('Artifact', ArtifactSchema);
+
+// Repository implementation
+export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
+  // Add shareable property required by interface
+  public shareable: any = {}; // Placeholder for IShareableStaticMethods
+
+  constructor(model: Model<IArtifactDocument>) {
+    super(model);
+  }
+
+  // Override update to key on the custom `id` field, not MongoDB `_id`. Last-writer-wins like
+  // BaseRepository.update; no guarded variant is exposed (no artifact caller opts in).
+  async update(data: Partial<IArtifactDocument>, options?: Record<string, unknown>): Promise<IArtifactDocument | null> {
+    if (!data.id) {
+      throw new Error('id is required');
+    }
+    return this._plainUpdate<IArtifactDocument>({ id: data.id }, data as Record<string, unknown>, options);
+  }
+
+  // Implement artifact-specific methods
+  async findByType(type: string, filter: Record<string, unknown> = {}) {
+    return this.find({ ...filter, type, deletedAt: null });
+  }
+
+  async findByUser(userId: string, filter: Record<string, unknown> = {}) {
+    return this.find({ ...filter, userId, deletedAt: null });
+  }
+
+  async findByProject(projectId: string, filter: Record<string, unknown> = {}) {
+    return this.find({ ...filter, projectId, deletedAt: null });
+  }
+
+  async findBySession(sessionId: string, filter: Record<string, unknown> = {}) {
+    return this.find({ ...filter, sessionId, deletedAt: null });
+  }
+
+  async findActive(filter: Record<string, unknown> = {}) {
+    return this.find({ ...filter, deletedAt: null });
+  }
+
+  async findByStatus(status: string, filter: Record<string, unknown> = {}) {
+    return this.find({ ...filter, status, deletedAt: null });
+  }
+
+  async findByVisibility(visibility: string, filter: Record<string, unknown> = {}) {
+    return this.find({ ...filter, visibility, deletedAt: null });
+  }
+
+  // Defaults to live rows only. `includeDeleted` is an explicit opt-in because this used to write
+  // `deletedAt: null` after spreading the caller's filter, which silently overrode a caller that
+  // had deliberately left it off - so a text search ignored an includeDeleted request.
+  async searchByText(searchTerm: string, filter: Record<string, unknown> = {}, includeDeleted = false) {
+    return this.find({
+      ...filter,
+      ...(includeDeleted ? {} : { deletedAt: null }),
+      $text: { $search: searchTerm },
+    });
+  }
+
+  async findDuplicatesByHash(contentHash: string) {
+    return this.find({ contentHash, deletedAt: null });
+  }
+
+  async findByUserWithAccess(userId: string, accessType: 'read' | 'write' | 'delete' = 'read') {
+    const accessField = `permissions.can${accessType.charAt(0).toUpperCase() + accessType.slice(1)}`;
+    return this.findActive({
+      $or: [{ userId }, { [accessField]: userId }, { visibility: 'public' }, { 'permissions.isPublic': true }],
+    });
+  }
+
+  async softDelete(id: string): Promise<boolean> {
+    const result = await this.update({
+      id,
+      deletedAt: new Date(),
+      status: 'deleted',
+      updatedAt: new Date(),
+    } as any);
+    return !!result;
+  }
+
+  async restore(id: string): Promise<boolean> {
+    const result = await this.update({
+      id,
+      deletedAt: null,
+      status: 'draft',
+      updatedAt: new Date(),
+    } as any);
+    return !!result;
+  }
+
+  async findDeleted(filter: Record<string, unknown> = {}) {
+    return this.find({ ...filter, deletedAt: { $ne: null } });
+  }
+
+  /**
+   * The artifacts a set of agent runs produced, keyed by the Quest each run
+   * wrote. Projected and batched: QuestMaster v5 calls this once per graph read
+   * to attach a node's artifacts, so it must not be an N+1 and must not drag
+   * `content` (which is the whole artifact body) across for a chip label.
+   */
+  async findByQuestIds(
+    questIds: string[]
+  ): Promise<Array<{ id: string; type: string; title: string; sourceQuestId: string }>> {
+    if (!questIds.length) return [];
+    return this.model
+      .find(
+        { sourceQuestId: { $in: questIds }, deletedAt: null },
+        { _id: 0, id: 1, type: 1, title: 1, sourceQuestId: 1 }
+      )
+      .sort({ createdAt: 1 })
+      .lean<Array<{ id: string; type: string; title: string; sourceQuestId: string }>>();
+  }
+}
+
+export const artifactRepository = new ArtifactRepository(Artifact);
+export default Artifact;

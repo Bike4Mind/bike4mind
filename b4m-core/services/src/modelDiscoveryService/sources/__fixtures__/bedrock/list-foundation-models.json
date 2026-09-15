@@ -1,0 +1,67 @@
+{
+  "modelSummaries": [
+    {
+      "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-4-5-20251101-v1:0",
+      "modelId": "anthropic.claude-opus-4-5-20251101-v1:0",
+      "modelName": "Claude Opus 4.5",
+      "providerName": "Anthropic",
+      "inputModalities": ["TEXT", "IMAGE"],
+      "outputModalities": ["TEXT"],
+      "responseStreamingSupported": true,
+      "customizationsSupported": [],
+      "inferenceTypesSupported": ["INFERENCE_PROFILE"],
+      "modelLifecycle": { "status": "ACTIVE", "startOfLifeTime": "2025-11-24T00:00:00.000Z" }
+    },
+    {
+      "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-haiku-20240307-v1:0",
+      "modelId": "anthropic.claude-3-haiku-20240307-v1:0",
+      "modelName": "Claude 3 Haiku",
+      "providerName": "Anthropic",
+      "inputModalities": ["TEXT", "IMAGE"],
+      "outputModalities": ["TEXT"],
+      "responseStreamingSupported": true,
+      "customizationsSupported": ["FINE_TUNING"],
+      "inferenceTypesSupported": ["ON_DEMAND"],
+      "modelLifecycle": {
+        "status": "LEGACY",
+        "startOfLifeTime": "2024-03-07T00:00:00.000Z",
+        "legacyTime": "2026-02-19T00:00:00.000Z",
+        "publicExtendedAccessTime": "2026-03-20T00:00:00.000Z",
+        "endOfLifeTime": "2026-04-20T00:00:00.000Z"
+      }
+    },
+    {
+      "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/meta.llama4-scout-17b-instruct-v1:0",
+      "modelId": "meta.llama4-scout-17b-instruct-v1:0",
+      "modelName": "Llama 4 Scout 17B Instruct",
+      "providerName": "Meta",
+      "inputModalities": ["TEXT", "IMAGE"],
+      "outputModalities": ["TEXT"],
+      "responseStreamingSupported": true,
+      "inferenceTypesSupported": ["INFERENCE_PROFILE"],
+      "modelLifecycle": { "status": "ACTIVE" }
+    },
+    {
+      "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-canvas-v1:0",
+      "modelId": "amazon.nova-canvas-v1:0",
+      "modelName": "Nova Canvas",
+      "providerName": "Amazon",
+      "inputModalities": ["TEXT", "IMAGE"],
+      "outputModalities": ["IMAGE"],
+      "responseStreamingSupported": false,
+      "inferenceTypesSupported": ["ON_DEMAND"],
+      "modelLifecycle": { "status": "ACTIVE" }
+    },
+    {
+      "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0",
+      "modelId": "amazon.titan-embed-text-v2:0",
+      "modelName": "Titan Text Embeddings V2",
+      "providerName": "Amazon",
+      "inputModalities": ["TEXT"],
+      "outputModalities": ["EMBEDDING"],
+      "responseStreamingSupported": false,
+      "inferenceTypesSupported": ["ON_DEMAND"],
+      "modelLifecycle": { "status": "ACTIVE" }
+    }
+  ]
+}

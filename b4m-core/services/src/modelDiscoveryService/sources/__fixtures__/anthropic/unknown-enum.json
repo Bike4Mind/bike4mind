@@ -1,0 +1,24 @@
+{
+  "data": [
+    {
+      "type": "model",
+      "id": "claude-opus-6",
+      "display_name": "Claude Opus 6",
+      "max_input_tokens": 2000000,
+      "max_tokens": 200000,
+      "capabilities": {
+        "image_input": { "supported": true },
+        "pdf_input": { "supported": true },
+        "structured_outputs": { "supported": true },
+        "video_input": { "supported": true },
+        "effort": { "low": { "supported": true }, "high": { "supported": true }, "ultra": { "supported": true }, "supported": true },
+        "thinking": {
+          "supported": true,
+          "types": { "adaptive": { "supported": true }, "enabled": { "supported": true }, "continuous": { "supported": true } }
+        }
+      }
+    },
+    { "type": "assistant-preset", "id": "claude-preset-1", "display_name": "Not A Model" }
+  ],
+  "has_more": false
+}

@@ -1,0 +1,174 @@
+import bcrypt from 'bcryptjs';
+import { IUserDocument, IUserPreferences, IUserRepository } from '@bike4mind/common';
+import { BadRequestError, secureParameters } from '@bike4mind/utils';
+import { z } from 'zod';
+
+export const updateUserSchema = z.object({
+  name: z.string().optional(),
+  username: z.string().optional(),
+  // email field removed - users must use the secure email change verification flow
+  // See requestEmailChange and verifyEmailChange in userService
+  password: z.string().nullable().optional(),
+  team: z.string().nullable().optional(),
+  role: z.string().nullable().optional(),
+  phone: z.string().nullable().optional(),
+  preferredLanguage: z.string().nullable().optional(),
+  preferredContact: z.string().nullable().optional(),
+  preferredVoice: z.string().nullable().optional(),
+  voiceOverrideId: z.string().nullable().optional(),
+  voiceSystemPromptOverride: z.string().nullable().optional(),
+  preferredReasoningEffort: z.enum(['auto', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh']).nullable().optional(),
+  tshirtSize: z.string().nullable().optional(),
+  geoLocation: z.string().nullable().optional(),
+  lastNotebookId: z.string().nullable().optional(),
+  // `tags` is intentionally NOT in the self-service schema: user tags feed the
+  // access-control layer (legacy tag gates + entitlement registry's tag->key
+  // passthrough), so a non-admin updating their own profile must not be able to
+  // self-grant gated products/dev bypass. Tag mutation is admin-only -
+  // see `adminUpdateUserSchema` in ./adminUpdate.ts. `secureParameters` strips
+  // any `tags` field a non-admin sends because it's no longer in this schema.
+  lastCreditsPurchasedAt: z.date().nullable().optional(),
+  systemFiles: z
+    .array(
+      z.object({
+        fileId: z.string(),
+        enabled: z.boolean(),
+      })
+    )
+    .nullable()
+    .optional(),
+  securityQuestions: z
+    .array(z.object({ question: z.string(), answer: z.string() }))
+    .nullable()
+    .optional(),
+  // `photoUrl` is intentionally NOT in the self-service schema (same reasoning as
+  // `tags` above): it is an S3 key that upload-photo.ts derives server-side and later
+  // dereferences for DELETION (storage.delete + AppFile removal). A self-set value would
+  // let a caller point it at a resource they do not own, turning their next photo upload
+  // into an arbitrary-file delete. The dedicated upload-photo endpoint is the only writer;
+  // secureParameters strips any `photoUrl` a caller sends here.
+  showCreditsUsed: z.boolean().optional(),
+  preferences: z
+    .object({
+      language: z.string().optional(),
+      favoriteTags: z.array(z.string()).optional(),
+      favoriteModelIds: z.array(z.string()).optional(),
+      fileBrowserViewMode: z.enum(['home', 'list', 'grid', 'tags']).optional(),
+      optiSessionId: z.string().nullable().optional(),
+      lastUsedTextModel: z.string().nullable().optional(),
+      lastUsedImageModel: z.string().nullable().optional(),
+      lastUsedImageEditModel: z.string().nullable().optional(),
+      showDebug: z.boolean().optional(),
+      showHelp: z.boolean().optional(),
+      maxVisibleLines: z.number().optional(),
+      autoCollapseContent: z.boolean().optional(),
+      enableAutoScroll: z.boolean().optional(),
+      scrollbarWidth: z.number().optional(),
+      experimentalFeatures: z.record(z.string(), z.boolean()).optional(),
+      rechartsDisplayMode: z.enum(['inline', 'artifact']).optional(),
+      toolsCatalogCollapsed: z.boolean().optional(),
+      // `docxTemplateFileId` is intentionally NOT here (same reasoning as `photoUrl`/`tags`):
+      // it is an AppFile id that docx-template.ts later dereferences (read + tag mutation).
+      // The dedicated docx-template POST endpoint validates ownership before setting it; a
+      // self-service write could point it at a foreign file. secureParameters strips it here.
+      contextTelemetryLevel: z.enum(['none', 'basic', 'enhanced']).optional(),
+      // coerce: the settings UI echoes this back as an ISO string from GET /users/{id},
+      // so a strict z.date() 422s on every write after the first (which mints a real Date).
+      contextTelemetryConsentedAt: z.coerce.date().optional(),
+      // Layer-2 Agent-mode preference. The Mongoose schema accepts it now
+      // (UserModel.ts) but unknown keys never reach repo.update without being
+      // listed here.
+      agentModeDefault: z.enum(['off', 'auto', 'on']).optional(),
+      showFunTools: z.boolean().optional(),
+      saveGeneratedAudio: z.boolean().optional(),
+      showSplashCards: z.boolean().optional(),
+    })
+    .nullable()
+    .optional(),
+});
+
+export type UpdateUserParameters = z.infer<typeof updateUserSchema>;
+
+export interface UpdateUserAdapters {
+  db: {
+    users: IUserRepository;
+  };
+}
+
+export function applyBaseUserUpdates(user: IUserDocument, params: UpdateUserParameters): IUserDocument {
+  // Only validate password if attempting to update it
+  if (params.password !== undefined && params.password !== null) {
+    if (!user.password) {
+      throw new BadRequestError('User does not have a password. Cannot update password for OAuth users.');
+    }
+    if (bcrypt.compareSync(params.password, user.password)) {
+      throw new BadRequestError('New password cannot be the same as the old password');
+    }
+    const hashedPassword = bcrypt.hashSync(params.password, 10);
+    params.password = hashedPassword;
+  }
+
+  return {
+    ...user,
+    ...params,
+    ...(params.preferences && { preferences: mergePreferences(user.preferences, params.preferences) }),
+    updatedAt: new Date(),
+  };
+}
+
+/**
+ * Reduce a fully-built user document to the targeted write partial: the id, a fresh
+ * updatedAt, and ONLY the fields the request actually changed. Persisting this instead
+ * of the whole built document is what stops a profile or admin save from round-tripping
+ * (and thereby reverting a concurrent write to) currentCredits, tokenVersion, isBanned,
+ * tags and every other field the caller never sent. `params` supplies the changed-field
+ * keys; `built` supplies their post-merge values (hashed password, merged preferences).
+ */
+export function toUserUpdatePartial(
+  built: IUserDocument,
+  params: Record<string, unknown>
+): Partial<IUserDocument> & { id: string } {
+  const write: Record<string, unknown> = { id: built.id, updatedAt: built.updatedAt };
+  for (const key of Object.keys(params)) {
+    if (key === 'id') continue;
+    write[key] = (built as unknown as Record<string, unknown>)[key];
+  }
+  return write as Partial<IUserDocument> & { id: string };
+}
+
+/**
+ * `preferences` is merged onto the stored object, not replaced, so a partial write cannot
+ * silently drop keys the caller omitted. An explicit `null` still clears the whole object -
+ * that is the only way to remove individual keys. `experimentalFeatures` is merged one level
+ * deeper (mirrors the client in UserSettingsContext); nothing else in the schema nests.
+ */
+function mergePreferences(
+  stored: IUserPreferences | null | undefined,
+  incoming: NonNullable<UpdateUserParameters['preferences']>
+): IUserPreferences {
+  const base = stored ?? {};
+  return {
+    ...base,
+    ...incoming,
+    ...(incoming.experimentalFeatures !== undefined && {
+      experimentalFeatures: { ...base.experimentalFeatures, ...incoming.experimentalFeatures },
+    }),
+  };
+}
+
+export async function updateUser(userId: string, parameters: UpdateUserParameters, { db }: UpdateUserAdapters) {
+  const params = secureParameters(parameters, updateUserSchema);
+  const userPassword = await db.users.findByIdWithPassword(userId);
+
+  if (!userPassword) {
+    throw new Error('User not found');
+  }
+
+  const updatedUser = applyBaseUserUpdates(userPassword, params);
+
+  // Persist ONLY the fields this request changed. Writing the whole built document
+  // (a spread of the read snapshot) is what let a routine profile save revert a
+  // concurrent credit deduction, tokenVersion bump or admin tag/ban change.
+  await db.users.update(toUserUpdatePartial(updatedUser, params));
+  return updatedUser;
+}

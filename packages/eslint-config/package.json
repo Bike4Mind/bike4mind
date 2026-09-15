@@ -1,0 +1,20 @@
+{
+  "name": "@bike4mind/eslint-config",
+  "version": "1.0.0",
+  "description": "Shared ESLint configurations for Bike4Mind monorepo",
+  "private": true,
+  "main": "index.js",
+  "files": [
+    "*.js"
+  ],
+  "peerDependencies": {
+    "eslint": ">=9.0.0",
+    "@typescript-eslint/eslint-plugin": ">=8.0.0",
+    "@typescript-eslint/parser": ">=8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "eslint-config-next": {
+      "optional": true
+    }
+  }
+}

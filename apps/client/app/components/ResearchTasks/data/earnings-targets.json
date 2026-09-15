@@ -1,0 +1,469 @@
+{
+  "category": "earnings",
+  "title": "Earnings Reports",
+  "description": "Latest quarterly earnings and financial reports from top tech companies",
+  "targets": [
+    {
+      "company": "Microsoft",
+      "ticker": "MSFT",
+      "url": "https://www.microsoft.com/en-us/investor/earnings/FY-2025-Q3/press-release-webcast",
+      "category": "tech"
+    },
+    {
+      "company": "NVIDIA",
+      "ticker": "NVDA",
+      "url": "https://investor.nvidia.com/financial-info/quarterly-results/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Apple",
+      "ticker": "AAPL",
+      "url": "https://investor.apple.com/investor-relations/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Amazon.com",
+      "ticker": "AMZN",
+      "url": "https://ir.aboutamazon.com/quarterly-results/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Alphabet (Google)",
+      "ticker": "GOOG",
+      "url": "https://abc.xyz/investor/",
+      "category": "tech"
+    },
+    {
+      "company": "Meta Platforms (Facebook)",
+      "ticker": "META",
+      "url": "https://s21.q4cdn.com/399680738/files/doc_financials/2025/q1/Meta-03-31-2025-Exhibit-99-1-Final.pdf",
+      "category": "tech"
+    },
+    {
+      "company": "Tesla",
+      "ticker": "TSLA",
+      "url": "https://ir.tesla.com/#quarterly-disclosure",
+      "category": "tech"
+    },
+    {
+      "company": "Netflix",
+      "ticker": "NFLX",
+      "url": "https://ir.netflix.net/financials/quarterly-earnings/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Oracle",
+      "ticker": "ORCL",
+      "url": "https://investor.oracle.com/investor-news/news-details/2025/Oracle-Announces-Fiscal-2025-Third-Quarter-Financial-Results/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Salesforce",
+      "ticker": "CRM",
+      "url": "https://investor.salesforce.com/press-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Broadcom",
+      "ticker": "AVGO",
+      "url": "https://investors.broadcom.com/news-releases/news-release-details/broadcom-inc-announces-first-quarter-fiscal-year-2025-financial",
+      "category": "tech"
+    },
+    {
+      "company": "TSMC (Taiwan Semicon. Mfg.)",
+      "ticker": "TSM",
+      "url": "https://pr.tsmc.com/english/news/3222",
+      "category": "tech"
+    },
+    {
+      "company": "ASML Holding",
+      "ticker": "ASML",
+      "url": "https://www.asml.com/en/news/press-releases/2025/q1-2025-financial-results",
+      "category": "tech"
+    },
+    {
+      "company": "AMD (Advanced Micro Devices)",
+      "ticker": "AMD",
+      "url": "https://ir.amd.com/news-events/press-releases/detail/1247/amd-reports-first-quarter-2025-financial-results",
+      "category": "tech"
+    },
+    {
+      "company": "Intel Corporation",
+      "ticker": "INTC",
+      "url": "https://www.intc.com/news-events/press-releases/detail/1737/intel-reports-first-quarter-2025-financial-results",
+      "category": "tech"
+    },
+    {
+      "company": "Qualcomm",
+      "ticker": "QCOM",
+      "url": "https://s204.q4cdn.com/645488518/files/doc_financials/2025/q2/FY2025-2nd-Quarter-Earnings-Release.pdf",
+      "category": "tech"
+    },
+    {
+      "company": "Texas Instruments",
+      "ticker": "TXN",
+      "url": "https://investor.ti.com/financial-results",
+      "category": "tech"
+    },
+    {
+      "company": "Micron Technology",
+      "ticker": "MU",
+      "url": "https://investors.micron.com/financials/quarterly-results",
+      "category": "tech"
+    },
+    {
+      "company": "Applied Materials",
+      "ticker": "AMAT",
+      "url": "https://investor.appliedmaterials.com/financials/quarterly-results/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Lam Research",
+      "ticker": "LRCX",
+      "url": "https://investor.lamresearch.com/financials/quarterly-results",
+      "category": "tech"
+    },
+    {
+      "company": "KLA Corporation",
+      "ticker": "KLAC",
+      "url": "https://ir.kla.com/financial-information/quarterly-results",
+      "category": "tech"
+    },
+    {
+      "company": "Analog Devices",
+      "ticker": "ADI",
+      "url": "https://investor.analog.com/financial-information/quarterly-results",
+      "category": "tech"
+    },
+    {
+      "company": "Marvell Technology",
+      "ticker": "MRVL",
+      "url": "https://investor.marvell.com/financial-information/quarterly-results/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "NXP Semiconductors",
+      "ticker": "NXPI",
+      "url": "https://investors.nxp.com/financials/quarterly-results/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "SK Hynix",
+      "ticker": "000660.KS",
+      "url": "https://www.skhynix.com/eng/ir/irreports.jsp",
+      "category": "tech"
+    },
+    {
+      "company": "Arm Holdings",
+      "ticker": "ARM",
+      "url": "https://ir.arm.com/news-and-events/press-releases",
+      "category": "tech"
+    },
+    {
+      "company": "MediaTek Inc.",
+      "ticker": "2454.TW",
+      "url": "https://www.mediatek.com/investor-relations/reports",
+      "category": "tech"
+    },
+    {
+      "company": "SAP",
+      "ticker": "SAP",
+      "url": "https://www.sap.com/investors/en/financial-news/q1-2025-results.html",
+      "category": "tech"
+    },
+    {
+      "company": "Adobe Inc.",
+      "ticker": "ADBE",
+      "url": "https://www.adobe.com/investor-relations/financial-documents.html",
+      "category": "tech"
+    },
+    {
+      "company": "ServiceNow",
+      "ticker": "NOW",
+      "url": "https://investors.servicenow.com/financials/quarterly-results/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Snowflake Inc.",
+      "ticker": "SNOW",
+      "url": "https://investors.snowflake.com/news-and-events/press-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Workday, Inc.",
+      "ticker": "WDAY",
+      "url": "https://investor.workday.com/financials/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Palantir Technologies",
+      "ticker": "PLTR",
+      "url": "https://investors.palantir.com/news-details/2025/Palantir-Announces-Q1-2025-Earnings/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Intuit",
+      "ticker": "INTU",
+      "url": "https://investors.intuit.com/financial-results/",
+      "category": "tech"
+    },
+    {
+      "company": "Autodesk, Inc.",
+      "ticker": "ADSK",
+      "url": "https://investors.autodesk.com/financial-information/quarterly-results/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Synopsys, Inc.",
+      "ticker": "SNPS",
+      "url": "https://www.synopsys.com/company/investor-relations.html",
+      "category": "tech"
+    },
+    {
+      "company": "Cadence Design Systems",
+      "ticker": "CDNS",
+      "url": "https://www.cadence.com/en_US/home/company/investor-relations/financials.html",
+      "category": "tech"
+    },
+    {
+      "company": "Veeva Systems",
+      "ticker": "VEEV",
+      "url": "https://ir.veeva.com/financial-information/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Datadog, Inc.",
+      "ticker": "DDOG",
+      "url": "https://investors.datadoghq.com/financials/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Atlassian Corp.",
+      "ticker": "TEAM",
+      "url": "https://investors.atlassian.com/financials/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Palo Alto Networks",
+      "ticker": "PANW",
+      "url": "https://investors.paloaltonetworks.com/news-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "CrowdStrike Holdings",
+      "ticker": "CRWD",
+      "url": "https://ir.crowdstrike.com/financials/quarterly-results",
+      "category": "tech"
+    },
+    {
+      "company": "Fortinet, Inc.",
+      "ticker": "FTNT",
+      "url": "https://investor.fortinet.com/news-events/press-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Zscaler, Inc.",
+      "ticker": "ZS",
+      "url": "https://ir.zscaler.com/financials/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Cisco Systems",
+      "ticker": "CSCO",
+      "url": "https://investor.cisco.com/financial-information/quarterly-results/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Arista Networks",
+      "ticker": "ANET",
+      "url": "https://investors.arista.com/financial-information/quarterly-results/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Cloudflare, Inc.",
+      "ticker": "NET",
+      "url": "https://cloudflare.net/investor-relations/financials",
+      "category": "tech"
+    },
+    {
+      "company": "Equinix, Inc.",
+      "ticker": "EQIX",
+      "url": "https://investor.equinix.com/financials/quarterly-results-and-filings/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Alibaba Group",
+      "ticker": "BABA",
+      "url": "https://www.alibabagroup.com/en/ir/earnings",
+      "category": "tech"
+    },
+    {
+      "company": "Shopify Inc.",
+      "ticker": "SHOP",
+      "url": "https://investors.shopify.com/financial-reports/quarterly-results/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Sea Limited",
+      "ticker": "SE",
+      "url": "https://investor.sea.com/financials.cfm",
+      "category": "tech"
+    },
+    {
+      "company": "MercadoLibre",
+      "ticker": "MELI",
+      "url": "https://investor.mercadolibre.com/financials.cfm",
+      "category": "tech"
+    },
+    {
+      "company": "JD.com (Jingdong Mall)",
+      "ticker": "JD",
+      "url": "https://ir.jd.com/financial-information",
+      "category": "tech"
+    },
+    {
+      "company": "PDD Holdings (Pinduoduo)",
+      "ticker": "PDD",
+      "url": "https://investor.pddholdings.com/news-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Coupang, Inc.",
+      "ticker": "CPNG",
+      "url": "https://investors.coupang.com/financial-information/quarterly-results/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Booking Holdings",
+      "ticker": "BKNG",
+      "url": "https://ir.bookingholdings.com/news-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Uber Technologies",
+      "ticker": "UBER",
+      "url": "https://investor.uber.com/news-events/financial-reports/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Airbnb, Inc.",
+      "ticker": "ABNB",
+      "url": "https://investors.airbnb.com/financial-information/quarterly-results/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "DoorDash, Inc.",
+      "ticker": "DASH",
+      "url": "https://ir.doordash.com/financials/quarterly-results/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Trip.com Group",
+      "ticker": "TCOM",
+      "url": "https://investors.trip.com/news-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "PayPal Holdings",
+      "ticker": "PYPL",
+      "url": "https://investor.pypl.com/financials/quarterly-results/default.aspx",
+      "category": "finance"
+    },
+    {
+      "company": "Block, Inc. (formerly Square)",
+      "ticker": "SQ",
+      "url": "https://s29.q4cdn.com/628966176/files/doc_financials/2025/q1/Block_1Q25_Shareholder-Letter.pdf",
+      "category": "finance"
+    },
+    {
+      "company": "Coinbase Global",
+      "ticker": "COIN",
+      "url": "https://investor.coinbase.com/financials/quarterly-results/default.aspx",
+      "category": "finance"
+    },
+    {
+      "company": "Robinhood Markets",
+      "ticker": "HOOD",
+      "url": "https://investors.robinhood.com/financials/default.aspx",
+      "category": "finance"
+    },
+    {
+      "company": "MicroStrategy",
+      "ticker": "MSTR",
+      "url": "https://www.microstrategy.com/en/investor-relations/financial-documents",
+      "category": "finance"
+    },
+    {
+      "company": "Adyen NV",
+      "ticker": "ADYEN.AS",
+      "url": "https://www.adyen.com/press-and-media/press-releases",
+      "category": "finance"
+    },
+    {
+      "company": "Sony Group",
+      "ticker": "SONY",
+      "url": "https://www.sony.com/en/SonyInfo/IR/financial/fr/",
+      "category": "tech"
+    },
+    {
+      "company": "Nintendo Co. Ltd.",
+      "ticker": "7974.T",
+      "url": "https://www.nintendo.co.jp/ir/en/finance/index.html",
+      "category": "tech"
+    },
+    {
+      "company": "Electronic Arts",
+      "ticker": "EA",
+      "url": "https://www.ea.com/news/electronic-arts-reports-q4-fy25-results",
+      "category": "tech"
+    },
+    {
+      "company": "Take-Two Interactive",
+      "ticker": "TTWO",
+      "url": "https://ir.take2games.com/financial-information/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Spotify Technology",
+      "ticker": "SPOT",
+      "url": "https://investors.spotify.com/financials/press-releases/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Tencent Holdings",
+      "ticker": "TCEHY",
+      "url": "https://www.tencent.com/en-us/investors.html",
+      "category": "tech"
+    },
+    {
+      "company": "Samsung Electronics",
+      "ticker": "005930.KS",
+      "url": "https://www.samsung.com/global/ir/reports-financial-statements/",
+      "category": "tech"
+    },
+    {
+      "company": "SMIC (Semiconductor Mfg Intl)",
+      "ticker": "0981.HK",
+      "url": "https://www.smics.com/en/site/company_financialSummary",
+      "category": "tech"
+    },
+    {
+      "company": "Xiaomi Corp.",
+      "ticker": "XIACF",
+      "url": "https://www.mi.com/global/about/investor",
+      "category": "tech"
+    },
+    {
+      "company": "NetEase, Inc.",
+      "ticker": "NTES",
+      "url": "https://ir.netease.com/en/financial-results",
+      "category": "tech"
+    },
+    {
+      "company": "Meituan",
+      "ticker": "3690.HK",
+      "url": "https://about.meituan.com/investor.html",
+      "category": "tech"
+    }
+  ]
+} 

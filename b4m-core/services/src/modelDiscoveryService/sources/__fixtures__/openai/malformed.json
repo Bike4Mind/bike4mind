@@ -1,0 +1,11 @@
+{
+  "object": "list",
+  "data": [
+    { "id": "gpt-5", "object": "model", "created": 1754425777, "owned_by": "system" },
+    { "object": "model", "created": 1754425777, "owned_by": "system" },
+    { "id": "", "object": "model" },
+    { "id": 42, "object": "model" },
+    null,
+    "sora-2"
+  ]
+}

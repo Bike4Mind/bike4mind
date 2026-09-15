@@ -1,0 +1,90 @@
+[
+  {
+    "email": "alice@example.com",
+    "username": "alice",
+    "isAdmin": true
+  },
+  {
+    "email": "alice+alt@example.com",
+    "username": "aliceAlt",
+    "isAdmin": true
+  },
+  {
+    "email": "bob@example.com",
+    "username": "bob",
+    "isAdmin": true
+  },
+  {
+    "email": "carol@example.com",
+    "username": "carol",
+    "isAdmin": true
+  },
+  {
+    "email": "dave@example.com",
+    "username": "dave",
+    "isAdmin": true
+  },
+  {
+    "email": "erin@example.com",
+    "username": "erin",
+    "isAdmin": true
+  },
+  {
+    "email": "frank@example.com",
+    "username": "frank",
+    "isAdmin": true
+  },
+  {
+    "email": "grace@example.com",
+    "username": "grace",
+    "isAdmin": true
+  },
+  {
+    "email": "grace+test@example.com",
+    "username": "graceTest",
+    "isAdmin": false
+  },
+  {
+    "email": "heidi@example.com",
+    "username": "heidi",
+    "isAdmin": true
+  },
+  {
+    "email": "ivan@example.com",
+    "username": "ivan",
+    "isAdmin": true
+  },
+  {
+    "email": "judy@example.com",
+    "username": "judy",
+    "isAdmin": true
+  },
+  {
+    "email": "judy+test@example.com",
+    "username": "judyTest",
+    "isAdmin": false
+  },
+  {
+    "email": "karl@example.com",
+    "username": "karl",
+    "isAdmin": true
+  },
+  {
+    "email": "automation@example.com",
+    "username": "automation",
+    "isAdmin": true,
+    "name": "Automation"
+  },
+  {
+    "email": "auto-share@example.com",
+    "username": "auto-share",
+    "isAdmin": true,
+    "name": "Auto Share"
+  },
+  {
+    "email": "automation+1@example.com",
+    "username": "automationAlt",
+    "isAdmin": true,
+    "name": "Automation Alt"
+  }
+]

@@ -1,0 +1,752 @@
+import { api } from '@client/app/contexts/ApiContext';
+import type {
+  ArtifactType,
+  CommentPolicy,
+  PublishResult,
+  PublishScopeTier,
+  PublishVisibility,
+  ReportReason,
+  UploadUrlResponse,
+} from '@bike4mind/common';
+import { ELISION_PUBLISH_BODY, SCOPE_URL_PREFIX } from '@bike4mind/common';
+import { detectElidedSafe } from '@client/app/utils/artifactParser';
+import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
+import { exportHref, type PublishExportFormat } from '@client/app/utils/publishExport';
+
+/** Summary row for the published-artifacts management list. */
+export interface ManagedArtifact {
+  publicId: string;
+  tier: PublishScopeTier;
+  scopeId: string;
+  slug: string;
+  title: string;
+  description?: string;
+  visibility: PublishVisibility;
+  commentPolicy?: CommentPolicy;
+  /** Owner opt-in to search-engine indexing; absent/false means the page is served noindex. */
+  discoverable?: boolean;
+  source: { kind: 'bundle' | 'reply' | 'fabfile'; artifactId?: string };
+  size?: { totalBytes: number; fileCount: number };
+  viewCount?: number;
+  publishedAt?: string;
+  updatedAt?: string;
+  /** accessGate.kind, projected without the passphrase hash. Absent = ungated. */
+  gateKind?: 'passphrase' | 'domain';
+  /** Freeform owner labels, stored normalized. */
+  tags?: string[];
+  previousVersionMeta?: { sha256Index?: string };
+  /** Number of entries in the published version history (drives the version switcher
+   *  and the single-version hint). 0/1 means no switcher yet; 2+ shows the switcher. */
+  versionsCount?: number;
+}
+
+/** How a re-publish of an already-published artifact should land. */
+export type PublishMode = 'update' | 'new';
+
+/** Build the public `/p/...` path for a published artifact (relative to origin). */
+export function toArtifactSharePath(tier: PublishScopeTier, scopeId: string, slug: string): string {
+  return `${SCOPE_URL_PREFIX[tier]}/${scopeId}/${slug}`;
+}
+
+/** Search / filter / sort / page the management list. Every field optional; omitting all of
+ *  them reproduces the previous behaviour (newest first, one large page). */
+export interface ManagedListQuery {
+  q?: string;
+  /** Ask the server to compute facet counts. Off by default - they are group-bys over the whole
+   *  library, and a caller that only needs a page (or an existence check) should not pay for them. */
+  facets?: boolean;
+  /** A single tag, matched exactly against the normalized stored form. */
+  tag?: string;
+  kind?: string;
+  visibility?: string;
+  gate?: string;
+  comments?: 'on' | 'off';
+  sort?: string;
+  limit?: number;
+  skip?: number;
+}
+
+/** Counts over the caller's whole library, independent of the current filter selection, so a
+ *  facet chip keeps showing its count after you click it. */
+export interface ManagedListFacets {
+  kind: Record<string, number>;
+  visibility: Record<string, number>;
+  gate: Record<string, number>;
+  comments: number;
+  /** Use counts per tag, most-used first, capped by the endpoint. */
+  tag: Record<string, number>;
+}
+
+export interface ManagedListPage {
+  artifacts: ManagedArtifact[];
+  /** Rows matching the current filter, which is what the pager needs - NOT the library size. */
+  total: number;
+  limit: number;
+  skip: number;
+  facets: ManagedListFacets;
+}
+
+const EMPTY_FACETS: ManagedListFacets = { kind: {}, visibility: {}, gate: {}, comments: 0, tag: {} };
+
+/** List a page of the caller's OWN published artifacts (the manageable set). */
+export async function listMyPublishedArtifacts(query: ManagedListQuery = {}): Promise<ManagedListPage> {
+  const params = new URLSearchParams({ mine: 'true' });
+  // Only send what is actually set: an empty `q` or a default sort would otherwise become part
+  // of the react-query cache key and split the cache for no reason.
+  if (query.q?.trim()) params.set('q', query.q.trim());
+  if (query.kind) params.set('kind', query.kind);
+  if (query.visibility) params.set('visibility', query.visibility);
+  if (query.gate) params.set('gate', query.gate);
+  if (query.comments) params.set('comments', query.comments);
+  if (query.tag) params.set('tag', query.tag);
+  if (query.sort) params.set('sort', query.sort);
+  if (query.facets) params.set('facets', 'true');
+  if (query.limit != null) params.set('limit', String(query.limit));
+  if (query.skip) params.set('skip', String(query.skip));
+
+  const { data } = await api.get<Partial<ManagedListPage>>(`/api/publish/artifacts?${params.toString()}`);
+  const artifacts = data.artifacts ?? [];
+  return {
+    artifacts,
+    // Fall back to the page length rather than 0 so a response from an older server (no total)
+    // shows the rows it did return instead of an empty pager claiming nothing matched.
+    total: data.total ?? artifacts.length,
+    limit: data.limit ?? artifacts.length,
+    skip: data.skip ?? 0,
+    facets: data.facets ?? EMPTY_FACETS,
+  };
+}
+
+/** Replace an artifact's tags. Full replace, not a merge - `[]` clears them, which is the only
+ *  way an owner can REMOVE a tag. */
+export async function updatePublishedTags(publicId: string, tags: string[]): Promise<void> {
+  await api.patch(`/api/publish/artifacts/${publicId}`, { tags });
+}
+
+export interface TagSuggestion {
+  tag: string;
+  /** Uses among published artifacts. 0 means the tag comes from the caller's AppFile vocabulary
+   *  and is not yet on anything published. */
+  count: number;
+}
+
+/** The caller's own tag vocabulary for autocomplete, merged across published artifacts and
+ *  AppFile tags so one label means one thing across the app. Best-effort: autocomplete failing
+ *  must never block typing a tag, since tags are freeform anyway. */
+export async function fetchMyTagVocabulary(): Promise<TagSuggestion[]> {
+  try {
+    const { data } = await api.get<{ tags: TagSuggestion[] }>('/api/publish/tags');
+    return data.tags ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Find the caller's existing publication of a given notebook artifact, if any.
+ * Returns the most recently published match (the list is sorted newest-first) so the
+ * publish dialog can offer "update existing" vs "publish as new". Returns null on no
+ * match - callers should treat a lookup failure as "not published" and never block
+ * publishing on it.
+ */
+export async function findPublishedByArtifact(artifactId: string): Promise<ManagedArtifact | null> {
+  try {
+    const { data } = await api.get<{ artifacts: ManagedArtifact[] }>(
+      `/api/publish/artifacts?sourceArtifactId=${encodeURIComponent(artifactId)}`
+    );
+    return data.artifacts?.[0] ?? null;
+  } catch {
+    // Best-effort lookup: a transport/auth failure must never block publishing, so
+    // degrade to "not published" and let the dialog offer a plain publish-as-new.
+    return null;
+  }
+}
+
+/**
+ * Fetch a published artifact's content in an export format (issue #1142).
+ *
+ * Goes through the authenticated `api` client rather than a plain `<a download>`: a
+ * top-level navigation to `/p/...?export=` carries no Authorization header, so a
+ * private or org-gated artifact would answer with the loader shell (an HTML page)
+ * instead of the file. The viewer-facing surfaces use plain anchors instead, and
+ * only where the artifact re-authorizes without a credential.
+ *
+ * Callers must check `supportsExport(kind, format)` first - the server 404s a format
+ * with no faithful conversion for the kind, deliberately rather than degrading.
+ */
+export async function fetchPublishedExport(viewerPath: string, format: PublishExportFormat): Promise<string> {
+  const { data } = await api.get<string>(exportHref(viewerPath, format), {
+    // Keep the payload as the raw text it is - axios would otherwise JSON.parse a
+    // markdown/HTML body that happens to start with a JSON-looking token.
+    responseType: 'text',
+    transformResponse: [(d: unknown) => (typeof d === 'string' ? d : String(d ?? ''))],
+  });
+  return data;
+}
+
+/** Soft-delete (archive) a published artifact (owner/admin). */
+export async function deletePublishedArtifact(publicId: string): Promise<void> {
+  await api.delete(`/api/publish/artifacts/${publicId}`);
+}
+
+/**
+ * Explicit share actions default to `public` - the user clicked "Share", so the
+ * link should open for the recipient. The share dialog lets them dial it back.
+ */
+const DEFAULT_SHARE_VISIBILITY: PublishVisibility = 'public';
+
+/** Publish a single assistant reply to a public viewer page (/p/r/{publicId}). */
+export async function publishReply(input: {
+  sessionId: string;
+  messageId: string;
+  title?: string;
+  visibility?: PublishVisibility;
+  /**
+   * Scope tier to publish under. Defaults to `'user'` (a personal `/p/r` page). Pass
+   * `'organization'` with `scopeId` set to the org id for an org-scoped page the serve gate
+   * authorizes to org members - see `replyPublisher`.
+   */
+  tier?: PublishScopeTier;
+  /** Scope id for `tier` (the org id for org tier). Server defaults it to the caller for user tier. */
+  scopeId?: string;
+}): Promise<PublishResult> {
+  const { data } = await api.post<PublishResult>('/api/publish/reply', {
+    visibility: DEFAULT_SHARE_VISIBILITY,
+    ...input,
+  });
+  return data;
+}
+
+/** Publish a FabFile to a public viewer page (/p/f/{publicId}). */
+export async function publishFabFile(input: {
+  fabFileId: string;
+  title?: string;
+  visibility?: PublishVisibility;
+  /**
+   * Scope tier to publish under. Defaults to `'user'` (a personal `/p/f` page). Pass
+   * `'organization'` with `scopeId` set to the org id for an org-scoped page the serve gate
+   * authorizes to org members - see `fabFilePublisher`.
+   */
+  tier?: PublishScopeTier;
+  /** Scope id for `tier` (the org id for org tier). Server defaults it to the caller for user tier. */
+  scopeId?: string;
+}): Promise<PublishResult> {
+  const { data } = await api.post<PublishResult>('/api/publish/fabfile', {
+    visibility: DEFAULT_SHARE_VISIBILITY,
+    ...input,
+  });
+  return data;
+}
+
+/**
+ * Map a share-dialog visibility pick to the scope-tier fields the publish endpoints expect.
+ * Org visibility publishes a real org-tier page (scopeId = org id) so same-org members can view
+ * it - the ONLY combination the serve gate authorizes to org members (a user-tier record's
+ * scopeId is the user id, never the viewer's org id, so org visibility on it 403s everyone but
+ * the owner). Requires an active org; the dialog only offers the Team option when one exists, so
+ * this branch is unreachable without orgId. The server re-validates org membership before
+ * trusting the scope. Mirrors `artifactBundlePublisher`.
+ */
+function orgTierFields(
+  visibility: PublishVisibility,
+  orgId?: string
+): { tier: PublishScopeTier; scopeId: string } | Record<string, never> {
+  return visibility === 'organization' && orgId ? { tier: 'organization', scopeId: orgId } : {};
+}
+
+/**
+ * Build the share-dialog publish callback for a chat reply. When the caller is in an org ("Team")
+ * account context, `orgId` lets a Team pick publish an org-scoped page. See `orgTierFields`.
+ */
+export function replyPublisher(input: {
+  sessionId: string;
+  messageId: string;
+  title?: string;
+  /** The caller's active org, when in a "Team" account context. Undefined for personal scope. */
+  orgId?: string;
+}): (visibility: PublishVisibility) => Promise<PublishResult> {
+  const { orgId, ...reply } = input;
+  return visibility => publishReply({ ...reply, visibility, ...orgTierFields(visibility, orgId) });
+}
+
+/**
+ * Build the share-dialog publish callback for a FabFile. When the caller is in an org ("Team")
+ * account context, `orgId` lets a Team pick publish an org-scoped page. See `orgTierFields`.
+ */
+export function fabFilePublisher(input: {
+  fabFileId: string;
+  title?: string;
+  /** The caller's active org, when in a "Team" account context. Undefined for personal scope. */
+  orgId?: string;
+}): (visibility: PublishVisibility) => Promise<PublishResult> {
+  const { orgId, ...file } = input;
+  return visibility => publishFabFile({ ...file, visibility, ...orgTierFields(visibility, orgId) });
+}
+
+/** Report a public page for abuse. Requires an authenticated caller. */
+export async function reportPublishedArtifact(
+  publicId: string,
+  input: { reason: ReportReason; details?: string }
+): Promise<{ ok: boolean; alreadyReported?: boolean }> {
+  const { data } = await api.post<{ ok: boolean; alreadyReported?: boolean }>(
+    `/api/publish/artifacts/${publicId}/report`,
+    input
+  );
+  return data;
+}
+
+/** Change a published item's visibility (owner/admin). */
+export async function updatePublishedVisibility(publicId: string, visibility: PublishVisibility): Promise<void> {
+  await api.patch(`/api/publish/artifacts/${publicId}`, { visibility });
+}
+
+/** Change who may comment on a published item (owner/admin). */
+export async function updatePublishedCommentPolicy(publicId: string, commentPolicy: CommentPolicy): Promise<void> {
+  await api.patch(`/api/publish/artifacts/${publicId}`, { commentPolicy });
+}
+
+/**
+ * Opt a published item in or out of search-engine indexing (owner/admin). Off by
+ * default: publishing publicly means "anyone with the link can view", never "listed
+ * in Google". Only takes effect while the item is open-public; link previews in chat
+ * apps are unaffected either way.
+ */
+export async function updatePublishedDiscoverable(publicId: string, discoverable: boolean): Promise<void> {
+  await api.patch(`/api/publish/artifacts/${publicId}`, { discoverable });
+}
+
+/** Access gate on top of `visibility: 'public'` - see issue #383. */
+export type PublishAccessGateInput =
+  { kind: 'passphrase'; passphrase: string } | { kind: 'domain'; allowedDomains: string[] } | null;
+
+/**
+ * Set, rotate, or clear (null) a public item's access gate (owner/admin).
+ * The passphrase is sent once and stored only as a hash server-side; there is
+ * no API to read it back - rotating means setting a new one.
+ */
+export async function updatePublishedAccessGate(publicId: string, accessGate: PublishAccessGateInput): Promise<void> {
+  await api.patch(`/api/publish/artifacts/${publicId}`, { accessGate });
+}
+
+/**
+ * Set or clear the embed allowlist - the external https origins allowed to frame
+ * this artifact (owner/admin). Only honored while the item is open-public (no
+ * gate); `[]` clears it. The server normalizes and re-validates each origin.
+ */
+export async function updatePublishedEmbedOrigins(publicId: string, embedOrigins: string[]): Promise<void> {
+  await api.patch(`/api/publish/artifacts/${publicId}`, { embedOrigins });
+}
+
+/**
+ * Current embed-allowlist state for seeding the editor: the allowlisted origins
+ * plus whether a gate is live (embedding is open-public only, so the editor hides
+ * when `gated`).
+ */
+export async function getPublishedEmbedState(publicId: string): Promise<{ embedOrigins: string[]; gated: boolean }> {
+  const { data } = await api.get<{ artifact?: { embedOrigins?: string[]; accessGate?: unknown } }>(
+    `/api/publish/artifacts/${publicId}`
+  );
+  return { embedOrigins: data.artifact?.embedOrigins ?? [], gated: !!data.artifact?.accessGate };
+}
+
+/** Read shape of a live access gate (the passphrase hash is stripped server-side). */
+export type PublishAccessGateRead = { kind: 'passphrase' } | { kind: 'domain'; allowedDomains: string[] } | null;
+
+/** Everything the per-artifact manage panel needs to seed its editors (owner/admin). */
+export interface PublishedManageState {
+  visibility: PublishVisibility;
+  accessGate: PublishAccessGateRead;
+  embedOrigins: string[];
+  commentPolicy: CommentPolicy;
+  discoverable: boolean;
+}
+
+export async function getPublishedManageState(publicId: string): Promise<PublishedManageState> {
+  const { data } = await api.get<{ artifact?: Partial<PublishedManageState> }>(`/api/publish/artifacts/${publicId}`);
+  const a = data.artifact ?? {};
+  return {
+    visibility: a.visibility ?? 'private',
+    accessGate: a.accessGate ?? null,
+    embedOrigins: a.embedOrigins ?? [],
+    commentPolicy: a.commentPolicy ?? 'none',
+    // Absent on rows predating the field -> false. Matches the server default: an
+    // artifact is not search-discoverable until its owner says so.
+    discoverable: a.discoverable ?? false,
+  };
+}
+
+/**
+ * Restore a published bundle to its immediately-previous version (owner/admin).
+ * Returns the new version's sha. Only works when a previous version was archived
+ * (revisions made after the version-archive feature shipped).
+ */
+export async function restorePreviousVersion(publicId: string): Promise<{ sha256Index: string }> {
+  const { data } = await api.post<{ sha256Index: string }>(`/api/publish/${publicId}/restore`, {});
+  return data;
+}
+
+/**
+ * Whether a publication can be refreshed from its in-app source artifact.
+ *
+ * Bundles only, and only when `source.artifactId` is set. A `reply` snapshots an
+ * immutable chat message so there is nothing to re-read; a bundle published from
+ * outside the app (no artifactId) has no source to read back; and bundles are the
+ * only kind with the version history a refresh lands in - the same restriction the
+ * restore endpoint applies.
+ */
+export function canRefreshFromSource(a: ManagedArtifact): boolean {
+  return a.source.kind === 'bundle' && !!a.source.artifactId;
+}
+
+/** Slice of `GET /api/artifacts/{id}?includeContent=true` a refresh needs. */
+interface SourceArtifactResponse {
+  artifact?: { type?: string; title?: string };
+  content?: { content?: string };
+}
+
+/**
+ * Re-publish an existing publication from its source artifact's CURRENT content,
+ * landing a new version on the SAME `/p/...` URL.
+ *
+ * Runs the ordinary publish pipeline (upload-url -> PUT -> finalize) with the slug
+ * pinned to the existing publication, so finalize upserts a new version instead of
+ * creating a second page - and so the refreshed bytes go through the same
+ * `validateBundle` security contract and React transpile as any other publish. That
+ * reuse is the point: a bespoke "refresh" endpoint would have to restate the publish
+ * contract and could drift from it.
+ *
+ * Every field finalize's `$set` overwrites unconditionally is passed through from the
+ * current row - `visibility`, `commentPolicy`, `description`. Omitting them would not
+ * leave them alone: finalize falls back to the publish DEFAULT, which would turn a
+ * private page public and drop comments to `none`. Fields finalize never touches
+ * (`accessGate`, `discoverable`, `embedOrigins`, `shareToken`) survive on their own.
+ *
+ * The source's CURRENT title wins, since re-syncing from source is the whole point;
+ * the slug stays pinned, so the public URL never moves.
+ */
+export async function refreshPublishedFromSource(a: ManagedArtifact): Promise<PublishResult> {
+  const artifactId = a.source.artifactId;
+  if (!artifactId) throw new Error('This publication has no source artifact to refresh from');
+
+  const { data } = await api.get<SourceArtifactResponse>(
+    `/api/artifacts/${encodeURIComponent(artifactId)}?includeContent=true`
+  );
+  const type = data.artifact?.type;
+  const content = data.content?.content;
+  if (!type) throw new Error('The source artifact could not be read');
+  if (!content?.trim()) throw new Error('The source artifact has no content to publish');
+
+  return publishArtifactBundle({
+    artifactId,
+    type,
+    content,
+    title: data.artifact?.title || a.title,
+    tier: a.tier,
+    scopeId: a.scopeId,
+    slug: a.slug,
+    visibility: a.visibility,
+    commentPolicy: a.commentPolicy,
+    description: a.description,
+  });
+}
+
+/**
+ * Publish an artifact as a hosted static bundle (/p/u/{userId}/{slug}) via the
+ * 3-step flow: request presigned upload -> PUT index.html to S3 -> finalize.
+ *
+ * The artifact is rendered to a single static index.html. `html`/`svg` artifacts
+ * become real pages; other types render their source in a <pre> (interactive JS
+ * artifacts are static-only until the sandbox-origin work lands, so inline scripts
+ * are stripped at serve time).
+ */
+export async function publishArtifactBundle(input: {
+  artifactId: string;
+  type: string;
+  content: string;
+  title: string;
+  /**
+   * The publishing user, used only as the default `scopeId` for the `user` tier.
+   * Optional when `scopeId` is passed explicitly - a refresh pins the existing scope,
+   * so it has no separate use for the caller's id.
+   */
+  userId?: string;
+  /**
+   * Scope tier to publish under. Defaults to `'user'` (a personal `/p/u/{userId}` page).
+   * Pass `'organization'` with `scopeId` set to the org id to publish an org-scoped page
+   * (`/p/o/{orgId}`) that the serve gate authorizes to org members - see `artifactBundlePublisher`.
+   */
+  tier?: PublishScopeTier;
+  /** Scope id for `tier`. Defaults to `userId` (user tier). For org tier, the org id. */
+  scopeId?: string;
+  visibility?: PublishVisibility;
+  commentPolicy?: CommentPolicy;
+  /**
+   * Public blurb. finalize `$set`s `description` unconditionally, so a re-publish that
+   * omits it CLEARS an existing one - pass it through when landing a new version of a
+   * publication that already has one.
+   */
+  description?: string;
+  /**
+   * Publish to this exact slug instead of deriving one from the title. Pass the existing
+   * publication's slug to land a new VERSION of it (finalize upserts on
+   * tier+scopeId+slug) rather than a separate page, even if the title has since drifted
+   * during notebook iteration.
+   */
+  slug?: string;
+  /**
+   * "Publish as new" of an artifact that already has one or more publications: append a
+   * fresh discriminator to the derived slug so the upsert can never land on a prior
+   * publication. Set by the dialog only when the user picks "new" AND a prior publication
+   * was found. Ignored when an explicit `slug` is given (that's the "update" path).
+   */
+  forceUniqueSlug?: boolean;
+}): Promise<PublishResult> {
+  const content = (input.content ?? '').trim();
+  if (!content) throw new Error('This artifact has no content to publish');
+
+  const scopeId = input.scopeId ?? input.userId;
+  if (!scopeId) throw new Error('publishArtifactBundle needs either scopeId or userId to resolve the scope');
+
+  // React artifacts upload their RAW JSX as index.html; the server transpiles it into a
+  // self-contained inert HTML bundle at finalize (issue #21). Every other type renders to static
+  // HTML here. The `artifactType` signal on `source` tells finalize which path to take.
+  const isReact = input.type === 'react';
+  const indexHtml = isReact ? input.content : buildArtifactIndexHtml(input.type, input.content, input.title);
+  const size = new TextEncoder().encode(indexHtml).length;
+  let slug = input.slug ?? `${slugify(input.title) || 'artifact'}-${input.artifactId.slice(0, 6)}`;
+  // "Publish as new" must land a SEPARATE page. finalize upserts on tier+scopeId+slug, so a
+  // derived slug that matches ANY prior publication of this artifact (same artifactId, and a
+  // title that again slugifies the same) would silently append a version to it instead.
+  // Since findPublishedByArtifact only surfaces the most-recent match, comparing against a
+  // single slug misses older siblings - so append a fresh discriminator unconditionally to
+  // guarantee a new record.
+  if (!input.slug && input.forceUniqueSlug) {
+    slug = `${slug}-${uniqueSlugDiscriminator()}`;
+  }
+
+  // Step 1 - request a presigned PUT for index.html.
+  const { data: draft } = await api.post<UploadUrlResponse>('/api/publish/artifact/upload-url', {
+    tier: input.tier ?? 'user',
+    scopeId,
+    slug,
+    title: input.title || 'Shared artifact',
+    visibility: input.visibility ?? DEFAULT_SHARE_VISIBILITY,
+    ...(input.commentPolicy ? { commentPolicy: input.commentPolicy } : {}),
+    ...(input.description ? { description: input.description } : {}),
+    source: { kind: 'bundle', artifactId: input.artifactId, ...(isReact ? { artifactType: 'react' as const } : {}) },
+    files: [{ path: 'index.html', size, mimeType: 'text/html' }],
+  });
+
+  // Step 2 - PUT the bytes directly to S3 (plain fetch; no app auth header).
+  const put = draft.uploadUrls.find(u => u.path === 'index.html');
+  if (!put) throw new Error('Upload URL was not issued for index.html');
+  const res = await fetch(put.url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'text/html' },
+    body: indexHtml,
+  });
+  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
+
+  // Step 3 - finalize (validates + promotes + upserts).
+  const { data: result } = await api.post<PublishResult>('/api/publish/artifact/finalize', {
+    draftId: draft.draftId,
+  });
+  return result;
+}
+
+/** Options the share dialog passes to an artifact-bundle publish callback. */
+export interface ArtifactPublishOpts {
+  /** Whether to land a new version on the existing publication or create a new page. */
+  mode: PublishMode;
+  /**
+   * The existing publication's slug, supplied by the dialog whenever a prior publication
+   * was found. In 'update' mode it pins the upsert; its mere presence in 'new' mode signals
+   * that a prior publication exists, so the publisher forces a unique slug for the new page.
+   */
+  existingSlug?: string;
+}
+
+/**
+ * Build the share-dialog publish callback for an artifact bundle. The dialog
+ * decides the mode: "update" reuses the existing publication's slug (passed back as
+ * `existingSlug`) so finalize appends a version; "new" (the default) derives a fresh
+ * slug for a separate page.
+ *
+ * When the caller is in an org ("Team") account context, `orgId` enables the dialog's
+ * Team option: picking `'organization'` visibility publishes an org-tier page
+ * (`tier:'organization'`, `scopeId=orgId` -> `/p/o/{orgId}/{slug}`). This is the ONLY
+ * combination the serve gate authorizes to org members - a user-tier page with org
+ * visibility would 403 for everyone but the owner (its scopeId is the user id, never the
+ * viewer's org id). The server re-validates org membership before trusting the scope.
+ */
+export function artifactBundlePublisher(input: {
+  artifactId: string;
+  type: string;
+  content: string;
+  title: string;
+  userId: string;
+  /** The caller's active org, when in a "Team" account context. Undefined for personal scope. */
+  orgId?: string;
+}): (visibility: PublishVisibility, opts?: ArtifactPublishOpts) => Promise<PublishResult> {
+  const { orgId, ...bundle } = input;
+  return (visibility, opts) =>
+    publishArtifactBundle({
+      ...bundle,
+      visibility,
+      // Org visibility publishes a real org-tier page (scopeId = org id) so same-org members
+      // can view it - see orgTierFields.
+      ...orgTierFields(visibility, orgId),
+      // 'update' pins the existing slug so finalize appends a version; 'new' with a prior
+      // publication forces a unique slug so it can't collide back onto ANY existing one.
+      ...(opts?.mode === 'update' && opts.existingSlug
+        ? { slug: opts.existingSlug }
+        : opts?.mode === 'new' && opts.existingSlug
+          ? { forceUniqueSlug: true }
+          : {}),
+    });
+}
+
+/**
+ * Wire the share dialog for an artifact so the "update existing" LOOKUP and the PUBLISH are
+ * guaranteed to key on the SAME artifact id. Every publish surface (the chat artifact
+ * card and the full viewer) routes through this one entry point: pass a single `artifactId`
+ * and it feeds BOTH `resolveExisting` and the publisher, so the id can never drift between the
+ * lookup and the write. A drifted id (e.g. a positional `artifact-<tabIndex>` fallback) both
+ * misses the lookup - silently degrading "update existing" to publish-as-new - AND gets
+ * persisted as `source.artifactId`, corrupting the linkage. Callers must pass a stable id.
+ *
+ * CALL FROM AN EVENT HANDLER, NOT A RENDER BODY: `incompleteWarning` scans the whole artifact
+ * body synchronously. Both current callers invoke this on the share click, which is why the cost
+ * is invisible; running it per render on a large body would not be.
+ */
+export function buildArtifactPublishWiring(input: {
+  artifactId: string;
+  /**
+   * Narrowed to the union rather than `string`. A plain string would let an unrecognised value through
+   * to the detector, where the JS-bearing scans are gated on html/react and would silently switch
+   * themselves off - the exact class of silent miss this feature exists to catch. Both callers already
+   * pass a value constrained by `ArtifactModel`, so this costs them nothing.
+   */
+  type: ArtifactType;
+  content: string;
+  title: string;
+  userId: string;
+  /** The caller's active org, when in a "Team" account context. Enables org-scoped publishing. */
+  orgId?: string;
+}): {
+  resolveExisting: () => Promise<ManagedArtifact | null>;
+  publish: (visibility: PublishVisibility, opts?: ArtifactPublishOpts) => Promise<PublishResult>;
+  incompleteWarning?: string;
+} {
+  return {
+    resolveExisting: () => findPublishedByArtifact(input.artifactId),
+    publish: artifactBundlePublisher(input),
+    // A /p/ link is the point of no return: it can be handed to a client before anyone
+    // notices the artifact's buttons are inert. Computed here rather than in the dialog so
+    // every publish surface that routes through this wiring inherits the check.
+    ...(detectElidedSafe(input.content, input.type) ? { incompleteWarning: ELISION_PUBLISH_BODY } : {}),
+  };
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function slugify(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+}
+
+/**
+ * A short, collision-resistant slug discriminator for "publish as new": 3 base-36
+ * timestamp chars (rough ordering) + 3 random base-36 chars. The random tail is what
+ * separates two publishes fired in the SAME millisecond - a time-only discriminator would
+ * hand both the identical suffix and collide them back onto one slug. Always exactly 6
+ * chars so the discriminated slug stays within SlugSchema's 64-char cap.
+ */
+function uniqueSlugDiscriminator(): string {
+  const time = Date.now().toString(36).slice(-3);
+  const rand = Math.floor(Math.random() * 46656) // 36^3 -> 3 base-36 chars
+    .toString(36)
+    .padStart(3, '0');
+  return `${time}${rand}`;
+}
+
+/**
+ * Render an artifact to a single static index.html based on its type.
+ *
+ * Exported so the server renderer's byte-parity tests can pin their output to this
+ * (`apps/client/server/services/publish/renderArtifactHtml.ts`). The server copy is the
+ * permanent home; this client pre-render is removed once the raw-upload switch lands (#1492).
+ */
+export function buildArtifactIndexHtml(type: string, content: string, title: string): string {
+  const t = escapeHtml(title || 'Shared artifact');
+  // Full HTML doc -> serve as-is, but still inject the lead-gen footer before
+  // </body> (fall back to appending) so every published page is branded.
+  if (type === 'html' && /<html[\s>]/i.test(content)) {
+    const footer = buildShareFooterHtml({ source: 'artifact' });
+    return /<\/body>/i.test(content) ? content.replace(/<\/body>/i, `${footer}</body>`) : content + footer;
+  }
+
+  const PAGE = (inner: string, extraStyle = '') => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta property="og:title" content="${t}"><title>${t}</title>
+<style>:root{color-scheme:light dark}body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;line-height:1.6;max-width:900px;margin:0 auto;padding:2rem 1.25rem 4rem}pre{background:rgba(127,127,127,.12);padding:1rem;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-wrap:break-word}img,svg{max-width:100%;height:auto}${extraStyle}</style>
+</head><body>${inner}${buildShareFooterHtml({ source: 'artifact' })}</body></html>`;
+
+  if (type === 'html') return PAGE(content); // HTML fragment
+  if (type === 'svg') return PAGE(content); // inline SVG markup
+  // Source-bearing types (code/python/react/recharts/mermaid/json/...) -> code view.
+  return PAGE(`<pre><code>${escapeHtml(content)}</code></pre>`);
+}
+
+/** Absolute, shareable URL for a publish result (e.g. https://app.example.com/p/r/abc123). */
+export function toShareUrl(result: Pick<PublishResult, 'url'>): string {
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin}${result.url}`;
+  }
+  return result.url;
+}
+
+/** Absolute no-sign-in share URL for a share token (e.g. https://app.example.com/a/<token>). */
+export function toShareTokenUrl(shareToken: string): string {
+  const path = `/a/${shareToken}`;
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin}${path}`;
+  }
+  return path;
+}
+
+/**
+ * Mint (idempotent) or fetch the no-sign-in share token for a published artifact
+ * (owner/admin). Pass `regenerate: true` to rotate it, which immediately revokes
+ * every outstanding `/a` link. Returns the token and its relative `/a/<token>` path.
+ */
+export async function createOrGetShareToken(
+  publicId: string,
+  regenerate = false
+): Promise<{ shareToken: string; shareUrl: string }> {
+  const { data } = await api.post<{ shareToken: string; shareUrl: string }>(`/api/publish/${publicId}/share-token`, {
+    regenerate,
+  });
+  return data;
+}
+
+/** Rotate the share token (revokes all outstanding `/a` links), returning the new one. */
+export async function regenerateShareToken(publicId: string): Promise<{ shareToken: string; shareUrl: string }> {
+  return createOrGetShareToken(publicId, true);
+}
+
+/** Revoke the share token so every `/a` link 404s immediately (owner/admin). */
+export async function revokeShareToken(publicId: string): Promise<void> {
+  await api.delete(`/api/publish/${publicId}/share-token`);
+}

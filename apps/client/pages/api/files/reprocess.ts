@@ -1,0 +1,63 @@
+import { Permission } from '@bike4mind/common';
+import { fabFileRepository } from '@bike4mind/database';
+import { getFabFileById } from '@server/managers/fabFileManager';
+import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { baseApi } from '@server/middlewares/baseApi';
+import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { sendToQueue } from '@server/utils/sqs';
+import { sendToClient } from '@server/websocket/utils';
+import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { Request } from 'express';
+import { Resource } from 'sst';
+
+/**
+ * POST /api/files/reprocess  { fabFileId }
+ *
+ * Re-runs chunking + vectorization for an existing fabFile. Unlike /api/files/chunk
+ * (which requires a chunkSize and doesn't reset state), this resets the processing
+ * flags and clears the "no extractable text" note so re-extraction starts clean -
+ * useful for files that landed with 0 chunks (failed/partial extraction).
+ */
+const handler = baseApi().post(
+  asyncHandler(async (req: Request<unknown, unknown, { fabFileId?: string }>, res) => {
+    const { fabFileId } = req.body;
+    if (!fabFileId) throw new BadRequestError('Missing parameter: fabFileId');
+
+    const fabFile = await getFabFileById(fabFileId, req.ability!, Permission.update);
+    if (!fabFile) throw new NotFoundError('FabFile not found');
+    if (!req.ability?.can?.(Permission.update, fabFile)) throw new BadRequestError('Unauthorized');
+    if (fabFile.isChunking) throw new BadRequestError('FabFile is currently being chunked');
+
+    // Shared with the bulk "Rebuild passages" wave so the two reset paths cannot drift on which
+    // fields they clear - notably `error`, which this route previously left set: a file that chunked
+    // then failed vectorization stayed invisible to both the lake's under-chunked detection and the
+    // rescue sweep after a reprocess.
+    // The check above is a read; this is the write that actually decides. A worker can claim the
+    // file in between, in which case the reset skips it and returns nothing - carry on and we would
+    // report 'ongoing' and hand back a messageId for a delivery that loses the worker CAS and
+    // re-chunks nothing, leaving the user with no signal at all.
+    const [reset] = await fabFileRepository.resetChunkStateByIds([fabFileId]);
+    if (!reset) throw new BadRequestError('FabFile is currently being chunked');
+
+    await sendToClient(req.user.id, Resource.websocket.managementEndpoint, {
+      action: 'update_file_chunk_vector_status',
+      fabFileId,
+      chunkStatus: 'ongoing',
+    });
+
+    const queueUrl = getSourceQueueUrl('fabFileChunkQueue');
+    if (!queueUrl) throw new Error('Chunk queue URL not found');
+
+    const messageId = await sendToQueue(queueUrl, { fabFileId: fabFile._id, userId: fabFile.userId });
+
+    return res.json({ messageId });
+  })
+);
+
+export const config = {
+  api: {
+    externalResolver: true,
+  },
+};
+
+export default handler;

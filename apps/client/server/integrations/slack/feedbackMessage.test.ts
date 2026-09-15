@@ -1,0 +1,336 @@
+import { describe, it, expect } from 'vitest';
+import { buildFeedbackSlackMessage, buildPromptMetaSummary } from './feedbackMessage';
+
+describe('buildPromptMetaSummary', () => {
+  it('summarizes a full promptMeta into a short, readable set of signals', () => {
+    const summary = buildPromptMetaSummary({
+      model: { name: 'claude-sonnet-5' },
+      tokenUsage: { totalTokens: 1234, estimatedCost: 0.05 },
+      finishReason: 'end_turn',
+      functionCalls: [{ name: 'web_search' }, { name: 'search_knowledge_base' }],
+      citables: [{}, {}],
+      context: { lakeMemory: { beliefCount: 3, dataLakeTags: ['support-docs'] } },
+    });
+    expect(summary).toContain('Model: claude-sonnet-5');
+    expect(summary).toContain('Tokens: 1234, est. cost $0.05');
+    expect(summary).toContain('Finish reason: end_turn');
+    expect(summary).toContain('Tool calls: 2 (web_search, search_knowledge_base)');
+    expect(summary).toContain('Citables: 2');
+    expect(summary).toContain('Lake beliefs: 3 (support-docs)');
+  });
+
+  it('shows the belief budget alongside the count when the turn recorded one', () => {
+    // A report reading "Lake beliefs: 24" is the saturated case worth acting on; "3" out of the
+    // same 24 is not. Without the budget both render identically.
+    const summary = buildPromptMetaSummary({
+      context: { lakeMemory: { beliefCount: 24, beliefBudget: 24, dataLakeTags: ['support-docs'] } },
+    });
+    expect(summary).toContain('Lake beliefs: 24/24 (support-docs)');
+  });
+
+  it('falls back to the bare count for a turn recorded before the budget was tracked', () => {
+    const summary = buildPromptMetaSummary({
+      context: { lakeMemory: { beliefCount: 3, dataLakeTags: ['support-docs'] } },
+    });
+    expect(summary).toContain('Lake beliefs: 3 (support-docs)');
+    expect(summary).not.toContain('Lake beliefs: 3/');
+  });
+
+  it('renders only the signals actually present', () => {
+    const summary = buildPromptMetaSummary({ model: { name: 'claude-sonnet-5' } });
+    expect(summary).toBe('Model: claude-sonnet-5');
+  });
+
+  it('returns "none" for an undefined promptMeta', () => {
+    expect(buildPromptMetaSummary(undefined)).toBe('none');
+  });
+
+  it('returns "none" for an empty promptMeta object', () => {
+    expect(buildPromptMetaSummary({})).toBe('none');
+  });
+
+  it('renders citables even with no functionCalls (a citation-only turn)', () => {
+    const summary = buildPromptMetaSummary({ citables: [{}, {}, {}] });
+    expect(summary).toBe('Citables: 3');
+  });
+
+  it('renders a zero token count and a zero belief count (not swallowed by a truthy check)', () => {
+    const summary = buildPromptMetaSummary({
+      tokenUsage: { totalTokens: 0 },
+      context: { lakeMemory: { beliefCount: 0 } },
+    });
+    expect(summary).toContain('Tokens: 0');
+    expect(summary).toContain('Lake beliefs: 0');
+  });
+
+  it('falls back to actualTotalTokens when totalTokens is absent', () => {
+    const summary = buildPromptMetaSummary({ tokenUsage: { actualTotalTokens: 42 } });
+    expect(summary).toContain('Tokens: 42');
+  });
+
+  it('falls back to actualInputTokens + actualOutputTokens when neither totalTokens nor actualTotalTokens is set', () => {
+    const summary = buildPromptMetaSummary({ tokenUsage: { actualInputTokens: 100, actualOutputTokens: 23 } });
+    expect(summary).toContain('Tokens: 123');
+  });
+
+  it('renders an estimated cost even with no token total, formatted without scientific notation or long tails', () => {
+    const summary = buildPromptMetaSummary({ tokenUsage: { estimatedCost: 0.300000000000004 } });
+    expect(summary).toContain('Tokens: unknown, est. cost $0.3');
+  });
+
+  it('handles functionCalls: null and functionCalls: [] without throwing', () => {
+    expect(buildPromptMetaSummary({ functionCalls: null })).toBe('none');
+    expect(buildPromptMetaSummary({ functionCalls: [] })).toBe('Tool calls: 0');
+  });
+
+  it('caps function-call names and marks the overflow instead of truncating silently', () => {
+    const summary = buildPromptMetaSummary({
+      functionCalls: Array.from({ length: 7 }, (_, i) => ({ name: `tool_${i}` })),
+    });
+    expect(summary).toContain('Tool calls: 7 (tool_0, tool_1, tool_2, tool_3, tool_4, +2 more)');
+  });
+
+  it('caps data lake tags and marks the overflow instead of truncating silently', () => {
+    const summary = buildPromptMetaSummary({
+      context: {
+        lakeMemory: { beliefCount: 9, dataLakeTags: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] },
+      },
+    });
+    expect(summary).toContain('Lake beliefs: 9 (a, b, c, d, e, +2 more)');
+  });
+
+  it('escapes Slack mrkdwn special characters inside the summary itself (model name, tool names, lake tags)', () => {
+    const injected = '<@here>';
+    const summary = buildPromptMetaSummary({
+      model: { name: injected },
+      finishReason: injected,
+      functionCalls: [{ name: injected }],
+      context: { lakeMemory: { beliefCount: 1, dataLakeTags: [injected] } },
+    });
+    expect(summary).not.toContain('<@here>');
+    expect(summary.match(/&lt;@here&gt;/g)).toHaveLength(4);
+  });
+
+  it('collapses newlines in model.name so it cannot forge a fake extra field below the identity block', () => {
+    const forged = 'claude\n*User Email:* ceo@company.com';
+    const summary = buildPromptMetaSummary({ model: { name: forged } });
+    expect(summary).toBe('Model: claude *User Email:* ceo@company.com');
+    expect(summary.split('\n')).toHaveLength(1);
+  });
+
+  it.each([
+    ['finishReason', { finishReason: 'end\n*User Email:* fake' }, 'Finish reason: end *User Email:* fake'],
+    [
+      'functionCalls[].name',
+      { functionCalls: [{ name: 'web_search\n*User Email:* fake' }] },
+      'Tool calls: 1 (web_search *User Email:* fake)',
+    ],
+    [
+      'dataLakeTags[]',
+      { context: { lakeMemory: { beliefCount: 1, dataLakeTags: ['docs\n*User Email:* fake'] } } },
+      'Lake beliefs: 1 (docs *User Email:* fake)',
+    ],
+  ] as const)('collapses newlines in %s the same way as model.name', (_field, promptMeta, expectedLine) => {
+    const summary = buildPromptMetaSummary(promptMeta);
+    expect(summary.split('\n')).toContain(expectedLine);
+  });
+
+  it('never surfaces owner-only function-call fields even if a caller failed to redact them', () => {
+    const summary = buildPromptMetaSummary({
+      functionCalls: [
+        {
+          name: 'web_search',
+          returnValue: 'PRIVATE TOOL OUTPUT',
+          parameters: { query: 'internal corpus query' },
+        } as { name?: string; returnValue?: string; parameters?: Record<string, unknown> },
+      ],
+    });
+    expect(summary).not.toContain('PRIVATE TOOL OUTPUT');
+    expect(summary).not.toContain('internal corpus query');
+  });
+});
+
+describe('buildFeedbackSlackMessage', () => {
+  const base = {
+    stagePrefix: '',
+    type: 'Bug',
+    organization: 'Acme',
+    username: 'jdoe',
+    userEmail: 'jdoe@example.com',
+    userId: 'user-1',
+    content: 'it broke',
+  };
+
+  it('renders the label with a blockquoted body', () => {
+    const message = buildFeedbackSlackMessage(base);
+    expect(message).toContain('*Feedback:*\n> it broke\n');
+  });
+
+  it('renders the label with an empty quoted body for empty content', () => {
+    const message = buildFeedbackSlackMessage({ ...base, content: '' });
+    expect(message).toContain('*Feedback:*\n> \n');
+  });
+
+  it('escapes an injection-shaped content value instead of letting it render as a live link', () => {
+    const message = buildFeedbackSlackMessage({ ...base, content: '<https://evil.example/|Open record>' });
+    expect(message).not.toContain('<https://evil.example/|Open record>');
+    expect(message).toContain('&lt;https://evil.example/|Open record&gt;');
+  });
+
+  it('blockquotes every line of multi-line content so it cannot forge fake top-level fields', () => {
+    const message = buildFeedbackSlackMessage({ ...base, content: 'line one\n*User Email:* fake@evil.example' });
+    expect(message).toContain('> line one\n> *User Email:* fake@evil.example');
+  });
+
+  it('escapes username, userEmail, type, organization, and userId the same way as content', () => {
+    const injected = '<@here>';
+    const message = buildFeedbackSlackMessage({
+      stagePrefix: '',
+      type: injected,
+      organization: injected,
+      username: injected,
+      userEmail: injected,
+      userId: injected,
+      content: injected,
+    });
+    expect(message).not.toContain('<@here>');
+    expect(message.match(/&lt;@here&gt;/g)).toHaveLength(6);
+  });
+
+  it('collapses newlines in the identity fields so they cannot forge a fake extra field', () => {
+    const forged = 'bug\n*User Email:* ceo@company.com\n*Feedback:*\n> fake wire instructions';
+    const message = buildFeedbackSlackMessage({ ...base, type: forged });
+    const typeLine = message.split('\n').find(line => line.startsWith('*Type:*'));
+    expect(typeLine).toBe('*Type:* bug *User Email:* ceo@company.com *Feedback:* &gt; fake wire instructions');
+    // The forged text is inline on the *Type:* line, not a fabricated standalone field line -
+    // only the ONE real line (from base.userEmail) actually starts with the *User Email:* label.
+    const userEmailLines = message.split('\n').filter(line => line.startsWith('*User Email:*'));
+    expect(userEmailLines).toHaveLength(1);
+  });
+
+  it('collapses newlines in username, userEmail, and userId the same way as type', () => {
+    const forged = 'jdoe\n*Feedback:* forged line';
+    for (const field of ['username', 'userEmail', 'userId'] as const) {
+      const message = buildFeedbackSlackMessage({ ...base, [field]: forged });
+      expect(message).not.toContain('jdoe\n*Feedback:* forged line');
+      expect(message).toContain('jdoe *Feedback:* forged line');
+    }
+  });
+
+  it('includes the stage prefix ahead of the type line, unaffected by the promptMeta summary', () => {
+    const message = buildFeedbackSlackMessage({ ...base, stagePrefix: '*[pr-1234]*\n', promptMeta: undefined });
+    expect(message.startsWith('*[pr-1234]*\n*Type:*')).toBe(true);
+    expect(message.split('*Prompt Meta:*')[1]).not.toContain('[pr-1234]');
+  });
+
+  it('truncates an oversized message instead of shipping it (or silently failing to send) whole', () => {
+    const message = buildFeedbackSlackMessage({ ...base, content: 'x'.repeat(50_000) });
+    expect(message.length).toBeLessThan(20100);
+    expect(message.endsWith('... [truncated]')).toBe(true);
+  });
+
+  it('does not split a UTF-16 surrogate pair when truncating', () => {
+    const emoji = '\u{1F600}'; // 2 UTF-16 code units - a naive slice can land between them
+    const message = buildFeedbackSlackMessage({ ...base, content: emoji.repeat(15000) });
+    const withoutSuffix = message.slice(0, message.length - '... [truncated]'.length);
+    const lastCode = withoutSuffix.charCodeAt(withoutSuffix.length - 1);
+    expect(lastCode >= 0xd800 && lastCode <= 0xdbff).toBe(false);
+  });
+
+  it('caps each identity field independently so one oversized field cannot consume the whole message budget', () => {
+    const huge = 'x'.repeat(1000);
+    const message = buildFeedbackSlackMessage({ ...base, type: huge, username: huge, content: 'the real report' });
+    // Not truncated overall (well under MAX_MESSAGE_CHARS) - the per-field cap did the work.
+    expect(message.endsWith('... [truncated]')).toBe(false);
+    expect(message).toContain('the real report');
+    expect(message).toContain('*Prompt Meta:*');
+    const typeLine = message.split('\n').find(line => line.startsWith('*Type:*'));
+    expect(typeLine).toBeDefined();
+    expect(typeLine!.length).toBeLessThan(220);
+  });
+
+  it('adds a CR-only line to the blockquote just like an LF (B1 regression)', () => {
+    const message = buildFeedbackSlackMessage({ ...base, content: 'harmless\r*User Email:* ceo@company.com' });
+    const feedbackLines = message.split('\n').filter(line => line.startsWith('> '));
+    expect(feedbackLines).toEqual(['> harmless', '> *User Email:* ceo@company.com']);
+    // Only the real *User Email:* line (unquoted) exists outside the blockquote.
+    const unquotedUserEmailLines = message.split('\n').filter(line => line.startsWith('*User Email:*'));
+    expect(unquotedUserEmailLines).toHaveLength(1);
+  });
+
+  it('blockquotes a U+2028 LINE SEPARATOR in content the same way as CR/LF (B2 regression)', () => {
+    const message = buildFeedbackSlackMessage({ ...base, content: 'harmless\u2028*User Email:* ceo@company.com' });
+    const feedbackLines = message.split('\n').filter(line => line.startsWith('> '));
+    expect(feedbackLines).toEqual(['> harmless', '> *User Email:* ceo@company.com']);
+    const unquotedUserEmailLines = message.split('\n').filter(line => line.startsWith('*User Email:*'));
+    expect(unquotedUserEmailLines).toHaveLength(1);
+  });
+
+  it('collapses a U+2028 LINE SEPARATOR in an identity field the same way as CR/LF (B2 regression)', () => {
+    const forged = 'bug\u2028*User Email:* ceo@company.com';
+    const message = buildFeedbackSlackMessage({ ...base, type: forged });
+    const typeLine = message.split('\n').find(line => line.startsWith('*Type:*'));
+    expect(typeLine).toBe('*Type:* bug *User Email:* ceo@company.com');
+    const unquotedUserEmailLines = message.split('\n').filter(line => line.startsWith('*User Email:*'));
+    expect(unquotedUserEmailLines).toHaveLength(1);
+  });
+});
+
+describe('buildFeedbackSlackMessage deep links', () => {
+  const base = {
+    stagePrefix: '',
+    type: 'Bug',
+    organization: 'Acme',
+    username: 'jdoe',
+    userEmail: 'jdoe@example.com',
+    userId: 'user-1',
+    content: 'it broke',
+  };
+  const links = {
+    record: 'https://app.example.com/admin?tab=feedback&feedbackId=fb-1',
+    conversation: 'https://app.example.com/notebooks/sess-1?questId=quest-1',
+    conversationIsTurn: true,
+  };
+
+  it('renders both targets as Slack links on one labeled line', () => {
+    const message = buildFeedbackSlackMessage({ ...base, links });
+    const linksLine = message.split('\n').find(line => line.startsWith('*Links:*'));
+    expect(linksLine).toBe(
+      '*Links:* <https://app.example.com/admin?tab=feedback&amp;feedbackId=fb-1|Admin record> - ' +
+        '<https://app.example.com/notebooks/sess-1?questId=quest-1|Conversation turn>'
+    );
+  });
+
+  it('labels a session-only target as a conversation, not a turn', () => {
+    const message = buildFeedbackSlackMessage({
+      ...base,
+      links: { ...links, conversation: 'https://app.example.com/notebooks/sess-1', conversationIsTurn: false },
+    });
+    const linksLine = message.split('\n').find(line => line.startsWith('*Links:*'));
+    expect(linksLine).toContain('|Conversation>');
+    expect(linksLine).not.toContain('Conversation turn');
+  });
+
+  it('links only the record when the report has no conversation to open', () => {
+    const message = buildFeedbackSlackMessage({
+      ...base,
+      links: { ...links, conversation: null, conversationIsTurn: false },
+    });
+    const linksLine = message.split('\n').find(line => line.startsWith('*Links:*'));
+    expect(linksLine).toBe('*Links:* <https://app.example.com/admin?tab=feedback&amp;feedbackId=fb-1|Admin record>');
+    expect(message).not.toContain('notebooks');
+  });
+
+  it('omits the line entirely when there are no links, rather than emitting an empty label', () => {
+    expect(buildFeedbackSlackMessage({ ...base, links: null })).not.toContain('*Links:*');
+    expect(buildFeedbackSlackMessage(base)).not.toContain('*Links:*');
+  });
+
+  it('places the links above the report body so an over-cap submission cannot truncate them away', () => {
+    const message = buildFeedbackSlackMessage({ ...base, content: 'x'.repeat(50_000), links });
+    expect(message).toContain('[truncated]');
+    expect(message).toContain('|Admin record>');
+    expect(message).toContain('|Conversation turn>');
+    expect(message.indexOf('*Links:*')).toBeLessThan(message.indexOf('*Feedback:*'));
+  });
+});

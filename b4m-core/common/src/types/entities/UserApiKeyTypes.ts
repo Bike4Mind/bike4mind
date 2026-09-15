@@ -1,0 +1,295 @@
+import { IBaseRepository, IMongoDocument } from '.';
+import { CreditHolderType } from './CreditHolderTypes';
+
+export enum ApiKeyScope {
+  READ_NOTEBOOKS = 'notebooks:read',
+  WRITE_NOTEBOOKS = 'notebooks:write',
+  READ_FILES = 'files:read',
+  WRITE_FILES = 'files:write',
+  AI_GENERATE = 'ai:generate',
+  AI_CHAT = 'ai:chat',
+  READ_PROJECTS = 'projects:read',
+  WRITE_PROJECTS = 'projects:write',
+  /** Authorizes only the cc-bridge WS actions (cc_agent_register /
+   *  cc_agent_event / cc_agent_disconnect). Keys with this scope CANNOT
+   *  call chat/completions - a leaked bridge key has the narrow blast
+   *  radius of a sprite-spawning credential, not a billable AI key. */
+  CC_BRIDGE = 'cc-bridge:connect',
+  ADMIN = 'admin:*',
+  MARKETING_REPORTS_READ = 'marketing-reports:read',
+  MARKETING_REPORTS_WRITE = 'marketing-reports:write',
+  /** Server-to-server ingest scope for Overwatch analytics. Admin-provisioned only - never shown in user-facing key creation UI. */
+  OVERWATCH_INGEST_WRITE = 'overwatch-ingest:write',
+  /** Authorizes only embedded-widget chat against the single agent the key is
+   *  bound to (`agentId`). Like CC_BRIDGE, a leaked embed key has a narrow blast
+   *  radius: it can talk to one agent from allow-listed origins, nothing else. */
+  EMBED_CHAT = 'embed:chat',
+  /** Read a Hearth channel list and replay its events. Read-only: it cannot
+   *  advance an actor cursor, because consuming events out from under a
+   *  legitimate agent reader is a denial of context, not a read. */
+  HEARTH_READ = 'hearth:read',
+  /** Append Hearth events, create channels, and advance actor cursors. */
+  HEARTH_WRITE = 'hearth:write',
+  /**
+   * Read OptiHashi problems, runs, and run artifacts. Deliberately split from
+   * {@link OPTIHASHI_COMPUTE}: a key that only inspects results is structurally
+   * unable to start a billable solve, so an agent-held key can be handed the
+   * read half alone. Like every scope, it authorizes but never entitles - the
+   * OptiHashi entitlement check still runs and can refuse on its own.
+   */
+  OPTIHASHI_READ = 'optihashi:read',
+  /**
+   * Submit OptiHashi compute (solve/decompose/schedule) and cancel a run. This
+   * is the spend half of the OptiHashi pair: it commissions external compute
+   * that costs real money, so it is never implied by {@link OPTIHASHI_READ}.
+   */
+  OPTIHASHI_COMPUTE = 'optihashi:compute',
+  /**
+   * Read data lakes and their contents: list/browse lakes (including keyword search over
+   * articles), read a lake's health, spend, batches, and access view. Split from
+   * {@link DATALAKE_WRITE} so a key handed to an agent can look at a lake without being able to
+   * change one. A retrieval query that spends LLM/search budget (semantic search, the RLM answer
+   * endpoint) needs {@link DATALAKE_QUERY} instead: this scope does not imply it, though a
+   * {@link DATALAKE_QUERY} key does gain this one (it has to, to reach the read-gated routes its
+   * own retrieval tools call back into).
+   */
+  DATALAKE_READ = 'datalake:read',
+  /**
+   * Change what is IN a lake or how it behaves: create/update/archive a lake,
+   * attach, detach, retag, or purge its files, run converge/rechunk/research,
+   * and manage upload batches. Deliberately does NOT carry
+   * {@link DATALAKE_SHARE}: adding files to a lake is a different privilege
+   * from handing the lake to someone else.
+   */
+  DATALAKE_WRITE = 'datalake:write',
+  /**
+   * Change WHO can reach a lake: its visibility and its ownership (and the
+   * grant/revoke door). Never implied by {@link DATALAKE_WRITE} - re-sharing a
+   * lake widens the blast radius of every document already in it, which is not
+   * what a key minted to keep a lake's files current asked for.
+   */
+  DATALAKE_SHARE = 'datalake:share',
+  /**
+   * Run a retrieval query that spends LLM/search budget against a lake: semantic search and the
+   * RLM answer endpoint. Deliberately NOT suffixed `:read` - {@link DATALAKE_READ} feeds the
+   * New-Key modal's "Read-only" preset (`s.value.endsWith(':read')`), and a key an operator mints
+   * expecting that preset to be free must not auto-join a scope that commissions billable work.
+   * Mirrors {@link OPTIHASHI_COMPUTE}'s split from {@link OPTIHASHI_READ}. Never implied by
+   * {@link DATALAKE_READ} or {@link DATALAKE_WRITE} - spend on a lake is opt-in on its own. The
+   * implication runs the other way for gating purposes: a key holding only this scope also passes
+   * {@link DATALAKE_READ}'s gate, because the RLM answer endpoint's in-REPL tools call back into
+   * read-gated routes (e.g. GET /api/data-lakes/articles) with the caller's own credential.
+   */
+  DATALAKE_QUERY = 'datalake:query',
+  /**
+   * Read the Overwatch analytics surface - the cross-product overview, product
+   * inventory and config, first-party metrics, product-stat history, funnel,
+   * and pipeline freshness. Exists so an agent can be handed a credential that
+   * can only *look*: it is deliberately NOT the read half of
+   * {@link OVERWATCH_INGEST_WRITE}, which is a per-product ingest credential
+   * bound to one `productId` and able to write that product's numbers. Handing
+   * an explorer the ingest key would let it fabricate the very stats it reports
+   * on, so the two are separate scopes rather than a read/write pair.
+   *
+   * Like every scope, it authorizes but never entitles - the Overwatch access
+   * check (`requestHasOverwatchAccess`: admin OR developer OR `overwatch:pro`)
+   * still runs against the key's owner and can refuse on its own. A key minted
+   * with this scope by a user who does not hold Overwatch access opens nothing.
+   * That check and the routes it guards live in the Overwatch overlay package;
+   * neither has an implementation in this repository, so nothing here verifies
+   * the claim - it is a property of the consumer, recorded for the reader.
+   */
+  OVERWATCH_READ = 'overwatch:read',
+}
+
+export enum ApiKeyStatus {
+  ACTIVE = 'active',
+  DISABLED = 'disabled',
+  EXPIRED = 'expired',
+  RATE_LIMITED = 'rate_limited',
+}
+
+export interface IUserApiKeyUsage {
+  totalRequests: number;
+  totalTokens?: number;
+  lastRequest?: Date;
+  requestsToday: number;
+  requestsThisMinute: number;
+  /**
+   * Cumulative settled spend in credits, accumulated atomically per completion -
+   * the counter that `spendCap` (IUserApiKey) is enforced against. Written only
+   * via IUserApiKeyRepository.incrementSpend, never via updateUsage.
+   */
+  totalSpendCredits?: number;
+}
+
+export interface IUserApiKeyBaseline {
+  // Average requests per hour (calculated from last 30 days)
+  avgRequestsPerHour: number;
+  // Average requests per day
+  avgRequestsPerDay: number;
+  // Common IP addresses (top 5 most frequent)
+  commonIPs: string[];
+  // Common endpoints (top 10 most frequent)
+  commonEndpoints: string[];
+  // Average response time in milliseconds
+  avgResponseTime: number;
+  // Peak usage hours (hours of day with most requests, 0-23)
+  peakHours: number[];
+  // Last calculated timestamp
+  lastCalculatedAt: Date;
+}
+
+export interface IUserApiKeyMetadata {
+  clientIP?: string;
+  userAgent?: string;
+  createdFrom: 'dashboard' | 'cli' | 'api' | 'bridge' | 'overwatch-admin' | 'oauth-exchange';
+  /** Admin userId who minted this key. Set on insert only; service layer must reject updates. */
+  createdByUserId?: string;
+  /**
+   * OAuth client that minted this key via the federated AI-token exchange
+   * (`createdFrom === 'oauth-exchange'`). Tags the key to a (user, client) pair
+   * so the exchange endpoint can find and revoke the prior key before minting a
+   * fresh one - keeping at most one active exchange key per pair. NOT `productId`:
+   * productId carries a global per-product active-key cap that would reject mints
+   * once a client had >20 concurrent federated users.
+   */
+  oauthClientId?: string;
+  baseline?: IUserApiKeyBaseline;
+}
+
+export interface IUserApiKeyRateLimit {
+  requestsPerMinute: number;
+  requestsPerDay: number;
+}
+
+/**
+ * White-label config for an embed key (epic #41), rendered by the widget serve
+ * route. Writes are validated by EmbedBrandingSchema (schemas/embedBranding.ts);
+ * `hideBranding` is honored only when the key owner's plan carries the
+ * whitelabel entitlement - the serve route re-checks on every request.
+ */
+export interface IEmbedBranding {
+  primaryColor?: string;
+  logoUrl?: string;
+  displayName?: string;
+  hideBranding?: boolean;
+}
+
+export interface IUserApiKey {
+  id: string;
+  userId: string;
+  name: string; // Human-friendly name
+  keyHash: string; // Hashed secret (never store plain text)
+  keyPrefix: string; // First 16 chars for lookup (e.g., "b4m_live_xxxxxxx")
+  scopes: ApiKeyScope[]; // Permissions array
+  status: ApiKeyStatus;
+  expiresAt?: Date; // Optional expiration
+  lastUsedAt?: Date;
+  /**
+   * Revocation audit trail, all set together the first time a key is revoked and
+   * never overwritten afterwards. `updatedAt` is not a substitute - any write to
+   * the document bumps it.
+   */
+  revokedAt?: Date;
+  /**
+   * Acting user who revoked the key. Absent for system-initiated revocations
+   * (rollbacks, bulk deactivation) that have no human actor. Distinct from
+   * `userId` (the minter) when an org admin revokes a key billed to an org they
+   * administer but did not mint.
+   */
+  revokedBy?: string;
+  /** Why the key was revoked, when the caller supplied a reason. */
+  revokedReason?: string;
+  rateLimit: IUserApiKeyRateLimit;
+  usage: IUserApiKeyUsage;
+  metadata: IUserApiKeyMetadata;
+  /** Overwatch product this key is bound to. Required when scopes includes OVERWATCH_INGEST_WRITE. */
+  productId?: string;
+  /** Human-readable product name, stored for display in admin UI. */
+  productName?: string;
+  /**
+   * Billing target for this key's usage. Absent/`User` = personal key billed to
+   * `userId`. `Organization` = the key's AI usage debits `organizationId`'s
+   * shared credit pool instead of the minting user; the minter stays in `userId`
+   * for attribution + management. Invariant: `Organization` iff `organizationId`
+   * is set. Only `User` and `Organization` are valid here (never `Agent`). An
+   * `embed:chat` key must be `Organization`-billed - enforced at mint and at
+   * serve/session (assertEmbedCredential).
+   */
+  billingOwnerType?: ApiKeyBillingOwnerType;
+  /** Organization whose credit pool this key bills. Set iff billingOwnerType is Organization. */
+  organizationId?: string;
+  /** Agent this embed key is bound to. Required when scopes includes EMBED_CHAT. */
+  agentId?: string;
+  /** https origin allow-list for an embed key (normalized, deduped, capped at EMBED_ORIGINS_MAX). */
+  allowedOrigins?: string[];
+  /**
+   * Lake ids this key is bound to for the manage-but-not-member session admission (see
+   * `preauthorizedLakeIds` on the session, and its containment check at
+   * pages/api/sessions/create.ts). Admin-minted only; a key's presence in this list is not itself
+   * authority to admit a lake - the caller must still pass the live canManageLake check on every
+   * request, this only narrows which lakes that authority may be exercised for.
+   */
+  preauthorizedLakeIds?: string[];
+  /** Optional white-label config for an embed key (see {@link IEmbedBranding}). */
+  branding?: IEmbedBranding;
+  /**
+   * Lifetime spend ceiling for an embed key, in whole credits. Absent = uncapped.
+   * A present 0 is a real cap (blocks all spend), so enforcement guards with
+   * `spendCap !== undefined`, never a truthy check.
+   */
+  spendCap?: number;
+  /**
+   * Whether this embed key's billing OWNER holds the white-label entitlement.
+   * Computed server-side on GET /api/user-api-keys only (never persisted) so the
+   * Configure UI can gate the hide-branding toggle on the owner's plan rather
+   * than the viewer's - matching the owner-scoped serve/write rule. Boolean only:
+   * the owner's tags or the reason are never sent to the client.
+   */
+  ownerHasWhitelabel?: boolean;
+}
+
+/**
+ * The billing owner an API key can settle usage to. A subset of
+ * {@link CreditHolderType} - keys bill a person or an org, never an agent.
+ */
+export type ApiKeyBillingOwnerType = CreditHolderType.User | CreditHolderType.Organization;
+
+export interface IUserApiKeyDocument extends IUserApiKey, IMongoDocument {}
+
+export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocument> {
+  findByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
+  findByUserId: (userId: string) => Promise<IUserApiKeyDocument[]>;
+  findByUserIdAndId: (userId: string, id: string) => Promise<IUserApiKeyDocument | null>;
+  updateUsage: (id: string, usage: Partial<IUserApiKeyUsage>) => Promise<void>;
+  /** Atomically adds settled credits to `usage.totalSpendCredits`. No-op for non-finite or <= 0 amounts. */
+  incrementSpend: (id: string, credits: number) => Promise<void>;
+  /** Sets the spend ceiling; `null` clears it ($unset), so the key becomes uncapped. */
+  setSpendCap: (id: string, spendCap: number | null) => Promise<void>;
+  /** Zeroes `usage.totalSpendCredits` - the top-up lever for an over-cap key. */
+  resetSpend: (id: string) => Promise<void>;
+  /** Replaces both request ceilings; the enforcer picks them up on the next request. */
+  setRateLimit: (id: string, rateLimit: IUserApiKeyRateLimit) => Promise<void>;
+  updateLastUsed: (id: string) => Promise<void>;
+  findActiveByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
+  deactivateAllByUserId: (userId: string) => Promise<void>;
+  findExpiredKeys: () => Promise<IUserApiKeyDocument[]>;
+  countActiveByUserId: (userId: string) => Promise<number>;
+  findByProductId: (productId: string) => Promise<IUserApiKeyDocument[]>;
+  /** Counts keys with status ACTIVE or RATE_LIMITED for a product. */
+  countActiveByProductId: (productId: string) => Promise<number>;
+  /** All keys billed to an organization's credit pool (any status), newest first. */
+  findByOrganizationId: (organizationId: string) => Promise<IUserApiKeyDocument[]>;
+  /**
+   * The key with this id iff it is org-billed to one of the given orgs (any
+   * status); null for an empty set (fail-closed, no query). Positive org-admin
+   * scope for the configure/rotate/revoke write paths - same billing predicate
+   * findByOrganizationId applies to the LIST route, so an org admin can act on
+   * any key billed to an org they administer, not just keys they minted.
+   */
+  findByOrganizationIdsAndId: (organizationIds: string[], id: string) => Promise<IUserApiKeyDocument | null>;
+  /** Active keys bound to an agent (embed keys), newest first; uses the sparse
+   *  { agentId, status } index. */
+  findByAgentId: (agentId: string) => Promise<IUserApiKeyDocument[]>;
+}

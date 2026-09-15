@@ -1,0 +1,113 @@
+type ExtendedMessageRole = 'user' | 'assistant' | 'system' | 'error' | 'function';
+
+export interface IExtendedMessage extends Omit<IMessage, 'role'> {
+  role: ExtendedMessageRole;
+}
+
+export type MessageContentTypes = 'text' | 'image' | 'image_url' | 'tool_use' | 'tool_result' | 'thinking';
+
+type ChatCompletionMessageRole = 'user' | 'assistant' | 'system' | 'function' | 'tool';
+
+interface MessageContentBase {
+  type: MessageContentTypes;
+  text?: string;
+  image_url?: {
+    url: string;
+  };
+
+  // tool_use
+  id?: string;
+  name?: string;
+  input?: {
+    [key: string]: unknown;
+  };
+
+  // thinking
+  thinking?: string;
+}
+
+export interface MessageContentText extends MessageContentBase {
+  type: 'text';
+  text: string;
+}
+
+export interface MessageContentImageUrl extends MessageContentBase {
+  type: 'image_url';
+  image_url: {
+    url: string;
+  };
+}
+
+export interface MessageContentInlineImage extends MessageContentBase {
+  type: 'image';
+  source: {
+    // "base64" for base64-encoded image:
+    type: 'base64';
+    // MIME type of the content, eg "image/jpeg" "image/png"
+    media_type: string;
+    // Base64-encoded image
+    data: string;
+  };
+}
+
+export interface MessageContentToolUse extends MessageContentBase {
+  type: 'tool_use';
+  id: string;
+  name: string;
+  input: {
+    [key: string]: unknown;
+  };
+  thought_signature?: string; // Required by Gemini API for function calling
+}
+
+export interface MessageContentToolResult extends MessageContentBase {
+  type: 'tool_result';
+  tool_use_id: string;
+  content: string;
+}
+
+export interface MessageContentThinking extends MessageContentBase {
+  type: 'thinking';
+  thinking: string;
+  signature?: string; // Required by Anthropic API for verification
+}
+
+export type MessageContentObject =
+  | MessageContentText
+  | MessageContentImageUrl
+  | MessageContentInlineImage
+  | MessageContentToolUse
+  | MessageContentToolResult
+  | MessageContentThinking;
+
+export type MessageContent = string | MessageContentObject[];
+
+export interface IMessage {
+  role: ChatCompletionMessageRole;
+  content: MessageContent | string;
+  fabFileIds?: string[];
+  /**
+   * Mark this message as a cache breakpoint. Anthropic translates this to
+   * `cache_control: { type: 'ephemeral' }` on the content block; other providers
+   * ignore the flag. Setting on a message also auto-attaches the prompt-caching
+   * beta header.
+   */
+  cache?: boolean;
+  /**
+   * Names the tool whose presence this message's instructions assume ("you MUST use the X tool").
+   * Messages carrying it are dropped by `stripToolDependentMessages` wherever a turn continues
+   * WITHOUT tools - notably each backend's max-tool-call recursion, which re-sends the assembled
+   * messages with tools removed. Control-only, like `cache`: never sent to a provider.
+   *
+   * Intended for SYSTEM messages, which is what every current caller sets it on. The backends that
+   * rebuild each wire message from `role`/`content` drop it for free; the two that forward IMessage
+   * objects more or less intact strip it explicitly, so setting it on a user or assistant message is
+   * safe rather than a silent leak.
+   *
+   * An empty string counts as UNSET for dropping: `stripToolDependentMessages` keeps such a message
+   * rather than losing a real prompt to a mis-set marker. The wire-side strip is deliberately less
+   * forgiving and removes the key whenever it is present, since an empty one is still not something a
+   * provider should see.
+   */
+  requiresTool?: string;
+}

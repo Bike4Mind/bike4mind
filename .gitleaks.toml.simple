@@ -1,0 +1,44 @@
+# Simple Gitleaks configuration for Bike4Mind
+# This is a fallback config if the more detailed one has issues
+
+title = "Bike4Mind Simple Gitleaks Configuration"
+
+[allowlist]
+description = "global allow list"
+paths = [
+  ".*\\.min\\.js$",
+  ".*\\.chunk\\.js$",
+  ".*\\.bundle\\.js$",
+  ".*\\.md$"
+]
+
+# Simple rule for MongoDB connection strings
+[[rules]]
+id = "simple-mongodb-uri"
+description = "MongoDB Connection String"
+regex = "mongodb(\\+srv)?://[^\\s'\"]+"
+tags = ["mongodb"]
+
+# Simple rule for Slack webhooks
+[[rules]]
+id = "simple-slack-webhook"
+description = "Slack Webhook"
+regex = "https://hooks\\.slack\\.com/services/T[a-zA-Z0-9]{8,10}/B[a-zA-Z0-9]{8,10}/[a-zA-Z0-9]{24}"
+tags = ["slack"]
+
+# Simple rule for AWS keys
+[[rules]]
+id = "simple-aws-key"
+description = "AWS Access Key"
+regex = "(AWS|aws|Aws)?_?(ACCESS|access|Access)?_?(KEY|key|Key)(_|=|:).*"
+tags = ["aws"]
+
+# Simple rule for API keys
+[[rules]]
+id = "simple-api-key"
+description = "API Key"
+regex = "(api|API)((-|_)?(key|KEY|Key))((-|_)?(token|TOKEN|Token))?(=|:|\"| |'|`).+"
+tags = ["api", "token"]
+
+# Use all the built-in rules
+[useBuiltinRules] 

@@ -1,0 +1,207 @@
+import { Logger } from '@bike4mind/observability';
+import { updateShareableFiles } from '../projectService';
+import { usableSessionIds } from '../utils/objectIds';
+import {
+  ICacheRepository,
+  IFabFileRepository,
+  IProjectRepository,
+  isImageServeable,
+  ISessionDocument,
+  ISessionRepository,
+  IUserDocument,
+  SessionUpdateRequestSchema,
+} from '@bike4mind/common';
+import { NotFoundError } from '@bike4mind/utils';
+import { deriveRetrievalTagsFromFiles, type DeriveRetrievalTagsAdapters } from './deriveRetrievalTags';
+import { secureParameters } from '@bike4mind/utils';
+import { BaseStorage, getCachedSignedUrl } from '@bike4mind/utils';
+import uniq from 'lodash/uniq.js';
+import { z } from 'zod';
+
+// `id` is service-internal addressing, not a field the public PUT request body carries
+// (it comes from the URL path there) - extend rather than fold it into the shared schema.
+const updateSessionParamtersSchema = SessionUpdateRequestSchema.extend({
+  id: z.string(),
+});
+
+type UpdateSessionParameters = z.infer<typeof updateSessionParamtersSchema>;
+
+/**
+ * Compile-time guard for the manage-but-not-member admission, mirroring the one in
+ * sessionService/create.ts. `preauthorizedLakeIds` must never become an `updateSession` input: it is
+ * set once at session-create after the route's own `canManageLake` check, and a session update must
+ * not be able to grant or alter it. Adding the key to `SessionUpdateRequestSchema` resolves the
+ * argument to `false` and fails the build.
+ *
+ * This lives here rather than as a `@ts-expect-error` in update.test.ts because tsconfig.json
+ * excludes test files, so an assertion in one is in no typecheck program and can never fail.
+ */
+type AssertTrue<T extends true> = T;
+export type UpdateSessionParametersOmitPreauthorizedLakeIds = AssertTrue<
+  'preauthorizedLakeIds' extends keyof UpdateSessionParameters ? false : true
+>;
+
+interface UpdateSessionAdapters {
+  db: {
+    sessions: ISessionRepository;
+    projects: IProjectRepository;
+    fabFiles: IFabFileRepository;
+    caches: ICacheRepository;
+  };
+  storage: BaseStorage;
+  /** Optional so existing callers compile; without it a failed derivation is silent. */
+  logger?: Logger;
+  /** Lets the lake-tag derivation see lake-membership files - see DeriveRetrievalTagsAdapters. */
+  resolveLakeAccess?: DeriveRetrievalTagsAdapters['resolveLakeAccess'];
+}
+
+export const updateSession = async (
+  user: IUserDocument,
+  parameters: UpdateSessionParameters,
+  adapters: UpdateSessionAdapters
+) => {
+  const { db } = adapters;
+  const {
+    knowledgeIds: rawIds,
+    artifactIds,
+    name,
+    id,
+    tags,
+    lastUsedModel,
+    forceKnowledgeRetrieval,
+    propagateToProjects,
+  } = secureParameters(parameters, updateSessionParamtersSchema);
+
+  // Dropped, not rejected - a rename PUTs the whole session, so see usableSessionIds.
+  const knowledgeIds = rawIds && usableSessionIds(rawIds, 'knowledge', adapters.logger ?? Logger.globalInstance);
+
+  const session = await db.sessions.shareable.findUpdateAccessById(user, id);
+
+  if (!session) {
+    throw new NotFoundError('Session not found');
+  }
+
+  // Propagate only what this write ADDS, never the whole list.
+  //
+  // Propagating the full list makes the propagateToProjects flag leak across writes: a
+  // file added earlier with propagation off gets pushed into the project by the next
+  // write that happens to have it on, and a removal - which sends the surviving files -
+  // propagates all of them. Since project.fileIds is append-only and additive, the
+  // delta is the only set that ever needs propagating anyway.
+  //
+  // Keyed on the ADDED set rather than "the list changed" for a second reason too: a rename PUTs
+  // the whole stored list back, and dropping an unusable id from it makes the incoming list differ
+  // from the stored one on EVERY such write. A changed-list test would then fire on a rename.
+  const alreadyKnown = new Set(session.knowledgeIds ?? []);
+  const addedFileIds = knowledgeIds?.filter(id => !alreadyKnown.has(id)) ?? [];
+
+  if (addedFileIds.length > 0 && propagateToProjects !== false) {
+    await addFilesToProjects(user, { session, fileIds: addedFileIds }, adapters);
+  }
+
+  // Persist ONLY the fields this request changed, as a plain partial keyed by id.
+  // findUpdateAccessById returns a hydrated mongoose doc, and passing it straight to
+  // db.sessions.update($set of the whole thing) reverted any owner share revocation,
+  // visibility change or soft-delete that landed during this handler's window (the read
+  // authorizes a sharee; a lake derivation and signed-URL pre-warm can run before the write).
+  const update: Partial<ISessionDocument> & { id: string } = { id };
+  if (name) update.name = name;
+
+  // Re-derive the lake scope whenever a file is ATTACHED. Deriving only at CREATE left the most
+  // ordinary way a user reaches a lake completely unscoped: attaching a lake file to an
+  // already-open notebook goes through here, and an empty `retrievalTags` is not a narrow scope -
+  // the search's tag clause is skipped entirely and retrieval falls through to every lake the
+  // caller can reach. Only ever ADDS a derived scope; an explicitly-set one is left alone.
+  //
+  // Additions, not any change: a removal cannot bring a new lake into the attached set, and a
+  // write that adds nothing (a rename, a tag edit) must not acquire a scope as a side effect.
+  // Derives from the whole surviving list, since the scope describes the attached set, not the
+  // delta.
+  // An explicit lake scope blocks derivation even when it selected NO lake - otherwise attaching a
+  // lake file would hand a scope back to a user who had deliberately cleared it.
+  if (knowledgeIds && addedFileIds.length > 0 && !session.retrievalTags?.length && !session.lakeScopeExplicit) {
+    const derived = await deriveRetrievalTagsFromFiles(user, knowledgeIds, {
+      db: { fabFiles: db.fabFiles },
+      logger: adapters.logger,
+      resolveLakeAccess: adapters.resolveLakeAccess,
+    });
+    if (derived.length > 0) update.retrievalTags = derived;
+  }
+
+  if (knowledgeIds) update.knowledgeIds = knowledgeIds;
+  if (artifactIds) update.artifactIds = artifactIds;
+  if (tags) update.tags = tags;
+  if (lastUsedModel) update.lastUsedModel = lastUsedModel;
+  // Explicit undefined check (not `|| session.x`) so toggling OFF (false) actually persists.
+  if (forceKnowledgeRetrieval !== undefined) {
+    update.forceKnowledgeRetrieval = forceKnowledgeRetrieval;
+  }
+  update.lastUpdated = new Date();
+
+  const updated = await db.sessions.update(update);
+
+  return updated ?? session;
+};
+
+const addFilesToProjects = async (
+  user: IUserDocument,
+  params: {
+    session: ISessionDocument;
+    fileIds: string[];
+  },
+  adapters: UpdateSessionAdapters
+) => {
+  const { session } = params;
+  let { fileIds } = params;
+  const { db, storage } = adapters;
+  const projects = await db.projects.findAllBySessionId(session.id);
+
+  // Access-check before granting. findAllByIds has no ACL, and updateShareableFiles
+  // below grants every project member read+update on whatever it is handed - so an
+  // unchecked id here lets a caller PUT someone else's fileId into their own session
+  // and share it with their project. The sibling path (projectService/addFiles) has
+  // always resolved through `shareable`; this one did not.
+  //
+  // Filters rather than throwing, unlike that sibling: a session's knowledgeIds can
+  // legitimately contain a global/system file that the shareable filter does not return
+  // for this user, and failing the whole session write on one such id would be a
+  // regression. Skipping it grants nothing, which is the property that matters.
+  const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, fileIds);
+  if (files.length !== fileIds.length) {
+    const accessible = new Set(files.map(f => f.id));
+    const refused = fileIds.filter(id => !accessible.has(id));
+    Logger.globalInstance.warn(
+      `addFilesToProjects: refusing to share ${refused.length} file(s) not accessible to user ${user.id}: ` +
+        `${refused.join(', ')}`
+    );
+    fileIds = fileIds.filter(id => accessible.has(id));
+    if (fileIds.length === 0) return;
+  }
+
+  // Hydrate the signed-URL cache for all files to speed up llm context retrieval.
+  //
+  // This pre-warm bypasses generateSignedUrl's moderation gate: it must not mint
+  // (and cache, under `cachedSignedUrl:<filePath>`) a signed URL for a held/blocked uploaded
+  // image. Skipping it here means the image simply has no pre-warmed cache entry, which is
+  // correct since it must not be servable.
+  await Promise.all(
+    files.map(async file => {
+      if (file.filePath && isImageServeable(file)) {
+        try {
+          await getCachedSignedUrl(file.filePath, storage, db);
+        } catch (error) {
+          // Log error but continue processing other files
+          Logger.globalInstance.error(`Failed to cache signed URL for file ${file.id}:`, error);
+        }
+      }
+    })
+  );
+
+  for (const project of projects) {
+    project.fileIds = uniq([...project.fileIds, ...fileIds]);
+
+    await updateShareableFiles(user.id, { project, files }, adapters);
+
+    await db.projects.update(project);
+  }
+};

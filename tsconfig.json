@@ -1,0 +1,18 @@
+{
+  "extends": "@tsconfig/node24/tsconfig.json",
+  "exclude": [
+    "packages",
+    "apps",
+    "docs-site",
+    "b4m-core",
+    "infra",
+    ".sst",
+    "sst.config.ts",
+    "sst-env.d.ts",
+    "scripts/codemods/__tests__/fixtures"
+  ],
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+  },
+}

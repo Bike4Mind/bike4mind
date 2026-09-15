@@ -1,0 +1,58 @@
+name: E2E Tests (Core)
+
+# Thin caller for the Core promote-gate. Runs the curated Core project subset and
+# posts the e2e/core commit status the prod-promotion console gates on. All shared
+# plumbing lives in e2e-run.yml; this file only maps the Core-specific parameters.
+# Core set graduates over time — see apps/client/e2e/README.md ("Core gate").
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: 'Target environment'
+        type: choice
+        options: [dev]
+        default: dev
+      pr_number:
+        description: 'PR number for preview env (overrides stage, e.g. 123)'
+        type: string
+        required: false
+      e2e_test_id:
+        description: 'Optional extra tester prefix for test user isolation (e.g. alice). Leave blank - e2e-run always appends a per-run id, so runs are already isolated from each other.'
+        type: string
+        required: false
+      gate_run:
+        description: 'Internal: deploy-triggered gate run (leave false for manual runs)'
+        type: string
+        default: 'false'
+        required: false
+
+jobs:
+  core:
+    # Grant the reusable workflow the token scopes it needs: id-token for OIDC AWS
+    # auth and statuses for the e2e/core commit status. A called workflow's
+    # permissions can only be downgraded from the caller's, and this repo's default
+    # token is read-only — so without this block the reusable job loses OIDC (no
+    # tests run) and can't stamp e2e/core (silent gate death).
+    permissions:
+      contents: read
+      id-token: write
+      statuses: write
+    uses: ./.github/workflows/e2e-run.yml
+    secrets: inherit
+    with:
+      stage:              ${{ inputs.stage }}
+      pr_number:          ${{ inputs.pr_number }}
+      e2e_test_id:        ${{ inputs.e2e_test_id }}
+      gate_run:           ${{ inputs.gate_run }}
+      playwright_args:    '--project=unauthenticated --project=notebook --project=prompts'
+      status_context:     'e2e/core'
+      suite_name:         'Core'
+      artifact_suffix:    'core'
+      timeout_minutes:    60
+      stamp_promotable:   ${{ inputs.pr_number == '' }}
+      wait_for_deploy:    ${{ inputs.pr_number == '' }}
+      show_credits:       false
+      trigger_label:      ${{ inputs.gate_run == 'true' && 'Run via Deployer' || 'Run via Dispatch' }}
+      concurrency_group:  ${{ inputs.gate_run == 'true' && 'e2e-core-gate' || format('e2e-core-{0}', inputs.pr_number || inputs.stage || 'dev') }}
+      cancel_in_progress: ${{ inputs.gate_run == 'true' }}

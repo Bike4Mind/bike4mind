@@ -1,0 +1,131 @@
+import { IBaseEvent } from '../../..';
+
+export enum UserApiKeyEvents {
+  CREATED = 'User API Key Created',
+  USED = 'User API Key Used',
+  ROTATED = 'User API Key Rotated',
+  UPDATED = 'User API Key Updated',
+  REVOKED = 'User API Key Revoked',
+  RATE_LIMITED = 'User API Key Rate Limited',
+  RATE_LIMIT_RESET = 'User API Key Rate Limit Reset',
+  EXPIRED = 'User API Key Expired',
+  DELETED = 'User API Key Deleted',
+}
+
+export interface IUserApiKeyCreatedEvent extends IBaseEvent {
+  type: UserApiKeyEvents.CREATED;
+  metadata: {
+    keyId: string;
+    name: string;
+    scopes: string[];
+    expiresAt?: string;
+    createdFrom: 'dashboard' | 'cli' | 'api' | 'bridge';
+    /** 'Organization' for org-billed keys, 'User' (or absent) for personal keys. */
+    billingOwnerType?: string;
+    /** Set for org-billed keys: the organization charged for this key's usage. */
+    organizationId?: string;
+    /**
+     * Lake ids an admin-minted key was bound to for the manage-but-not-member session admission.
+     * A CEILING on what the key may admit, never a grant (see pages/api/sessions/create.ts), and
+     * invisible on the lake side - so this is where a lake's bindings are discoverable.
+     */
+    preauthorizedLakeIds?: string[];
+  };
+}
+
+export interface IUserApiKeyUsedEvent extends IBaseEvent {
+  type: UserApiKeyEvents.USED;
+  metadata: {
+    keyId: string;
+    keyPrefix: string;
+    endpoint: string;
+    method: string;
+    responseTime: number;
+    statusCode: number;
+    // Optional completions-specific fields
+    model?: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    stream?: boolean;
+    /** Correlation ID echoed as the X-Request-ID header */
+    requestId?: string;
+  };
+}
+
+export interface IUserApiKeyRotatedEvent extends IBaseEvent {
+  type: UserApiKeyEvents.ROTATED;
+  metadata: {
+    keyId: string;
+    name: string;
+  };
+}
+
+export interface IUserApiKeyUpdatedEvent extends IBaseEvent {
+  type: UserApiKeyEvents.UPDATED;
+  metadata: {
+    keyId: string;
+    name: string;
+    /** Which fields changed (e.g. 'agentId', 'allowedOrigins', 'branding'). */
+    updatedFields: string[];
+  };
+}
+
+export interface IUserApiKeyRevokedEvent extends IBaseEvent {
+  type: UserApiKeyEvents.REVOKED;
+  metadata: {
+    keyId: string;
+    name: string;
+    reason?: string;
+  };
+}
+
+export interface IUserApiKeyRateLimitedEvent extends IBaseEvent {
+  type: UserApiKeyEvents.RATE_LIMITED;
+  metadata: {
+    keyId: string;
+    keyPrefix: string;
+    limitType: 'minute' | 'day';
+    limit: number;
+    endpoint: string;
+    method?: string;
+    currentCount?: number;
+  };
+}
+
+export interface IUserApiKeyRateLimitResetEvent extends IBaseEvent {
+  type: UserApiKeyEvents.RATE_LIMIT_RESET;
+  metadata: {
+    keyId: string;
+    name: string;
+    /** The acting admin's user id; the event's userId is the key owner. */
+    resetBy: string;
+  };
+}
+
+export interface IUserApiKeyExpiredEvent extends IBaseEvent {
+  type: UserApiKeyEvents.EXPIRED;
+  metadata: {
+    keyId: string;
+    name: string;
+    expiresAt: string;
+  };
+}
+
+export interface IUserApiKeyDeletedEvent extends IBaseEvent {
+  type: UserApiKeyEvents.DELETED;
+  metadata: {
+    keyId: string;
+    name: string;
+  };
+}
+
+export type UserApiKeyEventPayload =
+  | IUserApiKeyCreatedEvent
+  | IUserApiKeyUsedEvent
+  | IUserApiKeyRotatedEvent
+  | IUserApiKeyUpdatedEvent
+  | IUserApiKeyRevokedEvent
+  | IUserApiKeyRateLimitedEvent
+  | IUserApiKeyRateLimitResetEvent
+  | IUserApiKeyExpiredEvent
+  | IUserApiKeyDeletedEvent;

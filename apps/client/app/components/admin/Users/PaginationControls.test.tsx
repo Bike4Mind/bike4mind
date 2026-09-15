@@ -1,0 +1,111 @@
+import { getThemeConfig } from '@client/app/utils/themes';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import type { ReactNode } from 'react';
+import { describe, expect, it, vi } from 'vitest';
+import PaginationControls from './PaginationControls';
+
+const appTheme = extendTheme({ ...getThemeConfig() });
+const TestWrapper = ({ children }: { children: ReactNode }) => (
+  <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+);
+
+const baseProps = {
+  currentPage: 2,
+  totalPages: 4,
+  onPageChange: vi.fn(),
+  currentLimit: 10,
+  onLimitChange: vi.fn(),
+  totalUsers: 37,
+  pageLimitOptions: [5, 10, 20],
+};
+
+describe('PaginationControls', () => {
+  it('shows the page size picker and total count in the full variant', () => {
+    render(<PaginationControls {...baseProps} variant="full" />, { wrapper: TestWrapper });
+
+    expect(screen.getByText('Page 2 of 4')).toBeInTheDocument();
+    expect(screen.getByText('37 users')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-page-size-select-full')).toBeInTheDocument();
+  });
+
+  it('keeps the page size picker but drops the total count in the compact variant', () => {
+    render(<PaginationControls {...baseProps} variant="compact" />, { wrapper: TestWrapper });
+
+    expect(screen.getByText('2 of 4')).toBeInTheDocument();
+    // Compact is the only pager on phones, so page size has to stay reachable here.
+    expect(screen.getByTestId('admin-page-size-select-compact')).toBeInTheDocument();
+    expect(screen.queryByText('37 users')).not.toBeInTheDocument();
+  });
+
+  it('shows the active page size in both variants', () => {
+    const { unmount } = render(<PaginationControls {...baseProps} variant="compact" />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('admin-page-size-select-compact')).toHaveTextContent('10 / page');
+    unmount();
+
+    render(<PaginationControls {...baseProps} variant="full" />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('admin-page-size-select-full')).toHaveTextContent('10 / page');
+  });
+
+  it('keeps each pager addressable when both mount together, as they do on desktop', () => {
+    // A shared testid across variants resolves to two elements and trips Playwright strict mode.
+    render(
+      <>
+        <PaginationControls {...baseProps} variant="full" />
+        <PaginationControls {...baseProps} variant="compact" />
+      </>,
+      { wrapper: TestWrapper }
+    );
+
+    expect(screen.getAllByTestId('admin-page-size-select-full')).toHaveLength(1);
+    expect(screen.getAllByTestId('admin-page-size-select-compact')).toHaveLength(1);
+  });
+
+  it('falls back to the current limit when it is not one of the options', () => {
+    // A limit persisted under admin-user-tab-01 can outlive a change to PAGE_LIMIT_OPTIONS;
+    // without the fallback the control reads as a bare " / page".
+    render(<PaginationControls {...baseProps} currentLimit={15} variant="full" />, { wrapper: TestWrapper });
+
+    expect(screen.getByTestId('admin-page-size-select-full')).toHaveTextContent('15 / page');
+  });
+
+  it('omits the total until the first response lands', () => {
+    // totalPages is 0 before data arrives; "Page 1 of 0" reads as an empty result set.
+    const { unmount } = render(<PaginationControls {...baseProps} currentPage={1} totalPages={0} variant="full" />, {
+      wrapper: TestWrapper,
+    });
+    expect(screen.getByText('Page 1')).toBeInTheDocument();
+    expect(screen.queryByText(/of 0/)).not.toBeInTheDocument();
+    unmount();
+
+    render(<PaginationControls {...baseProps} currentPage={1} totalPages={0} variant="compact" />, {
+      wrapper: TestWrapper,
+    });
+    expect(screen.getByText('1')).toBeInTheDocument();
+    expect(screen.queryByText(/of 0/)).not.toBeInTheDocument();
+  });
+
+  it('disables the pager at both ends of the range', () => {
+    const { unmount } = render(<PaginationControls {...baseProps} currentPage={1} variant="compact" />, {
+      wrapper: TestWrapper,
+    });
+    expect(screen.getByLabelText('Previous page')).toBeDisabled();
+    expect(screen.getByLabelText('Next page')).toBeEnabled();
+    unmount();
+
+    render(<PaginationControls {...baseProps} currentPage={4} variant="compact" />, { wrapper: TestWrapper });
+    expect(screen.getByLabelText('Next page')).toBeDisabled();
+  });
+
+  it('reports page changes', async () => {
+    const onPageChange = vi.fn();
+    render(<PaginationControls {...baseProps} onPageChange={onPageChange} variant="compact" />, {
+      wrapper: TestWrapper,
+    });
+
+    await userEvent.click(screen.getByLabelText('Next page'));
+
+    expect(onPageChange).toHaveBeenCalledWith(3);
+  });
+});

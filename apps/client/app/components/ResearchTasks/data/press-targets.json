@@ -1,0 +1,607 @@
+{
+  "category": "press",
+  "title": "Press Releases",
+  "description": "Official company press releases and announcements",
+  "targets": [
+    {
+      "company": "Microsoft",
+      "ticker": "MSFT",
+      "url": "https://www.microsoft.com/en-us/Investor/PressReleases",
+      "category": "tech"
+    },
+    {
+      "company": "NVIDIA",
+      "ticker": "NVDA",
+      "url": "https://nvidianews.nvidia.com/news",
+      "category": "tech"
+    },
+    {
+      "company": "Apple",
+      "ticker": "AAPL",
+      "url": "https://www.apple.com/newsroom/",
+      "category": "tech"
+    },
+    {
+      "company": "Amazon.com",
+      "ticker": "AMZN",
+      "url": "https://ir.aboutamazon.com/news-release/news-release-details/",
+      "category": "tech"
+    },
+    {
+      "company": "Alphabet (Google)",
+      "ticker": "GOOG",
+      "url": "https://abc.xyz/investor/news/",
+      "category": "tech"
+    },
+    {
+      "company": "Meta Platforms (Facebook)",
+      "ticker": "META",
+      "url": "https://investor.fb.com/news-and-events/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Broadcom",
+      "ticker": "AVGO",
+      "url": "https://investors.broadcom.com/news-releases/news-release-details/",
+      "category": "tech"
+    },
+    {
+      "company": "TSMC",
+      "ticker": "TSM",
+      "url": "https://pr.tsmc.com/english/news",
+      "category": "tech"
+    },
+    {
+      "company": "Tesla",
+      "ticker": "TSLA",
+      "url": "https://ir.tesla.com/press-release",
+      "category": "tech"
+    },
+    {
+      "company": "Tencent Holdings",
+      "ticker": "TCEHY",
+      "url": "https://www.tencent.com/en-us/investors.html",
+      "category": "tech"
+    },
+    {
+      "company": "Netflix",
+      "ticker": "NFLX",
+      "url": "https://ir.netflix.net/news-events/press-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Oracle",
+      "ticker": "ORCL",
+      "url": "https://investor.oracle.com/investor-news/news-details/",
+      "category": "tech"
+    },
+    {
+      "company": "SAP",
+      "ticker": "SAP",
+      "url": "https://news.sap.com/investor-relations/",
+      "category": "tech"
+    },
+    {
+      "company": "ASML Holding",
+      "ticker": "ASML",
+      "url": "https://www.asml.com/en/news/press-releases",
+      "category": "tech"
+    },
+    {
+      "company": "Alibaba Group",
+      "ticker": "BABA",
+      "url": "https://www.alibabagroup.com/en/news/press_pdf",
+      "category": "tech"
+    },
+    {
+      "company": "Palantir Technologies",
+      "ticker": "PLTR",
+      "url": "https://investors.palantir.com/news-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Samsung Electronics",
+      "ticker": "005930.KS",
+      "url": "https://www.samsung.com/global/ir/news/",
+      "category": "tech"
+    },
+    {
+      "company": "Cisco Systems",
+      "ticker": "CSCO",
+      "url": "https://newsroom.cisco.com/",
+      "category": "tech"
+    },
+    {
+      "company": "Salesforce",
+      "ticker": "CRM",
+      "url": "https://www.salesforce.com/news/",
+      "category": "tech"
+    },
+    {
+      "company": "IBM",
+      "ticker": "IBM",
+      "url": "https://newsroom.ibm.com/",
+      "category": "tech"
+    },
+    {
+      "company": "Intuit",
+      "ticker": "INTU",
+      "url": "https://investors.intuit.com/news/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "ServiceNow",
+      "ticker": "NOW",
+      "url": "https://investors.servicenow.com/news/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "AMD",
+      "ticker": "AMD",
+      "url": "https://ir.amd.com/news-events/press-releases",
+      "category": "tech"
+    },
+    {
+      "company": "Booking Holdings",
+      "ticker": "BKNG",
+      "url": "https://ir.bookingholdings.com/news-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Uber Technologies",
+      "ticker": "UBER",
+      "url": "https://investor.uber.com/news-events/news-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Adobe Inc.",
+      "ticker": "ADBE",
+      "url": "https://news.adobe.com/news/news-details/",
+      "category": "tech"
+    },
+    {
+      "company": "Xiaomi Corp.",
+      "ticker": "XIACF",
+      "url": "https://www.mi.com/global/about/news",
+      "category": "tech"
+    },
+    {
+      "company": "Texas Instruments",
+      "ticker": "TXN",
+      "url": "https://newscenter.ti.com/news-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Qualcomm",
+      "ticker": "QCOM",
+      "url": "https://www.qualcomm.com/news/releases",
+      "category": "tech"
+    },
+    {
+      "company": "Sony Group",
+      "ticker": "SONY",
+      "url": "https://www.sony.com/en/SonyInfo/News/Press/",
+      "category": "tech"
+    },
+    {
+      "company": "Spotify Technology",
+      "ticker": "SPOT",
+      "url": "https://investors.spotify.com/news/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Schneider Electric",
+      "ticker": "SU.PA",
+      "url": "https://www.se.com/ww/en/about-us/newsroom/news-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "PDD Holdings",
+      "ticker": "PDD",
+      "url": "https://investor.pddholdings.com/news-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "AppLovin Corp.",
+      "ticker": "APP",
+      "url": "https://investors.applovin.com/news-and-events/press-releases/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Arm Holdings",
+      "ticker": "ARM",
+      "url": "https://ir.arm.com/news-and-events/press-releases",
+      "category": "tech"
+    },
+    {
+      "company": "Shopify Inc.",
+      "ticker": "SHOP",
+      "url": "https://investors.shopify.com/news-and-events/press-releases/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "ADP",
+      "ticker": "ADP",
+      "url": "https://mediacenter.adp.com/",
+      "category": "tech"
+    },
+    {
+      "company": "Applied Materials",
+      "ticker": "AMAT",
+      "url": "https://investor.appliedmaterials.com/news-releases/news-release-details/",
+      "category": "tech"
+    },
+    {
+      "company": "Palo Alto Networks",
+      "ticker": "PANW",
+      "url": "https://investors.paloaltonetworks.com/news-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "MercadoLibre",
+      "ticker": "MELI",
+      "url": "https://investor.mercadolibre.com/news-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Arista Networks",
+      "ticker": "ANET",
+      "url": "https://investors.arista.com/news-releases/news-release-details/",
+      "category": "tech"
+    },
+    {
+      "company": "Micron Technology",
+      "ticker": "MU",
+      "url": "https://investors.micron.com/news-releases/news-release-details/",
+      "category": "tech"
+    },
+    {
+      "company": "CrowdStrike Holdings",
+      "ticker": "CRWD",
+      "url": "https://ir.crowdstrike.com/news-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "SK Hynix",
+      "ticker": "000660.KS",
+      "url": "https://news.skhynix.com/",
+      "category": "tech"
+    },
+    {
+      "company": "Meituan",
+      "ticker": "3690.HK",
+      "url": "https://about.meituan.com/en/news",
+      "category": "tech"
+    },
+    {
+      "company": "Lam Research",
+      "ticker": "LRCX",
+      "url": "https://newsroom.lamresearch.com/news-releases/news-release-details/",
+      "category": "tech"
+    },
+    {
+      "company": "Analog Devices",
+      "ticker": "ADI",
+      "url": "https://investor.analog.com/news-releases/news-release-details/",
+      "category": "tech"
+    },
+    {
+      "company": "KLA Corporation",
+      "ticker": "KLAC",
+      "url": "https://ir.kla.com/news-events/press-releases",
+      "category": "tech"
+    },
+    {
+      "company": "MicroStrategy",
+      "ticker": "MSTR",
+      "url": "https://www.microstrategy.com/en/investor-relations/press-releases",
+      "category": "tech"
+    },
+    {
+      "company": "Sea Limited",
+      "ticker": "SE",
+      "url": "https://www.sea.com/investor-news",
+      "category": "tech"
+    },
+    {
+      "company": "Keyence Corp.",
+      "ticker": "6861.T",
+      "url": "https://www.keyence.com/ss/info/news/",
+      "category": "tech"
+    },
+    {
+      "company": "Nintendo Co. Ltd.",
+      "ticker": "7974.T",
+      "url": "https://www.nintendo.co.jp/corporate/release/en/",
+      "category": "tech"
+    },
+    {
+      "company": "Fiserv, Inc.",
+      "ticker": "FI",
+      "url": "https://investors.fiserv.com/news/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "DoorDash, Inc.",
+      "ticker": "DASH",
+      "url": "https://ir.doordash.com/news/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Equinix, Inc.",
+      "ticker": "EQIX",
+      "url": "https://investor.equinix.com/news-events/press-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Intel Corporation",
+      "ticker": "INTC",
+      "url": "https://newsroom.intel.com/news-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Airbnb, Inc.",
+      "ticker": "ABNB",
+      "url": "https://news.airbnb.com/",
+      "category": "tech"
+    },
+    {
+      "company": "Cadence Design Systems",
+      "ticker": "CDNS",
+      "url": "https://www.cadence.com/en_US/home/company/newsroom/press-releases.html",
+      "category": "tech"
+    },
+    {
+      "company": "NetEase, Inc.",
+      "ticker": "NTES",
+      "url": "https://ir.netease.com/en/news-events/news-releases",
+      "category": "tech"
+    },
+    {
+      "company": "Fortinet, Inc.",
+      "ticker": "FTNT",
+      "url": "https://investor.fortinet.com/news-events/press-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Dell Technologies",
+      "ticker": "DELL",
+      "url": "https://investors.delltechnologies.com/news-releases/news-release-details/",
+      "category": "tech"
+    },
+    {
+      "company": "Constellation Software",
+      "ticker": "CSU.TO",
+      "url": "https://www.csisoftware.com/news/",
+      "category": "tech"
+    },
+    {
+      "company": "Synopsys, Inc.",
+      "ticker": "SNPS",
+      "url": "https://news.synopsys.com/",
+      "category": "tech"
+    },
+    {
+      "company": "Tokyo Electron Ltd.",
+      "ticker": "8035.T",
+      "url": "https://www.tel.com/news/",
+      "category": "tech"
+    },
+    {
+      "company": "Hon Hai Precision (Foxconn)",
+      "ticker": "2317.TW",
+      "url": "https://www.foxconn.com/en-us/press/",
+      "category": "tech"
+    },
+    {
+      "company": "PayPal Holdings",
+      "ticker": "PYPL",
+      "url": "https://newsroom.paypal-corp.com/news",
+      "category": "tech"
+    },
+    {
+      "company": "Snowflake Inc.",
+      "ticker": "SNOW",
+      "url": "https://investors.snowflake.com/news-and-events/press-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "MediaTek Inc.",
+      "ticker": "2454.TW",
+      "url": "https://www.mediatek.com/news-events/news-releases",
+      "category": "tech"
+    },
+    {
+      "company": "Workday, Inc.",
+      "ticker": "WDAY",
+      "url": "https://newsroom.workday.com/press-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "CoreWeave, Inc.",
+      "ticker": "CRWV",
+      "url": "https://www.coreweave.com/press",
+      "category": "tech"
+    },
+    {
+      "company": "Robinhood Markets",
+      "ticker": "HOOD",
+      "url": "https://investors.robinhood.com/news/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Autodesk, Inc.",
+      "ticker": "ADSK",
+      "url": "https://adsknews.autodesk.com/news/press-releases",
+      "category": "tech"
+    },
+    {
+      "company": "Coinbase Global",
+      "ticker": "COIN",
+      "url": "https://investor.coinbase.com/news-and-events/news-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Cloudflare, Inc.",
+      "ticker": "NET",
+      "url": "https://cloudflare.net/press-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Roper Technologies",
+      "ticker": "ROP",
+      "url": "https://investors.ropertech.com/news-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Adyen NV",
+      "ticker": "ADYEN.AS",
+      "url": "https://www.adyen.com/press-and-media/press-releases",
+      "category": "tech"
+    },
+    {
+      "company": "Atlassian Corp.",
+      "ticker": "TEAM",
+      "url": "https://investors.atlassian.com/news/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Marvell Technology",
+      "ticker": "MRVL",
+      "url": "https://investor.marvell.com/news-releases/news-release-details/",
+      "category": "tech"
+    },
+    {
+      "company": "SMIC",
+      "ticker": "0981.HK",
+      "url": "https://www.smics.com/en/site/news",
+      "category": "tech"
+    },
+    {
+      "company": "Infineon Technologies",
+      "ticker": "IFX.DE",
+      "url": "https://www.infineon.com/cms/en/about-infineon/press/press-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "NXP Semiconductors",
+      "ticker": "NXPI",
+      "url": "https://investors.nxp.com/news-releases/news-release-details/",
+      "category": "tech"
+    },
+    {
+      "company": "Coupang, Inc.",
+      "ticker": "CPNG",
+      "url": "https://news.coupang.com/",
+      "category": "tech"
+    },
+    {
+      "company": "Dassault Systèmes",
+      "ticker": "DSY.PA",
+      "url": "https://www.3ds.com/newsroom/press-releases",
+      "category": "tech"
+    },
+    {
+      "company": "TE Connectivity",
+      "ticker": "TEL",
+      "url": "https://www.te.com/usa-en/about-te/news-center/press-releases.html",
+      "category": "tech"
+    },
+    {
+      "company": "JD.com",
+      "ticker": "JD",
+      "url": "https://ir.jd.com/news-releases",
+      "category": "tech"
+    },
+    {
+      "company": "Veeva Systems",
+      "ticker": "VEEV",
+      "url": "https://ir.veeva.com/news/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Zscaler, Inc.",
+      "ticker": "ZS",
+      "url": "https://ir.zscaler.com/news/default.aspx",
+      "category": "tech"
+    },
+    {
+      "company": "Fair Isaac Corp. (FICO)",
+      "ticker": "FICO",
+      "url": "https://investors.fico.com/news-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Take-Two Interactive",
+      "ticker": "TTWO",
+      "url": "https://ir.take2games.com/news-events/press-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Fidelity National Info. Svcs.",
+      "ticker": "FIS",
+      "url": "https://investor.fisglobal.com/news-releases/news-release-details/",
+      "category": "tech"
+    },
+    {
+      "company": "Datadog, Inc.",
+      "ticker": "DDOG",
+      "url": "https://investors.datadoghq.com/news-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Wolters Kluwer NV",
+      "ticker": "WKL.AS",
+      "url": "https://www.wolterskluwer.com/en/newsroom/news",
+      "category": "tech"
+    },
+    {
+      "company": "Trip.com Group",
+      "ticker": "TCOM",
+      "url": "https://ir.trip.com/news-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Garmin Ltd.",
+      "ticker": "GRMN",
+      "url": "https://investor.garmin.com/news/press-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Advantest Corp.",
+      "ticker": "6857.T",
+      "url": "https://www.advantest.com/news",
+      "category": "tech"
+    },
+    {
+      "company": "Block, Inc. (formerly Square)",
+      "ticker": "SQ",
+      "url": "https://investors.block.xyz/news/news-details/",
+      "category": "tech"
+    },
+    {
+      "company": "Delta Electronics (Thailand)",
+      "ticker": "DELTA.BK",
+      "url": "https://www.deltathailand.com/en/news",
+      "category": "tech"
+    },
+    {
+      "company": "Electronic Arts",
+      "ticker": "EA",
+      "url": "https://news.ea.com/press-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Amadeus IT Group",
+      "ticker": "AMS.MC",
+      "url": "https://corporate.amadeus.com/en/newsroom/press-releases",
+      "category": "tech"
+    },
+    {
+      "company": "Quanta Computer",
+      "ticker": "2382.TW",
+      "url": "https://www.quantatw.com/en-us/News",
+      "category": "tech"
+    }
+  ]
+} 

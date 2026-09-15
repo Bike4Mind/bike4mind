@@ -1,0 +1,3 @@
+{
+  "anthropic": { "id": "anthropic", "name": "Anthropic", "env": ["ANTHROPIC_API_KEY"], "models": {} }
+}

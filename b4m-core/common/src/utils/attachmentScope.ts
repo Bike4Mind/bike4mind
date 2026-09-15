@@ -1,0 +1,40 @@
+/**
+ * How long an uploaded file stays in a notebook's context.
+ *
+ *  - 'notebook' -> persisted to `session.knowledgeIds`, re-sent on every later turn
+ *  - 'message'  -> travels with one message as `messageFileIds`, then it is gone
+ *
+ * 'auto' resolves by mime type: documents stay, images do not. An image is re-encoded
+ * as base64 into every turn it is attached to, so persisting one costs tokens on every
+ * message forever; a document's cost is bounded by chunk retrieval. Users can still
+ * override either way.
+ *
+ * Resolved once when an upload starts and frozen onto the pending file, so a later
+ * change to the control - or a notebook switch - cannot re-scope something in flight.
+ *
+ * The array is the source of truth so UI can enumerate the modes rather than restating
+ * them; its order is the order the composer's scope control renders in.
+ */
+export const ATTACH_SCOPE_MODES = ['auto', 'notebook', 'message'] as const;
+export type AttachScopeMode = (typeof ATTACH_SCOPE_MODES)[number];
+export type AttachScope = 'notebook' | 'message';
+
+/**
+ * Is this mime type an image? `image/svg+xml` counts, since vision models receive it
+ * as an image.
+ *
+ * The repo has ~50 inline `startsWith('image/')` checks and they disagree on the edges
+ * (case, null handling). Only the ones on the attachment pipeline - composer upload,
+ * chat context assembly, attachment capability warnings - have been converted here.
+ * Icon pickers, avatar validation and resize eligibility still carry their own copies:
+ * same question, unrelated subsystems, and folding them in would have made this a
+ * repo-wide diff.
+ */
+export function isImageAttachment(mimeType?: string | null): boolean {
+  return typeof mimeType === 'string' && mimeType.toLowerCase().startsWith('image/');
+}
+
+export function resolveAttachScope(mode: AttachScopeMode, mimeType?: string | null): AttachScope {
+  if (mode !== 'auto') return mode;
+  return isImageAttachment(mimeType) ? 'message' : 'notebook';
+}

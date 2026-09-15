@@ -1,0 +1,12 @@
+{
+  "generatedAt": "2026-07-26T00:00:00.000Z",
+  "notice": "Override map for the aggregator join (spec sec 5.6), keyed by OUR model id. An entry always beats the normalizer, and an entry naming a key the aggregator does not publish fails modelIdAliases.test.ts rather than silently resolving to nothing. Keep this small and reviewable: it is where genuinely irregular ids live, not a rules engine. Only add an entry when the aggregator key is the SAME model on the SAME backend - never point a direct-API id at a Bedrock or reseller key, because the prices differ.",
+  "aliases": {
+    "gemini-2.5-flash-preview-09-25": {
+      "litellm": "gemini-2.5-flash-preview-09-2025"
+    },
+    "grok-3-fast": {
+      "litellm": "xai/grok-3-fast-latest"
+    }
+  }
+}

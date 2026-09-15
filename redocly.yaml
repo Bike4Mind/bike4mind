@@ -1,0 +1,22 @@
+# Redocly config for linting the generated OpenAPI spec.
+# CI runs: redocly lint apps/client/public/openapi.json
+extends:
+  - recommended
+
+rules:
+  # The committed spec ships neutral placeholder server URLs
+  # (your-deployment.example.com) on purpose: this is a public repo and must not
+  # hardcode a real deployment domain. Real domains are injected at build time
+  # via B4M_OPENAPI_PROD_URL / *_STAGING_URL / *_LOCAL_URL (see
+  # b4m-core/common/src/openapi/document.ts), so the example.com default is
+  # expected here, not a defect.
+  no-server-example.com: off
+
+  # The API is proprietary with no public license URL, so info.license is just
+  # { name: 'Proprietary' }. There is no SPDX identifier or URL to add, so the
+  # strict license check does not apply.
+  info-license-strict: off
+
+apis:
+  main:
+    root: apps/client/public/openapi.json

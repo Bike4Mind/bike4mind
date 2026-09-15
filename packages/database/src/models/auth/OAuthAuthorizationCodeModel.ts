@@ -1,0 +1,71 @@
+import { IMongoDocument, IBaseRepository } from '@bike4mind/common';
+import mongoose, { Schema, model, Model } from 'mongoose';
+import BaseRepository from '@bike4mind/db-core';
+
+export interface IOAuthAuthorizationCodeDocument extends IMongoDocument {
+  code: string;
+  clientId: string;
+  userId: string;
+  redirectUri: string;
+  scopes: string[];
+  codeChallenge?: string;
+  codeChallengeMethod?: 'S256';
+  nonce?: string;
+  expiresAt: Date;
+  used: boolean;
+  createdAt: Date;
+}
+
+export interface IOAuthAuthorizationCodeRepository extends IBaseRepository<IOAuthAuthorizationCodeDocument> {
+  consumeValidCode(code: string): Promise<IOAuthAuthorizationCodeDocument | null>;
+}
+
+type IOAuthAuthorizationCodeModel = Model<IOAuthAuthorizationCodeDocument>;
+
+const OAuthAuthorizationCodeSchema = new Schema<IOAuthAuthorizationCodeDocument>(
+  {
+    code: { type: String, required: true, unique: true },
+    clientId: { type: String, required: true },
+    userId: { type: String, required: true },
+    redirectUri: { type: String, required: true },
+    scopes: { type: [String], default: [] },
+    codeChallenge: { type: String },
+    codeChallengeMethod: { type: String, enum: ['S256'] },
+    nonce: { type: String },
+    expiresAt: { type: Date, required: true },
+    used: { type: Boolean, default: false },
+  },
+  { timestamps: true }
+);
+
+// TTL index: auto-delete expired codes from MongoDB
+OAuthAuthorizationCodeSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+OAuthAuthorizationCodeSchema.index({ code: 1, used: 1 });
+
+class OAuthAuthorizationCodeRepository
+  extends BaseRepository<IOAuthAuthorizationCodeDocument>
+  implements IOAuthAuthorizationCodeRepository
+{
+  constructor(m: IOAuthAuthorizationCodeModel) {
+    super(m);
+  }
+
+  /**
+   * Atomically claim an unused, unexpired code: flip `used` false->true and return
+   * the post-update document (so the caller reads `used: true`), or null if it was
+   * already used/expired/unknown. Single DB round-trip so two concurrent token
+   * requests can't both redeem one code (the find-then-mark split had a race that
+   * let a leaked code be spent twice).
+   */
+  consumeValidCode(code: string) {
+    return this.model
+      .findOneAndUpdate({ code, used: false, expiresAt: { $gt: new Date() } }, { $set: { used: true } }, { new: true })
+      .exec();
+  }
+}
+
+export const OAuthAuthorizationCodeModel =
+  (mongoose.models['OAuthAuthorizationCode'] as IOAuthAuthorizationCodeModel) ??
+  model<IOAuthAuthorizationCodeDocument>('OAuthAuthorizationCode', OAuthAuthorizationCodeSchema);
+
+export const oauthAuthorizationCodeRepository = new OAuthAuthorizationCodeRepository(OAuthAuthorizationCodeModel);

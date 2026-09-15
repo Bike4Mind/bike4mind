@@ -1,0 +1,70 @@
+# Bike4Mind self-host: Tailscale sidecar - OPT-IN override.
+#
+# Puts the instance on your private Tailscale tailnet with automatic HTTPS, so a
+# few trusted people can reach it with NOTHING published to the public internet
+# (Tailscale connects outbound and traverses NAT; no ports are opened, no domain
+# or DNS needed). This is the recommended path for sharing with friends. Use it as
+# an EXTRA -f alongside the base stack, gated by the `tailnet` profile:
+#
+#   docker compose -f compose.selfhost.yaml -f compose.tailscale.yaml \
+#     --env-file .env.selfhost --profile tailnet up -d
+#
+# Prerequisites (see "Share your instance with friends" in SELF_HOST.md):
+#   - A Tailscale account with MagicDNS AND HTTPS Certificates enabled (tailnet
+#     admin console -> DNS). HTTPS is what gives the app a secure-context URL,
+#     which it requires for remote browsers.
+#   - An auth key from the admin console (Settings -> Keys); set TS_AUTHKEY in
+#     .env.selfhost. A reusable + ephemeral key is convenient for a container.
+#   - After first bring-up, set WEBSOCKET_URL=wss://<magicdns-name>/ws in
+#     .env.selfhost (the sidecar prints its name; `docker compose logs tailscale`)
+#     and re-up, so browsers open the realtime socket over the tailnet.
+#
+# What this file does:
+#   - Runs the official `tailscale/tailscale` image in userspace-networking mode
+#     (no NET_ADMIN or /dev/net/tun needed), joins your tailnet with TS_AUTHKEY,
+#     and serves the app over tailnet HTTPS via TS_SERVE_CONFIG (selfhost/tailscale/
+#     serve.json): `/` -> app:3000 and `/ws` -> ws:3001, reached over the compose
+#     network. Tailscale provisions and renews the TLS cert automatically.
+#   - Publishes NO host ports. The base stack still publishes app/ws on the host
+#     (LAN-only behind NAT); if this host has a PUBLIC IP, firewall those or use
+#     the Caddy path instead - Tailscale alone does not close them.
+#
+# What this file does NOT do (see the SELF_HOST.md checklist):
+#   - It does not change MinIO credentials, enable Mongo auth, or configure SMTP.
+#   - Published artifact bundles derive their CSP from the Host header and
+#     X-Forwarded-Proto; whether `tailscale serve` forwards those as the viewer
+#     needs is not verified. If a published /p/ page fails to load assets over the
+#     tailnet, use the Caddy path (compose.caddy.yaml). Chat, notebooks, and
+#     realtime are unaffected.
+
+name: bike4mind-selfhost
+
+services:
+  tailscale:
+    image: ${TAILSCALE_IMAGE:-tailscale/tailscale:latest}
+    profiles: ['tailnet']
+    hostname: ${TS_HOSTNAME:-bike4mind}
+    restart: unless-stopped
+    environment:
+      # Auth key from the tailnet admin console (Settings -> Keys). Required.
+      TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY to a tailnet auth key in .env.selfhost}
+      # Userspace networking: no NET_ADMIN capability or /dev/net/tun device needed,
+      # which keeps this a plain unprivileged container. tailscale serve works in
+      # this mode.
+      TS_USERSPACE: 'true'
+      # Persist node state across restarts so it does not re-register each `up`.
+      TS_STATE_DIR: /var/lib/tailscale
+      # Serve the app over tailnet HTTPS per this config (mounted below).
+      TS_SERVE_CONFIG: /config/serve.json
+      # Extra flags, e.g. --advertise-tags. Empty by default.
+      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      # HTTPS + path routing for the app and the realtime gateway. Read-only.
+      - ./selfhost/tailscale/serve.json:/config/serve.json:ro
+    depends_on:
+      - app
+      - ws
+
+volumes:
+  tailscale-state:

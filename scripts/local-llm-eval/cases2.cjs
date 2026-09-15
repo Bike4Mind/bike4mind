@@ -1,0 +1,27 @@
+// Translated verbatim from the real shipped test suite:
+// apps/client/server/tavern/parseQuestResponse.test.ts (commit bab24a5ae1)
+module.exports = [
+  { name: 'prose reply -> null (the #8022 crash input)',
+    input: 'I appreciate the request, but I cannot generate a quest for that.', expected: null },
+  { name: 'empty string -> null', input: '', expected: null },
+  { name: 'whitespace only -> null', input: '   \n  ', expected: null },
+  { name: 'clean JSON object',
+    input: '{"title":"Research pricing","description":"Compare 3 competitors","difficulty":"medium"}',
+    expected: { title: 'Research pricing', description: 'Compare 3 competitors', difficulty: 'medium' } },
+  { name: 'JSON wrapped in a markdown code fence',
+    input: '```json\n{"title":"T","description":"D","difficulty":"easy"}\n```',
+    expected: { title: 'T', description: 'D', difficulty: 'easy' } },
+  { name: 'JSON embedded in surrounding prose',
+    input: 'Sure! Here is your quest: {"title":"T","description":"D","difficulty":"hard"} Hope that helps!',
+    expected: { title: 'T', description: 'D', difficulty: 'hard' } },
+  { name: 'recover real object past a decoy {placeholder} brace',
+    input: 'Here is a {placeholder}: {"title":"T","description":"D","difficulty":"easy"}',
+    expected: { title: 'T', description: 'D', difficulty: 'easy' } },
+  { name: 'invalid difficulty defaults to medium',
+    input: '{"title":"T","description":"D","difficulty":"legendary"}',
+    expected: { title: 'T', description: 'D', difficulty: 'medium' } },
+  { name: 'valid JSON but wrong shape (missing title) -> null',
+    input: '{"description":"D","difficulty":"easy"}', expected: null },
+  { name: 'malformed JSON -> null and must not throw',
+    input: '{ this is not ::: json', expected: null },
+];

@@ -1,0 +1,318 @@
+# Changesets Release Workflow
+#
+# This workflow handles the entire release lifecycle:
+# 1. When changeset files are pending: creates/updates a "Version Packages" PR
+# 2. When the "Version Packages" PR is merged: publishes to npm and creates GitHub releases
+# 3. Manual version bump via workflow_dispatch
+# 4. Snapshot (prerelease) publish when "Branch Tests" succeeds on a feature branch
+#
+# Replaces: release-please.yaml + post-release.yaml
+#
+# npm auth: Trusted Publishing (OIDC). Each @bike4mind/* package on npmjs.com is
+# configured to trust THIS workflow file (.github/workflows/release.yaml) in this
+# repo. npm allows only ONE trusted publisher per package and validates the
+# TOP-LEVEL workflow file (not a called reusable workflow), so every npm publish
+# must enter through this file - that's why the snapshot publish is triggered
+# here via workflow_run instead of from test.yaml. Publishing jobs need the
+# `id-token: write` permission; no npm token secret is involved.
+
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'b4m-core/**'
+      - 'packages/cli/**'
+      - '.changeset/**'
+      - '.github/workflows/release.yaml'
+  # Snapshot publishes ride on Branch Tests completing (see snapshot job below).
+  workflow_run:
+    workflows: ["Branch Tests"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Package to bump (e.g., common, services, utils, mcp, cli, or all)'
+        required: true
+        type: choice
+        options:
+          - all
+          - agents
+          - auth
+          - common
+          - core
+          - db-core
+          - fab-pipeline
+          - infra
+          - llm-adapters
+          - observability
+          - services
+          - utils
+          - mcp
+          - cli
+      version-type:
+        description: 'Version bump type'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  # workflow_run (snapshot) runs group per feature branch so branches don't
+  # queue behind each other; push/dispatch runs keep their event-wide group.
+  group: changesets-release-${{ github.event_name }}-${{ github.event.workflow_run.head_branch || '' }}
+  cancel-in-progress: false
+
+# Disable Husky git hooks in CI. The changesets action does git push
+# to create/update the Version Packages PR branch, which would trigger
+# the pre-push hook (pnpm -w typecheck && pnpm -r typecheck) and timeout.
+# https://typicode.github.io/husky/how-to.html
+env:
+  HUSKY: "0"
+
+jobs:
+  # Manual version bump: creates a changeset file on a new branch and opens a PR
+  manual-version-bump:
+    if: github.event_name == 'workflow_dispatch' && github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    steps:
+      # Use b4m-release-bot App token (not GITHUB_TOKEN) so the manual bump PR
+      # triggers CI workflows. PRs from github-actions[bot] (GITHUB_TOKEN)
+      # are blocked by GitHub's infinite-loop prevention; custom App bots are not.
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Verify App token is non-empty
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if [ -z "$APP_TOKEN" ]; then
+            echo "::error::App token generation returned empty — check RELEASE_APP_ID / RELEASE_APP_PRIVATE_KEY. Aborting before fallback to GITHUB_TOKEN (which would create PRs that skip CI)."
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Configure Git
+        run: |
+          git config user.name "b4m-release-bot[bot]"
+          git config user.email "b4m-release-bot[bot]@users.noreply.github.com"
+
+      - name: Create changeset and PR
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          PACKAGE: ${{ github.event.inputs.package }}
+          BUMP: ${{ github.event.inputs.version-type }}
+        run: |
+          # Map short names to full package names
+          declare -A PKG_NAMES=(
+            [agents]="@bike4mind/agents"
+            [auth]="@bike4mind/auth"
+            [common]="@bike4mind/common"
+            [core]="@bike4mind/core"
+            [db-core]="@bike4mind/db-core"
+            [fab-pipeline]="@bike4mind/fab-pipeline"
+            [infra]="@bike4mind/infra"
+            [llm-adapters]="@bike4mind/llm-adapters"
+            [observability]="@bike4mind/observability"
+            [services]="@bike4mind/services"
+            [utils]="@bike4mind/utils"
+            [mcp]="@bike4mind/mcp"
+            [slack]="@bike4mind/slack"
+            [cli]="@bike4mind/cli"
+          )
+
+          BRANCH_NAME="changeset/manual-bump-$(date +%s)"
+          git checkout -b "$BRANCH_NAME"
+
+          mkdir -p .changeset
+          CHANGESET_FILE=".changeset/manual-bump-$(date +%s).md"
+
+          if [ "$PACKAGE" = "all" ]; then
+            {
+              echo "---"
+              echo "\"@bike4mind/agents\": $BUMP"
+              echo "\"@bike4mind/auth\": $BUMP"
+              echo "\"@bike4mind/common\": $BUMP"
+              echo "\"@bike4mind/core\": $BUMP"
+              echo "\"@bike4mind/db-core\": $BUMP"
+              echo "\"@bike4mind/fab-pipeline\": $BUMP"
+              echo "\"@bike4mind/infra\": $BUMP"
+              echo "\"@bike4mind/llm-adapters\": $BUMP"
+              echo "\"@bike4mind/observability\": $BUMP"
+              echo "\"@bike4mind/services\": $BUMP"
+              echo "\"@bike4mind/utils\": $BUMP"
+              echo "\"@bike4mind/mcp\": $BUMP"
+              echo "\"@bike4mind/slack\": $BUMP"
+              echo "\"@bike4mind/cli\": $BUMP"
+              echo "---"
+              echo ""
+              echo "Manual version bump for all packages"
+            } > "$CHANGESET_FILE"
+          else
+            PKG_FULL="${PKG_NAMES[$PACKAGE]}"
+            if [ -z "$PKG_FULL" ]; then
+              echo "Error: unknown package '$PACKAGE'"
+              exit 1
+            fi
+            {
+              echo "---"
+              echo "\"$PKG_FULL\": $BUMP"
+              echo "---"
+              echo ""
+              echo "Manual $BUMP version bump for $PKG_FULL"
+            } > "$CHANGESET_FILE"
+          fi
+
+          git add .changeset/
+          git commit -m "chore(release): manual $BUMP bump for $PACKAGE"
+          git push origin "$BRANCH_NAME"
+
+          gh pr create \
+            --title "chore(release): manual $BUMP version bump for $PACKAGE" \
+            --body "Automated manual version bump for **$PACKAGE** package(s) with **$BUMP** bump type." \
+            --base main \
+            --head "$BRANCH_NAME"
+
+  # Automated release: creates Version Packages PR or publishes when that PR is merged
+  release:
+    if: github.event_name == 'push' && github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+      # Mint the OIDC token npm exchanges for a short-lived publish credential.
+      id-token: write
+    steps:
+      # Use b4m-release-bot App token (not GITHUB_TOKEN) so the Version Packages PR
+      # triggers CI workflows. PRs from github-actions[bot] (GITHUB_TOKEN)
+      # are blocked by GitHub's infinite-loop prevention; custom App bots are not.
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Verify App token is non-empty
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if [ -z "$APP_TOKEN" ]; then
+            echo "::error::App token generation returned empty — check RELEASE_APP_ID / RELEASE_APP_PRIVATE_KEY. Aborting before fallback to GITHUB_TOKEN (which would create PRs that skip CI)."
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: 'pnpm'
+          cache-dependency-path: '**/pnpm-lock.yaml'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        # Brand defaults baked into the published @bike4mind/cli at build time.
+        # Source has NO brand fallback (open-core invariant, #9306/#9392); the
+        # hosted publish injects them here from repo variables. Unset on a fork ⇒
+        # empty default (the fork sets its own var). See packages/cli/tsdown.config.ts.
+        env:
+          B4M_DEFAULT_API_URL: ${{ vars.B4M_DEFAULT_API_URL }}
+          B4M_CREDITS_URL: ${{ vars.B4M_CREDITS_URL }}
+        run: |
+          pnpm core:build
+          pnpm --filter "@bike4mind/cli" build
+
+      # changeset publish shells out to `npm publish`; OIDC trusted publishing
+      # needs npm >= 11.5.1, newer than what some Node 24 images bundle.
+      - name: Update npm for trusted publishing
+        run: npm install -g npm@latest
+
+      # No NPM_TOKEN: changesets/action skips the .npmrc auth line when the env
+      # var is absent, and npm authenticates via OIDC trusted publishing.
+      - name: Create Release PR or Publish
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          version: pnpm changeset:version
+          publish: pnpm changeset:publish
+          commit: "chore(release): version packages"
+          title: "chore(release): version packages"
+          createGithubReleases: true
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+
+      # Publishing is OIDC-only (no token fallback), so a package missing its npm
+      # Trusted Publisher fails with ENEEDAUTH mid-publish - which changesets/action
+      # surfaces only as a bare red step. Spell out the fix so a broken release is
+      # self-diagnosing. (changesets/action doesn't expose per-package output here,
+      # so this is generic; the snapshot path names the exact packages.)
+      - name: Explain a likely npm auth failure
+        if: failure() && steps.changesets.outcome == 'failure'
+        run: |
+          echo "::error title=npm publish may have failed auth (ENEEDAUTH)::If the step above failed while publishing, a package is likely missing its npm Trusted Publisher (publishing is OIDC-only, no token fallback). Configure each published package at npmjs.com/package/<pkg>/access -> Trusted Publisher: Organization=Bike4Mind, Repository=bike4mind, Workflow=release.yaml, Environment=blank. Note: npm allows only ONE trusted publisher per package and it must point at THIS file (release.yaml)."
+
+  # Snapshot (prerelease) publish for feature branches, triggered when the
+  # "Branch Tests" workflow completes successfully. It lives in this file so
+  # npm's single trusted publisher (this workflow) covers snapshot publishes
+  # too - see the header comment.
+  snapshot:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch != 'main' &&
+      github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
+    concurrency:
+      group: snapshot-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: true
+    # Reusable-workflow permissions flow from the CALLER: the called jobs can
+    # only use what is granted here (comment-published-versions needs
+    # pull-requests/issues write; the publish job needs id-token: write).
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    uses: ./.github/workflows/snapshot-publish.yaml
+    with:
+      head-branch: ${{ github.event.workflow_run.head_branch }}
+      head-sha: ${{ github.event.workflow_run.head_sha }}

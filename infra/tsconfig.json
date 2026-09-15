@@ -1,0 +1,20 @@
+{
+  "extends": "@tsconfig/node24/tsconfig.json",
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    // toolRuntimeAssets.ts imports apps/client/scripts/resolve-highs-wasm.mjs, the resolver
+    // shared with the client's postinstall copy. It stays .mjs because that script runs under
+    // plain node with no build step; allowJs lets infra consume it (types come from its JSDoc).
+    "allowJs": true
+  },
+  "include": [
+    "../sst-env.d.ts",
+    "../.sst/platform/config.d.ts",
+    "../sst.config.ts",
+    "./premium-generated/overwatch-infra.generated.ts",
+    "./premium-generated/pi-infra.generated.ts",
+    "./**/*.ts"
+  ]
+}

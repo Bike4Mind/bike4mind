@@ -1,0 +1,23 @@
+# Files exempt from the user-$lookup projection guard (scripts/check-user-lookup-projection.mjs).
+# Each entry must have a comment explaining WHY the full user doc does not reach a client.
+# Prefer fixing (add an inner $project) over allowlisting.
+#
+# All entries below were triaged and confirmed SAFE-at-the-response (the full user doc is
+# dropped by a downstream stage / the consumer reads only safe fields, and the endpoints are
+# admin/permission-gated). They are baselined here rather than hardened; follow-up: add an
+# inner $project to make them safe-by-construction and remove them from this list.
+
+# Outer $project limits the joined owner to {_id,name,username,email}; consumed only by the
+# admin-only GET /api/subscriptions.
+apps/client/server/models/Subscription.ts
+
+# Outer $project limits the joined user to {_id,name,username,email}; method is deprecated and
+# not called by any active API handler.
+apps/client/server/models/UserSubscription.ts
+
+# User lookups feed the admin-only usage report (GET /api/users/report -- consumer extracts
+# email only) and the permission-gated metrics (GET /api/users/counterLogs -- $group/$project
+# drop the full doc). NOTE: findAllWithUserByDate/Range return `& { user: IUserDocument }` by
+# contract, so they are safe only while consumers read a safe subset -- harden with an inner
+# $project in follow-up.
+packages/database/src/models/infra/ops/CounterLogModel.ts

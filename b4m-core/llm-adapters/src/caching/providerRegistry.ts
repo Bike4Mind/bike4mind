@@ -1,0 +1,185 @@
+import { ModelBackend } from '@bike4mind/common';
+
+/**
+ * TODO: This registry is currently unused but provides useful metadata about provider caching capabilities.
+ * Potential uses:
+ * - Pre-flight checks before enabling caching
+ * - Documentation/reference for supported providers
+ * - Feature flags based on provider capabilities
+ *
+ * Consider integrating with ChatCompletionProcess to validate cache strategy against provider capabilities.
+ */
+
+export interface ProviderCachingCapabilities {
+  backend: ModelBackend;
+  supported: boolean;
+  automatic: boolean; // True if caching requires no code changes
+  explicitControl: boolean; // True if provider supports explicit cache markers
+  minTokens: number;
+  maxTTL: string;
+  costSavings: number; // Percentage (0-100)
+}
+
+/**
+ * Registry of caching capabilities by provider
+ */
+export const CACHING_CAPABILITIES: Record<ModelBackend, ProviderCachingCapabilities> = {
+  [ModelBackend.Anthropic]: {
+    backend: ModelBackend.Anthropic,
+    supported: true,
+    automatic: false,
+    explicitControl: true,
+    minTokens: 1024,
+    maxTTL: '1h',
+    costSavings: 90,
+  },
+  [ModelBackend.OpenAI]: {
+    backend: ModelBackend.OpenAI,
+    supported: true,
+    automatic: true,
+    explicitControl: false,
+    minTokens: 1024,
+    maxTTL: '24h',
+    costSavings: 90,
+  },
+  [ModelBackend.Gemini]: {
+    backend: ModelBackend.Gemini,
+    supported: true,
+    automatic: true,
+    explicitControl: true,
+    minTokens: 1024,
+    maxTTL: 'auto',
+    costSavings: 90,
+  },
+  [ModelBackend.Bedrock]: {
+    backend: ModelBackend.Bedrock,
+    supported: true,
+    automatic: false,
+    explicitControl: true,
+    minTokens: 1024,
+    maxTTL: '1h',
+    costSavings: 90,
+  },
+  [ModelBackend.XAI]: {
+    backend: ModelBackend.XAI,
+    supported: true,
+    automatic: true,
+    explicitControl: false,
+    minTokens: 0, // Automatic
+    maxTTL: '5m',
+    costSavings: 60,
+  },
+  [ModelBackend.Kimi]: {
+    backend: ModelBackend.Kimi,
+    supported: true,
+    automatic: true,
+    explicitControl: false,
+    // Moonshot documents a hard floor: a prompt under 256 tokens is never cached.
+    minTokens: 256,
+    // Not published. Left as 'auto' rather than invented.
+    maxTTL: 'auto',
+    // A cache read is ~10% of the input rate across the family ($0.30 against
+    // $3.00 on K3), so the saving on the cached portion is ~90%.
+    costSavings: 90,
+  },
+  [ModelBackend.DeepSeek]: {
+    backend: ModelBackend.DeepSeek,
+    supported: true,
+    automatic: true,
+    explicitControl: false,
+    // Not published as a hard floor the way Moonshot's 256 is; caching engages on
+    // repeated prefixes without a documented minimum.
+    minTokens: 0,
+    maxTTL: 'auto',
+    // A cache hit is 2.0% of the miss rate on Flash and 3.3% on V4 Pro, so the
+    // saving on the cached portion is ~98% either way; this single flat score
+    // uses Flash's figure as the estimate for both.
+    costSavings: 98,
+  },
+  [ModelBackend.Ollama]: {
+    backend: ModelBackend.Ollama,
+    supported: false,
+    automatic: false,
+    explicitControl: false,
+    minTokens: 0,
+    maxTTL: '0',
+    costSavings: 0,
+  },
+  [ModelBackend.BFL]: {
+    backend: ModelBackend.BFL,
+    supported: false, // Image generation, not text
+    automatic: false,
+    explicitControl: false,
+    minTokens: 0,
+    maxTTL: '0',
+    costSavings: 0,
+  },
+  [ModelBackend.VoyageAI]: {
+    backend: ModelBackend.VoyageAI,
+    supported: false,
+    automatic: false,
+    explicitControl: false,
+    minTokens: 0,
+    maxTTL: '0',
+    costSavings: 0,
+  },
+  [ModelBackend.AWS]: {
+    backend: ModelBackend.AWS,
+    supported: false,
+    automatic: false,
+    explicitControl: false,
+    minTokens: 0,
+    maxTTL: '0',
+    costSavings: 0,
+  },
+  [ModelBackend.LocalImage]: {
+    backend: ModelBackend.LocalImage,
+    supported: false, // Image generation, not text
+    automatic: false,
+    explicitControl: false,
+    minTokens: 0,
+    maxTTL: '0',
+    costSavings: 0,
+  },
+};
+
+/**
+ * Get caching capabilities for a model
+ */
+export function getCachingCapabilities(model: string): ProviderCachingCapabilities {
+  // Map model ID to backend using heuristics
+  // TODO: This could be enhanced by querying the ModelInfo registry if available
+  const modelLower = model.toLowerCase();
+
+  if (modelLower.includes('claude')) {
+    return CACHING_CAPABILITIES[ModelBackend.Anthropic];
+  } else if (modelLower.includes('gpt') || modelLower.includes('o1') || modelLower.includes('o3')) {
+    return CACHING_CAPABILITIES[ModelBackend.OpenAI];
+  } else if (modelLower.includes('gemini')) {
+    return CACHING_CAPABILITIES[ModelBackend.Gemini];
+  } else if (modelLower.includes('grok')) {
+    return CACHING_CAPABILITIES[ModelBackend.XAI];
+  } else if (modelLower.includes('bedrock')) {
+    return CACHING_CAPABILITIES[ModelBackend.Bedrock];
+  } else if (modelLower.includes('ollama')) {
+    return CACHING_CAPABILITIES[ModelBackend.Ollama];
+  }
+
+  // Default: no caching support
+  return {
+    backend: ModelBackend.Anthropic, // Placeholder
+    supported: false,
+    automatic: false,
+    explicitControl: false,
+    minTokens: 0,
+    maxTTL: '0',
+    costSavings: 0,
+  };
+}
+
+/**
+ * Check if a model supports prompt caching
+ */
+export function supportsCaching(model: string): boolean {
+  return getCachingCapabilities(model).supported;
+}

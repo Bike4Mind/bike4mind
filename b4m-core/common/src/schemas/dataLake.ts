@@ -1,0 +1,353 @@
+import z from 'zod';
+import {
+  DATALAKE_TAG_PREFIX,
+  hasBlankTagPrefixSegment,
+  isReservedTagPrefix,
+  DATA_LAKE_GROUNDING_MODES,
+  MAX_TAG_PREFIX_LENGTH,
+  MIN_TAG_PREFIX_LENGTH,
+  MIN_DATA_LAKE_SLUG_LENGTH,
+  MAX_DATA_LAKE_SLUG_LENGTH,
+  DATA_LAKE_SLUG_REGEX,
+  MAX_TAXONOMY_TAGS,
+  MAX_TAXONOMY_TAG_SUFFIX_LENGTH,
+  MAX_TAXONOMY_TAG_ORIGINAL_NAME_LENGTH,
+  MAX_TAXONOMY_MATCHING_FOLDERS_PER_TAG,
+  MAX_TAXONOMY_MATCHING_FOLDER_LENGTH,
+  MAX_LAKE_FILE_TAG_NAME_LENGTH,
+} from '../constants/dataLakes';
+import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '../constants/chunking';
+import type { LakeConfigAuditCoversEveryUpdatableField } from '../types/entities/LakeConfigChangeEventTypes';
+
+// Hash validation
+
+const sha256Regex = /^[a-f0-9]{64}$/;
+
+// Data Lake CRUD
+
+// Both write paths (create wizard, settings modal) share one definition so the two can never
+// drift. Trimmed at parse time (like fileTagPrefix) rather than relying on a client-side trim,
+// and refused when it is not a single tag: lakeMatchesAccess does an exact, whole-string
+// membership test with no comma-splitting, so a multi-value string saves as a gate nobody holds.
+const requiredUserTagValue = z
+  .string()
+  .trim()
+  .min(1)
+  .max(100)
+  .refine(
+    s => !/[,;]/.test(s),
+    'User tag must be a single tag with no commas or semicolons (e.g. "vip" or "Sales Team")'
+  );
+
+export const CreateDataLakeRequestInput = z.object({
+  name: z.string().min(1).max(200),
+  slug: z
+    .string()
+    // Bounds and shape shared with the wizard, which slugifies the lake NAME and gates on the
+    // result before this ever runs (see slugifyDataLakeName / isValidDataLakeSlug).
+    .min(MIN_DATA_LAKE_SLUG_LENGTH)
+    .max(MAX_DATA_LAKE_SLUG_LENGTH)
+    .regex(DATA_LAKE_SLUG_REGEX, 'Slug must be lowercase alphanumeric with hyphens (e.g. "my-data-lake")'),
+  description: z.string().max(2000).optional(),
+  fileTagPrefix: z
+    .string()
+    // Edge whitespace is stripped so the stored prefix equals its normalizeTagPrefix form -
+    // consumers split between raw reads (tree roots) and normalized reads (tag stamping),
+    // and " acme:" stored raw would desynchronize them.
+    .trim()
+    // Bounds shared with the wizard (tagPrefixIssue, the Start Upload gate, and the prefix it
+    // derives from a lake name) so a value the form offers is never one this rejects.
+    .min(MIN_TAG_PREFIX_LENGTH)
+    .max(MAX_TAG_PREFIX_LENGTH)
+    .refine(s => s.endsWith(':'), 'Tag prefix must end with ":" (e.g. "acme:")')
+    // A prefix with a blank segment ("::", "a::", ":a:", "a: :", or zero-width characters)
+    // gives every derived tag a blank tree segment, which the tag-tree UIs can only paper
+    // over (empty node labels, orphaned back rows). Reject it at the source; the wizard
+    // mirrors this via tagPrefixIssue / hasBlankTagPrefixSegment so the rules cannot drift.
+    .refine(s => !hasBlankTagPrefixSegment(s), 'Tag prefix segments must be non-empty (e.g. "acme:" or "acme:legal:")')
+    .refine(s => !isReservedTagPrefix(s), `Tag prefix cannot use the reserved "${DATALAKE_TAG_PREFIX}" namespace`),
+  requiredUserTag: requiredUserTagValue.optional(),
+  // Entitlement keys are namespaced (must contain ":") so a bare user-tag value can never
+  // be a requiredEntitlement - tags pass through 1:1 as entitlement keys, so an un-namespaced
+  // value would be self-grantable. Stored normalized (lowercase) by the service.
+  requiredEntitlement: z
+    .string()
+    .min(3)
+    .max(100)
+    .refine(
+      s => s.includes(':') && s.split(':').every(part => part.length > 0),
+      'Entitlement key must be namespaced with non-empty parts (e.g. "product:pro")'
+    )
+    .optional(),
+  // The caller's active account-switcher org, if any. It is NOT trusted as-is: the route
+  // authorization-validates it against the caller's org memberships (see resolveActiveOrg)
+  // before scoping the lake, so a user still can't plant a lake into an org they don't
+  // belong to. Omitted (or empty) means personal scope.
+  organizationId: z.string().optional(),
+});
+export type CreateDataLakeRequestInputType = z.infer<typeof CreateDataLakeRequestInput>;
+
+export const UpdateDataLakeRequestInput = z.object({
+  name: z.string().min(1).max(200).optional(),
+  description: z.string().max(2000).optional(),
+  // Per-lake system prompt (see IDataLake.systemPrompt). Uncapped, matching the other system
+  // prompts in the codebase. Edit is gated to creator/admin by updateDataLake (canManageLake).
+  systemPrompt: z.string().optional(),
+  // Preferred registry system-prompt id bound to the lake (see IDataLake.preferredSystemPromptId).
+  // Empty string clears it, mirroring the requiredUserTag sentinel below. The session-activatable
+  // ALLOWLIST check is enforced at the write route (apps/client), which owns the allowlist - core
+  // cannot import it. This bound is a crafted-body cap only, not the real constraint.
+  preferredSystemPromptId: z.union([z.literal(''), z.string().min(1).max(200)]).optional(),
+  // Per-lake grounding mode (see IDataLake.groundingMode). Constrained to the shared enum tuple so
+  // the request, the Mongoose enum, and the resolver can never drift. Omitting it means "leave
+  // unchanged" (Mongo $set strips undefined); there is no clear sentinel because the field is not
+  // nullable - a lake always has a mode (its stored value or the resolver default).
+  groundingMode: z.enum(DATA_LAKE_GROUNDING_MODES).optional(),
+  // Empty string is the explicit "remove this gate" sentinel, accepted on UPDATE only (a
+  // create has no gate to clear). It is stored as-is rather than unset: every read path
+  // already treats '' as ungated - the access queries in DataLakeModel carry explicit
+  // `requiredUserTag: ''` arms, and lakeMatchesAccess/canAccessLake test truthiness.
+  // Omitting the field still means "leave unchanged" (Mongo $set strips undefined).
+  requiredUserTag: z.union([z.literal(''), requiredUserTagValue]).optional(),
+  requiredEntitlement: z
+    .union([
+      z.literal(''),
+      z
+        .string()
+        .min(3)
+        .max(100)
+        .refine(
+          s => s.includes(':') && s.split(':').every(part => part.length > 0),
+          'Entitlement key must be namespaced with non-empty parts (e.g. "product:pro")'
+        ),
+    ])
+    .optional(),
+  // Per-lake opt-in to query-text audit logging (see IDataLake.auditQueryTextEnabled).
+  auditQueryTextEnabled: z.boolean().optional(),
+  // Per-lake opt-in to lake memory (see IDataLake.lakeMemoryEnabled). Recorded whatever the platform
+  // `EnableLakeMemory` setting says: that flag gates behaviour at each consumer, not the stored
+  // preference - see updateDataLake.
+  lakeMemoryEnabled: z.boolean().optional(),
+  // The chunk passage target (TOKENS) this lake REQUIRES of its member files (#1662). A
+  // CONSTRAINT the chunk handler checks, never an override of the file-owner-altitude policy: a
+  // member file whose effective target differs is reported as a conflict, not re-chunked. Bounded
+  // to the same range the scoped DefaultChunkSize setting uses. `null` is the explicit clear
+  // sentinel (remove the requirement); omitting the field leaves it unchanged ($set strips
+  // undefined). Setting it does NOT re-chunk existing files - it only changes what future conflict
+  // checks compare against.
+  requiredPassageTokenTarget: z
+    .number()
+    .int()
+    .min(MIN_PASSAGE_TOKEN_TARGET)
+    // Same ceiling as the scoped DefaultChunkSize setting, which is what the comment above promises.
+    // A lake requiring a target above the detection threshold is the other route into #1804: its
+    // members re-chunk to a compliant size that still trips detection, so its rebuild badge never
+    // reaches zero. Bounding only the setting would leave this route open.
+    .max(OVERSIZED_PASSAGE_TOKEN_THRESHOLD)
+    .nullable()
+    .optional(),
+  // NOTE: status is intentionally NOT updatable here. Lifecycle transitions
+  // (archive/unarchive/delete/cleanup) go through their dedicated endpoints so the
+  // required side effects (cancel in-flight batch, archive/soft-delete files, stat
+  // recompute, best-effort index removal) always run.
+});
+export type UpdateDataLakeRequestInputType = z.infer<typeof UpdateDataLakeRequestInput>;
+
+/**
+ * COMPILE-TIME PIN: every field this endpoint can write must be audited by the config-change event.
+ * Unused at runtime - its only job is to fail the build if the two drift, because a settable field
+ * missing from LAKE_CONFIG_DOCUMENT_FIELDS would have its edits land silently and never appear in
+ * the owner-facing history. Adding a field above without classifying it in LAKE_CONFIG_FIELD_AUDIT
+ * breaks here, which is the moment to make that decision rather than discover it later.
+ */
+export type UpdatableDataLakeFieldsAreAudited = LakeConfigAuditCoversEveryUpdatableField<
+  keyof UpdateDataLakeRequestInputType
+>;
+
+// A STATIC (registry) lake has no document, so it cannot go through UpdateDataLakeRequestInput /
+// updateDataLake - only its admin-settable overlay (see IFallbackLakeSetting) is writable, and only
+// the fields that overlay actually stores. Deliberately narrower than the DB-lake schema: no name,
+// description, or gate fields, since a fallback lake's identity is config, not editable metadata.
+export const UpdateFallbackLakeSettingsRequestInput = z.object({
+  groundingMode: z.enum(DATA_LAKE_GROUNDING_MODES).optional(),
+  // Same shape and sentinel as UpdateDataLakeRequestInput's field above - kept deliberately
+  // identical so the two write paths cannot silently diverge on what a crafted body may contain.
+  // The session-activatable ALLOWLIST check is enforced at the write route (apps/client), same as
+  // the DB-lake path; this schema is a crafted-body cap only, not the real constraint.
+  preferredSystemPromptId: z.union([z.literal(''), z.string().min(1).max(200)]).optional(),
+  // Same field, uncapped, as UpdateDataLakeRequestInput's above. Storage is unconditional - which
+  // registry lakes actually get this INJECTED is isTrustedForInjection's decision (org-scoped
+  // only, getDataLakePrompts.ts), not a write-time restriction, so an admin can set this ahead of
+  // a lake being scoped to an org without the value being rejected or silently dropped.
+  systemPrompt: z.string().optional(),
+});
+export type UpdateFallbackLakeSettingsRequestInputType = z.infer<typeof UpdateFallbackLakeSettingsRequestInput>;
+/**
+ * `purging` is deliberately absent from `status`. It is transitional and past the point of no
+ * return, so a lake in it is on its way out and is never something a caller should filter for.
+ * Keep it out if this schema is ever wired to a route. Full set: `DataLakeStatus`.
+ */
+export const DataLakeListRequestInput = z.object({
+  organizationId: z.string().optional(),
+  status: z.enum(['draft', 'active', 'archived', 'deleted']).optional(),
+});
+export type DataLakeListRequestInputType = z.infer<typeof DataLakeListRequestInput>;
+
+// Conflict resolution (per-batch dedup policy)
+
+export const ConflictResolutionSchema = z.enum(['skip', 'update', 'duplicate']);
+export type ConflictResolutionType = z.infer<typeof ConflictResolutionSchema>;
+
+// Batch creation
+
+export const CreateBatchRequestInput = z.object({
+  dataLakeId: z.string(),
+  totalFiles: z.number().positive(),
+  totalSizeBytes: z.number().nonnegative(),
+  conflictResolution: ConflictResolutionSchema.optional(),
+  appliedTags: z.array(z.object({ name: z.string(), strength: z.number() })).optional(),
+  /** Opt-in for background AI tag suggestion - never true in append mode. */
+  wantsTaxonomy: z.boolean().optional(),
+});
+export type CreateBatchRequestInputType = z.infer<typeof CreateBatchRequestInput>;
+
+// Batch Presigned URLs
+
+export const BatchPresignedUrlFileItem = z.object({
+  fileName: z.string().min(1),
+  mimeType: z.string().min(1),
+  fileSize: z.number().positive(),
+  contentHash: z.string().regex(sha256Regex).optional(),
+  tags: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        strength: z.number().min(0).max(1),
+      })
+    )
+    .optional(),
+  relativePath: z.string().optional(),
+});
+
+export const BatchPresignedUrlRequestInput = z.object({
+  files: z.array(BatchPresignedUrlFileItem).min(1).max(100),
+  /**
+   * The lake to upload into, as an id or a slug (`assertLakeWriteAccess` resolves either).
+   * Send the id: a slug the client derived from the lake's name resolves to whichever lake
+   * holds it, which after the server disambiguates a collision is not the new lake.
+   */
+  dataLakeSlug: z.string().optional(),
+  /**
+   * When uploading into a data lake batch, the batch id so each created FabFile is
+   * correlated to the batch (stamped with batchId) AND appended to the batch
+   * manifest. Without it the pipeline can't track batch progress.
+   */
+  batchId: z.string().optional(),
+});
+export type BatchPresignedUrlRequestInputType = z.infer<typeof BatchPresignedUrlRequestInput>;
+
+// AI Taxonomy Application - the background job's inference call itself has no HTTP
+// request shape (triggered by the queue handler, not the client); these cover the review
+// panel's two actions against an already-analyzed batch.
+
+// Bounds are generous relative to real values (inference aims for 5-20 short hierarchical
+// tags like "type:contract") - they exist to cap worst-case request size/storage/CPU from a
+// crafted body, not to constrain legitimate use. applyTaxonomySuggestions also cross-checks
+// each originalName against the batch's actual stored suggestions, so these bounds are a
+// second, independent layer rather than the only protection.
+const TaxonomyTagInput = z.object({
+  suffix: z.string().min(1).max(MAX_TAXONOMY_TAG_SUFFIX_LENGTH),
+  originalName: z.string().min(1).max(MAX_TAXONOMY_TAG_ORIGINAL_NAME_LENGTH),
+  strength: z.number().min(0).max(1),
+  source: z.enum(['folder', 'ai']),
+  matchingFolders: z
+    .array(z.string().max(MAX_TAXONOMY_MATCHING_FOLDER_LENGTH))
+    .max(MAX_TAXONOMY_MATCHING_FOLDERS_PER_TAG),
+  deleted: z.boolean(),
+});
+
+export const ApplyTaxonomyRequestInput = z.object({
+  /** The reviewed/edited tag list to apply (already filtered to non-deleted by the caller, or
+   * filtered here - deleted entries are simply skipped since they carry no tag to write). */
+  tags: z.array(TaxonomyTagInput).max(MAX_TAXONOMY_TAGS),
+});
+export type ApplyTaxonomyRequestInputType = z.infer<typeof ApplyTaxonomyRequestInput>;
+
+export const ReanalyzeTaxonomyRequestInput = z.object({
+  /** User description of the data (helps the AI) */
+  context: z.string().max(2000).optional(),
+});
+export type ReanalyzeTaxonomyRequestInputType = z.infer<typeof ReanalyzeTaxonomyRequestInput>;
+
+/**
+ * `PUT /api/data-lakes/:id/files/:fabFileId/tags` - the complete desired tag set UNDER THIS
+ * LAKE'S PREFIX (scoped-replace semantics: the server diffs against the file's current tags and
+ * pushes/pulls to match; tags outside the prefix are untouched). `tags` is REQUIRED, not
+ * optional - under replace semantics an absent field must never read as "the empty set", which
+ * would silently evict the file from the lake through a body a client forgot to send.
+ *
+ * Per-name length is bounded by `MAX_LAKE_FILE_TAG_NAME_LENGTH`, the longest a caller-authored
+ * name under any prefix could legitimately need; the lake-specific prefix bound is a service-level
+ * check (the lake is not resolved at parse time). The newline exclusion matches every other
+ * tag-name field in this schema file - a tag name is a single line.
+ */
+export const SetLakeFileTagsRequestInput = z.object({
+  tags: z
+    .array(
+      z
+        .string()
+        .min(1)
+        .max(MAX_LAKE_FILE_TAG_NAME_LENGTH)
+        .regex(/^[^\r\n]*$/)
+    )
+    .max(MAX_TAXONOMY_TAGS),
+});
+export type SetLakeFileTagsRequestInputType = z.infer<typeof SetLakeFileTagsRequestInput>;
+
+// Deduplication
+
+export const CheckDuplicatesRequestInput = z.object({
+  hashes: z.array(z.string().regex(sha256Regex)).min(1).max(500),
+});
+export type CheckDuplicatesRequestInputType = z.infer<typeof CheckDuplicatesRequestInput>;
+
+// Incremental Sync
+
+export const SyncDeltaFileEntry = z.object({
+  relativePath: z.string(),
+  fileName: z.string(),
+  contentHash: z.string().regex(sha256Regex),
+  fileSize: z.number(),
+});
+
+export const ComputeSyncDeltaRequestInput = z.object({
+  dataLakeSlug: z.string(),
+  currentFiles: z.array(SyncDeltaFileEntry).min(1).max(10000),
+  /** Per-request dedup policy for files whose content hash already exists. Defaults to 'skip'. */
+  conflictResolution: ConflictResolutionSchema.optional(),
+});
+export type ComputeSyncDeltaRequestInputType = z.infer<typeof ComputeSyncDeltaRequestInput>;
+
+export const ApplySyncRequestInput = z.object({
+  dataLakeSlug: z.string(),
+  actions: z.object({
+    upload: z.array(
+      z.object({
+        relativePath: z.string(),
+        fileName: z.string(),
+        contentHash: z.string().regex(sha256Regex),
+      })
+    ),
+    update: z.array(
+      z.object({
+        existingFileId: z.string(),
+        relativePath: z.string(),
+        fileName: z.string(),
+        contentHash: z.string().regex(sha256Regex),
+      })
+    ),
+    remove: z.array(z.string()),
+    skip: z.array(z.string()),
+  }),
+});
+export type ApplySyncRequestInputType = z.infer<typeof ApplySyncRequestInput>;

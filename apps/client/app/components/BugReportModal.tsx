@@ -1,0 +1,191 @@
+import React, { useState } from 'react';
+import { Modal, ModalDialog, Typography, Tooltip, Textarea, Chip, Stack, Button, Box } from '@mui/joy';
+import { PromptMeta } from '@bike4mind/common';
+
+import BugReportIcon from '@mui/icons-material/BugReport';
+import ThumbUpIcon from '@mui/icons-material/ThumbUp';
+import ThumbDownIcon from '@mui/icons-material/ThumbDown';
+import FeedbackIcon from '@mui/icons-material/Feedback';
+import { FeedbackType } from '@bike4mind/common';
+
+import { createFeedbackOnServer } from '@client/app/utils/feedbackAPICalls';
+import { useUser } from '@client/app/contexts/UserContext';
+import { useTheme } from '@mui/joy';
+import { toast } from 'sonner';
+
+interface BugReportModalProps {
+  open: boolean;
+  className?: string;
+  onClose: () => void;
+  promptMeta: PromptMeta | null;
+  /** Turn/session pointers, passed explicitly rather than relying solely on the
+   *  promptMeta.questId/session.id fallback (absent for e.g. a user-only turn with no reply yet).
+   *  Untrusted pointers, not authorization keys - the server re-reads and ownership-checks
+   *  whichever is present before either survives onto the saved record (see feedbackContext.ts). */
+  sessionId?: string;
+  questId?: string;
+  /** Called after a successful submit (regardless of delivery outcome) so the caller can
+   *  invalidate its own session-scoped feedback cache and show the "Reported" annotation
+   *  immediately, without this modal knowing anything about react-query. */
+  onSubmitted?: () => void;
+}
+
+const BugReportModal: React.FC<BugReportModalProps> = ({
+  open,
+  onClose,
+  promptMeta,
+  sessionId,
+  questId,
+  onSubmitted,
+}) => {
+  const [bugReport, setBugReport] = useState('');
+  const [feedbackType, setFeedbackType] = useState<FeedbackType>(FeedbackType.BUG);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const userContext = useUser();
+  const theme = useTheme();
+  const handleFeedbackTypeChange = (type: FeedbackType) => {
+    setFeedbackType(type);
+  };
+
+  const getIconStyle = (type: FeedbackType) => ({
+    size: 'lg',
+    color: feedbackType === type ? 'white' : 'inherit',
+    bgcolor:
+      feedbackType === type
+        ? type === FeedbackType.BUG
+          ? theme.palette.feedback.bug
+          : type === FeedbackType.THUMBS_DOWN
+            ? theme.palette.feedback.thumbsDown
+            : type === FeedbackType.THUMBS_UP
+              ? theme.palette.feedback.positive
+              : theme.palette.feedback.feedback
+        : 'transparent',
+    borderRadius: '100%',
+    cursor: 'pointer',
+    width: '40px',
+    height: '40px',
+    padding: '5px',
+    transition: 'all 0.3s ease',
+    '&:hover': {
+      bgcolor:
+        type === FeedbackType.BUG
+          ? theme.palette.feedback.bug
+          : type === FeedbackType.THUMBS_DOWN
+            ? theme.palette.feedback.thumbsDown
+            : type === FeedbackType.THUMBS_UP
+              ? theme.palette.feedback.positive
+              : theme.palette.feedback.feedback,
+      color: 'white',
+    },
+  });
+
+  const handleSubmit = async () => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const result = await createFeedbackOnServer({
+        userId: userContext?.currentUser?.id ?? 'Unknown',
+        username: userContext?.currentUser?.username ?? 'Unknown',
+        userEmail: userContext?.currentUser?.email ?? 'Unknown',
+        tags: ['bug', 'feedback', 'bugReport'],
+        type: feedbackType,
+        content: bugReport || 'No feedback details provided',
+        promptMeta: promptMeta ?? {},
+        sessionId,
+        questId,
+      });
+      onClose();
+      onSubmitted?.();
+      // Optional chaining: a rolling deploy can route this request to a server instance
+      // still on the pre-delivery-field handler, where the record saved but `delivery` is
+      // absent - fall back to the success toast (the pre-fix default) rather than throwing.
+      if (result.delivery?.delivered !== false) {
+        toast.success(`${feedbackType} report submitted successfully`);
+      } else {
+        toast.warning('Saved your report, but we could not notify the team - please ping support if it is urgent.');
+      }
+      setBugReport('');
+    } catch (error) {
+      console.error('Failed to submit bug report:', error);
+      toast.error('Could not submit your report. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose}>
+      <ModalDialog>
+        <Stack direction="row" justifyContent="space-between">
+          <Typography level="h1">Submit Bug & Feedback Report</Typography>
+        </Stack>
+        <Typography level="h4">Bad AI output?, broken feature, UI issue, or maybe good feedback?</Typography>
+        <Stack direction="row" justifyContent="start" spacing={5}>
+          <Tooltip title="Good AI output">
+            <ThumbUpIcon
+              sx={getIconStyle(FeedbackType.THUMBS_UP)}
+              onClick={() => handleFeedbackTypeChange(FeedbackType.THUMBS_UP)}
+            />
+          </Tooltip>
+          <Tooltip title="Bad AI output">
+            <ThumbDownIcon
+              sx={getIconStyle(FeedbackType.THUMBS_DOWN)}
+              onClick={() => handleFeedbackTypeChange(FeedbackType.THUMBS_DOWN)}
+            />
+          </Tooltip>
+          <Tooltip title="Bug">
+            <BugReportIcon
+              sx={getIconStyle(FeedbackType.BUG)}
+              onClick={() => handleFeedbackTypeChange(FeedbackType.BUG)}
+            />
+          </Tooltip>
+          <Tooltip title="Feedback">
+            <FeedbackIcon
+              sx={getIconStyle(FeedbackType.FEEDBACK)}
+              onClick={() => handleFeedbackTypeChange(FeedbackType.FEEDBACK)}
+            />
+          </Tooltip>
+        </Stack>
+        <Box sx={{ mt: 2 }}>
+          <Typography level="h3">Please give us as much information as possible to improve your experience.</Typography>
+          <Textarea
+            slotProps={{ textarea: { 'data-testid': 'bug-report-modal-content-textarea' } }}
+            minRows={10}
+            value={bugReport || ''}
+            onChange={e => setBugReport(e.target.value)}
+            sx={{ width: '100%', mt: 2, backgroundColor: 'grey' }}
+          />
+        </Box>
+        <Chip color="success">
+          <Typography level="body-md">
+            Notebook, ai model, prompt, message and all other relevant information attached:
+          </Typography>
+        </Chip>
+        <Box overflow="auto" maxHeight="10vh">
+          <Typography level="body-sm">Prompt Meta:</Typography>
+          <Typography level="body-xs">{JSON.stringify(promptMeta, null, 2)}</Typography>
+        </Box>
+        <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end', mt: 2 }}>
+          <Button
+            data-testid="bug-report-modal-cancel-btn"
+            onClick={onClose}
+            variant="outlined"
+            disabled={isSubmitting}
+          >
+            Cancel
+          </Button>
+          <Button
+            data-testid="bug-report-modal-submit-btn"
+            onClick={handleSubmit}
+            variant="solid"
+            disabled={isSubmitting}
+          >
+            Submit
+          </Button>
+        </Box>
+      </ModalDialog>
+    </Modal>
+  );
+};
+
+export default BugReportModal;

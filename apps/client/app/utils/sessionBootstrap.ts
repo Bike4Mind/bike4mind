@@ -1,0 +1,284 @@
+import { IUserDocument } from '@bike4mind/common';
+import type { QueryClient } from '@tanstack/react-query';
+import { api, isPublicPath } from '@client/app/contexts/ApiContext';
+import { refreshSession } from '@client/app/utils/refreshCoordinator';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
+import { useUser } from '@client/app/contexts/UserContext';
+
+/**
+ * Cold-load silent refresh.
+ *
+ * The access token is memory-only, so after any page load the app has no credential until it
+ * exchanges the HttpOnly refresh cookie for a fresh one. Every protected route awaits this in
+ * `beforeLoad` (see router.tsx): treating "no token yet" as "logged out" would bounce a cold
+ * load through /login, whose on-mount clearClientCaches() + removeQueries() tears the session
+ * down before it can be established.
+ *
+ * Deliberately unconditional - it does NOT check any localStorage flag first. WebKit ITP evicts
+ * script-writable storage after ~7 days while leaving a server-set cookie intact, and that
+ * asymmetry is the whole reason the refresh token moved into a cookie. The cost is one 401 for
+ * a genuinely signed-out visitor who lands on a protected deep link.
+ */
+
+/** Cached for the page's lifetime: resolved OR rejected, the answer does not change until a
+ *  login/logout resets it. Without caching, every route transition would re-run the exchange. */
+let bootstrapPromise: Promise<void> | null = null;
+
+/** Drop the cached result so the next protected navigation re-derives the session. Call after
+ *  any client-side identity change (login, logout, impersonation swap). */
+export function resetSessionBootstrap(): void {
+  bootstrapPromise = null;
+}
+
+async function exchangeRefreshCookie(): Promise<void> {
+  try {
+    // Through the shared coordinator, not a private call: a cold load races its own queries, and
+    // an unauthenticated query's 401 would otherwise drive a SECOND exchange concurrent with this
+    // one. The access-token store is updated by the coordinator; only `user` is ours to apply.
+    const session = await refreshSession();
+
+    // A token alone does not satisfy the route guard - it gates on currentUser, so leaving this
+    // null bounces a perfectly good session to /login. The refresh response usually carries the
+    // user, but not when the coordinator served an already-current token (another tab exchanged
+    // the cookie, and its response was never visible here). Resolve identity directly in that case
+    // rather than assuming the payload shape.
+    if (session.user) {
+      useUser.getState().setCurrentUser(session.user);
+      return;
+    }
+
+    // This second round trip only happens on the adopt path, and it is UNRETRIED - a blip, a cold
+    // Lambda or the 10s timeout is enough to lose it. Rethrow rather than swallowing so the caller
+    // does not cache a resolved "no identity": we hold a valid cookie and a valid token here, and
+    // caching that result would redirect to /login for the page's whole lifetime with no toast and
+    // nothing to retry.
+    const { data } = await api.get<IdentifyResponse>('/api/identify', { timeout: 10000 });
+    useUser.getState().setCurrentUser(data.user);
+  } catch {
+    // No recoverable session. Leave the stores alone rather than marking the session expired:
+    // the route guard turns a null currentUser into a /login redirect with the deep link
+    // preserved, and stamping expiredReason here would show a spurious "session expired" toast
+    // to someone who was simply never signed in.
+    //
+    // Uncache so the next protected navigation retries. The cached-forever behaviour is right for
+    // "there is no session" (the answer cannot change without a login, which resets this anyway)
+    // but wrong for a transient identity fetch, and the two are indistinguishable from here.
+    bootstrapPromise = null;
+  }
+}
+
+/**
+ * Idempotent; safe to await from every guard and from concurrent navigations.
+ *
+ * The short-circuit requires BOTH halves of a usable session, not just the token. The route guard
+ * gates on currentUser, so "token present, identity missing" is not a state worth skipping the
+ * bootstrap for - and it is reachable: the coordinator writes a token before every return, so an
+ * identity fetch that failed above would otherwise be latched behind a token-only check and the tab
+ * would sit on /login for its whole lifetime holding a perfectly valid cookie.
+ */
+export function bootstrapSession(): Promise<void> {
+  if (useAccessToken.getState().accessToken && useUser.getState().currentUser) {
+    return Promise.resolve();
+  }
+  bootstrapPromise ??= exchangeRefreshCookie();
+  return bootstrapPromise;
+}
+
+/** How close to its `exp` claim a token has to be before a refocus is worth a round trip.
+ *  Generous enough to absorb clock skew between this tab and the server. */
+const REVALIDATE_EXPIRY_BUFFER_MS = 30_000;
+
+/** Decode the `exp` claim (seconds since epoch) from a JWT without verifying the signature
+ *  (client-side only) - same pattern as UserContext's decodeTokenVersion/decodeMfaPending.
+ *  Returns null when absent, malformed, or on a legacy token with no exp claim. */
+function decodeTokenExpiryMs(token: string): number | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(atob(base64)) as { exp?: unknown };
+    return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Refocus liveness check - pure predicate, unit-testable in isolation.
+ * Mirrors shouldProbeOnFailedWsConnect (WebsocketContext.tsx): decides whether a tab
+ * returning to the foreground is worth pinging the server for, without doing the ping itself.
+ */
+export function shouldRevalidateOnFocus(params: {
+  visibilityState: DocumentVisibilityState;
+  accessToken: string | null;
+  mfaPending: boolean;
+  expired: boolean;
+  pathname: string;
+  /** Injectable for tests; real callers take the default (now). */
+  nowMs?: number;
+}): boolean {
+  if (params.visibilityState !== 'visible') return false;
+  if (!params.accessToken) return false;
+  if (params.mfaPending) return false;
+  if (params.expired) return false;
+  if (isPublicPath(params.pathname)) return false;
+  const expMs = decodeTokenExpiryMs(params.accessToken);
+  // No readable exp claim (malformed/legacy token) is treated as "could be stale" - probe
+  // rather than silently skip, matching the fail-safe direction of every guard above.
+  if (expMs !== null && expMs - (params.nowMs ?? Date.now()) > REVALIDATE_EXPIRY_BUFFER_MS) {
+    return false;
+  }
+  return true;
+}
+
+/** Single-flight guard, shared by every caller of probeIdentity below, so a refocus that
+ *  coincides with a WebsocketContext close-probe fires one authed round trip, not two. */
+let probeInFlight = false;
+
+/** Drop a stuck in-flight flag (a test left its promise unsettled). Mirrors resetRefreshCoordinator
+ *  in ApiContext.tsx for the same guard shape. */
+export function resetProbeGuardForTests(): void {
+  probeInFlight = false;
+}
+
+interface IdentifyResponse {
+  user: IUserDocument;
+  accessToken: string;
+}
+
+/**
+ * Liveness probe shared by revalidateSessionOnFocus (below) and WebsocketContext's
+ * close-probe. Goes through the same `api` instance (the 401 interceptor still refreshes and
+ * retries on a genuine expiry), but on SUCCESS writes the fresh response directly into the
+ * `['identify']` query cache via setQueryData - the same cache UserProvider's identify effect
+ * reads - so a refreshed token doesn't get fed back to stale by that effect (see
+ * useGetIdentify's own doc comment on this exact stale-cache-feedback failure mode).
+ *
+ * Deliberately NOT queryClient.refetchQueries: that would also propagate a FAILED probe (a
+ * transient network error, not a real 401) into the query's error state, and
+ * resolveIdentifyEffect checks isError before isSuccess - so a laptop waking with wifi still
+ * coming up would clear currentUser and bounce the user to /login. A failed probe here just
+ * throws it away; the interceptor's own forceSessionExpiredRedirect (unaffected by this
+ * function) is still what handles a genuinely revoked session.
+ */
+export function probeIdentity(queryClient: QueryClient): Promise<void> {
+  if (probeInFlight) return Promise.resolve();
+  probeInFlight = true;
+  return (
+    api
+      // Bounded like the interceptor's own refresh call (ApiContext.tsx): without this, a
+      // hanging server leaves probeInFlight stuck true forever, blocking every future probe
+      // from both the WS close-probe and revalidateSessionOnFocus below.
+      .get<IdentifyResponse>('/api/identify', { timeout: 10000 })
+      .then(response => {
+        queryClient.setQueryData(['identify'], response.data);
+      })
+      .catch(() => {})
+      .finally(() => {
+        probeInFlight = false;
+      })
+  );
+}
+
+/**
+ * On a tab returning from idle, `bootstrapSession` only runs at page load (see router.tsx's
+ * beforeLoad); nothing re-validates the session on refocus. refetchOnWindowFocus defaults to
+ * false (see providers.tsx), and the handful of queries that opt in are mostly admin/settings
+ * surfaces, so an idle tab's expired token could sit unrefreshed indefinitely. This fires that
+ * recovery explicitly, through probeIdentity above (the SAME interceptor, no separate refresh
+ * path), instead of leaving it to whichever query happens to opt in and race there first.
+ * shouldRevalidateOnFocus's exp check means a refocus well before the token's TTL elapses
+ * skips the round trip entirely, so this stays free on the common case.
+ */
+export function revalidateSessionOnFocus(queryClient: QueryClient): void {
+  const { accessToken, mfaPending, expired } = useAccessToken.getState();
+  if (
+    !shouldRevalidateOnFocus({
+      visibilityState: document.visibilityState,
+      accessToken,
+      mfaPending,
+      expired,
+      pathname: window.location.pathname,
+    })
+  ) {
+    return;
+  }
+  void probeIdentity(queryClient);
+}
+
+/** Floor on the delay below so an already-expired token can't schedule a near-zero-delay,
+ *  tight polling loop if a probe is slow to land or fails without changing the token. */
+const MIN_REVALIDATE_DELAY_MS = 5_000;
+
+/** Fallback polling interval when the token's exp claim is unreadable (malformed/legacy) -
+ *  matches the fail-safe direction of shouldRevalidateOnFocus's own exp-claim handling above,
+ *  just as a bounded interval instead of an unconditional probe. */
+const UNREADABLE_EXP_FALLBACK_MS = 5 * 60_000;
+
+/** Small positive margin PAST the exp claim, not a pre-expiry buffer like
+ *  REVALIDATE_EXPIRY_BUFFER_MS above. The server only rotates the token once it has actually
+ *  expired (pages/api/identify.ts's own refresh branch), and the standard JWT auth middleware
+ *  already rejects an expired token before that - so a probe fired BEFORE the deadline just
+ *  gets the unchanged token back and, since the delay floors at MIN_REVALIDATE_DELAY_MS as
+ *  expiry approaches, would otherwise poll every few seconds for nothing until the deadline
+ *  actually arrives. This margin only exists to tolerate clock skew between this tab and the
+ *  server, not to refresh early. */
+const POST_EXPIRY_PROBE_MARGIN_MS = 2_000;
+
+/**
+ * Pure: how long until the current access token is worth a liveness probe. `null` when there
+ * is no token to schedule against. Deliberately targets just AFTER the exp claim (see
+ * POST_EXPIRY_PROBE_MARGIN_MS) rather than shouldRevalidateOnFocus's pre-expiry buffer above -
+ * that buffer suits a one-shot event-triggered check; a self-re-arming timer has no such
+ * latency to hide and firing early only wastes round trips.
+ */
+export function nextRevalidationDelayMs(token: string | null, nowMs: number = Date.now()): number | null {
+  if (!token) return null;
+  const expMs = decodeTokenExpiryMs(token);
+  if (expMs === null) return UNREADABLE_EXP_FALLBACK_MS;
+  return Math.max(MIN_REVALIDATE_DELAY_MS, expMs - nowMs + POST_EXPIRY_PROBE_MARGIN_MS);
+}
+
+/**
+ * Self-re-arming timer that keeps a focused tab's session fresh even when nothing else ever
+ * probes: revalidateSessionOnFocus (above) only fires from a focus/visibilitychange event,
+ * which an always-visible tab never sends, and an established WebSocket carries no further
+ * auth check once open. Fires probeIdentity shortly after the token's exp claim, then re-arms
+ * against whatever the current token is afterward - regardless of whether that probe changed
+ * it, so a single failed round trip can't permanently stop the loop. A token change from any
+ * other path (a reactive 401 refresh, logout) also re-arms immediately rather than waiting for
+ * the stale timer. Returns a disposer; call once per app lifetime (see providers.tsx).
+ */
+export function scheduleSessionRevalidation(queryClient: QueryClient): () => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const arm = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    const delay = nextRevalidationDelayMs(useAccessToken.getState().accessToken);
+    if (delay === null) return;
+    timer = setTimeout(() => {
+      const { accessToken, mfaPending, expired } = useAccessToken.getState();
+      // Mirrors shouldRevalidateOnFocus's non-visibility gates: an mfaPending or already-torn-
+      // down session has nothing to revalidate, and a public-path tab (e.g. sitting on /login)
+      // has no session to keep warm. Skip the probe but still re-arm - the delay recomputes
+      // against whatever the token is by the time this next fires, so a session that later
+      // clears mfaPending (or navigates off a public path) picks back up on its own.
+      if (accessToken && !mfaPending && !expired && !isPublicPath(window.location.pathname)) {
+        void probeIdentity(queryClient).then(arm);
+      } else {
+        arm();
+      }
+    }, delay);
+  };
+
+  arm();
+  const unsubscribe = useAccessToken.subscribe((state, prevState) => {
+    if (state.accessToken === prevState.accessToken) return;
+    arm();
+  });
+
+  return () => {
+    if (timer !== undefined) clearTimeout(timer);
+    unsubscribe();
+  };
+}

@@ -1,0 +1,138 @@
+/* Auto-derived from the tree via scoped `Resource.*` access analysis.
+   Regenerate after product-code extraction - some entries are transient (see TRANSIENT tags). */
+import type { Manifest } from './index';
+
+export const DEFAULT_MANIFEST = {
+  // --- secret ---
+  // Integration secrets are optional: unset disables that integration. Only the
+  // core boot secrets (JWT/session/encryption/Mongo) are hard-required.
+  ANTHROPIC_API_KEY: { kind: 'secret', optional: true },
+  B4M_ANALYTICS_ENABLED: { kind: 'secret', optional: true },
+  B4M_PROD_API_KEY: { kind: 'secret', optional: true },
+  // Shared-secret bearer for the frontend -> ChatCompletion /process dispatch. Required:
+  // chat dispatch fails closed (401) without it. Distinct from SECRET_ENCRYPTION_KEY.
+  CHAT_COMPLETION_INTERNAL_SECRET: { kind: 'secret' },
+  DEEPSEEK_API_KEY: { kind: 'secret', optional: true },
+  E2E_CLEANUP_SECRET: { kind: 'secret', optional: true },
+  EMERGENCY_LOGIN_ENABLED: { kind: 'secret', optional: true },
+  GEMINI_API_KEY: { kind: 'secret', optional: true },
+  GITHUB_CLIENT_ID: { kind: 'secret', optional: true },
+  GITHUB_CLIENT_SECRET: { kind: 'secret', optional: true },
+  GITHUB_ZAP_REF: { kind: 'secret', optional: true },
+  GOOGLE_CLIENT_ID: { kind: 'secret', optional: true },
+  GOOGLE_CLIENT_SECRET: { kind: 'secret', optional: true },
+  JWT_SECRET: { kind: 'secret' },
+  MAIL_FROM: { kind: 'secret', optional: true },
+  MAIL_HOST: { kind: 'secret', optional: true },
+  MAIL_PASSWORD: { kind: 'secret', optional: true },
+  MAIL_PORT: { kind: 'secret', optional: true },
+  MAIL_USERNAME: { kind: 'secret', optional: true },
+  MONGODB_URI: { kind: 'secret' },
+  MOONSHOT_API_KEY: { kind: 'secret', optional: true },
+  OAUTH_RSA_PRIVATE_KEY: { kind: 'secret', optional: true },
+  OKTA_AUDIENCE: { kind: 'secret', optional: true },
+  OKTA_CLIENT_ID: { kind: 'secret', optional: true },
+  OKTA_CLIENT_SECRET: { kind: 'secret', optional: true },
+  OKTA_USE_ORG_AUTH_SERVER: { kind: 'secret', optional: true },
+  OPENAI_API_KEY: { kind: 'secret', optional: true },
+  OVERWATCH_INGEST_ENABLED: { kind: 'secret', optional: true }, // transient: removed after product extraction
+  OVERWATCH_INGEST_KEY: { kind: 'secret', optional: true }, // transient: removed after product extraction
+  OVERWATCH_INGEST_URL: { kind: 'secret', optional: true }, // transient: removed after product extraction
+  OVERWATCH_PSEUDONYM_SALT: { kind: 'secret', optional: true }, // transient: removed after product extraction
+  OPTIHASHI_API_TOKEN: { kind: 'secret', optional: true },
+  OPTIHASHI_API_URL: { kind: 'secret', optional: true },
+  OPTIHASHI_WEBHOOK_SECRET: { kind: 'secret', optional: true },
+  OPTIHASHI_WEBHOOK_SECRET_PREVIOUS: { kind: 'secret', optional: true },
+  RATE_LIMIT_INGEST_TOKEN: { kind: 'secret', optional: true },
+  SECOPS_ATTACK_SIMULATION_INGEST_TOKEN: { kind: 'secret', optional: true },
+  SECOPS_CODE_INGEST_TOKEN: { kind: 'secret', optional: true },
+  SECOPS_PACKAGES_INGEST_TOKEN: { kind: 'secret', optional: true },
+  SECOPS_PROWLER_INGEST_TOKEN: { kind: 'secret', optional: true },
+  SECOPS_PROWLER_WORKFLOW_TOKEN: { kind: 'secret', optional: true },
+  SECOPS_SECRETS_INGEST_TOKEN: { kind: 'secret', optional: true },
+  SECOPS_ZAP_DISPATCH_TOKEN: { kind: 'secret', optional: true },
+  SECOPS_ZAP_INGEST_TOKEN: { kind: 'secret', optional: true },
+  SECRET_ENCRYPTION_KEY: { kind: 'secret' },
+  SECRET_ENCRYPTION_KEY_PREVIOUS: { kind: 'secret', optional: true },
+  SESSION_SECRET: { kind: 'secret' },
+  SLACK_ERROR_REPORTING_WEBHOOK_URL: { kind: 'secret', optional: true },
+  SLACK_WEBHOOK_URL: { kind: 'secret', optional: true },
+  STRIPE_PUBLISHABLE_KEY: { kind: 'secret', optional: true },
+  STRIPE_SECRET_KEY: { kind: 'secret', optional: true },
+  STRIPE_WEBHOOK_SECRET: { kind: 'secret', optional: true },
+  SUPPORT_EMAIL: { kind: 'secret', optional: true },
+  WHATS_NEW_DISTRIBUTION_URL: { kind: 'secret', optional: true },
+  XAI_API_KEY: { kind: 'secret', optional: true },
+  // --- bucket ---
+  appFilesBucket: { kind: 'bucket' },
+  emailIngestionBucket: { kind: 'bucket' },
+  fabFileBucket: { kind: 'bucket' },
+  generatedImagesBucket: { kind: 'bucket' },
+  historyImportBucket: { kind: 'bucket' },
+  publishedArtifactsBucket: { kind: 'bucket' },
+  slackExportBucket: { kind: 'bucket' },
+  // --- queue ---
+  agentContinuationQueue: { kind: 'queue' },
+  agentProactiveMessageQueue: { kind: 'queue' },
+  // Optional for the same reason as the taxonomy queue: the start-a-run route checks for the URL
+  // and refuses with an actionable message, so a self-host install without it degrades cleanly
+  // rather than queueing a run nothing will ever execute.
+  dataLakeResearchQueue: { kind: 'queue', optional: true },
+  dataLakeTaxonomyQueue: { kind: 'queue', optional: true },
+  deepAgentWakeQueue: { kind: 'queue' },
+  // Read by the drive-sync route, the resync poll cron and the ingest handler's own redrive.
+  // drive-sync takes the GLOBALLY unique driveFolderId claim before it enqueues, so an
+  // unregistered key here left a folder reading "Connected" that could never sync, with the
+  // claim released only by hand.
+  //
+  // Registered even though nothing consumes it on self-host yet, which is the opposite of the
+  // call made for webhookDeliveryQueue (see manifestCoverage.test.ts). The distinction is the
+  // call site, not the queue: this one has NO degrade path and throws AFTER taking a global,
+  // cross-org claim, so leaving it unregistered trades a silent no-op for a data-integrity
+  // failure that needs a manual row deletion. webhookDeliveryQueue's two sites catch and return
+  // a clean 503, so there the silent no-op really is the worse of the two.
+  driveLakeIngestQueue: { kind: 'queue' },
+  emailAnalysisQueue: { kind: 'queue', optional: true },
+  emailBatchQueue: { kind: 'queue' },
+  emailIngestionQueue: { kind: 'queue' },
+  emailJobQueue: { kind: 'queue' },
+  fabFileChunkQueue: { kind: 'queue' },
+  fabFileVectorizeQueue: { kind: 'queue' },
+  // Optional so an install that upgraded without adding the new env vars still boots the
+  // worker (it warns and skips the consumer) instead of taking every other queue down with it.
+  imageEditQueue: { kind: 'queue', optional: true },
+  imageGenerationQueue: { kind: 'queue', optional: true },
+  // Reached from the data-lake batch finalize path and from lakeMemoryExtraction. Both enqueue
+  // sites sit inside a try/catch, so an unregistered key degraded to a logged error and a
+  // feature that silently did nothing.
+  //
+  // `optional` like its feature-gated siblings above, and for the same reason: it sits behind an
+  // off-by-default admin flag, so a basic install never sets it. That also keeps the diagnostic
+  // an operator needs - with no URL configured the enqueue still fails into those catches and
+  // says so, rather than accepting a message into a queue nothing is consuming yet.
+  lakeMemoryQueue: { kind: 'queue', optional: true },
+  liveOpsTriageQueue: { kind: 'queue' },
+  notebookCurationQueue: { kind: 'queue', optional: true },
+  researchEngineQueue: { kind: 'queue' },
+  // Queue name -> URL map read by getSourceQueueUrl (dlqRegistry). Hosted links this as a
+  // Linkable to the frontend Lambda instead of the individual queues; the shim computes it
+  // from the same per-queue env vars so enqueue sites resolve identically in self-host.
+  sourceQueueUrls: { kind: 'queueUrls' },
+  sreFixQueue: { kind: 'queue' },
+  // --- function ---
+  AgentExecutor: { kind: 'function' },
+  AppEventBus: { kind: 'function' },
+  HistoryUploadCompleteFunction: { kind: 'function' },
+  ImageProcessor: { kind: 'function' },
+  NotebookImportCompleteFunction: { kind: 'function' },
+  SlackEventBus: { kind: 'function' },
+  mcpHandler: { kind: 'function', optional: true },
+  // --- service ---
+  // Always-on chatCompletion HTTP service the frontend dispatches quests to
+  // (`${CHAT_COMPLETION}/process`). Required: chat is broken without it.
+  ChatCompletion: { kind: 'service' },
+  // --- websocket ---
+  websocket: { kind: 'websocket' },
+  // --- record ---
+  lambdaFunctionNames: { kind: 'record', optional: true },
+} as const satisfies Manifest;

@@ -1,0 +1,674 @@
+import { Warning as WarningIcon, Delete, PushPinOutlined as PushPinOutlinedIcon } from '@mui/icons-material';
+import { red } from '@client/app/utils/themes/colors';
+import { Badge, Box, Chip, CircularProgress, Divider, IconButton, Tooltip, Typography } from '@mui/joy';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { toast } from 'sonner';
+
+import { IFabFileDocument, MimeType, isImageAttachment, isImageServeable } from '@bike4mind/common';
+import { setKnowledgeViewer } from '@client/app/components/Knowledge/KnowledgeViewer';
+import {
+  useSessions,
+  useSystemPromptFiles,
+  useWorkBenchActions,
+  useWorkBenchFiles,
+} from '@client/app/contexts/SessionsContext';
+import { useUser } from '@client/app/contexts/UserContext';
+import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
+import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { useEffectiveEmbeddingModel } from '@client/app/hooks/data/settings';
+import { useReprocessFile } from '@client/app/hooks/data/fabFiles';
+import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import useSessionLayout from '@client/app/hooks/useSessionLayout';
+import { useMessageFiles } from '@client/app/hooks/useMessageFiles';
+import { renameDuplicateFiles } from '@client/app/utils/fabFileUtils';
+import { buildSortedKnowledgeItems } from '@client/app/utils/knowledgeViewerSorting';
+import { useQueryClient } from '@tanstack/react-query';
+
+import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
+import CodeIcon from '@mui/icons-material/Code';
+import DescriptionIcon from '@mui/icons-material/Description';
+import ErrorIcon from '@mui/icons-material/Error';
+import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
+import LinkIcon from '@mui/icons-material/Link';
+import PersonIcon from '@mui/icons-material/Person';
+import PublicIcon from '@mui/icons-material/Public';
+import TableChartIcon from '@mui/icons-material/TableChart';
+import MarkdownIcon from '@mui/icons-material/TextSnippet';
+
+const FileItemContainer = React.forwardRef<HTMLDivElement, { children: React.ReactNode }>(({ children }, ref) => {
+  return (
+    <Box
+      ref={ref}
+      sx={theme => ({
+        backgroundColor: theme.palette.background.body,
+        borderRadius: 5,
+        display: 'flex',
+        alignItems: 'center',
+        p: '8px',
+        gap: '12px',
+        '&:hover': {
+          bgcolor: theme.palette.notebooklist.hoverBg,
+        },
+        transition: 'background-color 0.2s',
+        border: '1px solid',
+        borderColor: 'border.light',
+      })}
+    >
+      {children}
+    </Box>
+  );
+});
+
+FileItemContainer.displayName = 'FileItemContainer';
+
+const mimeTypeToIcon: Record<MimeType | 'default', React.JSX.Element | undefined> = {
+  'text/plain': <DescriptionIcon />,
+  'application/pdf': <InsertDriveFileIcon />,
+  'text/csv': <TableChartIcon />,
+  'application/json': <CodeIcon />,
+  'text/html': <LinkIcon />,
+  'text/markdown': <MarkdownIcon />,
+  default: <InsertDriveFileIcon />,
+};
+
+const getIconForMimeType = (mimeType?: MimeType | string, file?: IFabFileDocument): React.ReactNode => {
+  // All icons/images will be wrapped in a fixed-size container for alignment
+  const containerSize = 32;
+  if (mimeType?.startsWith('image/') && file && (file.fileUrl || file.presignedUrl)) {
+    const imageUrl = file.fileUrl || file.presignedUrl;
+    return (
+      <Box
+        sx={{
+          width: containerSize,
+          height: containerSize,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+        }}
+      >
+        <Box
+          component="img"
+          src={imageUrl}
+          alt={file.fileName}
+          sx={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            borderRadius: '4px',
+            display: 'block',
+          }}
+        />
+      </Box>
+    );
+  }
+  // For SVG icons, center and size them in the same container
+  const icon = mimeType ? mimeTypeToIcon[mimeType as MimeType] || mimeTypeToIcon['default'] : mimeTypeToIcon['default'];
+  return (
+    <Box
+      sx={{
+        width: containerSize,
+        height: containerSize,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexShrink: 0,
+      }}
+    >
+      {icon
+        ? React.cloneElement(icon, {
+            sx: {
+              color: (theme: any) => `${theme.palette.text.primary}80`,
+              fontSize: '1.5rem',
+              flexShrink: 0,
+            },
+          })
+        : icon}
+    </Box>
+  );
+};
+
+// Helper to check if a file was likely auto-detected as plain text
+const isAutoDetectedText = (file: IFabFileDocument): boolean => {
+  if (file.mimeType !== 'text/plain') return false;
+  if (!file.fileName.includes('.')) return true;
+  if (file.fileName.endsWith('.txt')) {
+    return file.fileName.indexOf('.') === file.fileName.lastIndexOf('.');
+  }
+  return false;
+};
+
+interface FilesSectionProps {
+  model: string;
+  onEmbeddingMismatchChange?: (hasEmbeddingMismatches: boolean) => void;
+}
+
+const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchChange }) => {
+  const { currentSessionId, currentSession } = useSessions();
+  const workBenchFiles = useWorkBenchFiles(currentSessionId || undefined);
+  const { setWorkBenchFiles } = useWorkBenchActions();
+  const { systemFiles, globalSystemFileIds, userSystemFileIds } = useSystemPromptFiles();
+  const { addToNotebookContext, removeFromNotebookContext, isPending } = useNotebookContextFiles();
+  const [loadingChip, setLoadingChip] = useState<{ [id: string]: boolean }>({});
+  const [reprocessingFiles, setReprocessingFiles] = useState<{ [id: string]: boolean }>({});
+  const isAnyFileReprocessing = Object.values(reprocessingFiles).some(Boolean);
+  const { currentUser } = useUser();
+  const modelInfo = useModelInfo()?.data?.find(m => m.id === model);
+  const effectiveEmbeddingModel = useEffectiveEmbeddingModel();
+  const reprocessFile = useReprocessFile();
+  const queryClient = useQueryClient();
+
+  // Files attached to individual messages
+  const messageFiles = useMessageFiles(currentSessionId);
+
+  // Get pending message files and artifacts from session layout store
+  const pendingMessageFilesRaw = useSessionLayout(s => s.pendingMessageFiles);
+  const pendingMessageFiles = useMemo(() => pendingMessageFilesRaw || [], [pendingMessageFilesRaw]);
+  const recentArtifacts = useSessionLayout(s => s.recentArtifacts);
+
+  // Memoize sorted knowledge items for consistent ordering
+  const sortedKnowledgeItems = useMemo(
+    () => buildSortedKnowledgeItems(workBenchFiles, systemFiles, messageFiles, pendingMessageFiles, recentArtifacts),
+    [workBenchFiles, systemFiles, messageFiles, pendingMessageFiles, recentArtifacts]
+  );
+
+  const isOwnNotebook = useMemo(() => {
+    return currentSession?.userId === currentUser?.id || !currentSession;
+  }, [currentSession, currentUser]);
+
+  // Does this file's vectors live in a different space than the one this deployment would query
+  // with? Compared against the EFFECTIVE model, not the advertised `defaultEmbeddingModel` setting:
+  // on a stage that fell back to the keyless embedder the corpus carries the fallback's label, and
+  // comparing against the advertised model flags every healthy file with a mismatch badge whose
+  // reprocess button re-runs the same fallback and re-stamps the same label - an unclearable
+  // warning. Unknown effective model -> no badge, rather than a badge we cannot substantiate.
+  const hasEmbeddingMismatch = useCallback(
+    (file: IFabFileDocument) => {
+      return file.embeddingModel && effectiveEmbeddingModel && file.embeddingModel !== effectiveEmbeddingModel;
+    },
+    [effectiveEmbeddingModel]
+  );
+
+  // Handle reprocessing file with new embedding model
+  const handleReprocessFile = useCallback(
+    (file: IFabFileDocument) => {
+      setReprocessingFiles(prev => ({ ...prev, [file.id]: true }));
+
+      // Check if this is a system file
+      const isSystemFile = systemFiles.some(sysFile => sysFile.id === file.id);
+
+      reprocessFile.mutate(file.id, {
+        onSuccess: () => {
+          // Only the queue ack - the rebuild runs async, so say started, not done.
+          toast.success(`Re-processing "${file.fileName}" - it will be re-embedded with the current model`);
+          setReprocessingFiles(prev => ({ ...prev, [file.id]: false }));
+
+          // /api/files/reprocess has cleared the flags server-side; mirror that rather than
+          // claiming completion. Nothing reconciles this panel in-session: it has no
+          // update_file_chunk_vector_status subscriber, and the workbench store is zustand, so the
+          // hook's ['fabFiles'] invalidation cannot reach it either - the row stays pending until a
+          // remount or session switch rehydrates it (SessionsContext's knowledgeIds effect).
+          // isChunking is what the disabled predicates below read, so setting it keeps the button
+          // from re-arming mid-rebuild; a second click would be a second real reset + re-embed.
+          const markPending = (f: IFabFileDocument) =>
+            f.id === file.id ? { ...f, vectorized: false, chunked: false, isChunking: true } : f;
+
+          if (isSystemFile) {
+            // No follow-up invalidation: ['system-prompt-files', allSystemFileIds]
+            // (SessionsContext) is active while this panel is open, so a refetch would replace this
+            // row with server state that already reads isChunking:false - resetChunkStateByIds
+            // writes it - and re-arm the button mid-rebuild, which is exactly what markPending
+            // exists to prevent. It could never observe completion anyway; that needs the deferred
+            // update_file_chunk_vector_status subscriber.
+            queryClient.setQueriesData({ queryKey: ['system-prompt-files'], exact: false }, (oldData: any) => {
+              if (Array.isArray(oldData)) {
+                return oldData.map(markPending);
+              }
+              return oldData;
+            });
+          } else if (currentSessionId) {
+            setWorkBenchFiles(currentSessionId, prevFiles => prevFiles.map(markPending));
+          }
+        },
+        onError: (error: any) => {
+          toast.error(`Failed to reprocess file: ${error?.message || 'Unknown error'}`);
+          setReprocessingFiles(prev => ({ ...prev, [file.id]: false }));
+        },
+      });
+    },
+    [reprocessFile, currentSessionId, setWorkBenchFiles, systemFiles, queryClient]
+  );
+
+  // Check if the file is supported by the model
+  const fileSupported = useCallback(
+    (file: IFabFileDocument) => {
+      let supported = true;
+      if (modelInfo?.type === 'text') {
+        if (!modelInfo?.supportsVision && isImageAttachment(file.mimeType)) {
+          supported = false;
+        }
+      } else if (modelInfo?.type === 'image') {
+        if (isImageAttachment(file.mimeType)) {
+          if (!modelInfo?.supportsImageVariation) {
+            supported = false;
+          }
+        } else {
+          supported = false;
+        }
+      }
+      return supported;
+    },
+    [modelInfo]
+  );
+
+  // Remove from notebook context. This does NOT delete the file - it reappears under
+  // "Attached to a message" if it was ever sent - so the affordance says "remove from
+  // notebook", not "delete".
+  const handleRemove = useCallback(
+    (id: string) => {
+      setLoadingChip(prev => ({ ...prev, [id]: true }));
+      void removeFromNotebookContext(currentSessionId, id)
+        .then(written => {
+          if (written) toast.success('Removed from notebook context');
+        })
+        .catch(() => {})
+        .finally(() => setLoadingChip(prev => ({ ...prev, [id]: false })));
+    },
+    [currentSessionId, removeFromNotebookContext]
+  );
+
+  const handlePromote = useCallback(
+    (file: IFabFileDocument) => {
+      // An unscanned or blocked image must not acquire a knowledgeIds entry: that entry
+      // follows the file into clones, exports and the project fan-out. Documents resolve
+      // to 'clean' immediately, so this only ever holds back an image mid-scan.
+      if (isImageAttachment(file.mimeType) && !isImageServeable(file)) {
+        toast.error('That image is still being scanned - try again in a moment');
+        return;
+      }
+      // An explicit user gesture, so project propagation keeps its default.
+      void addToNotebookContext(currentSessionId, file)
+        .then(written => {
+          if (written) toast.success(`"${file.fileName}" is now available to this whole notebook`);
+        })
+        .catch(() => {
+          // Already rolled back and surfaced by the hook.
+        });
+    },
+    [currentSessionId, addToNotebookContext]
+  );
+
+  const handleClick = useCallback(
+    (index: number) => {
+      // First force clear any existing artifact data
+      setSessionLayout({
+        layout: 'vertical',
+        selectedArtifactId: undefined,
+        artifactData: undefined,
+      });
+
+      // Find the file at the clicked index in the original order
+      const clickedFile = workBenchFiles[index];
+      // Find its position in the sorted items list
+      const sortedIndex = sortedKnowledgeItems.findIndex(item => item.id === clickedFile.id);
+
+      // setTimeout lets the layout change settle before setting the tab index
+      if (sortedIndex !== -1) {
+        setTimeout(() => {
+          setKnowledgeViewer({ selectedTabIndex: sortedIndex });
+        }, 0);
+      }
+    },
+    [workBenchFiles, sortedKnowledgeItems]
+  );
+
+  const handleSystemFileClick = useCallback(
+    (systemFile: IFabFileDocument) => {
+      // First force clear any existing artifact data
+      setSessionLayout({
+        layout: 'vertical',
+        selectedArtifactId: undefined,
+        artifactData: undefined,
+      });
+
+      // Find the system file in the sorted list (using system- prefix)
+      const systemFileIndex = sortedKnowledgeItems.findIndex(item => item.id === `system-${systemFile.id}`);
+
+      // setTimeout lets the layout change settle before setting the tab index
+      if (systemFileIndex !== -1) {
+        setTimeout(() => {
+          setKnowledgeViewer({ selectedTabIndex: systemFileIndex });
+        }, 0);
+      }
+    },
+    [sortedKnowledgeItems]
+  );
+
+  // Helper to determine if a system file is global or user-specific
+  const getSystemFileType = (fileId: string) => {
+    const isGlobal = globalSystemFileIds.includes(fileId);
+    const isUser = userSystemFileIds.includes(fileId);
+
+    if (isGlobal && isUser) return 'duplicate';
+    if (isGlobal) return 'global';
+    return 'user';
+  };
+
+  const allFiles = [...workBenchFiles, ...systemFiles];
+  // messageFiles counts toward the gate below: a notebook whose only files are
+  // message-scoped would otherwise render nothing, which is exactly the notebook whose
+  // files need promoting.
+  const totalFileCount = allFiles.length + messageFiles.length;
+  // Check if any files have embedding mismatches
+  const hasEmbeddingMismatches = useMemo(() => {
+    return [...workBenchFiles, ...systemFiles].some(file => hasEmbeddingMismatch(file));
+  }, [workBenchFiles, systemFiles, hasEmbeddingMismatch]);
+
+  // Notify parent component when embedding mismatch status changes
+  useEffect(() => {
+    onEmbeddingMismatchChange?.(hasEmbeddingMismatches);
+  }, [hasEmbeddingMismatches, onEmbeddingMismatchChange]);
+
+  if (totalFileCount === 0) return null;
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+      {/* System Files Section */}
+      {systemFiles.length > 0 && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {systemFiles.map((file: IFabFileDocument) => {
+            const systemType = getSystemFileType(file.id);
+            const embeddingMismatch = hasEmbeddingMismatch(file);
+            let tooltipText =
+              systemType === 'duplicate'
+                ? `${file.fileName} (Duplicate: Global + User System Prompt)`
+                : systemType === 'global'
+                  ? `${file.fileName} (Global System Prompt)`
+                  : `${file.fileName} (User System Prompt)`;
+
+            if (embeddingMismatch) {
+              tooltipText = `${file.fileName} (Different embedding model: ${file.embeddingModel})`;
+            }
+
+            return (
+              <Tooltip key={file.id} title={tooltipText} placement="top" arrow>
+                <FileItemContainer>
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      cursor: 'pointer',
+                      flex: 1,
+                      minWidth: 0,
+                      transition: 'all 0.15s ease-in-out',
+                    }}
+                    onClick={() => handleSystemFileClick(file)}
+                  >
+                    <Box sx={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                      {getIconForMimeType(file.mimeType, file)}
+                      <Badge
+                        anchorOrigin={{
+                          vertical: 'bottom',
+                          horizontal: 'right',
+                        }}
+                        size="sm"
+                        sx={{ position: 'absolute', top: -2, right: -2 }}
+                      >
+                        {systemType === 'global' ? (
+                          <PublicIcon sx={{ fontSize: '0.75rem', color: 'primary.500' }} />
+                        ) : (
+                          <PersonIcon sx={{ fontSize: '0.75rem', color: 'primary.500' }} />
+                        )}
+                      </Badge>
+                    </Box>
+                    <Typography level="body-sm" noWrap sx={{ color: theme => theme.palette.text.primary, flex: 1 }}>
+                      {file.fileName.length > 30 ? `${file.fileName.slice(0, 30)}...` : file.fileName}
+                    </Typography>
+                    {file.error && (
+                      <Tooltip title={file.error} placement="top" arrow>
+                        <WarningIcon sx={{ fontSize: '0.875rem', color: red[400] }} />
+                      </Tooltip>
+                    )}
+                  </Box>
+                  {embeddingMismatch && (
+                    <Tooltip
+                      title="Click here to reprocess this system file for better search and analysis results."
+                      placement="top"
+                      arrow
+                    >
+                      <IconButton
+                        data-testid={`files-section-reprocess-btn-system-${file.id}`}
+                        size="sm"
+                        variant="plain"
+                        color="danger"
+                        disabled={isAnyFileReprocessing || file.isChunking || file.isVectorizing}
+                        onClick={e => {
+                          e.stopPropagation();
+                          handleReprocessFile(file);
+                        }}
+                        sx={{
+                          width: 32,
+                          height: 32,
+                          minWidth: 32,
+                          minHeight: 32,
+                          p: 0,
+                          m: 0,
+                        }}
+                      >
+                        {reprocessingFiles[file.id] ? (
+                          <CircularProgress size="sm" />
+                        ) : (
+                          <ErrorIcon sx={{ fontSize: '0.75rem' }} />
+                        )}
+                      </IconButton>
+                    </Tooltip>
+                  )}
+                </FileItemContainer>
+              </Tooltip>
+            );
+          })}
+        </Box>
+      )}
+
+      {/* Divider between system and session files */}
+      {systemFiles.length > 0 && workBenchFiles.length > 0 && <Divider sx={{ my: 1 }} />}
+
+      {/* Session Files Section */}
+      {workBenchFiles.length > 0 && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {renameDuplicateFiles(workBenchFiles).map((file, index) => {
+            const autoDetected = isAutoDetectedText(file);
+            const supported = fileSupported(file);
+            const embeddingMismatch = hasEmbeddingMismatch(file);
+            let tooltipText = file.fileName;
+
+            if (!supported) {
+              tooltipText = 'Selected model does not support this file type';
+            } else if (embeddingMismatch) {
+              tooltipText = `${file.fileName} (Different embedding model: ${file.embeddingModel})`;
+            } else if (autoDetected) {
+              tooltipText = `${file.fileName} (Auto-detected as plain text)`;
+            }
+
+            return (
+              <Tooltip key={file.id} title={tooltipText} placement="top" arrow>
+                <FileItemContainer>
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      cursor: 'pointer',
+                      flex: 1,
+                      minWidth: 0,
+                      transition: 'all 0.15s ease-in-out',
+                    }}
+                    onClick={() => handleClick(index)}
+                  >
+                    <Box sx={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                      {getIconForMimeType(file.mimeType, file)}
+                      {autoDetected && (
+                        <Badge
+                          anchorOrigin={{
+                            vertical: 'bottom',
+                            horizontal: 'right',
+                          }}
+                          size="sm"
+                          sx={{ position: 'absolute', top: -2, right: -2 }}
+                        >
+                          <AutoFixHighIcon sx={{ fontSize: '0.75rem', color: 'warning.500' }} />
+                        </Badge>
+                      )}
+                    </Box>
+                    <Typography
+                      level="body-sm"
+                      noWrap
+                      sx={{ color: theme => theme.palette.text.primary, flex: 1 }}
+                      data-testid="session-file-list"
+                    >
+                      {file.fileName.length > 30 ? `${file.fileName.slice(0, 30)}...` : file.fileName}
+                    </Typography>
+                    {file.error && (
+                      <Tooltip title={file.error} placement="top" arrow>
+                        <WarningIcon sx={{ fontSize: '0.875rem', color: red[400] }} />
+                      </Tooltip>
+                    )}
+                  </Box>
+                  {embeddingMismatch && (
+                    <Tooltip
+                      title="Click here to reprocess this file for better search and analysis results."
+                      placement="top"
+                      arrow
+                    >
+                      <IconButton
+                        data-testid={`files-section-reprocess-btn-workbench-${file.id}`}
+                        size="sm"
+                        variant="plain"
+                        color="danger"
+                        disabled={isAnyFileReprocessing || file.isChunking || file.isVectorizing}
+                        onClick={e => {
+                          e.stopPropagation();
+                          handleReprocessFile(file);
+                        }}
+                        sx={{
+                          width: 32,
+                          height: 32,
+                          minWidth: 32,
+                          minHeight: 32,
+                          p: 0,
+                          m: 0,
+                        }}
+                      >
+                        {reprocessingFiles[file.id] ? (
+                          <CircularProgress size="sm" />
+                        ) : (
+                          <ErrorIcon sx={{ fontSize: '0.75rem' }} />
+                        )}
+                      </IconButton>
+                    </Tooltip>
+                  )}
+                  {(file.userId === currentUser?.id || isOwnNotebook) && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', ml: 'auto' }}>
+                      {loadingChip[file?.id] ? (
+                        <CircularProgress size="sm" sx={{ width: 20, height: 20 }} />
+                      ) : (
+                        <IconButton
+                          size="sm"
+                          variant="plain"
+                          color="neutral"
+                          onClick={e => {
+                            e.stopPropagation();
+                            handleRemove(file.id);
+                          }}
+                          sx={{
+                            width: 24,
+                            height: 24,
+                            minWidth: 24,
+                            minHeight: 24,
+                            p: 0,
+                            m: 0,
+                            ml: 0.5,
+                          }}
+                        >
+                          <Delete sx={{ fontSize: '0.875rem' }} />
+                        </IconButton>
+                      )}
+                    </Box>
+                  )}
+                </FileItemContainer>
+              </Tooltip>
+            );
+          })}
+        </Box>
+      )}
+
+      {messageFiles.length > 0 && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }} data-testid="files-section-message-files-group">
+          <Divider />
+          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+            Attached to a message
+          </Typography>
+          {messageFiles.map((file: IFabFileDocument) => (
+            <Tooltip
+              key={file.id}
+              title={`${file.fileName} - only sent with the message it was attached to`}
+              placement="top"
+              arrow
+            >
+              <FileItemContainer>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}>
+                  {getIconForMimeType(file.mimeType, file)}
+                  <Typography level="body-sm" noWrap data-testid="session-file-list">
+                    {file.fileName}
+                  </Typography>
+                  <Chip
+                    size="sm"
+                    variant="outlined"
+                    color="neutral"
+                    data-testid={`files-section-message-scope-chip-${file.id}`}
+                  >
+                    One message
+                  </Chip>
+                </Box>
+                {(file.userId === currentUser?.id || isOwnNotebook) && (
+                  <Box sx={{ display: 'flex', alignItems: 'center', ml: 'auto' }}>
+                    <Tooltip
+                      title={
+                        isImageAttachment(file.mimeType)
+                          ? 'Use in this notebook - images are re-sent with every message and cost tokens each turn'
+                          : 'Use in this notebook'
+                      }
+                      placement="top"
+                      arrow
+                    >
+                      <IconButton
+                        size="sm"
+                        variant="plain"
+                        color="neutral"
+                        disabled={isPending(file.id)}
+                        data-testid={`files-section-promote-btn-${file.id}`}
+                        onClick={e => {
+                          e.stopPropagation();
+                          handlePromote(file);
+                        }}
+                      >
+                        {isPending(file.id) ? (
+                          <CircularProgress size="sm" sx={{ width: 20, height: 20 }} />
+                        ) : (
+                          <PushPinOutlinedIcon sx={{ fontSize: '1rem' }} />
+                        )}
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                )}
+              </FileItemContainer>
+            </Tooltip>
+          ))}
+        </Box>
+      )}
+    </Box>
+  );
+};
+
+export default FilesSection;

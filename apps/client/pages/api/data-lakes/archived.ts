@@ -1,0 +1,27 @@
+import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { dataLakeService } from '@bike4mind/services';
+import { dataLakeRepository, dataLakeAccessGrantRepository, adminSettingsRepository } from '@bike4mind/database';
+import { Request } from 'express';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
+
+// GET /api/data-lakes/archived - archived lakes accessible to the user (management view)
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
+  .use(requireFeatureEnabled('EnableDataLakes'))
+  .get(async (req: Request, res) => {
+    const dataLakes = await dataLakeService.listArchivedDataLakes(await toAccessContext(req), {
+      db: {
+        dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        settings: adminSettingsRepository,
+      },
+    });
+    return res.json({ data: dataLakes });
+  });
+
+export const config = {
+  api: { externalResolver: true },
+};
+
+export default handler;

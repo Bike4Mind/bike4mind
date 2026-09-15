@@ -1,0 +1,215 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// Mock state via vi.hoisted so it is initialized before the hoisted vi.mock factories run.
+const { sideEffects, QuestMock, SessionMock, findAccessibleById } = vi.hoisted(() => ({
+  sideEffects: {
+    publishSummarizeSession: vi.fn().mockResolvedValue(undefined),
+    publishContextSummarizeSession: vi.fn().mockResolvedValue(undefined),
+  },
+  QuestMock: {
+    find: vi.fn(),
+    findOne: vi.fn(),
+    create: vi.fn(),
+    findOneAndUpdate: vi.fn(),
+  },
+  SessionMock: {
+    findOne: vi.fn(),
+    updateOne: vi.fn().mockResolvedValue(undefined),
+    where: vi.fn(),
+  },
+  findAccessibleById: vi.fn(),
+}));
+
+// ---- cross-module + side-effect boundaries ----
+vi.mock('./sessionSideEffects', () => sideEffects);
+
+vi.mock('@bike4mind/database', () => ({
+  Quest: QuestMock,
+  Session: SessionMock,
+  mongoose: { Types: { ObjectId: class {} } },
+}));
+
+vi.mock('@bike4mind/database/auth', () => ({
+  Session: { modelName: 'Session' },
+  sessionRepository: { shareable: { findAccessibleById } },
+}));
+
+vi.mock('@bike4mind/common', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+  return {
+    Permission: { update: 'update' },
+    // @server/utils/errors re-exports NotFoundError from here, so it must be provided.
+    NotFoundError: class NotFoundError extends Error {},
+    // Real implementation: the redaction test below verifies the actual behavior, not a stub.
+    redactPromptMetaForViewer: actual.redactPromptMetaForViewer,
+  };
+});
+
+vi.mock('@bike4mind/observability', () => ({
+  Logger: { log: vi.fn(), info: vi.fn(), error: vi.fn() },
+}));
+
+vi.mock('@casl/mongoose', () => ({
+  accessibleBy: () => ({ ofType: () => ({}) }),
+}));
+
+import {
+  addMessageToSession,
+  deleteMessageFromSession,
+  stopReply,
+  summarizeSession,
+  contextSummarizeSession,
+  getMessagesFromSession,
+} from './sessionOperations';
+import { publishSummarizeSession, publishContextSummarizeSession } from './sessionSideEffects';
+import type { Ability } from '@server/auth/ability';
+import type { IChatHistoryItem } from '@bike4mind/common';
+
+// Typed casts keep the intended types visible (and catch drift) without real Mongoose docs.
+const mockAbility = (canResult: boolean): Ability =>
+  ({ can: vi.fn().mockReturnValue(canResult) }) as unknown as Ability;
+const mockMessage = (m: Partial<Omit<IChatHistoryItem, 'sessionId'>>): Omit<IChatHistoryItem, 'sessionId'> =>
+  m as Omit<IChatHistoryItem, 'sessionId'>;
+
+const ability = mockAbility(true);
+
+describe('sessionOperations', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    SessionMock.updateOne.mockResolvedValue(undefined);
+  });
+
+  describe('getMessagesFromSession', () => {
+    // A Mongoose Query mock: skip/limit/sort mutate-and-return-this, and the object itself is
+    // awaitable (thenable), matching how the real code chains then `await`s the query.
+    const chainableFind = (docs: unknown[]) => {
+      const query = {
+        skip: () => query,
+        limit: () => query,
+        sort: () => query,
+        then: (resolve: (v: unknown[]) => void) => resolve(docs),
+      };
+      return query;
+    };
+
+    const questWithFunctionCalls = (returnValue: string) => ({
+      toJSON: () => ({
+        id: 'q1',
+        promptMeta: {
+          functionCalls: [{ name: 'web_search', parameters: {}, id: 'call_1', returnValue, success: true }],
+        },
+      }),
+    });
+
+    it('returns functionCalls untouched for the session owner', async () => {
+      findAccessibleById.mockResolvedValueOnce({ userId: 'owner-1' });
+      QuestMock.find.mockReturnValueOnce(chainableFind([questWithFunctionCalls('private tool output')]));
+
+      const { data } = await getMessagesFromSession({ id: 'owner-1' } as never, 's1', undefined, { all: true });
+
+      expect(JSON.stringify(data)).toContain('private tool output');
+    });
+
+    it('strips functionCalls[].returnValue for a non-owner viewer (shared-session read)', async () => {
+      findAccessibleById.mockResolvedValueOnce({ userId: 'owner-1' });
+      QuestMock.find.mockReturnValueOnce(chainableFind([questWithFunctionCalls('private tool output')]));
+
+      const { data } = await getMessagesFromSession({ id: 'sharee-2' } as never, 's1', undefined, { all: true });
+
+      expect(JSON.stringify(data)).not.toContain('private tool output');
+      // name/id/success must survive - only returnValue/error are owner-only.
+      expect(JSON.stringify(data)).toContain('web_search');
+      expect(JSON.stringify(data)).toContain('call_1');
+    });
+
+    it('throws NotFoundError when the session is not accessible', async () => {
+      findAccessibleById.mockResolvedValueOnce(null);
+      await expect(getMessagesFromSession({ id: 'u1' } as never, 's1')).rejects.toThrow('Session not found');
+    });
+  });
+
+  describe('addMessageToSession', () => {
+    it('throws NotFoundError when the session is not accessible', async () => {
+      SessionMock.findOne.mockResolvedValueOnce(null);
+      await expect(addMessageToSession('u1', 's1', mockMessage({ prompt: 'hi' }), ability)).rejects.toThrow(
+        'Session not found'
+      );
+      expect(QuestMock.create).not.toHaveBeenCalled();
+    });
+
+    it('creates the quest and bumps the session timestamp', async () => {
+      SessionMock.findOne.mockResolvedValueOnce({ id: 's1', lastUpdated: new Date(0) });
+      QuestMock.create.mockResolvedValueOnce({ id: 'q1' });
+
+      const result = await addMessageToSession('u1', 's1', mockMessage({ prompt: 'hi' }), ability);
+
+      expect(QuestMock.create).toHaveBeenCalledWith({ prompt: 'hi', sessionId: 's1' });
+      expect(SessionMock.updateOne).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ id: 'q1' });
+    });
+  });
+
+  describe('deleteMessageFromSession', () => {
+    it('throws when the session is not accessible', async () => {
+      SessionMock.findOne.mockResolvedValueOnce(null);
+      await expect(deleteMessageFromSession('u1', 's1', 'm1', ability)).rejects.toThrow('Session not found');
+    });
+
+    it('soft-deletes the message via deletedAt', async () => {
+      SessionMock.findOne.mockResolvedValueOnce({ id: 's1' });
+      QuestMock.findOneAndUpdate.mockResolvedValueOnce({ id: 'm1', deletedAt: new Date() });
+
+      await deleteMessageFromSession('u1', 's1', 'm1', ability);
+
+      expect(QuestMock.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'm1', sessionId: 's1' },
+        { $set: { deletedAt: expect.any(Date) } }
+      );
+    });
+  });
+
+  describe('stopReply', () => {
+    it('marks the latest quest as stopped', async () => {
+      QuestMock.findOne.mockReturnValueOnce({ sort: vi.fn().mockResolvedValue({ id: 'q9', status: 'running' }) });
+      SessionMock.findOne.mockResolvedValueOnce({ id: 's1' });
+      QuestMock.findOneAndUpdate.mockResolvedValueOnce({ id: 'q9', status: 'stopped' });
+
+      const result = await stopReply('s1', ability);
+
+      expect(QuestMock.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: 'q9' },
+        { status: 'stopped', statusMessage: 'Generation cancelled by user' },
+        { new: true }
+      );
+      expect(result).toMatchObject({ status: 'stopped' });
+    });
+
+    it('is a no-op update when the latest quest is already stopped', async () => {
+      QuestMock.findOne.mockReturnValueOnce({ sort: vi.fn().mockResolvedValue({ id: 'q9', status: 'stopped' }) });
+      SessionMock.findOne.mockResolvedValueOnce({ id: 's1' });
+
+      const result = await stopReply('s1', ability);
+
+      expect(QuestMock.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ status: 'stopped' });
+    });
+
+    it('throws when there is no active quest', async () => {
+      QuestMock.findOne.mockReturnValueOnce({ sort: vi.fn().mockResolvedValue(null) });
+      SessionMock.findOne.mockResolvedValueOnce({ id: 's1' });
+      await expect(stopReply('s1', ability)).rejects.toThrow('No active quest found');
+    });
+  });
+
+  describe('summarization triggers', () => {
+    it('summarizeSession delegates to publishSummarizeSession', async () => {
+      await summarizeSession('s1', 'manual');
+      expect(publishSummarizeSession).toHaveBeenCalledWith('s1', 'manual');
+    });
+
+    it('contextSummarizeSession delegates to publishContextSummarizeSession', async () => {
+      await contextSummarizeSession('s1', 'quest-9');
+      expect(publishContextSummarizeSession).toHaveBeenCalledWith('s1', 'quest-9');
+    });
+  });
+});

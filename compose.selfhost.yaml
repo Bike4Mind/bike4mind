@@ -1,0 +1,559 @@
+# Bike4Mind self-host stack: run anywhere, no AWS account required.
+#
+# Quickstart (see SELF_HOST.md for the full guide):
+#   cp .env.selfhost.example .env.selfhost      # then fill in secrets
+#   docker compose -f compose.selfhost.yaml --env-file .env.selfhost up
+#
+# By default the app pulls the CI-published image (ghcr.io/<org>/bike4mind-selfhost).
+# To build locally instead: `docker compose -f compose.selfhost.yaml build`
+# (needs ~12-16GB Docker memory; the CI-published image is the supported path).
+#
+# The separate `compose.yaml` in this repo is the dev Mongo helper and is left
+# untouched; this file is the self-host stack.
+#
+# SECURITY — this stack is for LOCAL / single-host use. The backing services
+# (Mongo, MinIO, ElasticMQ, Mailpit, and OpenSearch if the optional opensearch
+# profile is enabled) run without authentication and are bound to 127.0.0.1 so
+# they are NOT reachable off the host. Before running on a public-facing
+# server you MUST: enable Mongo auth (--auth + a user), set strong
+# MINIO_ROOT_USER/MINIO_ROOT_PASSWORD (do not ship the dev defaults), point
+# MAIL_* at a real SMTP provider, put the app behind a reverse proxy with
+# TLS, and keep the backing ports unpublished. Do not expose
+# 27017/9000/9324/8025/9200 to the internet.
+#
+# Realtime: the `ws` gateway + `subscriber-fanout` services provide live
+# streaming updates (chat, notebooks, sync) without AWS API Gateway. See the
+# `ws` service below and selfhost/ws-gateway/.
+
+name: bike4mind-selfhost
+
+services:
+  mongo:
+    image: mongo:7
+    command: ['mongod', '--replSet', 'rs0', '--bind_ip_all']
+    volumes:
+      - mongo-data:/data/db
+    # MongoDB/WiredTiger opens a file per collection + index. Docker's default
+    # soft nofile limit (1024) is far below MongoDB's documented minimum (64000):
+    # the server fatally panics with a WiredTiger "Too many open files" (EMFILE)
+    # error the moment the app creates its collections. Raise it here.
+    ulimits:
+      nofile:
+        soft: 64000
+        hard: 64000
+    # Bound to loopback — reachable by the app over the compose network, not off-host.
+    # The app connects over the compose network (mongo:27017); this published port
+    # is only for host-side tooling. Override MONGO_HOST_PORT if 27017 is already
+    # taken on your host (e.g. a local mongod). The internal port never changes.
+    ports:
+      - '127.0.0.1:${MONGO_HOST_PORT:-27017}:27017'
+    # Single-node replica set (the app requires a replica set for transactions).
+    # The healthcheck initiates rs0 on first run, then reports healthy once up.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'mongosh',
+          '--quiet',
+          '--eval',
+          "try { rs.status().ok } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongo:27017'}]}).ok }",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  # S3-compatible object storage. The app uses the AWS S3 SDK pointed at this endpoint.
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    # Credentials come from .env.selfhost (no literals in this file). The
+    # .env.selfhost.example ships the conventional local default (minioadmin);
+    # change it for anything but local eval.
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      # ObjectCreated -> app webhook (self-host replacement for S3 events). MinIO POSTs
+      # uploads to the app's internal route, which marks the FabFile complete and enqueues
+      # RAG chunking. Bound to the fab-file bucket by `mc event add` in createbuckets below.
+      # The worker's periodic scan is the safety net if a notification is missed.
+      MINIO_NOTIFY_WEBHOOK_ENABLE_primary: 'on'
+      MINIO_NOTIFY_WEBHOOK_ENDPOINT_primary: http://app:3000/api/internal/s3/object-created
+      MINIO_NOTIFY_WEBHOOK_AUTH_TOKEN_primary: ${INTERNAL_S3_WEBHOOK_SECRET}
+    volumes:
+      - minio-data:/data
+    # Loopback-only. Override MINIO_ROOT_USER/PASSWORD for anything but local eval.
+    # Override MINIO_HOST_PORT / MINIO_CONSOLE_HOST_PORT if those ports are taken.
+    ports:
+      - '127.0.0.1:${MINIO_HOST_PORT:-9000}:9000'
+      - '127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-9001}:9001'
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:9000/minio/health/live || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: create the buckets the app expects (names come from .env.selfhost),
+  # register the put-event webhook on the FabFile bucket (drives self-host upload
+  # chunking) and on the history-import bucket (without it the LLM history import and
+  # the notebook import upload successfully and are then never processed), then set a
+  # MinIO lifecycle rule that expires abandoned publish drafts. finalize.ts
+  # deletes a draft on success, so the drafts/ prefix only lingers when a publish is
+  # started but never finalized; the rule reaps those after 7 days. Scoped to the
+  # drafts/ prefix so promoted bundles (stored under tier/scope/slug) are never
+  # touched. The history-import bucket gets an unprefixed 7-day rule, matching the hosted
+  # lifecycle on that bucket: an archive whose import is abandoned (a second import was
+  # already running) is otherwise never deleted, and self-host had no equivalent reaper.
+  # Both rules are idempotent (skipped if a lifecycle config already exists) and
+  # best-effort (an mc build without ilm support just skips them). Hosted gets the same
+  # cleanup from S3 lifecycle rules; this is the MinIO equivalent. If you point object
+  # storage at a different S3 backend, add equivalent rules there.
+  createbuckets:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    env_file:
+      - .env.selfhost
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
+        for b in "$$APP_FILES_BUCKET" "$$EMAIL_INGESTION_BUCKET" "$$FAB_FILE_BUCKET" "$$GENERATED_IMAGES_BUCKET" "$$HISTORY_IMPORT_BUCKET" "$$PUBLISHED_ARTIFACTS_BUCKET" "$$SLACK_EXPORT_BUCKET"; do
+          [ -n "$$b" ] && mc mb -p "local/$$b" || true;
+        done;
+        [ -n "$$FAB_FILE_BUCKET" ] && mc event add "local/$$FAB_FILE_BUCKET" arn:minio:sqs::primary:webhook --event put --ignore-existing || true;
+        [ -n "$$HISTORY_IMPORT_BUCKET" ] && mc event add "local/$$HISTORY_IMPORT_BUCKET" arn:minio:sqs::primary:webhook --event put --ignore-existing || true;
+        { [ -n "$$PUBLISHED_ARTIFACTS_BUCKET" ] && { mc ilm rule ls "local/$$PUBLISHED_ARTIFACTS_BUCKET" >/dev/null 2>&1 || mc ilm rule add --expire-days 7 --prefix "drafts/" "local/$$PUBLISHED_ARTIFACTS_BUCKET"; }; };
+        { [ -n "$$HISTORY_IMPORT_BUCKET" ] && { mc ilm rule ls "local/$$HISTORY_IMPORT_BUCKET" >/dev/null 2>&1 || mc ilm rule add --expire-days 7 "local/$$HISTORY_IMPORT_BUCKET"; }; }; true
+
+  # SQS-compatible queue. Queues are predeclared in elasticmq.conf; the URL
+  # format there matches the *_QUEUE URLs in .env.selfhost.example.
+  sqs:
+    image: softwaremill/elasticmq-native
+    volumes:
+      - ./elasticmq.conf:/opt/elasticmq.conf:ro
+    # Loopback-only — ElasticMQ has no auth; never expose it off-host.
+    # Override SQS_HOST_PORT / SQS_UI_HOST_PORT if those ports are taken.
+    ports:
+      - '127.0.0.1:${SQS_HOST_PORT:-9324}:9324'
+      - '127.0.0.1:${SQS_UI_HOST_PORT:-9325}:9325'
+
+  # Local mail catcher: all outgoing mail (including sign-in codes) lands here.
+  # Read it at http://localhost:8025. Point MAIL_* at a real SMTP provider instead
+  # for anything beyond local use.
+  mail:
+    image: axllent/mailpit
+    # Override MAIL_UI_HOST_PORT if 8025 is taken on your host.
+    ports:
+      - '127.0.0.1:${MAIL_UI_HOST_PORT:-8025}:8025'
+
+  app:
+    # Default: pull the CI-published multi-arch image (linux/amd64 + linux/arm64).
+    # Override with B4M_IMAGE, or run `docker compose -f compose.selfhost.yaml build`
+    # to build from source.
+    image: ${B4M_IMAGE:-ghcr.io/bike4mind/bike4mind-selfhost:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env.selfhost
+    depends_on:
+      mongo:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      sqs:
+        condition: service_started
+      mail:
+        condition: service_started
+      # The app dispatches quests to this service over HTTP (see dispatchQuest.ts). Wait for
+      # `service_healthy` (not just started): its /health only passes once Mongo is connected
+      # (~20s), and dispatchQuest retries only 2x @ 300ms - far short of a cold boot, so a
+      # message sent in that window would fail. No cycle: `chatcompletion` depends on mongo/etc.,
+      # not on `app` (and it deliberately does NOT depend on `ws`, which depends on `app`).
+      chatcompletion:
+        condition: service_healthy
+    # Override APP_HOST_PORT to serve the app on a different host port.
+    ports:
+      - '${APP_HOST_PORT:-3000}:3000'
+    # Lets the app reach an Ollama running on the *host* (native install, e.g.
+    # for GPU) via OLLAMA_BASE_URL=http://host.docker.internal:11434. Harmless
+    # when unused. The bundled `ollama` service below is reached as `ollama`.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    # Realtime: the app reads the browser URL + management endpoint from
+    # WEBSOCKET_URL / WEBSOCKET_MANAGEMENT_ENDPOINT (.env.selfhost, -> the `ws`
+    # gateway below) and uses INTERNAL_WS_SECRET to authenticate the gateway's
+    # internal handler calls. Both come from the env file.
+
+  # Always-on chatCompletion HTTP worker — the self-host equivalent of the hosted Fargate
+  # ChatCompletion. The `app` container POSTs created quests to `/process` here
+  # (dispatchQuest -> ${CHAT_COMPLETION}/process); this container runs
+  # ChatCompletionProcess in-process and streams replies through the `ws` gateway
+  # (WEBSOCKET_MANAGEMENT_ENDPOINT). It also serves the public /api/ai/v1/completions SSE
+  # endpoint. Same code + code path as hosted; only the config source differs (the alias
+  # hook in the Dockerfile maps `sst` -> the env-backed @bike4mind/resource shim).
+  chatcompletion:
+    # Built locally from source (like `ws`); there is no published pull-only image yet, so
+    # `up` builds it on first run. Add `--build` to rebuild after code changes.
+    build:
+      context: .
+      dockerfile: apps/client/Dockerfile.chatcompletion.selfhost
+    env_file:
+      - .env.selfhost
+    depends_on:
+      mongo:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      sqs:
+        condition: service_started
+      mail:
+        condition: service_started
+    # Exposes the container's :8080 on the host so the external /api/ai/v1/completions route
+    # is reachable at http://localhost:${CHATCOMPLETION_HOST_PORT:-8788}. The `app` container
+    # reaches it over the compose network as http://chatcompletion:8080 (CHAT_COMPLETION).
+    ports:
+      - '${CHATCOMPLETION_HOST_PORT:-8788}:8080'
+    # Lets it reach a host-native Ollama (OLLAMA_BASE_URL=http://host.docker.internal:11434),
+    # matching the `app` container.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    # /health returns 200 once Mongo is connected, 503 while still connecting.
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "fetch(\"http://localhost:8080/health\").then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  # Background worker - the self-host replacement for the hosted SST queue consumers
+  # (infra/queues.ts) and cron (infra/cron.ts), neither of which exists in plain Docker.
+  # Long-polls ElasticMQ (research engine; later chunk/vectorize + the event queue) and
+  # runs the task scheduler, calling the SAME handlers the hosted Lambdas use. Reuses the
+  # chatcompletion image; only the command differs (runs server/worker/main.ts). No ports:
+  # it dispatches nothing inbound. Logs: `docker compose -f compose.selfhost.yaml logs -f worker`.
+  # This is also the stack's only model-discovery driver: every service loads the same
+  # env file, and only this one acts on B4M_DISCOVERY_DRIVER. Discovery stays off (and
+  # makes no outbound request) until that flag is set - see SELF_HOST.md.
+  worker:
+    build:
+      context: .
+      dockerfile: apps/client/Dockerfile.chatcompletion.selfhost
+    env_file:
+      - .env.selfhost
+    command:
+      ['pnpm', 'exec', 'tsx', '--import', './server/chatCompletion/selfhostSstAlias.mjs', 'server/worker/main.ts']
+    depends_on:
+      mongo:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      sqs:
+        condition: service_started
+    # Lets it reach a host-native Ollama (OLLAMA_BASE_URL=http://host.docker.internal:11434),
+    # matching the app/chatcompletion containers - background embedding needs it.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    # server/worker/main.ts drains for up to 20s on SIGTERM (DRAIN_GRACE_MS). Docker's
+    # 10s default would SIGKILL through that, abandoning an in-flight scheduled run and
+    # stranding its Mongo lease until the TTL expires; keep this above the code budget.
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  # Realtime WebSocket gateway — the self-host replacement for AWS API Gateway
+  # WebSocket. One port (3001) with two faces: a browser-facing socket server
+  # (WEBSOCKET_URL=ws://localhost:3001) and an API Gateway Management API
+  # emulator (WEBSOCKET_MANAGEMENT_ENDPOINT=http://ws:3001) that the app and the
+  # subscriber-fanout push to. It holds no auth/model logic; it delegates
+  # connect/subscribe/unsubscribe to the app over an internal shared-secret
+  # endpoint. Source: selfhost/ws-gateway/.
+  ws:
+    build:
+      context: ./selfhost/ws-gateway
+      dockerfile: Dockerfile
+    env_file:
+      - .env.selfhost
+    environment:
+      PORT: '3001'
+      APP_INTERNAL_URL: http://app:3000
+    # Browser connects to ws://localhost:3001; app + fanout reach it as
+    # http://ws:3001 over the compose network. Override WS_HOST_PORT if 3001 is
+    # taken on your host (also update WEBSOCKET_URL to match).
+    ports:
+      - '${WS_HOST_PORT:-3001}:3001'
+    depends_on:
+      app:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "fetch(\"http://localhost:3001/health\").then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+
+  # MongoDB change-stream -> WebSocket fan-out. Watches the collections clients
+  # subscribe to (recorded in the querySubscriptions collection) and pushes
+  # matching changes through the ws gateway's management endpoint, restoring live
+  # data updates (notebooks, chat, sync) in self-host. Published image; build it
+  # from source in its own repo and tag it the same to run local edits.
+  subscriber-fanout:
+    image: ${SUBSCRIBER_FANOUT_IMAGE:-ghcr.io/bike4mind/subscriber-fanout:latest}
+    env_file:
+      - .env.selfhost
+    environment:
+      # The fanout logs the stage and pushes to the management endpoint below.
+      STAGE: ${APP_STAGE:-selfhost}
+      WEBSOCKET_MANAGEMENT_ENDPOINT: http://ws:3001
+      # Browsers have no 128KB frame cap and don't reassemble chunks, so send whole.
+      WEBSOCKET_DISABLE_CHUNKING: 'true'
+      # Dummy creds satisfy the AWS SDK; the ws gateway ignores the SigV4 signature.
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      # No EC2/ECS metadata service in plain Docker; skip it so the credential
+      # chain resolves from env immediately instead of waiting on an IMDS timeout.
+      AWS_EC2_METADATA_DISABLED: 'true'
+    depends_on:
+      mongo:
+        condition: service_healthy
+      ws:
+        condition: service_started
+    restart: unless-stopped
+
+  # Local LLMs via Ollama (optional).
+  # Run local open-weight models (e.g. Qwen) with NO provider API keys and, once
+  # the models are pulled, NO internet. Opt in with the `ollama` profile:
+  #   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile ollama up -d
+  # Then set OLLAMA_BASE_URL=http://ollama:11434 in .env.selfhost (see the file).
+  # CPU-only by default so it runs on any host; for NVIDIA GPU acceleration add
+  # the override file: `-f compose.ollama-gpu.yaml` (needs nvidia-container-toolkit).
+  ollama:
+    image: ollama/ollama
+    profiles: ['ollama']
+    volumes:
+      - ollama-data:/root/.ollama
+    # Loopback-only, like the other backing services. Override OLLAMA_HOST_PORT
+    # if 11434 is taken (e.g. by a host Ollama).
+    ports:
+      - '127.0.0.1:${OLLAMA_HOST_PORT:-11434}:11434'
+    healthcheck:
+      test: ['CMD-SHELL', 'ollama list >/dev/null 2>&1 || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # One-shot: pull the model(s) named in OLLAMA_PULL_MODELS (space-separated) so
+  # they're ready in the app's model picker. Safe to re-run; an already-present
+  # model is a no-op. Pick your model(s) in .env.selfhost (menu + GPU/RAM specs there).
+  ollama-pull:
+    image: ollama/ollama
+    profiles: ['ollama']
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_PULL_MODELS: ${OLLAMA_PULL_MODELS:-qwen3.5:2b-q4_K_M}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >
+        echo "Pulling: $$OLLAMA_PULL_MODELS" &&
+        for m in $$OLLAMA_PULL_MODELS; do
+          echo "==> ollama pull $$m" && ollama pull "$$m" || echo "WARN: failed to pull $$m";
+        done &&
+        echo "Done. Pulled models are now available in the app model picker."
+    restart: 'no'
+
+  # Local web search via SearXNG (optional).
+  # A self-hosted metasearch engine so the web_search tool (and deep_research)
+  # work with NO SerpAPI key. Opt in with the `search` profile:
+  #   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile search up -d
+  # Then set SEARXNG_BASE_URL=http://searxng:8080 in .env.selfhost (see the file).
+  searxng:
+    image: searxng/searxng:latest
+    profiles: ['search']
+    # Read-only config; only the JSON format + limiter tweaks the adapter needs are
+    # overridden, everything else inherits SearXNG defaults. See selfhost/searxng/settings.yml.
+    volumes:
+      - ./selfhost/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      # SearXNG's settings loader maps this env var onto server.secret_key at load time
+      # (searx/settings_defaults.py: secret_key has environ_name='SEARXNG_SECRET'), so it applies
+      # even with the read-only settings.yml above - no file mutation, no secret committed to the
+      # repo. Verified in-container: get_setting('server.secret_key') returns this value.
+      # Override in .env.selfhost for anything but local eval.
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-selfhost-local-dev}
+    # Loopback-only, like the other backing services. The app reaches it over the
+    # compose network as http://searxng:8080. Override SEARXNG_HOST_PORT if 8080 is taken.
+    ports:
+      - '127.0.0.1:${SEARXNG_HOST_PORT:-8080}:8080'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q --spider http://localhost:8080/healthz || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  # Local image generation via a self-hosted Stable-Diffusion server (optional).
+  # Generate images with NO provider API keys, using the SD.Next WebUI's
+  # AUTOMATIC1111-compatible REST API (/sdapi/v1/txt2img). Opt in with the
+  # `imagegen` profile:
+  #   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile imagegen up -d
+  # Then set IMAGE_GEN_BASE_URL=http://imagegen:7860 in .env.selfhost (see the file).
+  # CPU-only by default so it runs on any host (slow: ~1-3 min/image); for NVIDIA
+  # GPU acceleration add the override file: `-f compose.imagegen-gpu.yaml`.
+  imagegen:
+    # Floating :latest is convenient but NOT reproducible - a later upstream push can
+    # change the SD backend under you. For a stable stack, override IMAGEGEN_IMAGE in
+    # .env.selfhost with a specific tag or (better) a digest, e.g.
+    # IMAGEGEN_IMAGE=vladmandic/sdnext-cuda@sha256:<digest>. See SELF_HOST.md.
+    image: ${IMAGEGEN_IMAGE:-vladmandic/sdnext-cuda:latest}
+    profiles: ['imagegen']
+    # Pin the data/models dirs explicitly so the checkpoint the puller writes to
+    # /mnt/models/Stable-diffusion is always the dir SD.Next scans - never rely on
+    # an image default that could drift and silently no-op the feature. Must stay
+    # in sync with the volume targets below and the puller's download path.
+    environment:
+      SD_DATADIR: /mnt/data
+      SD_MODELSDIR: /mnt/models
+    # SD.Next serves the REST API by default. --use-cpu all forces CPU so the
+    # nVidia-base image still runs on a host with no GPU; the GPU override file
+    # replaces this command to drop --use-cpu all. --quick skips the per-boot
+    # reinstall check (the image ships its deps prebuilt). Checkpoints live under
+    # SD_MODELSDIR (/mnt/models/Stable-diffusion); state under SD_DATADIR.
+    command: ['python', 'launch.py', '--listen', '--use-cpu', 'all', '--api', '--quick', '--log', 'sdnext.log']
+    volumes:
+      - imagegen-models:/mnt/models
+      - imagegen-data:/mnt/data
+    # Loopback-only, like the other backing services. Override IMAGEGEN_HOST_PORT
+    # if 7860 is taken (e.g. by a host SD server).
+    ports:
+      - '127.0.0.1:${IMAGEGEN_HOST_PORT:-7860}:7860'
+    healthcheck:
+      # curl may be absent from the image, but python always is; poll the models
+      # endpoint (an empty list before any checkpoint is pulled is still healthy).
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request; urllib.request.urlopen('http://localhost:7860/sdapi/v1/sd-models', timeout=5)" || exit 1
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      # First boot compiles/loads the backend before the API answers; be generous.
+      start_period: 300s
+
+  # One-shot: download the checkpoint(s) named in IMAGE_GEN_PULL_MODELS (space-
+  # separated URLs) into the shared models volume so they show up in the app's
+  # model picker. Safe to re-run; an already-present file is skipped. Pick your
+  # checkpoint in .env.selfhost (menu + disk/VRAM specs there).
+  imagegen-pull:
+    # Floating :latest, same reproducibility caveat as `imagegen` above. This one is
+    # not env-overridable - pin a specific curlimages/curl digest here if you need a
+    # reproducible pull step.
+    image: curlimages/curl:latest
+    profiles: ['imagegen']
+    # Write into the same volume SD.Next created as root.
+    user: root
+    depends_on:
+      imagegen:
+        condition: service_healthy
+    environment:
+      IMAGE_GEN_PULL_MODELS: ${IMAGE_GEN_PULL_MODELS:-https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors}
+    volumes:
+      - imagegen-models:/mnt/models
+    # Literal block scalar (|), not folded (>): the script has inline `# ...`
+    # shell comments, and folding would join them onto the following code line
+    # so the comment swallows real statements. `|` keeps every line intact.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        mkdir -p /mnt/models/Stable-diffusion
+        echo "Pulling: $$IMAGE_GEN_PULL_MODELS"
+        first=""
+        for url in $$IMAGE_GEN_PULL_MODELS; do
+          name=$$(basename "$${url%%\?*}")
+          [ -z "$$first" ] && first="$$name"
+          dest="/mnt/models/Stable-diffusion/$$name"
+          if [ -f "$$dest" ]; then
+            echo "==> $$name already present, skipping"
+          else
+            # Download to a .part file and rename only on success, so an
+            # interrupted pull never leaves a corrupt file the guard above skips.
+            echo "==> downloading $$name" && curl -fL --retry 3 -o "$$dest.part" "$$url" && mv "$$dest.part" "$$dest" || { echo "WARN: failed to download $$url"; rm -f "$$dest.part"; }
+          fi
+        done
+        # SD.Next scanned the (empty) models dir at boot, before the download finished,
+        # so poke it to rescan - otherwise /sdapi/v1/sd-models stays [] until a manual
+        # refresh and the checkpoint never reaches the picker. Best-effort with a short
+        # retry in case the server is still warming.
+        echo "Refreshing SD.Next checkpoint list..."
+        for i in 1 2 3 4 5; do
+          curl -fsS -X POST http://imagegen:7860/sdapi/v1/refresh-checkpoints && break || sleep 3
+        done || true
+        # Preload the first checkpoint (model_name = filename without extension) via
+        # POST /sdapi/v1/options, because override_settings alone won't load a model
+        # from a cold start - so the first chat generation isn't stuck on a never-loaded
+        # model. Best-effort and generously capped; the load can take minutes on CPU.
+        if [ -n "$$first" ]; then
+          model="$${first%.*}"
+          echo "Preloading active checkpoint: $$model (can take minutes on CPU)..."
+          curl -fsS --max-time 900 -X POST -H "Content-Type: application/json" \
+            -d "{\"sd_model_checkpoint\": \"$$model\"}" http://imagegen:7860/sdapi/v1/options || \
+            echo "WARN: could not preload $$model; it will load on first use"
+        fi
+        echo "Done. Pulled checkpoints are now available in the app model picker."
+    restart: 'no'
+
+  # Optional OpenSearch container for kNN-backed Data Lake retrieval (otherwise self-host
+  # falls back to the bounded brute-force scan). Opt in with the `opensearch` profile:
+  #   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile opensearch up -d
+  # Then set OPENSEARCH_ENDPOINT and B4M_SELF_HOST_OPENSEARCH=true in .env.selfhost (see the file).
+  # No `depends_on` from `app`: that would force this optional container to always start,
+  # defeating the profile gate. The app fails open to the scan path if it's absent or unreachable.
+  opensearch:
+    image: opensearchproject/opensearch:2.19.1
+    profiles: ['opensearch']
+    environment:
+      discovery.type: single-node
+      # Security plugin needs real TLS/certs to run; this container is loopback-only and never
+      # exposed, so it's disabled rather than configured, matching the no-auth self-host client.
+      DISABLE_SECURITY_PLUGIN: 'true'
+      DISABLE_INSTALL_DEMO_CONFIG: 'true'
+      OPENSEARCH_JAVA_OPTS: '-Xms512m -Xmx512m'
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    # Loopback-only, like the other backing services. Override OPENSEARCH_HOST_PORT if 9200 is taken.
+    ports:
+      - '127.0.0.1:${OPENSEARCH_HOST_PORT:-9200}:9200'
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS http://localhost:9200/_cluster/health || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  mongo-data:
+  minio-data:
+  ollama-data:
+  imagegen-models:
+  imagegen-data:
+  opensearch-data:

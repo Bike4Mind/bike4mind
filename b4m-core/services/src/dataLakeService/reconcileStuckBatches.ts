@@ -1,0 +1,116 @@
+import type {
+  IDataLakeBatchSummary,
+  IDataLakeRepository,
+  IDataLakeBatchRepository,
+  IFabFileRepository,
+} from '@bike4mind/common';
+import { BATCH_NON_TERMINAL_STATUSES } from '@bike4mind/common';
+import { recomputeLakeStats } from './recomputeLakeStats';
+import type { LakeConfigAuditAdapters } from './recordLakeConfigChange';
+
+/**
+ * Default stuck-batch timeout: a non-terminal batch idle longer than this is forced terminal.
+ *
+ * Must exceed the worst-case time a batch can spend legitimately retrying a chunk/vectorize
+ * failure before the queue handlers themselves account it (see fabFileChunk.ts's and
+ * fabFileVectorize.ts's deferFailureIfRetryable gate) - otherwise this reconciler forces the
+ * batch terminal mid-retry, before a later attempt gets the chance to succeed. The chunk queue
+ * is the long pole: infra/queues.ts pins fabFileChunkQueue to a 60-minute visibility timeout and
+ * dlq.retry: 3. Each visibility wait already covers that attempt's own Lambda execution time (the
+ * timeout starts at receipt, not at completion), so only the FINAL attempt's own run needs adding
+ * on top of the two full waits between attempts: 2*60 + 13 (Lambda timeout) = 133 minutes worst
+ * case before the final attempt's own accounting can possibly land. 180 minutes leaves real
+ * margin over that.
+ */
+export const DEFAULT_STUCK_BATCH_TIMEOUT_MS = 180 * 60 * 1000; // 180 minutes (3 hours)
+
+interface ReconcileStuckBatchesAdapters {
+  db: {
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats' | 'activateIfDraft'>;
+    batches: Pick<IDataLakeBatchRepository, 'markTerminalIfActive'>;
+    fabFiles: Pick<IFabFileRepository, 'computeDataLakeStats'>;
+    // Forwarded straight to recomputeLakeStats. This reconciler forces terminal exactly the
+    // batches that never reached `finalizeBatchIfComplete`, so it is the ONLY path that can
+    // activate those lakes - without these the draft -> active flip for an abandoned upload would
+    // be recorded nowhere. Optional, matching LakeConfigAuditAdapters: absent, it records nothing
+    // rather than failing the reconcile.
+    lakeConfigChangeEvents?: LakeConfigAuditAdapters['db']['lakeConfigChangeEvents'];
+    adminSettings?: LakeConfigAuditAdapters['db']['adminSettings'];
+  };
+  logger?: { info: (msg: string, ...args: unknown[]) => void; warn: (msg: string, ...args: unknown[]) => void };
+  /**
+   * Optional metric hooks, wired by the app callers (core can't import the CloudWatch helper).
+   * `emitForcedTerminal` fires once per batch actually forced terminal, passed the full
+   * (post-transition) batch doc - app callers use this both to record the metric and to
+   * backstop the background AI-tag-suggestion enqueue: a batch forced terminal here
+   * bypassed `finalizeBatchIfComplete` entirely (e.g. the browser tab closed mid-upload and
+   * `upload-complete` never ran), so this is the only place left that can still trigger it.
+   * The taxonomy-phase transition is independently guarded, so calling it again here when
+   * upload-complete already fired it is a harmless no-op. `emitStuckGauge` reports the stuck
+   * count and is wired only from the cron (a fixed cadence), never the read-time path.
+   */
+  metrics?: {
+    emitForcedTerminal?: (batch: IDataLakeBatchSummary) => void | Promise<void>;
+    emitStuckGauge?: (count: number) => void | Promise<void>;
+  };
+}
+
+/**
+ * Read-time reconciler. Given a set of (already-fetched) batches, forces any
+ * non-terminal batch idle past `timeoutMs` to 'completed_with_errors' via a GUARDED
+ * transition (markTerminalIfActive only succeeds while still non-terminal), so it
+ * cannot race a genuinely-late real increment into a double-finalize. Lake stats are
+ * recomputed from source for each forced batch, making a late signal harmless.
+ *
+ * Returns the ids of batches it forced terminal (for observability - this count is
+ * "work being lost").
+ */
+export const reconcileStuckBatches = async (
+  batches: IDataLakeBatchSummary[],
+  timeoutMs: number,
+  { db, logger, metrics }: ReconcileStuckBatchesAdapters,
+  now: number = Date.now()
+): Promise<string[]> => {
+  const forced: string[] = [];
+
+  const stuck = batches.filter(b => {
+    if (!BATCH_NON_TERMINAL_STATUSES.includes(b.status)) return false;
+    const updatedAt = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+    return now - updatedAt > timeoutMs;
+  });
+
+  // Gauge the stuck count (no-op unless a caller wires it). Metrics must never break reconcile.
+  try {
+    await metrics?.emitStuckGauge?.(stuck.length);
+  } catch (error) {
+    logger?.warn('Reconciler stuck-gauge emit failed:', error);
+  }
+
+  for (const batch of stuck) {
+    const won = await db.batches.markTerminalIfActive(batch.id, 'completed_with_errors', 'reconciler');
+    if (!won) continue; // a real increment finalized it first - nothing to reconcile.
+    forced.push(batch.id);
+    try {
+      await metrics?.emitForcedTerminal?.(won);
+    } catch (error) {
+      logger?.warn(`Reconciler forced-terminal metric emit failed for batch ${batch.id}:`, error);
+    }
+    logger?.warn(`Reconciler forced stuck batch ${batch.id} terminal (idle > ${timeoutMs}ms)`);
+    try {
+      const lake = await db.dataLakes.findById(batch.dataLakeId);
+      if (lake) {
+        // `logger` forwarded, not just `db`: the audit write inside is best-effort and reports a
+        // failure through `warn`, so without it an audit going dark on this path falls to
+        // console.warn where log-based alerting cannot see it.
+        await recomputeLakeStats(lake, { db, logger });
+      }
+    } catch (error) {
+      logger?.warn(`Reconciler stat recompute failed for batch ${batch.id}:`, error);
+    }
+  }
+
+  if (forced.length > 0) {
+    logger?.info(`Reconciler forced ${forced.length} stuck batch(es) terminal`);
+  }
+  return forced;
+};

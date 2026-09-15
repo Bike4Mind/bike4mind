@@ -1,0 +1,303 @@
+import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
+import { DataSubscribeRequestAction, Permission } from '@bike4mind/common';
+import { z } from 'zod';
+import {
+  AdminSettings,
+  ApiKey,
+  AppFile,
+  Artifact,
+  ArtifactVersion,
+  FabFile,
+  findModelByCollectionName,
+  Inbox,
+  Invite,
+  mongoose,
+  Organization,
+  Project,
+  QuerySubscription,
+  Quest,
+  QuestMasterPlan,
+  User,
+} from '@bike4mind/database';
+import { Session as SessionModel } from '@bike4mind/database/auth';
+import { accessibleBy } from '@casl/mongoose';
+import { Subscription } from '@server/models/Subscription';
+import { inviteSubscriptionScope, questMasterPlanSubscriptionScope } from '@server/websocket/subscriptionScopes';
+import { sendToConnection, withWebSocketContext } from '@server/websocket/utils';
+import { verifyWsAccessToken } from '@server/websocket/verifyWsAccessToken';
+import crypto from 'crypto';
+import { pickBy } from 'lodash';
+import pLimit from 'p-limit';
+import ability from '../auth/ability';
+import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
+import { Resource } from 'sst';
+import { resolveFieldLimits } from './dataSubscribeFieldLimits';
+
+const HARD_LIMIT = 200;
+
+// Server-side ceiling (ms) on the one-time initial fetch. The filter is client-authored, so even
+// with the operator allow-list on DataSubscribeRequestAction a badly-shaped-but-legal filter can
+// be slow; this makes the database abort it instead of letting it pin a pooled connection for the
+// whole Lambda timeout.
+const INITIAL_FETCH_MAX_TIME_MS = 5_000;
+
+/** Best-effort extraction, for the notifySubscribeError call on a frame that failed to parse. */
+function extractRawSubscriptionId(rawBody: unknown): string | undefined {
+  if (typeof rawBody !== 'object' || rawBody === null) return undefined;
+  const subscriptionId = (rawBody as Record<string, unknown>).subscriptionId;
+  return typeof subscriptionId === 'string' ? subscriptionId : undefined;
+}
+
+/**
+ * Notifies the client that its `subscribe_query` frame was refused or its initial fetch was
+ * aborted - the two failure modes on this path that are content-dependent rather than auth- or
+ * infra-dependent, so they can fire for a caller whose frame is otherwise well-formed. Neither
+ * throws an UnauthorizedError/JsonWebTokenError, so withWebSocketContext's status code never
+ * reaches the client as a frame; without this, the caller sees silence and the surface just
+ * never updates. Deliberately not used for auth failures - those keep their existing behavior.
+ * Best-effort: a failure here must not mask the original error from withWebSocketContext's log.
+ */
+async function notifySubscribeError(
+  connectionId: string,
+  endpoint: string,
+  subscriptionId: string | undefined,
+  error: unknown
+): Promise<void> {
+  if (!subscriptionId) return;
+  const message =
+    error instanceof z.ZodError
+      ? error.issues.map(issue => issue.message).join('; ')
+      : error instanceof Error
+        ? error.message
+        : 'Internal server error';
+  try {
+    await sendToConnection(connectionId, endpoint, { action: 'data_subscribe_error', subscriptionId, error: message });
+  } catch {
+    // Best-effort notification only.
+  }
+}
+
+// Adds a subscription for the given collection/query; the subscriber-fanout package
+// handles the actual change-stream delivery. Query is scoped to the user's ability here
+// so subscriber-fanout doesn't need to re-check access.
+export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async (event, context, logger) => {
+  const endpoint = Resource.websocket.managementEndpoint;
+  const connectionId = event.requestContext.connectionId;
+  const rawBody: unknown = JSON.parse(event.body ?? '');
+
+  let parsedRequest;
+  try {
+    parsedRequest = DataSubscribeRequestAction.parse(rawBody);
+  } catch (error) {
+    await notifySubscribeError(connectionId, endpoint, extractRawSubscriptionId(rawBody), error);
+    throw error;
+  }
+
+  const {
+    accessToken,
+    subscriptionId: clientSubscriberId,
+    collectionName,
+    query,
+    fields,
+    fetchInitialData,
+  } = parsedRequest;
+
+  const user = await verifyWsAccessToken(accessToken);
+  const userAbility = ability(user);
+
+  // 'scope' limits the scope of the query, to only things you're allowed to see.
+  // mostly it uses the accessibleBy function from the casl/mongoose package.  There
+  // are some cases where a Model isn't handled by casl/mongoose, and we handle those
+  // cases explicitly.
+  let scope: mongoose.FilterQuery<unknown>;
+  // Set only for the quests branch below - whether the single session this subscription's
+  // `query.sessionId` names (the only shape the client actually sends, sessions.ts:598) belongs
+  // to the caller. Determines whether resolveFieldLimits' owner-only exclusion applies.
+  let isOwnQuestSession = false;
+  if (collectionName === Quest.collection.collectionName) {
+    const accessibleSessions = await SessionModel.find(accessibleBy(userAbility).ofType(SessionModel), {
+      _id: true,
+      userId: true,
+    });
+    scope = { sessionId: { $in: accessibleSessions.map(s => s._id) } };
+    const requestedSessionId = typeof query.sessionId === 'string' ? query.sessionId : undefined;
+    isOwnQuestSession =
+      !!requestedSessionId &&
+      accessibleSessions.some(s => s._id.toString() === requestedSessionId && s.userId === user.id);
+  } else if (collectionName === QuestMasterPlan.collection.collectionName) {
+    const accessibleSessions = await SessionModel.find(accessibleBy(userAbility).ofType(SessionModel), { _id: true });
+    // Plan access is user-based (owner/shared/public) with a session-based
+    // fallback for legacy and session-visibility plans
+    scope = questMasterPlanSubscriptionScope(
+      user._id.toString(),
+      accessibleSessions.map(s => s._id)
+    );
+  } else if (collectionName === Invite.collection.collectionName) {
+    const canShareProjectsQuery = accessibleBy(userAbility, Permission.share).ofType(Project);
+    const shareableProjectIds = await Project.find(canShareProjectsQuery).distinct('_id');
+    scope = inviteSubscriptionScope(
+      user.email,
+      shareableProjectIds.map(id => id.toString())
+    );
+  } else {
+    // To make a collection subscribeable, add it to this scope mapping:
+    scope = {
+      [User.collection.collectionName]: { _id: user._id },
+      [SessionModel.collection.collectionName]: accessibleBy(userAbility).ofType(SessionModel),
+      [FabFile.collection.collectionName]: accessibleBy(userAbility).ofType(FabFile),
+      [AdminSettings.collection.collectionName]: accessibleBy(userAbility).ofType(AdminSettings),
+      [Inbox.collection.collectionName]: { receiverId: user._id },
+      [ApiKey.collection.collectionName]: accessibleBy(userAbility).ofType(ApiKey),
+      [Organization.collection.collectionName]: accessibleBy(userAbility).ofType(Organization),
+      [AppFile.collection.collectionName]: accessibleBy(userAbility).ofType(AppFile),
+      [Project.collection.collectionName]: accessibleBy(userAbility).ofType(Project),
+      [Subscription.collection.collectionName]: accessibleBy(userAbility).ofType(Subscription),
+      [Artifact.collection.collectionName]: accessibleBy(userAbility).ofType(Artifact),
+      [ArtifactVersion.collection.collectionName]: accessibleBy(userAbility).ofType(ArtifactVersion),
+      // [DELETION-FOOTPRINT] premium-bob run doc: the reading screen live-subscribes to its
+      // bob_runs doc by _id (issue #33). Owner-scoped so a user only sees their own runs. Literal
+      // string because the model lives in the overlay (not importable here); `userId` is a String
+      // field, so match the stringified id. This ownership rule (own runs only) MUST stay in sync
+      // with the GET /api/premium-bob/runs/:id polling route's read check (assertCanReadRun) so the
+      // poll can't leak what the socket wouldn't. Removed when Bob is extracted.
+      ['bob_runs']: { userId: user._id.toString() },
+    }[collectionName];
+  }
+
+  // scopedFields (built below) is persisted onto the QuerySubscription record a few lines down
+  // as `fields`, which is what the separate subscriber-fanout service reads to build its own
+  // change-stream projection - so this exclusion applies to live update/insert events fanout
+  // relays, not just the one-time fetchInitialData query above.
+  const fieldLimits = resolveFieldLimits(collectionName, {
+    questCollectionName: Quest.collection.collectionName,
+    organizationCollectionName: Organization.collection.collectionName,
+    isQuestOwner: isOwnQuestSession,
+    isPlatformAdmin: !!user.isAdmin,
+  });
+
+  let scopedFields: undefined | Record<string, boolean | number> =
+    (fields || fieldLimits) &&
+    ({
+      ...fields,
+      ...fieldLimits,
+      // fields is z.looseObject({}) (arbitrary caller-supplied keys), so the spread widens to an
+      // index signature regardless of fieldLimits' own type - both sides are actually boolean/
+      // number Mongo projection flags.
+    } as Record<string, boolean | number>);
+
+  if (scopedFields) {
+    const inclusions = pickBy(scopedFields, v => v);
+    if (Object.keys(inclusions).length) {
+      const haveExclusions = Object.values(scopedFields).some(v => !v);
+      if (haveExclusions) {
+        // Mongo projections can't mix inclusion and exclusion keys. No current in-repo caller
+        // sends inclusion fields for the quests collection (all pass fields: {}), so
+        // fieldLimits' exclusions never meet an inclusion today - but the real callers live in
+        // the overlay, so that can't be verified from here. Killing the whole subscription over
+        // a caller's inclusion request would be a worse failure than just not honoring it, so
+        // drop the inclusions and keep fieldLimits' exclusions (e.g. returnValue/error) instead.
+        logger.warn(`[dataSubscribeRequest] Dropping inclusion fields mixed with exclusions for ${collectionName}`, {
+          fields,
+        });
+        scopedFields = pickBy(scopedFields, v => !v);
+      } else {
+        scopedFields = {
+          ...inclusions,
+          deletedAt: true,
+        };
+      }
+    }
+  }
+
+  if (!scope) {
+    throw new Error(`Invalid collectionName: ${collectionName}`);
+  }
+
+  const collection = findModelByCollectionName(collectionName);
+  if (!collection) {
+    // Shouldn't happen, we'd already verified scope
+    throw new Error(`Invalid collectionName: ${collectionName}`);
+  }
+
+  const scopedQuery = { $and: [query, scope] };
+  const findPromise = collection
+    .find(scopedQuery, scopedFields ?? undefined)
+    .setOptions({ includeDeleted: true, limit: HARD_LIMIT, maxTimeMS: INITIAL_FETCH_MAX_TIME_MS });
+  const normalizedQuery = findPromise.getQuery();
+  const subscriber = { endpoint, connectionId, clientId: clientSubscriberId, attempts: 0 };
+
+  if (fetchInitialData) {
+    let results;
+    try {
+      results = await findPromise;
+    } catch (error) {
+      await notifySubscribeError(connectionId, endpoint, clientSubscriberId, error);
+      throw error;
+    }
+    const limit = pLimit(50);
+    const sendingOutcomes = await Promise.allSettled(
+      results.map(r =>
+        limit(() => {
+          const payload = r.deletedAt
+            ? { operationType: 'delete', data: { _id: r._id.toString(), id: r.id } }
+            : { operationType: 'insert', data: r.toJSON() };
+          return sendToConnection(connectionId, endpoint, {
+            action: 'data_update',
+            subscriptionId: clientSubscriberId,
+            collectionName,
+            ...payload,
+          });
+        })
+      )
+    );
+
+    sendingOutcomes.forEach((outcome, i) => {
+      if (outcome.status === 'rejected') {
+        // DEBUG: Set to true to enable verbose WebSocket error logging
+        const doVerbose = false;
+
+        if (doVerbose) {
+          const log = outcome.reason instanceof GoneException ? logger.info.bind(logger) : logger.error.bind(logger);
+          log(`Failed to send update ${collectionName} ${i} to connection ${connectionId}: ${outcome.reason}`);
+        }
+      }
+    });
+  }
+
+  // scopedFields feeds this hash, so a subscription created before fieldLimits existed and one
+  // created after hash to DIFFERENT queryIds - the fields write below is $setOnInsert only, so an
+  // old subscription is never mutated in place with the new exclusion; a client that reconnects
+  // (getting a fresh scopedFields) lands on a new document instead. This is what keeps
+  // $setOnInsert safe here rather than leaving pre-deploy subscriptions permanently unredacted.
+  // The gap is bounded by the connection's own lifetime, not by the deploy: API Gateway WebSocket
+  // connections are forcibly closed after 10 minutes idle or 2 hours total, so every pre-deploy
+  // subscriber reconnects (and re-hashes) well within a couple of hours regardless.
+  const uniqueQuerySelector = crypto
+    .createHash('sha256')
+    .update(JSON.stringify(collectionName))
+    .update(JSON.stringify(normalizedQuery))
+    .update(JSON.stringify(scopedFields))
+    .digest('base64');
+
+  const result = await QuerySubscription.findOneAndUpdate(
+    { queryId: uniqueQuerySelector },
+    {
+      $addToSet: { subscribers: subscriber },
+      $setOnInsert: {
+        queryId: uniqueQuerySelector,
+        collectionName,
+        query: normalizedQuery,
+        fields: scopedFields,
+      },
+    },
+    { upsert: true, new: true }
+  );
+  if (result) {
+    // no-op
+  } else {
+    logger.error(`Failed to subscribe client ${clientSubscriberId} to ${collectionName}`);
+    throw new Error(`Failed to subscribe client ${clientSubscriberId} to ${collectionName}`);
+  }
+
+  return { statusCode: 200 };
+});

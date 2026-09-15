@@ -1,0 +1,811 @@
+import { z } from 'zod';
+import { ContextTelemetrySchema, SystemPromptDetailSchema } from './contextTelemetry';
+
+/**
+ * A Date that also accepts its own JSON form. promptMeta makes a round trip through the client:
+ * MessageContent hands it to the bug-report modal, which posts it to /api/feedback, where this
+ * same schema parses the request body. JSON has no Date, so a bare z.date() would reject every
+ * value that survives that trip. statusLog.timestamp has carried the same allowance for years.
+ */
+const JsonSafeDate = z.date().or(z.string());
+
+const PromptMetaModelParametersSchema = z.object({
+  // Text generation parameters
+  temperature: z.number().optional(),
+  topP: z.number().optional(),
+  maxTokens: z.number().optional(),
+  presencePenalty: z.number().optional(),
+  frequencyPenalty: z.number().optional(),
+  logitBias: z.record(z.string(), z.number()).optional(),
+  stream: z.boolean().optional(),
+
+  // Image generation parameters
+  n: z.number().optional(), // Number of images
+  quality: z.string().optional(),
+  style: z.string().optional(),
+  size: z.string().optional(), // Image/video size (e.g., "1024x1024", "720x1280")
+  width: z.number().optional(),
+  height: z.number().optional(),
+  aspect_ratio: z.string().optional(),
+  safety_tolerance: z.number().optional(), // BFL safety tolerance
+  prompt_upsampling: z.boolean().optional(), // BFL prompt upsampling
+  seed: z.number().optional(),
+  output_format: z.string().optional(), // Output format (jpeg/png)
+  response_format: z.string().optional(), // Response format (url/b64_json)
+
+  // Video generation parameters (Sora)
+  seconds: z.number().optional(), // Video duration in seconds (4, 8, or 12)
+  model: z.string().optional(), // Video model name
+});
+
+const PromptMetaModelSchema = z.object({
+  // We're flexible about model name since they'll potentially come from Hugging Face
+  // or other public sources
+  name: z.string(),
+  parameters: PromptMetaModelParametersSchema.optional(),
+  type: z.enum(['text', 'image', 'video']).optional(),
+  backend: z.string().optional(),
+  contextWindow: z.number().optional(),
+  maxTokens: z.number().optional(),
+  canStream: z.boolean().optional(),
+  canThink: z.boolean().optional(),
+  supportsVision: z.boolean().optional(),
+  supportsTools: z.boolean().optional(),
+  supportsImageVariation: z.boolean().optional(),
+  supportsSafetyTolerance: z.boolean().optional(),
+  trainingCutoff: z.string().optional(),
+});
+
+const PromptMetaTokenUsageSchema = z.object({
+  inputTokens: z.number().optional(),
+  outputTokens: z.number().optional(),
+  totalTokens: z.number().optional(),
+  actualInputTokens: z.number().optional(),
+  actualOutputTokens: z.number().optional(),
+  actualTotalTokens: z.number().optional(),
+  // Billed cache-read count: raw provider value on provider-basis settlement,
+  // capped-at-local-input discount value on local fallback.
+  cacheReadInputTokens: z.number().optional(),
+  // Billed cache-WRITE count, at the 1.25x cache-creation rate. Provider-basis only:
+  // the local fallback never bills cache creation, so it stays absent there. Recorded
+  // because a write is the single most expensive component of a cold turn, and without
+  // it the cache-write rate can only be inferred from cacheReadInputTokens being absent.
+  cacheCreationInputTokens: z.number().optional(),
+  // Which basis priced estimatedCost/creditsUsed: provider-reported usage or
+  // the local tokenizer estimate (fallback when the provider omits usage).
+  settledBasis: z.enum(['provider', 'local']).optional(),
+  estimatedCost: z.number().optional(),
+  creditsUsed: z.number().optional(),
+});
+
+const PromptMetaAttachedFileSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().optional(),
+  type: z.string().optional(),
+  size: z.number().optional(),
+  mimeType: z.string().optional(),
+  // attachedFiles already persists, so a writer that starts setting this would hit the same
+  // JSON round trip as the fields above. Promoted before that can happen rather than after.
+  lastModified: JsonSafeDate.optional(),
+});
+
+const SystemPromptSourceSchema = z.object({
+  fileId: z.string(),
+  fileName: z.string().optional(),
+  source: z.enum(['admin', 'user', 'project', 'session', 'hardcoded']),
+  priority: z.number().optional(),
+  enabled: z.boolean().optional(),
+  content: z.string().optional(),
+});
+
+// Token breakdown by source (shared with contextTelemetry but also stored directly for overflow diagnostics)
+const PromptMetaTokensBySourceSchema = z.object({
+  systemPrompts: z.number(),
+  conversationHistory: z.number(),
+  mementos: z.number(),
+  fabFiles: z.number(),
+  urlContent: z.number(),
+  toolSchemas: z.number(),
+  userPrompt: z.number(),
+});
+
+const PromptMetaContextSchema = z.object({
+  attachedFiles: z.array(PromptMetaAttachedFileSchema).optional(),
+  knowledgeBaseEntries: z.array(z.string()).optional(),
+  messageHistoryLength: z.number().optional(),
+  requestedHistoryCount: z.number().optional(),
+  totalMessageCount: z.number().optional(),
+  mementoCount: z.number().optional(),
+  mementoIds: z.array(z.string()).optional(),
+  tokensBySource: PromptMetaTokensBySourceSchema.optional(),
+  // Per-source system prompt breakdown, derived from the tagged assembly (see
+  // services systemPromptSources). Stored on every completion - unlike contextTelemetry,
+  // which only exists when enhanced telemetry is enabled - so the API layer can report
+  // which prompts fed a completion.
+  systemPromptDetails: z.array(SystemPromptDetailSchema).optional(),
+  systemPrompt: z.string().optional(),
+  userPrompt: z.string().optional(),
+  conversationContext: z
+    .array(
+      z.object({
+        role: z.string(),
+        content: z.string(),
+        timestamp: z.date().optional(),
+      })
+    )
+    .optional(),
+  // Extra context messages for external sources
+  extraContextMessages: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant', 'system', 'function', 'tool']),
+        content: z.union([z.string(), z.array(z.any())]),
+        fabFileIds: z.array(z.string()).optional(),
+      })
+    )
+    .optional(),
+  systemPromptSources: z.array(SystemPromptSourceSchema).optional(),
+  dedupedSystemPrompts: z.array(z.string()).optional(),
+  totalSystemPromptCount: z.number().optional(),
+  duplicateSystemPromptCount: z.number().optional(),
+  sessionFileIds: z.array(z.string()).optional(),
+  messageFileIds: z.array(z.string()).optional(),
+  globalSystemFileIds: z.array(z.string()).optional(),
+  userSystemFileIds: z.array(z.string()).optional(),
+  projectSystemFileIds: z.array(z.string()).optional(),
+  // What the assembler decided about inlining the attached knowledge corpus vs deferring it to
+  // the offered search_knowledge_base tool. Pairs with `offeredTools` + `tokensBySource.fabFiles`
+  // so one row shows: tools offered, docs deferred, resulting inline token cost. `deferredCount`
+  // counts only the RETRIEVABLE subset (docs the tool can actually reach); non-retrievable
+  // attachments are always inlined and never counted here.
+  knowledgeInlining: z
+    .object({
+      attachedCount: z.number(),
+      retrievableCount: z.number(),
+      deferredCount: z.number(),
+      deferredToRetrieval: z.boolean(),
+      minInlineTokensPerDoc: z.number(),
+    })
+    .optional(),
+  // Lake memory hot-card (#1440): the durable lake-profile beliefs injected on a Data-Lake-mode turn,
+  // and which lakes they came from. Present only when the card fired, so an eval row shows lake
+  // grounding independent of whether the model then also called the knowledge tools.
+  lakeMemory: z
+    .object({
+      beliefCount: z.number(),
+      // The `lakeMemoryRecallK` budget in force for the turn (#2496). Without it `beliefCount`
+      // is ambiguous on exactly the question the knob exists to answer: a row reading 8 could be
+      // "the cap bound" or "only 8 beliefs qualified", and telling those apart used to mean
+      // knowing what the setting happened to be when the turn ran. beliefCount === beliefBudget
+      // is now a readable saturation signal. Optional: turns recorded before this field existed
+      // have none, and it must not fail their Zod re-parse.
+      beliefBudget: z.number().optional(),
+      dataLakeTags: z.array(z.string()),
+    })
+    .optional(),
+  // Phase 2: Context window debug fields
+  contextWindowUsage: z
+    .object({
+      contextLimit: z.number(),
+      maxOutputTokens: z.number(),
+      safeMaxInputTokens: z.number(),
+      actualInputTokens: z.number(),
+      bufferTokens: z.number(),
+      utilizationPercentage: z.number(),
+      overflowDetected: z.boolean().optional(),
+      overflowAmount: z.number().optional(),
+      // Older turns dropped from the verbatim window this turn and folded into
+      // contextSummary (drives the client's "earlier turns condensed" note).
+      verbatimTurnsExcluded: z.number().optional(),
+    })
+    .optional(),
+  // Phase 2: Message truncation tracking
+  messageTruncation: z
+    .object({
+      wasTruncated: z.boolean(),
+      originalMessageCount: z.number(),
+      truncatedMessageCount: z.number(),
+      truncationMethod: z.enum(['priority', 'token-budget', 'history-limit']).optional(),
+      removedMessages: z
+        .array(
+          z.object({
+            role: z.string(),
+            tokens: z.number(),
+            priority: z.number(),
+          })
+        )
+        .optional(),
+    })
+    .optional(),
+});
+
+const PromptMetaFunctionCallSchema = z.object({
+  name: z.string().optional(),
+  parameters: z.record(z.string(), z.any()).optional(), // z.any() supports arrays, objects, and all JSON types
+  returnValue: z.string().optional(),
+  executionTime: z.number().optional(),
+  success: z.boolean().optional(),
+  error: z.string().optional(),
+  creditsUsed: z.number().optional(),
+  /** Tool use ID for Anthropic API tool pairing */
+  id: z.string().optional(),
+});
+
+const PromptMetaPerformanceSchema = z.object({
+  totalResponseTime: z.number().optional(),
+  contextRetrievalTime: z.number().optional(),
+  modelInferenceTime: z.number().optional(),
+  /**
+   * Time to First Visible Token: elapsed ms until the first chunk the user can actually
+   * see. Left unset when a turn streamed nothing visible (thinking-only, or a turn that
+   * errored before answering), so absence reads as "never rendered" rather than as fast.
+   * Pair with firstChunkTime to tell a slow model from a long hidden-reasoning window.
+   */
+  firstTokenTime: z.number().optional(),
+  /** Elapsed ms until the first chunk of any kind, including a hidden thinking block. */
+  firstChunkTime: z.number().optional(),
+  clientFirstTokenTime: z.number().optional(), // Time from client sending prompt to client rendering first token
+  streamingPerformance: z
+    .object({
+      chunkCount: z.number().optional(),
+      totalStreamTime: z.number().optional(),
+      totalChars: z.number().optional(),
+      charsPerSecond: z.number().optional(),
+    })
+    .optional(),
+  featureExecutionTimes: z.union([z.record(z.string(), z.number()), z.map(z.string(), z.number())]).optional(),
+  databaseOperationTimes: z.union([z.record(z.string(), z.number()), z.map(z.string(), z.number())]).optional(),
+  phases: z.record(z.string(), z.number()).optional(),
+});
+
+const PromptMetaSessionSchema = z.object({
+  id: z.string(), // Required as per Mongoose schema
+  userId: z.string(), // Required as per Mongoose schema
+  organizationId: z.string().optional(),
+  projectId: z.string().optional(),
+  agentId: z.string().optional(),
+  agentName: z.string().optional(),
+});
+
+const PromptMetaArtifactSchema = z.object({
+  // Deliberately open. Writers put internal artifact types here (`ArtifactTypeSchema`:
+  // 'chess', 'react', 'html', ...) and tool extraction can fall back to a raw MIME string,
+  // so a closed enum would reject real values. That matters more than usual here, because
+  // ChatCompletionInvoke parses the whole promptMeta on every turn - a value this schema
+  // rejects fails the completion rather than just failing to record telemetry.
+  type: z.string(),
+  content: z.string(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  timestamp: JsonSafeDate.optional(),
+});
+
+const ToolHealthSchema = z.object({
+  toolName: z.string(),
+  available: z.boolean(),
+  failureCount: z.number(),
+  lastError: z.string().optional(),
+  lastChecked: JsonSafeDate.optional(),
+  lastExecutionTime: z.number().optional(),
+  successRate: z.number().optional(),
+});
+
+// Citable Source Schema - tracks sources referenced in AI responses
+// Used by web_search, deep_research, RAG, and MCP tools
+export const CitableSourceSchema = z.object({
+  /** Unique identifier - can be URL, UUID, or composite key */
+  id: z.string(),
+  /** Source classification for UI rendering */
+  type: z.enum(['web_url', 'document', 'dataset', 'mcp']),
+  /** Human-readable title/name */
+  title: z.string(),
+  /** Navigation target (external URL, deep link, or hash route) */
+  url: z.string().optional(),
+  /** Brief description or excerpt (1-2 sentences) */
+  description: z.string().optional(),
+  /** ISO 8601 timestamp for freshness indication */
+  timestamp: z.string().optional(),
+  /** Attribution for non-report sources */
+  author: z.string().optional(),
+  /** Processing status for real-time updates */
+  status: z.enum(['pending', 'processing', 'complete', 'error']).optional(),
+  /** Extensibility metadata */
+  metadata: z
+    .looseObject({
+      sourceSystem: z.string().optional(),
+      icon: z.string().optional(),
+      tags: z.array(z.string()).optional(),
+      confidence: z.number().optional(),
+      practiceAreas: z.array(z.string()).optional(),
+      chunkId: z.string().optional(),
+      relevanceScore: z.number().optional(),
+      fullContext: z.string().optional(),
+    }) // Allow additional properties
+    .optional(),
+});
+
+/**
+ * Per-turn retrieval outcome (#1867): whether retrieval was attempted this turn and what happened,
+ * independent of whether the model then cited anything. Exists specifically to make the zero case
+ * distinguishable from "never asked" - `context.lakeMemory` and `citables` both go silent on a
+ * zero-result retrieval, so a turn that legitimately found nothing is indistinguishable from one
+ * where retrieval never ran at all.
+ *
+ * Holds NO chunk/document identifiers, and no DOCUMENT count. A document count already exists and
+ * is more precise: `citables.filter(c => c.type === 'document')` is deduped by id/url/title in
+ * `applyQuestStatusChanges`, while this shape cannot dedupe (no identifiers to dedupe by) and
+ * would have to sum - producing a second, disagreeing number for the same question.
+ *
+ * `injected` below is NOT that number and does not reopen it: it counts PASSAGES and characters,
+ * neither of which `citables` can express - one document contributes many passages, and a turn
+ * that injected nothing emits no citable to count at all. Similarity scores otherwise live on
+ * `LakeAccessEvent`; the single `injected.topScore` is here because that row is written only on a
+ * turn that grounded, so it cannot carry the near-miss score of a turn that grounded on nothing.
+ *
+ * CAUTION, not a guarantee: the absence of chunk/document identifiers is what keeps this shape
+ * OUT of `promptMetaRedaction.ts`'s scope (that helper is a functionCalls-only denylist and would
+ * not catch a nested nonidentifier field like `dataLakeTags` regardless). It does NOT mean this
+ * field never needs redaction consideration - `dataLakeTags` (which lakes were involved) already
+ * reaches non-owner viewers the same way `lakeMemory.dataLakeTags` does (session shares, feedback
+ * egress, admin logs, session clone - see redactedFeedback.ts, admin/model-logs.ts, clone.ts, none
+ * of which touch this field). That exposure is not new in the general case, but it IS new
+ * specifically on a zero-recall turn: `lakeMemory` was never written there before this field
+ * existed, so a turn that previously carried no lake-identity signal at all now carries one.
+ *
+ * `attempted`/`outcome` on their own would still be ambiguous about WHICH lakes were searched on a
+ * zero-recall turn (dataLakeTags otherwise lives only inside `lakeMemory`, written after the
+ * zero-belief return), so this stamps the resolved tags at write time rather than making a reader
+ * fall back to the session's current (possibly since-changed) `retrievalTags`.
+ *
+ * Absent-or-fully-present, matching `lakeMemory` above - see the Mongoose-side subSchema comment
+ * in QuestModel.ts for why partial-write and default-array shapes are unsafe here.
+ *
+ * WIDER THAN ITS NAME SUGGESTS as of `mode` (#1394). The field is no longer written only when
+ * retrieval ran: it is now seeded on every turn that could have retrieved (forced retrieval
+ * enabled, or the knowledge tool offered), so `attempted: false` is a recorded fact rather than
+ * an absence to be inferred. Presence therefore means "this turn was in a position to retrieve",
+ * and turns with no knowledge in scope still carry no field at all. The distinction matters to a
+ * rollup: absence is now ambiguous between "not a retrieval turn" and "written before this
+ * existed", which is why `mode` documents its own date-bounding requirement.
+ */
+export const RetrievalSummarySchema = z.object({
+  /** True once a retrieval-capable surface actually ran (not merely offered) this turn. */
+  attempted: z.boolean(),
+  /**
+   * Present if and only if `attempted` is true - an outcome describes a run, and a turn that
+   * never ran retrieval has none. A reader testing for a specific value is unaffected (absence
+   * is not any of them); a reader switching exhaustively must handle undefined.
+   *
+   * 'ok' - ran, whether or not anything came back (the zero case is a legitimate 'ok').
+   * 'no_lakes' - ran but the user had no entitled/selected lake in scope.
+   * 'not_indexed' - ran to completion having compared nothing: the corpus in scope carries no
+   *   usable vector (never indexed, or embedded with a foreign model), so no passage was ever
+   *   scored against the query. Distinct from 'ok' because the library was not searched at all,
+   *   and reporting that as a topical zero ("your documents do not cover this") is exactly the
+   *   confident-wrong-answer this field exists to catch. Distinct from 'failed' because nothing
+   *   broke: the remedy is re-vectorizing, which the corpus owner can do themselves, and a retry
+   *   never helps.
+   *   COVERAGE: recorded by forced retrieval (KnowledgeRetrievalFeature's `scoredCount === 0`
+   *   exit) and by knowledgeBaseSearch, whose semantic arms carry the same verdict through to the
+   *   keyword arm's write - the two agree on "not one passage was compared against the query",
+   *   not on any withholding flag, so a relevance floor that emptied a real search and a partial
+   *   withholding alongside a real search both stay 'ok' on both surfaces.
+   *   knowledgeBaseRetrieve cannot reach this state: it fetches named files rather than ranking
+   *   against a query embedding, so it has no comparison to come up empty.
+   * 'failed' - recall did not complete: it threw, OR the retrieval repository is not wired on
+   *   this host (the guards in ChatCompletionFeatures / knowledgeBaseSearch / knowledgeBaseRetrieve
+   *   record it without anything throwing). What separates it from 'not_indexed' is the remedy,
+   *   not the tempo: fix the outage or the host wiring, never re-index content. An unwired host
+   *   reports continuously too, so "chronic" alone does not pick out 'not_indexed'.
+   *   NOT this: a model-supplied argument that is not a well-formed id. knowledgeBaseRetrieve
+   *   shape-checks `file_id` and answers a malformed one as a single-file miss ('ok'), because the
+   *   remedy is for the model to search for the right id - there is nothing for an operator to
+   *   fix. It is logged rather than counted here, so the rate stays observable without this field
+   *   reporting an outage that is not happening.
+   * On multiple retrieval calls within one turn, merge priority is failed > not_indexed > ok >
+   * no_lakes (see retrievalSummaryMerge.ts's mergeRetrievalSummary): a single failure is never
+   * masked by a later success or abstain, an unsearchable corpus outranks a legitimate zero so a
+   * success on another surface cannot erase it, and a real success is never masked by another
+   * surface's "no lakes in scope" abstain in the same turn.
+   */
+  outcome: z.enum(['ok', 'no_lakes', 'not_indexed', 'failed']).optional(),
+  /**
+   * Whether forced retrieval was ENABLED for this turn, independent of whether it then ran.
+   *
+   * This is what makes the optional path measurable. `attempted` says retrieval happened;
+   * without `mode` there is no way to ask the complementary question - of the turns where the
+   * model was merely OFFERED the knowledge tools, how often did it choose to retrieve - because
+   * a forced turn and an optional turn both land as `attempted: true`.
+   *
+   * Optional on the schema, and absence NEVER means 'optional' - it means unclassified. Two
+   * sources, one historical and one ongoing: turns recorded before this field landed, and
+   * agent-mode runs, which write a retrieval summary through `persistRunAsQuest` but never pass
+   * the seed site at the `offeredTools` write in ChatCompletionProcess. So date-bounding a rollup
+   * removes the first source but not the second; count the unclassified bucket rather than
+   * assuming it empties.
+   */
+  mode: z.enum(['forced', 'optional']).optional(),
+  /**
+   * Whether the knowledge-base when-to-retrieve guidance section actually shipped in this turn's
+   * tool prompt. Written only on turns that were OFFERED the knowledge tool, so absence means
+   * "not an offered turn" or "recorded before this field landed" - it never means "cleared".
+   *
+   * `false` is the load-bearing value here, not filler. Clearing the KnowledgeBaseRetrievalPrompt
+   * setting is the section's only off switch, so a turn recording `false` is the CONTROL arm of
+   * the A/B this field exists to make readable. Anything merging or folding this must preserve an
+   * explicit `false` rather than collapse it into absent - see mergeRetrievalSummary, which uses
+   * `??` and deliberately not `||` for that reason.
+   *
+   * MUST STAY IN SYNC with TWO gates, not one. ToolBuilder.buildToolPrompt emits the section iff
+   * the tool is offered AND the guidance string is non-empty; filterByPromptMode then drops the
+   * whole `toolPrompt` source, which no promptMode admits, so an offered tool is not sufficient.
+   * The ChatCompletionProcess seed site conjoins all three, and hands the first two to
+   * buildToolPrompt as the same consts, so the flag and the actual emission cannot drift.
+   */
+  knowledgeBaseGuidanceInjected: z.boolean().optional(),
+  /**
+   * Why the forced arm did not run on a turn that had it enabled. Only ever set with
+   * `mode: 'forced'`, and only for the deliberate suppressions in
+   * ChatCompletionFeatures.getContextMessages - a forced turn that ran and failed reports that
+   * through `outcome`, not here.
+   *
+   * These turns are the reason this field exists: forced retrieval is configured, a rule
+   * suppresses it, and the model falls back to the offered tool. That is exactly the population
+   * the per-turn routing question is about, and before this it was indistinguishable from a turn
+   * where forced retrieval was never configured at all.
+   */
+  forcedSkipReason: z.enum(['attached_files', 'personal_corpus']).optional(),
+  /** Which retrieval-capable surface(s) ran this turn, e.g. 'lake-memory', 'knowledgeBaseSearch'. */
+  surfaces: z.array(z.string()),
+  /** Lakes resolved at the moment retrieval ran, stamped point-in-time (not read live from the session). */
+  dataLakeTags: z.array(z.string()),
+  /**
+   * The lake scope the turn's retrieval surfaces WOULD have searched, resolved at the seed site
+   * whether or not any of them ran: the caller's accessible lakes narrowed to the session
+   * (narrowLakeAccessToSession), or empty where the corpus is personal and the lake arms are
+   * suppressed. `dataLakeTags` is the other half of the pair and answers a different question -
+   * which lakes retrieval ACTUALLY used - so on a turn where retrieval never ran that one is empty
+   * while this one still names whatever was in scope.
+   *
+   * EXISTS FOR THE OFFLINE REPLAY. `answerability` is reconstructed after the fact, and without a
+   * recorded scope the replay had to rebuild one from the session's `retrievalTags` as they stand
+   * at replay time - a session whose lake selection had since changed was replayed against a
+   * corpus its turn never had, with nothing to flag it. Recording it here removes that drift for
+   * every turn seeded after this landed; `probedAt` still discloses the content drift, which no
+   * amount of recording can fix.
+   *
+   * Absence means NOT RECORDED (a turn predating this, or one whose `retrieval` was written only
+   * by a surface rather than by the seed) - never "no lakes in scope", which is present-and-empty.
+   * The replay must keep those apart: probing an unrecorded turn would mean inventing a scope,
+   * which is the approximation this field exists to end.
+   *
+   * Only the seed writes it, so mergeRetrievalSummary carries it first-writer-wins rather than
+   * unioning: a later surface write asserting a narrower scope must not be able to widen the
+   * recorded one, and a union across the two would mean neither.
+   */
+  lakeScope: z.array(z.string()).optional(),
+  /**
+   * Ids of the lakes whose `systemPrompt` was injected this turn (getAccessibleDataLakePrompts),
+   * across every injection site (forced retrieval and the model-driven knowledge tools). NOT the
+   * prompt text itself - that already reaches the model in the completion, and copying it here
+   * widens exposure for nothing. Absent means no injection site ran; present-and-empty means one
+   * ran but nothing qualified (untrusted, or an empty systemPrompt).
+   */
+  injectedLakePromptIds: z.array(z.string()).optional(),
+  /** mementoCount/mementoIds precedent: mirrors injectedLakePromptIds.length. */
+  injectedLakePromptCount: z.number().optional(),
+  /**
+   * How much retrieved content actually reached the model this turn: `chunks` passages totalling
+   * `chars` characters of retrieved CONTENT (headings and framing excluded, so the number means
+   * the same thing on every surface), plus `topScore`, the best similarity among the compared
+   * passages the reporting surface can SEE - which is not the same population on every surface.
+   * Forced retrieval scores every chunk itself and so reports true near-misses; knowledgeBaseSearch's
+   * semantic arm only ever sees `minScore` survivors, and reports no `topScore` at all on a starve,
+   * so a sub-floor near-miss there is invisible rather than recorded.
+   *
+   * PRESENCE CONTRACT: present if and only if at least one surface COMPLETED a search this turn.
+   * `chunks: 0` is a RECORDED STARVE - the library was searched and nothing was injected, which is
+   * the case this field exists to make visible: without it, a forced-retrieval turn that injected
+   * nothing is byte-identical to one that injected its whole character budget (both `outcome:
+   * 'ok'`). Absence means the volume is UNKNOWN, which is what a turn carries when no surface
+   * completed a search: retrieval was never attempted, nothing was in scope to search
+   * ('no_lakes'), or the one surface that ran broke mid-flight, where a zero would be a lie.
+   * A surface that completed but CANNOT know the turn's passage volume also stays silent rather
+   * than claiming a zero - knowledgeBaseSearch's keyword arm on a hit is the case: it injects
+   * file metadata and hands the model retrieve_knowledge_content, which injects the text and
+   * reports no volume, so its zero would survive the merge as a starve that did not happen.
+   *
+   * KNOWN HOLE in that rule, while retrieve_knowledge_content stays uninstrumented: a recorded zero
+   * is not PROOF of a starve. Forced retrieval and the knowledge tools are not mutually exclusive
+   * (ChatCompletionProcess seeds on `forcedRetrievalEnabled || knowledgeToolOffered`), so the forced
+   * arm can complete empty, write its honest zero, and the model can then ground the same turn
+   * through retrieve_knowledge_content, which contributes no volume to oppose it. The zero is
+   * per-surface-truthful and turn-level-misleading. Any rollup counting starves should treat a zero
+   * as "nothing was injected by a surface that reports volume" and, until that tool reports its own,
+   * cross-check `functionCalls` before calling the turn ungrounded.
+   *
+   * Per SURFACE, not per turn: a surface that breaks contributes nothing while a surface that
+   * completed alongside it still reports its own volume, so a turn CAN read 'failed' next to a
+   * recorded zero. That pairing means "one surface broke, and everything that did finish injected
+   * nothing" - which is exactly what a reader needs, and strictly more than the outcome alone.
+   *
+   * SUMMED across surfaces, so this field and `outcome` can legitimately disagree in tone on a
+   * multi-surface turn: forced retrieval grounding on 12 passages while knowledgeBaseSearch throws
+   * gives `outcome: 'failed'` alongside `chunks: 12`. That is correct - `outcome` is worst-of,
+   * `injected` is sum-of-completions.
+   *
+   * `topScore` is optional because only cosine-similarity surfaces have one to report. Lake
+   * memory's belief `relevance` is a different scale and forced retrieval's pre-scan value is a
+   * -1 sentinel; neither is ever written here, because a `max` across mixed scales, or against a
+   * sentinel, is a number that reads as a similarity and is not one.
+   *
+   * Date-bound any rollup, the same caveat `mode` documents on itself: turns recorded before this
+   * landed carry no volume, and no backfill is possible - the volume of a past turn is gone.
+   *
+   * `preRelativeFloorCandidates` and `postRelativeFloorCandidates` are the ONE pair here that is
+   * not "what reached the model": `ranked.length` and `scored.length` in KnowledgeRetrievalFeature
+   * - the candidates left after the absolute similarity floor, and after the relative floor
+   * trims them. `chunks` is what survived the char budget on top of that, so the three
+   * numbers bracket two independent trimmers:
+   *
+   *   pre -> [relative floor] -> post -> [char budget] -> chunks
+   *
+   * They exist so a low `chunks` is diagnosable - a small corpus and a floor that trimmed a large
+   * pool end in the same `chunks`. `pre - post` is the floor's own effect and nothing else;
+   * `pre - chunks` is NOT, because the budget trims the same walk. Both optional: only forced
+   * retrieval computes a ranked pool, a surface without one (lake memory, the knowledge tools)
+   * never writes either, and absence must not read as zero candidates. SUMMED like `chunks`, with
+   * the same absent-is-not-zero handling as `topScore`.
+   *
+   * COMPARE THE PAIR ONLY TO ITSELF, never to `chunks`, unless `surfaces` is forced retrieval
+   * alone. `chunks` and `chars` sum across ALL surfaces while this pair is forced-only, so a mixed
+   * turn can store `chunks` above `pre` - inverting the relationship the pair exposes. Lake memory
+   * is the common case, not the exotic one: it is enabled inside the same forced-retrieval gate,
+   * so on a lake-memory lake it writes on nearly every forced turn. Its chunks can be backed out
+   * via `context.lakeMemory.beliefCount` (approximately - that count is pre-sanitization); its
+   * CHARS land only inside the shared sum, with no per-surface field to subtract them back out, so
+   * `chars` cannot be decontaminated at all. `pre - post` needs neither, which is the point of
+   * storing both.
+   *
+   * BOTH SATURATE, so `pre` counts what the SCAN REACHED, not what the corpus holds: `pool` is
+   * truncated in-scan at FORCED_RETRIEVAL_MAX_SCORED_CHUNKS (256), over a scan itself bounded by
+   * FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS (4000) across FORCED_RETRIEVAL_MAX_CANDIDATE_FILES (100).
+   * 2000 qualifying chunks and 300 both record 256; above the cap a rollup is a plateau.
+   */
+  injected: z
+    .object({
+      chunks: z.number(),
+      chars: z.number(),
+      topScore: z.number().optional(),
+      preRelativeFloorCandidates: z.number().optional(),
+      postRelativeFloorCandidates: z.number().optional(),
+    })
+    .optional(),
+  /**
+   * Could the corpus in scope have answered this turn, whether or not the model went looking?
+   *
+   * The denominator the optional-path retrieval rate has always been missing (#1394). A rate of
+   * "the model retrieved on 20% of offered turns" cannot say whether the other 80% were misses or
+   * turns with nothing to find, and the two argue for opposite things: the first for routing work,
+   * the second for leaving the optional path alone. Crossing this field with the rate separates
+   * them.
+   *
+   * THE ONLY FIELD IN THIS BLOCK NOT WRITTEN BY THE TURN. Every sibling is stamped point-in-time
+   * while the turn runs; this one is written afterwards by an offline replay
+   * (packages/scripts/retrieval/answerability-replay.ts) that re-scores the recorded prompt against
+   * the corpus. That is deliberate - the population it exists to measure is the turns where
+   * retrieval did NOT run, so computing it live would mean adding a full brute-force chunk scan
+   * (ChatCompletionFeatures' forced path, which has no ANN index) to exactly the turns that pay
+   * nothing for retrieval today. The measurement is not worth that latency on live traffic.
+   *
+   * BEING A RECONSTRUCTION, IT CARRIES DRIFTS THE OTHER FIELDS DO NOT:
+   * 1. Corpus CONTENT moves. A document added or reindexed between the turn and the replay is
+   *    scored as though it had been there. `probedAt` discloses the gap; a replay run long after
+   *    the window is weak evidence, not strong.
+   * 2. Corpus SCOPE no longer drifts: the seed records the turn's resolved scope in `lakeScope`
+   *    and the replay probes that, so a session whose lake selection has since changed is still
+   *    scored against the lakes its turn actually had. The cost is coverage rather than accuracy -
+   *    a turn with no recorded scope is skipped instead of approximated, so every turn predating
+   *    the field is outside the measurement.
+   * 3. The QUESTION can move out from under it. The probe is keyed to the quest, not to the
+   *    prompt text it scored, so a turn whose prompt is later rewritten in place keeps a probe
+   *    describing the question it used to ask. mergeRetrievalSummary preserves the probe across
+   *    a runtime write deliberately - dropping it would erase the backfill - so nothing
+   *    invalidates a stale one. Re-run the replay with --force over a window whose turns were
+   *    edited.
+   *
+   * RAW SCORE, NOT A VERDICT, so the cutoff lives in the reader. summarizeOptionalPathRetrieval
+   * applies it at fold time, which lets the same replay be re-thresholded without re-running -
+   * the point of storing the number, given the two live floors disagree by construction (forced
+   * retrieval's absolute default is 0.75, the knowledge tool's is 0).
+   *
+   * `topScore` is the same raw cosine scale as `injected.topScore` and comparable to it. It is NOT
+   * comparable to lake memory's belief relevance, for the reason `injected` documents at length.
+   *
+   * `scanTruncated` inherits forced retrieval's saturation: the replay bounds its scan the same
+   * way, so a low `topScore` on a truncated scan is not proof the corpus lacked an answer - it is
+   * proof the part that was scanned did. Treat those turns as unknown rather than as negatives.
+   *
+   * Absence means NOT PROBED - never "not answerable". Every turn predating the replay, and every
+   * turn the replay skipped or failed on, is absent, so a fold must keep it as its own arm rather
+   * than letting it fall in with the negatives.
+   */
+  answerability: z
+    .object({
+      /** Best cosine the replay found across the reconstructed corpus. */
+      topScore: z.number(),
+      /** Chunks at or above `floor`. Separates "one lucky match" from "a rich seam". */
+      candidatesAboveFloor: z.number(),
+      /** The absolute floor the replay counted `candidatesAboveFloor` against, as a fraction. */
+      floor: z.number(),
+      /** The scan hit its chunk ceiling, so `topScore` is a floor on the true best, not the best. */
+      scanTruncated: z.boolean(),
+      /** When the replay ran, NOT when the turn ran - the disclosure for content drift above. */
+      probedAt: JsonSafeDate,
+    })
+    .optional(),
+  /**
+   * Which of this turn's injected lake prompt ids were BOTH in the session's pre-authorized (manage-
+   * but-not-member admission) set AND injected on this turn - see unionPreauthorizedLakeAccess and
+   * pages/api/sessions/create.ts. A subset of injectedLakePromptIds, never a superset. Narrows the
+   * session's static `preauthorizedLakeIds` (what was ADMITTED) to what a given turn actually used.
+   *
+   * MEMBERSHIP, NOT CAUSATION. An admitted lake the caller could already reach - its creator, or a
+   * member of its org - injects through the ordinary trust arm and is listed here all the same, so a
+   * non-empty value does not prove the admission is what made the injection possible. Absent means no
+   * admitted id was among this turn's injections, including every turn on a session with none.
+   */
+  preauthorizedLakeIdsUsed: z.array(z.string()).optional(),
+  /**
+   * Which of this turn's injected lake prompt ids the caller holds an owner/curator GRANT on - the
+   * per-arm sibling of `preauthorizedLakeIdsUsed`, and the reason both exist: `injectedLakePromptIds`
+   * records THAT a lake's systemPrompt entered the turn, these two record WHICH ARM admitted it.
+   * A subset of injectedLakePromptIds, never a superset. Derived at both injection sites via
+   * grantedLakeIdsUsedFor.
+   *
+   * THE ARM WORTH NAMING SEPARATELY: the grant arm (#2495) is the only one that can cross an org
+   * boundary - `grantLakeAccess` can hand a CURATOR grant to an arbitrary cross-tenant user, and
+   * that grant carries injection trust. The creator and org arms cannot reach past one org, and a
+   * reader grant is excluded permanently, so a lake listed here is the case an operator auditing
+   * cross-tenant prompt influence is actually looking for.
+   *
+   * MEMBERSHIP, NOT CAUSATION, the same caveat the field above carries: a granted lake its holder
+   * could already reach (they created it, or they are in its org) injects through the ordinary
+   * trust arm and is listed here anyway, so a non-empty value does not prove the grant is what
+   * made the injection possible. The two fields OVERLAP for that reason - a lake can appear in
+   * both - so they are not a partition of injectedLakePromptIds and must not be counted as one.
+   *
+   * Absent means no injected id was grant-reached, including every turn where the grant read
+   * FAILED (it is fail-quiet by design - telemetry must not drop the injection it records), so
+   * absence is weaker evidence than presence. Date-bound any rollup: turns predating this field
+   * carry nothing, and no backfill is possible - a past turn's grant rows have moved on.
+   */
+  grantedLakeIdsUsed: z.array(z.string()).optional(),
+});
+
+/**
+ * Why a grounded turn's library scan stopped short of the whole library.
+ *
+ * Written ONLY on a partially-covered turn (reportCoverage returns early otherwise), so presence
+ * means "partial" and `partial` is always true - the flag is explicit anyway because a reader
+ * checking `retrievalCoverage.partial` should not have to know that absence is the other half of
+ * the contract.
+ *
+ * Single producer (ChatCompletionFeatures.reportCoverage), which is why - unlike `warnings`,
+ * `citables` and `retrieval` - this field needs no merge case in applyQuestStatusChanges: a
+ * later tool-arm write that omits it is preserved by the one-level spread.
+ *
+ * `reasons` is the same diagnostic prose the warnings entry interpolates. It is shown to the
+ * reader behind a disclosure rather than in the banner body, because only some reasons are
+ * actionable (a document mid-reindex returns on its own; a per-turn chunk budget does not).
+ */
+export const RetrievalCoverageSchema = z.object({
+  /** Always true - see the presence contract above. */
+  partial: z.boolean(),
+  /** One entry per distinct cause, e.g. a candidate cap, a scan budget, an embedding mismatch. */
+  reasons: z.array(z.string()),
+});
+
+// Main PromptMeta Schema
+export const PromptMetaZodSchema = z.object({
+  model: PromptMetaModelSchema.optional(),
+  tokenUsage: PromptMetaTokenUsageSchema.optional(),
+  context: PromptMetaContextSchema.optional(),
+  /** Per-turn retrieval outcome - see RetrievalSummarySchema. Top-level (not under `context`)
+   * deliberately: applyQuestStatusChanges does a one-level spread merge, so a field nested under
+   * `context` would be replaced wholesale by any tool-arm write instead of merging. */
+  retrieval: RetrievalSummarySchema.optional(),
+  /** Partial-grounding-coverage detail - see RetrievalCoverageSchema. Top-level for the same
+   * one-level-spread-merge reason as `retrieval` above. */
+  retrievalCoverage: RetrievalCoverageSchema.optional(),
+  functionCalls: z.array(PromptMetaFunctionCallSchema).optional(),
+  /**
+   * Names of the tools actually offered to the model this turn - the output of `buildTools`
+   * (`allTools`), after the post-build denylist pass and the Ollama auto-added trim. This is a
+   * superset of the resolved `enabledTools`: it also includes MCP server tools and the
+   * auto-injected `delegate_to_agent`, neither of which ever appears in `enabledTools`. Distinct
+   * from the chat response's `effectiveTools`, which reflects only the API-layer (phrase-
+   * recommender) selection and so cannot see server-side offers like the attached-knowledge
+   * auto-offer. This is the authoritative "what did the model actually get" signal for
+   * eval/measurement and for diagnosing the silent no-tool-offered state.
+   */
+  offeredTools: z.array(z.string()).optional(),
+  performance: PromptMetaPerformanceSchema.optional(),
+  session: PromptMetaSessionSchema.optional(),
+  questId: z.string().optional(),
+  /** ISO 8601 timestamp of when this completion's data was finalized (set at completion end). */
+  generatedAt: z.string().optional(),
+  promptId: z.string().optional(),
+  prompt: z.string().optional(),
+  replyIds: z.array(z.string()).optional(),
+  generatedImageReferences: z.array(z.string()).optional(),
+  promptErrors: z.array(z.string()).optional(),
+  warnings: z.array(z.string()).optional(),
+  /**
+   * The provider's reason for ending generation (Anthropic vocabulary:
+   * 'end_turn' | 'max_tokens' | 'tool_use' | 'stop_sequence' | 'pause_turn').
+   * 'max_tokens' signals the response was truncated against the output ceiling,
+   * letting the client render a truncated-artifact recovery affordance.
+   */
+  finishReason: z.string().optional(),
+  /**
+   * Set when an emitted artifact looks voluntarily abbreviated - placeholder comments in
+   * place of real code, or calls into functions that were never defined. The complement to
+   * `finishReason === 'max_tokens'`: truncation is a hard stop the provider reports, elision
+   * finishes cleanly and reports nothing, so this is the only completeness signal available
+   * for it (and the only one at all on backends that never emit a stop reason).
+   * Advisory - the client renders a "may be incomplete" notice; content is never altered.
+   */
+  suspectedElision: z
+    .object({
+      confidence: z.enum(['high', 'low']),
+      /** Total signals across every artifact in the reply. */
+      signalCount: z.number().nonnegative(),
+      /** Human-readable signal descriptions, capped for payload size. */
+      details: z.array(z.string()),
+    })
+    .optional(),
+  statusLog: z
+    .array(
+      z.object({
+        status: z.string(),
+        timestamp: z.date().or(z.string()), // z.string() is for API params stringify compatibility
+      })
+    )
+    .optional(),
+  artifacts: z.array(PromptMetaArtifactSchema).optional(),
+  humanReview: z
+    .object({
+      required: z.boolean().optional(),
+      approved: z.boolean().optional(),
+      comments: z.string().optional(),
+      modifications: z.string().optional(),
+      reviewedBy: z.string().optional(),
+      reviewedAt: JsonSafeDate.optional(),
+    })
+    .optional(),
+  executionTracking: z
+    .object({
+      steps: z
+        .array(
+          z.object({
+            name: z.string(),
+            status: z.enum(['pending', 'running', 'completed', 'failed']),
+            startTime: JsonSafeDate.optional(),
+            endTime: JsonSafeDate.optional(),
+            result: z.string().optional(),
+            error: z.string().optional(),
+          })
+        )
+        .optional(),
+      currentStep: z.string().optional(),
+      completedSteps: z.array(z.string()).optional(),
+      failedSteps: z.array(z.string()).optional(),
+    })
+    .optional(),
+  // Phase 2: Tool health tracking
+  toolHealth: z.array(ToolHealthSchema).optional(),
+  // Citable sources referenced in AI responses (from web_search, deep_research, RAG, MCP)
+  citables: z.array(CitableSourceSchema).optional(),
+  // Context telemetry for debugging and monitoring (privacy-first, no PII)
+  contextTelemetry: ContextTelemetrySchema.optional(),
+});

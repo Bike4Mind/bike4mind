@@ -1,0 +1,9 @@
+#!/bin/bash
+#
+# sst-dev-fast: A wrapper to make dev-fast feel like an SST command
+#
+# Usage: ./sst-dev-fast [options]
+#   or:  pnpm dev-fast
+#
+
+exec ./dev-fast "$@" 

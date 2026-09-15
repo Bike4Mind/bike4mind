@@ -1,0 +1,217 @@
+import { DATALAKE_TAG_PREFIX, effectiveTagPrefixArm, type DataLakeMembershipScope } from '@bike4mind/common';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
+
+/**
+ * The FabFile `status` value that lake REPORTING excludes and lake RETRIEVAL does not (#2737).
+ *
+ * A presigned FabFile row is tagged into a lake before a byte is sent, so lake reporting excludes
+ * this status on top of `buildDataLakeMembershipFilter` - without it an upload that never completed
+ * would count toward "the lake has a member" and one-way-activate a draft lake (see
+ * `computeDataLakeStats`). Retrieval's own filter is exactly `{ deletedAt: null, archivedAt: null }`
+ * (fabFileSearchQuery's `baseFilter`) over this SAME membership predicate, so this status conjunct
+ * is the ONLY thing that makes the two corpora differ.
+ *
+ * Both sides are deliberate and stay as they are. What is not acceptable is the difference being
+ * invisible - two readers derived 84 and 74 members for one lake (#2737). So a reporting surface
+ * that quotes a corpus size must be able to say how many members retrieval serves that it did not
+ * count: `summarizeDataLakeIndexingHealth` admits pending rows in its `$match` and counts them as
+ * `retrievalOnlyFiles`, while `computeDataLakeStats` and `countDataLakeTopicTags` still exclude
+ * them outright, because their numbers are persisted and drive activation rather than being
+ * narrated to a caller.
+ *
+ * NOT yet the single definition of this clause: the rest of the FabFileModel family (the hash-keyed
+ * reads, the lake writes) still spells `status: { $ne: 'pending' }` inline. Point new lake-scoped
+ * reads here rather than adding another literal.
+ */
+export const LAKE_REPORTING_EXCLUDED_STATUS = 'pending';
+
+/**
+ * The ONE membership predicate: a file belongs to a lake on an exact meta-tag match OR on a
+ * `fileTagPrefix` match against a file the lake's CREATOR OWNS. Shared by the single-lake browse
+ * and every whole-lake lifecycle write, so all of them agree on who is a member - they used to
+ * disagree, and a prefix-only file stayed browsable in an archived lake, survived permanent
+ * delete with its chunks, and was missing from `fileCount`.
+ *
+ * Anchored to the creator rather than the caller because `computeDataLakeStats` persists a
+ * viewer-independent `fileCount`; an actor-anchored predicate would make the stored count vary
+ * by who triggered the recompute.
+ *
+ * The prefix arm needs an ownership conjunct at all because `fileTagPrefix` is user-chosen and only
+ * unique per creator (see DataLakeModel) - a lake in a different org or by a different creator can
+ * still register the same prefix. Without the conjunct, minting a lake with prefix `acme:` would
+ * permanently delete every file in the database tagged `acme:*`.
+ *
+ * That conjunct is POSITIVE ownership - `userId` equals the creator - and deliberately NOT
+ * "anything the creator can access". A read share must not make someone else's file a member:
+ * this predicate drives a hard delete, so riding a share would let a lake owner purge a file that
+ * was merely shared with them, and would list it to every visitor of a public lake. The cost is
+ * that a prefix-only file an ADMIN uploaded into someone's lake carries the admin's `userId` and
+ * is not a member - it survives the teardown and stays in that admin's Files, the safe direction.
+ */
+export function buildDataLakeMembershipFilter(scope: DataLakeMembershipScope): Record<string, unknown> {
+  const metaArm = { 'tags.name': scope.datalakeTag };
+  // Whether the prefix arm runs at all is `effectiveTagPrefixArm`'s decision, not this function's,
+  // so a caller that discloses the scope it queried cannot claim an arm this filter dropped (#2243).
+  // It drops an unusable prefix, a reserved-namespace one (which would match every OTHER lake's
+  // membership tag), and an owned scope with no creator to anchor to - matching less, the safe
+  // direction, in all three cases.
+  const prefix = effectiveTagPrefixArm(scope);
+  if (!prefix) {
+    return metaArm;
+  }
+  // Anchored so the index on `tags.name` still bounds the scan; escaped because a user-chosen
+  // prefix can carry regex metacharacters.
+  const prefixArm = { 'tags.name': { $regex: new RegExp(`^${escapeRegex(prefix)}`) } };
+
+  // A REGISTRY lake's prefix arm carries no ownership conjunct, deliberately: the lake is a shared
+  // knowledge base whose files come from many contributors, and it has no creator to anchor to.
+  // That is only safe because a registry prefix is compile-time config from DATA_LAKES rather than
+  // user input - the same reasoning `dataLakeTagPrefixes` documents in fabFileSearchQuery. Never
+  // route a user-supplied prefix through this branch.
+  //
+  // This arm is also why registry lakes cannot be narrowed to meta-tag-only "for safety": doing so
+  // under-counts them against their own browse, which is the drift this union exists to stop.
+  if (scope.kind === 'registry') {
+    return { $or: [metaArm, prefixArm] };
+  }
+
+  // OWNED lake: the prefix is user-chosen and unique only per creator, so it MUST be conjoined with
+  // positive ownership. `effectiveTagPrefixArm` already returned null for a creator-less owned
+  // scope, so `creatorUserId` is set here.
+  return {
+    $or: [metaArm, { $and: [prefixArm, { userId: scope.creatorUserId }] }],
+  };
+}
+
+/**
+ * Prefix-arm membership with the meta-tag arm subtracted out - the datastore mirror of
+ * `getFileMembershipArm` returning `'prefix'` rather than `'both'`. Paired with a plain
+ * `{ 'tags.name': scope.datalakeTag }` count, this partitions a lake's members into two
+ * DISJOINT counts that sum to the same total `buildDataLakeMembershipFilter` would report,
+ * which is what lets a lake header read "48 by lake tag, 37 by content prefix" without the
+ * two numbers double-counting a file that carries both signals.
+ *
+ * A REGISTRY lake's prefix arm carries no ownership conjunct (see buildDataLakeMembershipFilter),
+ * so this mirrors that: no `userId` conjunct for `kind === 'registry'`, only for an owned lake -
+ * dropping it there would double-count against the disjoint-sum guarantee this function exists
+ * to uphold.
+ *
+ * Whether the prefix arm survives at all is `effectiveTagPrefixArm`'s decision, the same one
+ * `buildDataLakeMembershipFilter` above defers to: no usable prefix, a reserved namespace, or an
+ * owned lake with no creator to anchor it to, and there is no prefix-only membership to count.
+ */
+export function buildDataLakePrefixOnlyMembershipFilter(
+  scope: DataLakeMembershipScope
+): Record<string, unknown> | null {
+  const prefix = effectiveTagPrefixArm(scope);
+  if (!prefix) return null;
+  const prefixArm = { 'tags.name': { $regex: new RegExp(`^${escapeRegex(prefix)}`) } };
+  const excludesMeta = { 'tags.name': { $ne: scope.datalakeTag } };
+  if (scope.kind === 'registry') {
+    return { $and: [prefixArm, excludesMeta] };
+  }
+  // effectiveTagPrefixArm already returned null for an owned scope with no creator; this narrows
+  // the type to prove it to the compiler, and is not a second copy of that decision.
+  if (!scope.creatorUserId) return null;
+  return { $and: [prefixArm, { userId: scope.creatorUserId }, excludesMeta] };
+}
+
+/**
+ * Conjoins the membership predicate with a caller's own conditions. Use this instead of spreading
+ * `buildDataLakeMembershipFilter` into an object literal whenever those conditions name a top-level
+ * Mongo operator.
+ *
+ * Spreading is a trap: the prefix arm returns a top-level `$or`, so a literal that also names `$or`
+ * SILENTLY DELETES the membership predicate (last key wins in JS) and the query degrades to every
+ * file in the install. That is a cross-lake read on the health and convergence surfaces, and a
+ * convergence wave built from it re-chunks other lakes' documents at this lake's target. There is no
+ * type error and no runtime error - the query just widens. Route it through here and the two can
+ * only ever be ANDed.
+ */
+export function buildDataLakeMembershipQuery(
+  scope: DataLakeMembershipScope,
+  conditions: Record<string, unknown>
+): Record<string, unknown> {
+  return { $and: [buildDataLakeMembershipFilter(scope), conditions] };
+}
+
+/**
+ * Datastore mirror of `satisfiesTagPrefix`, NEGATED: matches files carrying no tag that places
+ * them under `prefix`. What the backfill migration selects, so it stamps exactly the files the
+ * write-door reconciler would have. A parity test asserts the two agree; change them together.
+ *
+ * The trailing `[\s\S]` in the pattern is the length check - a bare `acme:` is not a category
+ * anyone can navigate to, so it does not satisfy `acme:`. It is spelled that way rather than `.`
+ * because `.` excludes newlines, which would make `acme:\nfoo` satisfy the predicate but not this
+ * filter. Case-sensitive (no `i` flag), matching both the predicate and the read arms the stamp
+ * has to become visible to.
+ *
+ * The second conjunct mirrors the predicate's "a meta-tag is membership, never content" rule. It is
+ * unreachable for the prefixes the stamp gate actually clears, since those are outside the
+ * `datalake:` namespace - but carrying it means parity holds for ANY prefix rather than only under
+ * that precondition, which is one fewer thing for a future caller to get wrong. Case-insensitive,
+ * matching the predicate.
+ *
+ * Returns a top-level filter fragment; spread it alongside the meta-tag arm.
+ *
+ * Shares its top-level `tags` key with `buildNoOtherLakeMetaTagFilter` below - spreading both
+ * together silently keeps only the last one (see that function's own test for the collision).
+ * No caller composes them today; if one ever needs to, compose their $elemMatch conditions
+ * directly instead of spreading both objects.
+ */
+export function buildLacksContentPrefixTagFilter(prefix: string): Record<string, unknown> {
+  return {
+    tags: {
+      $not: {
+        $elemMatch: {
+          $and: [
+            { name: { $regex: new RegExp(`^${escapeRegex(prefix)}[\\s\\S]`) } },
+            { name: { $not: new RegExp(`^${DATALAKE_TAG_PREFIX}`, 'i') } },
+          ],
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Matches files carrying no lake-membership meta-tag OTHER than `datalakeTag` itself.
+ *
+ * `addFileToLake` has no exclusivity check, so one file can carry more than one lake's meta-tag at
+ * once. A query that needs to tell "mine, and only mine" from "mine, but also a co-owning lake's"
+ * spreads this alongside a membership filter - see `hasArchivedMemberExclusiveToDataLakeTag`'s own
+ * doc for why that distinction matters there.
+ *
+ * The namespace test is case-INSENSITIVE, roughly matching `isDataLakeTagName` (@bike4mind/common)
+ * - a `DATALAKE:other` tag is still another lake's membership however it is cased (that helper
+ * also trims whitespace, which this regex does not; a legacy whitespace-padded tag is outside both
+ * this function's and the rest of this file's namespace checks alike).
+ *
+ * The "other than mine" test is exact and case-SENSITIVE, the same comparison
+ * `buildDataLakeMembershipFilter`'s meta arm uses to decide a row is mine at all - both sides must
+ * use the SAME exactness or they could disagree on what "mine" is. One deliberate consequence: a
+ * mixed-case variant of THIS lake's own tag is treated as another lake's (excluded from "mine"),
+ * not folded back to it - degenerate but safe, since no lake can hold a non-canonical meta-tag in
+ * the first place.
+ *
+ * A document with no `tags` at all matches ($not is true on a missing field), which is correct: it
+ * carries no other lake's tag. It cannot widen anything, since every membership arm requires one.
+ *
+ * A bare `datalake:` element (no suffix) would also satisfy the namespace regex and count as
+ * "another lake's" - unreachable in practice, since the write paths that mint a meta-tag always
+ * append a real identifier after the prefix, never the bare prefix alone.
+ *
+ * Shares its top-level `tags` key with `buildLacksContentPrefixTagFilter` above - see that
+ * function's own doc for the composition hazard this creates for a future caller of both.
+ */
+export function buildNoOtherLakeMetaTagFilter(datalakeTag: string): Record<string, unknown> {
+  return {
+    tags: {
+      $not: {
+        $elemMatch: {
+          name: { $regex: new RegExp(`^${DATALAKE_TAG_PREFIX}`, 'i'), $ne: datalakeTag },
+        },
+      },
+    },
+  };
+}

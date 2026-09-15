@@ -1,0 +1,267 @@
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import type { MongoMemoryServer } from 'mongodb-memory-server';
+import { connectTestDB, disconnectTestDB } from './utils';
+import { ApiKeyUsageLog, apiKeyUsageLogRepository } from '../models/auth/ApiKeyUsageLogModel';
+
+// #773: the API-key usage view now derives request counts from the usage log via
+// countRequestsByKeyForUser (the UserApiKey.usage counters are never written).
+describe('ApiKeyUsageLogRepository.countRequestsByKeyForUser', () => {
+  let mongoServer: MongoMemoryServer;
+
+  beforeAll(async () => {
+    mongoServer = await connectTestDB();
+  }, 30000);
+
+  afterAll(async () => {
+    await disconnectTestDB(mongoServer);
+  }, 30000);
+
+  beforeEach(async () => {
+    await ApiKeyUsageLog.deleteMany({});
+  });
+
+  const base = {
+    ipAddress: '203.0.113.1',
+    endpoint: '/api/ai/v1/completions',
+    method: 'POST',
+    responseTime: 12,
+    statusCode: 200,
+  };
+  const logRequest = (userId: string, keyId: string, timestamp: Date) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test seed: partial log doc
+    apiKeyUsageLogRepository.create({ userId, keyId, timestamp, ...base } as any);
+
+  it('returns per-key lifetime total and today count matching the logged requests', async () => {
+    const dayStart = new Date();
+    dayStart.setUTCHours(0, 0, 0, 0);
+    const earlierToday = new Date(dayStart.getTime() + 60 * 60 * 1000); // +1h (today)
+    const beforeToday = new Date(dayStart.getTime() - 2 * 60 * 60 * 1000); // -2h (before today, still <90d)
+
+    // keyA: 2 today + 1 before today -> total 3, today 2
+    await logRequest('user-1', 'keyA', earlierToday);
+    await logRequest('user-1', 'keyA', earlierToday);
+    await logRequest('user-1', 'keyA', beforeToday);
+    // keyB: 1 today -> total 1, today 1
+    await logRequest('user-1', 'keyB', earlierToday);
+    // another user's key must NOT leak into user-1's counts
+    await logRequest('user-2', 'keyC', earlierToday);
+
+    const counts = await apiKeyUsageLogRepository.countRequestsByKeyForUser('user-1', dayStart);
+
+    expect(counts.keyA).toEqual({ totalRequests: 3, requestsToday: 2 });
+    expect(counts.keyB).toEqual({ totalRequests: 1, requestsToday: 1 });
+    expect(counts.keyC).toBeUndefined(); // user-scoped
+  });
+
+  it('returns an empty map when the user has no logged requests', async () => {
+    const dayStart = new Date();
+    dayStart.setUTCHours(0, 0, 0, 0);
+    const counts = await apiKeyUsageLogRepository.countRequestsByKeyForUser('nobody', dayStart);
+    expect(counts).toEqual({});
+  });
+});
+
+describe('ApiKeyUsageLogRepository.platformEndpointUsage', () => {
+  let mongoServer: MongoMemoryServer;
+
+  beforeAll(async () => {
+    mongoServer = await connectTestDB();
+  }, 30000);
+
+  afterAll(async () => {
+    await disconnectTestDB(mongoServer);
+  }, 30000);
+
+  beforeEach(async () => {
+    await ApiKeyUsageLog.deleteMany({});
+  });
+
+  const log = (overrides: Partial<Record<string, unknown>> = {}) =>
+    apiKeyUsageLogRepository.create({
+      userId: 'user-1',
+      keyId: 'keyA',
+      ipAddress: '203.0.113.1',
+      endpoint: '/api/ai/v1/completions',
+      method: 'POST',
+      responseTime: 10,
+      statusCode: 200,
+      timestamp: new Date(),
+      ...overrides,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test seed: partial log doc
+    } as any);
+
+  it('groups by endpoint+method with request count, avg + p95 latency, and error rate', async () => {
+    // /a POST: 5 ok requests, latencies 10..50 -> avg 30, p95 (nearest-rank) 50.
+    for (const rt of [10, 20, 30, 40, 50]) {
+      await log({ endpoint: '/a', method: 'POST', responseTime: rt, statusCode: 200 });
+    }
+    // /b GET: 2 requests, one server error -> errorRate 0.5.
+    await log({ endpoint: '/b', method: 'GET', responseTime: 5, statusCode: 200 });
+    await log({ endpoint: '/b', method: 'GET', responseTime: 7, statusCode: 500 });
+
+    const { byEndpoint } = await apiKeyUsageLogRepository.platformEndpointUsage({ days: 30 });
+
+    // Ordered by request count desc.
+    expect(byEndpoint).toMatchObject([
+      { endpoint: '/a', method: 'POST', requests: 5, errorRate: 0 },
+      { endpoint: '/b', method: 'GET', requests: 2 },
+    ]);
+    expect(byEndpoint[0].avgResponseTimeMs).toBeCloseTo(30, 10);
+    expect(byEndpoint[0].p95ResponseTimeMs).toBe(50);
+    expect(byEndpoint[1].errorRate).toBeCloseTo(0.5, 10);
+  });
+
+  it('rolls up over-time request counts by UTC day', async () => {
+    await log({ responseTime: 10 });
+    await log({ responseTime: 20 });
+
+    const { overTime } = await apiKeyUsageLogRepository.platformEndpointUsage({ days: 30 });
+    expect(overTime).toHaveLength(1);
+    expect(overTime[0]).toMatchObject({ requests: 2 });
+    expect(overTime[0].day).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('excludes requests outside the trailing window', async () => {
+    await log({ timestamp: new Date('2020-01-01') });
+    const result = await apiKeyUsageLogRepository.platformEndpointUsage({ days: 30 });
+    expect(result.byEndpoint).toHaveLength(0);
+    expect(result.overTime).toHaveLength(0);
+  });
+
+  it('supports an hours window', async () => {
+    await log({ timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000) }); // 2h ago
+    const oneHour = await apiKeyUsageLogRepository.platformEndpointUsage({ hours: 1 });
+    expect(oneHour.byEndpoint).toHaveLength(0);
+    const threeHours = await apiKeyUsageLogRepository.platformEndpointUsage({ hours: 3 });
+    expect(threeHours.byEndpoint).toHaveLength(1);
+  });
+});
+
+describe('ApiKeyUsageLogRepository.findKeyTrafficByEndpointPrefix', () => {
+  let mongoServer: MongoMemoryServer;
+
+  beforeAll(async () => {
+    mongoServer = await connectTestDB();
+  }, 30000);
+
+  afterAll(async () => {
+    await disconnectTestDB(mongoServer);
+  }, 30000);
+
+  beforeEach(async () => {
+    await ApiKeyUsageLog.deleteMany({});
+  });
+
+  /**
+   * Seed timestamps must stay inside the collection's 90-day TTL. `ApiKeyUsageLog`
+   * declares `expireAfterSeconds` and `createMongoServer` cannot disable autoIndex,
+   * so a real mongod builds that index and its background monitor is entitled to
+   * sweep an older fixture between the write and the aggregate. Widening the query
+   * with `days` does not help - the TTL is a separate mechanism.
+   */
+  const daysAgo = (days: number) => new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+  const log = (overrides: Partial<Record<string, unknown>> = {}) =>
+    apiKeyUsageLogRepository.create({
+      userId: 'user-1',
+      keyId: 'keyA',
+      ipAddress: '203.0.113.1',
+      endpoint: '/api/thing/one',
+      method: 'GET',
+      responseTime: 10,
+      statusCode: 200,
+      timestamp: new Date(),
+      ...overrides,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test seed: partial log doc
+    } as any);
+
+  it('groups matching traffic per key with its request count and last use', async () => {
+    const newestBusy = daysAgo(8);
+    await log({ keyId: 'busy', endpoint: '/api/thing/one', timestamp: daysAgo(10) });
+    await log({ keyId: 'busy', endpoint: '/api/thing/two', timestamp: newestBusy });
+    await log({ keyId: 'busy', endpoint: '/api/thing/two', timestamp: daysAgo(9) });
+    await log({ keyId: 'quiet', userId: 'user-2', endpoint: '/api/thing/one', timestamp: daysAgo(9) });
+
+    const rows = await apiKeyUsageLogRepository.findKeyTrafficByEndpointPrefix({
+      endpointPrefix: '/api/thing',
+      days: 90,
+    });
+
+    expect(rows).toHaveLength(2);
+    expect(rows.find(r => r.keyId === 'busy')).toMatchObject({ userId: 'user-1', requests: 3 });
+    expect(new Date(rows.find(r => r.keyId === 'busy')!.lastUsed).toISOString()).toBe(newestBusy.toISOString());
+    expect(rows.find(r => r.keyId === 'quiet')).toMatchObject({ userId: 'user-2', requests: 1 });
+  });
+
+  it('truncates by recency, not by request count, so a quiet key outranks an older busy one', async () => {
+    // The keys this tool exists to catch are the monthly and quarterly callers.
+    // Ordering by `requests` before the limit would discard exactly those first,
+    // and narrowing the window to clear the cap would drop them for good.
+    await log({ keyId: 'busy-but-stale', endpoint: '/api/thing/one', timestamp: daysAgo(80) });
+    await log({ keyId: 'busy-but-stale', endpoint: '/api/thing/one', timestamp: daysAgo(80) });
+    await log({ keyId: 'busy-but-stale', endpoint: '/api/thing/one', timestamp: daysAgo(80) });
+    await log({ keyId: 'quiet-but-recent', endpoint: '/api/thing/one', timestamp: daysAgo(1) });
+
+    const rows = await apiKeyUsageLogRepository.findKeyTrafficByEndpointPrefix({
+      endpointPrefix: '/api/thing',
+      days: 90,
+      limit: 1,
+    });
+
+    expect(rows.map(r => r.keyId)).toEqual(['quiet-but-recent']);
+  });
+
+  it('does not return an endpoints array', async () => {
+    // `endpoint` is `req.originalUrl`, so a distinct-set accumulator is effectively
+    // per-request cardinality and could blow the 16MB group-document limit on a
+    // broad prefix. Nothing renders it, so it is not collected.
+    await log({ keyId: 'busy', endpoint: '/api/thing/one' });
+
+    const rows = await apiKeyUsageLogRepository.findKeyTrafficByEndpointPrefix({
+      endpointPrefix: '/api/thing',
+      days: 36500,
+    });
+
+    expect(rows[0]).not.toHaveProperty('endpoints');
+  });
+
+  it('matches on prefix only, and anchors it to the start of the endpoint', async () => {
+    await log({ keyId: 'inside', endpoint: '/api/thing/one' });
+    await log({ keyId: 'elsewhere', endpoint: '/api/other/one' });
+    // Anchoring matters: an unanchored match would pull this in and overstate the blast radius.
+    await log({ keyId: 'suffix', endpoint: '/nested/api/thing/one' });
+
+    const rows = await apiKeyUsageLogRepository.findKeyTrafficByEndpointPrefix({
+      endpointPrefix: '/api/thing',
+      days: 36500,
+    });
+
+    expect(rows.map(r => r.keyId)).toEqual(['inside']);
+  });
+
+  it('treats regex metacharacters in the prefix as literals', async () => {
+    // Unescaped, `/api/a+b` would match '/api/aab' and miss the real route,
+    // under-reporting affected keys - a false "nobody breaks".
+    await log({ keyId: 'literal', endpoint: '/api/a+b/one' });
+    await log({ keyId: 'regexy', endpoint: '/api/aab/one' });
+
+    const rows = await apiKeyUsageLogRepository.findKeyTrafficByEndpointPrefix({
+      endpointPrefix: '/api/a+b',
+      days: 36500,
+    });
+
+    expect(rows.map(r => r.keyId)).toEqual(['literal']);
+  });
+
+  it('excludes traffic older than the window', async () => {
+    await log({ keyId: 'recent', timestamp: new Date() });
+    await log({ keyId: 'ancient', timestamp: new Date(Date.now() - 120 * 24 * 60 * 60 * 1000) });
+
+    const rows = await apiKeyUsageLogRepository.findKeyTrafficByEndpointPrefix({
+      endpointPrefix: '/api/thing',
+      days: 90,
+    });
+
+    expect(rows.map(r => r.keyId)).toEqual(['recent']);
+  });
+});

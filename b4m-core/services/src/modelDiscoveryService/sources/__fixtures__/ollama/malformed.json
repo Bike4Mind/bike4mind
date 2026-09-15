@@ -1,0 +1,9 @@
+{
+  "models": [
+    { "name": "qwen3.5:2b-q4_K_M", "details": { "family": "qwen3", "context_length": 262144 }, "capabilities": ["completion", "tools"] },
+    { "details": { "family": "orphan" } },
+    { "name": "", "capabilities": ["completion"] },
+    { "name": "broken:latest", "details": "not-an-object", "capabilities": "completion" },
+    null
+  ]
+}
