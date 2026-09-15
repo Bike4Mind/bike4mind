@@ -2932,6 +2932,19 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
       );
       expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
     });
+
+    it('resolves the org-scoped default when organizationId arrives as an ObjectId-shaped value, not a string', async () => {
+      // A hydrated Mongoose user document's organizationId is an ObjectId (toHexString()), not a
+      // plain string - normalizeId() must run before comparing it against membershipOrgIds
+      // (string[]), or a strict .includes() silently disables the override for every real member.
+      const objectIdOrgId = { toHexString: () => 'org1' } as unknown as string;
+      const context = contextWithMembership(
+        [{ scopeLevel: 'organization', scopeId: 'org1', settingName: 'kbSearchDefaultResults', settingValue: '4' }],
+        ['org1']
+      );
+      (context.user as { organizationId: unknown }).organizationId = objectIdOrgId;
+      expect(passageCount(await runWith({}, context))).toBe(4);
+    });
   });
 
   /** Context wiring a row-stub adminSettings, and optionally a scoped-overlay store, for #1955's
