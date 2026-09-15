@@ -72,18 +72,13 @@
   --b4m-md-r: 10px;
   --b4m-md-r-sm: 6px;
 
-  /* Self-hosted by next/font in app/layout.tsx. The fallback belongs INSIDE
-     var(): an undefined custom property makes the whole font-family invalid at
-     computed-value time, so a trailing comma-list would never be reached. The
-     variable is set on <html> server-side, but tests and any surface that
-     renders this CSS without the root layout rely on this. */
-  --b4m-md-font-body: var(--font-reading-serif, 'Source Serif 4'), Georgia, 'Iowan Old Style', serif;
+  /* Three faces, three jobs: the app's own sans reads everything, the serif is
+     reserved for the two places a few words carry weight (top headings and a
+     quoted voice), and mono means code and nothing else.
 
-  /* Must be a real stack, not `inherit`. This element sets font-family to the
-     body serif, so an inheriting UI font would resolve to that serif and
-     collapse the whole point: serif for reading, sans for chrome (headings
-     below h2, table heads, labels), mono for data. */
-  --b4m-md-font-ui: var(
+     Must be a real stack, not `inherit`: this element sets font-family from it,
+     so an inheriting value would resolve to itself. */
+  --b4m-md-font-body: var(
     --joy-fontFamily-body,
     'Libre Franklin',
     -apple-system,
@@ -94,6 +89,13 @@
     Arial,
     sans-serif
   );
+
+  /* Self-hosted by next/font in app/layout.tsx. The fallback belongs INSIDE
+     var(): an undefined custom property makes the whole font-family invalid at
+     computed-value time, so a trailing comma-list would never be reached. The
+     variable is set on <html> server-side, but tests and any surface that
+     renders this CSS without the root layout rely on this. */
+  --b4m-md-font-display: var(--font-reading-serif, 'Source Serif 4'), Georgia, 'Iowan Old Style', serif;
   --b4m-md-font-mono:
     var(--font-reading-mono, 'JetBrains Mono'), ui-monospace, 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas',
     'source-code-pro', monospace;
@@ -137,7 +139,7 @@
    reading serif and given the paragraph's bottom margin. */
 .b4m-md .b4m-md-figure p {
   margin: 0;
-  font-family: var(--b4m-md-font-ui);
+  font-family: var(--b4m-md-font-body);
   text-wrap: initial;
 }
 
@@ -180,7 +182,7 @@
   line-height: 0;
   position: relative;
   vertical-align: baseline;
-  font-family: var(--b4m-md-font-ui);
+  font-family: var(--b4m-md-font-body);
 }
 
 .b4m-md sup {
@@ -213,7 +215,7 @@
    which resets every axis it does not name - including `wght`, silently
    undoing the font-weight below. */
 .b4m-md h1 {
-  font-family: var(--b4m-md-font-body);
+  font-family: var(--b4m-md-font-display);
   font-optical-sizing: auto;
   font-size: 1.42em;
   font-weight: 600;
@@ -221,7 +223,7 @@
 }
 
 .b4m-md h2 {
-  font-family: var(--b4m-md-font-body);
+  font-family: var(--b4m-md-font-display);
   font-optical-sizing: auto;
   font-size: 1.2em;
   font-weight: 600;
@@ -232,7 +234,7 @@
 }
 
 .b4m-md h3 {
-  font-family: var(--b4m-md-font-ui);
+  font-family: var(--b4m-md-font-body);
   font-size: 0.86em;
   font-weight: 660;
   letter-spacing: 0.02em;
@@ -240,7 +242,7 @@
 }
 
 .b4m-md h4 {
-  font-family: var(--b4m-md-font-ui);
+  font-family: var(--b4m-md-font-body);
   font-size: 0.8em;
   font-weight: 640;
   letter-spacing: 0.03em;
@@ -248,7 +250,7 @@
 }
 
 .b4m-md h5 {
-  font-family: var(--b4m-md-font-ui);
+  font-family: var(--b4m-md-font-body);
   font-size: 0.72em;
   font-weight: 640;
   letter-spacing: 0.13em;
@@ -258,7 +260,7 @@
 }
 
 .b4m-md h6 {
-  font-family: var(--b4m-md-font-ui);
+  font-family: var(--b4m-md-font-body);
   font-size: 0.68em;
   font-weight: 600;
   letter-spacing: 0.15em;
@@ -307,7 +309,7 @@
 
 .b4m-md ol > li::marker {
   color: var(--b4m-md-ink-3);
-  font-family: var(--b4m-md-font-mono);
+  font-variant-numeric: tabular-nums;
   font-size: 0.85em;
 }
 
@@ -373,7 +375,8 @@
 
 /* -- blockquote -----------------------------------------------------------
    A rule and a shift of register, not a tinted box: the quote is a different
-   voice, not a different importance. */
+   voice, not a different importance - and here the face says so literally. The
+   serif is reserved for exactly two things: top headings, and a quoted voice. */
 .b4m-md blockquote {
   /* A heading's bottom margin collapses against this one, so only a value above
      it has any effect. Prose gets ~5px of free optical relief from its own
@@ -384,6 +387,7 @@
   padding: 0.1em 0 0.1em 1.15em;
   border-left: 1px solid var(--b4m-md-line-2);
   color: var(--b4m-md-ink-3);
+  font-family: var(--b4m-md-font-display);
   font-style: italic;
 }
 
@@ -426,7 +430,7 @@
   width: 100%;
   border-collapse: collapse;
   border: 0;
-  font-family: var(--b4m-md-font-ui);
+  font-family: var(--b4m-md-font-body);
   line-height: 1.45;
 }
 
@@ -485,7 +489,6 @@
 }
 
 .b4m-md tbody td.b4m-md-num {
-  font-family: var(--b4m-md-font-mono);
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum' 1;
   color: var(--b4m-md-ink);
@@ -551,7 +554,7 @@
 }
 
 .b4m-md section[data-footnotes] > h2 {
-  font-family: var(--b4m-md-font-ui);
+  font-family: var(--b4m-md-font-body);
   font-size: 0.72em;
   font-weight: 640;
   letter-spacing: 0.15em;
