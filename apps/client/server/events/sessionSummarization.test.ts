@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   createFabFile: vi.fn(),
   sessionUpdate: vi.fn(),
   publishTag: vi.fn(),
+  recordSessionOperationalUsage: vi.fn(),
   logEvent: vi.fn(),
   upload: vi.fn(),
   findPrefixArmLakes: vi.fn(
@@ -109,7 +110,7 @@ vi.mock('@server/utils/storage', () => ({
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
 vi.mock('@server/events/recordSessionOperationalUsage', () => ({
-  recordSessionOperationalUsage: vi.fn(),
+  recordSessionOperationalUsage: h.recordSessionOperationalUsage,
 }));
 
 import { handler } from './sessionSummarization';
@@ -375,8 +376,10 @@ describe('sessionSummarization summary-file lookup', () => {
 
 // The credit pre-flight prices a callTagging summarize at OPERATIONS_PER_SUMMARIZE_WITH_TAGGING
 // operational model calls (sessions/[id]/summary.ts, projects/[id]/sessions.ts). Nothing but this
-// cascade justifies that number, so it is asserted against the real constant: adding or removing
-// a cascaded operational call here fails until the constant is moved to match.
+// cascade justifies that number, so it is asserted against the real constant on BOTH legs: the
+// summary's own settlement call and the Tag it publishes. Asserting only the Tag would leave the
+// summary leg encoded in arithmetic (`constant - 1`) and let a handler that stopped settling its
+// own call keep passing.
 describe('sessionSummarization operational cascade', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -390,13 +393,20 @@ describe('sessionSummarization operational cascade', () => {
   it('queues exactly the cascaded operations the pre-flight charges for', async () => {
     await run({ callTagging: true });
 
-    // The summary itself is the first operation; every Tag it publishes is another.
-    expect(h.publishTag).toHaveBeenCalledTimes(OPERATIONS_PER_SUMMARIZE_WITH_TAGGING - 1);
+    // The summary settles one operational call of its own; every Tag it publishes is another.
+    // Both counted, then summed against the constant, so a change to either leg fails here.
+    expect(h.recordSessionOperationalUsage).toHaveBeenCalledTimes(1);
+    expect(h.publishTag).toHaveBeenCalledTimes(1);
+    expect(h.recordSessionOperationalUsage.mock.calls.length + h.publishTag.mock.calls.length).toBe(
+      OPERATIONS_PER_SUMMARIZE_WITH_TAGGING
+    );
   });
 
   it('cascades nothing without callTagging, which is why tag.ts prices itself at one', async () => {
     await run();
 
+    // One settled call and no cascade, so a plain Summarize is worth exactly one operation.
+    expect(h.recordSessionOperationalUsage).toHaveBeenCalledTimes(1);
     expect(h.publishTag).not.toHaveBeenCalled();
   });
 });

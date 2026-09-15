@@ -69,12 +69,16 @@ describe('checkSessionOperationalCredits', () => {
   // AdminSettingsCache awaits findAll() on a cache miss with no error handling of its own, so a
   // cold container is enough to reach this - and on the project-attach path a throw here lands
   // after withTransaction has committed, 500ing an action that already succeeded.
-  it('allows when the settings read throws', async () => {
+  it('allows when the settings read throws, and says so at error level', async () => {
     mockBillingEnabled.mockRejectedValue(new Error('mongo down'));
     mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0 });
+    const logger = { warn: vi.fn(), error: vi.fn() };
 
-    await expect(preflight()).resolves.toEqual({ allowed: true });
+    await expect(preflight({ logger: logger as never })).resolves.toEqual({ allowed: true });
     expect(mockFindUserById).not.toHaveBeenCalled();
+    // The level is the alarm channel, so it is asserted, not incidental: a silent fail-open is
+    // indistinguishable from the ungated behavior this gate replaced.
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('gate disabled'), expect.any(Error));
   });
 
   it('allows a funded holder when billing is on', async () => {
@@ -142,11 +146,13 @@ describe('checkSessionOperationalCredits', () => {
 
   // Fails OPEN by design: a mongo blip must not turn "attach a notebook" or "tag this session"
   // into an error. The settlement is still guarded by the balance it debits against.
-  it('allows when the billing store throws', async () => {
+  it('allows when the billing store throws, and says so at error level', async () => {
     billingOn();
     mockFindUserById.mockRejectedValue(new Error('mongo down'));
+    const logger = { warn: vi.fn(), error: vi.fn() };
 
-    await expect(preflight()).resolves.toEqual({ allowed: true });
+    await expect(preflight({ logger: logger as never })).resolves.toEqual({ allowed: true });
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('gate disabled'), expect.any(Error));
   });
 
   it('allows when the owner no longer exists', async () => {
@@ -195,7 +201,12 @@ describe('checkSessionOperationalCredits', () => {
 
     const verdict = await preflight({ requesterId: 'someone-else' });
 
-    expect(verdict.allowed === false && verdict.reason).not.toContain('administrator');
+    // The refusal is asserted before its wording: a negative assertion alone would pass just as
+    // happily if the cap stopped refusing at all, which is the regression worth catching here.
+    expect(verdict.allowed).toBe(false);
+    const reason = verdict.allowed === false ? verdict.reason : '';
+    expect(reason).toBe('The owner of this notebook does not have enough credits for session tagging.');
+    expect(reason).not.toContain('administrator');
   });
 
   // The common case is requester == owner, where the actionable detail is the whole point.
@@ -226,16 +237,29 @@ describe('checkSessionOperationalCredits', () => {
       mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0 });
     };
 
-    // Carries a real pricing map on purpose: with `pricing: {}` this passes whether the flag is
-    // read or not, which is what made the earlier version of this test tautological. The flag has
-    // to be the thing doing the work.
+    // The real shape of a freeToRun model: the flag plus no price rows, because
+    // generateModelPriceSeed.ts:49 skips seeding them. Not tautological despite the empty map -
+    // its pair below feeds the SAME empty map with the flag off and gets a refusal, so the flag
+    // is demonstrably the thing doing the work.
     it('allows a broke holder when the operations model is freeToRun', async () => {
       brokeHolder();
-      mockGetOperationsModel.mockResolvedValue({
-        modelInfo: { id: 'llama3', freeToRun: true, pricing: { 128000: { input: 0.15, output: 0.6 } } },
-      });
+      mockGetOperationsModel.mockResolvedValue({ modelInfo: { id: 'llama3', freeToRun: true, pricing: {} } });
 
       await expect(preflight()).resolves.toEqual({ allowed: true });
+    });
+
+    // The flag is a declaration of intent, not a billing switch: getTextModelCost reads it only
+    // to suppress [UNPRICED_MODEL] (models.ts:678-686) and no write path stops a freeToRun model
+    // from carrying a priced tier (runModelDiscovery.ts:999 appends without the admin route's
+    // known-model gate). Waiving on the flag alone would hand this work through while settlement
+    // charged $750k of tokens at full rate, so the probe has to agree with the flag.
+    it('keeps the refusal when a freeToRun model still carries a priced tier', async () => {
+      brokeHolder();
+      mockGetOperationsModel.mockResolvedValue({
+        modelInfo: { id: 'llama3-mislabelled', freeToRun: true, pricing: { 128000: { input: 0.15, output: 0.6 } } },
+      });
+
+      await expect(preflight()).resolves.toMatchObject({ allowed: false });
     });
 
     // An empty map is a GAP, not a declaration of free: both write paths reject it outright
@@ -296,9 +320,7 @@ describe('checkSessionOperationalCredits', () => {
         maxCreditsPerMember: 10,
         userDetails: [{ id: USER_ID, usedCredits: 10 }],
       });
-      mockGetOperationsModel.mockResolvedValue({
-        modelInfo: { id: 'llama3', freeToRun: true, pricing: { 128000: { input: 0.15, output: 0.6 } } },
-      });
+      mockGetOperationsModel.mockResolvedValue({ modelInfo: { id: 'llama3', freeToRun: true, pricing: {} } });
 
       await expect(preflight()).resolves.toEqual({ allowed: true });
     });

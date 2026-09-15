@@ -92,7 +92,13 @@ describe('POST /api/admin/recalculate-message-counts credit pre-flight', () => {
   // The spider skips an already-groomed notebook (`!session.summaryAt` / `!session.taggedAt`), so
   // pricing a re-run at totalNotebooks would refuse a large account credits for work it will not
   // do - the gate would make the spider unusable above a few hundred notebooks.
-  it('sizes the check to the ungroomed notebooks, not to every notebook the admin owns', async () => {
+  //
+  // `summarize` on purpose: it is the only leg whose narrowing actually bites today. `taggedAt`
+  // is written but is not a declared Session path, so mongoose strict mode strips it and
+  // `{ taggedAt: null }` matches the whole collection (#2798). The count stays truthful about the
+  // spend either way, because the same missing field makes spider.ts:98 re-tag every notebook -
+  // but a `tags` run here would not distinguish ungroomed sizing from totalNotebooks sizing.
+  it('sizes the summarize leg to the ungroomed notebooks, not to every notebook the admin owns', async () => {
     await run({ operations: ['summarize'] });
 
     expect(mockAssertCredits).toHaveBeenCalledWith(
