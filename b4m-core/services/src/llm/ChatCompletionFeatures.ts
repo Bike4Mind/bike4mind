@@ -94,6 +94,7 @@ import {
   grantedLakeIdsUsedFor,
 } from '../dataLakeService/getDataLakePrompts';
 import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
+import { membershipOrgIdsForTurn } from '../dataLakeService/membershipOrgIdsForTurn';
 import { attributeAccessedLakeIds } from '../dataLakeService/attributeAccessedLakes';
 import { recordLakeAccessEvent } from '../dataLakeService/recordLakeAccessEvent';
 import { defangBlockMarkers, renderDataLakePromptSection } from '../dataLakeService/renderDataLakePromptBlock';
@@ -2325,10 +2326,16 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    *
    * The scoped branch is wrapped defensively, NOT because production takes the fallback:
    * `resolveScopedSettingValues` documents that it never throws and wraps both of its own reads, so
-   * the only thing the catch can realistically see is an argument-evaluation error. The corollary is
-   * worth knowing rather than assuming away - when the resolver's OWN platform read fails it
-   * resolves the coded default internally and returns normally, so a settings outage lands on coded
-   * defaults whether or not this guard is here.
+   * the only thing the catch can realistically see is an argument-evaluation error - now including
+   * the membership read below, which has its own real failure mode. The corollary is worth knowing
+   * rather than assuming away - when the resolver's OWN platform read fails it resolves the coded
+   * default internally and returns normally, so a settings outage lands on coded defaults whether or
+   * not this guard is here.
+   *
+   * `user.organizationId` is a selected-org display pointer, not proof of membership (#1674) -
+   * verified via `membershipOrgIdsForTurn` (shared per-turn memo with the data-lake resolvers)
+   * before it reaches `scopeForCaller`, same fix and same fail-closed-to-personal-scope direction
+   * as the sibling `search_knowledge_base` fix (#2769).
    */
   private async readForcedRetrievalSettings(): Promise<{
     charBudget: unknown;
@@ -2338,9 +2345,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     const { db, user } = this.chatCompletion;
     if (db.scopedSettings) {
       try {
+        const pointerOrgId = normalizeId(user.organizationId);
+        const membershipOrgIds = pointerOrgId
+          ? await membershipOrgIdsForTurn(this.chatCompletion, user.id, db.organizations)
+          : [];
+        const verifiedOrgId = pointerOrgId && membershipOrgIds.includes(pointerOrgId) ? pointerOrgId : undefined;
         const values = await resolveScopedSettingValues(
           FORCED_RETRIEVAL_SETTING_KEYS,
-          scopeForCaller({ userId: user.id, organizationId: normalizeId(user.organizationId) }),
+          scopeForCaller({ userId: user.id, organizationId: verifiedOrgId }),
           { adminSettings: db.adminSettings, scopedSettings: db.scopedSettings },
           { logger: this.logger }
         );
@@ -2351,7 +2363,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         };
       } catch (err) {
         // Fall THROUGH rather than rethrow: the outer catch lands on coded defaults, which would
-        // discard a platform-wide override for the duration of a transient scoped-read failure.
+        // discard a platform-wide override for the duration of a transient scoped-read or
+        // membership-lookup failure.
         this.logger.warn(
           '\u{1F512} Forced retrieval: scoped settings read failed; falling back to the platform values',
           err
