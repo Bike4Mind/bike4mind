@@ -126,6 +126,10 @@ async function enqueueVectorizeBatches(params: {
  * vectorizing error from elsewhere is still true and must not be papered over by a retry of this
  * handler. It is wrong for a refusal, which is terminal and names a different, actionable cause -
  * and which the stranded file's own stale transient error would otherwise suppress entirely.
+ * It rewrites the FabFile and its manifest entry TOGETHER: the two error strings are read by
+ * different guards (`ownsError` here, revertFileFailure's prefix match on the entry), so leaving
+ * one behind is what charges a single file's failure to its batch twice. It never re-charges the
+ * counters itself - that stays guarded on `isFirstFailure` below.
  */
 async function accountFileFailure(params: {
   event: SQSEvent;
@@ -160,9 +164,23 @@ async function accountFileFailure(params: {
   // below stays guarded on `isFirstFailure` regardless: replacing a message must not charge the
   // file's failure to the batch twice.
   if (!isFirstFailure && supersedes) {
-    await FabFile.updateOne({ _id: fabFileId }, { $set: { error: errorMessage, isVectorizing: false } }).catch(err =>
-      logger.error(`Failed to supersede the stored error on ${fabFileId}: ${err}`)
-    );
+    try {
+      const replaced = await fabFileRepository.supersedeFailureError(fabFileId, errorMessage);
+      // That write is the only thing that destroys the outgoing text, and it is the sole record of
+      // why the file was already failing - so it survives here rather than nowhere.
+      if (replaced) logger.warn(`Superseded the stored error on ${fabFileId}: ${replaced}`);
+      // The manifest entry has to move with the file record, or the two disagree permanently and
+      // the batch is charged twice for this one file. revertFileFailure matches the ENTRY's error
+      // against this handler's prefix to decide whose failure it may revoke: an entry left holding
+      // the superseded text makes the next delivery's undo decline, while the file-side clear
+      // succeeds - so the verdict re-runs as a FIRST failure and increments the counters again,
+      // which finalizeBatchIfComplete can read as the batch being complete while a file is still
+      // in flight. Error text only (see supersedeFileError): updateFileStatus would restamp
+      // `failureCounted: false` and strip the attribution those counters are given back by.
+      if (batchId) await dataLakeBatchRepository.supersedeFileError(batchId, fabFileId, errorMessage);
+    } catch (err) {
+      logger.error(`Failed to supersede the stored error on ${fabFileId}: ${err}`);
+    }
   }
   if (!batchId || !isFirstFailure) return;
 
@@ -336,7 +354,13 @@ async function undoStrand(params: {
  *
  * Reads the same two counts as `resolveFileLabel` (fabFileService/stampChunkEmbeddingModel.ts),
  * which answers the neighbouring question at the other end of the pass: which single file label is
- * honest once a vectorize pass completes. Keep the two readings of those counts in step.
+ * honest once a vectorize pass completes. The two read those counts DIFFERENTLY, deliberately, and
+ * the divergence is the `mixed` arm: `resolveFileLabel` folds the completing pass's own model into
+ * the declared set when unlabeled vectors exist, so one declared space beside unlabeled vectors
+ * collapses to a set of one and it stamps the label with no warning. It is certifying a file it has
+ * just written vectors into; this is choosing a space for vectors that do not exist yet, and cannot
+ * borrow that certainty. So the shape `resolveFileLabel` calls settled is the one reported here -
+ * which is also why nothing downstream catches it, and why this arm has to.
  */
 type CommittedEmbeddingSpace =
   /** Nothing embedded yet, so there is no space to preserve and any model is safe. */
@@ -406,9 +430,9 @@ async function readCommittedEmbeddingSpace(fabFileId: string): Promise<Committed
  * text stays short, free of ids and model names, and names the action that surface actually offers.
  * The model ids, the counts and the operator's repair go to the log beside it.
  *
- * The `single` arm is also where retiring an embedding-model id is held to being the migration it
- * is: an id must not leave SupportedEmbeddingModelSchema while stored rows still name it and hold
- * vectorless chunks. Nothing at build time can see those rows, so the contract can only be held at
+ * The `single`/`mixed` arm is also where retiring an embedding-model id is held to being the
+ * migration it is: an id must not leave SupportedEmbeddingModelSchema while stored rows still name
+ * it and hold vectorless chunks. Nothing at build time can see those rows, so it can only be held at
  * the row - and only for rows that name a space, which is why running the chunk-model backfill is
  * a prerequisite of that migration rather than a nicety.
  *
@@ -583,12 +607,23 @@ async function resumeVectorizeEnqueue(
   // The undo settles the error only for the error this handler OWNS. A file stranded while holding
   // someone else's error keeps it, so `accountFileFailure` is asked to supersede (see `supersedes`
   // there) rather than trusting the undo to have left the field clear.
+  //
+  // The evidence is read OUTSIDE the try, and the boundary is load-bearing. The catch below exists
+  // for the deliberate refusals, and it writes what it catches into `FabFile.error` with
+  // `supersedes` set - the one flag that bypasses first-error-wins. A database rejection caught
+  // there would put a raw driver message in front of every user who can see the file, and because
+  // that text carries no VECTORIZE_ENQUEUE_ERROR_PREFIX, `ownsError` would be false forever and no
+  // later successful resume could ever clear it. Reading first lets a failed read propagate as the
+  // ordinary handler failure it is, into the same retry-and-DLQ envelope as the reads above it, and
+  // keeps the invariant that everything in `FabFile.error` is a string this module authored.
+  const committed = await readCommittedEmbeddingSpace(fabFileId);
+
   let embeddingModel: string;
   try {
     embeddingModel = resolveResumeEmbeddingModel({
       fabFileId,
       fileLabel: fabFile.embeddingModel,
-      committed: await readCommittedEmbeddingSpace(fabFileId),
+      committed,
       defaultEmbeddingModel,
       logger,
     });

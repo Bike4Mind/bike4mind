@@ -43,6 +43,8 @@ const h = vi.hoisted(() => {
     ),
     findAccessibleById: vi.fn(),
     markFailedIfNotAlready: vi.fn(),
+    supersedeFailureError: vi.fn(async () => null as string | null),
+    supersedeFileError: vi.fn(async () => undefined),
     updateFileStatus: vi.fn(),
     incrementCounter: vi.fn(),
     incrementCounters: vi.fn(),
@@ -79,6 +81,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   dataLakeBatchRepository: {
     updateFileStatus: h.updateFileStatus,
+    supersedeFileError: h.supersedeFileError,
     incrementCounter: h.incrementCounter,
     incrementCounters: h.incrementCounters,
     claimFileStatus: h.claimFileStatus,
@@ -94,6 +97,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {
     shareable: { findAccessibleById: h.findAccessibleById },
     markFailedIfNotAlready: h.markFailedIfNotAlready,
+    supersedeFailureError: h.supersedeFailureError,
     update: h.fabFileUpdate,
     markConvergencePaused: h.markConvergencePaused,
   },
@@ -1248,12 +1252,71 @@ describe('fabFileChunk handler - a failed vectorize enqueue must not strand the 
       // The foreign error survived the undo, as it must.
       expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $unset: { vectorizeEnqueueFailedAt: 1 } });
       // ...and the refusal replaces it anyway, because it is terminal and names a different cause.
-      expect(h.fabFileUpdateOne).toHaveBeenCalledWith(
-        { _id: 'ff1' },
-        { $set: { error: expect.stringContaining('Reprocess'), isVectorizing: false } }
-      );
+      expect(h.supersedeFailureError).toHaveBeenCalledWith('ff1', expect.stringContaining('Reprocess'));
+      // The MANIFEST ENTRY moves with the file record, and this is the assertion that makes the
+      // superseding path distinguishable from the one that leaves the two disagreeing. Without it
+      // the entry keeps the foreign text, revertFileFailure's prefix guard declines on the next
+      // delivery while clearStrandedMarkers succeeds, and the refusal re-runs as a first failure
+      // and charges this one file's failure to the batch twice.
+      expect(h.supersedeFileError).toHaveBeenCalledWith('batch-1', 'ff1', expect.stringContaining('Reprocess'));
+      // Error text only. updateFileStatus would restamp failureCounted: false and strip the
+      // attribution the outgoing failure's counters are handed back by - the same double charge
+      // from the other side.
+      expect(h.updateFileStatus).not.toHaveBeenCalled();
       // Superseding the message must not charge the batch a second failure for the same file.
       expect(h.incrementCounters).not.toHaveBeenCalled();
+    });
+
+    // `supersedes` defaults OFF, and the default is the load-bearing half: first-error-wins is
+    // right for every transient failure, because a chunking or vectorizing error from elsewhere is
+    // still true and must not be papered over by a retry of this handler. Flipping the default to
+    // `true` left all 86 tests green before this case existed.
+    it('leaves a foreign error alone when the hand-off fails transiently rather than refusing', async () => {
+      h.findAccessibleById.mockResolvedValue({ ...stranded, error: 'Chunking failed: corrupt PDF' });
+      h.findVectorlessChunkIds.mockResolvedValue(['c1']);
+      h.markFailedIfNotAlready.mockResolvedValue(false); // the foreign error is still there
+      h.sendToQueue.mockRejectedValue(new Error('SQS unavailable'));
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(/SQS unavailable/);
+
+      // Positive control first: the transient failure WAS accounted, so a silent no-op cannot pass
+      // this test by accident.
+      expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', expect.stringContaining('SQS unavailable'));
+      expect(h.supersedeFailureError).not.toHaveBeenCalled();
+      expect(h.supersedeFileError).not.toHaveBeenCalled();
+    });
+
+    // The other half of the same predicate: `!isFirstFailure` gates the superseding write, so a
+    // refusal on a file that carried NO error takes the ordinary CAS and must not follow it with an
+    // unpredicated second write of the same text.
+    it('does not supersede when the refusal is itself the first error on the file', async () => {
+      h.findAccessibleById.mockResolvedValue({ ...stranded, error: null });
+      h.distinctEmbeddingModelsByFabFileId.mockResolvedValue([RETIRED]);
+      h.markFailedIfNotAlready.mockResolvedValue(true);
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(/no longer available/);
+
+      expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', expect.stringContaining('Reprocess'));
+      expect(h.supersedeFailureError).not.toHaveBeenCalled();
+      expect(h.supersedeFileError).not.toHaveBeenCalled();
+      // The CAS already wrote the reason, so the batch takes the normal first-failure accounting.
+      expect(h.updateFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', 'failed', expect.stringContaining('Reprocess'));
+      expect(h.incrementCounters).toHaveBeenCalledTimes(1);
+    });
+
+    // A database failure reading the committed space is NOT a refusal. Caught as one, its raw
+    // driver message would be written to `FabFile.error` with `supersedes` set - straight into a
+    // tooltip for every user who can see the file, and unclearable forever, since the text carries
+    // no VECTORIZE_ENQUEUE_ERROR_PREFIX for `ownsError` to recognise on any later delivery.
+    it('lets a failed evidence read propagate instead of storing it as a refusal', async () => {
+      h.findAccessibleById.mockResolvedValue(stranded);
+      h.distinctEmbeddingModelsByFabFileId.mockRejectedValue(new Error('connection timed out'));
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(/connection timed out/);
+
+      expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+      expect(h.supersedeFailureError).not.toHaveBeenCalled();
+      expect(h.sendToQueue).not.toHaveBeenCalled();
     });
 
     it('refuses a file whose vectors already span two spaces, rather than picking one', async () => {

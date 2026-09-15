@@ -191,15 +191,20 @@ describe('resume embedding-space guard against a real mongod (#2766)', () => {
     expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('no recorded space'));
   });
 
-  it('stays silent and takes the default when the file holds no vectors at all', async () => {
-    const { fabFileId, userId } = await seedFile(undefined, [
+  // Seeded WITH a label that differs from the default, because the arm's decision is "the file
+  // label still wins where nothing contradicts it" - the chunks were sized against it. Seeding no
+  // label instead would assert the default, which is what a mutant that ignores the label entirely
+  // also returns, so the case could not fail. Silence is the other half: `'vector.0': $exists`
+  // must exclude these never-embedded rows, or they read as vectors in no recorded space and warn.
+  it('stays silent and keeps the file label when the file holds no vectors at all', async () => {
+    const { fabFileId, userId } = await seedFile(COMMITTED_SPACE, [
       { space: undefined, vectorized: false },
       { space: undefined, vectorized: false },
     ]);
 
     await dispatch(makeEvent({ fabFileId, userId }), {} as never, mockLogger);
 
-    expect(requestedModel()).toBe(DEPLOYMENT_DEFAULT);
+    expect(requestedModel()).toBe(COMMITTED_SPACE);
     expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('embedding space'));
   });
 });
