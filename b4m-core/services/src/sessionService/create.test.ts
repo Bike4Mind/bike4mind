@@ -3,9 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // createSession imports projectService from the services barrel ('..'); stub it so the
 // heavy barrel is not loaded. addSessions is only reached when a projectId resolves, which
 // these tests never do.
-vi.mock('..', () => ({
-  projectService: { addSessions: vi.fn() },
-}));
+vi.mock('../projectService', () => ({ addSessions: vi.fn() }));
 
 import { createSession } from './create';
 import type { CreateSessionAdapters } from './create';

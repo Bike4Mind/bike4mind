@@ -13,7 +13,7 @@ import {
 import type { ILogger } from '@bike4mind/observability';
 import { FunctionQueueRunner } from '@bike4mind/utils';
 import type { CreateFabFileAdapters } from '../fabFileService/create';
-import { tagService } from '..';
+import * as tagService from '../tagService';
 
 /**
  * Utility function to find existing research data based on URL and organization/user context.

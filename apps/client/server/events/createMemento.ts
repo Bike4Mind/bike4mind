@@ -4,7 +4,8 @@ import { apiKeyRepository, adminSettingsRepository, Memento } from '@bike4mind/d
 import { getSettingsByNames } from '@bike4mind/utils';
 import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
 import { ChatModels, MEMENTO_EMBEDDING_MODEL, toMementoVector, MementoTier, MementoType } from '@bike4mind/common';
-import { apiKeyService, MementoEvaluationService, mementoService } from '@bike4mind/services';
+import { apiKeyService, mementoService } from '@bike4mind/services';
+import { MementoEvaluationService } from '@bike4mind/services/llm';
 import { isMementosV2Enabled, writeFactToLedger } from '@server/memory/mementoLedgerMirror';
 import { generateMementoSummaryEmbedding } from '@server/utils/mementoEmbedding';
 

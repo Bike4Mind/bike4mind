@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, Mock, vi } from 'vitest';
 
-vi.mock('..', () => ({ tagService: { createFileTag: vi.fn() } }));
+vi.mock('../tagService', () => ({ createFileTag: vi.fn() }));
 
 import {
   findExistingResearchData,
@@ -10,7 +10,7 @@ import {
   createSendStatusUpdate,
   prepareTagsForResearchTask,
 } from './utils';
-import { tagService } from '..';
+import * as tagService from '../tagService';
 import {
   IResearchData,
   IResearchTaskScrape,

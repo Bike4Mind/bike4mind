@@ -27,7 +27,7 @@ import {
   ModelPicker,
 } from './components';
 import type { PermissionResponse, EnvChoice } from './components';
-import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services';
+import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
 import { getShellSessionManager } from '@bike4mind/services/llm/tools/cliTools';
 import { LoginFlow } from './components/LoginFlow';
 import { SessionStore, ConfigStore, CommandHistoryStore } from './storage';
