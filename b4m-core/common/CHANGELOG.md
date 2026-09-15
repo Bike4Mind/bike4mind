@@ -1,5 +1,11 @@
 # @bike4mind/common
 
+## 7.2.1
+
+### Patch Changes
+
+- [#2796](https://github.com/Bike4Mind/bike4mind/pull/2796) [`8ef2c17`](https://github.com/Bike4Mind/bike4mind/commit/8ef2c17f7b54b0df8c3809f17a62544784e65029) Thanks [@onoya](https://github.com/onoya)! - derive the scoped-retrieval Lake-rung guard from the reads' own key lists
+
 ## 7.2.0
 
 ### Minor Changes
