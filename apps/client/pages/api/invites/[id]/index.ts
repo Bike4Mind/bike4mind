@@ -10,7 +10,8 @@ import {
   organizationRepository,
   Group,
 } from '@bike4mind/database';
-import { getInviteDetails, filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
+import { isValidObjectId } from 'mongoose';
+import { canViewInvite, getInviteDetails, filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sharingService } from '@bike4mind/services';
@@ -27,8 +28,16 @@ const handler = baseApi()
         return res.status(400).json({ message: 'Invite Share request' });
       }
 
+      // Matches the sibling at pages/api/[type]/[id]: an unvalidated id reaches findById as a cast
+      // error rather than the 404 the rest of this handler is careful to return.
+      if (!isValidObjectId(id)) {
+        return res.status(400).json({ message: 'Invalid ID format' });
+      }
+
       const invite = await Invite.findById(id);
-      if (!invite) {
+      // A caller who is not a named recipient or share-authorized gets the same 404 as a
+      // missing invite -- a 403 would confirm the id exists.
+      if (!invite || !(await canViewInvite(req.user, invite))) {
         return res.status(404).json({ message: 'Invite Not Found' });
       }
 
