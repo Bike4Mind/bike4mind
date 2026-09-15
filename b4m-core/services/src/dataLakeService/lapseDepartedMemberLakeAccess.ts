@@ -1,5 +1,6 @@
 import type { IDataLakeAccessGrantRepository, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { grantChange, ownershipChange } from './diffLakeConfig';
+import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import { resolveEffectiveOwnerIds, type LakeGrant, type ManageActor } from './manageRule';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 
@@ -9,7 +10,10 @@ export interface LapseDepartedMemberLakeAccessAdapters extends LakeConfigAuditAd
   // wire it would go dark silently - the one failure mode an access-revocation audit must not have.
   db: LakeConfigAuditAdapters['db'] & {
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
-    dataLakes: Pick<IDataLakeRepository, 'findByOrganizationId'>;
+    // `update` carries phase 2's actor stamp. It is also what makes the lake DOCUMENT a write both
+    // this path and `transferLakeOwnership` touch for the same lake, which is what a transaction
+    // needs in order to detect the two colliding - see the serialization note on phase 2.
+    dataLakes: Pick<IDataLakeRepository, 'findByOrganizationId' | 'update'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listActiveByLakes' | 'upsertGrant'>;
   };
 }
@@ -117,7 +121,8 @@ export async function lapseDepartedMemberLakeAccess(
     db,
     audit,
     triggeredBy,
-    now
+    now,
+    logger
   );
 
   return { lapsedLakeIds, succeededLakeIds };
@@ -197,6 +202,18 @@ async function lapseOwnGrants(
  * only genuinely new reach, and `setLakeVisibility` still hard-refuses publishing a lake carrying a
  * `requiredUserTag` or `requiredEntitlement`. `setLakeVisibility` and `transferLakeOwnership` both
  * carry the matching note, so the invariant is not documented in only one direction.
+ *
+ * SERIALIZATION against `transferLakeOwnership`, which is the other writer of an `owner` grant.
+ * Both operations decide from a snapshot of a lake's grants and then write, so a transfer that
+ * passed its gate before a departure committed would otherwise resume against stale grants,
+ * re-mint the departed member (transfer DEMOTES prior owners to `curator` with `expiresAt: null`,
+ * which overwrites the row phase 1 just expired) and leave the lake with two owners. Both paths now
+ * run inside `withTransaction`, so Mongo aborts and retries whichever commits second and it re-reads
+ * the grants - but only if the two actually touch a common document. That is why the stamp write
+ * below matters beyond attribution: every lake this phase succeeds on gets a lake-DOCUMENT write,
+ * and `transferLakeOwnership` writes the same document for its own stamp. So the two collide on the
+ * grant row when the departing member held one, and on the lake document when they did not (the
+ * creator-fallback case, which has no grant row to collide on until the transfer creates it).
  */
 async function passOnCreatedLakes(
   departedUserId: string,
@@ -205,13 +222,17 @@ async function passOnCreatedLakes(
   db: Db,
   audit: AuditFn,
   triggeredBy: LakeAccessLapseTrigger,
-  now: Date
+  now: Date,
+  logger: LapseDepartedMemberLakeAccessAdapters['logger']
 ): Promise<string[]> {
   const successorUserId = organization.userId;
-  // The billing owner IS the departing member: `revokeAccess` drops them from `users[]` without
-  // clearing `organization.userId`, so they remain the org's owner and succeeding to themselves
-  // would be a no-op that merely logged. Their retained access is consistent with still owning the
-  // org, not a hole. (`leave` cannot reach here at all - it refuses the org's owner outright.)
+  // Succeeding to yourself is a no-op that would merely log. Neither departure path can actually
+  // reach this with the billing owner as the departing member - `leave` refuses the org's owner
+  // ("Cannot leave your own organization") and `revokeAccess` now refuses them too, because a
+  // removal that leaves `organization.userId` pointing at the removed member ends nothing while
+  // still expiring their grants. Kept as a guard rather than an assertion because this primitive
+  // takes the successor from its caller: a third caller passing an org whose owner is the departing
+  // member should get a no-op, not a self-grant.
   if (!successorUserId || successorUserId === departedUserId) return [];
 
   const createdByDeparted = orgLakes.filter(lake => lake.createdByUserId === departedUserId);
@@ -254,6 +275,34 @@ async function passOnCreatedLakes(
       grantedByUserId: triggeredBy.userId,
       expiresAt: null,
     });
+    // Ownership lives in the grants, so without this the lake document itself would be untouched by
+    // a change of owner and keep naming an older, smaller edit as its last editor - the same reason
+    // `transferLakeOwnership` stamps, and the field's contract says every configuration write does.
+    // Written AFTER the grant, matching transfer's ordering, so the stamp never claims a succession
+    // that failed partway. Phase 1 deliberately does not stamp: an ordinary lapse changes who may
+    // reach the lake, not the lake's configuration.
+    //
+    // NOT best-effort, which is where this diverges from transfer: that service is documented
+    // non-atomic, so it swallows a stamp failure rather than reporting a transfer that in fact
+    // succeeded. Both callers here run inside `withTransaction`, so a throw aborts and retries the
+    // whole departure and there is no half-applied state to protect - swallowing would only hide a
+    // real failure. A `null` result still warns rather than throws: `BaseModel.update` is a
+    // `findOneAndUpdate` that resolves `null` when nothing matched, which inside the transaction's
+    // snapshot means the lake went away between the org-wide read above and here.
+    const stamp = lakeConfigWriteStamp(triggeredBy);
+    if (stamp.lastUpdatedByUserId) {
+      const stamped = await db.dataLakes.update({ id: lake.id, ...stamp });
+      if (!stamped) {
+        // Both members of `LakeConfigAuditLogger` are optional, and it falls back to console so the
+        // stamp can never quietly name an older edit with nothing anywhere to say why. Called
+        // through a closure rather than by reference so a logger whose method needs `this` works.
+        const warn = (msg: string, meta: unknown) => (logger?.warn ? logger.warn(msg, meta) : console.warn(msg, meta));
+        warn('[dataLakes] ownership passed on but the lake was not found for the actor stamp', {
+          dataLakeId: lake.id,
+        });
+      }
+    }
+
     await audit(lake, 'membership-succession', [ownershipChange([departedUserId], successorUserId)]);
     succeeded.push(lake.id);
   }

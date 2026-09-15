@@ -37,14 +37,19 @@ const harness = (opts: {
   const listActiveByLakes = vi.fn().mockResolvedValue(opts.activeOnCreated ?? []);
   const upsertGrant = vi.fn().mockImplementation(async (input: unknown) => input);
   const record = vi.fn().mockResolvedValue(undefined);
+  // Resolves a document by default: `update` is a findOneAndUpdate, and a `null` here means the
+  // lake vanished - a case one test below asserts on deliberately.
+  const update = vi.fn().mockImplementation(async (input: { id: string }) => ({ id: input.id }));
+  const warn = vi.fn();
   const adapters = {
     db: {
-      dataLakes: { findByOrganizationId },
+      dataLakes: { findByOrganizationId, update },
       dataLakeAccessGrants: { listByPrincipal, listActiveByLakes, upsertGrant },
       lakeConfigChangeEvents: { record },
     },
+    logger: { warn },
   };
-  return { findByOrganizationId, listByPrincipal, listActiveByLakes, upsertGrant, record, adapters };
+  return { findByOrganizationId, listByPrincipal, listActiveByLakes, upsertGrant, record, update, warn, adapters };
 };
 
 const run = (h: ReturnType<typeof harness>, departed = DEPARTED) =>
@@ -267,5 +272,48 @@ describe('lapseDepartedMemberLakeAccess - phase 2, a lake the member created', (
 
     await expect(run(h)).resolves.toEqual({ lapsedLakeIds: ['lakeA'], succeededLakeIds: [] });
     expect(eventsFor(h, 'membership-succession')).toHaveLength(0);
+  });
+});
+
+describe('lapseDepartedMemberLakeAccess - the succession actor stamp', () => {
+  // Ownership lives in the grants, so without this write the lake document is byte-identical after a
+  // change of owner and keeps naming whoever made the last ordinary edit. It is also the write that
+  // makes the lake document shared with `transferLakeOwnership`, which is what lets a transaction
+  // detect the two colliding - so a regression here is a concurrency regression, not just a cosmetic
+  // one.
+  it('stamps the triggering principal on a lake whose ownership passed on', async () => {
+    const h = harness({ lakes: [lake('lakeA', DEPARTED)] });
+
+    await expect(run(h)).resolves.toEqual({ lapsedLakeIds: [], succeededLakeIds: ['lakeA'] });
+
+    expect(h.update).toHaveBeenCalledWith({ id: 'lakeA', lastUpdatedByUserId: TRIGGER.userId });
+  });
+
+  it('stamps AFTER the successor grant lands, so it never claims a succession that failed', async () => {
+    const h = harness({ lakes: [lake('lakeA', DEPARTED)] });
+    h.upsertGrant.mockRejectedValueOnce(new Error('grant write failed'));
+
+    await expect(run(h)).rejects.toThrow('grant write failed');
+
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it('does NOT stamp an ordinary lapse - that changes who can reach the lake, not its configuration', async () => {
+    const h = harness({ lakes: [lake('lakeA')], held: [grant('lakeA', 'curator')] });
+
+    await expect(run(h)).resolves.toEqual({ lapsedLakeIds: ['lakeA'], succeededLakeIds: [] });
+
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it('warns rather than throws when the lake is gone, so the departure still commits', async () => {
+    const h = harness({ lakes: [lake('lakeA', DEPARTED)] });
+    h.update.mockResolvedValue(null);
+
+    await expect(run(h)).resolves.toEqual({ lapsedLakeIds: [], succeededLakeIds: ['lakeA'] });
+
+    expect(h.warn).toHaveBeenCalledWith(expect.stringContaining('not found for the actor stamp'), {
+      dataLakeId: 'lakeA',
+    });
   });
 });

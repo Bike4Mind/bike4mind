@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { revokeAccess } from './revokeAccess';
 import { IOrganizationDocument, IUserDocument } from '@bike4mind/common';
-import { NotFoundError } from '@bike4mind/utils';
+import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { Permission } from '@bike4mind/common';
 
 describe('organizationService - revokeAccess', () => {
@@ -75,6 +75,7 @@ describe('organizationService - revokeAccess', () => {
         // the org-update assertions in the existing cases stay exact.
         dataLakes: {
           findByOrganizationId: vi.fn().mockResolvedValue([]),
+          update: vi.fn().mockImplementation(async (input: { id: string }) => ({ id: input.id })),
         },
         dataLakeAccessGrants: {
           listByPrincipal: vi.fn().mockResolvedValue([]),
@@ -225,6 +226,66 @@ describe('organizationService - revokeAccess', () => {
     expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
     expect(mockAdapters.db.users.removeGroupsFromUser).not.toHaveBeenCalled();
     expect(mockAdapters.db.dataLakeAccessGrants.upsertGrant).not.toHaveBeenCalled();
+  });
+
+  it('refuses to remove the billing owner, who cannot actually be detached from the org', async () => {
+    // `isCurrentOrgMember` admits the billing owner, so without an explicit refusal the removal
+    // reaches the purge - and nothing here clears `organization.userId`. The target would keep the
+    // owner pointer and every rung `findIdsWithAdminRights` grants from it, while their grants on
+    // the org's own lakes were expired underneath them. On a lake transferred away from its creator
+    // that is worse than a no-op: ownership falls back to `createdByUserId`.
+    await expect(
+      revokeAccess(mockOwnerUser as IUserDocument, { id: 'org1', userId: 'owner1' }, mockAdapters)
+    ).rejects.toThrow(BadRequestError);
+
+    expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
+    expect(mockAdapters.db.users.removeGroupsFromUser).not.toHaveBeenCalled();
+    expect(mockAdapters.db.dataLakeAccessGrants.upsertGrant).not.toHaveBeenCalled();
+  });
+
+  it('clears the manager appointment when the removed member held it', async () => {
+    // `managerId` is a SECOND org-admin rung: `findIdsWithAdminRights` matches on it, which feeds
+    // administeredOrgIds and therefore canManageLake's org rung. Leaving it set meant a removed
+    // manager's own grants lapsed while their authority over every lake in the org survived.
+    mockAdapters.db.organizations.findById.mockResolvedValue({
+      ...existingOrganization,
+      users: [...existingOrganization.users!],
+      userDetails: existingOrganization.userDetails?.map(d => ({ ...d })),
+      managerId: 'user1',
+    });
+
+    const result = await revokeAccess(mockOwnerUser as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters);
+
+    expect(result.managerId).toBeNull();
+    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(expect.objectContaining({ managerId: null }));
+  });
+
+  it('leaves a manager appointment held by somebody else alone', async () => {
+    mockAdapters.db.organizations.findById.mockResolvedValue({
+      ...existingOrganization,
+      users: [...existingOrganization.users!],
+      userDetails: existingOrganization.userDetails?.map(d => ({ ...d })),
+      managerId: 'manager1',
+    });
+
+    const result = await revokeAccess(mockOwnerUser as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters);
+
+    expect(result.managerId).toBe('manager1');
+  });
+
+  it('attributes a key-driven removal to the API KEY, keeping the human findable', async () => {
+    // Without this the audit row records principalKind 'user' and the key id is lost, so a scripted
+    // access change is indistinguishable from the admin clicking the button.
+    mockAdapters.auditPrincipal = { principalKind: 'apiKey', principalId: 'key-7', onBehalfOfUserId: 'owner1' };
+    mockAdapters.db.dataLakes.findByOrganizationId.mockResolvedValue([
+      { id: 'lake1', organizationId: 'org1', createdByUserId: 'user1' },
+    ]);
+
+    await revokeAccess(mockOwnerUser as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters);
+
+    expect(mockAdapters.db.lakeConfigChangeEvents.record).toHaveBeenCalledWith(
+      expect.objectContaining({ principalKind: 'apiKey', principalId: 'key-7', onBehalfOfUserId: 'owner1' })
+    );
   });
 
   it('should initialize userDetails if it is null', async () => {

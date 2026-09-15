@@ -362,7 +362,10 @@ describe('organizationService.revokeAccess - Manager Permissions', () => {
     // revokeAccess also ends the removed member's data-lake access on this org's lakes. No org
     // lakes here, so that step is a no-op and the assertions below stay about membership.
     mockLakeRepositories = {
-      dataLakes: { findByOrganizationId: vi.fn().mockResolvedValue([]) },
+      dataLakes: {
+        findByOrganizationId: vi.fn().mockResolvedValue([]),
+        update: vi.fn().mockImplementation(async (input: { id: string }) => ({ id: input.id })),
+      },
       dataLakeAccessGrants: {
         listByPrincipal: vi.fn().mockResolvedValue([]),
         listActiveByLakes: vi.fn().mockResolvedValue([]),

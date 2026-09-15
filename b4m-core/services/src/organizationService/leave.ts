@@ -41,13 +41,15 @@ export const leave = async (
   organization.userDetails = organization.userDetails?.filter(u => u.id !== user.id) ?? [];
 
   // Strip this org's group ids from the departing user, end their data-lake access on this org's
-  // lakes, and drop them from adminUserIds (the org doc, persisted just below). None of
-  // `user.groups[]`, the grant rows or `adminUserIds` carries an org qualifier, so leaving must
-  // clear them or the user keeps group-shared data access, direct lake access and org-admin
-  // authority. Idempotent, so safe under a withTransaction
-  // retry. Self-service, so the departing member is themselves the attributed principal - and the
-  // org's own owner can never reach here, since leaving your own organization is refused above.
-  organization.adminUserIds = await purgeOrgMembershipArtifacts(user.id, organization, { userId: user.id }, adapters);
+  // lakes, and drop them from adminUserIds and from the manager appointment (the org doc, persisted
+  // just below). None of `user.groups[]`, the grant rows, `adminUserIds` or `managerId` carries an
+  // org qualifier, so leaving must clear them or the user keeps group-shared data access, direct
+  // lake access and org-admin authority. Idempotent, so safe under a withTransaction retry.
+  // Self-service, so the departing member is themselves the attributed principal - and the org's
+  // own owner can never reach here, since leaving your own organization is refused above.
+  const purged = await purgeOrgMembershipArtifacts(user.id, organization, { userId: user.id }, adapters);
+  organization.adminUserIds = purged.adminUserIds;
+  organization.managerId = purged.managerId;
 
   await adapters.db.organizations.update(organization);
 

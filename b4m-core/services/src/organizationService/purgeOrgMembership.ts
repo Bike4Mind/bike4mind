@@ -11,6 +11,22 @@ export interface PurgeOrgMembershipAdapters extends LapseDepartedMemberLakeAcces
     groups: Pick<IGroupRepository, 'findByOrganization'>;
     users: Pick<IUserRepository, 'removeGroupsFromUser'>;
   };
+  /**
+   * Who the audit trail should name when the caller is an API key rather than a browser session.
+   * Rides on the adapters alongside `logger` for the same reason: it is a request-scoped fact the
+   * route resolves (`lakeConfigAuditPrincipal(req.user, req.apiKeyInfo)`) and the service must not
+   * infer. Omitted for a session caller, where `recordLakeConfigChange`'s own derivation is right.
+   * Without it a key-driven departure records `principalKind: 'user'` and the key id is lost, so a
+   * scripted access change reads as a direct human action.
+   */
+  auditPrincipal?: LakeAccessLapseTrigger['auditPrincipal'];
+}
+
+/** What the caller MUST persist onto the org doc after a purge. */
+export interface PurgedOrgMembershipFields {
+  adminUserIds: string[];
+  /** `null` when the departing member held the appointment, otherwise unchanged. */
+  managerId: string | null | undefined;
 }
 
 /**
@@ -24,13 +40,21 @@ export interface PurgeOrgMembershipAdapters extends LapseDepartedMemberLakeAcces
  *   - pull the org's live group ids from the member's `user.groups[]` (a real DB write),
  *   - end the member's data-lake access on this org's lakes, passing on ownership of any lake they
  *     created so it does not fall back to them (a real DB write), AND
- *   - compute `adminUserIds` with the member removed and RETURN it.
+ *   - compute `adminUserIds` and `managerId` with the member removed and RETURN them.
  *
  * Neither `user.groups[]` nor `adminUserIds` carries an org qualifier, so a member who keeps them
  * after removal retains both group-shared data access and org-admin authority. (`assertCanManageOrgGroups`
  * also requires current org membership, not just `adminUserIds` - but that check reads
  * `organization.users`, which THIS purge doesn't touch, so it is not a substitute for pruning
  * `adminUserIds` here.)
+ *
+ * `managerId` is cleared here for the same reason and was previously the hole in it: the appointment
+ * is a SECOND org-admin rung that neither departure path cleared, so a departing manager kept it.
+ * `findIdsWithAdminRights` (`OrganizationModel.ts:443`) matches `{ managerId: userId }`, which feeds
+ * `administeredOrgIds` and therefore `canManageLake`'s org rung - so their own grants lapsed below
+ * while their authority over every lake in the org survived, and "the purge ends a departing
+ * member's lake access" was false for exactly that one class of member. Both rungs now end in the
+ * same place, so they cannot drift apart the way they had.
  *
  * Lake access belongs here for the same reason: grants carry no membership qualifier either, so a
  * role held on one of this org's lakes outlived the membership it was issued for. Putting the step
@@ -41,9 +65,9 @@ export interface PurgeOrgMembershipAdapters extends LapseDepartedMemberLakeAcces
  * Takes the whole `organization` rather than its id because the lake step needs the billing owner
  * (`organization.userId`) as the successor for a lake the departing member created.
  *
- * Returns the pruned `adminUserIds` rather than mutating in place and returning void: the caller
- * MUST assign it onto the org doc it persists, so a future caller cannot silently get the unsafe
- * half (group access dropped, admin authority retained). Idempotent - safe under a withTransaction
+ * Returns the pruned fields rather than mutating in place and returning void: the caller MUST assign
+ * them onto the org doc it persists, so a future caller cannot silently get the unsafe half (group
+ * access dropped, admin authority retained). Idempotent - safe under a withTransaction
  * retry, including both halves of the lake step - by two different mechanisms, so both are worth
  * stating: a retry's `listByPrincipal(..., { activeAsOf })` no longer matches the row phase 1 just
  * expired, so it re-stamps nothing; and the successor grant phase 2 wrote makes phase 2's "another
@@ -56,15 +80,23 @@ export interface PurgeOrgMembershipAdapters extends LapseDepartedMemberLakeAcces
  */
 export async function purgeOrgMembershipArtifacts(
   targetUserId: string,
-  organization: LapsingOrganization & { adminUserIds?: string[] },
+  organization: LapsingOrganization & { adminUserIds?: string[]; managerId?: string | null },
   triggeredBy: LakeAccessLapseTrigger,
   adapters: PurgeOrgMembershipAdapters
-): Promise<string[]> {
+): Promise<PurgedOrgMembershipFields> {
   const orgGroups = await adapters.db.groups.findByOrganization(organization.id);
   await adapters.db.users.removeGroupsFromUser(
     targetUserId,
     orgGroups.map(group => group.id)
   );
-  await lapseDepartedMemberLakeAccess(targetUserId, organization, triggeredBy, adapters);
-  return (organization.adminUserIds ?? []).filter(id => id !== targetUserId);
+  await lapseDepartedMemberLakeAccess(
+    targetUserId,
+    organization,
+    { ...triggeredBy, auditPrincipal: triggeredBy.auditPrincipal ?? adapters.auditPrincipal },
+    adapters
+  );
+  return {
+    adminUserIds: (organization.adminUserIds ?? []).filter(id => id !== targetUserId),
+    managerId: organization.managerId === targetUserId ? null : organization.managerId,
+  };
 }

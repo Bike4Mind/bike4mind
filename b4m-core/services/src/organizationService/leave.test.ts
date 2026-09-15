@@ -75,6 +75,7 @@ describe('organizationService - leave', () => {
         // Same for org lakes: no lakes by default, so the lake-access lapse is a no-op.
         dataLakes: {
           findByOrganizationId: vi.fn().mockResolvedValue([]),
+          update: vi.fn().mockImplementation(async (input: { id: string }) => ({ id: input.id })),
         },
         dataLakeAccessGrants: {
           listByPrincipal: vi.fn().mockResolvedValue([]),
@@ -179,6 +180,26 @@ describe('organizationService - leave', () => {
     expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(
       expect.objectContaining({ adminUserIds: ['other-admin'] })
     );
+  });
+
+  it('clears the manager appointment when the departing member held it', async () => {
+    // Same hole as adminUserIds and for the same reason: `findIdsWithAdminRights` matches on
+    // `managerId`, which feeds administeredOrgIds and therefore canManageLake's org rung. A manager
+    // could leave, have their own grants lapse below, and keep authority over every lake in the org.
+    mockAdapters.db.organizations.shareable.findAccessibleById.mockResolvedValue(freshOrg({ managerId: 'user1' }));
+
+    const result = await leave(mockMemberUser as IUserDocument, { id: 'org1' }, mockAdapters);
+
+    expect(result.managerId).toBeNull();
+    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(expect.objectContaining({ managerId: null }));
+  });
+
+  it('leaves a manager appointment held by somebody else alone', async () => {
+    mockAdapters.db.organizations.shareable.findAccessibleById.mockResolvedValue(freshOrg({ managerId: 'manager1' }));
+
+    const result = await leave(mockMemberUser as IUserDocument, { id: 'org1' }, mockAdapters);
+
+    expect(result.managerId).toBe('manager1');
   });
 
   // Load-bearing: without it this file merely mocks the lake repos away, and the departure-side
