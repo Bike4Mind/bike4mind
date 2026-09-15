@@ -38,9 +38,17 @@ describe('oauthFailureRedirectMessage', () => {
     expect(oauthFailureRedirectMessage('state_expired')).toMatch(/expired/i);
   });
 
+  it('tells the user an invite is needed when registration is closed', () => {
+    expect(oauthFailureRedirectMessage('registration_closed')).toMatch(/invite/i);
+  });
+
+  // The reasons above are the only ones allowed to say something specific; everything
+  // else must stay generic so a failure code cannot become an account oracle.
+  const SPECIFIC_MESSAGE_REASONS = ['state_expired', 'registration_closed'];
+
   it('gives a generic message for every other canonical reason', () => {
     for (const reason of OAUTH_FAILURE_REASONS) {
-      if (reason === 'state_expired') continue;
+      if (SPECIFIC_MESSAGE_REASONS.includes(reason)) continue;
       expect(oauthFailureRedirectMessage(reason)).toBe('Authentication failed');
     }
   });

@@ -148,9 +148,29 @@ export const TTS_ERROR_CODES = [
 ] as const satisfies readonly ApiErrorCode[];
 
 /**
- * Error body for `POST /api/ai/tts`, shared by every error status the route
- * declares. `errorCode` is present only on the conditions that carry a
- * classifier; an ordinary validation 422 has none.
+ * Error body for `POST /api/ai/tts`, shared by the 401, 422, 429 and 502; the 413
+ * has a shape of its own (`ttsResponseTooLargeSchema`). `errorCode` is present only
+ * on the conditions that carry a classifier; an ordinary validation 422 has none.
+ *
+ * Extends `ApiErrorSchema` because what decides whether a body carries the fields
+ * errorHandler adds - `request_id`, and `name` until its 2026-12-01 sunset - is
+ * whether the body was THROWN, not which status it wears, and three of these four
+ * statuses are reachable both ways:
+ *
+ * - 401: thrown by apiKeyAuth on a rejected key; written by `auth` when no
+ *   credential was presented at all, and by the handler for
+ *   `provider_not_configured` and for an upstream credential rejection
+ *   (`provider_rejected`).
+ * - 422: thrown by request validation and by the char-limit / format guards;
+ *   written by the handler for `insufficient_credits` and for an upstream 422.
+ * - 429: thrown by apiKeyRateLimit; written by the handler on an upstream 429.
+ * - 502: only ever written.
+ *
+ * So those two are genuinely optional here, and splitting this per status would be
+ * wrong for the first three. The 502 does advertise both without ever sending them;
+ * that is not worth a fourth error schema on one route, and `request_id` missing from
+ * this handler's written bodies is a gap in the handler rather than something to
+ * enshrine in a schema.
  */
 export const ttsErrorResponseSchema = ApiErrorSchema.extend({
   provider: supportedVoiceGenerationVendor.optional(),
@@ -162,9 +182,14 @@ export const ttsErrorResponseSchema = ApiErrorSchema.extend({
  * response-size cap. When a browsable copy was saved, `fileUrl` is how the caller
  * retrieves the audio it paid for.
  *
- * Not derived from `ApiErrorSchema`, unlike `ttsErrorResponseSchema`: this body is
- * written directly (pages/api/ai/tts.ts, the exceedsTtsResponseLimit guard) rather
- * than thrown, so errorHandler never sees it and never adds `name` here.
+ * Not derived from `ApiErrorSchema`: every 413 on this route is written, never
+ * thrown, so errorHandler never serves one and `name` is genuinely absent rather than
+ * optional - a stronger claim than `ttsErrorResponseSchema` can make for its own
+ * statuses, see the note there. Two writers, and only the first matches the paragraph
+ * above: the exceedsTtsResponseLimit guard, and the upstream-4xx passthrough relaying
+ * a provider 413, where nothing was generated or billed and there is no `fileUrl`. An
+ * oversized *request* body is a third 413 that never reaches this schema at all -
+ * Next's own body parser answers it in plain text before the router runs.
  */
 export const ttsResponseTooLargeSchema = z.object({
   error: z.string(),

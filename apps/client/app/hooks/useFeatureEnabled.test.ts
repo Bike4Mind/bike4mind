@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
-import { useFeatureEnabled } from './useFeatureEnabled';
+import { settingsMap } from '@bike4mind/common';
+import { featureMeta, useFeatureEnabled } from './useFeatureEnabled';
 
 const mockUseUserSettings = vi.fn();
 const mockUseAdminSettingsCache = vi.fn();
@@ -169,5 +170,26 @@ describe('useFeatureEnabled', () => {
       const { result } = renderHook(() => useFeatureEnabled());
       expect(result.current.isFeatureEnabled('agentMode')).toBe(false);
     });
+  });
+});
+
+describe('featureMeta parity with the Enable<Feature>Default setting family', () => {
+  // Scoped to the `Enable<Feature>Default` family on purpose, NOT to "every setting must
+  // have a consumer": some master gates are consumed outside this repo, so the broader
+  // rule would false-positive on them. A `*Default` row is different - it exists solely to
+  // seed a per-user preference through `featureMeta`, so one missing from that table is a
+  // lever an admin can flip with no effect anywhere.
+  const adminDefaultKeys = Object.values(settingsMap)
+    .map(setting => setting.key)
+    .filter(key => /^Enable.+Default$/.test(key));
+
+  const seededDefaultKeys = Object.values(featureMeta).flatMap(meta => (meta.defaultKey ? [meta.defaultKey] : []));
+
+  it('finds a non-empty family, so a typo in the pattern cannot pass the suite vacuously', () => {
+    expect(adminDefaultKeys.length).toBeGreaterThan(0);
+  });
+
+  it.each(adminDefaultKeys)('%s seeds a per-user preference', key => {
+    expect(seededDefaultKeys).toContain(key);
   });
 });

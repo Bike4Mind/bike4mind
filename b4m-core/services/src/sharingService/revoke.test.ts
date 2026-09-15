@@ -10,9 +10,9 @@ describe('sharingService - revoke', () => {
 
   let mockAdapters: {
     db: {
-      sessions: { shareable: { findAccessibleById: Mock }; update: Mock };
-      fabFiles: { shareable: { findAccessibleById: Mock }; update: Mock };
-      projects: { shareable: { findAccessibleById: Mock }; update: Mock };
+      sessions: { shareable: { findAccessibleById: Mock }; updateGuarded: Mock };
+      fabFiles: { shareable: { findAccessibleById: Mock }; updateGuarded: Mock };
+      projects: { shareable: { findAccessibleById: Mock }; updateGuarded: Mock };
       users: { findById: Mock };
     };
   };
@@ -21,9 +21,9 @@ describe('sharingService - revoke', () => {
     vi.clearAllMocks();
     mockAdapters = {
       db: {
-        sessions: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn() },
-        fabFiles: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn() },
-        projects: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn() },
+        sessions: { shareable: { findAccessibleById: vi.fn() }, updateGuarded: vi.fn() },
+        fabFiles: { shareable: { findAccessibleById: vi.fn() }, updateGuarded: vi.fn() },
+        projects: { shareable: { findAccessibleById: vi.fn() }, updateGuarded: vi.fn() },
         users: { findById: vi.fn() },
       },
     };
@@ -40,7 +40,7 @@ describe('sharingService - revoke', () => {
 
     await revoke(ownerId, { id: documentId, type: 'files', userId: sharedUserId }, mockAdapters as any);
 
-    expect(mockAdapters.db.fabFiles.update).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
+    expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
   });
 
   it('should allow a user to revoke their own sharing (self-removal)', async () => {
@@ -54,7 +54,7 @@ describe('sharingService - revoke', () => {
 
     await revoke(sharedUserId, { id: documentId, type: 'files', userId: sharedUserId }, mockAdapters as any);
 
-    expect(mockAdapters.db.fabFiles.update).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
+    expect(mockAdapters.db.fabFiles.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
   });
 
   it('should reject when caller is neither owner nor the user being revoked', async () => {
@@ -70,7 +70,7 @@ describe('sharingService - revoke', () => {
       revoke(attackerId, { id: documentId, type: 'files', userId: sharedUserId }, mockAdapters as any)
     ).rejects.toThrow(UnauthorizedError);
 
-    expect(mockAdapters.db.fabFiles.update).not.toHaveBeenCalled();
+    expect(mockAdapters.db.fabFiles.updateGuarded).not.toHaveBeenCalled();
   });
 
   it('should throw NotFoundError when user to revoke is not found', async () => {

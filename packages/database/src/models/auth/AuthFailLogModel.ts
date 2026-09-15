@@ -174,12 +174,26 @@ class AuthFailLogRepository extends BaseRepository<IAuthFailLogDocument> {
   }
 
   /**
-   * Get failed login attempts for a specific user
+   * Get failed login attempts for a specific user.
+   *
+   * `userEmail` is optional: an account created via OAuth without a provider-verified
+   * email has no address on file. Matching on `{ email: undefined }` would compile to
+   * `{ email: null }` and pull in every emailless record, i.e. other users' failures,
+   * so an absent email drops out of the `$or` instead.
    */
-  async getUserFailedLogins(userEmail: string, username: string, since: Date): Promise<IAuthFailLogDocument[]> {
+  async getUserFailedLogins(
+    userEmail: string | null | undefined,
+    username: string,
+    since: Date
+  ): Promise<IAuthFailLogDocument[]> {
+    const identityMatch: Array<Record<string, string>> = [{ username }];
+    if (userEmail) {
+      identityMatch.push({ email: userEmail });
+    }
+
     return this.model
       .find({
-        $or: [{ email: userEmail }, { username: username }],
+        $or: identityMatch,
         createdAt: { $gte: since },
       })
       .sort({ createdAt: -1 });
@@ -283,42 +297,6 @@ class AuthFailLogRepository extends BaseRepository<IAuthFailLogDocument> {
    * Returns patterns where the user was one of the targets
    */
   async getSuspiciousPatternsTargetingUser(username: string, since: Date): Promise<ISuspiciousPattern[]> {
-    const userFailedLogins = await this.model
-      .find({
-        $or: [
-          { username: username },
-          { email: username }, // In case username is actually an email
-        ],
-        createdAt: { $gte: since },
-      })
-      .limit(5);
-
-    console.log(`Found ${userFailedLogins.length} failed logins for user: ${username}`);
-    console.log('Sample failed login:', userFailedLogins[0]);
-
-    const allPatterns = await this.model.aggregate([
-      { $match: { createdAt: { $gte: since } } },
-      {
-        $group: {
-          _id: '$ip',
-          attempts: { $sum: 1 },
-          usernames: { $addToSet: '$username' },
-        },
-      },
-      {
-        $addFields: {
-          usernameCount: { $size: '$usernames' },
-        },
-      },
-    ]);
-
-    console.log(`All patterns found: ${allPatterns.length}`);
-    allPatterns.forEach((pattern, index) => {
-      console.log(
-        `All Pattern ${index + 1}: IP=${pattern._id}, Attempts=${pattern.attempts}, Usernames=${JSON.stringify(pattern.usernames)}`
-      );
-    });
-
     const result = await this.model.aggregate<ISuspiciousPattern>([
       // Match documents within time range
       { $match: { createdAt: { $gte: since } } },
@@ -388,69 +366,7 @@ class AuthFailLogRepository extends BaseRepository<IAuthFailLogDocument> {
       { $sort: { lastAttempt: -1 } },
     ]);
 
-    console.log(`Found ${result.length} suspicious patterns for user: ${username}`);
-    console.log('Sample suspicious pattern:', result[0]);
-
-    console.log('Raw aggregation result:', JSON.stringify(result, null, 2));
-
-    // Type guard helper for _id field
-    const getIdValue = (
-      id: string | { ip: string; timeBucket: Date },
-      field: 'ip' | 'timeBucket'
-    ): string | Date | undefined => {
-      if (typeof id === 'object' && id !== null && 'ip' in id && 'timeBucket' in id) {
-        return id[field];
-      }
-      return undefined;
-    };
-
-    result.forEach((pattern, index) => {
-      console.log(`\n=== Pattern ${index + 1} Analysis ===`);
-      console.log(`IP: ${pattern.ip || getIdValue(pattern._id, 'ip') || pattern._id}`);
-      console.log(`Time Bucket: ${pattern.timeBucket || getIdValue(pattern._id, 'timeBucket')}`);
-      console.log(`Total attempts: ${pattern.attempts}`);
-      console.log(`Unique usernames: ${pattern.usernames?.length || 0}`);
-      console.log(`Usernames: ${JSON.stringify(pattern.usernames)}`);
-      console.log(
-        `Includes target user (${username}): ${pattern.usernames?.includes(username) || pattern.emails?.includes(username)}`
-      );
-
-      // Check which criteria it meets (now properly enforced by time bucketing)
-      const meetsMultipleAttempts = pattern.attempts >= 5;
-      const meetsUsernameEnumeration = (pattern.usernames?.length || 0) >= 3;
-
-      console.log(`Criteria met:`);
-      console.log(
-        `  - Multiple Failed Attempts (5+ within 5min): ${meetsMultipleAttempts} (${pattern.attempts} attempts)`
-      );
-      console.log(
-        `  - Username Enumeration (3+ within 5min): ${meetsUsernameEnumeration} (${pattern.usernames?.length || 0} usernames)`
-      );
-      console.log(`  - Risk Level: ${pattern.riskLevel}`);
-    });
-
-    result.forEach((pattern, index) => {
-      console.log(`Pattern ${index + 1}:`);
-      console.log(`  - IP: ${pattern.ip || getIdValue(pattern._id, 'ip') || pattern._id}`);
-      console.log(`  - Time Bucket: ${pattern.timeBucket || getIdValue(pattern._id, 'timeBucket')}`);
-      console.log(`  - Attempts: ${pattern.attempts}`);
-      console.log(`  - Usernames: ${JSON.stringify(pattern.usernames)}`);
-      console.log(`  - Username Count: ${pattern.usernames?.length || 0}`);
-      console.log(`  - Risk Level: ${pattern.riskLevel}`);
-      console.log(
-        `  - Includes target user: ${pattern.usernames?.includes(username) || pattern.emails?.includes(username)}`
-      );
-    });
-
-    // Ensure dates are properly formatted and add debugging
-    const formattedResult = result.map((pattern, index) => {
-      console.log(`Formatting pattern ${index + 1}:`, {
-        originalLastAttempt: pattern.lastAttempt,
-        originalRiskLevel: pattern.riskLevel,
-        originalAttempts: pattern.attempts,
-        originalUsernames: pattern.usernames,
-      });
-
+    return result.map(pattern => {
       // Ensure we have valid dates
       const lastAttemptDate = pattern.lastAttempt ? new Date(pattern.lastAttempt) : new Date();
       const firstAttemptDate = pattern.firstAttempt ? new Date(pattern.firstAttempt) : new Date();
@@ -468,9 +384,6 @@ class AuthFailLogRepository extends BaseRepository<IAuthFailLogDocument> {
         usernames: pattern.usernames || [],
       };
     });
-
-    console.log('Final formatted result:', formattedResult);
-    return formattedResult;
   }
 }
 

@@ -12,9 +12,10 @@ import { ensureAdmin } from '@server/utils/errors';
 // not a document instance) as true whenever any conditional rule exists - the condition is
 // never applied. That leaked every secret to any logged-in non-admin.
 //
-// Sensitive values are masked on the way out (the same redactor /api/settings/fetch uses),
-// so an admin secret never leaves the server through this route either - the stored value
-// is encrypted at rest, and only the mask (real last-4) is returned.
+// Sensitive values are masked on the way out (the same redactor /api/settings/fetch uses):
+// the stored value is encrypted at rest, and only the mask (real last-4) is returned for
+// any setting tagged `isSensitive` in settingsMap, or for a `settingName` with no entry
+// there at all (fail closed - an orphaned/renamed key defaults to masked, not plaintext).
 const handler = baseApi().get(async (req, res) => {
   ensureAdmin(req.user?.isAdmin);
 

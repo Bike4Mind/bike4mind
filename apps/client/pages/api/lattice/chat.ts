@@ -243,7 +243,10 @@ function formatModelStateForLLM(modelState: any): string {
     '**Entities (use these EXACT IDs in formulas):**',
   ];
 
-  const byCategory: Record<string, any[]> = {};
+  // Keyed by an unvalidated attribute value off req.body: a plain `{}` would resolve a category
+  // of `constructor`/`__proto__` through the prototype chain, so the truthy check below passes and
+  // the push then throws. Same guard as HydrationEngine's computed-value containers.
+  const byCategory: Record<string, any[]> = Object.create(null);
 
   for (const entity of modelState.data.entities) {
     const categoryAttr = entity.attributes?.find((a: any) => a.key === 'category');

@@ -253,10 +253,12 @@ jobs:
           PW_WORKERS: '3'
           CI: 'true'
           PLAYWRIGHT_ARGS: ${{ inputs.playwright_args }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SST_STAGE: ${{ steps.config.outputs.stage }}
         run: |
           set -o pipefail
           [ -n "$PLAYWRIGHT_ARGS" ] && echo "Running: playwright test $PLAYWRIGHT_ARGS" || echo "Running full suite"
-          if [ -n "${{ inputs.pr_number }}" ]; then
+          if [ -n "$PR_NUMBER" ]; then
             # Preview (cross-account): E2E_CLEANUP_SECRET is injected from the repo secret above.
             if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
               echo "::error::E2E_CLEANUP_SECRET repo secret is required for preview runs"
@@ -265,7 +267,7 @@ jobs:
             pnpm --filter client exec playwright test $PLAYWRIGHT_ARGS 2>&1 | tee apps/client/playwright-output.txt
           else
             # dev/staging (same account): resolve the secret from SST.
-            pnpm sst shell --stage ${{ steps.config.outputs.stage }} -- pnpm --filter client exec playwright test $PLAYWRIGHT_ARGS 2>&1 | tee apps/client/playwright-output.txt
+            pnpm sst shell --stage "$SST_STAGE" -- pnpm --filter client exec playwright test $PLAYWRIGHT_ARGS 2>&1 | tee apps/client/playwright-output.txt
           fi
 
       - name: Upload Playwright report
@@ -444,14 +446,19 @@ jobs:
           echo "credits_block=,{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"*💳 AI Credits*\\n${CREDITS_LINES}\"}}" >> "$GITHUB_OUTPUT"
 
       - name: Notify Slack
-        if: always()
+        # Cancelled = superseded gate run (the e2e-core-gate concurrency group cancels
+        # it): post nothing, since its parser emits zeros an always() post would show
+        # as a bogus green. A pre-test failure (install hang, health probe) is failure()
+        # not cancelled(), so it still posts - the total==0 branch in the status
+        # expressions below renders it red instead of a misleading green.
+        if: ${{ !cancelled() }}
         uses: slackapi/slack-github-action@v2
         with:
           webhook: ${{ secrets.SLACK_E2E_WEBHOOK_URL }}
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": "Playwright E2E${{ inputs.suite_name && format(' {0}', inputs.suite_name) || ' Tests' }} (${{ inputs.trigger_label }}) — ${{ steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Passed but some specs did not start' || ':x: Failed' }}",
+              "text": "Playwright E2E${{ inputs.suite_name && format(' {0}', inputs.suite_name) || ' Tests' }} (${{ inputs.trigger_label }}) — ${{ steps.results.outputs.total == '0' && ':x: No results (run failed before tests)' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Passed but some specs did not start' || ':x: Failed' }}",
               "blocks": [
                 {
                   "type": "header",
@@ -465,7 +472,7 @@ jobs:
                   "fields": [
                     {
                       "type": "mrkdwn",
-                      "text": "*Status*\n${{ steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Incomplete' || ':x: Failed' }}"
+                      "text": "*Status*\n${{ steps.results.outputs.total == '0' && ':x: No results (run failed before tests)' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Incomplete' || ':x: Failed' }}"
                     },
                     {
                       "type": "mrkdwn",

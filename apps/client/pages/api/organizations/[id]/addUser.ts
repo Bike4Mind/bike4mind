@@ -21,10 +21,11 @@ const handler = baseApi().post(
     const organization = await organizationRepository.findById(orgId);
     if (!organization) throw new NotFoundError('Organization not found');
 
-    const isOwner = organization.userId === req.user?.id;
-    const isAdmin = req.user?.isAdmin;
-    if (!isOwner && !isAdmin) {
-      throw new ForbiddenError('Only the billing owner or admin can add a user to the organization');
+    // Same roster-authority predicate addMember and revokeAccess use. This route used to check
+    // owner-or-platform-admin inline, excluding the appointed manager that every other roster path
+    // admits - so a manager could remove a member but not add one.
+    if (!organizationService.canAdministerOrganization(req.user, organization)) {
+      throw new ForbiddenError('Only the billing owner, team manager, or admin can add a user to the organization');
     }
 
     await withTransaction(() =>

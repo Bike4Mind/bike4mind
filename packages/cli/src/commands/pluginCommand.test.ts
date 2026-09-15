@@ -280,7 +280,9 @@ describe('add/remove orchestration', () => {
     await handleRemove('foo', dir, configStore);
 
     const [, args] = mockedExecFileSync.mock.calls[0];
-    expect(args).toEqual(['uninstall', '--prefix', dir, 'b4m-plugin-foo']);
+    // --no-audit is load-bearing, not tidiness: npm audits on uninstall too, and
+    // that registry round trip is ~1000x the cost of the removal itself.
+    expect(args).toEqual(['uninstall', '--prefix', dir, '--no-fund', '--no-audit', 'b4m-plugin-foo']);
 
     const reloaded = await new ConfigStore(configPath).load();
     expect(reloaded.features?.foo).toBe(false);

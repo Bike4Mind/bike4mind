@@ -271,8 +271,7 @@ type QueryableType =
   | { $lte: IndexableType }
   | { $in: IndexableType[] }
   | { $nin: IndexableType[] }
-  | { $exists: boolean }
-  | { $regex: string };
+  | { $exists: boolean };
 
 /**
  * Recursively serialize a value with object keys sorted, so two distinct-but-equal

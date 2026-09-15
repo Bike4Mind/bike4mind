@@ -6,8 +6,8 @@ import { resolveWebSearchProvider } from './providers';
 
 // serpApiSearch lives in providers.ts (alongside the provider abstraction) but is re-exported here
 // so its external import path (`.../websearch`) and the existing tests stay stable.
-export { serpApiSearch, resolveWebSearchProvider } from './providers';
-export type { WebSearchProvider, WebSearchProviderResult } from './providers';
+export { serpApiSearch, resolveWebSearchProvider, recencyBucket } from './providers';
+export type { WebSearchProvider, WebSearchProviderResult, WebSearchOptions } from './providers';
 
 export function safeHostname(url: string): string {
   try {

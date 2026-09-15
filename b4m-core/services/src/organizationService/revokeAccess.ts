@@ -2,6 +2,7 @@ import { IGroupRepository, IOrganizationRepository, IUserDocument, IUserReposito
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { purgeOrgMembershipArtifacts } from './purgeOrgMembership';
+import { canAdministerOrganization } from './orgAuthority';
 
 const revokeAccessSchema = z.object({
   id: z.string(),
@@ -14,7 +15,7 @@ interface RevokeAccessAdapters {
   db: {
     organizations: IOrganizationRepository;
     groups: Pick<IGroupRepository, 'findByOrganization'>;
-    users: Pick<IUserRepository, 'removeGroupsFromUser'>;
+    users: Pick<IUserRepository, 'removeGroupsFromUser' | 'findById' | 'update'>;
   };
 }
 
@@ -34,10 +35,9 @@ export const revokeAccess = async (
   const organization = await adapters.db.organizations.findById(id);
   if (!organization) throw new NotFoundError(`Organization not found for id: ${id}`);
 
-  // Only owner, manager, or admin can revoke access
-  const isOwner = organization.userId === user.id;
-  const isManager = organization.managerId === user.id;
-  if (!isOwner && !isManager && !user.isAdmin) {
+  // Only owner, manager, or admin can revoke access. Shares the predicate with addMember so the
+  // two halves of the membership lifecycle cannot drift on who may change the roster.
+  if (!canAdministerOrganization(user, organization)) {
     throw new NotFoundError(`Organization not found for id: ${id}`); // Return same error to avoid info leakage
   }
 
@@ -52,6 +52,16 @@ export const revokeAccess = async (
   organization.adminUserIds = await purgeOrgMembershipArtifacts(userId, organization, adapters);
 
   await adapters.db.organizations.update(organization);
+
+  // Mirror leave.ts: if the org we just removed them from was the user's currently-selected org,
+  // clear it - otherwise org-scoped access (data-lake AccessContext, team-wide prompts) and billing
+  // keep being inferred from a stale organizationId, the inverse of the join-side invariant set in
+  // acceptOrganization/addMember. We hold only the removed user's id here, so fetch them to compare.
+  // Idempotent under a withTransaction retry (a re-run recomputes the same set-to-null).
+  const removed = await adapters.db.users.findById(userId);
+  if (removed?.organizationId?.toString() === id) {
+    await adapters.db.users.update({ id: userId, organizationId: null });
+  }
 
   return organization;
 };

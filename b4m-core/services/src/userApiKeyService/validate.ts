@@ -34,6 +34,8 @@ export interface ValidationResult {
   agentId?: string;
   /** Origins an embed key may be used from (defense-in-depth); embed keys only. */
   allowedOrigins?: string[];
+  /** Lake ids this key is bound to for the manage-but-not-member session admission. */
+  preauthorizedLakeIds?: string[];
   /** White-label config for an embed key; consumed by the widget serve route. */
   branding?: IEmbedBranding;
   /** Spend ceiling in credits for an embed key. Present 0 = real cap; absent = uncapped. */
@@ -74,6 +76,7 @@ function finalizeApiKeyValidation(apiKey: IUserApiKeyDocument, db: ValidateUserA
     organizationId: apiKey.organizationId,
     agentId: apiKey.agentId,
     allowedOrigins: apiKey.allowedOrigins,
+    preauthorizedLakeIds: apiKey.preauthorizedLakeIds,
     branding: apiKey.branding,
     spendCap: apiKey.spendCap,
     currentSpend: apiKey.usage?.totalSpendCredits,

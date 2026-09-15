@@ -23,25 +23,18 @@ import { Resource } from 'sst';
 // Shared const so the auditable set can never drift from the model's enum.
 const AUDITABLE_INTEGRATIONS = new Set<string>(INTEGRATION_AUDIT_INTEGRATION_NAMES);
 
+/**
+ * The local MCP handler spawns the MCP server as a child of whatever runtime calls it, so
+ * "run locally" has to mean a developer machine or a deployment with no mcpHandler Lambda at
+ * all - never a hosted runtime that holds platform credentials.
+ *
+ * There is deliberately no fallback from a failed Lambda invoke to the local handler. The old
+ * one selected itself by substring-matching the error text for things like 'etimedout', and in
+ * the deployed case that text came back in the Lambda's own error payload - which an MCP server
+ * writes. A remote error message could therefore choose to have the MCP child spawned next to
+ * the credentials. A broken invoke now surfaces as an error instead.
+ */
 const shouldRunLocally = () => process.env.IS_LOCAL === 'true' || process.env.NODE_ENV === 'development';
-
-const needsLocalFallback = (error: unknown): boolean => {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  const message = error.message.toLowerCase();
-  return (
-    message.includes('missing credentials') ||
-    message.includes('could not load credentials') ||
-    message.includes('credentials provider error') ||
-    message.includes('missing region') ||
-    message.includes('socket hang up') ||
-    message.includes('econnrefused') ||
-    message.includes('etimedout') ||
-    message.includes('network error')
-  );
-};
 
 function decodePayload(payload: Uint8Array | undefined): string {
   if (!payload) {
@@ -264,62 +257,57 @@ export async function invokeMcpHandler<T = unknown>(payload: Parameters<typeof l
   }
 }
 
-// Safe: only called when mcpName is truthy (line 213-214 guard ensures Resource.mcpHandler is accessible)
-async function invokeLambda<T>(payload: Parameters<typeof localMcpHandler>[0]): Promise<T> {
-  try {
-    const client = new LambdaClient({});
-    const command = new InvokeCommand({
-      FunctionName: Resource.mcpHandler.name,
-      Payload: Buffer.from(JSON.stringify(payload)),
-      InvocationType: 'RequestResponse',
-    });
-
-    const response = await client.send(command);
-    const raw = decodePayload(response.Payload);
-
-    if (response.FunctionError) {
-      let details = response.FunctionError;
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw);
-          details = parsed?.errorMessage || parsed?.message || parsed || details;
-        } catch {
-          details = `${details}: ${raw}`;
-        }
-      }
-
-      throw new Error(`MCP handler invocation failed: ${details}`);
-    }
-
-    if (!raw) {
-      return undefined as T;
-    }
-
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      throw new Error(`Failed to parse MCP handler response: ${raw}`);
-    }
-
-    await extractAndPersistRateLimitEvents(parsed);
-    return parsed as T;
-  } catch (error) {
-    if (!shouldRunLocally() && needsLocalFallback(error)) {
-      console.error(
-        `[invokeMcpHandler] Lambda invocation failed, falling back to local handler.`,
-        `Server: ${payload.name}, Action: ${payload.action},`,
-        `Error: ${error instanceof Error ? error.message : String(error)}`
-      );
-      const result = await localMcpHandler(payload);
-      try {
-        await extractAndPersistRateLimitEvents(result as Record<string, unknown>);
-      } catch (rateLimitErr) {
-        console.error('[invokeMcpHandler] Failed to extract rate limit events in fallback path:', rateLimitErr);
-      }
-      return result as T;
-    }
-
-    throw error;
+/**
+ * Render a Lambda FunctionError as display text. The payload is authored by the MCP handler and,
+ * through it, by the MCP server itself - it is a string to show a user, never a signal that
+ * steers control flow here.
+ */
+function describeFunctionError(functionError: string, raw: string): string {
+  if (!raw) {
+    return functionError;
   }
+
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed === 'object' && parsed !== null) {
+      const { errorMessage, message } = parsed as Record<string, unknown>;
+      if (typeof errorMessage === 'string' && errorMessage) return errorMessage;
+      if (typeof message === 'string' && message) return message;
+    }
+  } catch {
+    // Not JSON - fall through and show the raw body alongside the error type.
+  }
+
+  return `${functionError}: ${raw}`;
+}
+
+// Safe: only called when mcpName is truthy (the Resource.mcpHandler lookup above ensures it is accessible)
+async function invokeLambda<T>(payload: Parameters<typeof localMcpHandler>[0]): Promise<T> {
+  const client = new LambdaClient({});
+  const command = new InvokeCommand({
+    FunctionName: Resource.mcpHandler.name,
+    Payload: Buffer.from(JSON.stringify(payload)),
+    InvocationType: 'RequestResponse',
+  });
+
+  const response = await client.send(command);
+  const raw = decodePayload(response.Payload);
+
+  if (response.FunctionError) {
+    throw new Error(`MCP handler invocation failed: ${describeFunctionError(response.FunctionError, raw)}`);
+  }
+
+  if (!raw) {
+    return undefined as T;
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`Failed to parse MCP handler response: ${raw}`);
+  }
+
+  await extractAndPersistRateLimitEvents(parsed);
+  return parsed as T;
 }

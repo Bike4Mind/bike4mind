@@ -21,7 +21,7 @@ describe('buildDataLakeTools — wiring through ReplContext', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    session = new ReplSession({ sessionId: 'tools-test' });
+    session = new ReplSession({ sessionId: 'tools-test', executor: 'in-process-unsafe' });
     // Spy on global fetch so HTTP calls return canned JSON
     fetchSpy = vi.spyOn(globalThis, 'fetch') as unknown as ReturnType<typeof vi.spyOn>;
   });
@@ -108,8 +108,8 @@ describe('buildDataLakeTools — wiring through ReplContext', () => {
     expect(u.subLlmCalls).toBe(1);
     expect(u.promptTokens).toBe(100);
     expect(u.completionTokens).toBe(30);
-    // Cost = 100 * 0.8e-6 + 30 * 4e-6 = 0.00008 + 0.00012 = 0.0002
-    expect(u.totalCostUsd).toBeCloseTo(0.0002, 7);
+    // Cost = 100 * 1e-6 + 30 * 5e-6 = 0.0001 + 0.00015 = 0.00025
+    expect(u.totalCostUsd).toBeCloseTo(0.00025, 7);
   });
 
   it('rejects semanticSearch when query is missing', async () => {
@@ -182,7 +182,7 @@ describe('buildDataLakeTools - every loopback call runs as the requesting princi
   const callerHeaders = { authorization: 'Bearer caller.jwt.token' };
 
   beforeEach(() => {
-    session = new ReplSession({ sessionId: 'principal-test' });
+    session = new ReplSession({ sessionId: 'principal-test', executor: 'in-process-unsafe' });
     fetchSpy = vi.spyOn(globalThis, 'fetch') as unknown as ReturnType<typeof vi.spyOn>;
   });
 
@@ -218,6 +218,41 @@ describe('buildDataLakeTools - every loopback call runs as the requesting princi
     for (let i = 0; i < 3; i++) {
       expect(sentHeaders(i).authorization).toBe('Bearer caller.jwt.token');
       expect(sentHeaders(i)['x-api-key']).toBeUndefined();
+    }
+  });
+
+  /**
+   * The tool-HTTP rung is the innermost bound in the ladder, and it reaches
+   * five call sites through one helper - so a single dropped `signal:` retires
+   * the rung for a whole tool with nothing failing. Nothing in this file looked
+   * at the second fetch argument before.
+   */
+  it('bounds every loopback call with the tool-HTTP abort signal', async () => {
+    fetchSpy.mockImplementation(
+      async () => new Response(JSON.stringify({ results: [], data: [], total: 0 }), { status: 200 })
+    );
+
+    session.setTools(
+      buildDataLakeTools({
+        baseUrl: 'http://localhost:3000',
+        authHeaders: callerHeaders,
+        anthropicApiKey: 'a',
+        session,
+      })
+    );
+
+    const r = await session.runCode(`
+      await semanticSearch({ query: "q" });
+      await keywordSearch({ query: "q" });
+      await listArticles({});
+    `);
+    expect(r.error).toBeNull();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    for (let i = 0; i < 3; i++) {
+      const init = fetchSpy.mock.calls[i][1] as RequestInit;
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+      expect(init.signal?.aborted).toBe(false);
     }
   });
 

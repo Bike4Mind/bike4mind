@@ -83,4 +83,12 @@ export enum DataLakeAuditEvents {
   // the payload carries the verification counts the sweep read back, so the record answers "was it
   // actually destroyed", not just "was it requested".
   LAKE_DOCUMENT_PURGED = 'LAKE_DOCUMENT_PURGED',
+  // A lake's extracted-fact memory profile was queued for (re)build. Consumes daily-cap
+  // headroom and starts an LLM-billed background run, so it is audited the same way a rebuild
+  // trigger is on the sibling convergence/rechunk doors.
+  LAKE_MEMORY_BUILD_TRIGGERED = 'LAKE_MEMORY_BUILD_TRIGGERED',
+  // A lake's whole memory profile was crypto-shredded, via the existing
+  // DELETE /api/memory/lake/:id door - distinct from LAKE_DOCUMENT_PURGED, which destroys lake
+  // CONTENT (a file's chunks/vectors), not the derived fact profile built from it.
+  LAKE_MEMORY_PURGED = 'LAKE_MEMORY_PURGED',
 }

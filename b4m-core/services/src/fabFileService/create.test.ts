@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
 import { FabFileSourceType, KnowledgeType } from '@bike4mind/common';
+import { invalidateSettingsCache } from '@bike4mind/utils';
 import { createFabFile, type CreateFabFileAdapters } from './create';
 
 // Unsupported file-type gating on ingest. The rejection throws right
@@ -166,6 +167,62 @@ describe('createFabFile (upload moderation gate root cause)', () => {
   });
 });
 
+describe('createFabFile MaxFileSize enforcement - cleared setting no longer blocks every upload (#2456)', () => {
+  const mockUserId = 'user-123';
+
+  let mockAdapters: CreateFabFileAdapters;
+  let fabFilesCreate: Mock;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // The admin-settings cache key is process-wide ('all_settings'), not scoped to this test's
+    // db mock - without invalidating it, whichever test in this file populates it first would
+    // leak its findAll() result into every later test in this file.
+    invalidateSettingsCache();
+
+    fabFilesCreate = vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data }));
+    mockAdapters = {
+      db: {
+        fabFiles: { create: fabFilesCreate },
+        adminSettings: {
+          findAll: vi.fn().mockResolvedValue([{ settingName: 'MaxFileSize', settingValue: '' }]),
+          findBySettingNames: vi.fn().mockResolvedValue([]),
+        },
+        users: {
+          findById: vi.fn().mockResolvedValue({ id: mockUserId, storageLimit: 1000, currentStorageSize: 0 }),
+        },
+      },
+      storage: {
+        generateSignedUrl: vi.fn().mockResolvedValue('https://s3.example.com/signed-url'),
+        upload: vi.fn().mockResolvedValue(undefined),
+      },
+    } as unknown as CreateFabFileAdapters;
+  });
+
+  // Not undoing our own beforeEach - guarding the NEXT describe block in this file from it.
+  // The admin-settings cache this block populates (`MaxFileSize: ''`) is process-wide, so
+  // without this it would leak forward and feed every describe block that runs after this
+  // one, not just the tests inside it.
+  afterEach(() => {
+    invalidateSettingsCache();
+  });
+
+  it('accepts a normal-sized upload when MaxFileSize is stored as a cleared empty string', async () => {
+    await expect(
+      createFabFile(
+        mockUserId,
+        {
+          fileName: 'notes.txt',
+          mimeType: 'text/plain',
+          fileSize: 10 * 1024 * 1024, // 10MB - well under the 30MB default, well over a stray 0
+          type: KnowledgeType.FILE,
+        },
+        mockAdapters
+      )
+    ).resolves.toBeDefined();
+  });
+});
+
 describe('createFabFile provenance', () => {
   const mockUserId = 'user-123';
   let fabFilesCreate: Mock;
@@ -299,7 +356,7 @@ describe('createFabFile - lake-tag gate at create time', () => {
   // This is exactly the call shape packages/scripts/datalake/ingest-pdf-datalake.ts makes to seed
   // a STATIC REGISTRY lake (datalake:opti-knowledge, no owning DB document) - the only supported
   // way to populate one. Centralizing assertCanWriteDataLakeTags here must not break it.
-  it('allows an admin to create a file tagged into a static-registry lake with no DB lookup', async () => {
+  it('allows an admin to create a file tagged into a static-registry lake, minting no fallback stamp', async () => {
     findByDatalakeTag.mockClear();
     const result = await createFabFile(
       'u1',
@@ -312,7 +369,11 @@ describe('createFabFile - lake-tag gate at create time', () => {
       mockAdaptersFor(true)
     );
     expect(result.id).toBe('fab-1');
-    expect(findByDatalakeTag).not.toHaveBeenCalled();
+    // assertCanWriteDataLakeTags' static-registry arm does no DB lookup (line 231-235 above), but
+    // the fallback tagger (#2397) still resolves the meta-tag - a static-registry lake has no
+    // owning document, so this returns null and mints no stamp, same as a stale/orphaned tag would.
+    expect(findByDatalakeTag).toHaveBeenCalledTimes(1);
+    expect(result.tags).toEqual([{ name: 'datalake:opti-knowledge', strength: 1 }]);
   });
 
   it('refuses a non-admin creating a file tagged into a static-registry lake', async () => {
@@ -328,5 +389,85 @@ describe('createFabFile - lake-tag gate at create time', () => {
         mockAdaptersFor(false)
       )
     ).rejects.toThrow(/only an admin can change this data lake/i);
+  });
+});
+
+// #2397: createFabFile used to persist a lake meta-tag with no content-prefix stamp, unlike
+// updateFabFile (which runs every whole-array tag write through reconcileLakeTags). A file
+// created this way sat in its lake contributing nothing to tag-counts and appearing under no
+// category in the Explorer tree until some later edit happened to trigger the stamp.
+describe('createFabFile - lake fallback-tag stamp at create time (#2397)', () => {
+  const lake = {
+    id: 'lake1',
+    name: 'Project Docs',
+    fileTagPrefix: 'proj:',
+    datalakeTag: 'datalake:project-docs',
+    createdByUserId: 'u1',
+  };
+
+  const mockAdapters = (): CreateFabFileAdapters =>
+    ({
+      db: {
+        fabFiles: { create: vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data })) },
+        adminSettings: { findAll: vi.fn().mockResolvedValue([]), findBySettingNames: vi.fn().mockResolvedValue([]) },
+        users: { findById: vi.fn().mockResolvedValue({ id: 'u1', isAdmin: false }) },
+        dataLakes: {
+          findByDatalakeTag: vi.fn().mockResolvedValue(lake),
+          // No colliding lakes in scope, so decideStampPrefix's overlap check clears.
+          find: vi.fn().mockResolvedValue([]),
+        },
+      },
+      storage: { generateSignedUrl: vi.fn().mockResolvedValue('url'), upload: vi.fn() },
+    }) as unknown as CreateFabFileAdapters;
+
+  it('stamps <prefix>uncategorized on a file created with only the lake meta-tag', async () => {
+    const result = await createFabFile(
+      'u1',
+      {
+        ...base,
+        fileName: 'notes.txt',
+        mimeType: 'text/plain',
+        tags: [{ name: 'datalake:project-docs', strength: 1 }],
+      },
+      mockAdapters()
+    );
+
+    // Same tag-counts/Explorer-tree signal reconcileLakeTags stamps on the update path - this is
+    // the parity the acceptance criteria ask for.
+    expect(result.tags).toEqual(
+      expect.arrayContaining([
+        { name: 'datalake:project-docs', strength: 1 },
+        { name: 'proj:uncategorized', strength: 1 },
+      ])
+    );
+  });
+
+  it('mints no stamp when the file already carries a tag under the lake prefix', async () => {
+    const result = await createFabFile(
+      'u1',
+      {
+        ...base,
+        fileName: 'notes.txt',
+        mimeType: 'text/plain',
+        tags: [
+          { name: 'datalake:project-docs', strength: 1 },
+          { name: 'proj:onboarding', strength: 1 },
+        ],
+      },
+      mockAdapters()
+    );
+
+    expect(result.tags).toEqual([
+      { name: 'datalake:project-docs', strength: 1 },
+      { name: 'proj:onboarding', strength: 1 },
+    ]);
+  });
+
+  it('leaves a create with no tags at all untouched (no dataLakes round trip)', async () => {
+    const adapters = mockAdapters();
+    const result = await createFabFile('u1', { ...base, fileName: 'notes.txt', mimeType: 'text/plain' }, adapters);
+
+    expect(result.tags).toBeUndefined();
+    expect(adapters.db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
   });
 });

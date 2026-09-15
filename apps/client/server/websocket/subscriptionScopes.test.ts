@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Types } from 'mongoose';
-import { questMasterPlanSubscriptionScope } from './subscriptionScopes';
+import { InviteType } from '@bike4mind/common';
+import { inviteSubscriptionScope, questMasterPlanSubscriptionScope } from './subscriptionScopes';
 
 describe('questMasterPlanSubscriptionScope', () => {
   const userId = new Types.ObjectId().toString();
@@ -43,5 +44,33 @@ describe('questMasterPlanSubscriptionScope', () => {
 
     expect(scope.$or).not.toContainEqual({ userId: otherUser });
     expect(scope.$or).not.toContainEqual({ sharedWith: otherUser });
+  });
+});
+
+describe('inviteSubscriptionScope', () => {
+  const projectIds = [new Types.ObjectId().toString()];
+  const projectArm = { $and: [{ type: InviteType.Project }, { documentId: { $in: projectIds } }] };
+
+  it('matches invites addressed to the caller plus the shareable-project arm', () => {
+    expect(inviteSubscriptionScope('user@example.com', projectIds).$or).toEqual([
+      { 'recipients.pending': { $in: ['user@example.com'] } },
+      projectArm,
+    ]);
+  });
+
+  it.each([
+    ['undefined', undefined],
+    ['null', null],
+    ['blank', '   '],
+  ])('drops the pending arm entirely for a %s email', (_label, email) => {
+    // `$in: [undefined]` is read by Mongo as "field missing or null", so an emailless account
+    // would otherwise match every invite whose recipients.pending path is absent.
+    expect(inviteSubscriptionScope(email, projectIds).$or).toEqual([projectArm]);
+  });
+
+  it('trims the email before matching', () => {
+    expect(inviteSubscriptionScope('  user@example.com  ', projectIds).$or?.[0]).toEqual({
+      'recipients.pending': { $in: ['user@example.com'] },
+    });
   });
 });

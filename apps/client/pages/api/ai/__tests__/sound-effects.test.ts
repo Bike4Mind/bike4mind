@@ -81,13 +81,16 @@ vi.mock('@bike4mind/database', () => ({
     incrementCredits: (...a: unknown[]) => userIncrement(...a),
   },
 }));
-// Keep the real pure cap helper so org-billed tests exercise the actual cap decision
-// the handler depends on; only the write (deductCreditsWithOrgSupport) is stubbed.
+// Keep the real pure cap helper and the real membership predicate so org-billed tests exercise
+// the actual decisions the handler depends on; only the write (deductCreditsWithOrgSupport) is
+// stubbed. A hand-written stand-in for either would drift from the shared implementation.
 vi.mock('@bike4mind/services', async () => {
   const creditService = await vi.importActual<typeof import('@bike4mind/services/creditService')>(
     '@bike4mind/services/creditService'
   );
+  const services = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
   return {
+    organizationService: { isCurrentOrgMember: services.organizationService.isCurrentOrgMember },
     apiKeyService: { getEffectiveApiKey: (...a: unknown[]) => getEffectiveApiKey(...a) },
     creditService: {
       ...creditService,
@@ -333,7 +336,7 @@ describe('POST /api/ai/sound-effects', () => {
     estimateSoundCredits.mockReturnValue({ requiredCredits: 20, usdCost: 0.01, billedSeconds: 5 });
     // Personal pool is empty on purpose: an org-billed key must draw from the org.
     findById.mockResolvedValue({ id: 'u1', currentCredits: 0 });
-    orgFindById.mockResolvedValue({ id: 'org1', currentCredits: 1000, userDetails: [] });
+    orgFindById.mockResolvedValue({ id: 'org1', currentCredits: 1000, userDetails: [], users: [{ userId: 'u1' }] });
 
     const { res, promise } = run({ text: 'explosion', durationSeconds: 5 }, orgKey);
     await promise;
@@ -360,7 +363,7 @@ describe('POST /api/ai/sound-effects', () => {
   it('bills the org seat of a browser/JWT member (organizationId from the user)', async () => {
     getSettingsValue.mockReturnValue(true);
     estimateSoundCredits.mockReturnValue({ requiredCredits: 15, usdCost: 0.0075, billedSeconds: 4 });
-    orgFindById.mockResolvedValue({ id: 'orgSeat', currentCredits: 500, userDetails: [] });
+    orgFindById.mockResolvedValue({ id: 'orgSeat', currentCredits: 500, userDetails: [], users: [{ userId: 'u1' }] });
 
     // No API key: JWT session whose user belongs to an org.
     const { res, promise } = run({ text: 'chime' }, undefined, 'orgSeat');
@@ -379,7 +382,7 @@ describe('POST /api/ai/sound-effects', () => {
     getSettingsValue.mockReturnValue(true);
     estimateSoundCredits.mockReturnValue({ requiredCredits: 50, usdCost: 0.025, billedSeconds: 12 });
     findById.mockResolvedValue({ id: 'u1', currentCredits: 100000 });
-    orgFindById.mockResolvedValue({ id: 'org1', currentCredits: 10, userDetails: [] });
+    orgFindById.mockResolvedValue({ id: 'org1', currentCredits: 10, userDetails: [], users: [{ userId: 'u1' }] });
     orgIncrement.mockResolvedValue({ currentCredits: -40 });
 
     const { res, promise } = run({ text: 'thunder' }, orgKey);
@@ -401,6 +404,7 @@ describe('POST /api/ai/sound-effects', () => {
       currentCredits: 10000,
       maxCreditsPerMember: 40,
       userDetails: [{ id: 'u1', usedCredits: 20 }],
+      users: [{ userId: 'u1' }],
     });
 
     const { res, promise } = run({ text: 'boom' }, orgKey);
@@ -411,6 +415,54 @@ describe('POST /api/ai/sound-effects', () => {
     expect(orgIncrement).not.toHaveBeenCalled();
     expect(generate).not.toHaveBeenCalled();
     expect(deductCredits).not.toHaveBeenCalled();
+  });
+
+  // An org-billed key's target is stamped at mint time and never revisited, so a key whose holder
+  // has since left the org used to keep drawing on that org's pool. The refusal must land BEFORE
+  // the pool is touched.
+  it('refuses an org-billed API key whose holder is no longer on the org roster', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 30, usdCost: 0.015, billedSeconds: 8 });
+    findById.mockResolvedValue({ id: 'u1', currentCredits: 0 });
+    orgFindById.mockResolvedValue({ id: 'org1', currentCredits: 10000, userDetails: [], users: [] });
+
+    const { res, promise } = run({ text: 'boom' }, orgKey);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(JSON.stringify(res._getJSONData())).toContain('Re-mint');
+    expect(orgIncrement).not.toHaveBeenCalled();
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  // A platform admin is authorized to mint an org-billed key for a customer org but is never on
+  // that org's roster, so a roster-only gate would break the key on its first call.
+  it('admits a platform admin holding an org-billed key for an org they are not on', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 30, usdCost: 0.015, billedSeconds: 8 });
+    findById.mockResolvedValue({ id: 'u1', currentCredits: 0, isAdmin: true });
+    orgFindById.mockResolvedValue({ id: 'org1', currentCredits: 10000, userDetails: [], users: [] });
+
+    const { res, promise } = run({ text: 'boom' }, orgKey);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(orgIncrement).toHaveBeenCalled();
+  });
+
+  // The other side of that gate, deliberately: a browser/JWT caller did not ask for org billing,
+  // so a stale own-org pointer degrades as before rather than locking them out of the route.
+  it('does not apply the roster check to a browser/JWT caller billing their own org seat', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 30, usdCost: 0.015, billedSeconds: 8 });
+    findById.mockResolvedValue({ id: 'u1', currentCredits: 0 });
+    orgFindById.mockResolvedValue({ id: 'orgSeat', currentCredits: 10000, userDetails: [], users: [] });
+
+    const { res, promise } = run({ text: 'boom' }, undefined, 'orgSeat');
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(orgIncrement).toHaveBeenCalled();
   });
 
   it('bills the user pool for a user-billed API key (billingOwnerType User), ignoring the org seat', async () => {

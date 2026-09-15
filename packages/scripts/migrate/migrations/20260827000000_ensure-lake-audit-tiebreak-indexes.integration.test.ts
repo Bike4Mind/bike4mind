@@ -1,13 +1,17 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
 import { LakeAccessEventModel, LakeConfigChangeEventModel, safeDropIndex } from '@bike4mind/database';
-import { createMongoServer } from '../../../database/src/__test__/createMongoServer';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
 
 // Mirrors the sibling ensure-lakeaccessevent-questid-index test's guard: a core migration imported
 // transitively via '@bike4mind/database' need not evaluate SST config, but stay robust if it does.
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
 import migration from './20260827000000_ensure-lake-audit-tiebreak-indexes';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const key = (k: Record<string, number>) => JSON.stringify(k);
 
@@ -61,7 +65,7 @@ describe('ensure-lake-audit-tiebreak-indexes migration (real DB)', () => {
     expect(accessKeys).not.toContain(key(LEGACY.byLake));
     // listByPrincipal keeps its plain { createdAt: -1 } sort, so its index is left untouched.
     expect(accessKeys).toContain(key({ principalKind: 1, principalId: 1, createdAt: -1 }));
-  }, 60000);
+  });
 
   it('refuses to drop a legacy index when its replacement was not built, leaving the read covered', async () => {
     await LakeConfigChangeEventModel.collection.createIndex(LEGACY.config);
@@ -79,7 +83,7 @@ describe('ensure-lake-audit-tiebreak-indexes migration (real DB)', () => {
       configBuild.mockRestore();
       accessBuild.mockRestore();
     }
-  }, 60000);
+  });
 
   it('is idempotent on re-run and on an environment that never had the legacy indexes', async () => {
     await migration.up();
@@ -89,5 +93,5 @@ describe('ensure-lake-audit-tiebreak-indexes migration (real DB)', () => {
     const accessKeys = (await LakeAccessEventModel.collection.indexes()).map(i => key(i.key as never));
     expect(configKeys).toContain(key(REPLACEMENT.config));
     expect(accessKeys).toContain(key(REPLACEMENT.byLake));
-  }, 60000);
+  });
 });

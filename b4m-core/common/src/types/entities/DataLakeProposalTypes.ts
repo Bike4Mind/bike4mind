@@ -53,10 +53,10 @@ export interface IDataLakeProposal {
   sourceUrl: string;
   /**
    * The dedup identity of the source (`canonicalSourceKey`). Every dedup decision - duplicate,
-   * already admitted, tombstoned - is keyed on this, never on `FabFile.contentHash` (client-side
-   * byte hash, unverified, absent on files no upload door created) and never on the vector index
-   * (torn down per member by convergence, so an overlapping run would re-propose what the lake
-   * already holds).
+   * already admitted, tombstoned - is keyed on this, never on `FabFile.contentHash` (unverified,
+   * and not available until AFTER admission - a proposal is dedup'd before any FabFile exists to
+   * hash) and never on the vector index (torn down per member by convergence, so an overlapping
+   * run would re-propose what the lake already holds).
    */
   canonicalSourceKey: string;
   /** The candidate's title, as the producer read it from the source. */

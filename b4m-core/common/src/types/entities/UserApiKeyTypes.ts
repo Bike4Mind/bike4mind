@@ -44,6 +44,62 @@ export enum ApiKeyScope {
    * that costs real money, so it is never implied by {@link OPTIHASHI_READ}.
    */
   OPTIHASHI_COMPUTE = 'optihashi:compute',
+  /**
+   * Read data lakes and their contents: list/browse lakes (including keyword search over
+   * articles), read a lake's health, spend, batches, and access view. Split from
+   * {@link DATALAKE_WRITE} so a key handed to an agent can look at a lake without being able to
+   * change one. A retrieval query that spends LLM/search budget (semantic search, the RLM answer
+   * endpoint) needs {@link DATALAKE_QUERY} instead: this scope does not imply it, though a
+   * {@link DATALAKE_QUERY} key does gain this one (it has to, to reach the read-gated routes its
+   * own retrieval tools call back into).
+   */
+  DATALAKE_READ = 'datalake:read',
+  /**
+   * Change what is IN a lake or how it behaves: create/update/archive a lake,
+   * attach, detach, retag, or purge its files, run converge/rechunk/research,
+   * and manage upload batches. Deliberately does NOT carry
+   * {@link DATALAKE_SHARE}: adding files to a lake is a different privilege
+   * from handing the lake to someone else.
+   */
+  DATALAKE_WRITE = 'datalake:write',
+  /**
+   * Change WHO can reach a lake: its visibility and its ownership (and the
+   * grant/revoke door). Never implied by {@link DATALAKE_WRITE} - re-sharing a
+   * lake widens the blast radius of every document already in it, which is not
+   * what a key minted to keep a lake's files current asked for.
+   */
+  DATALAKE_SHARE = 'datalake:share',
+  /**
+   * Run a retrieval query that spends LLM/search budget against a lake: semantic search and the
+   * RLM answer endpoint. Deliberately NOT suffixed `:read` - {@link DATALAKE_READ} feeds the
+   * New-Key modal's "Read-only" preset (`s.value.endsWith(':read')`), and a key an operator mints
+   * expecting that preset to be free must not auto-join a scope that commissions billable work.
+   * Mirrors {@link OPTIHASHI_COMPUTE}'s split from {@link OPTIHASHI_READ}. Never implied by
+   * {@link DATALAKE_READ} or {@link DATALAKE_WRITE} - spend on a lake is opt-in on its own. The
+   * implication runs the other way for gating purposes: a key holding only this scope also passes
+   * {@link DATALAKE_READ}'s gate, because the RLM answer endpoint's in-REPL tools call back into
+   * read-gated routes (e.g. GET /api/data-lakes/articles) with the caller's own credential.
+   */
+  DATALAKE_QUERY = 'datalake:query',
+  /**
+   * Read the Overwatch analytics surface - the cross-product overview, product
+   * inventory and config, first-party metrics, product-stat history, funnel,
+   * and pipeline freshness. Exists so an agent can be handed a credential that
+   * can only *look*: it is deliberately NOT the read half of
+   * {@link OVERWATCH_INGEST_WRITE}, which is a per-product ingest credential
+   * bound to one `productId` and able to write that product's numbers. Handing
+   * an explorer the ingest key would let it fabricate the very stats it reports
+   * on, so the two are separate scopes rather than a read/write pair.
+   *
+   * Like every scope, it authorizes but never entitles - the Overwatch access
+   * check (`requestHasOverwatchAccess`: admin OR developer OR `overwatch:pro`)
+   * still runs against the key's owner and can refuse on its own. A key minted
+   * with this scope by a user who does not hold Overwatch access opens nothing.
+   * That check and the routes it guards live in the Overwatch overlay package;
+   * neither has an implementation in this repository, so nothing here verifies
+   * the claim - it is a property of the consumer, recorded for the reader.
+   */
+  OVERWATCH_READ = 'overwatch:read',
 }
 
 export enum ApiKeyStatus {
@@ -168,6 +224,14 @@ export interface IUserApiKey {
   agentId?: string;
   /** https origin allow-list for an embed key (normalized, deduped, capped at EMBED_ORIGINS_MAX). */
   allowedOrigins?: string[];
+  /**
+   * Lake ids this key is bound to for the manage-but-not-member session admission (see
+   * `preauthorizedLakeIds` on the session, and its containment check at
+   * pages/api/sessions/create.ts). Admin-minted only; a key's presence in this list is not itself
+   * authority to admit a lake - the caller must still pass the live canManageLake check on every
+   * request, this only narrows which lakes that authority may be exercised for.
+   */
+  preauthorizedLakeIds?: string[];
   /** Optional white-label config for an embed key (see {@link IEmbedBranding}). */
   branding?: IEmbedBranding;
   /**

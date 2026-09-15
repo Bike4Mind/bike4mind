@@ -150,6 +150,17 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     return { statusCode: 403 };
   }
 
+  // A register naming an instanceId that already belongs to someone else would otherwise rewrite
+  // that record's owner, device and connection - taking over a live session. This is the same
+  // ownership check cc_agent_event and cc_agent_disconnect already make; `findByInstanceId` rather
+  // than the user-scoped lookup because "not registered yet" and "registered to someone else" have
+  // to be told apart here, and only the second is a rejection.
+  const existing = await activeCodeAgentRepository.findByInstanceId(instanceId);
+  if (existing && existing.userId !== userId) {
+    logger.warn(`[CC_AGENT_REGISTER] Instance ${instanceId} is already registered to another user - rejecting`);
+    return { statusCode: 403 };
+  }
+
   const spriteId = pickSprite(instanceId);
   const position = pickSpawnPosition();
 

@@ -238,10 +238,10 @@ describe('runAlternateModelAnn', () => {
     expect(outcome.embedded).toBe(true);
     expect(outcome.failed).toBe(false);
     expect(outcome.filesWithHits).toEqual(new Set(['a']));
-    expect(outcome.filesMissed).toEqual(['b']);
+    expect(outcome.filesUnranked).toEqual(['b']);
   });
 
-  it('populates filesMissed and leaves filesWithHits empty on zero raw hits', async () => {
+  it('populates filesUnranked and leaves filesWithHits empty on zero raw hits', async () => {
     const runAnn = vi
       .fn()
       .mockResolvedValue({ results: [], hitsReturned: 0, hitsSkippedUnknownFile: 0, filesWithHits: new Set() });
@@ -254,7 +254,7 @@ describe('runAlternateModelAnn', () => {
     expect(outcome.embedded).toBe(true);
     expect(outcome.failed).toBe(false);
     expect(outcome.filesWithHits.size).toBe(0);
-    expect(outcome.filesMissed).toEqual(['a', 'b']);
+    expect(outcome.filesUnranked).toEqual(['a', 'b']);
   });
 
   it('makes no ANN call when the embed fails, and never rejects', async () => {
@@ -272,9 +272,11 @@ describe('runAlternateModelAnn', () => {
       hitsReturned: 0,
       hitsSkippedUnknownFile: 0,
       filesWithHits: new Set(),
-      filesMissed: [],
+      filesUnranked: [],
       embedded: false,
       failed: true,
+      // No query reached the backend, so there is no latency to report - null, not 0.
+      backendQueryMs: null,
     });
   });
 

@@ -68,7 +68,6 @@
     "no_valid_emails_error": "Palihug isulod ang balido nga mga email address",
     "send_referral": "Ipadala ang Referral",
     "send_referral_success": "Malampusong napadala ang referral!",
-    "send_referral_skipped": "{{count}} nga imbitasyon gipakyas — ang mga email address anaa nay account.",
     "send_referral_failed": "{{count}} nga imbitasyon dili mapadala. Palihug sulayi pag-usab.",
     "send_referral_error": "Sayup sa pagpadala sa referral. Palihug sulayi pag-usab.",
     "slack_notification_default": "Referral gipadala sa user USER_NAME:USER_ID ngadto sa FRIEND_EMAIL"

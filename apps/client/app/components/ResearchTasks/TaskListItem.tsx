@@ -67,7 +67,7 @@ const TaskListItem: FC<TaskListItemProps> = ({ task, isSelected, onClick, onEdit
           borderColor: 'divider',
           '&:hover': {
             bgcolor: 'background.level1',
-            borderColor: 'neutral.outlinedHoverBorder',
+            borderColor: 'neutral.outlinedBorder',
             '& .actions': {
               opacity: 1,
             },

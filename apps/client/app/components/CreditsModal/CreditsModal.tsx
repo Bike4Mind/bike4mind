@@ -181,7 +181,7 @@ const CreditsModal = () => {
                         alignItems: 'center',
                         gap: 1,
                         height: '60vh',
-                        borderColor: 'error.500',
+                        borderColor: 'danger.outlinedBorder',
                       }}
                     >
                       <Typography level="h2">{t('Payment Issues')}</Typography>

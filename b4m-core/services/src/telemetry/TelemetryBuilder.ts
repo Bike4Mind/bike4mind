@@ -53,7 +53,11 @@ export function categorizeToolError(errorMessage: string): ToolErrorCategory {
     msg.includes('unauthorized') ||
     msg.includes('forbidden') ||
     msg.includes('401') ||
-    msg.includes('403')
+    msg.includes('403') ||
+    // A wrong or expired credential surfaces as '<Provider> API key is expired' on the quest
+    // path (llm-adapters/adapterFamilyDispatch.ts) - without this it falls to internal_error.
+    msg.includes('api key') ||
+    msg.includes('credential')
   ) {
     return 'auth_error';
   }
@@ -104,6 +108,9 @@ export function mapBackendToProvider(backend: ModelBackend | string): ModelTelem
     case ModelBackend.Kimi:
     case 'kimi':
       return 'moonshot';
+    case ModelBackend.DeepSeek:
+    case 'deepseek':
+      return 'deepseek';
     default:
       // Default to anthropic for unknown backends. This is a reporting hazard, not
       // a safe fallback: a backend missing a case above is silently counted as

@@ -114,7 +114,7 @@ const AddKnowledgeModal: React.FC<AddKnowledgeModalProps> = ({ open, onClose }) 
         <Box
           sx={theme => ({
             border: '1px solid',
-            borderColor: isDragging ? 'primary.main' : 'divider',
+            borderColor: isDragging ? 'primary.plainColor' : 'divider',
             borderRadius: '8px',
             p: 3,
             mb: 2,
@@ -122,7 +122,7 @@ const AddKnowledgeModal: React.FC<AddKnowledgeModalProps> = ({ open, onClose }) 
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
-            bgcolor: isDragging ? 'action.hover' : theme.palette.background.panel,
+            bgcolor: isDragging ? 'neutral.softBg' : theme.palette.background.panel,
             transition: 'all 0.3s',
             minHeight: '100px',
           })}

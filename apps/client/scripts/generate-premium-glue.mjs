@@ -530,7 +530,7 @@ function generateServerHandlerStubs(packages) {
 // server/premium-generated/ dir.
 function generateLlmTools(packages) {
   const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumLlmTools.generated.ts');
-  const typeImport = `import type { ToolDefinition } from '@bike4mind/services';`;
+  const typeImport = `import type { ToolDefinition } from '@bike4mind/services/llm/tools';`;
 
   const contributors = packages.filter(p => p.contributions.llmToolsExport);
 

@@ -1,7 +1,13 @@
 import { withWebSocketContext, sendToClient } from '@server/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { pickRealtimeVoiceTier } from '@server/voice/realtimeVoicePricing';
-import { CreditHolderType, IModelPrice, VoiceSessionEndedAction, computeRealtimeVoiceUsd } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  CreditHolderType,
+  IModelPrice,
+  VoiceSessionEndedAction,
+  computeRealtimeVoiceUsd,
+} from '@bike4mind/common';
 import { getSettingsMap, getSettingsValue, NotFoundError, usdToCreditsStochastic } from '@bike4mind/utils';
 import {
   adminSettingsRepository,
@@ -13,6 +19,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { sessionService, creditService } from '@bike4mind/services';
+import { connectionHoldsScope } from '@server/websocket/connectionScope';
 
 export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async (event, context, logger) => {
   const { userId, sessionId, model, usage } = VoiceSessionEndedAction.parse(JSON.parse(event.body ?? ''));
@@ -24,6 +31,16 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   const connection = await Connection.findOne({ connectionId });
   if (!connection || connection.userId !== userId) {
     logger.warn('voiceSessionEnded userId mismatch or unknown connection - rejecting', {
+      connectionId,
+      claimedUserId: userId,
+    });
+    return { statusCode: 200 };
+  }
+
+  // This frame settles credits. Owning the socket is not enough authority for that: a key minted
+  // only to run the cc-bridge can open one, and must not be able to move its owner's balance.
+  if (!connectionHoldsScope(connection, [ApiKeyScope.AI_CHAT])) {
+    logger.warn('voiceSessionEnded from a connection without ai:chat scope - rejecting', {
       connectionId,
       claimedUserId: userId,
     });
