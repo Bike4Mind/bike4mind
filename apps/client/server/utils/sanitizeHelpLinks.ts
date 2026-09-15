@@ -80,10 +80,13 @@ export function isFabricatedDocLink(url: string): boolean {
 export function stripFabricatedLinks(text: string): string {
   // Defense-in-depth: the link regexes are now linear, but cap the scanned text so
   // no future regex edit can turn an oversized reply into a CPU sink. 200k is far
-  // above any real help reply.
-  const capped = capForParse(text, 200_000);
+  // above any real help reply. The cap bounds the scan only - the tail is re-appended
+  // so an over-cap reply is never silently truncated (it just goes unscrubbed, and
+  // head + tail reassembles the original exactly, surrogate pairs included).
+  const head = capForParse(text, 200_000);
+  const tail = text.slice(head.length);
   return (
-    capped
+    head
       // `[label](url)` / `![label](url)` -> label, when the target is fabricated
       .replace(MARKDOWN_LINK_RE, (match, label: string, url: string) => (isFabricatedDocLink(url) ? label : match))
       // bare fabricated URLs -> removed, preserving trailing sentence punctuation
@@ -91,6 +94,6 @@ export function stripFabricatedLinks(text: string): string {
         const trailing = rawUrl.match(TRAILING_PUNCTUATION_RE)?.[0] ?? '';
         const url = trailing ? rawUrl.slice(0, -trailing.length) : rawUrl;
         return isFabricatedDocLink(url) ? trailing : match;
-      })
+      }) + tail
   );
 }
