@@ -1,5 +1,6 @@
 import {
   BedrockEmbeddingModel,
+  capForParse,
   countCodePoints,
   DEFAULT_PASSAGE_TOKEN_TARGET,
   IFabFile,
@@ -598,6 +599,10 @@ export class SmartChunker {
     const slideTexts: string[] = [];
     let totalXmlBytes = 0;
     let totalTextChars = 0;
+    // The `<a:t>` run regex backtracks quadratically on unterminated runs; cap each
+    // slide's XML so a crafted (or corrupt) slide can't pin CPU. 512k is far above a
+    // real slide's text XML.
+    const SLIDE_XML_PARSE_CAP = 512_000;
     for (let i = 0; i < slidePaths.length; i++) {
       const entry = zip.files[slidePaths[i]];
       // Bound the decompressed XML as it inflates rather than trusting the entry's self-declared
@@ -618,7 +623,7 @@ export class SmartChunker {
         continue;
       }
       totalXmlBytes += read.byteLength;
-      const xml = read.text;
+      const xml = capForParse(read.text, SLIDE_XML_PARSE_CAP);
       // `<a:t>` runs frequently carry attributes (e.g. `<a:t xml:space="preserve">`);
       // match the open tag with optional attributes, else PPTX text is silently dropped.
       const runs = xml.match(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g) ?? [];

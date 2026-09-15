@@ -20,6 +20,16 @@ describe('parseNativeToolSection', () => {
     );
     expect(calls).toEqual([{ id: 'search', name: 'search', index: 0, arguments: '{"q":"x"}' }]);
   });
+
+  it('completes on an oversized section of unterminated markers (input cap, no CPU pin)', () => {
+    // The per-call regex backtracks super-linearly on a section full of open markers
+    // with no matching end. The parse-cap bounds the scanned length so this returns
+    // immediately rather than pinning the shared process. (A regression blows the
+    // vitest timeout instead of hanging CI.)
+    const adversarial = '<|tool_call_begin|> '.repeat(200_000);
+    const calls = parseNativeToolSection(adversarial);
+    expect(Array.isArray(calls)).toBe(true);
+  });
 });
 
 describe('hasNativeToolMarker', () => {

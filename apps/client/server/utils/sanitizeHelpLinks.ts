@@ -13,6 +13,8 @@
  * links (which the assistant is told to suggest) are left intact.
  */
 
+import { capForParse } from '@bike4mind/common';
+
 // Matches inline links `[label](url)` and images `![label](url)`, capturing the
 // label (group 1) and the bare destination (group 2). Handles the common CommonMark
 // variants so fabricated links can't slip through on syntax alone:
@@ -22,7 +24,12 @@
 //   - one level of balanced parentheses in the URL (e.g. `doc_(v2).md`)
 // Reference-style links (`[label][ref]`) are intentionally out of scope - an LLM
 // chat reply won't emit the separate `[ref]: url` definition they require.
-const MARKDOWN_LINK_RE = /!?\[([^\]]+)\]\(\s*<?((?:[^()\s]+|\([^)]*\))+?)>?(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
+// The URL group consumes one character at a time (`[^()\s]`, not `[^()\s]+`): a
+// nested quantifier here backtracks exponentially on an unclosed `(` - a run of URL
+// chars with no closing `)` could be partitioned 2^n ways. Single-char consumption
+// matches exactly the same strings but is linear. (It also drops a stray trailing
+// `>` from the capture, as the angle-bracket-wrapping comment above intends.)
+const MARKDOWN_LINK_RE = /!?\[([^\]]+)\]\(\s*<?((?:[^()\s]|\([^)]*\))+?)>?(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
 
 // Matches a bare http(s) URL plus any leading whitespace, including CommonMark
 // autolink `<url>` wrapping (the `<>` are consumed so nothing is orphaned when the
@@ -71,8 +78,12 @@ export function isFabricatedDocLink(url: string): boolean {
 }
 
 export function stripFabricatedLinks(text: string): string {
+  // Defense-in-depth: the link regexes are now linear, but cap the scanned text so
+  // no future regex edit can turn an oversized reply into a CPU sink. 200k is far
+  // above any real help reply.
+  const capped = capForParse(text, 200_000);
   return (
-    text
+    capped
       // `[label](url)` / `![label](url)` -> label, when the target is fabricated
       .replace(MARKDOWN_LINK_RE, (match, label: string, url: string) => (isFabricatedDocLink(url) ? label : match))
       // bare fabricated URLs -> removed, preserving trailing sentence punctuation

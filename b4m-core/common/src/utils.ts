@@ -1,6 +1,12 @@
 // Helper function to determine MIME type based on file extension
 
 import { SnippetMeta, SnippetSection } from './types';
+import { capForParse } from './utils/capForParse';
+
+// This extractor runs on every chat prompt and its regex backtracks super-linearly,
+// so an oversized pasted payload could pin CPU. 256k chars is far above any real
+// snippet-meta prompt; beyond it the tail is truncated rather than scanned.
+const SNIPPET_META_PARSE_CAP = 256_000;
 
 // TODO: Move this to a shared utility function
 export function determineMimeType(fileName: string, currentMimeType: string): string {
@@ -201,6 +207,7 @@ export async function parallelLimit<T, R>(items: T[], limit: number, asyncFn: (i
 }
 
 export const extractSnippetMeta = (content: string): { sections: SnippetSection[] } => {
+  content = capForParse(content, SNIPPET_META_PARSE_CAP);
   const snippetRegex = /<!--snippet-meta\s*(\{[\s\S]*?\})\s*-->[\n\s]*([\s\S]*?)(?=<!--snippet-meta|$)/g;
   const sections: SnippetSection[] = [];
   let lastIndex = 0;
