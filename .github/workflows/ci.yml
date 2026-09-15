@@ -90,16 +90,6 @@ jobs:
       - name: Check user $lookup field projections
         run: node scripts/check-user-lookup-projection.mjs
 
-      # Also runs in `help-docs` below, and it has to live in both: this job is gated on
-      # `deployable`, that one on `docs-changed`, and the two shapes miss each other. An
-      # artifacts-only change (the generated JSON under apps/client/app/generated/, which
-      # no docs-path matches) is deployable-but-not-docs, so `help-docs` skips and the
-      # index-vs-embeddings invariant would go unguarded - it is pre-commit otherwise, and
-      # --no-verify walks past that. A docs-only change is the reverse: this job skips.
-      # Cheap enough to run twice on a code+docs PR, and cheaper than a job on every PR.
-      - name: Check help artifacts agree
-        run: sh .husky/check-help-content.sh
-
       # Resolve what "added" means for the two ASCII checks below.
       #
       # `pull_request.base.sha` is the base-branch head recorded when the PR was opened -
@@ -913,17 +903,18 @@ jobs:
         if: steps.download-core.outcome == 'failure'
         run: pnpm core:build
 
+      # Nothing commits the index any more, so this is the only place its generator is
+      # exercised against a real docs change before a deploy runs it for real. It is a
+      # smoke check, not a fixture: none of the suites below read the generated file (they
+      # all compare docs-site against source). Keyless - the vectors need a credential and
+      # are a deploy-time step, deliberately not built here.
+      - name: Generate the help index
+        run: pnpm --filter @bike4mind/scripts help:build-index
+
       - name: Run help corpus and help-id suites
         run: pnpm --filter @bike4mind/scripts exec vitest run help/__tests__
         env:
           CI: true
-
-      # The index-vs-embeddings half of this script reads the two committed artifacts
-      # and ignores the staging area, so it works unchanged in CI. It was pre-commit
-      # only, which `--no-verify` bypasses; this is the first time the Help AI chat's
-      # "every indexed article has a vector" invariant is enforced anywhere else.
-      - name: Check help artifacts agree
-        run: sh .husky/check-help-content.sh
 
   # verify-docs-build removed: the Docusaurus scaffolding (docs-site/package.json,
   # lockfile, config) is not tracked in this repo, so the build can never succeed
