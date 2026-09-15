@@ -328,3 +328,41 @@ describe('parseArtifacts — multi-line and special-character opening tags', () 
     expect(artifacts).toHaveLength(0);
   });
 });
+
+describe('convertCodeBlocksToArtifacts - linear rewrite of the fenced-code detectors', () => {
+  const F = '```';
+
+  it('promotes adjacent code blocks independently without merging them', () => {
+    // The pre-rewrite regexes over-matched past the first closing fence, swallowing
+    // a following block into one malformed artifact. Each block must now convert on
+    // its own.
+    const input = `first\n${F}tsx\nexport default function App() { return <i/>; }\n${F}\nmid\n${F}svg\n<svg><rect/></svg>\n${F}\nlast`;
+    const out = convertCodeBlocksToArtifacts(input);
+
+    const { artifacts } = parseArtifacts(out);
+    expect(artifacts).toHaveLength(2);
+    expect(artifacts.map(a => a.type).sort()).toEqual(['react', 'svg']);
+    // The literal fence delimiters must be gone (fully consumed by the two conversions).
+    expect(out).not.toContain(F);
+  });
+
+  it('completes on an unterminated code fence without catastrophic backtracking', () => {
+    // The pre-rewrite `(?:.*\n)*?ANCHOR(?:\n.*)*?` shape backtracked quadratically on a
+    // fence with no closing delimiter. Linear now: this returns immediately. A
+    // regression blows the vitest timeout instead of hanging CI.
+    const adversarial = `${F}tsx\n` + 'const x = 1; function foo() {}\n'.repeat(20_000);
+    const out = convertCodeBlocksToArtifacts(adversarial);
+    // No closing fence and no component line: left untouched.
+    expect(out).toBe(adversarial);
+  });
+
+  it('still promotes a React component and still leaves a non-component fence alone', () => {
+    const promoted = convertCodeBlocksToArtifacts(`${F}tsx\nexport default function App() { return <i/>; }\n${F}`);
+    expect(promoted).toContain('type="application/vnd.ant.react"');
+
+    // `const Widget` has a declaration but no component token after it on the line, so
+    // it is not promoted even though it uses hooks - preserving prior behavior.
+    const plain = `${F}jsx\nconst Widget = () => {\n  const [x] = useState(0);\n  return <p>{x}</p>;\n};\n${F}`;
+    expect(convertCodeBlocksToArtifacts(plain)).toBe(plain);
+  });
+});
