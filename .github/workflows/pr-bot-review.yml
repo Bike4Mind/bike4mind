@@ -701,6 +701,12 @@ jobs:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_SYSTEM: /dev/null
           GIT_CONFIG_NOSYSTEM: '1'
+          # The numbered spelling of the same config, which the three above do not cover:
+          # they name config FILES, and `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`
+          # carries the config itself in the environment. Pinned to 0 so git reads no numbered
+          # pair, because a key like `core.fsmonitor` is a command git runs. Three `env:` lines
+          # would otherwise be arbitrary execution here with the `run:` body untouched.
+          GIT_CONFIG_COUNT: '0'
         run: |
           # `-e` is load-bearing, not hygiene: without it a failed `git commit` falls
           # through to the push, which reports `Everything up-to-date` and exits 0, so
@@ -1049,6 +1055,9 @@ jobs:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_SYSTEM: /dev/null
           GIT_CONFIG_NOSYSTEM: '1'
+          # And the numbered environment spelling of that same config, for the reason
+          # `Push fold commit` states: the three vars above bound config FILES only.
+          GIT_CONFIG_COUNT: '0'
           # Belt to the `python3 -I` below, which is the live bound on the interpreter.
           # Both are kept because they are independent: `-I` implies `-E`, so while the
           # flag is there this variable is ignored, and if the flag is ever edited away

@@ -371,17 +371,22 @@ function gitSubcommand(words: string[]): string | undefined {
  * `git -c <key>=<value> <subcommand>`. A literal matcher missed that, missed two spaces, and
  * missed a line continuation between the two words.
  */
-function gitCommands(src: string, subcommands: RegExp): string[][] {
+function gitInvocations(src: string): string[][] {
   const found: string[][] = [];
   for (const body of runBodies(src)) {
     for (const { words } of shellCommands(body)) {
       const rest = commandProgram(words);
-      if (unquoteWord(rest[0] ?? '') !== 'git') continue;
-      const sub = gitSubcommand(rest);
-      if (sub && subcommands.test(sub)) found.push(rest);
+      if (unquoteWord(rest[0] ?? '') === 'git') found.push(rest);
     }
   }
   return found;
+}
+
+function gitCommands(src: string, subcommands: RegExp): string[][] {
+  return gitInvocations(src).filter(words => {
+    const sub = gitSubcommand(words);
+    return sub !== undefined && subcommands.test(sub);
+  });
 }
 
 /**
@@ -404,6 +409,81 @@ const gitPushes = (src: string) =>
  */
 const gitSubcommands = (src: string) =>
   [...new Set(gitCommands(src, /./).map(words => gitSubcommand(words) ?? ''))].sort();
+
+/** The `Push fold commit` step's `env:` keys, shared by the pin below and the harness that
+ * executes that step's body. */
+const PUSH_STEP_ENV_KEYS = [
+  'PUSH_TOKEN',
+  'HEAD_REF',
+  'REPO',
+  'SERVER_URL',
+  'RUN_ID',
+  'GIT_CONFIG_GLOBAL',
+  'GIT_CONFIG_SYSTEM',
+  'GIT_CONFIG_NOSYSTEM',
+  'GIT_CONFIG_COUNT',
+];
+
+/**
+ * Every git configuration KEY this file sets on a command line, as a whole SET.
+ *
+ * `git` is in `DATA_ONLY_COMMANDS` and the sweeps above bound which SUBCOMMANDS it may run -
+ * but several config keys are a command git executes: `core.fsmonitor`, `diff.external`,
+ * `core.sshCommand`, `uploadpack.packObjectsHook`. `gitSubcommand` skips `-c` and its value on
+ * purpose, so a key rides behind an allowlisted subcommand invisibly, which makes `git` the
+ * same shape as `awk`: a program whose ARGUMENT is a program. Swapping one key on an
+ * already-shipped line (`-c core.excludesFile=/dev/null` -> `-c core.fsmonitor='sh -c ...'`)
+ * is a one-word edit inside the step that holds PUSH_TOKEN, upstream of the path guard and the
+ * size bound. The `GIT_CONFIG_*` nulling in that step's env bounds config FILES and does not
+ * touch this. `--config-env=<key>=<var>` names a key the same way and is pinned with it.
+ */
+const GIT_CONFIG_KEYS = ['core.attributesFile', 'core.excludesFile', 'core.quotePath', 'user.email', 'user.name'];
+
+const gitConfigKeys = (src: string) =>
+  [
+    ...new Set(
+      gitInvocations(src).flatMap(words =>
+        words.flatMap((word, index) => {
+          const value = unquoteWord(word);
+          if (value === '-c' || value === '--config-env') {
+            return [unquoteWord(words[index + 1] ?? '').split('=')[0]];
+          }
+          if (value.startsWith('--config-env=')) return [value.slice('--config-env='.length).split('=')[0]];
+          return [];
+        })
+      )
+    ),
+  ].sort();
+
+/**
+ * The names of every environment assignment made as a PREFIX to a command, anywhere in the
+ * file, as a whole SET - `FOO=bar cmd`, not the standalone `FOO=$(cmd)` assignments this job is
+ * written in.
+ *
+ * Third spelling of `gitConfigKeys`'s class, and the one neither that pin nor the step's `env:`
+ * block can see: `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0='sh -c
+ * ...' git ls-files` carries the config in the command's own environment. Measured on git
+ * 2.50.1: it overrides `GIT_CONFIG_COUNT: '0'` in the step env, and `commandProgram` strips the
+ * assignments, so the command still parses as an allowlisted `git ls-files` carrying no `-c`.
+ * The shipped set is empty, which is the tightest allowlist available here.
+ */
+const envAssignmentPrefixes = (src: string) =>
+  [
+    ...new Set(
+      runBodies(src).flatMap(body =>
+        shellCommands(body).flatMap(({ words }) => {
+          const names: string[] = [];
+          let rest = words;
+          while (rest.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0])) {
+            names.push(rest[0].split('=')[0]);
+            rest = rest.slice(1);
+          }
+          // A standalone assignment is not a prefix: nothing runs with that environment.
+          return rest.length ? names : [];
+        })
+      )
+    ),
+  ].sort();
 
 /**
  * Every invocation of a program matching `name` anywhere in a `run:` body, as parsed word
@@ -594,6 +674,15 @@ function withKeys(src: string, name: string): string[] {
   expect(block, `${name}: no with: block`).toBeTruthy();
   return [...(block ?? '').matchAll(/^ {10}([a-z0-9_-]+):/gm)].map(m => m[1]);
 }
+
+/** A step's `env:` block as ordered key/value pairs, comment lines dropped. */
+function envPairs(src: string, name: string): [string, string][] {
+  const block = step(src, name).match(/^ {8}env:\n((?: {10}.*\n|\n)+)/m)?.[1];
+  expect(block, `${name}: no env: block`).toBeTruthy();
+  return [...(block ?? '').matchAll(/^ {10}([A-Za-z_][A-Za-z0-9_]*): ?(.*)$/gm)].map(m => [m[1], m[2]]);
+}
+
+const envKeys = (src: string, name: string) => envPairs(src, name).map(([key]) => key);
 
 /**
  * The review step's `claude_args:` block tokenised the way the action tokenises it.
@@ -963,6 +1052,22 @@ function runPushStep(src: string, fixture: PushFixture): PushOutcome {
   // executes unrepresentative of what the runner runs.
   expect(bodies, 'expected exactly one run: body in the push step').toHaveLength(1);
   const body = bodies[0] ?? '';
+  // This harness EXECUTES that body with a token-shaped value in its environment, so a git
+  // config key is not something to discover afterwards: `git -c core.fsmonitor='sh -c ...'` is
+  // a command git runs, and a body carrying one would be run BY the suite that is supposed to
+  // refuse it - reported green, having exfiltrated the fixture's token. Refuse first instead.
+  expect(
+    gitConfigKeys(step(src, 'Push fold commit')).filter(key => !GIT_CONFIG_KEYS.includes(key)),
+    'the push step sets a git config key this harness will not execute'
+  ).toEqual([]);
+  // Same argument for the step's `env:`, and it is this harness's own doing: the env is read
+  // from the YAML below and passed through VERBATIM, which is what makes an env edit reach the
+  // executed body - and would equally hand `GIT_CONFIG_KEY_0=core.fsmonitor` to it. Measured:
+  // without this line the added keys run their payload here while the pin above reports the
+  // mutation. Refuse the unknown key instead of executing it.
+  expect(envKeys(src, 'Push fold commit'), 'the push step declares an env key this harness will not execute').toEqual(
+    PUSH_STEP_ENV_KEYS
+  );
 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-fold-push-'));
   try {
@@ -1042,15 +1147,30 @@ function runPushStep(src: string, fixture: PushFixture): PushOutcome {
       FOLD_TEST_GIT: execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim(),
       HOME: home,
       GITHUB_OUTPUT: outputs,
-      // The step's own `env:` block, which is what makes the git calls below the ones it ships.
-      PUSH_TOKEN: 'x-fold-test-token',
-      HEAD_REF: PUSH_HEAD_REF,
-      REPO: 'owner/repo',
-      SERVER_URL: 'https://github.com',
-      RUN_ID: '1',
-      GIT_CONFIG_GLOBAL: '/dev/null',
-      GIT_CONFIG_SYSTEM: '/dev/null',
-      GIT_CONFIG_NOSYSTEM: '1',
+      // The step's own `env:` block, READ FROM THE YAML rather than copied here. A copy made
+      // this harness blind to the one edit that changes what the shipped `run:` body executes
+      // without changing the body: `GIT_CONFIG_COUNT`/`KEY_n`/`VALUE_n` beside the file-nulling
+      // vars is a git config, and a key like `core.fsmonitor` is a command git runs.
+      //
+      // A value the runner substitutes cannot come from the file, so those keys are resolved
+      // from the table below and every other key is passed through VERBATIM. An UNKNOWN
+      // `${{ }}` key fails here rather than being dropped, which is what stops this harness
+      // silently ignoring a future env edit - and it fails BEFORE the body is executed, so an
+      // added key cannot reach a real process out of this fixture.
+      ...Object.fromEntries(
+        envPairs(src, 'Push fold commit').map(([key, value]) => {
+          if (!value.includes('${{')) return [key, value.replace(/^'(.*)'$/, '$1')];
+          const substituted: Record<string, string> = {
+            PUSH_TOKEN: 'x-fold-test-token',
+            HEAD_REF: PUSH_HEAD_REF,
+            REPO: 'owner/repo',
+            SERVER_URL: 'https://github.com',
+            RUN_ID: '1',
+          };
+          expect(substituted, `Push fold commit: unmodelled env key ${key}`).toHaveProperty(key);
+          return [key, substituted[key] ?? ''];
+        })
+      ),
     };
     // Or git reads the DEVELOPER's attributes and ignore files instead of this scratch $HOME.
     delete env.XDG_CONFIG_HOME;
@@ -1736,7 +1856,73 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       expect(stepSrc, `${name}: no GIT_CONFIG_GLOBAL`).toMatch(/^ {10}GIT_CONFIG_GLOBAL: \/dev\/null$/m);
       expect(stepSrc, `${name}: no GIT_CONFIG_SYSTEM`).toMatch(/^ {10}GIT_CONFIG_SYSTEM: \/dev\/null$/m);
       expect(stepSrc, `${name}: no GIT_CONFIG_NOSYSTEM`).toMatch(/^ {10}GIT_CONFIG_NOSYSTEM: '1'$/m);
+      // Those three name config FILES. The numbered environment spelling carries the config
+      // itself, is not a file, and reaches the same execution: measured on git 2.50.1 with all
+      // three of the above in force, `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor
+      // GIT_CONFIG_VALUE_0='sh -c ...'` ran the command on the shipped `ls-files` line.
+      expect(stepSrc, `${name}: no GIT_CONFIG_COUNT`).toMatch(/^ {10}GIT_CONFIG_COUNT: '0'$/m);
     }
+    // And the whole `env:` KEY SET of both, by value. The line above only asserts that
+    // `GIT_CONFIG_COUNT: '0'` is PRESENT, which stays true while `GIT_CONFIG_KEY_0` and
+    // `GIT_CONFIG_VALUE_0` are added beside it - and an env edit changes what the `run:` body
+    // executes without changing one byte of that body, so every body-shaped sweep in this file
+    // is structurally unable to see it. A new key here has to be justified.
+    expect(envKeys(src, 'Push fold commit')).toEqual(PUSH_STEP_ENV_KEYS);
+    // POSITIVE CONTROL for both pins, on the axis the attack uses: the added keys are
+    // `GIT_CONFIG_KEY_0`/`VALUE_0`, so a sweep whose key charset stops at letters reads the
+    // shipped set unchanged and bounds nothing.
+    const plantedKey = src.replace(
+      '          PUSH_TOKEN: ${{ steps.push_token.outputs.token }}\n',
+      '          PUSH_TOKEN: ${{ steps.push_token.outputs.token }}\n          GIT_CONFIG_KEY_0: core.fsmonitor\n'
+    );
+    expect(plantedKey, 'the env injection anchor moved').not.toBe(src);
+    expect(envKeys(plantedKey, 'Push fold commit')).toContain('GIT_CONFIG_KEY_0');
+    expect(envKeys(src, 'Redact and upload review transcript')).toEqual([
+      'EXECUTION_FILE',
+      'SKILL_FILE',
+      'SKILL_SHA',
+      'DEST',
+      'GIT_CONFIG_GLOBAL',
+      'GIT_CONFIG_SYSTEM',
+      'GIT_CONFIG_NOSYSTEM',
+      'GIT_CONFIG_COUNT',
+      'PYTHONNOUSERSITE',
+    ]);
+    // Every git config key set on a COMMAND LINE anywhere in the file, by value. See
+    // `gitConfigKeys`: `-c` is config that no config-file nulling touches, and a key like
+    // `core.fsmonitor` or `diff.external` is a command git runs. All five that ship are inert
+    // knobs whose job is to stop git reading something the agent could have planted.
+    expect(gitConfigKeys(src)).toEqual(GIT_CONFIG_KEYS);
+    // POSITIVE CONTROL for that pin, one spelling per route: a by-value `toEqual` is only a
+    // bound if a sixth key actually reaches it.
+    for (const injected of [
+      `git -c diff.external='sh -c :' diff --ext-diff HEAD -- .`,
+      `git -c core.fsmonitor='sh -c :' ls-files --others --exclude-standard`,
+      `git --config-env=core.sshCommand=EVIL push origin HEAD:main`,
+      `git --config-env core.sshCommand=EVIL push origin HEAD:main`,
+      `'env' git -c uploadpack.packObjectsHook='sh -c :' ls-files --others`,
+    ]) {
+      const mutated = src.replace(
+        /^ {6}- name: Report skill-fetch failure$/m,
+        `      - name: Publish the fold\n        run: |\n          ${injected}\n      - name: Report skill-fetch failure`
+      );
+      expect(mutated, 'the injection anchor moved').not.toBe(src);
+      expect(gitConfigKeys(mutated), `a git config key was not seen: ${injected}`).toHaveLength(6);
+    }
+    // The third spelling, which neither of the two pins above can see: the config carried in a
+    // command's OWN environment as an assignment prefix. Empty, and a prefix that is not empty
+    // has to be justified here - `GIT_CONFIG_COUNT=1 ... git ls-files` overrides the step env
+    // (measured), and `commandProgram` strips the assignments, so it parses as plain `git`.
+    expect(envAssignmentPrefixes(src)).toEqual([]);
+    expect(
+      envAssignmentPrefixes(
+        src.replace(
+          /^ {6}- name: Report skill-fetch failure$/m,
+          `      - name: Publish the fold\n        run: |\n          GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor git ls-files\n      - name: Report skill-fetch failure`
+        )
+      ),
+      'an environment assignment prefix was not seen'
+    ).toEqual(['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0']);
     // With the global config nulled, `git config user.email` would write to /dev/null and
     // the commit would come out unattributed - which cla.yml and main-protection both key
     // off. Identity has to be passed per-invocation instead.
@@ -1903,9 +2089,11 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // program to be `git`, and awk's is a single quoted word. The shape is idiomatic in this
     // step, which already runs awk twice. Pinning the invocations rather than scanning their
     // text for `system`/`print | "sh"`/`|&` keeps this an allowlist: a new awk program is a
-    // deliberate edit here, whatever it is spelled as. `sudo` is the only other entry whose
-    // argument is unbounded, and it runs upstream of the agent; `python3` runs only as `-I -`
-    // fed from the object store, pinned separately.
+    // deliberate edit here, whatever it is spelled as. It is not the only entry of that shape:
+    // `git` takes a program through `-c <key>=<value>` (`gitConfigKeys`, pinned by value),
+    // `jq -f <path>` names one and is exempted by `DATA_ONLY_COMMANDS` (the shipped invocation
+    // is pinned by value just below, the FLAG is not bounded), and `sudo` runs upstream of the
+    // agent; `python3` runs only as `-I -` fed from the object store, pinned separately.
     // Quotes are stripped by the parser, so two spellings of one program text collapse to the
     // same entry here. That merges `-F'\t'` with `-F"\t"` and nothing else: inserting quote
     // characters cannot introduce a `system(` or a `print | "sh"` that was not already there.
