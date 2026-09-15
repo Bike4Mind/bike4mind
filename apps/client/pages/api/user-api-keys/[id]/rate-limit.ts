@@ -29,8 +29,14 @@ interface UpdateRateLimitRequest {
  * PATCH carrying JSON cannot get past preflight anyway - but it costs the
  * browser client nothing, since the check reads Sec-Fetch and Origin headers
  * and exchanges no token.
+ *
+ * skipApiKeyRateLimit: this route is the escape hatch for a key that has hit
+ * its own limit, so it cannot sit behind that same limit - otherwise an
+ * exhausted single-key account has no API path back until the window rolls.
+ * apiKeyAuth (identity + the findByUserIdAndId ownership scope) still runs in
+ * full; only the rate-limit counters are skipped.
  */
-const handler = baseApi()
+const handler = baseApi({ skipApiKeyRateLimit: true })
   .use(csrfProtection())
   .patch(
     asyncHandler<{}, unknown, UpdateRateLimitRequest, { id: string }>(async (req, res) => {

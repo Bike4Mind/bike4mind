@@ -45,6 +45,19 @@ interface BaseAPIOptions {
    * safe).
    */
   exemptReadsFromDailyRateLimit?: boolean;
+  /**
+   * Exempt this route ENTIRELY from the calling key's per-minute and per-day
+   * rate limit (both counters are left untouched). `apiKeyAuth` - identity,
+   * scope enforcement, banned/dispute/moderation gates - still runs; only the
+   * `apiKeyRateLimit` middleware is left uninstalled.
+   *
+   * Use this ONLY for a low-volume, self-service management operation that
+   * cannot itself consume model spend and that a caller needs specifically
+   * because their key is rate-limited (e.g. raising the key's own rate limit).
+   * Exempting a route that consumes spend or is otherwise abusable would let
+   * a key sidestep metering there, not just here. Defaults to false.
+   */
+  skipApiKeyRateLimit?: boolean;
 }
 
 /** Default max body size: 1MB - prevents memory exhaustion from large payloads */
@@ -146,8 +159,11 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
       // This runs asynchronously and doesn't block requests
       router.use(apiKeyAnomalyDetection());
 
-      // Enforce per-API-key rate limits (skips non-API-key requests)
-      router.use(apiKeyRateLimit({ exemptReadsFromDailyLimit: resolvedOptions.exemptReadsFromDailyRateLimit }));
+      // Enforce per-API-key rate limits (skips non-API-key requests). Not installed
+      // at all when skipApiKeyRateLimit is set - see the option doc above.
+      if (!resolvedOptions.skipApiKeyRateLimit) {
+        router.use(apiKeyRateLimit({ exemptReadsFromDailyLimit: resolvedOptions.exemptReadsFromDailyRateLimit }));
+      }
     }
 
     // Apply JWT authentication middleware (will be skipped if already authenticated via API key)
