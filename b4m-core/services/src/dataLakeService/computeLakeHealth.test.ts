@@ -56,6 +56,7 @@ const brokenMember = (id: string): Member => ({
 
 const lake = {
   id: 'lake-1',
+  status: 'active' as string,
   datalakeTag: 'datalake:acme',
   fileTagPrefix: 'acme:',
   createdByUserId: 'u1',
@@ -250,5 +251,26 @@ describe('computeLakeHealth', () => {
     const big = health.duplicateMembers.groups.find(g => g.fileName === 'big.txt');
     expect(big?.memberCount).toBe(25);
     expect(big?.members).toHaveLength(20);
+  });
+
+  it('reports the lake as serving only while its status is active', async () => {
+    const adapters = () => makeAdapters([healthyMember('good')]);
+    const active = await computeLakeHealth(lake, adapters() as never);
+    expect(active.serving).toEqual({ status: 'active', isServing: true });
+
+    // A perfect corpus behind a non-active status: every predicate passes and the lake still answers
+    // nothing, which is exactly the reading `serving` exists to separate out.
+    for (const status of ['draft', 'archived', 'archiving', 'deleted']) {
+      const health = await computeLakeHealth({ ...lake, status }, adapters() as never);
+      expect(health.serving).toEqual({ status, isServing: false });
+      expect(health.reachableShare).toBe(1);
+    }
+  });
+
+  it('reports serving on the no-tag short-circuit too', async () => {
+    const health = await computeLakeHealth({ ...lake, status: 'draft', datalakeTag: '' }, makeAdapters([]) as never);
+
+    expect(health.serving).toEqual({ status: 'draft', isServing: false });
+    expect(health.coverage.membersWithChunks).toBe(0);
   });
 });

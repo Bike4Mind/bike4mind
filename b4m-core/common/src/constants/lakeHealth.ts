@@ -16,6 +16,7 @@
  * a substitute: the chars-per-token ratio swings by corpus, so a customer-facing percentage derived
  * from it is systematically wrong per lake - the exact "vibe" these predicates exist to remove.
  */
+import type { DataLakeStatus } from '../types/entities/DataLakeTypes';
 import {
   CHARS_PER_TOKEN_SERVE_BOUND,
   type ChunkStallReason,
@@ -522,6 +523,14 @@ export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & 
    * report and `memberCount` on each group stay exact.
    */
   duplicateMembers: LakeHealthDuplicatesReport;
+  /**
+   * The lake's LIFECYCLE answer to "can any of this be retrieved", which every predicate above is
+   * blind to: they grade the corpus, and a draft or archived lake with a perfect corpus still serves
+   * nothing (`isLakeServingRetrieval`). Reported beside the corpus figures rather than folded into
+   * them - a non-serving lake is not an ingestion failure, and its predicates stay meaningful for
+   * whoever is preparing it - but it is never "healthy" either, which is what the badge derives.
+   */
+  serving: { status: DataLakeStatus; isServing: boolean };
 };
 
 function emptyTally(): PredicateTally {

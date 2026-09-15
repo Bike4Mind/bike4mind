@@ -1,6 +1,7 @@
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
   findDuplicateMembers,
+  isLakeServingRetrieval,
   resolveLakeHealthPolicy,
   selectLakeHealthMembers,
   summarizeLakeHealth,
@@ -59,11 +60,22 @@ export interface ComputeLakeHealthAdapters {
  * groups this same member scan by exact fileName; report-only, same as the rest of this module.
  * `groups` and each group's `members` are capped here for payload size (`DUPLICATE_GROUPS_RETURNED`,
  * `DUPLICATE_MEMBERS_PER_GROUP`); the counts stay exact regardless.
+ *
+ * Reports the lake's `serving` lifecycle state alongside all of that: every predicate here grades the
+ * CORPUS, and retrieval is gated on `status === 'active'` in two places the corpus cannot speak for
+ * (`getDynamicDataLakeTags`' pre-filter and the session-binding check), so a fully-indexed draft or
+ * archived lake would otherwise report healthy while serving nothing.
  */
 export async function computeLakeHealth(
   lake: Pick<
     IDataLakeDocument,
-    'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId' | 'organizationId' | 'requiredPassageTokenTarget'
+    | 'id'
+    | 'status'
+    | 'datalakeTag'
+    | 'fileTagPrefix'
+    | 'createdByUserId'
+    | 'organizationId'
+    | 'requiredPassageTokenTarget'
   >,
   { db, logger }: ComputeLakeHealthAdapters
 ): Promise<LakeHealthApiResponse> {
@@ -79,6 +91,9 @@ export async function computeLakeHealth(
       : DEFAULT_PASSAGE_TOKEN_TARGET;
 
   const policy = resolveLakeHealthPolicy({ explicitTarget: lake.requiredPassageTokenTarget, inheritedTarget });
+  // Lifecycle, not corpus: reported unconditionally, including on the empty-lake path below, because
+  // it is the one finding that does not depend on scanning a single member.
+  const serving = { status: lake.status, isServing: isLakeServingRetrieval(lake.status) };
 
   // Defense in depth: `datalakeTag` is `required: true` on the lake, but an absent one would serialize
   // to `null` in the membership `$match` and degrade the query to "files with no tags" across every
@@ -92,6 +107,7 @@ export async function computeLakeHealth(
       affectedMemberCount: 0,
       scanTruncated: false,
       duplicateMembers: { memberCount: 0, groupCount: 0, groups: [] },
+      serving,
     };
   }
 
@@ -123,5 +139,6 @@ export async function computeLakeHealth(
         members: g.members.slice(0, DUPLICATE_MEMBERS_PER_GROUP),
       })),
     },
+    serving,
   };
 }
