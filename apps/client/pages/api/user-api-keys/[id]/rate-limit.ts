@@ -30,13 +30,15 @@ interface UpdateRateLimitRequest {
  * browser client nothing, since the check reads Sec-Fetch and Origin headers
  * and exchanges no token.
  *
- * skipApiKeyRateLimit: this route is the escape hatch for a key that has hit
- * its own limit, so it cannot sit behind that same limit - otherwise an
- * exhausted single-key account has no API path back until the window rolls.
- * apiKeyAuth (identity + the findByUserIdAndId ownership scope) still runs in
- * full; only the rate-limit counters are skipped.
+ * exemptFromDailyRateLimit: this route is the escape hatch for a key that has
+ * hit its own DAILY limit, so it cannot sit behind that same limit - otherwise
+ * an exhausted single-key account has no API path back until the window
+ * rolls. Only the day counter is skipped; the per-minute burst cap still
+ * applies, and apiKeyAuth still runs in full (identity, banned/dispute/
+ * moderation gates). The ownership scope is the handler's own -
+ * updateApiKeyRateLimit resolves the key via findByUserIdAndId.
  */
-const handler = baseApi({ skipApiKeyRateLimit: true })
+const handler = baseApi({ exemptFromDailyRateLimit: true })
   .use(csrfProtection())
   .patch(
     asyncHandler<{}, unknown, UpdateRateLimitRequest, { id: string }>(async (req, res) => {
