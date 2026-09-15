@@ -4,11 +4,13 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import HelpModal from './HelpModal';
 import { toast } from 'sonner';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 const h = vi.hoisted(() => ({
   createFeedbackOnServer: vi.fn(),
   logEventMutate: vi.fn(),
   updatePreferences: vi.fn(),
+  currentSessionId: null as string | null,
 }));
 
 vi.mock('@client/app/utils/feedbackAPICalls', () => ({
@@ -29,6 +31,10 @@ vi.mock('@client/app/contexts/UserSettingsContext', () => ({
   }),
 }));
 
+vi.mock('@client/app/contexts/SessionsContext', () => ({
+  useSessions: () => ({ currentSessionId: h.currentSessionId }),
+}));
+
 vi.mock('@client/app/hooks/data/analytics', () => ({
   useLogEvent: () => ({ mutate: h.logEventMutate }),
 }));
@@ -43,14 +49,26 @@ vi.mock('sonner', () => ({
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
+let queryClient: QueryClient;
+
 const renderModal = () =>
   render(
-    <CssVarsProvider theme={appTheme}>
-      <HelpModal />
-    </CssVarsProvider>
+    <QueryClientProvider client={queryClient}>
+      <CssVarsProvider theme={appTheme}>
+        <HelpModal />
+      </CssVarsProvider>
+    </QueryClientProvider>
   );
 
+const seedQuests = (sessionId: string, questIds: string[][]) =>
+  queryClient.setQueryData(['quests', 'session', sessionId], {
+    pages: questIds.map(ids => ({ data: ids.map(id => ({ id })) })),
+    pageParams: [],
+  });
+
 beforeEach(() => {
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  h.currentSessionId = null;
   h.createFeedbackOnServer.mockReset();
   h.logEventMutate.mockClear();
   h.updatePreferences.mockClear();
@@ -165,6 +183,63 @@ describe('HelpModal', () => {
     await waitFor(() => expect(toast.warning).toHaveBeenCalled());
     expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('could not save'));
     expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('attaches the current session and its latest turn when submitted from inside a session', async () => {
+    h.currentSessionId = '651111111111111111111111';
+    seedQuests('651111111111111111111111', [
+      ['652222222222222222222222', '652222222222222222222221'],
+      ['651000000000000000000000'],
+    ]);
+    h.createFeedbackOnServer.mockResolvedValue({ id: 'fb1', delivery: { delivered: true, channels: {} } });
+    renderModal();
+
+    submitFeedback('the composer ate my draft');
+
+    await waitFor(() => expect(h.createFeedbackOnServer).toHaveBeenCalled());
+    expect(h.createFeedbackOnServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: '651111111111111111111111',
+        questId: '652222222222222222222222',
+      })
+    );
+  });
+
+  it('sends the session alone when it has no turns yet', async () => {
+    h.currentSessionId = '651111111111111111111111';
+    h.createFeedbackOnServer.mockResolvedValue({ id: 'fb1', delivery: { delivered: true, channels: {} } });
+    renderModal();
+
+    submitFeedback('a thought');
+
+    await waitFor(() => expect(h.createFeedbackOnServer).toHaveBeenCalled());
+    const [payload] = h.createFeedbackOnServer.mock.calls[0];
+    expect(payload.sessionId).toBe('651111111111111111111111');
+    expect(payload).not.toHaveProperty('questId');
+  });
+
+  it('claims no session context when the modal is opened outside a session', async () => {
+    h.createFeedbackOnServer.mockResolvedValue({ id: 'fb1', delivery: { delivered: true, channels: {} } });
+    renderModal();
+
+    submitFeedback('a thought');
+
+    await waitFor(() => expect(h.createFeedbackOnServer).toHaveBeenCalled());
+    const [payload] = h.createFeedbackOnServer.mock.calls[0];
+    expect(payload).not.toHaveProperty('sessionId');
+    expect(payload).not.toHaveProperty('questId');
+  });
+
+  it('claims nothing for an optimistic session id the server could never resolve', async () => {
+    h.currentSessionId = 'optimistic-session-abc';
+    h.createFeedbackOnServer.mockResolvedValue({ id: 'fb1', delivery: { delivered: true, channels: {} } });
+    renderModal();
+
+    submitFeedback('a thought');
+
+    await waitFor(() => expect(h.createFeedbackOnServer).toHaveBeenCalled());
+    const [payload] = h.createFeedbackOnServer.mock.calls[0];
+    expect(payload).not.toHaveProperty('sessionId');
   });
 
   it('does not call the API or toast for empty/whitespace-only content', () => {

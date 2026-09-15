@@ -28,7 +28,6 @@ describe('validateSlackFileForIngest', () => {
   });
 
   it.each([
-    ['mimetype', { mimetype: undefined }],
     ['name', { name: undefined }],
     ['url_private_download', { url_private_download: undefined }],
     ['size', { size: undefined }],
@@ -45,6 +44,95 @@ describe('validateSlackFileForIngest', () => {
     expect(result).toMatchObject({ ok: false, reason: 'unsupported_type' });
     if (result.ok) throw new Error('expected rejection');
     expect(result.message).toContain('text/csv');
+  });
+
+  it.each(['deploy.sh', 'movie.srt', 'config.yaml'])(
+    'rejects %s even though Slack labels it text/plain (#2025 - the client label must not decide the gate)',
+    name => {
+      const result = validateSlackFileForIngest(attachment({ name, mimetype: 'text/plain' }));
+
+      expect(result).toMatchObject({ ok: false, reason: 'unsupported_type' });
+    }
+  );
+
+  it.each(['Dockerfile', 'LICENSE', 'Makefile'])(
+    "still accepts a genuinely extension-less file %s (regression guard, matches create.ts's own fallback)",
+    name => {
+      const result = validateSlackFileForIngest(attachment({ name, mimetype: 'text/plain' }));
+
+      expect(result.ok).toBe(true);
+    }
+  );
+
+  it.each(['.env', '.eslintrc', '.prettierrc', '.exe'])(
+    'accepts dotfile %s - `path.extname` reports no extension for it, same as a bare LICENSE/Dockerfile name, so it must not be refused as unsupported (regression: main accepts these)',
+    name => {
+      const result = validateSlackFileForIngest(attachment({ name, mimetype: 'text/plain' }));
+
+      expect(result.ok).toBe(true);
+    }
+  );
+
+  it('rejects payload. - a trailing dot resolves no extension too, but is malformed rather than extension-less, so it must not get the dotfile fallback', () => {
+    const result = validateSlackFileForIngest(attachment({ name: 'payload.', mimetype: 'text/plain' }));
+
+    expect(result).toMatchObject({ ok: false, reason: 'unsupported_type' });
+    if (result.ok) throw new Error('expected rejection');
+    expect(result.message).toBe('File "payload." has no recognized file type.');
+  });
+
+  it.each(['Meeting notes 2026.09.07', 'My Report v1.2'])(
+    'accepts %s as extension-less - a date/version suffix is not an extension, even though `path.extname` finds a dot (regression: main accepts these)',
+    name => {
+      const result = validateSlackFileForIngest(attachment({ name, mimetype: 'text/plain' }));
+
+      expect(result.ok).toBe(true);
+    }
+  );
+
+  it('still refuses movie.mkv - a real extension-shaped tail stays a type decision, not an extension-less name', () => {
+    const result = validateSlackFileForIngest(attachment({ name: 'movie.mkv', mimetype: 'text/plain' }));
+
+    expect(result).toMatchObject({ ok: false, reason: 'unsupported_type' });
+  });
+
+  it('still refuses app.properties - an unsupported extension longer than 8 chars must not be mistaken for extension-less', () => {
+    const result = validateSlackFileForIngest(attachment({ name: 'app.properties', mimetype: 'text/plain' }));
+
+    expect(result).toMatchObject({ ok: false, reason: 'unsupported_type' });
+  });
+
+  it('accepts an attachment with no client-reported mimetype - nothing downstream reads that field', () => {
+    const result = validateSlackFileForIngest(attachment({ name: 'notes.pdf', mimetype: undefined }));
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('holds a real image to the tighter cap even when it claims a non-image mimetype (#2025 sibling)', () => {
+    // The extension says PNG; the claimed mimetype tries to dodge the tighter image cap.
+    const result = validateSlackFileForIngest(
+      attachment({
+        name: 'shot.png',
+        mimetype: 'application/octet-stream',
+        size: SLACK_MAX_IMAGE_SIZE_BYTES + 1,
+      })
+    );
+
+    expect(result).toMatchObject({ ok: false, reason: 'too_large' });
+  });
+
+  it('does not hold a non-image to the tighter cap merely because it claims an image mimetype', () => {
+    // The extension says PDF; the claimed mimetype falsely says image/png. Resolved type, not the
+    // claim, must decide the cap - so this stays under the general 50MB limit.
+    const result = validateSlackFileForIngest(
+      attachment({
+        name: 'notes.pdf',
+        mimetype: 'image/png',
+        size: SLACK_MAX_IMAGE_SIZE_BYTES + 1,
+      })
+    );
+
+    expect(result.ok).toBe(true);
   });
 
   it('rejects a non-image over the 50MB limit', () => {

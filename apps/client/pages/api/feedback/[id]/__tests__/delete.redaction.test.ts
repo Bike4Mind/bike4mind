@@ -32,8 +32,14 @@ const { deletedFeedbackDoc } = vi.hoisted(() => {
   return { deletedFeedbackDoc: { ...plain, toJSON: () => plain } };
 });
 
+// The route reads the document first so the ownership condition on the delete grant can be
+// evaluated against the instance, then deletes it - hence findById + deleteOne, not
+// findOneAndDelete.
 vi.mock('@bike4mind/database', () => ({
-  FeedbackModel: { findOneAndDelete: vi.fn().mockResolvedValue(deletedFeedbackDoc) },
+  FeedbackModel: {
+    findById: vi.fn().mockResolvedValue(deletedFeedbackDoc),
+    deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+  },
   FeedbackTextModel: { deleteOne: vi.fn().mockResolvedValue({}) },
 }));
 

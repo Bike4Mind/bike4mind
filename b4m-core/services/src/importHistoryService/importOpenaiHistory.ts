@@ -85,7 +85,12 @@ export const processOpenaiConversationNode = (
     if (message.author.role === 'user' && node.children.length > 0) {
       // We expect the user message to have a single reply (child), and its children to be the assistant's replies.
       const intermediateId = last(node.children);
-      const intermediate = intermediateId && mappings[intermediateId];
+      // Own-property test: `mapping` comes off the user-uploaded conversations.json, and a
+      // plain-object index resolves a node id of `toString`/`valueOf` through the prototype
+      // chain to a truthy function - bypassing this guard and throwing an opaque TypeError
+      // downstream instead of the intended "missing node" error. Same guard below.
+      const intermediate =
+        intermediateId && Object.hasOwn(mappings, intermediateId) ? mappings[intermediateId] : undefined;
       if (!intermediate) {
         throw new Error(`Message ${message.id} is missing reply node ${intermediateId}`);
       }
@@ -115,7 +120,7 @@ export const processOpenaiConversationNode = (
 
   if (node.children.length > 0) {
     for (const childId of node.children) {
-      if (!mappings[childId]) {
+      if (!Object.hasOwn(mappings, childId)) {
         throw new Error(`Child node ${childId} not found`);
       }
       records.push(...processOpenaiConversationNode(sessionId, mappings[childId], mappings));

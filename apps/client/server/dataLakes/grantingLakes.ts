@@ -1,5 +1,5 @@
 import { normalizeTagPrefix, openLakeTagPrefix } from '@bike4mind/common';
-import type { DataLakeConfig, IFabFileDocument } from '@bike4mind/common';
+import type { DataLakeConfig } from '@bike4mind/common';
 
 /**
  * Split out from `./index` on purpose: this file has NO dependency on the DB/entitlements chain
@@ -47,7 +47,11 @@ export function grantingLakes(lakes: DataLakeConfig[], fileTagNames: string[]): 
   });
 }
 
-/** Pure gate: is `file` accessible via any of `lakes`? See `grantingLakes` for the predicate. */
-export function isFileInAccessibleLake(lakes: DataLakeConfig[], file: IFabFileDocument): boolean {
+/**
+ * Pure gate: is `file` accessible via any of `lakes`? See `grantingLakes` for the predicate.
+ * Takes only the tag-name shape it reads, so a caller holding a lean projection (e.g.
+ * presigned-url's FabFile lookup) can share this gate without a full `IFabFileDocument`.
+ */
+export function isFileInAccessibleLake(lakes: DataLakeConfig[], file: { tags?: { name: string }[] | null }): boolean {
   return grantingLakes(lakes, file.tags?.map(t => t.name) ?? []).length > 0;
 }

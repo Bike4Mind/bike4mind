@@ -47,7 +47,7 @@ export type {
 } from './di';
 
 // ─── Core Classes ────────────────────────────────────────────────────────────
-export { SlackClient } from './SlackClient';
+export { SlackClient, escapeSlackMrkdwn } from './SlackClient';
 export type { SlackMessage } from './SlackClient';
 export { SlackEvent } from './SlackEvent';
 export type { SlackEventData } from './SlackEvent';
@@ -61,6 +61,8 @@ export {
   parseImageModelOverride,
   parseDataLakeCommand,
   isDataLakeCommand,
+  looksLikeBareDataLakeMention,
+  BARE_DATA_LAKE_MENTION_PATTERN,
   DATA_LAKE_AGENT_KEY,
 } from './agent-parser';
 export type { BuildSystemPromptOptions, ParsedDataLakeCommand, DataLakeSubcommand } from './agent-parser';

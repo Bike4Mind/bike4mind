@@ -76,7 +76,9 @@ export const cloneSession = async (
     // adapters object and the route supplies one. Without both halves a non-owner ends up narrowed
     // to a lake they cannot read, with their personal-corpus fallback off (a non-empty
     // retrievalTags reads as "already lake-scoped") and no way to clear either from the UI.
-    ...(isOwner ? { retrievalTags: session.retrievalTags } : {}),
+    // Same owner-only gate: a non-owner falls back to derivation, which the explicit marker would
+    // otherwise suppress, leaving them with neither a copied scope nor a derived one.
+    ...(isOwner ? { retrievalTags: session.retrievalTags, lakeScopeExplicit: session.lakeScopeExplicit } : {}),
   };
   if (session.summary) buildCloneSession.summary = session.summary;
   if (session.summaryAt) buildCloneSession.summaryAt = session.summaryAt;

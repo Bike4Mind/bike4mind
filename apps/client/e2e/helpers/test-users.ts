@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { NOTEBOOK_EXPORT_IMPORTER_KEY } from '../constants';
 
 export interface TestUser {
   userId: string;
@@ -44,6 +45,10 @@ const SPEC_KEYS = [
   'search',
   'dataLake',
   'skills',
+  'notebookExportBytes',
+  // The notebook-export-bytes importer: no project authenticates as it, but it is loaded here so
+  // the spec can reach its token through getTestUsers like every other identity.
+  NOTEBOOK_EXPORT_IMPORTER_KEY,
   // AI-latency suites (only seeded when AI_LATENCY_RUN=true; getTestUsers skips absent files).
   // Listed here so getTestUsers loads their spec users, which lets specAuthForProject resolve
   // real auth and route their navigations through /auth/success like every other authed suite -

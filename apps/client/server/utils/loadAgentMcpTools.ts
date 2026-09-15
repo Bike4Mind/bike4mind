@@ -1,7 +1,7 @@
 import type { IMcpServerDocument } from '@bike4mind/common';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
-import { generateMcpToolsFromCache } from '@bike4mind/services';
+import { generateMcpToolsFromCache } from '@bike4mind/services/llm';
 
 export interface LoadAgentMcpToolsDeps {
   mcpServers: {

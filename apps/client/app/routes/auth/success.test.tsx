@@ -21,9 +21,11 @@ const {
   mockApplyRedirect: vi.fn(),
 }));
 
-// mockSearch is only accessed lazily (inside () => mockSearch), so it doesn't
-// need vi.hoisted - its value at call time is what matters.
+// mockSearch / mockCurrentUser are only accessed lazily (inside the mock
+// factories' arrow fns), so they don't need vi.hoisted - their value at call
+// time is what matters.
 let mockSearch: Record<string, unknown> = { redirectTo: '/new' };
+let mockCurrentUser: { id: string } | null = null;
 
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => mockNavigate,
@@ -32,7 +34,7 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: () => ({ setCurrentUser: mockSetCurrentUser }),
+  useUser: () => ({ currentUser: mockCurrentUser, setCurrentUser: mockSetCurrentUser }),
 }));
 
 vi.mock('@client/app/hooks/useAccessToken', () => ({
@@ -81,6 +83,7 @@ const USER_DATA = { id: 'u1', name: 'Test User' };
 beforeEach(() => {
   vi.clearAllMocks();
   mockSearch = { redirectTo: '/new' };
+  mockCurrentUser = null;
   mockGetState.mockReturnValue({ accessToken: null });
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => USER_DATA }));
 });
@@ -165,6 +168,29 @@ describe('AuthSuccessPage', () => {
 
     await waitFor(() => expect(mockApplyRedirect).toHaveBeenCalledWith(mockRouterHistory, '/new'));
     expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('refuses to switch identity when already signed in as a different user', async () => {
+    // #134: navigating an already-signed-in browser to /auth/success#token=<other
+    // account> must not adopt the other user's session.
+    mockCurrentUser = { id: 'other-user' };
+    mockParseAuthParams.mockReturnValue(TOKENS); // token for u1
+
+    render(<AuthSuccessPage />);
+
+    await waitFor(() => expect(mockApplyRedirect).toHaveBeenCalledWith(mockRouterHistory, '/new'));
+    expect(mockSetVerifiedSession).not.toHaveBeenCalled();
+    expect(mockSetCurrentUser).not.toHaveBeenCalled();
+  });
+
+  it('adopts the token on a re-login as the same user', async () => {
+    mockCurrentUser = { id: 'u1' };
+    mockParseAuthParams.mockReturnValue(TOKENS); // token for u1
+
+    render(<AuthSuccessPage />);
+
+    await waitFor(() => expect(mockSetVerifiedSession).toHaveBeenCalledWith('tok'));
+    expect(mockSetCurrentUser).toHaveBeenCalledWith(USER_DATA);
   });
 
   it('fires applyRedirect exactly once under React StrictMode (hasProcessed guard)', async () => {

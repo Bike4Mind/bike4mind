@@ -36,6 +36,11 @@ jobs:
         env:
           INPUT_ENVIRONMENT: ${{ inputs.environment }}
           INPUT_STAGE: ${{ inputs.stage }}
+          ROLE_ARN_PRODUCTION: ${{ vars.PROWLER_AUDIT_ROLE_ARN_PRODUCTION }}
+          ROLE_ARN_STAGING: ${{ vars.PROWLER_AUDIT_ROLE_ARN_STAGING }}
+          TARGET_PROD: ${{ vars.OWASP_ZAP_TARGET_PROD }}
+          TARGET_STAGING: ${{ vars.OWASP_ZAP_TARGET }}
+          PREVIEW_SERVER_DOMAIN: ${{ vars.PREVIEW_SERVER_DOMAIN }}
         run: |
           if [[ -n "$INPUT_STAGE" && ! "$INPUT_STAGE" =~ ^[a-z0-9]+$ ]]; then
             echo "::error::Invalid stage input '${INPUT_STAGE}': must be lowercase alphanumeric (e.g. pr1234)"
@@ -43,16 +48,16 @@ jobs:
           fi
 
           if [ "$INPUT_ENVIRONMENT" = "production" ]; then
-            echo "role_arn=${{ vars.PROWLER_AUDIT_ROLE_ARN_PRODUCTION }}" >> $GITHUB_OUTPUT
-            DEFAULT_INGEST_URL="${{ vars.OWASP_ZAP_TARGET_PROD }}"
+            echo "role_arn=$ROLE_ARN_PRODUCTION" >> $GITHUB_OUTPUT
+            DEFAULT_INGEST_URL="$TARGET_PROD"
           else
-            echo "role_arn=${{ vars.PROWLER_AUDIT_ROLE_ARN_STAGING }}" >> $GITHUB_OUTPUT
-            DEFAULT_INGEST_URL="${{ vars.OWASP_ZAP_TARGET }}"
+            echo "role_arn=$ROLE_ARN_STAGING" >> $GITHUB_OUTPUT
+            DEFAULT_INGEST_URL="$TARGET_STAGING"
           fi
 
           # If a PR stage is provided (e.g. "pr1234"), route ingest to that PR's preview host
           if [[ "$INPUT_STAGE" == pr* ]]; then
-            PREVIEW_DOMAIN="${{ vars.PREVIEW_SERVER_DOMAIN }}"
+            PREVIEW_DOMAIN="$PREVIEW_SERVER_DOMAIN"
             echo "ingest_url=https://app.${INPUT_STAGE}.${PREVIEW_DOMAIN}" >> $GITHUB_OUTPUT
             echo "ingest_stage=${INPUT_STAGE}" >> $GITHUB_OUTPUT
           else
@@ -97,9 +102,11 @@ jobs:
           run_install: false
 
       - name: Configure npm authentication
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
-          pnpm config set //registry.npmjs.org/:_authToken ${{ secrets.NPM_TOKEN }}
+          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" > ~/.npmrc
+          pnpm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
 
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile

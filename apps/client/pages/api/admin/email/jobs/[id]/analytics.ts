@@ -2,6 +2,7 @@ import { emailJobRepository, emailSendAttemptRepository } from '@bike4mind/datab
 import { EmailSendStatus } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { assertParseableDate } from '@server/utils/dateParam';
 
 const handler = baseApi().get(async (req, res) => {
   if (!req.user?.isAdmin) {
@@ -27,6 +28,9 @@ const handler = baseApi().get(async (req, res) => {
     startDate?: string;
     endDate?: string;
   };
+
+  assertParseableDate('startDate', startDate);
+  assertParseableDate('endDate', endDate);
 
   const job = await emailJobRepository.findById(id);
   if (!job) {

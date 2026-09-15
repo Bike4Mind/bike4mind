@@ -28,8 +28,8 @@ vi.mock('@server/utils/storage', () => ({
   getGeneratedImageStorage: vi.fn(() => ({ __mock: 'generatedImageStorage' })),
 }));
 
-vi.mock('@bike4mind/services', async () => {
-  const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+vi.mock('@bike4mind/services/llm', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/services/llm')>('@bike4mind/services/llm');
   // `class` (not arrow `vi.fn`) so `new VideoGenerationService(...)` works while still
   // evaluating the constructor args - where the `Resource.X` access we want to track lives.
   return {

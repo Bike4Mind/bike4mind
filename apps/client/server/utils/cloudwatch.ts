@@ -12,6 +12,9 @@ export interface MetricDimensions {
   [key: string]: string;
 }
 
+/** One datapoint in a PutMetricData call, as the build* helpers below hand it to emitMetrics. */
+type MetricEntry = { name: string; value: number; dimensions?: MetricDimensions; unit: StandardUnit };
+
 /**
  * Emit a metric to CloudWatch
  *
@@ -34,7 +37,7 @@ export async function emitMetric(
     // module-level clients to capture expired credentials. This pattern prevents
     // production failures: "InvalidSignatureException: Signature expired"
     const client = new CloudWatchClient({
-      region: process.env.AWS_REGION || 'us-east-1',
+      region: process.env.AWS_REGION || 'us-east-2',
     });
 
     const command = new PutMetricDataCommand({
@@ -86,7 +89,7 @@ export async function emitMetrics(
     // module-level clients to capture expired credentials. This pattern prevents
     // production failures: "InvalidSignatureException: Signature expired"
     const client = new CloudWatchClient({
-      region: process.env.AWS_REGION || 'us-east-1',
+      region: process.env.AWS_REGION || 'us-east-2',
     });
 
     const command = new PutMetricDataCommand({
@@ -448,7 +451,9 @@ export async function recordCircuitBreakerRejection(integration: string): Promis
 // Data Lake Batch Metrics - Namespace: Lumina5/DataLakeBatch
 // ReconcilerForcedTerminal (a stuck batch the reconciler forced terminal - work lost),
 // BatchCompleted (normal pipeline completion, split by outcome), StuckBatches (gauge sampled by
-// the reconciler cron), ReconcileRuns (cron heartbeat, emitted even on zero work for alarm-on-silence).
+// the reconciler cron), ReconcileRuns (cron heartbeat, emitted even on zero work for alarm-on-silence),
+// ChunkRescueRuns/ChunkRescueEnqueued/ChunkRescueFailures (the un-chunked rescue sweep - the Runs
+// metric carries the outcome dimension that tells a gated-off sweep from an idle or failing one).
 // Dimensions stay low-cardinality on purpose - batchId/dataLakeId live in logs, never in metrics.
 
 const DATA_LAKE_BATCH_NAMESPACE = 'Lumina5/DataLakeBatch';
@@ -460,7 +465,21 @@ export const DataLakeBatchMetrics = {
   RECONCILE_RUNS: 'ReconcileRuns',
   TAXONOMY_DAILY_CAP_EXCEEDED: 'TaxonomyDailyCapExceeded',
   TAXONOMY_TAGS_APPLY_SKIPPED: 'TaxonomyTagsApplySkipped',
+  CHUNK_RESCUE_RUNS: 'ChunkRescueRuns',
+  CHUNK_RESCUE_ENQUEUED: 'ChunkRescueEnqueued',
+  CHUNK_RESCUE_FAILURES: 'ChunkRescueFailures',
 } as const;
+
+/**
+ * How one un-chunked-rescue tick ended. Low-cardinality on purpose (three values), so it is safe
+ * as a metric dimension: `disabled` = the enableAutoChunk gate short-circuited the sweep,
+ * `swept` = it ran (finding nothing is still a sweep), `failed` = it threw and the caller caught.
+ *
+ * Kept here rather than imported from the worker so a metrics module never depends on a worker:
+ * `ChunkRescueSweepResult` in server/worker/chunkRescueSweep.ts declares the first two and the
+ * reconciler cron supplies the third, and assignability to this union is what keeps them in sync.
+ */
+export type ChunkRescueOutcome = 'disabled' | 'swept' | 'failed';
 
 export async function emitDataLakeBatchMetric(
   metricName: string,
@@ -499,6 +518,94 @@ export async function recordTaxonomyDailyCapExceeded(): Promise<void> {
 /** Heartbeat: the reconciler cron ran. Emit even on zero work so absence-of-data can alarm. */
 export async function recordReconcileRun(): Promise<void> {
   return emitDataLakeBatchMetric(DataLakeBatchMetrics.RECONCILE_RUNS, 1, {}, StandardUnit.Count);
+}
+
+/**
+ * The exact MetricData shape one rescue tick emits - exported so the two alarms' dimension
+ * contract is unit-testable on its own, without mocking the AWS SDK (same reason
+ * buildFeedbackDeliveryFailureMetrics below is exported).
+ *
+ * Each of the three counters is emitted TWICE: once on the stage-less stream it has always
+ * written, and once with the raw deploy stage added as a `Stage` dimension. A dimensioned metric
+ * is a DISTINCT stream in CloudWatch, so the stage-less stream cannot be scoped in place - every
+ * deployed stage writes it, which is how a dev-stage rescue failure ends up counting toward
+ * production's threshold. Emitting both streams is what lets the alarms move to the scoped one
+ * without a deploy window where an alarm reads a stream nobody writes yet, and it leaves the
+ * stage-less stream as the cross-stage total. Note the cost of that: a query that sums ACROSS
+ * dimension sets (a SEARCH expression, not a plain metric selection) now counts every run twice.
+ *
+ * NOTE the asymmetry with the feedback-delivery builders below: those add a COARSE `{ Stage }`-only
+ * rollup, and copying that shape here would break an alarm. dataLakeChunkRescueSweepFailing reads
+ * ChunkRescueRuns at outcome=failed with `Sum > 0`, so a `{ Stage }`-only Runs stream - which
+ * counts every run, the healthy ones included - would page daily on a working sweep. The scoped
+ * Runs entry therefore keeps `outcome` alongside `Stage`.
+ */
+export function buildChunkRescueSweepMetrics(
+  outcome: ChunkRescueOutcome,
+  enqueued: number,
+  failed: number,
+  stage: string | undefined
+): MetricEntry[] {
+  // `||` not `??`: PutMetricData validates the request as a whole and rejects an empty dimension
+  // value, so an empty-string stage would drop all six datapoints - including the alarm-critical
+  // failure counters. Degrading to an unread `Stage=unknown` stream loses the alarm for that run;
+  // rejecting the call loses the record of the run entirely.
+  const scoped = stage || 'unknown';
+  return [
+    {
+      name: DataLakeBatchMetrics.CHUNK_RESCUE_RUNS,
+      value: 1,
+      dimensions: { outcome },
+      unit: StandardUnit.Count,
+    },
+    {
+      name: DataLakeBatchMetrics.CHUNK_RESCUE_RUNS,
+      value: 1,
+      dimensions: { outcome, Stage: scoped },
+      unit: StandardUnit.Count,
+    },
+    { name: DataLakeBatchMetrics.CHUNK_RESCUE_ENQUEUED, value: enqueued, unit: StandardUnit.Count },
+    {
+      name: DataLakeBatchMetrics.CHUNK_RESCUE_ENQUEUED,
+      value: enqueued,
+      dimensions: { Stage: scoped },
+      unit: StandardUnit.Count,
+    },
+    { name: DataLakeBatchMetrics.CHUNK_RESCUE_FAILURES, value: failed, unit: StandardUnit.Count },
+    {
+      name: DataLakeBatchMetrics.CHUNK_RESCUE_FAILURES,
+      value: failed,
+      dimensions: { Stage: scoped },
+      unit: StandardUnit.Count,
+    },
+  ];
+}
+
+/**
+ * One un-chunked rescue tick: its outcome, and what it moved. Emitted every run including the
+ * zero-work ones, because "no files needed rescuing" and "the sweep is switched off or broken"
+ * are the two readings an operator has to be able to tell apart, and both report zero enqueued.
+ *
+ * One PutMetricData call carries every datapoint - the sweep runs on a daily cron, so there is no
+ * reason to spend several API calls on it, and a partial failure across several would leave the
+ * counters disagreeing with the outcome.
+ *
+ * Covers the HOSTED daily cron only. runChunkRescueSweep has a second driver, the self-host
+ * worker tick in server/worker/main.ts, which deliberately emits nothing - there is no CloudWatch
+ * on a self-host install. So a zero here means the hosted cron found no work, never that no
+ * install swept.
+ *
+ * Alarms, both in infra/alarms.ts and both reading the stage-scoped streams:
+ * dataLakeChunkRescueFailuresHigh reads ChunkRescueFailures at `{ Stage }`, and
+ * dataLakeChunkRescueSweepFailing reads ChunkRescueRuns at `{ outcome: 'failed', Stage }`.
+ */
+export async function recordChunkRescueSweep(
+  outcome: ChunkRescueOutcome,
+  enqueued: number,
+  failed: number,
+  stage: string | undefined
+): Promise<void> {
+  return emitMetrics(DATA_LAKE_BATCH_NAMESPACE, buildChunkRescueSweepMetrics(outcome, enqueued, failed, stage));
 }
 
 /**
@@ -550,8 +657,6 @@ export async function emitFeedbackDeliveryMetrics(
   return emitMetrics(FEEDBACK_DELIVERY_NAMESPACE, metrics);
 }
 
-type FeedbackMetricEntry = { name: string; value: number; dimensions?: MetricDimensions; unit: StandardUnit };
-
 /**
  * The exact MetricData shape a delivery failure emits - exported so the alarm's dimension
  * contract is unit-testable on its own, without mocking the AWS SDK.
@@ -572,7 +677,7 @@ export function buildFeedbackDeliveryFailureMetrics(
   stageClass: FeedbackDeliveryStageClass,
   errorType: string,
   stage: string | undefined
-): FeedbackMetricEntry[] {
+): MetricEntry[] {
   return [
     {
       name: FeedbackDeliveryMetrics.DELIVERY_FAILED,
@@ -601,8 +706,8 @@ export function buildFeedbackDeliverySkippedMetrics(
   stageClass: FeedbackDeliveryStageClass,
   reason: FeedbackDeliverySkipReason,
   stage: string | undefined
-): FeedbackMetricEntry[] {
-  const metrics: FeedbackMetricEntry[] = [
+): MetricEntry[] {
+  const metrics: MetricEntry[] = [
     {
       name: FeedbackDeliveryMetrics.DELIVERY_SKIPPED,
       value: 1,

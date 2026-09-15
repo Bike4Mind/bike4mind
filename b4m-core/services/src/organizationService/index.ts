@@ -24,6 +24,7 @@ import {
 } from './groupMembership';
 import { resolveGroupTypesForUser } from './resolveGroupTypesForUser';
 import type { GroupTypeResolutionOverride } from './resolveGroupTypesForUser';
+import { canAdministerOrganization, isCurrentOrgMember } from './orgAuthority';
 import { resolveCapabilitiesForUser, userHasCapability } from './resolveCapabilitiesForUser';
 import type { GroupTypeCapabilityMap } from './resolveCapabilitiesForUser';
 
@@ -32,6 +33,8 @@ export {
   searchSchema,
   get,
   addMember,
+  canAdministerOrganization,
+  isCurrentOrgMember,
   applyPartnerRuleMembership,
   assignManager,
   removeManager,

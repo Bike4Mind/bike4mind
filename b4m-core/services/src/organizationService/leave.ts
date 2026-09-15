@@ -56,7 +56,13 @@ export const leave = async (
   // retry (leave never re-fetches `user`) recomputes it identically and re-issues the same
   // idempotent set-to-null - the earlier version mutated `user` in memory here, which flipped the
   // guard false on a commit-time retry and silently skipped the write, leaving a stale org.
-  if (user.organizationId === id) {
+  //
+  // Compare via toString(): `IUserDocument.organizationId` is TYPED as a string but production
+  // hands us a hydrated Mongoose doc where it is an ObjectId (UserModel declares
+  // Schema.Types.ObjectId with no stringifying transform), so a strict `===` against the route
+  // param is ALWAYS false and the pointer never cleared. The type does not catch this; every other
+  // reader of this field normalizes the same way (revokeAccess.ts, orgAccess.ts).
+  if (user.organizationId?.toString() === id) {
     await adapters.db.users.update({ id: user.id, organizationId: null });
   }
 

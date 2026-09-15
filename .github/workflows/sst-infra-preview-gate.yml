@@ -19,6 +19,19 @@ on:
   merge_group:
     branches: [main]
 
+# A label swap - one label removed and another added in the same instant - emits
+# `unlabeled` and `labeled` together, which starts two identical runs on the same SHA.
+# Keyed per PR so they serialize, and on the PR specifically because a constant key
+# would let one PR cancel another.
+#
+# NOT cancel-in-progress. Cancelling the twin saves the minutes but leaves a CANCELLED
+# check run behind, and as a required check GitHub can read that as the current verdict
+# - blocking a PR whose real verdict was a pass. Queueing costs one extra short run and
+# both report the truth.
+concurrency:
+  group: preview-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
   pull-requests: read

@@ -96,37 +96,34 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       } else {
         req.logger.info(`Adding ${intent.metadata.credits} credits to user ${user.id}`);
 
-        // Create credit transaction record
-        await creditTransactionRepository.createTransaction('purchase', {
-          ownerId: user.id,
-          ownerType: CreditHolderType.User,
-          amount: intent.amount,
-          credits: Number(intent.metadata.credits),
-          status: CreditPurchaseStatus.Completed,
-          stripePaymentIntentId: intent.id,
-          packageId: intent.metadata.packageId,
-          metadata: {
-            environment: intent.metadata.environment,
-            paymentMethod: intent.payment_method_types?.[0],
-          },
-        });
-
-        // Update user's credit balance
-        user.currentCredits += Number(intent.metadata.credits);
-        await userRepository.update(user);
-
-        // Bypasses addCredits (this path predates it), so stamp the pack lot
-        // inline here rather than through the central seam. Best-effort - see
-        // stampCreditLot.
-        await creditService.stampCreditLot(
+        // Records the CreditTransaction (idempotent on stripePaymentIntentId),
+        // then atomically $inc's the balance and stamps the pack lot. Replaces a
+        // former read-modify-$set of the whole user doc, which reverted any concurrent
+        // balance write. (The unique stripePaymentIntentId index already blocked
+        // double-crediting on Stripe retries: createTransaction rethrew the E11000 before
+        // the increment. The $inc additionally makes the balance update itself atomic.)
+        await creditService.addCredits(
           {
+            type: 'purchase',
             ownerId: user.id,
             ownerType: CreditHolderType.User,
-            amount: Number(intent.metadata.credits),
-            grantType: 'purchase',
-            stripeRef: intent.id,
+            amount: intent.amount,
+            credits: Number(intent.metadata.credits),
+            status: CreditPurchaseStatus.Completed,
+            stripePaymentIntentId: intent.id,
+            packageId: intent.metadata.packageId,
+            metadata: {
+              environment: intent.metadata.environment,
+              paymentMethod: intent.payment_method_types?.[0],
+            },
           },
-          { db: { creditLots: creditLotRepository } }
+          {
+            db: {
+              creditTransactions: creditTransactionRepository,
+              creditLots: creditLotRepository,
+            },
+            creditHolderMethods: userRepository,
+          }
         );
       }
       break;
@@ -220,8 +217,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           break;
         }
 
-        user.stripeCustomerId = null;
-        await userRepository.update(user);
+        await userRepository.update({ id: user.id, stripeCustomerId: null });
         req.logger.info(`Removed Stripe customer ID from user ${user.id}`);
       } else {
         const organization = await organizationRepository.findByStripeCustomerId(customer.id);
@@ -230,8 +226,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           break;
         }
 
-        organization.stripeCustomerId = null;
-        await organizationRepository.update(organization);
+        await organizationRepository.update({ id: organization.id, stripeCustomerId: null });
         req.logger.info(`Removed Stripe customer ID from organization ${organization.id}`);
       }
 
@@ -312,8 +307,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       }
 
       if (user) {
-        user.disputePending = true;
-        await userRepository.update(user);
+        await userRepository.update({ id: user.id, disputePending: true });
 
         await postMessageToSlack(
           `🚨 *Stripe Dispute Created* — dispute ${dispute.id}\n*User:* ${user.name || user.email} (${user.id})\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nAccount flagged, credits clawback initiated.`
@@ -362,8 +356,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       }
 
       if (user) {
-        user.disputePending = false;
-        await userRepository.update(user);
+        await userRepository.update({ id: user.id, disputePending: false });
 
         await postMessageToSlack(
           `✅ *Stripe Dispute Won* — dispute ${dispute.id}\n*User:* ${user.name || user.email} (${user.id})\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\nAccount dispute flag cleared.`

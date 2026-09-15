@@ -28,6 +28,7 @@ import {
   TOOL_DESCRIPTIONS,
 } from '../../constants.js';
 import { createMockServer, parseResponse, type RegisteredTool } from '../test-utils.js';
+import { clearParentCache } from '../../helpers/ancestry.js';
 
 /**
  * Helper to set up ancestry mock: target page's parent is the root page.
@@ -61,6 +62,7 @@ describe('Page Tools', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearParentCache();
     // Reset to defaults: write enabled, root page set, access mode 'all'
     vi.mocked(getConfig).mockReturnValue({
       accessToken: 'mock-token',
@@ -155,15 +157,40 @@ describe('Page Tools', () => {
       expect(parsed.error).toContain('not within the configured root page tree');
     });
 
-    it('should create a page in a database', async () => {
-      // Database parent bypasses page ancestry check
-      mockRootPageWrite({
-        id: 'db-page-id',
-        url: 'https://notion.so/db-page',
-        object: 'page',
+    it('should reject explicit parentDatabaseId outside root tree', async () => {
+      const outsideDbId = 'c3d4e5f6-a7b8-9012-cdef-123456789012';
+
+      // Ancestry check: the database sits under the workspace, not the root page
+      vi.mocked(notionRequest).mockResolvedValueOnce({
+        id: outsideDbId,
+        object: 'database',
+        parent: { type: 'workspace', workspace: true },
       });
 
+      const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
+      const result = await tool!.handler({ title: 'Outside DB', parentDatabaseId: outsideDbId });
+
+      expect(result.isError).toBe(true);
+      const parsed = parseResponse(result);
+      expect(parsed.error).toContain('not within the configured root page tree');
+      expect(notionRequest).not.toHaveBeenCalledWith('/pages', expect.objectContaining({ method: 'POST' }));
+    });
+
+    it('should create a page in a database', async () => {
       const dbId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+      // Ancestry check: database parent is under the root page
+      vi.mocked(notionRequest)
+        .mockResolvedValueOnce({
+          id: dbId,
+          object: 'database',
+          parent: { type: 'page_id', page_id: ROOT_PAGE_ID },
+        })
+        .mockResolvedValueOnce({
+          id: 'db-page-id',
+          url: 'https://notion.so/db-page',
+          object: 'page',
+        });
+
       const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
       const result = await tool!.handler({ title: 'DB Entry', parentDatabaseId: dbId });
 
@@ -175,23 +202,51 @@ describe('Page Tools', () => {
     });
 
     it('should prefer database parent over page parent when both provided', async () => {
-      mockRootPageWrite({
-        id: 'page-id',
-        url: 'https://notion.so/page',
-        object: 'page',
-      });
-
       const dbId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
       const pageId = 'b2c3d4e5-f6a7-8901-bcde-f12345678901';
+      // Ancestry check for database parent
+      vi.mocked(notionRequest)
+        .mockResolvedValueOnce({
+          id: dbId,
+          object: 'database',
+          parent: { type: 'page_id', page_id: ROOT_PAGE_ID },
+        })
+        .mockResolvedValueOnce({
+          id: 'page-id',
+          url: 'https://notion.so/page',
+          object: 'page',
+        });
+
       const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
       await tool!.handler({ title: 'Test', parentDatabaseId: dbId, parentPageId: pageId });
 
-      // Should not have made an ancestry check call (database takes priority)
-      expect(notionRequest).toHaveBeenCalledTimes(1);
+      // ancestry check (1) + write (1)
+      expect(notionRequest).toHaveBeenCalledTimes(2);
       expect(notionRequest).toHaveBeenCalledWith('/pages', {
         method: 'POST',
         body: expect.stringContaining(`"database_id":"${dbId}"`),
       });
+    });
+
+    it('should deny an excluded database parent in selected mode', async () => {
+      const dbId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+      vi.mocked(getConfig).mockReturnValue({
+        accessToken: 'mock-token',
+        writeEnabled: true,
+        rootPageId: ROOT_PAGE_ID,
+        accessMode: 'selected',
+        allowedPages: [{ id: ROOT_PAGE_ID, access: 'readwrite' }],
+        excludedPageIds: [dbId],
+      });
+
+      const tool = registeredTools.get(TOOL_NOTION_CREATE_PAGE);
+      const result = await tool!.handler({ title: 'DB Entry', parentDatabaseId: dbId });
+
+      expect(result.isError).toBe(true);
+      const parsed = parseResponse(result);
+      expect(parsed.error).toContain('explicitly excluded');
+      // Denied before any Notion call, so nothing was created
+      expect(notionRequest).not.toHaveBeenCalled();
     });
 
     it('should include content block when content is provided', async () => {

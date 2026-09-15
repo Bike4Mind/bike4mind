@@ -36,8 +36,10 @@ export const assertLakeWriteAccess = async (
     db,
   }: {
     db: {
-      dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'>;
-      dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+      dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug' | 'findBySlugAmongIds'>;
+      // 'listByPrincipal' (#2425) flows straight through to assertLakeAccess's own adapter type
+      // below, which uses it to resolve a foreign-org owner/curator grant by slug.
+      dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listByPrincipal'>;
     };
   }
 ): Promise<IDataLakeDocument> => {
@@ -76,8 +78,10 @@ export const assertLakeRebuildAccess = async (
     db,
   }: {
     db: {
-      dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'>;
-      dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+      dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug' | 'findBySlugAmongIds'>;
+      // 'listByPrincipal' (#2425) flows straight through to assertLakeAccess's own adapter type
+      // below, which uses it to resolve a foreign-org owner/curator grant by slug.
+      dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listByPrincipal'>;
     };
   }
 ): Promise<IDataLakeDocument> => {
@@ -111,8 +115,10 @@ export const assertFallbackLakeSettingsWriteAccess = async (
     logger,
   }: {
     db: {
-      dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'>;
-      dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+      dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug' | 'findBySlugAmongIds'>;
+      // 'listByPrincipal' (#2425) flows straight through to assertLakeAccess's own adapter type
+      // below, which uses it to resolve a foreign-org owner/curator grant by slug.
+      dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listByPrincipal'>;
       /**
        * Declared, and non-optional, so the overlay merge cannot be lost by a caller that builds
        * exactly this type. It previously worked only by structural typing - the one route passes a

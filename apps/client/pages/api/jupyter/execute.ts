@@ -88,9 +88,11 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
         return source.trim().length > 0;
       }).length;
 
-      // Use findOneAndUpdate with userId filter to prevent unauthorized quest modification
+      // Owner-scoped so a caller cannot drive execution on someone else's quest.
+      // `promptMeta.session.userId` is the Quest's owner field - the schema declares no top-level
+      // `userId`, so the filter this used to carry could never match and the route always 403'd.
       const updatedQuest = await Quest.findOneAndUpdate(
-        { _id: questId, userId },
+        { _id: questId, 'promptMeta.session.userId': userId },
         {
           $set: {
             'jupyterNotebook.status': 'executing',

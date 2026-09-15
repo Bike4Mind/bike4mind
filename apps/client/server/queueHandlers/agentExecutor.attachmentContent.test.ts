@@ -5,7 +5,9 @@ import {
   materializeAttachmentContent,
   composeFirstIterationMessage,
   attachmentNoticeBlock,
+  attachmentNoticeStrings,
   MAX_INLINED_IMAGE_BYTES,
+  unmaterializedAttachments,
 } from './agentExecutor.attachmentContent';
 
 function makeLogger() {
@@ -180,13 +182,122 @@ describe('materializeAttachmentContent', () => {
     );
   });
 
-  it('still reports unresolved ids when extraction of the rest throws', async () => {
+  it('notices every dropped id when extraction throws, not just the unresolved ones', async () => {
     const logger = makeLogger();
     const extract = vi.fn().mockRejectedValue(new Error('storage down'));
 
     const result = await materializeAttachmentContent([file('a')], ['ghost'], extract, logger);
 
-    expect(result.notices).toEqual([expect.objectContaining({ fabFileId: 'ghost', band: 'unresolved' })]);
+    // The delivery contract says every id in `droppedIds` has a line in the notices. The catch
+    // path drops both the unresolvable id AND the file it never got to read, so both are owed one.
+    expect(result.delivery.droppedIds.sort()).toEqual(['a', 'ghost']);
+    expect(result.notices.map(n => n.fabFileId).sort()).toEqual(['a', 'ghost']);
+    expect(result.notices).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ fabFileId: 'ghost', band: 'unresolved' }),
+        expect.objectContaining({ fabFileId: 'a', band: 'read_failed' }),
+      ])
+    );
+  });
+});
+
+describe('materializeAttachmentContent delivery report (#1576 ask 1, agent door)', () => {
+  it('counts every requested id, delivered and dropped alike', async () => {
+    const logger = makeLogger();
+    const extract = vi.fn().mockResolvedValue(
+      extractorResult({
+        userMessages: [{ role: 'user', content: 'A BODY' }],
+        deliveredFileIds: ['a', 'b'],
+        fullyDeliveredFileIds: ['a'],
+      })
+    );
+
+    const result = await materializeAttachmentContent([file('a'), file('b'), file('c')], ['ghost'], extract, logger);
+
+    expect(result.delivery).toEqual({
+      requested: 4,
+      delivered: 2,
+      fullyDelivered: 1,
+      dropped: 2,
+      droppedIds: ['c', 'ghost'],
+    });
+  });
+
+  // The state the whole ask turns on: nothing failed, so `notices` is empty and carries no signal
+  // at all. Only the report distinguishes this from a run that was given no attachments.
+  it('reports a wholly successful run, which produces no notices to infer from', async () => {
+    const logger = makeLogger();
+    const extract = vi.fn().mockResolvedValue(
+      extractorResult({
+        userMessages: [{ role: 'user', content: 'A BODY' }],
+        deliveredFileIds: ['a', 'b'],
+        fullyDeliveredFileIds: ['a', 'b'],
+      })
+    );
+
+    const result = await materializeAttachmentContent([file('a'), file('b')], [], extract, logger);
+
+    expect(result.notices).toEqual([]);
+    expect(result.delivery).toEqual({
+      requested: 2,
+      delivered: 2,
+      fullyDelivered: 2,
+      dropped: 0,
+      droppedIds: [],
+    });
+  });
+
+  it('reports every id as dropped when extraction throws, rather than reporting nothing', async () => {
+    const logger = makeLogger();
+    const extract = vi.fn().mockRejectedValue(new Error('storage down'));
+
+    const result = await materializeAttachmentContent([file('a')], ['ghost'], extract, logger);
+
+    expect(result.delivery).toEqual({
+      requested: 2,
+      delivered: 0,
+      fullyDelivered: 0,
+      dropped: 2,
+      droppedIds: ['a', 'ghost'],
+    });
+  });
+
+  it('reports unresolved-only ids as dropped when the extractor is never reached', async () => {
+    const logger = makeLogger();
+    const extract = vi.fn();
+
+    const result = await materializeAttachmentContent([], ['ghost-1', 'ghost-2'], extract, logger);
+
+    expect(extract).not.toHaveBeenCalled();
+    expect(result.delivery).toMatchObject({ requested: 2, delivered: 0, dropped: 2 });
+  });
+});
+
+describe('attachmentNoticeStrings', () => {
+  it('is the message text alone, matching what the chat door persists', () => {
+    const notices: FabFileNotice[] = [
+      { fabFileId: 'a', fileName: 'a.md', band: 'unresolved', message: '"a.md" was not sent.', delivered: false },
+    ];
+    expect(attachmentNoticeStrings(notices)).toEqual(['"a.md" was not sent.']);
+  });
+
+  it('caps the list and says how many it left out, so a large workbench cannot flood the banner', () => {
+    const notices: FabFileNotice[] = Array.from({ length: 25 }, (_, i) => ({
+      fabFileId: `f${i}`,
+      fileName: `f${i}.md`,
+      band: 'unresolved' as const,
+      message: `"f${i}.md" was not sent.`,
+      delivered: false,
+    }));
+
+    const lines = attachmentNoticeStrings(notices);
+
+    expect(lines).toHaveLength(21);
+    expect(lines[20]).toBe('...and 5 more attachment(s) not listed here.');
+  });
+
+  it('is empty when nothing went wrong', () => {
+    expect(attachmentNoticeStrings([])).toEqual([]);
   });
 });
 
@@ -245,5 +356,47 @@ describe('attachmentNoticeBlock', () => {
     expect(out).toContain('"f19.md"');
     expect(out).not.toContain('"f20.md"');
     expect(out).toContain('5 more attachment(s) not listed here');
+  });
+});
+
+describe('unmaterializedAttachments (the agent door skip paths)', () => {
+  it('reports every requested id as dropped, with a notice each', () => {
+    const out = unmaterializedAttachments(['a', 'b']);
+
+    expect(out.delivery).toEqual({
+      requested: 2,
+      delivered: 0,
+      fullyDelivered: 0,
+      dropped: 2,
+      droppedIds: ['a', 'b'],
+    });
+    expect(out.notices.map(n => n.fabFileId)).toEqual(['a', 'b']);
+    expect(out.notices.every(n => n.delivered === false)).toBe(true);
+  });
+
+  it('carries no content, so composing it into the first iteration leaves the query untouched', () => {
+    // What makes the two skip paths safe to turn from `undefined` into a value: the fold adds no
+    // content of its own. The prompt does still change on those paths - the caller appends the
+    // notice block before it gets here - but this step contributes nothing to it.
+    const out = unmaterializedAttachments(['a']);
+
+    expect(composeFirstIterationMessage('the query', out)).toBe('the query');
+    expect(out.inlinedFileIds).toEqual([]);
+    expect(out.fullyInlinedFileIds).toEqual([]);
+  });
+
+  // The caller guards against an empty request, so this pins the helper's own contract rather
+  // than a live path: no notices invented, and a well-formed zeroed report rather than a partial.
+  it('is total: an empty request yields an empty report, not a malformed one', () => {
+    const out = unmaterializedAttachments([]);
+
+    expect(out.notices).toEqual([]);
+    expect(out.delivery).toEqual({
+      requested: 0,
+      delivered: 0,
+      fullyDelivered: 0,
+      dropped: 0,
+      droppedIds: [],
+    });
   });
 });

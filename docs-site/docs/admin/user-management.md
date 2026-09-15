@@ -224,6 +224,11 @@ The export fetches all matching users (not just the current page) before generat
 
 - Check if the account is **banned** or **moderated** in the Admin Actions section.
 - Verify the email address is correct — the one-time code is sent to the email on file.
+- **If the Email field is blank**, the account has no email on file and *cannot* receive a one-time
+  code. This is a supported account shape: an account created through a social/OAuth provider that
+  did not assert the email as verified is stored without one. That user signs in through the same
+  provider they signed up with, not by email code. To move them onto email login, have them add an
+  address from **Profile > Email Address > Add Email** and confirm the verification link.
 - Confirm the email service is working via **Admin → General Ops → System Health**.
 - Check the user's login history for suspicious activity.
 

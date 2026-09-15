@@ -32,12 +32,22 @@ export interface BaseStatePayload {
 }
 
 export type VerifyResult<T = unknown> =
-  | { valid: true; payload: T }
-  | { valid: false; reason: 'missing' | 'expired' | 'invalid'; message: string };
+  { valid: true; payload: T } | { valid: false; reason: 'missing' | 'expired' | 'invalid'; message: string };
 
 export interface IJwtStateStore {
-  createStateToken<T extends Record<string, unknown>>(options: JwtStateStoreOptions, additionalPayload?: T): string;
-  verifyStateToken<T extends BaseStatePayload>(token: string, options: JwtStateStoreOptions): VerifyResult<T>;
+  // nonceHash / expectedNonceHash carry the browser-binding nonce (see the host's
+  // oauthFlowCookie): the mint embeds it as the `nh` claim, and verify enforces the
+  // match when a hash is passed. Both optional so non-bound callers are unaffected.
+  createStateToken<T extends Record<string, unknown>>(
+    options: JwtStateStoreOptions,
+    additionalPayload?: T,
+    nonceHash?: string
+  ): string;
+  verifyStateToken<T extends BaseStatePayload>(
+    token: string,
+    options: JwtStateStoreOptions,
+    expectedNonceHash?: string | null
+  ): VerifyResult<T>;
   validateJwtSecret(): string;
 }
 

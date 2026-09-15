@@ -37,6 +37,7 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
 import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE } from './creditService';
+import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
 
 export interface CompletionParams {
@@ -148,11 +149,38 @@ function estimateInputTokens(messages: IMessage[]): number {
 }
 
 /**
+ * OpenAI's own API accepts these bare names as an alias for whatever dated snapshot is
+ * current, but our catalog stores the dated snapshot id itself (ChatModels.GPT4_1 etc. in
+ * @bike4mind/common), so a caller using OpenAI's convention otherwise finds no catalog
+ * entry. Resolved once, up front, so every downstream use of `model` (backend lookup,
+ * cost/credit calc, the completion call itself, logged usage) sees one consistent id.
+ *
+ * A Map, not a plain object: `model` is caller-controlled, and a plain object lookup
+ * keyed by an arbitrary string returns inherited properties for keys like "constructor"
+ * or "toString" instead of undefined.
+ */
+const OPENAI_BARE_MODEL_ALIASES: ReadonlyMap<string, ChatModels> = new Map([
+  ['gpt-4.1', ChatModels.GPT4_1],
+  ['gpt-4.1-mini', ChatModels.GPT4_1_MINI],
+  ['gpt-4.1-nano', ChatModels.GPT4_1_NANO],
+]);
+
+/**
+ * Exported so callers that do their own catalog lookup against the raw request model
+ * (logCompletionAnalytics' credit-estimate lookup) resolve the same alias executeCompletion
+ * does, rather than independently missing it once the request itself starts succeeding.
+ */
+export function resolveOpenAiBareModelAlias(modelId: string): string {
+  return OPENAI_BARE_MODEL_ALIASES.get(modelId) ?? modelId;
+}
+
+/**
  * Shared LLM completion logic
  * Used by Next.js API route, Lambda function, and available for 3rd party integrations
  */
 export async function executeCompletion(params: CompletionParams): Promise<void> {
-  const { userId, model, messages, options, db, logger, onChunk, apiKeyInfo } = params;
+  const { userId, messages, options, db, logger, onChunk, apiKeyInfo } = params;
+  const model = resolveOpenAiBareModelAlias(params.model);
   const source: CompletionSource = params.source ?? 'api';
   const completionStartTime = Date.now();
 
@@ -176,6 +204,30 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     organization = await db.organizations.findById(params.billingOrganizationId);
     if (!organization) {
       throw new Error(`[CLI_CREDITS] Billing organization ${params.billingOrganizationId} not found`);
+    }
+
+    // The billing target is stamped on the API key at MINT time and never revisited, so a key whose
+    // minting user has since left (or been removed from) the org kept drawing on that org's shared
+    // credit pool indefinitely. Re-verify membership at USE time, against the roster just fetched -
+    // no extra query.
+    //
+    // Fail closed rather than falling back to personal billing: the caller asked to spend the org's
+    // credits, and quietly spending their own instead would be a surprising charge they never
+    // authorized. An explicit error tells them to re-mint the key.
+    //
+    // The platform-admin arm lives HERE, not in the predicate: `isCurrentOrgMember` reports roster
+    // attachment, not authority, and must stay that way so the two ideas cannot be conflated. But a
+    // platform admin mints org-billed keys on a customer org's behalf as a normal support action -
+    // pages/api/user-api-keys/index.ts admits them explicitly - and is never on that org's roster,
+    // so without this arm such a key would fail on its very first call, not merely after someone
+    // left. Only queried on the refusal path, so the happy path keeps its no-extra-query property.
+    if (!isCurrentOrgMember(organization, userId)) {
+      const actor = await db.users.findById(userId);
+      if (!actor?.isAdmin) {
+        throw new Error(
+          `[CLI_CREDITS] User ${userId} is no longer a member of billing organization ${organization.id}`
+        );
+      }
     }
   }
   const billToOrg = organization !== null;
