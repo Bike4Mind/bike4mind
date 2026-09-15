@@ -1,5 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { _semaphoreTestHelpers, SemaphoreBusyError, type SlotRelease } from './_anthropicSemaphore';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import {
+  _semaphoreTestHelpers,
+  DEFAULT_ACQUIRE_TIMEOUT_MS,
+  SemaphoreBusyError,
+  type SlotRelease,
+} from './_anthropicSemaphore';
 
 const { getActiveCount, getQueueLength, acquireSlot, resetForTest, MAX_CONCURRENT, MAX_QUEUED_PER_TENANT } =
   _semaphoreTestHelpers;
@@ -20,6 +25,10 @@ const flush = async () => {
 describe('Anthropic semaphore', () => {
   beforeEach(() => {
     resetForTest();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('allows up to MAX_CONCURRENT slots without queuing', async () => {
@@ -148,7 +157,7 @@ describe('Anthropic semaphore', () => {
     expect(getQueueLength()).toBe(MAX_QUEUED_PER_TENANT + 1);
   });
 
-  // --- Signal-less fallback timeout ---
+  // --- Fallback wait timeout ---
   it('times out a signal-less waiter after timeoutMs and removes it from the queue', async () => {
     await saturate('A');
 
@@ -156,5 +165,26 @@ describe('Anthropic semaphore', () => {
     await expect(acquireSlot({ tenantKey: 'A', timeoutMs: 20 })).rejects.toBeInstanceOf(SemaphoreBusyError);
     expect(Date.now() - start).toBeGreaterThanOrEqual(15);
     expect(getQueueLength()).toBe(0);
+  });
+
+  it('bounds a waiter that supplies a signal, not only signal-less callers', async () => {
+    // A signal is not a wait bound on its own: the interactive signal carries user-cancel
+    // always, but the request/idle timeout only joins it when an admin setting is on.
+    vi.useFakeTimers();
+    await saturate('A');
+
+    const controller = new AbortController();
+    const waiting = acquireSlot({ tenantKey: 'A', signal: controller.signal });
+    const rejection = expect(waiting).rejects.toBeInstanceOf(SemaphoreBusyError);
+    expect(getQueueLength()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_ACQUIRE_TIMEOUT_MS);
+
+    await rejection;
+    expect(getQueueLength()).toBe(0);
+  });
+
+  it('carries a 429 so the shared fallback classifier reads it as transient backpressure', () => {
+    expect(new SemaphoreBusyError('queue full').status).toBe(429);
   });
 });

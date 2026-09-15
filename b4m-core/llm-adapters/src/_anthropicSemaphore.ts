@@ -25,10 +25,11 @@ export const MAX_CONCURRENT_ANTHROPIC_CALLS = 15;
 // one hashed end-user id); a pathological flood is rejected fast rather than queued.
 export const MAX_QUEUED_PER_TENANT = 100;
 
-// Fallback maximum wait, applied ONLY when a caller supplies no AbortSignal.
-// Interactive callers pass a signal that already carries user-cancel plus request/
-// idle timeout, so they are bounded by that; this catches the rare signal-less
-// caller (seeds, batch scripts) so no waiter can block forever. Comfortably longer
+// Maximum time any waiter sits in the queue, applied to every acquire that does not pass
+// an explicit `timeoutMs` - signal or not. A supplied signal is NOT a substitute: the
+// interactive signal carries user-cancel always, but the request/idle timeout is only
+// folded into it when the EnableStreamIdleTimeout admin setting is on, so on the default
+// configuration a signal-bounded waiter would still wait indefinitely. Comfortably longer
 // than the longest legitimate stream hold.
 export const DEFAULT_ACQUIRE_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -47,15 +48,20 @@ export interface AcquireSlotOptions {
   tenantKey?: string;
   /** The waiter leaves the queue and the acquire rejects if this fires while it waits. */
   signal?: AbortSignal;
-  /**
-   * Max time to wait for a slot. Defaults to DEFAULT_ACQUIRE_TIMEOUT_MS only when no
-   * signal is supplied; a caller that passes a signal is expected to bound itself with it.
-   */
+  /** Max time to wait for a slot before rejecting. Defaults to DEFAULT_ACQUIRE_TIMEOUT_MS. */
   timeoutMs?: number;
 }
 
-/** Thrown when a slot cannot be obtained: the tenant's queue is full, or the wait timed out. */
+/**
+ * Thrown when a slot cannot be obtained: the tenant's queue is full, or the wait timed out.
+ * Both are transient backpressure on a shared pool rather than a fault in the request, so it
+ * carries a 429 that the shared `shouldTriggerFallback` classifier reads (via `getHttpStatus`)
+ * and hops the completion onto another model instead of surfacing a hard failure.
+ */
 export class SemaphoreBusyError extends Error {
+  /** Read by the shared HTTP-status error classifiers; see the class doc. */
+  readonly status = 429;
+
   constructor(message: string) {
     super(message);
     this.name = 'SemaphoreBusyError';
@@ -64,9 +70,7 @@ export class SemaphoreBusyError extends Error {
 
 type Waiter = {
   key: string;
-  seq: number;
   resolve: (release: SlotRelease) => void;
-  reject: (err: Error) => void;
   /** Clears the timer and abort listener. Idempotent. */
   settle: () => void;
 };
@@ -74,7 +78,6 @@ type Waiter = {
 let _totalActive = 0;
 const _activeByTenant = new Map<string, number>();
 const _waiters: Waiter[] = [];
-let _seqCounter = 0;
 
 function incActive(key: string): void {
   _activeByTenant.set(key, (_activeByTenant.get(key) ?? 0) + 1);
@@ -99,18 +102,20 @@ function makeRelease(key: string): SlotRelease {
   };
 }
 
-/** Index of the waiter whose tenant holds the fewest active slots; arrival order breaks ties. */
+/**
+ * Index of the waiter whose tenant holds the fewest active slots; arrival order breaks ties.
+ * `_waiters` is only ever appended to and spliced from, so it is already in arrival order and
+ * the strict `<` keeps the first-encountered (earliest) waiter on a tie - which is what makes
+ * this degrade to FIFO within a single tenant.
+ */
 function pickFairWaiterIndex(): number {
   let best = -1;
   let bestActive = Infinity;
-  let bestSeq = Infinity;
   for (let i = 0; i < _waiters.length; i++) {
-    const waiter = _waiters[i];
-    const active = _activeByTenant.get(waiter.key) ?? 0;
-    if (active < bestActive || (active === bestActive && waiter.seq < bestSeq)) {
+    const active = _activeByTenant.get(_waiters[i].key) ?? 0;
+    if (active < bestActive) {
       best = i;
       bestActive = active;
-      bestSeq = waiter.seq;
     }
   }
   return best;
@@ -174,11 +179,10 @@ export function acquireSlot(opts: AcquireSlotOptions = {}): Promise<SlotRelease>
   });
 
   return new Promise<SlotRelease>((resolve, reject) => {
-    const timeoutMs = opts.timeoutMs ?? (signal ? undefined : DEFAULT_ACQUIRE_TIMEOUT_MS);
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_ACQUIRE_TIMEOUT_MS;
 
     const settle = () => {
-      if (timer) clearTimeout(timer);
+      clearTimeout(timer);
       if (signal) signal.removeEventListener('abort', onAbort);
     };
     const removeAndReject = (err: Error) => {
@@ -191,16 +195,16 @@ export function acquireSlot(opts: AcquireSlotOptions = {}): Promise<SlotRelease>
       removeAndReject(abortError(signal!));
     }
 
-    const waiter: Waiter = { key, seq: _seqCounter++, resolve, reject, settle };
-    _waiters.push(waiter);
+    // Armed before the waiter joins the queue, so no admit or abort can reach `settle`
+    // (or the queue can reach `waiter`) while either is still uninitialized.
+    const timer = setTimeout(
+      () => removeAndReject(new SemaphoreBusyError(`Timed out after ${timeoutMs}ms waiting for an Anthropic slot`)),
+      timeoutMs
+    );
 
+    const waiter: Waiter = { key, resolve, settle };
+    _waiters.push(waiter);
     if (signal) signal.addEventListener('abort', onAbort, { once: true });
-    if (timeoutMs !== undefined) {
-      timer = setTimeout(
-        () => removeAndReject(new SemaphoreBusyError(`Timed out after ${timeoutMs}ms waiting for an Anthropic slot`)),
-        timeoutMs
-      );
-    }
   });
 }
 
@@ -215,7 +219,6 @@ export const _semaphoreTestHelpers = {
     _waiters.length = 0;
     _activeByTenant.clear();
     _totalActive = 0;
-    _seqCounter = 0;
   },
   MAX_CONCURRENT: MAX_CONCURRENT_ANTHROPIC_CALLS,
   MAX_QUEUED_PER_TENANT,
