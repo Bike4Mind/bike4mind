@@ -41,7 +41,9 @@ vi.mock('@bike4mind/services', () => ({
     adminUpdateUser: (...a: unknown[]) => mockAdminUpdateUser(...a),
     updateUser: (...a: unknown[]) => mockUpdateUser(...a),
     adminUpdateUserSchema: z.object({}).passthrough(),
-    updateUserSchema: z.object({}).passthrough(),
+    // A real allowlist (not passthrough) so the discarded-field detection under
+    // test actually exercises Zod's strip-unknown-keys behavior.
+    updateUserSchema: z.object({ name: z.string().optional(), role: z.string().optional() }),
   },
 }));
 
@@ -140,5 +142,50 @@ describe('PUT /api/users/:id/update - lockout guard', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mockCount).not.toHaveBeenCalled();
     expect(mockAdminUpdateUser).toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/users/:id/update - self-service admin-only field discard', () => {
+  const SELF = { id: 'u1', isAdmin: false };
+
+  it('reports discarded admin-only fields instead of silently dropping them', async () => {
+    const { res, promise } = run({
+      user: SELF,
+      userId: SELF.id,
+      body: { name: 'New Name', creditDelta: 500, tags: ['vip'], isAdmin: true },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const json = res._getJSONData();
+    expect(json.ignoredFields).toEqual(expect.arrayContaining(['creditDelta', 'tags', 'isAdmin']));
+    expect(json.ignoredFields).toHaveLength(3);
+
+    // The privileged fields never reach the service layer.
+    expect(mockUpdateUser).toHaveBeenCalledWith(
+      SELF.id,
+      expect.not.objectContaining({ creditDelta: 500, tags: ['vip'], isAdmin: true }),
+      expect.anything()
+    );
+    const [, calledBody] = mockUpdateUser.mock.calls[0];
+    expect(calledBody).toEqual({ name: 'New Name' });
+  });
+
+  it('omits ignoredFields entirely when every submitted key is allowed', async () => {
+    const { res, promise } = run({ user: SELF, userId: SELF.id, body: { name: 'New Name' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const json = res._getJSONData();
+    expect(json.ignoredFields).toBeUndefined();
+    expect(mockUpdateUser).toHaveBeenCalledWith(SELF.id, { name: 'New Name' }, expect.anything());
+  });
+
+  it('reports an empty-body update with no admin-only fields sent as having none ignored', async () => {
+    const { res, promise } = run({ user: SELF, userId: SELF.id, body: {} });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().ignoredFields).toBeUndefined();
   });
 });
