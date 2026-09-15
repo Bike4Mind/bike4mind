@@ -1360,8 +1360,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         // Checked against the user, not the connection's org: objectCreated debits the
         // uploading user, and this handler's own reclaim path deducts from that same counter,
         // so an org-scoped check here could never fire.
+        // Retires so far this run are already deleted, but their bytes are only staged in
+        // reclaimedBytesByUserId until flushReclaimedStorage after the loop - credit them now.
+        const stagedReclaim = reclaimedBytesByUserId.get(user.id) ?? 0;
         try {
-          await checkStorageLimit(user, acceptedBytes + bytes.length);
+          await checkStorageLimit(user, Math.max(0, acceptedBytes + bytes.length - stagedReclaim));
         } catch (error) {
           if (!(error instanceof BadRequestError)) throw error;
           await skip(file.id, 'storage_limit', { size: bytes.length });

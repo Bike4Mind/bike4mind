@@ -461,6 +461,43 @@ describe('driveLakeIngest consumer', () => {
     expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
   });
 
+  it('credits bytes a same-run duplicate retire already reclaimed against a later quota check', async () => {
+    // d1 has a stale duplicate copy retired by the step-4b sweep (100 bytes, per the default
+    // deleteFabFile mock) before the loop reaches d2. d2's check must be credited that reclaim, or
+    // it is still refused against a snapshot that counts bytes already deleted this run.
+    h.walkFolder.mockResolvedValue([
+      { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' },
+      { id: 'd2', name: 'b.txt', mimeType: 'text/plain', relativePath: 'b.txt' },
+    ]);
+    setExisting([
+      {
+        id: 'ff-older',
+        driveFileId: 'd1',
+        userId: 'user1',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        tags: [{ name: 'lake-tag' }],
+      },
+      {
+        id: 'ff-newest',
+        driveFileId: 'd1',
+        userId: 'user1',
+        createdAt: '2026-02-01T00:00:00.000Z',
+        tags: [{ name: 'lake-tag' }],
+      },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes(300));
+    h.checkStorageLimit.mockImplementation(async (_user, size: number) => {
+      if (size > 250) throw new BadRequestError('storage limit exceeded');
+    });
+
+    await run();
+
+    // Without the 100-byte credit this would be called with 300, which the mock above refuses.
+    expect(h.checkStorageLimit).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), 200);
+    expect(h.recordSkippedDriveFile).not.toHaveBeenCalledWith('batch1', 'd2');
+    expect(h.createFabFile).toHaveBeenCalledWith(expect.objectContaining({ driveFileId: 'd2' }), expect.anything());
+  });
+
   it('ingests only the genuinely-new file, skipping one already in the lake (unchanged)', async () => {
     h.walkFolder.mockResolvedValue([
       { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' },
