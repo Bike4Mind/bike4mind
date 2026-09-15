@@ -154,6 +154,11 @@ to the status this table says. That half is review-only - see
 `401` with `provider_not_configured` for "no usable key is configured"
 (`pages/api/ai/tts.ts`), where this table says `503`.
 
+The table maps a condition to the status a **synchronous** response uses. An async
+endpoint has already answered `200` by the time the work fails, so the same condition
+arrives on the polled job resource carrying the same `errorCode` instead - see
+[section 4](#4-long-running-work).
+
 The two provider classifiers are easy to invert, so to be explicit:
 `provider_not_configured` means **we** have no usable key for that provider;
 `provider_rejected` means the provider **refused** the key we sent.
@@ -249,6 +254,20 @@ Today there are three shapes for this - chat quest-polling (with an inline `wait
 escape), image-generation quest-polling, and fully synchronous audio. Converging them is
 follow-up work; new endpoints use `202` + job resource.
 
+**A handoff response must also document how the work can FAIL.** Once the ACK is sent,
+no status code is left to carry the outcome: a failed turn polls back as a normal `200`
+job resource whose classifier is the only machine-readable signal, and for chat the
+failure text lands in `reply` - the same field a real answer uses. So the classifier is
+not optional documentation; a contract that publishes only the handoff invites a caller
+to consume a credit-exhaustion message as a model reply.
+
+Declare the job resource's outcome fields via `ResponseSpec.pollResult`. It publishes as a
+`<operationId>PollResult` component that the response points at with an `x-poll-result`
+extension rather than as a body of that status, since the body belongs to the poll
+operation. Use the same `errorCode` vocabulary as the synchronous `422`s above -
+`insufficient_credits` / `spend_cap_exceeded` mean the same thing whether they arrive as
+a status or on a job resource. `POST /api/chat` is the reference.
+
 ---
 
 ## 5. Scopes
@@ -317,3 +336,4 @@ mistakes "CI passed" for "conventions met":
 | `emitsRateLimitHeaders` matches the handler's middleware chain | Half of this **is** now gated - the flag is rejected on any auth mode but `apiKeyOrJwt`, since `baseApi` mounts `apiKeyRateLimit` only on the api-key chain. What remains ungated is whether an `apiKeyOrJwt` handler actually mounts `baseApi`. Closing it needs the adapters to assert at runtime in non-prod, the way they already assert response schemas. |
 | Wire fields are `snake_case` | Requires walking Zod shapes, and today's schemas deliberately accept camelCase aliases, so the check would fail on arrival. Needs the alias metadata to exist first. |
 | `202` + job resource for unbounded work | Not structurally detectable - it is a design review question. |
+| An async endpoint documents its poll result's failure classifier | `pollResult` is optional on `ResponseSpec`, and whether a given operation's work can fail after the ACK lives in the processing pipeline, not the contract. |

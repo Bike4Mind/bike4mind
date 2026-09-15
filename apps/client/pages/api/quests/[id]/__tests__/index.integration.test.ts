@@ -204,6 +204,35 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     expect(res._getJSONData()).toMatchObject({ images: [], files: [] });
   });
 
+  describe('errorCode (why the turn failed)', () => {
+    // A credit-exhausted turn is status done with the credit copy in `reply` - the
+    // same field an answer uses - so without the classifier a polling caller can
+    // only pattern-match prose.
+    it('reports the classifier on a failed turn alongside the failure prose', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'done',
+        type: 'error',
+        errorCode: 'insufficient_credits',
+        reply: "You're out of credits. This request needs about 12 credits, but only 3 are available.",
+        promptMeta: {},
+      });
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toMatchObject({ type: 'error', errorCode: 'insufficient_credits' });
+    });
+
+    it('leaves it undefined on a successful turn', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getJSONData().errorCode).toBeUndefined();
+    });
+  });
+
   describe('toolPayloads (structured tool output for programmatic callers)', () => {
     const PROBLEM = { name: 'shop', jobs: [], machines: [] };
 

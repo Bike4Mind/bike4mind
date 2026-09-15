@@ -85,6 +85,20 @@ export function registerContract(contract: EndpointContract): void {
       content[body.contentType] = { schema: componentSchema(body, `${contract.operationId}Response${status}Alt${i}`) };
     });
 
+    // A poll result is a different operation's body, so it is registered as a
+    // standalone component rather than content of this status: the description
+    // points a caller at it. zod-to-openapi emits every registered definition,
+    // referenced or not.
+    if (spec.pollResult) {
+      registry.register(
+        `${contract.operationId}PollResult`,
+        spec.pollResult.schema.openapi(`${contract.operationId}PollResult`, {
+          description: spec.pollResult.description,
+          ...(spec.pollResult.example !== undefined && { example: spec.pollResult.example }),
+        })
+      );
+    }
+
     responses[status] = {
       description: spec.description,
       content,

@@ -181,6 +181,19 @@ function operationMetadata() {
     // Statuses each contract declares ITSELF, as opposed to the 401/403 that
     // registerContract injects - the distinction rate-limit headers turn on below.
     declaredStatuses: new Map(contracts.map(c => [c.operationId, new Set(Object.keys(c.responses))])),
+    // Statuses whose contract declares a pollResult. The shape is a component
+    // registerContract already registered; this pass is what points the response at
+    // it, since the generator models no "the outcome arrives elsewhere" relation.
+    pollResultStatuses: new Map(
+      contracts.map(c => [
+        c.operationId,
+        new Set(
+          Object.entries(c.responses)
+            .filter(([, spec]) => spec.pollResult)
+            .map(([status]) => status)
+        ),
+      ])
+    ),
   };
 }
 
@@ -277,9 +290,17 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
 
       const emitsRateLimitHeaders = meta.rateLimitHeaderOps.has(opId);
       const declaredStatuses = meta.declaredStatuses.get(opId);
+      const pollResultStatuses = meta.pollResultStatuses.get(opId);
       for (const status of Object.keys(op.responses ?? {})) {
         const response = op.responses[status];
         response.headers = { ...REQUEST_ID_HEADER_SPEC, ...(response.headers ?? {}) };
+        // An extension rather than a second media type under `content`: this body
+        // belongs to the poll operation, and claiming this status can return it
+        // would make a generated client parse an ACK as the outcome. The prose
+        // lives on the component it points at.
+        if (pollResultStatuses?.has(status)) {
+          response['x-poll-result'] = { schema: { $ref: `#/components/schemas/${opId}PollResult` } };
+        }
         if (emitsRateLimitHeaders && !isInjectedAuthFailure(status, declaredStatuses)) {
           response.headers = { ...response.headers, ...RATE_LIMIT_HEADER_SPEC };
         }
