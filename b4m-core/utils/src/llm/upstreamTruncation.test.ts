@@ -562,3 +562,48 @@ describe('content cut before assembly is declared to the model', () => {
     });
   });
 });
+
+describe('processUrlsFromPrompt remainingPrompt stripping', () => {
+  it('strips a URL carrying regex metacharacters, which the unescaped alternation left behind', async () => {
+    // URL_REGEX's character classes can emit `?` and `.`, so this URL used to compile to
+    // `https://example.com/a?b=1` as a PATTERN - `a?` optional, `.` any char - which no longer
+    // matches its own text. The URL was fetched and then left sitting in the prompt.
+    const url = 'https://example.com/a?b=1';
+    const { remainingPrompt } = await processUrlsFromPrompt(
+      `summarise ${url} please`,
+      100000,
+      'user-1',
+      async () => {},
+      mockLogger as any
+    );
+
+    expect(remainingPrompt).not.toContain(url);
+    expect(remainingPrompt).toContain('summarise');
+    expect(remainingPrompt).toContain('please');
+  });
+
+  it('strips a plain URL and trims, unchanged from before', async () => {
+    const { remainingPrompt } = await processUrlsFromPrompt(
+      'summarise https://example.com/report',
+      100000,
+      'user-1',
+      async () => {},
+      mockLogger as any
+    );
+
+    expect(remainingPrompt).toBe('summarise');
+  });
+
+  it('returns the prompt untouched when it holds no URLs', async () => {
+    const { remainingPrompt, userMessages } = await processUrlsFromPrompt(
+      '  just a question  ',
+      100000,
+      'user-1',
+      async () => {},
+      mockLogger as any
+    );
+
+    expect(remainingPrompt).toBe('  just a question  ');
+    expect(userMessages).toHaveLength(0);
+  });
+});

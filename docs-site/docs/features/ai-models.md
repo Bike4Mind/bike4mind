@@ -119,6 +119,7 @@ Claude 3.x through 4.5 models (and Claude 4.6 Sonnet) support a 200K token conte
 ### DeepSeek Models (Direct API)
 
 - **DeepSeek Flash** - DeepSeek-V4.1-Flash, 1M context window with vision, tool use, and reasoning support
+- **DeepSeek V4 Pro** - DeepSeek-V4-Pro, 1M context window with reasoning support
 
 ### Moonshot Models (Kimi)
 
@@ -271,7 +272,7 @@ Different models support different context lengths:
 | Gemini 2.5 Pro | 2M tokens | Largest documents |
 | Gemini 3.x / 2.5 Flash | 1M tokens | Large documents, fast |
 | Grok 4 | 256K tokens | Long conversations |
-| DeepSeek Flash | 1M tokens | Massive codebases, long documents |
+| DeepSeek Flash / V4 Pro | 1M tokens | Massive codebases, long documents |
 | Kimi K3 | 1M tokens | Large documents, agentic tool use |
 | DeepSeek R1 / v3.1 | 128K tokens | Code repositories |
 

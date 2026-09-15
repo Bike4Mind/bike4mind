@@ -348,7 +348,7 @@ const SubscribersTab = () => {
             <Alert
               color="warning"
               variant="soft"
-              sx={{ mb: 2, backgroundColor: isDarkMode ? 'warning.550' : 'warning.100' }}
+              sx={{ mb: 2 }}
               endDecorator={
                 <IconButton
                   size="sm"

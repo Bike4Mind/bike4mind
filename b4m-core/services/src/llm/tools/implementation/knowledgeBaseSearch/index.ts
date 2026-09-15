@@ -89,8 +89,14 @@ interface SkipNotice {
  * `maxChunkChars` comes from resolveSearchBudgets, which derives it from the chunk-size policy. It is
  * not a constant here on purpose: a serve cap set independently of the chunk size WILL disagree with
  * it, and the disagreement is invisible - every full-size passage arrives pre-truncated and the model
- * answers from a fraction of what the lake stores. Clipping now only fires on chunks larger than the
- * current policy would produce (legacy content from a coarser chunker), and says so when it does.
+ * answers from a fraction of what the lake stores. Clipping fires on chunks larger than that policy
+ * would produce (legacy content from a coarser chunker), and says so when it does.
+ *
+ * "That policy" is the caller's rung floored at the platform value (#2803), not the policy of each
+ * passage's own OWNER, so the guarantee is not quite absolute: an owner who pinned their chunk target
+ * above both still has their in-policy chunks clipped here. Per-file resolution is what would close
+ * it - see `resolveServeTarget`. The notice below names one number because this budget is one number;
+ * that is the coupling to revisit first if per-file ever lands.
  *
  * `bounding` (#1955) is set when a token budget stopped short of returning every ranked passage -
  * distinct from `scan.truncated` (how much of the CORPUS was searched) and `skipNotice` (whether what
