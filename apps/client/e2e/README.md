@@ -371,7 +371,13 @@ How the suite reads that value depends on the account it is running against:
 - **dev / staging (same account)** - the Playwright step runs inside `pnpm sst shell`, so the test client reads `Resource.E2E_CLEANUP_SECRET.value`, the same value the cleanup/create-user API validates against.
 - **`pr<N>` previews (separate account)** - the dev role cannot `sst shell` into a preview stack, so the workflows inject the `E2E_CLEANUP_SECRET` **repo secret** on `Bike4Mind/bike4mind` directly into the step's environment instead.
 
-That repo secret is a mirror of the value the deployer seeds onto every stage, and it has to be set on this repo specifically - a copy living only on the deployer repo is not visible here. **When it is unset, preview-targeted runs cannot start at all**, and every path reports that as a labeled skip rather than a failure: the PR comment reads `Skipped` and the Slack post reads `:fast_forward: Skipped`. Zero tests ran, so neither a pass nor a failure would be true. If you see that, the fix is to set the repo secret, not to debug the suite.
+That repo secret is a mirror of the value the deployer seeds onto every stage, and it has to be set on this repo specifically - a copy living only on the deployer repo is not visible here. **When it is unset, preview-targeted runs cannot start at all.** Zero tests ran, so neither a pass nor a failure would be true, and each workflow reports it as a labeled skip instead:
+
+- `e2e-on-label.yml` - the PR comment reads `E2E Tests Skipped` and names the secret.
+- `e2e-run.yml` - the Slack post reads `:fast_forward: Skipped (E2E_CLEANUP_SECRET not configured)`. The promotion commit status is left missing, which is not promotable.
+- `e2e-ai-latency.yml` - the Slack post reads `:fast_forward: Skipped (E2E_CLEANUP_SECRET not configured)` and the table legend names the configuration gap instead of blaming Playwright. **One exception:** a *full-matrix* preview dispatch still fails red, because model discovery cannot run without the secret and the matrix cannot be built without discovered models. That run names the cause in an `::error::` rather than reporting an empty discovery result.
+
+If you see any of these, the fix is to set the repo secret, not to debug the suite.
 
 ## Debugging
 

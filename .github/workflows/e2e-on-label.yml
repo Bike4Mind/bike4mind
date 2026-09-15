@@ -157,12 +157,18 @@ jobs:
               ? 'Preview e2e is unavailable: the `E2E_CLEANUP_SECRET` repo secret is not configured, so no tests ran.'
               : (summaryMatch ? summaryMatch[0].trim() : 'See report for details');
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            // The report upload is gated off on a skip, so offering a download would point at
+            // an artifact list with no Playwright report in it. Link the run itself instead -
+            // that is where the ::warning:: naming the missing secret actually is.
+            const reportLine = skipped
+              ? `**Run:** [View workflow run](${runUrl})`
+              : `**Report:** [Download from artifacts](${runUrl})`;
 
             const body = `${icon} **E2E Tests ${status}**
 
             **Results:** ${summary}
             **Preview:** \`${process.env.API_URL}\`
-            **Report:** [Download from artifacts](${runUrl})
+            ${reportLine}
 
             <sub>Tested against preview deployment for PR #${context.issue.number} (triggered by run-e2e label)</sub>`;
 

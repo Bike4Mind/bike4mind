@@ -139,6 +139,31 @@ describe('e2e skip rendering', () => {
   it('renders the PR comment as Skipped rather than Passed', () => {
     const contents = read('e2e-on-label.yml');
     expect(contents).toMatch(/const skipped = '\$\{\{ steps\.e2e\.outputs\.preview_skipped \}\}' === 'true'/);
-    expect(contents).toMatch(/skipped \? 'Skipped' :/);
+    // Anchored to the front of the statement, not matched anywhere in it: `passed ? 'Passed' :
+    // skipped ? 'Skipped' : 'Failed'` still contains the inner arm, so an unanchored match would
+    // pass while a skip rendered a green "E2E Tests Passed" on a PR where zero tests ran.
+    expect(contents).toMatch(/const status = skipped \? 'Skipped' :/);
+    expect(contents).toMatch(/const icon = skipped \?/);
+  });
+
+  /**
+   * ai-latency renders its verdict in shell rather than a GitHub expression, and its skip has a
+   * second way to go wrong: the flag crosses a job boundary, so the chain below can be correct
+   * while reading an output nobody publishes. Both ends are pinned - deleting either the job
+   * output or the `notify` env line leaves PREVIEW_SKIPPED permanently empty, which silently
+   * restores the green-with-no-cause reading this branch exists to prevent.
+   */
+  it('branches the ai-latency Slack status on the skip before pass/fail', () => {
+    const contents = read('e2e-ai-latency.yml');
+    expect(contents).toMatch(/^\s*preview_skipped: \$\{\{ steps\.e2e\.outputs\.preview_skipped \}\}$/m);
+    expect(contents).toMatch(/^\s*PREVIEW_SKIPPED: \$\{\{ needs\.e2e-ai-latency\.outputs\.preview_skipped \}\}$/m);
+    // The skip must be the FIRST arm: the no-quality-data arm it would otherwise fall into
+    // renders a string whose own legend attributes it to a Playwright crash.
+    expect(contents).toMatch(
+      /if \[ "\$\{PREVIEW_SKIPPED:-\}" = "true" \]; then\r?\n\s*OVERALL_STATUS=":fast_forward: Skipped[^\r\n]*\r?\n\s*elif \[ "\$\{#ALL_PW_RESULTS\[@\]\}" -gt 0 \]; then/
+    );
+    // A later unconditional downgrade would undo the branch above, so the one that exists is
+    // pinned as skip-aware rather than merely present.
+    expect(contents).toMatch(/if \[ "\$EXCEEDED" = "true" \] && \[ "\$\{PREVIEW_SKIPPED:-\}" != "true" \]; then/);
   });
 });

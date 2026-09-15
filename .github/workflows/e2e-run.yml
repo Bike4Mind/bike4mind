@@ -466,7 +466,11 @@ jobs:
         # not cancelled(), so it still posts - the total==0 branch in the status
         # expressions below renders it red instead of a misleading green. The skip
         # branch ahead of it is the third state: a preview run that could not start
-        # for a missing repo secret is neither a pass nor a failure.
+        # for a missing repo secret is neither a pass nor a failure. The action button
+        # below degrades with it: no report is uploaded on a skip, so it links the run
+        # rather than an empty artifact list. Its `!= 'true' && '#artifacts' || ''` shape
+        # is deliberate - '' is falsy in a GitHub expression, so the non-empty branch has
+        # to come first or the anchor would be appended in both states.
         if: ${{ !cancelled() }}
         uses: slackapi/slack-github-action@v2
         with:
@@ -521,8 +525,8 @@ jobs:
                   "elements": [
                     {
                       "type": "button",
-                      "text": { "type": "plain_text", "text": "View Report" },
-                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts"
+                      "text": { "type": "plain_text", "text": "${{ steps.e2e.outputs.preview_skipped == 'true' && 'View Run' || 'View Report' }}" },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}${{ steps.e2e.outputs.preview_skipped != 'true' && '#artifacts' || '' }}"
                     }
                   ]
                 }
