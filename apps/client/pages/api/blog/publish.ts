@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { IUserDocument } from '@bike4mind/common';
 import { decryptToken } from '@server/security/tokenEncryption';
+import { assertUrlAllowed, safeFetch, SsrfError } from '@server/utils/ssrfProtection';
 
 interface BlogPublishParams {
   title: string;
@@ -32,6 +33,20 @@ async function publishToBlog(user: IUserDocument, params: BlogPublishParams): Pr
   const { apiKey: rawApiKey, baseUrl, defaultAuthor, defaultTags } = user.blogIntegration;
   const apiKey = decryptToken(rawApiKey) ?? '';
 
+  // Fail closed against SSRF: this runs server-side with the user's blog key, so a baseUrl
+  // pointed at an internal/metadata host would let the server reach it on the caller's behalf.
+  // Reject the host up front (DNS-resolving, so a public name that resolves to a private IP is
+  // caught too); the outbound safeFetch below re-checks it and a redirect hop. Mirrors
+  // blog/presign-image-upload.ts (shared guard).
+  try {
+    await assertUrlAllowed(baseUrl);
+  } catch (e) {
+    if (e instanceof SsrfError) {
+      throw new Error(`Blog integration baseUrl is not allowed: ${e.message}`);
+    }
+    throw e;
+  }
+
   const requestBody: Record<string, any> = {
     title: params.title,
     content: params.content,
@@ -53,7 +68,7 @@ async function publishToBlog(user: IUserDocument, params: BlogPublishParams): Pr
 
   let response: Response;
   try {
-    response = await fetch(`${baseUrl}/api/posts`, {
+    response = await safeFetch(`${baseUrl}/api/posts`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -65,6 +80,11 @@ async function publishToBlog(user: IUserDocument, params: BlogPublishParams): Pr
     clearTimeout(timeoutId);
   } catch (fetchError) {
     clearTimeout(timeoutId);
+    // Keep every baseUrl problem (including a redirect to an internal host) in the same 422
+    // "not allowed" bucket the up-front guard uses.
+    if (fetchError instanceof SsrfError) {
+      throw new Error(`Blog integration baseUrl is not allowed: ${fetchError.message}`);
+    }
     if (fetchError instanceof Error && fetchError.name === 'AbortError') {
       throw new Error('Blog API request timed out after 15s');
     }
@@ -72,8 +92,18 @@ async function publishToBlog(user: IUserDocument, params: BlogPublishParams): Pr
   }
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to publish blog post: ${response.status} ${response.statusText}. ${errorText}`);
+    // Bound what the upstream body can leak into our response: parse a message/error field, else
+    // cap the raw text. An unbounded relay of a user-supplied host's response is an SSRF read half.
+    // Mirrors presign-image-upload.ts.
+    const text = await response.text().catch(() => '');
+    let detail = `status ${response.status}`;
+    try {
+      const parsed = JSON.parse(text);
+      detail = parsed.message || parsed.error || detail;
+    } catch {
+      if (text) detail = text.substring(0, 200);
+    }
+    throw new Error(`Failed to publish blog post: ${detail}`);
   }
 
   const data: BlogPublishResponse = await response.json();
@@ -98,7 +128,7 @@ const handler = baseApi().post(async (req, res) => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to publish blog post';
-    const isConfigError = message.includes('not configured');
+    const isConfigError = message.includes('not configured') || message.startsWith('Blog integration baseUrl');
     if (isConfigError) {
       console.warn('Blog publish config issue:', message);
       return res.status(422).json({ success: false, message });

@@ -32,6 +32,34 @@ Two generated/declared files trail step 1 and are gated in CI, not locally:
 - `infra/deploy-contract.json` must name any `process.env` that `infra/` reads at deploy
   time. Threading a new lever through `infra/web.ts` alone fails `Core Build`.
 
+## Confined scopes (default-deny)
+
+Three scopes -- `embed:chat`, `cc-bridge:connect` and `overwatch-ingest:write` -- are
+*confined*: each exists to authorize exactly one flow, so a key carrying any of them is
+rejected on every `baseApi` route that does not explicitly name it, rather than falling
+through the opt-in default above. `CONFINED_SCOPES` / `decideScopeGate`
+(`apps/client/server/middlewares/apiKeyScopeGate.ts`) is where that denial lives.
+
+For a confined scope, step 3 is neither optional nor local. Declaring `requiredScopes`
+on *every* route the credential is expected to reach is mandatory, **including routes
+that are not in this repository** -- a downstream deployment can mount additional route
+files into `pages/api` through the same `baseApi` at build time, and one that omits
+`requiredScopes` will 403 a legitimate confined key the minute the gate ships. There is
+no staging lever to soften it: confined scopes are in `UNSTAGEABLE_SCOPES` by design
+(there is no grandfathered population -- each key is minted for its one flow), so a
+missed route is a hard outage with no backfill, only a revert.
+
+The sequence is therefore: land the `requiredScopes` declaration on all routes the
+credential touches -- in this repo and any downstream one, where the declaration is a
+no-op against a `main` that already carries the enum value -- *before* the confinement
+gate deploys. A route that also serves ordinary session or personal-key callers cannot
+declare the scope file-wide (`requiredScopes` is per-`baseApi` chain, not per-method, so
+it would newly deny those callers): split the methods, or check the scope in the handler.
+
+Confined scopes take no staging and no re-mint window; the preflight,
+`API_KEY_SCOPE_STAGING` and the re-mint sequence in the rest of this document govern the
+broad opt-in scopes only.
+
 ## Splitting read from spend
 
 Where a surface both reads state and commissions billable work, give it two scopes,

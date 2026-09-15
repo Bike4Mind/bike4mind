@@ -45,6 +45,8 @@ openssl rand -hex 32   # -> SECRET_ENCRYPTION_KEY
 
 > **Do not rotate `SECRET_ENCRYPTION_KEY` casually.** It encrypts other secrets stored in the database, and rotation is not automated for self-host. If you must change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and leave it set permanently: reads fall back to the previous key, so old ciphertext (admin settings, per-user API keys, OAuth tokens, social connections) stays readable. Dropping the previous key makes anything still encrypted under it unrecoverable.
 
+> **Rotating `JWT_SECRET`?** The rotation grace window (which briefly accepts tokens signed with the outgoing secret) stores that outgoing secret encrypted at rest, so it now depends on `SECRET_ENCRYPTION_KEY` being configured - and on `SECRET_ENCRYPTION_KEY_PREVIOUS` too if you are mid-way through an encryption-key rotation. With no encryption key set the outgoing secret is stored in plaintext (logged once) and the grace window still works; but if the encryption key is set at renew time and then changed without carrying the previous key, grace-window tokens fail to verify until they naturally expire.
+
 > **Formatting:** compose reads `.env.selfhost` values verbatim - don't add comments on the same line as a value.
 
 **Minimum required to boot:** the defaults in the template already point everything (MongoDB, MinIO object storage, ElasticMQ queues, Mailpit mail catcher) at the bundled services - you only need to set the three secrets above.

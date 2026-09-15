@@ -6,7 +6,11 @@ import BaseRepository from '@bike4mind/db-core';
 const SecretRotationSchema = new Schema<ISecretRotation, Model<ISecretRotationDocument>, {}>(
   {
     keyName: { type: String, required: true, unique: true },
-    previousKey: { type: String, required: false },
+    // `select: false`: this holds a live signing secret during the rotation grace
+    // window, and two admin-authenticated routes serialize these documents. Excluded
+    // by default so a new response path cannot leak it; `findByKeyNameWithSecret` is
+    // the one accessor that opts back in.
+    previousKey: { type: String, required: false, select: false },
     rotatedAt: { type: Date, required: true },
     nextRotation: { type: Date, required: true },
     rotationIntervalDays: { type: Number, required: true, min: 1 },
@@ -39,35 +43,18 @@ export class SecretRotationRepository
     return this.secretRotationModel.findOne({ keyName });
   }
 
-  async findActiveKeys() {
-    return this.secretRotationModel.find({ isActive: true });
+  /**
+   * Same lookup as `findByKeyName`, but with `previousKey` included. Only the token
+   * verifiers applying the rotation grace window may use this (see
+   * apps/client/server/auth/secretRotationGrace.ts for the list) - never a route that
+   * serializes the result.
+   */
+  async findByKeyNameWithSecret(keyName: string) {
+    return this.secretRotationModel.findOne({ keyName }).select('+previousKey');
   }
 
-  async rotateKey(keyName: string, previousKey: string, rotatedBy: string) {
-    const existing = await this.findByKeyName(keyName);
-    if (!existing) {
-      throw new Error(`SecretRotation not found for ${keyName}`);
-    }
-
-    const rotationIntervalDays = existing.rotationIntervalDays;
-    const now = new Date();
-    const nextRotation = new Date();
-    nextRotation.setDate(now.getDate() + rotationIntervalDays);
-
-    const secretRotation = await this.secretRotationModel.findOneAndUpdate(
-      { keyName },
-      {
-        $set: {
-          previousKey,
-          rotatedAt: now,
-          lastRotatedById: rotatedBy,
-          nextRotation,
-        },
-      },
-      { new: true }
-    );
-
-    return secretRotation;
+  async findActiveKeys() {
+    return this.secretRotationModel.find({ isActive: true });
   }
 }
 

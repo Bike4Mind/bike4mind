@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { z } from 'zod';
+import { ApiKeyScope } from '@bike4mind/common';
 
 const { mockUserFindById, mockAdminUpdateUser, mockUpdateUser, mockCount } = vi.hoisted(() => ({
   mockUserFindById: vi.fn(),
@@ -66,13 +67,16 @@ const run = ({
   user,
   userId = 'u1',
   body = {},
+  apiKeyInfo,
 }: {
   user?: unknown;
   userId?: string;
   body?: Record<string, unknown>;
+  apiKeyInfo?: unknown;
 } = {}) => {
   const { req, res } = createMocks({ method: 'PUT', query: { id: userId }, body });
   if (user) (req as Record<string, unknown>).user = user;
+  if (apiKeyInfo) (req as Record<string, unknown>).apiKeyInfo = apiKeyInfo;
   (req as Record<string, unknown>).logger = { updateMetadata: vi.fn() };
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
@@ -139,6 +143,43 @@ describe('PUT /api/users/:id/update - lockout guard', () => {
     await promise;
     expect(res._getStatusCode()).toBe(200);
     expect(mockCount).not.toHaveBeenCalled();
+    expect(mockAdminUpdateUser).toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/users/:id/update - admin branch requires the admin scope', () => {
+  // The route cannot declare `requiredScopes`: it is also every ordinary user's own
+  // profile update. So the gate sits on the admin branch, which writes credits,
+  // roles and email.
+  it('403s an api-key caller without admin:* on the admin branch', async () => {
+    const { res, promise } = run({
+      user: ADMIN,
+      userId: 'someone-else',
+      body: { currentCredits: 999999 },
+      apiKeyInfo: { keyId: 'k1', scopes: [ApiKeyScope.AI_CHAT] },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('admits an api-key caller that holds admin:*', async () => {
+    const { promise } = run({
+      user: ADMIN,
+      userId: 'someone-else',
+      body: { currentCredits: 10 },
+      apiKeyInfo: { keyId: 'k1', scopes: [ApiKeyScope.ADMIN] },
+    });
+    await promise;
+
+    expect(mockAdminUpdateUser).toHaveBeenCalled();
+  });
+
+  it('leaves JWT admins alone - no apiKeyInfo means no scope gate', async () => {
+    const { promise } = run({ user: ADMIN, userId: 'someone-else', body: { currentCredits: 10 } });
+    await promise;
+
     expect(mockAdminUpdateUser).toHaveBeenCalled();
   });
 });
