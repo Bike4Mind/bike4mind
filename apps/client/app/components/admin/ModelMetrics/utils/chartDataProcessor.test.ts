@@ -26,6 +26,7 @@ describe('processChartData', () => {
         metric('2025-09-14T15:10:00', { contextRetrievalTime: 900 }),
       ]);
 
+      expect(chartData.granularity).toBe('hourly');
       expect(points(chartData.dailyTrends)).toEqual([
         { x: '09/14 14:00', y: 2 },
         { x: '09/14 15:00', y: 1 },
@@ -44,6 +45,7 @@ describe('processChartData', () => {
         metric('2025-09-16T01:00:00'),
       ]);
 
+      expect(chartData.granularity).toBe('daily');
       expect(points(chartData.dailyTrends)).toEqual([
         { x: '09/14', y: 1 },
         { x: '09/16', y: 2 },
@@ -60,6 +62,7 @@ describe('processChartData', () => {
         metric('2025-09-15T18:00:00'),
       ];
 
+      expect(processChartData(wide).granularity).toBe('daily');
       expect(points(processChartData(wide).dailyTrends).map(p => p.x)).toEqual(['09/13', '09/15', '09/17']);
     });
 
@@ -98,6 +101,7 @@ describe('processChartData', () => {
       expect(points(chartData.dailyTrends)).toEqual([]);
       expect(points(chartData.charactersPerSecondTrends)).toEqual([]);
       expect(chartData.modelUsageData).toEqual([]);
+      expect(chartData.granularity).toBe('hourly');
     });
   });
 

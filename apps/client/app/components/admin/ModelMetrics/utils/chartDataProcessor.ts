@@ -39,7 +39,7 @@ const buildAverageTrend = (
   const byBucket = filteredMetrics.reduce(
     (acc, metric) => {
       const value = valueOf(metric);
-      if (value === undefined || value === null) {
+      if (value == null) {
         return acc;
       }
       const { x, sortKey } = toBucket(metric.timestamp, useHourlyGranularity);
@@ -119,7 +119,7 @@ export const processChartData = (
     },
     { min: Infinity, max: -Infinity }
   );
-  const useHourlyGranularity = filteredMetrics.length === 0 || span.max - span.min <= MAX_HOURLY_SPAN_MS;
+  const useHourlyGranularity = span.max - span.min <= MAX_HOURLY_SPAN_MS;
 
   // Daily/hourly usage trends
   const usageByBucket = filteredMetrics.reduce(
@@ -165,19 +165,17 @@ export const processChartData = (
     useHourlyGranularity,
     metric => {
       const charsPerSecond = metric.performance?.streamingPerformance?.charsPerSecond;
-      if (metric.model?.type !== 'text' || !charsPerSecond || charsPerSecond <= 0) {
-        return null;
-      }
-      return charsPerSecond;
+      return metric.model?.type === 'text' && charsPerSecond != null && charsPerSecond > 0 ? charsPerSecond : null;
     }
   );
 
   const processPickupTrends = buildAverageTrend(filteredMetrics, 'process-pickup', useHourlyGranularity, metric => {
     const pickupTime = metric.performance?.processPickupTime;
-    return pickupTime !== undefined && pickupTime !== null && pickupTime >= 0 ? pickupTime : null;
+    return pickupTime != null && pickupTime >= 0 ? pickupTime : null;
   });
 
   return {
+    granularity: useHourlyGranularity ? 'hourly' : 'daily',
     modelUsageData,
     performanceData,
     dailyTrends,

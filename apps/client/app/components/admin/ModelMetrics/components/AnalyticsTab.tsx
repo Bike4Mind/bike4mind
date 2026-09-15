@@ -141,7 +141,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
       {/* Row 2: Daily Usage Trends */}
       <Box sx={{ mt: 2, mb: 2 }}>
         <Typography level="h4" sx={{ mb: 2 }}>
-          {chartData.dailyTrends[0]?.data?.[0]?.x?.includes(':') ? 'Hourly' : 'Daily'} Analytics Trends
+          {chartData.granularity === 'hourly' ? 'Hourly' : 'Daily'} Analytics Trends
         </Typography>
         <Box sx={{ height: 300 }}>
           {chartData.dailyTrends[0]?.data?.length > 1 ? (
@@ -162,7 +162,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
                 tickSize: 5,
                 tickPadding: 5,
                 tickRotation: -45,
-                legend: chartData.dailyTrends[0]?.data?.[0]?.x?.includes(':') ? 'Time' : 'Date',
+                legend: chartData.granularity === 'hourly' ? 'Time' : 'Date',
                 legendPosition: 'middle',
                 legendOffset: 55,
               }}
@@ -252,7 +252,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
                   tickSize: 5,
                   tickPadding: 5,
                   tickRotation: -45,
-                  legend: chartData.contextRetrievalTrends[0]?.data?.[0]?.x?.includes(':') ? 'Time' : 'Date',
+                  legend: chartData.granularity === 'hourly' ? 'Time' : 'Date',
                   legendPosition: 'middle',
                   legendOffset: 55,
                 }}
@@ -340,7 +340,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
                   tickSize: 5,
                   tickPadding: 5,
                   tickRotation: -45,
-                  legend: chartData.firstTokenTrends[0]?.data?.[0]?.x?.includes(':') ? 'Time' : 'Date',
+                  legend: chartData.granularity === 'hourly' ? 'Time' : 'Date',
                   legendPosition: 'middle',
                   legendOffset: 55,
                 }}
@@ -431,7 +431,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
                   tickSize: 5,
                   tickPadding: 5,
                   tickRotation: -45,
-                  legend: chartData.processPickupTrends[0]?.data?.[0]?.x?.includes(':') ? 'Time' : 'Date',
+                  legend: chartData.granularity === 'hourly' ? 'Time' : 'Date',
                   legendPosition: 'middle',
                   legendOffset: 55,
                 }}
@@ -518,7 +518,7 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ filters = {} }) => {
                   tickSize: 5,
                   tickPadding: 5,
                   tickRotation: -45,
-                  legend: chartData.charactersPerSecondTrends[0]?.data?.[0]?.x?.includes(':') ? 'Time' : 'Date',
+                  legend: chartData.granularity === 'hourly' ? 'Time' : 'Date',
                   legendPosition: 'middle',
                   legendOffset: 55,
                 }}
