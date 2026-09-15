@@ -18,8 +18,12 @@ import {
  *
  * PER-FILE, INTERLEAVED, so a partial run converges. Every file's delete and its rollup repair
  * happen back-to-back, wrapped in its own try/catch - an interruption (a timeout on the 15-minute
- * deploy-gating migrator Lambda, infra/database.ts, a bad row) leaves a consistent prefix, and a
- * re-run picks up wherever the scan still finds candidates rather than redoing settled files.
+ * deploy-gating migrator Lambda, infra/database.ts, a bad row) leaves every already-settled file
+ * consistent; at most the one file being processed when the interruption hit can have its chunks
+ * deleted with its rollup not yet repaired, and that file's rollup self-corrects the next time
+ * anything measures it from source (a later repair pass, a rebuild-passages wave, the live
+ * vectorize handler). A re-run picks up wherever the scan still finds candidates rather than
+ * redoing settled files.
  *
  * ROLLUP REPAIR IS FROM SOURCE, NEVER A BLIND `$inc`. `chunkCount` (a fresh count),
  * `chunkedCharCount`/`maxChunkCharLength`/`embeddedChunkCount`/`embeddedCharCount` (from
@@ -87,9 +91,7 @@ const capped = (ids: string[]) =>
  * Deletes one file's candidate rows (batched) and repairs its rollup from source. Never throws -
  * a bad row for one file must not abandon every file after it; the caller logs what this returns.
  */
-async function processFilePlan(
-  plan: NearEmptyChunkFilePlan
-): Promise<{
+async function processFilePlan(plan: NearEmptyChunkFilePlan): Promise<{
   deleted: number;
   keptSoleChunk: boolean;
   rollup: 'repaired' | 'skipped-unmeasured' | 'skipped-invalid-id' | 'skipped-concurrent' | 'error';
