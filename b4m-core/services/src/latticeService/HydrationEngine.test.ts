@@ -93,6 +93,16 @@ describe('HydrationEngine matchesPattern (regex-injection guard)', () => {
     expect(match('a.b', 'a.b')).toBe(true);
   });
 
+  it('keeps a metacharacter literal on the wildcard path, where the injection actually lived', () => {
+    // The `a.b` case above returns on `!pattern.includes('*')` before the matcher is entered, so
+    // it never pinned this. Combining `*` with another metacharacter is the only shape that does.
+    // Under the pre-fix `pattern.replace(/\*/g, '.*')` compile these both invert: `^.*[ab]$`
+    // matched 'xa' and rejected 'x[ab]'. (A revert to the round-1 escape-then-compile form is
+    // indistinguishable here by construction - the chained-* timing case below is what pins that.)
+    expect(match('*[ab]', 'xa')).toBe(false);
+    expect(match('*[ab]', 'x[ab]')).toBe(true);
+  });
+
   it('matches multi-* globs correctly', () => {
     expect(match('*a*b', 'xxaybzzb')).toBe(true);
     expect(match('*a*b', 'xxbyyaz')).toBe(false);

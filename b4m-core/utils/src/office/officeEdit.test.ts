@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import JSZip from 'jszip';
 import * as XLSX from 'xlsx';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
@@ -163,21 +163,13 @@ describe('unsupported mime', () => {
 });
 
 describe('xlsx sheet-name prototype-pollution guard', () => {
-  // Pollution from this path lands on the CELL ADDRESS keys the writer emits, not on any
-  // value from the edited text, so those are the keys worth asserting on.
-  const POLLUTED_KEYS = ['A1', 'B1', 'A2', '!ref'];
-
-  afterEach(() => {
-    for (const key of POLLUTED_KEYS) delete (Object.prototype as Record<string, unknown>)[key];
-  });
-
-  it('rejects a reserved sheet name and leaves Object.prototype untouched', async () => {
+  it('rejects a reserved sheet name', async () => {
+    // `book_append_sheet(wb, ws, '__proto__')` reassigns `wb.Sheets`'s OWN prototype to the sheet
+    // object - it never writes shared `Object.prototype` - so the rejection itself is the whole
+    // assertion here. The own-property read is what the sibling test below covers.
     const buffer = makeXlsx();
     const edited = '### Sheet: __proto__\nA,polluted\nx,y';
     await expect(applyEditedText(buffer, edited, XLSX_MIME)).rejects.toThrow(/sheet name/i);
-    for (const key of POLLUTED_KEYS) {
-      expect(({} as Record<string, unknown>)[key]).toBeUndefined();
-    }
   });
 
   it('looks up an existing sheet by own property, not through the prototype chain', async () => {
