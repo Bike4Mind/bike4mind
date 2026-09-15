@@ -35,12 +35,15 @@ describe('imagePixelCount', () => {
 });
 
 describe('ensureImageWithinDimensionLimit', () => {
-  it('passes an over-budget image through undecoded rather than allocating its bitmap', async () => {
+  it('returns null for an over-budget image rather than allocating its bitmap', async () => {
+    // Null, not the original bytes: the contract is that the result fits the dimension limit, and
+    // passing an unusable image through makes the provider reject the whole turn. Callers skip
+    // the file with an `image_too_large` notice instead.
     const bomb = pngHeader(20000, 20000); // 4e8 px, ~1.6GB if decoded
     expect(imagePixelCount(bomb)).toBeGreaterThan(MAX_IMAGE_PIXELS);
     const start = Date.now();
     const out = await ensureImageWithinDimensionLimit(bomb);
-    expect(out).toBe(bomb); // returned as-is: never decoded
+    expect(out).toBeNull(); // never decoded
     expect(Date.now() - start).toBeLessThan(200);
   });
 

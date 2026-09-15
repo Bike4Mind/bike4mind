@@ -1279,11 +1279,37 @@ export interface FabFileNotice {
  * processFabFilesServer (see its deps) rather than imported here so this module -
  * and thus the @bike4mind/utils barrel - carries no jimp dependency. Server callers
  * pass `ensureImageWithinDimensionLimit` from '@bike4mind/utils/imageResize'. See #660.
+ * `null` means the image declares a canvas too large to decode safely, so it cannot be made to
+ * fit; every call site must skip the file with a notice rather than send it on.
  */
-type ResizeImageForModel = (imageBuffer: Buffer, maxDimension?: number, logger?: Logger) => Promise<Buffer>;
+type ResizeImageForModel = (imageBuffer: Buffer, maxDimension?: number, logger?: Logger) => Promise<Buffer | null>;
 
 /** Passthrough default: no resize when a caller doesn't inject one. */
 const noopResize: ResizeImageForModel = async imageBuffer => imageBuffer;
+
+/**
+ * Skip an image whose declared canvas is over the decode budget (resizeImageForModel returned
+ * null). It is never decoded, so it cannot be downscaled here - only a smaller upload fixes it.
+ * Every vision path that drops a file has to push a notice, or the file reaches neither the prompt
+ * nor the user (#2228).
+ */
+async function noticeOversizedCanvas(
+  file: IFabFileDocument,
+  fileNotices: FabFileNotice[],
+  logger: Logger,
+  sendStatusUpdate: (status: string) => Promise<void>
+): Promise<void> {
+  const message = `\u26a0\ufe0f Image "${file.fileName}" declares too large a canvas to process and was not sent. Please delete this file and re-upload a smaller image.`;
+  logger.warn(message);
+  await sendStatusUpdate(message);
+  fileNotices.push({
+    fabFileId: file.id,
+    fileName: file.fileName,
+    band: 'image_too_large',
+    message,
+    delivered: false,
+  });
+}
 
 export async function processFabFilesServer(
   embeddingFactory: EmbeddingFactory,
@@ -1534,6 +1560,10 @@ export async function processFabFilesServer(
               // Download image, enforce dimension limit, and detect actual format
               const rawImageBuffer = await storage.download(file.filePath!);
               const imageBuffer = await resizeImageForModel(rawImageBuffer, undefined, logger);
+              if (imageBuffer === null) {
+                await noticeOversizedCanvas(file, fileNotices, logger, sendStatusUpdate);
+                return;
+              }
               const imageData = imageBuffer.toString('base64');
 
               // Detect actual mime type from buffer to avoid mismatches with Anthropic API
@@ -1564,6 +1594,10 @@ export async function processFabFilesServer(
                 undefined,
                 logger
               );
+              if (moonshotBuffer === null) {
+                await noticeOversizedCanvas(file, fileNotices, logger, sendStatusUpdate);
+                return;
+              }
               const { mime: moonshotMimeType } = await getFileType(moonshotBuffer, file.fileName, file.mimeType);
               const moonshotBase64 = moonshotBuffer.toString('base64');
 
@@ -1620,6 +1654,10 @@ export async function processFabFilesServer(
             // dimension cap so a large upload does not blow the local context.
             const rawImageBuffer = await storage.download(file.filePath!);
             const imageBuffer = await resizeImageForModel(rawImageBuffer, undefined, logger);
+            if (imageBuffer === null) {
+              await noticeOversizedCanvas(file, fileNotices, logger, sendStatusUpdate);
+              return;
+            }
             const { mime: ollamaMimeType } = await getFileType(imageBuffer, file.fileName, file.mimeType);
             const ollamaBase64 = imageBuffer.toString('base64');
 

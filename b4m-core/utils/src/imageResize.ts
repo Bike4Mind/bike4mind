@@ -50,24 +50,26 @@ const JIMP_SUPPORTED_MIMES = new Set([
 /**
  * Ensures an image buffer's dimensions do not exceed the max allowed pixels.
  * Bedrock rejects images >2000px in multi-image requests.
- * Returns the original buffer unchanged if already within limits.
+ * Returns the original buffer unchanged if already within limits, or `null` when the image
+ * declares more pixels than MAX_IMAGE_PIXELS.
  * Uses jimp (pure JS) instead of sharp to avoid native dependency issues in Lambda.
  */
 export async function ensureImageWithinDimensionLimit(
   imageBuffer: Buffer,
   maxDimension: number = MAX_IMAGE_DIMENSION_PX,
   logger?: Logger
-): Promise<Buffer> {
-  // Reject a decompression bomb before decoding: a small file can declare a huge canvas.
-  // Stay lenient (this function's contract is to return a usable buffer, not throw) - pass the
-  // bytes through undecoded so we never allocate the bitmap; a too-large image is rejected
-  // downstream by Bedrock's own 2000px limit anyway.
+): Promise<Buffer | null> {
+  // Reject a decompression bomb before decoding: a small file can declare a huge canvas. Signal
+  // over-budget rather than returning the bytes undecoded - this function's contract is that its
+  // result fits maxDimension, and an image that cannot be checked does not. Passing it through
+  // would send a provider an image it rejects, failing the whole turn (and every other file
+  // attached to it); `null` lets the caller skip just this file with a notice.
   const pixels = imagePixelCount(imageBuffer);
   if (pixels !== null && pixels > MAX_IMAGE_PIXELS) {
     logger?.warn(
-      `[ensureImageWithinDimensionLimit] image declares ${pixels} pixels, over the ${MAX_IMAGE_PIXELS} decode limit; passing through undecoded`
+      `[ensureImageWithinDimensionLimit] image declares ${pixels} pixels, over the ${MAX_IMAGE_PIXELS} decode limit; skipping`
     );
-    return imageBuffer;
+    return null;
   }
   try {
     // Dynamic import: jimp is only needed by server-side callers (Lambda, services).

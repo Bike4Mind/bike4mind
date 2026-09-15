@@ -1,4 +1,4 @@
-import { SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { SupportedFabFileMimeTypes, readZipEntryBounded, type BoundedZipEntry } from '@bike4mind/common';
 import { BadRequestError } from '../errors';
 import { isForbiddenObjectKey } from '../safeObjectKey';
 
@@ -41,61 +41,63 @@ export function isAiEditableOfficeMime(mime?: string | null): boolean {
 export const MAX_OFFICE_EDIT_BYTES = 10 * 1024 * 1024;
 
 /**
- * Cap on the number of cells a worksheet's declared `!ref` range may span. A .xlsx can declare
- * a range far larger than its populated cells (the full grid, `A1:XFD1048576`, is ~17e9 cells);
- * extractXlsxText iterates the DECLARED range, so an unbounded `!ref` turns a tiny upload into
- * minutes of event-loop work. Well above any human-scale AI-editable sheet.
+ * Cap on the number of cells a workbook's declared `!ref` ranges may span IN AGGREGATE. A .xlsx
+ * can declare a range far larger than its populated cells (the full grid, `A1:XFD1048576`, is
+ * ~17e9 cells); extractXlsxText iterates the DECLARED range, so an unbounded `!ref` turns a tiny
+ * upload into minutes of event-loop work. The cap has to be a running total rather than per sheet:
+ * a worksheet part that declares a huge range and populates nothing is a couple of hundred bytes,
+ * so within MAX_OFFICE_EDIT_BYTES an attacker multiplies sheets instead of enlarging one. Well
+ * above any human-scale AI-editable workbook.
  */
 export const MAX_XLSX_CELLS = 1_000_000;
 
 /**
  * Max decompressed size of a single OOXML zip entry we read into a string (the docx
  * `word/document.xml`). The 10 MB binary cap bounds the compressed upload, not what an entry
- * decompresses to - a small zip can inflate an entry by ~1000x (zip-bomb shape), so bound the
- * uncompressed size before materializing it.
+ * decompresses to - a small zip can inflate an entry by ~1000x (zip-bomb shape), so the inflate
+ * itself is bounded as it runs (see readZipEntryBounded).
  */
 export const MAX_OFFICE_ENTRY_BYTES = 32 * 1024 * 1024;
 
 /**
- * Decode a worksheet's declared `!ref`, rejecting one whose cell count exceeds MAX_XLSX_CELLS.
- * Both the read (extractXlsxText, which iterates the range) and write (applyXlsxText) paths take
- * their range through here so a crafted `!ref` is bounded before it drives any work.
+ * Decode a worksheet's declared `!ref`, rejecting it once the workbook's cells cross
+ * MAX_XLSX_CELLS in total. Both the read (extractXlsxText, which iterates the range) and write
+ * (applyXlsxText) paths take their ranges through here, each threading its own running total, so
+ * a crafted `!ref` is bounded before it drives any work.
  */
-function decodeBoundedRange(XLSX: typeof import('xlsx'), ref: string, sheetName: string): import('xlsx').Range {
+function decodeBoundedRange(
+  XLSX: typeof import('xlsx'),
+  ref: string,
+  sheetName: string,
+  cellsSoFar: number
+): { range: import('xlsx').Range; cellsSoFar: number } {
   const range = XLSX.utils.decode_range(ref);
-  const cellCount = (range.e.r - range.s.r + 1) * (range.e.c - range.s.c + 1);
-  if (cellCount > MAX_XLSX_CELLS) {
+  const total = cellsSoFar + (range.e.r - range.s.r + 1) * (range.e.c - range.s.c + 1);
+  if (total > MAX_XLSX_CELLS) {
     throw new BadRequestError(
-      `Spreadsheet sheet "${sheetName}" declares ${cellCount.toLocaleString()} cells, over the ${MAX_XLSX_CELLS.toLocaleString()}-cell limit`
+      `Spreadsheet declares ${total.toLocaleString()} cells through sheet "${sheetName}", over the ${MAX_XLSX_CELLS.toLocaleString()}-cell limit`
     );
   }
-  return range;
+  return { range, cellsSoFar: total };
 }
 
 /**
- * Read a named zip entry to a string, rejecting one whose declared uncompressed size exceeds
- * `maxBytes` BEFORE decompressing it (JSZip exposes `_data.uncompressedSize` on the entry). When
- * the metadata is absent, fall back to reading then checking length - one entry's worst case,
- * not an unbounded loop.
+ * Read a named zip entry to a string, bounded at `maxBytes` of DECOMPRESSED output. The bound is
+ * enforced during the inflate rather than against the entry's self-declared uncompressed size,
+ * which is attacker-controlled and which jszip only validates after allocating in full - see
+ * readZipEntryBounded in @bike4mind/common.
  */
-async function readZipEntryBounded(
+async function readOfficeEntryBounded(
   entry: import('jszip').JSZipObject,
   maxBytes: number,
   label: string
 ): Promise<string> {
-  const declared = (entry as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize;
-  if (typeof declared === 'number' && declared > maxBytes) {
-    throw new BadRequestError(
-      `${label} is ${declared.toLocaleString()} bytes decompressed, over the ${maxBytes.toLocaleString()}-byte limit`
-    );
+  // `internalStream` is documented ZipObject API but is missing from the `jszip` types.
+  const result = await readZipEntryBounded(entry as unknown as BoundedZipEntry, maxBytes);
+  if (!result.ok) {
+    throw new BadRequestError(`${label} is over the ${maxBytes.toLocaleString()}-byte decompressed limit`);
   }
-  const text = await entry.async('string');
-  if (text.length > maxBytes) {
-    throw new BadRequestError(
-      `${label} is ${text.length.toLocaleString()} bytes decompressed, over the ${maxBytes.toLocaleString()}-byte limit`
-    );
-  }
-  return text;
+  return result.text;
 }
 
 export async function extractEditableText(buffer: Buffer, mime: string): Promise<string> {
@@ -176,7 +178,7 @@ async function loadDocumentXml(buffer: Buffer): Promise<{ zip: import('jszip'); 
   }
   const entry = zip.file('word/document.xml');
   if (!entry) throw new BadRequestError('File is not a valid .docx document (missing word/document.xml)');
-  const xml = await readZipEntryBounded(entry, MAX_OFFICE_ENTRY_BYTES, 'word/document.xml');
+  const xml = await readOfficeEntryBounded(entry, MAX_OFFICE_ENTRY_BYTES, 'word/document.xml');
   return { zip, xml };
 }
 
@@ -259,12 +261,15 @@ async function extractXlsxText(buffer: Buffer): Promise<string> {
   }
 
   const blocks: string[] = [];
+  let cellsSoFar = 0;
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
     const lines = [`${XLSX_SHEET_HEADER}${sheetName}`];
     const ref = sheet['!ref'];
     if (ref) {
-      const range = decodeBoundedRange(XLSX, ref, sheetName);
+      const decoded = decodeBoundedRange(XLSX, ref, sheetName, cellsSoFar);
+      cellsSoFar = decoded.cellsSoFar;
+      const range = decoded.range;
       for (let r = range.s.r; r <= range.e.r; r++) {
         const row: string[] = [];
         for (let c = range.s.c; c <= range.e.c; c++) {
@@ -315,6 +320,7 @@ async function applyXlsxText(originalBuffer: Buffer, editedText: string): Promis
     throw new BadRequestError('File is not a valid .xlsx spreadsheet');
   }
 
+  let cellsSoFar = 0;
   for (const { name, csv } of splitXlsxSheets(editedText)) {
     const rows = parse(csv.replace(/\s+$/, ''), { relax_column_count: true, skip_empty_lines: false }) as string[][];
 
@@ -349,9 +355,12 @@ async function applyXlsxText(originalBuffer: Buffer, editedText: string): Promis
       continue;
     }
 
-    const existingRef = sheet['!ref']
-      ? decodeBoundedRange(XLSX, sheet['!ref'], name)
-      : { s: { r: 0, c: 0 }, e: { r: 0, c: 0 } };
+    let existingRef: import('xlsx').Range = { s: { r: 0, c: 0 }, e: { r: 0, c: 0 } };
+    if (sheet['!ref']) {
+      const decoded = decodeBoundedRange(XLSX, sheet['!ref'], name, cellsSoFar);
+      cellsSoFar = decoded.cellsSoFar;
+      existingRef = decoded.range;
+    }
     let maxR = existingRef.e.r;
     let maxC = existingRef.e.c;
 

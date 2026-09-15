@@ -509,6 +509,36 @@ describe('SmartChunker', () => {
       expect(allText).not.toContain('OVERSIZED_MARKER');
       expect(Date.now() - start).toBeLessThan(5000);
     });
+
+    it('stops chunking once the slides exhaust the aggregate XML budget', async () => {
+      // The per-slide and slide-count caps bound each item, but an attacker controls their
+      // product: 5,000 slides at 16MB each is ~80GB of decompression driven by one upload. Bulk
+      // that carries no text is the cheap shape, so each slide here is 15MB of XML comment with
+      // one short run. The 32MB budget admits two, then the walk stops.
+      const bulk = (n: number) => `<!--${'x'.repeat(15 * 1024 * 1024)}--><a:t>SLIDE_${n}</a:t>`;
+      const pptx = await buildPptx([bulk(1), bulk(2), bulk(3), '<a:t>TAIL_SLIDE</a:t>']);
+      const chunks = await chunker.chunkFile(pptx, PPTX_MIME);
+      const allText = chunks.map(c => c.text).join(' ');
+
+      expect(allText).toContain('SLIDE_1');
+      expect(allText).toContain('SLIDE_2');
+      expect(allText).not.toContain('SLIDE_3');
+      expect(allText).not.toContain('TAIL_SLIDE');
+    }, 60_000);
+
+    it('caps the extracted text handed to chunkText, which the XML budget does not imply', async () => {
+      // 32MB of slide XML can still yield tens of MB of text, and tiktoken traps rather than
+      // returning on a string that size - so the accumulated text needs its own bound. The
+      // oversized slide is truncated at the cap and the walk stops.
+      const wordy = `<a:t>HEAD_MARKER ${'word '.repeat(600_000)} TAIL_MARKER</a:t>`;
+      const pptx = await buildPptx([wordy, '<a:t>NEXT_SLIDE</a:t>']);
+      const chunks = await chunker.chunkFile(pptx, PPTX_MIME);
+      const allText = chunks.map(c => c.text).join(' ');
+
+      expect(allText).toContain('HEAD_MARKER');
+      expect(allText).not.toContain('TAIL_MARKER'); // truncated at the cap
+      expect(allText).not.toContain('NEXT_SLIDE'); // walk stopped
+    }, 60_000);
   });
 });
 
