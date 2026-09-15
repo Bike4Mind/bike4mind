@@ -2683,6 +2683,37 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     expect(exfil.remoteLog).toEqual(['base']);
   });
 
+  // `unquoteWord` is the normaliser every prefix loop and program sweep runs a shell word
+  // through, so a word it under-strips is a bound that silently does not apply. Pinned
+  // directly because the spellings matrix only instantiates the single-pair shape, while the
+  // failure this helper was rewritten to fix lives in ADJACENT quotes: under the lookbehind
+  // form the character before a quote is CONSUMED by the match, so the second of two adjacent
+  // quotes cannot match. `''env'' git push` is the same command to the shell, and under that
+  // form it keeps a stray quote, which makes SHELL_PREFIX miss the prefix and leaves the push
+  // outside every by-value bound keyed on the program.
+  it('strips shell quoting the way the shell does, including adjacent quotes', () => {
+    const cases: Array<[string, string]> = [
+      ['git', 'git'],
+      ["'env'", 'env'],
+      ['"command"', 'command'],
+      ["''", ''],
+      ['""', ''],
+      ['\'ti\'"me"', 'time'],
+      ["'a'''b'", 'ab'],
+      ["\\'", "\\'"],
+      ["a\\'b", "a\\'b"],
+    ];
+    for (const [input, expected] of cases) {
+      expect([input, unquoteWord(input)]).toEqual([input, expected]);
+    }
+
+    // Paired control: the superseded lookbehind form agrees on every row EXCEPT the adjacent-
+    // quote ones, so those rows - not the helper merely being called - are what this holds.
+    const lookbehind = (word: string) => word.replace(/(^|[^\\])['"]/g, (_match, before) => before);
+    const diverges = cases.filter(([input, expected]) => lookbehind(input) !== expected).map(([input]) => input);
+    expect(diverges).toEqual(["''", '""', '\'ti\'"me"', "'a'''b'"]);
+  });
+
   it('pushes non-force to the PR head ref, with a token the checkout never held', () => {
     // Swept over every `run:` body in the FILE, not over the `Push fold commit` step. The
     // invariant is "a fold cannot push anywhere but the PR head, and never with --force";
