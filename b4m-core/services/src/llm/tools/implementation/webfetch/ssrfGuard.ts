@@ -27,7 +27,7 @@ export function unsafeHostnameReason(hostname: string): string | null {
   if (host === 'localhost' || host === '0.0.0.0' || host === '::' || host === '::1') {
     return 'loopback host';
   }
-  if (host.includes('ffff:')) {
+  if (host.startsWith('::ffff:')) {
     return 'ipv4-mapped ipv6 address';
   }
   if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) && isPrivateIP(host)) {
