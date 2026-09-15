@@ -51,7 +51,16 @@ vi.mock('@bike4mind/database', () => ({
   User: {
     findById: (...a: unknown[]) => {
       const result = mockUserFindById(...a);
-      return { select: () => ({ lean: () => Promise.resolve(result) }) };
+      // Mirrors Mongoose's Query: chainable via .select()/.lean(), but also
+      // directly awaitable (the handler awaits User.findById(userId) bare in
+      // its post-update refetch), so `then` needs to resolve to the same result.
+      const query = {
+        select: () => query,
+        lean: () => Promise.resolve(result),
+        then: (onFulfilled: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) =>
+          Promise.resolve(result).then(onFulfilled, onRejected),
+      };
+      return query;
     },
   },
   userRepository: { count: (...a: unknown[]) => mockCount(...a) },
@@ -82,7 +91,10 @@ const run = ({
 const ADMIN = { id: 'admin1', isAdmin: true };
 
 beforeEach(() => {
-  mockUserFindById.mockReset();
+  // Default: a plain truthy user doc, standing in for whatever findById was called
+  // for (the lockout check, the post-update refetch, or both). Individual tests
+  // override this with mockReturnValue when the returned shape matters.
+  mockUserFindById.mockReset().mockReturnValue({ id: 'u1', name: 'Existing Name' });
   mockAdminUpdateUser.mockReset().mockResolvedValue(undefined);
   mockUpdateUser.mockReset().mockResolvedValue(undefined);
   mockCount.mockReset().mockResolvedValue(2);
@@ -187,5 +199,18 @@ describe('PUT /api/users/:id/update - self-service admin-only field discard', ()
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData().ignoredFields).toBeUndefined();
+  });
+
+  it('returns a null body, not a bare { ignoredFields } object, when the user row is gone by the refetch', async () => {
+    mockUserFindById.mockReturnValue(null);
+    const { res, promise } = run({
+      user: SELF,
+      userId: SELF.id,
+      body: { name: 'New Name', isAdmin: true },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toBeNull();
   });
 });

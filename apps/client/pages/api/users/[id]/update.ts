@@ -186,7 +186,9 @@ const handler = baseApi().put(
       // no userNotes. This branch's own schema cannot write them either, so nothing is lost.
       const finalUser = await User.findById(userId);
       const safeUser = redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions'] });
-      return res.json(ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser);
+      // safeUser is null when the row vanished mid-request; spreading null there would
+      // turn the response into a bare { ignoredFields } that reads as a user document.
+      return res.json(safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser);
     }
   })
 );
