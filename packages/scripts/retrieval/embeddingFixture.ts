@@ -52,7 +52,7 @@ const CapturedQuerySchema = z.object({
    * An EMPTY array is a real value, not a missing one - it declares a negative, whose correct
    * behavior is to serve nothing. Every read must test for `undefined`, never for length.
    */
-  supporting: z.array(z.string()).optional(),
+  supporting: z.array(z.string().min(1)).optional(),
 });
 
 export const EmbeddingFixtureSchema = z.object({

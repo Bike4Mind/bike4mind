@@ -103,12 +103,30 @@ const argv = await yargs(hideBin(process.argv))
   .strict()
   .parse();
 
+// Both `--questions=` and a bare trailing `--questions` parse to the empty string, which is falsy -
+// so without this the flag reads as absent, the committed set is used, and the mistake surfaces only
+// after the embedding spend, as a fixture whose quality columns are all n/a.
+if (argv.questions !== undefined && argv.questions.trim() === '') {
+  throw new Error(
+    '--questions was given with no path. Supply the question file, or omit the flag to use PROBE_QUESTIONS.'
+  );
+}
+
+/** `JSON.parse` names neither the file nor the flag, and its message is the likeliest one to hit. */
+function readQuestionFile(file: string): ProbeQuestion[] {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (error) {
+    throw new Error(`Question file "${file}" could not be read as JSON: ${(error as Error).message}`);
+  }
+  return parseProbeQuestions(raw, file);
+}
+
 // Resolved before the DB connection and before any spend: a malformed question file should fail on
 // the file, not after a capture has been paid for.
-const probeQuestions: ProbeQuestion[] = argv.questions
-  ? parseProbeQuestions(JSON.parse(readFileSync(argv.questions, 'utf8')), argv.questions)
-  : PROBE_QUESTIONS;
 const usingExternalQuestions = Boolean(argv.questions);
+const probeQuestions: ProbeQuestion[] = argv.questions ? readQuestionFile(argv.questions) : PROBE_QUESTIONS;
 
 const models = parseSupportedModels(
   argv.models

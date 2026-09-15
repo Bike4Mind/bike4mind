@@ -58,6 +58,9 @@ export function assertSameCorpus(fixtures: readonly EmbeddingFixture[]): void {
  * already pins the text to `corpus.ts`, but an EXTERNAL set (`--questions`) has no committed text to
  * pin to, so a reworded question between two captures would otherwise reach the table under one id.
  * Comparing the hash here covers both, and costs nothing for the committed case.
+ *
+ * This pins WHICH QUESTIONS were asked. What counts as a right answer is a separate hazard, guarded
+ * separately - see `assertSameGroundTruth`.
  */
 export function assertSameQuerySet(fixtures: readonly EmbeddingFixture[]): void {
   const keyed = fixtures.map(f => ({
@@ -87,7 +90,9 @@ export function assertSameQuerySet(fixtures: readonly EmbeddingFixture[]): void 
  * the question set for one arm only - and an arm scored on fewer, or easier, questions reads as a
  * better model.
  */
-export function resolveQueries(fixture: EmbeddingFixture): { id: string; vector: number[]; supporting: string[] }[] {
+export type ResolvedQuery = { id: string; vector: number[]; supporting: string[] };
+
+export function resolveQueries(fixture: EmbeddingFixture): ResolvedQuery[] {
   // Tested per query rather than once for the fixture: a half-external file is corrupt in a way that
   // scores silently, since the committed-ground-truth arm below defaults a miss to [] - which reads
   // as a legitimate negative rather than as missing data.
@@ -114,6 +119,54 @@ export function resolveQueries(fixture: EmbeddingFixture): { id: string; vector:
   return fixture.queries.map(q => ({ id: q.id, vector: q.vector, supporting: SUPPORTING_BY_ID.get(q.id) ?? [] }));
 }
 
+/** One fixture and the ground truth its queries resolved to. */
+type ResolvedFixture = { fixture: EmbeddingFixture; queries: ResolvedQuery[] };
+
+/**
+ * Every fixture must resolve against the SAME ground truth.
+ *
+ * `assertSameQuerySet` pins which questions were asked; this pins what counts as a right answer, and
+ * they are different hazards. Two arms can carry identical ids, identical question text AND identical
+ * vectors while resolving to different supporting sets - which renders as a large quality gap
+ * (measured: recall 1.000 against 0.600, mrr 1.000 against 0.200) between arms whose geometry columns
+ * agree to four decimals, with no banner. A model verdict read off that is reading a labelling
+ * difference.
+ *
+ * Two shapes reach it, and neither is caught upstream:
+ *
+ * - A fixture captured with `--questions` tabled beside one captured against the committed set. The
+ *   ids and hashes can match exactly, and `resolveQueries` then answers from two different sources.
+ * - Two EXTERNAL fixtures captured either side of an edit to the question file. Editing `supporting`
+ *   alone leaves every id and text hash untouched, so nothing above this notices.
+ *
+ * Compared on resolved answer keys rather than on the capture source, because two sources agreeing
+ * on every question is harmless - it is divergence that cannot be tabled, not provenance. Supporting
+ * sets are sorted first: order is not meaningful in a set, and two captures from one file must not be
+ * separated by the order their author happened to list documents in.
+ */
+export function assertSameGroundTruth(resolved: readonly ResolvedFixture[]): void {
+  const answerKey = (queries: readonly ResolvedQuery[]): Map<string, string> =>
+    new Map(queries.map(q => [q.id, [...q.supporting].sort().join('|')]));
+
+  const [first, ...rest] = resolved;
+  if (!first) return;
+  const baseline = answerKey(first.queries);
+
+  for (const { fixture, queries } of rest) {
+    const key = answerKey(queries);
+    const divergent = [...key.keys()].filter(id => baseline.has(id) && baseline.get(id) !== key.get(id));
+    if (divergent.length > 0) {
+      throw new Error(
+        `Fixtures "${first.fixture.model}@${first.fixture.dims}" and "${fixture.model}@${fixture.dims}" ` +
+          `resolve different ground truth for question id(s): ${divergent.join(', ')}. Either one arm was ` +
+          'captured with --questions and the other against the committed set, or the question file was ' +
+          'edited between the two captures. Both table as a quality difference the models did not ' +
+          'produce. Re-capture every arm against one question set.'
+      );
+    }
+  }
+}
+
 /**
  * Which widths this fixture actually has arms at, widest first.
  *
@@ -135,10 +188,15 @@ export function applicableWidths(fixture: EmbeddingFixture, widths: readonly num
 export function compareArms(fixtures: readonly EmbeddingFixture[], widths: readonly number[]): ArmRow[] {
   assertSameCorpus(fixtures);
   assertSameQuerySet(fixtures);
+  // Every fixture is resolved before any arm is built, because resolution is what turns a query id
+  // into an answer key and the cross-arm check has to compare the keys themselves. Resolving here
+  // also puts each fixture's own errors (a partly-external set, an id corpus.ts does not know) ahead
+  // of the comparison, so they are reported against the fixture that caused them.
+  const resolved = fixtures.map(fixture => ({ fixture, queries: resolveQueries(fixture) }));
+  assertSameGroundTruth(resolved);
   const rows: ArmRow[] = [];
 
-  for (const fixture of fixtures) {
-    const queries = resolveQueries(fixture);
+  for (const { fixture, queries } of resolved) {
     if (queries.length === 0) throw new Error(`Fixture "${fixture.corpus}" (${fixture.model}) carries no queries.`);
 
     // Some requested widths not applying is the intended reading (see applicableWidths); NONE
@@ -227,17 +285,19 @@ export function formatComparison(rows: readonly ArmRow[], fixtures: readonly Emb
         'embedded arms re-embed; check the skipped column before drawing a model conclusion.'
     );
   }
-  // corpus.ts names help slugs, so a capture of any other lake has no ground truth to score against.
+  // A capture whose ground truth names no document it actually holds has nothing to score against.
   // Saying so beats printing quality columns of n/a and leaving the reader to work out why. Named
   // per arm because `groundTruthApplies` is a per-ROW property: table-wide phrasing prints "reads
-  // n/a" above arms whose quality cells are real numbers.
+  // n/a" above arms whose quality cells are real numbers. The source is left unnamed on purpose -
+  // it is corpus.ts for a committed capture and the --questions file for an external one, and the
+  // report cannot tell which fixture the reader is holding.
   const unlabelled = rows.filter(r => !r.groundTruthApplies).map(r => r.arm);
   if (unlabelled.length > 0) {
     notes.push(
       `GROUND TRUTH DOES NOT DESCRIBE THIS CORPUS (${unlabelled.join(', ')}): no captured document ` +
-        'matches a supporting slug in corpus.ts, so recall/prec/hit/mrr read n/a for those arms - and ' +
-        'so do posTop/negTop, which are partitioned by the same labels. Read the band and the spread, ' +
-        'which need no labels, and ignore the rest.'
+        'matches a supporting id in the question set this capture was scored against, so ' +
+        'recall/prec/hit/mrr read n/a for those arms - and so do posTop/negTop, which are partitioned ' +
+        'by the same labels. Read the band and the spread, which need no labels, and ignore the rest.'
     );
   }
   // Partial overlap is the likelier accident than none, and it does NOT trip the flag above: one

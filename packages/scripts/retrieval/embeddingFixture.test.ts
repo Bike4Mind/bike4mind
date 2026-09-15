@@ -172,6 +172,31 @@ describe('question-text integrity', () => {
     };
     expect(() => loadEmbeddingFixture(unknown)).not.toThrow();
   });
+
+  it('does not pin an EXTERNAL query to corpus.ts, even where its id collides with a committed one', () => {
+    // The id-collision shape, which is the only one the external skip changes: an external set is
+    // self-describing, so corpus.ts holds no text to pin it to and a shared id means nothing. Without
+    // the skip this throws a stale-question error citing a question the capture never asked.
+    const external = {
+      ...tinyFixture,
+      queries: tinyFixture.queries.map(q => ({
+        ...q,
+        questionHash: hashQuestionText(`external text for ${q.id}`),
+        supporting: ['some-external-file-id'],
+      })),
+    };
+    expect(() => loadEmbeddingFixture(external)).not.toThrow();
+  });
+
+  it('rejects an empty string in a carried supporting set', () => {
+    // The question file's own schema refuses it, so a fixture carrying one was hand-edited; an empty
+    // id matches no document and would score as a silent miss.
+    const blank = {
+      ...tinyFixture,
+      queries: tinyFixture.queries.map(q => ({ ...q, supporting: [''] })),
+    };
+    expect(() => loadEmbeddingFixture(blank)).toThrow();
+  });
 });
 
 describe('corpusRegime', () => {

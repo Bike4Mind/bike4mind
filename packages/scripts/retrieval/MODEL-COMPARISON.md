@@ -137,8 +137,18 @@ consequences worth knowing:
 
 - Ground truth is pinned at capture time. Editing the question file does not change an existing
   fixture; re-capture to pick the edit up.
-- Arms are still checked against each other. `assertSameQuerySet` compares question id AND text hash
-  across fixtures, so a set edited between two captures is caught rather than tabled.
+- Arms are still checked against each other, by two guards that cover two different edits.
+  `assertSameQuerySet` compares question id AND text hash, which catches a question that was reworded
+  or added between captures. `assertSameGroundTruth` compares the resolved answer keys, which catches
+  the edit the first one cannot see: changing only a question's `supporting` leaves its id and its
+  text untouched, so nothing about the question set has changed and the arms would otherwise table
+  together. That second guard also refuses an external arm beside a committed one, which is the same
+  hazard arriving by a different route - identical vectors scored against two answer keys render as a
+  large quality gap with every geometry column agreeing.
+
+`--questions` with no path is rejected rather than treated as absent. Both `--questions=` and a bare
+trailing `--questions` parse to the empty string, and silently falling back to `PROBE_QUESTIONS`
+would surface only after the embedding spend, as a capture whose quality columns are all `n/a`.
 
 ## The corpus-regime gate
 
