@@ -142,9 +142,11 @@ const handler = baseApi({ auth: false })
     //
     //      Defaults to GRACE (log-only): unlike the interactive token.ts flow (where the
     //      user consents moments earlier in the same round-trip), this server-to-server
-    //      exchange may present a token minted before grants existed. Logging a would-reject
-    //      lets grants self-heal as users re-authorize before enforcement. Set
-    //      OAUTH_AI_TOKEN_ENFORCE_GRANT=true to enforce.
+    //      exchange may present a token minted before grants existed, so grace mode logs a
+    //      would-reject instead of blocking while operators re-mint/re-authorize. It does NOT
+    //      auto-heal - a grant is recorded only when the user actually authorizes this client.
+    //      Flip enforcement per stage with OAUTH_AI_TOKEN_ENFORCE_GRANT=true; the lever is plumbed
+    //      through infra (deploy-contract.json + infra/web.ts), per the API_KEY_SCOPE_STAGING precedent.
     const grant = await oauthGrantRepository.findGrant(b4mUserId, client_id);
     if (!grant) {
       if (process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT === 'true') {
