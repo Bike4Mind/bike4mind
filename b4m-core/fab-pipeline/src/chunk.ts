@@ -1000,10 +1000,11 @@ export class SmartChunker {
         if (combinedTokens <= this.chunkTokenLimit) {
           current = { text: combinedText, tokenCount: combinedTokens };
         } else if (!(await tryMergeBackward(pendingShort))) {
-          // Neither neighbor can absorb it, and more content follows in this loop, so dropping
-          // here cannot leave the file chunkless.
+          // No eligible neighbor (either there's nothing preceding it yet, or the forward/backward
+          // merge would overflow the token limit), and more content follows in this loop, so
+          // dropping here cannot leave the file chunkless.
           this.logger.warn(
-            `Dropping near-empty chunk - neither neighbor can absorb it within the token limit (${countCodePoints(pendingShort.text)} chars)`
+            `Dropping near-empty chunk - no eligible neighbor to absorb it within the token limit (${countCodePoints(pendingShort.text)} chars)`
           );
         }
         pendingShort = undefined;
