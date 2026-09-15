@@ -13,121 +13,26 @@ vi.mock('dns', () => {
   return { default: { resolve4, resolve6 }, resolve4, resolve6 };
 });
 
-describe('isPrivateIP - RFC 2544 benchmarking range', () => {
-  it('blocks 198.18.0.0/15', () => {
-    expect(isPrivateIP('198.18.0.0')).toBe(true);
-    expect(isPrivateIP('198.18.0.1')).toBe(true);
-    expect(isPrivateIP('198.18.255.255')).toBe(true);
-    expect(isPrivateIP('198.19.0.0')).toBe(true);
-    expect(isPrivateIP('198.19.255.255')).toBe(true);
+// The private-IP classifier is not reimplemented here - it is re-exported from @bike4mind/fab-pipeline
+// so the hardened IPv6 range logic lives in one place (the #1969 drift). fab-pipeline owns the
+// exhaustive classifier suite; these smoke tests only pin that the re-export is wired to the shared,
+// stricter classifier at this boundary - in particular that 6to4 (2002::/16) is blocked as a whole
+// prefix here, the reconciliation of the earlier local fork that decoded it and let public-embedded
+// 6to4 through.
+describe('classifier is the shared fab-pipeline one (no local fork)', () => {
+  it('blocks private literals and allows public ones', () => {
+    expect(isPrivateIP('10.0.0.1')).toBe(true);
+    expect(isPrivateIP('169.254.169.254')).toBe(true);
+    expect(isPrivateIP('8.8.8.8')).toBe(false);
+    expect(isPrivateOrInternalHostname('localhost')).toBe(true);
+    expect(isPrivateOrInternalHostname('metadata.google.internal')).toBe(true);
+    expect(isPrivateOrInternalHostname('blog.example.com')).toBe(false);
   });
 
-  it('blocks the IPv4-mapped IPv6 form of the range', () => {
-    expect(isPrivateIP('::ffff:198.18.0.1')).toBe(true);
-    expect(isPrivateIP('::ffff:198.17.0.1')).toBe(false);
-  });
-
-  it('does not over-block adjacent public ranges', () => {
-    expect(isPrivateIP('198.17.255.255')).toBe(false);
-    expect(isPrivateIP('198.20.0.0')).toBe(false);
-  });
-
-  it('blocks 198.18.x.x literal hostnames', () => {
-    expect(isPrivateOrInternalHostname('198.18.0.1')).toBe(true);
-    expect(isPrivateOrInternalHostname('198.19.42.42')).toBe(true);
-  });
-});
-
-describe('isPrivateIP - IPv4-mapped IPv6 (hex and dotted spellings)', () => {
-  // new URL('https://[::ffff:127.0.0.1]').hostname is '[::ffff:7f00:1]', not the dotted form,
-  // so the guard must recognize the hex spelling or it is dead code for every URL-derived host.
-  it('blocks private mapped addresses in the hex form new URL() produces', () => {
-    expect(isPrivateIP('::ffff:7f00:1')).toBe(true); // 127.0.0.1
-    expect(isPrivateIP('::ffff:a00:5')).toBe(true); // 10.0.0.5
-    expect(isPrivateIP('::ffff:a9fe:a9fe')).toBe(true); // 169.254.169.254 (cloud metadata)
-  });
-
-  it('blocks private mapped addresses in the dotted form', () => {
-    expect(isPrivateIP('::ffff:127.0.0.1')).toBe(true);
-    expect(isPrivateIP('::ffff:169.254.169.254')).toBe(true);
-  });
-
-  it('does not over-block a genuinely public mapped address', () => {
-    expect(isPrivateIP('::ffff:808:808')).toBe(false); // 8.8.8.8
-    expect(isPrivateIP('::ffff:8.8.8.8')).toBe(false);
-  });
-
-  it('catches the bracketed hostname forms through the hostname check', () => {
-    expect(isPrivateOrInternalHostname('[::ffff:7f00:1]')).toBe(true); // 127.0.0.1
-    expect(isPrivateOrInternalHostname('[::ffff:a9fe:a9fe]')).toBe(true); // 169.254.169.254
-    expect(isPrivateOrInternalHostname('[::ffff:808:808]')).toBe(false); // 8.8.8.8 public
-  });
-});
-
-describe('isPrivateIP - IPv4-compatible and 6to4 IPv6 (embedded IPv4)', () => {
-  it('blocks IPv4-compatible ::a.b.c.d embedding a private IPv4 (hex + dotted)', () => {
-    expect(isPrivateIP('::7f00:1')).toBe(true); // ::127.0.0.1
-    expect(isPrivateIP('::a00:5')).toBe(true); // ::10.0.0.5
-    expect(isPrivateIP('::127.0.0.1')).toBe(true);
-    expect(isPrivateOrInternalHostname('[::7f00:1]')).toBe(true);
-  });
-
-  it('blocks 6to4 2002:: embedding a private IPv4', () => {
-    expect(isPrivateIP('2002:7f00:1::')).toBe(true); // 127.0.0.1
-    expect(isPrivateIP('2002:a00:5::')).toBe(true); // 10.0.0.5
-    expect(isPrivateOrInternalHostname('[2002:7f00:1::]')).toBe(true);
-  });
-
-  it('does not over-block a public embedded address', () => {
-    expect(isPrivateIP('::808:808')).toBe(false); // ::8.8.8.8 (compat, public)
-    expect(isPrivateIP('2002:808:808::')).toBe(false); // 6to4 8.8.8.8 (public)
-  });
-});
-
-describe('alternate IPv4 encodings normalize and are blocked', () => {
-  // WHATWG new URL() parses integer/hex/octal hosts into dotted-decimal, so the guard sees the
-  // canonical form and the range check applies - no separate decoder needed.
-  it('normalizes integer/hex/octal hosts to dotted-decimal', () => {
-    expect(new URL('https://2130706433').hostname).toBe('127.0.0.1');
-    expect(new URL('https://0x7f000001').hostname).toBe('127.0.0.1');
-    expect(new URL('https://0177.0.0.1').hostname).toBe('127.0.0.1');
-  });
-
-  it('so the hostname check catches them', () => {
-    for (const u of ['https://2130706433', 'https://0x7f000001', 'https://0177.0.0.1']) {
-      expect(isPrivateOrInternalHostname(new URL(u).hostname)).toBe(true);
-    }
-  });
-});
-
-describe('isPrivateOrInternalHostname - trailing-dot FQDN', () => {
-  it('strips a trailing dot so localhost. / metadata. are still caught', () => {
-    expect(isPrivateOrInternalHostname('localhost.')).toBe(true);
-    expect(isPrivateOrInternalHostname('metadata.google.internal.')).toBe(true);
-    expect(isPrivateOrInternalHostname('foo.local.')).toBe(true);
-  });
-
-  it('does not over-block a public host with a trailing dot', () => {
-    expect(isPrivateOrInternalHostname('blog.example.com.')).toBe(false);
-  });
-});
-
-describe('isPrivateOrInternalHostname - bracketed IPv6 literals', () => {
-  // URL.hostname wraps IPv6 literals in brackets; without stripping them the IPv6 checks miss.
-  it('strips the brackets so loopback/link-local/ULA literals are still caught', () => {
-    expect(isPrivateOrInternalHostname('[::1]')).toBe(true);
-    expect(isPrivateOrInternalHostname('[fe80::1]')).toBe(true);
-    expect(isPrivateOrInternalHostname('[fc00::1]')).toBe(true);
-  });
-
-  it('blocks the whole fe00::/8 (link-local + deprecated site-local fec0::/10)', () => {
-    // fec0::/10 site-local (RFC 3879) is an IPv6 literal, so DNS resolution never backstops it;
-    // nothing in fe00::/8 is global-unicast, so the guard blocks the entire /8.
-    for (const ip of ['fe80::1', 'febf::1', 'fec0::1', 'fed0::1', 'fee0::1', 'feff::1']) {
-      expect(isPrivateIP(ip)).toBe(true);
-      expect(isPrivateOrInternalHostname(`[${ip}]`)).toBe(true);
-    }
-    expect(isPrivateOrInternalHostname('[2606:4700:4700::1111]')).toBe(false); // public, not over-blocked
+  it('blocks the entire 6to4 2002::/16 prefix (reconciled policy, not the decode-and-allow fork)', () => {
+    expect(isPrivateIP('2002:7f00:1::')).toBe(true); // 6to4-wrapped 127.0.0.1
+    expect(isPrivateIP('2002:808:808::')).toBe(true); // 6to4-wrapped 8.8.8.8: blocked as a prefix, not decoded
+    expect(isPrivateOrInternalHostname('[2002:808:808::]')).toBe(true);
   });
 });
 
