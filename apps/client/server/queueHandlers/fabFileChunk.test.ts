@@ -1288,16 +1288,80 @@ describe('fabFileChunk handler - a failed vectorize enqueue must not strand the 
       expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('manifest write lost'));
     });
 
-    it('supersedes the manifest entry before the file record', async () => {
+    // The pair is ATOMIC, not merely ordered, and ordering it would not have been enough: NOTHING
+    // redelivers a refused file to retry the write that lost. This point is reached only on the
+    // final SQS attempt, so the message DLQs next; the stranded sweep selects on
+    // `vectorizeEnqueueFailedAt`, which this path never stamps and the undo just cleared; and the
+    // un-chunked sweep needs chunkCount: 0, which a chunked file never has. A half-written pair is
+    // therefore permanent, and it diverges the two guards that read the two records - `ownsError`
+    // on the file, revertFileFailure's prefix match on the entry - in one direction or the other
+    // whichever half is lost. `transactionDepth` is what separates "ran together" from "ran in a
+    // row": drop the withTransaction wrapper and both writes still happen, in this order, at
+    // depth 0.
+    it('writes the manifest entry and the file record inside one transaction', async () => {
       h.findAccessibleById.mockResolvedValue({ ...stranded, error: 'Chunking failed: corrupt PDF' });
+      h.distinctEmbeddingModelsByFabFileId.mockResolvedValue([RETIRED]);
+      h.markFailedIfNotAlready.mockResolvedValue(false);
+      const depths: number[] = [];
+      h.supersedeFileError.mockImplementationOnce(async () => {
+        depths.push(h.transactionDepth.current);
+      });
+      h.supersedeFailureError.mockImplementationOnce(async () => {
+        depths.push(h.transactionDepth.current);
+        return null;
+      });
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(/no longer available/);
+
+      expect(depths).toEqual([1, 1]);
+    });
+
+    // The `if (batchId)` guard, which nothing pinned. A file outside any batch has no manifest
+    // entry to rewrite, and an undefined batchId would reach the batch collection as a filter
+    // matched by shape rather than one that matches nothing.
+    it('skips the manifest write for a file that belongs to no batch', async () => {
+      h.findAccessibleById.mockResolvedValue({
+        ...stranded,
+        batchId: undefined,
+        error: 'Chunking failed: corrupt PDF',
+      });
       h.distinctEmbeddingModelsByFabFileId.mockResolvedValue([RETIRED]);
       h.markFailedIfNotAlready.mockResolvedValue(false);
 
       await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(/no longer available/);
 
-      expect(h.supersedeFileError.mock.invocationCallOrder[0]).toBeLessThan(
-        h.supersedeFailureError.mock.invocationCallOrder[0]
+      expect(h.supersedeFileError).not.toHaveBeenCalled();
+      // The file record is still superseded: the refusal reason is what the user reads, and a file
+      // with no batch has no second record to disagree with.
+      expect(h.supersedeFailureError).toHaveBeenCalledWith('ff1', expect.stringContaining('Reprocess'));
+    });
+
+    // supersedeFailureError's `{ new: false }` read-back is the only record of why the file was
+    // already failing, and this warn is its only consumer - so the flag's contract is only actually
+    // observable here. Drop the `if (replaced)` and the second case below starts reporting a
+    // destroyed error that never existed.
+    it('logs the error it destroyed, so the reason it overwrote survives somewhere', async () => {
+      h.findAccessibleById.mockResolvedValue({ ...stranded, error: 'Chunking failed: corrupt PDF' });
+      h.distinctEmbeddingModelsByFabFileId.mockResolvedValue([RETIRED]);
+      h.markFailedIfNotAlready.mockResolvedValue(false);
+      h.supersedeFailureError.mockResolvedValueOnce('Chunking failed: corrupt PDF');
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(/no longer available/);
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('Superseded the stored error on ff1: Chunking failed: corrupt PDF')
       );
+    });
+
+    it('says nothing about superseding when there was no stored error to destroy', async () => {
+      h.findAccessibleById.mockResolvedValue({ ...stranded, error: 'Chunking failed: corrupt PDF' });
+      h.distinctEmbeddingModelsByFabFileId.mockResolvedValue([RETIRED]);
+      h.markFailedIfNotAlready.mockResolvedValue(false);
+      h.supersedeFailureError.mockResolvedValueOnce(null);
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(/no longer available/);
+
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('Superseded the stored error'));
     });
 
     // `supersedes` defaults OFF, and the default is the load-bearing half: first-error-wins is
@@ -1397,6 +1461,14 @@ describe('fabFileChunk handler - a failed vectorize enqueue must not strand the 
         expect.anything(),
         expect.objectContaining({ embeddingModel: 'voyage-3' })
       );
+      // ...and it says so. A label here is intent, not observation: this arm knows strictly LESS
+      // than `mixed` (zero spaces confirmed by a chunk row rather than one) yet chooses on the
+      // label alone, so leaving it silent while the better-informed shape warned would be the same
+      // inversion `mixed` was split out of `single` to fix. It is also the last moment the shape is
+      // observable - the resume's own chunk stamping then labels these rows with the model this
+      // pass picked, and resolveFileLabel certifies the result without a warning of its own.
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('no recorded embedding space'));
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('voyage-3'));
     });
 
     it('prefers the file label over the default when the file holds no vectors at all', async () => {

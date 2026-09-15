@@ -1678,6 +1678,21 @@ describe('DataLakeBatchRepository.supersedeFileError - error text and nothing el
     const fresh = await dataLakeBatchRepository.findById(batch.id);
     expect(fresh?.files[0].error).toBe('Chunking failed: corrupt PDF');
   });
+
+  // The `_id: batchId` conjunct, which none of the cases above reach: every one of them varies the
+  // entry WITHIN one batch, so dropping the batch scope leaves them all green. The same fabFileId
+  // in two batches is the ordinary shape here - re-running a lake appends a fresh manifest over the
+  // same files - and unscoped, updateOne stamps whichever batch it reaches first, landing one
+  // batch's refusal reason on another batch's entry.
+  it('does not stamp an identically-shaped entry in another batch', async () => {
+    const other = await batchWithEntry('failed', 'Chunking failed: corrupt PDF');
+    const target = await batchWithEntry('failed', 'Chunking failed: corrupt PDF');
+
+    await dataLakeBatchRepository.supersedeFileError(target.id, 'ff1', `${PREFIX}: Reprocess it`);
+
+    expect((await dataLakeBatchRepository.findById(target.id))?.files[0].error).toBe(`${PREFIX}: Reprocess it`);
+    expect((await dataLakeBatchRepository.findById(other.id))?.files[0].error).toBe('Chunking failed: corrupt PDF');
+  });
 });
 
 describe('DataLakeBatchRepository.reopenFinalizedWithErrors', () => {

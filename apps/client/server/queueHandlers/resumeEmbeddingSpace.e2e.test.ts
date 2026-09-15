@@ -41,7 +41,14 @@ vi.mock('sst', () => ({
   Resource: new Proxy({}, { get: () => ({ url: 'https://queue.test', managementEndpoint: 'wss://ws.test' }) }),
 }));
 
-import { AdminSettings, FabFile, User, fabFileChunkRepository } from '@bike4mind/database';
+import {
+  AdminSettings,
+  FabFile,
+  User,
+  dataLakeBatchRepository,
+  fabFileChunkRepository,
+  fabFileRepository,
+} from '@bike4mind/database';
 import { KnowledgeType } from '@bike4mind/common';
 import { dispatch } from './fabFileChunk';
 import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from './sqsDelivery';
@@ -222,5 +229,80 @@ describe('resume embedding-space guard against a real mongod (#2766)', () => {
 
     expect(requestedModel()).toBe(DEPLOYMENT_DEFAULT);
     expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('embedding space'));
+  });
+});
+
+/**
+ * The superseding write pair against a real replica set.
+ *
+ * The unit suite mocks `withTransaction` as a passthrough, so it can show the two writes running
+ * at transaction depth 1 and nothing about whether a transaction actually holds them: a passthrough
+ * never rolls anything back, and a real one can fail outright (a standalone mongod rejects the
+ * session with code 20 rather than degrading quietly). Both claims below need a real server, and
+ * the second is the one the pair exists for - a half-written pair is PERMANENT here, because
+ * nothing redelivers a refused file to retry the write that lost.
+ */
+const FOREIGN_ERROR = 'Chunking failed: corrupt PDF';
+
+/** A refusable file (vectors in a retired space) already carrying someone else's error, in a batch. */
+async function seedRefusableFileInBatch() {
+  const { fabFileId, userId } = await seedFile(undefined, [
+    { space: RETIRED_SPACE, vectorized: true },
+    { space: undefined, vectorized: false },
+  ]);
+  const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId, totalFiles: 1 } as never);
+  await dataLakeBatchRepository.appendFiles(batch.id, [
+    { fabFileId, fileName: 'x.pdf', status: 'failed', error: FOREIGN_ERROR },
+  ]);
+  // The foreign error is what makes this the superseding path: markFailedIfNotAlready declines, and
+  // clearStrandedMarkers will not clear an error this handler does not own. The stamp is what the
+  // rescue sweep found the file by, and is dropped by the undo before the refusal is accounted.
+  await FabFile.updateOne(
+    { _id: fabFileId },
+    { $set: { error: FOREIGN_ERROR, batchId: batch.id, vectorizeEnqueueFailedAt: new Date() } }
+  );
+  return { fabFileId, userId, batchId: batch.id };
+}
+
+const entryError = async (batchId: string) => (await dataLakeBatchRepository.findById(batchId))?.files[0].error;
+const fileError = async (fabFileId: string) => (await FabFile.findById(fabFileId).lean())?.error;
+
+describe('a refusal supersedes the file record and its manifest entry together (#2766)', () => {
+  it('commits both halves of the pair', async () => {
+    const { fabFileId, userId, batchId } = await seedRefusableFileInBatch();
+
+    await expect(dispatch(makeEvent({ fabFileId, userId }), {} as never, mockLogger)).rejects.toThrow(
+      /no longer available/
+    );
+
+    // Both records now name the refusal. They are read by different guards - `ownsError` on the
+    // file, revertFileFailure's anchored prefix match on the entry - so agreement between them is
+    // the whole point of writing them together.
+    expect(await fileError(fabFileId)).toContain('Reprocess');
+    expect(await entryError(batchId)).toContain('Reprocess');
+  });
+
+  it('rolls the manifest entry back when the file write fails', async () => {
+    const { fabFileId, userId, batchId } = await seedRefusableFileInBatch();
+    const spy = vi
+      .spyOn(fabFileRepository, 'supersedeFailureError')
+      .mockRejectedValueOnce(new Error('file write lost'));
+
+    try {
+      await expect(dispatch(makeEvent({ fabFileId, userId }), {} as never, mockLogger)).rejects.toThrow(
+        /no longer available/
+      );
+    } finally {
+      spy.mockRestore();
+    }
+
+    // Without the transaction the entry write has already landed by the time the file write throws,
+    // leaving the entry carrying this handler's prefix while the file keeps the foreign error. That
+    // state is unreachable-by-repair: a later strand's undo reverts the batch charge off the ENTRY
+    // and markFailedIfNotAlready declines to restore it off the FILE, so the batch is left short a
+    // failure it still has and can never reach its completion threshold.
+    expect(await entryError(batchId)).toBe(FOREIGN_ERROR);
+    expect(await fileError(fabFileId)).toBe(FOREIGN_ERROR);
+    expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('file write lost'));
   });
 });
