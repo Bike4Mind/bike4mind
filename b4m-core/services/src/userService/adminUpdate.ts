@@ -74,6 +74,31 @@ export function findAdminOnlyUserUpdateFields(body: unknown): string[] {
   return ADMIN_ONLY_USER_UPDATE_FIELDS.filter(field => Object.prototype.hasOwnProperty.call(keys, field));
 }
 
+/**
+ * Every top-level key either schema recognizes. `ADMIN_ONLY_USER_UPDATE_FIELDS` only
+ * covers the *diff* between the two schemas, so a field that is persisted and
+ * security-sensitive but declared in neither (e.g. `photoUrl`, `emailVerified` - each
+ * writable only through its own dedicated endpoint) would otherwise still get the
+ * silent 200 this module exists to remove. `findUnrecognizedUserUpdateFields` below
+ * catches that class instead.
+ */
+const KNOWN_USER_UPDATE_FIELDS: ReadonlySet<string> = new Set([
+  ...Object.keys(updateUserSchema.shape),
+  ...Object.keys(adminUpdateUserSchema.shape),
+]);
+
+/**
+ * Top-level body keys neither schema declares. Reported alongside admin-only
+ * fields so a self-service caller sees every field the request asked to change
+ * that was not actually applied, not just the ones the admin schema happens to own.
+ */
+export function findUnrecognizedUserUpdateFields(body: unknown): string[] {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return [];
+  return Object.keys(body as Record<string, unknown>)
+    .filter(key => key !== 'id' && !KNOWN_USER_UPDATE_FIELDS.has(key))
+    .sort();
+}
+
 export type AdminUpdateUserParameters = z.infer<typeof adminUpdateUserSchema>;
 
 export interface AdminUpdateUserAdapters {

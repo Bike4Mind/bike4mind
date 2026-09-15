@@ -88,4 +88,18 @@ describe('ProfileDataForm', () => {
 
     expect(mockMutate).not.toHaveBeenCalled();
   });
+
+  it('hides the admin-only email and Organization fields from a non-admin render', () => {
+    renderForm(false);
+
+    expect(screen.queryByTestId('profile-form-input-email')).toBeNull();
+    expect(screen.queryByText('Organization:')).toBeNull();
+  });
+
+  it('shows the admin-only email and Organization fields in an admin render', () => {
+    renderForm(true);
+
+    expect(screen.getByTestId('profile-form-input-email')).toBeInTheDocument();
+    expect(screen.getByText('Organization:')).toBeInTheDocument();
+  });
 });

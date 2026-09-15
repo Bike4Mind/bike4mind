@@ -156,15 +156,22 @@ const handler = baseApi().put(
       );
     } else {
       // Reject rather than silently strip: Zod drops unknown keys, so without this a
-      // request asking for a privileged mutation (isAdmin, tags, currentCredits, ...)
-      // would get a 200 with the permitted half applied and no sign the rest was
-      // discarded. The allowlist parse below and secureParameters inside the service
-      // remain the layers that actually enforce the boundary.
+      // request asking for a privileged or unrecognized field (isAdmin, tags,
+      // currentCredits, photoUrl, ...) would get a 200 with the permitted half applied
+      // and no sign the rest was discarded. `adminOnlyFields` covers fields the admin
+      // schema declares; `unrecognizedFields` covers fields declared in neither schema
+      // (e.g. photoUrl, which is writable only through its own dedicated endpoint) so
+      // that class of persisted-but-unlisted field can't ride through the same way. The
+      // allowlist parse below and secureParameters inside the service remain the layers
+      // that actually enforce the boundary.
       const adminOnlyFields = userService.findAdminOnlyUserUpdateFields(req.body);
-      if (adminOnlyFields.length > 0) {
+      const unrecognizedFields = userService.findUnrecognizedUserUpdateFields(req.body);
+      if (adminOnlyFields.length > 0 || unrecognizedFields.length > 0) {
+        const rejectedFields = [...adminOnlyFields, ...unrecognizedFields];
         return res.status(403).json({
-          error: `Forbidden: these fields are admin-only and were not applied: ${adminOnlyFields.join(', ')}`,
+          error: `Forbidden: these fields are not writable by a non-admin and were not applied: ${rejectedFields.join(', ')}`,
           adminOnlyFields,
+          unrecognizedFields,
         });
       }
 

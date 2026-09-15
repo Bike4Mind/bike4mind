@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { adminUpdateUser, ADMIN_ONLY_USER_UPDATE_FIELDS, findAdminOnlyUserUpdateFields } from './adminUpdate';
+import {
+  adminUpdateUser,
+  ADMIN_ONLY_USER_UPDATE_FIELDS,
+  findAdminOnlyUserUpdateFields,
+  findUnrecognizedUserUpdateFields,
+} from './adminUpdate';
 
 const ADMIN_ID = 'admin-1';
 const TARGET_ID = 'user-1';
@@ -255,10 +260,28 @@ describe('adminUpdateUser - preferences merge', () => {
 });
 
 describe('findAdminOnlyUserUpdateFields', () => {
-  it('covers the privileged fields the self-service schema deliberately omits', () => {
-    expect(ADMIN_ONLY_USER_UPDATE_FIELDS).toEqual(
-      expect.arrayContaining(['currentCredits', 'email', 'isAdmin', 'isBanned', 'organizationId', 'tags'])
-    );
+  it('covers exactly the privileged fields the self-service schema deliberately omits', () => {
+    // Exact list, not arrayContaining: moving any one of these into updateUserSchema
+    // (the drift this derivation exists to prevent) must fail this assertion, not
+    // silently drop off the admin-only list.
+    expect(ADMIN_ONLY_USER_UPDATE_FIELDS).toEqual([
+      'creditDelta',
+      'creditReason',
+      'currentCredits',
+      'disputePending',
+      'email',
+      'isAdmin',
+      'isBanned',
+      'isModerated',
+      'level',
+      'moderationStatus',
+      'numReferralsAvailable',
+      'organizationId',
+      'storageLimit',
+      'subscribedUntil',
+      'tags',
+      'userNotes',
+    ]);
   });
 
   it('excludes fields the self-service schema already allows, and the route-param id', () => {
@@ -281,5 +304,30 @@ describe('findAdminOnlyUserUpdateFields', () => {
     expect(findAdminOnlyUserUpdateFields(null)).toEqual([]);
     expect(findAdminOnlyUserUpdateFields('tags')).toEqual([]);
     expect(findAdminOnlyUserUpdateFields([{ tags: [] }])).toEqual([]);
+  });
+});
+
+describe('findUnrecognizedUserUpdateFields', () => {
+  it('reports a field declared in neither schema, e.g. photoUrl (writable only via its own endpoint)', () => {
+    expect(findUnrecognizedUserUpdateFields({ name: 'a', photoUrl: 'x' })).toEqual(['photoUrl']);
+  });
+
+  it('does not report admin-only fields - those are ADMIN_ONLY_USER_UPDATE_FIELDS territory', () => {
+    expect(findUnrecognizedUserUpdateFields({ isAdmin: true, tags: ['vip'] })).toEqual([]);
+  });
+
+  it('excludes the id route param', () => {
+    expect(findUnrecognizedUserUpdateFields({ id: 'u1' })).toEqual([]);
+  });
+
+  it('sorts multiple unrecognized keys', () => {
+    expect(findUnrecognizedUserUpdateFields({ zzz: 1, aaa: 2 })).toEqual(['aaa', 'zzz']);
+  });
+
+  it('returns nothing for a clean body or a non-object', () => {
+    expect(findUnrecognizedUserUpdateFields({ name: 'a' })).toEqual([]);
+    expect(findUnrecognizedUserUpdateFields(null)).toEqual([]);
+    expect(findUnrecognizedUserUpdateFields('tags')).toEqual([]);
+    expect(findUnrecognizedUserUpdateFields([{ tags: [] }])).toEqual([]);
   });
 });

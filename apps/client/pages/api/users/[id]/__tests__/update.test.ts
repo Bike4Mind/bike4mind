@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { z } from 'zod';
 
 const { mockUserFindById, mockAdminUpdateUser, mockUpdateUser, mockCount } = vi.hoisted(() => ({
   mockUserFindById: vi.fn(),
@@ -36,20 +35,20 @@ vi.mock('@server/utils/ip', () => ({
   truncateIp: (ip: string) => ip,
 }));
 
-// Stands in for the real helper, which derives its list from the admin/self schema
-// diff; that derivation is covered in b4m-core/services (adminUpdate.test.ts).
-const ADMIN_ONLY = ['currentCredits', 'isAdmin', 'isBanned', 'tags'];
-
-vi.mock('@bike4mind/services', () => ({
-  userService: {
-    adminUpdateUser: (...a: unknown[]) => mockAdminUpdateUser(...a),
-    updateUser: (...a: unknown[]) => mockUpdateUser(...a),
-    adminUpdateUserSchema: z.object({}).passthrough(),
-    updateUserSchema: z.object({}).passthrough(),
-    findAdminOnlyUserUpdateFields: (body: unknown) =>
-      body && typeof body === 'object' ? ADMIN_ONLY.filter(f => f in (body as Record<string, unknown>)) : [],
-  },
-}));
+// Real schemas + derivation (adminUpdateUserSchema, updateUserSchema,
+// findAdminOnlyUserUpdateFields, findUnrecognizedUserUpdateFields) run unmocked here so
+// this route test exercises the actual allowlist and field lists, not a hand-maintained
+// stand-in that can drift from them. Only the persistence-touching functions are mocked.
+vi.mock('@bike4mind/services', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+  return {
+    userService: {
+      ...actual.userService,
+      adminUpdateUser: (...a: unknown[]) => mockAdminUpdateUser(...a),
+      updateUser: (...a: unknown[]) => mockUpdateUser(...a),
+    },
+  };
+});
 
 vi.mock('@bike4mind/database', () => ({
   User: {
@@ -156,6 +155,8 @@ describe('PUT /api/users/:id/update - self-service admin-only fields', () => {
     ['isAdmin', { isAdmin: true }],
     ['tags', { tags: ['vip'] }],
     ['currentCredits', { currentCredits: 9999 }],
+    ['organizationId', { organizationId: 'org1' }],
+    ['email', { email: 'new@example.com' }],
   ])('rejects a self-service update carrying %s instead of silently discarding it', async (field, body) => {
     const { res, promise } = run({ user: SELF, userId: SELF.id, body: { name: 'New Name', ...body } });
     await promise;
@@ -170,6 +171,16 @@ describe('PUT /api/users/:id/update - self-service admin-only fields', () => {
     await promise;
     expect(res._getStatusCode()).toBe(403);
     expect(res._getJSONData().adminOnlyFields).toEqual(['isAdmin', 'tags']);
+  });
+
+  it('rejects a field declared in neither schema (e.g. photoUrl) as unrecognized, not silently dropped', async () => {
+    const { res, promise } = run({ user: SELF, userId: SELF.id, body: { name: 'New Name', photoUrl: 'evil-key' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().unrecognizedFields).toEqual(['photoUrl']);
+    expect(res._getJSONData().adminOnlyFields).toEqual([]);
+    expect(res._getJSONData().error).toContain('photoUrl');
+    expect(mockUpdateUser).not.toHaveBeenCalled();
   });
 
   it('leaves a clean self-service update alone', async () => {
