@@ -1,4 +1,5 @@
 import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
+import { brand } from '@client/app/utils/themes/colors';
 import CopyTextButton from '@client/app/components/Session/CopyTextButton';
 import DownloadMenu from '../common/DownloadMenu';
 import PromptReplies from '@client/app/components/Session/PromptReplies';
@@ -796,8 +797,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                   {hasShareableReply && (
                     <Button
                       data-testid="message-publish-share-btn"
-                      variant="outlined"
-                      color="neutral"
+                      variant="solid"
                       size="sm"
                       startDecorator={<ShareIcon sx={{ fontSize: 16 }} />}
                       onClick={handleShareReply}
@@ -806,6 +806,15 @@ const MessageContent: React.FC<ContentProps> = memo(
                         flexShrink: '0',
                         borderRadius: '6px',
                         fontSize: '13px',
+                        backgroundColor: brand[800],
+                        color: '#fff',
+                        fontWeight: 600,
+                        transition: 'transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease',
+                        '&:hover': {
+                          backgroundColor: brand[900],
+                          transform: 'scale(1.04)',
+                          boxShadow: '0 0 14px rgba(11, 107, 203, 0.5)',
+                        },
                       }}
                     >
                       Publish &amp; Share

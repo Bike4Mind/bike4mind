@@ -347,7 +347,6 @@ export function PublishShareModal({
     const stagedGate = isPublic && gateTouched ? buildGateInput() : null;
     if (stagedGate === 'invalid') return;
     setBusy(true);
-    const id = toast.loading(mode === 'update' ? 'Publishing new version...' : 'Creating share link...');
     try {
       const r = await publish(visibility, { mode, existingSlug: existing?.slug });
       if (stagedGate) {
@@ -385,9 +384,8 @@ export function PublishShareModal({
         });
       }
       setResult(r);
-      toast.success('Share link ready', { id });
     } catch (err) {
-      toast.error(errorMessage(err), { id });
+      toast.error(errorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -547,7 +545,10 @@ export function PublishShareModal({
 
   return (
     <Modal open={open} onClose={onClose}>
-      <ModalDialog sx={{ maxWidth: 520, width: '100%' }} data-testid="publish-share-modal">
+      <ModalDialog
+        sx={{ maxWidth: 640, width: '100%', maxHeight: '90vh', overflow: 'auto' }}
+        data-testid="publish-share-modal"
+      >
         <ModalClose />
         <Typography level="title-lg" sx={{ mb: 0.5 }}>
           {phase === 'shared' ? 'Shared & ready' : 'Share'}
@@ -612,27 +613,20 @@ export function PublishShareModal({
                     p: 1,
                     borderRadius: 'sm',
                     border: '1px solid',
-                    borderColor: selected ? AMBER : 'divider',
-                    bgcolor: selected ? `${AMBER}1F` : 'transparent',
+                    borderColor: selected ? 'primary.500' : 'divider',
+                    bgcolor: selected ? 'primary.softBg' : 'transparent',
                     cursor: busy ? 'default' : 'pointer',
                     transition: 'border-color .15s, background-color .15s',
                   }}
                 >
-                  <Radio
-                    value={o.value}
-                    disabled={busy}
-                    sx={{ ...(selected && { color: AMBER, '& svg': { color: AMBER } }) }}
-                    slotProps={{ radio: selected ? { sx: { backgroundColor: AMBER, borderColor: AMBER } } : undefined }}
-                  />
-                  <Box
-                    sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1, color: selected ? AMBER : 'inherit' }}
-                  >
+                  <Radio value={o.value} disabled={busy} />
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1 }}>
                     {o.icon}
                     <Box>
-                      <Typography level="title-sm" sx={{ color: selected ? AMBER : 'inherit', lineHeight: 1.2 }}>
+                      <Typography level="title-sm" sx={{ lineHeight: 1.2 }}>
                         {o.label}
                       </Typography>
-                      <Typography level="body-xs" sx={{ opacity: 0.75, color: selected ? AMBER : 'inherit' }}>
+                      <Typography level="body-xs" sx={{ opacity: 0.75 }}>
                         {o.hint}
                       </Typography>
                     </Box>
@@ -671,14 +665,27 @@ export function PublishShareModal({
               data-testid="publish-share-gate"
               sx={{ gap: 0.75 }}
             >
-              {GATE_OPTIONS.map(o => (
-                <Radio
-                  key={o.value}
-                  value={o.value}
-                  disabled={busy}
-                  data-testid={`publish-share-gate-${o.value}`}
-                  label={
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              {GATE_OPTIONS.map(o => {
+                const selected = gateKind === o.value;
+                return (
+                  <Box
+                    key={o.value}
+                    onClick={() => onPickGate(o.value)}
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1.25,
+                      p: 1,
+                      borderRadius: 'sm',
+                      border: '1px solid',
+                      borderColor: selected ? 'primary.500' : 'divider',
+                      bgcolor: selected ? 'primary.softBg' : 'transparent',
+                      cursor: busy ? 'default' : 'pointer',
+                      transition: 'border-color .15s, background-color .15s',
+                    }}
+                  >
+                    <Radio value={o.value} disabled={busy} data-testid={`publish-share-gate-${o.value}`} />
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1 }}>
                       {o.icon}
                       <Box>
                         <Typography level="title-sm" sx={{ lineHeight: 1.2 }}>
@@ -689,9 +696,9 @@ export function PublishShareModal({
                         </Typography>
                       </Box>
                     </Box>
-                  }
-                />
-              ))}
+                  </Box>
+                );
+              })}
             </RadioGroup>
             {gateKind === 'passphrase' && (
               <Box sx={{ mt: 1 }}>
@@ -760,8 +767,7 @@ export function PublishShareModal({
                     Joy's FormControl context and lands in the switch's aria-describedby, so a screen-
                     reader user actually hears this caveat instead of just the label. */}
                 <FormHelperText sx={{ opacity: 0.75 }}>
-                  Off by default. When off, the link still works for anyone you send it to - it just won&apos;t show up
-                  in Google. Link previews in chat apps work either way.
+                  Off by default. Won&apos;t show in Google unless enabled.
                 </FormHelperText>
               </Box>
             </Box>
