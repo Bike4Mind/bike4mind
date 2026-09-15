@@ -50,7 +50,7 @@ const DARK: Palette = {
 };
 
 const LIGHT: Palette = {
-  bg: 'var(--joy-palette-reading-surface2, #EDF2F6)',
+  bg: 'var(--joy-palette-reading-surface, #F4F7F9)',
   fg: '#425663',
   ink: '#141F28',
   ink3: '#5B6C7A',

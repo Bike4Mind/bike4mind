@@ -66,13 +66,21 @@ export const readingTheme = {
     warnSoft: alpha(orange[425], 0.1),
   },
   light: {
-    surface: '#f6f9fb',
-    surface2: '#edf2f6',
-    // Light mode is not tuned yet; the veil is present so the token set matches
-    // dark, at an alpha low enough to be a no-op until it is.
-    cardTintTop: alpha(brand[500], 0.04),
-    cardTintBottom: alpha(brand[500], 0.015),
-    cardLine: alpha(brand[800], 0.16),
+    /**
+     * Same story as dark: the card base is the fill the prompt bubble already
+     * uses in this scheme (gray[50] is background.surface2 here), and the veil
+     * over it is what makes a framed block a card.
+     */
+    surface: gray[50],
+    /** Inline chips and table row hover: the veil baked flat. */
+    surface2: '#EEF3F9',
+    // The same 5% -> 2% fall as dark, which lands the card dE 5.3 from the light
+    // page against dark's 6.2 - the two schemes are tinted to the same degree.
+    cardTintTop: alpha(brand[500], 0.05),
+    cardTintBottom: alpha(brand[500], 0.02),
+    // brand[800] rather than brand[500]: the mid blue is too pale to read as an
+    // edge on a near-white card. 20% matches dark's edge-to-card separation.
+    cardLine: alpha(brand[800], 0.2),
     line: 'rgba(16, 38, 56, 0.11)',
     line2: 'rgba(16, 38, 56, 0.22)',
     // Same construction as dark - one ink at three opacities - but tinted from a

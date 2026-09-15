@@ -27,8 +27,8 @@
    default light scheme is 'light', so this is the same answer, not a guess. */
 .b4m-md,
 [data-joy-color-scheme='light'] .b4m-md {
-  --b4m-md-surface: var(--joy-palette-reading-surface, #f6f9fb);
-  --b4m-md-surface-2: var(--joy-palette-reading-surface2, #edf2f6);
+  --b4m-md-surface: var(--joy-palette-reading-surface, #f4f7f9);
+  --b4m-md-surface-2: var(--joy-palette-reading-surface2, #eef3f9);
   --b4m-md-line: var(--joy-palette-reading-line, rgba(16, 38, 56, 0.11));
   --b4m-md-line-2: var(--joy-palette-reading-line2, rgba(16, 38, 56, 0.22));
   --b4m-md-ink: var(--joy-palette-reading-ink, #0a2230);
