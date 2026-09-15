@@ -419,7 +419,13 @@ describe('feature-to-source reconciliation', () => {
   it('spreads the correction sources into the ChatCompletionProcess assembly', () => {
     const assemblySource = readFileSync(join(__dirname, 'ChatCompletionProcess.ts'), 'utf-8');
 
-    expect(assemblySource).toContain('...correctionContextMessages,');
-    expect(assemblySource).toContain('await resolveCorrectionContext(quest, this.db.quests, logger)');
+    // Anchored to a whole line rather than a bare substring, so commenting the wiring out fails
+    // too - `// ...correctionContextMessages,` satisfies `includes` just as happily as the live line.
+    expect(/^\s*\.\.\.correctionContextMessages,\s*$/m.test(assemblySource)).toBe(true);
+    expect(
+      /^\s*const correctionContextMessages = await resolveCorrectionContext\(quest, this\.db\.quests, logger\);\s*$/m.test(
+        assemblySource
+      )
+    ).toBe(true);
   });
 });

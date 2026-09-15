@@ -19,7 +19,7 @@ export type CorrectedTurn = {
   prompt?: string;
   reply?: string | null;
   replies?: string[];
-  structuredReplies?: Array<{ content?: MessageContentObject[] } | null | undefined> | null;
+  structuredReplies?: Array<{ role?: string; content?: MessageContentObject[] } | null | undefined> | null;
 };
 
 /**
@@ -39,9 +39,17 @@ function truncate(text: string, limit: number): string {
   return text.length <= limit ? text : `${text.slice(0, limit)}\n[...truncated]`;
 }
 
-/** The prose an assistant turn actually said, ignoring tool_use/thinking/image blocks. */
+/**
+ * The prose an assistant turn actually said, ignoring tool_use/thinking/image blocks.
+ *
+ * Assistant entries only. `role` is `required: true` on each entry (QuestModel.ts:467), and a
+ * `user`-role entry carries tool_result content rather than anything the model said - quoting that
+ * back as "the answer they are correcting" would be wrong.
+ */
 function readStructuredText(turn: CorrectedTurn): string {
-  const blocks = (turn.structuredReplies ?? []).flatMap(entry => entry?.content ?? []);
+  const blocks = (turn.structuredReplies ?? [])
+    .filter(entry => entry?.role === 'assistant')
+    .flatMap(entry => entry?.content ?? []);
   return blocks
     .map(block => (block?.type === 'text' ? block.text : ''))
     .filter(Boolean)
@@ -50,13 +58,23 @@ function readStructuredText(turn: CorrectedTurn): string {
 }
 
 /**
- * The answer as prose. `structuredReplies` is preferred because a tool-using or thinking-format turn
- * records its text there and can leave `replies`/`reply` empty - the same precedence
- * estimateQuestTokenLength uses (@bike4mind/utils, utils.ts), and the same reason the publish and
- * timeout-recovery readers flatten it. Unlike that function this falls THROUGH when the structured
- * blocks carry no text (a turn that only called tools), because what is wanted here is prose to
- * quote rather than a size estimate. `replies` is the multi-part form and `reply` the single-string
- * form kept for older turns. None is guaranteed, so this can legitimately come back empty.
+ * The answer as prose, in the same precedence the other readers of this shape use.
+ *
+ * IMPORTANT: `structuredReplies` is NOT written by anything in core today - see
+ * `b4m-core/utils/src/llm/utils.ts:556`, "Priority 1 (`structuredReplies`) still never fires
+ * (nothing writes that field)". The branch is kept because it is the precedence the siblings
+ * already declare (utils.ts:356, publish/reply.ts:42, questTimeoutRecovery.ts:68) and costs nothing
+ * while the field stays empty, so a writer appearing later does not silently strand this reader.
+ * It is dead code until then, and should be read as such.
+ *
+ * Unlike estimateQuestTokenLength, which stops at `structuredReplies?.length`, this falls THROUGH
+ * when the structured blocks carry no text: that function wants a size estimate, this one wants
+ * prose to quote. `replies` is the multi-part form and `reply` the single-string form kept for
+ * older turns. None is guaranteed, so this can legitimately come back empty.
+ *
+ * If a writer does appear, two things need revisiting with it: the retry path at
+ * ChatCompletionInvoke.ts clears `reply`/`replies` but not `structuredReplies`, so a retried turn
+ * would be quoted from its pre-retry answer; and toolResults pairing lives in a sibling field.
  */
 function readAnswerText(turn: CorrectedTurn): string {
   const fromStructured = readStructuredText(turn);
@@ -117,7 +135,12 @@ export function buildCorrectionContextMessages(
 
 /** Just enough of the quest store to read the corrected turn back. */
 export type CorrectionQuestReader = {
-  findById: (id: string) => Promise<(CorrectedTurn & { sessionId?: string }) | null | undefined>;
+  /**
+   * `sessionId` is deliberately NOT optional: it is `required: true` (QuestModel.ts:444) and
+   * `findById` applies no projection today, so declaring it required makes a future narrowing
+   * projection that drops the field fail the typecheck rather than the session gate below.
+   */
+  findById: (id: string) => Promise<(CorrectedTurn & { sessionId: string }) | null | undefined>;
 };
 
 /**
@@ -143,7 +166,10 @@ export async function resolveCorrectionContext(
 
   const correctedTurn = await quests.findById(quest.correctsQuestId);
 
-  if (correctedTurn && correctedTurn.sessionId !== quest.sessionId) {
+  // Positive check, not reject-on-mismatch: two absent ids compare unequal-false and would let the
+  // link through. Nothing can produce that today, but a narrowed read is the obvious next change
+  // here, and this gate failing open is the one outcome it must not have.
+  if (correctedTurn && !(correctedTurn.sessionId && quest.sessionId && correctedTurn.sessionId === quest.sessionId)) {
     logger.warn(
       `🔁 [CORRECTION] Ignoring cross-session correction link: quest ${quest.correctsQuestId} belongs to ` +
         `session ${correctedTurn.sessionId}, not ${quest.sessionId}.`

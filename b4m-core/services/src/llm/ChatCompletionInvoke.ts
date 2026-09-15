@@ -117,7 +117,10 @@ export class ChatCompletionInvoke {
         getEffectiveLLMApiKeys(userId, { db: this.db, getSettingsByNames }, { logger: new Logger() }),
       this.db.sessions.findById(sessionId),
       organizationId ? this.db.organizations.findById(organizationId) : Promise.resolve(null),
-      correctsQuestId ? this.db.quests.findById(correctsQuestId) : Promise.resolve(null),
+      // Gated on `!questId` too, not just `correctsQuestId`: the combination is refused below with a
+      // BadRequestError, and `correctsQuestId` carries no ObjectId-shape constraint, so fetching it
+      // here would let a malformed id raise a CastError out of this batch ahead of that refusal.
+      correctsQuestId && !questId ? this.db.quests.findById(correctsQuestId) : Promise.resolve(null),
     ]);
 
     if (!this.apiKeyTableCache) {

@@ -15,7 +15,10 @@ const framingOf = (turn: CorrectedTurn | null | undefined) =>
 const quoteOf = (turn: CorrectedTurn | null | undefined) =>
   buildCorrectionContextMessages(turn).correctionQuote[0]?.content as string | undefined;
 
-const textBlocks = (...texts: string[]) => [{ content: texts.map(text => ({ type: 'text' as const, text })) }];
+/** Matches the persisted shape: `role` is required: true on each entry (QuestModel.ts:467). */
+const textBlocks = (...texts: string[]) => [
+  { role: 'assistant', content: texts.map(text => ({ type: 'text' as const, text })) },
+];
 
 describe('buildCorrectionContextMessages', () => {
   it('frames the latest message as a correction rather than a new question', () => {
@@ -79,10 +82,10 @@ describe('buildCorrectionContextMessages', () => {
     expect(quote).not.toContain('legacy');
   });
 
-  // A tool-heavy or thinking-format turn records its prose in structuredReplies and can leave
-  // replies/reply empty. Reading only the latter made such a turn look like it never answered, so
-  // the correction silently lost its framing on exactly the turns most worth correcting.
-  describe('structuredReplies', () => {
+  // NOTE: nothing in core writes `structuredReplies` today (utils.ts:556), so this branch is dead
+  // in production and these cases pin the contract for whenever a writer appears - not behaviour
+  // any live turn exercises. They are kept because the siblings declare the same precedence.
+  describe('structuredReplies (dead branch: no writer in core today)', () => {
     it('reads the answer out of structured text blocks', () => {
       expect(quoteOf({ structuredReplies: textBlocks('the structured answer') })).toContain('the structured answer');
     });
@@ -106,6 +109,7 @@ describe('buildCorrectionContextMessages', () => {
       const quote = quoteOf({
         structuredReplies: [
           {
+            role: 'assistant',
             content: [
               { type: 'tool_use', id: 'tu-1', name: 'search', input: { query: 'secret-tool-input' } },
               { type: 'text', text: 'the prose answer' },
@@ -118,12 +122,38 @@ describe('buildCorrectionContextMessages', () => {
       expect(quote).not.toContain('secret-tool-input');
     });
 
+    // A user-role entry holds tool_result content. Quoting it back as "the answer they are
+    // correcting" would attribute the user's own tool output to the model.
+    it('ignores non-assistant entries', () => {
+      const quote = quoteOf({
+        structuredReplies: [
+          { role: 'user', content: [{ type: 'text', text: 'a tool result, not an answer' }] },
+          { role: 'assistant', content: [{ type: 'text', text: 'the actual answer' }] },
+        ] as CorrectedTurn['structuredReplies'],
+      });
+
+      expect(quote).toContain('the actual answer');
+      expect(quote).not.toContain('a tool result, not an answer');
+    });
+
+    it('falls through to replies when only non-assistant entries are present', () => {
+      const quote = quoteOf({
+        structuredReplies: [
+          { role: 'user', content: [{ type: 'text', text: 'a tool result' }] },
+        ] as CorrectedTurn['structuredReplies'],
+        replies: ['the flat answer'],
+      });
+
+      expect(quote).toContain('the flat answer');
+      expect(quote).not.toContain('a tool result');
+    });
+
     // Deliberately unlike estimateQuestTokenLength, which stops at `structuredReplies?.length`:
     // what is wanted here is prose to quote, so a turn that only called tools falls through.
     it('falls through to replies when the structured blocks carry no text', () => {
       const quote = quoteOf({
         structuredReplies: [
-          { content: [{ type: 'tool_use', id: 'tu-1', name: 'search', input: {} }] },
+          { role: 'assistant', content: [{ type: 'tool_use', id: 'tu-1', name: 'search', input: {} }] },
         ] as CorrectedTurn['structuredReplies'],
         replies: ['the flat answer'],
       });
@@ -195,6 +225,26 @@ describe('resolveCorrectionContext', () => {
     const quests = reader({ sessionId: 'session-B', prompt: 'other', replies: ['another session answer'] });
 
     const messages = await resolveCorrectionContext({ correctsQuestId: 'quest-1', sessionId: SESSION }, quests, logger);
+
+    expect(messages).toEqual({ correction: [], correctionQuote: [] });
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('cross-session'));
+  });
+
+  // The gate is positive rather than reject-on-mismatch, so it fails CLOSED if a future narrowed
+  // projection stops returning sessionId. Nothing produces these states today; that is the point.
+  it.each([
+    ['the corrected turn carries no sessionId', { sessionId: undefined }, SESSION],
+    ['the correcting quest carries no sessionId', { sessionId: SESSION }, undefined],
+    ['neither side carries one', { sessionId: undefined }, undefined],
+  ])('refuses the link when %s', async (_label, correctedDoc, questSessionId) => {
+    const logger = makeLogger();
+    const quests = reader({ ...correctedDoc, prompt: 'a question', replies: ['an answer'] });
+
+    const messages = await resolveCorrectionContext(
+      { correctsQuestId: 'quest-1', sessionId: questSessionId },
+      quests,
+      logger
+    );
 
     expect(messages).toEqual({ correction: [], correctionQuote: [] });
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('cross-session'));
