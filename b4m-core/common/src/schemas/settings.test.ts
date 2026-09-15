@@ -17,6 +17,9 @@ import {
   WEB_SEARCH_FRESHNESS_PROMPT,
   KNOWLEDGE_BASE_RETRIEVAL_PROMPT,
   DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
+  SEARCH_BUDGET_SETTING_KEYS,
+  FORCED_RETRIEVAL_SETTING_KEYS,
+  type SettingKey,
 } from './settings';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
@@ -271,6 +274,7 @@ describe('public settings projection (M2.5 security boundary)', () => {
         'anthropicDemoKey',
         'xaiApiKey',
         'moonshotApiKey',
+        'deepseekApiKey',
         'geminiDemoKey',
         'voyageApiKey',
       ]) {
@@ -616,26 +620,71 @@ describe('forcedRetrievalCharBudget agrees with the forced-retrieval fallback (#
   });
 });
 
-describe('data-lake scan budgets are caller-altitude, not per-lake (#2624)', () => {
-  const SCAN_BUDGET_KEYS = ['dataLakeSearchMaxFiles', 'dataLakeSearchMaxChunks'] as const;
+describe('scoped retrieval settings are caller-altitude, not per-lake (#2624, #2572)', () => {
+  // Both reads that resolve settings for one retrieval turn, each derived from the list its
+  // production caller actually passes: resolveSearchBudgets (b4m-core/services) and
+  // readForcedRetrievalSettings (ChatCompletionFeatures.ts). Individual keys below have their own
+  // describe blocks carrying their own reasoning; this block is the NET that catches a key nobody
+  // wrote a bespoke assertion for.
+  const SCOPED_RETRIEVAL_KEYS = [...SEARCH_BUDGET_SETTING_KEYS, ...FORCED_RETRIEVAL_SETTING_KEYS];
+
+  it('covers the keys whose Lake rung has already had to be removed by hand', () => {
+    // Anti-vacuity guard for the loops below, and the reason this suite reads the production lists
+    // rather than its own: a for-of over an emptied or shortened list asserts nothing and still
+    // passes green. The keys named here are the ones with history - #2707 removed the Lake rung
+    // from the first two, #2465 shipped the third WITH one (merged textually clean, corrected in
+    // review rather than by this guard), and #2572 is why the forced-retrieval budget has none.
+    expect(SCOPED_RETRIEVAL_KEYS).toContain('dataLakeSearchMaxFiles');
+    expect(SCOPED_RETRIEVAL_KEYS).toContain('dataLakeSearchMaxChunks');
+    expect(SCOPED_RETRIEVAL_KEYS).toContain('dataLakeSearchMaxChunksPerFile');
+    expect(SCOPED_RETRIEVAL_KEYS).toContain('forcedRetrievalCharBudget');
+  });
 
   it('declares Organization and Owner but NOT Lake', () => {
-    // These two advertised a Lake rung that no retrieval caller ever resolved, so an operator could
+    // These advertised a Lake rung that no retrieval caller ever resolved, so an operator could
     // save a Lake-scoped override, see it in the admin UI, and have every search keep using the
     // platform value. The rung is not merely unwired: resolveRetrievalLakeScope hands one scan every
-    // lake the caller can reach as a single dataLakeTags array, so there is no lakeId to key on.
-    // Restoring Lake here without per-lake sub-budgets in the scan would re-create that same lie.
-    for (const key of SCAN_BUDGET_KEYS) {
+    // lake the caller can reach as a single dataLakeTags array, so there is no lakeId to key on, and
+    // one forced-retrieval turn scans an uncapped SET of lakes into a single pool for the same
+    // reason. Restoring Lake on either without per-lake sub-budgets would re-create that same lie.
+    // Driven off the lists the reads actually pass, so a NEW key declared with a Lake rung is
+    // covered the moment it becomes resolvable - which a literal here was not.
+    for (const key of SCOPED_RETRIEVAL_KEYS) {
       expect(settingsMap[key].scope?.settableAt).toEqual([SettingScopeLevel.Organization, SettingScopeLevel.Owner]);
+      expect(settingsMap[key].scope?.settableAt).not.toContain(SettingScopeLevel.Lake);
     }
   });
 
   it('still declares a scope, so the read path must stay on the scoped resolver', () => {
     // Dropping the block entirely would be the wrong fix: the Org and Owner rungs are resolvable
-    // (the caller is known) and resolveSearchBudgets honors them. Only Lake was unkeyable.
-    for (const key of SCAN_BUDGET_KEYS) {
+    // (the caller is known) and both reads honor them. Only Lake was unkeyable.
+    for (const key of SCOPED_RETRIEVAL_KEYS) {
       expect(settingsMap[key].scope).toBeDefined();
     }
+  });
+
+  it('no setting outside the convergence allowlist declares a Lake rung at all', () => {
+    // The loops above are list-gated, so the #2465 failure mode survives in two steps: declare a
+    // Lake-scoped setting in one PR, wire its read in a later one, and nothing forces it into either
+    // key list until the read exists. This assertion is the fail-CLOSED half and needs no list
+    // maintenance - it walks every setting and requires a Lake rung to be justified HERE, so a new
+    // one fails on the commit that declares it rather than on the commit that reads it.
+    //
+    // The allowlist is lake-convergence policy: these three take a lake as their SUBJECT (a lake is
+    // the thing being paused, rate-limited or admission-gated), which is exactly what a retrieval
+    // budget is not - retrieval spans every lake the caller can reach at once. Adding an entry here
+    // should mean answering that question, not silencing this test.
+    const LAKE_SUBJECT_SETTINGS: readonly SettingKey[] = [
+      'PauseLakeConvergence',
+      'LakeConvergenceBulkChangeSharePct',
+      'EnforceLakeAdmission',
+    ];
+
+    const declaringLake = (Object.keys(settingsMap) as SettingKey[]).filter(key =>
+      settingsMap[key].scope?.settableAt?.includes(SettingScopeLevel.Lake)
+    );
+
+    expect(declaringLake.sort()).toEqual([...LAKE_SUBJECT_SETTINGS].sort());
   });
 });
 

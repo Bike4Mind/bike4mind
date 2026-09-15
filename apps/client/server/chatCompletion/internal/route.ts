@@ -3,7 +3,8 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import { Resource } from 'sst';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { questRepository } from '@bike4mind/database';
-import { QuestStartBodySchema, categorizeToolError } from '@bike4mind/services';
+import { categorizeToolError } from '@bike4mind/services';
+import { QuestStartBodySchema } from '@bike4mind/services/llm';
 import { Logger } from '@bike4mind/observability';
 import { processQuest } from '@server/queueHandlers/questProcessor';
 import { emitMetrics } from '@server/utils/cloudwatch';

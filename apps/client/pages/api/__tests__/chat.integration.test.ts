@@ -100,6 +100,17 @@ vi.mock('@server/utils/chatCompletionDefaults', () => ({
 // all run for real.
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();
+  return {
+    ...actual,
+    userApiKeyService: {
+      ...(actual.userApiKeyService as object),
+      validateUserApiKey: (...a: unknown[]) => mockValidate(...a),
+    },
+  };
+});
+
+vi.mock('@bike4mind/services/llm', async orig => {
+  const actual = await orig<Record<string, unknown>>();
   class MockChatCompletionInvoke {
     prefetchedSession = undefined;
     prefetchedOrganization = undefined;
@@ -116,10 +127,6 @@ vi.mock('@bike4mind/services', async orig => {
   return {
     ...actual,
     ChatCompletionProcess: MockChatCompletionProcess,
-    userApiKeyService: {
-      ...(actual.userApiKeyService as object),
-      validateUserApiKey: (...a: unknown[]) => mockValidate(...a),
-    },
     ChatCompletionInvoke: MockChatCompletionInvoke,
   };
 });

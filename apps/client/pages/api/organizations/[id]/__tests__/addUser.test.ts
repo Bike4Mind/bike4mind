@@ -3,10 +3,11 @@ import { createMocks } from 'node-mocks-http';
 import { ForbiddenError, NotFoundError } from '@server/utils/errors';
 
 /**
- * POST /api/organizations/[id]/addUser gained an explicit billing-owner/admin
- * gate during the organizationManager consolidation (the route was previously
- * unauthenticated). These assert the gate (deny path) and delegation to
- * organizationService.addMember (allow path).
+ * POST /api/organizations/[id]/addUser gained an explicit authorization gate during the
+ * organizationManager consolidation (the route was previously unauthenticated). It now shares
+ * `canAdministerOrganization` with addMember and revokeAccess, so the appointed manager - whom the
+ * old inline owner-or-admin check excluded - is admitted here too. These assert the gate in both
+ * directions and delegation to organizationService.addMember on the allow path.
  */
 
 const mockRefs = vi.hoisted(() => ({
@@ -27,7 +28,17 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const addMember = vi.hoisted(() => vi.fn().mockResolvedValue({ organization: {}, user: {} }));
-vi.mock('@bike4mind/services', () => ({ organizationService: { addMember } }));
+// The gate predicate is pulled from its real source rather than stubbed: these cases assert who is
+// admitted, so a hand-written stand-in here could drift from the shared predicate and keep passing.
+vi.mock('@bike4mind/services', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+  return {
+    organizationService: {
+      addMember,
+      canAdministerOrganization: actual.organizationService.canAdministerOrganization,
+    },
+  };
+});
 
 const findById = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById } }));
@@ -62,7 +73,15 @@ describe('POST /api/organizations/[id]/addUser', () => {
     expect(addMember).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects a non-owner, non-admin before calling addMember', async () => {
+  it('lets the appointed team manager add a user', async () => {
+    findById.mockResolvedValue({ id: 'org1', userId: 'owner1', managerId: 'manager1' });
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'org1' }, body: { userId: 'u1' } });
+    (req as any).user = { id: 'manager1', isAdmin: false };
+    await mockRefs.postHandler!(req, res);
+    expect(addMember).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a non-owner, non-manager, non-admin before calling addMember', async () => {
     const { req, res } = createMocks({ method: 'POST', query: { id: 'org1' }, body: { userId: 'u1' } });
     (req as any).user = { id: 'intruder', isAdmin: false };
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(ForbiddenError);

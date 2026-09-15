@@ -11,10 +11,12 @@ const {
   mockResolveSearchBudgets,
   mockGetProviderFromModel,
   mockFindOrgById,
+  mockFindAccessibleOrgById,
   mockGetSettingsMap,
   mockRecordOperationalUsage,
   mockRecordLakeAccessEvent,
   mockCountTokens,
+  mockFindMembershipOrgIds,
 } = vi.hoisted(() => ({
   mockResolveScope: vi.fn(),
   mockSemanticSearch: vi.fn(),
@@ -25,10 +27,15 @@ const {
   mockResolveSearchBudgets: vi.fn(),
   mockGetProviderFromModel: vi.fn(),
   mockFindOrgById: vi.fn(),
+  mockFindAccessibleOrgById: vi.fn(),
   mockGetSettingsMap: vi.fn(async () => ({}) as Record<string, unknown>),
   mockRecordOperationalUsage: vi.fn(),
   mockRecordLakeAccessEvent: vi.fn().mockResolvedValue(undefined),
   mockCountTokens: vi.fn(async () => 3),
+  // Starting point: the caller is a member of nothing, so the selected-org pointer never verifies.
+  // Cases that care about the org rung set this explicitly - and the suite's beforeEach restores it,
+  // since vi.clearAllMocks() drops recorded calls but keeps whatever implementation was last set.
+  mockFindMembershipOrgIds: vi.fn(async () => [] as string[]),
 }));
 
 // Only the middleware chain and the seams below are mocked; @bike4mind/common stays real so
@@ -67,10 +74,20 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   adminSettingsRepository: { getSettingsValue: mockGetSettingsValue },
   creditTransactionRepository: {},
-  organizationRepository: { findById: mockFindOrgById },
+  organizationRepository: {
+    // Kept as its own spy purely so the billing tests can assert it is NOT called: the
+    // plain accessor skips the membership ACL, and a revert to it has to fail the suite
+    // rather than pass silently.
+    findById: mockFindOrgById,
+    shareable: { findAccessibleById: mockFindAccessibleOrgById },
+    findMembershipOrgIds: mockFindMembershipOrgIds,
+  },
   usageEventRepository: {},
   userRepository: { findById: mockFindUserById },
   lakeAccessEventRepository: { record: mockRecordLakeAccessEvent },
+  // Identifiable marker rather than a stub repo: the budget assertions below check that the route
+  // wires the overlay store through, which is half of what #2709 fixed.
+  scopedSettingsRepository: 'SCOPED_SETTINGS_REPO_MARKER',
 }));
 // The report helpers are the REAL ones: the wording and snake_case mapping are what these tests
 // check, so a reimplementation here would prove nothing. Imported from source because the module
@@ -79,6 +96,12 @@ vi.mock('@bike4mind/services', async () => ({
   apiKeyService: {
     getEffectiveApiKey: mockGetEffectiveApiKey,
     getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys,
+  },
+  // Real `scopeForCaller`: the point of these assertions is which org id the route DERIVES and
+  // hands it, so a stub would only prove the stub.
+  scopedSettingsService: {
+    scopeForCaller: (await import('../../../../../../b4m-core/services/src/settings/resolveScopedSetting'))
+      .scopeForCaller,
   },
   ...(await import('../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch').then(m => ({
     __mismatch: m,
@@ -144,7 +167,13 @@ vi.mock('@bike4mind/services', async () => ({
   creditService: await import('../../../../../../b4m-core/services/src/creditService/memberCreditCap'),
 }));
 
-import { BedrockEmbeddingModel, getQuestErrorCode, ModelBackend, OllamaEmbeddingModel } from '@bike4mind/common';
+import {
+  BedrockEmbeddingModel,
+  CreditHolderType,
+  getQuestErrorCode,
+  ModelBackend,
+  OllamaEmbeddingModel,
+} from '@bike4mind/common';
 import handler from '@pages/api/data-lakes/semantic-search';
 import { emptyEmbeddingMismatchReport } from '../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch';
 import { emptyRetrievalUnavailableReport } from '../../../../../../b4m-core/services/src/dataLakeService/retrievalUnavailable';
@@ -218,6 +247,7 @@ const searchAdapters = () => mockSemanticSearch.mock.calls[0][1];
 describe('POST /api/data-lakes/semantic-search lake scoping', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFindMembershipOrgIds.mockResolvedValue([]);
     mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
     mockSemanticSearch.mockResolvedValue(EMPTY_RESULT);
     mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
@@ -1136,12 +1166,12 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
     mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
     mockGetSettingsMap.mockResolvedValue(BILLING_ON);
     mockFindUserById.mockResolvedValue(user());
-    mockFindOrgById.mockResolvedValue(null);
+    mockFindAccessibleOrgById.mockResolvedValue(null);
   });
 
   it('rejects a member who has spent their organization cap, before embedding anything', async () => {
     mockFindUserById.mockResolvedValue(user({ organizationId: 'org1' }));
-    mockFindOrgById.mockResolvedValue({
+    mockFindAccessibleOrgById.mockResolvedValue({
       id: 'org1',
       currentCredits: 1_000_000,
       maxCreditsPerMember: 500,
@@ -1156,7 +1186,7 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
 
   it('rejects when the organization pool is exhausted', async () => {
     mockFindUserById.mockResolvedValue(user({ organizationId: 'org1' }));
-    mockFindOrgById.mockResolvedValue({ id: 'org1', currentCredits: 0, userDetails: [] });
+    mockFindAccessibleOrgById.mockResolvedValue({ id: 'org1', currentCredits: 0, userDetails: [] });
 
     await expect(handler(makeReq({ query: 'onboarding' }), makeRes())).rejects.toThrow(
       /organization does not have enough credits/i
@@ -1176,6 +1206,24 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
     expect(mockSemanticSearch).not.toHaveBeenCalled();
   });
 
+  it('falls back to personal billing when the org pointer is stale - the caller is not on that roster (#2769)', async () => {
+    // organizationId is SET, but the ACL read returns null - a member-set removal (or #2607's
+    // migration) has outrun the pointer. Must bill/refuse against the user's own balance, never
+    // the stale org's cap or pool.
+    mockFindUserById.mockResolvedValue(user({ organizationId: 'stale-org', currentCredits: 0 }));
+    mockFindAccessibleOrgById.mockResolvedValue(null);
+
+    await expect(handler(makeReq({ query: 'onboarding' }), makeRes())).rejects.toThrow(
+      /you do not have enough credits/i
+    );
+
+    expect(mockSemanticSearch).not.toHaveBeenCalled();
+    // Pins the accessor AND the argument order, so reverting to the plain non-ACL lookup
+    // fails here instead of passing on an identical-looking return value.
+    expect(mockFindAccessibleOrgById).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 'stale-org');
+    expect(mockFindOrgById).not.toHaveBeenCalled();
+  });
+
   it('rejects with the 422 insufficient-credits classifier the Add Credits CTA keys off', async () => {
     mockFindUserById.mockResolvedValue(user({ currentCredits: 0 }));
 
@@ -1187,7 +1235,7 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
 
   it('lets a funded member through and settles the spend', async () => {
     mockFindUserById.mockResolvedValue(user({ organizationId: 'org1' }));
-    mockFindOrgById.mockResolvedValue({
+    mockFindAccessibleOrgById.mockResolvedValue({
       id: 'org1',
       currentCredits: 1_000_000,
       maxCreditsPerMember: 500,
@@ -1236,7 +1284,7 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
     mockGetProviderFromModel.mockReturnValue(ModelBackend.Ollama);
     mockGetEffectiveLLMApiKeys.mockResolvedValue({ ollama: 'http://localhost:11434' });
     mockFindUserById.mockResolvedValue(user({ organizationId: 'org1' }));
-    mockFindOrgById.mockResolvedValue({
+    mockFindAccessibleOrgById.mockResolvedValue({
       id: 'org1',
       currentCredits: 0,
       maxCreditsPerMember: 500,
@@ -1267,11 +1315,113 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
     // A half-resolved pair would skip the member cap and land org usage on the member's own
     // balance, which is worse than the pre-existing behaviour of charging nobody.
     mockFindUserById.mockResolvedValue(user({ organizationId: 'org1', currentCredits: 0 }));
-    mockFindOrgById.mockRejectedValue(new Error('organizations read failed'));
+    mockFindAccessibleOrgById.mockRejectedValue(new Error('organizations read failed'));
 
     await handler(makeReq({ query: 'onboarding' }), makeRes());
 
     expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
     expect(mockRecordOperationalUsage).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * #2709: the route used to resolve its budgets platform-only, so an Organization/Owner override
+ * applied on the chat knowledge-base-search path and did nothing here - the same lever reading
+ * differently depending on which surface you asked. These pin the scope the route now derives.
+ *
+ * The org rung is keyed on MEMBERSHIP, not on `user.organizationId` alone: that field is the
+ * selected-org display pointer (#1674), so it selects among the caller's orgs and the membership
+ * set is what proves one.
+ */
+describe('POST /api/data-lakes/semantic-search budget scope (#2709)', () => {
+  const budgetScopeArgs = () => mockResolveSearchBudgets.mock.calls[0];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
+    mockSemanticSearch.mockResolvedValue(EMPTY_RESULT);
+    mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'test-openai-key' });
+    mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
+    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockFindUserById.mockResolvedValue(null);
+    // clearAllMocks keeps the last-set implementation, so without this the no-org case inherits the
+    // membership set of whichever case ran before it.
+    mockFindMembershipOrgIds.mockResolvedValue([]);
+  });
+
+  it('wires the scoped-settings overlay store through, not just the platform repo', async () => {
+    // Without the store the resolver takes the platform path no matter what scope it is handed,
+    // so this is half of what made the override inert.
+    await handler(makeReq({ query: 'onboarding' }, { id: 'u1', tags: [], organizationId: 'org1' }), makeRes());
+
+    expect(budgetScopeArgs()[0]).toEqual(expect.objectContaining({ scopedSettings: 'SCOPED_SETTINGS_REPO_MARKER' }));
+  });
+
+  it('resolves at the org rung when the selected org is one the caller is a member of', async () => {
+    mockFindMembershipOrgIds.mockResolvedValue(['org1', 'org2']);
+
+    await handler(makeReq({ query: 'onboarding' }, { id: 'u1', tags: [], organizationId: 'org1' }), makeRes());
+
+    expect(budgetScopeArgs()[2]).toEqual({
+      organizationId: 'org1',
+      owner: { id: 'org1', type: CreditHolderType.Organization },
+    });
+  });
+
+  it('ignores a selected org the caller is NOT a member of, rather than reading that org ceiling', async () => {
+    // The pointer is user-settable and is not proof of membership (#1674). A stale or forged one
+    // must not silently key the budget to an org the caller has no claim on.
+    mockFindMembershipOrgIds.mockResolvedValue(['org2']);
+
+    await handler(makeReq({ query: 'onboarding' }, { id: 'u1', tags: [], organizationId: 'org1' }), makeRes());
+
+    expect(budgetScopeArgs()[2]).toEqual({
+      organizationId: undefined,
+      owner: { id: 'u1', type: CreditHolderType.User },
+    });
+  });
+
+  it('falls back to the user owner rung for a caller with no org at all', async () => {
+    await handler(makeReq({ query: 'onboarding' }, { id: 'u1', tags: [] }), makeRes());
+
+    expect(budgetScopeArgs()[2]).toEqual({
+      organizationId: undefined,
+      owner: { id: 'u1', type: CreditHolderType.User },
+    });
+  });
+
+  it('scopes the zero-accessible-lakes early return too, whose budgets are echoed as scan.budgets', async () => {
+    // The easy site to forget: it returns before the search runs, but its budgets still reach the
+    // caller in the response envelope, so a platform-only read here reports the wrong ceiling.
+    mockResolveScope.mockResolvedValue({ dataLakeTags: [], dataLakeTagPrefixes: [], lakes: [] });
+    mockFindMembershipOrgIds.mockResolvedValue(['org1']);
+
+    await handler(makeReq({ query: 'onboarding' }, { id: 'u1', tags: [], organizationId: 'org1' }), makeRes());
+
+    expect(mockResolveSearchBudgets).toHaveBeenCalledTimes(1);
+    expect(budgetScopeArgs()[0]).toEqual(expect.objectContaining({ scopedSettings: 'SCOPED_SETTINGS_REPO_MARKER' }));
+    expect(budgetScopeArgs()[2]).toEqual({
+      organizationId: 'org1',
+      owner: { id: 'org1', type: CreditHolderType.Organization },
+    });
+  });
+
+  it('reuses the membership set the access gate already resolved, rather than re-querying', async () => {
+    // The real gate (resolveRetrievalLakeScope) resolves membership through the same per-request
+    // memo, so by the time the budget scope is derived the answer is already on the request. This
+    // stands in for that: a route that looked membership up itself would show a call here.
+    mockResolveScope.mockImplementation(async (req: { membershipOrgIds?: string[] }) => {
+      req.membershipOrgIds = ['org1'];
+      return DYNAMIC_SCOPE;
+    });
+
+    await handler(makeReq({ query: 'onboarding' }, { id: 'u1', tags: [], organizationId: 'org1' }), makeRes());
+
+    expect(mockFindMembershipOrgIds).not.toHaveBeenCalled();
+    expect(budgetScopeArgs()[2]).toEqual({
+      organizationId: 'org1',
+      owner: { id: 'org1', type: CreditHolderType.Organization },
+    });
   });
 });

@@ -88,6 +88,20 @@ export const LAKE_CONFIG_CHANGE_ACTIONS = [
    */
   'grant-access',
   'revoke-access',
+  /**
+   * Ownership moved to the lake org's billing owner because the lake's CREATOR left the
+   * organization, and no other owner grant remained to take over. Recorded by the departure path
+   * (`lapseDepartedMemberLakeAccess`), always under the `system` rung: an org membership change
+   * drove it, so no lake-side relationship authorized it.
+   *
+   * Deliberately NOT `transfer-ownership`: that is a door an owner walks through on purpose, under
+   * its own narrower authority ladder and consent guard, and it DEMOTES the prior owner to curator
+   * rather than dropping them. Nobody requested this one, and the prior owner keeps nothing - the
+   * whole point is that their access has lapsed. Also not `grant-access`, which refuses the `owner`
+   * role outright. An audit that could not tell a deliberate handover from an automatic succession
+   * would be hiding the only fact that matters here: why the owner changed without anyone asking.
+   */
+  'membership-succession',
 ] as const;
 export type LakeConfigChangeAction = (typeof LAKE_CONFIG_CHANGE_ACTIONS)[number];
 

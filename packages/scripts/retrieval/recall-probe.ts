@@ -3,8 +3,9 @@
  * Retrieval-recall probe for `search_knowledge_base` (#1993).
  *
  * Measures how much of the material that could support an answer actually reaches the model, at
- * several `kbSearchResultTokenBudget` / `kbSearchMinRelevancePct` settings, so those defaults can be
- * chosen from a measurement instead of left at the conservative launch values #1955 shipped.
+ * several `kbSearchResultTokenBudget` / `kbSearchMinRelevancePct` / `kbSearchDefaultResults`
+ * settings, so those defaults can be chosen from a measurement instead of left at the conservative
+ * launch values #1955 shipped.
  *
  * WHY IT DRIVES THE TOOL RATHER THAN A CHAT TURN. #1831 measured through forced retrieval, and this
  * ticket inherited that wording - but forced retrieval is a different code path with different
@@ -43,26 +44,34 @@
  * `packages/scripts/help/ingest-help-datalake.ts`. See `corpus.ts` for why that corpus and why the
  * ground truth is hand-authored.
  *
- * SCOPE. This measures RECALL of the supporting set. The unverifiable-claim rate the ticket also
- * asks for needs an answer generated from the served passages plus a judge pass over its claims;
- * that arm is not built here and is required before any default is actually changed, since it is the
- * metric that can show a wider budget making answers worse rather than better.
+ * TWO ARMS. The recall arm above measures how much of the supporting set reached the model. The
+ * CLAIM arm generates an answer from the served passages and judges its claims against those same
+ * passages, because recall can only rise as a budget widens - scored on recall alone this sweep
+ * would recommend the widest budget every time. The claim arm is the one that can move the other
+ * way. It needs a judge credential the recall arm does not; `--no-claim-audit` runs the recall arm
+ * alone, and the claim columns are then absent from the table rather than zero. See `claimAudit.ts`
+ * for what "unverifiable" does and does not mean - it is NOT a hallucination rate.
  *
  * Usage (needs DB + an embedding key, which `sst shell` provides):
  *   npx sst shell --stage pr<N> -- tsx packages/scripts/retrieval/recall-probe.ts \
- *     --userId <probeUserId> --configs=0:0
+ *     --userId <probeUserId> --configs=0:0:5
  *
- *   --configs   sweep points as `tokenBudget:minRelevancePct`, comma separated.
- *               Defaults to `0:0`, today's shipped defaults (the baseline row).
+ *   --configs   sweep points as `tokenBudget:minRelevancePct:defaultResults`, comma separated.
+ *               Defaults to today's shipped values (the baseline row). All three components are
+ *               required: the baseline showed the passage default BINDING at 3.1 documents per
+ *               question, so an entry that leaves it unstated is measuring an unstated bound.
  *   --userId    the principal the searches run as. Use an account with NO personal files: the
  *               unscoped arm ranks the caller's own library alongside the lake, and personal files
  *               would enter the corpus without being in the ground truth.
  *   --out-dir   where the JSON result lands (default packages/scripts/out, which is gitignored).
+ *   --no-claim-audit  skip the claim arm and its ANTHROPIC_API_KEY requirement, measuring recall
+ *               only. The claim columns are then omitted from the table entirely.
+ *   --answer-model / --judge-model  the models that compose and grade the answer.
  *   --dry-run   print the plan without writing settings or sweeping. Preflight still RUNS, and it
  *               ends in a live canary search (a real embedding call) - checking that the corpus is
  *               reachable is the whole value of a dry run, so it is deliberately not skipped.
  *
- * SIDE EFFECT: the sweep WRITES the two admin settings on the target stage and restores their prior
+ * SIDE EFFECT: the sweep WRITES the three admin settings on the target stage and restores their prior
  * values on the way out - from a `finally`, and from a SIGINT/SIGTERM handler so Ctrl-C does not
  * strand a mid-sweep configuration on the stage. It also takes a lease row for the duration, so a
  * second concurrent run refuses to start rather than capturing the first run's mutated values as
@@ -76,6 +85,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
+import Anthropic from '@anthropic-ai/sdk';
 import { Resource } from 'sst';
 import {
   AdminSettings,
@@ -101,7 +111,16 @@ import { pollFor } from './pollEvent';
 import { PROBE_QUESTIONS, type ProbeQuestion } from './corpus';
 import { aggregate, scoreQuestion, type QuestionOutcome } from './metrics';
 import {
+  aggregateClaimAudits,
+  buildAnswerPrompt,
+  buildJudgePrompt,
+  isAbstention,
+  parseJudgeResponse,
+  type ClaimAudit,
+} from './claimAudit';
+import {
   BASELINE_CONFIG,
+  formatBaselineSpec,
   formatConfig,
   formatSweepTable,
   parseConfigs,
@@ -128,9 +147,20 @@ const CANARY_QUESTION: ProbeQuestion = {
   supporting: ['features/data-lakes'],
 };
 
+/**
+ * The claim arm's default models. Both default to the same model, which means the answerer is
+ * effectively grading its own phrasing - a judge is more forgiving of an answer worded the way it
+ * would have worded it. That bias is CONSTANT across every row, so it cannot manufacture a gap
+ * between two configurations, which is the only thing the sweep reads. `--judge-model` exists for
+ * anyone who wants to spend a second model on removing it anyway.
+ */
+const DEFAULT_ANSWER_MODEL = 'claude-opus-5';
+const DEFAULT_JUDGE_MODEL = 'claude-opus-5';
+
 // Typed as SettingKey so a typo fails the build rather than writing a row nothing reads.
 const TOKEN_BUDGET_SETTING: SettingKey = 'kbSearchResultTokenBudget';
 const MIN_RELEVANCE_SETTING: SettingKey = 'kbSearchMinRelevancePct';
+const DEFAULT_RESULTS_SETTING: SettingKey = 'kbSearchDefaultResults';
 
 const logger = new Logger();
 
@@ -324,7 +354,9 @@ async function preflight(user: IUserDocument, capture: Capture): Promise<{ lakeI
   // in fact reachable. That is the right trade: the canary's job is to turn a silent stage-wide
   // zero into a loud stop, and a false stop costs one legible error message while a false pass
   // costs a plausible, entirely wrong results table.
-  const canary = await runQuestion(CANARY_QUESTION, user, capture);
+  // Never the claim arm: this is a precondition check on the search path, and spending two model
+  // calls to grade a query designed to be trivially answerable would measure nothing.
+  const canary = await runQuestion(CANARY_QUESTION, user, capture, null);
   if (canary.served.length === 0) {
     throw new Error(
       `Canary search returned no documents, so the ${fileIds.length}-file lake is unreachable for ` +
@@ -399,6 +431,7 @@ async function writeSetting(name: string, value: string | null): Promise<void> {
 async function applyConfig(config: SweepConfig): Promise<void> {
   await writeSetting(TOKEN_BUDGET_SETTING, String(config.tokenBudget));
   await writeSetting(MIN_RELEVANCE_SETTING, String(config.minRelevancePct));
+  await writeSetting(DEFAULT_RESULTS_SETTING, String(config.defaultResults));
 }
 
 /**
@@ -415,7 +448,7 @@ const LEASE_SETTING = '__recallProbeLease';
 const LEASE_STALE_AFTER_MS = 2 * 60 * 60 * 1000;
 
 /**
- * Take exclusive ownership of the two swept settings, and hand back a `restore` that gives them
+ * Take exclusive ownership of the three swept settings, and hand back a `restore` that gives them
  * back exactly once.
  *
  * This is the ONLY thing standing between a dev script and a permanently altered shared stage, so
@@ -469,7 +502,8 @@ async function acquireSettingsLease(): Promise<{ restore: () => Promise<void> }>
     const staleHint =
       startedAt > 0 && ageMs > LEASE_STALE_AFTER_MS
         ? `\nThat lease is older than ${LEASE_STALE_AFTER_MS / 3_600_000}h, so the run holding it probably died. ` +
-          `Confirm no sweep is running, CHECK ${TOKEN_BUDGET_SETTING} and ${MIN_RELEVANCE_SETTING} against ` +
+          `Confirm no sweep is running, CHECK ${TOKEN_BUDGET_SETTING}, ${MIN_RELEVANCE_SETTING} and ` +
+          `${DEFAULT_RESULTS_SETTING} against ` +
           `what this stage should have, then clear the "${LEASE_SETTING}" row to release it.`
         : '';
     throw new Error(
@@ -485,6 +519,7 @@ async function acquireSettingsLease(): Promise<{ restore: () => Promise<void> }>
   const original: Record<string, string | null> = {
     [TOKEN_BUDGET_SETTING]: await readSetting(TOKEN_BUDGET_SETTING),
     [MIN_RELEVANCE_SETTING]: await readSetting(MIN_RELEVANCE_SETTING),
+    [DEFAULT_RESULTS_SETTING]: await readSetting(DEFAULT_RESULTS_SETTING),
   };
 
   let inFlight: Promise<void> | null = null;
@@ -571,19 +606,85 @@ async function resolveSlugs(fileIds: readonly string[]): Promise<string[]> {
   return slugs;
 }
 
+/**
+ * The claim arm's two model calls, or `null` when the run was launched with `--no-claim-audit`.
+ *
+ * ONE JUDGE FOR THE WHOLE SWEEP, held constant across every configuration and fixed by CLI flag
+ * rather than read from the stage's model settings. A judge that varied between rows would make the
+ * rows incomparable, which is the only thing the claim columns are for.
+ */
+type ClaimArm = {
+  answer: (prompt: string) => Promise<string>;
+  judge: (prompt: string) => Promise<string>;
+};
+
+/**
+ * `max_tokens` is generous on both calls because a truncated answer silently understates the claim
+ * count and a truncated judge response fails `parseJudgeResponse` outright. No `temperature`: it is
+ * rejected outright by the current models, and determinism is not available to buy here anyway -
+ * which is why the sweep is read on gaps between rows rather than on a single row's exact rate.
+ */
+function buildClaimArm(apiKey: string, answerModel: string, judgeModel: string): ClaimArm {
+  const client = new Anthropic({ apiKey });
+  const ask = async (model: string, prompt: string): Promise<string> => {
+    const response = await client.messages.create({
+      model,
+      max_tokens: 16_000,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    // content is a discriminated union, and a response whose text blocks are all empty means the
+    // model returned only thinking - scoring that as an empty answer would read as an abstention.
+    const text = response.content
+      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+      .map(block => block.text)
+      .join('\n')
+      .trim();
+    if (text === '') {
+      throw new Error(`${model} returned no text (stop_reason: ${response.stop_reason ?? 'none'}).`);
+    }
+    return text;
+  };
+  return {
+    answer: prompt => ask(answerModel, prompt),
+    judge: prompt => ask(judgeModel, prompt),
+  };
+}
+
+/**
+ * Generate an answer from what the tool served and judge its claims against the same text.
+ *
+ * `servedPassages` is the tool's own return string - see `claimAudit.ts` for why that, and not the
+ * audit trail, is the source of the passage text.
+ */
+async function auditClaims(question: ProbeQuestion, servedPassages: string, arm: ClaimArm): Promise<ClaimAudit> {
+  const answer = await arm.answer(buildAnswerPrompt(question.question, servedPassages));
+  if (isAbstention(answer)) return { kind: 'skipped', reason: 'abstained' };
+  return {
+    kind: 'scored',
+    verdicts: parseJudgeResponse(await arm.judge(buildJudgePrompt(question.question, servedPassages, answer))),
+  };
+}
+
 type QuestionResult = {
   id: string;
   question: string;
   supporting: string[];
   served: string[];
   outcome: QuestionOutcome;
+  /** Absent when the run measured recall only. */
+  claims?: ClaimAudit;
 };
 
-async function runQuestion(question: ProbeQuestion, user: IUserDocument, capture: Capture): Promise<QuestionResult> {
+async function runQuestion(
+  question: ProbeQuestion,
+  user: IUserDocument,
+  capture: Capture,
+  arm: ClaimArm | null
+): Promise<QuestionResult> {
   capture.reset();
   const context = buildToolContext(user, capture);
   const tool = b4mTools.search_knowledge_base.implementation(context, {});
-  await tool.toolFn({ query: question.question });
+  const servedPassages = await tool.toolFn({ query: question.question });
 
   // Awaited by the tool on every terminal path, so it is already captured. Only the un-awaited
   // audit write needs waiting for, and only when this says one is coming - so a negative question
@@ -609,7 +710,16 @@ async function runQuestion(question: ProbeQuestion, user: IUserDocument, capture
   }
 
   const served = reading.kind === 'served' ? await resolveSlugs(reading.fileIds) : [];
-  return { ...question, served, outcome: scoreQuestion(served, new Set(question.supporting)) };
+  // Keyed off the recall arm's own reading rather than the string's emptiness: the tool returns a
+  // prose notice when it serves nothing, and handing that to the answerer would have it compose an
+  // answer out of an apology. `toolFn` is typed as returning unknown-shaped tool output, so the
+  // string check also guards the claim arm against a non-string return.
+  const claims: ClaimAudit | undefined = !arm
+    ? undefined
+    : reading.kind !== 'served' || typeof servedPassages !== 'string'
+      ? { kind: 'skipped', reason: 'served-nothing' }
+      : await auditClaims(question, servedPassages, arm);
+  return { ...question, served, outcome: scoreQuestion(served, new Set(question.supporting)), claims };
 }
 
 // ---------------------------------------------------------------------------
@@ -619,20 +729,38 @@ async function runQuestion(question: ProbeQuestion, user: IUserDocument, capture
 async function main(): Promise<void> {
   const argv = await yargs(hideBin(process.argv))
     .option('userId', { type: 'string', demandOption: true, describe: 'Principal the searches run as' })
-    .option('configs', { type: 'string', default: '0:0', describe: 'tokenBudget:minRelevancePct, comma separated' })
+    .option('configs', {
+      type: 'string',
+      default: formatBaselineSpec(),
+      describe: 'tokenBudget:minRelevancePct:defaultResults, comma separated',
+    })
     // packages/scripts/out/ is gitignored; the repo root's out/ is not, so defaulting to cwd
     // dropped an untracked result file into the repo whenever this ran from the root.
     .option('out-dir', { type: 'string', default: path.resolve(SCRIPTS_PACKAGE_DIR, 'out') })
     .option('dry-run', { type: 'boolean', default: false })
+    .option('claim-audit', {
+      type: 'boolean',
+      default: true,
+      describe: 'Measure the unverifiable-claim rate (needs ANTHROPIC_API_KEY). --no-claim-audit to skip',
+    })
+    .option('answer-model', { type: 'string', default: DEFAULT_ANSWER_MODEL })
+    .option('judge-model', { type: 'string', default: DEFAULT_JUDGE_MODEL })
     .strict()
     .parse();
 
+  // Checked before anything is written, not at first use: the claim arm runs inside the sweep, and
+  // a missing key discovered there would abort a run that has already mutated the stage's settings.
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (argv['claim-audit'] && !apiKey) {
+    throw new Error(
+      'The claim arm needs ANTHROPIC_API_KEY. Set it, or pass --no-claim-audit to measure recall ' +
+        'only - the table then omits the claim columns rather than reporting a 0% unverifiable rate.'
+    );
+  }
+  const arm = argv['claim-audit'] && apiKey ? buildClaimArm(apiKey, argv['answer-model'], argv['judge-model']) : null;
+
   const configs = parseConfigs(argv.configs);
-  if (
-    !configs.some(
-      c => c.tokenBudget === BASELINE_CONFIG.tokenBudget && c.minRelevancePct === BASELINE_CONFIG.minRelevancePct
-    )
-  ) {
+  if (!configs.some(c => formatConfig(c) === formatConfig(BASELINE_CONFIG))) {
     // Without the off/off row there is nothing to read the other rows against: a recall number means
     // "better or worse than what ships today", and today is 0/0.
     logger.warn(
@@ -652,7 +780,8 @@ async function main(): Promise<void> {
   if (argv['dry-run']) {
     logger.log(
       `Dry run. Would sweep ${configs.length} configuration(s) over ${PROBE_QUESTIONS.length} questions ` +
-        `against lake ${lakeId} (${fileCount} files) as ${user.id}:\n  ` +
+        `against lake ${lakeId} (${fileCount} files) as ${user.id}` +
+        `${arm ? `, claim arm on (answer ${argv['answer-model']}, judge ${argv['judge-model']})` : ', recall only'}:\n  ` +
         configs.map(formatConfig).join('\n  ')
     );
     return;
@@ -670,14 +799,21 @@ async function main(): Promise<void> {
 
       const results: QuestionResult[] = [];
       for (const question of PROBE_QUESTIONS) {
-        const result = await runQuestion(question, user, capture);
+        const result = await runQuestion(question, user, capture, arm);
         results.push(result);
         logger.log(
           `  ${result.id}  served ${result.outcome.documentsServed}  recall ${(result.outcome.recall * 100).toFixed(0)}%`
         );
       }
       detail[formatConfig(config)] = results;
-      rows.push({ ...config, aggregate: aggregate(results.map(r => r.outcome)) });
+      // Built from the audits actually present rather than from `arm`, so a row can never carry a
+      // claim aggregate assembled out of nothing.
+      const audits = results.map(r => r.claims).filter((c): c is ClaimAudit => c !== undefined);
+      rows.push({
+        ...config,
+        aggregate: aggregate(results.map(r => r.outcome)),
+        claims: audits.length > 0 ? aggregateClaimAudits(audits) : undefined,
+      });
     }
   } finally {
     // Restores every setting and releases the lease, even if a question threw. Idempotent with the
@@ -693,8 +829,21 @@ async function main(): Promise<void> {
   writeFileSync(
     outPath,
     // No timestamp: the run's provenance is the stage and the corpus, and a timestamp would make two
-    // otherwise-identical runs diff noisily when they are checked into a ticket.
-    JSON.stringify({ lakeId, corpusFiles: fileCount, questions: PROBE_QUESTIONS.length, rows, detail }, null, 2)
+    // otherwise-identical runs diff noisily when they are checked into a ticket. The judge models
+    // ARE provenance though - an unverifiable-claim rate is only comparable to another measured by
+    // the same grader, and this file is the evidence a shipped default gets justified by.
+    JSON.stringify(
+      {
+        lakeId,
+        corpusFiles: fileCount,
+        questions: PROBE_QUESTIONS.length,
+        claimAudit: arm ? { answerModel: argv['answer-model'], judgeModel: argv['judge-model'] } : null,
+        rows,
+        detail,
+      },
+      null,
+      2
+    )
   );
   logger.log(`Wrote ${outPath}`);
 }

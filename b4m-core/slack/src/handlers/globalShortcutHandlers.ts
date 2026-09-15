@@ -970,7 +970,7 @@ async function processQuickAskInDM(
 
     // Use ChatCompletionInvoke to properly trigger AI processing
     // This handles all the quest setup and EventBridge publishing correctly
-    const { ChatCompletionInvoke } = await import('@bike4mind/services');
+    const { ChatCompletionInvoke } = await import('@bike4mind/services/llm');
     const { SQSService } = await import('@bike4mind/utils');
 
     // any: defaultChatCompletionOptions provides remaining IChatCompletionServiceOptions fields at runtime

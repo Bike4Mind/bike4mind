@@ -58,6 +58,7 @@ const MODELS_DEV_NAMESPACES: ReadonlySet<string> = new Set([
   'xai',
   'bedrock',
   'amazon-bedrock',
+  'deepseek',
 ]);
 
 const LITELLM_NAMESPACES: ReadonlySet<string> = new Set([
@@ -77,6 +78,9 @@ const LITELLM_NAMESPACES: ReadonlySet<string> = new Set([
   // fireworks, baseten and cloudflare at different rates, and collapsing those
   // would let a resold price outrank the direct one.
   'moonshot',
+  // DeepSeek's first-party litellm prefix. NOT `together_ai`, `fireworks_ai` or
+  // `novita`, which resell the same models at their own rates.
+  'deepseek',
 ]);
 
 /**
@@ -96,6 +100,9 @@ export const MODELS_DEV_PROVIDER_BY_BACKEND: Readonly<Record<string, string>> = 
   // is a separate row with its own rates and is deliberately not indexed.
   kimi: 'moonshotai',
   bedrock: 'amazon-bedrock',
+  // DeepSeek's own first-party provider, distinct from the amazon-bedrock rows
+  // that also carry a `deepseek.*` id shape.
+  deepseek: 'deepseek',
 };
 
 function namespacesFor(aggregator: AggregatorName): ReadonlySet<string> {

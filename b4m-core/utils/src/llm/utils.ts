@@ -38,6 +38,7 @@ import { getSettingsValue } from '../settings';
 import { Logger } from '@bike4mind/observability';
 import { ensureToolPairingIntegrity } from '@bike4mind/llm-adapters';
 import { getFileContent } from '../fabfile';
+import { escapeRegex } from '../escapeRegex';
 import { BadRequestError, CorruptedFileError } from '../errors';
 import { isAxiosError } from 'axios';
 import { ITokenizer } from '../tokenCounting';
@@ -1061,8 +1062,14 @@ export async function processUrlsFromPrompt(
     }
   });
 
-  // Remove processed URLs from the user prompt
-  const remainingPrompt = userPrompt.replace(new RegExp(processedUrls.join('|'), 'gi'), '').trim();
+  // Remove processed URLs from the user prompt. Escape each URL before building the
+  // alternation: URL_REGEX can emit `?` and `.`, so a URL like `https://example.com/a?b=1`
+  // used to compile to a pattern that no longer matched its own text and was left in the
+  // prompt (or mis-stripped). Its character classes cannot emit `(`/`+`/`*`, so backtracking
+  // was never the exposure here - correct stripping is.
+  const remainingPrompt = processedUrls.length
+    ? userPrompt.replace(new RegExp(processedUrls.map(escapeRegex).join('|'), 'gi'), '').trim()
+    : userPrompt.trim();
 
   return { userMessages, remainingPrompt };
 }
@@ -1272,11 +1279,37 @@ export interface FabFileNotice {
  * processFabFilesServer (see its deps) rather than imported here so this module -
  * and thus the @bike4mind/utils barrel - carries no jimp dependency. Server callers
  * pass `ensureImageWithinDimensionLimit` from '@bike4mind/utils/imageResize'. See #660.
+ * `null` means the image declares a canvas too large to decode safely, so it cannot be made to
+ * fit; every call site must skip the file with a notice rather than send it on.
  */
-type ResizeImageForModel = (imageBuffer: Buffer, maxDimension?: number, logger?: Logger) => Promise<Buffer>;
+type ResizeImageForModel = (imageBuffer: Buffer, maxDimension?: number, logger?: Logger) => Promise<Buffer | null>;
 
 /** Passthrough default: no resize when a caller doesn't inject one. */
 const noopResize: ResizeImageForModel = async imageBuffer => imageBuffer;
+
+/**
+ * Skip an image whose declared canvas is over the decode budget (resizeImageForModel returned
+ * null). It is never decoded, so it cannot be downscaled here - only a smaller upload fixes it.
+ * Every vision path that drops a file has to push a notice, or the file reaches neither the prompt
+ * nor the user (#2228).
+ */
+async function noticeOversizedCanvas(
+  file: IFabFileDocument,
+  fileNotices: FabFileNotice[],
+  logger: Logger,
+  sendStatusUpdate: (status: string) => Promise<void>
+): Promise<void> {
+  const message = `\u26a0\ufe0f Image "${file.fileName}" declares too large a canvas to process and was not sent. Please delete this file and re-upload a smaller image.`;
+  logger.warn(message);
+  await sendStatusUpdate(message);
+  fileNotices.push({
+    fabFileId: file.id,
+    fileName: file.fileName,
+    band: 'image_too_large',
+    message,
+    delivered: false,
+  });
+}
 
 export async function processFabFilesServer(
   embeddingFactory: EmbeddingFactory,
@@ -1465,7 +1498,11 @@ export async function processFabFilesServer(
           // here rather than given its own case because the payload is identical;
           // without it every Kimi model advertising supportsVision would accept
           // an attachment, drop it at `default`, and answer as if blind.
-          case ModelBackend.Kimi: {
+          case ModelBackend.Kimi:
+          // Same OpenAI base64 block. Only deepseek-flash is multimodal; the
+          // supportsVision gate above keeps deepseek-v4-pro from ever reaching
+          // this switch, so grouping on the backend is safe.
+          case ModelBackend.DeepSeek: {
             // Download image from S3 and send as base64 data URL.
             // Presigned S3 URLs cause timeouts when OpenAI/XAI servers try to fetch them.
             const openaiImageBuffer = await storage.download(file.filePath!);
@@ -1523,6 +1560,10 @@ export async function processFabFilesServer(
               // Download image, enforce dimension limit, and detect actual format
               const rawImageBuffer = await storage.download(file.filePath!);
               const imageBuffer = await resizeImageForModel(rawImageBuffer, undefined, logger);
+              if (imageBuffer === null) {
+                await noticeOversizedCanvas(file, fileNotices, logger, sendStatusUpdate);
+                return;
+              }
               const imageData = imageBuffer.toString('base64');
 
               // Detect actual mime type from buffer to avoid mismatches with Anthropic API
@@ -1553,6 +1594,10 @@ export async function processFabFilesServer(
                 undefined,
                 logger
               );
+              if (moonshotBuffer === null) {
+                await noticeOversizedCanvas(file, fileNotices, logger, sendStatusUpdate);
+                return;
+              }
               const { mime: moonshotMimeType } = await getFileType(moonshotBuffer, file.fileName, file.mimeType);
               const moonshotBase64 = moonshotBuffer.toString('base64');
 
@@ -1609,6 +1654,10 @@ export async function processFabFilesServer(
             // dimension cap so a large upload does not blow the local context.
             const rawImageBuffer = await storage.download(file.filePath!);
             const imageBuffer = await resizeImageForModel(rawImageBuffer, undefined, logger);
+            if (imageBuffer === null) {
+              await noticeOversizedCanvas(file, fileNotices, logger, sendStatusUpdate);
+              return;
+            }
             const { mime: ollamaMimeType } = await getFileType(imageBuffer, file.fileName, file.mimeType);
             const ollamaBase64 = imageBuffer.toString('base64');
 

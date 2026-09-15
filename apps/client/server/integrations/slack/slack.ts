@@ -11,6 +11,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { buildEmailMirrorMessage, type EmailMirrorPayload } from './emailMirror';
 import { buildFeedbackSlackMessage, type FeedbackPromptMetaInput } from './feedbackMessage';
+import type { FeedbackDeepLinks } from '@server/utils/feedbackDeepLinks';
 import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
@@ -112,15 +113,25 @@ export async function postMessageToSlack(message: string): Promise<void> {
   }
 }
 
-export async function postFeedbackToSlack(
-  type: string,
-  organization: string,
-  username: string,
-  userEmail: string,
-  userId: string,
-  content: string,
-  promptMeta?: FeedbackPromptMetaInput | null
-): Promise<FeedbackChannelDelivery> {
+/**
+ * A single options object rather than the positional list this used to be: the first six fields
+ * are all strings, so a transposed pair (username/userEmail, organization/type) type-checks
+ * cleanly and surfaces only as a wrong Slack message.
+ */
+export interface PostFeedbackToSlackInput {
+  type: string;
+  organization: string;
+  username: string;
+  userEmail: string;
+  userId: string;
+  content: string;
+  promptMeta?: FeedbackPromptMetaInput | null;
+  /** Absolute deep links to the record and the conversation; null when APP_URL is unset. */
+  links?: FeedbackDeepLinks | null;
+}
+
+export async function postFeedbackToSlack(input: PostFeedbackToSlackInput): Promise<FeedbackChannelDelivery> {
+  const { type, organization, username, userEmail, userId, content, promptMeta, links } = input;
   try {
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
     const route = resolveFeedbackSlackRoute(Config.STAGE, settings, process.env.B4M_SELF_HOST === 'true');
@@ -152,6 +163,7 @@ export async function postFeedbackToSlack(
       userId,
       content,
       promptMeta,
+      links,
     });
 
     try {

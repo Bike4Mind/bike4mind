@@ -9,7 +9,7 @@ import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
 // dragging in AdminPage (the import cycle this module split exists to prevent).
 import { useAdminModal } from '@client/app/components/admin/useAdminModal';
 import { getThemeConfig } from '@client/app/utils/themes';
-import ModelSelection, { getModelBackend, SELF_HOSTED_BACKEND } from './ModelSelection';
+import ModelSelection, { getModelBackend, SELF_HOSTED_BACKEND, sortBackendsByPriority } from './ModelSelection';
 
 const { setLLM } = vi.hoisted(() => ({ setLLM: vi.fn() }));
 const admin = vi.hoisted(() => ({ isAdmin: false, navigate: vi.fn() }));
@@ -244,5 +244,81 @@ describe('getModelBackend self-hosted grouping', () => {
     delete process.env.B4M_SELF_HOST;
     const model = makeModel({ id: 'local-image/foo', name: 'foo', backend: ModelBackend.LocalImage });
     expect(getModelBackend(model)).toBe('Other');
+  });
+});
+
+describe('getModelBackend DeepSeek and Moonshot grouping', () => {
+  const makeModel = (over: Partial<ModelInfo>): ModelInfo =>
+    ({ id: 'x', name: 'X', description: '', type: 'text', contextWindow: 1, max_tokens: 1, ...over }) as ModelInfo;
+
+  it.each([
+    ['deepseek-flash', 'DeepSeek Flash', ModelBackend.DeepSeek],
+    ['deepseek-v4-pro', 'DeepSeek V4 Pro', ModelBackend.DeepSeek],
+    ['us.deepseek.r1-v1:0', 'DeepSeek R1', ModelBackend.Bedrock],
+    ['deepseek.v3-v1:0', 'DeepSeek v3.1', ModelBackend.Bedrock],
+  ] as const)('groups DeepSeek id %s under "DeepSeek"', (id, name, backend) => {
+    expect(getModelBackend(makeModel({ id, name, backend }))).toBe('DeepSeek');
+  });
+
+  it('does not swallow the Ollama-hosted deepseek-r1:latest into "DeepSeek"', () => {
+    const model = makeModel({ id: 'deepseek-r1:latest', name: 'deepseek-r1:latest', backend: ModelBackend.Ollama });
+    expect(getModelBackend(model)).toBe('Other');
+  });
+
+  it('still routes the Ollama-hosted deepseek-r1:latest to the self-hosted section', () => {
+    const savedSelfHost = process.env.B4M_SELF_HOST;
+    process.env.B4M_SELF_HOST = 'true';
+    try {
+      const model = makeModel({ id: 'deepseek-r1:latest', name: 'deepseek-r1:latest', backend: ModelBackend.Ollama });
+      expect(getModelBackend(model)).toBe(SELF_HOSTED_BACKEND);
+    } finally {
+      if (savedSelfHost === undefined) delete process.env.B4M_SELF_HOST;
+      else process.env.B4M_SELF_HOST = savedSelfHost;
+    }
+  });
+
+  it.each([
+    ['kimi-k3', 'Kimi K3'],
+    ['kimi-k2.7-code', 'Kimi K2.7 Code'],
+    ['kimi-k2.7-code-highspeed', 'Kimi K2.7 Code Highspeed'],
+    ['kimi-k2.6', 'Kimi K2.6'],
+    ['moonshotai.kimi-k2.5', 'Kimi K2.5'],
+    ['moonshot.kimi-k2-thinking', 'Kimi K2 Thinking'],
+  ] as const)('groups Moonshot id %s under "Moonshot"', (id, name) => {
+    expect(getModelBackend(makeModel({ id, name }))).toBe('Moonshot');
+  });
+});
+
+describe('BACKEND_PRIORITY section order', () => {
+  it('sorts known backends in the intended order, with the rest alphabetical after', () => {
+    const shuffled = [
+      'Cohere',
+      'Mistral',
+      'DeepSeek',
+      'Zephyr',
+      'Moonshot',
+      'xAI',
+      SELF_HOSTED_BACKEND,
+      'Anthropic',
+      'OpenAI',
+      'Google',
+      'Meta',
+      'Black Forest Labs',
+    ];
+
+    expect(sortBackendsByPriority(shuffled)).toEqual([
+      SELF_HOSTED_BACKEND,
+      'OpenAI',
+      'Anthropic',
+      'Google',
+      'Meta',
+      'xAI',
+      'DeepSeek',
+      'Moonshot',
+      'Mistral',
+      'Black Forest Labs',
+      'Cohere',
+      'Zephyr',
+    ]);
   });
 });

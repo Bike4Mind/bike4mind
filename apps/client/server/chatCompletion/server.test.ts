@@ -56,7 +56,11 @@ const mockExecuteCompletion = vi.hoisted(() => vi.fn());
 // categorizeToolError's own bucketing rules are covered by TelemetryBuilder.test.ts; here it's
 // stubbed so this route test only asserts that its result flows into the emitted metric.
 const mockCategorizeToolError = vi.hoisted(() => vi.fn().mockReturnValue('internal_error'));
-vi.mock('@bike4mind/services', async () => {
+vi.mock('@bike4mind/services', () => ({
+  categorizeToolError: mockCategorizeToolError,
+}));
+
+vi.mock('@bike4mind/services/llm', async () => {
   const { z } = await import('zod');
   return {
     QuestStartBodySchema: z.object({
@@ -65,10 +69,12 @@ vi.mock('@bike4mind/services', async () => {
       userId: z.string(),
       message: z.string().min(1),
     }),
-    executeCompletion: mockExecuteCompletion,
-    categorizeToolError: mockCategorizeToolError,
   };
 });
+
+vi.mock('@bike4mind/services/cliCompletions', () => ({
+  executeCompletion: mockExecuteCompletion,
+}));
 
 // Auth is exercised by the route; mock the whole module so we can drive the API-key /
 // JWT cascade and rate-limit branches without real key validation or JWT verification.

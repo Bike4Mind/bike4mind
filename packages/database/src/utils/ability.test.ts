@@ -112,7 +112,7 @@ describe('db-core defineAbilitiesFor - Feedback read/delete scoping', () => {
   const ownReport = Object.assign(new FeedbackModel(), { userId: 'u1' });
   const othersReport = Object.assign(new FeedbackModel(), { userId: 'someone-else' });
 
-  it('lets a reporter read and retract their own report, but not anyone else\'s', () => {
+  it("lets a reporter read and retract their own report, but not anyone else's", () => {
     const a = defineAbilitiesFor(makeUser());
     expect(a.can('read', ownReport)).toBe(true);
     expect(a.can('delete', ownReport)).toBe(true);
