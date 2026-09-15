@@ -429,11 +429,14 @@ jobs:
             # Reads elsewhere on the runner are NOT fenced.
             #
             # Spelling of the path specs matters and is not obvious. Only `Edit(path)`
-            # is consulted by the file-permission checks - `Write(path)` and
-            # `MultiEdit(path)` specs are IGNORED (the CLI says so on stderr and then
-            # exits 0, so a dead spec looks like a live one) - and an `Edit(path)` rule
-            # covers every file-editing tool, Write included. So each fence below is
-            # written once, as `Edit(...)`, and that one spec is the whole of it.
+            # is consulted by the file-permission checks - a path rule naming `Write`
+            # or `MultiEdit` is accepted but never read, so a dead spec looks exactly
+            # like a live one - and an `Edit(path)` rule covers every file-editing
+            # tool, Write included. So each fence below is written once, as
+            # `Edit(...)`, and that one spec is the whole of it. Do not rely on the
+            # CLI warning about an ignored spec as a safety net: it is emitted per
+            # output mode, and this job runs the action's JSON stream, where it can
+            # land in the debug log rather than anywhere CI would surface.
             # Bare `MultiEdit` is kept in both arms even though this CLI version does
             # not know the name: it costs a startup warning and nothing else, and if
             # the tool returns it should return already denied. It is NOT a fence.
@@ -1164,7 +1167,16 @@ jobs:
         # edits this file gets a red check and a comment claiming a review was lost.
         # `posted != 'true'` also gates the failure branch, so a run that posts a
         # review and then errors does not contradict the measurement above.
-        if: always() && (steps.bot_review.outcome == 'failure' || (steps.bot_review.outcome == 'success' && steps.bot_review.outputs.conclusion == 'success')) && steps.review_posted.outputs.posted != 'true'
+        #
+        # The last conjunct keeps this step and `Report cancelled fold` off the same
+        # state. `always()` is TRUE when cancelled, and a cancel landing after the
+        # agent succeeded but before `review_posted` ran leaves `posted` empty - which
+        # satisfies `posted != 'true'` here while the cancel reporter fires on that
+        # same state, so both used to comment: one saying the outcome is unknowable,
+        # this one asserting as fact that no review completed and then exiting 1.
+        # Negated only for a fold run rather than written `!cancelled()`, because a
+        # cancelled ORDINARY review has no other reporter at all.
+        if: always() && !(cancelled() && env.FOLD_MODE == 'true') && (steps.bot_review.outcome == 'failure' || (steps.bot_review.outcome == 'success' && steps.bot_review.outputs.conclusion == 'success')) && steps.review_posted.outputs.posted != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WAKEUP_DETECTED: ${{ steps.transcript.outputs.schedule_wakeup_detected }}
