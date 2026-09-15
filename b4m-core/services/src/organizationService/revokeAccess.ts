@@ -2,6 +2,7 @@ import { IGroupRepository, IOrganizationRepository, IUserDocument, IUserReposito
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { purgeOrgMembershipArtifacts } from './purgeOrgMembership';
+import { canAdministerOrganization } from './orgAuthority';
 
 const revokeAccessSchema = z.object({
   id: z.string(),
@@ -34,10 +35,9 @@ export const revokeAccess = async (
   const organization = await adapters.db.organizations.findById(id);
   if (!organization) throw new NotFoundError(`Organization not found for id: ${id}`);
 
-  // Only owner, manager, or admin can revoke access
-  const isOwner = organization.userId === user.id;
-  const isManager = organization.managerId === user.id;
-  if (!isOwner && !isManager && !user.isAdmin) {
+  // Only owner, manager, or admin can revoke access. Shares the predicate with addMember so the
+  // two halves of the membership lifecycle cannot drift on who may change the roster.
+  if (!canAdministerOrganization(user, organization)) {
     throw new NotFoundError(`Organization not found for id: ${id}`); // Return same error to avoid info leakage
   }
 

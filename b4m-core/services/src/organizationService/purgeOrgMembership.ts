@@ -22,8 +22,9 @@ interface PurgeOrgMembershipAdapters {
  * Returns the pruned `adminUserIds` rather than mutating in place and returning void: the caller
  * MUST assign it onto the org doc it persists, so a future caller cannot silently get the unsafe
  * half (group access dropped, admin authority retained). Idempotent - safe under a withTransaction
- * retry. NOTE: `leave` additionally clears the departing user's selected `organizationId`; that is
- * NOT part of this shared step (revoke has no equivalent - tracked separately).
+ * retry. NOTE: clearing the departing member's selected `organizationId` is NOT part of this shared
+ * step - `leave` and `revokeAccess` each do it themselves, because they hold the member's document
+ * at different points (leave has the acting user, revoke must fetch the target).
  */
 export async function purgeOrgMembershipArtifacts(
   targetUserId: string,

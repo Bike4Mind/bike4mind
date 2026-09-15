@@ -22,8 +22,10 @@ export class DeepSeekCachingAdapter implements ICachingAdapter {
 
     const cacheHitRate = totalInputTokens > 0 ? (cachedTokens / totalInputTokens) * 100 : 0;
 
-    // A cache hit costs ~2% of the miss rate ($0.006 against $0.30 per 1M), so
-    // the saving on the cached portion is ~98%.
+    // A cache hit costs 2.0% of the miss rate on Flash ($0.006 against $0.30 per
+    // 1M) and 3.3% on V4 Pro ($0.044 against $1.32 per 1M). The flat 0.98
+    // multiplier below is Flash's figure, used as an estimate for both since
+    // CacheUsageStats has no per-model rate to key off here.
     const costSavingsPercent = cacheHitRate * 0.98;
     const estimatedLatencyReduction = cacheHitRate * 0.7;
 

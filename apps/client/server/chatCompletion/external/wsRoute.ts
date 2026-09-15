@@ -7,7 +7,7 @@ import {
   type CompletionSource,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { executeCompletion } from '@bike4mind/services';
+import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import {
   connectDB,
   mongoose,

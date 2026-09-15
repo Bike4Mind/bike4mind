@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { ToolDefinition } from '@bike4mind/services';
+import type { ToolDefinition } from '@bike4mind/services/llm';
 import { injectBriefContext, appendBriefToObservation, extractLoadedProblem } from './briefContextInjector';
 
 const familyEnvelope = (problem: unknown, displayMessage = 'summary') =>

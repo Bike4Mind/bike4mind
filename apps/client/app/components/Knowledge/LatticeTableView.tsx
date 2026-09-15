@@ -130,7 +130,10 @@ const LatticeTableView: React.FC<LatticeTableViewProps> = ({
 
   // Group entities by type for row grouping
   const groupedEntities = useMemo(() => {
-    const groups: Record<string, ILatticeEntity[]> = {};
+    // entity.type is persisted unvalidated off req.body; a plain `{}` would resolve a type of
+    // `constructor`/`__proto__` through the prototype chain, skip the lazy-init and throw on push
+    // inside this useMemo. Same guard as lattice/chat.ts's byCategory.
+    const groups: Record<string, ILatticeEntity[]> = Object.create(null);
 
     model.data.entities.forEach(entity => {
       const type = entity.type || 'default';

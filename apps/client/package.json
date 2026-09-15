@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/client",
-  "version": "0.1.70",
+  "version": "0.1.74",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/copy-tavern-assets.mjs && node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && node scripts/generate-premium-glue.mjs",
@@ -100,6 +100,7 @@
     "@lexical/rich-text": "^0.47.0",
     "@lexical/utils": "^0.47.0",
     "@mendable/firecrawl-js": "^1.29.3",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "@mui/icons-material": "^5.14.9",
     "@mui/joy": "^5.0.0-beta.52",
     "@mui/material-nextjs": "^7.3.9",

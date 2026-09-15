@@ -1,3 +1,4 @@
+import { isPrivateIP } from '@bike4mind/fab-pipeline';
 import { lookup } from 'node:dns/promises';
 
 /**
@@ -13,47 +14,11 @@ import { lookup } from 'node:dns/promises';
  * uses `resolveAndVetUrl` and pins the vetted IP for http (see plainFetch.ts), which removes the
  * race for http. The `unsafeFetchUrlReason` boolean form (llms.txt probe) keeps the repo's accepted
  * best-effort posture (external-image.ts) since its body is never read.
+ *
+ * Private-address classification is delegated to `isPrivateIP` from `@bike4mind/fab-pipeline` -
+ * this file used to reimplement the same per-hextet IPv6 prefix list and drifted out of sync with
+ * it (#1969).
  */
-
-function isPrivateIpv4(ip: string): boolean {
-  const m = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (!m) return false;
-  const a = parseInt(m[1], 10);
-  const b = parseInt(m[2], 10);
-  return (
-    a === 10 ||
-    a === 127 ||
-    a === 0 ||
-    (a === 100 && b >= 64 && b <= 127) || // carrier-grade NAT (RFC 6598) 100.64.0.0/10
-    (a === 169 && b === 254) || // link-local + AWS metadata 169.254.169.254
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    a >= 224 // multicast / reserved
-  );
-}
-
-function isPrivateIpv6(ip: string): boolean {
-  const h = ip.toLowerCase().replace(/^\[|\]$/g, '');
-  if (h === '::1' || h === '::') return true;
-  if (h.includes('ffff:')) {
-    // IPv4-mapped IPv6 (::ffff:a.b.c.d) dials the underlying IPv4 - treat conservatively.
-    const tail = h.split(':').pop() ?? '';
-    return tail.includes('.') ? isPrivateIpv4(tail) : true;
-  }
-  // Unique-local (fc00::/7) and link-local (fe80::/10).
-  return (
-    h.startsWith('fc') ||
-    h.startsWith('fd') ||
-    h.startsWith('fe8') ||
-    h.startsWith('fe9') ||
-    h.startsWith('fea') ||
-    h.startsWith('feb')
-  );
-}
-
-function isPrivateIp(ip: string): boolean {
-  return ip.includes(':') ? isPrivateIpv6(ip) : isPrivateIpv4(ip);
-}
 
 /** Literal-hostname check (no DNS). Returns a reason string when unsafe, else null. */
 export function unsafeHostnameReason(hostname: string): string | null {
@@ -62,13 +27,13 @@ export function unsafeHostnameReason(hostname: string): string | null {
   if (host === 'localhost' || host === '0.0.0.0' || host === '::' || host === '::1') {
     return 'loopback host';
   }
-  if (host.includes('ffff:')) {
+  if (host.startsWith('::ffff:')) {
     return 'ipv4-mapped ipv6 address';
   }
-  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) && isPrivateIpv4(host)) {
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) && isPrivateIP(host)) {
     return 'private/reserved ipv4 address';
   }
-  if (host.includes(':') && isPrivateIpv6(host)) {
+  if (host.includes(':') && isPrivateIP(host)) {
     return 'private/reserved ipv6 address';
   }
   return null;
@@ -96,7 +61,7 @@ export async function resolveAndVetUrl(url: URL): Promise<VettedFetchTarget> {
     return { safe: false, reason: 'dns resolution failed' };
   }
   for (const { address } of addresses) {
-    if (isPrivateIp(address)) return { safe: false, reason: 'resolves to a private/reserved address' };
+    if (isPrivateIP(address)) return { safe: false, reason: 'resolves to a private/reserved address' };
   }
   const first = addresses[0];
   if (!first) return { safe: false, reason: 'dns resolution failed' };

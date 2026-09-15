@@ -295,5 +295,27 @@ describe('resolveOutputMaxTokens', () => {
     it('still honors an explicit budget on DeepSeek Flash', () => {
       expect(resolve(8192, deepseekFlash)).toBe(8192);
     });
+
+    const deepseekV4Pro: ModelInfo = {
+      ...baseModelInfo,
+      id: ChatModels.DEEPSEEK_V4_PRO,
+      name: 'DeepSeek V4 Pro',
+      backend: ModelBackend.DeepSeek,
+      can_think: true,
+      max_tokens: 393_216,
+      dispatchProfile: { maxTokensParam: 'max_tokens', toolTransport: 'chat' },
+    };
+
+    it('reports DeepSeek V4 Pro as reasoning within the output budget', () => {
+      expect(reasonsWithinOutputBudget(deepseekV4Pro)).toBe(true);
+    });
+
+    it('defaults DeepSeek V4 Pro to the reasoning floor, not the 4096 fallback', () => {
+      expect(resolve(undefined, deepseekV4Pro)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    });
+
+    it('still honors an explicit budget on DeepSeek V4 Pro', () => {
+      expect(resolve(8192, deepseekV4Pro)).toBe(8192);
+    });
   });
 });

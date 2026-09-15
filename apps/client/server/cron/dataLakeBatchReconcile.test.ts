@@ -270,7 +270,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
 
       await handler();
 
-      expect(h.recordRescue).toHaveBeenCalledWith('swept', 2, 3);
+      expect(h.recordRescue).toHaveBeenCalledWith('swept', 2, 3, 'dev');
     });
 
     it('reports a GATED-OFF sweep as disabled, not as a clean idle run', async () => {
@@ -281,7 +281,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
 
       const body = JSON.parse((await handler()).body);
 
-      expect(h.recordRescue).toHaveBeenCalledWith('disabled', 0, 0);
+      expect(h.recordRescue).toHaveBeenCalledWith('disabled', 0, 0, 'dev');
       expect(body.rescueOutcome).toBe('disabled');
     });
 
@@ -290,7 +290,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
 
       const body = JSON.parse((await handler()).body);
 
-      expect(h.recordRescue).toHaveBeenCalledWith('failed', 0, 0);
+      expect(h.recordRescue).toHaveBeenCalledWith('failed', 0, 0, 'dev');
       expect(body.rescueOutcome).toBe('failed');
     });
 
@@ -299,7 +299,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
 
       await handler();
 
-      expect(h.recordRescue).toHaveBeenCalledWith('swept', 0, 0);
+      expect(h.recordRescue).toHaveBeenCalledWith('swept', 0, 0, 'dev');
     });
 
     it('a rejecting rescue-metric helper never breaks the run', async () => {

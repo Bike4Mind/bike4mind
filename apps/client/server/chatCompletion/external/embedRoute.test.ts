@@ -40,19 +40,25 @@ const MockInsufficientCreditsError = vi.hoisted(
       }
     }
 );
-vi.mock('@bike4mind/services', async () => {
+vi.mock('@bike4mind/services', () => ({
+  assertOwnerHasCredits: mockAssertOwnerHasCredits,
+  assertKeySpendWithinCap: mockAssertKeySpendWithinCap,
+  apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({ openai: 'k' }) },
+}));
+
+vi.mock('@bike4mind/services/cliCompletions', () => ({
+  executeCompletion: mockExecuteCompletion,
+}));
+
+vi.mock('@bike4mind/services/llm', async () => {
   // Mirror the real resolveQuestErrorCode against the stand-in class, delegating
   // tagged 422s to the REAL getQuestErrorCode so classification stays end-to-end.
   const { getQuestErrorCode } = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
   return {
-    executeCompletion: mockExecuteCompletion,
-    assertOwnerHasCredits: mockAssertOwnerHasCredits,
-    assertKeySpendWithinCap: mockAssertKeySpendWithinCap,
     InsufficientCreditsError: MockInsufficientCreditsError,
     resolveQuestErrorCode: (error: unknown) =>
       error instanceof MockInsufficientCreditsError ? error.code : getQuestErrorCode(error),
     buildSharedTools: mockBuildSharedTools,
-    apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({ openai: 'k' }) },
     // Availability filter that runs alongside buildSharedTools - tests here assert on
     // enabledTools/kbScope, not on which tools are gated, so every tool reads as available.
     resolveToolAvailability: vi.fn().mockResolvedValue({}),

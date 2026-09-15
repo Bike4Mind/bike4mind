@@ -37,25 +37,29 @@ class InternalServerError extends HTTPError {
   }
 }
 
-vi.mock('@bike4mind/common', () => ({
-  AuthEvents: { LOGIN: 'login', REGISTER: 'register' },
-  UnprocessableEntityError,
-  HTTPError,
-  InternalServerError,
-  // Used by entitlements/registry.ts (reached transitively via the verify handler).
-  parseInternalStaffDomains: (raw?: string) => [
-    ...new Set(
-      (raw ?? '')
-        .split(',')
-        .map(d => d.trim().toLowerCase())
-        .filter(Boolean)
-    ),
-  ],
-  // Pure serializer; mirror its toJSON normalization (secret-stripping shape is covered
-  // by toSafeUser.test.ts). These tests are about enumeration resistance, not the shape.
-  redactUserSecretsForSelf: (user: { toJSON?: () => unknown } | null | undefined) =>
-    user && typeof user.toJSON === 'function' ? user.toJSON() : user,
-}));
+vi.mock('@bike4mind/common', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+  return {
+    ...actual,
+    AuthEvents: { LOGIN: 'login', REGISTER: 'register' },
+    UnprocessableEntityError,
+    HTTPError,
+    InternalServerError,
+    // Used by entitlements/registry.ts (reached transitively via the verify handler).
+    parseInternalStaffDomains: (raw?: string) => [
+      ...new Set(
+        (raw ?? '')
+          .split(',')
+          .map(d => d.trim().toLowerCase())
+          .filter(Boolean)
+      ),
+    ],
+    // Pure serializer; mirror its toJSON normalization (secret-stripping shape is covered
+    // by toSafeUser.test.ts). These tests are about enumeration resistance, not the shape.
+    redactUserSecretsForSelf: (user: { toJSON?: () => unknown } | null | undefined) =>
+      user && typeof user.toJSON === 'function' ? user.toJSON() : user,
+  };
+});
 
 vi.mock('@bike4mind/database', () => ({
   userRepository: {

@@ -19,7 +19,7 @@ import { RekognitionImageModerationService } from '@bike4mind/utils/imageModerat
 import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@server/utils/analyticsLog';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { ImageEditService } from '@bike4mind/services';
+import { ImageEditService } from '@bike4mind/services/llm';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { fabFilesService } from '@bike4mind/services';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';

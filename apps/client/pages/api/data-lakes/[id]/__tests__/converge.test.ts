@@ -45,17 +45,16 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   scopedSettingsRepository: {},
 }));
-vi.mock('@bike4mind/common', async () => ({
-  isSupportedEmbeddingModel: () => true,
-  // Real: the route's scope gate is built from this enum.
-  ApiKeyScope: (await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common')).ApiKeyScope,
-  // Real, not a literal: converge.ts stamps this on every message it enqueues and the chunk
-  // handler's kill switch reads it, so a stub here would let this suite pass against a value the
-  // switch no longer recognises. It reaches converge.ts through convergenceProvenance.ts, which
-  // re-exports the vocabulary from common.
-  CONVERGENCE_ORIGIN: (await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common'))
-    .CONVERGENCE_ORIGIN,
-}));
+vi.mock('@bike4mind/common', async () => {
+  // Partial mock: everything else stays real. `rateLimit.ts` now reaches
+  // `@bike4mind/fab-pipeline`'s SSRF guard (via `server/utils/ip.ts`, #1969), whose embedding
+  // provider modules import several enums (BedrockEmbeddingModel, OpenAIEmbeddingModel, ...) from
+  // this package at load time - none invoked here, but a full-replacement mock has to name every
+  // one of them or the import throws. `isSupportedEmbeddingModel` alone is stubbed on purpose: the
+  // route only needs it to say yes, not to run the real allowlist.
+  const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+  return { ...actual, isSupportedEmbeddingModel: () => true };
+});
 vi.mock('@bike4mind/utils', () => ({ BadRequestError: class BadRequestError extends Error {} }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));

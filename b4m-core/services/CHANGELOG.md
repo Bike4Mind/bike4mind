@@ -1,5 +1,103 @@
 # @bike4mind/services
 
+## 8.0.0
+
+### Major Changes
+
+- [#2778](https://github.com/Bike4Mind/bike4mind/pull/2778) [`f3d4563`](https://github.com/Bike4Mind/bike4mind/commit/f3d4563c442e4471fd37d3bf35baac96095f5fc5) Thanks [@onoya](https://github.com/onoya)! - keep the LLM tool closure out of the package barrel
+
+### Minor Changes
+
+- [#2812](https://github.com/Bike4Mind/bike4mind/pull/2812) [`fee546f`](https://github.com/Bike4Mind/bike4mind/commit/fee546f162297fbd3cf5acdb41b71906bdabab46) Thanks [@maconard](https://github.com/maconard)! - restore DeepSeek V4 Pro
+
+### Patch Changes
+
+- [#2783](https://github.com/Bike4Mind/bike4mind/pull/2783) [`5e1eee0`](https://github.com/Bike4Mind/bike4mind/commit/5e1eee08f765b93a1c30160c03858e7c5e9fd798) Thanks [@onoya](https://github.com/onoya)! - verify membership and roster authority at every use site
+
+- [#2823](https://github.com/Bike4Mind/bike4mind/pull/2823) [`a4e980d`](https://github.com/Bike4Mind/bike4mind/commit/a4e980d956c721aa734dde981420adcb4bfaa243) Thanks [@onoya](https://github.com/onoya)! - escape dynamic regex inputs and guard dynamic object writes
+
+- [#2826](https://github.com/Bike4Mind/bike4mind/pull/2826) [`d1836db`](https://github.com/Bike4Mind/bike4mind/commit/d1836db1eb4c3d9c738a56b94d01da63f16e325a) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - dedupe sibling private-address guards onto a shared predicate
+
+- [#2828](https://github.com/Bike4Mind/bike4mind/pull/2828) [`2922d00`](https://github.com/Bike4Mind/bike4mind/commit/2922d0061d5ee3673da2a3b9bd88f11b7005e5db) Thanks [@onoya](https://github.com/onoya)! - let a caller rung only raise the search serve budget
+
+- [#2843](https://github.com/Bike4Mind/bike4mind/pull/2843) [`13322f6`](https://github.com/Bike4Mind/bike4mind/commit/13322f6bcc3473bdc243d1d4e397e069204273a6) Thanks [@onoya](https://github.com/onoya)! - harden the shared settings int-coercion helpers
+
+- Updated dependencies [[`5e1eee0`](https://github.com/Bike4Mind/bike4mind/commit/5e1eee08f765b93a1c30160c03858e7c5e9fd798), [`fee546f`](https://github.com/Bike4Mind/bike4mind/commit/fee546f162297fbd3cf5acdb41b71906bdabab46), [`a4e980d`](https://github.com/Bike4Mind/bike4mind/commit/a4e980d956c721aa734dde981420adcb4bfaa243), [`2922d00`](https://github.com/Bike4Mind/bike4mind/commit/2922d0061d5ee3673da2a3b9bd88f11b7005e5db), [`afba631`](https://github.com/Bike4Mind/bike4mind/commit/afba6315105929e9b39672a2d0d23caad7f8e4aa)]:
+  - @bike4mind/common@7.3.0
+  - @bike4mind/llm-adapters@0.15.0
+  - @bike4mind/utils@5.2.0
+  - @bike4mind/agents@1.0.6
+  - @bike4mind/fab-pipeline@1.3.6
+  - @bike4mind/auth@0.8.3
+  - @bike4mind/db-core@0.5.6
+  - @bike4mind/mcp@2.0.6
+
+## 7.2.2
+
+### Patch Changes
+
+- [#2765](https://github.com/Bike4Mind/bike4mind/pull/2765) [`2298140`](https://github.com/Bike4Mind/bike4mind/commit/229814036a13097cae1cd3ccc19d052d4d6c17f9) Thanks [@onoya](https://github.com/onoya)! - resolve search budgets on the caller scope in the semantic-search route
+
+- Updated dependencies [[`2298140`](https://github.com/Bike4Mind/bike4mind/commit/229814036a13097cae1cd3ccc19d052d4d6c17f9)]:
+  - @bike4mind/common@7.2.2
+  - @bike4mind/agents@1.0.5
+  - @bike4mind/auth@0.8.2
+  - @bike4mind/db-core@0.5.5
+  - @bike4mind/fab-pipeline@1.3.5
+  - @bike4mind/llm-adapters@0.14.2
+  - @bike4mind/mcp@2.0.5
+  - @bike4mind/utils@5.1.2
+
+## 7.2.1
+
+### Patch Changes
+
+- [#2796](https://github.com/Bike4Mind/bike4mind/pull/2796) [`8ef2c17`](https://github.com/Bike4Mind/bike4mind/commit/8ef2c17f7b54b0df8c3809f17a62544784e65029) Thanks [@onoya](https://github.com/onoya)! - derive the scoped-retrieval Lake-rung guard from the reads' own key lists
+
+- Updated dependencies [[`8ef2c17`](https://github.com/Bike4Mind/bike4mind/commit/8ef2c17f7b54b0df8c3809f17a62544784e65029)]:
+  - @bike4mind/common@7.2.1
+  - @bike4mind/agents@1.0.4
+  - @bike4mind/auth@0.8.1
+  - @bike4mind/db-core@0.5.4
+  - @bike4mind/fab-pipeline@1.3.4
+  - @bike4mind/llm-adapters@0.14.1
+  - @bike4mind/mcp@2.0.4
+  - @bike4mind/utils@5.1.1
+
+## 7.2.0
+
+### Minor Changes
+
+- [#2760](https://github.com/Bike4Mind/bike4mind/pull/2760) [`f72cd4b`](https://github.com/Bike4Mind/bike4mind/commit/f72cd4b612275d641680699cfd4f6e91976903f7) Thanks [@onoya](https://github.com/onoya)! - measure and alarm on ANN query duration
+
+- [#2762](https://github.com/Bike4Mind/bike4mind/pull/2762) [`adc900a`](https://github.com/Bike4Mind/bike4mind/commit/adc900ab152e00d3324bc228ac73c98a5cb5e2ef) Thanks [@maconard](https://github.com/maconard)! - add DeepSeek as a first-party provider and close Moonshot gaps
+
+- [#2773](https://github.com/Bike4Mind/bike4mind/pull/2773) [`b660460`](https://github.com/Bike4Mind/bike4mind/commit/b6604604904ae62ab4c6745ec4e2335e05706e68) Thanks [@vinchi777](https://github.com/vinchi777)! - record which lake prompts the owner/curator grant arm admitted
+
+### Patch Changes
+
+- [#2682](https://github.com/Bike4Mind/bike4mind/pull/2682) [`f6407e2`](https://github.com/Bike4Mind/bike4mind/commit/f6407e27d91175446e28246e1234d4c0a409c694) Thanks [@onoya](https://github.com/onoya)! - fall back to a keyless Bedrock embedder when no provider credential resolves
+
+- [#2758](https://github.com/Bike4Mind/bike4mind/pull/2758) [`0a931d2`](https://github.com/Bike4Mind/bike4mind/commit/0a931d25ddbfc35963f82f1bb6ea26b89a10f39e) Thanks [@onoya](https://github.com/onoya)! - resolve cosine relevance floors per embedding space
+
+- [#2759](https://github.com/Bike4Mind/bike4mind/pull/2759) [`671c753`](https://github.com/Bike4Mind/bike4mind/commit/671c753fc81d65561729f591bc7038e4c605126c) Thanks [@onoya](https://github.com/onoya)! - report unmeasured lake members as unmeasured, and disclose the corpus-scope gap
+
+- [#2770](https://github.com/Bike4Mind/bike4mind/pull/2770) [`e543fe6`](https://github.com/Bike4Mind/bike4mind/commit/e543fe695608f0c4fb9aade7a0be974aa2c44f4e) Thanks [@wescarda](https://github.com/wescarda)! - use isObjectIdShaped instead of lowercase-only hex regex
+
+- [#2775](https://github.com/Bike4Mind/bike4mind/pull/2775) [`36fae3b`](https://github.com/Bike4Mind/bike4mind/commit/36fae3b0e2a448442c65b83735de0406ed233370) Thanks [@vinchi777](https://github.com/vinchi777)! - record the resolved lake scope at the retrieval seed site
+
+- [#2776](https://github.com/Bike4Mind/bike4mind/pull/2776) [`534d9c6`](https://github.com/Bike4Mind/bike4mind/commit/534d9c69e757aa69d4d68ef713199afbb94d53a5) Thanks [@wescarda](https://github.com/wescarda)! - resolve OpenAI bare model aliases (gpt-4.1) in the public completions API
+
+- Updated dependencies [[`b5c25db`](https://github.com/Bike4Mind/bike4mind/commit/b5c25db2ff248dd7491f7c263ae69cd1aaf23eca), [`0abc901`](https://github.com/Bike4Mind/bike4mind/commit/0abc9019ce87dc58c96e63273c32eb1310e121fa), [`aedbc31`](https://github.com/Bike4Mind/bike4mind/commit/aedbc312f5c166b52e166d795c7a2c6917134964), [`f6407e2`](https://github.com/Bike4Mind/bike4mind/commit/f6407e27d91175446e28246e1234d4c0a409c694), [`a756c37`](https://github.com/Bike4Mind/bike4mind/commit/a756c379f89401a9cfefc41735df4610dd5da0ce), [`0a931d2`](https://github.com/Bike4Mind/bike4mind/commit/0a931d25ddbfc35963f82f1bb6ea26b89a10f39e), [`671c753`](https://github.com/Bike4Mind/bike4mind/commit/671c753fc81d65561729f591bc7038e4c605126c), [`adc900a`](https://github.com/Bike4Mind/bike4mind/commit/adc900ab152e00d3324bc228ac73c98a5cb5e2ef), [`b660460`](https://github.com/Bike4Mind/bike4mind/commit/b6604604904ae62ab4c6745ec4e2335e05706e68), [`36fae3b`](https://github.com/Bike4Mind/bike4mind/commit/36fae3b0e2a448442c65b83735de0406ed233370)]:
+  - @bike4mind/common@7.2.0
+  - @bike4mind/mcp@2.0.3
+  - @bike4mind/llm-adapters@0.14.0
+  - @bike4mind/fab-pipeline@1.3.3
+  - @bike4mind/utils@5.1.0
+  - @bike4mind/auth@0.8.0
+  - @bike4mind/agents@1.0.3
+  - @bike4mind/db-core@0.5.3
+
 ## 7.1.1
 
 ### Patch Changes

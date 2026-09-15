@@ -68,9 +68,10 @@ export const useFeedbackOperations = (params: FeedbackListParams): UseFeedbackOp
   const organizationsQuery = useQuery({
     queryKey: FEEDBACK_ORGANIZATIONS_QUERY_KEY,
     // limit: 1 because only the `organizations` facet is wanted here; the rows are the list
-    // query's job.
-    queryFn: () => getFeedbackFromServer({ page: 1, limit: 1, sort: 'desc' }),
-    select: response => response.organizations,
+    // query's job. This is the ONE request that opts into the facet - it is a full-collection
+    // distinct for an admin, so the paged list and the CSV export must not carry it.
+    queryFn: () => getFeedbackFromServer({ page: 1, limit: 1, sort: 'desc', includeOrganizations: true }),
+    select: response => response.organizations ?? [],
   });
 
   const feedback = hasStatusSelection ? (listQuery.data?.items ?? []) : [];

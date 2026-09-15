@@ -9,6 +9,7 @@ import {
   embeddingModelContextWindow,
 } from './chunk';
 import { Logger } from '@bike4mind/observability';
+import { countCodePoints, MIN_CHUNK_CHARS_FLOOR } from '@bike4mind/common';
 
 // Minimal mock storage - chunkText doesn't use storage
 const mockStorage = {
@@ -247,6 +248,115 @@ describe('SmartChunker', () => {
     });
   });
 
+  describe('mergeOrDropNearEmptyChunks (#2817)', () => {
+    it('merges a near-empty chunk forward into the following chunk', async () => {
+      const chunks: Chunk[] = [
+        { text: 'This is a normal, reasonably long first chunk of real content here.', tokenCount: 15 },
+        { text: 'x', tokenCount: 1 },
+        { text: 'This is a normal, reasonably long third chunk of real content too.', tokenCount: 15 },
+      ];
+      const result = await (chunker as any).mergeOrDropNearEmptyChunks(chunks);
+
+      expect(result).toHaveLength(2);
+      expect(result[0].text).toBe(chunks[0].text);
+      expect(result[1].text).toBe(`x ${chunks[2].text}`);
+      for (const chunk of result) {
+        expect(countCodePoints(chunk.text)).toBeGreaterThanOrEqual(MIN_CHUNK_CHARS_FLOOR);
+      }
+    });
+
+    it('accumulates a run of several under-floor chunks until the floor clears', async () => {
+      const chunks: Chunk[] = [
+        { text: 'a', tokenCount: 1 },
+        { text: 'b', tokenCount: 1 },
+        { text: 'c', tokenCount: 1 },
+        { text: 'd'.repeat(60), tokenCount: 20 },
+      ];
+      const result = await (chunker as any).mergeOrDropNearEmptyChunks(chunks);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].text).toBe(`a b c ${'d'.repeat(60)}`);
+    });
+
+    it('drops a near-empty chunk when neither neighbor can absorb it without exceeding the token limit', async () => {
+      const tinyChunker = createChunker(1);
+      try {
+        const chunks: Chunk[] = [
+          { text: 'This is a long enough chunk of real content, over the floor mark.', tokenCount: 15 },
+          { text: '.', tokenCount: 1 },
+          { text: 'Another long enough chunk of real content, also over the floor mark.', tokenCount: 15 },
+        ];
+        const result = await (tinyChunker as any).mergeOrDropNearEmptyChunks(chunks);
+
+        expect(result).toHaveLength(2);
+        expect(result.some((c: Chunk) => c.text === '.')).toBe(false);
+      } finally {
+        tinyChunker.freeEncoder();
+      }
+    });
+
+    it('keeps a lone near-empty chunk rather than leaving the file with zero chunks', async () => {
+      const chunks: Chunk[] = [{ text: '.', tokenCount: 1 }];
+      const result = await (chunker as any).mergeOrDropNearEmptyChunks(chunks);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].text).toBe('.');
+    });
+
+    it('merges a near-empty chunk BACKWARD into the preceding chunk when forward merge would overflow', async () => {
+      // The next chunk is already far over the limit alone (as a real splitOversizedSegment
+      // remainder always sits exactly at chunkTokenLimit), so a forward merge always overflows;
+      // the preceding chunk has headroom and should absorb it instead of it being dropped.
+      const limitedChunker = createChunker(50);
+      try {
+        const chunks: Chunk[] = [
+          { text: 'This chunk has real content and plenty of headroom left.', tokenCount: 12 },
+          { text: '.', tokenCount: 1 },
+          { text: 'x'.repeat(5000), tokenCount: 9999 },
+        ];
+        const result = await (limitedChunker as any).mergeOrDropNearEmptyChunks(chunks);
+
+        expect(result).toHaveLength(2);
+        expect(result[0].text).toBe(`${chunks[0].text} .`);
+        expect(result[1].text).toBe(chunks[2].text);
+      } finally {
+        limitedChunker.freeEncoder();
+      }
+    });
+
+    it('merges a trailing near-empty chunk backward rather than dropping it', async () => {
+      const chunks: Chunk[] = [
+        { text: 'This is a normal, reasonably long final chunk of real content here.', tokenCount: 15 },
+        { text: '.', tokenCount: 1 },
+      ];
+      const result = await (chunker as any).mergeOrDropNearEmptyChunks(chunks);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].text).toBe(`${chunks[0].text} .`);
+    });
+
+    it('cascades: after a drop, the chunk that failed to absorb it gets its own chance as the new pendingShort', async () => {
+      // With chunkTokenLimit=1, even "a z" (two single-char words) exceeds the limit, so the
+      // forward merge of 'a' into 'z' fails; there is no preceding chunk yet (merged is empty),
+      // so 'a' drops. 'z' itself is still under the floor, so - rather than being pushed straight
+      // to merged - it becomes the NEW pendingShort and, being the last chunk, is kept as the
+      // sole survivor (never leaving the file with zero chunks).
+      const tinyChunker = createChunker(1);
+      try {
+        const chunks: Chunk[] = [
+          { text: 'a', tokenCount: 1 },
+          { text: 'z', tokenCount: 1 },
+        ];
+        const result = await (tinyChunker as any).mergeOrDropNearEmptyChunks(chunks);
+
+        expect(result).toHaveLength(1);
+        expect(result[0].text).toBe('z');
+      } finally {
+        tinyChunker.freeEncoder();
+      }
+    });
+  });
+
   describe('validateAndResplitChunks', () => {
     it('re-splits artificially oversized chunks', { timeout: 30000 }, async () => {
       const oversizedChunk: Chunk = {
@@ -260,6 +370,21 @@ describe('SmartChunker', () => {
         expect(actualTokens).toBeLessThanOrEqual(CHUNK_TOKEN_LIMIT);
       }
       expect(result.length).toBeGreaterThan(1);
+    });
+
+    it('also merges/drops near-empty chunks (#2817) - proves the wiring, not just the isolated helper', async () => {
+      // The mergeOrDropNearEmptyChunks tests above call that private method directly and would
+      // stay green even if its call site inside validateAndResplitChunks were deleted. This test
+      // goes through validateAndResplitChunks itself, so removing that call site fails it.
+      const longChunk: Chunk = {
+        text: 'This is a normal, reasonably long chunk of real content that clears the floor easily.',
+        tokenCount: 20,
+      };
+      const shortChunk: Chunk = { text: '.', tokenCount: 1 };
+      const result = await (chunker as any).validateAndResplitChunks([longChunk, shortChunk]);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].text).toBe(`${longChunk.text} .`);
     });
   });
 
@@ -371,6 +496,49 @@ describe('SmartChunker', () => {
       expect(allText).toContain('Attributed run text');
       expect(allText).toContain('Bare run text');
     });
+
+    it('skips a slide whose decompressed XML exceeds the per-entry cap, keeping the rest', async () => {
+      // A .pptx is a zip; one slide entry can inflate ~1000x when decompressed (zip-bomb shape).
+      // The oversized slide is skipped before it is materialized; the normal slide still chunks.
+      const huge = `<a:t>OVERSIZED_MARKER ${'x'.repeat(17 * 1024 * 1024)}</a:t>`;
+      const pptx = await buildPptx([huge, '<a:t>Normal slide text</a:t>']);
+      const start = Date.now();
+      const chunks = await chunker.chunkFile(pptx, PPTX_MIME);
+      const allText = chunks.map(c => c.text).join(' ');
+      expect(allText).toContain('Normal slide text');
+      expect(allText).not.toContain('OVERSIZED_MARKER');
+      expect(Date.now() - start).toBeLessThan(5000);
+    });
+
+    it('stops chunking once the slides exhaust the aggregate XML budget', async () => {
+      // The per-slide and slide-count caps bound each item, but an attacker controls their
+      // product: 5,000 slides at 16MB each is ~80GB of decompression driven by one upload. Bulk
+      // that carries no text is the cheap shape, so each slide here is 15MB of XML comment with
+      // one short run. The 32MB budget admits two, then the walk stops.
+      const bulk = (n: number) => `<!--${'x'.repeat(15 * 1024 * 1024)}--><a:t>SLIDE_${n}</a:t>`;
+      const pptx = await buildPptx([bulk(1), bulk(2), bulk(3), '<a:t>TAIL_SLIDE</a:t>']);
+      const chunks = await chunker.chunkFile(pptx, PPTX_MIME);
+      const allText = chunks.map(c => c.text).join(' ');
+
+      expect(allText).toContain('SLIDE_1');
+      expect(allText).toContain('SLIDE_2');
+      expect(allText).not.toContain('SLIDE_3');
+      expect(allText).not.toContain('TAIL_SLIDE');
+    }, 60_000);
+
+    it('caps the extracted text handed to chunkText, which the XML budget does not imply', async () => {
+      // 32MB of slide XML can still yield tens of MB of text, and tiktoken traps rather than
+      // returning on a string that size - so the accumulated text needs its own bound. The
+      // oversized slide is truncated at the cap and the walk stops.
+      const wordy = `<a:t>HEAD_MARKER ${'word '.repeat(600_000)} TAIL_MARKER</a:t>`;
+      const pptx = await buildPptx([wordy, '<a:t>NEXT_SLIDE</a:t>']);
+      const chunks = await chunker.chunkFile(pptx, PPTX_MIME);
+      const allText = chunks.map(c => c.text).join(' ');
+
+      expect(allText).toContain('HEAD_MARKER');
+      expect(allText).not.toContain('TAIL_MARKER'); // truncated at the cap
+      expect(allText).not.toContain('NEXT_SLIDE'); // walk stopped
+    }, 60_000);
   });
 });
 
