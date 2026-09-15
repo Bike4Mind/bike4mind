@@ -59,7 +59,9 @@ export interface LapsingOrganization {
  * Scoped to `user`-principal grants on lakes of the org BEING LEFT, which is what keeps it
  * compatible with the deliberate cross-org grant: a curator who was never a member of this org
  * triggers no departure here, and an `organization`-principal grant describes the org rather than
- * the person, so neither is touched.
+ * the person, so neither is touched. The first half of that holds at the CALLER too, not only here:
+ * `revokeAccess` refuses a target who is not a current member (`isCurrentOrgMember`), so an org
+ * admin cannot name an arbitrary user and have their grants lapsed as though they had departed.
  *
  * KNOWN LIMITATION, not introduced here: when the departing member holds the owner grant on a lake
  * somebody ELSE created, phase 1 lapses it and ownership falls back to that creator - who may
@@ -75,6 +77,12 @@ export async function lapseDepartedMemberLakeAccess(
 ): Promise<LapseDepartedMemberLakeAccessResult> {
   const { db, logger } = adapters;
 
+  // Unfiltered and unbounded by design - every lake of the org, draft and archived included, since
+  // a grant on any of them outlives the membership just the same. Both phases then write once per
+  // affected grant, SEQUENTIALLY (see below) and inside the caller's transaction, so the work is
+  // linear in lakes-per-org against the route's 60s Lambda timeout. Fine at current org sizes; if
+  // an org's lake count ever approaches the hundreds this is the line that needs paging, and the
+  // failure mode to watch for is a departure timing out half-applied rather than erroring cleanly.
   const orgLakes = await db.dataLakes.findByOrganizationId(organization.id);
   if (orgLakes.length === 0) return { lapsedLakeIds: [], succeededLakeIds: [] };
 
@@ -86,10 +94,12 @@ export async function lapseDepartedMemberLakeAccess(
     recordLakeConfigChange(
       {
         // The audit row wants a PRINCIPAL (who caused this), not an AUTHORITY (what allowed it):
-        // no lake-side rung did, which is why `system` is stamped rather than resolved. The other
-        // `ManageActor` fields are inert, and provably so rather than by convention - with no
-        // grants, no admin flag and no administered orgs, `resolveLakeManageRung` returns null and
-        // `recordLakeConfigChange` falls through to this same `system`.
+        // no lake-side rung did, so `system` is stamped EXPLICITLY rather than resolved. That is
+        // load-bearing, not redundant. `recordLakeConfigChange` is `manageRung ?? resolve... ??
+        // 'system'`, and on the most ordinary case here - a member leaving a lake they created -
+        // resolution would find the creator fallback and return `creator`, labelling a lifecycle
+        // lapse as an owner-authorized write. Passing the rung short-circuits that. The zeroed
+        // `isAdmin`/`administeredOrgIds` are belt-and-braces on an actor that is never consulted.
         actor: { ...triggeredBy, isAdmin: false, administeredOrgIds: [] },
         lake,
         action,
@@ -166,9 +176,27 @@ async function lapseOwnGrants(
  *
  * The billing owner (`organization.userId`) is the successor because it is the only always-present,
  * unique, deterministic answer: `managerId` is nullable and `adminUserIds` may be empty and carries
- * no meaningful order. It grants no new capability - `canManageLake`'s org rung already lets an org
- * admin manage every lake scoped to that org, and the billing owner is implicitly one - so this
- * relocates ownership off a departed person rather than handing anybody reach they lacked.
+ * no meaningful order.
+ *
+ * THIS DOES CONFER ONE NEW CAPABILITY, and it is deliberate. For the manage rung and for read it
+ * does not - `canManageLake`'s org rung already admitted the billing owner on every lake scoped to
+ * that org. But `setLakeVisibility`'s expose gate is `isEffectiveOwner`, which deliberately excludes
+ * that rung, and `transferLakeOwnership` refuses an org admin naming themselves - so before this,
+ * the billing owner could not widen a member's lake to `public`. Now, for a lake whose creator left,
+ * they can.
+ *
+ * That is accepted rather than guarded because the alternative is strictly worse. Withholding
+ * succession does not leave the lake unowned; `resolveEffectiveOwnerIds` falls back to
+ * `createdByUserId`, and `canManageLake` is consulted BEFORE the org prerequisite
+ * (`classifyLakeAccess.ts:45` vs `:66`), so a FORMER member would keep full read, full manage and
+ * that same expose gate on an org lake. The transfer guard's premise - an owner is present, and
+ * their consent is being skipped - simply does not hold for a departure.
+ *
+ * The delta is also narrower than it first reads: an org admin can already share a lake org-wide
+ * with an `organization`-principal reader grant (`lakeGrantWriteRule.ts:58-67`), so `public` is the
+ * only genuinely new reach, and `setLakeVisibility` still hard-refuses publishing a lake carrying a
+ * `requiredUserTag` or `requiredEntitlement`. `setLakeVisibility` and `transferLakeOwnership` both
+ * carry the matching note, so the invariant is not documented in only one direction.
  */
 async function passOnCreatedLakes(
   departedUserId: string,

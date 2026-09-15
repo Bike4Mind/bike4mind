@@ -2,7 +2,7 @@ import { IGroupRepository, IOrganizationRepository, IUserDocument, IUserReposito
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { purgeOrgMembershipArtifacts, type PurgeOrgMembershipAdapters } from './purgeOrgMembership';
-import { canAdministerOrganization } from './orgAuthority';
+import { canAdministerOrganization, isCurrentOrgMember } from './orgAuthority';
 
 const revokeAccessSchema = z.object({
   id: z.string(),
@@ -39,6 +39,17 @@ export const revokeAccess = async (
   // two halves of the membership lifecycle cannot drift on who may change the roster.
   if (!canAdministerOrganization(user, organization)) {
     throw new NotFoundError(`Organization not found for id: ${id}`); // Return same error to avoid info leakage
+  }
+
+  // The target must actually be a member. The filter below is a no-op for a non-member, which was
+  // harmless while nothing downstream acted on the removal - but the purge now expires data-lake
+  // grants, so without this an org admin could pass ANY userId and lapse that user's grants on this
+  // org's lakes, member or not. That is also what makes `lapseDepartedMemberLakeAccess`' "a curator
+  // who was never a member of this org triggers no departure here" true of the path rather than
+  // merely of the primitive. Same error as the authority failure above, to avoid leaking whether a
+  // given account exists or belongs here.
+  if (!isCurrentOrgMember(organization, userId)) {
+    throw new NotFoundError(`Organization not found for id: ${id}`);
   }
 
   organization.users = organization.users.filter(user => user.userId.toString() !== userId);

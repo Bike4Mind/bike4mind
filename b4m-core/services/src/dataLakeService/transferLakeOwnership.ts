@@ -59,6 +59,13 @@ export interface TransferLakeOwnershipResult {
  * invariant that gate documents. Reassigning to another member is fine: the recipient is then a real
  * owner exposing their own lake. A platform admin is unconstrained (global superuser by definition).
  *
+ * The guard's premise is that there IS an owner whose consent is being bypassed. It therefore does
+ * not extend to `lapseDepartedMemberLakeAccess`, which mints an owner grant for the billing owner
+ * when a lake's creator leaves the org: there, the owner is gone, and refusing succession would
+ * leave ownership - and this door, and the expose gate - resolved to a former member. This is the
+ * only other writer of an `owner` grant; the general door (`lakeGrantWriteRule.ts:50`) still
+ * refuses the role outright, so ownership moves through exactly these two places and no others.
+ *
  * Refused for a fallback (hardcoded registry) lake, which has no backing document to hang a grant on
  * (`assertLakeGrantable`). For an org-scoped lake BOTH parties must belong to that org - the new
  * owner by the candidate predicate below, the actor by `resolveLakeTransferAuthority`'s membership

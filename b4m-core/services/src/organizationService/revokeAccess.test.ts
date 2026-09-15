@@ -49,7 +49,15 @@ describe('organizationService - revokeAccess', () => {
     mockAdapters = {
       db: {
         organizations: {
-          findById: vi.fn().mockResolvedValue(existingOrganization),
+          // A FRESH copy per test. `revokeAccess` reassigns `organization.users`/`userDetails` on
+          // the document it is handed, so returning the shared module-level fixture let the first
+          // test strip `user1` from it for every test that ran after - which stayed invisible only
+          // while nothing read the roster before filtering it.
+          findById: vi.fn().mockResolvedValue({
+            ...existingOrganization,
+            users: [...existingOrganization.users!],
+            userDetails: [...existingOrganization.userDetails!],
+          }),
           update: vi.fn().mockResolvedValue(undefined),
         },
         groups: {
@@ -200,6 +208,23 @@ describe('organizationService - revokeAccess', () => {
     );
 
     expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a target who is not a member, without lapsing any of their lake grants', async () => {
+    // The roster filter is a no-op for a non-member, so nothing here would have failed loudly. What
+    // makes it matter is the purge: an authorized org admin naming an arbitrary userId must not be
+    // able to expire that user's grants on this org's lakes.
+    mockAdapters.db.dataLakes.findByOrganizationId.mockResolvedValue([
+      { id: 'lake1', organizationId: 'org1', createdByUserId: 'outsider' },
+    ]);
+
+    await expect(
+      revokeAccess(mockOwnerUser as IUserDocument, { id: 'org1', userId: 'outsider' }, mockAdapters)
+    ).rejects.toThrow(NotFoundError);
+
+    expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
+    expect(mockAdapters.db.users.removeGroupsFromUser).not.toHaveBeenCalled();
+    expect(mockAdapters.db.dataLakeAccessGrants.upsertGrant).not.toHaveBeenCalled();
   });
 
   it('should initialize userDetails if it is null', async () => {
