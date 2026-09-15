@@ -2333,9 +2333,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * not this guard is here.
    *
    * `user.organizationId` is a selected-org display pointer, not proof of membership (#1674) -
-   * verified via `membershipOrgIdsForTurn` (shared per-turn memo with the data-lake resolvers)
-   * before it reaches `scopeForCaller`, same fix and same fail-closed-to-personal-scope direction
-   * as the sibling `search_knowledge_base` fix (#2769).
+   * verified via `membershipOrgIdsForTurn` before it reaches `scopeForCaller`, same fix and same
+   * fail-closed-to-personal-scope direction as the sibling `search_knowledge_base` fix (#2769).
+   * Not actually a shared cache hit with the data-lake resolvers, though: the memo keys on
+   * `turnScope` object identity, and `this.chatCompletion` here is never the same object as a
+   * tool's `ToolContext` - this always issues its own membership read.
    */
   private async readForcedRetrievalSettings(): Promise<{
     charBudget: unknown;
