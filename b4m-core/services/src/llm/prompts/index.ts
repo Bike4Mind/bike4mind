@@ -69,7 +69,7 @@
  * That addition is a CHARACTERISATION AND ELABORATION ban, not a computation ban, and it is scoped to
  * the absent claim: explaining a mechanism the retrieved content itself supplies is still wanted, and
  * `grounded-answer/explain-supported-mechanism` is the case that catches a model that stopped.
- * NOT another entry on the word list - see the paragraph below for why that road is closed.
+ * NOT another entry on the word list - see the paragraph above for why that road is closed.
  *
  * A MEASURED BEHAVIOUR DEPENDS ON THIS RULE'S SCOPE. `triage_router` STEP 1 (apps/client/server/utils/
  * systemPrompts/defaults.ts) tells the model to DERIVE figures the request supplies the inputs for -
