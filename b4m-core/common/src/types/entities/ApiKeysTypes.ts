@@ -10,6 +10,7 @@ export enum ApiKeyType {
   ollama = 'ollama',
   xai = 'xai',
   kimi = 'kimi',
+  deepseek = 'deepseek',
   voyageai = 'voyageai',
 }
 

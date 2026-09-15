@@ -29,6 +29,7 @@ import { postFeedbackToSlack } from '@server/integrations/slack/slack';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
 import { Config } from '@server/utils/config';
 import { resolveFeedbackContext } from '@server/utils/feedbackContext';
+import { buildFeedbackDeepLinks, FEEDBACK_LINK_LABELS, type FeedbackDeepLinks } from '@server/utils/feedbackDeepLinks';
 import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
@@ -97,6 +98,11 @@ const ListFeedbackQuerySchema = z.object({
   // Capped: the value reaches a Mongo regex, so an unbounded pattern is a CPU sink even escaped.
   search: z.string().min(1).max(200).optional(),
   sort: z.enum(['asc', 'desc']).prefault('desc'),
+  // Opt-in because the facet is a `distinct` over the caller's WHOLE accessible set, which for an
+  // admin is the unindexed full collection - and every caller but the admin org-filter menu throws
+  // the result away (the paged list, the CSV export loop, the per-session "Reported" read).
+  // An explicit enum rather than z.coerce.boolean(), which reads the string "false" as true.
+  includeOrganizations: z.enum(['true', 'false']).optional(),
 });
 
 /** `qs.parse` hands back a lone value or an array depending on how many times a key repeats. */
@@ -141,6 +147,32 @@ type FeedbackEmailRoute =
 // bracketed substring would hide information from the staff reading it.
 function sanitizeForEmail(value: string): string {
   return sanitizeHtml(value, { allowedTags: [], allowedAttributes: {}, disallowedTagsMode: 'escape' });
+}
+
+/**
+ * `href` lives in a double-quoted attribute, which sanitizeForEmail does not cover: it is a
+ * text-node sanitizer (allowedTags: []), documented to neutralize markup rather than to make a
+ * string safe inside an attribute. The deep-link builders percent-encode every id they
+ * interpolate, so this is defense in depth for the day one of them stops.
+ */
+function escapeHtmlAttribute(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/**
+ * The email's counterpart to renderLinksLine in feedbackMessage.ts - same two targets, and the
+ * labels come from the same constant, so a report triaged from the inbox and one triaged from
+ * Slack lead to the same places by the same names.
+ * Empty string when there is nothing to link to, which collapses the row out of the template.
+ */
+function renderFeedbackLinksHtml(links: FeedbackDeepLinks | null): string {
+  if (!links) return '';
+  const anchors = [`<a href="${escapeHtmlAttribute(links.record)}">${FEEDBACK_LINK_LABELS.record}</a>`];
+  if (links.conversation) {
+    const label = links.conversationIsTurn ? FEEDBACK_LINK_LABELS.turn : FEEDBACK_LINK_LABELS.session;
+    anchors.push(`<a href="${escapeHtmlAttribute(links.conversation)}">${label}</a>`);
+  }
+  return `<p><strong>Links:</strong> ${anchors.join(' - ')}</p>`;
 }
 
 /**
@@ -234,8 +266,9 @@ const handler = baseApi()
       FeedbackModel.countDocuments(filter),
       // Facet options come from the caller's whole accessible set, NOT from `filter` - otherwise
       // selecting an organization would prune every other option out of the dropdown that
-      // selected it.
-      FeedbackModel.distinct('organization', readable),
+      // selected it. Which is also why it is opt-in: `readable` is `{}` for an admin, so this is a
+      // full-collection scan on an unindexed field and must not ride along on unrelated reads.
+      query.includeOrganizations === 'true' ? FeedbackModel.distinct('organization', readable) : undefined,
     ]);
 
     return res.json({
@@ -243,9 +276,13 @@ const handler = baseApi()
       total,
       page: query.page,
       limit: query.limit,
-      organizations: organizationFacet
-        .filter((name): name is string => typeof name === 'string' && name.length > 0)
-        .sort((a, b) => a.localeCompare(b)),
+      // Omitted rather than [] when not requested: an empty array is indistinguishable from "no
+      // organizations have any feedback", which would empty the filter menu.
+      ...(organizationFacet && {
+        organizations: organizationFacet
+          .filter((name): name is string => typeof name === 'string' && name.length > 0)
+          .sort((a, b) => a.localeCompare(b)),
+      }),
     });
   })
   .post(async (req, res) => {
@@ -400,6 +437,20 @@ const handler = baseApi()
       ? { ...promptMeta, functionCalls: redactFunctionCallsForViewer(promptMeta.functionCalls) }
       : promptMeta;
 
+    // Built once for both channels so a link in Slack and the same link in the email can never
+    // disagree. Null on a deploy with no APP_URL: both channels then render no link section
+    // rather than an unfollowable relative path, and the notification still goes out.
+    const deepLinks = buildFeedbackDeepLinks({
+      feedbackId: newFeedback.id,
+      sessionId: newFeedback.sessionId,
+      questId: newFeedback.questId,
+    });
+    if (!deepLinks) {
+      Logger.warn('[feedback] APP_URL is unset - delivering the notification without deep links', {
+        feedbackId: newFeedback.id,
+      });
+    }
+
     // Send feedback to Slack if enabled. postFeedbackToSlack records its own
     // success/failure/skip metrics and reports its own outcome; the 'disabled' skip is
     // recorded here since it never even calls into postFeedbackToSlack. Collected below (with the
@@ -411,15 +462,16 @@ const handler = baseApi()
     let slack: FeedbackChannelDelivery;
     if (getSettingsValue('EnableFeedBackToSlack', settings)) {
       console.log('Sending feedback to Slack is enabled');
-      slack = await postFeedbackToSlack(
-        type || 'CS',
+      slack = await postFeedbackToSlack({
+        type: type || 'CS',
         organization,
-        newFeedback.username,
-        newFeedback.userEmail ?? '',
-        newFeedback.userId,
-        truncatedContent,
-        promptMetaForExternalEgress
-      );
+        username: newFeedback.username,
+        userEmail: newFeedback.userEmail ?? '',
+        userId: newFeedback.userId,
+        content: truncatedContent,
+        promptMeta: promptMetaForExternalEgress,
+        links: deepLinks,
+      });
     } else {
       slack = { outcome: 'skipped', reason: 'disabled' };
       disabledChannelMetrics.push(
@@ -560,6 +612,7 @@ const handler = baseApi()
                       <p><strong>From:</strong> ${sanitizedUsername} (ID: ${sanitizedUserId})</p>
                       <p><strong>Email:</strong> ${sanitizedUserEmail}</p>
                       ${sanitizedType ? `<p><strong>Type:</strong> ${sanitizedType}</p>` : ''}
+                      ${renderFeedbackLinksHtml(deepLinks)}
                     </div>
                     <p><strong>Message:</strong></p>
                     <p>${sanitizedContent}</p>

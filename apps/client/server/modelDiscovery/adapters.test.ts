@@ -111,6 +111,7 @@ describe('the source registry', () => {
         'anthropic',
         'xai',
         'kimi',
+        'deepseek',
         'gemini',
         'ollama',
         'bfl',
@@ -120,7 +121,7 @@ describe('the source registry', () => {
         'litellm',
       ])
     );
-    expect(names).toHaveLength(11);
+    expect(names).toHaveLength(12);
   });
 
   it('registers no duplicates: the report and the min-interval guard key on name', () => {

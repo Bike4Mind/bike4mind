@@ -28,7 +28,6 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 vi.mock('@bike4mind/services', () => ({
-  resolveWebSearchProvider: h.resolveWebSearchProvider,
   apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
   dataLakeService: { proposeDataLakeContent: h.proposeDataLakeContent },
   dataLakeResearchService: {
@@ -38,6 +37,9 @@ vi.mock('@bike4mind/services', () => ({
     },
     RELEVANCE_JUDGE_DEFAULT_MODEL: 'default-judge-model',
   },
+}));
+vi.mock('@bike4mind/services/llm', () => ({
+  resolveWebSearchProvider: h.resolveWebSearchProvider,
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels: h.getAvailableModels }));
 // fetchAndParseURL comes from fab-pipeline, not utils: the lint rule `no-restricted-imports` routes

@@ -15,6 +15,7 @@ export * from './anthropic';
 export * from './anthropicDocs';
 export * from './bedrock';
 export * from './bfl';
+export * from './deepseek';
 export * from './elevenlabs';
 export * from './gemini';
 export * from './kimi';

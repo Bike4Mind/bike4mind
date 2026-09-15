@@ -1,5 +1,39 @@
 # @bike4mind/common
 
+## 7.2.2
+
+### Patch Changes
+
+- [#2765](https://github.com/Bike4Mind/bike4mind/pull/2765) [`2298140`](https://github.com/Bike4Mind/bike4mind/commit/229814036a13097cae1cd3ccc19d052d4d6c17f9) Thanks [@onoya](https://github.com/onoya)! - resolve search budgets on the caller scope in the semantic-search route
+
+## 7.2.1
+
+### Patch Changes
+
+- [#2796](https://github.com/Bike4Mind/bike4mind/pull/2796) [`8ef2c17`](https://github.com/Bike4Mind/bike4mind/commit/8ef2c17f7b54b0df8c3809f17a62544784e65029) Thanks [@onoya](https://github.com/onoya)! - derive the scoped-retrieval Lake-rung guard from the reads' own key lists
+
+## 7.2.0
+
+### Minor Changes
+
+- [#2738](https://github.com/Bike4Mind/bike4mind/pull/2738) [`a756c37`](https://github.com/Bike4Mind/bike4mind/commit/a756c379f89401a9cfefc41735df4610dd5da0ce) Thanks [@TRAP-RCG](https://github.com/TRAP-RCG)! - add an overwatch:read scope for agent-held credentials
+
+- [#2762](https://github.com/Bike4Mind/bike4mind/pull/2762) [`adc900a`](https://github.com/Bike4Mind/bike4mind/commit/adc900ab152e00d3324bc228ac73c98a5cb5e2ef) Thanks [@maconard](https://github.com/maconard)! - add DeepSeek as a first-party provider and close Moonshot gaps
+
+- [#2773](https://github.com/Bike4Mind/bike4mind/pull/2773) [`b660460`](https://github.com/Bike4Mind/bike4mind/commit/b6604604904ae62ab4c6745ec4e2335e05706e68) Thanks [@vinchi777](https://github.com/vinchi777)! - record which lake prompts the owner/curator grant arm admitted
+
+### Patch Changes
+
+- [#2513](https://github.com/Bike4Mind/bike4mind/pull/2513) [`b5c25db`](https://github.com/Bike4Mind/bike4mind/commit/b5c25db2ff248dd7491f7c263ae69cd1aaf23eca) Thanks [@julsanchez](https://github.com/julsanchez)! - verify session ownership before acting on session-scoped routes
+
+- [#2682](https://github.com/Bike4Mind/bike4mind/pull/2682) [`f6407e2`](https://github.com/Bike4Mind/bike4mind/commit/f6407e27d91175446e28246e1234d4c0a409c694) Thanks [@onoya](https://github.com/onoya)! - fall back to a keyless Bedrock embedder when no provider credential resolves
+
+- [#2758](https://github.com/Bike4Mind/bike4mind/pull/2758) [`0a931d2`](https://github.com/Bike4Mind/bike4mind/commit/0a931d25ddbfc35963f82f1bb6ea26b89a10f39e) Thanks [@onoya](https://github.com/onoya)! - resolve cosine relevance floors per embedding space
+
+- [#2759](https://github.com/Bike4Mind/bike4mind/pull/2759) [`671c753`](https://github.com/Bike4Mind/bike4mind/commit/671c753fc81d65561729f591bc7038e4c605126c) Thanks [@onoya](https://github.com/onoya)! - report unmeasured lake members as unmeasured, and disclose the corpus-scope gap
+
+- [#2775](https://github.com/Bike4Mind/bike4mind/pull/2775) [`36fae3b`](https://github.com/Bike4Mind/bike4mind/commit/36fae3b0e2a448442c65b83735de0406ed233370) Thanks [@vinchi777](https://github.com/vinchi777)! - record the resolved lake scope at the retrieval seed site
+
 ## 7.1.1
 
 ### Patch Changes

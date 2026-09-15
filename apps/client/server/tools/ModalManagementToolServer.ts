@@ -8,6 +8,7 @@ import {
   IModalDocument,
 } from '@bike4mind/common';
 import { ModalModel } from '@bike4mind/database/social';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { createModal, updateModal, deleteModal, listModals } from './modalOperations';
 import { parseNaturalLanguageQueryDirect } from '@client/pages/api/admin/modal-tool';
 import {
@@ -470,8 +471,10 @@ export class ModalManagementToolServer implements AdminTool {
 
       // If not found by ID, try by title
       if (!modal) {
+        // Escape before the $regex operand: `identifier` is admin-tool/LLM-supplied, and raw
+        // metacharacters would change what the query matches. Mirrors modalOperations.updateModal.
         modal = await ModalModel.findOne({
-          title: new RegExp(identifier, 'i'),
+          title: new RegExp(escapeRegex(identifier), 'i'),
         }).lean();
       }
 

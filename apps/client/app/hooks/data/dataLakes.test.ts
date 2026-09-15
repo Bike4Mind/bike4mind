@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { BrowsePublicDataLakesResult, PublicDataLakeSummary } from '@bike4mind/common';
@@ -71,6 +71,7 @@ import {
   useApplyTaxonomySuggestions,
   useRechunkDataLake,
   useSetLakeVisibility,
+  useUpdateDataLake,
   useUpdateFallbackLakeSettings,
   useArchiveDataLake,
   useGetTransitionalDataLakes,
@@ -912,11 +913,21 @@ describe('lakeMemoryPollInterval', () => {
  * raising staleTime or dropping the toggle would strand the row the owner just created. These pin
  * the invalidation itself.
  *
+ * Each door is asserted twice, from one table: the lake it wrote IS invalidated, and the bare
+ * `['dataLakeConfigHistory']` root is NOT. The second half is the half that cannot be dropped:
+ * configHistory sits outside the `list` prefix precisely so a rename does not refetch every lake's
+ * history (see dataLakeKeys.ts), and invalidating the root undoes that silently - nothing errors,
+ * the UI stays correct, and the only symptom is every open lake history refetching on every
+ * unrelated lake edit. A positive `toContain` check cannot see it, because a door that invalidated
+ * BOTH the root and the scoped key would satisfy one.
+ *
+ * A new door that records a config-change row belongs in this table, not in a case of its own.
+ *
  * The key is asserted as the literal `['dataLakeConfigHistory', 'lake1']` prefix rather than through
  * dataLakeKeys.configHistoryOf: building the expectation from the same helper the hook calls would
  * still pass if that helper's shape drifted away from what the query is actually keyed under.
  */
-describe('config-history invalidation on the non-update config writes', () => {
+describe('config-history invalidation on the config-writing doors', () => {
   const mountWith = () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
@@ -927,132 +938,158 @@ describe('config-history invalidation on the non-update config writes', () => {
   const invalidatedKeys = (invalidate: ReturnType<typeof vi.spyOn>) =>
     invalidate.mock.calls.map(call => JSON.stringify((call[0] as { queryKey?: unknown })?.queryKey));
 
-  it("useSetLakeVisibility invalidates the changed lake's history", async () => {
-    const { wrapper, invalidate } = mountWith();
-    apiPost.mockResolvedValueOnce({ data: { id: 'lake1' } });
+  type ConfigWriteDoor = {
+    name: string;
+    /** Queues this door's response, mounts it, and runs the write against lake1. */
+    drive: (wrapper: React.FC<{ children: React.ReactNode }>) => Promise<void>;
+  };
 
-    const { result } = renderHook(() => useSetLakeVisibility(), { wrapper });
-    await act(async () => {
-      await result.current.mutateAsync({ id: 'lake1', visibility: 'public' });
-    });
+  const doors: ConfigWriteDoor[] = [
+    // The original writer of this key, and the shape the rest were measured against.
+    {
+      name: 'useUpdateDataLake',
+      drive: async wrapper => {
+        apiPut.mockResolvedValueOnce({ data: { id: 'lake1' } });
+        const { result } = renderHook(() => useUpdateDataLake(), { wrapper });
+        await act(async () => {
+          await result.current.mutateAsync({ id: 'lake1', name: 'Renamed' });
+        });
+      },
+    },
+    // The static/registry lake's admin overlay. A different route and a different service from
+    // useUpdateDataLake, but it records the same `update` action, so it owes the same invalidation.
+    {
+      name: 'useUpdateFallbackLakeSettings',
+      drive: async wrapper => {
+        apiPut.mockResolvedValueOnce({ data: { id: 'lake1' } });
+        const { result } = renderHook(() => useUpdateFallbackLakeSettings(), { wrapper });
+        await act(async () => {
+          await result.current.mutateAsync({ id: 'lake1', groundingMode: 'retrieve' });
+        });
+      },
+    },
+    {
+      name: 'useSetLakeVisibility',
+      drive: async wrapper => {
+        apiPost.mockResolvedValueOnce({ data: { id: 'lake1' } });
+        const { result } = renderHook(() => useSetLakeVisibility(), { wrapper });
+        await act(async () => {
+          await result.current.mutateAsync({ id: 'lake1', visibility: 'public' });
+        });
+      },
+    },
+    // The transfer door moves no document field, so its history row is the ONLY record that the
+    // handover happened - and the manager who just confirmed the transfer is the reader most likely
+    // to open History next.
+    {
+      name: 'useTransferLakeOwnership',
+      drive: async wrapper => {
+        apiPost.mockResolvedValueOnce({ data: { newOwnerUserId: 'u2', demotedUserIds: ['u1'] } });
+        const { result } = renderHook(() => useTransferLakeOwnership(), { wrapper });
+        await act(async () => {
+          await result.current.mutateAsync({ id: 'lake1', newOwnerUserId: 'u2' });
+        });
+      },
+    },
+    {
+      name: 'useGrantLakeAccess',
+      drive: async wrapper => {
+        apiPost.mockResolvedValueOnce({ data: { data: { principalId: 'u1', role: 'reader' } } });
+        const { result } = renderHook(() => useGrantLakeAccess(), { wrapper });
+        await act(async () => {
+          await result.current.mutateAsync({ id: 'lake1', principalType: 'user', principalId: 'u1', role: 'reader' });
+        });
+      },
+    },
+    {
+      name: 'useRevokeLakeAccess',
+      drive: async wrapper => {
+        apiDelete.mockResolvedValueOnce({ data: { data: { revoked: true } } });
+        const { result } = renderHook(() => useRevokeLakeAccess(), { wrapper });
+        await act(async () => {
+          await result.current.mutateAsync({ id: 'lake1', principalType: 'user', principalId: 'u1' });
+        });
+      },
+    },
+    // One entry for all five lifecycle callers (archive/unarchive/restore/delete plus the
+    // status-driven retry): they share `invalidateAfterLifecycle`, so the key and its scoping are
+    // decided in one place and per-action cases would assert the same line five times.
+    {
+      name: 'a lifecycle action',
+      drive: async wrapper => {
+        apiPost.mockResolvedValueOnce({ data: { success: true } });
+        const { result } = renderHook(() => useArchiveDataLake(), { wrapper });
+        await act(async () => {
+          await result.current.mutateAsync('lake1');
+        });
+      },
+    },
+    // The purge door builds its own onSuccess around the pending-purge suppression rather than going
+    // through invalidateAfterLifecycle, which is how it missed this key while the other four
+    // lifecycle actions had it. Inert in today's UI (a purge is accepted from the Deleted section,
+    // History unmounted), so this pins the CONSISTENCY - and `purge` is the action least worth
+    // special-casing, being the only audit record a purge leaves. Not reachable via the retry path
+    // either: TransitionalRetryAction excludes it, so nothing else picks up the slack.
+    {
+      name: 'useCleanupDataLake',
+      drive: async wrapper => {
+        apiPost.mockResolvedValueOnce({ data: { success: true } });
+        const { result } = renderHook(() => useCleanupDataLake(), { wrapper });
+        await act(async () => {
+          await result.current.mutateAsync('lake1');
+        });
+      },
+    },
+    // Purging one document is NOT lake-scoped (it invalidates the files and health ROOTS), which
+    // makes it the door most likely to reach for the history root as well - but the config row it
+    // can write comes from recomputeLakeStats' draft -> active flip on the purged-from lake alone.
+    {
+      name: 'usePurgeDataLakeDocument',
+      drive: async wrapper => {
+        apiPost.mockResolvedValueOnce({ data: { verified: true, chunksBefore: 3, chunksRemaining: 0 } });
+        const { result } = renderHook(() => usePurgeDataLakeDocument('lake1'), { wrapper });
+        await act(async () => {
+          await result.current.mutateAsync('f1');
+        });
+      },
+    },
+    // Covers `invalidateLakeFileMembershipQueries`, shared with useAddFileToDataLake. Inert in
+    // today's UI (these fire from the file wizard, where the History observer is unmounted), so it
+    // pins the CONSISTENCY rather than a visible bug: every client path whose write can record a
+    // config-history row invalidates that lake's history, with no per-path reasoning about which
+    // ones currently matter.
+    {
+      name: 'a file removal',
+      drive: async wrapper => {
+        apiDelete.mockResolvedValueOnce({ data: { success: true, fileCount: 1, totalSizeBytes: 4 } });
+        const { result } = renderHook(() => useRemoveFileFromDataLake('lake1'), { wrapper });
+        await act(async () => {
+          await result.current.mutateAsync('f1');
+        });
+      },
+    },
+  ];
 
-    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+  beforeEach(() => {
+    // The api spies are module-scoped and shared, so an unconsumed `...Once` queued by a sibling
+    // describe would otherwise answer this door's request instead of its own mock.
+    apiPost.mockReset();
+    apiPut.mockReset();
+    apiDelete.mockReset();
   });
 
-  it("a lifecycle action invalidates the acted-on lake's history", async () => {
+  // A purge writes module-scoped suppression state. Cleared here rather than inside the case so a
+  // failing assertion cannot also strand 'lake1' for the cases that follow.
+  afterEach(__resetPurgingLakesForTests);
+
+  it.each(doors)("$name invalidates the written lake's history, and only that lake's", async ({ drive }) => {
     const { wrapper, invalidate } = mountWith();
-    apiPost.mockResolvedValueOnce({ data: { success: true } });
 
-    const { result } = renderHook(() => useArchiveDataLake(), { wrapper });
-    await act(async () => {
-      await result.current.mutateAsync('lake1');
-    });
+    await drive(wrapper);
 
-    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
-  });
-
-  it("a file removal invalidates that lake's history too - it can trigger the auto-activate row", async () => {
-    // Inert in today's UI (this hook fires from the file wizard, where the History observer is
-    // unmounted), so this pins the CONSISTENCY rather than a visible bug: every client path whose
-    // write can record a config-history row invalidates that lake's history, with no per-path
-    // reasoning about which ones currently matter.
-    const { wrapper, invalidate } = mountWith();
-    apiDelete.mockResolvedValueOnce({ data: { success: true, fileCount: 1, totalSizeBytes: 4 } });
-
-    const { result } = renderHook(() => useRemoveFileFromDataLake('lake1'), { wrapper });
-    await act(async () => {
-      await result.current.mutateAsync('f1');
-    });
-
-    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
-  });
-
-  it("useGrantLakeAccess invalidates the shared lake's history", async () => {
-    const { wrapper, invalidate } = mountWith();
-    apiPost.mockResolvedValueOnce({ data: { data: { principalId: 'u1', role: 'reader' } } });
-
-    const { result } = renderHook(() => useGrantLakeAccess(), { wrapper });
-    await act(async () => {
-      await result.current.mutateAsync({ id: 'lake1', principalType: 'user', principalId: 'u1', role: 'reader' });
-    });
-
-    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
-  });
-
-  it("useRevokeLakeAccess invalidates the lake's history", async () => {
-    const { wrapper, invalidate } = mountWith();
-    apiDelete.mockResolvedValueOnce({ data: { data: { revoked: true } } });
-
-    const { result } = renderHook(() => useRevokeLakeAccess(), { wrapper });
-    await act(async () => {
-      await result.current.mutateAsync({ id: 'lake1', principalType: 'user', principalId: 'u1' });
-    });
-
-    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
-  });
-
-  // The transfer door moves no document field, so its history row is the ONLY record that the
-  // handover happened - and the manager who just confirmed the transfer is the reader most likely
-  // to open History next.
-  it("useTransferLakeOwnership invalidates the transferred lake's history", async () => {
-    const { wrapper, invalidate } = mountWith();
-    apiPost.mockResolvedValueOnce({ data: { newOwnerUserId: 'u2', demotedUserIds: ['u1'] } });
-
-    const { result } = renderHook(() => useTransferLakeOwnership(), { wrapper });
-    await act(async () => {
-      await result.current.mutateAsync({ id: 'lake1', newOwnerUserId: 'u2' });
-    });
-
-    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
-  });
-
-  // The purge door builds its own onSuccess around the pending-purge suppression rather than going
-  // through invalidateAfterLifecycle, which is how it missed this key while the other four
-  // lifecycle actions had it. Inert in today's UI (a purge is accepted from the Deleted section,
-  // History unmounted), so this pins the CONSISTENCY - and `purge` is the action least worth
-  // special-casing, being the only audit record a purge leaves. Not reachable via the retry path
-  // either: TransitionalRetryAction excludes it, so nothing else picks up the slack.
-  it("useCleanupDataLake invalidates the purged lake's history", async () => {
-    const { wrapper, invalidate } = mountWith();
-    apiPost.mockResolvedValueOnce({ data: { success: true } });
-
-    const { result } = renderHook(() => useCleanupDataLake(), { wrapper });
-    await act(async () => {
-      await result.current.mutateAsync('lake1');
-    });
-    // A purge writes module-scoped suppression state, and this describe has no reset of its own.
-    // Cleared before the assertion so a failure here cannot also strand 'lake1' for later cases.
-    __resetPurgingLakesForTests();
-
-    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
-  });
-
-  // The static/registry lake's admin overlay. A different route and a different service from
-  // useUpdateDataLake, but it records the same `update` action, so it owes the same invalidation.
-  it("useUpdateFallbackLakeSettings invalidates the edited lake's history", async () => {
-    const { wrapper, invalidate } = mountWith();
-    apiPut.mockResolvedValueOnce({ data: { id: 'lake1' } });
-
-    const { result } = renderHook(() => useUpdateFallbackLakeSettings(), { wrapper });
-    await act(async () => {
-      await result.current.mutateAsync({ id: 'lake1', groundingMode: 'retrieve' });
-    });
-
-    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
-  });
-
-  it('scopes the invalidation to that one lake, never the whole history root', async () => {
-    // configHistory sits outside the `list` prefix precisely so a rename does not refetch every
-    // lake's history (see dataLakeKeys.ts). Invalidating the bare root here would undo that.
-    const { wrapper, invalidate } = mountWith();
-    apiPost.mockResolvedValueOnce({ data: { id: 'lake1' } });
-
-    const { result } = renderHook(() => useSetLakeVisibility(), { wrapper });
-    await act(async () => {
-      await result.current.mutateAsync({ id: 'lake1', visibility: 'private' });
-    });
-
-    expect(invalidatedKeys(invalidate)).not.toContain(JSON.stringify(['dataLakeConfigHistory']));
+    const keys = invalidatedKeys(invalidate);
+    expect(keys).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+    expect(keys).not.toContain(JSON.stringify(['dataLakeConfigHistory']));
   });
 });
 

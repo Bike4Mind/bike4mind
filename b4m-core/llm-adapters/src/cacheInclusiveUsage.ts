@@ -34,13 +34,19 @@ export function splitCacheInclusiveInput(
 /**
  * Cached prompt tokens from a raw provider usage object, across every spelling in use:
  * OpenAI Chat Completions nests them under `prompt_tokens_details`, the OpenAI
- * Responses API under `input_tokens_details`, and Moonshot publishes a flat
- * `cached_tokens` alongside the OpenAI-shaped nesting. Reading only one spelling
- * silently bills every cache hit on the other transports at the full input rate.
+ * Responses API under `input_tokens_details`, Moonshot publishes a flat
+ * `cached_tokens` alongside the OpenAI-shaped nesting, and DeepSeek its own flat
+ * `prompt_cache_hit_tokens`. Reading only one spelling silently bills every cache
+ * hit on the other transports at the full input rate.
+ *
+ * DeepSeek's own spelling leads, because it is the number its invoice is computed
+ * from; the OpenAI-shaped ones it also sends are the fallback for a proxy that
+ * forwards only those.
  */
 export function cachedTokensFromUsage(usage: Record<string, unknown> | undefined | null): number {
   if (!usage) return 0;
   const candidates: unknown[] = [
+    usage.prompt_cache_hit_tokens,
     usage.cached_tokens,
     (usage.prompt_tokens_details as Record<string, unknown> | undefined)?.cached_tokens,
     (usage.input_tokens_details as Record<string, unknown> | undefined)?.cached_tokens,

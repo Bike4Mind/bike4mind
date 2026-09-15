@@ -25,7 +25,7 @@ Organization defaults apply to every channel in the workspace unless a channel-s
 2. Scroll to **AI Model Settings** at the bottom
 3. Under **Default Settings**, click **Edit**
 4. Configure any combination of:
-   - **AI Model** -- select from a dropdown of all enabled models, grouped by provider (OpenAI, Anthropic, Bedrock, Gemini, xAI, Ollama, AWS)
+   - **AI Model** -- select from a dropdown of all enabled models, grouped by provider (OpenAI, Anthropic, Bedrock, Gemini, xAI, Moonshot (Kimi), DeepSeek, Ollama, AWS)
    - **Temperature** -- controls response randomness (0.0 = deterministic, 2.0 = creative)
    - **Max Tokens** -- limits response length (1 to 200,000)
 5. Click **Save**
@@ -110,7 +110,7 @@ Suppose your org default is GPT-4.1 Mini, you have a custom agent `@codebot` con
 
 The model dropdown in configuration modals shows the same models available in the web app:
 
-- Models are fetched from all configured backends (OpenAI, Anthropic, AWS Bedrock, Gemini, xAI, Ollama)
+- Models are fetched from all configured backends (OpenAI, Anthropic, AWS Bedrock, Gemini, xAI, Moonshot (Kimi), DeepSeek, Ollama)
 - Models disabled by the system admin in the LLM Dashboard are excluded
 - Deprecated models are automatically filtered out
 - Models are grouped by provider for easier navigation

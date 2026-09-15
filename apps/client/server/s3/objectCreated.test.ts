@@ -37,7 +37,7 @@ vi.mock('@bike4mind/database', () => ({
   User: { findById: h.userFindById },
   withTransaction: (fn: (session: unknown) => Promise<unknown>) => fn(undefined),
 }));
-vi.mock('@bike4mind/services', () => ({ moderateImageOrThrow: vi.fn() }));
+vi.mock('@bike4mind/services/llm', () => ({ moderateImageOrThrow: vi.fn() }));
 vi.mock('@bike4mind/common', () => ({ isAudioMimeType: () => false }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: vi.fn(async () => ({})), getSettingsValue: () => true }));
 vi.mock('@bike4mind/utils/imageModeration', () => ({ RekognitionImageModerationService: class {} }));

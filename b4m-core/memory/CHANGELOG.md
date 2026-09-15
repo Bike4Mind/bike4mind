@@ -1,5 +1,11 @@
 # @bike4mind/memory
 
+## 0.2.1
+
+### Patch Changes
+
+- [#2758](https://github.com/Bike4Mind/bike4mind/pull/2758) [`0a931d2`](https://github.com/Bike4Mind/bike4mind/commit/0a931d25ddbfc35963f82f1bb6ea26b89a10f39e) Thanks [@onoya](https://github.com/onoya)! - resolve cosine relevance floors per embedding space
+
 ## 0.2.0
 
 ### Minor Changes

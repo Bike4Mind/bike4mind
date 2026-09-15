@@ -15,8 +15,15 @@ import {
   usageEventRepository,
   userRepository,
   lakeAccessEventRepository,
+  scopedSettingsRepository,
 } from '@bike4mind/database';
-import { apiKeyService, creditService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
+import {
+  apiKeyService,
+  creditService,
+  dataLakeService,
+  recordOperationalUsage,
+  scopedSettingsService,
+} from '@bike4mind/services';
 import {
   getProviderFromModel,
   resolveEmbeddingConfig,
@@ -30,6 +37,7 @@ import {
   isSupportedEmbeddingModel,
   insufficientCreditsError,
   usdToCredits,
+  type SettingScope,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import {
@@ -43,12 +51,38 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import { resolveRetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
+import { getRequestMembershipOrgIds } from '@server/dataLakes/requestMembership';
 
 // Reused across requests so the tiktoken encoder is resolved once, not per search.
 let sharedTokenizer: ITokenizer | undefined;
 function getSharedTokenizer(logger: Logger): ITokenizer {
   if (!sharedTokenizer) sharedTokenizer = createTokenizer({ logger });
   return sharedTokenizer;
+}
+
+/**
+ * The scope this route resolves its search budgets on (#2709).
+ *
+ * `scopeForCaller`'s own caveat says a consumer that needs more than the selected-org display
+ * pointer "must resolve membership first and pass the result here" - so that is what this does.
+ * `user.organizationId` SELECTS among the caller's orgs; `getRequestMembershipOrgIds` (#1674) is
+ * what PROVES one. The access gate resolves the same memo earlier in the request (it reaches
+ * `getDynamicDataLakeAccess`, which resolves membership whenever a lakes repo is wired - always,
+ * here), so this reads it rather than paying for a second lookup. Call it AFTER that gate. A
+ * pointer at an org the caller is not a member of resolves to no org rung at all rather than to
+ * that org's ceiling - and, since `scopeForCaller` makes the OWNER rung the ORG when one is present
+ * and the USER when it is not, that caller's personal owner override governs here instead of the
+ * org's. Owner outranks Organization, so it is the rung that decides.
+ *
+ * Budgets are read-only, so this is a tighter standard than the rung strictly needs. It is the
+ * cheap one here, and it keeps the route from being the precedent that a looser derivation is fine.
+ */
+async function resolveBudgetScope(req: Request): Promise<SettingScope> {
+  const userId = req.user.id;
+  const selectedOrgId = normalizeId(req.user.organizationId);
+  const memberOrgIds = await getRequestMembershipOrgIds(req);
+  const verifiedOrgId = selectedOrgId && memberOrgIds.includes(selectedOrgId) ? selectedOrgId : undefined;
+  return scopedSettingsService.scopeForCaller({ userId, organizationId: verifiedOrgId });
 }
 
 /**
@@ -99,7 +133,7 @@ function getSharedTokenizer(logger: Logger): ITokenizer {
  *   - total_chunks_searched: number
  *   - files_in_scope: number
  *   - embedding_model: string
- *   - latency_ms: number
+ *   - latency_ms: number (whole request; `scan.ann_slowest_query_ms` is the ANN share of it)
  *   - scan: coverage accounting. When `scan.truncated` is true a budget stopped the walk, so the
  *     results rank only part of the corpus - do not read an absence of hits as an absence of
  *     content. `scan.budgets` echoes the limits in force so a caller can explain the truncation.
@@ -194,6 +228,12 @@ const toScanPayload = (scan: dataLakeService.SemanticSearchScanAccounting) => ({
   ann_files_queried: scan.annFilesQueried,
   ann_hits: scan.annHits,
   ann_models_queried: scan.annModelsQueried,
+  // The ANN share of latency_ms, so a slow search can be attributed from the response itself
+  // rather than from CloudWatch minutes later. The counters above cannot tell a 49s search from a
+  // 2s one, and this route runs under a 60s Lambda ceiling - a first production search spent 45.4s
+  // of 49.2s somewhere after the query embedding, and this is the field that says whether that
+  // somewhere was the ANN query. null when none reached a backend, which is not an instant one.
+  ann_slowest_query_ms: scan.annSlowestQueryMs,
   // Per-document cap: whether it actually bound, and the ANN limit that was requested. `cap_pool`
   // is why ann_hits can step by a factor of 3 with the cap on - a wider ask, not a retrieval
   // change - and cap_promotions is the only signal that separates a cap that redistributed slots
@@ -269,13 +309,18 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       // --- Resolve accessible data lakes (this IS the access gate) ---
       const { dataLakeTags, dataLakeTagPrefixes, lakes } = await resolveRetrievalLakeScope(req);
 
+      // After the gate on purpose: it populates the membership memo this reads, so the org
+      // verification below is free. Both budget reads share it, so one search resolves one scope.
+      const budgetScope = await resolveBudgetScope(req);
+
       // Every lake contributes exactly one meta-tag, so an empty tag list means zero
       // accessible lakes. Gating on the prefixes instead would be wrong: a caller can
       // legitimately hold only dynamic lakes, whose prefixes are all in the SCOPED bucket.
       if (dataLakeTags.length === 0) {
         const budgets = await dataLakeService.resolveSearchBudgets(
-          { adminSettings: adminSettingsRepository },
-          req.logger
+          { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository },
+          req.logger,
+          budgetScope
         );
         return res.json({
           results: [],
@@ -486,7 +531,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
           dataLakeTags,
           dataLakeTagPrefixes,
           lakeMemberships,
-          budgets: await dataLakeService.resolveSearchBudgets({ adminSettings: adminSettingsRepository }, req.logger),
+          budgets: await dataLakeService.resolveSearchBudgets(
+            { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository },
+            req.logger,
+            budgetScope
+          ),
           vectorSearchEnabled: (await adminSettingsRepository.getSettingsValue('EnableDataLakeVectorSearch')) ?? false,
           // Per-lake supersession collapse - `lakes` is only ever an attribution source here, never
           // a second way to resolve access (the scope is still the tags above).

@@ -1,4 +1,4 @@
-import { IFeedbackDocument, FeedbackStatus } from '@bike4mind/common';
+import { IFeedbackDocument, FeedbackStatus, FeedbackSubject } from '@bike4mind/common';
 
 // Extended feedback document with MongoDB _id field. `contentExpired` is added by the API's
 // hydrateFeedbackText join - true when content was submitted but has since aged out under the
@@ -33,8 +33,18 @@ export interface FeedbackFilters {
 /**
  * The filter half of the server query, as GET /api/feedback understands it. Kept separate from
  * page/limit so a CSV export can reuse the same filters while paging independently.
+ *
+ * `sessionId`/`questId`/`userId`/`organizationId`/`subject` mirror the same query params the admin
+ * triage table doesn't use today but the endpoint has always accepted (see ListFeedbackQuerySchema)
+ * - added for the session-scoped "Reported" annotation read (hooks/data/feedback.ts), which is a
+ * second consumer of this same contract rather than a reason to fork a parallel params type.
  */
 export interface FeedbackListFilterParams {
+  userId?: string;
+  sessionId?: string;
+  questId?: string;
+  organizationId?: string;
+  subject?: FeedbackSubject;
   status?: FeedbackStatus[];
   organization?: string[];
   search?: string;
@@ -44,6 +54,12 @@ export interface FeedbackListFilterParams {
 export type FeedbackListParams = FeedbackListFilterParams & {
   page: number;
   limit: number;
+  /**
+   * Ask the server to compute the `organizations` facet. Opt-in because it is a `distinct` over
+   * the caller's entire accessible set - for an admin, the whole collection on an unindexed field
+   * - and only the org filter menu's dedicated query consumes it.
+   */
+  includeOrganizations?: boolean;
 };
 
 /** Response envelope of GET /api/feedback. */
@@ -52,8 +68,11 @@ export interface FeedbackListResponse {
   total: number;
   page: number;
   limit: number;
-  /** Distinct organization labels across the caller's whole accessible set, for the filter menu. */
-  organizations: string[];
+  /**
+   * Distinct organization labels across the caller's whole accessible set, for the filter menu.
+   * Present only when the request asked for it (`includeOrganizations`).
+   */
+  organizations?: string[];
 }
 
 // Hook return types

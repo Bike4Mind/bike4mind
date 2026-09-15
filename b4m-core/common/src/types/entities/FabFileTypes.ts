@@ -307,7 +307,15 @@ export interface IFabFile {
 
   /** Whether this FabFile is currently being vectorized. */
   isVectorizing?: boolean;
-  /** Whether this FabFile has completed vectorization. */
+  /**
+   * NOT a completion marker, despite the name: every chunk write sets it (see
+   * fabFileService/vectorize.ts and FabFileModel.advanceVectorizeProgress), so a file one chunk
+   * into a fifty-chunk batch already reads true. `vectorized: true` + `isVectorizing: false` is
+   * also what chunking leaves behind at count 0 - see FabFileModel's advanceVectorizeProgress
+   * comment, which names the consequence: the terminal marker is `chunkEmbeddingModelStampedAt`,
+   * not this field. Read that one to mean "finished"; read this one as "has at least one
+   * vectorized chunk".
+   */
   vectorized?: boolean;
   /**
    * The embedding model used to generate the vectors, as a FILE-level claim about the whole corpus.

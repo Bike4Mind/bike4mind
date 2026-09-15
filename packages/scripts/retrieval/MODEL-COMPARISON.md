@@ -283,10 +283,21 @@ shrink. Directional, not proven.
 
 ### NEW: what the measured bands do to the live cosine floors
 
-`3-small@1536` spans 0.2293-0.5588 and `3-large@3072` spans 0.2104-0.5197. The `0.75` floors in
-`forcedRetrieval.ts`, `ChatCompletionFeatures.ts` and `getFirstIterationMementosPreamble.ts` sit ABOVE
-the whole band in either space, so after the flip they reject every chunk on every query - the silent
-outage `b4m-core/common/src/schemas/embedding.ts` records this codebase hitting twice already.
+`3-small@1536` spans 0.2293-0.5588 and `3-large@3072` spans 0.2104-0.5197. The `0.75` floors that used
+to live in `forcedRetrieval.ts`, `ChatCompletionFeatures.ts` and `getFirstIterationMementosPreamble.ts`
+sit ABOVE the whole band in either space, so after the flip they would have rejected every chunk on
+every query - the silent outage `b4m-core/common/src/schemas/embedding.ts` records this codebase
+hitting twice already.
+
+**Those three literals are gone** (#2572 item 4a). Both floors now resolve per embedding space from
+`FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE` / `MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE` in
+`b4m-core/common/src/constants/embeddingSpaceFloors.ts`, keyed on the space the scores were actually
+produced in - for forced retrieval that is the candidate files' MAJORITY model, not the admin
+default, so a lake still on ada-002 mid-migration keeps its own floor on the same deployment where a
+migrated one gets 3-small's. A space with no measured entry applies no absolute floor and logs at
+error level, leaving the scale-free relative floor as the only gate: less precise, and recoverable,
+where a blackout is not. So the numbers below are still what a floor DOES to recall in each space,
+but the shipped 85:75 row is no longer what a 3-small deployment would run.
 
 A FAB replacement floor is bracketed by `posTop` and `negTop`: roughly 0.38-0.40 for `3-small@1536`.
 That is NOT `MEMENTO_MIN_SIMILARITY` (0.25), which sits below this corpus's `negTop` of 0.3615 and would
@@ -329,6 +340,8 @@ Run on the `system-help` lake (51 articles, 452 chunks, 30 `PROBE_QUESTIONS`) ca
 arms, 12000-char budget. Read the caveats at the end of this subsection before quoting any number.
 
 Shipped defaults are `forcedRetrievalRelativeFloorPct` 85 and `forcedRetrievalMinSimilarityPct` 75.
+The 75 is now the ada-002 entry of `FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE` rather than a
+single global default; 3-small resolves to 35, and this table is where that 35 comes from.
 
 | arm | floors | accepted/q | served/q | relative bound | emptied | recall | precision |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -336,7 +349,7 @@ Shipped defaults are `forcedRetrievalRelativeFloorPct` 85 and `forcedRetrievalMi
 | ada-002 | 0:74 | 13.1 | 9.4 | 0.0% | 0/30 | 90.7% | 36.6% |
 | ada-002 | **85:75** (shipped) | 6.3 | 5.9 | **0.0%** | 2/30 | 65.3% | 39.6% |
 | ada-002 | 0:76 | 2.7 | 2.7 | 0.0% | 9/30 | 39.7% | 56.1% |
-| 3-small | **85:75** (shipped) | **0.0** | **0.0** | 0.0% | **30/30** | **0.0%** | n/a |
+| 3-small | **85:75** (was shipped) | **0.0** | **0.0** | 0.0% | **30/30** | **0.0%** | n/a |
 | 3-small | 0:30 | 19.2 | 9.9 | 0.0% | 0/30 | 92.7% | 32.1% |
 | 3-small | 0:35 | 6.8 | 5.9 | 0.0% | 4/30 | 70.0% | 53.5% |
 | 3-small | 85:35 | 3.3 | 3.3 | 40.0% | 4/30 | 62.0% | 71.7% |
@@ -377,10 +390,15 @@ corpus the same 85 is inert under ada-002 and binds on 40% of queries under 3-sm
 threshold `0.35/0.85 = 0.412` lands mid-distribution against a measured `posTop` of 0.4269. Holding
 the absolute floor at 35 and adding it is what that buys: 0:35 -> 85:35 is 6.8 -> 3.3 chunks/q, mean
 cut rank 5.2, precision 53.5% -> 71.7% for 8 points of recall. The absolute floor meanwhile goes from "one point past the knee" to "above the entire
-band" - 0.75 exceeds 3-small's band max of 0.5588, so the shipped pair returns nothing on every
-query. That is the silent outage the band paragraph predicts, now measured: not a tuning nicety, a
-total blackout on the forced path. A raw cosine threshold is not comparable across embedding models;
-a fraction of the turn's top score is.
+band" - 0.75 exceeds 3-small's band max of 0.5588, so that pair returned nothing on every query.
+That is the silent outage the band paragraph predicts, now measured: not a tuning nicety, a total
+blackout on the forced path. A raw cosine threshold is not comparable across embedding models; a
+fraction of the turn's top score is.
+
+This row is what made the absolute floor space-keyed rather than global (see the band section
+above). The relative floor needed no such treatment, and this is the measurement that says why: the
+same 85 does useful and comparable work in BOTH spaces, because a fraction of the turn's own top
+score carries its scale with it.
 
 Caveats, all of which bound how far these numbers travel:
 

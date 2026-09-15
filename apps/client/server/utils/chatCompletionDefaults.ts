@@ -43,7 +43,8 @@ import {
   type ModelInfo,
 } from '@bike4mind/common';
 import { MCPClient } from '@bike4mind/mcp';
-import { apiKeyService, IChatCompletionServiceOptions } from '@bike4mind/services';
+import { apiKeyService } from '@bike4mind/services';
+import { IChatCompletionServiceOptions } from '@bike4mind/services/llm';
 import { ApiKeyTable, getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { getSettingsByNames, ITokenizer, TiktokenTokenizer } from '@bike4mind/utils';
 import { ILogger, Logger } from '@bike4mind/observability';

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { ToolDefinition } from '@bike4mind/services';
+import type { ToolDefinition } from '@bike4mind/services/llm';
 import {
   guardPlanCompletion,
   planIsComplete,

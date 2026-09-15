@@ -178,7 +178,7 @@ export const ArtifactVersionDropdown: React.FC<ArtifactVersionDropdownProps> = (
                             Latest
                           </Chip>
                         )}
-                        {isSelected && <LatestIcon sx={{ fontSize: 16, color: 'primary.main' }} />}
+                        {isSelected && <LatestIcon sx={{ fontSize: 16, color: 'primary.plainColor' }} />}
                       </Stack>
                     </Stack>
                     {version.versionTag && (

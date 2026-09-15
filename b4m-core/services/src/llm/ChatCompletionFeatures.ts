@@ -34,12 +34,6 @@ import {
   IUsageEventRepository,
   IMementoRepository,
   IOrganizationRepository,
-  DashboardParamsSchema,
-  PromptMetaZodSchema,
-  b4mLLMTools,
-  ResearchModeParamsSchema,
-  GenerateImageToolCallSchema,
-  AudioGenerationToolCallSchema,
   ILatticeModel,
   IDataLakeAccessGrantRepository,
   IDataLakeRepository,
@@ -57,13 +51,15 @@ import {
   lakeMemoryFacts,
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
   FORCED_RETRIEVAL_MAX_SCORED_CHUNKS,
+  FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE,
   FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+  FORCED_RETRIEVAL_SETTING_KEYS,
   compareForcedRetrievalRank,
+  cosineFloorPctForSpace,
   forcedRetrievalRelativeCutoff,
   LAKE_RECALL_K_DEFAULT,
   DATALAKE_TAG_PREFIX,
-  PROMPT_TEXT_MAX,
   materializePromptMetaSession,
   ModelBackend,
   type SupportedEmbeddingModel,
@@ -92,7 +88,11 @@ import {
   partitionBySupersession,
   type SupersessionReport,
 } from '../dataLakeService/supersession';
-import { getAccessibleDataLakePrompts, datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
+import {
+  getAccessibleDataLakePrompts,
+  datalakeTagsFrom,
+  grantedLakeIdsUsedFor,
+} from '../dataLakeService/getDataLakePrompts';
 import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
 import { attributeAccessedLakeIds } from '../dataLakeService/attributeAccessedLakes';
 import { recordLakeAccessEvent } from '../dataLakeService/recordLakeAccessEvent';
@@ -131,6 +131,7 @@ import {
   DEFAULT_VERBATIM_WINDOW_FRACTION,
   SYSTEM_PROMPT_RESERVE_TOKENS,
 } from './ChatCompletionProcess';
+import { QuestStartBodySchema } from './questStartBody';
 import { forcedRetrievalNoContextPrompt, type ForcedRetrievalNoContextFinding } from './forcedRetrievalAbstention';
 import { resolveLakeMemoryScope } from './resolveLakeMemoryScope';
 import { MCPClient } from '@bike4mind/mcp';
@@ -444,70 +445,7 @@ export interface IChatCompletionServiceOptions {
   gpcSignalDetected?: boolean;
 }
 
-export const QuestStartBodySchema = z.object({
-  userId: z.string(),
-  sessionId: z.string(),
-  questId: z.string(),
-  message: z.string().min(1, 'Message cannot be empty'),
-  messageFileIds: z.array(z.string()),
-  historyCount: z.number(),
-  fabFileIds: z.array(z.string()),
-  params: ChatCompletionCreateInputSchema,
-  dashboardParams: DashboardParamsSchema.optional(),
-  enableQuestMaster: z.boolean().optional(),
-  enableMementos: z.boolean().optional(),
-  enableArtifacts: z.boolean().optional(),
-  /** See ChatCompletionInvokeParamsSchema.promptMode - must stay in sync with it. */
-  promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
-  /** See ChatCompletionInvokeParamsSchema.skipAutoOffers - must stay in sync with it. */
-  skipAutoOffers: z.boolean().optional(),
-  /** See ChatCompletionInvokeParamsSchema.systemPrompt - must stay in sync with it. */
-  systemPrompt: z.string().max(PROMPT_TEXT_MAX).optional(),
-  enableAgents: z.boolean().optional(),
-  enableLattice: z.boolean().optional(),
-  promptMeta: PromptMetaZodSchema,
-  tools: z.array(z.union([b4mLLMTools, z.string()])).optional(),
-  mcpServers: z.array(z.string()).optional(),
-  projectId: z.string().optional(),
-  organizationId: z.string().nullable().optional(),
-  questMaster: QuestMasterParamsSchema.optional(),
-  toolPromptId: z.string().optional(),
-  researchMode: ResearchModeParamsSchema.optional(),
-  fallbackModel: z.string().optional(),
-  embeddingModel: z.string().optional(),
-  queryComplexity: z.string(),
-  imageConfig: GenerateImageToolCallSchema.optional(),
-  audioConfig: AudioGenerationToolCallSchema.optional(),
-  deepResearchConfig: z
-    .object({
-      maxDepth: z.number().optional(),
-      duration: z.number().optional(),
-      // searchers are passed via ToolContext, not through this API schema
-      searchers: z.array(z.any()).optional(),
-    })
-    .optional(),
-  extraContextMessages: z
-    .array(
-      z.object({
-        role: z.enum(['user', 'assistant', 'system', 'function', 'tool']),
-        content: z.union([z.string(), z.array(z.any())]),
-        fabFileIds: z.array(z.string()).optional(),
-      })
-    )
-    .optional(),
-  /** User's timezone (IANA format, e.g., "America/New_York") */
-  timezone: z.string().optional(),
-  /** Persona-based sub-agent filter - only these agent names are available for delegation */
-  allowedAgents: z.array(z.string()).optional(),
-  /** When true, Quest Processor injects Slack-specific tool configs (help, notebooks, curated files) */
-  enableSlackTools: z.boolean().optional(),
-  /**
-   * Disclose the system prompt text this completion was assembled from. Exposed on the process
-   * instance for the direct response of the request that asked for it, and never persisted -
-   * the derived breakdown (`promptMeta.context.systemPromptDetails`) is the persisted half.
-   */
-  includeSystemPrompt: z.boolean().optional(),
-});
+export { QuestStartBodySchema } from './questStartBody';
 
 // Type for what features need from the chat completion service
 export type ChatCompletionContext = Pick<
@@ -585,6 +523,13 @@ export interface ChatCompletionFeature {
   ) => Promise<IMessage[]>;
 }
 
+/**
+ * How many mementos V1 recall keeps. Named because the floor beside it can now resolve to "none"
+ * on an unmeasured embedding space, which makes this the only thing bounding what gets injected.
+ * Agent mode's first-iteration recall mirrors it (`getFirstIterationMementosPreamble`).
+ */
+const MEMENTO_V1_TOP_K = 10;
+
 export class MementoFeature implements ChatCompletionFeature {
   private chatCompletion: ChatCompletionContext;
   private db: IChatCompletionServiceOptions['db'];
@@ -611,7 +556,7 @@ export class MementoFeature implements ChatCompletionFeature {
 
   async getContextMessages(
     quest: IChatHistoryItemDocument,
-    embeddingFactory: EmbeddingFactory,
+    _embeddingFactory: EmbeddingFactory,
     message: string,
     modelInfo: ModelInfo
   ): Promise<IMessage[]> {
@@ -650,13 +595,26 @@ export class MementoFeature implements ChatCompletionFeature {
 
     this.logger.log('📚 Retrieving relevant mementos using vector similarity');
 
+    // Neither `minSimilarity` nor `embeddingModel`: BOTH are properties of the embedding space, and
+    // `getRelevantMementos` is the single place that resolves it (from the `defaultEmbeddingModel`
+    // setting). The 0.75 that used to sit here was fitted to ada-002 and would have rejected every
+    // memento in existence the moment that setting moved.
+    //
+    // MUST STAY IN SYNC with `getFirstIterationMementosPreamble.ts` (agent mode), which also passes
+    // neither. Passing `embeddingFactory.getDefaultEmbeddingModel()` here is what made the two modes
+    // disagree: the factory resolves by CREDENTIAL PRIORITY (an OpenAI key alone returns ada-002) and
+    // never reads the setting - see `resolveEmbeddingModelFallback` below, which says the same thing
+    // about naming a space. That argument does not merely pick a floor, it picks the space the QUERY
+    // is embedded in, so with the setting on 3-small and an OpenAI key present this embedded the
+    // query in ada-002, scored it against 3-small memento vectors, and then gated the resulting
+    // cross-space noise on ada-002's 75. Memory went dark on the exact path this table exists to keep
+    // lit. Resolving in one place makes the comparison in-space and the two modes agree by
+    // construction.
     const relevantMementos = await getRelevantMementos(
       this.user.id,
       message,
       {
-        topK: 10,
-        minSimilarity: 0.75,
-        embeddingModel: embeddingFactory.getDefaultEmbeddingModel(),
+        topK: MEMENTO_V1_TOP_K,
         logger: this.logger,
       },
       {
@@ -1719,16 +1677,9 @@ const FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS = 4000;
 // resolveForcedRetrievalConfig below), so none is a module constant - every former
 // FORCED_RETRIEVAL_CHAR_BUDGET and FORCED_RETRIEVAL_MIN_SIMILARITY reference is a resolved local
 // instead. When nothing clears the floors, no chunk is injected and the turn falls back to
-// forcedRetrievalNoContextPrompt.
-//
-// Exported so a test's admin-settings fixture can serve exactly the keys the read asks for: a
-// fixture that enumerated them itself would keep passing (on coded defaults) if a fourth key were
-// added here, which is the one way these tests could go quiet without failing.
-export const FORCED_RETRIEVAL_SETTING_KEYS = [
-  'forcedRetrievalCharBudget',
-  'forcedRetrievalRelativeFloorPct',
-  'forcedRetrievalMinSimilarityPct',
-] as const;
+// forcedRetrievalNoContextPrompt. The key list itself lives in @bike4mind/common
+// (FORCED_RETRIEVAL_SETTING_KEYS) so the scoped-settings guard can loop it - `common` cannot import
+// from `services`, and a guard that re-enumerated the keys would not cover a fourth one.
 
 /**
  * One of the two floor settings as a 0-1 cosine fraction, or `fallback` when the stored value is
@@ -1742,18 +1693,91 @@ export const FORCED_RETRIEVAL_SETTING_KEYS = [
  * a floor of 20.0, which no similarity can clear, starving every Data-Lake turn with nothing in the
  * output to say why. Cheap guard, unbounded downside.
  *
- * Falls back rather than clamping to 100, which is where this deliberately diverges from
- * `resolveRelevancePct`'s handling of the same hazard: clamping a fat-fingered value to "admit only
- * a perfect match" is itself the retrieval starvation this floor exists to prevent, so the coded
- * default - known-good, behavior-preserving - is the safer landing place.
+ * Falls back rather than clamping to 100: clamping a fat-fingered value to "admit only a perfect
+ * match" is itself the retrieval starvation this floor exists to prevent, so the coded default -
+ * known-good, behavior-preserving - is the safer landing place. `resolveRelevancePct` in
+ * `resolveSearchBudgets.ts` now guards `kbSearchMinRelevancePct` identically; the two must stay in
+ * sync, since they are the same hazard on the two retrieval paths.
  */
-function forcedRetrievalFloorFraction(raw: unknown, fallbackPct: number, label: string, logger: Logger): number {
+function forcedRetrievalFloorPct(raw: unknown, fallbackPct: number, label: string, logger: Logger): number {
   const pct = nonNegativeIntOr(raw as string | number | null | undefined, fallbackPct, label, logger);
   if (pct > 100) {
     logger.warn(`\u{1F512} Forced retrieval: ${label} ${pct} exceeds 100; using ${fallbackPct} instead`);
-    return fallbackPct / 100;
+    return fallbackPct;
   }
-  return pct / 100;
+  return pct;
+}
+
+function forcedRetrievalFloorFraction(raw: unknown, fallbackPct: number, label: string, logger: Logger): number {
+  return forcedRetrievalFloorPct(raw, fallbackPct, label, logger) / 100;
+}
+
+/**
+ * The absolute floor to grade THIS turn's candidates against, given what the operator configured and
+ * which embedding space the scores were actually produced in.
+ *
+ * A configured value is honored as-is: it is a raw cosine, the operator picked it for the corpus in
+ * front of them, and `forcedRetrievalMinSimilarityPct`'s whole point is that it be tunable. What
+ * cannot be honored is a value nobody chose. The setting's DECLARED default is 75, fitted to
+ * ada-002, and both settings read paths manufacture that 75 for a key no one has ever written - so
+ * an untouched deployment that flips `defaultEmbeddingModel` would carry an ada-002 number into a
+ * space whose entire band sits below it and reject every chunk on every turn.
+ *
+ * Neither read path can distinguish "never set" from "set to exactly the default" without a second
+ * scoped query per turn, which this path deliberately does not spend (see `readForcedRetrievalSettings`
+ * on why all three keys share one read). So the declared default doubles as the "nobody chose this"
+ * signal: a configured value EQUAL to it resolves per embedding space instead. The one case that
+ * misreads is an operator who deliberately types the default's own number for a space whose measured
+ * floor differs - they get the measured floor rather than their typed one, which is more results
+ * than they asked for rather than fewer, and it is logged. The opposite mistake is a silent blackout.
+ *
+ * An unmeasured space yields 0, leaving the scale-free relative floor as the only gate. That is a
+ * real loss of precision, and it beats every alternative: there is no floor that transfers across
+ * vector spaces, so the choice is between ranking without an absolute cut and guessing a cut that
+ * empties the turn.
+ *
+ * `space` is the space the QUERY was embedded in, which is what the scores being gated were produced
+ * against - not a claim about the corpus. `resolveMajorityEmbeddingModel` votes over the parent
+ * files' `embeddingModel`, and that label has exactly one writer: `fabFileService/chunk.ts` records
+ * it when a chunking pass COMMITS, alongside `chunkEmbeddingModelStampedAt: null`. So it names the
+ * model that pass INTENDED to embed with - it is not a completion stamp, and it is not proof that
+ * every vector under it landed in that space (`resumeVectorizeEnqueue` re-embeds only the vectorless
+ * chunks, and falls back to the CURRENT default when the stored label is absent or no longer in
+ * `SupportedEmbeddingModelSchema`). A MAJORITY rather than a unanimity check is what makes that
+ * workable: labelled files decide the space, unlabelled ones abstain, and only a corpus with no
+ * labelled file at all falls back to the `defaultEmbeddingModel` admin setting. Unlabelled chunks
+ * are scored either way - `isForeignEmbeddingModel` gives them the benefit of the doubt, because
+ * withholding on a missing label would blind the common case. That is the right default, not a
+ * guarantee. Where a file's vectors really are from another space, the cosines were already noise
+ * before this function ran, and no floor can rescue them - the mismatch is the bug, not the floor.
+ * The log below therefore names the space the floor was chosen FOR, which is always right, and says
+ * nothing about whether every scored chunk really lives there.
+ */
+function resolveForcedRetrievalAbsoluteFloor(configuredPct: number, space: string, logger: Logger): number {
+  if (configuredPct !== FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT) return configuredPct / 100;
+
+  const spacePct = cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, space);
+  if (spacePct !== undefined) {
+    if (spacePct !== configuredPct) {
+      logger.log(
+        `\u{1F512} Forced retrieval: absolute floor ${spacePct}% resolved for embedding space "${space}" ` +
+          `(the ${configuredPct}% default is an ada-002 value and does not transfer)`
+      );
+    }
+    return spacePct / 100;
+  }
+
+  // warn, not error: an unmeasured space is the DESIGNED resolution for any model outside the table,
+  // not a fault. Self-host hits it on every Data-Lake turn, and nobody can clear it from the console -
+  // at error level that is per-turn noise in whatever reads error logs, which trains operators to
+  // ignore the channel. Measuring a floor is the fix, and it happens offline.
+  logger.warn(
+    `\u{1F512} Forced retrieval: no measured absolute floor for embedding space "${space}"; gating on ` +
+      `the relative floor alone. Applying the ${configuredPct}% default here would have been an ` +
+      `ada-002 number in a space nobody has measured - above its band that rejects every chunk on ` +
+      `every turn. Measure one into FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE.`
+  );
+  return 0;
 }
 
 /**
@@ -1768,8 +1792,22 @@ interface ForcedRetrievalFloors {
    * leaving the absolute one as the only gate - the behavior before this was configurable.
    */
   relativeFloor: number;
-  /** Absolute cosine floor a candidate must clear regardless of how the turn's band sits. */
+  /**
+   * Absolute cosine floor a candidate must clear regardless of how the turn's band sits. `0`
+   * disables it, which is what an embedding space with no measured floor resolves to.
+   */
   minSimilarity: number;
+}
+
+/**
+ * What one turn's settings read yields. The relative floor arrives ready to use because a fraction
+ * of the turn's top score means the same thing in every vector space; the absolute one cannot,
+ * so it travels as the configured PERCENT and is resolved against the embedding space later.
+ */
+interface ForcedRetrievalConfig {
+  charBudget: number;
+  relativeFloor: number;
+  configuredAbsolutePct: number;
 }
 
 /** An above-floor candidate. The vector is dropped so each batch can be freed after scoring. */
@@ -2037,12 +2075,18 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
 
       const { db, user } = this.chatCompletion;
       const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
-      const prompts = await getAccessibleDataLakePrompts(
-        { db, user, entitlementKeys, logger: this.logger },
-        { restrictToDatalakeTags: datalakeTags, preauthorizedLakeIds: this.preauthorizedLakeIds }
-      );
+      // Held in a local rather than passed inline: the grant-reach memo is scoped by OBJECT
+      // IDENTITY, so the telemetry derivation below is a cache hit only if it gets this same
+      // instance (see grantedLakeIdsUsedFor).
+      const lakeAccessContext = { db, user, entitlementKeys, logger: this.logger };
+      const prompts = await getAccessibleDataLakePrompts(lakeAccessContext, {
+        restrictToDatalakeTags: datalakeTags,
+        preauthorizedLakeIds: this.preauthorizedLakeIds,
+      });
+      const injectedLakePromptIds = prompts.map(p => p.id);
       const preauthorizedSet = new Set(this.preauthorizedLakeIds);
-      const preauthorizedLakeIdsUsed = prompts.map(p => p.id).filter(id => preauthorizedSet.has(id));
+      const preauthorizedLakeIdsUsed = injectedLakePromptIds.filter(id => preauthorizedSet.has(id));
+      const grantedLakeIdsUsed = await grantedLakeIdsUsedFor(lakeAccessContext, injectedLakePromptIds);
       // Recorded whenever this injection site ran, even if nothing qualified (present-and-empty
       // is distinct from absent - see the field's own comment in promptMeta.ts).
       quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
@@ -2053,8 +2097,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         attempted: true,
         surfaces: [],
         dataLakeTags: [],
-        injectedLakePromptIds: prompts.map(p => p.id),
+        injectedLakePromptIds,
         ...(preauthorizedLakeIdsUsed.length ? { preauthorizedLakeIdsUsed } : {}),
+        ...(grantedLakeIdsUsed.length ? { grantedLakeIdsUsed } : {}),
       });
       const section = renderDataLakePromptSection(prompts);
       if (!section) return null;
@@ -2218,7 +2263,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * lands here too. (On the scoped path a missing adapter is swallowed inside the resolver and
    * never reaches this catch.) Every default it falls back to is behavior-preserving.
    */
-  private async resolveForcedRetrievalConfig(): Promise<{ charBudget: number; floors: ForcedRetrievalFloors }> {
+  private async resolveForcedRetrievalConfig(): Promise<ForcedRetrievalConfig> {
     try {
       const { charBudget, relative, absolute } = await this.readForcedRetrievalSettings();
       return {
@@ -2228,20 +2273,21 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           'forcedRetrievalCharBudget',
           this.logger
         ),
-        floors: {
-          relativeFloor: forcedRetrievalFloorFraction(
-            relative,
-            FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
-            'forcedRetrievalRelativeFloorPct',
-            this.logger
-          ),
-          minSimilarity: forcedRetrievalFloorFraction(
-            absolute,
-            FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
-            'forcedRetrievalMinSimilarityPct',
-            this.logger
-          ),
-        },
+        relativeFloor: forcedRetrievalFloorFraction(
+          relative,
+          FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+          'forcedRetrievalRelativeFloorPct',
+          this.logger
+        ),
+        // Stays a PERCENT here, unresolved: turning it into a cosine needs the embedding space,
+        // which is not known until the candidate files have voted on one, mid-scan. See
+        // `resolveForcedRetrievalAbsoluteFloor`.
+        configuredAbsolutePct: forcedRetrievalFloorPct(
+          absolute,
+          FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
+          'forcedRetrievalMinSimilarityPct',
+          this.logger
+        ),
       };
     } catch (err) {
       // Names every key, because one read failure degrades all three at once and an operator
@@ -2255,10 +2301,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       );
       return {
         charBudget: FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
-        floors: {
-          relativeFloor: FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT / 100,
-          minSimilarity: FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT / 100,
-        },
+        relativeFloor: FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT / 100,
+        // The coded default, which then resolves per embedding space like any unchosen value - so a
+        // settings outage cannot reintroduce the ada-002 floor in a space it does not belong to.
+        configuredAbsolutePct: FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
       };
     }
   }
@@ -2471,8 +2517,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       }
 
       // Resolved ONCE here, before the scan - never re-read per chunk in the accumulation loop
-      // below. One call for all three because they share a scope, so they share a read.
-      const { charBudget: forcedRetrievalCharBudget, floors } = await this.resolveForcedRetrievalConfig();
+      // below. One call for all three because they share a scope, so they share a read. The
+      // absolute floor is still a percent at this point: it becomes a cosine below, once the
+      // candidate files have voted on which embedding space this turn is scoring in.
+      const {
+        charBudget: forcedRetrievalCharBudget,
+        relativeFloor,
+        configuredAbsolutePct,
+      } = await this.resolveForcedRetrievalConfig();
 
       // Only a non-lake tag survives: a `datalake:` entry (the shape a lake-created session sets
       // `retrievalTags` to) names the SESSION's lake, which is already applied above via
@@ -2564,6 +2616,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       );
       const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
       const queryVector = await embeddingService.generateEmbedding(query);
+
+      // The pair is only complete HERE. `embeddingModel` above is the space every score below is
+      // computed in - the corpus's own majority, not the admin default - which is exactly the space
+      // an absolute cosine floor has to belong to. A lake still on the old model mid-migration keeps
+      // scoring against the old floor on the same deployment where a migrated one gets the new.
+      const floors: ForcedRetrievalFloors = {
+        relativeFloor,
+        minSimilarity: resolveForcedRetrievalAbsoluteFloor(configuredAbsolutePct, embeddingModel, this.logger),
+      };
 
       // Withhold foreign-model files before any chunk is loaded, mirroring the shared ranking
       // core: their vectors never enter memory and never spend the per-turn chunk budget below,
@@ -2849,7 +2910,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           preRelativeFloorCandidates: ranked.length,
           postRelativeFloorCandidates: scored.length,
         });
-        this.logger.log(`🔒 Forced retrieval: no chunk cleared the similarity floor (top=${topScore.toFixed(3)})`);
+        // Names the floor and the space, not just the top score. An off-topic question and a floor
+        // sitting above the corpus's entire band produce the identical outcome here - every score
+        // below the line - and no per-turn test separates them, so the line carries what an
+        // operator needs to tell them apart instead: a top score far below the floor across a whole
+        // scanned corpus is the misconfiguration, one just below it is a genuine miss.
+        this.logger.log(
+          `\u{1F512} Forced retrieval: no chunk cleared the ${(floors.minSimilarity * 100).toFixed(0)}% absolute ` +
+            `floor (top=${topScore.toFixed(3)} over ${scoredCount} chunks in "${embeddingModel}" space)`
+        );
         // The ZERO ROW. Unlike every other write in this collection it records an ATTEMPT AGAINST A
         // SCOPE, not a read: nothing was returned, so there is no file tag to reverse into a lake
         // and `resolvedLakeIds` is the scope that was searched. Written on THIS exit alone - the

@@ -1,7 +1,7 @@
 {
   "name": "@bike4mind/services",
   "description": "This packages contains all the core business logic",
-  "version": "7.1.1",
+  "version": "7.2.2",
   "publishConfig": {
     "access": "restricted"
   },
@@ -50,6 +50,36 @@
         "default": "./dist/creditService/index.cjs"
       }
     },
+    "./agentProactiveMessagingService": {
+      "import": {
+        "types": "./dist/agentProactiveMessagingService/index.d.mts",
+        "default": "./dist/agentProactiveMessagingService/index.mjs"
+      },
+      "require": {
+        "types": "./dist/agentProactiveMessagingService/index.d.cts",
+        "default": "./dist/agentProactiveMessagingService/index.cjs"
+      }
+    },
+    "./cliCompletions": {
+      "import": {
+        "types": "./dist/cliCompletions.d.mts",
+        "default": "./dist/cliCompletions.mjs"
+      },
+      "require": {
+        "types": "./dist/cliCompletions.d.cts",
+        "default": "./dist/cliCompletions.cjs"
+      }
+    },
+    "./llm": {
+      "import": {
+        "types": "./dist/llm/index.d.mts",
+        "default": "./dist/llm/index.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/index.d.cts",
+        "default": "./dist/llm/index.cjs"
+      }
+    },
     "./llm/StatusManager": {
       "import": {
         "types": "./dist/llm/StatusManager.d.mts",
@@ -58,6 +88,26 @@
       "require": {
         "types": "./dist/llm/StatusManager.d.cts",
         "default": "./dist/llm/StatusManager.cjs"
+      }
+    },
+    "./llm/questStartBody": {
+      "import": {
+        "types": "./dist/llm/questStartBody.d.mts",
+        "default": "./dist/llm/questStartBody.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/questStartBody.d.cts",
+        "default": "./dist/llm/questStartBody.cjs"
+      }
+    },
+    "./llm/toolFinishObserver": {
+      "import": {
+        "types": "./dist/llm/toolFinishObserver.d.mts",
+        "default": "./dist/llm/toolFinishObserver.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/toolFinishObserver.d.cts",
+        "default": "./dist/llm/toolFinishObserver.cjs"
       }
     },
     "./llm/tools": {

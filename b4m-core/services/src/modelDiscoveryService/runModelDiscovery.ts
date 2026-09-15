@@ -15,7 +15,7 @@ import {
   type IModelPrice,
   type IModelPriceInput,
 } from '@bike4mind/common';
-import { resolveCatalogRecords, type ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
+import { adapterPriceTiers, resolveCatalogRecords, type ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
 import { applyAbsence, planAbsence, type AbsencePlan } from './absence';
 import { limitConcurrency } from './concurrency';
 import { planCatalogWrites, summarizeDiff, type CatalogWritePlan } from './catalogWrite';
@@ -789,6 +789,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     // The models this run adds are known too: a new model's first price row
     // lands in the same run as the catalog row that makes it a model at all.
     knownModelIds: new Set([...base.keys(), ...operatorOwnedModelIds, ...catalog.rows.map(row => row.modelId)]),
+    adapterTiers: await adapterPriceTiers(),
     bandPct: ctx.bandPct,
     runStartedAt: effectiveAt,
   });

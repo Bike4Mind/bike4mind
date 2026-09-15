@@ -38,6 +38,7 @@ import { getSettingsValue } from '../settings';
 import { Logger } from '@bike4mind/observability';
 import { ensureToolPairingIntegrity } from '@bike4mind/llm-adapters';
 import { getFileContent } from '../fabfile';
+import { escapeRegex } from '../escapeRegex';
 import { BadRequestError, CorruptedFileError } from '../errors';
 import { isAxiosError } from 'axios';
 import { ITokenizer } from '../tokenCounting';
@@ -1061,8 +1062,14 @@ export async function processUrlsFromPrompt(
     }
   });
 
-  // Remove processed URLs from the user prompt
-  const remainingPrompt = userPrompt.replace(new RegExp(processedUrls.join('|'), 'gi'), '').trim();
+  // Remove processed URLs from the user prompt. Escape each URL before building the
+  // alternation: URL_REGEX can emit `?` and `.`, so a URL like `https://example.com/a?b=1`
+  // used to compile to a pattern that no longer matched its own text and was left in the
+  // prompt (or mis-stripped). Its character classes cannot emit `(`/`+`/`*`, so backtracking
+  // was never the exposure here - correct stripping is.
+  const remainingPrompt = processedUrls.length
+    ? userPrompt.replace(new RegExp(processedUrls.map(escapeRegex).join('|'), 'gi'), '').trim()
+    : userPrompt.trim();
 
   return { userMessages, remainingPrompt };
 }
@@ -1465,7 +1472,11 @@ export async function processFabFilesServer(
           // here rather than given its own case because the payload is identical;
           // without it every Kimi model advertising supportsVision would accept
           // an attachment, drop it at `default`, and answer as if blind.
-          case ModelBackend.Kimi: {
+          case ModelBackend.Kimi:
+          // Same OpenAI base64 block. Only deepseek-flash is multimodal; the
+          // supportsVision gate above keeps deepseek-v4-pro from ever reaching
+          // this switch, so grouping on the backend is safe.
+          case ModelBackend.DeepSeek: {
             // Download image from S3 and send as base64 data URL.
             // Presigned S3 URLs cause timeouts when OpenAI/XAI servers try to fetch them.
             const openaiImageBuffer = await storage.download(file.filePath!);
