@@ -1,5 +1,6 @@
 import { ToolDefinition } from '../../base/types';
 import { IUserDocument } from '@bike4mind/common';
+import { guardedFetch } from '../webfetch/guardedFetch';
 
 interface BlogEditParams {
   postId: string;
@@ -31,8 +32,8 @@ async function editBlogPost(user: IUserDocument, params: BlogEditParams): Promis
   if (params.status !== undefined) updatePayload.status = params.status;
   if (params.publishedAt !== undefined) updatePayload.publishedAt = params.publishedAt;
 
-  // Make HTTP PUT request to blog API
-  const response = await fetch(`${baseUrl}/api/posts/${params.postId}`, {
+  // Make HTTP PUT request to blog API (SSRF-guarded: baseUrl is user-supplied)
+  const response = await guardedFetch(`${baseUrl}/api/posts/${params.postId}`, {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',

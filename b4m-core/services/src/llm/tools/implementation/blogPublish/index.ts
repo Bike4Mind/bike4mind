@@ -1,5 +1,6 @@
 import { ToolDefinition } from '../../base/types';
 import { IUserDocument } from '@bike4mind/common';
+import { guardedFetch } from '../webfetch/guardedFetch';
 
 interface BlogPublishParams {
   title: string;
@@ -40,8 +41,8 @@ async function publishToBlog(user: IUserDocument, params: BlogPublishParams): Pr
     author: defaultAuthor || user.name || 'Unknown',
   };
 
-  // Make HTTP POST request to blog API
-  const response = await fetch(`${baseUrl}/api/posts`, {
+  // Make HTTP POST request to blog API (SSRF-guarded: baseUrl is user-supplied)
+  const response = await guardedFetch(`${baseUrl}/api/posts`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
