@@ -4,6 +4,7 @@ export * from './activation';
 export * from './ledger';
 export * from './recall';
 export * from './subject';
+export * from './conflict';
 export * from './store';
 export * from './readPrincipalMemory';
 export * from './composeStores';

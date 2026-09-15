@@ -31,9 +31,10 @@ export interface DeleteUserApiKeyResult {
  * Remove a revoked key's record, scoped by resolveOwnedApiKey (the key's minter,
  * or an admin of the org it is billed to). This is list hygiene, never a
  * security control: only a key already DISABLED may go, so revocation - the
- * write that actually kills the credential and stamps revokedAt/revokedBy - has
- * always happened first and is always recorded. An active key gets a 409, so
- * there is no path to drop a live credential without leaving that trail.
+ * write that actually kills the credential and stamps revokedAt (and revokedBy
+ * where there is a human actor) - has always happened first. An active key gets
+ * a 409, so there is no path to drop a live credential without leaving that
+ * trail.
  *
  * `db.userApiKeys.delete` is a soft delete (UserApiKeySchema carries
  * softDeletePlugin): the document stays in the collection with its audit fields

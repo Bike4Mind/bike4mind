@@ -8,6 +8,7 @@ import { Logger } from '@bike4mind/observability';
  */
 
 import { ToolContext, ToolDefinition } from '../../base/types';
+import { isObjectIdShaped } from '../../base/objectId';
 import type { ILatticeModel, LatticeEntityType, LatticeDataType, LatticeOperation } from '@bike4mind/common';
 
 // Shared types
@@ -396,7 +397,7 @@ export const latticeAddEntityTool: ToolDefinition = {
       };
 
       // Try to persist to database if model is persisted
-      if (context.db.latticeModels && modelId && /^[a-f0-9]{24}$/.test(modelId)) {
+      if (context.db.latticeModels && modelId && isObjectIdShaped(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
           // Owner-only: Lattice models have no share arrays, so a foreign id is denied
@@ -549,7 +550,7 @@ export const latticeSetValueTool: ToolDefinition = {
       const entityId = entityName.toLowerCase().replace(/\s+/g, '_');
 
       // Try to persist to database if model is persisted
-      if (context.db.latticeModels && modelId && /^[a-f0-9]{24}$/.test(modelId)) {
+      if (context.db.latticeModels && modelId && isObjectIdShaped(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
           // Owner-only: Lattice models have no share arrays, so a foreign id is denied
@@ -704,7 +705,7 @@ export const latticeCreateRuleTool: ToolDefinition = {
       let entityCreatedMessage = '';
 
       // Try to persist to database if model is persisted
-      if (context.db.latticeModels && modelId && /^[a-f0-9]{24}$/.test(modelId)) {
+      if (context.db.latticeModels && modelId && isObjectIdShaped(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
           // Owner-only: Lattice models have no share arrays, so a foreign id is denied

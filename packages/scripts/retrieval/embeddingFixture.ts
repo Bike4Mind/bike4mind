@@ -16,9 +16,11 @@
  * fixture's declared `dims` and throws, rather than trusting the label.
  */
 
+import { createHash } from 'crypto';
 import { z } from 'zod';
 import { isSupportedEmbeddingModel, OpenAIEmbeddingModel } from '@bike4mind/common';
 import { truncateAndNormalize } from '../help/utils';
+import { PROBE_QUESTIONS } from './corpus';
 import type { ScorableChunk } from './scoreDistribution';
 
 /** A captured chunk vector plus the file it came from - the retrieval unit metrics.ts scores. */
@@ -35,6 +37,12 @@ const CapturedQuerySchema = z.object({
   /** A `PROBE_QUESTIONS` id, so the fixture joins to the committed ground truth by id alone. */
   id: z.string().min(1),
   vector: z.array(z.number()),
+  /**
+   * `hashQuestionText` of the question this vector embeds. The id alone cannot say WHICH text was
+   * embedded under it, and two captures taken either side of a reworded question hold vectors of
+   * different questions under one id - see `assertQuestionTextMatches`.
+   */
+  questionHash: z.string().min(1),
 });
 
 export const EmbeddingFixtureSchema = z.object({
@@ -44,6 +52,14 @@ export const EmbeddingFixtureSchema = z.object({
   /** Which corpus this came from, so two fixtures cannot be compared across different lakes. */
   corpus: z.string().min(1),
   capturedAt: z.string().min(1),
+  /**
+   * Declares a fixture whose model is not a shipped one and whose vectors may still be truncated -
+   * the synthetic captures this harness tests itself with. Set ONLY by a committed test fixture:
+   * without it, "the registry does not know this model" and "this is a synthetic fixture" are the
+   * same signal, and a typo'd model id in a hand-edited capture renders width arms of a model that
+   * never had them. See `isTruncatableModel`.
+   */
+  syntheticMatryoshka: z.boolean().optional(),
   filesInScope: z.number().int().nonnegative(),
   /**
    * Chunks the capture refused to include, by the shipped `ChunkSkipReason` vocabulary. Recorded
@@ -63,6 +79,38 @@ export const EmbeddingFixtureSchema = z.object({
 
 export type EmbeddingFixture = z.infer<typeof EmbeddingFixtureSchema>;
 export type CapturedChunk = z.infer<typeof CapturedChunkSchema>;
+
+export function hashQuestionText(question: string): string {
+  return createHash('sha256').update(question, 'utf8').digest('hex').slice(0, 16);
+}
+
+const QUESTION_HASH_BY_ID = new Map(PROBE_QUESTIONS.map(q => [q.id, hashQuestionText(q.question)]));
+
+/**
+ * Every captured query must be a vector of the question `corpus.ts` currently asks under that id.
+ *
+ * `assertSameQuerySet` compares id SETS, which is one level short: two fixtures both carrying
+ * `q01..q25` pass it, but if the wording of `q07` changed between the two captures they hold vectors
+ * of DIFFERENT questions under one id, and both are then scored against one ground truth. That is
+ * the same hazard the id check exists to stop - an arm scored on different questions reads as a
+ * better model - so the text is pinned too, not just the id.
+ *
+ * An id `corpus.ts` does not know is left to `resolveQueries`, which names it with the error a
+ * re-capture actually needs.
+ */
+function assertQuestionTextMatches(fixture: EmbeddingFixture): void {
+  const stale = fixture.queries
+    .filter(q => QUESTION_HASH_BY_ID.has(q.id) && QUESTION_HASH_BY_ID.get(q.id) !== q.questionHash)
+    .map(q => q.id);
+  if (stale.length > 0) {
+    throw new Error(
+      `Fixture "${fixture.corpus}" (${fixture.model}) carries query vector(s) of a question text that ` +
+        `is no longer what corpus.ts asks: ${stale.join(', ')}. The id still matches, so nothing ` +
+        'downstream would notice - the arm would simply be scored on a different question than its ' +
+        'neighbours. Re-capture against the current PROBE_QUESTIONS.'
+    );
+  }
+}
 
 /**
  * Parse and validate a capture. Throws on a width that contradicts the declared `dims`, on either
@@ -87,6 +135,7 @@ export function loadEmbeddingFixture(raw: unknown): EmbeddingFixture {
         'ranking as an ordinary low score. Re-capture rather than trusting this file.'
     );
   }
+  assertQuestionTextMatches(fixture);
   return fixture;
 }
 
@@ -127,15 +176,22 @@ const MATRYOSHKA_MODELS = new Set<string>([
 ]);
 
 /**
- * May a narrower arm be derived from a capture of this model?
+ * May a narrower arm be derived from this capture?
  *
- * A model the shipped registry does not know is allowed through: `capture-embeddings.ts` validates
- * every model against that registry (`parseSupportedModels`) before it spends anything, so no real
- * capture can carry an unregistered id. What reaches here with one is a synthetic test fixture, and
- * gating those would cost this harness its own end-to-end width coverage while closing no hole.
+ * A synthetic fixture has to say so itself. `capture-embeddings.ts` validates every model against
+ * the shipped registry before it spends, so no real capture carries an unregistered id - but the
+ * comparison path parses a fixture FILE, whose `model` is only `z.string().min(1)`. Treating
+ * "unregistered" as "synthetic" therefore made a typo (`text-embedding-ada-oo2`) truncatable, and
+ * rendered its width arms beside a legitimate `3-small@512` - exactly what this gate exists to
+ * prevent. The committed test fixtures set `syntheticMatryoshka` instead, so the two signals stay
+ * separate.
+ *
+ * The flag cannot promote a model the registry DOES know: `text-embedding-ada-002` stays non-MRL
+ * however a fixture is labelled.
  */
-export function isTruncatableModel(model: string): boolean {
-  return MATRYOSHKA_MODELS.has(model) || !isSupportedEmbeddingModel(model);
+export function isTruncatableModel(fixture: Pick<EmbeddingFixture, 'model' | 'syntheticMatryoshka'>): boolean {
+  if (MATRYOSHKA_MODELS.has(fixture.model)) return true;
+  return fixture.syntheticMatryoshka === true && !isSupportedEmbeddingModel(fixture.model);
 }
 
 /**
@@ -160,7 +216,7 @@ export function deriveArm(fixture: EmbeddingFixture, dims: number): DerivedArm {
         'Matryoshka truncation only goes narrower; re-capture at the wider width.'
     );
   }
-  if (dims < fixture.dims && !isTruncatableModel(fixture.model)) {
+  if (dims < fixture.dims && !isTruncatableModel(fixture)) {
     throw new Error(
       `${fixture.model} is not a Matryoshka model, so a ${dims}-dim prefix of its ${fixture.dims}-dim ` +
         'vectors is not an embedding - it is the first coordinates of one. Score it at its capture ' +

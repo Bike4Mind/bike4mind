@@ -254,7 +254,9 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     // connectedBy is re-stamped to the re-syncing caller so ingest never runs as a deleted user.
     expect(h.connUpdateCredential).toHaveBeenCalledWith('conn1', 'orgA', 'enc-refresh', 'u1');
     expect(h.connCreate).not.toHaveBeenCalled();
-    expect(h.sendToQueue).toHaveBeenCalledWith('queue-url', { connectionId: 'conn1' });
+    // This IS the "Re-sync everything" surface (#2396): reconnecting an existing connection forces a
+    // full walk rather than trusting its (possibly stale, possibly absent) syncCursor.
+    expect(h.sendToQueue).toHaveBeenCalledWith('queue-url', { connectionId: 'conn1', forceFullWalk: true });
     expect(status).toHaveBeenCalledWith(202);
   });
 

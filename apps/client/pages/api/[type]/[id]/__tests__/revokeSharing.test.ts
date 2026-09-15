@@ -38,6 +38,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   projectRepository: {},
   userRepository: {},
+  withTransaction: (fn: any) => fn(),
 }));
 
 import '../revokeSharing';
@@ -53,30 +54,21 @@ describe('/api/[type]/[id]/revokeSharing - URL params win', () => {
   beforeEach(() => mockRevoke.mockClear());
 
   it('takes the document id from the URL, not from any body field', async () => {
-    const { req, res } = request(
-      { type: 'sessions', id: 'url-doc-id' },
-      { userId: 'u2', id: 'body-doc-id' }
-    );
+    const { req, res } = request({ type: 'sessions', id: 'url-doc-id' }, { userId: 'u2', id: 'body-doc-id' });
     await mockRefs.useHandler!(req, res);
     const [, params] = mockRevoke.mock.calls[0];
     expect(params.id).toBe('url-doc-id');
   });
 
   it('takes the document type from the URL, not from any body field', async () => {
-    const { req, res } = request(
-      { type: 'sessions', id: 'doc1' },
-      { userId: 'u2', type: 'files' }
-    );
+    const { req, res } = request({ type: 'sessions', id: 'doc1' }, { userId: 'u2', type: 'files' });
     await mockRefs.useHandler!(req, res);
     const [, params] = mockRevoke.mock.calls[0];
     expect(params.type).toBe('sessions');
   });
 
   it('forwards userId from the body (it is the revocation target, not the caller)', async () => {
-    const { req, res } = request(
-      { type: 'sessions', id: 'doc1' },
-      { userId: 'target-user' }
-    );
+    const { req, res } = request({ type: 'sessions', id: 'doc1' }, { userId: 'target-user' });
     await mockRefs.useHandler!(req, res);
     const [callerId, params] = mockRevoke.mock.calls[0];
     expect(callerId).toBe('caller');

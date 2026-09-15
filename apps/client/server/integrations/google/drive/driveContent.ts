@@ -1,7 +1,14 @@
 import type { drive_v3 } from '@googleapis/drive';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
 import { resolveSupportedMimeType } from '@bike4mind/utils';
-import { listFolderChildren, isFolder, isDriveRateLimitError, withDriveRetry, type DriveFile } from './driveClient';
+import {
+  listFolderChildren,
+  isFolder,
+  isDriveRateLimitError,
+  withDriveRetry,
+  getFileParents,
+  type DriveFile,
+} from './driveClient';
 
 const GOOGLE_DOC = 'application/vnd.google-apps.document';
 const GOOGLE_SHEET = 'application/vnd.google-apps.spreadsheet';
@@ -84,6 +91,64 @@ export async function walkFolder(
   }
 
   return files;
+}
+
+// Bounds the total number of ancestor-chain lookups isUnderRoot pays for ONE candidate file, and so
+// (transitively) how much a pathological/cyclic parents graph can cost. Not a tree-depth limit as
+// such - each step is one Drive call - but a folder tree deep enough to exceed it is already a
+// pathological input for this check, not a real customer structure.
+const MAX_ANCESTOR_LOOKUPS = 25;
+
+/**
+ * Is `fileId`'s CURRENT position in Drive under `rootFolderId`, resolved by walking its live parent
+ * chain? Needed only for incremental sync: the Changes API (driveClient.listChanges) is Drive-WIDE,
+ * with no folder filter, so a file this connection has never ingested has to be proven to live in
+ * OUR tree before it becomes a candidate - a full walk never faces this because listFolderChildren is
+ * already scoped to one folder at a time.
+ *
+ * Unresolved - the chain runs out before reaching root (a CONFIRMED dead end: getFileParents returned
+ * null for a 404/trashed ancestor), or MAX_ANCESTOR_LOOKUPS is hit - resolves to false. That is the
+ * deliberately conservative side for an ADD decision: excluding a file that genuinely belongs here is
+ * recoverable (the next full walk, or cursor-invalidation fallback, picks it up), while including one
+ * that does not would ingest content from outside the folder the org actually connected.
+ *
+ * A TRANSIENT lookup failure (rate limit, 5xx, network blip) is different: getFileParents rethrows
+ * rather than returning null, and this function does not catch it - it propagates to the caller
+ * uncaught. That distinction matters because this same result also drives REMOVAL of an already-
+ * tracked file (classifyDriveChanges): folding a transient blip into a bare `false` there would read
+ * as "moved out of the tree" and silently evict a still-live file. Callers for whom that risk applies
+ * MUST catch and treat the ambiguity as "leave alone, re-resolve next run" - never as a confirmed false.
+ *
+ * `cache` memoizes id -> parents across every candidate resolved in one run (pass the SAME map to
+ * every call), since sibling files under one new subfolder would otherwise each re-walk an identical
+ * tail of the chain.
+ */
+export async function isUnderRoot(
+  drive: drive_v3.Drive,
+  parents: string[] | undefined,
+  rootFolderId: string,
+  cache: Map<string, string[] | null>
+): Promise<boolean> {
+  const queue = [...(parents ?? [])];
+  const visited = new Set<string>();
+  let lookups = 0;
+
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (id === rootFolderId) return true;
+    if (visited.has(id)) continue;
+    visited.add(id);
+
+    let grandparents = cache.get(id);
+    if (grandparents === undefined) {
+      if (lookups >= MAX_ANCESTOR_LOOKUPS) return false;
+      lookups++;
+      grandparents = await getFileParents(drive, id);
+      cache.set(id, grandparents);
+    }
+    if (grandparents) queue.push(...grandparents);
+  }
+  return false;
 }
 
 /**

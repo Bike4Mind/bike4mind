@@ -144,9 +144,12 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
   });
 
   /** Drive the service's post-destruction hook the way the service itself would. */
-  const runOnPurged = async (purged: { ownerUserId: string; fileSize: number; tagNames: string[] }) => {
+  const runOnPurged = async (
+    purged: { ownerUserId: string; fileSize: number; tagNames: string[] },
+    auth?: { user?: { id: string }; apiKeyInfo?: { keyId: string } }
+  ) => {
     const { res } = makeRes();
-    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
+    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }, auth), res);
     await h.purgeDataLakeDocument.mock.calls[0][3].onPurged(purged);
   };
 
@@ -214,6 +217,26 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     expect(h.recomputeStatsForLakeTags).toHaveBeenCalledWith(
       ['datalake:archive'],
       expect.objectContaining({ actor: { userId: 'u1', isAdmin: false } })
+    );
+  });
+
+  it('carries the key principal into the other-lakes rebuild, which can auto-activate a draft lake', async () => {
+    // A narrower actor here records a key-driven auto-activation (recomputeLakeStats) as the owning
+    // human's own edit, permanently, on a lake the caller never named.
+    await runOnPurged(
+      { ownerUserId: 'owner-9', fileSize: 10, tagNames: ['datalake:archive'] },
+      { user: { id: 'u1' }, apiKeyInfo: { keyId: 'key-abc' } }
+    );
+
+    expect(h.recomputeStatsForLakeTags).toHaveBeenCalledWith(
+      ['datalake:archive'],
+      expect.objectContaining({
+        actor: {
+          userId: 'u1',
+          isAdmin: false,
+          auditPrincipal: { principalKind: 'apiKey', principalId: 'key-abc', onBehalfOfUserId: 'u1' },
+        },
+      })
     );
   });
 

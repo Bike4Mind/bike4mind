@@ -4,6 +4,7 @@ import { cacheService } from '@bike4mind/services';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
+import { resolveQuestModelType } from '@server/utils/questModelType';
 import { Request } from 'express';
 import { z } from 'zod';
 
@@ -130,7 +131,7 @@ async function fetchModelMetrics(filters: ModelMetricsFilters): Promise<ModelMet
     timestamp: quest.timestamp?.toISOString() || new Date().toISOString(),
     model: {
       name: quest.promptMeta?.model?.name || 'Unknown',
-      type: quest.promptMeta?.model?.type || (quest.images || []).length ? 'image' : 'text',
+      type: resolveQuestModelType(quest),
       backend: quest.promptMeta?.model?.backend,
       parameters: {
         temperature: quest.promptMeta?.model?.parameters?.temperature,

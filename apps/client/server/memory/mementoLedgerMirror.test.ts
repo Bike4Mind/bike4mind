@@ -31,7 +31,7 @@ vi.mock('./ledgerMemoryStore', () => ({
 vi.mock('./factCipher', () => ({ createKeyProvider: () => ({}) }));
 
 const { createLedgerAppendSession, writeFactToLedger } = await import('./mementoLedgerMirror');
-const { resolveSubject } = await import('@bike4mind/memory');
+const { figureScopedSubject, resolveSubject } = await import('@bike4mind/memory');
 
 // The subject/options a captured appendMemoryEvent call was made with.
 const callSubject = (i: number) => appendMemoryEventMock.mock.calls[i][3].subject as string;
@@ -157,6 +157,141 @@ describe('createLedgerAppendSession - hoisted de-dup (#1501)', () => {
     expect(appendMemoryEventMock).toHaveBeenCalledTimes(1);
     expect(callSubject(0)).toBe(resolveSubject({ fact: summary }));
     expect(callHashed(0)).toBe(false);
+  });
+});
+
+/**
+ * Two documents disagreeing about one figure (#1501 item 4).
+ *
+ * De-dup coalesces on embedding cosine, and an assert on an existing subject REPLACES that belief, so
+ * before this guard the lake kept only whichever document was extracted last - the other reading was
+ * destroyed, provenance included. Measured against the live embedding model, two readings of one
+ * metric sit at ~0.99 cosine, so this is the common case rather than a corner one.
+ *
+ * These fixtures use hand-written vectors (the real `cosineSimilarity` runs), so "near-duplicate" here
+ * means the same thing it means in production: over `MEMENTO_DEDUP_SIMILARITY`.
+ */
+describe('createLedgerAppendSession - preserving a disagreement (#1501)', () => {
+  const NEAR = [1, 0, 0]; // identical vectors: unambiguously over the de-dup threshold
+  const existingBelief = (fact: string, sources: string[]) => ({
+    principal: LAKE.principal,
+    beliefs: [{ id: 'HMAC_existing', shredded: false, embedding: NEAR, fact, sources }],
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    appendMemoryEventMock.mockResolvedValue({ seq: 0, hash: 'h', prevHash: null });
+  });
+
+  it('keeps both readings when two documents disagree on a figure', async () => {
+    readProfileMock.mockResolvedValue(existingBelief('Uptime is 99.9%', ['docA']));
+    const session = await createLedgerAppendSession(LAKE);
+
+    await session.append({
+      summary: 'Uptime is 99.5%',
+      evidenceTier: 'external-facing',
+      sources: ['docB'],
+      embedding: NEAR,
+    });
+
+    // Not asserted onto the existing belief's HMAC - that is what would have destroyed it.
+    expect(callSubject(0)).not.toBe('HMAC_existing');
+    expect(callHashed(0)).toBe(false);
+  });
+
+  it('does not let the preserved reading hash back onto the belief it disagrees with', async () => {
+    // The trap this guards: `subjectKey` drops single-character tokens, so "99.9" and "99.5" both
+    // reduce to `99 uptime`. Writing the preserved claim under its bare derived subject would hash
+    // onto the very belief it was being kept apart from, and coalesce after all.
+    readProfileMock.mockResolvedValue(existingBelief('Uptime is 99.9%', ['docA']));
+    const session = await createLedgerAppendSession(LAKE);
+
+    await session.append({
+      summary: 'Uptime is 99.5%',
+      evidenceTier: 'external-facing',
+      sources: ['docB'],
+      embedding: NEAR,
+    });
+
+    // Asserted positively: "not the other belief's subject" is also true of a plain coalesce onto
+    // the stored HMAC, so it would pass even with the preservation removed.
+    expect(callSubject(0)).toBe(figureScopedSubject(resolveSubject({ fact: 'Uptime is 99.5%' }), 'Uptime is 99.5%'));
+    // ...and the scoping is what makes that distinct, since both facts derive the SAME bare subject.
+    expect(resolveSubject({ fact: 'Uptime is 99.5%' })).toBe(resolveSubject({ fact: 'Uptime is 99.9%' }));
+    expect(callSubject(0)).not.toBe(resolveSubject({ fact: 'Uptime is 99.5%' }));
+  });
+
+  it('still coalesces a restatement that carries the same figure', async () => {
+    readProfileMock.mockResolvedValue(existingBelief('Uptime is 99.9%', ['docA']));
+    const session = await createLedgerAppendSession(LAKE);
+
+    await session.append({
+      summary: 'The uptime is 99.90%',
+      evidenceTier: 'external-facing',
+      sources: ['docB'],
+      embedding: NEAR,
+    });
+
+    expect(callSubject(0)).toBe('HMAC_existing');
+    expect(callHashed(0)).toBe(true);
+  });
+
+  it('treats a differing figure from the SAME document as an update, not a disagreement', async () => {
+    // One document re-extracted after an edit supersedes itself; only co-equal documents disagree.
+    readProfileMock.mockResolvedValue(existingBelief('Headcount is 25', ['docA']));
+    const session = await createLedgerAppendSession(LAKE);
+
+    await session.append({
+      summary: 'Headcount is 30',
+      evidenceTier: 'external-facing',
+      sources: ['docA'],
+      embedding: NEAR,
+    });
+
+    expect(callSubject(0)).toBe('HMAC_existing');
+  });
+
+  it('does NOT change personal memory, where superseding is the correct behaviour', async () => {
+    // The regression guard for the shared seam: this same function serves user mementos, where one
+    // authority supersedes itself and replacing the older value is right.
+    readProfileMock.mockResolvedValue({
+      principal: { kind: 'user', id: 'user-1' },
+      beliefs: [{ id: 'HMAC_existing', shredded: false, embedding: NEAR, fact: 'I run 5 miles', sources: ['s1'] }],
+    });
+    const session = await createLedgerAppendSession({
+      principal: { kind: 'user', id: 'user-1' },
+      ownerUserId: 'user-1',
+      startedAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    await session.append({
+      summary: 'I run 8 miles',
+      evidenceTier: 'external-facing',
+      sources: ['s2'],
+      embedding: NEAR,
+    });
+
+    expect(callSubject(0)).toBe('HMAC_existing');
+    expect(callHashed(0)).toBe(true);
+  });
+
+  it('survives a belief with no readable fact rather than throwing', async () => {
+    readProfileMock.mockResolvedValue({
+      principal: LAKE.principal,
+      beliefs: [{ id: 'HMAC_existing', shredded: false, embedding: NEAR }],
+    });
+    const session = await createLedgerAppendSession(LAKE);
+
+    await expect(
+      session.append({
+        summary: 'Uptime is 99.5%',
+        evidenceTier: 'external-facing',
+        sources: ['docB'],
+        embedding: NEAR,
+      })
+    ).resolves.toBe(true);
+
+    expect(callSubject(0)).toBe('HMAC_existing'); // no figures to compare -> de-dup as before
   });
 });
 

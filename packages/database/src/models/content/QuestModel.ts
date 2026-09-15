@@ -71,6 +71,18 @@ const InjectedVolumeSchema = subSchema({
   postRelativeFloorCandidates: { type: Number, required: false },
 });
 
+// Written by the offline answerability replay, not by the turn - see the field's comment in
+// promptMeta.ts for why the measurement is reconstructed rather than computed live, and for the
+// two drifts that follow from that. Date is stored as a real Date; the Zod side accepts its JSON
+// form too (JsonSafeDate) because promptMeta round-trips through the client.
+const AnswerabilityProbeSchema = subSchema({
+  topScore: { type: Number, required: true },
+  candidatesAboveFloor: { type: Number, required: true },
+  floor: { type: Number, required: true },
+  scanTruncated: { type: Boolean, required: true },
+  probedAt: { type: Date, required: true },
+});
+
 // Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
 // auto-vivification of `surfaces`/`dataLakeTags` as empty arrays, which would fail the Zod
 // re-parse since `attempted` is required). Top-level on promptMeta, not nested under
@@ -89,6 +101,10 @@ const RetrievalSummarySchema = subSchema({
   forcedSkipReason: { type: String, required: false },
   surfaces: [{ type: String, required: false }],
   dataLakeTags: [{ type: String, required: false }],
+  // default: undefined for the same auto-vivification reason as dataLakeTags above - and here it
+  // also preserves the presence contract the offline replay depends on: absence means the turn's
+  // scope was never recorded, which a materialized empty array would report as "no lake in scope".
+  lakeScope: { type: [String], required: false, default: undefined },
   // default: undefined for the same auto-vivification reason as dataLakeTags above.
   injectedLakePromptIds: { type: [String], required: false, default: undefined },
   injectedLakePromptCount: { type: Number, required: false },
@@ -96,8 +112,14 @@ const RetrievalSummarySchema = subSchema({
   // preserves the field's presence contract, since a materialized empty object would report
   // "unknown volume" as a recorded one.
   injected: { type: InjectedVolumeSchema, required: false, default: undefined },
+  // default: undefined for the same auto-vivification reason as `injected` above - and here it
+  // also preserves the presence contract that absence means NOT PROBED, never "not answerable".
+  answerability: { type: AnswerabilityProbeSchema, required: false, default: undefined },
   // default: undefined for the same auto-vivification reason as injectedLakePromptIds above.
   preauthorizedLakeIdsUsed: { type: [String], required: false, default: undefined },
+  // Same shape and the same default:undefined reason as preauthorizedLakeIdsUsed above - its
+  // per-arm sibling, which the two overlap by design (see both fields on the Zod side).
+  grantedLakeIdsUsed: { type: [String], required: false, default: undefined },
 });
 
 // Partial-grounding-coverage detail. subSchema + default:undefined for the same reason as

@@ -12,17 +12,15 @@ import {
   type IMessage,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import { assertOwnerHasCredits, assertKeySpendWithinCap, apiKeyService } from '@bike4mind/services';
+import { executeCompletion } from '@bike4mind/services/cliCompletions';
 import {
-  executeCompletion,
-  assertOwnerHasCredits,
-  assertKeySpendWithinCap,
   resolveQuestErrorCode,
   buildSharedTools,
-  apiKeyService,
   resolveToolAvailability,
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
-} from '@bike4mind/services';
+} from '@bike4mind/services/llm';
 import { getSettingsByNames } from '@bike4mind/utils';
 import {
   getAvailableModels,

@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { latticeAddEntityTool, latticeSetValueTool, latticeCreateRuleTool } from './index';
 
-// 24-hex id so the persistence path's `/^[a-f0-9]{24}$/` gate is satisfied.
+// 24-hex id so the persistence path's `isObjectIdShaped` gate is satisfied.
 const MODEL_ID = 'a'.repeat(24);
+// Same id, uppercased - Mongo accepts all-case hex, so this must take the persist branch too.
+const UPPERCASE_MODEL_ID = MODEL_ID.toUpperCase();
 
 const makeContext = (modelUserId: string, callerUserId: string) => {
   const update = vi.fn().mockResolvedValue(null);
@@ -45,6 +47,18 @@ describe('Lattice tools - owner-only object-level authz', () => {
     const { context, update } = makeContext('owner', 'owner');
     const result = await latticeAddEntityTool.implementation(context).toolFn({
       modelId: MODEL_ID,
+      name: 'Revenue',
+      type: 'line_item',
+      initialValues: [],
+    });
+    expect(update).toHaveBeenCalledOnce();
+    expect(JSON.parse(result).success).toBe(true);
+  });
+
+  it('lattice_add_entity persists when modelId is uppercase-hex (#2544)', async () => {
+    const { context, update } = makeContext('owner', 'owner');
+    const result = await latticeAddEntityTool.implementation(context).toolFn({
+      modelId: UPPERCASE_MODEL_ID,
       name: 'Revenue',
       type: 'line_item',
       initialValues: [],

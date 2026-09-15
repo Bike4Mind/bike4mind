@@ -333,4 +333,88 @@ describe('mergeRetrievalSummary', () => {
       expect(merged?.preauthorizedLakeIdsUsed).toEqual(['lake1']);
     });
   });
+
+  describe('grantedLakeIdsUsed', () => {
+    it('unions ids without duplicates, independent of injectedLakePromptIds', () => {
+      const merged = mergeRetrievalSummary(
+        base({ injectedLakePromptIds: ['lake1'], grantedLakeIdsUsed: ['lake1'] }),
+        base({ injectedLakePromptIds: ['lake1', 'lake2'], grantedLakeIdsUsed: ['lake2'] })
+      );
+      expect(merged?.grantedLakeIdsUsed).toEqual(['lake1', 'lake2']);
+    });
+
+    it('stays absent when neither side reached a lake by grant', () => {
+      const merged = mergeRetrievalSummary(base(), base());
+      expect(merged && 'grantedLakeIdsUsed' in merged).toBe(false);
+    });
+
+    it('survives a side that never asserted the field', () => {
+      const merged = mergeRetrievalSummary(base({ grantedLakeIdsUsed: ['lake1'] }), base());
+      expect(merged?.grantedLakeIdsUsed).toEqual(['lake1']);
+    });
+
+    it('merges alongside preauthorizedLakeIdsUsed without either arm absorbing the other', () => {
+      // The two arms OVERLAP by design - a lake can be both - so neither union may be derived
+      // from the other's.
+      const merged = mergeRetrievalSummary(
+        base({ injectedLakePromptIds: ['both'], grantedLakeIdsUsed: ['both'], preauthorizedLakeIdsUsed: ['both'] }),
+        base({ injectedLakePromptIds: ['granted'], grantedLakeIdsUsed: ['granted'] })
+      );
+      expect(merged?.grantedLakeIdsUsed).toEqual(['both', 'granted']);
+      expect(merged?.preauthorizedLakeIdsUsed).toEqual(['both']);
+    });
+  });
+
+  describe('answerability', () => {
+    const probe = {
+      topScore: 0.88,
+      candidatesAboveFloor: 4,
+      floor: 0.75,
+      scanTruncated: false,
+      probedAt: new Date('2026-09-11T00:00:00.000Z'),
+    };
+
+    it('preserves a backfilled probe against a later runtime write that knows nothing about it', () => {
+      // The real hazard: this function returns an object literal, so a field with no case here is
+      // dropped. A regenerate on an already-replayed quest would silently erase the measurement.
+      const merged = mergeRetrievalSummary(base({ answerability: probe }), base({ surfaces: ['knowledgeBaseSearch'] }));
+      expect(merged?.answerability).toEqual(probe);
+    });
+
+    it('stays absent on turns that were never replayed', () => {
+      const merged = mergeRetrievalSummary(base(), base());
+      expect(merged && 'answerability' in merged).toBe(false);
+    });
+
+    it('accepts the probe from either side, since only one writer ever sets it', () => {
+      expect(mergeRetrievalSummary(base(), base({ answerability: probe }))?.answerability).toEqual(probe);
+    });
+  });
+
+  describe('lakeScope', () => {
+    it('survives a later surface write, which is what the offline replay reads', () => {
+      const merged = mergeRetrievalSummary(
+        base({ lakeScope: ['datalake:acme:handbook'] }),
+        base({ surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['datalake:acme:handbook'] })
+      );
+      expect(merged?.lakeScope).toEqual(['datalake:acme:handbook']);
+    });
+
+    it('keeps a recorded empty scope rather than falling through to the other side', () => {
+      // Present-and-empty means "the session had no lake", which is a measurement; absent means
+      // the scope was never recorded. A truthy fallthrough would turn the first into the second.
+      const merged = mergeRetrievalSummary(base({ lakeScope: [] }), base({ lakeScope: ['datalake:x'] }));
+      expect(merged?.lakeScope).toEqual([]);
+    });
+
+    it('stays absent on a turn nothing seeded', () => {
+      const merged = mergeRetrievalSummary(base(), base());
+      expect(merged && 'lakeScope' in merged).toBe(false);
+    });
+
+    it('does not union the two sides - a surface must not widen the recorded scope', () => {
+      const merged = mergeRetrievalSummary(base({ lakeScope: ['datalake:a'] }), base({ lakeScope: ['datalake:b'] }));
+      expect(merged?.lakeScope).toEqual(['datalake:a']);
+    });
+  });
 });

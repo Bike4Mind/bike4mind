@@ -25,6 +25,8 @@ export const LAKE_RECALL_K_DEFAULT = 24;
  * turns remain - a symptom that looks nothing like a misconfigured setting.
  *
  * 200 x the 500-char per-fact cap in `buildLakeMemoryContext` is ~100,000 chars, matching
- * `forcedRetrievalCharBudget`'s own declared ceiling for the retrieval block alongside it.
+ * `forcedRetrievalCharBudget`'s own declared ceiling for the retrieval block alongside it. A dated
+ * card adds a fixed `(document dated YYYY-MM-DD)` suffix per fact, so the rendered block runs a few
+ * percent over that figure - the ceiling is the order of magnitude, not a byte budget.
  */
 export const LAKE_RECALL_K_MAX = 200;

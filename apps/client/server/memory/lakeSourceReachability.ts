@@ -72,6 +72,32 @@ export function createSurvivingSourcesResolver(deps: {
 }
 
 /**
+ * When each source document was authored, for dating a recalled belief (#1501).
+ *
+ * Two documents in one lake can state different figures for the same thing, and the fold deliberately
+ * keeps both rather than letting the later extraction destroy the earlier claim. Which reading is
+ * CURRENT is not ours to decide - it needs context the short extracted fact no longer carries - so the
+ * card shows each claim's document date and leaves the judgement to the model.
+ *
+ * Runs on the recalled slice only (at most the turn's belief budget), not the whole source set the
+ * reachability gate scans, so this is a small keyed read. A document that has since been deleted
+ * simply has no date, and the caller renders that as unknown rather than guessing.
+ */
+export function createSourceDatesResolver(deps: {
+  fabfiles: Pick<IFabFileRepository, 'findCitableFieldsByIds'>;
+}): (sourceIds: string[]) => Promise<Map<string, string>> {
+  return async sourceIds => {
+    if (sourceIds.length === 0) return new Map();
+    const files = await deps.fabfiles.findCitableFieldsByIds(sourceIds);
+    const dates = new Map<string, string>();
+    for (const file of files) {
+      if (file.createdAt) dates.set(file.id, new Date(file.createdAt).toISOString().slice(0, 10));
+    }
+    return dates;
+  };
+}
+
+/**
  * Build the reachability resolver `recallLakeMemory` injects: given a belief set's source FabFile ids,
  * return the subset the knowledge tool can currently cite. Batches one `findAllByIds` read and applies
  * `isFabFileCitable` per file. Fail-safe is the CALLER's job (recallLakeMemory drops uncited beliefs);

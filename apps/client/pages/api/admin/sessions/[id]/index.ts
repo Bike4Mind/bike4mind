@@ -80,6 +80,7 @@ const toSupportSession = (session: ISessionDocument): IAdminSupportSession => ({
   disableUserIntegrations: session.disableUserIntegrations,
   forceKnowledgeRetrieval: session.forceKnowledgeRetrieval,
   retrievalTags: session.retrievalTags,
+  lakeScopeExplicit: session.lakeScopeExplicit,
   retrievalExcludeFilenameMarkers: session.retrievalExcludeFilenameMarkers,
   retrievalVectorizedOnly: session.retrievalVectorizedOnly,
 

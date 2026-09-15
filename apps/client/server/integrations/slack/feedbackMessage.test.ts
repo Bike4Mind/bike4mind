@@ -275,3 +275,62 @@ describe('buildFeedbackSlackMessage', () => {
     expect(unquotedUserEmailLines).toHaveLength(1);
   });
 });
+
+describe('buildFeedbackSlackMessage deep links', () => {
+  const base = {
+    stagePrefix: '',
+    type: 'Bug',
+    organization: 'Acme',
+    username: 'jdoe',
+    userEmail: 'jdoe@example.com',
+    userId: 'user-1',
+    content: 'it broke',
+  };
+  const links = {
+    record: 'https://app.example.com/admin?tab=feedback&feedbackId=fb-1',
+    conversation: 'https://app.example.com/notebooks/sess-1?questId=quest-1',
+    conversationIsTurn: true,
+  };
+
+  it('renders both targets as Slack links on one labeled line', () => {
+    const message = buildFeedbackSlackMessage({ ...base, links });
+    const linksLine = message.split('\n').find(line => line.startsWith('*Links:*'));
+    expect(linksLine).toBe(
+      '*Links:* <https://app.example.com/admin?tab=feedback&amp;feedbackId=fb-1|Admin record> - ' +
+        '<https://app.example.com/notebooks/sess-1?questId=quest-1|Conversation turn>'
+    );
+  });
+
+  it('labels a session-only target as a conversation, not a turn', () => {
+    const message = buildFeedbackSlackMessage({
+      ...base,
+      links: { ...links, conversation: 'https://app.example.com/notebooks/sess-1', conversationIsTurn: false },
+    });
+    const linksLine = message.split('\n').find(line => line.startsWith('*Links:*'));
+    expect(linksLine).toContain('|Conversation>');
+    expect(linksLine).not.toContain('Conversation turn');
+  });
+
+  it('links only the record when the report has no conversation to open', () => {
+    const message = buildFeedbackSlackMessage({
+      ...base,
+      links: { ...links, conversation: null, conversationIsTurn: false },
+    });
+    const linksLine = message.split('\n').find(line => line.startsWith('*Links:*'));
+    expect(linksLine).toBe('*Links:* <https://app.example.com/admin?tab=feedback&amp;feedbackId=fb-1|Admin record>');
+    expect(message).not.toContain('notebooks');
+  });
+
+  it('omits the line entirely when there are no links, rather than emitting an empty label', () => {
+    expect(buildFeedbackSlackMessage({ ...base, links: null })).not.toContain('*Links:*');
+    expect(buildFeedbackSlackMessage(base)).not.toContain('*Links:*');
+  });
+
+  it('places the links above the report body so an over-cap submission cannot truncate them away', () => {
+    const message = buildFeedbackSlackMessage({ ...base, content: 'x'.repeat(50_000), links });
+    expect(message).toContain('[truncated]');
+    expect(message).toContain('|Admin record>');
+    expect(message).toContain('|Conversation turn>');
+    expect(message.indexOf('*Links:*')).toBeLessThan(message.indexOf('*Feedback:*'));
+  });
+});

@@ -7,6 +7,10 @@ import {
   isValidDriveFolderId,
   withDriveRetry,
   FOLDER_MIME_TYPE,
+  listChanges,
+  getStartPageToken,
+  isDriveInvalidCursorError,
+  getFileParents,
 } from './driveClient';
 
 /** The shape googleapis hands back for a throttle - a 429, or a 403 whose reason is a quota. */
@@ -269,5 +273,144 @@ describe('rate limits', () => {
 
     const access = await settleThroughBackoff(getFolderAccess(drive, 'FOLDER_X'));
     expect(access).toMatchObject({ ok: false, reason: 'rate_limited' });
+  });
+});
+
+describe('getStartPageToken', () => {
+  it('returns the baseline cursor', async () => {
+    const drive = { changes: { getStartPageToken: vi.fn(async () => ({ data: { startPageToken: 'p1' } })) } };
+    expect(await getStartPageToken(drive as unknown as drive_v3.Drive)).toBe('p1');
+  });
+
+  it('throws if Drive omits the token (never silently returns an unusable cursor)', async () => {
+    const drive = { changes: { getStartPageToken: vi.fn(async () => ({ data: {} })) } };
+    await expect(getStartPageToken(drive as unknown as drive_v3.Drive)).rejects.toThrow(/did not return/);
+  });
+});
+
+describe('listChanges', () => {
+  function mockChangesDrive(pages: Array<{ changes?: unknown[]; nextPageToken?: string; newStartPageToken?: string }>) {
+    const list = vi.fn();
+    for (const page of pages) list.mockResolvedValueOnce({ data: page });
+    return { drive: { changes: { list } } as unknown as drive_v3.Drive, list };
+  }
+
+  it('scopes the request to the given pageToken and requests shared-drive items', async () => {
+    const { drive, list } = mockChangesDrive([{ changes: [], newStartPageToken: 'p2' }]);
+    await listChanges(drive, 'p1');
+
+    const args = list.mock.calls[0][0];
+    expect(args.pageToken).toBe('p1');
+    expect(args.supportsAllDrives).toBe(true);
+    expect(args.includeItemsFromAllDrives).toBe(true);
+  });
+
+  it('follows pagination, concatenating changes, and returns the LAST page newStartPageToken', async () => {
+    const { drive, list } = mockChangesDrive([
+      {
+        changes: [{ fileId: '1', removed: false, file: { id: '1', name: 'a.txt', mimeType: 'text/plain' } }],
+        nextPageToken: 'p2',
+      },
+      { changes: [{ fileId: '2', removed: true }], newStartPageToken: 'p3' },
+    ]);
+
+    const { changes, newStartPageToken } = await listChanges(drive, 'p1');
+
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(list.mock.calls[1][0].pageToken).toBe('p2');
+    expect(changes.map(c => c.fileId)).toEqual(['1', '2']);
+    expect(newStartPageToken).toBe('p3');
+  });
+
+  it('carries removed/trashed/parents through for the caller to classify', async () => {
+    const { drive } = mockChangesDrive([
+      {
+        changes: [
+          {
+            fileId: '1',
+            removed: false,
+            file: { id: '1', name: 'a.txt', mimeType: 'text/plain', parents: ['ROOT'], trashed: true },
+          },
+        ],
+        newStartPageToken: 'p2',
+      },
+    ]);
+
+    const { changes } = await listChanges(drive, 'p1');
+    expect(changes).toEqual([
+      {
+        fileId: '1',
+        removed: false,
+        file: { id: '1', name: 'a.txt', mimeType: 'text/plain', parents: ['ROOT'], trashed: true },
+      },
+    ]);
+  });
+
+  it('represents a genuine removal with no `file`', async () => {
+    const { drive } = mockChangesDrive([{ changes: [{ fileId: '1', removed: true }], newStartPageToken: 'p2' }]);
+    const { changes } = await listChanges(drive, 'p1');
+    expect(changes).toEqual([{ fileId: '1', removed: true, file: undefined }]);
+  });
+
+  it('throws if the last page never carries a newStartPageToken (would advance the cursor nowhere)', async () => {
+    const { drive } = mockChangesDrive([{ changes: [] }]);
+    await expect(listChanges(drive, 'p1')).rejects.toThrow(/newStartPageToken/);
+  });
+});
+
+describe('isDriveInvalidCursorError', () => {
+  it.each([
+    ['a 400 (bad/malformed pageToken)', { code: 400 }],
+    ['a 404 (pageToken no longer resolvable)', { response: { status: 404 } }],
+  ])('detects %s', (_label, shape) => {
+    expect(isDriveInvalidCursorError(Object.assign(new Error('bad token'), shape))).toBe(true);
+  });
+
+  it.each([
+    ['a 429 (rate limit, not an invalid cursor)', { code: 429 }],
+    ['a plain error', {}],
+  ])('does not treat %s as an invalid cursor', (_label, shape) => {
+    expect(isDriveInvalidCursorError(Object.assign(new Error('nope'), shape))).toBe(false);
+  });
+
+  it('is safe on non-object rejections', () => {
+    expect(isDriveInvalidCursorError(undefined)).toBe(false);
+  });
+});
+
+describe('getFileParents', () => {
+  it('returns the current parent ids', async () => {
+    const drive = { files: { get: vi.fn(async () => ({ data: { parents: ['P1', 'P2'] } })) } };
+    expect(await getFileParents(drive as unknown as drive_v3.Drive, 'F')).toEqual(['P1', 'P2']);
+  });
+
+  it('returns null for a trashed file (not a usable ancestor)', async () => {
+    const drive = { files: { get: vi.fn(async () => ({ data: { trashed: true, parents: ['P1'] } })) } };
+    expect(await getFileParents(drive as unknown as drive_v3.Drive, 'F')).toBeNull();
+  });
+
+  it('returns null on a CONFIRMED 404 (the file is genuinely gone)', async () => {
+    const drive = {
+      files: {
+        get: vi.fn(async () => {
+          throw Object.assign(new Error('not found'), { code: 404 });
+        }),
+      },
+    };
+    expect(await getFileParents(drive as unknown as drive_v3.Drive, 'F')).toBeNull();
+  });
+
+  // Rethrown, not swallowed into null: null also means "confirmed gone", and isUnderRoot's caller
+  // reads that as "moved out of the tree" for an already-tracked file - misreading a rate
+  // limit/5xx/network blip the same way would silently evict a still-live file from the lake.
+  it('rethrows a TRANSIENT failure rather than treating it as a confirmed not-found', async () => {
+    const drive = {
+      files: {
+        get: vi.fn(async () => {
+          throw new Error('rate limited');
+        }),
+      },
+    };
+    await expect(getFileParents(drive as unknown as drive_v3.Drive, 'F')).rejects.toThrow('rate limited');
   });
 });

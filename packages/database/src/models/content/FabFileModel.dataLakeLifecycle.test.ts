@@ -207,6 +207,331 @@ describe('FabFile data lake lifecycle membership', () => {
     });
   });
 
+  describe('countDataLakeTopicTags (#1292)', () => {
+    it('counts content tags on lake members only, most-frequent first', async () => {
+      const rows = await seedLakeRows();
+      await FabFile.updateOne(
+        { _id: rows.metaTagged._id },
+        { $set: { tags: [{ name: DATALAKE_TAG }, { name: 'oncology' }, { name: 'oncology' }] } }
+      );
+      await FabFile.updateOne(
+        { _id: rows.prefixOwned._id },
+        { $set: { tags: [{ name: 'acme:report' }, { name: 'oncology' }, { name: 'radiology' }] } }
+      );
+      // Retags this row with no lake-membership tag at all, so it drops out of the $match
+      // entirely - its 'oncology' tag must not contribute despite the identical name.
+      await FabFile.updateOne({ _id: rows.unrelated._id }, { $set: { tags: [{ name: 'oncology' }] } });
+
+      const topics = await fabFileRepository.countDataLakeTopicTags(scope);
+
+      // 'acme:report' and 'radiology' tie at count 1; the sort's _id tiebreaker orders them
+      // alphabetically, which is why 'acme:report' precedes 'radiology' below.
+      expect(topics).toEqual([
+        { tag: 'oncology', count: 2 },
+        { tag: 'acme:report', count: 1 },
+        { tag: 'radiology', count: 1 },
+      ]);
+    });
+
+    it('excludes the datalake: meta-tag itself - a membership signal, not a topic', async () => {
+      await seedLakeRows();
+
+      const topics = await fabFileRepository.countDataLakeTopicTags(scope);
+
+      expect(topics.map(t => t.tag)).not.toContain(DATALAKE_TAG);
+    });
+
+    it('excludes a bare fileTagPrefix tag with no suffix, but keeps a real prefixed topic tag', async () => {
+      // 'acme:' alone identifies the lake, the same way a bare prefix is excluded from the tag
+      // tree elsewhere (buildLacksContentPrefixTagFilter). 'acme:report' has a suffix, so it IS a
+      // real topic and must survive.
+      await makeFile({ fileName: 'bare.txt', userId: CREATOR, tags: [{ name: 'acme:' }] });
+      await seedLakeRows(); // contributes prefixOwned, tagged 'acme:report'
+
+      const topics = await fabFileRepository.countDataLakeTopicTags(scope);
+
+      expect(topics.map(t => t.tag)).not.toContain('acme:');
+      expect(topics.map(t => t.tag)).toContain('acme:report');
+    });
+
+    it('excludes the <prefix>uncategorized placeholder - it means "untagged", not a topic', async () => {
+      // The write doors (createDataLakeFallbackTagger, addFileToDataLake, the backfill migration)
+      // stamp this on every prefix-arm member carrying no other content tag, so it is typically the
+      // MODAL tag on a lake. Left in, it sorts first and hands the model "untagged" as the corpus's
+      // leading topic - the guess-or-refusal outcome this tool exists to prevent.
+      for (const n of [1, 2, 3]) {
+        await makeFile({
+          fileName: `placeholder${n}.txt`,
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: 'acme:uncategorized' }],
+        });
+      }
+      await makeFile({
+        fileName: 'real.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }, { name: 'oncology' }],
+      });
+
+      const topics = await fabFileRepository.countDataLakeTopicTags(scope);
+
+      expect(topics.map(t => t.tag)).not.toContain('acme:uncategorized');
+      expect(topics).toEqual([{ tag: 'oncology', count: 1 }]);
+    });
+
+    it('caps the returned tags at `limit`, highest count first', async () => {
+      await makeFile({
+        fileName: 'many-tags.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }, { name: 'a' }, { name: 'b' }, { name: 'c' }, { name: 'd' }],
+      });
+
+      const topics = await fabFileRepository.countDataLakeTopicTags(scope, 3);
+
+      expect(topics).toHaveLength(3);
+    });
+
+    it('ignores a legacy tag element with a missing or non-string name rather than reporting it as a topic', async () => {
+      // `tags` is [Object] with no sub-schema, and legacy rows are known to carry elements with a
+      // missing or non-string `name` (six other call sites in this file guard the same shape).
+      await makeFile({
+        fileName: 'legacy.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }, {}, { name: 42 }, { name: 'oncology' }],
+      });
+
+      const topics = await fabFileRepository.countDataLakeTopicTags(scope);
+
+      expect(topics).toEqual([{ tag: 'oncology', count: 1 }]);
+    });
+  });
+
+  describe('summarizeDataLakeIndexingHealth (#1292)', () => {
+    it('counts a pre-chunk extraction failure, which the chunk-bearing health read cannot see', async () => {
+      await makeFile({
+        fileName: 'broken.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 0,
+        error: 'extraction failed',
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      // findDataLakeHealthMembers' $match admits only chunk-bearing members, so a caller counting
+      // failures from its rows reports "0 failed" for a lake that has a real one.
+      expect(health.failedFiles).toBe(1);
+      expect(health.chunkedFiles).toBe(0);
+    });
+
+    it('does not read a legacy empty-string error as a failure', async () => {
+      await makeFile({
+        fileName: 'fine.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 2,
+        embeddedChunkCount: 2,
+        error: '',
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      // Matches evaluateMemberHealth's hasError (a NON-EMPTY string). `{ $ne: null }` calls this broken.
+      expect(health.failedFiles).toBe(0);
+      expect(health.fullyVectorizedFiles).toBe(1);
+    });
+
+    it('keys "fully vectorized" on embeddedChunkCount, not vectorizedChunkCount', async () => {
+      // vectorizedChunkCount also counts an oversized un-embeddable chunk as done, which is why the
+      // shared evaluator grades P3 on embeddedChunkCount instead. This row is NOT fully vectorized.
+      await makeFile({
+        fileName: 'oversized.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 4,
+        vectorizedChunkCount: 4,
+        embeddedChunkCount: 2,
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      expect(health.fullyVectorizedFiles).toBe(0);
+      // MEASURED and short, so genuinely in flight - not the unmeasured bucket below.
+      expect(health.inFlightFiles).toBe(1);
+      expect(health.unmeasuredFiles).toBe(0);
+      expect(health.totalEmbeddedChunks).toBe(2);
+    });
+
+    it('reports an unmeasured legacy member as unmeasured, not as in flight and not as broken', async () => {
+      await makeFile({
+        fileName: 'legacy.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 3,
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      // An absent `embeddedChunkCount` is the evaluator's `unknown`: not zero, not in flight.
+      // Riding `inFlightFiles` had describe_knowledge_base render this row as "still indexing",
+      // a definite claim about work in progress that nothing had measured (#2737).
+      expect(health).toMatchObject({
+        chunkedFiles: 1,
+        fullyVectorizedFiles: 0,
+        inFlightFiles: 0,
+        unmeasuredFiles: 1,
+        failedFiles: 0,
+        totalChunks: 3,
+        // Summed as zero because the counter is absent - a floor, which is why the bucket above
+        // exists to tell the caller when to read it as one.
+        totalEmbeddedChunks: 0,
+      });
+    });
+
+    it('does not count a failed unmeasured member as unmeasured - it is already failed', async () => {
+      await makeFile({
+        fileName: 'broken-legacy.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 3,
+        error: 'vectorize failed',
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      // Same `!hasError` guard `inFlightFiles` always carried: a member with a terminal error is
+      // settled, so it must not also be reported as something nobody has measured yet.
+      expect(health).toMatchObject({ failedFiles: 1, unmeasuredFiles: 0, inFlightFiles: 0 });
+    });
+
+    it('counts a pending member as retrieval-only instead of dropping it silently', async () => {
+      await makeFile({
+        fileName: 'uploaded.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 2,
+        embeddedChunkCount: 2,
+      });
+      // A presigned row that never finished uploading. Reporting excludes it (it must not activate
+      // a draft lake); retrieval's filter has no status clause, so a search runs over it (#2737).
+      await makeFile({
+        fileName: 'never-uploaded.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        status: 'pending',
+        chunkCount: 7,
+        embeddedChunkCount: 7,
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      // Every bucket still reports the narrower corpus, exactly as the old `$match` did...
+      expect(health).toMatchObject({
+        chunkedFiles: 1,
+        fullyVectorizedFiles: 1,
+        totalChunks: 2,
+        totalEmbeddedChunks: 2,
+      });
+      // ...but the size of the gap is now reportable rather than invisible.
+      expect(health.retrievalOnlyFiles).toBe(1);
+    });
+
+    it('reads a legacy row with no status, or a null one, as reported rather than retrieval-only', async () => {
+      const missing = await makeFile({
+        fileName: 'no-status.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 2,
+        embeddedChunkCount: 2,
+      });
+      const nulled = await makeFile({
+        fileName: 'null-status.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 3,
+        embeddedChunkCount: 3,
+      });
+      // The schema defaults `status` to 'pending', so these legacy shapes have to be written past
+      // Mongoose. They are real: findByContentHashes' own comment calls out preserving
+      // "legacy/undefined-status rows", which is why it uses `$ne` rather than `=== 'complete'`.
+      await FabFile.collection.updateOne({ _id: missing._id }, { $unset: { status: '' } });
+      await FabFile.collection.updateOne({ _id: nulled._id }, { $set: { status: null } });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      // `$eq: ['$status', 'pending']` is false for both, matching what `{ $ne: 'pending' }` matched
+      // before the bucket moved out of `$match`. Getting this wrong would quietly drop every legacy
+      // member out of the reported corpus and into the gap count.
+      expect(health).toMatchObject({
+        chunkedFiles: 2,
+        fullyVectorizedFiles: 2,
+        retrievalOnlyFiles: 0,
+        totalChunks: 5,
+        totalEmbeddedChunks: 5,
+      });
+    });
+
+    it('counts a pending-and-unmeasured member only as retrieval-only, never also as unmeasured', async () => {
+      // Every bucket gates on the same `reported` flag, but this is the one row that would expose
+      // a drift if `unmeasuredFiles` used a different guard than its siblings: not reported, AND
+      // it would have been unmeasured had it been reported.
+      await makeFile({
+        fileName: 'never-uploaded-legacy.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        status: 'pending',
+        chunkCount: 5,
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      expect(health).toMatchObject({
+        chunkedFiles: 0,
+        unmeasuredFiles: 0,
+        inFlightFiles: 0,
+        retrievalOnlyFiles: 1,
+        totalChunks: 0,
+        totalEmbeddedChunks: 0,
+      });
+    });
+
+    it('scopes to lake members only, on the same predicate as computeDataLakeStats', async () => {
+      await makeFile({
+        fileName: 'member.txt',
+        userId: CREATOR,
+        tags: [{ name: DATALAKE_TAG }],
+        chunkCount: 2,
+        embeddedChunkCount: 2,
+      });
+      await makeFile({
+        fileName: 'outsider.txt',
+        userId: STRANGER,
+        tags: [{ name: 'unrelated' }],
+        chunkCount: 9,
+        embeddedChunkCount: 9,
+      });
+
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      expect(health.chunkedFiles).toBe(1);
+      expect(health.totalChunks).toBe(2);
+    });
+
+    it('returns zeroes for a lake with no members rather than undefined', async () => {
+      const health = await fabFileRepository.summarizeDataLakeIndexingHealth(scope);
+
+      expect(health).toEqual({
+        chunkedFiles: 0,
+        fullyVectorizedFiles: 0,
+        failedFiles: 0,
+        inFlightFiles: 0,
+        unmeasuredFiles: 0,
+        retrievalOnlyFiles: 0,
+        totalChunks: 0,
+        totalEmbeddedChunks: 0,
+      });
+    });
+  });
+
   // #1040: the single-lake browse (fabFileRepository.search with lakeMembership +
   // restrictToDataLake, what GET /api/data-lakes/:id/articles runs) must agree with
   // computeDataLakeStats above about who is a member - a file only reached through a share or a

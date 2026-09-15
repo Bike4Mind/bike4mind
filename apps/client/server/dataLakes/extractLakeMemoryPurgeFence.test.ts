@@ -48,6 +48,8 @@ vi.mock('@bike4mind/common', () => ({
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) },
   dataLakeService: { lakeMembershipScope: () => 'datalake:test' },
+}));
+vi.mock('@bike4mind/services/llm', () => ({
   LakeMemoryExtractionService: class {
     evaluate = (...a: unknown[]) => evaluateMock(...a);
   },

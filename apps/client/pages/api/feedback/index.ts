@@ -1,9 +1,13 @@
 import { FeedbackModel, FeedbackTextModel, User } from '@bike4mind/database';
 import {
   classifyStage,
+  FEEDBACK_LIST_DEFAULT_LIMIT,
+  FEEDBACK_LIST_MAX_LIMIT,
+  FEEDBACK_SUBJECTS,
   FeedbackEvents,
   FeedbackStatus,
   IOrganizationDocument,
+  Permission,
   PromptMetaZodSchema,
   feedbackContentExpiresAt,
   redactFunctionCallsForViewer,
@@ -17,15 +21,15 @@ import type {
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@server/utils/analyticsLog';
-import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { escapeRegex, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { NotFoundError } from '@server/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
 import { postFeedbackToSlack } from '@server/integrations/slack/slack';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
 import { Config } from '@server/utils/config';
 import { resolveFeedbackContext } from '@server/utils/feedbackContext';
+import { buildFeedbackDeepLinks, FEEDBACK_LINK_LABELS, type FeedbackDeepLinks } from '@server/utils/feedbackDeepLinks';
 import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
@@ -34,9 +38,73 @@ import {
   emitFeedbackDeliveryMetrics,
   ALARM_WORTHY_SKIP_REASONS,
 } from '@server/utils/cloudwatch';
+import { accessibleBy } from '@casl/mongoose';
 import mongoose from 'mongoose';
+import qs from 'qs';
+import type { FilterQuery } from 'mongoose';
 import sanitizeHtml from 'sanitize-html';
 import { z } from 'zod';
+
+/**
+ * Fields the admin triage table and its CSV export actually read, as an allowlist.
+ *
+ * `promptMeta` is deliberately absent: it is the largest field on the document and no list row
+ * renders it (it is read one record at a time through feedback/[id]/read), so projecting it here
+ * would ship the per-report diagnostic blob with every row of every page. `contentStored` is
+ * required by hydrateFeedbackText to tell an expired report from one that never had text.
+ */
+export const FEEDBACK_LIST_FIELDS = [
+  'userId',
+  'content',
+  'contentStored',
+  'status',
+  'tags',
+  'username',
+  'userEmail',
+  'organization',
+  'organizationId',
+  'type',
+  'subject',
+  'sessionId',
+  'questId',
+  'createdAt',
+  'updatedAt',
+].join(' ');
+
+/**
+ * Query contract for the feedback list. Every filter keys off a field #1864 indexed
+ * (`userId`/`sessionId`/`questId`/`organizationId`, each paired with `createdAt`) so a scoped
+ * read walks an index rather than the collection.
+ *
+ * Sort is `createdAt` only, and that is a deliberate narrowing of what the client used to do
+ * in-browser (status rank first, then date). A status-rank sort is a computed field, which no
+ * index can serve - it would force a blocking in-memory sort of every matching document on every
+ * page, defeating the four `{ key, createdAt }` indexes this endpoint exists to use. The status
+ * *filter* below covers the triage need the grouping was standing in for.
+ */
+const ListFeedbackQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).prefault(1),
+  limit: z.coerce.number().int().min(1).max(FEEDBACK_LIST_MAX_LIMIT).prefault(FEEDBACK_LIST_DEFAULT_LIMIT),
+  userId: z.string().min(1).optional(),
+  sessionId: z.string().min(1).optional(),
+  questId: z.string().min(1).optional(),
+  organizationId: z.string().min(1).optional(),
+  // Legacy free-text org label. The admin dropdown builds its options out of the documents
+  // themselves, so it still selects on this; `organizationId` is the key programmatic callers
+  // (rollups, deep links) should use.
+  organization: z.union([z.string(), z.array(z.string())]).optional(),
+  status: z.union([z.enum(FeedbackStatus), z.array(z.enum(FeedbackStatus))]).optional(),
+  subject: z.enum(FEEDBACK_SUBJECTS).optional(),
+  // Capped: the value reaches a Mongo regex, so an unbounded pattern is a CPU sink even escaped.
+  search: z.string().min(1).max(200).optional(),
+  sort: z.enum(['asc', 'desc']).prefault('desc'),
+});
+
+/** `qs.parse` hands back a lone value or an array depending on how many times a key repeats. */
+function toArray<T>(value: T | T[] | undefined): T[] {
+  if (value === undefined) return [];
+  return Array.isArray(value) ? value : [value];
+}
 
 const CreateFeedbackRequestSchema = z.object({
   userId: z.string(),
@@ -77,6 +145,32 @@ function sanitizeForEmail(value: string): string {
 }
 
 /**
+ * `href` lives in a double-quoted attribute, which sanitizeForEmail does not cover: it is a
+ * text-node sanitizer (allowedTags: []), documented to neutralize markup rather than to make a
+ * string safe inside an attribute. The deep-link builders percent-encode every id they
+ * interpolate, so this is defense in depth for the day one of them stops.
+ */
+function escapeHtmlAttribute(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/**
+ * The email's counterpart to renderLinksLine in feedbackMessage.ts - same two targets, and the
+ * labels come from the same constant, so a report triaged from the inbox and one triaged from
+ * Slack lead to the same places by the same names.
+ * Empty string when there is nothing to link to, which collapses the row out of the template.
+ */
+function renderFeedbackLinksHtml(links: FeedbackDeepLinks | null): string {
+  if (!links) return '';
+  const anchors = [`<a href="${escapeHtmlAttribute(links.record)}">${FEEDBACK_LINK_LABELS.record}</a>`];
+  if (links.conversation) {
+    const label = links.conversationIsTurn ? FEEDBACK_LINK_LABELS.turn : FEEDBACK_LINK_LABELS.session;
+    anchors.push(`<a href="${escapeHtmlAttribute(links.conversation)}">${label}</a>`);
+  }
+  return `<p><strong>Links:</strong> ${anchors.join(' - ')}</p>`;
+}
+
+/**
  * Decides where feedback-to-email sends go for a given deploy stage, mirroring
  * resolveFeedbackSlackRoute (@server/integrations/slack/slack) so the two channels can't drift
  * apart on the same stage-leak bug. Non-production stages deliberately do NOT fall back to
@@ -113,17 +207,73 @@ const handler = baseApi()
       throw new Error('Ability not found');
     }
 
-    if (!req.ability.can('read', FeedbackModel)) {
-      throw new Error('Permission denied');
+    const query = ListFeedbackQuerySchema.parse(qs.parse(req.query as Record<string, string>));
+
+    // The ability rules ARE the scope: an admin holds an unconditional read grant, so this
+    // narrows to {} and they see every report; everyone else holds only the { userId } grant, so
+    // it narrows to their own. A caller with no read grant at all narrows to an unsatisfiable
+    // filter rather than an empty one, so this fails closed - which is why there is no separate
+    // by-class permission check here (a by-class check would ignore the ownership condition and
+    // pass for every logged-in user).
+    const readable = accessibleBy(req.ability, Permission.read).ofType(FeedbackModel);
+
+    const clauses: FilterQuery<unknown>[] = [readable];
+
+    if (query.userId) clauses.push({ userId: query.userId });
+    if (query.sessionId) clauses.push({ sessionId: query.sessionId });
+    if (query.questId) clauses.push({ questId: query.questId });
+    if (query.organizationId) clauses.push({ organizationId: query.organizationId });
+    if (query.subject) clauses.push({ subject: query.subject });
+
+    const organizations = toArray(query.organization);
+    if (organizations.length > 0) clauses.push({ organization: { $in: organizations } });
+
+    const statuses = toArray(query.status);
+    if (statuses.length > 0) clauses.push({ status: { $in: statuses } });
+
+    if (query.search) {
+      const pattern = new RegExp(escapeRegex(query.search), 'i');
+
+      // `content` lives on the TTL'd FeedbackText sibling rather than on the report, so a text
+      // search has to resolve ids over there first and cannot be expressed as one filter. The
+      // regex is unindexed, but this is an admin triage surface and the path it replaces shipped
+      // the entire collection to the browser to search it client-side. Projecting only _id keeps
+      // the intermediate small; FeedbackText is itself bounded by the 90-day content TTL.
+      const matchingText = await FeedbackTextModel.find({ content: pattern }).select('_id').lean();
+
+      const searchClauses: FilterQuery<unknown>[] = [{ username: pattern }, { userEmail: pattern }];
+      if (matchingText.length > 0) {
+        searchClauses.push({ _id: { $in: matchingText.map(text => text._id) } });
+      }
+      clauses.push({ $or: searchClauses });
     }
 
-    const feedback = await FeedbackModel.find();
+    // $and rather than a merged object literal: the CASL scope carries its own $or arm and a
+    // spread would silently drop one side of it. Same reason as pages/api/files/index.ts.
+    const filter = { $and: clauses };
 
-    if (!feedback) {
-      throw new NotFoundError('Feedback not found');
-    }
+    const [items, total, organizationFacet] = await Promise.all([
+      FeedbackModel.find(filter)
+        .select(FEEDBACK_LIST_FIELDS)
+        .sort({ createdAt: query.sort === 'asc' ? 1 : -1 })
+        .skip((query.page - 1) * query.limit)
+        .limit(query.limit),
+      FeedbackModel.countDocuments(filter),
+      // Facet options come from the caller's whole accessible set, NOT from `filter` - otherwise
+      // selecting an organization would prune every other option out of the dropdown that
+      // selected it.
+      FeedbackModel.distinct('organization', readable),
+    ]);
 
-    return res.json(await hydrateFeedbackText(feedback.map(toRedactedFeedback)));
+    return res.json({
+      items: await hydrateFeedbackText(items.map(toRedactedFeedback)),
+      total,
+      page: query.page,
+      limit: query.limit,
+      organizations: organizationFacet
+        .filter((name): name is string => typeof name === 'string' && name.length > 0)
+        .sort((a, b) => a.localeCompare(b)),
+    });
   })
   .post(async (req, res) => {
     const newFeedbackData = CreateFeedbackRequestSchema.parse(req.body);
@@ -277,6 +427,20 @@ const handler = baseApi()
       ? { ...promptMeta, functionCalls: redactFunctionCallsForViewer(promptMeta.functionCalls) }
       : promptMeta;
 
+    // Built once for both channels so a link in Slack and the same link in the email can never
+    // disagree. Null on a deploy with no APP_URL: both channels then render no link section
+    // rather than an unfollowable relative path, and the notification still goes out.
+    const deepLinks = buildFeedbackDeepLinks({
+      feedbackId: newFeedback.id,
+      sessionId: newFeedback.sessionId,
+      questId: newFeedback.questId,
+    });
+    if (!deepLinks) {
+      Logger.warn('[feedback] APP_URL is unset - delivering the notification without deep links', {
+        feedbackId: newFeedback.id,
+      });
+    }
+
     // Send feedback to Slack if enabled. postFeedbackToSlack records its own
     // success/failure/skip metrics and reports its own outcome; the 'disabled' skip is
     // recorded here since it never even calls into postFeedbackToSlack. Collected below (with the
@@ -288,15 +452,16 @@ const handler = baseApi()
     let slack: FeedbackChannelDelivery;
     if (getSettingsValue('EnableFeedBackToSlack', settings)) {
       console.log('Sending feedback to Slack is enabled');
-      slack = await postFeedbackToSlack(
-        type || 'CS',
+      slack = await postFeedbackToSlack({
+        type: type || 'CS',
         organization,
-        newFeedback.username,
-        newFeedback.userEmail ?? '',
-        newFeedback.userId,
-        truncatedContent,
-        promptMetaForExternalEgress
-      );
+        username: newFeedback.username,
+        userEmail: newFeedback.userEmail ?? '',
+        userId: newFeedback.userId,
+        content: truncatedContent,
+        promptMeta: promptMetaForExternalEgress,
+        links: deepLinks,
+      });
     } else {
       slack = { outcome: 'skipped', reason: 'disabled' };
       disabledChannelMetrics.push(
@@ -437,6 +602,7 @@ const handler = baseApi()
                       <p><strong>From:</strong> ${sanitizedUsername} (ID: ${sanitizedUserId})</p>
                       <p><strong>Email:</strong> ${sanitizedUserEmail}</p>
                       ${sanitizedType ? `<p><strong>Type:</strong> ${sanitizedType}</p>` : ''}
+                      ${renderFeedbackLinksHtml(deepLinks)}
                     </div>
                     <p><strong>Message:</strong></p>
                     <p>${sanitizedContent}</p>

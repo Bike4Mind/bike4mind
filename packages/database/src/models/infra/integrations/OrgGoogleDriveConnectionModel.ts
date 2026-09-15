@@ -95,6 +95,9 @@ const OrgGoogleDriveConnectionSchema = new Schema<IOrgGoogleDriveConnectionDocum
 
     // Incremental-sync resumption (Drive changes pageToken)
     syncCursor: { type: String },
+    // Last completed FULL folder walk; the poll cron forces another once this goes stale, which is
+    // what reconciles the subtree moves Drive's per-file changes feed cannot report.
+    lastFullWalkAt: { type: Date },
   },
   {
     timestamps: true,
@@ -304,13 +307,22 @@ class OrgGoogleDriveConnectionRepository
     return this.model.findByIdAndUpdate(id, { $set: set, ...(unset && { $unset: unset }) }, { new: true });
   }
 
-  /** Advance the incremental-sync cursor after a sync batch is durably created. */
+  /**
+   * Advance the incremental-sync cursor after a sync batch is durably created. `fullWalk` also stamps
+   * `lastFullWalkAt` - the clock findDueForPoll's caller reads to decide when to force a re-walk - so
+   * only a run that actually re-walked the tree may reset it.
+   */
   async updateSyncCursor(
     id: string,
     syncCursor: string,
-    polledAt: Date
+    polledAt: Date,
+    opts?: { fullWalk?: boolean }
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
-    return this.model.findByIdAndUpdate(id, { $set: { syncCursor, lastPolledAt: polledAt } }, { new: true });
+    return this.model.findByIdAndUpdate(
+      id,
+      { $set: { syncCursor, lastPolledAt: polledAt, ...(opts?.fullWalk && { lastFullWalkAt: polledAt }) } },
+      { new: true }
+    );
   }
 
   /**

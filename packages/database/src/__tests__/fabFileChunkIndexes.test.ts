@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { FabFileChunk } from '../models/content/FabFileModel';
-import { setupMongoTest } from '../__test__/utils';
+import { setupMongoTest, testFabFileId as fid } from '../__test__/utils';
 
 /**
  * The fabfilechunks index set is deliberately minimal: one compound index serves both the keyset
@@ -47,14 +47,14 @@ describe('fabfilechunks indexes', () => {
     // What the compound is actually for. Both plan assertions elsewhere use a single-id $in, which
     // never exercises the SORT_MERGE across files that keeps a large lake walk non-blocking.
     await FabFileChunk.create(
-      ['a', 'b', 'c'].flatMap(fabFileId =>
+      [fid('a'), fid('b'), fid('c')].flatMap(fabFileId =>
         Array.from({ length: 8 }, (_, i) => ({ fabFileId, text: `${fabFileId}${i}`, tokenCount: 2, vector: [0.1] }))
       )
     );
     await FabFileChunk.createIndexes();
 
     const plan = await FabFileChunk.collection
-      .find({ fabFileId: { $in: ['a', 'b', 'c'] }, vector: { $exists: true, $ne: [] } })
+      .find({ fabFileId: { $in: [fid('a'), fid('b'), fid('c')] }, vector: { $exists: true, $ne: [] } })
       .sort({ _id: 1 })
       .limit(5)
       .explain('queryPlanner');
@@ -68,14 +68,18 @@ describe('fabfilechunks indexes', () => {
   it('serves a resumed keyset page from the same index', async () => {
     // Page 2..N is where a large walk spends its time, and no other test explains a cursored page.
     await FabFileChunk.create(
-      Array.from({ length: 10 }, (_, i) => ({ fabFileId: 'lake', text: `c${i}`, tokenCount: 2, vector: [0.1] }))
+      Array.from({ length: 10 }, (_, i) => ({ fabFileId: fid('lake'), text: `c${i}`, tokenCount: 2, vector: [0.1] }))
     );
     await FabFileChunk.createIndexes();
-    const first = await FabFileChunk.collection.find({ fabFileId: 'lake' }).sort({ _id: 1 }).limit(3).toArray();
+    const first = await FabFileChunk.collection
+      .find({ fabFileId: fid('lake') })
+      .sort({ _id: 1 })
+      .limit(3)
+      .toArray();
 
     const plan = await FabFileChunk.collection
       .find({
-        fabFileId: { $in: ['lake'] },
+        fabFileId: { $in: [fid('lake')] },
         vector: { $exists: true, $ne: [] },
         _id: { $gt: first[first.length - 1]._id },
       })
@@ -94,14 +98,14 @@ describe('fabfilechunks indexes', () => {
     // filter on fabFileId alone and must still get an index scan rather than a collection scan.
     await FabFileChunk.create(
       Array.from({ length: 60 }, (_, i) => ({
-        fabFileId: i % 12 === 0 ? 'lake' : 'other',
+        fabFileId: i % 12 === 0 ? fid('lake') : fid('other'),
         text: `chunk ${i}`,
         tokenCount: 2,
       }))
     );
     await FabFileChunk.createIndexes();
 
-    const plan = await FabFileChunk.collection.find({ fabFileId: 'lake' }).explain('queryPlanner');
+    const plan = await FabFileChunk.collection.find({ fabFileId: fid('lake') }).explain('queryPlanner');
 
     // Substring checks on the serialized plan, matching fabFileChunkVectorScope.test.ts: MongoDB's
     // SBE nests the classic plan under winningPlan.queryPlan, so a structural path assertion would

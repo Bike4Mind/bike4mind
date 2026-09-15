@@ -25,6 +25,7 @@ import {
   PromptIntentSchema,
   ImageModerationIncident as ImageModerationIncidentInput,
   AttachmentLakeAccess,
+  materializePromptMetaSession,
 } from '@bike4mind/common';
 import {
   BFL_IMAGE_MODELS,
@@ -390,7 +391,9 @@ export class ImageGenerationService {
 
       quest.type = 'error';
       quest.reply = errorMessage;
-      await this.db.quests.update(quest);
+      // Write only the fields this error path sets, not the whole stale quest: this catch can run
+      // after the success-path update above, and a whole-doc write would clobber that update.
+      await this.db.quests.update({ id: quest.id, type: quest.type, reply: quest.reply });
     }
 
     Logger.globalInstance.log(`[DEBUG INVOKE] Returning quest:`, {
@@ -477,10 +480,8 @@ export class ImageGenerationService {
     return { requiredCredits, usdCost: usdCost * n };
   }
 
-  private addStatusToQuest(quest: IChatHistoryItemDocument, status: string) {
-    if (!quest.promptMeta) {
-      quest.promptMeta = {};
-    }
+  private addStatusToQuest(quest: IChatHistoryItemDocument, status: string, userId: string) {
+    quest.promptMeta = materializePromptMetaSession(quest.promptMeta, { sessionId: quest.sessionId, userId });
     if (!quest.promptMeta.statusLog) {
       quest.promptMeta.statusLog = [];
     }
@@ -743,7 +744,7 @@ export class ImageGenerationService {
       // Encode the prompt to tokens
       const promptTokens = await this.tokenizer.encodeTokens(prompt, model);
 
-      this.addStatusToQuest(quest, 'Preparing to paint...');
+      this.addStatusToQuest(quest, 'Preparing to paint...', userId);
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
         action: 'streamed_chat_completion',
         quest: parseQuestToStreamPayload(quest),
@@ -753,7 +754,7 @@ export class ImageGenerationService {
       const settings = await getSettingsMap(this.db);
 
       if (getSettingsValue('ModerationEnabled', settings)) {
-        this.addStatusToQuest(quest, 'Checking prompt...');
+        this.addStatusToQuest(quest, 'Checking prompt...', userId);
         await clientMessageSender.sendToClient(userId, wsEndpoint, {
           action: 'streamed_chat_completion',
           quest: parseQuestToStreamPayload(quest),
@@ -780,7 +781,7 @@ export class ImageGenerationService {
       });
 
       if (truncated) {
-        this.addStatusToQuest(quest, 'Trimming the prompt...');
+        this.addStatusToQuest(quest, 'Trimming the prompt...', userId);
         await clientMessageSender.sendToClient(userId, wsEndpoint, {
           action: 'streamed_chat_completion',
           quest: parseQuestToStreamPayload(quest),
@@ -788,7 +789,7 @@ export class ImageGenerationService {
         });
       }
 
-      this.addStatusToQuest(quest, 'Now painting...');
+      this.addStatusToQuest(quest, 'Now painting...', userId);
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
         action: 'streamed_chat_completion',
         quest: parseQuestToStreamPayload(quest),
@@ -926,9 +927,7 @@ export class ImageGenerationService {
             quest.status = 'done';
 
             // Store clarification metadata for potential future retry
-            if (!quest.promptMeta) {
-              quest.promptMeta = {};
-            }
+            quest.promptMeta = materializePromptMetaSession(quest.promptMeta, { sessionId, userId });
             (quest.promptMeta as any).imageClarification = {
               clarificationId: clarificationResponse.clarificationId,
               question: clarificationResponse.question,
@@ -936,7 +935,7 @@ export class ImageGenerationService {
               timestamp: new Date(),
             };
 
-            this.addStatusToQuest(quest, 'Clarification requested');
+            this.addStatusToQuest(quest, 'Clarification requested', userId);
             await this.db.quests.update(quest);
             await clientMessageSender.sendToClient(userId, wsEndpoint, {
               action: 'streamed_chat_completion',
@@ -1196,7 +1195,7 @@ export class ImageGenerationService {
       );
 
       // download images and store to s3
-      this.addStatusToQuest(quest, 'Tucking your image into storage...');
+      this.addStatusToQuest(quest, 'Tucking your image into storage...', userId);
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
         action: 'streamed_chat_completion',
         quest: parseQuestToStreamPayload(quest),
@@ -1249,7 +1248,7 @@ export class ImageGenerationService {
         })
       );
 
-      this.addStatusToQuest(quest, 'Adding to the notebook...');
+      this.addStatusToQuest(quest, 'Adding to the notebook...', userId);
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
         action: 'streamed_chat_completion',
         quest: parseQuestToStreamPayload(quest),
@@ -1281,7 +1280,7 @@ export class ImageGenerationService {
       }
 
       // Add final status
-      this.addStatusToQuest(quest, 'Image generation completed');
+      this.addStatusToQuest(quest, 'Image generation completed', userId);
 
       Logger.globalInstance.debug(`[DEBUG] Quest before update:`, {
         id: quest.id,
@@ -1375,7 +1374,7 @@ export class ImageGenerationService {
       }
     } catch (error) {
       logger.error('Error processing image generation:', error);
-      this.addStatusToQuest(quest, `Error: ${(error as Error).message}`);
+      this.addStatusToQuest(quest, `Error: ${(error as Error).message}`, userId);
       quest.reply = (error as Error).message;
       quest.type = 'error';
       quest.status = 'done';

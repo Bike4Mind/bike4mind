@@ -27,7 +27,7 @@ import {
   Tooltip,
 } from '@mui/joy';
 import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
-import { useRouter } from '@tanstack/react-router';
+import { useRouter, useSearch } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { lazy, useEffect, useRef, useState, type ReactNode } from 'react';
 import { api } from '@client/app/contexts/ApiContext';
@@ -67,6 +67,7 @@ import MenuIcon from '@mui/icons-material/Menu';
 import ApiReferenceTab from './ApiReferenceTab';
 import ApiCookbookTab from './ApiCookbookTab';
 import { AdminTab, SIDEBAR_SECTIONS, type SidebarGate, type SidebarItem } from './adminSidebarConfig';
+import { adminTabFromSlug } from './adminTabSlugs';
 import { useAdminModal } from './useAdminModal';
 import { useAdminSidebarSections } from './useAdminSidebarSections';
 
@@ -298,6 +299,19 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   const [activeTab, setActiveTab] = useAdminModal(useShallow(state => [state.activeTab, state.setActiveTab]));
   const hiddenNotifications = useAdminNotifications(state => state.hiddenNotifications);
   const { currentUser } = useUser();
+  const { tab: requestedTabSlug } = useSearch({ strict: false }) as { tab?: string };
+
+  // A `?tab=` deep link chooses the opening tab. Keyed on the slug, NOT on activeTab, so this is
+  // an entry point rather than a mirror: activeTab is also driven by the sidebar and by the chat
+  // model picker's "manage models" shortcut (see useAdminModal), and re-asserting the URL's value
+  // on every change would fight both. Leaving the param in place is deliberate - the link stays
+  // shareable and survives a reload.
+  useEffect(() => {
+    const requestedTab = adminTabFromSlug(requestedTabSlug);
+    if (requestedTab !== undefined) {
+      setActiveTab(requestedTab);
+    }
+  }, [requestedTabSlug, setActiveTab]);
 
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
@@ -363,12 +377,16 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   // Get waiting subscribers count for badge
   const waitingSubscribers = useGetWaitingSubscribersCount({ enabled: currentUser?.isAdmin });
 
-  // Set default tab based on migration availability
+  // Set default tab based on migration availability. Skipped when the URL asked for a tab: both
+  // this and the `?tab=` effect above read the same `activeTab` snapshot, so on a render where
+  // enableUserMigration is already true they would both fire and this one would land last,
+  // silently overriding the deep link. Today it only loses that race because the flag arrives
+  // from a query a tick later.
   useEffect(() => {
-    if (enableUserMigration && activeTab === AdminTab.Users) {
+    if (enableUserMigration && activeTab === AdminTab.Users && !adminTabFromSlug(requestedTabSlug)) {
       setActiveTab(AdminTab.Migrate);
     }
-  }, [enableUserMigration, activeTab, setActiveTab]);
+  }, [enableUserMigration, activeTab, setActiveTab, requestedTabSlug]);
 
   if (!currentUser?.isAdmin) {
     return (

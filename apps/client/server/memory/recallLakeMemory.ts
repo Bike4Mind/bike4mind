@@ -28,6 +28,12 @@ export interface LakeBeliefRecall {
   relevance: number;
   /** Source FabFile ids the fact was extracted from, for citation. Always at least one (reachable). */
   sources: string[];
+  /**
+   * `YYYY-MM-DD` of the source document, when it is known. Absent for a belief whose document has
+   * since been deleted, and for a run with no dates resolver wired - both render as unknown rather
+   * than as a guess.
+   */
+  sourceDate?: string;
 }
 
 export interface RecallLakeMemoryOptions {
@@ -55,6 +61,15 @@ export interface RecallLakeMemoryOptions {
    * Injected because it needs the caller's retrieval filter, embedding-model and FabFile reads.
    */
   resolveReachableSources: (sourceIds: string[]) => Promise<Set<string>>;
+  /**
+   * When each source document was authored, for dating the recalled beliefs (#1501). Resolved AFTER
+   * the budget cut, so it reads only the slice that will actually be rendered rather than every
+   * source the reachability gate scans.
+   *
+   * Optional so a caller that has no FabFile access still recalls (undated) rather than failing; the
+   * production wiring always supplies it.
+   */
+  resolveSourceDates?: (sourceIds: string[]) => Promise<Map<string, string>>;
 }
 
 /**
@@ -126,7 +141,7 @@ export async function recallLakeMemory(opts: RecallLakeMemoryOptions): Promise<L
   const citable = beliefs.filter(b => (b.sources ?? []).some(id => reachable.has(id)));
   if (citable.length === 0) return [];
 
-  return recall(citable, opts.query, {
+  const recalled = recall(citable, opts.query, {
     k: opts.k,
     activationWeight: LAKE_ACTIVATION_WEIGHT,
     // The cosine floor is calibrated for the MEMENTO space, so it only applies when we actually scored
@@ -135,4 +150,24 @@ export async function recallLakeMemory(opts: RecallLakeMemoryOptions): Promise<L
       ? { scorer: embeddingScorer(embedded.vector), minRelevance: MEMENTO_MIN_SIMILARITY }
       : {}),
   }).map(r => ({ fact: r.belief.fact, relevance: r.relevance, sources: r.belief.sources ?? [] }));
+
+  if (!opts.resolveSourceDates || recalled.length === 0) return recalled;
+
+  // Dating is a nicety, not the grounding itself: a failed read costs the dates, never the facts.
+  const dates = await opts.resolveSourceDates([...new Set(recalled.flatMap(r => r.sources))]).catch((err: unknown) => {
+    console.warn(
+      `[lakeMemory] source date read failed; beliefs render undated this turn: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+    return new Map<string, string>();
+  });
+
+  return recalled.map(r => {
+    // A belief can cite more than one document; date it by the MOST RECENT, which is the claim's
+    // latest restatement and the one a reader would weigh.
+    const dated = r.sources.map(id => dates.get(id)).filter((d): d is string => Boolean(d));
+    const sourceDate = dated.length ? dated.reduce((latest, d) => (d > latest ? d : latest)) : undefined;
+    return sourceDate ? { ...r, sourceDate } : r;
+  });
 }

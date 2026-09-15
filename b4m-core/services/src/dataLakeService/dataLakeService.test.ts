@@ -364,6 +364,72 @@ describe('assertLakeAccess — hardcoded fallback lakes (no backing document)', 
       assertLakeAccess('opti-knowledge', ctx({ userTags: ['opti'], organizationIds: ['orgB'] }), { db })
     ).rejects.toThrow(/not found/i);
   });
+
+  // #2510: the grant arm must NOT be skipped just because the slug matches a registry id.
+  // disambiguateSlug only reserves the org-less meta-tag (datalake:<slug>), so an ORG-SCOPED lake
+  // may legitimately carry a registry slug; skipping the query for it hands back the synthetic
+  // registry lake in place of the caller's own grant-held lake - a wrong lake, not a denial.
+  it('an org-scoped DB lake carrying a registry slug still resolves via a foreign-org grant', async () => {
+    const shadow = lake({
+      id: 'real-db-id',
+      slug: 'opti-knowledge',
+      createdByUserId: 'other',
+      organizationId: 'orgA',
+    });
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: vi.fn().mockResolvedValue(null),
+        findBySlugAmongIds: vi
+          .fn()
+          .mockImplementation(async (_s: string, ids: string[]) => (ids.includes(shadow.id) ? shadow : null)),
+      },
+      dataLakeAccessGrants: {
+        listByPrincipal: vi.fn().mockResolvedValue([{ dataLakeId: shadow.id, role: 'owner' }]),
+        listByLake: vi
+          .fn()
+          .mockResolvedValue([{ dataLakeId: shadow.id, principalType: 'user', principalId: 'grantee', role: 'owner' }]),
+      },
+    };
+
+    // The Opti tag is held on purpose: it is what would make the fallback resolve and mask the bug.
+    const resolved = await assertLakeAccess(
+      'opti-knowledge',
+      ctx({ userId: 'grantee', organizationIds: ['orgB'], userTags: ['opti'] }),
+      { db }
+    );
+    expect(resolved.id).toBe('real-db-id');
+  });
+
+  // #2510 follow-up (human review): a slug colliding with a DATA_LAKES id/slug must not degrade on
+  // a grants-query failure the way every other slug does - degrading would return null here and let
+  // resolveLakeAccessWithGrants's ?? chain fall through to resolveFallbackLake, silently swapping the
+  // caller's own grant-held lake for the generic registry fallback (a 200 with the wrong content,
+  // not an error).
+  it('rethrows the grants-query failure instead of degrading when the slug collides with a fallback lake', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: vi.fn().mockResolvedValue(null),
+        findBySlugAmongIds: vi.fn().mockResolvedValue(null),
+      },
+      dataLakeAccessGrants: {
+        listByPrincipal: vi.fn().mockRejectedValue(new Error('grants collection unavailable')),
+        listByLake: vi.fn().mockResolvedValue([]),
+      },
+    };
+    const logger = { warn: vi.fn() };
+
+    // The Opti tag is held on purpose: it is what would make the fallback resolve and mask the bug
+    // if the failure were degraded instead of rethrown.
+    await expect(
+      assertLakeAccess('opti-knowledge', ctx({ userId: 'grantee', organizationIds: ['orgB'], userTags: ['opti'] }), {
+        db,
+        logger,
+      })
+    ).rejects.toThrow('grants collection unavailable');
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
 });
 
 /**
@@ -478,6 +544,34 @@ describe('assertLakeAccess - foreign-org grant resolves by slug (#2425)', () => 
       assertLakeAccess('foreign-granted', ctx({ userId: 'grantee', organizationIds: ['orgA'] }), { db })
     ).resolves.toBe(theirs);
     expect(findBySlugAmongIds).not.toHaveBeenCalled();
+  });
+
+  // #2510: previously uncaught - a transient grants-collection failure propagated straight out of
+  // assertLakeAccess, 500ing a request path (e.g. sessions/create.ts) that had no prior dependency
+  // on that collection. It must degrade like every other optional-adapter read in this file.
+  it('degrades to no grant-held match when the grants query fails, rather than throwing raw', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: findBySlugMiss(),
+        findBySlugAmongIds: findBySlugAmongIdsFake(),
+      },
+      dataLakeAccessGrants: {
+        listByPrincipal: vi.fn().mockRejectedValue(new Error('grants collection unavailable')),
+        listByLake: vi.fn().mockResolvedValue([]),
+      },
+    };
+    const logger = { warn: vi.fn() };
+
+    await expect(
+      assertLakeAccess('foreign-granted', ctx({ userId: 'grantee', organizationIds: ['orgB'] }), { db, logger })
+    ).rejects.toThrow(/not found/i);
+    // A dropped warn call would go unnoticed - it's the only signal an operator gets that this
+    // degrade path fired at all, since the caller-facing result is identical to "no grant exists".
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[dataLakes] grant-held slug fallback query failed; resolving with no grant reach',
+      expect.any(Error)
+    );
   });
 });
 
@@ -1333,10 +1427,8 @@ describe('management views - the grant reach is manage-scoped, not read-scoped',
     listActiveByLakes: vi.fn().mockResolvedValue([]),
   });
 
-  // The cutover setting is ON here to prove the manage reach does not consult it. That is the only
-  // thing it proves at this level: the read reach's reader/org arms are ALSO held back by the
-  // source-level READ_GRANT_ENFORCEMENT_READY interlock, so with it false the two reaches happen to
-  // agree on a reader row here. The reaches are compared where they provably differ in
+  // The read-grant setting is ON here to prove the manage reach does not consult it. That is the
+  // only thing it proves at this level. The reaches are compared where they provably differ in
   // resolveLakeReadAccess.test.ts; these cases guard the wiring and the role split.
   const dbFor = (grants: ReturnType<typeof grantRepoFor>) => ({
     dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() },
@@ -1881,7 +1973,7 @@ describe('updateDataLake — clearing an access gate', () => {
     expect(written).not.toHaveProperty('requiredEntitlement');
   });
 
-  it('lets an admin clear a gate on someone else’s lake, and refuses a non-owner', async () => {
+  it("lets an admin clear a gate on someone else's lake, and refuses a non-owner", async () => {
     const { db, update } = makeDb(gated());
     await expect(
       updateDataLake({ userId: 'admin', isAdmin: true }, 'lake1', { requiredUserTag: '' }, { db })
@@ -1902,7 +1994,7 @@ describe('updateDataLake — clearing an access gate', () => {
     ).resolves.toMatchObject({ requiredUserTag: '' });
   });
 
-  it('an ungated, org-less lake is owner-only — clearing does not make it world-readable', async () => {
+  it('an ungated, org-less lake is owner-only - clearing does not make it world-readable', async () => {
     const cleared = lake({ createdByUserId: 'owner', requiredUserTag: '', requiredEntitlement: '' });
     expect(canAccessLake(cleared, ctx({ userId: 'stranger' }))).toBe(false);
     expect(canAccessLake(cleared, ctx({ userId: 'owner' }))).toBe(true);
@@ -3584,7 +3676,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
       fabFiles: {
         // Second call is the post-purge survivor resolve: nothing joined mid-sweep by default.
         findIdsByDataLakeTag: vi.fn().mockResolvedValueOnce(['f1', 'f2']).mockResolvedValue([]),
-        hardDeleteByIds: vi.fn().mockResolvedValue(['f1', 'f2']),
+        hardDeleteOneById: vi.fn().mockResolvedValue(true),
         findById: vi.fn().mockResolvedValue(null),
         pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
       },
@@ -3622,7 +3714,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     // a HALF-PURGED lake as restorable. Anything failing after the guards must therefore surface as
     // some other error, so the consumer rethrows it to the DLQ rather than releasing.
     const adapters = makeAdapters('purging');
-    adapters.db.fabFiles.hardDeleteByIds = vi.fn().mockRejectedValue(new Error('mongo went away'));
+    adapters.db.fabFiles.hardDeleteOneById = vi.fn().mockRejectedValue(new Error('mongo went away'));
     const err = await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters).catch(
       (e: unknown) => e
     );
@@ -3636,7 +3728,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     const adapters = makeAdapters('deleted');
     await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
     expect(adapters.db.fabFileChunks.deleteManyByFabFileId).toHaveBeenCalledTimes(2);
-    expect(adapters.db.fabFiles.hardDeleteByIds).toHaveBeenCalled();
+    expect(adapters.db.fabFiles.hardDeleteOneById).toHaveBeenCalled();
     expect(adapters.db.batches.delete).toHaveBeenCalledWith('b1');
     expect(adapters.db.dataLakes.delete).toHaveBeenCalledWith('lake1');
   });
@@ -3652,16 +3744,18 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     const releaseDriveConnection = vi.fn(async () => {
       order.push('release-drive');
     });
-    adapters.db.fabFiles.hardDeleteByIds = vi.fn(async () => {
+    adapters.db.fabFiles.hardDeleteOneById = vi.fn(async () => {
       order.push('hard-delete');
-      return [];
+      return true;
     });
     await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
       ...adapters,
       releaseDriveConnection,
     });
     expect(releaseDriveConnection).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
-    expect(order).toEqual(['release-drive', 'hard-delete']);
+    // One hard-delete per member id (the row/chunk writes are paired per file, #2583), so what is
+    // pinned here is that the release precedes ALL of them, not the call count.
+    expect(order).toEqual(['release-drive', 'hard-delete', 'hard-delete']);
   });
 
   it('aborts the sweep when the Drive release fails, rather than purging the lake around it', async () => {
@@ -3707,7 +3801,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     expect(indexRemove).toBeLessThan(
       Math.min(...adapters.db.fabFileChunks.deleteManyByFabFileId.mock.invocationCallOrder)
     );
-    expect(indexRemove).toBeLessThan(adapters.db.fabFiles.hardDeleteByIds.mock.invocationCallOrder[0]);
+    expect(indexRemove).toBeLessThan(adapters.db.fabFiles.hardDeleteOneById.mock.invocationCallOrder[0]);
   });
 
   it('purges exactly the ids it announced, so a mid-sweep joiner is not destroyed unaccounted for', async () => {
@@ -3719,13 +3813,13 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
 
     // By id, never by re-running the predicate: a file tagged into the lake after the resolve
     // would otherwise be hard-deleted with its chunks intact and the index never told.
-    expect(adapters.db.fabFiles.hardDeleteByIds).toHaveBeenCalledWith(memberIds);
+    expect(adapters.db.fabFiles.hardDeleteOneById.mock.calls.map(([id]) => id)).toEqual(memberIds);
     expect(removalInput(retrievalIndex).fabFileIds).toEqual(memberIds);
     // Resolved once for the purge and reused. Re-resolving BEFORE the hard delete would pass the
     // assertions above while reopening the window they exist to close; the only other resolve is
     // the survivor sweep, which runs after.
     const resolves = adapters.db.fabFiles.findIdsByDataLakeTag.mock.invocationCallOrder;
-    const hardDelete = adapters.db.fabFiles.hardDeleteByIds.mock.invocationCallOrder[0];
+    const hardDelete = adapters.db.fabFiles.hardDeleteOneById.mock.invocationCallOrder[0];
     expect(resolves.filter(order => order < hardDelete)).toHaveLength(1);
   });
 
@@ -3739,7 +3833,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
 
     // The survivor keeps its bytes but stops matching a lake that no longer exists, so a later
     // lake claiming 'lk:' cannot adopt it - the create-time guard only sees surviving lakes.
-    expect(adapters.db.fabFiles.hardDeleteByIds).toHaveBeenCalledWith(memberIds);
+    expect(adapters.db.fabFiles.hardDeleteOneById.mock.calls.map(([id]) => id)).toEqual(memberIds);
     expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('joiner', [lake().datalakeTag, 'lk:late']);
     const pull = adapters.db.fabFiles.pullTagsByFabFileId.mock.invocationCallOrder[0];
     expect(pull).toBeLessThan(adapters.db.dataLakes.delete.mock.invocationCallOrder[0]);
@@ -3770,7 +3864,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     // can never be reconciled. The queue retry re-runs the whole sweep, so leaving it zero-progress
     // is what makes propagating safe.
     expect(adapters.db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
-    expect(adapters.db.fabFiles.hardDeleteByIds).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
     expect(adapters.db.batches.delete).not.toHaveBeenCalled();
     expect(adapters.db.dataLakes.delete).not.toHaveBeenCalled();
   });
@@ -3786,14 +3880,30 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     expect(adapters.db.fabFileChunks.deleteManyByFabFileId).toHaveBeenCalledTimes(3);
     expect(adapters.db.batches.delete).toHaveBeenCalledTimes(3);
 
-    // Ordering contract: last chunk delete -> hard-delete files -> first batch delete -> lake last.
+    // Ordering contract: hard-delete files -> last chunk delete -> first batch delete -> lake last.
+    // Rows before chunks is the #2583 invariant: see cleanupDeletedDataLake.test.ts for why.
+    const firstChunk = Math.min(...adapters.db.fabFileChunks.deleteManyByFabFileId.mock.invocationCallOrder);
     const lastChunk = Math.max(...adapters.db.fabFileChunks.deleteManyByFabFileId.mock.invocationCallOrder);
-    const hardDelete = adapters.db.fabFiles.hardDeleteByIds.mock.invocationCallOrder[0];
+    const hardDelete = Math.min(...adapters.db.fabFiles.hardDeleteOneById.mock.invocationCallOrder);
     const firstBatch = Math.min(...adapters.db.batches.delete.mock.invocationCallOrder);
     const lakeDelete = adapters.db.dataLakes.delete.mock.invocationCallOrder[0];
-    expect(lastChunk).toBeLessThan(hardDelete);
-    expect(hardDelete).toBeLessThan(firstBatch);
+    expect(hardDelete).toBeLessThan(firstChunk);
+    expect(lastChunk).toBeLessThan(firstBatch);
     expect(firstBatch).toBeLessThan(lakeDelete);
+    // Per file, not just in aggregate: each row delete precedes ITS OWN chunk delete. The two are
+    // paired inside one iteration so a DLQ retry can still re-derive the ids this run never
+    // reached - a bulk row delete followed by a separate chunk fan-out would satisfy the aggregate
+    // check above while leaving the retry nothing to resolve.
+    const rowOrderById = new Map(
+      adapters.db.fabFiles.hardDeleteOneById.mock.calls.map(([id]: [string], i: number) => [
+        id,
+        adapters.db.fabFiles.hardDeleteOneById.mock.invocationCallOrder[i],
+      ])
+    );
+    adapters.db.fabFileChunks.deleteManyByFabFileId.mock.calls.forEach(([id]: [string], i: number) => {
+      const chunkOrder = adapters.db.fabFileChunks.deleteManyByFabFileId.mock.invocationCallOrder[i];
+      expect(rowOrderById.get(id)).toBeLessThan(chunkOrder);
+    });
   });
 });
 

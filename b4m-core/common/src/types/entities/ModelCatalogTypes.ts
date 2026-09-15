@@ -36,6 +36,10 @@ export const ADAPTER_FAMILIES = [
   // controls, the sampling pins and max_completion_tokens do not, so a Kimi row
   // routed to the OpenAI shaper would 400.
   'kimi',
+  // DeepSeek direct. Not 'openai-chat' for the same reason as 'kimi': thinking
+  // mode is a per-request parameter, the sampling group is silently ignored
+  // while it is on, and the cache counters have their own field names.
+  'deepseek',
   'ollama',
   'bfl',
   'local-image',
@@ -333,6 +337,7 @@ export const MODEL_INFO_FIELD_GROUP_OF: Record<
   supportsSafetyTolerance: 'modalities',
 
   deprecationDate: 'lifecycle',
+  replacedBy: 'lifecycle',
 
   adapterFamily: 'dispatch',
   dispatchProfile: 'dispatch',
@@ -540,6 +545,8 @@ export const ModelDiscoveryState = z.object({
     .optional(),
   /** Optional: a state row written before Phase 4 has none, and must keep parsing. */
   suggestion: ModelLifecycleSuggestion.optional(),
+  /** Dispatch probes spent on this model, so one that always fails stops taking a budget slot. */
+  probeAttempts: z.number().int().nonnegative().optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -570,6 +577,9 @@ export interface IModelDiscoveryStateRepository extends IBaseRepository<IModelDi
     suggestion: ModelLifecycleSuggestionInput,
     at?: Date
   ): Promise<IModelDiscoveryState>;
+
+  /** One more spent dispatch probe. */
+  recordProbeAttempt(modelId: string): Promise<IModelDiscoveryState>;
 
   /** The deprecation queue: every model carrying a suggestion nobody has settled, oldest first. */
   pendingSuggestions(): Promise<IModelDiscoveryState[]>;
