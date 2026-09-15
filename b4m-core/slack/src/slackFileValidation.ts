@@ -87,6 +87,8 @@ export function validateSlackFileForIngest(file: SlackAttachment): SlackFileVali
     // extension when nothing resolved - never `file.mimetype` (only the client's claim, which can
     // name a type that IS on the allow-list). A digit tail that `path.extname` grabbed out of a
     // date or version suffix is not a type either, so it falls through to the no-type wording.
+    // Wording only: acceptance is already decided above, and the resolver treats a digit tail
+    // as an extension like any other. Do not read this as a gating distinction.
     const isDateOrVersionFragment = /^\d+$/.test(ext);
     const reportedType = resolvedMimeType || (isDateOrVersionFragment ? '' : ext);
     return {

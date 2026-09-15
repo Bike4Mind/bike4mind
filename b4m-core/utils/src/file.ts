@@ -177,6 +177,7 @@ const EXT_TO_MIME: Record<string, string> = Object.assign(Object.create(null), {
   env: SupportedFabFileMimeTypes.TXT_PLAIN,
   conf: SupportedFabFileMimeTypes.TXT_PLAIN,
   log: SupportedFabFileMimeTypes.TXT_PLAIN,
+  sql: SupportedFabFileMimeTypes.TXT_PLAIN,
   // Browser-reported spelling with no client-side counterpart in guessMimeType - it
   // belongs only here, where a claim needs an extension-side match.
   text: SupportedFabFileMimeTypes.TXT_PLAIN,
@@ -210,12 +211,18 @@ const EXT_TO_MIME: Record<string, string> = Object.assign(Object.create(null), {
 
   // Programming languages
   js: SupportedFabFileMimeTypes.JS,
+  mjs: SupportedFabFileMimeTypes.JS,
+  cjs: SupportedFabFileMimeTypes.JS,
   jsx: SupportedFabFileMimeTypes.JSX,
   ts: SupportedFabFileMimeTypes.TS,
   tsx: SupportedFabFileMimeTypes.TS, // TSX shares TS's MIME type ('text/typescript').
   py: SupportedFabFileMimeTypes.PY,
   java: SupportedFabFileMimeTypes.JAVA,
   cpp: SupportedFabFileMimeTypes.CPP,
+  // C has no member of its own; text/x-c++src is the closest supported type, and the
+  // chunker treats both the same way.
+  c: SupportedFabFileMimeTypes.CPP,
+  h: SupportedFabFileMimeTypes.CPP,
   cs: SupportedFabFileMimeTypes.CS,
   php: SupportedFabFileMimeTypes.PHP,
   rb: SupportedFabFileMimeTypes.RUBY,

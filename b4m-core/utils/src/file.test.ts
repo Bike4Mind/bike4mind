@@ -189,6 +189,19 @@ describe('getMimeTypeByExtension', () => {
     expect(getMimeTypeByExtension(ext)).toBe(mime);
   });
 
+  // Plainly-textual source extensions with no client-side entry behind them. The claim used
+  // to carry these in; under extension-first the table has to, or an API caller sending
+  // 'text/plain' for a .sql file is refused.
+  it.each([
+    ['sql', SupportedFabFileMimeTypes.TXT_PLAIN],
+    ['mjs', SupportedFabFileMimeTypes.JS],
+    ['cjs', SupportedFabFileMimeTypes.JS],
+    ['c', SupportedFabFileMimeTypes.CPP],
+    ['h', SupportedFabFileMimeTypes.CPP],
+  ])('resolves source extension %s', (ext, mime) => {
+    expect(getMimeTypeByExtension(ext)).toBe(mime);
+  });
+
   // A prototype-bearing lookup table answers these with an inherited member (the Object
   // function itself), which is truthy and so escapes as a non-string mimeType.
   it.each(['constructor', '__proto__', 'toString'])('resolves inherited key %s to nothing', key => {
@@ -354,18 +367,11 @@ describe('resolveSupportedMimeType precedence option', () => {
   });
 });
 
-// The extension-less rule lives in the resolver rather than at each door, so LICENSE
-// resolves the same way whichever ingest door it arrives at. It stays opt-in: a door
-// that omits it (the presigned-URL routes, the curated bulk path) keeps refusing.
+// Which names earn the fallback is pinned by the 'extension-less rule' block above; this
+// block covers the option itself - that it stays opt-in (a door omitting it keeps refusing),
+// and that it never outranks a supplied claim.
 describe('resolveSupportedMimeType extensionlessFallback option', () => {
   const opts = { extensionlessFallback: SupportedFabFileMimeTypes.TXT_PLAIN };
-
-  it.each(['LICENSE', '.env', 'Dockerfile'])('falls back to plain text for %s', name => {
-    expect(resolveSupportedMimeType(name, '', opts)).toEqual({
-      mimeType: SupportedFabFileMimeTypes.TXT_PLAIN,
-      supported: true,
-    });
-  });
 
   // The fallback must not become a route around the rejection: a claim that was supplied
   // and refused stays refused, extension-less name or not.
@@ -374,10 +380,6 @@ describe('resolveSupportedMimeType extensionlessFallback option', () => {
       mimeType: '',
       supported: false,
     });
-  });
-
-  it.each(['archive.7z', 'payload.'])('refuses %s rather than falling back', name => {
-    expect(resolveSupportedMimeType(name, '', opts)).toEqual({ mimeType: '', supported: false });
   });
 
   it('keeps refusing an extension-less name when the option is omitted', () => {
