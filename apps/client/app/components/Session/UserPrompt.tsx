@@ -214,10 +214,20 @@ const TruncatablePromptContent: FC<{
         variant="soft"
         level={isMobile ? 'body-sm' : 'body-md'}
         component="div"
+        // The bubble is fill + hairline, as in the mockup: with a defined edge the
+        // fill only has to sit slightly off the page, so the existing panel token
+        // carries it and no new colour enters the palette. `border.soft` is the
+        // palette's own lightest stroke and lands within a point of the reply
+        // treatment's --b4m-md-line (markdown/observatory.css), so bubble and
+        // reply read as one system without a second hand-written rgba.
         sx={theme => ({
           margin: 0,
-          padding: 2,
+          // More horizontal than vertical: line-height already gives the text
+          // vertical relief, so equal padding reads tighter at the sides.
+          padding: '12px 16px',
           backgroundColor: theme.palette.mode === 'light' ? '#F4F7F9' : 'background.panel',
+          border: '1px solid',
+          borderColor: 'border.soft',
           borderRadius: '8px',
           color: 'text.primary',
           overflowX: 'auto',
@@ -312,7 +322,10 @@ const UserPrompt: FC<UserPromptProps> = ({ prompt, messageFiles = [], search, on
               <Box
                 key={index}
                 sx={{
-                  maxWidth: '100%',
+                  // 78% from the mockup: the bubble hugs its content and stops
+                  // well short of the column, so a long prompt never reads as
+                  // wide as the reply under it.
+                  maxWidth: isEditMode ? '100%' : '78%',
                   minWidth: isEditMode ? '100%' : undefined,
                   alignSelf: 'end',
                   borderRadius: '8px',

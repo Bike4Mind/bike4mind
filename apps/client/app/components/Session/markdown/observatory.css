@@ -59,7 +59,7 @@
   --b4m-md-lift: rgba(255, 255, 255, 0.055);
 }
 
-/* -- shape, fonts, measure -----------------------------------------------
+/* -- shape and fonts ------------------------------------------------------
    Three faces doing three jobs: a serif to read in, sans for chrome (headings
    below h2, table heads, labels), mono for data. The serif and mono are
    self-hosted by next/font in app/layout.tsx and reach this file as CSS
@@ -70,7 +70,7 @@
    deliberately does NOT sit on the reply bubble: the bubble is a Joy
    <Typography>, whose emitted class would tie this one on specificity and win
    on injection order, and its children include banners and media grids that
-   must not inherit reading typography or match the `> *` measure rules below.
+   must not inherit reading typography.
    Because of that placement this file needs no specificity bumps and no
    !important anywhere. */
 .b4m-md {
@@ -103,16 +103,9 @@
     var(--font-reading-mono, 'JetBrains Mono'), ui-monospace, 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas',
     'source-code-pro', monospace;
 
-  /* Cap the reading measure on the flow children rather than on `.b4m-md`
-     itself: the wrapper is the container-query container, so narrowing it would
-     shrink the width every `@container` rule below measures against, and it
-     would also pull in the full-width children (tables, code blocks, figures)
-     that are deliberately allowed past the measure. */
-  --b4m-md-measure: min(100%, 68ch);
-  --b4m-md-measure-wide: min(100%, 76ch);
-
-  /* Container plumbing for the later rail work. The only thing that reads it
-     today is the measure widening at the bottom of this file. */
+  /* Container plumbing for the later rail work. Nothing reads it today - the
+     measure widening it used to drive is gone (see below) - but the context is
+     kept so a later branch can hang width-responsive treatments off it. */
   container-type: inline-size;
   container-name: b4m-md;
 
@@ -121,10 +114,6 @@
   color: var(--b4m-md-ink-2);
   hanging-punctuation: first last;
   text-wrap: pretty;
-}
-
-.b4m-md > :where(p, ul, ol, dl, blockquote, h1, h2, h3, h4, h5, h6) {
-  max-width: var(--b4m-md-measure);
 }
 
 .b4m-md > :first-child {
@@ -600,14 +589,4 @@
 
 .b4m-md .data-footnote-backref {
   border-bottom: 0;
-}
-
-/* -- container plumbing ---------------------------------------------------
-   One query, one effect: when the reply column itself (not the viewport) is
-   wide, the measure relaxes. This exists to prove the container is wired so a
-   later branch can hang the margin rail off the same context. */
-@container b4m-md (min-width: 720px) {
-  .b4m-md > :where(p, ul, ol, dl, blockquote, h1, h2, h3, h4, h5, h6) {
-    max-width: var(--b4m-md-measure-wide);
-  }
 }

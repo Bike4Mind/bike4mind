@@ -1525,13 +1525,16 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                   }}
                 >
                   <Typography
-                    variant="soft"
+                    // plain, not soft: the reply body is unframed, and Joy's soft
+                    // variant would paint its own background once the explicit one
+                    // below is gone. The user's prompt keeps its bubble.
+                    variant="plain"
                     level={isMobile ? 'body-sm' : 'body-md'}
                     component="div"
                     sx={{
                       margin: 0,
                       padding: 2,
-                      backgroundColor: 'chatbox.replyBg',
+                      backgroundColor: 'transparent',
                       borderRadius: '8px',
                       color: 'text.primary',
                       // Not a horizontal scroll container: wide children (tables,
