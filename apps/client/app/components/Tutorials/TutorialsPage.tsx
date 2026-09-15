@@ -93,9 +93,9 @@ const TutorialsPage = () => {
             <Typography
               level="body-sm"
               data-testid="tutorials-wip-notice"
-              sx={{ mt: '6px', fontSize: '14px', fontWeight: 500, color: 'primary.plainColor' }}
+              sx={{ mt: '6px', maxWidth: '500px', fontSize: '14px', fontWeight: 500, color: 'primary.500' }}
             >
-              Placeholder, in progress
+              Work in progress - nothing here is wired up yet. The cards are placeholders and the text is not final.
             </Typography>
           </Box>
 
