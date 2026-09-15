@@ -1,7 +1,9 @@
 import {
   BedrockEmbeddingModel,
+  countCodePoints,
   DEFAULT_PASSAGE_TOKEN_TARGET,
   IFabFile,
+  MIN_CHUNK_CHARS_FLOOR,
   MIN_PASSAGE_TOKEN_TARGET,
   OllamaEmbeddingModel,
   isAudioMimeType,
@@ -936,7 +938,8 @@ export class SmartChunker {
   }
 
   /**
-   * Post-chunking validation: re-split any chunks that still exceed the token limit.
+   * Post-chunking validation: re-split any chunks that still exceed the token limit, then merge or
+   * drop chunks too short to carry a useful embedding (see mergeOrDropNearEmptyChunks).
    * Bounded to max 3 passes to prevent infinite loops.
    */
   private async validateAndResplitChunks(chunks: Chunk[]): Promise<Chunk[]> {
@@ -960,7 +963,70 @@ export class SmartChunker {
       result = validated;
       if (allValid) break;
     }
-    return result.filter(c => c.text.trim().length > 0);
+    return this.mergeOrDropNearEmptyChunks(result.filter(c => c.text.trim().length > 0));
+  }
+
+  /**
+   * A chunk under MIN_CHUNK_CHARS_FLOOR carries no useful embedding (#2817). Tries the FOLLOWING
+   * chunk first, so a run of several under-floor chunks in a row keeps accumulating until it
+   * clears the floor, hits the limit, or runs out of chunks; falls back to merging into the
+   * PRECEDING chunk when the forward merge doesn't fit - load-bearing, because a chunk produced by
+   * splitOversizedSegment sits exactly at chunkTokenLimit, so a forward merge into one always
+   * overflows even when the chunk just emitted before the short one has plenty of headroom. Drop
+   * it only when NEITHER neighbor can absorb it AND the file has other real content - never drop
+   * the last chunk standing, since chunkCount 0 reads downstream as "no extractable text" rather
+   * than "hard to embed usefully".
+   */
+  private async mergeOrDropNearEmptyChunks(chunks: Chunk[]): Promise<Chunk[]> {
+    const merged: Chunk[] = [];
+    let pendingShort: Chunk | undefined;
+
+    // Merges `shortChunk` into the last emitted chunk in-place, if there is one and it fits.
+    const tryMergeBackward = async (shortChunk: Chunk): Promise<boolean> => {
+      const prev = merged[merged.length - 1];
+      if (!prev) return false;
+      const combinedText = `${prev.text} ${shortChunk.text}`.trim();
+      const combinedTokens = await this.countTokens(combinedText);
+      if (combinedTokens > this.chunkTokenLimit) return false;
+      merged[merged.length - 1] = { text: combinedText, tokenCount: combinedTokens };
+      return true;
+    };
+
+    for (const chunk of chunks) {
+      let current = chunk;
+      if (pendingShort) {
+        const combinedText = `${pendingShort.text} ${current.text}`.trim();
+        const combinedTokens = await this.countTokens(combinedText);
+        if (combinedTokens <= this.chunkTokenLimit) {
+          current = { text: combinedText, tokenCount: combinedTokens };
+        } else if (!(await tryMergeBackward(pendingShort))) {
+          // Neither neighbor can absorb it, and more content follows in this loop, so dropping
+          // here cannot leave the file chunkless.
+          this.logger.warn(
+            `Dropping near-empty chunk - neither neighbor can absorb it within the token limit (${countCodePoints(pendingShort.text)} chars)`
+          );
+        }
+        pendingShort = undefined;
+      }
+
+      if (countCodePoints(current.text) < MIN_CHUNK_CHARS_FLOOR) {
+        pendingShort = current;
+        continue;
+      }
+      merged.push(current);
+    }
+
+    if (pendingShort) {
+      if (merged.length === 0) {
+        merged.push(pendingShort);
+      } else if (!(await tryMergeBackward(pendingShort))) {
+        this.logger.warn(
+          `Dropping trailing near-empty chunk - no mergeable neighbor within the token limit (${countCodePoints(pendingShort.text)} chars)`
+        );
+      }
+    }
+
+    return merged;
   }
 
   // Counts the number of tokens in the given text using the appropriate tokenization method
