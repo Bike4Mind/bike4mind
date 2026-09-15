@@ -66,6 +66,7 @@ beforeAll(() => {
       b4mContributions: {
         spaRoutesExport: `${PKG_NAME}/routes`,
         navItemsExport: `${PKG_NAME}/nav`,
+        routeIndexingExport: `${PKG_NAME}/seo`,
         notebookSidenavExport: `${PKG_NAME}/sidenav`,
         llmToolsExport: `${PKG_NAME}/tools`,
         migrationsExport: `${PKG_NAME}/server/migrations`,
@@ -117,6 +118,12 @@ describe('hydrated but UNLINKED overlay', () => {
     expect(sidenav).not.toContain(PKG_NAME);
     expect(sidenav).toContain('premiumNotebookSidenav: PremiumNotebookSidenav = null');
 
+    // robots.ts/sitemap.ts import this statically, so an unresolvable import here
+    // would break the whole app's build, not just the overlay's crawler policy.
+    const indexing = readFileSync(join(clientRoot, 'app/premium-generated/premiumRouteIndexing.generated.ts'), 'utf8');
+    expect(indexing).not.toContain(PKG_NAME);
+    expect(indexing).toContain('premiumRouteIndexing: PremiumRouteIndexing[] = []');
+
     expect(existsSync(join(clientRoot, 'pages/api/premium-fakeoverlay'))).toBe(false);
     expect(existsSync(join(clientRoot, 'server/premium-generated/fakeoverlay.ts'))).toBe(false);
   });
@@ -161,6 +168,9 @@ describe('hydrated AND linked overlay', () => {
 
     const sidenav = readFileSync(join(clientRoot, 'app/premium-generated/premiumNotebookSidenav.generated.ts'), 'utf8');
     expect(sidenav).toContain(`import('${PKG_NAME}/sidenav')`);
+
+    const indexing = readFileSync(join(clientRoot, 'app/premium-generated/premiumRouteIndexing.generated.ts'), 'utf8');
+    expect(indexing).toContain(`import { routeIndexing as indexing0 } from '${PKG_NAME}/seo'`);
 
     const stub = readFileSync(join(clientRoot, 'pages/api/premium-fakeoverlay/ping.ts'), 'utf8');
     expect(stub).toContain(`export { default } from '${PKG_NAME}/api/ping'`);
