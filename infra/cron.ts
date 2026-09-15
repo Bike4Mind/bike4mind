@@ -1,4 +1,6 @@
 import { execSync } from 'child_process';
+import { createHash } from 'crypto';
+import { readFileSync } from 'fs';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { emailJobQueue } from './emailMarketing';
 import { allSecrets } from './secrets';
@@ -810,7 +812,15 @@ const driveLakeResyncPollCron = new sst.aws.Cron('driveLakeResyncPoll', {
  * elsewhere. `apps/client`'s prebuild also produces it, but that belongs to the web component's
  * `next build` and nothing orders that before this function is bundled, so depending on it would
  * be a race that fails as a missing copyFiles source. Regenerating is keyless, deterministic and
- * a few seconds, so doing it unconditionally is cheaper than the coupling.
+ * takes about a third of a second, so doing it unconditionally is cheaper than the coupling.
+ *
+ * The cost of putting it at module scope: this file is re-exported from infra/index.ts, so EVERY
+ * SST command that loads the program pays it - `remove` and `diff` included - and `buildHelpIndex`
+ * throws on an empty corpus. A deployer checkout without docs-site, or without the workspace
+ * installed, therefore fails to load the program at all rather than failing only to deploy.
+ * That is the right trade for `deploy` and the wrong one for `remove`; it is accepted here
+ * because the alternative (deriving the index inside the handler and copying only docs-site)
+ * is a larger change than this one.
  *
  * HELP_CORPUS_VERSION exists only to make a docs-only edit redeploy the function: SST does not
  * notice copyFiles CONTENT changes, so without it the bundle keeps the corpus from whenever the
@@ -825,12 +835,16 @@ execSync('pnpm --filter @bike4mind/scripts help:build-index', { stdio: 'inherit'
 // Hashes the index's BYTES, not a git blob: it is no longer tracked, so `git ls-tree` cannot see
 // it. Both halves are needed - docs-site covers the article bodies the mirror ingests, which the
 // index does not carry, and the index covers a generator change that alters its shape.
-const HELP_CORPUS_HASH = execSync(
-  "{ git ls-tree -r HEAD docs-site/docs | awk '{print $3}'; " +
-    "md5sum apps/client/app/generated/help-index.json | awk '{print $1}'; } | sort | md5sum | awk '{print $1}'"
-)
-  .toString()
-  .trim()
+//
+// Hashed in Node rather than by piping to md5sum, which the old one-liner did. A shell pipeline
+// ending in `awk` reports its LAST command's status, so an absent md5sum (not a macOS default)
+// silently yielded an empty hash - pinning HELP_CORPUS_VERSION to a constant, which is precisely
+// the stale-corpus loop the block above exists to prevent - and an absent index silently hashed
+// the docs alone. Both now throw.
+const HELP_CORPUS_HASH = createHash('md5')
+  .update(execSync('git ls-tree -r HEAD docs-site/docs').toString())
+  .update(readFileSync('apps/client/app/generated/help-index.json'))
+  .digest('hex')
   .slice(0, 8);
 
 const helpDatalakeIngestCron = new sst.aws.Cron('helpDatalakeIngest', {

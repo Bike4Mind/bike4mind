@@ -604,10 +604,17 @@ Neither artifact is committed to the repository, so **a stock self-host build ha
 To get semantic help search, run the vectorizer at build time with your own key:
 
 ```bash
+pnpm --filter @bike4mind/client help:build            # index + bundled markdown, no key
 OPENAI_API_KEY=sk-... pnpm --filter @bike4mind/scripts help:vectorize
 ```
 
-Run it after the index exists (any `next build` produces it, or run `pnpm --filter @bike4mind/scripts help:build-index` directly) and before you build the image, so the vectors land in the bundle. It takes well under a minute for the whole corpus and costs a fraction of a cent against `text-embedding-3-small`. Re-run it whenever you edit the shipped docs; without a re-run the vectors go stale and the chat quietly falls back to keyword for the changed sections.
+The first command is not optional. `help:vectorize` does not read `docs-site` directly - it reads the bundled markdown that `help:build` writes under `apps/client/public/help-content/`, which does not exist in a fresh checkout. Running the vectorizer on its own fails with `help-index.json entries have no file in the content root matching its accessLevel`. Any `next build` also produces both, since `prebuild` runs `help:build`; the pair above is the standalone equivalent.
+
+Run it before you build the image so the vectors land in the bundle. It takes well under a minute for the whole corpus and costs a fraction of a cent against `text-embedding-3-small`.
+
+Re-run it whenever you edit the shipped docs. The failure is quieter than it sounds: article bodies are re-read from disk at query time, so an edit that leaves headings alone still serves your new text. What goes stale is the ranking - rename or re-split a heading and that section's vector no longer resolves, so it is dropped from the results silently, and only a query where every selected section drops falls back to keyword.
+
+Without a key the command throws rather than skipping. Set `HELP_EMBEDDINGS_REQUIRED=false` to downgrade that to a logged skip, which is what a build pipeline that does not care about semantic help search wants.
 
 **You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Settings -> API Keys**) as well as at build time.
 
