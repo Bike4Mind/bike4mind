@@ -23,8 +23,17 @@ import { isSupportedEmbeddingModel, type SupportedEmbeddingModel } from '@bike4m
  *
  * Prior art: the memento corpus solved the same problem by pinning a model and stamping each
  * record (MEMENTO_EMBEDDING_ID / mementoEmbeddingIsCurrent in @bike4mind/common's embedding
- * schema). FabFile chunks carry no such stamp - only the parent FabFile.embeddingModel - so
- * detection has to work from file metadata.
+ * schema). Detection here works from the PARENT file's recorded model, and that field is INTENT,
+ * not a completion stamp: its single writer (fabFileService/chunk.ts:248) sets it inside the
+ * chunk-commit transaction, alongside vectorizedChunkCount: 0, so it names the model that chunking
+ * pass meant to embed with - written before a single vector exists. It is therefore not evidence
+ * that the vectors under it are homogeneous: anything that embeds a file's remaining chunks in a
+ * different model leaves one label over a mixed population, and a per-file check cannot see that.
+ *
+ * Chunks do carry their own `embeddingModel` (IFabFileChunk), and that one IS a completion stamp -
+ * fabFileVectorize commits it only once the whole file finishes. It is the more precise signal
+ * where present. Reading it here would be a behavior change, not a cleanup: it is unset on rows
+ * predating it, so the file-level fallback has to stay either way.
  */
 
 /** Why a loaded chunk was withheld from cosine ranking. */
