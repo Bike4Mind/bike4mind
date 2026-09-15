@@ -34,10 +34,10 @@ describe('toDeepSeekEffort', () => {
 });
 
 describe('deepseekReasoningParams', () => {
-  it('sends reasoning_effort on the shipped id', () => {
-    expect(deepseekReasoningParams(ChatModels.DEEPSEEK_FLASH, { reasoningEffort: 'xhigh' })).toEqual({
-      reasoning_effort: 'max',
-    });
+  it('sends reasoning_effort on both shipped ids', () => {
+    for (const model of [ChatModels.DEEPSEEK_FLASH, ChatModels.DEEPSEEK_V4_PRO]) {
+      expect(deepseekReasoningParams(model, { reasoningEffort: 'xhigh' })).toEqual({ reasoning_effort: 'max' });
+    }
   });
 
   it('omits both spellings when nothing was asked for, leaving DeepSeek its default', () => {
@@ -57,7 +57,7 @@ describe('deepseekReasoningParams', () => {
     // There is no 'none' effort level, so an effort alongside a disable would
     // state two contradictory things about the same turn.
     expect(
-      deepseekReasoningParams(ChatModels.DEEPSEEK_FLASH, { thinking: { enabled: false }, reasoningEffort: 'high' })
+      deepseekReasoningParams(ChatModels.DEEPSEEK_V4_PRO, { thinking: { enabled: false }, reasoningEffort: 'high' })
     ).toEqual({ thinking: { type: 'disabled' } });
   });
 
@@ -70,19 +70,21 @@ describe('deepseekReasoningParams', () => {
 
 describe('deepseekSamplingParams', () => {
   /**
-   * Thinking mode is the default, and DeepSeek documents temperature,
-   * presence_penalty and frequency_penalty as unsupported there. They are
-   * ignored rather than rejected, so nothing surfaces the mistake - the answer
-   * is simply not the one the knob asked for.
+   * Thinking mode is the default on both ids, and DeepSeek documents
+   * temperature, presence_penalty and frequency_penalty as unsupported there.
+   * They are ignored rather than rejected, so nothing surfaces the mistake -
+   * the answer is simply not the one the knob asked for.
    */
-  it('drops the whole ignored sampling group while thinking is on', () => {
-    expect(
-      deepseekSamplingParams(ChatModels.DEEPSEEK_FLASH, {
-        temperature: 0.7,
-        presencePenalty: 0.2,
-        frequencyPenalty: 0.3,
-      })
-    ).toEqual({});
+  it('drops the whole ignored sampling group on both shipped ids while thinking is on', () => {
+    for (const model of [ChatModels.DEEPSEEK_FLASH, ChatModels.DEEPSEEK_V4_PRO]) {
+      expect(
+        deepseekSamplingParams(model, {
+          temperature: 0.7,
+          presencePenalty: 0.2,
+          frequencyPenalty: 0.3,
+        })
+      ).toEqual({});
+    }
   });
 
   it('hands the group back once the caller turns thinking off', () => {

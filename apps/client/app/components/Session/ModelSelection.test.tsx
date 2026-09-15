@@ -253,6 +253,7 @@ describe('getModelBackend DeepSeek and Moonshot grouping', () => {
 
   it.each([
     ['deepseek-flash', 'DeepSeek Flash', ModelBackend.DeepSeek],
+    ['deepseek-v4-pro', 'DeepSeek V4 Pro', ModelBackend.DeepSeek],
     ['us.deepseek.r1-v1:0', 'DeepSeek R1', ModelBackend.Bedrock],
     ['deepseek.v3-v1:0', 'DeepSeek v3.1', ModelBackend.Bedrock],
   ] as const)('groups DeepSeek id %s under "DeepSeek"', (id, name, backend) => {

@@ -1,4 +1,9 @@
-import { ChatCompletionFeature, ChatCompletionInvoke, ChatCompletionProcess, featureNames } from '@bike4mind/services';
+import {
+  ChatCompletionFeature,
+  ChatCompletionInvoke,
+  ChatCompletionProcess,
+  featureNames,
+} from '@bike4mind/services/llm';
 import { BadRequestError, getSettingsMap, getSettingsValue, NotFoundError, SQSService } from '@bike4mind/utils';
 import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@server/middlewares/rateLimit';

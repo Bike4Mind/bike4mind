@@ -4759,6 +4759,63 @@ export const settingsMap = {
 
 export type SettingValue<K extends SettingKey> = z.infer<(typeof settingsMap)[K]['schema']>;
 
+/**
+ * Every setting the data-lake SEARCH budget merge resolves, in one list. The forced-retrieval merge
+ * is a separate read with its own list ({@link FORCED_RETRIEVAL_SETTING_KEYS}), which this does not
+ * cover; the Lake-rung guard loops both.
+ *
+ * `resolveSearchBudgets` (b4m-core/services) reads exactly these on both its scoped and its platform
+ * path, and the guard in settings.test.ts loops this same list to assert none of them declares a
+ * Lake rung: one search is handed every lake the caller can reach as a single tag array (#2624), so
+ * a Lake-scoped override has no lakeId to key on and resolves to nothing an operator can observe.
+ * Shared rather than enumerated twice because that guard is only as good as its key list - against a
+ * hand-written one, #2465 declared a new budget key WITH a Lake rung, merged textually clean, and
+ * was caught in review rather than by CI.
+ *
+ * Declaring a key here is what makes it resolvable: the scoped path's return type is mapped over
+ * this list, so a budget read without being declared here fails to compile.
+ *
+ * `DefaultChunkSize` is not a scan budget and is listed so that ONE derivation serves both paths -
+ * the serve budget is DERIVED from the chunk policy, and omitting it here would make the scoped path
+ * serve a different budget than the platform path for the same lake, which is the disagreement
+ * `resolveSearchBudgets` exists to remove.
+ *
+ * `DefaultChunkSize` is also the one key here a caller rung may only RAISE, never lower (#2803). This
+ * read resolves on the CALLER's scope, but the key's declared subject is the FILE OWNER ("Resolves at
+ * file-OWNER altitude", its own definition above), and a search spans other owners' files - so a
+ * caller-side override that LOWERED the serve budget would truncate in-policy content it does not
+ * own. `resolveServeTarget` (services/dataLakeService/resolveSearchBudgets.ts) floors the resolved
+ * value at the platform one for that reason; it stays listed here because the raise direction is
+ * still wanted, and because dropping it would give the two paths different budgets for the same lake.
+ */
+export const SEARCH_BUDGET_SETTING_KEYS = [
+  'dataLakeSearchMaxFiles',
+  'dataLakeSearchMaxChunks',
+  'DefaultChunkSize',
+  'kbSearchDefaultResults',
+  'kbSearchResultTokenBudget',
+  'kbSearchMinRelevancePct',
+  'dataLakeSearchMaxChunksPerFile',
+] as const satisfies readonly SettingKey[];
+
+/**
+ * Every setting the forced-retrieval merge resolves, in one list - the sibling of
+ * {@link SEARCH_BUDGET_SETTING_KEYS} for the other read that resolves settings for one retrieval
+ * turn. `readForcedRetrievalSettings` (ChatCompletionFeatures.ts, b4m-core/services) resolves these
+ * through `resolveScopedSettingValues`, and the guard in settings.test.ts loops this list to assert
+ * none of them declares a Lake rung: one turn scans an uncapped SET of lakes into a single pool, so
+ * no single lake can key a narrower rung (#2572).
+ *
+ * Lives here rather than beside that read so the guard can reach it - `common` cannot import from
+ * `services`. A test fixture that enumerated these keys itself would keep passing on coded defaults
+ * if a fourth were added, which is the one way those tests could go quiet without failing.
+ */
+export const FORCED_RETRIEVAL_SETTING_KEYS = [
+  'forcedRetrievalCharBudget',
+  'forcedRetrievalRelativeFloorPct',
+  'forcedRetrievalMinSimilarityPct',
+] as const satisfies readonly SettingKey[];
+
 // ============================================================================
 // Public settings projection - the security boundary for the unauthenticated
 // CDN config artifact (docs/perf/mobile-startup-latency.md, M2.5).

@@ -1,10 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ForbiddenError } from '@bike4mind/common';
+import type { IUserDocument } from '@bike4mind/common';
 
 const mockFindById = vi.fn();
+const mockFindAccessibleById = vi.fn();
 vi.mock('@bike4mind/database/infra', () => ({
-  organizationRepository: { findById: (...a: unknown[]) => mockFindById(...a) },
+  organizationRepository: {
+    findById: (...a: unknown[]) => mockFindById(...a),
+    shareable: { findAccessibleById: (...a: unknown[]) => mockFindAccessibleById(...a) },
+  },
 }));
 
 // resolveBillingOrgId delegates the membership decision to the canonical org gate; mock it so this
@@ -15,7 +20,7 @@ vi.mock('../resolveActiveOrg', () => ({
   resolveActiveOrg: (...a: unknown[]) => mockResolveActiveOrg(...a),
 }));
 
-import { verifyOrgAccess, resolveBillingOrgId } from '../orgAccess';
+import { verifyOrgAccess, verifyOrgMembership, resolveBillingOrgId } from '../orgAccess';
 
 // Valid 24-hex ObjectId strings (pass Types.ObjectId round-trip validation).
 const ORG = '650000000000000000000abc';
@@ -25,6 +30,10 @@ const STRANGER = '650000000000000000000333';
 const OTHER_ORG = '650000000000000000000def';
 
 const org = { id: ORG, userId: OWNER, managerId: MANAGER };
+
+// verifyOrgMembership takes a full IUserDocument because the shareable ACL it delegates to is
+// declared that way; only id/groups/isAdmin are ever read, so the fixtures supply those and cast.
+const asUser = (u: { id: string; groups: string[]; isAdmin: boolean }) => u as unknown as IUserDocument;
 
 describe('verifyOrgAccess', () => {
   beforeEach(() => {
@@ -66,6 +75,68 @@ describe('verifyOrgAccess', () => {
   it('404s a non-admin when the org does not exist', async () => {
     mockFindById.mockResolvedValue(null);
     await expect(verifyOrgAccess({ id: OWNER, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
+  });
+});
+
+/**
+ * The membership-level sibling of verifyOrgAccess, for org-scoped reads a plain member legitimately
+ * makes (their org's subscription plan). Its whole job is to be WIDER than verifyOrgAccess on the
+ * member arm while staying non-oracular for everyone else.
+ */
+describe('verifyOrgMembership', () => {
+  const member = asUser({ id: STRANGER, groups: [], isAdmin: false });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindById.mockResolvedValue(org);
+    mockFindAccessibleById.mockResolvedValue(org);
+  });
+
+  it('rejects an invalid ObjectId without touching the DB', async () => {
+    await expect(verifyOrgMembership(member, 'not-an-object-id')).rejects.toBeInstanceOf(BadRequestError);
+    expect(mockFindAccessibleById).not.toHaveBeenCalled();
+    expect(mockFindById).not.toHaveBeenCalled();
+  });
+
+  it('grants a plain member, who verifyOrgAccess would refuse', async () => {
+    await expect(verifyOrgMembership(member, ORG)).resolves.toBe(org);
+    await expect(verifyOrgAccess({ id: STRANGER, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it('consults the shareable ACL for a non-admin, not a bare findById', async () => {
+    await verifyOrgMembership(member, ORG);
+    expect(mockFindAccessibleById).toHaveBeenCalledWith(member, ORG);
+    expect(mockFindById).not.toHaveBeenCalled();
+  });
+
+  it('404s a non-member', async () => {
+    mockFindAccessibleById.mockResolvedValue(null);
+    await expect(verifyOrgMembership(member, ORG)).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  // The anti-enumeration property: a caller must not be able to tell an org they cannot see from
+  // one that does not exist.
+  it('404s a missing org identically to an inaccessible one', async () => {
+    mockFindAccessibleById.mockResolvedValue(null);
+    const inaccessible = await verifyOrgMembership(member, ORG).catch((e: Error) => e);
+    mockFindAccessibleById.mockResolvedValue(null);
+    const missing = await verifyOrgMembership(member, OTHER_ORG).catch((e: Error) => e);
+
+    expect((inaccessible as Error).constructor).toBe((missing as Error).constructor);
+    expect((inaccessible as Error).message).toBe((missing as Error).message);
+  });
+
+  it('grants an admin any org, verifying existence only', async () => {
+    await expect(verifyOrgMembership(asUser({ id: STRANGER, groups: [], isAdmin: true }), ORG)).resolves.toBe(org);
+    expect(mockFindById).toHaveBeenCalledWith(ORG);
+    expect(mockFindAccessibleById).not.toHaveBeenCalled();
+  });
+
+  it('404s an admin when the org does not exist', async () => {
+    mockFindById.mockResolvedValue(null);
+    await expect(verifyOrgMembership(asUser({ id: STRANGER, groups: [], isAdmin: true }), ORG)).rejects.toBeInstanceOf(
+      NotFoundError
+    );
   });
 });
 

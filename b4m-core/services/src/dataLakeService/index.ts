@@ -28,6 +28,7 @@ export * from './filterStillManagedLakes';
 export * from './transferLakeOwnership';
 export * from './lakeGrantWriteRule';
 export * from './manageLakeGrant';
+export * from './lapseDepartedMemberLakeAccess';
 export * from './lakeOwnershipCandidates';
 export * from './authorizeBatchAccess';
 export * from './fallbackLakeTags';

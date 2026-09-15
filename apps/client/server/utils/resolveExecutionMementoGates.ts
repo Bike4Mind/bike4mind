@@ -18,7 +18,7 @@
 import type { Logger } from '@bike4mind/observability';
 import type { IAgentExecution } from '@bike4mind/database';
 import type { IAdminSettingsRepository } from '@bike4mind/common';
-import { resolveMementoGates, type MementoGates } from '@bike4mind/services';
+import { resolveMementoGates, type MementoGates } from '@bike4mind/services/llm';
 import { isMementosV2Enabled } from '@server/memory/mementoLedgerMirror';
 
 export type MementoGateExecution = Pick<IAgentExecution, 'userId' | 'enableMementos' | 'resolvedMementoGates'>;

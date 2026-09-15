@@ -39,19 +39,20 @@ export const THINKING_ANSWER_HEADROOM_TOKENS = 1000;
  * resolves to that entire cap, which is the only value leaving room for an answer
  * after a long trace.
  *
- * DeepSeek Flash misses every clause for its own set of reasons: no
+ * DeepSeek Flash and V4 Pro miss every clause for their own set of reasons: no
  * `thinkingStyle` (that field is Anthropic's), absent from the OpenAI-only
  * REASONING_SUPPORTED_MODELS, and DEEPSEEK_PROFILE declares plain `max_tokens`
  * rather than `max_completion_tokens` because that is the parameter DeepSeek
- * takes. It reasons on every turn by default at effort 'high', spends those
- * tokens inside `max_tokens`, and a 4096 budget against a 393K cap is consumed
- * by the monologue alone: the turn comes back `finish_reason: 'length'` with no
- * content and deepseekBackend throws.
+ * takes. Both reason on every turn by default at effort 'high', spend those
+ * tokens inside `max_tokens`, and a 4096 budget against their multi-hundred-K
+ * caps is consumed by the monologue alone: the turn comes back
+ * `finish_reason: 'length'` with no content and deepseekBackend throws.
  */
 const REASONS_WITHIN_OUTPUT_BUDGET_IDS: ReadonlySet<string> = new Set<string>([
   ChatModels.KIMI_K2_THINKING_BEDROCK,
   ChatModels.KIMI_K2_5_BEDROCK,
   ChatModels.DEEPSEEK_FLASH,
+  ChatModels.DEEPSEEK_V4_PRO,
 ]);
 
 /**

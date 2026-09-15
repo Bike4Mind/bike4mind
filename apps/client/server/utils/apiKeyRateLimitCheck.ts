@@ -28,7 +28,32 @@ export interface RateLimitContext {
   method: string;
 }
 
+/**
+ * Which counter a request is charged to. 'request' is the key's configured
+ * quota - the default for all ordinary traffic. 'management' is a small,
+ * separate quota used only by key-administration routes, so a key whose own
+ * request window is exhausted can still call the route that would raise it.
+ */
+export type RateLimitCounter = 'request' | 'management';
+
+/**
+ * Ceilings for the 'management' counter. Fixed rather than key-configurable:
+ * these routes only mutate key metadata and cannot consume model spend, so the
+ * quota exists to bound abuse, not to meter cost. Small enough that it is
+ * never a useful amplification target, generous enough for a client that
+ * retries a ceiling change a few times.
+ */
+export const MANAGEMENT_RATE_LIMIT = {
+  requestsPerMinute: 5,
+  requestsPerDay: 50,
+} as const;
+
 export interface RateLimitOptions {
+  /**
+   * Which counter to charge this request to. Defaults to 'request' (the key's
+   * own configured quota). See {@link RateLimitCounter}.
+   */
+  counter?: RateLimitCounter;
   /**
    * Whether this request should consume the per-DAY quota. Defaults to true.
    * Set false for cheap idempotent reads (async job-status polls, content
@@ -45,10 +70,16 @@ export interface RateLimitOptions {
  * enforcer (checkApiKeyRateLimit) and the reset (resetApiKeyRateLimit) must
  * derive keys from here so they can never desync.
  */
-export function buildRateLimitKeys(keyId: string): { minuteKey: string; dayKey: string } {
+export function buildRateLimitKeys(
+  keyId: string,
+  counter: RateLimitCounter = 'request'
+): { minuteKey: string; dayKey: string } {
+  // The default counter keeps its original, unnamespaced key format so live
+  // windows are not orphaned by this function gaining a second counter.
+  const scope = counter === 'request' ? '' : `${counter}:`;
   return {
-    minuteKey: `api-key-rate-limit:${keyId}:minute`,
-    dayKey: `api-key-rate-limit:${keyId}:day`,
+    minuteKey: `api-key-rate-limit:${keyId}:${scope}minute`,
+    dayKey: `api-key-rate-limit:${keyId}:${scope}day`,
   };
 }
 
@@ -61,7 +92,9 @@ export function buildRateLimitKeys(keyId: string): { minuteKey: string; dayKey: 
  *
  * Note: embed keys additionally have per-session counters
  * (`embed-session-rate-limit:{sessionId}:minute|:day`, see ./embedSessionRateLimit)
- * which this deliberately does not clear.
+ * and the 'management' counter has its own keys; this deliberately clears
+ * neither - a reset restores the key's request budget, and the management
+ * quota is not the budget anyone is asking to have restored.
  */
 export async function resetApiKeyRateLimit(keyId: string): Promise<void> {
   const { minuteKey, dayKey } = buildRateLimitKeys(keyId);
@@ -154,7 +187,8 @@ async function decrementCounter(key: string): Promise<number> {
  * instead of accumulating to the ceiling forever.
  *
  * @param keyId - The API key ID to check
- * @param rateLimit - The rate limit configuration from the API key
+ * @param rateLimit - The rate limit configuration from the API key (ignored when
+ *   `options.counter` is 'management', which has its own fixed ceilings)
  * @param context - Optional context for analytics logging (userId, endpoint, method)
  * @param options - Enforcement options (e.g. exempt cheap reads from the day quota)
  * @returns RateLimitResult with allowed status, headers, and error if exceeded
@@ -165,11 +199,14 @@ export async function checkApiKeyRateLimit(
   context?: RateLimitContext,
   options: RateLimitOptions = {}
 ): Promise<RateLimitResult> {
-  const { requestsPerMinute, requestsPerDay } = rateLimit;
-  const { meterDailyLimit = true } = options;
+  const { meterDailyLimit = true, counter = 'request' } = options;
+  // A management request is charged to its own counter with its own fixed
+  // ceilings, so an exhausted request window neither blocks it nor is advanced
+  // by it.
+  const { requestsPerMinute, requestsPerDay } = counter === 'management' ? MANAGEMENT_RATE_LIMIT : rateLimit;
 
   try {
-    const { minuteKey, dayKey } = buildRateLimitKeys(keyId);
+    const { minuteKey, dayKey } = buildRateLimitKeys(keyId, counter);
 
     // Step 1: Atomically try to increment the minute counter (only if under
     // limit). The returned expiresAt is the real window end -> exact Retry-After.

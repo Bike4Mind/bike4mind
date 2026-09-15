@@ -9,7 +9,7 @@ import { CompletedGroupNotification } from './CompletedGroupNotification';
 import { PermissionPrompt } from './PermissionPrompt';
 import type { PermissionResponse } from './PermissionPrompt';
 import { UserQuestionPrompt } from './UserQuestionPrompt';
-import type { UserQuestionResponse } from '@bike4mind/services';
+import type { UserQuestionResponse } from '@bike4mind/services/llm';
 import { ReviewGatePrompt } from './ReviewGatePrompt';
 import { ExitHandoffPrompt } from './ExitHandoffPrompt';
 import { ConfigEditor } from './ConfigEditor';

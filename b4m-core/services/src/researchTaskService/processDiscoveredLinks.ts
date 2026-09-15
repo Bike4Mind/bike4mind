@@ -81,8 +81,15 @@ export const processDiscoveredLinks = async (
 
     if (!links || links.length === 0) return;
 
+    // Owner-scoped, matching findExistingResearchData: the org narrows the lookup, it never widens
+    // it to another member's research data. Resolving a colleague's record here would hand this
+    // task their FabFile.
     const researchData = researchTask.organizationId
-      ? await db.researchDatas.findByUrlAndOrganizationId(url, researchTask.organizationId)
+      ? await db.researchDatas.findByUrlAndUserIdAndOrganizationId(
+          url,
+          researchTask.userId,
+          researchTask.organizationId
+        )
       : await db.researchDatas.findByUrlAndUserId(url, researchTask.userId);
 
     if (!researchData)

@@ -215,10 +215,11 @@ describe('updateDataLake', () => {
       expect(audit.record).not.toHaveBeenCalled();
     });
 
-    // The regression this separation exists to prevent. ' ' is accepted by the request schema and
-    // is TRUTHY, so it really does gate the lake - but the audit diff trims it to "unset", exactly
-    // like ''. When the diff was the write gate, the clearing PUT looked like a no-op and the lake
-    // stayed gated to a tag nobody can hold, with no API path left to clear it.
+    // The regression this separation exists to prevent. ' ' is TRUTHY, so a stored whitespace-only
+    // tag really does gate the lake - the request schema now trims and refuses one, but rows
+    // written before that still exist - while the audit diff trims it to "unset", exactly like ''.
+    // When the diff was the write gate, the clearing PUT looked like a no-op and the lake stayed
+    // gated to a tag nobody can hold, with no API path left to clear it.
     it('clears a whitespace-only gate instead of mistaking the clear for a no-op', async () => {
       const existing = lake({ requiredUserTag: ' ' });
       const update = echoUpdate(existing);
