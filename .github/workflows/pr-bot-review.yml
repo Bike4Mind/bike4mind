@@ -524,6 +524,17 @@ jobs:
             #             which sentence `Report incomplete review` prints. Any new jq
             #             whose output decides something must supply its own program
             #             with `-n`/`--args` fixtures instead.
+            #   awk     - no startup file and no default search path: gawk reads `AWKPATH`
+            #             only for `-f`, and every invocation here supplies its program as
+            #             an argument. Its PROGRAM TEXT is the input source that matters,
+            #             since `system()` and `print | "cmd"` are execution, so the two
+            #             invocations are pinned by value in the guard test instead.
+            #   apt-get - runs arbitrary maintainer scripts as root, and reads `/etc/apt`
+            #             and `APT_CONFIG`. It does not qualify because it runs UPSTREAM of
+            #             the agent, in the bubblewrap install step, so nothing it reads is
+            #             agent-writable yet. That ordering is the whole bound, so its two
+            #             invocations are pinned by value too - a third one, or the same one
+            #             moved below the agent, has to be argued for.
             # `gh` was checked and does not qualify: an alias cannot shadow a built-in
             # command, and the configured pager is not invoked when stdout is not a TTY.
             # `bash` does not qualify: GitHub runs step shells non-interactive and

