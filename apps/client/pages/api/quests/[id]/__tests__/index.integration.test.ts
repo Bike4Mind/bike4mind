@@ -154,6 +154,25 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     expect(res._getJSONData()).toMatchObject({ id: 'quest-1', status: 'completed' });
   });
 
+  it('carries type unconditionally on a successful quest, matching the wait:true chat body', async () => {
+    validateWithScopes([ApiKeyScope.READ_NOTEBOOKS]);
+    mockQuestFindById.mockResolvedValue({
+      id: 'quest-1',
+      sessionId: 'sess-1',
+      status: 'done',
+      type: 'message',
+      reply: 'hi',
+      replies: ['hi'],
+      promptMeta: {},
+    });
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    // Same field, same value POST /api/chat's wait:true body carries for a successful turn
+    // (see the chat integration suite) - a caller uses one branch for both surfaces.
+    expect(res._getJSONData().type).toBe('message');
+  });
+
   it('accepts an ai:chat-only key (200) — the chat→poll happy path (OR widening)', async () => {
     validateWithScopes([ApiKeyScope.AI_CHAT]);
     const { req, res } = fire();
@@ -504,6 +523,52 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getStatusCode()).toBe(200);
       const body = res._getJSONData();
       expect(JSON.stringify(body.promptMeta.functionCalls)).toContain('PRIVATE TOOL OUTPUT');
+    });
+  });
+
+  describe('errorCode classifier (a poller must be able to tell a credit failure from a real answer)', () => {
+    it('is undefined on a normal completed quest', async () => {
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().errorCode).toBeUndefined();
+    });
+
+    it('surfaces errorCode alongside type: "error" and the credit-copy reply, still as 200', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'done',
+        type: 'error',
+        errorCode: 'insufficient_credits',
+        reply: "You're out of credits. This request needs about 10 credits, but only 2 are available.",
+        replies: [],
+        promptMeta: {},
+      });
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const body = res._getJSONData();
+      expect(body.type).toBe('error');
+      expect(body.errorCode).toBe('insufficient_credits');
+      expect(body.reply).toMatch(/out of credits/i);
+    });
+
+    it('surfaces errorCode: "spend_cap_exceeded" for the sibling classifier', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'done',
+        type: 'error',
+        errorCode: 'spend_cap_exceeded',
+        reply: 'This request would exceed the configured spend cap.',
+        replies: [],
+        promptMeta: {},
+      });
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().errorCode).toBe('spend_cap_exceeded');
     });
   });
 });

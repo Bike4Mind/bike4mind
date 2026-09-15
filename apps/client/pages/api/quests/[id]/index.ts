@@ -94,6 +94,10 @@ const handler = baseApi({
     // A recovered timeout is `status: 'done'` carrying an error message, so a headless client
     // needs `type` to machine-distinguish it from a genuine success.
     type: quest.type,
+    // Reason for a `type: 'error'` quest, when there is a machine-readable one (credit
+    // exhaustion today) - see chatContract's 200 description. Undefined on a successful quest
+    // AND on the error classes that carry no code, so `type` stays the failure signal.
+    errorCode: quest.errorCode,
     sessionId: quest.sessionId,
     reply: quest.reply,
     replies: quest.replies,
