@@ -11,6 +11,10 @@ const logger = {
   log: vi.fn(),
 } as unknown as ModerateImportedKnowledgeFilesArgs['logger'];
 
+// The stamp the claim was acquired with; persist/release are guarded on it so a run whose claim was
+// superseded mid-scan cannot write over its successor.
+const CLAIMED_AT = new Date('2026-01-01T00:00:00Z');
+
 function buildArgs(overrides: Partial<ModerateImportedKnowledgeFilesArgs> = {}): ModerateImportedKnowledgeFilesArgs {
   return {
     filePaths: ['knowledge/u1/a'],
@@ -23,8 +27,8 @@ function buildArgs(overrides: Partial<ModerateImportedKnowledgeFilesArgs> = {}):
       moderationStatus: 'clean' as const,
     })) as unknown as ModerateImportedKnowledgeFilesArgs['moderate'],
     logger,
-    claim: vi.fn(async () => ({ _id: 'oid', id: 'f1', mimeType: 'text/plain' })),
-    persist: vi.fn(async () => undefined),
+    claim: vi.fn(async () => ({ _id: 'oid', id: 'f1', mimeType: 'text/plain', moderationClaimedAt: CLAIMED_AT })),
+    persist: vi.fn(async () => true),
     release: vi.fn(async () => undefined),
     retireMissingObject: vi.fn(async () => undefined),
     downloadBytes: vi.fn(async () => Buffer.from('x')),
@@ -37,7 +41,7 @@ describe('moderateImportedKnowledgeFiles', () => {
   it('persists a clean verdict for a non-image', async () => {
     const args = buildArgs();
     await moderateImportedKnowledgeFiles(args);
-    expect(args.persist).toHaveBeenCalledWith('oid', { moderationStatus: 'clean' });
+    expect(args.persist).toHaveBeenCalledWith('oid', { moderationStatus: 'clean' }, CLAIMED_AT);
     expect(args.release).not.toHaveBeenCalled();
   });
 
@@ -49,11 +53,23 @@ describe('moderateImportedKnowledgeFiles', () => {
     })) as unknown as ModerateImportedKnowledgeFilesArgs['moderate'];
     const args = buildArgs({ moderate });
     await moderateImportedKnowledgeFiles(args);
-    expect(args.persist).toHaveBeenCalledWith('oid', {
-      moderationStatus: 'blocked',
-      mimeType: 'image/png',
-      blockReason: 'unsupported_format',
-    });
+    expect(args.persist).toHaveBeenCalledWith(
+      'oid',
+      { moderationStatus: 'blocked', mimeType: 'image/png', blockReason: 'unsupported_format' },
+      CLAIMED_AT
+    );
+  });
+
+  it('does not count a verdict whose claim was superseded mid-scan', async () => {
+    // The rescue sweep can return a stale 'scanning' row to 'pending' while this scan is still
+    // running, and a successor can then re-claim it. persist is guarded on the claim stamp, so our
+    // write is correctly dropped - but it is not progress this run may count, or the sweep's own
+    // recovery accounting overstates itself.
+    const args = buildArgs({ persist: vi.fn(async () => false) });
+    const res = await moderateImportedKnowledgeFiles(args);
+    expect(res).toEqual({ scanned: 0 });
+    expect(args.release).not.toHaveBeenCalled(); // the successor owns the row now; do not touch it
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('superseded'));
   });
 
   it('skips a file whose claim was lost (owned by another scan / already terminal)', async () => {
@@ -70,7 +86,7 @@ describe('moderateImportedKnowledgeFiles', () => {
     }) as unknown as ModerateImportedKnowledgeFilesArgs['moderate'];
     const args = buildArgs({ moderate });
     await moderateImportedKnowledgeFiles(args);
-    expect(args.release).toHaveBeenCalledWith('oid');
+    expect(args.release).toHaveBeenCalledWith('oid', CLAIMED_AT);
     expect(args.persist).not.toHaveBeenCalled();
   });
 
@@ -112,7 +128,7 @@ describe('moderateImportedKnowledgeFiles', () => {
     }) as unknown as ModerateImportedKnowledgeFilesArgs['moderate'];
     const args = buildArgs({ moderate }); // terminalOnMissingObject not set
     await moderateImportedKnowledgeFiles(args);
-    expect(args.release).toHaveBeenCalledWith('oid');
+    expect(args.release).toHaveBeenCalledWith('oid', CLAIMED_AT);
     expect(args.persist).not.toHaveBeenCalled();
   });
 
@@ -131,7 +147,7 @@ describe('moderateImportedKnowledgeFiles', () => {
     }) as unknown as ModerateImportedKnowledgeFilesArgs['moderate'];
     const args = buildArgs({ moderate, terminalOnMissingObject: true });
     await moderateImportedKnowledgeFiles(args);
-    expect(args.release).toHaveBeenCalledWith('oid');
+    expect(args.release).toHaveBeenCalledWith('oid', CLAIMED_AT);
     expect(args.retireMissingObject).not.toHaveBeenCalled();
     expect(args.persist).not.toHaveBeenCalled();
   });
@@ -142,7 +158,7 @@ describe('moderateImportedKnowledgeFiles', () => {
     }) as unknown as ModerateImportedKnowledgeFilesArgs['moderate'];
     const args = buildArgs({ moderate, terminalOnMissingObject: true });
     await moderateImportedKnowledgeFiles(args);
-    expect(args.release).toHaveBeenCalledWith('oid');
+    expect(args.release).toHaveBeenCalledWith('oid', CLAIMED_AT);
     expect(args.persist).not.toHaveBeenCalled();
   });
 });

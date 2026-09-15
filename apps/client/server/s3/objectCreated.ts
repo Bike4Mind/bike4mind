@@ -79,9 +79,16 @@ export const func = withContext(async (event, context, logger) => {
     // single indivisible compare-and-swap: only ONE concurrent caller can transition
     // 'pending'/unset -> 'scanning'. A caller that loses the race (scanClaimed === null)
     // must not scan - whichever invocation won the claim owns the verdict for this file.
+    //
+    // moderationClaimedAt is stamped into the claim so the moderation rescue sweep can reclaim a crashed 'scanning' row by
+    // CLAIM age. Without it this door - the ordinary hosted-upload path, by far the highest-volume
+    // one - rides the sweep's legacy `updatedAt` fallback, which any unrelated write to the row
+    // resets; moderationClaimedAt exists to replace exactly that. It is also this invocation's claim
+    // identity, matched by writeVerdict below.
+    const claimedAt = new Date();
     const scanClaimed = await FabFile.findOneAndUpdate(
       { _id: metadata._id, moderationStatus: { $in: ['pending', null] } },
-      { $set: { moderationStatus: 'scanning' } },
+      { $set: { moderationStatus: 'scanning', moderationClaimedAt: claimedAt } },
       { new: true }
     );
 
@@ -93,6 +100,35 @@ export const func = withContext(async (event, context, logger) => {
     // waiting" - the eventual clean/blocked verdict is reported by whichever invocation
     // actually owns the scan.
     let moderationStatus: 'pending' | 'clean' | 'blocked' = 'pending';
+
+    // The verdict this invocation scanned, once it has one. Written by writeVerdict rather than
+    // through `metadata.save()` below, and doubles as the withTransaction retry guard.
+    let verdictPatch: { moderationStatus: 'clean' | 'blocked'; blockReason?: string } | null = null;
+
+    /**
+     * Write a terminal verdict guarded on the claim stamp acquired above, NOT on 'scanning' alone.
+     * The rescue sweep returns a stale 'scanning' row to 'pending' (moderationRescueSweep.ts), so a
+     * slow invocation here can find its claim superseded and a successor scan already in flight or
+     * finished; an unguarded write would then overwrite the successor's verdict - including
+     * un-quarantining a file it had just confirmed 'blocked'. Same shape as the chunk claim's
+     * identity-guarded release in queueHandlers/fabFileChunk.ts. Returns whether the write landed.
+     */
+    const writeVerdict = async (
+      patch: { moderationStatus: 'clean' | 'blocked'; blockReason?: string },
+      session: Parameters<Parameters<typeof withTransaction>[0]>[0]
+    ): Promise<boolean> => {
+      const res = await FabFile.updateOne(
+        { _id: metadata._id, moderationStatus: 'scanning', moderationClaimedAt: claimedAt },
+        { $set: patch, $unset: { moderationClaimedAt: 1 } },
+        { session }
+      );
+      if (res.matchedCount === 0) {
+        logger.warn(
+          `[Q2b] moderation claim for ${objectKey} was superseded mid-scan; discarding this invocation's verdict`
+        );
+      }
+      return res.matchedCount > 0;
+    };
 
     const user = await withTransaction(async session => {
       const user = await User.findById(metadata.userId).session(session);
@@ -109,11 +145,11 @@ export const func = withContext(async (event, context, logger) => {
       // NOT re-scan and potentially overwrite an already-terminal verdict (Rekognition
       // confidence jitter right at the threshold could flip a previously 'blocked' file to
       // 'clean' on redelivery, a silent un-quarantine).
-      if (moderationStatus !== 'pending') {
-        // Retry guard: withTransaction retries this callback on a transient transaction
-        // error. If we already completed a scan in a prior attempt of THIS invocation, reuse
-        // that verdict instead of re-invoking Rekognition a second time.
-        metadata.moderationStatus = moderationStatus;
+      if (verdictPatch) {
+        // Retry guard: withTransaction retries this callback on a transient transaction error. If we
+        // already completed a scan in a prior attempt of THIS invocation, re-apply that verdict (the
+        // rolled-back attempt's write is gone) instead of re-invoking Rekognition a second time.
+        if (!(await writeVerdict(verdictPatch, session))) moderationStatus = 'pending';
       } else if (!scanClaimed) {
         // Another invocation already owns this file's scan (or already finalized it) -
         // read a FRESH copy inside the transaction (not the stale pre-claim `metadata`) so
@@ -144,20 +180,25 @@ export const func = withContext(async (event, context, logger) => {
           moderateImageOrThrow,
           logger,
         });
-        moderationStatus = result.moderationStatus;
-        metadata.moderationStatus = moderationStatus;
+        // blockReason travels with the verdict (vs. just logging) so ops can distinguish an
+        // unscannable format from a confirmed-explicit match without CloudWatch.
+        verdictPatch = {
+          moderationStatus: result.moderationStatus,
+          ...(result.blockReason ? { blockReason: result.blockReason } : {}),
+        };
         if (result.correctedMimeType && result.correctedMimeType !== metadata.mimeType) {
           // Persist the byte-sniffed real type so downstream consumers (e.g.
-          // isImageServeable) see the truth instead of the client-declared mimeType.
+          // isImageServeable) see the truth instead of the client-declared mimeType. Left on
+          // `metadata` (so the save below writes it, and the isAudioMimeType check after the
+          // transaction sees it) rather than folded into the guarded verdict: unlike the verdict, a
+          // sniffed type is derived from the bytes, so a superseded write only ever restates what
+          // the successor computes.
           metadata.mimeType = result.correctedMimeType;
         }
-        if (result.blockReason) {
-          // Persist why it was blocked (vs. just logging) so ops can
-          // distinguish an unscannable format from a confirmed-explicit match without
-          // CloudWatch.
-          metadata.blockReason = result.blockReason;
-          logger.warn(`[Q2b] ${objectKey} blocked with reason=${result.blockReason}`);
-        }
+        if (result.blockReason) logger.warn(`[Q2b] ${objectKey} blocked with reason=${result.blockReason}`);
+        // 'pending' on a superseded claim, matching the losing-claim branch above: the client reads
+        // it as "not yet servable, keep waiting", and the successor reports the real verdict.
+        moderationStatus = (await writeVerdict(verdictPatch, session)) ? result.moderationStatus : 'pending';
       }
 
       changeStorageSize(user, object.size);

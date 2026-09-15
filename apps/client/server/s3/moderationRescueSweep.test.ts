@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({
   updateMany: vi.fn(),
   find: vi.fn(),
+  sort: vi.fn(),
   lean: vi.fn(),
   moderate: vi.fn(),
 }));
@@ -21,8 +22,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.updateMany.mockResolvedValue({});
   h.moderate.mockResolvedValue({ scanned: 1 });
-  // find(...).limit(...).lean()
-  h.find.mockReturnValue({ limit: vi.fn().mockReturnValue({ lean: h.lean }) });
+  // find(...).sort(...).limit(...).lean()
+  h.find.mockReturnValue({ sort: h.sort.mockReturnValue({ limit: vi.fn().mockReturnValue({ lean: h.lean }) }) });
 });
 
 describe('runModerationRescueSweep', () => {
@@ -36,6 +37,15 @@ describe('runModerationRescueSweep', () => {
     expect(filter.$or[0].moderationClaimedAt.$lt).toBeInstanceOf(Date);
     expect(filter.$or[1].updatedAt.$lt).toBeInstanceOf(Date);
     expect(update.$set.moderationStatus).toBe('pending');
+    // A crashed scan spent an attempt: count it, or a row that crashes its runner every time stays
+    // at attempts 0 and keeps winning the fairness sort ahead of never-tried rows forever.
+    expect(update.$inc).toEqual({ moderationAttempts: 1 });
+    // The stamp is only meaningful while 'scanning'; leaving it set would let a superseded runner's
+    // identity-guarded write still match.
+    expect(update.$unset).toEqual({ moderationClaimedAt: 1 });
+    // But NOT moderationLastAttemptAt: this reclaim is the only door that frees the row, so backing
+    // it off here would stop the same run from ever rescuing it.
+    expect(update.$set.moderationLastAttemptAt).toBeUndefined();
   });
 
   it('selects imported OR completed-upload pending rows, excluding abandoned presigns', async () => {
@@ -49,11 +59,30 @@ describe('runModerationRescueSweep', () => {
     expect(filter.filePath).toEqual({ $exists: true, $ne: '' });
     // Two arms: imported-knowledge keys, OR any completed upload (status 'complete'). An abandoned
     // presign (bare key, status still 'pending') matches neither, so it is never selected/re-selected.
-    const arms = filter.$or as Array<{ filePath?: RegExp; status?: string }>;
+    const arms = filter.$and[0].$or as Array<{ filePath?: RegExp; status?: string }>;
     const knowledgeArm = arms.find(a => a.filePath instanceof RegExp);
     expect(knowledgeArm?.filePath?.test('knowledge/u1/abc')).toBe(true);
     expect(knowledgeArm?.filePath?.test('9f2c-abc.png')).toBe(false);
     expect(arms).toContainEqual({ status: 'complete' });
+  });
+
+  it('backs off a row whose last attempt failed recently, but never one that has not been tried', async () => {
+    h.lean.mockResolvedValue([]);
+    await runModerationRescueSweep({ enabled: true, limit: 50, logger });
+    const backoff = h.find.mock.calls[0][0].$and[1].$or as Array<{ moderationLastAttemptAt: unknown }>;
+    // `null` matches missing-or-null, so a never-attempted row is always eligible. A bare $lt would
+    // exclude it: $lt does not match across BSON type brackets.
+    expect(backoff[0]).toEqual({ moderationLastAttemptAt: null });
+    expect((backoff[1].moderationLastAttemptAt as { $lt: Date }).$lt).toBeInstanceOf(Date);
+  });
+
+  it('orders selection by attempt count so a failing cluster cannot starve a stranded row', async () => {
+    // The starvation fix: an unset moderationAttempts sorts before any number, so a never-attempted
+    // row always takes a slot in the bounded window ahead of repeatedly-failing siblings - the
+    // guarantee, independent of how the backoff window is tuned. createdAt is the tiebreaker.
+    h.lean.mockResolvedValue([]);
+    await runModerationRescueSweep({ enabled: true, limit: 50, logger });
+    expect(h.sort).toHaveBeenCalledWith({ moderationAttempts: 1, createdAt: 1 });
   });
 
   it('reclaims stale scanning rows regardless of prefix, so a crashed ordinary upload is not stranded', async () => {

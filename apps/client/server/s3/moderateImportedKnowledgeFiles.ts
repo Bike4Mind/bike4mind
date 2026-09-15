@@ -10,6 +10,13 @@ interface ClaimedFabFile {
   _id: unknown;
   id: string;
   mimeType?: string;
+  /**
+   * The exact `moderationClaimedAt` this claim was acquired with. Threaded back into `persist` and
+   * `release` so each is guarded on the claim it owns rather than on `moderationStatus: 'scanning'`
+   * alone: the rescue sweep's stale-claim reclaim can free this row mid-scan and a successor can
+   * re-claim it, and an unguarded terminal write would then clobber the successor's verdict.
+   */
+  moderationClaimedAt?: Date;
 }
 
 export interface ModerateImportedKnowledgeFilesArgs {
@@ -29,13 +36,22 @@ export interface ModerateImportedKnowledgeFilesArgs {
    * terminal. Returns the claimed row so the verdict can be written back to its `_id`.
    */
   claim(filePath: string): Promise<ClaimedFabFile | null>;
-  /** Persist the terminal verdict (and any byte-sniff-corrected mime / block reason). */
+  /**
+   * Persist the terminal verdict (and any byte-sniff-corrected mime / block reason), guarded on the
+   * `claimedAt` stamp this run claimed with. Returns false when the guard misses - the claim was
+   * superseded mid-scan - so the caller counts only a verdict that actually landed.
+   */
   persist(
     _id: unknown,
-    patch: { moderationStatus: 'clean' | 'blocked'; mimeType?: string; blockReason?: string }
-  ): Promise<void>;
-  /** Release a claim back to `pending` after a transient scan failure so the row is never stranded on `scanning`. */
-  release(_id: unknown): Promise<void>;
+    patch: { moderationStatus: 'clean' | 'blocked'; mimeType?: string; blockReason?: string },
+    claimedAt?: Date
+  ): Promise<boolean>;
+  /**
+   * Release a claim back to `pending` after a transient scan failure so the row is never stranded on
+   * `scanning`. Guarded on `claimedAt` like `persist`: a superseded run must not clear its
+   * successor's claim, which would turn one takeover into a cascade.
+   */
+  release(_id: unknown, claimedAt?: Date): Promise<void>;
   /**
    * When true, a scan that fails because the object does not exist in storage (NoSuchKey only, never
    * a bare 404 - see isMissingObjectError) SOFT-DELETES the row (via `retireMissingObject`) instead
@@ -130,14 +146,25 @@ export async function moderateImportedKnowledgeFiles(
         logger,
       });
 
-      await persist(claimed._id, {
-        moderationStatus: result.moderationStatus,
-        ...(result.correctedMimeType && result.correctedMimeType !== claimed.mimeType
-          ? { mimeType: result.correctedMimeType }
-          : {}),
-        ...(result.blockReason ? { blockReason: result.blockReason } : {}),
-      });
-      scanned++;
+      const applied = await persist(
+        claimed._id,
+        {
+          moderationStatus: result.moderationStatus,
+          ...(result.correctedMimeType && result.correctedMimeType !== claimed.mimeType
+            ? { mimeType: result.correctedMimeType }
+            : {}),
+          ...(result.blockReason ? { blockReason: result.blockReason } : {}),
+        },
+        claimed.moderationClaimedAt
+      );
+      if (applied) {
+        scanned++;
+      } else {
+        // The rescue sweep reclaimed this row mid-scan and a successor now owns it. Dropping our
+        // verdict is the correct outcome - the successor writes its own - but it is not progress
+        // this run may count, or the sweep's own recovery accounting overstates itself.
+        logger.warn(`Moderation claim for ${filePath} was superseded mid-scan; discarding this run's verdict`);
+      }
     } catch (err) {
       if (claimed && terminalOnMissingObject && isMissingObjectError(err)) {
         // The object was never written to storage - an import whose bytes never landed leaves a
@@ -164,7 +191,7 @@ export async function moderateImportedKnowledgeFiles(
       }
       // Transient failure (Rekognition throttle/5xx, download error): release the claim so the
       // file stays held ('pending') and never stuck on 'scanning'. Fail-closed: still not servable.
-      if (claimed) await release(claimed._id).catch(() => undefined);
+      if (claimed) await release(claimed._id, claimed.moderationClaimedAt).catch(() => undefined);
       logger.warn(
         `Failed to moderate imported knowledge file ${filePath}: ${err instanceof Error ? err.message : String(err)}`
       );

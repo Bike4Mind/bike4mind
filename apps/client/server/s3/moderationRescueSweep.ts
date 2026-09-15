@@ -14,6 +14,14 @@ const MODERATION_STALE_MS = 30 * 60_000;
 // Left-anchored so a future filePath index can seek it.
 const KNOWLEDGE_KEY_PREFIX = /^knowledge\//;
 
+// How long a row released by a FAILED attempt is held out of the selection. The failures this
+// covers are the ones a retry cannot fix quickly - AccessDenied on the bucket, a Rekognition
+// 5xx/throttle, a storage 503 - so re-selecting such a row on the very next 60s worker tick burns
+// the window on a scan that is going to fail again. Only the transient release stamps
+// moderationLastAttemptAt (the stale-claim reclaim below deliberately does not), so a crashed
+// 'scanning' row is still recovered by the same run that reclaims it.
+const MODERATION_RETRY_BACKOFF_MS = 60 * 60_000;
+
 export interface ModerationRescueSweepArgs {
   /** Whether image moderation is on. When off, the sweep no-ops (see below) rather than whitewashing the held backlog. */
   enabled: boolean;
@@ -43,6 +51,20 @@ export interface ModerationRescueSweepArgs {
  * A selected ordinary row is `status: 'complete'` - its bytes did land - so a missing read there is a
  * storage blip, released as transient, never soft-deleted. See KNOWLEDGE_KEY_PREFIX.
  *
+ * Repeated failure cannot starve a stranded row. A non-404 failure (AccessDenied, a Rekognition
+ * 5xx/throttle, a storage 503) is released back to 'pending' and would otherwise be re-selected in
+ * natural order at full cap every run, so a cluster of failing `knowledge/` imports could fill
+ * `limit` and hide a genuinely stranded one forever. Two things prevent that, both keyed on the
+ * bookkeeping the release writes (moderationAttempts / moderationLastAttemptAt):
+ *   - the selection SORTS by moderationAttempts ascending, and an unset count sorts before any
+ *     number, so a never-attempted row always takes precedence over any repeatedly-failing sibling
+ *     no matter how many there are - the guarantee, independent of how the backoff is tuned;
+ *   - a row released by a failed attempt is held out of the selection for MODERATION_RETRY_BACKOFF_MS,
+ *     so a hot failure does not consume a window it is going to fail out of again.
+ * Deliberately no terminal attempt cap: a give-up state would be unrecoverable, since there is no
+ * operator re-scan route for a FabFile (unlike a published artifact's unblock path). A row keeps
+ * being retried, just never ahead of a row that has not been tried.
+ *
  * Re-scans in place with the same claim/persist wiring as the import path. Runs from the daily
  * reconcile cron; recovery latency is coarse but the held file is fail-closed (unservable) until it
  * completes, so lag is safe.
@@ -62,6 +84,7 @@ export async function runModerationRescueSweep({
   if (!enabled) return { rescanned: 0 };
 
   const cutoff = new Date(Date.now() - MODERATION_STALE_MS);
+  const retryAfter = new Date(Date.now() - MODERATION_RETRY_BACKOFF_MS);
 
   // A row stranded on 'scanning' (a claim whose scan crashed before releasing it) can never be
   // re-claimed by the pending|null CAS, so first return stale claims to 'pending'. Gate on
@@ -82,7 +105,17 @@ export async function runModerationRescueSweep({
         { moderationClaimedAt: { $exists: false }, updatedAt: { $lt: cutoff } },
       ],
     },
-    { $set: { moderationStatus: 'pending' } }
+    {
+      $set: { moderationStatus: 'pending' },
+      // A crashed scan consumed an attempt, so count it: without this a row that crashes its
+      // runner every time stays at attempts 0 and keeps winning the fairness sort forever. No
+      // moderationLastAttemptAt stamp though - that would back the row off for a full window, and
+      // this reclaim is the only door that frees it, so it would never be scanned by the same run.
+      $inc: { moderationAttempts: 1 },
+      // Only meaningful while 'scanning'; leaving it set would make the row's next claim
+      // indistinguishable from a live one to the identity guards in knowledgeModerationDeps.
+      $unset: { moderationClaimedAt: 1 },
+    }
   );
 
   // Select stale 'pending' rows whose bytes are (or should be) present: imported-knowledge rows (their
@@ -97,10 +130,22 @@ export async function runModerationRescueSweep({
       deletedAt: null, // matches missing-or-null; a soft-deleted upload is not stranded, skip it
       createdAt: { $lt: cutoff },
       filePath: { $exists: true, $ne: '' },
-      $or: [{ filePath: KNOWLEDGE_KEY_PREFIX }, { status: 'complete' }],
+      // Two independent $ors, so they have to share an $and rather than one duplicate key.
+      $and: [
+        { $or: [{ filePath: KNOWLEDGE_KEY_PREFIX }, { status: 'complete' }] },
+        // Backoff arm. `null` matches missing-or-null, so a row that has never failed is always
+        // eligible; a $lt alone would exclude it, since $lt does not match across BSON type
+        // brackets.
+        { $or: [{ moderationLastAttemptAt: null }, { moderationLastAttemptAt: { $lt: retryAfter } }] },
+      ],
     },
     { filePath: 1, userId: 1 }
   )
+    // Fairness: never-attempted rows first (an unset count sorts before any number), then the
+    // least-retried, oldest first. This is what makes starvation by a failing cluster impossible
+    // rather than merely unlikely. Matches the leading keys of the sweep's index so the planner
+    // streams in this order and stops at `limit`.
+    .sort({ moderationAttempts: 1, createdAt: 1 })
     .limit(limit)
     .lean<Array<{ filePath: string; userId: string }>>();
 

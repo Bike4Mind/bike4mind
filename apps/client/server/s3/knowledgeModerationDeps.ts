@@ -29,20 +29,47 @@ export function buildKnowledgeModerationDeps(
     moderate: moderateUploadedFile,
     logger,
     claim: async filePath => {
+      const claimedAt = new Date();
       const claimed = await FabFile.findOneAndUpdate(
         { filePath, moderationStatus: { $in: ['pending', null] } },
-        { $set: { moderationStatus: 'scanning', moderationClaimedAt: new Date() } },
+        { $set: { moderationStatus: 'scanning', moderationClaimedAt: claimedAt } },
         { new: true }
       );
-      return claimed ? { _id: claimed._id, id: claimed.id, mimeType: claimed.mimeType } : null;
+      return claimed
+        ? { _id: claimed._id, id: claimed.id, mimeType: claimed.mimeType, moderationClaimedAt: claimedAt }
+        : null;
     },
-    persist: async (_id, patch) => {
-      await FabFile.updateOne({ _id: _id as Types.ObjectId }, { $set: patch });
+    // Both writers below are guarded on the claim stamp, not on 'scanning' alone: the rescue sweep
+    // can reclaim a stale 'scanning' row mid-scan and a successor can re-claim it, and an
+    // unguarded write here would then land on a claim this run no longer owns - clobbering a
+    // successor's terminal verdict, or clearing its claim and re-opening the row to a third runner.
+    // Same identity-guard shape as the chunk claim's release in queueHandlers/fabFileChunk.ts.
+    persist: async (_id, patch, claimedAt) => {
+      const res = await FabFile.updateOne(
+        {
+          _id: _id as Types.ObjectId,
+          moderationStatus: 'scanning',
+          ...(claimedAt ? { moderationClaimedAt: claimedAt } : {}),
+        },
+        { $set: patch, $unset: { moderationClaimedAt: 1 } }
+      );
+      return res.matchedCount > 0;
     },
-    release: async _id => {
+    release: async (_id, claimedAt) => {
       await FabFile.updateOne(
-        { _id: _id as Types.ObjectId, moderationStatus: 'scanning' },
-        { $set: { moderationStatus: 'pending' } }
+        {
+          _id: _id as Types.ObjectId,
+          moderationStatus: 'scanning',
+          ...(claimedAt ? { moderationClaimedAt: claimedAt } : {}),
+        },
+        {
+          // The attempt bookkeeping the rescue sweep's fairness sort and backoff read - see
+          // moderationRescueSweep.ts. Written here because this is the single point every
+          // transient scan failure funnels through.
+          $set: { moderationStatus: 'pending', moderationLastAttemptAt: new Date() },
+          $inc: { moderationAttempts: 1 },
+          $unset: { moderationClaimedAt: 1 },
+        }
       );
     },
     // A missing-object orphan (see moderateImportedKnowledgeFiles.terminalOnMissingObject): the row's
