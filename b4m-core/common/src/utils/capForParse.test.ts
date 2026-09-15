@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { capForParse, DEFAULT_PARSE_CAP } from './capForParse';
 
 describe('capForParse', () => {
-  it('returns short input unchanged (same reference)', () => {
+  it('returns short input unchanged', () => {
     const input = 'hello world';
     expect(capForParse(input, 100)).toBe(input);
   });

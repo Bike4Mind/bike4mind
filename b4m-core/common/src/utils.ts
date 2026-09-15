@@ -207,17 +207,22 @@ export async function parallelLimit<T, R>(items: T[], limit: number, asyncFn: (i
 }
 
 export const extractSnippetMeta = (content: string): { sections: SnippetSection[] } => {
-  content = capForParse(content, SNIPPET_META_PARSE_CAP);
+  // Bound the SCAN, not the value. One caller renders these sections as the user's own
+  // chat message, so capping the returned text would silently shorten a large paste
+  // with no marker; snippet markers are only looked for in the capped prefix, and the
+  // tail rides along as trailing text so the rendered message stays whole.
+  const head = capForParse(content, SNIPPET_META_PARSE_CAP);
+  const tail = content.slice(head.length);
   const snippetRegex = /<!--snippet-meta\s*(\{[\s\S]*?\})\s*-->[\n\s]*([\s\S]*?)(?=<!--snippet-meta|$)/g;
   const sections: SnippetSection[] = [];
   let lastIndex = 0;
   let match;
 
   // Find all snippets
-  while ((match = snippetRegex.exec(content)) !== null) {
+  while ((match = snippetRegex.exec(head)) !== null) {
     // Add text before snippet if any
     if (match.index > lastIndex) {
-      const textBefore = content.slice(lastIndex, match.index).trim();
+      const textBefore = head.slice(lastIndex, match.index).trim();
       if (textBefore) {
         sections.push({ type: 'text', content: textBefore });
       }
@@ -236,12 +241,10 @@ export const extractSnippetMeta = (content: string): { sections: SnippetSection[
     lastIndex = match.index + match[0].length;
   }
 
-  // Add remaining text if any
-  if (lastIndex < content.length) {
-    const remainingText = content.slice(lastIndex).trim();
-    if (remainingText) {
-      sections.push({ type: 'text', content: remainingText });
-    }
+  // Add remaining text if any, including the uncapped tail
+  const remainingText = (head.slice(lastIndex) + tail).trim();
+  if (remainingText) {
+    sections.push({ type: 'text', content: remainingText });
   }
 
   return { sections };

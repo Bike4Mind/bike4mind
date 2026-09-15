@@ -26,4 +26,21 @@ describe('extractSnippetMeta', () => {
     const { sections } = extractSnippetMeta(adversarial);
     expect(Array.isArray(sections)).toBe(true);
   });
+  it('keeps text past the parse cap in the returned sections', () => {
+    // The cap bounds the SCAN only. These sections are rendered as the user's own chat
+    // message, so a large paste must come back whole rather than silently shortened.
+    const tail = 'TAIL_MARKER';
+    const oversized = 'a'.repeat(300_000) + tail;
+    const { sections } = extractSnippetMeta(oversized);
+    const rendered = sections.map(s => s.content).join('');
+    expect(rendered).toHaveLength(oversized.length);
+    expect(rendered.endsWith(tail)).toBe(true);
+  });
+
+  it('keeps the tail when a snippet ends exactly at the cap boundary', () => {
+    const meta = '<!--snippet-meta {"id":"1"} -->';
+    const head = meta + 'x'.repeat(256_000 - meta.length);
+    const { sections } = extractSnippetMeta(head + 'TAIL_MARKER');
+    expect(sections.map(s => s.content).join('')).toContain('TAIL_MARKER');
+  });
 });

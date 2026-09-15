@@ -21,10 +21,12 @@ import { capForParse } from '@bike4mind/common';
 
 export type ParsedNativeToolCall = { id: string; name: string; index: number; arguments: string };
 
-// The per-call regex backtracks super-linearly on a section full of unterminated
-// markers; cap the section so malformed model output can't pin CPU. 256k is far
-// above any real native tool-call section.
-const NATIVE_TOOL_SECTION_PARSE_CAP = 256_000;
+// The per-call regex is quadratic in the marker count on a section full of
+// unterminated markers, so the cap buys cost back superlinearly. Sized from the
+// measured curve rather than from headroom: ~6ms at this cap versus ~400ms at 256k,
+// and a real native tool-call section is orders of magnitude smaller. The section is
+// model output, which a prompt injection can steer, so the constant matters.
+const NATIVE_TOOL_SECTION_PARSE_CAP = 32_000;
 
 const SECTION_BEGIN = '<|tool_calls_section_begin|>';
 const SECTION_END = '<|tool_calls_section_end|>';

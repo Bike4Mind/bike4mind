@@ -150,4 +150,11 @@ describe('stripFabricatedLinks', () => {
     const input = 'See [the API](<https://docs.anthropic.com/en/api>) for details.';
     expect(stripFabricatedLinks(input)).toBe(input);
   });
+  it('does not truncate a reply longer than the scan cap', () => {
+    // The 200k cap bounds the scan; the tail is re-appended so an oversized reply is
+    // passed through rather than silently cut off mid-sentence.
+    const oversized = 'x'.repeat(250_000) + ' END_MARKER';
+    const out = stripFabricatedLinks(oversized);
+    expect(out).toBe(oversized);
+  });
 });

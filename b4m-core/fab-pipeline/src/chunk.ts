@@ -1,6 +1,5 @@
 import {
   BedrockEmbeddingModel,
-  capForParse,
   countCodePoints,
   DEFAULT_PASSAGE_TOKEN_TARGET,
   IFabFile,
@@ -50,6 +49,36 @@ const MAX_PPTX_SLIDES = 5_000;
 const MAX_SLIDE_XML_BYTES = 16 * 1024 * 1024;
 const MAX_PPTX_TOTAL_XML_BYTES = 32 * 1024 * 1024;
 const MAX_PPTX_TEXT_CHARS = 2_000_000;
+
+// Pull the bodies of `<a:t>` text runs out of a PPTX slide's XML with a linear scan.
+// The equivalent regex (`/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g`) is quadratic on XML that
+// opens runs it never closes: every `<a:t` restarts a lazy scan to the end of the input.
+// A .pptx is a zip, so the uploader picks the decompressed size, which made that a CPU
+// sink up to the per-slide byte cap. Scanning with indexOf is linear in the XML length,
+// so the cost is bounded without a parse cap that would truncate a real slide's markup.
+const extractSlideRunTexts = (xml: string): string[] => {
+  const CLOSE = '</a:t>';
+  const texts: string[] = [];
+  let cursor = 0;
+  while (cursor < xml.length) {
+    const open = xml.indexOf('<a:t', cursor);
+    if (open === -1 || open + 4 >= xml.length) break;
+    // `<a:tbl>`, `<a:tc>` and `<a:tab/>` share the prefix; a run's name ends at `>` or
+    // whitespace (runs frequently carry attributes, e.g. `<a:t xml:space="preserve">`).
+    const afterName = xml[open + 4];
+    if (afterName !== '>' && !/\s/.test(afterName)) {
+      cursor = open + 4;
+      continue;
+    }
+    const openEnd = xml.indexOf('>', open + 4);
+    if (openEnd === -1) break;
+    const close = xml.indexOf(CLOSE, openEnd + 1);
+    if (close === -1) break;
+    texts.push(xml.slice(openEnd + 1, close));
+    cursor = close + CLOSE.length;
+  }
+  return texts;
+};
 
 export const ChunkSchema = z.object({
   text: z.string(),
@@ -599,10 +628,6 @@ export class SmartChunker {
     const slideTexts: string[] = [];
     let totalXmlBytes = 0;
     let totalTextChars = 0;
-    // The `<a:t>` run regex backtracks quadratically on unterminated runs; cap each
-    // slide's XML so a crafted (or corrupt) slide can't pin CPU. 512k is far above a
-    // real slide's text XML.
-    const SLIDE_XML_PARSE_CAP = 512_000;
     for (let i = 0; i < slidePaths.length; i++) {
       const entry = zip.files[slidePaths[i]];
       // Bound the decompressed XML as it inflates rather than trusting the entry's self-declared
@@ -623,12 +648,8 @@ export class SmartChunker {
         continue;
       }
       totalXmlBytes += read.byteLength;
-      const xml = capForParse(read.text, SLIDE_XML_PARSE_CAP);
-      // `<a:t>` runs frequently carry attributes (e.g. `<a:t xml:space="preserve">`);
-      // match the open tag with optional attributes, else PPTX text is silently dropped.
-      const runs = xml.match(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g) ?? [];
-      const text = runs
-        .map(r => decodeXmlEntities(r.replace(/<a:t(?:\s[^>]*)?>|<\/a:t>/g, '')))
+      const text = extractSlideRunTexts(read.text)
+        .map(r => decodeXmlEntities(r))
         .join(' ')
         .replace(/\s+/g, ' ')
         .trim();

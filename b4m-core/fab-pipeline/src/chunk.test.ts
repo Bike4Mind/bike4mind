@@ -497,6 +497,20 @@ describe('SmartChunker', () => {
       expect(allText).toContain('Bare run text');
     });
 
+    it('stays linear on a slide that opens runs it never closes', async () => {
+      // The previous matcher restarted a lazy `[\s\S]*?` scan at every `<a:t`, so XML full of
+      // unterminated runs cost O(n^2) - and a .pptx is a zip, so the uploader picks n up to the
+      // per-slide byte cap. 2MB of opens finished in minutes before; the indexOf scan is linear.
+      // `<a:tbl>` shares the prefix and must not be mistaken for a run.
+      const unterminated = '<a:tbl/><a:t>'.repeat(160_000);
+      const pptx = await buildPptx([unterminated, '<a:t>Normal slide text</a:t>']);
+      const start = Date.now();
+      const chunks = await chunker.chunkFile(pptx, PPTX_MIME);
+      const allText = chunks.map(c => c.text).join(' ');
+      expect(allText).toContain('Normal slide text');
+      expect(Date.now() - start).toBeLessThan(5000);
+    }, 30_000);
+
     it('skips a slide whose decompressed XML exceeds the per-entry cap, keeping the rest', async () => {
       // A .pptx is a zip; one slide entry can inflate ~1000x when decompressed (zip-bomb shape).
       // The oversized slide is skipped before it is materialized; the normal slide still chunks.
