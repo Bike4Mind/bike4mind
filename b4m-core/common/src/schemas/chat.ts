@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { ApiErrorCode } from '../apiErrorCodes';
+import { QUEST_ERROR_CODES } from '../types';
 import { PROMPT_TEXT_MAX } from './briefcasePrompt';
 
 /**
@@ -126,9 +127,12 @@ export const SimplifiedChatRequestSchema = z.object({
 export type SimplifiedChatRequest = z.infer<typeof SimplifiedChatRequestSchema>;
 
 /**
- * Async ACK returned on the default (wait:false) path of POST /api/chat. The
- * handler assembles this body inline (apps/client/pages/api/chat.ts), so this
- * schema MUST stay in sync with that `res.json({...})` shape.
+ * Async ACK returned on the default (wait:false) path of POST /api/chat, and
+ * also the shape of the `wait: true` completed body and the polled quest
+ * (`GET /api/quests/{id}`) as far as `type`/`errorCode` go - those two fields
+ * are the same classifier on all three, so they are modelled once here. The
+ * handler assembles the ack body inline (apps/client/pages/api/chat.ts), so
+ * this schema MUST stay in sync with that `res.json({...})` shape.
  */
 export const ChatAckSchema = z.object({
   id: z.string(),
@@ -137,6 +141,16 @@ export const ChatAckSchema = z.object({
   timestamp: z.string(),
   model: z.string(),
   message: z.string().optional(),
+  // Absent on the immediate async ack (nothing has run yet). Present once the turn is
+  // terminal - on the `wait: true` body and on the polled quest - so a caller can tell a
+  // real answer from a failure surfaced as prose instead of a non-2xx status. `'error'` is
+  // the only value that matters here; see `errorCode` for which error.
+  type: z.enum(['message', 'oob', 'error', 'system', 'voice_transcript']).optional(),
+  // Machine-readable classifier for a `type: 'error'` turn, set for credit/spend-cap
+  // failures so a caller can match on this instead of parsing `reply`'s prose. Same
+  // vocabulary as the tts/music/soundEffects `errorCode` (CONVENTIONS.md "One
+  // error-code vocabulary"), narrowed to the quest-failure subset via QUEST_ERROR_CODES.
+  errorCode: z.enum(QUEST_ERROR_CODES).optional(),
   // The tool decision the API layer made for this turn, echoed back so a caller can see what was
   // offered and what was thrown away. Absent when the layer made no decision and had nothing to
   // report (the `enableTools`-only path, where the service layer resolves the set). Present on

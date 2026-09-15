@@ -34,7 +34,13 @@ export const chatContract = defineEndpoint({
         'Message accepted. The default (async) path returns this queued ACK. With `wait: true` the ' +
         'body additionally carries the completed reply (`response`/`responses`), `toolPayloads`, ' +
         '`createdAt`, and `performance` timings - fields not modelled here yet; the synchronous ' +
-        'response shape is a follow-up.',
+        'response shape is a follow-up. A turn that cannot be billed (the caller is out of credits, ' +
+        'or over an admin-set spend cap) still resolves with `200`, never a 4xx, on both that ' +
+        '`wait: true` body and the polled quest (`GET /api/quests/{id}`) - the prose explaining why ' +
+        'lands in `reply`/`response` like any other answer. `type: "error"` plus ' +
+        '`errorCode: "insufficient_credits"` or `"spend_cap_exceeded"` is what actually distinguishes ' +
+        'that from a real answer, so match on `errorCode` rather than the status or the reply text, ' +
+        'the same way the tts/music/soundEffects contracts document their synchronous 422 classifier.',
       schema: ChatAckSchema,
     },
     400: { description: 'No usable default chat model is configured and none was supplied.', schema: ApiErrorSchema },
