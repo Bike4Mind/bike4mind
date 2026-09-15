@@ -1288,6 +1288,9 @@ describe('POST /api/data-lakes/semantic-search budget scope (#2709)', () => {
     mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
     mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
     mockFindUserById.mockResolvedValue(null);
+    // clearAllMocks keeps the last-set implementation, so without this the no-org case inherits the
+    // membership set of whichever case ran before it.
+    mockFindMembershipOrgIds.mockResolvedValue([]);
   });
 
   it('wires the scoped-settings overlay store through, not just the platform repo', async () => {

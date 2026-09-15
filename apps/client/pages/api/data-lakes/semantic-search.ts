@@ -70,7 +70,9 @@ function getSharedTokenizer(logger: Logger): ITokenizer {
  * `getDynamicDataLakeAccess`, which resolves membership whenever a lakes repo is wired - always,
  * here), so this reads it rather than paying for a second lookup. Call it AFTER that gate. A
  * pointer at an org the caller is not a member of resolves to no org rung at all rather than to
- * that org's ceiling.
+ * that org's ceiling - and, since `scopeForCaller` makes the OWNER rung the ORG when one is present
+ * and the USER when it is not, that caller's personal owner override governs here instead of the
+ * org's. Owner outranks Organization, so it is the rung that decides.
  *
  * Budgets are read-only, so this is a tighter standard than the rung strictly needs. It is the
  * cheap one here, and it keeps the route from being the precedent that a looser derivation is fine.

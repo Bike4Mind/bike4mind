@@ -87,15 +87,30 @@ export type ResolvedSearchBudgets = SemanticSearchBudgets & {
  * because the symptom of a bad value would otherwise be "retrieval quietly covers less than the
  * admin configured", which is indistinguishable from a small corpus.
  *
+ * That warn fires only on the PLATFORM path, which since #2709 is not the path production takes:
+ * `scopeForCaller` always sets an owner rung, so `scopeHasRung` is true for every authenticated
+ * caller. On the scoped branch each key is read through `getSettingsValue`, which schema-parses the
+ * stored row and substitutes the coded default on a failed parse, silently. For four of the seven
+ * keys the schema bound is TIGHTER than the coercers below, so an out-of-range row does not just
+ * lose the warn, it resolves to a DIFFERENT value than the platform path would: `DefaultChunkSize`
+ * outside 64..1500, `kbSearchDefaultResults` above 10, `kbSearchResultTokenBudget` above 20000, and
+ * `kbSearchMinRelevancePct` above 100 - where the two ends are opposite, an impassable floor on the
+ * platform path against no floor at all on the scoped one (the end the chat tool has always been
+ * on). One consequence to know before trusting it: the `pct > 100` clamp in resolveRelevancePct
+ * below is now unreachable on the dominant path. The admin write boundary enforces every one of
+ * those bounds, so a divergent row takes a hand-edited document or one predating the constraint.
+ * Closing the gap properly belongs with the scoped seam itself (#1662).
+ *
  * Scope (epic #1658 lane 0 / #1660): a caller passes the org/owner a search runs for as `scope`,
  * plus the `scopedSettings` overlay repo, to let a narrower rung tighten the budget below the
  * platform ceiling. Org and Owner are the only rungs on offer: every key read here lost or
  * never had a Lake rung, because one search spans EVERY lake the caller can reach (#2624), so a
  * `scope.lakeId` reaching this function resolves nothing no matter what is stored against it.
  * Passing rungs WITHOUT the repo warns rather than resolving platform-only in silence - it is a
- * wiring mistake, since the two travel together. Chunk-policy rungs ride this same seam when #1662
- * gives `DefaultChunkSize` its `scope.settableAt`; the serve budget below picks them up with no
- * edit here.
+ * wiring mistake, since the two travel together. `DefaultChunkSize` already declares
+ * `settableAt: [Organization, Owner]` and a clamp of its own, so the serve budget derived from it
+ * resolves on those rungs too - visibly on the chat path, which consumes `maxChunkChars`; the
+ * search route derives it and never reads it.
  */
 export async function resolveSearchBudgets(
   db: {
@@ -124,11 +139,10 @@ export async function resolveSearchBudgets(
   if (hasRung && db.scopedSettings) {
     try {
       const values = await resolveScopedSettingValues(
-        // DefaultChunkSize rides along deliberately. It declares no `scope.settableAt`, so
-        // computeCandidateRefs yields no rungs for it and it resolves to exactly the platform value -
-        // this adds no org/lake lever (that is #1662), it only keeps ONE derivation for both paths.
-        // Omitting it here instead would make the scoped path serve a different budget than the
-        // platform path for the same lake, which is the disagreement this whole change removes.
+        // DefaultChunkSize rides along deliberately, and it DOES declare `scope.settableAt`
+        // ([Organization, Owner] plus a clamp), so it resolves on those rungs like every other key
+        // here. Omitting it would make the scoped path serve a different budget than the platform
+        // path for the same lake, which is the disagreement this whole change removes.
         [
           'dataLakeSearchMaxFiles',
           'dataLakeSearchMaxChunks',
@@ -246,7 +260,8 @@ export async function resolveSearchBudgets(
  * read yields the raw stored string, while the scoped resolver has already parsed the value through
  * the setting's schema. One consequence worth knowing: on the scoped path an unusable stored value is
  * coerced to the coded default before it reaches here, so the set-but-unusable warn below fires only
- * on the platform path. Closing that belongs with the scoped seam itself (#1662), not here.
+ * on the platform path - and `DefaultChunkSize` is one of the four keys where that coercion also
+ * changes the resolved value. See the resolver docblock above for which, and why.
  */
 function resolveServeBudget(rawChunkSize: string | number | null | undefined, logger?: Logger): number {
   // Same parse-and-warn contract as the scan budgets: unset is normal and silent, set-but-unusable
