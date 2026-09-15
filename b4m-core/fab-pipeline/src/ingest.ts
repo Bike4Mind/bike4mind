@@ -1,6 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import axios from 'axios';
-import type { CheerioAPI } from 'cheerio';
+import type { Cheerio, CheerioAPI } from 'cheerio';
 import mime from 'mime-types';
 import { ssrfSafeHttpAgent, ssrfSafeHttpsAgent, validateUrlForFetch } from './ssrfProtection';
 
@@ -185,11 +185,133 @@ const INLINE_SELECTOR =
 const BLOCK_LEVEL_SELECTOR = `*:not(${INLINE_SELECTOR.split(', ').join('):not(')}):not(td):not(th)`;
 
 /**
+ * cheerio's `AnyNode`, named without importing `domhandler` directly - that is a transitive dep of
+ * cheerio rather than one of ours, and cheerio re-exports the type only under aliases like this.
+ */
+type DomNode = Parameters<CheerioAPI['contains']>[0];
+
+/**
+ * Elements that carry UI rather than prose, removed before extraction.
+ *
+ * Two principles only, deliberately narrow - `nav`/`header`/`footer`/`aside` are NOT here, because
+ * pages do put real content in the last two and a full boilerplate pass is a different job:
+ *  - `aria-hidden`/`hidden`: the page itself says this is not content to be read. That is what
+ *    catches the duplicated tooltip labels modern doc sites render next to every icon button
+ *    ("Collapse sidebar", "Search or ask Copilot"), which are plain `<span>`s with no other signal.
+ *  - interactive controls, native or via the equivalent ARIA role: a control's label is an
+ *    instruction to the reader, not part of the document.
+ */
+const NON_CONTENT_SELECTOR = [
+  '[aria-hidden="true"]',
+  '[hidden]',
+  'button',
+  'input',
+  'select',
+  'textarea',
+  'option',
+  'optgroup',
+  'datalist',
+  'label',
+  'dialog',
+  'template',
+  // No text an embedding can use: icon markup, and `<title>`/`<desc>` that exist for screen readers.
+  'svg',
+  '[role="button"]',
+  '[role="search"]',
+  '[role="searchbox"]',
+  '[role="combobox"]',
+  '[role="listbox"]',
+  '[role="menu"]',
+  '[role="menubar"]',
+  '[role="tablist"]',
+  '[role="toolbar"]',
+  '[role="dialog"]',
+  '[role="alertdialog"]',
+  '[role="tooltip"]',
+  '[role="radiogroup"]',
+].join(', ');
+
+/**
+ * What counts as a control when judging a control strip. Broader than `NON_CONTENT_SELECTOR`,
+ * because a link is content in prose but a control in a nav bar - `a[href]` is the only reason the
+ * strip rule can see an unmarked `<div>` of nav links as chrome at all.
+ */
+const CONTROL_SELECTOR =
+  'a[href], button, input, select, textarea, summary, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="option"], [role="checkbox"], [role="radio"], [role="switch"]';
+
+/** Containers a control strip can be. Headings and `<p>` are excluded: `<h2><a>Title</a></h2>` is content. */
+const STRIP_CONTAINER_SELECTOR = 'div, span, ul, ol, li, nav, header, footer, aside, section, form, table, tbody, tr';
+
+/**
+ * Longest a single control's label may be before the group stops looking like a control strip.
+ * Nav items, tabs and toolbar buttons are a word or three; anything longer is prose in a link.
+ */
+const MAX_CONTROL_LABEL_CHARS = 40;
+
+const squash = (text: string) => text.replace(/\s+/g, ' ').trim();
+
+/**
+ * True when an element is a group of adjacent controls with no prose of its own - a nav bar, a
+ * breadcrumb row, a tab strip, a footer link column, a sandbox toolbar.
+ *
+ * Needs TWO controls, which is what keeps `<li><a>Some page</a></li>` in a real content list and
+ * `<div><a>An article title</a></div>` on a card. It also has to run BEFORE the controls themselves
+ * are removed, or the evidence is gone: react.dev's `Fork` link only reads as chrome because the
+ * `Reload` and `Clear` buttons share its toolbar.
+ *
+ * "No prose of its own" tolerates the punctuation sites use to separate items, so a `A | B | C`
+ * nav still qualifies.
+ */
+function isControlStrip($: CheerioAPI, element: DomNode): boolean {
+  const $element = $(element);
+  if (!squash($element.text())) return false;
+
+  const controls = $element.find(CONTROL_SELECTOR);
+  if (controls.length < 2) return false;
+
+  for (const control of controls.toArray()) {
+    const label = squash($(control).text());
+    if (label.length > MAX_CONTROL_LABEL_CHARS || /[.!?]\s/.test(label)) return false;
+  }
+
+  const outsideControls = $element.clone().find(CONTROL_SELECTOR).remove().end().text();
+  return outsideControls.replace(/[\s|\u00b7\u2022/,:;-]+/g, '') === '';
+}
+
+/**
+ * The scope to extract from: the document's own main-content landmark when it declares exactly one,
+ * otherwise everything.
+ *
+ * This is the half of the fix that handles chrome with no other tell - a sticky sub-header of icon
+ * buttons, a site footer carrying a survey and a privacy link. Trusting the page's own `<main>` also
+ * answers the "real content in `<aside>`/`<footer>`" case for free, and better than a rule about
+ * those tags could: an `<aside>` or `<footer>` INSIDE `main` is kept, one outside it is site chrome
+ * by the page's own declaration. A document with no `main` keeps the previous whole-document scope.
+ *
+ * Requires exactly one match with text in it, so an empty `<main>` shell (an app that renders it
+ * client-side) or a page with several does not silently shrink the extraction to nothing.
+ */
+function mainContentScope($: CheerioAPI): Cheerio<DomNode> {
+  const main = $('main, [role="main"]');
+  // `Cheerio<T>` is invariant in T, so the two branches' element types (Element vs Document) need
+  // widening to their common supertype rather than either one being inferred.
+  if (main.length === 1 && main.text().trim()) return main as Cheerio<DomNode>;
+  return $.root() as Cheerio<DomNode>;
+}
+
+/**
  * Extract readable text from the WHOLE document, not just `<p>` elements. The single collector
  * this replaced was `<p>`-only and fell back to the raw HTML when it found none: on a page whose
  * content isn't inside `<p>` (an RFC page using `<pre>`) that meant the fallback fired and stored
  * markup verbatim; on a page with real substance in headings, list items, table cells or code
  * blocks alongside its `<p>`s, that content was silently dropped.
+ *
+ * Because it reads the whole document, page chrome that the `<p>`-only collector dropped by
+ * accident now has to be dropped on purpose, or nav bars, search widgets, cookie banners, footer
+ * link columns and button labels get chunked and embedded alongside the article. Three rules do
+ * that, in this order - see `mainContentScope`, `isControlStrip` and `NON_CONTENT_SELECTOR` for why
+ * each one is shaped the way it is. The strip rule MUST run before the control removal, since it
+ * recognises a strip by the controls in it.
  *
  * `head` (title/meta/script/style all live there, and the caller already reads `<title>`
  * separately) plus any stray `script`/`style`/`noscript` outside it are removed before extraction,
@@ -204,7 +326,36 @@ const BLOCK_LEVEL_SELECTOR = `*:not(${INLINE_SELECTOR.split(', ').join('):not(')
  */
 function extractReadableText($: CheerioAPI): string {
   $('head, script, style, noscript').remove();
-  $('br').replaceWith('\n');
+
+  const scope = mainContentScope($);
+
+  const strips: DomNode[] = [];
+  scope.find(STRIP_CONTAINER_SELECTOR).each((_index, element) => {
+    // Outermost qualifying container only: removing a nested one first would leave the parent's
+    // remaining siblings looking like content, and doing both is wasted work.
+    if (strips.some(strip => $.contains(strip, element))) return;
+    if (isControlStrip($, element)) strips.push(element);
+  });
+
+  // Swapped for placeholders rather than removed outright, so the pruning can be UNDONE. The strip
+  // rule is the one judgement call here, and on a page that legitimately is nothing but a list of
+  // links - a link directory, a chapter index - it would take everything and store nothing at all.
+  // Rolling back is what makes that bounded without a size cap that would spare real chrome.
+  const placeholders = strips.map(strip => {
+    const placeholder = $('<div></div>');
+    $(strip).replaceWith(placeholder);
+    return placeholder;
+  });
+
+  if (squash(scope.text())) {
+    for (const placeholder of placeholders) placeholder.remove();
+  } else {
+    placeholders.forEach((placeholder, index) => placeholder.replaceWith(strips[index]));
+  }
+
+  scope.find(NON_CONTENT_SELECTOR).remove();
+
+  scope.find('br').replaceWith('\n');
 
   // The stash-and-splice marker is scoped to a per-call random token, not a fixed string - this
   // function processes arbitrary third-party HTML, and a fixed marker could collide with a page's
@@ -216,7 +367,7 @@ function extractReadableText($: CheerioAPI): string {
   const markerPattern = new RegExp(`\\uE000PRE${nonce}_(\\d+)\\uE000`, 'g');
 
   const preBlocks: string[] = [];
-  $('pre').each((_index, element) => {
+  scope.find('pre').each((_index, element) => {
     const text = $(element).text();
     // An empty <pre> has nothing worth preserving - remove it outright rather than stashing an
     // empty placeholder, or a page whose only "content" is an empty <pre> would incorrectly stop
@@ -229,16 +380,17 @@ function extractReadableText($: CheerioAPI): string {
     }
   });
 
-  $('td, th').each((_index, cell) => {
+  scope.find('td, th').each((_index, cell) => {
     $(cell).after(' ');
   });
-  $(BLOCK_LEVEL_SELECTOR).each((_index, element) => {
+  scope.find(BLOCK_LEVEL_SELECTOR).each((_index, element) => {
     $(element).after('\n');
   });
 
-  // `$.root()` covers the whole remaining document in one call - no need to special-case a
-  // missing `<body>` (malformed HTML with no body tag still has its text picked up).
-  const collapsed = $.root()
+  // The scope is `$.root()` unless the page declared a `main` - which covers the whole remaining
+  // document in one call, so there is no need to special-case a missing `<body>` (malformed HTML
+  // with no body tag still has its text picked up).
+  const collapsed = scope
     .text()
     .split('\n')
     .map(line => line.replace(/[ \t]+/g, ' ').trim())

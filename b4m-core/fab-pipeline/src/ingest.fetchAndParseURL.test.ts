@@ -414,9 +414,11 @@ describe('fetchAndParseURL whole-body text extraction', () => {
       '<html><body>' +
       '<details><summary>History</summary><p>Changed in v2</p></details>' +
       '<nav>Home</nav><nav>About</nav>' +
-      '<button>Submit</button><button>Cancel</button>' +
+      // Deliberately NOT <button>/<select>, which are the obvious members of this tag family:
+      // those are stripped as page chrome now, so they cannot double as separator fixtures here.
+      '<hgroup>Submit</hgroup><hgroup>Cancel</hgroup>' +
       '<aside>Sidebar</aside><address>Contact us</address>' +
-      '<select><option>Alpha</option><option>Beta</option></select>' +
+      '<fieldset>Alpha</fieldset><output>Beta</output>' +
       '</body></html>';
     axiosGet.mockResolvedValueOnce(html(page));
 
@@ -485,5 +487,186 @@ describe('fetchAndParseURL whole-body text extraction', () => {
     // it reads identically to a normal fetch that parsed into real content.
     const logged = (logger.log as unknown as ReturnType<typeof vi.fn>).mock.calls.flat().join(' ');
     expect(logged).toContain('no extractable text was found');
+  });
+});
+
+describe('fetchAndParseURL page-chrome stripping', () => {
+  const html = (body: string) => ({ status: 200, data: body, headers: { 'content-type': 'text/html' } });
+  const fetchText = async (page: string) => {
+    axiosGet.mockResolvedValueOnce(html(page));
+    const result = await fetchAndParseURL('http://93.184.216.34/docs', { logger });
+    return String(result.textContent);
+  };
+
+  // Each of the four below is modeled on the markup one of the pages that motivated this actually
+  // ships, because the tell differs per site and no single rule covers them: GitHub's docs chrome is
+  // aria-hidden tooltip spans and a survey outside <main>, Tailwind's top nav is unmarked <div>s of
+  // links with no landmark anywhere, and react.dev's sandbox toolbar mixes <button>s with an <a>.
+
+  it('drops aria-hidden tooltip labels rendered beside icon buttons', async () => {
+    const page =
+      '<html><body><main>' +
+      '<div><span aria-hidden="true">Collapse sidebar</span><span aria-hidden="true">Expand sidebar</span></div>' +
+      '<p>Real prose about workflows.</p>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).not.toContain('Collapse sidebar');
+    expect(text).not.toContain('Expand sidebar');
+    expect(text).toContain('Real prose about workflows.');
+  });
+
+  it('extracts from <main> and leaves site header and footer chrome outside it alone', async () => {
+    const page =
+      '<html><body>' +
+      '<header role="banner"><span aria-hidden="true">Search or ask Copilot</span></header>' +
+      '<main><p>Quickstart for GitHub Actions.</p></main>' +
+      '<footer><h3>Help us make these docs great!</h3>' +
+      '<form><div role="radiogroup"><label>Yes</label><label>No</label></div></form>' +
+      '<a href="/privacy">Privacy policy</a></footer>' +
+      '</body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Quickstart for GitHub Actions.');
+    expect(text).not.toContain('Search or ask Copilot');
+    expect(text).not.toContain('Help us make these docs great');
+    expect(text).not.toContain('Privacy policy');
+    expect(text).not.toMatch(/\bYes\b/);
+    expect(text).not.toMatch(/\bNo\b/);
+  });
+
+  it('drops an unmarked nav bar of links on a page with no landmark at all', async () => {
+    const page =
+      '<html><body><div><div>' +
+      '<div><a href="/docs">Docs</a><a href="/blog">Blog</a><a href="/showcase">Showcase</a></div>' +
+      '<div><button>Search</button><kbd>Ctrl K</kbd></div>' +
+      '</div>' +
+      '<h1>Installing Tailwind CSS as a Vite plugin</h1>' +
+      '<p>It is fast, flexible, and reliable.</p>' +
+      '</body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Installing Tailwind CSS as a Vite plugin');
+    expect(text).toContain('It is fast, flexible, and reliable.');
+    expect(text).not.toContain('Docs');
+    expect(text).not.toContain('Showcase');
+    expect(text).not.toContain('Search');
+  });
+
+  it('drops a link sharing a toolbar with buttons, which a tag-based rule cannot see', async () => {
+    // The `Fork` link is chrome only because of the company it keeps: on its own an <a> is content.
+    const page =
+      '<html><body><main><article>' +
+      '<div><button>Reload</button><button>Clear</button><a href="https://codesandbox.io/x">Fork</a></div>' +
+      '<p>useState is a React Hook that lets you add a state variable.</p>' +
+      '</article></main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('useState is a React Hook that lets you add a state variable.');
+    expect(text).not.toContain('Reload');
+    expect(text).not.toContain('Clear');
+    expect(text).not.toContain('Fork');
+  });
+
+  it('KEEPS real content in <aside> and <footer>, the failure mode the naive fix causes', async () => {
+    // Dropping these tags outright is the obvious way to strip chrome and it is wrong: a pull quote
+    // in an <aside> and an author note in a <footer> are the article. Nothing here declares a
+    // <main>, so the whole document is the scope and both have to survive on their own merits.
+    const page =
+      '<html><body>' +
+      '<article><p>The main argument of the piece.</p>' +
+      '<aside><h2>Background</h2><p>A pull quote with real substance that belongs in the index.</p></aside>' +
+      '<footer><p>Written by a staff reporter covering monetary policy since 2011.</p></footer>' +
+      '</article></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('The main argument of the piece.');
+    expect(text).toContain('Background');
+    expect(text).toContain('A pull quote with real substance that belongs in the index.');
+    expect(text).toContain('Written by a staff reporter covering monetary policy since 2011.');
+  });
+
+  it('KEEPS an <aside> and <footer> that live INSIDE the declared <main>', async () => {
+    const page =
+      '<html><body>' +
+      '<header role="banner"><a href="/">Home</a><a href="/about">About</a></header>' +
+      '<main><p>The body of the article.</p>' +
+      '<aside><p>A sidebar note that expands on the argument.</p></aside>' +
+      '<footer><p>Corrections: an earlier version misstated the date.</p></footer>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('The body of the article.');
+    expect(text).toContain('A sidebar note that expands on the argument.');
+    expect(text).toContain('Corrections: an earlier version misstated the date.');
+  });
+
+  it('keeps a single short link, so an ordinary content list is not mistaken for a nav', async () => {
+    // Two controls is the threshold; one is how a real list item or a linked card reads. The <ul>
+    // holding both WOULD qualify, which is the rule doing its job on a nav - what saves this page
+    // is the rollback below, since pruning it leaves nothing at all.
+    const page =
+      '<html><body><ul>' +
+      '<li><a href="/a">Understanding GitHub Actions</a></li>' +
+      '<li><a href="/b">Using workflow templates</a></li>' +
+      '</ul></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Understanding GitHub Actions');
+    expect(text).toContain('Using workflow templates');
+  });
+
+  it('keeps a link list whose entries are prose rather than labels', async () => {
+    const page =
+      '<html><body><div>' +
+      '<a href="/a">Committing the workflow file to a branch triggers the push event and runs it.</a>' +
+      '<a href="/b">If you chose to start a pull request, you can continue and create it.</a>' +
+      '</div></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('triggers the push event');
+    expect(text).toContain('you can continue and create it');
+  });
+
+  it('rolls the pruning back rather than storing nothing for a page that IS a list of links', async () => {
+    const entries = Array.from({ length: 40 }, (_unused, index) => `<a href="/p${index}">Chapter ${index}</a>`).join(
+      ''
+    );
+    const page = `<html><body><div>${entries}</div></body></html>`;
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Chapter 0');
+    expect(text).toContain('Chapter 39');
+  });
+
+  it('prunes a nav on a page that has prose, and does NOT roll back because prose survives', async () => {
+    // The other side of the rollback: identical nav markup to the case above, one paragraph added.
+    const entries = Array.from({ length: 40 }, (_unused, index) => `<a href="/p${index}">Chapter ${index}</a>`).join(
+      ''
+    );
+    const page = `<html><body><div>${entries}</div><p>The chapter itself, in prose.</p></body></html>`;
+
+    const text = await fetchText(page);
+
+    expect(text).toBe('The chapter itself, in prose.');
+  });
+
+  it('ignores an empty <main> shell instead of extracting nothing from it', async () => {
+    // A client-rendered app can ship <main></main> with the real content elsewhere in the document.
+    const page =
+      '<html><body><main></main><div><p>Server-rendered prose that is the whole page.</p></div></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Server-rendered prose that is the whole page.');
   });
 });
