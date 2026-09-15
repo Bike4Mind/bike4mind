@@ -64,8 +64,6 @@ declare module '@mui/joy/styles' {
      * `--joy-palette-reading-*` CSS variables Joy emits for this group.
      */
     reading: {
-      bg: string;
-      bg2: string;
       surface: string;
       surface2: string;
       cardTintTop: string;
@@ -79,11 +77,7 @@ declare module '@mui/joy/styles' {
       accent: string;
       accentSoft: string;
       accentLine: string;
-      warn: string;
       warnSoft: string;
-      danger: string;
-      ok: string;
-      lift: string;
     };
     aiSettings: {
       background: string;

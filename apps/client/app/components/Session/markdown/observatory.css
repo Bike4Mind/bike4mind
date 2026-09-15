@@ -27,28 +27,20 @@
    default light scheme is 'light', so this is the same answer, not a guess. */
 .b4m-md,
 [data-joy-color-scheme='light'] .b4m-md {
-  --b4m-md-bg: var(--joy-palette-reading-bg, #eceff3);
-  --b4m-md-bg-2: var(--joy-palette-reading-bg2, #ffffff);
   --b4m-md-surface: var(--joy-palette-reading-surface, #f6f9fb);
   --b4m-md-surface-2: var(--joy-palette-reading-surface2, #edf2f6);
   --b4m-md-line: var(--joy-palette-reading-line, rgba(16, 38, 56, 0.11));
   --b4m-md-line-2: var(--joy-palette-reading-line2, rgba(16, 38, 56, 0.22));
-  --b4m-md-ink: var(--joy-palette-reading-ink, #141f28);
-  --b4m-md-ink-2: var(--joy-palette-reading-ink2, #364a58);
-  --b4m-md-ink-3: var(--joy-palette-reading-ink3, #506271);
+  --b4m-md-ink: var(--joy-palette-reading-ink, #0a2230);
+  --b4m-md-ink-2: var(--joy-palette-reading-ink2, rgba(10, 34, 48, 0.85));
+  --b4m-md-ink-3: var(--joy-palette-reading-ink3, rgba(10, 34, 48, 0.7));
   --b4m-md-accent: var(--joy-palette-reading-accent, #0b6bcb);
   --b4m-md-accent-soft: var(--joy-palette-reading-accentSoft, rgba(11, 107, 203, 0.07));
   --b4m-md-accent-line: var(--joy-palette-reading-accentLine, rgba(11, 107, 203, 0.32));
-  --b4m-md-warn: var(--joy-palette-reading-warn, #9a6410);
   --b4m-md-warn-soft: var(--joy-palette-reading-warnSoft, rgba(232, 163, 61, 0.14));
-  --b4m-md-danger: var(--joy-palette-reading-danger, #c41c1c);
-  --b4m-md-ok: var(--joy-palette-reading-ok, #167230);
-  --b4m-md-lift: var(--joy-palette-reading-lift, rgba(255, 255, 255, 0.9));
 }
 
 [data-joy-color-scheme='dark'] .b4m-md {
-  --b4m-md-bg: var(--joy-palette-reading-bg, #0e1214);
-  --b4m-md-bg-2: var(--joy-palette-reading-bg2, #0b0f11);
   --b4m-md-surface: var(--joy-palette-reading-surface, #13181c);
   --b4m-md-surface-2: var(--joy-palette-reading-surface2, #141b23);
   --b4m-md-line: var(--joy-palette-reading-line, rgba(209, 228, 244, 0.08));
@@ -59,11 +51,7 @@
   --b4m-md-accent: var(--joy-palette-reading-accent, #5aaaea);
   --b4m-md-accent-soft: var(--joy-palette-reading-accentSoft, rgba(90, 170, 234, 0.11));
   --b4m-md-accent-line: var(--joy-palette-reading-accentLine, rgba(90, 170, 234, 0.34));
-  --b4m-md-warn: var(--joy-palette-reading-warn, #e8a33d);
   --b4m-md-warn-soft: var(--joy-palette-reading-warnSoft, rgba(232, 163, 61, 0.1));
-  --b4m-md-danger: var(--joy-palette-reading-danger, #e5555a);
-  --b4m-md-ok: var(--joy-palette-reading-ok, #43d08c);
-  --b4m-md-lift: var(--joy-palette-reading-lift, rgba(209, 228, 244, 0.04));
 }
 
 /* -- shape and fonts ------------------------------------------------------

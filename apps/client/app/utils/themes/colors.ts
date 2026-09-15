@@ -11,6 +11,7 @@ export const brand = {
   400: '#335F70', // mid tone
   500: '#3b82f6', // brand blue for gradients
   600: '#0A3D50', // dark navy blue
+  650: '#0A2230', // deepest navy - reading ink base in light mode
   700: '#2A4159', // selected
   800: '#0B6BCB', // main button
   900: '#0959AA', // main button hover
@@ -225,6 +226,12 @@ export const brandAlpha = {
     75: alpha(brand[100], 0.75), // #D1E4F4BF / rgba(209, 228, 244, 0.75)
     80: alpha(brand[100], 0.8), // #D1E4F4CC / rgba(209, 228, 244, 0.8)
     85: alpha(brand[100], 0.85), // #D1E4F4D9 / rgba(209, 228, 244, 0.85)
+  },
+
+  // brand[650] (#0A2230) with opacity - reading ink steps in light mode
+  650: {
+    70: alpha(brand[650], 0.7), // #0A2230B3 / rgba(10, 34, 48, 0.7)
+    85: alpha(brand[650], 0.85), // #0A2230D9 / rgba(10, 34, 48, 0.85)
   },
 
   // brand[400] (#335F70) with opacity - Mid-tone elements
