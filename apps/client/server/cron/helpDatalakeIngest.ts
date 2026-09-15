@@ -3,7 +3,8 @@
  *
  * The lake is the corpus behind in-chat `search_knowledge_base`; the Help panel reads the
  * generated `help-embeddings.json` instead, which is rebuilt from docs-site at deploy time and so
- * cannot drift from it. Nothing held THIS side in step with anything, so the lake was whatever the
+ * cannot go stale the way a committed copy did - as long as the deploy's vectorize step runs;
+ * under HELP_EMBEDDINGS_REQUIRED=false it leaves whatever is already there. Nothing held THIS side in step with anything, so the lake was whatever the
  * last hand-run of `help:ingest-datalake` left behind - it drifted for two months in both
  * directions at once, missing newly published articles while still serving eleven that had been
  * deleted from the corpus.

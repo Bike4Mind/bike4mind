@@ -79,7 +79,6 @@ interface ChunkData {
   accessLevel: HelpAccessLevel;
 }
 
-/** Remedy quoted in every failure below. */
 const REGENERATE_HINT = 'regenerate the help artifacts with `pnpm --filter @bike4mind/scripts help:regenerate`';
 
 /**

@@ -36,8 +36,10 @@ describe('probe ground truth', () => {
       path.dirname(fileURLToPath(import.meta.url)),
       '../../../apps/client/app/generated/help-index.json'
     );
-    // Generated, so a fresh checkout may not have it yet. Absent is not a failure - the docs-site
-    // assertion above still covers the ground truth; this one adds the ingest's own view when built.
+    // The index is generated and no longer committed, so in CI this leg SKIPS: no test shard runs
+    // help:build-index. It is a local-after-a-build check only. Kept rather than deleted because
+    // it is the one assertion that reads the ingest's own view, but do not read a green CI run as
+    // having exercised it - the docs-site assertion above is what covers the ground truth there.
     if (!existsSync(indexPath)) return;
 
     const entries = JSON.parse(readFileSync(indexPath, 'utf-8')).entries as {
