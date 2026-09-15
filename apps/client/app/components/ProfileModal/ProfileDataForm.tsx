@@ -190,18 +190,22 @@ const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, adminMode, 
               />
             </Grid>
           )}
-          <Grid className="profile-data-form-field-container" data-testid="profile-form-field" xs={12} sm={6} md={4}>
-            <Typography className="profile-data-form-label" data-testid="profile-form-label">
-              Organization:
-            </Typography>
-            <SingleOrganizationSelector
-              currentOrgId={editUser.organizationId}
-              onChange={orgId => {
-                setEditedFields(prev => ({ ...prev, organizationId: true }));
-                setEditUser(prev => ({ ...prev, organizationId: orgId }));
-              }}
-            />
-          </Grid>
+          {/* Org membership is admin-only (see adminUpdateUserSchema); offering it to a
+              non-admin only produces a rejected save. */}
+          {adminMode && (
+            <Grid className="profile-data-form-field-container" data-testid="profile-form-field" xs={12} sm={6} md={4}>
+              <Typography className="profile-data-form-label" data-testid="profile-form-label">
+                Organization:
+              </Typography>
+              <SingleOrganizationSelector
+                currentOrgId={editUser.organizationId}
+                onChange={orgId => {
+                  setEditedFields(prev => ({ ...prev, organizationId: true }));
+                  setEditUser(prev => ({ ...prev, organizationId: orgId }));
+                }}
+              />
+            </Grid>
+          )}
           <Grid className="profile-data-form-field-container" data-testid="profile-form-field" xs={12} sm={6} md={4}>
             <Typography className="profile-data-form-label" data-testid="profile-form-label">
               Team:

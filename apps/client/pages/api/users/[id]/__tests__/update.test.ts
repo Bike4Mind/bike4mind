@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { z } from 'zod';
 
 const { mockUserFindById, mockAdminUpdateUser, mockUpdateUser, mockCount } = vi.hoisted(() => ({
   mockUserFindById: vi.fn(),
@@ -36,14 +35,20 @@ vi.mock('@server/utils/ip', () => ({
   truncateIp: (ip: string) => ip,
 }));
 
-vi.mock('@bike4mind/services', () => ({
-  userService: {
-    adminUpdateUser: (...a: unknown[]) => mockAdminUpdateUser(...a),
-    updateUser: (...a: unknown[]) => mockUpdateUser(...a),
-    adminUpdateUserSchema: z.object({}).passthrough(),
-    updateUserSchema: z.object({}).passthrough(),
-  },
-}));
+// Real schemas + derivation (adminUpdateUserSchema, updateUserSchema,
+// findAdminOnlyUserUpdateFields, findUnrecognizedUserUpdateFields) run unmocked here so
+// this route test exercises the actual allowlist and field lists, not a hand-maintained
+// stand-in that can drift from them. Only the persistence-touching functions are mocked.
+vi.mock('@bike4mind/services', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+  return {
+    userService: {
+      ...actual.userService,
+      adminUpdateUser: (...a: unknown[]) => mockAdminUpdateUser(...a),
+      updateUser: (...a: unknown[]) => mockUpdateUser(...a),
+    },
+  };
+});
 
 vi.mock('@bike4mind/database', () => ({
   User: {
@@ -139,6 +144,58 @@ describe('PUT /api/users/:id/update - lockout guard', () => {
     await promise;
     expect(res._getStatusCode()).toBe(200);
     expect(mockCount).not.toHaveBeenCalled();
+    expect(mockAdminUpdateUser).toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/users/:id/update - self-service admin-only fields', () => {
+  const SELF = { id: 'u1', isAdmin: false };
+
+  it.each([
+    ['isAdmin', { isAdmin: true }],
+    ['tags', { tags: ['vip'] }],
+    ['currentCredits', { currentCredits: 9999 }],
+    ['organizationId', { organizationId: 'org1' }],
+    ['email', { email: 'new@example.com' }],
+  ])('rejects a self-service update carrying %s instead of silently discarding it', async (field, body) => {
+    const { res, promise } = run({ user: SELF, userId: SELF.id, body: { name: 'New Name', ...body } });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().adminOnlyFields).toEqual([field]);
+    expect(res._getJSONData().error).toContain(field);
+    expect(mockUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('names every offending field when several are sent', async () => {
+    const { res, promise } = run({ user: SELF, userId: SELF.id, body: { isAdmin: true, tags: ['vip'] } });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().adminOnlyFields).toEqual(['isAdmin', 'tags']);
+  });
+
+  it('rejects a field declared in neither schema (e.g. photoUrl) as unrecognized, not silently dropped', async () => {
+    const { res, promise } = run({ user: SELF, userId: SELF.id, body: { name: 'New Name', photoUrl: 'evil-key' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().unrecognizedFields).toEqual(['photoUrl']);
+    expect(res._getJSONData().adminOnlyFields).toEqual([]);
+    expect(res._getJSONData().error).toContain('photoUrl');
+    expect(mockUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('leaves a clean self-service update alone', async () => {
+    mockUserFindById.mockReturnValue({ id: 'u1' });
+    const { res, promise } = run({ user: SELF, userId: SELF.id, body: { name: 'New Name' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdateUser).toHaveBeenCalled();
+  });
+
+  it('does not apply the guard to admins', async () => {
+    mockUserFindById.mockReturnValue({ isAdmin: false });
+    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { tags: ['vip'] } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
     expect(mockAdminUpdateUser).toHaveBeenCalled();
   });
 });
