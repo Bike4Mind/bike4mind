@@ -422,6 +422,7 @@ const PUSH_STEP_ENV_KEYS = [
   'GIT_CONFIG_SYSTEM',
   'GIT_CONFIG_NOSYSTEM',
   'GIT_CONFIG_COUNT',
+  'GIT_CONFIG_PARAMETERS',
 ];
 
 /**
@@ -460,12 +461,16 @@ const gitConfigKeys = (src: string) =>
  * file, as a whole SET - `FOO=bar cmd`, not the standalone `FOO=$(cmd)` assignments this job is
  * written in.
  *
- * Third spelling of `gitConfigKeys`'s class, and the one neither that pin nor the step's `env:`
- * block can see: `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0='sh -c
- * ...' git ls-files` carries the config in the command's own environment. Measured on git
- * 2.50.1: it overrides `GIT_CONFIG_COUNT: '0'` in the step env, and `commandProgram` strips the
+ * One spelling of `gitConfigKeys`'s class that neither that pin nor the step's `env:` block can
+ * see: `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0='sh -c ...' git
+ * ls-files` carries the config in the command's own environment. Measured on git 2.50.1: it
+ * overrides `GIT_CONFIG_COUNT: '0'` in the step env, and `commandProgram` strips the
  * assignments, so the command still parses as an allowlisted `git ls-files` carrying no `-c`.
  * The shipped set is empty, which is the tightest allowlist available here.
+ *
+ * Not the last such spelling, and this file does not claim to enumerate them: `redirectionTargets`
+ * and `runnerFileCommandMentions` below bound `GIT_CONFIG_PARAMETERS`, which arrives from an
+ * EARLIER step rather than from this command line or this step's `env:` at all.
  */
 const envAssignmentPrefixes = (src: string) =>
   [
@@ -484,6 +489,110 @@ const envAssignmentPrefixes = (src: string) =>
       )
     ),
   ].sort();
+
+/**
+ * Every file a `run:` body in this job REDIRECTS into, as a whole SET.
+ *
+ * The runner exposes `$GITHUB_ENV` and `$GITHUB_PATH` as ordinary files, and a line appended to
+ * either one sets an environment variable, or a `$PATH` entry, for EVERY LATER STEP. That is the
+ * one route into a later step's environment that no `env:` key pin in this file can see - the
+ * pins read `env:` blocks, and this channel never touches one. It is not hypothetical: with all
+ * four `GIT_CONFIG_*` vars in force, `GIT_CONFIG_PARAMETERS` delivered this way runs an arbitrary
+ * command on the shipped `git ls-files` line in the step that holds PUSH_TOKEN (measured on git
+ * 2.50.1, token written to disk, step exit 0). The workflow's own comment block already calls a
+ * write to these files "command execution in EVERY later step" - it just used that to fence the
+ * AGENT out of `$RUNNER_TEMP`, and nothing applied it to this job's own `run:` bodies.
+ *
+ * A set of redirect TARGETS rather than a grep for those two names, because the bound wanted is
+ * "where does this job write", and `$GITHUB_STEP_SUMMARY`, an absolute path or a `$HOME` dotfile
+ * are the same shape. `runnerFileCommandMentions` below catches the rest of the class - a write
+ * reaching the same files through `tee`, `python3` or anything else that is not a redirection.
+ *
+ * `2>&1` and friends are excluded: a descriptor duplication opens no file. A redirection with no
+ * target at all is NOT excluded - it reaches the pin as `''` and reds it.
+ */
+const REDIRECTION_TARGETS = [
+  '"$DEST"',
+  '"$GITHUB_OUTPUT"',
+  '"$STAGED_NUMSTAT"',
+  '"$STAGED_PATHS"',
+  '"$err"',
+  '/dev/null',
+];
+
+function redirectionTargets(src: string): string[] {
+  const targets: string[] = [];
+  for (const body of runBodies(src)) {
+    for (const { words, end } of shellCommands(body)) {
+      words.forEach((word, index) => {
+        // `>`/`>>`, optionally preceded by a descriptor number, with the target either glued on
+        // or supplied as the next word.
+        const match = /^\d*>>?(.*)$/.exec(word);
+        if (!match) return;
+        const glued = match[1];
+        const next = words[index + 1];
+        // `2>&1` is a descriptor duplication and opens no file. `&` is a command separator to
+        // the parser, so it arrives here as a trailing bare `2>` on a command that ended at
+        // `&` - which is the only way a redirection operator can legitimately have no target.
+        if (!glued && next === undefined && end === '&') return;
+        targets.push(glued || (next ?? ''));
+      });
+    }
+  }
+  return [...new Set(targets)].sort();
+}
+
+/**
+ * Every mention of a runner file-command variable in a `run:` body, by any route.
+ *
+ * `redirectionTargets` bounds the redirection spelling; this bounds the name itself, so a write
+ * through `tee -a "$GITHUB_ENV"` or `python3 -c ... os.environ["GITHUB_ENV"]` is refused too.
+ * Deliberately a text sweep and not a parse: there is no legitimate use of either file in this
+ * job, so the tightest available statement is that neither name appears at all.
+ */
+const runnerFileCommandMentions = (src: string) =>
+  runBodies(src)
+    .flatMap(body => [...body.matchAll(/GITHUB_(?:ENV|PATH)/g)].map(match => match[0]))
+    .sort();
+
+/**
+ * The two sweeps above as ONE value, so one assertion carries both bounds.
+ *
+ * They are halves of a single statement - "this job writes these files and reaches the runner's
+ * env-setting files by no route at all" - and split across two `expect`s, deleting the weaker
+ * one is a no-op on the shipped file. Measured: with the mentions assertion removed the suite
+ * stays green, and only the `tee -a "$GITHUB_PATH"` route reopens. Returned together instead.
+ */
+const runnerFileWrites = (src: string) => ({
+  targets: redirectionTargets(src),
+  mentions: runnerFileCommandMentions(src),
+});
+
+/**
+ * The job's step list, in order: each step's `name:`, or the marker below when a step has none.
+ *
+ * The three `env:`/key-set pins in this file each argue that a bound on which keys are present
+ * "cannot be stated by pinning the ones someone already thought of". The step sequence was the
+ * one structural list left unstated, and it is a delivery vector rather than a bookkeeping
+ * detail: a new step whose whole body is one allowlisted `echo` changes what a later, fully
+ * guarded step executes, by writing the runner file commands above. Every body-shaped sweep in
+ * this file runs over whatever steps exist, so none of them can say "and no others".
+ *
+ * `name:` is optional in the step schema, and an unnamed step has defeated four sweeps here at
+ * once before, so an unnamed one is REPORTED rather than skipped - `toEqual` then reds on it.
+ */
+const UNNAMED_STEP = '<unnamed step>';
+
+function stepNames(src: string): string[] {
+  // `steps:` is the last key of the only job, so its block runs to the end of the file. Lifted
+  // by value rather than by a file-wide sweep so a `- ` list under some other key cannot join.
+  const block = /^ {4}steps:\n([\s\S]*)$/m.exec(src);
+  expect(block, 'the steps: block moved').not.toBeNull();
+  return [...(block?.[1] ?? '').matchAll(/^ {6}- (.*)$/gm)].map(match => {
+    const named = /^name: (.*)$/.exec(match[1]);
+    return named ? named[1] : UNNAMED_STEP;
+  });
+}
 
 /**
  * Every invocation of a program matching `name` anywhere in a `run:` body, as parsed word
@@ -1120,13 +1229,19 @@ function runPushStep(src: string, fixture: PushFixture): PushOutcome {
     // the destination now fails the run it is executed in. The scp-like arm keys on `@` before
     // a `:`, which no argument in the shipped body carries - the commit trailer holds a URL but
     // no `@`, and the identity `-c user.email=...` holds an `@` but no `:`.
+    //
+    // The redirect arm is anchored at the HOST. `*` matches `/` in a shell glob, so the single
+    // pattern `https://*github.com/*` also matched a URL whose host is elsewhere and whose PATH
+    // merely contains `github.com/` (`https://x:$PUSH_TOKEN@exfil.invalid/github.com/r.git`):
+    // that spelling was silently redirected to the scratch remote and the fixture then observed
+    // an untouched remote and passed, while the executed body had shipped the token off-box.
     fs.writeFileSync(
       path.join(bin, 'git'),
       [
         '#!/bin/sh',
         'for arg; do',
         '  case "$arg" in',
-        '    https://*github.com/*) set -- "$@" "$FOLD_TEST_REMOTE" ;;',
+        '    https://github.com/*|https://*@github.com/*) set -- "$@" "$FOLD_TEST_REMOTE" ;;',
         '    http://*|https://*|ssh://*|git://*|ftp://*|ftps://*|*@*:*)',
         '      echo "fold-test: refusing a remote this harness does not redirect: $arg" >&2',
         '      exit 97 ;;',
@@ -1861,6 +1976,14 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       // three of the above in force, `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor
       // GIT_CONFIG_VALUE_0='sh -c ...'` ran the command on the shipped `ls-files` line.
       expect(stepSrc, `${name}: no GIT_CONFIG_COUNT`).toMatch(/^ {10}GIT_CONFIG_COUNT: '0'$/m);
+      // And the spelling the count does not govern either. `GIT_CONFIG_PARAMETERS` is git's own
+      // channel for handing `-c` config to a subprocess: not a file, not numbered, read straight
+      // out of the environment. Measured on git 2.50.1 with all four of the above in force, a
+      // `core.fsmonitor` payload in it ran on the shipped `ls-files` line and the step exited 0;
+      // pinned empty it does nothing, and a command-line `-c` still applies and still reaches
+      // child git processes. Its delivery route is bounded separately - see the runner
+      // file-command sweep, which does not rest on Actions env precedence.
+      expect(stepSrc, `${name}: no GIT_CONFIG_PARAMETERS`).toMatch(/^ {10}GIT_CONFIG_PARAMETERS: ''$/m);
     }
     // And the whole `env:` KEY SET of both, by value. The line above only asserts that
     // `GIT_CONFIG_COUNT: '0'` is PRESENT, which stays true while `GIT_CONFIG_KEY_0` and
@@ -1886,6 +2009,7 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       'GIT_CONFIG_SYSTEM',
       'GIT_CONFIG_NOSYSTEM',
       'GIT_CONFIG_COUNT',
+      'GIT_CONFIG_PARAMETERS',
       'PYTHONNOUSERSITE',
     ]);
     // Every git config key set on a COMMAND LINE anywhere in the file, by value. See
@@ -1909,10 +2033,13 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       expect(mutated, 'the injection anchor moved').not.toBe(src);
       expect(gitConfigKeys(mutated), `a git config key was not seen: ${injected}`).toHaveLength(6);
     }
-    // The third spelling, which neither of the two pins above can see: the config carried in a
+    // A further spelling that neither of the two pins above can see: the config carried in a
     // command's OWN environment as an assignment prefix. Empty, and a prefix that is not empty
     // has to be justified here - `GIT_CONFIG_COUNT=1 ... git ls-files` overrides the step env
     // (measured), and `commandProgram` strips the assignments, so it parses as plain `git`.
+    // Not the end of the list: `GIT_CONFIG_PARAMETERS` is a spelling that arrives from an
+    // earlier step, pinned empty above and bounded at its delivery route by the runner
+    // file-command sweep.
     expect(envAssignmentPrefixes(src)).toEqual([]);
     expect(
       envAssignmentPrefixes(
@@ -1931,6 +2058,80 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     expect(commands).toMatch(
       /git -c user\.name='claude\[bot\]' \\\n\s*-c user\.email='claude\[bot\]@users\.noreply\.github\.com' \\\n\s*commit /
     );
+  });
+
+  it('never writes the runner file commands, and runs exactly the steps it says it does', () => {
+    // $GITHUB_ENV and $GITHUB_PATH set the environment, and the PATH, of every LATER step. That
+    // makes a one-line append inside an ordinary body a way to change what a fully guarded step
+    // executes without touching that step at all - and no `env:` key pin in this file can see
+    // it, because the channel never touches an `env:` block. Proven live, not argued: with all
+    // four GIT_CONFIG_* vars in force, `GIT_CONFIG_PARAMETERS` delivered this way ran a command
+    // on the shipped `git ls-files` line in the step holding PUSH_TOKEN and exited 0.
+    //
+    // The shipped set of redirect targets is six, all of them the job's own step outputs, its
+    // own scratch files or /dev/null, which is the tightest allowlist available here.
+    expect(runnerFileWrites(src)).toEqual({ targets: REDIRECTION_TARGETS, mentions: [] });
+    // POSITIVE CONTROLS, one per route. The first is the shape that was 28/28 green: one line
+    // APPENDED to an existing body, no new step, no changed `env:` block, and `echo` is both an
+    // allowlisted program and a data-only one, so every other sweep in this file reads the file
+    // unchanged.
+    const appended = src.replace(
+      /^( +)(echo "at=\$\(date .*\n)/m,
+      `$1$2$1echo "GIT_CONFIG_PARAMETERS='core.fsmonitor=sh -c :'" >> "$GITHUB_ENV"\n`
+    );
+    expect(appended, 'the append anchor moved').not.toBe(src);
+    expect(redirectionTargets(appended), 'an appended redirection was not seen').toContain('"$GITHUB_ENV"');
+    expect(runnerFileCommandMentions(appended)).not.toEqual([]);
+    // Same variable, reached without a redirection at all.
+    const teed = src.replace(/^( +)(echo "at=\$\(date .*\n)/m, `$1$2$1printf '%s\\\\n' "x" | tee -a "$GITHUB_PATH"\n`);
+    expect(teed, 'the tee anchor moved').not.toBe(src);
+    expect(runnerFileCommandMentions(teed), 'a non-redirection write was not seen').toEqual(['GITHUB_PATH']);
+    // And the glued spelling, which is what a target-after-the-operator reader misses.
+    const glued = src.replace(/^( +)(echo "at=\$\(date .*\n)/m, `$1$2$1echo x >>"$GITHUB_ENV"\n`);
+    expect(glued, 'the glued anchor moved').not.toBe(src);
+    expect(redirectionTargets(glued), 'a glued redirection target was not seen').toContain('"$GITHUB_ENV"');
+
+    // The step list itself, by value. Every sweep in this file runs over whatever steps exist,
+    // so none of them can say "and no others" - a whole new step was 28/28 green, and the step
+    // above is exactly what such a step would carry. Pinned the way the three key sets already
+    // are, and for the same stated reason.
+    expect(stepNames(src)).toEqual([
+      'Checkout PR head',
+      'Size guard - skip oversize PRs, pick review model',
+      'Substantive-change guard - skip changeset-only re-reviews',
+      'Note changeset-only skip on a manual re-review',
+      'Mint b4m-devtools read token',
+      'Fetch bot-review skill from b4m-devtools (fail loud)',
+      'Record review start time',
+      'Install bubblewrap',
+      'Run /bot-review',
+      'Verify a review was actually posted',
+      'Mint fold push token (fold mode only)',
+      'Push fold commit',
+      'Report fold failure',
+      'Report cancelled fold',
+      'Report fold no-op',
+      'Redact and upload review transcript',
+      'Upload review transcript',
+      'Report incomplete review',
+      'Report skill-fetch failure',
+      'Remove re-review label',
+    ]);
+    // POSITIVE CONTROLS: a new step in either spelling. `name:` is optional in the step schema
+    // and an unnamed step has blinded four sweeps in this file at once before, so it has to
+    // REACH the pin rather than be skipped by it.
+    for (const injected of [
+      '      - name: Publish the fold\n        run: |\n          echo hi\n',
+      '      - run: |\n          echo hi\n',
+      '      - uses: actions/checkout@v5\n',
+    ]) {
+      const mutated = src.replace(
+        /^ {6}- name: Report skill-fetch failure$/m,
+        `${injected}      - name: Report skill-fetch failure`
+      );
+      expect(mutated, 'the step injection anchor moved').not.toBe(src);
+      expect(stepNames(mutated), `a new step was not seen: ${injected.split('\n')[0]}`).toHaveLength(21);
+    }
   });
 
   it('never tells the agent to push', () => {

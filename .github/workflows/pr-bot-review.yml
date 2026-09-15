@@ -701,12 +701,24 @@ jobs:
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_SYSTEM: /dev/null
           GIT_CONFIG_NOSYSTEM: '1'
-          # The numbered spelling of the same config, which the three above do not cover:
+          # A further spelling of the same config, which the three above do not cover:
           # they name config FILES, and `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`
           # carries the config itself in the environment. Pinned to 0 so git reads no numbered
           # pair, because a key like `core.fsmonitor` is a command git runs. Three `env:` lines
           # would otherwise be arbitrary execution here with the `run:` body untouched.
           GIT_CONFIG_COUNT: '0'
+          # A FOURTH spelling: `GIT_CONFIG_PARAMETERS` is how git itself hands `-c` config down
+          # to a subprocess. It is neither a file nor governed by the count above, so none of
+          # the four vars before it touches it - measured on git 2.50.1, with all four in
+          # force, a `core.fsmonitor` payload in this variable ran on the shipped `ls-files`
+          # line below and exited 0. Pinned empty; `-c` on a command line still applies and
+          # still propagates to child git processes (measured).
+          #
+          # Empty rather than unset because the delivery route is a write to $GITHUB_ENV in an
+          # EARLIER step, which sets the variable for this one - see the sweep in
+          # checkBotFoldWritePath.test.ts that keeps every `run:` body in this file out of the
+          # runner file commands. That sweep is the bound that does not rest on env precedence.
+          GIT_CONFIG_PARAMETERS: ''
         run: |
           # `-e` is load-bearing, not hygiene: without it a failed `git commit` falls
           # through to the push, which reports `Everything up-to-date` and exits 0, so
@@ -1058,6 +1070,12 @@ jobs:
           # And the numbered environment spelling of that same config, for the reason
           # `Push fold commit` states: the three vars above bound config FILES only.
           GIT_CONFIG_COUNT: '0'
+          # And the fourth, for the reason that step states: `GIT_CONFIG_PARAMETERS` is git's
+          # own channel for passing `-c` config to a subprocess and the four vars above do not
+          # cover it. No execution was demonstrated in THIS step, whose only git call is a
+          # `git show` that refreshes no index - this is belt, kept so both post-agent git
+          # steps carry the same set and a future git call here inherits the bound.
+          GIT_CONFIG_PARAMETERS: ''
           # Belt to the `python3 -I` below, which is the live bound on the interpreter.
           # Both are kept because they are independent: `-I` implies `-E`, so while the
           # flag is there this variable is ignored, and if the flag is ever edited away
