@@ -51,6 +51,10 @@ const h = vi.hoisted(() => ({
   finalizeBatchIfComplete: vi.fn(),
   sendToQueue: vi.fn(),
   assertLakeAdmission: vi.fn(),
+  // Bypasses the real AdminSettingsCache singleton, which would otherwise persist whatever the
+  // first call in this file resolved across every later test that shares the same test process.
+  getSettingsMap: vi.fn(),
+  checkStorageLimit: vi.fn(),
   // records the interleaving of manifest-append vs byte-upload to assert ordering
   order: [] as string[],
   // wider ordering record - user loads, uploads, carry-over writes, deletes - for the invariants that
@@ -95,6 +99,16 @@ vi.mock('@bike4mind/database', () => ({
     updateSyncCursor: h.updateSyncCursor,
   },
 }));
+// Only the two settings/quota reads this door gates on are stubbed; BadRequestError stays the
+// real class so the door's own `instanceof` check still matches what these tests throw.
+vi.mock('@bike4mind/utils', async importOriginal => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    getSettingsMap: h.getSettingsMap,
+    checkStorageLimit: h.checkStorageLimit,
+  };
+});
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     createDataLakeFallbackTagger: () => async (tags: unknown) => tags,
@@ -274,6 +288,11 @@ describe('driveLakeIngest consumer', () => {
     // admission gate to its happy-path default so a later test's own rejection can't leak forward into
     // whichever test runs next in file order.
     h.assertLakeAdmission.mockResolvedValue(undefined);
+    // Empty map -> MaxFileSize falls back to its coded default (30 MB), and a permissive user ->
+    // checkStorageLimit falls back to its 1000 MB default too - both well above every fixture's
+    // byte size below, so neither new gate fires unless a test overrides it.
+    h.getSettingsMap.mockResolvedValue({});
+    h.checkStorageLimit.mockResolvedValue(undefined);
   });
 
   it('is a cheap no-op when the claim is lost and there is nothing in flight to defer behind', async () => {
@@ -353,6 +372,93 @@ describe('driveLakeIngest consumer', () => {
     expect(h.fetchDriveFileContent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 'ok' }));
     expect(h.recordSkippedDriveFile).toHaveBeenCalledWith('batch1', 'big');
     expect(h.upload).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a file at or over the admin MaxFileSize and continues the batch', async () => {
+    // The gate is `bytes.length >= maxFileSize` - exactly at the limit must refuse, not just over it.
+    h.getSettingsMap.mockResolvedValueOnce({ MaxFileSize: '1' }); // 1 MiB = 1,048,576 bytes
+    h.walkFolder.mockResolvedValue([
+      { id: 'file-1', name: 'at-limit.txt', mimeType: 'text/plain', relativePath: 'at-limit.txt' },
+      { id: 'file-2', name: 'under-limit.txt', mimeType: 'text/plain', relativePath: 'under-limit.txt' },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValueOnce(okBytes(1024 * 1024)).mockResolvedValueOnce(okBytes(1024 * 1024 - 1));
+
+    await run();
+
+    expect(h.recordSkippedDriveFile).toHaveBeenCalledWith('batch1', 'file-1');
+    expect(h.upload).toHaveBeenCalledTimes(1);
+    expect(h.createFabFile).toHaveBeenCalledTimes(1);
+    expect(h.createFabFile).toHaveBeenCalledWith(expect.objectContaining({ driveFileId: 'file-2' }), expect.anything());
+  });
+
+  it('skips a file over the admin MaxFileSize before fetching it, using the Drive-reported size', async () => {
+    h.getSettingsMap.mockResolvedValueOnce({ MaxFileSize: '1' }); // 1 MiB = 1,048,576 bytes
+    h.walkFolder.mockResolvedValue([
+      { id: 'file-1', name: 'big.txt', mimeType: 'text/plain', relativePath: 'big.txt', size: 2 * 1024 * 1024 },
+      { id: 'file-2', name: 'small.txt', mimeType: 'text/plain', relativePath: 'small.txt', size: 100 },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
+    expect(h.fetchDriveFileContent).toHaveBeenCalledTimes(1);
+    expect(h.fetchDriveFileContent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 'file-2' }));
+    expect(h.recordSkippedDriveFile).toHaveBeenCalledWith('batch1', 'file-1');
+    expect(h.upload).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips a file that exceeds the storage quota and continues the batch', async () => {
+    h.walkFolder.mockResolvedValue([
+      { id: 'file-1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' },
+      { id: 'file-2', name: 'b.txt', mimeType: 'text/plain', relativePath: 'b.txt' },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+    h.checkStorageLimit
+      .mockRejectedValueOnce(new BadRequestError('storage limit exceeded'))
+      .mockResolvedValueOnce(undefined);
+
+    await run();
+
+    // Checked against the USER, not an org id/lookup - pins the user-scoped gate from change 1.
+    expect(h.checkStorageLimit).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), 10);
+    expect(h.recordSkippedDriveFile).toHaveBeenCalledWith('batch1', 'file-1');
+    // The refused file is never uploaded or persisted as a FabFile - only the accepted one is.
+    expect(h.upload).toHaveBeenCalledTimes(1);
+    expect(h.createFabFile).toHaveBeenCalledTimes(1);
+    expect(h.createFabFile).toHaveBeenCalledWith(expect.objectContaining({ driveFileId: 'file-2' }), expect.anything());
+  });
+
+  it('accumulates bytes already uploaded this run, so two files that each pass alone together overshoot quota', async () => {
+    // Each file is under quota on its own against the stale start-of-run snapshot; only together,
+    // via the accumulator, do they exceed it.
+    h.walkFolder.mockResolvedValue([
+      { id: 'file-1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' },
+      { id: 'file-2', name: 'b.txt', mimeType: 'text/plain', relativePath: 'b.txt' },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValueOnce(okBytes(600)).mockResolvedValueOnce(okBytes(500));
+    h.checkStorageLimit.mockImplementation(async (_user, size: number) => {
+      if (size > 1000) throw new BadRequestError('storage limit exceeded');
+    });
+
+    await run();
+
+    expect(h.checkStorageLimit).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'user1' }), 600);
+    // 600 already accepted plus this file's 500 - refused only because of the accumulator, since
+    // 500 alone is well under the 1000 quota used by the mock above.
+    expect(h.checkStorageLimit).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: 'user1' }), 1100);
+    expect(h.recordSkippedDriveFile).toHaveBeenCalledWith('batch1', 'file-2');
+    expect(h.upload).toHaveBeenCalledTimes(1);
+    expect(h.createFabFile).toHaveBeenCalledTimes(1);
+    expect(h.createFabFile).toHaveBeenCalledWith(expect.objectContaining({ driveFileId: 'file-1' }), expect.anything());
+  });
+
+  it('rethrows a non-BadRequestError from the quota check rather than counting a skip', async () => {
+    h.walkFolder.mockResolvedValue([{ id: 'file-1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+    h.checkStorageLimit.mockRejectedValueOnce(new Error('connection lost'));
+
+    await expect(run()).rejects.toThrow('connection lost');
+    expect(h.recordSkippedDriveFile).not.toHaveBeenCalled();
   });
 
   it('ingests only the genuinely-new file, skipping one already in the lake (unchanged)', async () => {

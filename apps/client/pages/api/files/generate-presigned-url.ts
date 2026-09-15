@@ -58,7 +58,7 @@ const handler = baseApi().post(
       if (!data.fileSize) throw new BadRequestError('No file size provided');
       if (data.fileSize >= maxFileSize) throw new BadRequestError('File size exceeds maximum file size');
 
-      if (!checkStorageLimit(req.user, data.fileSize)) throw new BadRequestError('File size exceeds storage limit');
+      await checkStorageLimit(req.user, data.fileSize);
 
       console.log('==============');
       console.log('Generating presigned URL for file', data.fileName);

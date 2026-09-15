@@ -25,13 +25,14 @@ import {
   type IUserDocument,
   isLakeIngestable,
 } from '@bike4mind/common';
-import { BadRequestError } from '@bike4mind/utils';
+import { BadRequestError, checkStorageLimit, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { createFabFile } from '@server/managers/fabFileManager';
 import defineAbilitiesFor from '@server/auth/ability';
 import { getFilesStorage } from '@server/utils/storage';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
 import {
   disableDriveConnectionForLake,
   getValidConnectionDriveAccessToken,
@@ -1189,12 +1190,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         return;
       }
 
-      // The admission contract (#1680) for the lake this sync is JOINING every candidate into. This
-      // door resolves its lake server-side and stamps the meta-tag itself (below), and it creates its
-      // FabFiles through the manager's direct `FabFile.create` rather than
-      // `fabFileService.createFabFile` - so neither the meta-tag chokepoint nor the service gate ever
-      // sees it. Structurally the same unwired door `generate-presigned-urls-batch` needed its own
-      // explicit call for.
+      // This door still creates its FabFiles through the manager's direct `FabFile.create` rather
+      // than `fabFileService.createFabFile`, so it bypasses the meta-tag write-authorization
+      // chokepoint (assertCanWriteDataLakeTags) - see generate-presigned-urls-batch.ts's own
+      // explicit call for the same reason.
       //
       // Once per sync, before the batch: the lake and the owner-to-be are the same for every
       // candidate, so a refusal is a property of the connection, not of any one file. No FabFile
@@ -1283,6 +1282,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         logger.info('[driveLakeIngest] skipping file', { driveFileId, reason, recorded, ...extra });
       };
 
+      // Resolved once per run, not per file - the loop can walk hundreds of candidates.
+      const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+      const maxFileSize = getSettingsValue('MaxFileSize', settings, MAX_FILE_SIZE_DEFAULT_MB) * 1024 * 1024;
+
       // 6) One file at a time: size-gate -> fetch -> create FabFile -> append its manifest entry ->
       //    upload. Only one file's bytes are ever live, and the manifest entry precedes the upload so
       //    the objectCreated/chunk/vectorize claims the upload fires can find it (see header).
@@ -1290,6 +1293,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // Set when Drive throttled this slice, which changes both the continuation's delay and the
       // message the operator sees if the chain runs out of slices still throttled.
       let rateLimited = false;
+      // currentStorageSize is a snapshot read once per run, so several files that each pass the
+      // storage check individually would otherwise overshoot the quota together.
+      let acceptedBytes = 0;
       for (const [index, file] of candidates.entries()) {
         // Yield rather than get killed, checked BEFORE starting a file so the run never dies between
         // creating a FabFile and uploading its bytes - including before the FIRST file: a slice whose
@@ -1307,6 +1313,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         // (surfaced as export_too_large) plus the post-fetch guard below.
         if (file.size != null && file.size > MAX_INGEST_FILE_BYTES) {
           await skip(file.id, 'oversized', { size: file.size });
+          continue;
+        }
+
+        if (file.size != null && file.size >= maxFileSize) {
+          await skip(file.id, 'exceeds_max_file_size', { size: file.size });
           continue;
         }
 
@@ -1338,6 +1349,25 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         }
 
         const { bytes, mimeType } = result;
+
+        // Both size checks above only see file.size, which Drive omits for Docs/Sheets exports;
+        // this pair is the backstop that still catches those once the real byte count is known.
+        if (bytes.length >= maxFileSize) {
+          await skip(file.id, 'exceeds_max_file_size', { size: bytes.length });
+          continue;
+        }
+
+        // Checked against the user, not the connection's org: objectCreated debits the
+        // uploading user, and this handler's own reclaim path deducts from that same counter,
+        // so an org-scoped check here could never fire.
+        try {
+          await checkStorageLimit(user, acceptedBytes + bytes.length);
+        } catch (error) {
+          if (!(error instanceof BadRequestError)) throw error;
+          await skip(file.id, 'storage_limit', { size: bytes.length });
+          continue;
+        }
+
         const ext = mime.extension(mimeType);
         const fileKey = `${uuidv4()}${ext ? `.${ext}` : ''}`;
         const tags = await applyFallbackTags([{ name: datalakeTag, strength: DATALAKE_TAG_STRENGTH }]);
@@ -1378,6 +1408,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
         await storage.upload(bytes, fileKey, { ContentType: mimeType });
         uploaded++;
+        acceptedBytes += bytes.length;
 
         // Confirm the upload SYNCHRONOUSLY, right here - not left to the async S3 objectCreated
         // event. findDriveFileIdsByBatchId (what a resumed slice subtracts) excludes 'pending' rows
