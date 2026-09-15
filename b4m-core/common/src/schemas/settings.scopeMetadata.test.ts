@@ -11,12 +11,23 @@ import { SettingScopeLevel } from '../types/entities/ScopedSettingTypes';
  * `settingsMap` and nothing else, so it can only judge whether a declaration is well-formed, never
  * whether a consumer honors it. It does NOT catch "a lever with no consumer / a lever that lies",
  * which this docblock used to claim and #2624 walked straight past. That class is a property of
- * CALL SITES, not of this file, and the defence against it belongs where it is caused: making
- * `scope` a REQUIRED parameter, as `resolveSearchBudgets` now does, so a new consumer has to name
- * the scope it wants instead of inheriting platform-only by omission. Prefer that to a second list
- * here. Note what it does and does not buy: it forces the decision to be written down, and a
- * caller that deliberately writes `{}` still reads platform-only - which is the point, since some
- * genuinely should. `resolveScopedSettingValues` has no such requirement today.
+ * CALL SITES, not of this file, and the defence against it lives where it is caused, in two parts:
+ *
+ *  - `scope` is a REQUIRED parameter on `resolveScopedSetting`, `resolveScopedSettingValues` and
+ *    `resolveSearchBudgets`, so a consumer has to name the scope it wants rather than inherit
+ *    platform-only by omission. One that deliberately passes `{}` still reads platform-only, which
+ *    is the point - some genuinely should.
+ *  - `computeCandidateRefs` warns when a scope cannot key a rung the setting declares and the scope
+ *    builders always populate (owner, lake - see its `STRUCTURAL_RUNGS`). That is the half a
+ *    required parameter cannot reach: #2624 passed a perfectly real scope, just one built by
+ *    `scopeForCaller`, which never carries a lakeId, so the declared Lake rung resolved nothing and
+ *    nothing said so.
+ *
+ * Both bind any consumer that calls the resolver, including one in a private overlay, which is why
+ * neither is a second list here. A rung declared on a setting that NOTHING resolves is still not
+ * detected, deliberately: #1683 found a repo-wide "every declared setting has a consumer" check
+ * false-positives on keys read only by an overlay, and scoped its own guard to one family for that
+ * reason.
  */
 const VALID_LEVELS = new Set([SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake]);
 
