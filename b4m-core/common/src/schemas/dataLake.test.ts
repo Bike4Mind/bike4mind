@@ -153,8 +153,12 @@ describe('CreateDataLakeRequestInput.requiredUserTag', () => {
     }
   });
 
-  it('rejects a value with internal whitespace', () => {
-    expect(CreateDataLakeRequestInput.safeParse(input('acme:', 'team a')).success).toBe(false);
+  it('accepts a multi-word tag with internal whitespace', () => {
+    const result = CreateDataLakeRequestInput.safeParse(input('acme:', 'Sales Team'));
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.requiredUserTag).toBe('Sales Team');
+    }
   });
 
   it('rejects a whitespace-only value', () => {
@@ -185,6 +189,14 @@ describe('UpdateDataLakeRequestInput.requiredUserTag', () => {
 
   it('rejects a whitespace-only value (does not collapse to the clear sentinel)', () => {
     expect(UpdateDataLakeRequestInput.safeParse({ requiredUserTag: '   ' }).success).toBe(false);
+  });
+
+  it('accepts a multi-word tag with internal whitespace', () => {
+    const result = UpdateDataLakeRequestInput.safeParse({ requiredUserTag: 'Sales Team' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.requiredUserTag).toBe('Sales Team');
+    }
   });
 });
 
