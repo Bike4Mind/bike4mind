@@ -38,8 +38,16 @@ export const optionalJwtAuth = () => {
       // bypasses it - so we must mirror that policy here or a username+password session that
       // hasn't completed MFA could view gated bundles. Such a viewer falls through to the
       // loader shell's sign-in branch, the correct posture for a pre-MFA session.
-      const u = user as (Express.User & { mfaPending?: boolean }) | false | null;
-      if (err || !u || u.mfaPending) return next();
+      //
+      // Degrade a relying-party OAuth access token to anonymous too. verifyJwtPayload stamps
+      // oauthGrant onto the user and returns it as a success; on the normal full-auth chain the
+      // oauthRouteGate then default-denies it, but this `auth: false` route bypasses that gate,
+      // so without this an openid-only OAuth token would read a user's PRIVATE published
+      // artifacts. Mirror the gate's default-deny here: OAuth tokens fall through to the same
+      // public/anonymous posture as any un-credentialed viewer. Must stay in sync with
+      // oauthRouteGate.ts - both are the OAuth-token choke points on their respective paths.
+      const u = user as (Express.User & { mfaPending?: boolean; oauthGrant?: unknown }) | false | null;
+      if (err || !u || u.mfaPending || u.oauthGrant) return next();
       req.user = u;
       req.ability = ability(u as Parameters<typeof ability>[0]);
       next();
