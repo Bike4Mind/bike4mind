@@ -6,6 +6,16 @@ interface ResizableSplitterProps {
   onWidthChange?: (newWidth: number) => void;
 }
 
+// The knowledge pane never takes less than MIN or more than MAX of the split. Shared by the
+// pointer and keyboard paths so the two clamps cannot drift apart.
+const MIN_WIDTH_PERCENT = 20;
+const MAX_WIDTH_PERCENT = 80;
+// One arrow press. Deliberately fine rather than fast: Home/End already cover the extremes,
+// so the arrows are the precision control.
+const KEY_STEP_PERCENT = 2;
+
+const clampWidth = (width: number) => Math.max(MIN_WIDTH_PERCENT, Math.min(MAX_WIDTH_PERCENT, width));
+
 // Use a single shared state outside React to avoid re-renders during drag
 const dragState = {
   isDragging: false,
@@ -18,6 +28,18 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
   const knowledgeViewerWidth = useSessionLayout(s => s.knowledgeViewerWidth) || 50;
   const [isDragging, setIsDragging] = useState(false);
   const [, startTransition] = useTransition();
+
+  // A drag commits a fractional width, so round before announcing it or stepping off it:
+  // otherwise aria-valuenow and the stored width drift apart for the rest of the session.
+  const roundedWidth = Math.round(knowledgeViewerWidth);
+
+  const commitWidth = useCallback(
+    (newWidth: number) => {
+      setSessionLayout({ knowledgeViewerWidth: newWidth });
+      onWidthChange?.(newWidth);
+    },
+    [onWidthChange]
+  );
 
   const handlePointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -55,7 +77,7 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
         const deltaPercent = (deltaX / parentRect.width) * 100;
         // Minus, not plus: SessionContainer renders the split row-reversed, so the viewer
         // sits to the RIGHT of this handle and dragging right has to shrink it.
-        const newWidth = Math.max(20, Math.min(80, dragState.startWidth - deltaPercent));
+        const newWidth = clampWidth(dragState.startWidth - deltaPercent);
 
         dragState.currentWidth = newWidth;
 
@@ -85,15 +107,46 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
         // Commit the final width to React state in a transition
         const finalWidth = dragState.currentWidth;
         startTransition(() => {
-          setSessionLayout({ knowledgeViewerWidth: finalWidth });
-          onWidthChange?.(finalWidth);
+          commitWidth(finalWidth);
         });
       };
 
       window.addEventListener('pointermove', handlePointerMove);
       window.addEventListener('pointerup', handlePointerUp);
     },
-    [knowledgeViewerWidth, onWidthChange, startTransition]
+    [commitWidth, knowledgeViewerWidth, startTransition]
+  );
+
+  // Arrow keys step the separator, Home/End jump to the clamps. Left/Right are named for
+  // where the separator MOVES, so they carry the same sign flip as the drag: the viewer is
+  // the right-hand pane, so moving the separator right shrinks it.
+  const handleKeyResize = useCallback(
+    (e: React.KeyboardEvent) => {
+      let newWidth: number;
+
+      switch (e.key) {
+        case 'ArrowLeft':
+          newWidth = clampWidth(roundedWidth + KEY_STEP_PERCENT);
+          break;
+        case 'ArrowRight':
+          newWidth = clampWidth(roundedWidth - KEY_STEP_PERCENT);
+          break;
+        case 'Home':
+          newWidth = MIN_WIDTH_PERCENT;
+          break;
+        case 'End':
+          newWidth = MAX_WIDTH_PERCENT;
+          break;
+        default:
+          return;
+      }
+
+      // These keys would otherwise scroll whichever pane is behind the handle.
+      e.preventDefault();
+
+      if (newWidth !== knowledgeViewerWidth) commitWidth(newWidth);
+    },
+    [commitWidth, knowledgeViewerWidth, roundedWidth]
   );
 
   return (
@@ -124,15 +177,37 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
           backgroundColor: 'divider',
           transition: 'background-color 0.2s ease',
         },
-        '&:hover::before, &[data-dragging="true"]::before': {
+        '&:hover::before, &:focus-visible::before, &[data-dragging="true"]::before': {
           // primary.500, not primary.main: Joy's palette has no `main` key (that is Material
           // UI), so the string falls through as an invalid CSS value and nothing happens.
           backgroundColor: 'primary.500',
         },
+        // The handle is keyboard-focusable, so it needs its own focus indicator. The ring
+        // goes on the bar, not the element: the negative margins mean an outline on the
+        // 8px full-height strip would be drawn across both panes' content.
+        '&:focus-visible': {
+          outline: 'none',
+        },
+        '&:focus-visible::before': {
+          outline: '2px solid',
+          outlineColor: 'primary.500',
+          outlineOffset: '3px',
+        },
       }}
       onPointerDown={handlePointerDown}
+      onKeyDown={handleKeyResize}
       data-dragging={isDragging}
-      aria-label="Drag to resize"
+      data-testid="session-splitter-handle"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize the chat and knowledge panes"
+      aria-valuenow={roundedWidth}
+      aria-valuemin={MIN_WIDTH_PERCENT}
+      aria-valuemax={MAX_WIDTH_PERCENT}
+      // Without this a screen reader reads the value as its position in the 20-80 range
+      // (a 32% split announced as "20%"), which is worse than saying nothing.
+      aria-valuetext={`Knowledge pane ${roundedWidth}%`}
+      tabIndex={0}
     />
   );
 };
