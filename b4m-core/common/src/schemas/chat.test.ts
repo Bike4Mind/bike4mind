@@ -12,9 +12,10 @@ const baseAck = {
 };
 
 /**
- * `type`/`errorCode` model the classifier a caller matches on to tell a credit/spend-cap
- * failure from a real answer (chat.contract.ts's 200 description) - both absent on the
- * immediate async ack, present on the `wait: true` body and the polled quest once terminal.
+ * `type`/`errorCode` model the classifier a caller matches on to tell a failed turn from a
+ * real answer (chat.contract.ts's 200 description). Both absent on the immediate async ack;
+ * `type` is the failure signal on a terminal turn and `errorCode` only names the reason when
+ * there is one, so the vocabulary here is wider than what this endpoint can actually emit.
  */
 describe('ChatAckSchema error classifier', () => {
   it('accepts the shape with no type/errorCode (the immediate async ack)', () => {

@@ -34,13 +34,16 @@ export const chatContract = defineEndpoint({
         'Message accepted. The default (async) path returns this queued ACK. With `wait: true` the ' +
         'body additionally carries the completed reply (`response`/`responses`), `toolPayloads`, ' +
         '`createdAt`, and `performance` timings - fields not modelled here yet; the synchronous ' +
-        'response shape is a follow-up. A turn that cannot be billed (the caller is out of credits, ' +
-        'or over an admin-set spend cap) still resolves with `200`, never a 4xx, on both that ' +
-        '`wait: true` body and the polled quest (`GET /api/quests/{id}`) - the prose explaining why ' +
-        'lands in `reply`/`response` like any other answer. `type: "error"` plus ' +
-        '`errorCode: "insufficient_credits"` or `"spend_cap_exceeded"` is what actually distinguishes ' +
-        'that from a real answer, so match on `errorCode` rather than the status or the reply text, ' +
-        'the same way the tts/music/soundEffects contracts document their synchronous 422 classifier.',
+        'response shape is a follow-up. A turn that FAILS still resolves with `200`, never a 4xx, on ' +
+        'both that `wait: true` body and the polled quest (`GET /api/quests/{id}`) - the prose ' +
+        'explaining why lands in `reply`/`response` like any other answer, so the reply text alone ' +
+        'cannot tell a failure from an answer. `type: "error"` is the field that can: match on it ' +
+        'first, for EVERY failure class (out of credits, an aborted turn, a provider timeout or ' +
+        'overload, a recovered stuck quest). `errorCode` then names the reason, but only for the ' +
+        'billing failures that have one - `"insufficient_credits"` today; it is absent on every ' +
+        'other `type: "error"` turn, so never use its absence to infer success. On a real answer ' +
+        'both fields are absent from the `wait: true` body. Contrast the tts/music/soundEffects ' +
+        'contracts, which reject synchronously with a 422 carrying the same `errorCode` vocabulary.',
       schema: ChatAckSchema,
     },
     400: { description: 'No usable default chat model is configured and none was supplied.', schema: ApiErrorSchema },
