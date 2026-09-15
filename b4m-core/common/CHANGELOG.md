@@ -1,5 +1,11 @@
 # @bike4mind/common
 
+## 7.2.2
+
+### Patch Changes
+
+- [#2765](https://github.com/Bike4Mind/bike4mind/pull/2765) [`2298140`](https://github.com/Bike4Mind/bike4mind/commit/229814036a13097cae1cd3ccc19d052d4d6c17f9) Thanks [@onoya](https://github.com/onoya)! - resolve search budgets on the caller scope in the semantic-search route
+
 ## 7.2.1
 
 ### Patch Changes

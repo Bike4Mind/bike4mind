@@ -1,5 +1,18 @@
 # @bike4mind/slack
 
+## 0.5.2
+
+### Patch Changes
+
+- Updated dependencies [[`2298140`](https://github.com/Bike4Mind/bike4mind/commit/229814036a13097cae1cd3ccc19d052d4d6c17f9)]:
+  - @bike4mind/common@7.2.2
+  - @bike4mind/services@7.2.2
+  - @bike4mind/agents@1.0.5
+  - @bike4mind/fab-pipeline@1.3.5
+  - @bike4mind/llm-adapters@0.14.2
+  - @bike4mind/mcp@2.0.5
+  - @bike4mind/utils@5.1.2
+
 ## 0.5.1
 
 ### Patch Changes
