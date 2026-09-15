@@ -142,6 +142,12 @@ export interface NearEmptyChunkFilePlan {
  * The "does this file have any OTHER (non-candidate) chunk" check is one batched aggregate over
  * every candidate fabFileId, not one `countDocuments` per file - the earlier per-file form was an
  * N+1 inside the deploy-gating migrator Lambda's 15-minute/512MB budget.
+ *
+ * This aggregate runs before the caller's delete, so it is a theoretical TOCTOU: if something else
+ * removed a file's one non-candidate chunk in between, the sole-survivor guard below would not have
+ * engaged and the file could land at `chunkCount: 0`. Vanishingly unlikely at deploy time (nothing
+ * else mutates a file's chunks during this one-time sweep), and the repair step's own fresh
+ * `countDocuments` still reflects reality either way - noted for completeness, not a real risk here.
  */
 export async function planNearEmptyChunkDeletions(
   candidatesByFile: Map<string, NearEmptyChunkRow[]>
