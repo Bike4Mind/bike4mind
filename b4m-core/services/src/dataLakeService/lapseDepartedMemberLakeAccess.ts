@@ -214,6 +214,15 @@ async function lapseOwnGrants(
  * and `transferLakeOwnership` writes the same document for its own stamp. So the two collide on the
  * grant row when the departing member held one, and on the lake document when they did not (the
  * creator-fallback case, which has no grant row to collide on until the transfer creates it).
+ *
+ * That second arm holds only while the trigger is ATTRIBUTABLE: `lakeConfigWriteStamp` returns `{}`
+ * for a blank actor id and the stamp write is skipped with it, which would leave the
+ * creator-fallback case with no shared document. Both callers are routes passing `req.user.id`, so
+ * it holds today; a future system-triggered departure has to supply an actor id to keep it. The
+ * write is deliberately NOT unconditional: an empty `$set` still bumps `updatedAt`, which is the
+ * only status-move signal a transitional lake has (see the stranded-lake note on
+ * `strandedCutoffMsFor` in DataLakeTypes), so stamping every org lake regardless would reset
+ * that clock on lakes this departure has nothing to do with.
  */
 async function passOnCreatedLakes(
   departedUserId: string,

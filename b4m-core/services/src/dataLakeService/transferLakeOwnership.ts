@@ -97,6 +97,8 @@ export interface TransferLakeOwnershipResult {
  * conflict on a shared document, which Mongo aborts and retries. The shared document is the
  * demoted grant row when the departing member held one, and the LAKE document otherwise - both
  * paths write it for their actor stamp, which is why that stamp is load-bearing beyond attribution.
+ * The LAKE arm needs the departure's own trigger to be attributable, which both of its callers are;
+ * see the serialization note on `lapseDepartedMemberLakeAccess`'s phase 2.
  *
  * Every write is still idempotent (retrying the same transfer converges) and the ordering still
  * holds - the audit is written LAST so it can never claim a transfer that failed partway.
