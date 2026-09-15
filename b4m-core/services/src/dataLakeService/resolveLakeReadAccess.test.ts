@@ -10,7 +10,6 @@ import {
   resolveEnforceReadGrants,
   manageGrantedLakeIdsFor,
   ENFORCE_LAKE_READ_GRANTS_KEY,
-  READ_GRANT_ENFORCEMENT_READY,
 } from './resolveLakeReadAccess';
 import type { LakeGrant } from './manageRule';
 
@@ -211,15 +210,14 @@ describe('resolveEnforceReadGrants - fail-safe flag read', () => {
     expect(await resolveEnforceReadGrants(undefined)).toBe(false);
   });
 
-  it('setting ON is gated by the code interlock: enforced only when READY, else report-only + warn', async () => {
+  it('setting ON -> enforced, with no warn (the setting is the only gate)', async () => {
     const settings = { getSettingsValue: vi.fn().mockResolvedValue(true) };
     const logger = { warn: vi.fn() };
     const result = await resolveEnforceReadGrants(settings, logger);
     expect(settings.getSettingsValue).toHaveBeenCalledWith(ENFORCE_LAKE_READ_GRANTS_KEY);
-    // Enforced iff the source interlock is flipped; while it holds, a premature toggle stays
-    // report-only and logs a warning so the accidental enable is visible.
-    expect(result).toBe(READ_GRANT_ENFORCEMENT_READY);
-    expect(logger.warn).toHaveBeenCalledTimes(READ_GRANT_ENFORCEMENT_READY ? 0 : 1);
+    expect(result).toBe(true);
+    // Nothing else can hold enforcement back, so an ON setting is never a diagnosed state.
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it('a falsy value -> report-only', async () => {

@@ -26,7 +26,7 @@ import {
   type BuildSharedToolsOptions,
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
-} from '@bike4mind/services';
+} from '@bike4mind/services/llm';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import { latticeToolDefinitions } from '@bike4mind/services/llm/tools/cliTools';
 

@@ -20,6 +20,14 @@ export enum FeedbackType {
 export const FEEDBACK_SUBJECTS = ['turn', 'session', 'product'] as const;
 export type FeedbackSubject = (typeof FEEDBACK_SUBJECTS)[number];
 
+/**
+ * Page bounds for the feedback list endpoint. Shared rather than mirrored on each side: the
+ * server rejects a larger `limit`, and the CSV export pages at exactly the maximum - so a lower
+ * server cap with a stale client copy turns every export request into a validation error.
+ */
+export const FEEDBACK_LIST_DEFAULT_LIMIT = 20;
+export const FEEDBACK_LIST_MAX_LIMIT = 100;
+
 export interface IFeedback {
   userId: string;
   /** Moved to `IFeedbackText` (a TTL'd sibling document sharing this doc's `_id`) 90 days after

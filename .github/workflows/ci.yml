@@ -837,11 +837,14 @@ jobs:
   # holds regardless of deployability. On a deployable docs PR the suites also run in
   # the shards; the duplicate is ~1 min and worth the unconditional guarantee.
   #
-  # `ingestHelpDatalake.ts` (and its test) now pulls in @bike4mind/common, so this leg
-  # does need the core build after all. `needs: core-build` alone would make this job
-  # inherit core-build's skip on a non-deployable (docs-only) run, defeating the guard
-  # this job exists for - so it stays gated on `docs-changed` via an explicit `if`, and
-  # tolerates core-build having been skipped (falling back to a local build below).
+  # This leg used to need no core build - the help tooling imported only glob/gray-matter.
+  # `ingestHelpDatalake.ts` now pulls in @bike4mind/common, whose package entries all point
+  # at dist/, so the suite fails to LOAD without it (not an assertion failure - a resolve
+  # error). `needs: core-build` alone would be a regression: core-build is gated on
+  # `deployable`, and a docs-only PR is non-deployable, so this job would inherit that skip
+  # and go quiet on exactly the changes it exists to guard. Hence the explicit `if` that
+  # keeps the `docs-changed` gate and tolerates core-build having been skipped, plus the
+  # artifact download with a local build as fallback.
   help-docs:
     name: Help Docs Guards
     needs: [changes, core-build]
@@ -893,6 +896,8 @@ jobs:
           path: .
         continue-on-error: true
 
+      # Covers both misses: core-build skipped (docs-only run, so no artifact and an empty
+      # name above) and a genuine download failure.
       - name: Build bike4mind core packages (fallback)
         if: steps.download-core.outcome == 'failure'
         run: pnpm core:build

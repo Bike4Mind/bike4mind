@@ -32,6 +32,7 @@ export type ReplayRow = {
   promptMeta?: {
     retrieval?: {
       mode?: string;
+      lakeScope?: string[] | null;
       answerability?: unknown;
     };
   };
@@ -41,16 +42,25 @@ export type ReplayTarget = {
   questId: string;
   prompt: string;
   sessionId: string;
+  /** The turn's own recorded lake scope - never a scope reconstructed here. See lakeScope skips. */
+  lakeScope: string[];
 };
 
 /**
- * `no_lake_scope` is the one reason the RUNNER assigns rather than selectReplayTargets: it needs
- * the session loaded to know the turn had no lake selected, which is I/O this module does not do.
- * It is a skip and not a zero score on purpose - the knowledge tool's corpus is the session's
- * lakes PLUS the caller's own files, so a turn with no lake can still have been answerable from
- * files this replay cannot see, and scoring it as "nothing to find" would invent a negative.
+ * `no_session_record` is the one reason the RUNNER assigns rather than selectReplayTargets: it
+ * needs the session loaded to know the record is gone, which is I/O this module does not do. Its
+ * remedy is nothing - an orphaned turn never becomes probeable - which is why it must not share a
+ * tally slot with `no_lake_scope`, whose remedy is to re-run over a window of turns that carry a
+ * recorded scope.
+ *
+ * `no_lake_scope` covers both halves of "no corpus to probe": a turn seeded before
+ * `promptMeta.retrieval.lakeScope` existed, and one recorded with an empty scope. It is a skip and
+ * not a zero score on purpose - the knowledge tool's corpus is the session's lakes PLUS the
+ * caller's own files, so a turn with no lake can still have been answerable from files this replay
+ * cannot see, and scoring it as "nothing to find" would invent a negative.
  */
-export type SkipReason = 'not_optional' | 'no_prompt' | 'no_session' | 'already_probed' | 'no_lake_scope';
+export type SkipReason =
+  'not_optional' | 'no_prompt' | 'no_session' | 'already_probed' | 'no_lake_scope' | 'no_session_record';
 
 export type ReplaySelection = {
   targets: ReplayTarget[];
@@ -63,6 +73,7 @@ const emptySkips = (): Record<SkipReason, number> => ({
   no_session: 0,
   already_probed: 0,
   no_lake_scope: 0,
+  no_session_record: 0,
 });
 
 /**
@@ -76,6 +87,9 @@ const emptySkips = (): Record<SkipReason, number> => ({
  * older turn, widening the content drift the field already carries. `force` exists for the case
  * where that is the point (the corpus was reindexed and the old scores are known stale), and the
  * runner is expected to say loudly that it is overwriting.
+ *
+ * A turn with no recorded `lakeScope` is skipped rather than approximated - see the SkipReason
+ * doc for why, and RetrievalSummarySchema.lakeScope for what the seed records.
  *
  * Only `mode: 'optional'` turns are eligible: a forced turn retrieved because it was told to, so
  * its answerability says nothing about what the model would have chosen, and probing it would
@@ -109,7 +123,17 @@ export const selectReplayTargets = (
       selection.skipped.no_session += 1;
       continue;
     }
-    selection.targets.push({ questId: row._id, prompt, sessionId: row.sessionId });
+    // The turn's recorded scope is the only scope this replay will probe. Reconstructing one from
+    // the session's CURRENT tags is what this used to do, and it scored a session whose lake
+    // selection had since changed against a corpus its turn never had. Skipping instead trades
+    // coverage for accuracy: every turn predating the field falls outside the measurement, which
+    // the tally says out loud rather than quietly approximating.
+    const lakeScope = retrieval.lakeScope ?? [];
+    if (lakeScope.length === 0) {
+      selection.skipped.no_lake_scope += 1;
+      continue;
+    }
+    selection.targets.push({ questId: row._id, prompt, sessionId: row.sessionId, lakeScope });
   }
 
   return selection;

@@ -130,6 +130,8 @@ export const questProcessingFailureAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('QuestProcessingFailureAlarm')
   : undefined;
 
+// Retained with no alarm pointing at it: the topic is deployed and removing the declaration would
+// destroy it. Unsubscribed, so nothing routes here - see the dlqAlarmTopic note below.
 export const dataLakeStuckBatchesAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('DataLakeStuckBatchesAlarm')
   : undefined;
@@ -141,6 +143,16 @@ export const replSandboxUnavailableAlarm = isMonitoredStage
 // --- MetricAlarm definitions (only created for monitored stages) ---
 
 if (isMonitoredStage) {
+  // dlqAlarmTopic is a conditional export from infra/dlqAlarms.ts, gated by that file's OWN copy
+  // of the MONITORED_STAGES + ENABLE_MONITORING expression. The two agree today, but asserting
+  // `dlqAlarmTopic!` across a file boundary on a value another module owns means a future
+  // divergence between the two lists would surface as a bare TypeError at deploy-plan time - this
+  // guard turns that into a readable error instead. Hoisted to the top of the block because every
+  // alarm below may route here: it is the only topic in this file with a Slack subscriber.
+  if (!dlqAlarmTopic) {
+    throw new Error('alarm routing requires dlqAlarmTopic');
+  }
+
   /**
    * Alarm: Agent Checkpoint Depth Warning
    *
@@ -1107,7 +1119,7 @@ if (isMonitoredStage) {
     statistic: 'Maximum',
     threshold: 10,
     treatMissingData: 'notBreaching',
-    alarmActions: [dataLakeStuckBatchesAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'DataLakeBatch',
       Severity: 'Medium',
@@ -1154,7 +1166,7 @@ if (isMonitoredStage) {
     threshold: 0,
     // No emission means no applies ran, which is not a problem. Steady state is zero either way.
     treatMissingData: 'notBreaching',
-    alarmActions: [dataLakeStuckBatchesAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'DataLakeBatch',
       Severity: 'Low',
@@ -1176,8 +1188,10 @@ if (isMonitoredStage) {
    * response is to raise the budget or shard the lake, which is not urgent enough to page -
    * hence Medium, matching deprecatedModelRequest's "silent, needs a human decision" shape.
    *
-   * Reuses the DataLakeStuckBatches topic, as the taxonomy alarm above already does: it is the
-   * de-facto data-lake ops topic, and topics are not subscribed in IaC anyway.
+   * Routed to the shared dlqAlarmTopic, as every data-lake alarm here now is: it is the only
+   * topic in this file carrying a Slack-forwarding subscription (infra/dlqAlarms.ts subscribes it
+   * to the generic alarm notifier). A dedicated topic deploys with no subscriber and alarms into
+   * a void, which is what the data-lake family did until this was corrected.
    *
    * Metric emitted by: b4m-core/services/src/dataLakeService/scanTruncationMetrics.ts ->
    * reportScanTruncation, wired from both public search entrypoints in semanticDataLakeSearch.ts.
@@ -1198,21 +1212,174 @@ if (isMonitoredStage) {
     dimensions: { Stage: $app.stage },
     // No emission means no search truncated, which is the healthy state.
     treatMissingData: 'notBreaching',
-    alarmActions: [dataLakeStuckBatchesAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'DataLakeRetrieval',
       Severity: 'Medium',
     },
   });
 
-  // dlqAlarmTopic is a conditional export from infra/dlqAlarms.ts, gated by that file's OWN copy
-  // of the MONITORED_STAGES + ENABLE_MONITORING expression. The two agree today, but asserting
-  // `dlqAlarmTopic!` across a file boundary on a value another module owns means a future
-  // divergence between the two lists would surface as a bare TypeError at deploy-plan time - this
-  // guard turns that into a readable error instead.
-  if (!dlqAlarmTopic) {
-    throw new Error('feedback delivery alarms require dlqAlarmTopic');
-  }
+  /**
+   * Alarm: a single data-lake ANN query approached the request timeout.
+   *
+   * A first production ANN query took 49.2s end to end; the identical query immediately after took
+   * 2.6s, on a warm container with an already-open Mongo connection. 45.4s of the first was
+   * unaccounted for after the query embedding and the scope filters - consistent with Atlas
+   * faulting the vector index in from disk on first touch, though that attribution was a
+   * hypothesis at filing time and is precisely what this metric exists to confirm or refute. So
+   * the failure is not a slow system, it is a cliff the steady state gives no warning of, and the
+   * counters in this namespace cannot see it at all: a 49s search and a 2s search publish
+   * identical AnnHits.
+   *
+   * WHAT A FIRING DOES AND DOES NOT MEAN. The metric is emitted from the shared ranking core, so
+   * it covers both retrieval entrypoints, and they do not share a deadline:
+   *   - POST /api/data-lakes/semantic-search runs on the frontend server Lambda, capped at 60s
+   *     (infra/web.ts). Here a slow query is a correctness cliff - it returns a timeout, not a
+   *     slow result.
+   *   - the search_knowledge_base chat tool runs on ChatCompletion, an always-on Fargate service
+   *     with no comparable ceiling (infra/chatCompletion.ts). Here the same query is a bad wait,
+   *     not a failure.
+   * The datapoint does not say which one produced it - the caller that knows is the HTTP route or
+   * the tool, several frames above the emitter, and threading it down would change a shared
+   * service signature for a purely diagnostic gain. So treat a firing as "an ANN query went
+   * pathological somewhere", then use the Backend dimension and the route's own logs to place it.
+   *
+   * Threshold 30s: an order of magnitude above the observed steady state (2.5-2.9s) and half the
+   * Lambda budget, so it fires with time left to act and no plausible false positive on either
+   * entrypoint.
+   *
+   * Maximum, not a percentile. The metric is already a per-search maximum across models, and the
+   * question is whether ANY single index touch went pathological - which a percentile over a
+   * route serving single-digit requests per day cannot answer honestly, since p99 of one sample
+   * is that sample. Revisit as p99 if volume grows.
+   *
+   * This watches the approach to the ceiling, not the crossing of it: a query that overruns the
+   * Lambda never returns, so it publishes nothing. A timeout shows up as this alarm's SILENCE
+   * plus a 5xx - which is why this alarm does not on its own close the timeout risk, and why the
+   * keep-warm option in the originating issue stays open.
+   *
+   * Metric emitted by: b4m-core/services/src/dataLakeService/dataLakeSearchMetrics.ts ->
+   * recordDataLakeSearchMetrics (ANN_QUERY_DURATION_METRIC).
+   * Namespace: Lumina5/DataLakeRetrieval / AnnQueryDurationMs
+   * Alarms on the Stage-only dimension set; the Backend set is for attribution only.
+   */
+  new aws.cloudwatch.MetricAlarm('dataLakeAnnQuerySlow', {
+    name: `${$app.name}-${$app.stage}-data-lake-ann-query-slow`,
+    alarmDescription:
+      'A data-lake ANN query took over 30s. On POST /api/data-lakes/semantic-search that is most of the 60s Lambda budget and the next one may time out; from the chat tool it is a bad wait. Check which entrypoint before escalating',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'AnnQueryDurationMs',
+    namespace: 'Lumina5/DataLakeRetrieval',
+    period: 300, // 5 minutes
+    statistic: 'Maximum',
+    threshold: 30000, // 30 seconds in milliseconds, against the 60s Lambda timeout
+    dimensions: { Stage: $app.stage },
+    // No emission means no ANN query ran anywhere, which is the common state - the HTTP route in
+    // particular has served single-digit requests per day.
+    treatMissingData: 'notBreaching',
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'DataLakeRetrieval',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: Data Lake un-chunked rescue sweep, failing enqueues
+   *
+   * Every failure here is a file that stayed un-chunked for another day: the sweep found it,
+   * could not hand it to the queue, and the next run has to find it again. A file left
+   * un-chunked is invisible to retrieval, so this is silent data loss from a user's point of
+   * view, which is why the threshold is ANY failure rather than proportional to the run budget.
+   *
+   * The tolerance is in the evaluation periods, not the threshold. A run of at most 500 files can
+   * lose one to an SQS blip and recover on the next day's run, so a single failing day is not
+   * worth paging on; a threshold of `> 0` sustained across three daily periods is. Sizing it the
+   * other way (a count threshold over one day) is what would hide the failure that actually
+   * matters: one poison file that fails its send on every run contributes 1/day forever, so any
+   * threshold above zero never fires on the exact steady-state data loss this alarm is for.
+   *
+   * Deliberately NOT alarmed on: a run reporting zero rescues. That is the healthy steady state
+   * on most installs. The gated-off and threw cases are what a zero used to hide, and they are
+   * readable off ChunkRescueRuns's `outcome` dimension instead of by inference from a silent
+   * counter - alarming on the counter's absence would page every quiet day.
+   *
+   * Metric emitted by: server/utils/cloudwatch.ts -> recordChunkRescueSweep, wired from
+   * server/cron/dataLakeBatchReconcile.ts's rescue sweep.
+   * Namespace: Lumina5/DataLakeBatch / ChunkRescueFailures, dimension Stage=<this stage>. The
+   * emitter writes both a stage-less and a `{ Stage }`-scoped stream (a dimensioned metric is a
+   * distinct stream in CloudWatch); this alarm reads the scoped one so a dev-stage sweep failure
+   * no longer counts toward production's threshold, matching the `Stage`-dimension pattern
+   * `anthropicRateLimitErrors` above and `feedbackDeliveryFailures` below already use.
+   */
+  new aws.cloudwatch.MetricAlarm('dataLakeChunkRescueFailuresHigh', {
+    name: `${$app.name}-${$app.stage}-data-lake-chunk-rescue-failures-high`,
+    alarmDescription:
+      'Data lake un-chunked rescue sweep is failing to enqueue - files are staying un-chunked and unretrievable',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 3, // three consecutive daily runs, so a one-off SQS blip does not page
+    metricName: 'ChunkRescueFailures',
+    namespace: 'Lumina5/DataLakeBatch',
+    dimensions: { Stage: $app.stage }, // the scoped stream; the stage-less one is every stage at once
+    period: 86400, // 1 day - matches the daily cron that emits it
+    statistic: 'Sum', // a counter per run, unlike StuckBatches' gauge sample
+    threshold: 0, // any failure at all; see the docblock on why a count threshold hides the real case
+    treatMissingData: 'notBreaching',
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'DataLakeBatch',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: Data Lake Chunk Rescue Sweep Threw
+   *
+   * The sibling alarm above counts files the sweep could not enqueue. This one covers the case
+   * where there were no per-file failures to count because the sweep never got that far: it threw,
+   * the cron caught it, and reported `outcome: 'failed'` with both counters at zero. Read only by
+   * ChunkRescueFailures, that day is indistinguishable from a clean run - which is the exact hole
+   * the outcome dimension was added to close, so it needs its own alarm to be worth emitting.
+   *
+   * A throw is more severe than a per-file enqueue failure (no file is rescued at all, not one),
+   * but a single one is still within blip range for a cron that talks to Mongo and SQS, so the
+   * tolerance is two consecutive daily runs rather than the sibling's three.
+   *
+   * Not covered by anything else: this cron's log group is not in infra/logMonitor.ts's
+   * individualLogGroups, so its logger.error is neither Slacked nor alarmed, and the function has
+   * no AWS/Lambda Errors alarm either - the throw is caught, so the invocation succeeds.
+   *
+   * Metric emitted by: server/utils/cloudwatch.ts -> recordChunkRescueSweep, with the 'failed'
+   * outcome supplied by server/cron/dataLakeBatchReconcile.ts's catch.
+   * Namespace: Lumina5/DataLakeBatch / ChunkRescueRuns, dimensions outcome=failed + Stage=<this
+   * stage>. Unlike the stage rollups elsewhere in this file, the scoped Runs stream keeps
+   * `outcome` alongside `Stage` - a `{ Stage }`-only Runs stream counts every run, healthy ones
+   * included, so `Sum > 0` against it would page daily on a working sweep.
+   */
+  new aws.cloudwatch.MetricAlarm('dataLakeChunkRescueSweepFailing', {
+    name: `${$app.name}-${$app.stage}-data-lake-chunk-rescue-sweep-failing`,
+    alarmDescription:
+      'Data lake un-chunked rescue sweep is throwing - no files are being rescued and the failure counter reads zero',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 2, // two consecutive daily runs; one throw is a blip, two is a broken sweep
+    metricName: 'ChunkRescueRuns',
+    namespace: 'Lumina5/DataLakeBatch',
+    // 'disabled' and 'swept' share the metric and must not fire; Stage keeps another stage's
+    // broken sweep from paging this one. Both dimensions must match the emitted stream exactly -
+    // CloudWatch treats each dimension combination as its own stream, so dropping either one here
+    // points the alarm at a stream nothing writes, which reads identically to a healthy sweep.
+    dimensions: { outcome: 'failed', Stage: $app.stage },
+    period: 86400, // 1 day - matches the daily cron that emits it
+    statistic: 'Sum',
+    threshold: 0, // any throw at all
+    treatMissingData: 'notBreaching', // a day with no failed run emits no datapoint for this dimension
+    alarmActions: [dlqAlarmTopic.arn],
+    tags: {
+      Application: 'DataLakeBatch',
+      Severity: 'Medium',
+    },
+  });
 
   /**
    * Alarm: Feedback Delivery Failure

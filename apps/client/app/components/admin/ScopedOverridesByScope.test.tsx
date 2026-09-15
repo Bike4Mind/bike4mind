@@ -107,6 +107,29 @@ describe('ScopedOverridesByScope', () => {
     );
   });
 
+  // #2624 removed the Lake rung from the data-lake scan budgets. A row saved there before that is
+  // still in the collection and is no longer resolved, so calling it "overridden here" would show
+  // the operator a value that nothing reads.
+  it('reports a stored override at a rung the setting lost as inert, and still offers Clear', () => {
+    overrides = [
+      {
+        settingName: 'dataLakeSearchMaxFiles',
+        scopeLevel: 'lake',
+        scopeId: 'lake-1',
+        settingValue: '1',
+      } as IScopedSetting,
+    ];
+    renderPanel();
+    fireEvent.click(screen.getByTestId('scoped-overrides-by-scope-level-select'));
+    fireEvent.click(screen.getByTestId('scoped-overrides-by-scope-level-option-lake'));
+    enterAddress('lake-1');
+
+    const inertRow = screen.getByTestId('scoped-overrides-by-scope-row-dataLakeSearchMaxFiles');
+    expect(inertRow).toHaveTextContent('1 is stored here, but it is inert');
+    expect(inertRow).not.toHaveTextContent('overridden here');
+    expect(screen.getByTestId('scoped-overrides-by-scope-clear-btn-dataLakeSearchMaxFiles')).toBeInTheDocument();
+  });
+
   it('clears the override at the address it is listed under', () => {
     overrides = [
       {

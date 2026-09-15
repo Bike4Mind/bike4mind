@@ -26,6 +26,7 @@ import type { DagDispatcher, DagHandoffSignal } from './tools/implementation/coo
 import { isToolOfferable, type ToolAvailability } from './toolAvailability';
 import { extractAndSaveEntitiesFromToolResult, shouldExtractEntitiesFromTool } from '../conversationContextService';
 import type { MinimalSessionRepository } from '../conversationContextService/types';
+import { notifyToolFinish } from './toolFinishObserver';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -525,23 +526,10 @@ function wrapNavigateViewTool(
 // Tool-finish observer (host seam)
 // ---------------------------------------------------------------------------
 
-export interface ToolFinishObservation {
-  toolName: string;
-  userId?: string;
-}
-
-/**
- * Optional host-registered observer called after ANY tool completes on the
- * shared pipeline (chat, agents, quests). Fire-and-forget by contract: it is
- * invoked synchronously, never awaited, and exceptions are swallowed - an
- * observer can never add latency to or break a tool call. First consumer: the
- * Gears progression system.
- */
-let toolFinishObserver: ((observation: ToolFinishObservation) => void) | null = null;
-
-export function setToolFinishObserver(observer: ((observation: ToolFinishObservation) => void) | null): void {
-  toolFinishObserver = observer;
-}
+// The seam itself lives in a dependency-free leaf module so the host can
+// register an observer without tracing the tool registry into every route
+// bundle. Re-exported here to keep the ./llm barrel surface unchanged.
+export { setToolFinishObserver, type ToolFinishObservation } from './toolFinishObserver';
 
 function wrapToolsForSentinels(
   tools: ICompletionOptionTools[],
@@ -557,15 +545,9 @@ function wrapToolsForSentinels(
       toolFn: async (args: unknown) => {
         const result = await originalToolFn(args);
 
-        // Non-blocking host observer (see setToolFinishObserver): sync call,
-        // no await, exceptions swallowed - zero added latency by contract.
-        if (toolFinishObserver) {
-          try {
-            toolFinishObserver({ toolName, userId });
-          } catch {
-            // observers must never break or slow a tool call
-          }
-        }
+        // Non-blocking host observer: sync, never awaited, exceptions swallowed
+        // inside notifyToolFinish - zero added latency by contract.
+        notifyToolFinish({ toolName, userId });
 
         // Extract __uiSideEffect sentinel
         if (callbacks.onUiSideEffect) {

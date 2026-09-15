@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { DATA_LAKES, type DataLakeConfig, type IDataLakeDocument } from '@bike4mind/common';
-import { getAccessibleDataLakePrompts, datalakeTagsFrom } from './getDataLakePrompts';
+import { getAccessibleDataLakePrompts, datalakeTagsFrom, grantedLakeIdsUsedFor } from './getDataLakePrompts';
 import { grantedLakeReachForTurn } from './resolveLakeReadAccess';
 import type { DataLakeAccessContext } from './getDynamicDataLakeTags';
 
@@ -328,8 +328,8 @@ describe('getAccessibleDataLakePrompts', () => {
       // A REAL org grant is present on the lake, for an org the caller belongs to - so this fails
       // if the arm ever starts honouring org principals, rather than passing vacuously on an empty
       // fixture. `grantedLakeReachFor` reads org rows only under `includeReaders`, which this site
-      // pins to false permanently (injection must not follow the READ_GRANT_ENFORCEMENT_READY
-      // cutover); the call assertion below is what makes that flip fail loudly here.
+      // pins to false permanently (injection must not follow the read-grant cutover); the call
+      // assertion below is what makes that flip fail loudly here.
       const ctx = makeContext([sharedLake], { id: CURATOR, tags: [] }, [ORG], undefined, [], {
         principalGrants: { [`organization:${ORG}`]: [{ dataLakeId: 'shared', role: 'curator' }] },
       });
@@ -830,5 +830,102 @@ describe('datalakeTagsFrom', () => {
 
   it('returns an empty array when no file carries a lake tag', () => {
     expect(datalakeTagsFrom(['opti:foo', 'plain'])).toEqual([]);
+  });
+});
+
+/**
+ * The grant arm's telemetry sibling: which injected ids the caller reached BY GRANT, so an operator
+ * can tell that arm from pre-authorization and from the creator/org arms. Every lake here is a
+ * stranger's, in a foreign org, behind a tag the caller does not hold - so a grant row is the only
+ * thing that could name it.
+ */
+describe('grantedLakeIdsUsedFor', () => {
+  const CURATOR = 'user-curator';
+  const grantedLake = makeLake({
+    id: 'shared',
+    name: 'Shared Lake',
+    slug: 'shared',
+    datalakeTag: 'datalake:shared',
+    createdByUserId: 'stranger',
+    organizationId: 'org-beta',
+    requiredUserTag: 'beta-team',
+    systemPrompt: 'Cite the control number.',
+  });
+  const asCurator = (role: string) =>
+    makeContext([grantedLake], { id: CURATOR, tags: [] }, [ORG], undefined, [], {
+      principalGrants: { [`user:${CURATOR}`]: [{ dataLakeId: 'shared', role }] },
+    });
+
+  it('names only the injected ids the caller holds an owner/curator grant on', async () => {
+    const ctx = asCurator('curator');
+    expect(await grantedLakeIdsUsedFor(ctx, ['shared', 'ordinary'])).toEqual(['shared']);
+  });
+
+  it('preserves the injected order rather than the grant-row order', async () => {
+    // The field is read alongside injectedLakePromptIds, whose order is the stable render order.
+    const ctx = makeContext([grantedLake], { id: CURATOR, tags: [] }, [ORG], undefined, [], {
+      principalGrants: {
+        [`user:${CURATOR}`]: [
+          { dataLakeId: 'b', role: 'curator' },
+          { dataLakeId: 'a', role: 'curator' },
+        ],
+      },
+    });
+    expect(await grantedLakeIdsUsedFor(ctx, ['a', 'b'])).toEqual(['a', 'b']);
+  });
+
+  it('adds NO grant read to a turn that already resolved its prompts on the same context', async () => {
+    // The whole reason this derivation is caller-side (#2589): the arm resolved the same reach
+    // under the same memo key, so this is a cache hit. A miss here is a duplicated DB read per
+    // tool call.
+    const ctx = asCurator('curator');
+    const prompts = await getAccessibleDataLakePrompts(ctx);
+
+    expect(
+      await grantedLakeIdsUsedFor(
+        ctx,
+        prompts.map(p => p.id)
+      )
+    ).toEqual(['shared']);
+    expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves at the same permanent injection floor as the arm (no org ids, readers off)', async () => {
+    const ctx = asCurator('curator');
+    await grantedLakeIdsUsedFor(ctx, ['shared']);
+    expect(grantedLakeReachForTurn).toHaveBeenCalledWith(ctx, CURATOR, [], expect.anything(), false);
+  });
+
+  it('does NOT name a lake the caller holds only a reader grant on', async () => {
+    // The floor is what keeps this telemetry from claiming an arm that cannot admit a prompt.
+    expect(await grantedLakeIdsUsedFor(asCurator('reader'), ['shared'])).toEqual([]);
+  });
+
+  it('returns empty and warns on a failed grant read rather than throwing', async () => {
+    // Both call sites wrap injection in a catch that degrades to NO lake prompt, so a throw here
+    // would drop the very injection this field exists to annotate.
+    const ctx = asCurator('curator');
+    (ctx.db.dataLakeAccessGrants?.listByPrincipal as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('grants down')
+    );
+
+    expect(await grantedLakeIdsUsedFor(ctx, ['shared'])).toEqual([]);
+    expect(ctx.logger?.warn).toHaveBeenCalledWith(
+      expect.stringContaining('prompt access-grant telemetry lookup failed'),
+      expect.anything()
+    );
+  });
+
+  it('reads nothing when the site injected no prompt at all', async () => {
+    const ctx = asCurator('curator');
+    expect(await grantedLakeIdsUsedFor(ctx, [])).toEqual([]);
+    expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).not.toHaveBeenCalled();
+  });
+
+  it('returns empty for an unwired lake repo rather than reading grants with no consumer', async () => {
+    const ctx = asCurator('curator');
+    ctx.db.dataLakes = undefined;
+    expect(await grantedLakeIdsUsedFor(ctx, ['shared'])).toEqual([]);
+    expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).not.toHaveBeenCalled();
   });
 });

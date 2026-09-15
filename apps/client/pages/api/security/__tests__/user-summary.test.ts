@@ -60,6 +60,28 @@ describe('GET /api/security/user-summary - email leak strip', () => {
     expect(pattern.usernames).toEqual(['me']); // 'victim' filtered out
     expect(JSON.stringify(body)).not.toContain('victim@example.com');
   });
+
+  // An account created via OAuth without a provider-verified email has no address on
+  // file but is fully authenticated - its own security view must not read as a 401.
+  it('serves an emailless but authenticated caller instead of 401', async () => {
+    const { req, res } = createMocks({ method: 'GET', query: {} });
+    (req as any).user = { username: 'me' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    // Username alone drives the lookup; an undefined email must not widen the query.
+    expect(repo.getUserFailedLogins).toHaveBeenCalledWith(undefined, 'me', expect.any(Date));
+    expect(res._getJSONData().user).toEqual({ email: null, username: 'me' });
+  });
+
+  it('still 401s when there is no session at all', async () => {
+    const { req, res } = createMocks({ method: 'GET', query: {} });
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(repo.getUserFailedLogins).not.toHaveBeenCalled();
+  });
+
   // `hours` is parseInt-ed and then used in arithmetic, so a non-numeric value becomes NaN
   // and yields an Invalid Date that casts against the Date-typed `createdAt` filter. This
   // route has no admin gate, so any authenticated caller could reach that 500.

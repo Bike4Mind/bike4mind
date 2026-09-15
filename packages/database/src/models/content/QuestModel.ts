@@ -101,6 +101,10 @@ const RetrievalSummarySchema = subSchema({
   forcedSkipReason: { type: String, required: false },
   surfaces: [{ type: String, required: false }],
   dataLakeTags: [{ type: String, required: false }],
+  // default: undefined for the same auto-vivification reason as dataLakeTags above - and here it
+  // also preserves the presence contract the offline replay depends on: absence means the turn's
+  // scope was never recorded, which a materialized empty array would report as "no lake in scope".
+  lakeScope: { type: [String], required: false, default: undefined },
   // default: undefined for the same auto-vivification reason as dataLakeTags above.
   injectedLakePromptIds: { type: [String], required: false, default: undefined },
   injectedLakePromptCount: { type: Number, required: false },
@@ -113,6 +117,9 @@ const RetrievalSummarySchema = subSchema({
   answerability: { type: AnswerabilityProbeSchema, required: false, default: undefined },
   // default: undefined for the same auto-vivification reason as injectedLakePromptIds above.
   preauthorizedLakeIdsUsed: { type: [String], required: false, default: undefined },
+  // Same shape and the same default:undefined reason as preauthorizedLakeIdsUsed above - its
+  // per-arm sibling, which the two overlap by design (see both fields on the Zod side).
+  grantedLakeIdsUsed: { type: [String], required: false, default: undefined },
 });
 
 // Partial-grounding-coverage detail. subSchema + default:undefined for the same reason as

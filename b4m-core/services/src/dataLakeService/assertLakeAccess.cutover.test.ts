@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { AccessContext, IDataLakeDocument } from '@bike4mind/common';
 import { assertLakeAccess } from './assertLakeAccess';
-import { READ_GRANT_ENFORCEMENT_READY } from './resolveLakeReadAccess';
 
 // A private DB lake (not a DATA_LAKES fallback id): reachable only by owner/admin under the legacy
 // gate. A reader-grant holder is denied by legacy and admitted only once the cutover is enforced.
@@ -44,7 +43,10 @@ const makeAdapters = (enforce: boolean | Error) => {
   };
 };
 
-describe('assertLakeAccess - read-time grant cutover wiring (#1673)', () => {
+// The cutover itself is done - `EnforceLakeReadGrants` ships ON. What this suite pins is the
+// kill-switch behavior that outlives it: OFF returns to report-only (deny + diff line), and a failed
+// flag read degrades the same way rather than enforcing.
+describe('assertLakeAccess - read-time grant resolution wiring (#1673)', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('report-only: denies the reader (legacy) BUT emits the divergence diff line', async () => {
@@ -56,21 +58,11 @@ describe('assertLakeAccess - read-time grant cutover wiring (#1673)', () => {
     );
   });
 
-  it('setting ON is code-gated: the interlock keeps the reader in report-only until READY is flipped', async () => {
+  it('setting ON (the shipped default): admits the reader and emits no diff line', async () => {
     const { adapters, logger } = makeAdapters(true);
-    if (READ_GRANT_ENFORCEMENT_READY) {
-      // Interlock flipped (the completing PR): the reader is admitted and no report-only diff logs.
-      const lake = await assertLakeAccess(privateLake.id, readerCtx, adapters as never);
-      expect(lake.id).toBe(privateLake.id);
-      expect(logger.info).not.toHaveBeenCalled();
-    } else {
-      // Interlock holding (today): flipping the admin setting does NOT admit the reader - the
-      // "accidentally enabled" guard. It stays report-only (deny + diff line) and warns about the
-      // premature toggle.
-      await expect(assertLakeAccess(privateLake.id, readerCtx, adapters as never)).rejects.toThrow(/not found/i);
-      expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/code-gated off/));
-      expect(logger.info).toHaveBeenCalledOnce();
-    }
+    const lake = await assertLakeAccess(privateLake.id, readerCtx, adapters as never);
+    expect(lake.id).toBe(privateLake.id);
+    expect(logger.info).not.toHaveBeenCalled();
   });
 
   it('a FAILED flag read degrades to report-only (denies) rather than silently enforcing', async () => {

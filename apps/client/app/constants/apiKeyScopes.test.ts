@@ -62,4 +62,32 @@ describe('apiKeyScopes catalog', () => {
       expect(scope.endsWith(':write'), `${scope} must not end in :write`).toBe(false);
     }
   });
+
+  it('makes overwatch:read user-mintable and lands it in the read-only preset', () => {
+    // The `:read` suffix is what puts a scope in the Read-only preset (UserApiKeysTab),
+    // which is the default selection for a new key - so every key minted through the
+    // profile UI will carry this one. The suffix is deliberate, not incidental: the
+    // surface behind it reads and nothing more, so it belongs in that preset, where
+    // `datalake:query` and `optihashi:compute` deliberately go unsuffixed to stay out.
+    // If a tool reachable through the Overwatch MCP route ever mutates or spends, this
+    // scope has to lose the suffix too - and the spend-scope table above will not catch
+    // that, because it only iterates the scopes already listed in it.
+    //
+    // Safe in that default preset because the scope authorizes without entitling. The
+    // check that makes that true (`requestHasOverwatchAccess`) lives in the Overwatch
+    // overlay package and has no implementation here, so this repo cannot test it and
+    // this test does not claim to: it asserts only the catalog placement it can see.
+    // Same bargain `hearth:read` and `optihashi:read` already take.
+    expect(genericValues).toContain(ApiKeyScope.OVERWATCH_READ);
+    expect(ApiKeyScope.OVERWATCH_READ.endsWith(':read')).toBe(true);
+  });
+
+  it('keeps the Overwatch read scope distinct from the ingest write scope', () => {
+    // Not a read/write pair: the ingest scope is a per-product credential bound to one
+    // productId that can write that product's stats, and is admin-provisioned only.
+    // An explorer that could also report would be able to fabricate what it reports on.
+    expect(ApiKeyScope.OVERWATCH_READ).not.toBe(ApiKeyScope.OVERWATCH_INGEST_WRITE);
+    expect(genericValues).not.toContain(ApiKeyScope.OVERWATCH_INGEST_WRITE);
+    expect(ADMIN_ONLY_API_KEY_SCOPES.map(s => s.value)).toContain(ApiKeyScope.OVERWATCH_INGEST_WRITE);
+  });
 });

@@ -22,7 +22,7 @@ import axios from 'axios';
 import { fileTypeFromBuffer } from 'file-type';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
 import { findOrUpdateExistingResearchData, prepareTagsForResearchTask } from './utils';
-import { fabFilesService } from '..';
+import * as fabFilesService from '../fabFileService';
 import { CreateFabFileAdapters } from '../fabFileService';
 
 const researchTaskDownloadRelevantLinksSchema = z.object({

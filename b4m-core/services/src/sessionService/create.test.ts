@@ -3,9 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // createSession imports projectService from the services barrel ('..'); stub it so the
 // heavy barrel is not loaded. addSessions is only reached when a projectId resolves, which
 // these tests never do.
-vi.mock('..', () => ({
-  projectService: { addSessions: vi.fn() },
-}));
+vi.mock('../projectService', () => ({ addSessions: vi.fn() }));
 
 import { createSession } from './create';
 import type { CreateSessionAdapters } from './create';
@@ -128,6 +126,20 @@ describe('createSession lake-scope derivation', () => {
     );
     expect(session.retrievalTags).toEqual(['datalake:chosen']);
     // Not merely overridden - the derivation must not run at all, or it costs a DB read per create.
+    expect(findAllAccessibleByIds).not.toHaveBeenCalled();
+  });
+
+  it('derives nothing for an explicit scope that selected no lake', async () => {
+    // A deliberate "no lakes" must survive the files the session is born holding - otherwise the
+    // attachment hands back a scope the caller just cleared.
+    const { adapters, findAllAccessibleByIds } = makeAdapters([lakeFile]);
+    const session = await createSession(
+      user,
+      { name: 'n', knowledgeIds: [FILE_A], lakeScopeExplicit: true },
+      adapters as never
+    );
+    expect(session.retrievalTags).toBeUndefined();
+    expect(session.lakeScopeExplicit).toBe(true);
     expect(findAllAccessibleByIds).not.toHaveBeenCalled();
   });
 

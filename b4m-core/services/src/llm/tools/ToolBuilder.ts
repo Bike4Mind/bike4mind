@@ -154,6 +154,7 @@ const TOOL_PREAMBLES: Record<string, string> = {
   search_knowledge_base: 'Looking through your knowledge base…',
   retrieve_knowledge_content: 'Pulling that up…',
   count_knowledge_base: 'Counting your knowledge base…',
+  describe_knowledge_base: 'Looking at what your knowledge base covers…',
   weather_info: 'Checking the weather…',
   wolfram_alpha: 'Running that through Wolfram…',
   deep_research: 'Doing deeper research — give me a moment…',
@@ -193,6 +194,8 @@ function resolveToolStatus(toolName: string, data: any): string | null {
       return '📄 Reading the most relevant articles…';
     case 'count_knowledge_base':
       return '🔢 Counting the documents in the data lake…';
+    case 'describe_knowledge_base':
+      return '🗂️ Mapping the shape of the data lake…';
     case 'web_search':
       return query ? `🌐 Searching the web: “${truncateForStatus(query)}”` : '🌐 Searching the web…';
     case 'web_fetch':

@@ -4,7 +4,7 @@ import { organizationRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { validateEmbedBranding, validateEmbedKeyOrigins } from '@server/services/publish';
 import { gateEmbedBrandingWrite } from '@server/entitlements/embedKeyEntitlement';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@server/utils/analyticsLog';
 import { IEmbedBranding, UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError } from '@server/utils/errors';
@@ -83,7 +83,7 @@ const handler = baseApi()
         { db: { userApiKeys: userApiKeyRepository, organizations: organizationRepository } }
       );
 
-      await logEvent(
+      await logEventSafe(
         {
           userId,
           type: UserApiKeyEvents.UPDATED,
@@ -97,7 +97,8 @@ const handler = baseApi()
             ],
           },
         },
-        { ability: req.ability }
+        { ability: req.ability },
+        req.logger
       );
 
       return res.status(200).json(updated);
@@ -119,13 +120,14 @@ const handler = baseApi()
         { db: { userApiKeys: userApiKeyRepository, organizations: organizationRepository } }
       );
 
-      await logEvent(
+      await logEventSafe(
         {
           userId,
           type: UserApiKeyEvents.DELETED,
           metadata: { keyId, name },
         },
-        { ability: req.ability }
+        { ability: req.ability },
+        req.logger
       );
 
       return res.status(200).json({ success: true });

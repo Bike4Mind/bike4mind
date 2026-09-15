@@ -240,3 +240,71 @@ describe('getRelevantMementos keeps the document shape its consumers read', () =
     expect(first[0].memento.summary).toBe('tie-a');
   });
 });
+
+describe('the topicality floor follows the embedding space, not a literal', () => {
+  /**
+   * Query embedding is stubbed to [1, 0], so a memento at [cos, sin] scores exactly `cos`. These
+   * two straddle the ada-002 floor of 0.75 and nothing else.
+   */
+  const straddlingRows = (): Row[] => [
+    { id: 'mem-000001', summary: 'below the ada-002 floor', embedding: [0.6, 0.8] },
+    { id: 'mem-000002', summary: 'above the ada-002 floor', embedding: [0.8, 0.6] },
+  ];
+
+  const runInSpace = (embeddingModel: string, minSimilarity?: number) =>
+    getRelevantMementos(
+      'u1',
+      'what do you know about me',
+      {
+        topK: 5,
+        ...(minSimilarity === undefined ? {} : { minSimilarity }),
+        tier: MementoTier.HOT,
+        embeddingModel: embeddingModel as never,
+        apiKeyTable: { openai: 'stub' },
+        logger: logger as never,
+      },
+      {
+        db: {
+          mementos: { findByUserId: pagedMementos(straddlingRows()) } as never,
+          apiKeys: {} as never,
+          adminSettings: {} as never,
+        },
+      }
+    );
+
+  it('applies the measured ada-002 floor when the caller passes none', async () => {
+    const found = await runInSpace('text-embedding-ada-002');
+
+    // Exactly the 0.75 both call sites used to hardcode: recall on today's default model is
+    // unchanged by moving the number into the table.
+    expect(found.map(({ memento }) => memento.summary)).toEqual(['above the ada-002 floor']);
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('applies no floor in a space nobody has measured, and says so loudly', async () => {
+    const found = await runInSpace('text-embedding-3-small');
+
+    // The point of the change. Carrying ada-002's 0.75 into this space would reject BOTH rows -
+    // 3-small's whole measured band tops out at 0.5588 - and the user would read that as the
+    // assistant having forgotten them.
+    expect(found.map(({ memento }) => memento.summary)).toEqual(['above the ada-002 floor', 'below the ada-002 floor']);
+    // warn, not error, and asserted as NOT error on purpose: an unmeasured space is the designed
+    // resolution for any model outside the table, and self-host hits it every turn. At error level
+    // this is per-turn noise in whatever reads error logs for a condition no operator can clear,
+    // which is how a channel gets ignored.
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(String(logger.warn.mock.calls[0][0])).toContain('text-embedding-3-small');
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('honors an explicit floor without complaining, in any space', async () => {
+    const found = await runInSpace('text-embedding-3-small', 0.7);
+
+    expect(found.map(({ memento }) => memento.summary)).toEqual(['above the ada-002 floor']);
+    // A caller that passed a floor has asserted it knows the space; nothing is unresolved, so
+    // there is nothing to warn about. `warn` is the channel the unmeasured-space notice now uses,
+    // so assert on that one - checking only `error` would pass no matter what this path logged.
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+});

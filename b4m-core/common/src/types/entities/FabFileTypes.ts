@@ -291,10 +291,25 @@ export interface IFabFile {
 
   /** Whether this FabFile is currently being vectorized. */
   isVectorizing?: boolean;
-  /** Whether this FabFile has completed vectorization. */
+  /**
+   * NOT a completion marker, despite the name: every chunk write sets it (see
+   * fabFileService/vectorize.ts and FabFileModel.advanceVectorizeProgress), so a file one chunk
+   * into a fifty-chunk batch already reads true. `vectorized: true` + `isVectorizing: false` is
+   * also what chunking leaves behind at count 0 - see FabFileModel's advanceVectorizeProgress
+   * comment, which names the consequence: the terminal marker is `chunkEmbeddingModelStampedAt`,
+   * not this field. Read that one to mean "finished"; read this one as "has at least one
+   * vectorized chunk".
+   */
   vectorized?: boolean;
-  /** The embedding model used to generate the vectors. */
-  embeddingModel?: string;
+  /**
+   * The embedding model used to generate the vectors, as a FILE-level claim about the whole corpus.
+   * Explicitly nullable: `stampChunkEmbeddingModel` clears it when a file's chunks turn out to span
+   * more than one embedding space, because any single value would then be a lie about half the
+   * vectors and this label is exclusion authority (isForeignEmbeddingModel drops a labeled file from
+   * every search wholesale, but never excludes a blank one). Absent, null and '' are all "unknown",
+   * and every reader must treat them the same way.
+   */
+  embeddingModel?: string | null;
   /**
    * When this file's chunks were last fully re-stamped with their per-chunk `embeddingModel`
    * (see IFabFileChunk.embeddingModel). Atlas $vectorSearch cutover treats a stamp younger than
@@ -349,6 +364,13 @@ export interface IFabFile {
    * CloudWatch logs.
    */
   blockReason?: string;
+
+  /**
+   * Stamped when a moderation scan claim flips this row `pending` -> `scanning`, so the rescue
+   * sweep can reclaim a crashed `scanning` row by CLAIM age rather than `updatedAt` (which any
+   * write bumps). Only meaningful while `moderationStatus === 'scanning'`.
+   */
+  moderationClaimedAt?: Date;
 
   /**
    * Error message for the file.
@@ -498,6 +520,15 @@ export interface FabFileChunkVector {
   fabFileId: string;
   text: string;
   vector: number[];
+  /**
+   * The chunk's OWN model label, written beside its vector rather than summarized from the file.
+   * The two data-lake cosine scans prefer it over `FabFile.embeddingModel` because the file label
+   * is blank for a file whose chunks span two spaces, and no retrieval reader excludes a chunk on a
+   * blank FILE label. Blank is not free at the file level though - lake-memory reachability and the
+   * attachment scan's query-vector lookup both key on it (see stampChunkEmbeddingModel). The
+   * attachment scan (`cosineSearch`) does not read this field and guards on vector width alone.
+   */
+  embeddingModel?: string | null;
 }
 
 export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDocument> {
@@ -558,8 +589,25 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
     embeddedChunkCount: number;
     embeddedCharCount: number;
   }>;
-  /** Bulk-stamp every chunk of a file with the model its vectors were generated under. */
+  /**
+   * Label a file's still-UNLABELED, VECTOR-BEARING chunks with the model their vectors were
+   * generated under. Never overwrites a label already written beside a vector, and never labels a
+   * chunk that has no vector to attribute - see the implementation's notes on the mid-ingest model
+   * split a blanket update used to hide, and on the oversized chunks an unscoped one mislabeled.
+   */
   updateEmbeddingModel(fabFileId: string, embeddingModel: string): Promise<void>;
+  /**
+   * Distinct non-blank `embeddingModel` values across a file's VECTOR-BEARING chunks; >1 means its
+   * vectors span two spaces, and EMPTY means nothing in the file has been embedded at all.
+   */
+  distinctEmbeddingModelsByFabFileId(fabFileId: string): Promise<string[]>;
+  /**
+   * How many VECTOR-BEARING chunks of this file still carry no `embeddingModel` - the rows
+   * `updateEmbeddingModel` will fill. Read with `distinctEmbeddingModelsByFabFileId` to tell a
+   * file with no vectors at all (label unknown) from one whose vectors are merely unlabeled yet
+   * (label = the model about to stamp them); the distinct set is empty for both.
+   */
+  countUnlabeledVectorChunksByFabFileId(fabFileId: string): Promise<number>;
   /** One page of vector-bearing chunks missing `embeddingModel`, ascending by `_id` - backfill's keyset cursor. */
   findChunksMissingEmbeddingModel(options?: {
     limit?: number;
@@ -575,9 +623,9 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
   /** Whether `model`'s Atlas vector index exists and is queryable (cached; see atlasSearchIndex.ts). */
   getAtlasIndexStatus(model: string): Promise<{ queryable: boolean; status: string } | null>;
   /**
-   * One page of vector-bearing chunks (id, fabFileId, text, vector) for the given files,
-   * ascending by `_id`. Skips chunks without a vector at the DB layer. Powers semantic search
-   * (query embed -> cosine).
+   * One page of vector-bearing chunks (id, fabFileId, text, vector, embeddingModel) for the given
+   * files, ascending by `_id`. Skips chunks without a vector at the DB layer. Powers semantic
+   * search (query embed -> cosine).
    *
    * Contract callers rely on: `_id` is unique, so the ordering is total and `afterChunkId` is
    * an exact cursor - paging a corpus never skips or duplicates a chunk, and the same inputs
@@ -588,6 +636,21 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
     fabFileIds: string[],
     options?: { limit?: number; afterChunkId?: string }
   ): Promise<FabFileChunkVector[]>;
+  /**
+   * One page of chunk fields for the given files, `vector` excluded, ascending by `_id` - same
+   * exact-cursor contract as `findVectorsByFabFileIds`, and vectorless chunks included.
+   *
+   * The batched, vector-free counterpart of `findByFabFileId`, which is per-file and carries the
+   * embedding - the overwhelming bulk of a chunk row. A consumer that plans over a whole lake
+   * (token counts, text lengths, which model each chunk was embedded under) reads every chunk and
+   * needs none of the vectors, so pulling them costs a lake's worth of embeddings over the wire to
+   * compute a sum. Pair it with `findVectorsByFabFileIds` and join on `id` when the vectors are
+   * actually wanted.
+   */
+  findChunkFieldsByFabFileIds(
+    fabFileIds: string[],
+    options?: { limit?: number; afterChunkId?: string }
+  ): Promise<{ id: string; fabFileId: string; text: string; tokenCount?: number; embeddingModel?: string }[]>;
   /**
    * One page of chunk TEXT for a single file, ascending by `_id`, same exact-cursor contract as
    * `findVectorsByFabFileIds`. Returns vectorless chunks too - a text consumer that inherited the
@@ -1242,6 +1305,36 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   computeDataLakeStats(
     scope: DataLakeMembershipScope
   ): Promise<{ fileCount: number; totalSizeBytes: number; totalChunkedChars: number }>;
+  /**
+   * Top content tags for a lake by document count (#1292) - the tag tree read as a topic map.
+   * Same membership + liveness filter as computeDataLakeStats. Excludes the datalake: meta-tag
+   * namespace and, for a prefix-arm lake, both the bare fileTagPrefix and `<prefix>uncategorized`
+   * - all three are membership signals, not topics.
+   */
+  countDataLakeTopicTags(scope: DataLakeMembershipScope, limit?: number): Promise<{ tag: string; count: number }[]>;
+  /**
+   * Whole-lake indexing health as scalars (#1292), on the same membership + liveness predicate as
+   * computeDataLakeStats - so a member whose extraction failed BEFORE chunking is counted, which
+   * findDataLakeHealthMembers' chunk-bearing $match structurally cannot see. Bucket definitions
+   * track evaluateMemberHealth (`embeddedChunkCount` for vectorized, non-empty-string `error` for
+   * failed).
+   *
+   * `inFlightFiles` and `unmeasuredFiles` are disjoint and must stay that way (#2737): in-flight is
+   * measured and short, unmeasured has no `embeddedChunkCount` at all. Only the first may be
+   * rendered as work in progress - the second is the evaluator's `unknown`, and `totalEmbeddedChunks`
+   * is a FLOOR while it is non-zero. `retrievalOnlyFiles` is not a bucket but the size of the gap
+   * between this report's corpus and retrieval's (see LAKE_REPORTING_EXCLUDED_STATUS).
+   */
+  summarizeDataLakeIndexingHealth(scope: DataLakeMembershipScope): Promise<{
+    chunkedFiles: number;
+    fullyVectorizedFiles: number;
+    failedFiles: number;
+    inFlightFiles: number;
+    unmeasuredFiles: number;
+    retrievalOnlyFiles: number;
+    totalChunks: number;
+    totalEmbeddedChunks: number;
+  }>;
   /**
    * Per-member health rollups (#1666) for a lake, read from FabFile documents only (never the chunk
    * collection). Raw numbers the pure evaluator grades; char fields stay `null` when unmeasured.

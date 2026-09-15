@@ -188,4 +188,63 @@ describe('GET /api/business-links - nested filters from the client', () => {
     expect((mockRefs.findQuery as { $or?: unknown })?.$or).toBeUndefined();
     expect((mockRefs.findQuery as { categoryId?: unknown })?.categoryId).toBeUndefined();
   });
+
+  it('falls back to the flat searchTerm when filters[search] is present but empty', async () => {
+    // The client emits `filters[search]=` for an empty box, so a blank nested value
+    // means "unset" - it must not shadow the flat param API-key callers still send.
+    const { req, res } = invokeGet({ 'filters[search]': '', searchTerm: 'acme' });
+    await mockRefs.getHandler!(req, res);
+
+    const orConditions = (mockRefs.findQuery as { $or?: Array<Record<string, { $regex: string }>> })?.$or;
+    expect(orConditions, 'the flat searchTerm should still build a $or query').toBeInstanceOf(Array);
+    for (const condition of orConditions!) {
+      const [{ $regex }] = Object.values(condition);
+      expect($regex).toBe(escapeRegex('acme'));
+    }
+  });
+
+  it('falls back to the flat categoryId when filters[categoryId] is present but empty', async () => {
+    const categoryId = new Types.ObjectId().toString();
+    const { req, res } = invokeGet({ 'filters[categoryId]': '', categoryId });
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRefs.findQuery).toMatchObject({ categoryId });
+  });
+
+  it('rejects a malformed flat categoryId behind an empty filters[categoryId]', async () => {
+    // Reaching the flat value means it gets the same validation it gets when sent
+    // alone, rather than being silently dropped.
+    const { req, res } = invokeGet({ 'filters[categoryId]': '', categoryId: 'not-an-object-id' });
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData()).toEqual({ error: 'Invalid category ID format' });
+    expect(mockRefs.findQuery).toBeUndefined();
+  });
+
+  it('prefers a non-empty nested filter over the flat param', async () => {
+    const nestedCategoryId = new Types.ObjectId().toString();
+    const flatCategoryId = new Types.ObjectId().toString();
+    const { req, res } = invokeGet({
+      'filters[search]': 'nested',
+      searchTerm: 'flat',
+      'filters[categoryId]': nestedCategoryId,
+      categoryId: flatCategoryId,
+    });
+    await mockRefs.getHandler!(req, res);
+
+    expect(mockRefs.findQuery).toMatchObject({ categoryId: nestedCategoryId });
+    const orConditions = (mockRefs.findQuery as { $or?: Array<Record<string, { $regex: string }>> })?.$or;
+    const [{ $regex }] = Object.values(orConditions![0]);
+    expect($regex).toBe(escapeRegex('nested'));
+  });
+
+  it('builds no filter when both the nested and flat params are absent', async () => {
+    const { req, res } = invokeGet({});
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRefs.findQuery).toEqual({});
+  });
 });

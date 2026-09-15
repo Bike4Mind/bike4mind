@@ -85,6 +85,50 @@ function isTrustedForInjection(
 }
 
 /**
+ * `includeReaders` for every prompt-injection grant read. A PERMANENT security floor here, NOT the
+ * cutover default it is at the retrieval call sites. That cutover has HAPPENED:
+ * `getDynamicDataLakeAccess` and browse have widened to reader/org-principal grants, and THIS PATH
+ * MUST NOT FOLLOW - a READER's read access must not become authority to write instructions into
+ * another user's system prompt (injection lands in the system prompt, a higher-trust position than
+ * the retrieved content `renderRetrievedContentBlock` sanitizes precisely because it is untrusted).
+ */
+const INCLUDE_READER_GRANTS = false;
+
+/**
+ * The lake ids the caller reaches by an owner/curator grant, at the injection floor above.
+ *
+ * Stated in ONE place because two sites resolve it: the arm inside
+ * `getAccessibleDataLakePrompts`, and `grantedLakeIdsUsedFor`'s caller-side telemetry derivation.
+ * A floor restated per site is a floor that can drift, and this one is load-bearing. A test asserts
+ * these arguments literally, so a flip fails loudly rather than widening quietly.
+ *
+ * The membership org ids are deliberately NOT passed: `grantedLakeReachFor` reads them only under
+ * `includeReaders`, so threading them would leave the org-principal arm pre-wired and let a
+ * one-word flip activate it silently. Passing [] makes that flip return nothing and break visibly.
+ * (Org-principal grants are not absent from injection altogether - they can still reach it through
+ * the pre-authorization short-circuit, gated on org-ADMIN rights at session create - but they do
+ * not enter through THIS arm.) Only the USER-principal reach is consumed for the same reason:
+ * `orgGrantedLakes` is empty by construction here and is never forwarded to the lake query.
+ *
+ * Gated on `dataLakes` too: the arm feeds only the DB query and the DB-lake filter (a registry lake
+ * has no grants by construction), so without a lake repo this read has no reader.
+ *
+ * THROWS on a read failure rather than degrading here - the two callers drop different things and
+ * each logs its own consequence.
+ */
+async function injectionGrantedLakeIds(context: DataLakeAccessContext, userId: string): Promise<Set<string>> {
+  if (!context.db.dataLakes || !context.db.dataLakeAccessGrants) return new Set();
+  const reach = await grantedLakeReachForTurn(
+    context,
+    userId,
+    [],
+    context.db.dataLakeAccessGrants,
+    INCLUDE_READER_GRANTS
+  );
+  return new Set(reach.grantedLakeIds);
+}
+
+/**
  * Resolves the per-lake system prompts to inject for a turn: the caller's active,
  * accessible, TRUSTED lakes that carry a non-empty `systemPrompt`.
  *
@@ -205,41 +249,12 @@ export async function getAccessibleDataLakePrompts(
   // exactly the gap #2495 closes. Sharing the helper is not by itself a lockstep guarantee: the two
   // call sites already pass different arguments, and today's agreement rests on both pinning
   // `includeReaders = false`. That agreement is MEANT to be broken by the cutover, in the deny
-  // direction only - see below. The memo keys on those arguments for that reason, so the two sites
-  // cannot collide in it either.
-  //
-  // But `includeReaders: false` here is a PERMANENT security floor, NOT the cutover default it is
-  // at the other call sites. That cutover has HAPPENED: `getDynamicDataLakeAccess` and browse have
-  // widened to reader/org-principal grants, and THIS SITE MUST NOT FOLLOW - a READER's read
-  // access must not become authority to write instructions into another user's system prompt
-  // (injection lands in the system prompt, a higher-trust position than the retrieved content
-  // `renderRetrievedContentBlock` sanitizes precisely because it is untrusted). A test asserts this
-  // call's arguments literally, so the flip fails loudly here rather than widening quietly.
-  //
-  // The membership org ids are deliberately NOT passed: `grantedLakeReachFor` reads them only under
-  // `includeReaders`, so threading them would leave the org-principal arm pre-wired and let a
-  // one-word flip activate it silently. Passing [] makes that flip return nothing and break
-  // visibly. (Org-principal grants are not absent from injection altogether - they can still reach
-  // it through the pre-authorization short-circuit below, gated on org-ADMIN rights at session
-  // create - but they do not enter through THIS arm.)
-  //
-  // Gated on `dataLakes` too: the arm feeds only the DB query and the DB-lake filter (a registry
-  // lake has no grants by construction), so without a lake repo this read has no reader.
-  const INCLUDE_READER_GRANTS = false;
-  const grantedLakeIds = new Set<string>();
-  if (context.db.dataLakes && context.db.dataLakeAccessGrants && userId) {
+  // direction only - see `injectionGrantedLakeIds`, which owns the arguments this site passes. The
+  // memo keys on those arguments for that reason, so the two sites cannot collide in it either.
+  let grantedLakeIds = new Set<string>();
+  if (userId) {
     try {
-      // Only the USER-principal reach is consumed. `orgGrantedLakes` is empty by construction
-      // here (no membership org ids, `includeReaders` false) and is deliberately not forwarded to
-      // the query, so the org-principal arm cannot activate on this path even if that changes.
-      const reach = await grantedLakeReachForTurn(
-        context,
-        userId,
-        [],
-        context.db.dataLakeAccessGrants,
-        INCLUDE_READER_GRANTS
-      );
-      for (const id of reach.grantedLakeIds) grantedLakeIds.add(id);
+      grantedLakeIds = await injectionGrantedLakeIds(context, userId);
     } catch (err) {
       // Fail closed, loudly: the arm contributes nothing, which denies a legitimate curator their
       // lake's prompt rather than granting anyone one. Warned rather than thrown so a transient
@@ -378,4 +393,42 @@ export async function getAccessibleDataLakePrompts(
       // names are not unique, and localeCompare alone would leave same-named lakes free to swap.
       .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
   );
+}
+
+/**
+ * Which of `injectedLakePromptIds` the caller holds an owner/curator GRANT on - the grant arm's
+ * telemetry sibling of the caller-side `preauthorizedLakeIdsUsed` intersection, derived the same
+ * way and at the same places (both injection sites), because both answer one operator question:
+ * WHICH ARM admitted this lake into a system prompt. Without it `injectedLakePromptIds` records
+ * that a lake was injected but never why - and the grant arm is the one that can reach across an
+ * org boundary, so it is the arm an operator most needs named.
+ *
+ * Costs no extra grant read on a turn that resolved prompts through `getAccessibleDataLakePrompts`
+ * with the SAME `context` object: the arm resolved this reach under the same memo key, so this is
+ * a `grantedLakeReachForTurn` cache hit. Call sites must therefore pass the very object they
+ * passed to the resolver, not an equivalent literal - the memo is scoped by object identity.
+ *
+ * MEMBERSHIP, NOT CAUSATION, exactly as the pre-authorized field: a granted lake the caller could
+ * already reach - its creator, or a member of its org - injects through the ordinary trust arm and
+ * is listed here all the same, so a non-empty value does not prove the grant is what admitted it.
+ * The two fields overlap for the same reason; a lake can appear in both.
+ *
+ * NEVER THROWS. Both injection sites wrap resolution in a catch that degrades to no lake prompt at
+ * all, so a telemetry read that threw would drop the injection it exists to record. A failure
+ * yields an empty list and a warning instead.
+ */
+export async function grantedLakeIdsUsedFor(
+  context: DataLakeAccessContext,
+  injectedLakePromptIds: readonly string[]
+): Promise<string[]> {
+  if (injectedLakePromptIds.length === 0) return [];
+  try {
+    const userId = context.user.id ? String(context.user.id) : undefined;
+    if (!userId) return [];
+    const granted = await injectionGrantedLakeIds(context, userId);
+    return injectedLakePromptIds.filter(id => granted.has(id));
+  } catch (err) {
+    context.logger?.warn('[dataLakes] prompt access-grant telemetry lookup failed; omitting grantedLakeIdsUsed', err);
+    return [];
+  }
 }

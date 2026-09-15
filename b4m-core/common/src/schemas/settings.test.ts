@@ -16,6 +16,10 @@ import {
   ABSTENTION_PROMPT,
   WEB_SEARCH_FRESHNESS_PROMPT,
   KNOWLEDGE_BASE_RETRIEVAL_PROMPT,
+  DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
+  SEARCH_BUDGET_SETTING_KEYS,
+  FORCED_RETRIEVAL_SETTING_KEYS,
+  type SettingKey,
 } from './settings';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
@@ -32,6 +36,7 @@ import {
   FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
 } from '../constants/forcedRetrieval';
+import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE } from '../constants/embeddingSpaceFloors';
 import { LAKE_RECALL_K_DEFAULT, LAKE_RECALL_K_MAX } from '../constants/lakeMemory';
 import {
   KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
@@ -269,6 +274,7 @@ describe('public settings projection (M2.5 security boundary)', () => {
         'anthropicDemoKey',
         'xaiApiKey',
         'moonshotApiKey',
+        'deepseekApiKey',
         'geminiDemoKey',
         'voyageApiKey',
       ]) {
@@ -578,11 +584,16 @@ describe('forcedRetrievalCharBudget agrees with the forced-retrieval fallback (#
     expect(settingsMap.forcedRetrievalCharBudget.defaultValue).toBe(FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT);
   });
 
-  it('is platform-only: declares no scope, unlike its sibling dataLakeSearchMaxFiles/MaxChunks', () => {
-    // Deliberate, not an oversight - see the setting's own description. This path reads the setting
-    // directly rather than through the scoped-settings resolver, so a settableAt block here would be
-    // inert at best and could arm the resolver's fail-loud owner check at worst.
-    expect(settingsMap.forcedRetrievalCharBudget.scope).toBeUndefined();
+  it('is settable at the org/owner (caller) altitude, but deliberately not at Lake (#2572)', () => {
+    // Same rung set as the two relevance floors it is resolved alongside, and for the same reason
+    // there is no Lake rung: a forced-retrieval turn pools an uncapped SET of lakes, so no single
+    // lake can key a narrower rung. Was platform-only until #2572 pointed the read at
+    // resolveScopedSettingValues - the rungs and the read path have to move together, since
+    // settableAt is metadata only the scoped resolver honors.
+    expect(settingsMap.forcedRetrievalCharBudget.scope?.settableAt).toEqual([
+      SettingScopeLevel.Organization,
+      SettingScopeLevel.Owner,
+    ]);
   });
 
   it('prefaults to the shared constant rather than makeNumberSetting fallback 0', () => {
@@ -609,12 +620,91 @@ describe('forcedRetrievalCharBudget agrees with the forced-retrieval fallback (#
   });
 });
 
+describe('scoped retrieval settings are caller-altitude, not per-lake (#2624, #2572)', () => {
+  // Both reads that resolve settings for one retrieval turn, each derived from the list its
+  // production caller actually passes: resolveSearchBudgets (b4m-core/services) and
+  // readForcedRetrievalSettings (ChatCompletionFeatures.ts). Individual keys below have their own
+  // describe blocks carrying their own reasoning; this block is the NET that catches a key nobody
+  // wrote a bespoke assertion for.
+  const SCOPED_RETRIEVAL_KEYS = [...SEARCH_BUDGET_SETTING_KEYS, ...FORCED_RETRIEVAL_SETTING_KEYS];
+
+  it('covers the keys whose Lake rung has already had to be removed by hand', () => {
+    // Anti-vacuity guard for the loops below, and the reason this suite reads the production lists
+    // rather than its own: a for-of over an emptied or shortened list asserts nothing and still
+    // passes green. The keys named here are the ones with history - #2707 removed the Lake rung
+    // from the first two, #2465 shipped the third WITH one (merged textually clean, corrected in
+    // review rather than by this guard), and #2572 is why the forced-retrieval budget has none.
+    expect(SCOPED_RETRIEVAL_KEYS).toContain('dataLakeSearchMaxFiles');
+    expect(SCOPED_RETRIEVAL_KEYS).toContain('dataLakeSearchMaxChunks');
+    expect(SCOPED_RETRIEVAL_KEYS).toContain('dataLakeSearchMaxChunksPerFile');
+    expect(SCOPED_RETRIEVAL_KEYS).toContain('forcedRetrievalCharBudget');
+  });
+
+  it('declares Organization and Owner but NOT Lake', () => {
+    // These advertised a Lake rung that no retrieval caller ever resolved, so an operator could
+    // save a Lake-scoped override, see it in the admin UI, and have every search keep using the
+    // platform value. The rung is not merely unwired: resolveRetrievalLakeScope hands one scan every
+    // lake the caller can reach as a single dataLakeTags array, so there is no lakeId to key on, and
+    // one forced-retrieval turn scans an uncapped SET of lakes into a single pool for the same
+    // reason. Restoring Lake on either without per-lake sub-budgets would re-create that same lie.
+    // Driven off the lists the reads actually pass, so a NEW key declared with a Lake rung is
+    // covered the moment it becomes resolvable - which a literal here was not.
+    for (const key of SCOPED_RETRIEVAL_KEYS) {
+      expect(settingsMap[key].scope?.settableAt).toEqual([SettingScopeLevel.Organization, SettingScopeLevel.Owner]);
+      expect(settingsMap[key].scope?.settableAt).not.toContain(SettingScopeLevel.Lake);
+    }
+  });
+
+  it('still declares a scope, so the read path must stay on the scoped resolver', () => {
+    // Dropping the block entirely would be the wrong fix: the Org and Owner rungs are resolvable
+    // (the caller is known) and both reads honor them. Only Lake was unkeyable.
+    for (const key of SCOPED_RETRIEVAL_KEYS) {
+      expect(settingsMap[key].scope).toBeDefined();
+    }
+  });
+
+  it('no setting outside the convergence allowlist declares a Lake rung at all', () => {
+    // The loops above are list-gated, so the #2465 failure mode survives in two steps: declare a
+    // Lake-scoped setting in one PR, wire its read in a later one, and nothing forces it into either
+    // key list until the read exists. This assertion is the fail-CLOSED half and needs no list
+    // maintenance - it walks every setting and requires a Lake rung to be justified HERE, so a new
+    // one fails on the commit that declares it rather than on the commit that reads it.
+    //
+    // The allowlist is lake-convergence policy: these three take a lake as their SUBJECT (a lake is
+    // the thing being paused, rate-limited or admission-gated), which is exactly what a retrieval
+    // budget is not - retrieval spans every lake the caller can reach at once. Adding an entry here
+    // should mean answering that question, not silencing this test.
+    const LAKE_SUBJECT_SETTINGS: readonly SettingKey[] = [
+      'PauseLakeConvergence',
+      'LakeConvergenceBulkChangeSharePct',
+      'EnforceLakeAdmission',
+    ];
+
+    const declaringLake = (Object.keys(settingsMap) as SettingKey[]).filter(key =>
+      settingsMap[key].scope?.settableAt?.includes(SettingScopeLevel.Lake)
+    );
+
+    expect(declaringLake.sort()).toEqual([...LAKE_SUBJECT_SETTINGS].sort());
+  });
+});
+
 describe('forced-retrieval relevance floors are levers (#2497)', () => {
   const FLOOR_KEYS = ['forcedRetrievalRelativeFloorPct', 'forcedRetrievalMinSimilarityPct'] as const;
 
   it('defaults to the shared constants rather than hand-copied literals', () => {
     expect(settingsMap.forcedRetrievalRelativeFloorPct.defaultValue).toBe(FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT);
     expect(settingsMap.forcedRetrievalMinSimilarityPct.defaultValue).toBe(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT);
+  });
+
+  it('describes the per-space floors from the table rather than restating them in prose', () => {
+    // The description tells operators which floor actually applies per space, and those numbers are
+    // expected to move (35 is provisional until re-derived against a production lake). Hand-written
+    // prose would become a wrong number in the admin UI with nothing failing, so assert the
+    // description carries every value the table holds - and would catch a new space added without it.
+    const { description } = settingsMap.forcedRetrievalMinSimilarityPct;
+    for (const [space, pct] of Object.entries(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE)) {
+      expect(description).toContain(`${pct} for ${space}`);
+    }
   });
 
   it('keeps the absolute floor percent in step with the cosine fraction it replaced', () => {
@@ -662,7 +752,7 @@ describe('forced-retrieval relevance floors are levers (#2497)', () => {
     expect(settingsMap.forcedRetrievalMinSimilarityPct.schema.parse(1)).toBe(1);
   });
 
-  it('is settable at org and owner but NOT per lake, unlike dataLakeSearchMaxChunks', () => {
+  it('is settable at org and owner but NOT per lake', () => {
     // Deliberate, and the reason is structural rather than an oversight: one forced-retrieval turn
     // scans an uncapped SET of lakes into a single pool with a single top score, so there is no one
     // lake for a narrower rung to key on. Same call as kbSearchMinRelevancePct, whose corpus has the
@@ -672,15 +762,14 @@ describe('forced-retrieval relevance floors are levers (#2497)', () => {
       expect(settingsMap[key].scope?.settableAt).toEqual([SettingScopeLevel.Organization, SettingScopeLevel.Owner]);
       expect(settingsMap[key].scope?.settableAt).not.toContain(SettingScopeLevel.Lake);
     }
-    expect(settingsMap.dataLakeSearchMaxChunks.scope?.settableAt).toContain(SettingScopeLevel.Lake);
   });
 
   it('declares a scope, so the read path must go through the scoped resolver', () => {
-    // The inverse of forcedRetrievalCharBudget's assertion above. That one is platform-only because
-    // it is read via getSettingsValue, which ignores settableAt; these two are read via
-    // resolveScopedSettingValues, which honors it. A future change that pointed them back at
-    // getSettingsValue would silently drop every override, so the scope block is the signal that
-    // the resolver is required.
+    // These two and forcedRetrievalCharBudget above are read together, in one
+    // resolveScopedSettingValues call, which is what honors settableAt. A future change that
+    // pointed any of them back at getSettingsValue would silently drop every override, so the
+    // scope block is the signal that the resolver is required. lakeMemoryRecallK below is the
+    // live counterexample: no scope block, because its read is still the plain one.
     for (const key of FLOOR_KEYS) {
       expect(settingsMap[key].scope).toBeDefined();
     }
@@ -724,9 +813,10 @@ describe('kbSearchDefaultResults agrees with the search_knowledge_base tool fall
 
   it('is settable at the org/owner (caller) altitude, but deliberately not at Lake (#1955)', () => {
     // A knowledge-base search spans a mixed multi-lake corpus plus the caller's own/shared files -
-    // there is no single lake for a Lake rung to key on, unlike dataLakeSearchMaxFiles/MaxChunks
-    // (which scan one lake at a time and do declare Lake). Pinned so adding Lake later is a
-    // deliberate decision rather than silent drift.
+    // there is no single lake for a Lake rung to key on. dataLakeSearchMaxFiles/MaxChunks were once
+    // believed to differ (one lake at a time) and declared Lake on that basis; #2624 found the
+    // premise false and they now match. Pinned so adding Lake later is a deliberate decision
+    // rather than silent drift.
     expect(settingsMap.kbSearchDefaultResults.scope?.settableAt).toEqual([
       SettingScopeLevel.Organization,
       SettingScopeLevel.Owner,
@@ -826,10 +916,12 @@ describe('lakeMemoryRecallK agrees with the lake-memory recall fallback (#2496)'
     expect(settingsMap.lakeMemoryRecallK.defaultValue).toBeGreaterThan(8);
   });
 
-  it('is platform-only, like its sibling forcedRetrievalCharBudget', () => {
+  it('is platform-only, unlike its sibling forcedRetrievalCharBudget', () => {
     // Deliberate, not an oversight - see the setting's own description. LakeMemoryFeature reads it
-    // directly rather than through the scoped-settings resolver, so a settableAt block here would
-    // be inert at best and could arm the resolver's fail-loud owner check at worst.
+    // via getSettingsValue, which ignores settableAt, so a scope block here would be silently
+    // inert: every override written against it would resolve to nothing. Its sibling was in the
+    // same position until #2572 moved BOTH its rungs and its read at once, which is what giving
+    // this one org/owner rungs would also take.
     expect(settingsMap.lakeMemoryRecallK.scope).toBeUndefined();
   });
 
@@ -885,12 +977,56 @@ describe('lakeMemoryRecallK agrees with the lake-memory recall fallback (#2496)'
   });
 });
 
+describe('dataLakeSearchMaxChunksPerFile (#1422)', () => {
+  it('ships DISABLED, so enabling the diversity cap is an operator decision', () => {
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.defaultValue).toBe(DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT);
+    // Pin the literal too: 0 here means "no cap", matching pre-#1422 retrieval exactly. Crowding
+    // was measured absent on a 47-document corpus, so a default that changed what installs serve
+    // would be a behavior change nobody asked for.
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.defaultValue).toBe(0);
+  });
+
+  it('accepts 0 at write time - the schema must not treat the disabled value as invalid', () => {
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.min).toBe(0);
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.schema.parse(0)).toBe(0);
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.schema.parse(3)).toBe(3);
+    expect(() => settingsMap.dataLakeSearchMaxChunksPerFile.schema.parse(-1)).toThrow();
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback', () => {
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.schema.parse(undefined)).toBe(
+      DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT
+    );
+  });
+
+  it('is settable at org and owner but NOT per lake, like the scan budgets it sits with', () => {
+    // A per-lake cap reads as the natural shape - one lake of long documents wants it, the rest of
+    // an org does not - but it is unkeyable: the cap is enforced at a merge whose pool spans EVERY
+    // lake the caller can reach in one pass, so there is no lakeId to resolve an override against.
+    // dataLakeSearchMaxFiles/MaxChunks shipped that rung on the same intuition and it resolved
+    // nothing (#2624). Pinned so restoring Lake is a deliberate decision, not silent drift.
+    expect(settingsMap.dataLakeSearchMaxChunksPerFile.scope?.settableAt).toEqual([
+      SettingScopeLevel.Organization,
+      SettingScopeLevel.Owner,
+    ]);
+  });
+});
+
 describe('EMBEDDING settings group registration (#1955)', () => {
   it('lists kbSearchDefaultResults, kbSearchResultTokenBudget and kbSearchMinRelevancePct with unique order values', () => {
     const keys = ['kbSearchDefaultResults', 'kbSearchResultTokenBudget', 'kbSearchMinRelevancePct'];
     const entries = API_SERVICE_GROUPS.EMBEDDING.settings.filter(s => keys.includes(s.key));
     expect(entries.map(s => s.key).sort()).toEqual([...keys].sort());
     expect(new Set(entries.map(s => s.order)).size).toBe(entries.length);
+  });
+
+  it('registers dataLakeSearchMaxChunksPerFile in the group, with an order no sibling reuses', () => {
+    // A setting absent from the group renders nowhere in the admin UI - it resolves correctly and
+    // is simply unreachable, which is the failure mode this pins.
+    const entry = API_SERVICE_GROUPS.EMBEDDING.settings.find(s => s.key === 'dataLakeSearchMaxChunksPerFile');
+    expect(entry).toBeDefined();
+    const orders = API_SERVICE_GROUPS.EMBEDDING.settings.map(s => s.order);
+    expect(new Set(orders).size).toBe(orders.length);
   });
 });
 
@@ -1033,6 +1169,7 @@ describe('KnowledgeBaseRetrievalPrompt default tells the model when to retrieve'
   it('names no knowledge tool the gate does not guarantee', () => {
     expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).not.toMatch(/retrieve_knowledge_content/);
     expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).not.toMatch(/count_knowledge_base/);
+    expect(KNOWLEDGE_BASE_RETRIEVAL_PROMPT).not.toMatch(/describe_knowledge_base/);
   });
 
   it('ships as the KnowledgeBaseRetrievalPrompt setting default (no drift between const and setting)', () => {

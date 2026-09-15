@@ -10,6 +10,7 @@ import {
   type IFallbackLakeSettingsRepository,
   type IOrganizationRepository,
 } from '@bike4mind/common';
+import { usableObjectIds } from '@bike4mind/db-core';
 import type { Logger } from '@bike4mind/observability';
 import { isDatalakeTagWellFormed } from './createDataLake';
 import { lakeMembershipScope, registryMembershipScope } from './lakeMembershipScope';
@@ -297,6 +298,20 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
         lakeViewComplete = false;
       }
     }
+    // The repo silently drops an unusable dataLakeId from its `_id` arms instead of failing, so a
+    // bad grant makes its lake vanish while the read reports success - the same partial view as the
+    // failed-read path above, and it owes consumers the same admission. Re-checked here (not just
+    // in the repo) so the warn carries the request logger.
+    const reachIds = [...reach.grantedLakeIds, ...Object.values(reach.orgGrantedLakes).flat()];
+    const usableReachIds = usableObjectIds(reachIds, 'getDynamicDataLakeAccess.reach', context.logger);
+    if (usableReachIds.length !== reachIds.length) {
+      lakeViewComplete = false;
+      context.logger?.warn('[lake-grant-guard] lake view incomplete: unusable grant id dropped', {
+        received: reachIds.length,
+        usable: usableReachIds.length,
+        dropped: reachIds.length - usableReachIds.length,
+      });
+    }
     try {
       const dbLakes = await context.db.dataLakes.findActiveByUserTagsAndEntitlements(
         userTags,
@@ -321,7 +336,7 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
       }
       // Intersected with what the query actually returned, so a stale grant naming a deleted or
       // archived lake cannot put an id into the restoration set below.
-      const grantedIdSet = new Set([...reach.grantedLakeIds, ...Object.values(reach.orgGrantedLakes).flat()]);
+      const grantedIdSet = new Set(reachIds);
       for (const dl of dbLakes) {
         if (grantedIdSet.has(dl.id)) grantedDynamicIds.add(dl.id);
       }

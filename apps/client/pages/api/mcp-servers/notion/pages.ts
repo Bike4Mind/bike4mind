@@ -136,13 +136,20 @@ const handler = baseApi().get(async (req, res) => {
   }
 });
 
+// Shared by both listing loops. The size check runs once per round, so a final round
+// can overshoot the page cap by up to one page of results.
+const MAX_PAGES_PER_LIST = 200;
+const MAX_FETCH_ROUNDS = 10;
+
 async function fetchTopLevelPages(headers: Record<string, string>): Promise<PageNode[]> {
   const allPages: PageNode[] = [];
   let startCursor: string | undefined;
   let hasMore = true;
+  let rounds = 0;
 
   // Paginate through search results to find workspace-level pages
-  while (hasMore) {
+  while (hasMore && allPages.length < MAX_PAGES_PER_LIST && rounds < MAX_FETCH_ROUNDS) {
+    rounds++;
     const body: Record<string, unknown> = {
       page_size: 100,
       sort: { direction: 'ascending', timestamp: 'last_edited_time' },
@@ -187,8 +194,10 @@ async function fetchChildPages(parentId: string, headers: Record<string, string>
   const pages: PageNode[] = [];
   let startCursor: string | undefined;
   let hasMore = true;
+  let rounds = 0;
 
-  while (hasMore) {
+  while (hasMore && pages.length < MAX_PAGES_PER_LIST && rounds < MAX_FETCH_ROUNDS) {
+    rounds++;
     const url = startCursor
       ? `${NOTION_API_BASE_URL}/blocks/${parentId}/children?page_size=100&start_cursor=${startCursor}`
       : `${NOTION_API_BASE_URL}/blocks/${parentId}/children?page_size=100`;

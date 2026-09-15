@@ -280,6 +280,9 @@ export interface IChatHistoryItem {
     primaryModelName: string;
     fallbackModel: string;
     fallbackModelName: string;
+    /** Provider path of each side; see FallbackInfoSchema for why these are optional. */
+    primaryModelBackend?: string;
+    fallbackModelBackend?: string;
     timestamp: number;
   };
 
@@ -602,6 +605,15 @@ export interface ISession {
    * Generic capability - lets a surface focus the grounded tutor on one topic.
    */
   retrievalTags?: string[];
+  /**
+   * Whether `retrievalTags` above is a deliberate lake selection rather than an absent or derived
+   * default. It is what makes "the user deselected every lake" expressible: Mongoose hydrates an
+   * omitted array to `[]`, so an empty `retrievalTags` cannot say that on its own, and the
+   * lake-memory hot card would otherwise read it as "no scoping wanted" and widen to every entitled
+   * lake (see resolveLakeMemoryScope). Also suppresses the file-driven scope derivation, so
+   * attaching a lake file does not silently re-scope a session the user scoped by hand.
+   */
+  lakeScopeExplicit?: boolean;
   /**
    * Lake ids a manager was admitted to for THIS session even though they are not a member of the
    * lake (manage-but-not-member admission) - set ONLY by pages/api/sessions/create.ts, AFTER its

@@ -41,6 +41,13 @@ const BEDROCK_FAMILY_BY_VENDOR: Readonly<Record<string, AdapterFamily>> = {
  */
 const KIMI_PROFILE: ModelDispatchProfile = { maxTokensParam: 'max_completion_tokens', toolTransport: 'chat' };
 
+/**
+ * DeepSeek direct. Its own constant rather than PROVIDER_NATIVE_PROFILE because
+ * tools ride Chat Completions rather than a provider-native field, which is what
+ * deepseekBackend sends; the token parameter is still `max_tokens`.
+ */
+const DEEPSEEK_PROFILE: ModelDispatchProfile = { maxTokensParam: 'max_tokens', toolTransport: 'chat' };
+
 /** Backends whose family is the backend, with a request shape this build fixes. */
 const FAMILY_BY_BACKEND: Readonly<Partial<Record<ModelBackend, AdapterFamily>>> = {
   [ModelBackend.Anthropic]: 'anthropic-messages',
@@ -92,6 +99,10 @@ export function resolveDispatchForRecord(record: Pick<ModelRecord, 'id' | 'backe
   // provider-native one (see KIMI_PROFILE).
   if (record.backend === ModelBackend.Kimi) {
     return { adapterFamily: 'kimi', dispatchProfile: KIMI_PROFILE };
+  }
+
+  if (record.backend === ModelBackend.DeepSeek) {
+    return { adapterFamily: 'deepseek', dispatchProfile: DEEPSEEK_PROFILE };
   }
 
   const adapterFamily = FAMILY_BY_BACKEND[record.backend];

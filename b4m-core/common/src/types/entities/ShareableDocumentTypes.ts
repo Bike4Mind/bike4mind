@@ -115,7 +115,11 @@ export interface IShareableStaticMethods<DocType> {
    * @param id - The document ID
    * @returns The document
    */
-  findUpdateAccessById: (user: IUserDocument, id: string) => Promise<DocType | null>;
+  findUpdateAccessById: (
+    user: IUserDocument,
+    id: string,
+    opts?: { includeGlobalWrite?: boolean }
+  ) => Promise<DocType | null>;
 
   /**
    * Find all documents with update access by IDs

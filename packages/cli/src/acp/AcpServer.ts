@@ -20,7 +20,7 @@ import { randomUUID } from 'crypto';
 import { Mutex } from 'async-mutex';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { AgentStep, AgentResult, ConversationMessage, ReActAgent } from '@bike4mind/agents';
-import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services';
+import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
 
 import { ConfigStore, SessionStore, type CliConfig, type Session, type Message } from '../storage';
 import { CustomCommandStore } from '../storage/CustomCommandStore.js';

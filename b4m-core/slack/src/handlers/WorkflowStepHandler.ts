@@ -2,7 +2,7 @@ import { SQSService } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { SlackClient } from '../SlackClient';
 import { ChatModels, IChatHistoryItem, IUserDocument } from '@bike4mind/common';
-import { ChatCompletionInvoke } from '@bike4mind/services';
+import { ChatCompletionInvoke } from '@bike4mind/services/llm';
 import { getSlackDeps, getSlackDb } from '../di/registry';
 
 /**

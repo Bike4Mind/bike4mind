@@ -2,7 +2,7 @@ import { rapidReplyMappingRepository } from '@bike4mind/database/ai';
 import { rapidReplyPromptRepository } from '@bike4mind/database/ai';
 import { adminSettingsRepository } from '@bike4mind/database/infra';
 import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
-import { ChatCompletionProcess, featureNames, ChatCompletionFeature } from '@bike4mind/services';
+import { ChatCompletionProcess, featureNames, ChatCompletionFeature } from '@bike4mind/services/llm';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';

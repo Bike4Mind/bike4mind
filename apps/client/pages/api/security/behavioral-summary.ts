@@ -28,7 +28,10 @@ const logger = new Logger({ metadata: { service: 'SecurityBehavioralSummary' } }
 
 async function generateSecurityBehavioralSummary(user: {
   id: string;
-  email: string;
+  // Absent for an account created via OAuth without a provider-verified email. Failed
+  // logins then match on username alone (getUserFailedLogins drops an absent email from
+  // its $or rather than matching { email: null }, which would pull in other users').
+  email?: string;
   username: string;
   isAdmin: boolean;
 }) {
@@ -71,10 +74,16 @@ async function generateSecurityBehavioralSummary(user: {
     })),
   };
 
+  // The suspicious-pattern aggregation buckets by IP, so its `usernames` array carries every
+  // other user targeted from the same IP. This context is sent to a third-party model, so filter
+  // it to the caller - same rule the user-summary and user-recent handlers apply to their bodies.
+  // Email is absent for an emailless OAuth account, so it only joins the set when present.
+  const userIdentifiers = new Set([user.username.toLowerCase(), ...(user.email ? [user.email.toLowerCase()] : [])]);
+
   const context = {
     userId: user.id,
     username: user.username,
-    email: user.email,
+    ...(user.email && { email: user.email }),
     windowHours: hours,
     failedLogins: {
       count: failedLogins.length,
@@ -85,7 +94,9 @@ async function generateSecurityBehavioralSummary(user: {
       items: suspiciousPatterns.slice(0, 5).map(pattern => ({
         ip: pattern.ip,
         attempts: pattern.attempts,
-        usernames: pattern.usernames,
+        usernames: pattern.usernames.filter(
+          u => typeof u === 'string' && u.length > 0 && userIdentifiers.has(u.toLowerCase())
+        ),
         lastAttempt: pattern.lastAttempt,
         riskLevel: pattern.riskLevel,
       })),
@@ -241,14 +252,17 @@ const handler = baseApi()
     asyncHandler(async (req, res) => {
       const user = req.user;
 
-      if (!user || !user.email || !user.username || !user.id) {
-        return res.status(401).json({ error: 'User not authenticated or missing required fields' });
+      // Only the session itself is a 401. An emailless account (OAuth signup with no
+      // provider-verified email) is fully authenticated, and this card sits in the same
+      // Security panel as user-summary/user-recent - it must not read as a session error.
+      if (!user || !user.username || !user.id) {
+        return res.status(401).json({ error: 'User not authenticated' });
       }
 
       try {
         const safeUser = {
           id: user.id as string,
-          email: user.email as string,
+          email: user.email ?? undefined,
           username: user.username as string,
           isAdmin: user.isAdmin === true,
         };

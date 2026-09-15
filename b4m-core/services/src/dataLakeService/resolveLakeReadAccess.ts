@@ -8,27 +8,8 @@ import { classifyLakeAccess, type LakeAccessArm } from './classifyLakeAccess';
 import type { LakeGrant } from './manageRule';
 import { createScopedAsyncMemo } from './scopedAsyncMemo';
 
-/** The platform cutover flag governing whether read-grant resolution is enforced or report-only. */
+/** The platform kill switch governing whether read-grant resolution is enforced or report-only. */
 export const ENFORCE_LAKE_READ_GRANTS_KEY = 'EnforceLakeReadGrants' as const;
-
-/**
- * Source-level interlock for the ENFORCE transition, now FLIPPED. It existed so an admin toggling
- * `EnforceLakeReadGrants` before the feature was code-complete could not activate a half-wired gate;
- * enforcement requires BOTH the setting ON and this constant true.
- *
- * Both of its stated exit criteria are now met: the retrieval/grounding read arm
- * (`getDynamicDataLakeAccess` resolves grants on the same terms browse does, so a reader who can
- * open a lake can also ground on it), and the member-management WRITE path (`manageLakeGrant`, the
- * first producer of reader/org grants). The resolution stays additive
- * (`resolvedAllowed = legacy || readGrant`), so nobody loses access at the flip. Cross-org
- * containment is held at both ends - `refuseGrantWrite` on the way in, `containedGrants` plus the
- * org-constrained repo arm on the way out.
- *
- * Now vestigial - `resolveEnforceReadGrants` reduces to the setting alone - but retained as the
- * auditable seam the cutover tests branch on, and as the kill switch if enforcement has to be
- * backed out without a settings migration. The premature-toggle warn stays for the same reason.
- */
-export const READ_GRANT_ENFORCEMENT_READY = true;
 
 /** Backing store for `resolveEnforceReadGrants`' optional per-turn flag read. */
 const enforceFlagByTurn = createScopedAsyncMemo<boolean>();
@@ -142,10 +123,11 @@ export interface LakeReadAccessDecision {
 }
 
 /**
- * Resolve read access with the ephemeral membership view layered onto the legacy gate. In report-only
- * mode (`enforceReadGrants: false`) the ENFORCED decision stays the legacy one, so nothing changes for
- * users while the cutover is observed; the caller logs `diverges` to build the expected-grant-set diff.
- * Once enforced, a persisted read grant admits the caller. Pure/sync - the same seam as classifyLakeAccess.
+ * Resolve read access with the ephemeral membership view layered onto the legacy gate. When enforcing
+ * (the shipped default) a persisted read grant admits the caller. In report-only mode
+ * (`enforceReadGrants: false` - the kill switch off, or an unwired call site) the ENFORCED decision
+ * stays the legacy one and the caller logs `diverges` instead, so the withheld access is at least
+ * visible. Pure/sync - the same seam as classifyLakeAccess.
  */
 export function resolveLakeReadAccess(
   lake: Pick<
@@ -173,15 +155,16 @@ export function resolveLakeReadAccess(
 }
 
 /**
- * Whether read-grant resolution is ENFORCED right now. Enforcement requires BOTH the platform setting
- * ON and the source-level `READ_GRANT_ENFORCEMENT_READY` interlock (see its doc) - so a premature
- * admin toggle stays report-only until the feature is code-complete. Platform altitude on purpose:
- * the setting is a one-time install-wide migration cutover, not a per-lake lever.
+ * Whether read-grant resolution is ENFORCED right now - the platform setting alone. Two states remain:
+ * ENFORCE (the setting is ON, which includes a missing row, since `getSettingsValue` falls back to
+ * `defaultValue: true`), and report-only (the setting is explicitly OFF, or `settings` is unwired at
+ * this call site). Platform altitude on purpose: the setting is the install-wide read-grant kill
+ * switch, not a per-lake lever.
  *
  * NEVER throws - an unwired repo OR a THROWN read degrades to `false` (report-only / legacy), because
  * a failed read is not a "yes": collapsing it into enforce would silently widen access on a transient
- * glitch. The warns are the diagnostics that tell "flag off" apart from "read failed" apart from
- * "operator enabled it but the interlock is still holding" - all three must be visible to a smoke test.
+ * glitch. The warn is the diagnostic that tells "flag off" apart from "read failed" - both must be
+ * visible to a smoke test.
  *
  * THAT FAIL-SAFE DOES NOT REACH A NON-THROWING FAILURE, and the reason is in `getSettingsValue`: it
  * `safeParse`s the stored value and returns the setting's `defaultValue` on failure rather than
@@ -199,7 +182,6 @@ export async function resolveEnforceReadGrants(
   turnScope?: object
 ): Promise<boolean> {
   if (!settings) return false;
-  let intent = false;
   try {
     // `getSettingsValue` caches nothing (AdminSettingsModel round-trips to Mongo per call), so a
     // resolver that runs per TOOL CALL re-reads this flag every time. `turnScope` collapses that to
@@ -211,21 +193,11 @@ export async function resolveEnforceReadGrants(
     // instead would cache the report-only `false` a transient failure produces, holding retrieval
     // narrowed for the rest of the turn with nothing left to say why.
     const readFlag = () => settings.getSettingsValue(ENFORCE_LAKE_READ_GRANTS_KEY).then(value => value === true);
-    intent = turnScope ? await enforceFlagByTurn(turnScope, ENFORCE_LAKE_READ_GRANTS_KEY, readFlag) : await readFlag();
+    return turnScope ? await enforceFlagByTurn(turnScope, ENFORCE_LAKE_READ_GRANTS_KEY, readFlag) : await readFlag();
   } catch (err) {
     logger?.warn?.('[lakeReadGrantCutover] enforce-flag read failed; treating as report-only', err);
     return false;
   }
-  // Interlock: the operator asked to enforce, but the feature is not code-ready. Stay report-only and
-  // make the premature toggle loud rather than half-enabling a gate whose arms are not all wired.
-  if (intent && !READ_GRANT_ENFORCEMENT_READY) {
-    logger?.warn?.(
-      '[lakeReadGrantCutover] EnforceLakeReadGrants is ON but enforcement is code-gated off ' +
-        '(the interlock constant is off); staying report-only'
-    );
-    return false;
-  }
-  return intent && READ_GRANT_ENFORCEMENT_READY;
 }
 
 /** Grant-repo slice the id resolution needs: one principal's active grants. */

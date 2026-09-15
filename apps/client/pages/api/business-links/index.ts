@@ -40,8 +40,10 @@ const handler = baseApi()
       const queryParams = qs.parse(req.query as Record<string, string>) as IParsedQuery;
       const pageSize = parseInt(queryParams.pageSize || '10');
       const pageNumber = parseInt(queryParams.pageNumber || '1');
-      const searchTerm = filterString(queryParams.filters?.search) ?? filterString(queryParams.searchTerm) ?? '';
-      const categoryId = filterString(queryParams.filters?.categoryId) ?? filterString(queryParams.categoryId);
+      // `||`, not `??`: the client always emits the bracket key, blank when the
+      // control is empty, so a nested value only counts as supplied when non-empty.
+      const searchTerm = filterString(queryParams.filters?.search) || filterString(queryParams.searchTerm) || '';
+      const categoryId = filterString(queryParams.filters?.categoryId) || filterString(queryParams.categoryId);
 
       const query: any = {};
 

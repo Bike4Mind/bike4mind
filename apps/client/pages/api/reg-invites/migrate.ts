@@ -104,8 +104,10 @@ const handler = baseApi().post(async (req, res) => {
       }
 
       if (orgId) {
-        // Admin-only migration path (gated above). addMember sets the user's
-        // organizationId itself, so no separate user write is needed here.
+        // Admin-only migration path (gated above). addMember fills the user's organizationId
+        // itself when it is vacant - which is the case for the accounts this path creates - so no
+        // separate user write is needed. An account that already belongs to another org keeps
+        // pointing there: the migration adds the roster row, it does not move someone's active org.
         await withTransaction(() =>
           organizationService.addMember(
             req.user,

@@ -219,13 +219,13 @@ const NotebookImportModal: React.FC<NotebookImportModalProps> = ({ open, onClose
                     <Stack
                       sx={{
                         border: '2px dashed',
-                        borderColor: selectedFile ? 'success.main' : 'neutral.outlinedBorder',
+                        borderColor: selectedFile ? 'success.plainColor' : 'neutral.outlinedBorder',
                         borderRadius: 'md',
                         p: 3,
                         textAlign: 'center',
                         cursor: 'pointer',
                         '&:hover': {
-                          borderColor: 'primary.main',
+                          borderColor: 'primary.plainColor',
                           bgcolor: 'background.level1',
                         },
                       }}

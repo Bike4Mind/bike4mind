@@ -41,7 +41,8 @@ import type { IAgentExecution } from '@bike4mind/database';
 import { buildMemoryContext } from '@bike4mind/common';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import type { IApiKeyRepository, IMementoRepository, IAdminSettingsRepository } from '@bike4mind/common';
-import { mementoService, type MementoGates } from '@bike4mind/services';
+import { mementoService } from '@bike4mind/services';
+import { type MementoGates } from '@bike4mind/services/llm';
 import { resolveExecutionMementoGates, type MementoGateExecution } from './resolveExecutionMementoGates';
 
 export type MementoRetrievalExecution = Pick<
@@ -68,11 +69,15 @@ function sanitizeSummary(summary: string): string {
 }
 
 /**
- * Same `topK` / `minSimilarity` as `MementoFeature.getContextMessages` so
- * agent-mode and chat-mode show the same set of mementos for the same prompt.
+ * Same `topK` as `MementoFeature.getContextMessages` so agent-mode and chat-mode show the same set
+ * of mementos for the same prompt.
+ *
+ * The matching `minSimilarity` used to live here as a second, independent 0.75 - the kind of
+ * parity that holds only until someone edits one copy. It is now resolved inside
+ * `getRelevantMementos` from the embedding space it just embedded in, so both modes share a floor
+ * by construction rather than by a comment asking them to.
  */
 const MEMENTO_TOP_K = 10;
-const MEMENTO_MIN_SIMILARITY = 0.75;
 
 export interface MementosPreambleResult {
   preamble: string;
@@ -132,7 +137,6 @@ export async function getFirstIterationMementosPreamble(
       execution.query,
       {
         topK: MEMENTO_TOP_K,
-        minSimilarity: MEMENTO_MIN_SIMILARITY,
         logger,
       },
       { db: adapters.db }

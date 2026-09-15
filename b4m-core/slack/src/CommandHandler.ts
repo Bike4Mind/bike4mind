@@ -36,7 +36,7 @@ function capErrorReply(reply: string): string {
 }
 
 import { SlackClient } from './SlackClient';
-import { ChatCompletionInvoke } from '@bike4mind/services';
+import { ChatCompletionInvoke } from '@bike4mind/services/llm';
 import { createLoadingBar } from './utils/loadingBar';
 
 /**

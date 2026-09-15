@@ -38,6 +38,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   projectRepository: {},
   userRepository: {},
+  withTransaction: (fn: any) => fn(),
 }));
 
 import '../revokeSharing';

@@ -29,7 +29,9 @@ import {
   IResearchTaskScrape,
   IResearchDataRepository,
 } from '@bike4mind/common';
-import { fabFilesService, tagService, taskSchedulerService } from '..';
+import * as fabFilesService from '../fabFileService';
+import * as tagService from '../tagService';
+import * as taskSchedulerService from '../taskSchedulerService';
 import { htmlToMarkdown } from '../lib/turndown';
 import { getLinksFromHtml } from '../lib/cheerio';
 import pLimit from 'p-limit';
@@ -37,7 +39,7 @@ import { FunctionQueueRunner } from '@bike4mind/utils';
 import { findOrUpdateExistingResearchData, createSendStatusUpdate } from './utils';
 import { performDeepResearch } from '../llm/tools/implementation/deepResearch';
 import { CreateFabFileAdapters } from '../fabFileService';
-import { ToolContext } from '../llm/tools/base/types';
+import type { ToolContext } from '../llm/tools/base/types';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 
 type ResearchTaskProcessParameters = { id: string };
@@ -154,7 +156,15 @@ export const process = async (
     researchTask.statusFailedMessage = (e as Error).message;
     researchTask.statusFailedAt = new Date();
 
-    await db.researchTasks.update(researchTask);
+    // Write only the fields this error path sets, not the whole stale researchTask: the success-path
+    // update above (and processScrape/DeepResearch) may have already advanced the doc, and a whole-doc
+    // write would clobber that.
+    await db.researchTasks.update({
+      id: researchTask.id,
+      status: researchTask.status,
+      statusFailedMessage: researchTask.statusFailedMessage,
+      statusFailedAt: researchTask.statusFailedAt,
+    });
 
     try {
       await adapters.jobs.researchTasks.sendToClient(researchTask, {
