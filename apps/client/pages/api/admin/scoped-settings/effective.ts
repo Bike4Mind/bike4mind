@@ -1,6 +1,5 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
-import { fromZodError } from 'zod-validation-error';
 import {
   ApiKeyScope,
   CreditHolderType,
@@ -11,7 +10,7 @@ import {
 import { adminSettingsRepository, scopedSettingsRepository } from '@bike4mind/database/infra';
 import { scopedSettingsService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ensureAdmin } from '@server/utils/errors';
+import { ensureAdmin, parseOrBadRequest } from '@server/utils/errors';
 
 /**
  * Admin read surface for the EFFECTIVE value of a scoped setting - sibling to `./index.ts`, which only
@@ -58,17 +57,6 @@ const EffectiveQuerySchema = z
 
 export type EffectiveSettingQuery = z.infer<typeof EffectiveQuerySchema>;
 
-/**
- * Every rejection on this route answers 400, matching `./index.ts`'s own reasoning: a raw ZodError
- * would instead reach `errorHandler` as a 422, leaving the admin UI two statuses to message off for the
- * same class of mistake.
- */
-const parseOrBadRequest = <T>(schema: z.ZodType<T>, input: unknown): T => {
-  const parsed = schema.safeParse(input);
-  if (!parsed.success) throw new BadRequestError(fromZodError(parsed.error).message);
-  return parsed.data;
-};
-
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req: Request, res: Response) => {
   ensureAdmin(req.user?.isAdmin);
   const { settingName, organizationId, ownerId, ownerType, lakeId } = parseOrBadRequest(
@@ -98,7 +86,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req:
   // becomes a plaintext-secret leak for any isSensitive key.
   const { settingValue: value } = redactSettingSecrets({ settingName, settingValue: resolved.value });
 
-  return res.json({ settingName, scope, value, source: resolved.source });
+  // Surfaced so an admin investigating "I set this lever and nothing happened" can see a discarded
+  // narrower-rung override rather than get the same source:"platform" a never-set lever would show.
+  return res.json({
+    settingName,
+    scope,
+    value,
+    source: resolved.source,
+    ...(resolved.ignoredOverrides?.length ? { ignoredOverrides: resolved.ignoredOverrides } : {}),
+  });
 });
 
 export default handler;
