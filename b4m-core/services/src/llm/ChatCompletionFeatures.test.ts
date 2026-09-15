@@ -7,7 +7,6 @@ import {
   shouldSummarizeSession,
   SUMMARIZATION_CONFIG,
   LakeMemoryFeature,
-  FORCED_RETRIEVAL_SETTING_KEYS,
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
@@ -15,12 +14,23 @@ import {
   UNLIMITED_HISTORY_COUNT,
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+  FORCED_RETRIEVAL_SETTING_KEYS,
   LAKE_RECALL_K_DEFAULT,
   SettingScopeLevel,
 } from '@bike4mind/common';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 import type { ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
+
+// Partial mock: ChatCompletionFeatures pulls only `getRelevantMementos` from this module, and the V1
+// assertions below are about the ARGUMENTS it receives rather than what it returns. Spreading the
+// original keeps every other export real, so adding an import to the module under test does not
+// silently break this file.
+const getRelevantMementosMock = vi.hoisted(() => vi.fn());
+vi.mock('../mementoService', async importOriginal => ({
+  ...(await importOriginal<typeof import('../mementoService')>()),
+  getRelevantMementos: getRelevantMementosMock,
+}));
 
 const makeQuest = (overrides: Partial<IChatHistoryItemDocument> = {}): IChatHistoryItemDocument =>
   ({
@@ -235,7 +245,11 @@ describe('MementoFeature - Mementos V2 injection', () => {
 
   // Default WRITE flags for constructions that only exercise the READ path.
   const READ_ONLY = { writeV1: false, writeV2: true };
-  beforeEach(() => invokeCreateMemento.mockClear());
+  beforeEach(() => {
+    invokeCreateMemento.mockClear();
+    // Re-armed per test so one test's mockResolvedValue cannot leak into the next.
+    getRelevantMementosMock.mockReset().mockResolvedValue([]);
+  });
 
   const call = (feature: MementoFeature) =>
     feature.getContextMessages(
@@ -281,6 +295,39 @@ describe('MementoFeature - Mementos V2 injection', () => {
     await call(feature).catch(() => []); // V1 path may fail on the stub db; we only care about the gate
 
     expect(recallMementosV2).not.toHaveBeenCalled();
+  });
+
+  it('resolves the V1 embedding space inside getRelevantMementos, never from the credential factory', async () => {
+    // The P1 this pins: chat mode used to pass `embeddingFactory.getDefaultEmbeddingModel()`, which
+    // resolves by CREDENTIAL PRIORITY (an OpenAI key alone returns ada-002) and never reads the
+    // `defaultEmbeddingModel` setting. Agent mode (getFirstIterationMementosPreamble) passes neither
+    // and resolves from the setting, so the two disagreed whenever setting and credentials did.
+    //
+    // That argument picks the space the QUERY is embedded in, not just which floor applies: with the
+    // setting on 3-small and an OpenAI key present, chat embedded the query in ada-002, scored it
+    // against 3-small memento vectors, and gated the resulting cross-space noise on ada-002's 75 -
+    // memory went dark. Both call sites must now pass NEITHER argument.
+    getRelevantMementosMock.mockClear().mockResolvedValue([]);
+    const getDefaultEmbeddingModel = vi.fn().mockReturnValue('text-embedding-ada-002');
+    const feature = new MementoFeature(makeCtx(vi.fn().mockResolvedValue([]), v2User(false)), READ_ONLY);
+
+    await feature.getContextMessages(
+      makeQuest(),
+      { getDefaultEmbeddingModel } as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'what do i like',
+      undefined as unknown as Parameters<typeof feature.getContextMessages>[3],
+      1000
+    );
+
+    expect(getRelevantMementosMock).toHaveBeenCalledTimes(1);
+    const options = getRelevantMementosMock.mock.calls[0][1];
+    // `not.toHaveProperty` rather than checking for undefined: passing the key explicitly as
+    // undefined would still be a call site that thinks it owns the decision.
+    expect(options).not.toHaveProperty('embeddingModel');
+    expect(options).not.toHaveProperty('minSimilarity');
+    // The factory must not even be consulted - reaching for it here is the defect, whatever is done
+    // with the answer.
+    expect(getDefaultEmbeddingModel).not.toHaveBeenCalled();
   });
 
   it('onComplete forwards the RESOLVED write flags, so the subscriber cannot re-default V1 on', async () => {
@@ -779,6 +826,17 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     hasMore?: boolean;
     /** Admin's configured default-embedding-model setting; undefined = unset (factory default wins). */
     defaultEmbeddingModel?: string;
+    /**
+     * What the credential seam resolved for this turn (ChatCompletionProcess publishes it). Undefined
+     * models a construction that never reached the seam, which is what every other test here is.
+     */
+    embeddingBinding?: { requested: string; model: string; missing: string | null; configured?: boolean };
+    /**
+     * Per-setting-name overrides for `adminSettings.getSettingsValue`, keyed exactly as production
+     * calls it (e.g. 'forcedRetrievalMinSimilarityPct'). Absent keys fall back to the pre-existing
+     * behavior of returning `defaultEmbeddingModel` for every setting name.
+     */
+    settings?: Record<string, unknown>;
   }) => {
     const files = opts.files ?? [{ id: 'fileA', fileName: 'A.pdf', tags: [] }];
     // Honours limit + afterChunkId like the real repository, so the probe and the within-batch
@@ -804,10 +862,15 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
             .mockResolvedValue({ data: files, hasMore: opts.hasMore ?? false, total: opts.total ?? files.length }),
         },
         fabfilechunks: { findByFabFileId: vi.fn(), findVectorsByFabFileIds },
-        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(opts.defaultEmbeddingModel) },
+        adminSettings: {
+          getSettingsValue: vi.fn(async (name: string) =>
+            opts.settings && name in opts.settings ? opts.settings[name] : opts.defaultEmbeddingModel
+          ),
+        },
       },
       resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+      embeddingBinding: opts.embeddingBinding,
     };
   };
 
@@ -998,8 +1061,71 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     expect(content).toContain('does not cover this');
     expect(content).not.toContain('the search was incomplete');
     const logs = (ctx.logger as unknown as { log: ReturnType<typeof vi.fn> }).log.mock.calls.flat().join(' ');
-    expect(logs).toContain('no chunk cleared the similarity floor');
+    // Asserts the DIAGNOSTIC, not the prose. An off-topic question and a floor sitting above the
+    // corpus's whole band are indistinguishable at this exit - both leave every score under the
+    // line - so the operator's only way to tell them apart is this line carrying the floor it
+    // applied, the best score anything reached, and the space both were measured in.
+    expect(logs).toContain('no chunk cleared the 75% absolute floor');
+    expect(logs).toContain('top=0.000');
+    expect(logs).toContain('text-embedding-ada-002');
     expect((quest.promptMeta as { warnings?: string[] } | undefined)?.warnings).toBeUndefined();
+  });
+
+  it('grades a text-embedding-3-small corpus against its own floor, not the ada-002 default', async () => {
+    // 0.707 cosine clears 3-small's 35% floor but sits under the 75% ada-002 default - if the
+    // absolute floor were still hardcoded, this chunk would be rejected and the turn would abstain.
+    const ctx = makeCtx({
+      files: [
+        { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-3-small', vectorizedChunkCount: 1 },
+      ],
+      rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'borderline relevant content', vector: [1, 1] }],
+    });
+    const { content } = await run(ctx);
+    expect(content).toContain('borderline relevant content');
+    expect(content).not.toContain('does not cover this');
+  });
+
+  it('an unmeasured embedding space never blacks out retrieval - it fails loud instead', async () => {
+    // 3-large has a measured BAND but deliberately no entry in the by-space table: the natural
+    // unmeasured case. A floor fitted to one vector space must never silently empty every query in
+    // another, so the fallback is the relative floor alone (never a 0.75 ada-002 guess) plus a loud
+    // operator-facing log, not a quiet abstention.
+    const ctx = makeCtx({
+      files: [
+        { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-3-large', vectorizedChunkCount: 1 },
+      ],
+      // cosine([1,4],[1,0]) = 1/sqrt(17) = 0.243 - well under both the 75% default and 3-small's 35%.
+      rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'weakly related content', vector: [1, 4] }],
+    });
+    const { content } = await run(ctx);
+    expect(content).toContain('weakly related content');
+    expect(content).not.toContain('does not cover this');
+    // warn, not error, and asserted as NOT error on purpose - see the same pairing in
+    // getRelevantMementos.test.ts. An unmeasured space is the designed resolution for any model
+    // outside the table, so "loud" here means visible to an operator reading logs, not an alert on a
+    // condition nobody can clear from the console.
+    const logger = ctx.logger as unknown as { warn: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn> };
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('text-embedding-3-large'));
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('an operator-configured absolute floor is honored verbatim, not replaced by the by-space table', async () => {
+    // 3-small's table entry is 35%, which this chunk's 0.707 cosine clears easily. But the operator
+    // explicitly dialed the setting to 90%, and that value must win outright - substituting the
+    // table's 35% here would silently discard a value someone deliberately tuned.
+    const ctx = makeCtx({
+      files: [
+        { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-3-small', vectorizedChunkCount: 1 },
+      ],
+      rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'borderline relevant content', vector: [1, 1] }],
+      settings: { forcedRetrievalMinSimilarityPct: 90 },
+    });
+    const { content } = await run(ctx);
+    expect(content).toContain('does not cover this');
+    expect(content).not.toContain('borderline relevant content');
+    // An explicit value is not an unresolved one - nothing here warrants the loud error the
+    // unmeasured-space case above logs.
+    expect((ctx.logger as unknown as { error: ReturnType<typeof vi.fn> }).error).not.toHaveBeenCalled();
   });
 
   it('a no-match over a PARTIALLY scanned library must not harden into "no coverage"', async () => {
@@ -1138,6 +1264,76 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
       expect.stringContaining('different embedding models')
     );
+  });
+
+  describe('which vector space a keyless stage queries in', () => {
+    const TITAN = 'amazon.titan-embed-text-v2:0';
+    const embedWith = async (ctx: ReturnType<typeof makeCtx>) => {
+      const createEmbeddingService = vi.fn().mockReturnValue({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) });
+      const factory = { createEmbeddingService, getDefaultEmbeddingModel: () => TITAN };
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      await feature.getContextMessages(
+        makeQuest(),
+        factory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'q'
+      );
+      return createEmbeddingService;
+    };
+
+    /**
+     * One unlabeled-but-vectorized file, so the majority vote defers entirely to the fallback.
+     * `requested` defaults to the configured setting, which is what the seam is seeded with.
+     */
+    const keylessCtx = (binding: { model: string; missing: string | null; requested?: string }) =>
+      makeCtx({
+        files: [{ id: 'f1', fileName: 'F1.pdf', vectorizedChunkCount: 3 }],
+        rows: () => [{ id: 'c1', fabFileId: 'f1', text: 'content', vector: [1, 0] }],
+        defaultEmbeddingModel: 'text-embedding-ada-002',
+        embeddingBinding: { requested: binding.requested ?? 'text-embedding-ada-002', configured: true, ...binding },
+      });
+
+    it('overrides the stale setting when the DEPLOYMENT resolved no credential at all', async () => {
+      // The stage holds no key, so ingestion also fell back: the corpus really is in Titan space and
+      // the ada-002 setting is simply stale. `missing: null` is what says the fallback actually fired.
+      const createEmbeddingService = await embedWith(keylessCtx({ model: TITAN, missing: null }));
+      expect(createEmbeddingService).toHaveBeenCalledWith(TITAN);
+    });
+
+    it('does NOT override for an expired CALLER key on a keyed stage', async () => {
+      // The regression this pins: `resolveEmbeddingConfig` returns an empty config for an expired
+      // personal key too, and an empty config makes EmbeddingFactory report Titan - so deriving
+      // keylessness from the factory embedded this one caller's query in Titan space against a
+      // production ada-002 corpus. Silently zero results, and the expired-key error that would have
+      // told them to rotate it never surfaces. The deployment's own key state is unchanged by one
+      // expiry, so the configured model must still win.
+      const createEmbeddingService = await embedWith(
+        keylessCtx({ model: 'text-embedding-ada-002', missing: 'openai' })
+      );
+      expect(createEmbeddingService).toHaveBeenCalledWith('text-embedding-ada-002');
+    });
+
+    it('does NOT override on self-host / local dev / CI, which have no role to reach Bedrock with', async () => {
+      // Same empty-config shape, no execution role: substituting Bedrock here trades the actionable
+      // OPENAI_KEY_MISSING_MESSAGE for an opaque AWS CredentialsProviderError against an endpoint
+      // none of those three can reach. The resolver already declines to substitute (hence a non-null
+      // `missing`); this asserts the forced-retrieval path honours that instead of re-deciding.
+      const createEmbeddingService = await embedWith(
+        keylessCtx({ model: 'text-embedding-ada-002', missing: 'ollama' })
+      );
+      expect(createEmbeddingService).toHaveBeenCalledWith('text-embedding-ada-002');
+    });
+
+    it('does NOT override when a Bedrock model was ASKED for rather than substituted', async () => {
+      // `resolveEmbeddingConfig`'s Bedrock arm returns `{ config: {}, missing: null }` for a Bedrock
+      // model it was handed directly, so "missing === null and the provider is Bedrock" is also true
+      // on a fully keyed stage where an admin or caller simply named Titan. Without the
+      // `model !== requested` test that case overrides the configured model with the wrong vector
+      // space - the same silent zero-result, arrived at from the opposite direction.
+      const createEmbeddingService = await embedWith(keylessCtx({ requested: TITAN, model: TITAN, missing: null }));
+      expect(createEmbeddingService).toHaveBeenCalledWith('text-embedding-ada-002');
+    });
   });
 
   it("falls back to the admin's configured default, not the embedding factory's credential-derived default", async () => {
@@ -1656,6 +1852,10 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
     opts: {
       dataLakesThrows?: boolean;
       activeGrants?: Array<{ dataLakeId: string; principalType: string; principalId: string; role: string }>;
+      // The caller's own USER-principal grant rows, which is what the injection resolver's
+      // owner/curator grant arm reads (listByPrincipal) - distinct from `activeGrants`, the per-lake
+      // rows the pre-authorization manage re-check batches over.
+      principalGrants?: Array<{ dataLakeId: string; role: string }>;
     } = {}
   ) => {
     const chunksByFile = Object.fromEntries(
@@ -1690,11 +1890,11 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
         // resolves EMPTY so these tests keep isolating the pre-authorization arm: the injection
         // resolver reads it for its own owner/curator grant arm, which would otherwise admit the
         // same lake for a different reason than the one under test.
-        ...(opts.activeGrants
+        ...(opts.activeGrants || opts.principalGrants
           ? {
               dataLakeAccessGrants: {
-                listActiveByLakes: vi.fn().mockResolvedValue(opts.activeGrants),
-                listByPrincipal: vi.fn().mockResolvedValue([]),
+                listActiveByLakes: vi.fn().mockResolvedValue(opts.activeGrants ?? []),
+                listByPrincipal: vi.fn().mockResolvedValue(opts.principalGrants ?? []),
               },
             }
           : {}),
@@ -1904,6 +2104,66 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
       'anything'
     );
     expect(quest.promptMeta?.retrieval?.preauthorizedLakeIdsUsed).toBeUndefined();
+  });
+
+  // The arm this field exists for: a stranger's lake in an org the caller does not belong to, with
+  // no pre-authorization - so the grant row is the ONLY thing that could have injected the prompt,
+  // and it is now named rather than left to be inferred from injectedLakePromptIds alone.
+  it('records grantedLakeIdsUsed for a lake admitted by the callers curator grant', async () => {
+    const quest = makeQuest();
+    const ctx = makeCtx(
+      [lakeFile('fA', 'datalake:x')],
+      [makeLake({ createdByUserId: 'stranger', organizationId: 'org-beta' })],
+      { principalGrants: [{ dataLakeId: 'lakeX', role: 'curator' }] }
+    );
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual(['lakeX']);
+    expect(quest.promptMeta?.retrieval?.grantedLakeIdsUsed).toEqual(['lakeX']);
+    // TWO reads, both predating this field: one resolving the turn's retrieval scope (a different
+    // memo scope - the chat context), one for the injection arm. The telemetry derivation adds
+    // NONE, because it is handed the same context the arm was and hits the per-turn memo (#2589) -
+    // a third read here is that memo no longer being shared.
+    expect(ctx.db.dataLakeAccessGrants?.listByPrincipal).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves grantedLakeIdsUsed absent when the creator arm injected the prompt', async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([lakeFile('fA', 'datalake:x')], [makeLake()], {
+        principalGrants: [],
+      }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual(['lakeX']);
+    expect(quest.promptMeta?.retrieval?.grantedLakeIdsUsed).toBeUndefined();
+  });
+
+  it('does NOT name a lake the caller holds only a reader grant on', async () => {
+    // A reader grant cannot admit a prompt at all (the permanent injection floor), so it must not
+    // appear here either - a reader listed in this field would read as cross-tenant injection.
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([lakeFile('fA', 'datalake:x')], [makeLake()], {
+        principalGrants: [{ dataLakeId: 'lakeX', role: 'reader' }],
+      }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    expect(quest.promptMeta?.retrieval?.grantedLakeIdsUsed).toBeUndefined();
   });
 });
 

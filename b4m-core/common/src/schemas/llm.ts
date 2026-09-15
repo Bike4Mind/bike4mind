@@ -112,6 +112,16 @@ export const FallbackInfoSchema = z.object({
   primaryModelName: z.string(),
   fallbackModel: z.string(),
   fallbackModelName: z.string(),
+  /**
+   * Backend of each side, so the badge can name the provider path without
+   * inferring it from the id - a bare `deepseek-*` slug is the direct API on a
+   * hosted deployment and an Ollama pull on a self-hosted one. Optional and
+   * loosely typed: these payloads are persisted in browser storage, so a record
+   * written by an older build has neither field and an unknown backend name from
+   * a newer one must not fail the parse.
+   */
+  primaryModelBackend: z.string().optional(),
+  fallbackModelBackend: z.string().optional(),
   timestamp: z.number(),
 });
 

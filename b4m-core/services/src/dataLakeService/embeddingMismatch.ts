@@ -23,8 +23,17 @@ import { isSupportedEmbeddingModel, type SupportedEmbeddingModel } from '@bike4m
  *
  * Prior art: the memento corpus solved the same problem by pinning a model and stamping each
  * record (MEMENTO_EMBEDDING_ID / mementoEmbeddingIsCurrent in @bike4mind/common's embedding
- * schema). FabFile chunks carry no such stamp - only the parent FabFile.embeddingModel - so
- * detection has to work from file metadata.
+ * schema). Detection here works from the PARENT file's recorded model, and that field is INTENT,
+ * not a completion stamp: its single writer (fabFileService/chunk.ts:248) sets it inside the
+ * chunk-commit transaction, alongside vectorizedChunkCount: 0, so it names the model that chunking
+ * pass meant to embed with - written before a single vector exists. It is therefore not evidence
+ * that the vectors under it are homogeneous: anything that embeds a file's remaining chunks in a
+ * different model leaves one label over a mixed population, and a per-file check cannot see that.
+ *
+ * Chunks do carry their own `embeddingModel` (IFabFileChunk), and that one IS a completion stamp -
+ * fabFileVectorize commits it only once the whole file finishes. It is the more precise signal
+ * where present. Reading it here would be a behavior change, not a cleanup: it is unset on rows
+ * predating it, so the file-level fallback has to stay either way.
  */
 
 /** Why a loaded chunk was withheld from cosine ranking. */
@@ -166,10 +175,18 @@ export interface EmbeddingLabeledFile {
  *  - the QUERY model can only be a canonical id: `defaultEmbeddingModel` is declared with an
  *    `options` list, which makeStringSetting turns into a membership check that the settings
  *    update route runs on every admin write.
- *  - the STORED label has exactly one writer - chunkFabfile (fabFileService/chunk.ts) - whose
- *    `chunkFileSchema` validates it against SupportedEmbeddingModelSchema before the file is
- *    saved. Chunk labels are stamped from that same validated value by the vectorize handler and by
- *    the chunk-model backfill script (packages/scripts/datalake).
+ *  - the STORED label has THREE writers, and only the first validates. chunkFabfile
+ *    (fabFileService/chunk.ts) writes the label the deployment ASKED for, and its `chunkFileSchema`
+ *    validates against SupportedEmbeddingModelSchema before the file is saved. stampChunkEmbeddingModel
+ *    (fabFileService/stampChunkEmbeddingModel.ts) then rewrites it to the model the vectorize pass
+ *    actually embedded under, which can differ (keyless Bedrock fallback); its parameter is a bare
+ *    `string`, so it is the callers - the vectorize handler and the chunk-model backfill script
+ *    (packages/scripts/datalake) - that owe a canonical id. The system-help lake mirror
+ *    (packages/scripts/help/ingestHelpDatalake.ts) writes it on create from its own resolved model.
+ *    The two levels are NOT guaranteed to agree, and the file level is the weaker of them: the
+ *    vectorize handler labels each chunk with the model that embedded it, while the file label is a
+ *    summary that stampChunkEmbeddingModel deliberately leaves BLANK once the chunks disagree. So a
+ *    chunk-level reader must prefer the chunk's own label - see classifyLoadedChunk.
  *
  * Folding here would therefore mask a malformed label without buying anything, and a malformed
  * label is exactly what should stay visible. An unrecognized id also already fails CLOSED one
@@ -322,6 +339,14 @@ export function resolveMajorityEmbeddingModel(
  * Pure and total - it must never throw. Both ranking loops sit inside catch blocks that fall back
  * to silent behavior, which is the very bug this module exists to remove.
  *
+ * The CHUNK's own label decides the model check whenever it has one, and the file label is only the
+ * fallback. The chunk label is written in the same transaction as the vector sitting beside it,
+ * where the file label is a summary of them all - and that summary is deliberately BLANK for a file
+ * whose chunks span two spaces (see stampChunkEmbeddingModel). Blank is never foreign, so reading
+ * the file label alone leaves exactly the split file with no cross-model guard, and width cannot
+ * stand in: voyage-3 and Titan v2 are both 1024 wide, so the two halves of such a file compare
+ * cleanly against either query and score as though they were in one space.
+ *
  * Check order is deliberate:
  *  1. no parent file: the model check needs one, and an orphan cannot be attributed to any model.
  *  2. foreign model before width: it is the actionable diagnostic (it names the model to re-embed)
@@ -329,16 +354,22 @@ export function resolveMajorityEmbeddingModel(
  *  3. missing vector before width, or `0 !== queryDim` would swallow it into the width bucket.
  *  4. width last, so it means "the label agrees (or is unset) but the vector still cannot be
  *     compared" - i.e. the label lies or the vector is truncated.
+ *
+ * `chunkModel` is required rather than optional on purpose: a caller that simply forgot it would
+ * silently get the weaker file-only guard back, which is the defect this parameter exists to close.
+ * Pass `null` where the reader genuinely has no chunk label to offer.
  */
 export function classifyLoadedChunk(args: {
   vector: number[] | null | undefined;
   queryDim: number;
   parentFile: { embeddingModel?: string | null } | undefined;
   queryModel: string;
+  chunkModel: string | null | undefined;
 }): ChunkSkipReason | null {
-  const { vector, queryDim, parentFile, queryModel } = args;
+  const { vector, queryDim, parentFile, queryModel, chunkModel } = args;
   if (!parentFile) return 'unknownFile';
-  if (isForeignEmbeddingModel(parentFile.embeddingModel, queryModel)) return 'modelMismatch';
+  const declaredModel = chunkModel?.trim() ? chunkModel : parentFile.embeddingModel;
+  if (isForeignEmbeddingModel(declaredModel, queryModel)) return 'modelMismatch';
   if (!vector || vector.length === 0) return 'missingVector';
   if (vector.length !== queryDim) return 'dimensionMismatch';
   return null;

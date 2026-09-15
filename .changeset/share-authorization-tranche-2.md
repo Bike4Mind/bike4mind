@@ -32,8 +32,8 @@ keyed `users[]` on `userId` alone,
 so a file reached through two projects collapsed into one entry tagged with whichever project
 wrote last, while `revoke` filters on that tag: revoking via the earlier project matched nothing
 and returned the document as if it had succeeded, leaving access live, and revoking via the later
-one tore out the other project's grant as well. Entries are keyed on `(userId, projectId)`, so each
-project's grant and any direct share are separate rows, and a scoped revoke that matches no row now
+one tore out the other project's grant as well. Entries are keyed on `(userId, projectId, sessionId)`,
+so each project's grant, each session's, and any direct share are separate rows, and a scoped revoke that matches no row now
 raises `NotFoundError` instead of reporting a success that removed nothing. That last part guards a
 future scoped caller more than a present one: the only code passing a `projectId` today is
 `revokeFromProject`'s own cascade, which swallows `NotFoundError` by design, and the HTTP route
@@ -75,21 +75,38 @@ is never touched, and a tagged row can only have been written by an accept that 
 inviter to hold share on the file, so the tag *is* the authorization. That retires the previous
 gate, which asked whether the SESSION OWNER could still share the file while the mint had asked
 about the INVITER - not the same principal whenever a sharee minted the invite, which stranded those
-grants un-revokable through the very path that created them. Grants written before the tag existed
-are untagged and so are no longer reachable from the session path; they remain revocable directly on
-the file, which is the safe direction to fail.
+grants un-revokable through the very path that created them.
 
-Deleting a session cascades before it tombstones, and drops only the grant it created. The tombstone
-came first while the per-file grant rewrite came second, and `softDeletePlugin` puts
-`deletedAt: null` on every `findOne` - so a failure mid-cascade left the session unreachable on a
-retry with the remaining grants live and nothing left to clear them. The cascade now runs first.
-It also keys on the `sessionId` tag like its sibling in `sharingService/revoke.ts`, and clears every
-grantee's tagged row rather than only the deleter's: it was stripping every untagged row the deleter
-held, which took direct shares with it and left sharees' derived grants behind with no surface left
-to revoke them. It reads `knowledgeIds` as well as files uploaded into the session, since a grant the
-session minted can sit on a file that lives elsewhere. Both new whole-document grant writes, here and in the session
-knowledge-file cascade, take `updateGuarded` rather than `update`, joining the optimistic-concurrency
-convention the revoke path already uses.
+Grants written before the tag existed are untagged and so are not reachable from either cascade.
+This is under-revocation, and it is the safe direction to fail - the alternative is the third-party
+destruction above - but it is not costless, and the honest statement of the residue is narrower than
+"revoke it on the file instead". Where the session owner does not own the file, they have no
+surface at all: an unscoped revoke on the file is owner-or-self, so only the file's owner or the
+grant holder can clear it, and neither of them is the person who wanted the access gone. There is no
+backfill that closes this: an untagged row is indistinguishable from the direct share this change
+exists to protect, so tagging it re-creates the bug and adding a second tagged row leaves the
+untagged one live. It is not a regression either - before this change neither cascade existed at
+all, so those rows were already unreachable from this surface. The gap shrinks only as legacy grants
+are revoked on the file, and nothing should be filed to backfill it.
+
+Deleting a session cascades before it tombstones. The tombstone came first while the per-file grant
+rewrite came second, and `softDeletePlugin` puts `deletedAt: null` on every `findOne` - so a failure
+mid-cascade left the session unreachable on a retry with the remaining grants live and nothing left
+to clear them. The cascade now runs first, and the route wraps the whole call in a transaction, so a
+concurrency conflict partway through rolls back rather than leaving some files rewritten and some
+not; that matches the `revokeSharing` route, which already wrapped the sibling cascade.
+
+What that cascade touches, precisely: rows tagged with this session, on the union of files uploaded
+into it and files named in `knowledgeIds` (neither set contains the other), for every grantee rather
+than only the deleter, skipping files the deleter owns because those are hard-deleted moments later
+and a guarded write on them can abort the delete for nothing. It previously stripped every untagged
+row the deleter held, which took direct shares with it and left sharees' derived grants behind with
+no surface to revoke them. Its reach is bounded by `knowledgeIds` as of the call, which is
+client-writable, so a sharee holding update on the session can detach a file first and keep the
+grant; closing that needs a `users.sessionId` sweep across a high-cardinality collection and is not
+paid here. Both new whole-document grant writes, here and in the session knowledge-file cascade,
+take `updateGuarded` rather than `update`, joining the optimistic-concurrency convention the revoke
+path already uses. Mint paths still use a plain `update`; guarding those remains a separate change.
 
 Deleting a project revokes the owner's own derived grants. `addFiles`/`addSessions` mint the project
 owner a `projectId`-scoped read+update grant on content a MEMBER contributes, but the owner is never
@@ -101,7 +118,9 @@ removed from the list it reads. It now returns the pruned ids and leaves the cal
 `leaveProject` and the project arm of `revoke` assign the return; `deleteProject` drops it, so a
 tombstoned project still records what it held for restore and audit to read.
 
-The legacy link-only inference reads all three recipient buckets. Accepting and declining both move
+The legacy link-only inference reads all three recipient buckets, and is permanent: rows minted
+before `isLinkOnly` existed never gain the flag, so the fork stays until none are left. Its safety
+also depends on `remaining`, which is documented at the predicate rather than left implied. Accepting and declining both move
 an address out of `pending`, so unioning only `pending` and `accepted` made a pre-flag invite whose
 named recipients had all declined infer as a share link - opening the view gate to any authenticated
 caller and letting anyone redeem it. `refused` is unioned too.

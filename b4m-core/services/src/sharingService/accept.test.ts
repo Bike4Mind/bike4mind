@@ -608,6 +608,9 @@ describe('sharingService - acceptInvite (Session knowledgeId propagation)', () =
           expect.objectContaining({
             userId,
             permissions: expect.arrayContaining([Permission.read, Permission.update, Permission.share]),
+            // The provenance tag, asserted here because this is its only write site: without it the
+            // row is untagged, merges with a direct share, and both cascades delete the pair.
+            sessionId,
           }),
         ]),
       })

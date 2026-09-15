@@ -46,6 +46,7 @@ describe('every backend can be credentialed by discovery', () => {
       gemini: null,
       xai: null,
       kimi: null,
+      deepseek: null,
       bfl: null,
       voyageai: null,
       ollama: null,

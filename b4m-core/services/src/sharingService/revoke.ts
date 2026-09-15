@@ -63,8 +63,12 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
   // Matches the TARGET user's entries and nobody else's. The project-scoped arm used
   // `userId !== target && projectId !== scope`, which also deleted every co-member's
   // project-derived grant, so one member leaving stripped the whole project's access.
-  // Scoped, it matches on the (userId, projectId) pair pushShareable keys entries by: dropping
-  // only the grant this project materialized, leaving a direct share or another project's intact.
+  // Scoped on a projectId, it matches the (userId, projectId) pair pushShareable keys entries by,
+  // dropping only the grant that project materialized and leaving another project's intact.
+  // UNSCOPED it is deliberately broader than pushShareable's key: with no projectId it matches
+  // every row the user holds on this document - the direct share, each project's grant, and each
+  // session's. That is the point of an unscoped revoke on a document you own, and it is why the
+  // session tag is not part of this predicate: the cascades below filter on the tag, this does not.
   const isRevoked = (user: IUserShare) =>
     user.userId.toString() === userIdToRevoke && (type === 'projects' || !projectId || user.projectId === projectId);
 
@@ -115,6 +119,14 @@ const revokeSessionKnowledgeFileGrants = async (
   const { session, userIdToRevoke } = parameters;
   const { db } = adapters;
 
+  // Reach is bounded by knowledgeIds AS OF THIS CALL, and that list is client-writable by anyone
+  // holding update on the session (sessionService/update.ts validates shape only). A sharee can
+  // therefore detach a file before the owner revokes them and keep the tagged row: the cascade
+  // never visits it. The file's owner can still clear it with an unscoped revoke, but the session
+  // owner doing the revoking may not be that person. Closing it needs a
+  // `find({ 'users.sessionId': session.id })` sweep, which is an unindexed scan of a
+  // high-cardinality collection on every revoke - deliberately not paid here. The tag defends the
+  // destructive direction, which was the exposure; this is the evasive one.
   const files = await db.fabFiles.findAllByIds(session.knowledgeIds ?? []);
   for (const file of files) {
     // Only rows this session minted. The tag is the authorization: a row carrying `sessionId` was

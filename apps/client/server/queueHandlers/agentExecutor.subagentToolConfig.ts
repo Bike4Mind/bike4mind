@@ -13,7 +13,7 @@
  */
 import type { ApiKeyTable } from '@bike4mind/llm-adapters';
 import type { GenerateImageToolCall, AudioGenerationToolCall } from '@bike4mind/common';
-import type { BuildSharedToolsOptions } from '@bike4mind/services';
+import type { BuildSharedToolsOptions } from '@bike4mind/services/llm';
 
 export interface BuildSubagentToolConfigInput {
   model?: string;

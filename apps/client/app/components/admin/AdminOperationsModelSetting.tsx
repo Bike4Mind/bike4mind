@@ -21,6 +21,8 @@ import SmartToyIcon from '@mui/icons-material/SmartToy';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import { toast } from 'sonner';
+import type { ModelBackend } from '@bike4mind/common';
+import { backendLabel } from '@client/app/utils/agentOpsModels';
 
 interface OperationsModelConfig {
   modelId: string;
@@ -211,7 +213,7 @@ export const AdminOperationsModelSetting: React.FC = () => {
                   level="body-xs"
                   sx={{ fontWeight: 'bold', textTransform: 'uppercase', color: 'text.primary50' }}
                 >
-                  {provider}
+                  {backendLabel(provider as ModelBackend)}
                 </Typography>
               </Option>,
               ...providerModels!.map(model => (
@@ -243,7 +245,7 @@ export const AdminOperationsModelSetting: React.FC = () => {
                   level="body-xs"
                   sx={{ fontWeight: 'bold', textTransform: 'uppercase', color: 'text.primary50' }}
                 >
-                  {provider}
+                  {backendLabel(provider as ModelBackend)}
                 </Typography>
               </Option>,
               ...providerModels!.map(model => (
@@ -275,7 +277,7 @@ export const AdminOperationsModelSetting: React.FC = () => {
                   level="body-xs"
                   sx={{ fontWeight: 'bold', textTransform: 'uppercase', color: 'text.primary50' }}
                 >
-                  {provider}
+                  {backendLabel(provider as ModelBackend)}
                 </Typography>
               </Option>,
               ...providerModels!.map(model => (
@@ -293,17 +295,19 @@ export const AdminOperationsModelSetting: React.FC = () => {
           <Box>
             {currentModelInfo && (
               <Typography level="body-sm" sx={{ wordBreak: 'break-word' }}>
-                <strong>Text Model:</strong> {currentModelInfo.name} ({currentModelInfo.backend})
+                <strong>Text Model:</strong> {currentModelInfo.name} ({backendLabel(currentModelInfo.backend)})
               </Typography>
             )}
             {currentImageModelInfo && (
               <Typography level="body-sm" sx={{ wordBreak: 'break-word' }}>
-                <strong>Image Model:</strong> {currentImageModelInfo.name} ({currentImageModelInfo.backend})
+                <strong>Image Model:</strong> {currentImageModelInfo.name} (
+                {backendLabel(currentImageModelInfo.backend)})
               </Typography>
             )}
             {currentSpeechModelInfo && (
               <Typography level="body-sm" sx={{ wordBreak: 'break-word' }}>
-                <strong>Speech Model:</strong> {currentSpeechModelInfo.name} ({currentSpeechModelInfo.backend})
+                <strong>Speech Model:</strong> {currentSpeechModelInfo.name} (
+                {backendLabel(currentSpeechModelInfo.backend)})
               </Typography>
             )}
             <Box sx={{ mt: 1, display: 'flex', gap: 1, flexWrap: 'wrap' }}>

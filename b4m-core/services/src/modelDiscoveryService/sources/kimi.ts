@@ -28,8 +28,10 @@ export const KIMI_MODELS_URL = 'https://api.moonshot.ai/v1/models';
  * carry, the seeded price stands until a second aggregator agrees).
  *
  * Because `context_length` IS available, a Kimi model Moonshot lists that the
- * catalog has never held can be added by this source alone - unlike the OpenAI
- * source, which has to wait for an aggregator to supply a context window.
+ * catalog has never held arrives with its real window rather than waiting for an
+ * aggregator. Its display NAME does not come from here: planCatalogWrites
+ * defaults an introduction's name to the model id when no source supplied one, so
+ * such a model lands labelled `kimi-k3` until an operator improves on it.
  */
 interface KimiModel {
   id?: unknown;

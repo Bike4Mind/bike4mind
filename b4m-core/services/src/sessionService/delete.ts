@@ -49,7 +49,13 @@ export const deleteSession = async (
   // findByIdAndUserId is a bare findOne, so a session tombstoned first is unreachable on a retry:
   // the guard above would throw and any grant this loop had not yet reached would stay live with
   // no surface left to clear it. Nothing here is transactional, so ordering is the whole defence.
+  const ownedFileIds = new Set(ownedFiles.map(file => file.id));
+
   for (const file of grantedFiles) {
+    // A file about to be hard-deleted below has nothing left to revoke, and a guarded write on it
+    // can raise ConcurrencyConflictError and abort the whole delete over a document that is going
+    // away regardless.
+    if (ownedFileIds.has(file.id)) continue;
     // Only rows this session minted, and every grantee's, not just the deleter's: the session is
     // the source of those grants and it is going away, so leaving a sharee's behind strands it with
     // no surface left to revoke it. Keying on the tag rather than on an untagged row is what stops

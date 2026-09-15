@@ -330,7 +330,8 @@ export const pushShareable = (
   // knowledge propagation is the other grant-deriving path, and while it was untagged it merged
   // into any direct share of the same file to the same user - so revoking the session deleted a
   // grant a third party had made, which the revoker had no authority over. A direct share is its
-  // own untagged row, which is what lets an untagged revoke drop it and nothing else.
+  // own untagged row, which is what keeps the two SCOPED cascades off it. An unscoped revoke in
+  // revoke.ts is deliberately broader and still clears every row the user holds on the document.
   const userIndex = entity.users.findIndex(
     user =>
       user.userId === data.userId &&

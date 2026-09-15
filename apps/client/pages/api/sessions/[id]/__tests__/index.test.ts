@@ -83,6 +83,9 @@ vi.mock('@bike4mind/database', async orig => {
   return {
     ...actual,
     connectDB: vi.fn().mockResolvedValue(undefined),
+    // The DELETE route wraps deleteSession's grant cascade in a transaction; the real one opens a
+    // mongo session this suite has no server for, so run the callback inline.
+    withTransaction: vi.fn(async (fn: (s: unknown) => unknown) => fn(undefined)),
     User: Object.assign(Object.create(RealUser), { findById: (...a: unknown[]) => mockFindById(...a) }),
   };
 });

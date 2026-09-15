@@ -24,7 +24,7 @@ import {
   IOrganizationRepository,
   IScopedSettingsRepository,
 } from '@bike4mind/common';
-import { b4mTools, generateTools } from '../llm';
+import { b4mTools, generateTools } from '../llm/tools';
 
 interface GenerateAndSendProactiveMessageAdapters {
   config: ISessionAgentConfigDocument;

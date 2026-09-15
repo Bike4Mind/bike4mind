@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const getAccessibleDataLakePromptsMock = vi.fn();
+const grantedLakeIdsUsedForMock = vi.fn();
 vi.mock('../../../dataLakeService/getDataLakePrompts', () => ({
   getAccessibleDataLakePrompts: (...args: unknown[]) => getAccessibleDataLakePromptsMock(...args),
+  grantedLakeIdsUsedFor: (...args: unknown[]) => grantedLakeIdsUsedForMock(...args),
 }));
 
 import { prependRetrievedLakePrompts } from './retrievedLakePrompts';
@@ -24,6 +26,8 @@ function makeContext(overrides: Partial<ToolContext> = {}): ToolContext {
 describe('prependRetrievedLakePrompts', () => {
   beforeEach(() => {
     getAccessibleDataLakePromptsMock.mockReset();
+    grantedLakeIdsUsedForMock.mockReset();
+    grantedLakeIdsUsedForMock.mockResolvedValue([]);
   });
 
   it('records injectedLakePromptIds via statusUpdate when a prompt qualifies', async () => {
@@ -132,5 +136,51 @@ describe('prependRetrievedLakePrompts', () => {
 
     const call = (context.statusUpdate as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect('preauthorizedLakeIdsUsed' in call.promptMeta.retrieval).toBe(false);
+  });
+
+  it('records grantedLakeIdsUsed for an injected id the caller holds a grant on', async () => {
+    getAccessibleDataLakePromptsMock.mockResolvedValueOnce([
+      { id: 'granted', name: 'Granted Lake', systemPrompt: 'Cite the control number.' },
+      { id: 'ordinary', name: 'Ordinary Lake', systemPrompt: 'Ordinary.' },
+    ]);
+    grantedLakeIdsUsedForMock.mockResolvedValueOnce(['granted']);
+    const context = makeContext();
+    await prependRetrievedLakePrompts(context, 'result text', ['datalake:granted', 'datalake:ordinary'], new Set());
+
+    expect(context.statusUpdate).toHaveBeenCalledWith({
+      promptMeta: {
+        retrieval: {
+          attempted: true,
+          surfaces: [],
+          dataLakeTags: [],
+          injectedLakePromptIds: ['granted', 'ordinary'],
+          grantedLakeIdsUsed: ['granted'],
+        },
+      },
+    });
+  });
+
+  // The memo is scoped by object identity, so a derivation handed anything but the context the
+  // resolver got would issue a second grant read per tool call - the cost #2589 removed.
+  it('derives the grant arm from the SAME context object the resolver was given', async () => {
+    getAccessibleDataLakePromptsMock.mockResolvedValueOnce([
+      { id: 'granted', name: 'Granted Lake', systemPrompt: 'Cite it.' },
+    ]);
+    const context = makeContext();
+    await prependRetrievedLakePrompts(context, 'result text', ['datalake:granted'], new Set());
+
+    expect(grantedLakeIdsUsedForMock).toHaveBeenCalledWith(context, ['granted']);
+    expect(getAccessibleDataLakePromptsMock.mock.calls[0][0]).toBe(context);
+  });
+
+  it('omits grantedLakeIdsUsed when no injected id was grant-reached', async () => {
+    getAccessibleDataLakePromptsMock.mockResolvedValueOnce([
+      { id: 'ordinary', name: 'Ordinary Lake', systemPrompt: 'Ordinary.' },
+    ]);
+    const context = makeContext();
+    await prependRetrievedLakePrompts(context, 'result text', ['datalake:ordinary'], new Set());
+
+    const call = (context.statusUpdate as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect('grantedLakeIdsUsed' in call.promptMeta.retrieval).toBe(false);
   });
 });

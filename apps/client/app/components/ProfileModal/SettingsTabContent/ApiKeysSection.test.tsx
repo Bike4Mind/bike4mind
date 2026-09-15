@@ -50,6 +50,7 @@ const BYOK_TYPES = [
   ApiKeyType.gemini,
   ApiKeyType.xai,
   ApiKeyType.kimi,
+  ApiKeyType.deepseek,
   ApiKeyType.bfl,
   ApiKeyType.voyageai,
   ApiKeyType.elevenlabs,

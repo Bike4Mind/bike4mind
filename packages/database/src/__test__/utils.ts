@@ -12,6 +12,8 @@ import { researchTaskRepository } from '../models/ai/ResearchTaskModel';
 import { taskScheduleRepository } from '../models/infra/ops/TaskScheduleModel';
 import { researchAgentRepository } from '../models/ai/ResearchAgentModel';
 
+export { testFabFileId } from './testFabFileId';
+
 export const connectTestDB = async () => {
   const mongoServer = await createMongoServer();
   const mongoUri = mongoServer.getUri();

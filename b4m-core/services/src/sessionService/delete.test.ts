@@ -118,6 +118,26 @@ describe('sessionService - delete', () => {
     );
   });
 
+  // The guarded write can conflict and abort the whole delete, which is not a trade worth making
+  // for a document that is hard-deleted three lines later anyway.
+  it('does not take a guarded grant write on a file it is about to hard-delete', async () => {
+    const session = { id: sessionId, userId: ownerId, deletedAt: null };
+    const ownedFile = {
+      id: 'file-owned',
+      userId: ownerId,
+      users: [{ userId: 'carol', permissions: ['read'], sessionId }],
+    };
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue([ownedFile]);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await deleteSession(ownerId, { id: sessionId }, adapters);
+
+    expect(mockFabFileRepo.updateGuarded).not.toHaveBeenCalled();
+    expect(mockFabFileRepo.deleteManyInIds).toHaveBeenCalledWith(['file-owned']);
+  });
+
   // knowledgeIds, not just files uploaded into the session: accept.ts propagates onto whatever the
   // session attaches, which can be a file that lives somewhere else entirely.
   it('reaches a grant it minted on a knowledge file uploaded outside this session', async () => {

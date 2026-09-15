@@ -267,5 +267,33 @@ describe('resolveOutputMaxTokens', () => {
       expect(reasonsWithinOutputBudget(kimiK25)).toBe(true);
       expect(reasonsWithinOutputBudget(legacyModel)).toBe(false);
     });
+
+    // DeepSeek Flash misses every shape check for a different reason than Kimi: the
+    // dispatch profile says `max_tokens` (which is what DeepSeek takes) rather than
+    // `max_completion_tokens`, so the catalog-only clause cannot see it either. Left on
+    // the 4096 fallback it reasons at effort 'high' inside that budget, returns
+    // finish_reason 'length' with no content, and deepseekBackend throws.
+    const deepseekFlash: ModelInfo = {
+      ...baseModelInfo,
+      id: ChatModels.DEEPSEEK_FLASH,
+      name: 'DeepSeek Flash',
+      backend: ModelBackend.DeepSeek,
+      can_think: true,
+      max_tokens: 393_216,
+      dispatchProfile: { maxTokensParam: 'max_tokens', toolTransport: 'chat' },
+    };
+
+    it('reports DeepSeek Flash as reasoning within the output budget', () => {
+      expect(reasonsWithinOutputBudget(deepseekFlash)).toBe(true);
+    });
+
+    it('defaults DeepSeek Flash to the reasoning floor, not the 4096 fallback', () => {
+      // Its own cap is far above the floor, so the floor is what applies.
+      expect(resolve(undefined, deepseekFlash)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    });
+
+    it('still honors an explicit budget on DeepSeek Flash', () => {
+      expect(resolve(8192, deepseekFlash)).toBe(8192);
+    });
   });
 });

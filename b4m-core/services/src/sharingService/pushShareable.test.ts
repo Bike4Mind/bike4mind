@@ -12,7 +12,12 @@ describe('sharingService - pushShareable', () => {
     pushShareable(entity, { userId: 'user-1', permissions: [Permission.read, Permission.share] });
 
     expect(entity.users).toEqual([
-      { userId: 'user-1', permissions: [Permission.read, Permission.share], projectId: undefined },
+      {
+        userId: 'user-1',
+        permissions: [Permission.read, Permission.share],
+        projectId: undefined,
+        sessionId: undefined,
+      },
     ]);
   });
 
@@ -27,7 +32,12 @@ describe('sharingService - pushShareable', () => {
 
     expect(entity.users).toEqual([
       { userId: 'user-1', permissions: [Permission.read], projectId: 'project-9' },
-      { userId: 'user-1', permissions: [Permission.read, Permission.share], projectId: undefined },
+      {
+        userId: 'user-1',
+        permissions: [Permission.read, Permission.share],
+        projectId: undefined,
+        sessionId: undefined,
+      },
     ]);
   });
 
@@ -68,5 +78,43 @@ describe('sharingService - pushShareable', () => {
       { userId: 'user-1', permissions: [Permission.read], projectId: 'project-a' },
       { userId: 'user-1', permissions: [Permission.update], projectId: 'project-b' },
     ]);
+  });
+
+  // The sessionId clause of the key. Two sessions can each propagate the same file to the same
+  // person; revoking one must not take the other's grant, which needs two rows to be true.
+  it('keeps each session on its own row when two sessions reach the same document', () => {
+    const entity = asEntity();
+
+    pushShareable(entity, { userId: 'user-1', permissions: [Permission.read], sessionId: 'session-a' });
+    pushShareable(entity, { userId: 'user-1', permissions: [Permission.update], sessionId: 'session-b' });
+
+    expect(entity.users).toEqual([
+      { userId: 'user-1', permissions: [Permission.read], projectId: undefined, sessionId: 'session-a' },
+      { userId: 'user-1', permissions: [Permission.update], projectId: undefined, sessionId: 'session-b' },
+    ]);
+  });
+
+  // The destructive merge this tag exists to prevent, at the level of the key itself: a direct
+  // share and a session propagation to the same user collapsed into one row while they shared a
+  // key, so the session cascade deleted the direct share along with its own grant.
+  it('does not merge a session propagation into an existing direct share', () => {
+    const entity = asEntity([{ userId: 'user-1', permissions: [Permission.read] }]);
+
+    pushShareable(entity, { userId: 'user-1', permissions: [Permission.read], sessionId: 'session-a' });
+
+    expect(entity.users).toEqual([
+      { userId: 'user-1', permissions: [Permission.read] },
+      { userId: 'user-1', permissions: [Permission.read], projectId: undefined, sessionId: 'session-a' },
+    ]);
+  });
+
+  // A project grant and a session grant are different provenances even for the same user and doc.
+  it('keeps a project row and a session row separate', () => {
+    const entity = asEntity();
+
+    pushShareable(entity, { userId: 'user-1', permissions: [Permission.read], projectId: 'project-a' });
+    pushShareable(entity, { userId: 'user-1', permissions: [Permission.read], sessionId: 'session-a' });
+
+    expect(entity.users).toHaveLength(2);
   });
 });

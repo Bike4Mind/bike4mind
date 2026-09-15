@@ -17,6 +17,13 @@ describe('organizationService - leave', () => {
     email: 'member@example.com',
   };
 
+  // Production hands `leave` a hydrated Mongoose doc whose `organizationId` is an ObjectId, NOT the
+  // string the IUserDocument type advertises (UserModel declares Schema.Types.ObjectId with no
+  // stringifying transform). A plain-string fixture makes a strict `===` against the route param
+  // pass and hides the whole class of bug where the service forgets to normalize - which is exactly
+  // how a never-firing pointer clear shipped. Mimic the runtime shape instead.
+  const orgPointer = (id: string) => ({ toString: () => id }) as unknown as IUserDocument['organizationId'];
+
   const memberUserShare = {
     userId: 'user1',
     permissions: [Permission.read, Permission.update],
@@ -85,7 +92,7 @@ describe('organizationService - leave', () => {
   });
 
   it("clears organizationId when the left org was the user's selected org", async () => {
-    const memberWithSelectedOrg = { ...mockMemberUser, organizationId: 'org1' } as IUserDocument;
+    const memberWithSelectedOrg = { ...mockMemberUser, organizationId: orgPointer('org1') } as IUserDocument;
 
     await leave(memberWithSelectedOrg, { id: 'org1' }, mockAdapters);
 
@@ -93,16 +100,16 @@ describe('organizationService - leave', () => {
       expect.objectContaining({ id: 'user1', organizationId: null })
     );
     // leave must NOT mutate the caller-supplied user (retry-safety, see below).
-    expect(memberWithSelectedOrg.organizationId).toBe('org1');
+    expect(memberWithSelectedOrg.organizationId?.toString()).toBe('org1');
   });
 
   it("does NOT clear organizationId when the user's selected org is a different org", async () => {
-    const memberWithOtherOrg = { ...mockMemberUser, organizationId: 'other-org' } as IUserDocument;
+    const memberWithOtherOrg = { ...mockMemberUser, organizationId: orgPointer('other-org') } as IUserDocument;
 
     await leave(memberWithOtherOrg, { id: 'org1' }, mockAdapters);
 
     expect(mockAdapters.db.users.update).not.toHaveBeenCalled();
-    expect(memberWithOtherOrg.organizationId).toBe('other-org');
+    expect(memberWithOtherOrg.organizationId?.toString()).toBe('other-org');
   });
 
   it('re-issues the org-clear write on a withTransaction retry (no in-memory poisoning)', async () => {

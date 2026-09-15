@@ -21,6 +21,17 @@ export type LinkOnlyInviteShape = Pick<IInvite, 'isLinkOnly' | 'recipients' | 't
  * whose named recipients had all declined infer as link-only - which opens the view gate to any
  * authenticated caller and lets anyone redeem it. A declined invite names people; it names them in
  * a different bucket.
+ *
+ * The union is NOT self-sufficient, and a caller must not read it as though it were. Three paths
+ * empty `pending` without moving the addresses anywhere - cancelInviteById, refuseWholeInvite's
+ * cancel-for-everyone branch, and cancel's clear-all branch - so on a pre-flag FabFile/Session row
+ * each of them flips this predicate from "named" to "link-only". What makes that safe today is
+ * `remaining`: all three zero it in the same write, and both consumers (inviteManager's
+ * canViewInvite and acceptInvite) refuse an invite with none left before this result can matter.
+ * So a new cancel path that clears `pending` without zeroing `remaining`, or a third consumer that
+ * reads this without the `remaining` check, re-opens view-and-redeem to any authenticated holder
+ * of the id. Those addresses are deliberately not moved into `refused`: that bucket means the
+ * recipient declined, and a sharer cancelling is not a decline.
  */
 export const isLinkOnlyInvite = (invite: LinkOnlyInviteShape): boolean => {
   if (typeof invite.isLinkOnly === 'boolean') return invite.isLinkOnly;

@@ -36,6 +36,8 @@ export const getApiKeyTypeFromBackend = (backend: ModelBackend): ApiKeyType | nu
       return ApiKeyType.xai;
     case ModelBackend.Kimi:
       return ApiKeyType.kimi;
+    case ModelBackend.DeepSeek:
+      return ApiKeyType.deepseek;
     case ModelBackend.VoyageAI:
       return ApiKeyType.voyageai;
     // AWS-credentialed backends hold no API key of their own, and local-image is

@@ -14,8 +14,10 @@ vi.mock('@aws-sdk/client-cloudwatch', () => ({
 }));
 
 import {
+  buildChunkRescueSweepMetrics,
   buildFeedbackDeliveryFailureMetrics,
   buildFeedbackDeliverySkippedMetrics,
+  recordChunkRescueSweep,
   recordWebhookDeliveryFailure,
 } from './cloudwatch';
 
@@ -160,5 +162,121 @@ describe('recordWebhookDeliveryFailure', () => {
       'DeliveryLatency',
       'HttpResponseCode',
     ]);
+  });
+});
+
+// Both rescue alarms read a `{ Stage }`-scoped stream, which in CloudWatch is a DISTINCT stream
+// from the stage-less one - so these assertions are the only thing standing between the alarms and
+// the webhookDeliveryHighFailures trap above, where an alarm reads a stream nothing writes and so
+// looks permanently healthy. The dimension SETS are pinned exactly rather than spot-checked:
+// dropping or adding a dimension on either side silently repoints the alarm at a silent stream.
+describe('buildChunkRescueSweepMetrics', () => {
+  const dimsOf = (entry: { dimensions?: Record<string, string> }) => entry.dimensions ?? {};
+  const entriesNamed = (name: string, metrics: ReturnType<typeof buildChunkRescueSweepMetrics>) =>
+    metrics.filter(m => m.name === name);
+
+  it('emits each counter on both the stage-less and the Stage-scoped stream', () => {
+    const metrics = buildChunkRescueSweepMetrics('swept', 4, 2, 'production');
+
+    expect(metrics.map(m => m.name)).toEqual([
+      'ChunkRescueRuns',
+      'ChunkRescueRuns',
+      'ChunkRescueEnqueued',
+      'ChunkRescueEnqueued',
+      'ChunkRescueFailures',
+      'ChunkRescueFailures',
+    ]);
+  });
+
+  it('gives dataLakeChunkRescueFailuresHigh a Stage-scoped Failures stream to read', () => {
+    const metrics = buildChunkRescueSweepMetrics('swept', 4, 2, 'production');
+    const failures = entriesNamed('ChunkRescueFailures', metrics);
+
+    expect(failures.map(dimsOf)).toEqual([{}, { Stage: 'production' }]);
+    for (const entry of failures) {
+      expect(entry).toMatchObject({ value: 2, unit: StandardUnit.Count });
+    }
+  });
+
+  it('keeps outcome ALONGSIDE Stage on the scoped Runs stream, never Stage alone', () => {
+    // dataLakeChunkRescueSweepFailing alarms on Sum > 0 against outcome=failed. A `{ Stage }`-only
+    // Runs stream counts every run, healthy ones included, so pointing that alarm at one would
+    // page daily on a working sweep - this is the one place the feedback builders' coarse-rollup
+    // shape must NOT be copied.
+    const metrics = buildChunkRescueSweepMetrics('failed', 0, 3, 'dev');
+
+    expect(entriesNamed('ChunkRescueRuns', metrics).map(dimsOf)).toEqual([
+      { outcome: 'failed' },
+      { outcome: 'failed', Stage: 'dev' },
+    ]);
+  });
+
+  it('carries the outcome on the Runs metric, so zero-work states stay tellable apart', () => {
+    const metrics = buildChunkRescueSweepMetrics('disabled', 0, 0, 'dev');
+
+    expect(metrics[0]).toMatchObject({
+      name: 'ChunkRescueRuns',
+      value: 1,
+      dimensions: { outcome: 'disabled' },
+    });
+  });
+
+  it('substitutes a placeholder for a missing or empty stage rather than emitting an invalid one', () => {
+    // PutMetricData validates the request as a whole and rejects an empty dimension value, so
+    // passing one through would drop the Failures counters too - losing the record of the run, not
+    // just the alarm for it.
+    for (const stage of [undefined, '']) {
+      const metrics = buildChunkRescueSweepMetrics('swept', 1, 1, stage);
+      expect(entriesNamed('ChunkRescueEnqueued', metrics).map(dimsOf)).toEqual([{}, { Stage: 'unknown' }]);
+    }
+  });
+});
+
+describe('recordChunkRescueSweep', () => {
+  beforeEach(() => {
+    send.mockReset().mockResolvedValue(undefined);
+  });
+
+  // The alarms read namespace + metric name as hardcoded STRINGS across a package boundary - infra
+  // does not import DataLakeBatchMetrics, so nothing typechecks the pair. Renaming a metric here
+  // would leave the alarms pointed at a stream that never receives a datapoint, and an alarm on a
+  // silent metric looks exactly like a healthy one.
+  it('emits the names and namespace the alarms are pointed at', async () => {
+    await recordChunkRescueSweep('swept', 4, 2, 'production');
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const { Namespace, MetricData } = send.mock.calls[0][0].input;
+    expect(Namespace).toBe('Lumina5/DataLakeBatch');
+    expect(MetricData.map((d: { MetricName: string }) => d.MetricName)).toEqual([
+      'ChunkRescueRuns',
+      'ChunkRescueRuns',
+      'ChunkRescueEnqueued',
+      'ChunkRescueEnqueued',
+      'ChunkRescueFailures',
+      'ChunkRescueFailures',
+    ]);
+  });
+
+  it('serializes the Stage dimension onto the wire, not just into the builder', async () => {
+    // buildChunkRescueSweepMetrics' `dimensions` object still has to survive emitMetrics' mapping
+    // into CloudWatch's Name/Value pairs; the builder tests above cannot see that step.
+    await recordChunkRescueSweep('failed', 0, 3, 'dev');
+
+    const { MetricData } = send.mock.calls[0][0].input;
+    const scopedFailures = MetricData.filter(
+      (d: { MetricName: string; Dimensions: { Name: string }[] }) =>
+        d.MetricName === 'ChunkRescueFailures' && d.Dimensions.length > 0
+    );
+    expect(scopedFailures).toHaveLength(1);
+    expect(scopedFailures[0]).toMatchObject({ Value: 3, Dimensions: [{ Name: 'Stage', Value: 'dev' }] });
+  });
+
+  it('emits every datapoint in ONE PutMetricData call', async () => {
+    // The sweep is on a daily cron; several API calls where one does is pure waste, and a partial
+    // failure across several would leave the counters disagreeing with the outcome.
+    await recordChunkRescueSweep('failed', 0, 0, 'production');
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0].input.MetricData).toHaveLength(6);
   });
 });
