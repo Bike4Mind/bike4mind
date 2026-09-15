@@ -801,6 +801,7 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     mockInvoke.mockResolvedValue({
       id: 'quest-2',
       status: 'done',
+      type: 'message',
       reply: 'hi',
       replies: ['hi'],
       createdAt: new Date('2026-08-03T00:00:00Z'),
@@ -952,11 +953,13 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       expect(res._getJSONData().errorCode).toBe('spend_cap_exceeded');
     });
 
-    it('omits type and errorCode entirely on a real answer, so a caller can match on their presence', async () => {
+    it('carries type unconditionally on a real answer, matching the polled quest, and omits errorCode', async () => {
       const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
       await handler(req, res);
       const body = res._getJSONData();
-      expect(body).not.toHaveProperty('type');
+      // Same field, same value GET /api/quests/{id} returns for a successful quest
+      // (see the quests/[id] integration suite) - a caller uses one branch for both surfaces.
+      expect(body.type).toBe('message');
       expect(body).not.toHaveProperty('errorCode');
     });
   });

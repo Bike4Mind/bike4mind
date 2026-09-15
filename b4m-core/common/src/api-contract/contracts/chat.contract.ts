@@ -37,13 +37,15 @@ export const chatContract = defineEndpoint({
         'response shape is a follow-up. A turn that FAILS still resolves with `200`, never a 4xx, on ' +
         'both that `wait: true` body and the polled quest (`GET /api/quests/{id}`) - the prose ' +
         'explaining why lands in `reply`/`response` like any other answer, so the reply text alone ' +
-        'cannot tell a failure from an answer. `type: "error"` is the field that can: match on it ' +
-        'first, for EVERY failure class (out of credits, an aborted turn, a provider timeout or ' +
-        'overload, a recovered stuck quest). `errorCode` then names the reason, but only for the ' +
-        'billing failures that have one - `"insufficient_credits"` today; it is absent on every ' +
-        'other `type: "error"` turn, so never use its absence to infer success. On a real answer ' +
-        'both fields are absent from the `wait: true` body. Contrast the tts/music/soundEffects ' +
-        'contracts, which reject synchronously with a 422 carrying the same `errorCode` vocabulary.',
+        'cannot tell a failure from an answer. `type` is the field that can: both surfaces carry it ' +
+        'unconditionally, so match on `type: "error"` first, for EVERY failure class (out of credits, ' +
+        'an aborted turn, a provider timeout or overload, a recovered stuck quest); a real answer ' +
+        'carries the turn\'s actual completion type instead (`"message"` for an ordinary reply). ' +
+        '`errorCode` then names the failure reason, but only for the billing failures that have one - ' +
+        '`"insufficient_credits"` today; it is absent on every other `type: "error"` turn, so never use ' +
+        'its absence to infer success. On a real answer `errorCode` is absent from the `wait: true` ' +
+        'body. Contrast the tts/music/soundEffects contracts, which reject synchronously with a 422 ' +
+        'carrying the same `errorCode` vocabulary.',
       schema: ChatAckSchema,
     },
     400: { description: 'No usable default chat model is configured and none was supplied.', schema: ApiErrorSchema },

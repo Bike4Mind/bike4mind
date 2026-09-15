@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ApiErrorCode } from '../apiErrorCodes';
-import { QUEST_ERROR_CODES } from '../types';
+import { CHAT_HISTORY_ITEM_TYPES, QUEST_ERROR_CODES } from '../types';
 import { PROMPT_TEXT_MAX } from './briefcasePrompt';
 
 /**
@@ -141,11 +141,11 @@ export const ChatAckSchema = z.object({
   timestamp: z.string(),
   model: z.string(),
   message: z.string().optional(),
-  // The `wait: true` body emits this ONLY as `'error'` (chat.ts omits it on a real answer,
-  // so presence is the failure signal); the polled quest carries the quest's own value
-  // whatever it is. Absent on the immediate async ack - nothing has run yet. This, not
-  // `errorCode`, is what separates every failure class from an answer.
-  type: z.enum(['message', 'oob', 'error', 'system', 'voice_transcript']).optional(),
+  // Present unconditionally on the `wait: true` body, carrying the quest's own value -
+  // same as the polled quest (`GET /api/quests/{id}`). Absent only on the immediate async
+  // ack, where nothing has run yet. `errorCode` (not this field) is what separates a
+  // failure from an answer: `type` is `'error'` for every failure class, coded or not.
+  type: z.enum(CHAT_HISTORY_ITEM_TYPES).optional(),
   // Reason for a `type: 'error'` turn, when there is a machine-readable one. Only the
   // billing failures set it, so a `type: 'error'` turn with no `errorCode` is still a
   // failure (aborted, provider timeout/overload, recovered stuck quest) - never read its

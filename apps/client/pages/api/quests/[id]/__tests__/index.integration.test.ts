@@ -154,6 +154,25 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     expect(res._getJSONData()).toMatchObject({ id: 'quest-1', status: 'completed' });
   });
 
+  it('carries type unconditionally on a successful quest, matching the wait:true chat body', async () => {
+    validateWithScopes([ApiKeyScope.READ_NOTEBOOKS]);
+    mockQuestFindById.mockResolvedValue({
+      id: 'quest-1',
+      sessionId: 'sess-1',
+      status: 'done',
+      type: 'message',
+      reply: 'hi',
+      replies: ['hi'],
+      promptMeta: {},
+    });
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    // Same field, same value POST /api/chat's wait:true body carries for a successful turn
+    // (see the chat integration suite) - a caller uses one branch for both surfaces.
+    expect(res._getJSONData().type).toBe('message');
+  });
+
   it('accepts an ai:chat-only key (200) — the chat→poll happy path (OR widening)', async () => {
     validateWithScopes([ApiKeyScope.AI_CHAT]);
     const { req, res } = fire();
