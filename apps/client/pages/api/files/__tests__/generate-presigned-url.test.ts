@@ -116,6 +116,27 @@ describe('POST /api/files/generate-presigned-url - S3 client config', () => {
   });
 });
 
+describe('POST /api/files/generate-presigned-url - extension-first MIME resolution', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.createFabFile.mockImplementation(async () => ({ id: 'f1' }));
+  });
+
+  it('persists the extension-derived type over a mismatched claim', async () => {
+    const { res } = makeRes();
+    await run(body({ fileName: 'deploy.sh', mimeType: 'text/plain' }), res);
+
+    expect(h.createFabFile.mock.calls[0][0]).toMatchObject({ mimeType: 'application/x-sh' });
+  });
+
+  it('persists text/markdown for a .md upload, not the legacy text/x-markdown spelling', async () => {
+    const { res } = makeRes();
+    await run(body({ fileName: 'notes.md', mimeType: 'text/markdown' }), res);
+
+    expect(h.createFabFile.mock.calls[0][0]).toMatchObject({ mimeType: 'text/markdown' });
+  });
+});
+
 describe('POST /api/files/generate-presigned-url - data-lake tags', () => {
   beforeEach(() => {
     vi.clearAllMocks();
