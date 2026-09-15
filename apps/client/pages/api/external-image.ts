@@ -54,8 +54,9 @@ export function rejectIfUnsafe(url: URL): string | null {
 
   // Reject IPv4-mapped IPv6 addresses (::ffff:a.b.c.d / ::ffff:hex:hex).
   // Node normalises these to ::ffff:XXYY:ZZWW which bypasses the IPv4 regex but
-  // fetch() still dials the underlying IPv4 address.
-  if (host.includes('ffff:')) {
+  // fetch() still dials the underlying IPv4 address. Anchored to the actual prefix (not a bare
+  // substring match) so an ordinary public host with an unrelated `ffff` hextet isn't over-blocked.
+  if (host.startsWith('::ffff:')) {
     return 'IPv4-mapped IPv6 addresses are not allowed';
   }
 
