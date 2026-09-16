@@ -870,6 +870,49 @@ describe('planCatalogWrites', () => {
       expect(result.sightedModelIds.has('gpt-5.7')).toBe(true);
     });
 
+    /** The elevenlabs source's output: a full record that names no backend. */
+    const spoken = (patch: DiscoveredModel['patch'] = {}): DiscoveredModel => ({
+      modelId: 'eleven_multilingual_v2',
+      patch: {
+        id: 'eleven_multilingual_v2',
+        vendor: 'elevenlabs',
+        type: 'tts',
+        name: 'Eleven Multilingual v2',
+        contextWindow: 0,
+        ...patch,
+      },
+    });
+
+    const introduceSpoken = (records: DiscoveredModel[]) =>
+      plan({
+        contributions: [{ name: 'elevenlabs', kind: 'provider', records }],
+        coveredBackends: new Set<string>(),
+      });
+
+    it('refuses an introduction no source placed at a backend', () => {
+      const result = introduceSpoken([spoken()]);
+
+      expect(result.rows).toHaveLength(0);
+      // The run report gets the cause, not the append schema's enum parse error,
+      // which reads as a malformed record rather than an undispatchable one.
+      expect(result.dropped).toEqual([
+        {
+          source: 'elevenlabs',
+          modelId: 'eleven_multilingual_v2',
+          reason: expect.stringContaining('no backend'),
+        },
+      ]);
+      expect(result.dropped[0].reason).not.toContain('append schema');
+      expect(result.sightedModelIds.has('eleven_multilingual_v2')).toBe(true);
+    });
+
+    it('refuses a backend a source emitted empty', () => {
+      const result = introduceSpoken([spoken({ backend: '' as ModelBackend })]);
+
+      expect(result.rows).toHaveLength(0);
+      expect(result.dropped[0].reason).toContain('no backend');
+    });
+
     it('refuses the legacy pins and non-product ids the chat namespaces classify', () => {
       // All of these are `type: 'text'` to the OpenAI source, and all of them
       // sort ahead of a genuinely new id in the probe queue's tie-break.

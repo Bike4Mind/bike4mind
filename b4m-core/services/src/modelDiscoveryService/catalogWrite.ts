@@ -396,6 +396,14 @@ function planOne(
   const introducing = !existing && candidate.sawProvider;
   const pinnedGroups = new Set<FieldGroup>();
 
+  // The append schema requires a backend, so this record cannot become a row;
+  // refusing it by name keeps the run report legible, where the schema below
+  // reports it as a bare enum parse failure instead. Ahead of the name guard,
+  // which reads `draft.backend` to decide identity.
+  if (introducing && !(typeof draft.backend === 'string' && draft.backend.length > 0)) {
+    return { reason: 'introduction refused: the record names no backend, so nothing can dispatch it' };
+  }
+
   if (introducing && !(typeof draft.name === 'string' && draft.name.length > 0)) {
     // OpenAI lists every dated snapshot, legacy pin and non-product id it has
     // ever served and publishes a docs page only for what it sells, so a parsed
