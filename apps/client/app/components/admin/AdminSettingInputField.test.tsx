@@ -7,11 +7,13 @@ import { SENSITIVE_SETTING_MASK, settingsMap } from '@bike4mind/common';
 const mutate = vi.fn();
 // Read at render time, so a test can put the mutation into its rejected state.
 let updateError: unknown;
+// Read at render time, so a test can simulate the save round-trip still being in flight.
+let updatePending = false;
 // A factory mock replaces the whole module, so every hook the component tree imports from it has
 // to be listed here - ScopedSettingOverrides (rendered for any setting declaring `scope`) reaches
 // the three scoped-override hooks, and a missing one fails this file at import time.
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useUpdateSettings: () => ({ mutate, isPending: false, error: updateError }),
+  useUpdateSettings: () => ({ mutate, isPending: updatePending, error: updateError }),
   useScopedSettingOverrides: () => ({ data: [] }),
   useSetScopedSettingOverride: () => ({ mutate: vi.fn(), isPending: false, error: undefined }),
   useClearScopedSettingOverride: () => ({ mutate: vi.fn(), isPending: false, error: undefined }),
@@ -43,6 +45,7 @@ describe('AdminSettingInputField sensitive setting', () => {
   beforeEach(() => {
     mutate.mockReset();
     updateError = undefined;
+    updatePending = false;
   });
 
   it('shows the server mask and reveals nothing on focus', () => {
@@ -147,6 +150,7 @@ describe('AdminSettingInputField number setting', () => {
   beforeEach(() => {
     mutate.mockReset();
     updateError = undefined;
+    updatePending = false;
   });
 
   it('carries the schema bounds the server enforces', () => {
@@ -213,5 +217,15 @@ describe('AdminSettingInputField number setting', () => {
     renderBandField(50);
 
     expect(bandHelperText()).toHaveTextContent('Number must be <= 500');
+  });
+
+  it('locks the field while a save is in flight', () => {
+    updatePending = true;
+    renderBandField(50);
+
+    // onSuccess resyncs this field from the server's response, so a second edit typed
+    // mid-flight would otherwise be silently overwritten by the response for the previous
+    // submission.
+    expect(bandInput()).toBeDisabled();
   });
 });
