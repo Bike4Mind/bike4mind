@@ -122,8 +122,10 @@ const AdminSettingInputField = ({
   // Only number settings declare bounds, and only some of those, so they are read through
   // the type discriminant rather than off the union.
   const bounds: { min?: number; max?: number } = setting.type === 'number' ? setting : {};
+  // An emptied field is "unset", not a zero: Number('') is 0, which would report a bogus
+  // below-minimum error on a bounded setting and block the save that resets it to its default.
   const rangeError =
-    setting.type === 'number' && value !== null
+    setting.type === 'number' && value !== null && value !== ''
       ? rangeMessage(typeof value === 'number' ? value : Number(value), bounds.min, bounds.max)
       : undefined;
   // A rejected write is otherwise silent: the mutation surfaces nothing of its own and the
@@ -204,8 +206,11 @@ const AdminSettingInputField = ({
                     },
                   }}
                   type="number"
-                  value={typeof value === 'number' ? value : Number(value)}
-                  onChange={e => setValue(Number(e.target.value))}
+                  // A cleared field is kept as '' rather than coerced: Number('') is 0, which
+                  // the server would store as a real zero instead of letting makeNumberSetting's
+                  // empty-string preprocess fall back to the setting's own default.
+                  value={typeof value === 'number' ? value : value === null || value === '' ? '' : Number(value)}
+                  onChange={e => setValue(e.target.value === '' ? '' : Number(e.target.value))}
                 />
               ) : setting.type === 'string' ? (
                 setting.options ? (
