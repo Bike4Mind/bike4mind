@@ -250,7 +250,9 @@ async function executeRun(
   } as Omit<IModelDiscoveryRunDocument, 'id' | 'createdAt' | 'updatedAt'>);
   const runId = run.id;
 
-  const credentials = await adapters.resolveCredentials();
+  // A manual run is how an admin checks a key they just saved, so it reads admin
+  // settings fresh; scheduled and startup runs keep the cached map.
+  const credentials = await adapters.resolveCredentials({ skipCache: options.trigger === 'manual' });
   const history = await recentRunHistory(adapters, startedAt);
   const minInterval = options.minSourceIntervalMs ?? DEFAULT_MIN_SOURCE_INTERVAL_MS;
 
