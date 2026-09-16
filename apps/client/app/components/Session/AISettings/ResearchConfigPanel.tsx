@@ -4,6 +4,7 @@ import { Close as CloseIcon, KeyboardArrowDown } from '@mui/icons-material';
 import { ResearchModeConfiguration } from '@client/app/types/ResearchMode';
 import { ChatModelName, ChatModels, NO_TEMPERATURE_MODELS } from '@bike4mind/common';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
+import { menuSurfaceSx, selectListboxSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 
 interface ResearchConfigPanelProps {
   index: number;
@@ -158,42 +159,10 @@ export const ResearchConfigPanel: FC<ResearchConfigPanelProps> = ({ index, confi
                   // mr 16px, which overflowed the card and clipped the X).
                   minWidth: 0,
                   flex: 1,
-                  '& .MuiSelect-listbox': {
-                    border: 'none',
-                    boxShadow: 'none',
-                  },
                 }}
                 slotProps={{
                   listbox: {
-                    sx: {
-                      border: 'none !important',
-                      boxShadow: 'var(--joy-shadow-md)',
-                      '&::before': {
-                        display: 'none',
-                      },
-                      '&::after': {
-                        display: 'none',
-                      },
-                      '& .MuiOption-root': {
-                        borderTop: 'none !important',
-                        borderBottom: 'none !important',
-                        '&::before': {
-                          display: 'none',
-                        },
-                        '&::after': {
-                          display: 'none',
-                        },
-                      },
-                      '& .MuiList-root': {
-                        border: 'none !important',
-                        '&::before': {
-                          display: 'none',
-                        },
-                        '&::after': {
-                          display: 'none',
-                        },
-                      },
-                    },
+                    sx: theme => ({ ...menuSurfaceSx(theme), ...selectListboxSx(theme) }),
                   },
                 }}
               >

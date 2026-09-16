@@ -4793,12 +4793,13 @@ export type SettingValue<K extends SettingKey> = z.infer<(typeof settingsMap)[K]
  * serve a different budget than the platform path for the same lake, which is the disagreement
  * `resolveSearchBudgets` exists to remove.
  *
- * UNRESOLVED, and deliberately not blessed by listing it here: this read resolves on the CALLER's
- * scope, but `DefaultChunkSize`'s declared subject is the FILE OWNER ("Resolves at file-OWNER
- * altitude", its own definition above). A search spans other owners' files, so a caller-side
- * Organization/Owner override currently moves `maxChunkChars` for content it does not own. Whether
- * this key belongs in the scoped read at all is open - see the follow-up; the tests below pin the
- * behavior as CURRENT, not as intended.
+ * `DefaultChunkSize` is also the one key here a caller rung may only RAISE, never lower (#2803). This
+ * read resolves on the CALLER's scope, but the key's declared subject is the FILE OWNER ("Resolves at
+ * file-OWNER altitude", its own definition above), and a search spans other owners' files - so a
+ * caller-side override that LOWERED the serve budget would truncate in-policy content it does not
+ * own. `resolveServeTarget` (services/dataLakeService/resolveSearchBudgets.ts) floors the resolved
+ * value at the platform one for that reason; it stays listed here because the raise direction is
+ * still wanted, and because dropping it would give the two paths different budgets for the same lake.
  */
 export const SEARCH_BUDGET_SETTING_KEYS = [
   'dataLakeSearchMaxFiles',

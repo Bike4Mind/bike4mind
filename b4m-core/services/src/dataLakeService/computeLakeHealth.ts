@@ -1,6 +1,7 @@
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
   deriveLakeMemoryState,
+  deriveLakeServingState,
   findDuplicateMembers,
   isLeaseHeld,
   resolveLakeHealthPolicy,
@@ -98,11 +99,17 @@ export interface ComputeLakeHealthAdapters {
  * groups this same member scan by exact fileName; report-only, same as the rest of this module.
  * `groups` and each group's `members` are capped here for payload size (`DUPLICATE_GROUPS_RETURNED`,
  * `DUPLICATE_MEMBERS_PER_GROUP`); the counts stay exact regardless.
+ *
+ * Reports the lake's `serving` lifecycle state alongside all of that: every predicate here grades the
+ * CORPUS, and retrieval is gated on `status === 'active'` in two places the corpus cannot speak for
+ * (`getDynamicDataLakeTags`' pre-filter and the session-binding check), so a fully-indexed draft or
+ * archived lake would otherwise report healthy while serving nothing.
  */
 export async function computeLakeHealth(
   lake: Pick<
     IDataLakeDocument,
     | 'id'
+    | 'status'
     | 'datalakeTag'
     | 'fileTagPrefix'
     | 'createdByUserId'
@@ -117,6 +124,10 @@ export async function computeLakeHealth(
   >,
   { db, logger }: ComputeLakeHealthAdapters
 ): Promise<LakeHealthApiResponse> {
+  // Independent of every content-predicate scan below and of the empty-lake early return: nothing
+  // here depends on the lake's members, only on the lake document itself (#2839).
+  const serving = deriveLakeServingState(lake.status);
+
   const resolved = await resolveScopedSetting(
     'DefaultChunkSize',
     scopeForLake(lake),
@@ -155,6 +166,7 @@ export async function computeLakeHealth(
       duplicateMembers: { memberCount: 0, groupCount: 0, groups: [] },
       inconsistency: storedInconsistency(lake),
       lakeMemory,
+      serving,
     };
   }
 
@@ -198,6 +210,7 @@ export async function computeLakeHealth(
     // collection (#1665). detectLakeInconsistencies writes it; this renders whatever it last wrote.
     inconsistency: storedInconsistency(lake),
     lakeMemory: { ...lakeMemory, memberCount: members.length },
+    serving,
   };
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/scripts",
-  "version": "0.1.72",
+  "version": "0.1.74",
   "private": true,
   "type": "module",
   "main": "index.ts",
@@ -36,6 +36,7 @@
     "clear-resume-tokens": "tsx src/clear-resume-tokens.ts",
     "db:cleanup": "tsx migrate/index.ts cleanup",
     "db:preview-unaddressable-chunks": "tsx migrate/preview-unaddressable-fabfilechunks.ts",
+    "db:preview-near-empty-chunks": "tsx migrate/preview-near-empty-fabfilechunks.ts",
     "cleanup:query-subscriptions": "tsx cleanupOldQuerySubscriptions.ts",
     "test:email-ingestion": "tsx testEmailIngestLambda.ts",
     "test:api-usage": "tsx test-api-usage-monitoring.ts",

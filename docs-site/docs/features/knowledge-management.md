@@ -31,8 +31,10 @@ Bike4Mind's Knowledge Management system transforms your documents into an intell
 
 ### Web Content
 - **HTML** - Web page content extraction
-- **URL Import** - Direct import from any public URL
+- **URL Import** - Direct import from any public URL. A URL that yields no extractable text is refused with an error rather than saved as an empty file.
 - **Google Drive** - Direct integration
+
+A file's type is determined by its filename extension, not by the type your browser or upload client reports. An unrecognized extension is refused even when the upload claims a supported type, and a date-style filename like `Meeting notes 2026.09.07` is read as having the unrecognized extension `07` - rename the file, or remove the trailing date, before uploading.
 
 ## Smart Document Processing
 

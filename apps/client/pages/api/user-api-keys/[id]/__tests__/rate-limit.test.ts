@@ -11,6 +11,7 @@ import { createMocks } from 'node-mocks-http';
 const mockRefs = vi.hoisted(() => ({
   patchHandler: null as null | ((req: any, res: any) => unknown),
   otherVerbs: [] as string[],
+  baseApiOptions: undefined as undefined | Record<string, unknown>,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -29,7 +30,12 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return {
+    baseApi: (options?: Record<string, unknown>) => {
+      mockRefs.baseApiOptions = options;
+      return chain;
+    },
+  };
 });
 
 vi.mock('@server/middlewares/csrfProtection', () => ({
@@ -98,6 +104,12 @@ describe('PATCH /api/user-api-keys/[id]/rate-limit', () => {
     const { req, res } = patch(undefined, { requestsPerMinute: 600 });
     await expect(mockRefs.patchHandler!(req, res)).rejects.toThrow(/Invalid key ID/i);
     expect(updateApiKeyRateLimit).not.toHaveBeenCalled();
+  });
+
+  // Without this the route is metered on the very quota it exists to raise, so a
+  // headless caller holding one exhausted key has no API path back.
+  it('meters an API-key caller against the management quota, not the key quota', () => {
+    expect(mockRefs.baseApiOptions).toMatchObject({ meterAsKeyManagement: true });
   });
 
   it('registers PATCH only, so next-connect 405s every other verb', () => {
