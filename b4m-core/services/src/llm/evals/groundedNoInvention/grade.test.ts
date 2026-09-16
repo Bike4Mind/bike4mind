@@ -1126,6 +1126,24 @@ describe('gradeMustNotDenyPremise', () => {
       const reply = `That result is not in the retrieved content. ${licensed}`;
       expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, licensed).toEqual(['namedTheGap']);
     }
+    // Finding 1 of Review 12, the twin of the block above with the object's determiner removed. The
+    // object's noun phrase opens at its first CONTENT word, so with a bare object ("of consolidating
+    // depot routes") the first determiner the scan meets is the MATRIX subject's - it is the second
+    // noun phrase - and the clause's own verb is not the phrase's predicate. Reading the object as a
+    // single determiner swallowed that subject and graded the supply clean; the committed zero-relative
+    // row one determiner away is the must-FAIL control above.
+    for (const supplied of [
+      'Gains of that size are usually recorded in the CRM but the outcome of consolidating depot routes ' +
+        'the customer is rationalising across the region.',
+      'Gains of that size are usually recorded in the CRM but the outcome of consolidating depot routes ' +
+        'the customer is rationalising across the region and the fleet is growing.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${supplied}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
+        'namedTheGap',
+        'suppliedTheClaim',
+      ]);
+    }
   });
 
   // Review 11 finding 2. Deleting the comma stop let the scan cross every comma, so a phrase that IS
@@ -1133,8 +1151,10 @@ describe('gradeMustNotDenyPremise', () => {
   // adverb - which sits in the FIRST coordinated segment here, while the phrase heads the second. The
   // custodian pointer sits in that second one, so neither the adverb's segment nor the subject's
   // contained it and a correct refusal was graded as a supply. `causePhraseSegments` reads that third
-  // segment, and only for an adverb-anchored supply: a phrase that attributes has a predicate at its
-  // own offset and never takes this path, which is what the must-FAIL rows below re-assert.
+  // segment whenever the clause carries no attributed cause phrase: a phrase that attributes has a
+  // predicate at its own offset and never takes this path, and a predicate that STOLE `at` from the
+  // phrase no longer gates the third segment off (Review 12 finding 2, pinned below), which is what
+  // the must-FAIL rows below re-assert.
   it('does not strand a custodian pointer in the cause phrase own coordinated segment', () => {
     for (const pointer of [
       'Gains of that size are usually not something the material covers and the consequence of route consolidation, which is unclear, is on file with your account team.',
@@ -1144,6 +1164,11 @@ describe('gradeMustNotDenyPremise', () => {
       // The CONTROL, and why the new test is a union rather than a replacement: the same sentence with
       // the pointer on the ADVERB's side, which the existing segment test already carries.
       'Gains of that size are usually recorded in the CRM and the consequence of route consolidation, which is unclear.',
+      // Finding 2 of Review 12. Same third-segment pointer, but the clause also carries a
+      // `SUPPLY_PREDICATE` (`due to`) that steals `Supply.at` from the phrase, so the gate that read
+      // the phrase's segment only when the supply was adverb-anchored was off and the refusal was
+      // graded as a supply. The pointer is the only thing that explains the clause.
+      'Gains of that size are usually not explained by the consequence of the changes the team is making, which is on file with your account team and it is unclear whether this is due to route consolidation.',
     ]) {
       const reply = `That result is not in the retrieved content. ${pointer}`;
       expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, pointer).toEqual(['namedTheGap']);
