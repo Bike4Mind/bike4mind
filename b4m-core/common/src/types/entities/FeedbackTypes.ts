@@ -17,9 +17,41 @@ export enum FeedbackType {
 }
 
 /** What a feedback report is about - server-derived from what the submission actually resolved
- * to, never client-set (see the create handler). */
-export const FEEDBACK_SUBJECTS = ['turn', 'session', 'product'] as const;
+ * to, never client-set (see the create handler). 'help' is derived from the route that wrote the
+ * report rather than from a resolved quest/session, so `resolveFeedbackContext` never returns it;
+ * the help handlers set it directly. */
+export const FEEDBACK_SUBJECTS = ['turn', 'session', 'product', 'help'] as const;
 export type FeedbackSubject = (typeof FEEDBACK_SUBJECTS)[number];
+
+/** Which help-center surface a routed comment was written on. */
+export const HELP_FEEDBACK_SURFACES = ['article', 'chat'] as const;
+export type HelpFeedbackSurface = (typeof HELP_FEEDBACK_SURFACES)[number];
+
+/** The thumbs verdict on a help article or help-chat answer. Single source of truth for the two
+ * stores that persist it (`HelpEvent.rating` and `Feedback.helpContext.rating`) and the request
+ * schemas that accept it - they have to agree or a valid submission fails one side's validation. */
+export const HELP_FEEDBACK_RATINGS = ['helpful', 'not_helpful'] as const;
+export type HelpFeedbackRating = (typeof HELP_FEEDBACK_RATINGS)[number];
+
+/**
+ * Identifying context copied onto a report routed from the help center, so that a permanent row
+ * saying "this help answer was wrong" is still actionable on its own. Deliberately carries no
+ * free text: the article slug and the thumbs rating are structured signal and are safe to keep
+ * permanently, whereas the chat question and answer are not, and stay on the 90-day `HelpEvent`
+ * row that `eventId` points at.
+ *
+ * These rows carry no `sessionId`/`questId`, so they are invisible to the session-scoped reader
+ * by design - `subject: 'help'` plus `organizationId` is how they are found instead.
+ */
+export interface IHelpFeedbackContext {
+  /** The `HelpEvent` row this comment annotates. Expires on the same 90-day clock as the
+   * comment itself, so a live report always has a live event to join back to. */
+  eventId: string;
+  surface: HelpFeedbackSurface;
+  /** Article slug - set for the 'article' surface only; help chat has no slug. */
+  slug?: string;
+  rating?: HelpFeedbackRating;
+}
 
 /**
  * Page bounds for the feedback list endpoint. Shared rather than mirrored on each side: the
@@ -54,6 +86,8 @@ export interface IFeedback {
   contextQuestId?: string;
   organizationId?: IOrganizationDocument['id'] | null;
   subject: FeedbackSubject;
+  /** Set only on reports routed from the help center (`subject: 'help'`). */
+  helpContext?: IHelpFeedbackContext;
   /** True iff the sibling `IFeedbackText` document was successfully written - lets a reader tell
    * "text expired under the 90-day TTL" apart from "this report never had text". */
   contentStored: boolean;

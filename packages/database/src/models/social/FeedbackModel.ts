@@ -1,5 +1,5 @@
 import mongoose, { Model, model, Schema } from 'mongoose';
-import { FEEDBACK_SUBJECTS, IFeedbackDocument } from '@bike4mind/common';
+import { FEEDBACK_SUBJECTS, HELP_FEEDBACK_RATINGS, HELP_FEEDBACK_SURFACES, IFeedbackDocument } from '@bike4mind/common';
 
 const feedbackSchema = new Schema<IFeedbackDocument>(
   {
@@ -25,6 +25,20 @@ const feedbackSchema = new Schema<IFeedbackDocument>(
     contextQuestId: { type: String, required: false },
     organizationId: { type: Schema.Types.ObjectId, ref: 'Organization', required: false, default: null },
     subject: { type: String, enum: FEEDBACK_SUBJECTS, required: true, default: 'product' },
+    // Typed rather than folded into promptMeta's unschema'd Object: eventId is the join key the
+    // help read path stitches on, so a silent shape drift here empties a user-facing panel.
+    helpContext: {
+      type: new Schema(
+        {
+          eventId: { type: String, required: true },
+          surface: { type: String, enum: HELP_FEEDBACK_SURFACES, required: true },
+          slug: { type: String, required: false },
+          rating: { type: String, required: false, enum: HELP_FEEDBACK_RATINGS },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
     contentStored: { type: Boolean, required: true, default: false },
   },
   {
@@ -42,9 +56,12 @@ const feedbackSchema = new Schema<IFeedbackDocument>(
 feedbackSchema.index({ userId: 1, createdAt: -1 }, { name: 'feedback_userId_createdAt' });
 feedbackSchema.index({ questId: 1, createdAt: -1 }, { name: 'feedback_questId_createdAt' });
 feedbackSchema.index({ sessionId: 1, createdAt: -1 }, { name: 'feedback_sessionId_createdAt' });
-// `subject` has no standalone index - 3 values means a scan would touch ~1/3 of the collection
+// `subject` has no standalone index - 4 values means a scan would touch ~1/4 of the collection
 // anyway, so it rides as this compound index's second key instead.
 feedbackSchema.index({ organizationId: 1, subject: 1, createdAt: -1 }, { name: 'feedback_org_subject_createdAt' });
+// Sparse: only help-routed reports carry this key, and the help read path looks a report up by
+// the HelpEvent it annotates on every panel load.
+feedbackSchema.index({ 'helpContext.eventId': 1 }, { name: 'feedback_helpContext_eventId', sparse: true });
 
 export const FeedbackModel: Model<IFeedbackDocument> =
   mongoose.models.Feedback ?? model<IFeedbackDocument>('Feedback', feedbackSchema);
