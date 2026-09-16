@@ -275,7 +275,12 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
         sx={theme => ({
           position: 'absolute',
           top: '-8px',
-          left: '-8px',
+          // Below `sm` the message stack drops its inline padding (Session/MessageContent),
+          // so the card sits flush with the screen edge and a left overhang would be
+          // clipped. Same breakpoint as that padding; there the pill sits inset from the
+          // card edge instead, keeping only the top overhang.
+          left: '16px',
+          [theme.breakpoints.up('sm')]: { left: '-8px' },
           zIndex: 1,
           backgroundColor: brand[800],
           color: 'text.primary',
