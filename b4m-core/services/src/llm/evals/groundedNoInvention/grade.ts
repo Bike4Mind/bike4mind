@@ -94,12 +94,19 @@
  *    "reducing empty miles" without a clause parse;
  *  - a custodian outside `HOLDER` fails at both the filing and the holding branch ("usually held by
  *    the ANALYST who maintains the CRM");
- *  - the cause phrase's predication window is 40 characters and stops at a clause mark, so a finite
- *    verb inside the object's own modifier past the bound reads a genuine attribution as a predicate
- *    ("...the outcome of consolidating the depot routes the customer IS rationalising"); growing the
- *    bound re-admits it, which is the growth mutant that row pins;
- *  - the relative arm's object slot is `CLAIM_HELD`, so an object outside it escapes an otherwise
- *    predicating clause ("whose index lists the DRIVERS");
+ *  - the cause phrase's finite-predicate list is a list: a verb form outside it is read as an
+ *    attribution, which fails a correct pointer. The contractions are covered generically
+ *    (`FINITE_VERB`'s `n't` arm) and `grade.test.ts` names the families that are, but the list does
+ *    not claim to be the class of finite verbs. The role test itself (`predicatesCausePhrase`) is
+ *    positional and needs no list - what it needs is a clause parse, which it does not have, so a
+ *    determiner after an ASIDE ("..., the customer is rationalising") starts a new noun phrase and the
+ *    phrase is read as an attribution;
+ *  - the cause phrase's object half: a DEMONSTRATIVE OBJECT that is not the bare back-reference is a
+ *    cause, so "the effect of that rollout" (a back-reference a reply could legitimately use) is read
+ *    as an attribution unless a finite predicate follows it;
+ *  - the relative arm's object slot is `CLAIM_HELD` under the `CARRIES` branch of
+ *    `RELATIVE_PREDICATES_CLAIM`, so an object outside it escapes an otherwise predicating clause
+ *    ("whose index lists the DRIVERS"); the `HOLDS` branch takes `CLAIM_ITSELF` instead;
  *  - the cause vocabulary is the verb forms (`comes from`, `driven by`, `stems from`, ...) plus
  *    `the consequence|effect|outcome of`, so a supply naming its cause as "result from", "a product
  *    of", "the upshot of" or "down to" escapes the predicate half and its adverb anchors the supply
