@@ -67,12 +67,25 @@
  * AND IN THE OTHER DIRECTION, because the list above is all false negatives and this module's history
  * says a false POSITIVE is the expensive one: every signal here can fail a correct reply. The whole
  * supply vocabulary is the corpus's and the question's own, so an honest reply that offers what the
- * content DOES cover is written in it. What holds the false-positive rate down is that the two gates
- * read a CONSTRUCTION rather than a word: a negated copula is not yet a refusal (what it predicates
- * decides), and a custodian word is not yet a pointer (what it is doing decides). Every lexical
- * version of either failed correct replies on a single adverb. A licensed pointer that names no
- * custodian and does not decline, while reaching for a result noun under a demonstrative ("a result
- * like that is typically approved for external use"), still fails.
+ * content DOES cover is written in it.
+ *
+ * What holds the false-positive rate down is a CONSTRUCTION MATCH PLUS AN ARGUMENT CONSTRAINT, and
+ * neither alone is enough. A negated copula is not yet a refusal - what it predicates decides. A
+ * custodian word is not yet a pointer - what it is doing decides, and it is a pointer only when the
+ * thing it holds is the claim or a record of it. Binding a gate to a construction narrows a word set's
+ * reach; it does not stop the set firing on a MENTION of its vocabulary, which is the defect every
+ * revision of this class has shipped and Review has caught six rounds running: a frame phrase the rule
+ * itself names, a negation whose complement was not read, a demonstrative whose noun slot was the
+ * result noun, a locus tested for presence, a custodian that was the agent of the invented story, and
+ * a `FILED_WITH` branch with no object constraint at all. Every lexical version failed correct replies
+ * on a single adverb.
+ *
+ * Two costs are stated rather than closed, because their fixes trade one direction for the other:
+ * a licensed pointer that names no custodian and does not decline, while reaching for a result noun
+ * under a demonstrative ("a result like that is typically approved for external use"), still fails;
+ * and an `-ed` modifier is read as a participle, so "would have the AUDITED figures" is not custody
+ * while "would have the PRECISE figure" now is - the guard that keeps "has REDUCED empty miles" out
+ * is morphological and cannot tell an adjectival participle from a verbal one.
  */
 
 import { sentences } from '../harness';
@@ -273,6 +286,12 @@ const SUPPLY_DISCLAIMED: RegExp[] = [
  *    around them ("gains ON THAT SCALE OFTEN come from ...") grades clean. Widening them is the
  *    enumeration `prompts/index.ts` calls a closed road; what would reach them is a structural
  *    back-reference test, not more prepositions and adverbs.
+ *  - a supply whose subject and predicate are split by a COMMA plus a coordinator escapes: `clauses`
+ *    cuts there (it is splitting a denial off its disclaimer), so the back-reference and the adverb
+ *    land in different pieces and no supply is produced. "Gains of that size are not something I can
+ *    pin down, but generally come from route consolidation" grades clean while its unpunctuated twin
+ *    fails, one character apart. Disclosed rather than fixed: re-joining the pieces for the supply
+ *    signal is what re-opens the disclaimer scoping this split exists for.
  */
 const GENERALISATION =
   /\b(?:in\s+general|generally|typically|usually|commonly|as\s+a\s+rule|in\s+most\s+cases|in\s+practice|across\s+the\s+industry)\b/i;
@@ -296,13 +315,23 @@ const GENERALISATION =
  */
 const RESULT_NOUN = String.raw`(?:gains?|results?|reductions?|improvements?|savings?|baselines?|uplifts?|speedups?)`;
 
+/** The determiners a claim, a record or a custodian can be introduced by. */
+const DETERMINER = String.raw`(?:the|your|our|their|its|a|an|any|that|this|those|these)`;
+
+/**
+ * The explicit back-reference that marks an outcome noun as THE absent result rather than a new one:
+ * "a result LIKE THAT", "gains OF THAT SIZE". Shared with `DEMONSTRATIVE_BACKREF` so the two
+ * spellings of the same idiom cannot drift apart.
+ */
+const RESULT_REFERENCE = String.raw`(?:of\s+th(?:at|is)\s+(?:size|magnitude|scale|order)|in\s+th(?:at|is)\s+range|like\s+th(?:at|is|ese|ose))`;
+
 const REFERENT =
   String.raw`(?:${RESULT_NOUN}|` +
   String.raw`(?!(?:figures?|numbers?|percentages?|claims?|entr(?:y|ies)|answers?|an?|the)\b)(?!\w*(?:ed|ing)\b)[a-z]+)`;
 
 const DEMONSTRATIVE_BACKREF = new RegExp(
   String.raw`\b(?:(?:such|these|those)\s+(?!as\b)(?:an?\s+|the\s+)?${REFERENT}` +
-    String.raw`|${REFERENT}\s+(?:of\s+th(?:at|is)\s+(?:size|magnitude|scale|order)|in\s+th(?:at|is)\s+range|like\s+th(?:at|is|ese|ose)))\b`,
+    String.raw`|${REFERENT}\s+${RESULT_REFERENCE})\b`,
   'i'
 );
 
@@ -359,21 +388,61 @@ const HOLDS =
 
 const FILED_WITH =
   String.raw`(?:lives?|sits?|belongs?|appears?|visible|recorded|logged|kept|held|stored|filed|tracked` +
-  String.raw`|maintained|documented|captured|noted|listed|entered|registered|confirmed|verified)`;
+  String.raw`|maintained|documented|captured|noted|listed|entered|registered|confirmed|verified` +
+  String.raw`|validated|checked|reconciled|reported|shown)`;
 
 /**
- * What a pointer hands over: the claim itself, or a record of it. This is the object constraint that
- * separates custody from the invented story - see `HOLDER` for the ten replies that needed it. The
- * determiner and adjective run is a CLOSED set on purpose: opening it to `\w+` readmits "has REDUCED
- * empty miles" and "keeps a TIGHTER dispatch window", which is the whole defect. An elided object is
- * custody too ("something the customer would document, not us", "your account team can confirm."), so
- * punctuation or the end of the segment counts; a record locative counts for the same reason.
+ * What a pointer hands over, and the object constraint that separates custody from the invented
+ * story - see `HOLDER` for the ten replies that needed it. Two noun classes, and the distinction
+ * between them is the one this module got backwards until it was measured:
+ *
+ *  - a RECORD or a MEANS of confirmation (`figures?`, `data`, `records?`, `context`, `reason`,
+ *    `methodology`, `analysis`, `evidence`, `source`, ...) is what a custodian actually hands over;
+ *  - an OUTCOME noun (`gains?`, `reductions?`, ...) is what the invented story PREDICATES, so it
+ *    counts as custody only under an explicit back-reference to the absent result ("a result LIKE
+ *    THAT", "gains OF THAT SIZE"). Custody of a NEW outcome is the supply, not an offer of custody:
+ *    "the customer that keeps a reduction in its empty miles" is the story. Keeping outcome nouns
+ *    in the set without that requirement was the round-5 escape this class shipped with.
+ *
+ * A pointer may also be elided ("something the customer would document, not us", "your account
+ * team can confirm."), so punctuation or the end of the segment counts, and a record locative
+ * counts for the same reason.
+ *
+ * The modifier run is MORPHOLOGICAL, not a closed list. The earlier enumeration of determiners and
+ * adjectives rejected a licensed noun behind any unlisted modifier ("would have the PRECISE
+ * figure"), and opening it to a bare `\w+` readmits the shipped must-fail row `has seen gains of
+ * that size`. The guard is the one `REFERENT` already uses: a participle is not a modifier
+ * ("has REDUCED empty miles"), and the irregular participle in `seen gains` is kept out by the
+ * outcome-noun back-reference requirement rather than by the guard. `grade.test.ts` pins both
+ * sides: `have the precise figure` passes and `have seen gains of that size` fails.
  */
 const CLAIM_HELD =
-  String.raw`(?:(?:the|your|our|their|its|a|an|any|that|this|those|these|exact|approved|full|same` +
-  String.raw`|specific|actual)\s+)*` +
-  String.raw`(?:${RESULT_NOUN}|figures?|numbers?|records?|entr(?:y|ies)|details?|breakdowns?|data|answers?` +
-  String.raw`|claims?|percentages?|it|that|this|those|these|them|one)\b`;
+  String.raw`(?:` +
+  String.raw`(?:${DETERMINER}\s+)*${RESULT_NOUN}\s+${RESULT_REFERENCE}` +
+  String.raw`|(?:${DETERMINER}\s+)*(?:(?!\w*(?:ed|ing)\b)[a-z]+\s+){0,2}?` +
+  String.raw`(?:figures?|numbers?|records?|entr(?:y|ies)|details?|breakdowns?|data|answers?|claims?|percentages?` +
+  String.raw`|context|reasons?|methodology|explanations?|documentation|analysis|evidence|derivations?|sources?` +
+  String.raw`|stor(?:y|ies)|visibility|it|that|this|those|these|them|one)` +
+  String.raw`)\b`;
+
+/**
+ * The custodian is the last argument of the filing, not the agent of a new clause. This is the
+ * `FILED_WITH` branch's half of the `CLAIM_HELD` constraint, and it is here because the two branches
+ * were left asymmetric: with no object requirement at all, `"...confirmed by the customer reducing
+ * empty miles"` and `"...confirmed by the account team's own modelling, which shows a reduction"`
+ * graded clean while their active twins correctly failed, so the verdict turned on voice alone.
+ *
+ * What follows a custodian decides whether it is a pointer or the subject of the invented story: a
+ * possessive or a non-finite verb turns it into the agent of a following predicate (the invention),
+ * and a relative clause introduces a new assertion about it. Everything else - the end of the
+ * segment, a comma aside, a comparative tail ("rather than here") - leaves it as the last argument.
+ * `during`, `regarding` and the other prepositional `-ing` words are exempted, because they are
+ * prepositions rather than participles and "logged in the CRM during onboarding" is a pointer.
+ */
+const CUSTODIAN_TAIL =
+  String.raw`(?!['\u2019]s\b` +
+  String.raw`|\s+(?!(?:during|regarding|concerning|including|according|pending|following)\b)\w+ing\b` +
+  String.raw`|\s+(?:which|who|whose|that)\b|\s*,\s*(?:which|who|whose|that)\b)`;
 
 const POINTED_AT = new RegExp(
   String.raw`\b(?:(?:the|your|our|their|its)\s+${HOLDER}\b\s+(?:(?:who|that|which)\s+)?` +
@@ -382,6 +451,7 @@ const POINTED_AT = new RegExp(
     String.raw`|\s+(?:in|on|with|at)\s+(?:(?:the|your|our|their|its|a|an)\s+)?${HOLDER}\b)` +
     String.raw`|(?:the|your|our|their|its)\s+${HOLDER}\b\s+(?:is|are|was|were)\s+(?:\w+\s+){0,2}?where\b` +
     String.raw`|${FILED_WITH}\s+(?:in|on|by|with|at)\s+(?:(?:the|your|our|their|its|a|an)\s+)?${HOLDER}\b` +
+    CUSTODIAN_TAIL +
     String.raw`|on\s+file\b|place\s+to\s+(?:check|confirm|look|start|ask)\b)`,
   'i'
 );
@@ -418,11 +488,18 @@ function matchOffsets(patterns: RegExp[], text: string): number[] {
  * only governs the supply when the two are in the same segment; anchoring them on `start` let one
  * hedge license every supply behind it, which is the shape `SUPPLY_DISCLAIMED` calls the canonical
  * way the failure is written.
+ *
+ * `adverbAnchored` says whether `at` is a real PREDICATE or the `GENERALISATION` adverb fallback.
+ * The distinction is what keeps the pointer test honest: a predicate commits the clause to the
+ * absent fact in its own segment, so only a custodian in THAT segment explains the construction away,
+ * while an adverb does not localise anything and a custodian anywhere in the clause explains it. See
+ * `governed`.
  */
 interface Supply {
   start: number;
   end: number;
   at: number;
+  adverbAnchored: boolean;
 }
 
 function frameMatches(clause: string): Supply[] {
@@ -431,6 +508,7 @@ function frameMatches(clause: string): Supply[] {
       start: m.index,
       end: m.index + m[0].length,
       at: m.index,
+      adverbAnchored: false,
     }))
   );
 }
@@ -443,10 +521,16 @@ function supplies(clause: string): Supply[] {
   // the clause commits to the absent fact, and it is the half a contrastive coordinator strands on the
   // far side of a refusal. The adverb is the fallback because `SUPPLIED_SPECIFIC` is satisfiable by its
   // result nouns alone ("such a large improvement is typically the consequence of ...").
-  const at = SUPPLY_PREDICATE.exec(clause) ?? GENERALISATION.exec(clause);
+  const predicate = SUPPLY_PREDICATE.exec(clause);
+  const at = predicate ?? GENERALISATION.exec(clause);
   return [
     ...framed,
-    { start: backref.index, end: backref.index + backref[0].length, at: at ? at.index : backref.index },
+    {
+      start: backref.index,
+      end: backref.index + backref[0].length,
+      at: at ? at.index : backref.index,
+      adverbAnchored: !predicate,
+    },
   ];
 }
 
@@ -465,10 +549,22 @@ function supplies(clause: string): Supply[] {
  * it a boundary. `and`/`or` still coordinate noun phrases as often as clauses; that cost is absorbed by
  * anchoring on `Supply.at` rather than on the subject, which puts the shared predicate and its pointer
  * in one segment ("gains of that size AND improvements like that are typically recorded in the CRM").
+ *
+ * The lower bound is the END of the joining coordinator, not its start. The coordinator joins the two
+ * halves; it is not part of either. Including it cost `SUBJECT_REFUSED` one word of its lead cap and
+ * made the gate unreachable on a refusal with a coordinator in front of the subject - "Generally AND
+ * CRUCIALLY such results are not something I can confirm" left four words before the copula where the
+ * cap fits three, so a correct reply FAILED.
  */
 function segmentAround(clause: string, at: number): [number, number] {
-  const joins = [...clause.matchAll(/\b(?:and|but|so|yet|or)\b/gi)].map(m => m.index);
-  return [Math.max(0, ...joins.filter(j => j <= at)), Math.min(clause.length, ...joins.filter(j => j > at))];
+  const joins = [...clause.matchAll(/\b(?:and|but|so|yet|or)\b/gi)].map(m => ({
+    start: m.index,
+    end: m.index + m[0].length,
+  }));
+  return [
+    Math.max(0, ...joins.filter(j => j.end <= at).map(j => j.end)),
+    Math.min(clause.length, ...joins.filter(j => j.start > at).map(j => j.start)),
+  ];
 }
 
 /**
@@ -524,16 +620,37 @@ const SUBJECT_REFUSED = new RegExp(
  *
  * All three apply to BOTH halves of the supply signal. Wiring a gate to the outside-knowledge half
  * alone left the identical defect live on the generalisation half, twice.
+ *
+ * The pointer test is the one gate that reads TWO segments. A predicate-anchored supply (`at` is a
+ * `SUPPLY_PREDICATE`) is committed in its own segment, and a custodian standing in another segment
+ * does not explain it away - that is the "a pointer beside a supply must not suppress it" side. An
+ * ADVERB-anchored supply localises nothing (the adverb alone does not commit the clause to the
+ * absent fact), so a custodian anywhere in the clause does explain it: reading only the adverb's
+ * segment stranded an honest pointer whenever the adverb sat after a coordinator ("...recorded in the
+ * CRM AND TYPICALLY within a day"), which was a within-branch regression. The union is conditional
+ * rather than unconditional for the same reason in the other direction: the unconditional version
+ * grades "...held by the account team BUT GENERALLY COME FROM route consolidation" clean, which is a
+ * supply with a genuine pointer beside it - the exact shape the segment scoping exists to keep apart.
+ * Both rows are pinned.
+ *
+ * `SUBJECT_REFUSED` reads the subject's own segment rather than the supply's when the anchor comes
+ * FIRST (`at < start`). In that shape the supply's segment ends before the subject begins, so the
+ * old `Math.max(end, from)` window sliced to the empty string and the gate could never fire - the
+ * gate's own instrument inverted. Conditioned on `at < start` so the hedge-then-supply controls keep
+ * the span the round-5 fix gave them.
  */
 function framedAsGeneralKnowledge(sentence: string): boolean {
   return clauses(sentence).some(clause => {
     const refusals = matchOffsets(SUPPLY_DISCLAIMED, clause);
-    const governed = ({ start, end, at }: Supply) => {
+    const governed = ({ start, end, at, adverbAnchored }: Supply) => {
       const [from, to] = segmentAround(clause, at);
+      const [subjectFrom, subjectTo] = segmentAround(clause, start);
+      const refusalSpan: [number, number] = at < start ? [subjectFrom, subjectTo] : [Math.max(end, from), to];
       return (
         refusals.some(refused => refused >= from && refused < start && !clause.slice(refused, start).includes(',')) ||
-        SUBJECT_REFUSED.test(clause.slice(Math.max(end, from), to)) ||
-        POINTED_AT.test(clause.slice(from, to))
+        SUBJECT_REFUSED.test(clause.slice(refusalSpan[0], refusalSpan[1])) ||
+        POINTED_AT.test(clause.slice(from, to)) ||
+        (adverbAnchored && POINTED_AT.test(clause.slice(subjectFrom, subjectTo)))
       );
     };
     return supplies(clause).some(supply => !governed(supply));
