@@ -308,10 +308,15 @@ jobs:
 
       - name: Run /bot-review
         id: bot_review
-        # Gated on the skill having been FETCHED, which is what makes `Report skill-fetch
-        # failure` below true when it says no review ran. Without it the review ran against a
-        # missing skill file, and on a run that then posted nothing that comment fired beside
-        # `Report incomplete review` - two comments for one run, neither of them wrong.
+        # `steps.skill_fetch.outcome == 'success'` is REDUNDANT today, and kept on purpose. This
+        # `if:` names no status-check function, so Actions applies an implicit `success()`, and a
+        # failed fetch has already reddened the job and skipped this step. It is written down so
+        # the dependency is explicit rather than inherited from that default: adding
+        # `continue-on-error: true` to the fetch above would silence the implicit check, and this
+        # conjunct would then be the only thing keeping `Report skill-fetch failure`'s "no review
+        # ran" true. The double comment it was once credited with preventing was not reachable - a
+        # failed fetch leaves `bot_review.outcome` `skipped`, and `Report incomplete review` needs
+        # `failure` or `success` - so it is a belt, not the fix.
         if: steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false' && steps.skill_fetch.outcome == 'success'
         uses: anthropics/claude-code-action@v1
         with:
@@ -1213,20 +1218,16 @@ jobs:
         # skipped the review entirely (rather than degrading silently). Surface it on the PR,
         # not just as a red check. Best-effort comment - never red the job further.
         #
-        # `!cancelled()`, not `always()`. `always()` is true on cancellation too, so a cancel
-        # landing on a fold run whose fetch had failed fired this beside `Report cancelled fold`
-        # - two comments on one state, which is the one thing the reporting cross-product in the
-        # guard test asserts. The cancellation reporter owns that state: on cancellation the
-        # fetch may have "failed" only because it was killed, while "this run was CANCELLED" is
-        # true either way. An un-cancelled fetch failure still comments here, and nothing else
-        # does - the review step is skipped, so `posted` is empty and every other reporter's
-        # gate is false.
-        # A block scalar rather than one line: a plain YAML scalar may not START with `!`, which
-        # is a tag indicator, so `if: !cancelled() && ...` is not valid YAML at all - it is
-        # parsed as the tag `!cancelled()` and the workflow fails to load. The other `!cancelled()`
-        # gates in this file are block scalars for the same reason.
-        if: |
-          !cancelled() && steps.skill_fetch.outcome == 'failure'
+        # `always()` with the SAME negation `Report incomplete review` carries, not `!cancelled()`.
+        # `always()` alone is true on cancellation too, so a cancel landing on a fold run whose
+        # fetch had failed fired this beside `Report cancelled fold` - two comments on one state.
+        # `!cancelled()` fixed that by dropping the reporter entirely, which also removed it from a
+        # cancelled ORDINARY run whose fetch failed: `Report cancelled fold` needs FOLD_MODE and
+        # `Report incomplete review` needs `bot_review.outcome` in {failure, success}, which a
+        # skipped review is not, so that state commented nothing. Negating the conjunction only for
+        # a fold run keeps exactly one reporter on every one of them. Single-line rather than a
+        # block scalar, which is safe because the value now opens with `always()` rather than `!`.
+        if: always() && steps.skill_fetch.outcome == 'failure' && !(cancelled() && env.FOLD_MODE == 'true')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}

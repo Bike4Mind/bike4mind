@@ -986,9 +986,27 @@ function mappingEntries(block: string, indent: number, label: string): [string, 
 }
 
 /**
+ * The ONE opener for a mapping key, shared by the block lifter and every presence test.
+ *
+ * A presence test that spells the key differently from the reader it gates is the same defect as
+ * a reader that under-counts: YAML reads `env:`, `'env':` and `"env":` as the same key, so a step
+ * that declares no `env:` could be handed a whole quoted block while a bare-token gate recorded
+ * no block at all and the key-set pin read `[]` - exactly what it expects for that step.
+ * `mappingEntries` learned the quoted spellings; the gate that decides whether to call it had
+ * not, so `"env":` plus `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '0'` on the agent step was green.
+ */
+function keyOpener(indent: number, key: string): RegExp {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // `m`, because the presence test runs this over a whole multi-line step body while the lifter
+  // runs it line by line. Without it `^` and `$` anchor to the body's first and last character,
+  // so the gate read FALSE for a step that does declare `env:` and the pin silently went to `[]`.
+  return new RegExp(`^ {${indent}}(?:"${escaped}"|'${escaped}'|${escaped}):(.*)$`, 'm');
+}
+
+/**
  * The body of a mapping key (`with:`, `env:`, `claude_args:`, `if:`), lifted by YAML's
  * indentation rule rather than by a fixed column count and a "deeper than me, empty, or stop"
- * arm.
+ * arm. The opener is `keyOpener`, so a quoted key is lifted rather than missed.
  *
  * Those two arms stop at a line that is neither deep enough nor blank - and a COMMENT is exactly
  * that line, because YAML ignores comment lines for structure. A comment indented above the key
@@ -1006,7 +1024,7 @@ function mappingEntries(block: string, indent: number, label: string): [string, 
  */
 function liftBlock(text: string, key: string, indent: number, label: string): string {
   const lines = text.split('\n');
-  const head = new RegExp(`^ {${indent}}${key}:(.*)$`);
+  const head = keyOpener(indent, key);
   const starts = lines.flatMap((line, index) => (head.test(line) ? [index] : []));
   expect(starts, `${label}: expected exactly one ${key}: at indent ${indent}`).toHaveLength(1);
   const body: string[] = [];
@@ -1067,11 +1085,17 @@ const envKeys = (src: string, name: string) => envPairs(src, name).map(([key]) =
  * any other step, which `bash -e {0}` sources before that step's body runs. A pin per step NAME
  * cannot see either, so the whole map is pinned instead: a key added anywhere, and a block added
  * to a step that had none, both reach it.
+ *
+ * The gate below is `keyOpener`, the SAME spelling-aware opener the lifter uses. A bare-token
+ * gate (`/^ {8}env:$/m`) read a quoted `"env":` as no env block at all and returned `[]`, which
+ * is what this pin expects for a step that declares none - so the agent step could take a whole
+ * quoted block, scrub included, with the map reading unchanged. Any pin that gates a
+ * quoted-aware reader behind a bare-token regex reopens the class.
  */
 const stepEnvKeys = (src: string): [string, string[]][] =>
   stepChunks(src).map(({ name, body }) => [
     name,
-    /^ {8}env:$/m.test(body)
+    keyOpener(8, 'env').test(body)
       ? mappingEntries(liftBlock(body, 'env', 8, `${name} env:`), 10, `${name} env:`).map(([key]) => key)
       : [],
   ]);
@@ -2642,6 +2666,22 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     expect(stepEnvKeys(addedToAgent).find(([name]) => name === 'Run /bot-review')?.[1]).toEqual([
       'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB',
     ]);
+    // The SAME two lines under a QUOTED key. YAML reads `"env":` as the key `env`, and the
+    // bare-token presence gate that used to stand here read it as no block at all - so the pin
+    // received `[]`, which is exactly what it expects for a step that declares none, and a step
+    // level `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '0'` overrode the job-wide `'1'` with the map
+    // reading unchanged. Both quote spellings, because `mappingEntries` accepts both and a gate
+    // that takes one is still a hole.
+    for (const opener of ['"env"', "'env'"]) {
+      const quotedAgent = src.replace(
+        /^( {8}uses: anthropics\/claude-code-action@v1\n)/m,
+        `$1        ${opener}:\n          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '0'\n`
+      );
+      expect(quotedAgent, 'the agent env injection anchor moved').not.toBe(src);
+      expect(stepEnvKeys(quotedAgent).find(([name]) => name === 'Run /bot-review')?.[1], opener).toEqual([
+        'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB',
+      ]);
+    }
     // POSITIVE CONTROLS: a new step in every spelling the list item may take. `name:` is optional
     // in the step schema and an unnamed step has blinded four sweeps in this file at once before,
     // so it has to REACH the pin rather than be skipped by it. The last two are the bare `-`
@@ -2818,10 +2858,20 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       'Report skill-fetch failure',
     ];
     // `bot_review` is held at the shape claude-code-action leaves on a successful review and
-    // `skill_fetch` at success, so the four booleans below are the only axes that move.
-    const state = (cancelled: boolean, posted: boolean, minted: boolean, pushed: boolean): StepState => ({
+    // `skill_fetch` at success, so the booleans below are the only axes that move. `foldMode` is
+    // an AXIS rather than the literal `true` it used to be, because the fold reporters it switches
+    // off are exactly the ones that hid the ordinary-run cells: with it fixed, "at most one
+    // reporter" was proven for fold runs only, and the cancelled-ordinary-fetch-failure cell below
+    // lived in the half that was never built.
+    const state = (
+      cancelled: boolean,
+      foldMode: boolean,
+      posted: boolean,
+      minted: boolean,
+      pushed: boolean
+    ): StepState => ({
       cancelled,
-      foldMode: true,
+      foldMode,
       steps: {
         bot_review: { outcome: 'success', outputs: { conclusion: 'success' } },
         skill_fetch: { outcome: 'success' },
@@ -2836,69 +2886,73 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     const firing = (s: StepState) => reporters.filter(name => stepFires(src, name, s));
 
     for (const cancelled of [false, true]) {
-      for (const posted of [false, true]) {
-        for (const minted of [false, true]) {
-          for (const pushed of [false, true]) {
-            const on = firing(state(cancelled, posted, minted, pushed));
-            expect(
-              on.length,
-              `more than one reporter commented: ${on.join(', ')} - cancelled=${cancelled} posted=${posted} minted=${minted} pushed=${pushed}`
-            ).toBeLessThan(2);
+      for (const foldMode of [false, true]) {
+        for (const posted of [false, true]) {
+          for (const minted of [false, true]) {
+            for (const pushed of [false, true]) {
+              const on = firing(state(cancelled, foldMode, posted, minted, pushed));
+              expect(
+                on.length,
+                `more than one reporter commented: ${on.join(', ')} - cancelled=${cancelled} fold=${foldMode} posted=${posted} minted=${minted} pushed=${pushed}`
+              ).toBeLessThan(2);
+            }
           }
         }
       }
     }
 
     // And the rows that have to name a specific reporter, so "at most one" is not satisfied by
-    // nothing firing. The first is the collision: a cancel landing before the review was measured.
-    expect(firing(state(true, false, true, true))).toEqual(['Report cancelled fold']);
-    expect(firing(state(true, true, true, true))).toEqual(['Report cancelled fold']);
-    expect(firing(state(false, false, true, true))).toEqual(['Report incomplete review']);
-    expect(firing(state(false, true, false, true))).toEqual(['Report fold failure']);
-    expect(firing(state(false, true, true, false))).toEqual(['Report fold failure']);
-    // The happy path is the one tuple that correctly comments nothing.
-    expect(firing(state(false, true, true, true))).toEqual([]);
+    // nothing firing. The first two are the collision: a cancel landing before the review was
+    // measured, which the fold reporter owns in a fold run.
+    expect(firing(state(true, true, false, true, true))).toEqual(['Report cancelled fold']);
+    expect(firing(state(true, true, true, true, true))).toEqual(['Report cancelled fold']);
+    // A cancelled ORDINARY run has no fold reporter at all, and `posted` can be empty because the
+    // measurement step never ran - so `Report incomplete review` is what keeps it covered. That is
+    // the half the fold-only cross-product never built.
+    expect(firing(state(true, false, false, true, true))).toEqual(['Report incomplete review']);
+    expect(firing(state(false, true, false, true, true))).toEqual(['Report incomplete review']);
+    expect(firing(state(false, true, true, false, true))).toEqual(['Report fold failure']);
+    expect(firing(state(false, true, true, true, false))).toEqual(['Report fold failure']);
+    // The happy path is the one tuple in each mode that correctly comments nothing.
+    expect(firing(state(false, true, true, true, true))).toEqual([]);
+    expect(firing(state(false, false, true, true, true))).toEqual([]);
     // `Report fold no-op` covers both of its arms.
     for (const outputs of [
       { pushed: 'none', dropped: '' },
       { pushed: 'true', dropped: 'src/dropped.ts' },
     ]) {
-      const s = state(false, true, true, true);
+      const s = state(false, true, true, true, true);
       s.steps.fold_push = { outcome: 'success', outputs };
       expect(firing(s)).toEqual(['Report fold no-op']);
     }
-    // A failed skill fetch skips the review step, which is the shape the fifth reporter exists
-    // for - and the review-step gates are all false on it, so it cannot double up.
-    const skipped = state(false, false, false, false);
-    skipped.steps.skill_fetch = { outcome: 'failure' };
-    skipped.steps.bot_review = { outcome: 'skipped', outputs: {} };
-    expect(firing(skipped)).toEqual(['Report skill-fetch failure']);
 
-    // The FIFTH axis that loop holds fixed at `skill_fetch: success`, and the state outside it.
+    // The FIFTH axis that loop holds fixed at `skill_fetch: success`, and the states outside it.
     // `Report skill-fetch failure` was `always() && outcome == 'failure'`: no `cancelled()` and no
     // FOLD_MODE guard, so on a cancellation it fired beside `Report cancelled fold`. And the
-    // review step was not gated on the fetch at all, so this comment's own claim - "no review ran"
-    // - was false, and an un-cancelled fetch failure with a review that posted nothing fired
-    // beside `Report incomplete review`. Both halves are bound here: the report is `!cancelled()`
-    // and the review step now requires the fetch to have succeeded, which is what makes its
-    // message true rather than merely reassuring.
+    // review step was not gated on the fetch at all, so an un-cancelled fetch failure could fire
+    // beside `Report incomplete review`. The report is now `always()` with the SAME negation
+    // `Report incomplete review` carries, which keeps one reporter on the cancelled ORDINARY
+    // fetch failure that `!cancelled()` had left with none; the review step's conjunct is
+    // REDUNDANT under Actions' implicit `success()` and is kept as a belt - see the workflow.
     expect(ifLine(src, 'Run /bot-review')).toBe(
       "steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false' && steps.skill_fetch.outcome == 'success'"
     );
-    // As conjuncts off a BLOCK scalar, not a single-line `if:`: a plain YAML scalar may not start
-    // with `!`, so writing this gate on one line is a workflow that will not load at all. The
-    // reader below is what pins it; `ifLine` would silently read a different spelling.
-    expect(ifConjuncts(src, 'Report skill-fetch failure')).toEqual([
-      '!cancelled()',
-      "steps.skill_fetch.outcome == 'failure'",
-    ]);
+    // Single-line, unlike the `!cancelled()` gates: a plain YAML scalar may not OPEN with `!`, so
+    // `if: !cancelled() && ...` is the tag `!cancelled()` and the workflow will not load. Opening
+    // with `always()` is what lets this one be pinned by `ifLine` instead of by conjunct set.
+    expect(ifLine(src, 'Report skill-fetch failure')).toBe(
+      "always() && steps.skill_fetch.outcome == 'failure' && !(cancelled() && env.FOLD_MODE == 'true')"
+    );
     for (const cancelled of [false, true]) {
-      const noSkill = state(cancelled, false, false, false);
-      noSkill.steps.skill_fetch = { outcome: 'failure' };
-      noSkill.steps.bot_review = { outcome: 'skipped', outputs: {} };
-      expect(firing(noSkill), `a failed skill fetch was outside the sweep: cancelled=${cancelled}`).toEqual([
-        cancelled ? 'Report cancelled fold' : 'Report skill-fetch failure',
-      ]);
+      for (const foldMode of [false, true]) {
+        const noSkill = state(cancelled, foldMode, false, false, false);
+        noSkill.steps.skill_fetch = { outcome: 'failure' };
+        noSkill.steps.bot_review = { outcome: 'skipped', outputs: {} };
+        expect(
+          firing(noSkill),
+          `a failed skill fetch was outside the sweep: cancelled=${cancelled} fold=${foldMode}`
+        ).toEqual([cancelled && foldMode ? 'Report cancelled fold' : 'Report skill-fetch failure']);
+      }
     }
   });
 
@@ -3065,30 +3119,52 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     const ghInvocations = (src: string) => commandsNamed(src, /^gh$/);
     const ghSubcommands = (src: string) =>
       [...new Set(ghInvocations(src).map(words => words.slice(1).find(word => !word.startsWith('-')) ?? ''))].sort();
+    // The first non-flag word is the SUBCOMMAND; a verb lives one word further on, and pinning
+    // only the first left every `gh pr <verb>` unbound: `gh pr close "$PR" --repo "$REPO"` carries
+    // no flag the flag set does not already have, so closing, relabelling (`gh pr edit`),
+    // `gh pr ready`, `gh pr update-branch` and `gh pr merge` were all green at 31/31.
+    //
+    // A verb is a bare lowercase word; an ARGUMENT is not - `gh api <path>` and `gh api "$url"`
+    // put a path or an expansion where a verb-taking subcommand puts a verb, which is how the
+    // two are told apart without enumerating which subcommands take one.
+    const ghVerbs = (src: string) =>
+      [
+        ...new Set(
+          ghInvocations(src).map(words => {
+            const args = words.slice(1).filter(word => !word.startsWith('-'));
+            return /^[a-z][a-z-]*$/.test(args[1] ?? '') ? `${args[0]} ${args[1]}` : (args[0] ?? '');
+          })
+        ),
+      ].sort();
     const ghFlags = (src: string) =>
       [...new Set(ghInvocations(src).flatMap(words => words.slice(1).filter(word => word.startsWith('-'))))].sort();
+    expect(ghVerbs(src)).toEqual(['api', 'pr comment', 'pr edit', 'pr view']);
     expect(ghSubcommands(src)).toEqual(['api', 'pr']);
     expect(ghFlags(src)).toEqual(['--body', '--jq', '--json', '--paginate', '--remove-label', '--repo']);
     // POSITIVE CONTROLS, one per reach. The first two are the flag spellings the filter this
     // replaces DID enumerate - kept so the replacement is not weaker than what it replaced. The
-    // last two are the axes that filter could not see at all: `--output` is a file write on a READ
-    // verb, and `extension` is a subcommand rather than a flag.
-    for (const [injected, subcommand, flag] of [
-      ['gh api --method PUT repos/$REPO/contents/x -f content=y', 'api', '--method'],
-      ['gh api -XPUT repos/$REPO/contents/x -fcontent=y', 'api', '-XPUT'],
+    // last three are the axes that filter could not see at all: `--output` is a file write on a
+    // READ verb, `extension` is a subcommand rather than a flag, and `close` is a second-level
+    // verb under the pinned `pr` that the subcommand pin reads straight past.
+    for (const [injected, subcommand, verb, flag] of [
+      ['gh api --method PUT repos/$REPO/contents/x -f content=y', 'api', 'api', '--method'],
+      ['gh api -XPUT repos/$REPO/contents/x -fcontent=y', 'api', 'api', '-XPUT'],
       [
         'gh release download v1 --pattern "*" --output /home/runner/work/_temp/_runner_file_commands/set_env_x',
         'release',
+        'release download',
         '--output',
       ],
-      ['gh extension install evil/tool', 'extension', undefined],
-    ] as Array<[string, string, string | undefined]>) {
+      ['gh extension install evil/tool', 'extension', 'extension install', undefined],
+      ['gh pr close "$PR" --repo "$REPO"', 'pr', 'pr close', '--repo'],
+    ] as Array<[string, string, string, string | undefined]>) {
       const mutated = src.replace(
         /^ {6}- name: Report skill-fetch failure$/m,
         `      - name: Publish the fold\n        run: |\n          ${injected}\n      - name: Report skill-fetch failure`
       );
       expect(mutated, 'the injection anchor moved').not.toBe(src);
       expect(ghSubcommands(mutated), `a gh subcommand was not seen: ${injected}`).toContain(subcommand);
+      expect(ghVerbs(mutated), `a gh verb was not seen: ${injected}`).toContain(verb);
       if (flag) expect(ghFlags(mutated), `a gh flag was not seen: ${injected}`).toContain(flag);
     }
     // And no `gh` at all in the step that holds PUSH_TOKEN.
