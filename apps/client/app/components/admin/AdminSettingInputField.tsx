@@ -153,6 +153,10 @@ const AdminSettingInputField = ({
         onSuccess: (data: { settingValue?: unknown } | undefined) => {
           setSecretEdited(false);
           if (setting.isSensitive && typeof data?.settingValue === 'string') setValue(data.settingValue);
+          // A cleared number field resolves server-side to the setting's own default (#2636),
+          // not to what was submitted - sync from the response instead of leaving the field
+          // empty until the next full settings refetch.
+          if (setting.type === 'number' && typeof data?.settingValue === 'number') setValue(data.settingValue);
         },
       }
     );
