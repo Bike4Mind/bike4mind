@@ -110,12 +110,15 @@
  *  - the reduced relative's matrix predicate is read from the participle's own SLOT rather than from
  *    its INFLECTION (`canHeadPredicate`), so a predicate that ENDS its clause is not recognised, and a
  *    MULTI-WORD bare object puts its own first word in that slot ("...RATIONALISING DEPOT ROUTES"
- *    grades clean where the committed single-noun row does not). A preposition a modifier run opens
- *    keeps the predicate out of the slot too, which is why a PREPOSITIONAL modifier run still FAILS an
- *    honest refusal while the bare-adverb instance of the same cost no longer does. The slot's
- *    boundary is pinned on both sides in `grade.test.ts`; only a part-of-speech test closes the
- *    multi-word case, and the word-shape test that stood there failed correct replies and supplies
- *    alike;
+ *    grades clean where the committed single-noun row does not). A DETERMINER-LED prepositional
+ *    modifier keeps the predicate out of the slot too, which is why that modifier run still FAILS an
+ *    honest refusal while the bare-adverb instance of the same cost no longer does; a modifier run
+ *    whose preposition governs a bare content word ("...daily ACROSS depot routes.") is read as the
+ *    predicate instead and grades clean. A predicate's own complement may start with a preposition
+ *    ("...continues TO elude us", "...keeps ON eluding us") and is recognised by the content word
+ *    behind it. The slot's boundary is pinned on both sides in `grade.test.ts`; only a
+ *    part-of-speech test closes the multi-word case, and the word-shape test that stood there failed
+ *    correct replies and supplies alike;
  *  - the relative arm's object slot is `CLAIM_HELD` under the `CARRIES` branch of
  *    `RELATIVE_PREDICATES_CLAIM`, so an object outside it escapes an otherwise predicating clause
  *    ("whose index lists the DRIVERS"); the `HOLDS` branch takes `CLAIM_ITSELF` instead;
@@ -789,12 +792,20 @@ function isNonFiniteVerb(word: string): boolean {
  *
  * What separates the two is what a word in the relative's own slot is FOLLOWED by. The relative's
  * continuation is the relative's own object or adverbial run, and it ENDS the phrase - at the clause
- * end ("routes.", "everything.", "daily.") or in a modifier a preposition or coordinator opens
- * ("daily ACROSS THE REGION", "ACROSS THE REGION AND the fleet is growing"). A finite predicate is
- * followed by its own complement, which a preposition or a coordinator does not start ("elude US",
- * "defy EXPLANATION", "make NO sense", "remains UNCLEAR").
+ * end ("routes.", "everything.", "daily.") or in a modifier a coordinator introduces ("ACROSS THE
+ * REGION AND the fleet is growing"). A finite predicate is followed by its own complement ("elude
+ * US", "defy EXPLANATION", "make NO sense", "remains UNCLEAR").
  *
- * Cost, measured and accepted, in the two shapes this leaves open:
+ * A COMPLEMENT CAN START WITH A PREPOSITION, and an earlier revision read that alone as proof the
+ * candidate was not a predicate at all. That premise is false of English: a finite predicate takes an
+ * infinitival or PP complement ("...RATIONALISING continues TO elude us", "...RATIONALISING keeps ON
+ * eluding us"), and an unlisted predicate of that family was read as the relative's modifier, so the
+ * phrase was graded an attribution and an honest refusal failed - seven spellings, one token from a
+ * pinned must-PASS row. What the preposition INTRODUCES is the test: a preposition that governs a CONTENT
+ * word is the candidate's own complement, while one that opens a determiner-led noun phrase is the
+ * relative's adverbial run ("...RATIONALISING daily ACROSS THE region").
+ *
+ * Cost, measured and accepted, in the shapes this leaves open:
  *  - a matrix predicate that ends its clause takes no complement, so "...rationalising PERSISTS." is
  *    graded as a supply. No row in the suite reaches the shape, but the same reading is why the
  *    bare-object modifier run opens: a multi-word bare object puts its FIRST word where a predicate
@@ -803,13 +814,23 @@ function isNonFiniteVerb(word: string): boolean {
  *    not. Closing it needs the candidate's part of speech, which no shape test and no complement test
  *    recovers: `defy explanation` (a predicate and its object) and `depot routes` (a modifier and its
  *    head) are the same two uninflected content words in the same two slots. Both spellings are pinned
- *    in `grade.test.ts` at their current verdict, and measured in the report.
+ *    in `grade.test.ts` at their current verdict, and measured in the report;
+ *  - the same reading opens the modifier run whose preposition governs a BARE content word
+ *    ("...RATIONALISING daily ACROSS depot routes."), which is graded clean for the reason the
+ *    multi-word bare object is. The determiner-led run ("...daily ACROSS THE region.") stays caught,
+ *    and both spellings are pinned in `grade.test.ts`.
  */
 function canHeadPredicate(tokens: string[], i: number): boolean {
   const next = tokens[i + 1];
   if (next === undefined || /^[;:,!?.]$/.test(next)) return false;
   const nextWord = next.toLowerCase();
-  return !PREPOSITION.has(nextWord) && !COORDINATOR_WORD.test(nextWord);
+  if (COORDINATOR_WORD.test(nextWord)) return false;
+  if (!PREPOSITION.has(nextWord)) return true;
+  // The preposition introduces the candidate's own complement when a content word follows it. A
+  // determiner-led noun phrase behind it is the relative's own adverbial run instead, which keeps the
+  // predicate out of the slot.
+  const after = tokens[i + 2];
+  return after !== undefined && !/^[;:,!?.]$/.test(after) && !isFunctionWord(after.toLowerCase());
 }
 
 /** A word that introduces or joins a phrase rather than heading a predicate. */
@@ -828,9 +849,11 @@ function isFunctionWord(word: string): boolean {
  * the matrix predicate ("...the customer is RATIONALISING ELUDE us"). It has to be a word in the
  * PREDICATE's slot, not just any content word - see `canHeadPredicate` - or the relative verb's own
  * adverb is taken for the predicate ("...RATIONALISING DAILY"), `Supply.at` moves off the phrase and a
- * supply one modifier from the committed row grades clean. A word a preposition, determiner or
- * coordinator introduces belongs to the relative's modifier instead ("...RATIONALISING ACROSS the
- * region"), so it is skipped rather than matched.
+ * supply one modifier from the committed row grades clean. A word a determiner or coordinator
+ * introduces belongs to the relative's modifier instead ("...RATIONALISING ACROSS the region"), so it
+ * is skipped rather than matched; a word a PREPOSITION introduces is the candidate's own complement
+ * when it is a content word ("...RATIONALISING continues TO elude us") and the relative's adverbial
+ * run when it opens a determiner-led noun phrase ("...RATIONALISING daily ACROSS the region").
  *
  * ADJACENCY IS THE ACCEPTED LIMIT, and the prepositional modifier is the cost of it. A PP between the
  * participle and the predicate ("...RATIONALISING ACROSS THE REGION eludes us") leaves the predicate
