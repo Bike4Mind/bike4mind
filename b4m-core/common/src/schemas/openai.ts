@@ -1,4 +1,4 @@
-import { ImageModels } from '../models';
+import { IMAGE_SIZE_CONSTRAINTS, ImageModels } from '../models';
 import { z } from 'zod';
 import { BFL_IMAGE_MODELS } from './bfl';
 import { XAI_IMAGE_MODELS } from './xai';
@@ -53,17 +53,12 @@ export const ALL_IMAGE_MODELS = [
   ...GEMINI_IMAGE_MODELS,
 ] as const;
 
-export const OPENAI_GPT_IMAGE_1_IMAGE_SIZES = ['1024x1024', '1024x1536', '1536x1024'] as const;
-export const OPENAI_GPT_IMAGE_2_IMAGE_SIZES = [
-  '1024x1024',
-  '1536x1024',
-  '1024x1536',
-  '2048x2048',
-  '2048x1152',
-  '3840x2160',
-  '2160x3840',
-  'auto',
-] as const;
+export const OPENAI_GPT_IMAGE_1_IMAGE_SIZES = IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes;
+/**
+ * The UI presets plus 'auto', which the API accepts but is not a resolution, so it has no
+ * place in the preset list the size picker renders.
+ */
+export const OPENAI_GPT_IMAGE_2_IMAGE_SIZES = [...IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.sizes, 'auto'] as const;
 export const BFL_IMAGE_SIZES = ['1024x768'] as const;
 
 export const OPENAI_IMAGE_SIZES = [...OPENAI_GPT_IMAGE_1_IMAGE_SIZES] as const;
