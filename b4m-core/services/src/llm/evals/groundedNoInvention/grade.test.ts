@@ -1207,20 +1207,22 @@ describe('gradeMustNotDenyPremise', () => {
     }
   });
 
-  // The NAMED COST of reading the matrix predicate by ADJACENCY. A prepositional modifier between the
-  // participle and the predicate puts the predicate one token past the participle's own slot, so the
-  // tell cannot reach it and the honest refusal is graded as a supply. Closing it was measured and
-  // rejected: the scan can only recognise a verb morphologically, and a plural noun in the modifier run
-  // ("depot routes") is indistinguishable from the `-s` inflection, so the scan read the relative's own
-  // PP head as the matrix predicate and graded a supply one noun from the committed row clean. These
-  // rows are pinned at their CURRENT (wrong) verdict so the cost cannot change silently - changing
-  // these expectations is what closing it looks like. `finiteVerbFollows`' docblock carries the
-  // measurement and the refusal to trade.
-  it('grades an honest refusal whose predicate sits behind a prepositional modifier as a supply (known cost)', () => {
+  // The NAMED COST of reading the matrix predicate by ADJACENCY. A modifier run between the participle
+  // and the predicate - a prepositional phrase or a bare adverb - puts the predicate one token past the
+  // participle's own slot, so the tell cannot reach it and the honest refusal is graded as a supply.
+  // Closing it was measured and rejected: the scan can only recognise a verb morphologically, and a
+  // plural noun in the modifier run ("depot routes") is indistinguishable from the `-s` inflection, so
+  // the scan read the relative's own PP head as the matrix predicate and graded a supply one noun from
+  // the committed row clean. These rows are pinned at their CURRENT (wrong) verdict so the cost cannot
+  // change silently - changing these expectations is what closing it looks like. `finiteVerbFollows`'
+  // docblock carries the measurement and the refusal to trade.
+  it('grades an honest refusal whose predicate sits behind a modifier run as a supply (known cost)', () => {
     for (const pointer of [
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising across the region eludes us.',
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising in the eastern region escapes me.',
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising across the fleet defies explanation.',
+      // A bare adverb, not a PP: the cost is the adjacency, not the phrase.
+      'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising lately eludes us.',
     ]) {
       const reply = `That result is not in the retrieved content. ${pointer}`;
       expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, pointer).toEqual([
