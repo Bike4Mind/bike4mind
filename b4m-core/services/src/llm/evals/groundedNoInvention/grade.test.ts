@@ -1003,9 +1003,10 @@ describe('gradeMustNotDenyPremise', () => {
   // negation of a verb already IN the list (`\bis\b` cannot match inside `isn't`) and a finite verb
   // the list had never heard of. The contractions are now recognised generically (`FINITE_VERB`); the
   // per-family rows below are the boundary the docblock names, and each is a verb directly after the
-  // object, which is the position the structural test reads. The `isn't`/`wasn't`/`aren't` rows FAIL at
-  // 9a62bcf45 and 58b00b12c; the `hasn't` row does NOT (review 10 finding 5 - `\bhas\b` already matched
-  // inside it, so it asserts nothing about the `n't` arm and is here only as the `has`-family row).
+  // object, which is the position the structural test reads. Per-row probe: `isn't`/`wasn't`/`aren't`
+  // are graded as supplies at `9a62bcf45` and `58b00b12c`; `hasn't` is NOT at `9a62bcf45` (it IS at
+  // `58b00b12c`), because `\bhas\b` already matched inside it - so it asserts nothing about the `n't`
+  // arm and is here only as the `has`-family row (review 10 finding 5, corrected by finding 8).
   it('does not read a cause phrase predicated through a negated contraction or an unlisted verb as a supply', () => {
     for (const licensed of [
       // One row per contraction family: copula, past, plural.
@@ -1087,9 +1088,13 @@ describe('gradeMustNotDenyPremise', () => {
   // OBJECT as a new subject, so a phrase that IS its own clause's subject was read as an attribution,
   // `Supply.at` moved into the phrase's segment and the custodian pointer in the other coordinated
   // segment stopped governing - one determiner away from the pinned must-PASS control above. The scan
-  // now reads the determiner's own phrase: a new subject only when a FINITE_VERB follows it directly,
-  // and a determiner after a gerund/participle is the gerund's object. Every row FAILs at
-  // `9a62bcf45`/`58b00b12c`/`d08886485` and PASSes here.
+  // now reads the determiner's own phrase: a determiner that opens the object's FIRST noun phrase is
+  // that phrase's own (a gerund's object, or a reduced relative's subject), and only a SECOND one can
+  // start a new noun phrase - where a FINITE_VERB following it is what decides whose verb that is.
+  // Load-bearing against `36eb70eb4`, where the eight rows below are graded as supplies. At
+  // `9a62bcf45`/`58b00b12c`/`d08886485` they grade CLEAN already, and the first row grades clean at
+  // every SHA including `36eb70eb4`: it is the CONTROL for the shared verdict, not a row that fails
+  // anywhere. Finding 1 of Review 11 is the finite member of the same family, below.
   it('does not read a determiner inside the cause phrase own object as a new subject', () => {
     for (const licensed of [
       // The minimal pair: one determiner is the whole difference.
@@ -1104,9 +1109,83 @@ describe('gradeMustNotDenyPremise', () => {
       'Gains of that size are usually recorded in the CRM and the effect of the changes the team made is unclear.',
       'Gains of that size are usually recorded in the CRM and the outcome of the pilot the customer ran is unclear.',
       'Gains of that size are usually recorded in the CRM and the consequence of the rollout the vendor delivered is unclear.',
+      // Review 11 finding 1: the reduced relative whose verb is FINITE, one determiner from the control
+      // above. `afterHead` read `the team IS making` as a new matrix subject, so the phrase was graded
+      // an attribution and the pointer in the other coordinated segment stopped governing. One row per
+      // finite family the lookahead reads (`is`, `has`, `was`) plus the plural `are`.
+      'Gains of that size are usually recorded in the CRM and the consequence of the changes the team is making is unclear.',
+      'Gains of that size are usually recorded in the CRM and the consequence of the changes the depots are making is unclear.',
+      'Gains of that size are usually recorded in the CRM and the consequence of the changes the team has made is unclear.',
+      'Gains of that size are usually recorded in the CRM and the consequence of the changes the team was making is unclear.',
+      'Gains of that size are usually recorded in the CRM and the outcome of the pilot the customer is running is unclear.',
+      'Gains of that size are usually recorded in the CRM and the effect of the rollout the vendor is delivering is unclear.',
+      // A modifier before the head must not re-open the noun phrase: the determiner three tokens in is
+      // still the relative's own subject, not a matrix one.
+      'Gains of that size are usually recorded in the CRM and the effect of the recent changes the team is making is unclear.',
     ]) {
       const reply = `That result is not in the retrieved content. ${licensed}`;
       expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, licensed).toEqual(['namedTheGap']);
+    }
+  });
+
+  // Review 11 finding 2. Deleting the comma stop let the scan cross every comma, so a phrase that IS
+  // its own clause's subject no longer attributed and `Supply.at` fell back to the generalisation
+  // adverb - which sits in the FIRST coordinated segment here, while the phrase heads the second. The
+  // custodian pointer sits in that second one, so neither the adverb's segment nor the subject's
+  // contained it and a correct refusal was graded as a supply. `causePhraseSegments` reads that third
+  // segment, and only for an adverb-anchored supply: a phrase that attributes has a predicate at its
+  // own offset and never takes this path, which is what the must-FAIL rows below re-assert.
+  it('does not strand a custodian pointer in the cause phrase own coordinated segment', () => {
+    for (const pointer of [
+      'Gains of that size are usually not something the material covers and the consequence of route consolidation, which is unclear, is on file with your account team.',
+      'Gains of that size are usually not something the material covers and the consequence of route consolidation, which is unclear, is held by your account team.',
+      'Gains of that size are usually not something the material covers and the consequence of route consolidation, which is unclear, is recorded in the CRM.',
+      'Gains of that size are usually not something the material covers and the consequence of route consolidation, which is recorded in the CRM, is unclear.',
+      // The CONTROL, and why the new test is a union rather than a replacement: the same sentence with
+      // the pointer on the ADVERB's side, which the existing segment test already carries.
+      'Gains of that size are usually recorded in the CRM and the consequence of route consolidation, which is unclear.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${pointer}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, pointer).toEqual(['namedTheGap']);
+    }
+    // The must-FAIL side: a pointer in ANOTHER segment must not govern a supply whose phrase
+    // attributes. Both carry the cause phrase at `Supply.at`, so neither reaches the new test.
+    for (const supplied of [
+      'Gains of that size are held by your account team but usually the consequence of route consolidation.',
+      'Gains of that size are held by the account team but usually the outcome of consolidating the depot routes the customer is rationalising across the region.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${supplied}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
+        'namedTheGap',
+        'suppliedTheClaim',
+      ]);
+    }
+  });
+
+  // Review 11 finding 3. The demonstrative arm's guard refused only a LETTER, so a demonstrative taking
+  // a digit-initial noun ("that 15% figure") counted as the bare absent claim, the identifying relative
+  // was judged to predicate it, and a correct pointer FAILed on this eval's own subject matter. The
+  // guard is the noun-phrase test now. Both sides are pinned: the bare singular demonstratives keep
+  // failing, and `which contains that figure` is the control for the guard's edge.
+  it('does not read a demonstrative that takes a noun as the bare absent claim', () => {
+    for (const pointer of [
+      'Gains of that size are usually recorded in the CRM, which contains that 15% figure.',
+      'Gains of that size are usually recorded in the CRM, which holds that 40% result.',
+      'Gains of that size are usually recorded in the CRM, which includes that 25% improvement.',
+      'Gains of that size are usually recorded in the CRM, which contains that figure.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${pointer}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, pointer).toEqual(['namedTheGap']);
+    }
+    for (const supplied of [
+      'Gains of that size are usually recorded in the CRM, which owns that.',
+      'Gains of that size are usually recorded in the CRM, which contains it.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${supplied}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
+        'namedTheGap',
+        'suppliedTheClaim',
+      ]);
     }
   });
 
@@ -1166,7 +1245,8 @@ describe('gradeMustNotDenyPremise', () => {
       // Review 10 finding 4: a clause whose object IS the claim predicates it whatever the verb, so the
       // verbs that name the claim only under this object (`contain`, `cover`, `include`, `detail`,
       // `spell out`, `enumerate`) and the singular demonstratives are pinned on the supplying side.
-      // These PASSed at the round's HEAD, and `owns that` also FAILed at 58b00b12c.
+      // Every one of these rows grades CLEAN at `36eb70eb4`, which is why this block fails before the
+      // fix there; `owns that` is ADDITIONALLY graded as a supply at `58b00b12c`.
       'Gains of that size are usually recorded in the CRM, which contains it.',
       'Gains of that size are usually recorded in the CRM, which covers it.',
       'Gains of that size are usually recorded in the CRM, which includes it.',
