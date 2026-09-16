@@ -97,6 +97,20 @@ export const IMAGE_SIZE_CONSTRAINTS = {
       maxAspectRatio: 3,
     },
   },
+  /** Also the only sizes the variation endpoint accepts - variations are dall-e-2 only. */
+  DALL_E_2: {
+    sizes: ['256x256', '512x512', '1024x1024'] as const,
+    defaultSize: '1024x1024',
+  },
+  /**
+   * dall-e-3 is no longer in ImageModels, but the generate path still accepts its sizes
+   * for callers holding a persisted one. Kept separate from DALL_E_2 because the two
+   * tiers accept different lists and only dall-e-2 supports edit/variation.
+   */
+  DALL_E_3: {
+    sizes: ['1024x1024', '1792x1024', '1024x1792'] as const,
+    defaultSize: '1024x1024',
+  },
 } as const;
 
 export type GPTImage1Size = (typeof IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes)[number];
