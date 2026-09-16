@@ -510,10 +510,8 @@ export class NotebookImportService {
         // Not branched on `preserveIds`: reusing the source id would imply this is the same document.
         const storageKeySuffix = this.adapters.generateId();
 
-        // One value, not two flags: the export emits a listing-only entry (real size, no content, no
-        // URL) for a held or blocked image, and "neither" must be refused as that, not as oversized.
-        // Annotated, not inferred: without it the ternary widens to one object with both keys
-        // optional, and the `'base64' in source` narrowing below stops working.
+        // The export emits a listing-only entry (real size, no content, no URL) for a held or
+        // blocked image, and "neither" must be refused as that, not as oversized.
         // A URL reference is refused for what it is, above both gates. Nothing is stored on this
         // path, and the only size available for it is the client-declared `file.size`, so gating on
         // it would blame the size or quota limit for what is really an unimplemented import.
@@ -524,13 +522,13 @@ export class NotebookImportService {
           throw new Error('No content or URL provided for file');
         }
 
-        // Exact decoded length without allocating the buffer, so a file the gates refuse is never
-        // decoded. Over-counts only on malformed base64, where Buffer.from drops characters that
-        // byteLength counts - fail-closed.
-        const measuredSize = Buffer.byteLength(file.content, 'base64');
+        // Derived from string length alone, so nothing is allocated for a file the gates refuse.
+        // It over-counts malformed base64, which is the safe direction to refuse on but not to bill.
+        const gatedSize = Buffer.byteLength(file.content, 'base64');
 
-        // `>=` and server-measured bytes, matching fabFileService/create.ts exactly.
-        if (measuredSize >= this.maxFileSize) {
+        // `>=` and the MB-to-bytes conversion match fabFileService/create.ts. The measurement does
+        // not: that door gates on a caller-declared fileSize, this one on bytes it holds.
+        if (gatedSize >= this.maxFileSize) {
           throw new Error(`exceeds the ${Math.round(this.maxFileSize / (1024 * 1024))}MB maximum file size`);
         }
 
@@ -540,26 +538,33 @@ export class NotebookImportService {
         if (!this.importingUser) {
           throw new Error('no importing user resolved, refusing to skip the storage quota check');
         }
-        await checkStorageLimit(this.importingUser, this.admittedBytes + measuredSize);
+        await checkStorageLimit(this.importingUser, this.admittedBytes + gatedSize);
+
+        // Decoded once, here, and reused for the write, the accounting and the row. Booking anything
+        // but the stored length breaks that: the credit reads the real object size
+        // (server/s3/objectCreated.ts) while every refund reads this row's fileSize, so an
+        // import-then-delete cycle would deduct bytes that were never stored.
+        const bytes = Buffer.from(file.content, 'base64');
+        const storedSize = bytes.byteLength;
 
         // The first write of any kind for this file, and deliberately below both gates: an object
         // written for a file that is then refused would sit at knowledge/<userId>/<uuid> forever -
         // no FabFile row points at it, so nothing counts it against the quota, nothing moderates
         // it, and the bucket lifecycle rules (infra/buckets.ts) do not cover this prefix.
         const filePath = `knowledge/${targetUserId}/${storageKeySuffix}`;
-        await this.adapters.fileStorageService.uploadFile(filePath, Buffer.from(file.content, 'base64'));
+        await this.adapters.fileStorageService.uploadFile(filePath, bytes);
 
         // Charged only once the bytes are in storage, so a file that fails to store cannot spend
         // another file's headroom.
-        this.admittedBytes += measuredSize;
+        this.admittedBytes += storedSize;
 
         // No `id`: FabFile has no such path, so the store assigns one.
         const knowledgeData = {
           userId: targetUserId,
           fileName: file.name,
           mimeType: file.mimeType,
-          // Server-measured bytes, not the client-declared file.size, so a caller cannot understate.
-          fileSize: measuredSize,
+          // The stored length, not the client-declared file.size and not gatedSize - see above.
+          fileSize: storedSize,
           filePath,
           type: toKnowledgeType(file.type),
           // Leave moderationStatus at the schema default ('pending'). The bytes are attacker-supplied

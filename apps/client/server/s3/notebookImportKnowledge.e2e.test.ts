@@ -126,6 +126,35 @@ describe('notebook import writes knowledge files', () => {
     expect(result.importedAttachments).toBe(1);
   });
 
+  it('books the stored byte length on malformed base64, not the pre-decode gate length', async () => {
+    const written: Buffer[] = [];
+    // '!' is not a base64 character. byteLength derives 300000 from the string length alone;
+    // Buffer.from drops every character and yields an empty buffer.
+    const junk = '!'.repeat(400_000);
+    expect(Buffer.byteLength(junk, 'base64')).toBe(300_000);
+
+    const result = await makeService({
+      fileStorageService: {
+        uploadFile: async (_path: string, bytes: Buffer) => {
+          written.push(bytes);
+        },
+      },
+    }).importNotebooks(
+      USER,
+      payload([knowledgeFile({ name: 'junk.pdf', size: 300_000, content: junk })]) as never,
+      OPTIONS as never
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(written[0].byteLength).toBe(0);
+
+    // The row is what every refund reads: fabFileService/delete.ts deducts this number from the
+    // user's currentStorageSize, while the credit came from the real object size. A row claiming
+    // 300000 bytes for an object holding none is a repeatable storage drain.
+    const file = await FabFile.findOne({ userId: USER });
+    expect(file?.fileSize).toBe(0);
+  });
+
   it('carries the original knowledge type through the export', async () => {
     await makeService().importNotebooks(USER, payload([knowledgeFile({ type: 'URL' })]) as never, OPTIONS as never);
 

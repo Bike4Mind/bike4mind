@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DefaultLLMParams } from '@bike4mind/common';
+import { invalidateSettingsCache } from '@bike4mind/utils';
 import { NotebookImportService } from './index';
 import type { NotebookImportAdapters } from './index';
 
@@ -31,12 +32,17 @@ const NOTEBOOK = {
 
 const PAYLOAD = { exportVersion: '1.0.0', notebooks: [NOTEBOOK] };
 
-/**
- * The admin-settings cache behind `getSettingsMap` is a process-wide singleton with a TTL, so the
- * first import in this file fixes `MaxFileSize` for every later one. A single small value keeps the
- * over-sized fixture below cheap to build rather than a real 30MB buffer.
- */
+/** Small, so the over-sized fixtures stay cheap to build rather than real 30MB buffers. */
 const MAX_FILE_SIZE_MB = 1;
+
+/**
+ * The admin-settings cache behind `getSettingsMap` is a process-wide singleton with a TTL, so
+ * without this the first import in the worker fixes `MaxFileSize` for every later one - including
+ * tests in other files that share the worker and supply a different value.
+ */
+beforeEach(() => {
+  invalidateSettingsCache();
+});
 
 function makeAdapters(existingSessions: unknown[] = [], user: Record<string, unknown> = { id: 'user-1' }) {
   const bulkCreate = vi.fn().mockResolvedValue(undefined);
@@ -420,6 +426,29 @@ describe('notebook import: knowledge file admission', () => {
     return { adapters, result, importedIds: attached.knowledgeIds as string[] };
   }
 
+  it('aborts the whole import when the admin settings read fails', async () => {
+    const adapters = makeKnowledgeAdapters();
+    adapters.adminSettings.findAll = vi.fn().mockRejectedValue(new Error('settings unavailable'));
+
+    // Fail-closed, and deliberately not a per-file warning: an unresolved MaxFileSize means the
+    // gate cannot be applied at all, so admitting the import would write bytes past a limit nobody
+    // read. Refusing the whole job is recoverable - the user still holds the export file.
+    const error = await new NotebookImportService(adapters)
+      .importNotebooks(
+        'user-1',
+        { exportVersion: '1.0.0', notebooks: [{ ...NOTEBOOK, knowledge: [embedded('any.pdf', 10)] }] } as never,
+        { ...OPTIONS, importKnowledge: true } as never
+      )
+      .catch((e: unknown) => e as { code?: string; details?: unknown });
+
+    expect(error.code).toBe('IMPORT_FAILED');
+    // The outer handler rewrites every unexpected error to one IMPORT_FAILED string, so only
+    // `details` distinguishes this failure from any other.
+    expect((error.details as Error).message).toMatch(/settings unavailable/);
+    expect(adapters.fileStorageService.uploadFile).not.toHaveBeenCalled();
+    expect(adapters.sessionRepository.create).not.toHaveBeenCalled();
+  });
+
   it('skips a knowledge file over MaxFileSize and warns rather than aborting the import', async () => {
     // Exactly at the limit, which the upload door also refuses (`>=`).
     const { adapters, result, importedIds } = await importKnowledge([
@@ -508,6 +537,22 @@ describe('notebook import: knowledge file admission', () => {
     // would be refused at any size.
     expect(result.warnings).toEqual([expect.stringMatching(/huge-ref\.pdf.*not implemented/)]);
     expect(adapters.fileStorageService.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it('books the stored byte length, not the pre-decode gate length, on malformed base64', async () => {
+    // '!' is not a base64 character: byteLength derives 300_000 from the string length alone,
+    // Buffer.from drops every character and yields 0.
+    const junk = '!'.repeat(400_000);
+    const { adapters, result } = await importKnowledge([
+      { id: 'exported-junk', name: 'junk.pdf', mimeType: 'application/pdf', size: 300_000, content: junk },
+    ]);
+
+    expect(Buffer.byteLength(junk, 'base64')).toBe(300_000);
+    expect(result.warnings).toEqual([]);
+    expect(adapters.knowledgeRepository.create).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 0 }));
+
+    const [, uploaded] = (adapters.fileStorageService.uploadFile as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect((uploaded as Buffer).byteLength).toBe(0);
   });
 
   it('gates on server-measured bytes rather than the declared size', async () => {
