@@ -13,6 +13,7 @@ import {
   useWorkBenchFiles,
 } from '@client/app/contexts/SessionsContext';
 import { useUser } from '@client/app/contexts/UserContext';
+import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useEffectiveEmbeddingModel } from '@client/app/hooks/data/settings';
@@ -20,6 +21,7 @@ import { useReprocessFile } from '@client/app/hooks/data/fabFiles';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
 import { useMessageFiles } from '@client/app/hooks/useMessageFiles';
+import { getFabFileByIdFromServer } from '@client/app/utils/filesAPICalls';
 import { renameDuplicateFiles } from '@client/app/utils/fabFileUtils';
 import { buildSortedKnowledgeItems } from '@client/app/utils/knowledgeViewerSorting';
 import { useQueryClient } from '@tanstack/react-query';
@@ -157,6 +159,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
   const effectiveEmbeddingModel = useEffectiveEmbeddingModel();
   const reprocessFile = useReprocessFile();
   const queryClient = useQueryClient();
+  const { subscribeToAction } = useWebsocket();
 
   // Files attached to individual messages
   const messageFiles = useMessageFiles(currentSessionId);
@@ -204,22 +207,20 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
           setReprocessingFiles(prev => ({ ...prev, [file.id]: false }));
 
           // /api/files/reprocess has cleared the flags server-side; mirror that rather than
-          // claiming completion. Nothing reconciles this panel in-session: it has no
-          // update_file_chunk_vector_status subscriber, and the workbench store is zustand, so the
-          // hook's ['fabFiles'] invalidation cannot reach it either - the row stays pending until a
-          // remount or session switch rehydrates it (SessionsContext's knowledgeIds effect).
+          // claiming completion. The update_file_chunk_vector_status subscriber below is what
+          // observes the actual completion/failure and reconciles both stores - this optimistic
+          // write just covers the gap until that message arrives.
           // isChunking is what the disabled predicates below read, so setting it keeps the button
           // from re-arming mid-rebuild; a second click would be a second real reset + re-embed.
           const markPending = (f: IFabFileDocument) =>
             f.id === file.id ? { ...f, vectorized: false, chunked: false, isChunking: true } : f;
 
           if (isSystemFile) {
-            // No follow-up invalidation: ['system-prompt-files', allSystemFileIds]
+            // No follow-up invalidation here: ['system-prompt-files', allSystemFileIds]
             // (SessionsContext) is active while this panel is open, so a refetch would replace this
             // row with server state that already reads isChunking:false - resetChunkStateByIds
             // writes it - and re-arm the button mid-rebuild, which is exactly what markPending
-            // exists to prevent. It could never observe completion anyway; that needs the deferred
-            // update_file_chunk_vector_status subscriber.
+            // exists to prevent. Real completion is handled by the subscriber below instead.
             queryClient.setQueriesData({ queryKey: ['system-prompt-files'], exact: false }, (oldData: any) => {
               if (Array.isArray(oldData)) {
                 return oldData.map(markPending);
@@ -238,6 +239,60 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
     },
     [reprocessFile, currentSessionId, setWorkBenchFiles, systemFiles, queryClient]
   );
+
+  // Reconciles this panel once a reprocess actually finishes - the optimistic markPending
+  // write above only covers the gap until this arrives. The message carries no
+  // embeddingModel (see UpdateFabFileChunkVectorStatusAction), so a successful rebuild is
+  // reconciled with a fresh fetch rather than a field copy - that's the only way the
+  // mismatch badge (keyed on file.embeddingModel) can actually clear.
+  useEffect(() => {
+    const unsubscribe = subscribeToAction('update_file_chunk_vector_status', async msg => {
+      if (msg.action !== 'update_file_chunk_vector_status') return;
+
+      const isSystemFile = systemFiles.some(f => f.id === msg.fabFileId);
+      const isWorkbenchFile = workBenchFiles.some(f => f.id === msg.fabFileId);
+      if (!isSystemFile && !isWorkbenchFile) return;
+
+      if (msg.vectorizeStatus === 'complete') {
+        let freshFile: IFabFileDocument;
+        try {
+          freshFile = await getFabFileByIdFromServer(msg.fabFileId);
+        } catch (error) {
+          console.error(`Failed to refresh fabFile ${msg.fabFileId} after reprocess`, error);
+          return;
+        }
+
+        if (isSystemFile) {
+          queryClient.setQueriesData({ queryKey: ['system-prompt-files'], exact: false }, (oldData: any) => {
+            if (Array.isArray(oldData)) {
+              return oldData.map((f: IFabFileDocument) => (f.id === freshFile.id ? freshFile : f));
+            }
+            return oldData;
+          });
+        } else if (currentSessionId) {
+          setWorkBenchFiles(currentSessionId, prevFiles => prevFiles.map(f => (f.id === freshFile.id ? freshFile : f)));
+        }
+      } else if (msg.chunkStatus === 'failed' || msg.vectorizeStatus === 'failed') {
+        toast.error(msg.failedMessage || 'Failed to reprocess file');
+
+        const clearPending = (f: IFabFileDocument) =>
+          f.id === msg.fabFileId ? { ...f, isChunking: false, isVectorizing: false } : f;
+
+        if (isSystemFile) {
+          queryClient.setQueriesData({ queryKey: ['system-prompt-files'], exact: false }, (oldData: any) => {
+            if (Array.isArray(oldData)) {
+              return oldData.map(clearPending);
+            }
+            return oldData;
+          });
+        } else if (currentSessionId) {
+          setWorkBenchFiles(currentSessionId, prevFiles => prevFiles.map(clearPending));
+        }
+      }
+    });
+
+    return unsubscribe;
+  }, [subscribeToAction, systemFiles, workBenchFiles, currentSessionId, setWorkBenchFiles, queryClient]);
 
   // Check if the file is supported by the model
   const fileSupported = useCallback(
@@ -456,7 +511,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
                           m: 0,
                         }}
                       >
-                        {reprocessingFiles[file.id] ? (
+                        {reprocessingFiles[file.id] || file.isChunking ? (
                           <CircularProgress size="sm" />
                         ) : (
                           <ErrorIcon sx={{ fontSize: '0.75rem' }} />
@@ -560,7 +615,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
                           m: 0,
                         }}
                       >
-                        {reprocessingFiles[file.id] ? (
+                        {reprocessingFiles[file.id] || file.isChunking ? (
                           <CircularProgress size="sm" />
                         ) : (
                           <ErrorIcon sx={{ fontSize: '0.75rem' }} />
