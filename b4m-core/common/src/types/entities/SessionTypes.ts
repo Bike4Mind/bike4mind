@@ -221,6 +221,26 @@ export interface IChatHistoryItem {
   agentExecutionId?: string;
 
   /**
+   * Set when this turn is a "correct and retry" of an earlier turn: the user told us the
+   * previous answer was wrong, and this turn carries their correction. Points at the quest
+   * being corrected, which is always the PREVIOUS ATTEMPT rather than the original - correcting
+   * a correction chains onto it, so walking `correctsQuestId` backwards yields the whole
+   * attempt history in order.
+   *
+   * Server-derived: set only by ChatCompletionInvoke after confirming the referenced quest
+   * belongs to the same session, never trusted from the request body as given.
+   *
+   * Session-bound, so it does not survive a copy: sessionService clone/fork/snip strip it rather
+   * than spreading it into the new session, and resolveCorrectionContext re-checks the target's
+   * sessionId on read. Two guards because access is checked when you copy, not when the pointer is
+   * later dereferenced - a link that outlived its session would otherwise still resolve.
+   *
+   * Read by the evaluation-pair export, which turns a chain link into the triple
+   * (previous answer, what the user said was wrong, corrected answer).
+   */
+  correctsQuestId?: string;
+
+  /**
    * Provenance of the routing decision that produced this quest (M4).
    * Drives the `AutoRouteBadge` rendering above auto-routed responses
    * (classifier- or rule-based complexity-routed) so users see when

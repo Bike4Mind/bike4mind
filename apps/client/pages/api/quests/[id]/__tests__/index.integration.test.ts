@@ -223,6 +223,24 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     expect(res._getJSONData()).toMatchObject({ images: [], files: [] });
   });
 
+  it('returns errorCode for a terminal quest that stopped for a classified reason', async () => {
+    mockQuestFindById.mockResolvedValue({
+      id: 'quest-1',
+      sessionId: 'sess-1',
+      status: 'done',
+      type: 'error',
+      errorCode: 'insufficient_credits',
+      reply: {},
+      replies: [],
+      promptMeta: {},
+    });
+    validateWithScopes([ApiKeyScope.READ_NOTEBOOKS]);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().errorCode).toBe('insufficient_credits');
+  });
+
   describe('attachment report (#1576 ask 1: a caller can tell whether the corpus contributed)', () => {
     it('returns BOTH halves - the notices and the affirmative counts', async () => {
       mockQuestFindById.mockResolvedValue({

@@ -47,7 +47,7 @@ import {
   type ThinkingConfig,
 } from './thinkingParams';
 import { DispatchModel } from './dispatchModel';
-import { acquireSlot, releaseSlot } from './_anthropicSemaphore';
+import { acquireSlot, type SlotRelease } from './_anthropicSemaphore';
 import {
   createDegenerateStreamGuard,
   DEGENERATE_STREAM_STOP_REASON,
@@ -1183,11 +1183,16 @@ export class AnthropicBackend implements ICompletionBackend {
           let degenerateVerdict: DegenerateStreamVerdict | undefined;
 
           (async () => {
-            // Acquire semaphore slot before the API call. Released in the finally
-            // block below after the stream is fully consumed (or on any error),
-            // so the slot accurately reflects the real Anthropic connection lifetime.
-            await acquireSlot();
+            // Acquire a semaphore slot before the API call, released in the finally
+            // below once the stream is fully consumed (or on any error), so the slot
+            // reflects the real Anthropic connection lifetime. Scheduled fairly per
+            // tenant (keyed on the hashed end-user id) and abortable: the acquire lives
+            // INSIDE the try so an abort while waiting for a slot flows through the same
+            // benign-abort handling as an abort during the call, and a waiter that
+            // aborts leaves the queue instead of consuming a slot it can no longer use.
+            let release: SlotRelease | undefined;
             try {
+              release = await acquireSlot({ tenantKey: this._endUserId, signal: combinedSignal });
               // Diagnostic logging: Capture payload size to help debug hanging issues
               const payloadForSize = { ...apiParams, stream: true };
               const payloadSizeBytes = Buffer.byteLength(JSON.stringify(payloadForSize), 'utf8');
@@ -1697,7 +1702,7 @@ export class AnthropicBackend implements ICompletionBackend {
                 reject(error);
               }
             } finally {
-              releaseSlot();
+              release?.();
             }
           })();
         });
@@ -1954,12 +1959,14 @@ export class AnthropicBackend implements ICompletionBackend {
         }
       } else {
         // Non-streaming path
-        // Acquire semaphore slot for the API call. For non-streaming, the full
-        // response body is received when the call resolves, so we release
-        // immediately after.
-        await acquireSlot();
+        // Acquire a semaphore slot for the API call (scheduled fairly per tenant,
+        // abortable while waiting). Non-streaming receives the full body on resolve,
+        // so the slot releases immediately after. Acquire lives inside the try so an
+        // abort while waiting propagates to generateResponse's outer abort handling.
         let response;
+        let release: SlotRelease | undefined;
         try {
+          release = await acquireSlot({ tenantKey: this._endUserId, signal: options.abortSignal });
           // Wrap with retry for transient network errors (TLS abort, fetch terminated)
           response = await withRetry(
             () =>
@@ -1978,7 +1985,7 @@ export class AnthropicBackend implements ICompletionBackend {
             }
           ).then(r => r.result);
         } finally {
-          releaseSlot();
+          release?.();
         }
         const streamedText: string[] = [];
 

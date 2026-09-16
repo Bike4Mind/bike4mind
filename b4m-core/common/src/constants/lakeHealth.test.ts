@@ -13,6 +13,7 @@ import {
   findDuplicateMembers,
   isLeaseHeld,
   deriveLakeMemoryState,
+  deriveLakeServingState,
   LAKE_MEMORY_EXTRACTION_LEASE_MS,
   type LakeHealthMemberInput,
 } from './lakeHealth';
@@ -860,5 +861,25 @@ describe('deriveLakeMemoryState', () => {
 
   it('returns never-built ahead of stale when no profile exists yet', () => {
     expect(deriveLakeMemoryState({ ...base, everBuilt: false, stale: true })).toBe('never-built');
+  });
+});
+
+describe('deriveLakeServingState (#2839)', () => {
+  it('reports servesRetrieval true only for an active lake', () => {
+    expect(deriveLakeServingState('active')).toEqual({ status: 'active', servesRetrieval: true });
+  });
+
+  it('reports servesRetrieval false for a draft lake', () => {
+    expect(deriveLakeServingState('draft')).toEqual({ status: 'draft', servesRetrieval: false });
+  });
+
+  it('reports servesRetrieval false for an archived lake', () => {
+    expect(deriveLakeServingState('archived')).toEqual({ status: 'archived', servesRetrieval: false });
+  });
+
+  it('reports servesRetrieval false for every transitional status', () => {
+    for (const status of ['archiving', 'unarchiving', 'restoring', 'deleting', 'deleted', 'purging'] as const) {
+      expect(deriveLakeServingState(status)).toEqual({ status, servesRetrieval: false });
+    }
   });
 });

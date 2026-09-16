@@ -94,6 +94,7 @@ import {
   grantedLakeIdsUsedFor,
 } from '../dataLakeService/getDataLakePrompts';
 import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
+import { membershipOrgIdsForTurn } from '../dataLakeService/membershipOrgIdsForTurn';
 import { attributeAccessedLakeIds } from '../dataLakeService/attributeAccessedLakes';
 import { recordLakeAccessEvent } from '../dataLakeService/recordLakeAccessEvent';
 import { defangBlockMarkers, renderDataLakePromptSection } from '../dataLakeService/renderDataLakePromptBlock';
@@ -161,6 +162,11 @@ interface DatabaseAdapters {
     | 'countByFabFileId'
     // Must stay a superset of ToolContext.db.fabfilechunks - this is what feeds it (ToolBuilder).
     | 'distinctRetrievalIndexModelsByFabFileIds'
+    // Optional on semanticDataLakeSearch's adapter shape (resolveIndexResidency treats a missing
+    // method the same as a failed lookup - pre-residency behavior, not an error). Declared here so
+    // a future literal replacing this repo cannot silently drop it with no type error; every
+    // current call site already wires the real repository, which has it.
+    | 'annResidentFabFileIds'
   >;
   mementos: IMementoRepository;
   projects: IProjectRepository;
@@ -1688,10 +1694,11 @@ const FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS = 4000;
  * a floor of 20.0, which no similarity can clear, starving every Data-Lake turn with nothing in the
  * output to say why. Cheap guard, unbounded downside.
  *
- * Falls back rather than clamping to 100, which is where this deliberately diverges from
- * `resolveRelevancePct`'s handling of the same hazard: clamping a fat-fingered value to "admit only
- * a perfect match" is itself the retrieval starvation this floor exists to prevent, so the coded
- * default - known-good, behavior-preserving - is the safer landing place.
+ * Falls back rather than clamping to 100: clamping a fat-fingered value to "admit only a perfect
+ * match" is itself the retrieval starvation this floor exists to prevent, so the coded default -
+ * known-good, behavior-preserving - is the safer landing place. `resolveRelevancePct` in
+ * `resolveSearchBudgets.ts` now guards `kbSearchMinRelevancePct` identically; the two must stay in
+ * sync, since they are the same hazard on the two retrieval paths.
  */
 function forcedRetrievalFloorPct(raw: unknown, fallbackPct: number, label: string, logger: Logger): number {
   const pct = nonNegativeIntOr(raw as string | number | null | undefined, fallbackPct, label, logger);
@@ -2324,10 +2331,18 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    *
    * The scoped branch is wrapped defensively, NOT because production takes the fallback:
    * `resolveScopedSettingValues` documents that it never throws and wraps both of its own reads, so
-   * the only thing the catch can realistically see is an argument-evaluation error. The corollary is
-   * worth knowing rather than assuming away - when the resolver's OWN platform read fails it
-   * resolves the coded default internally and returns normally, so a settings outage lands on coded
-   * defaults whether or not this guard is here.
+   * the only thing the catch can realistically see is an argument-evaluation error - now including
+   * the membership read below, which has its own real failure mode. The corollary is worth knowing
+   * rather than assuming away - when the resolver's OWN platform read fails it resolves the coded
+   * default internally and returns normally, so a settings outage lands on coded defaults whether or
+   * not this guard is here.
+   *
+   * `user.organizationId` is a selected-org display pointer, not proof of membership (#1674) -
+   * verified via `membershipOrgIdsForTurn` before it reaches `scopeForCaller`, same fix and same
+   * fail-closed-to-personal-scope direction as the sibling `search_knowledge_base` fix (#2769).
+   * Not actually a shared cache hit with the data-lake resolvers, though: the memo keys on
+   * `turnScope` object identity, and `this.chatCompletion` here is never the same object as a
+   * tool's `ToolContext` - this always issues its own membership read.
    */
   private async readForcedRetrievalSettings(): Promise<{
     charBudget: unknown;
@@ -2337,9 +2352,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     const { db, user } = this.chatCompletion;
     if (db.scopedSettings) {
       try {
+        const pointerOrgId = normalizeId(user.organizationId);
+        const membershipOrgIds = pointerOrgId
+          ? await membershipOrgIdsForTurn(this.chatCompletion, user.id, db.organizations)
+          : [];
+        const verifiedOrgId = pointerOrgId && membershipOrgIds.includes(pointerOrgId) ? pointerOrgId : undefined;
         const values = await resolveScopedSettingValues(
           FORCED_RETRIEVAL_SETTING_KEYS,
-          scopeForCaller({ userId: user.id, organizationId: normalizeId(user.organizationId) }),
+          scopeForCaller({ userId: user.id, organizationId: verifiedOrgId }),
           { adminSettings: db.adminSettings, scopedSettings: db.scopedSettings },
           { logger: this.logger }
         );
@@ -2350,7 +2370,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         };
       } catch (err) {
         // Fall THROUGH rather than rethrow: the outer catch lands on coded defaults, which would
-        // discard a platform-wide override for the duration of a transient scoped-read failure.
+        // discard a platform-wide override for the duration of a transient scoped-read or
+        // membership-lookup failure.
         this.logger.warn(
           '\u{1F512} Forced retrieval: scoped settings read failed; falling back to the platform values',
           err

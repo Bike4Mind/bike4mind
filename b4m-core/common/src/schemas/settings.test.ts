@@ -1055,13 +1055,16 @@ describe('LakeAccessAuditRetentionDays cannot be configured below the floor', ()
 });
 
 describe('MaxFileSize cannot coerce a cleared field to a real 0', () => {
-  // A cleared admin field is stored as '', which z.coerce.number() reads as 0 - a value that
-  // PASSES validation, so the schema's own `.prefault(30)` (undefined-only) never fires and
-  // every caller sees a real 0MB limit instead of the intended default. The `min: 1` floor
-  // makes that coerced 0 fail validation instead, so callers (getSettingsValue's safeParse
-  // fallback) land on the default the way an unset row already does.
-  it('rejects both a cleared field and an explicit 0, unlike prefault-only defaulting', () => {
-    expect(() => settingsMap.MaxFileSize.schema.parse('')).toThrow();
+  // makeNumberSetting preprocesses an empty/whitespace-only string to undefined before
+  // z.coerce.number() runs (#2636), so a cleared field now prefaults directly instead of
+  // coercing to a real 0. The `min: 1` floor stays as a genuine lower bound: it still rejects
+  // an explicit 0, which makes no sense as a file-size limit.
+  it('prefaults a cleared field to 30 instead of coercing to 0', () => {
+    expect(settingsMap.MaxFileSize.schema.parse('')).toBe(30);
+    expect(settingsMap.MaxFileSize.schema.parse('   ')).toBe(30);
+  });
+
+  it('still rejects an explicit 0', () => {
     expect(() => settingsMap.MaxFileSize.schema.parse(0)).toThrow();
   });
 
@@ -1071,6 +1074,36 @@ describe('MaxFileSize cannot coerce a cleared field to a real 0', () => {
 
   it('accepts a genuinely configured value', () => {
     expect(settingsMap.MaxFileSize.schema.parse('50')).toBe(50);
+  });
+});
+
+describe('makeNumberSetting treats a cleared field as unset, not 0 (#2636)', () => {
+  // Same root cause as MaxFileSize above, checked across other fields with no `min` floor -
+  // z.coerce.number() reads '' as a real, schema-valid 0, which silently defeats
+  // .prefault() (undefined-only) for every makeNumberSetting field, not just MaxFileSize.
+  it('prefaults a cleared or whitespace-only field to the configured default', () => {
+    expect(settingsMap.MementoMaxTotalChars.schema.parse('')).toBe(32000);
+    expect(settingsMap.StreamIdleTimeoutSeconds.schema.parse('   ')).toBe(90);
+  });
+
+  it('still accepts an explicit 0 where 0 is a meaningful, in-range value', () => {
+    // AutoNameNotebook's own description says "Set to 0 to disable" - the fix only rewrites
+    // an empty/whitespace STRING to undefined, so a real 0 must still pass through untouched
+    // and stay distinguishable from a cleared field.
+    expect(settingsMap.AutoNameNotebook.schema.parse(0)).toBe(0);
+    expect(settingsMap.AutoNameNotebook.schema.parse('0')).toBe(0);
+  });
+
+  it('still prefaults AutoNameNotebook to its configured default when cleared', () => {
+    expect(settingsMap.AutoNameNotebook.schema.parse('')).toBe(1);
+  });
+
+  it('still coerces a genuinely configured numeric string', () => {
+    expect(settingsMap.MementoMaxTotalChars.schema.parse('12345')).toBe(12345);
+  });
+
+  it('prefaults a raw null the same as a cleared string', () => {
+    expect(settingsMap.MementoMaxTotalChars.schema.parse(null)).toBe(32000);
   });
 });
 

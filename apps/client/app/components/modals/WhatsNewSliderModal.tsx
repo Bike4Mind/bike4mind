@@ -48,7 +48,7 @@ const navButtonSx = {
   '--IconButton-size': { xs: '32px' },
   '&:hover': {
     backgroundColor: 'neutral.outlinedHoverBg',
-    borderColor: 'neutral.outlinedHoverBorder',
+    borderColor: 'neutral.outlinedBorder',
   },
 } as const;
 

@@ -960,7 +960,16 @@ function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: 
   return {
     ...config,
     type: 'number' as const,
-    schema: numberSchema.prefault(config.defaultValue ?? 0),
+    // A cleared field submits '', which z.coerce.number() reads as a schema-valid 0, silently
+    // defeating the undefined-only prefault; rewriting it (and a raw null) to undefined first
+    // restores the default. Only whitespace/null is rewritten, so a real 0 (AutoNameNotebook's
+    // "0 = disable") still passes through. prefault must stay INSIDE the preprocess: it
+    // substitutes only on the raw value it receives, so chaining it outside would feed the
+    // rewritten undefined into z.coerce.number() and fail with a NaN instead of defaulting.
+    schema: z.preprocess(
+      val => (val === null || (typeof val === 'string' && val.trim() === '') ? undefined : val),
+      numberSchema.prefault(config.defaultValue ?? 0)
+    ),
   };
 }
 
@@ -4780,12 +4789,13 @@ export type SettingValue<K extends SettingKey> = z.infer<(typeof settingsMap)[K]
  * serve a different budget than the platform path for the same lake, which is the disagreement
  * `resolveSearchBudgets` exists to remove.
  *
- * UNRESOLVED, and deliberately not blessed by listing it here: this read resolves on the CALLER's
- * scope, but `DefaultChunkSize`'s declared subject is the FILE OWNER ("Resolves at file-OWNER
- * altitude", its own definition above). A search spans other owners' files, so a caller-side
- * Organization/Owner override currently moves `maxChunkChars` for content it does not own. Whether
- * this key belongs in the scoped read at all is open - see the follow-up; the tests below pin the
- * behavior as CURRENT, not as intended.
+ * `DefaultChunkSize` is also the one key here a caller rung may only RAISE, never lower (#2803). This
+ * read resolves on the CALLER's scope, but the key's declared subject is the FILE OWNER ("Resolves at
+ * file-OWNER altitude", its own definition above), and a search spans other owners' files - so a
+ * caller-side override that LOWERED the serve budget would truncate in-policy content it does not
+ * own. `resolveServeTarget` (services/dataLakeService/resolveSearchBudgets.ts) floors the resolved
+ * value at the platform one for that reason; it stays listed here because the raise direction is
+ * still wanted, and because dropping it would give the two paths different budgets for the same lake.
  */
 export const SEARCH_BUDGET_SETTING_KEYS = [
   'dataLakeSearchMaxFiles',

@@ -12,15 +12,17 @@
  */
 
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import { globMatches } from '@bike4mind/utils/globMatches';
 
 /**
  * Check if a tool name matches a pattern
  *
- * Supports wildcards (*) that match any sequence of characters.
+ * Supports wildcards (*) that match any sequence of characters. Every other character is a
+ * literal - see {@link globMatches} for why this is a two-pointer walk and not a compiled
+ * RegExp (patterns arrive unvalidated off `req.body` via `allowedTools`/`deniedTools`).
  */
 export function matchesToolPattern(toolName: string, pattern: string): boolean {
-  const regexPattern = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
-  return new RegExp(`^${regexPattern}$`).test(toolName);
+  return globMatches(toolName, pattern);
 }
 
 /**

@@ -1,5 +1,86 @@
 # @bike4mind/slack
 
+## 2.0.1
+
+### Patch Changes
+
+- Updated dependencies [[`40f31bd`](https://github.com/Bike4Mind/bike4mind/commit/40f31bd9c9f63e6a2db9d5569222145c84fa46a0), [`bf76770`](https://github.com/Bike4Mind/bike4mind/commit/bf7677008efbd820c9d235e1cbad8a7797fbd4b4), [`00fb861`](https://github.com/Bike4Mind/bike4mind/commit/00fb8615644725e4936aec459d5dec0bdbac121d)]:
+  - @bike4mind/common@7.5.0
+  - @bike4mind/services@9.1.0
+  - @bike4mind/fab-pipeline@1.3.8
+  - @bike4mind/agents@1.0.8
+  - @bike4mind/llm-adapters@0.15.2
+  - @bike4mind/mcp@2.0.8
+  - @bike4mind/utils@6.0.1
+
+## 2.0.0
+
+### Major Changes
+
+- [#2786](https://github.com/Bike4Mind/bike4mind/pull/2786) [`4f8f445`](https://github.com/Bike4Mind/bike4mind/commit/4f8f445aa1d025a5187158fc0a527f475cefbd91) Thanks [@jarlacut](https://github.com/jarlacut)! - resolve ingest file type by extension, with per-door precedence
+
+  **Breaking change.** `resolveSupportedMimeType`'s third parameter is now an options object instead of
+  a bare predicate function:
+
+  ```ts
+  resolveSupportedMimeType(fileName, claimedMimeType, {
+    isAcceptable?: (mimeType: string | null | undefined) => boolean; // defaults to isSupportedFabFileMimeType
+    precedence?: 'extension-first' | 'claim-first'; // defaults to 'extension-first'
+    extensionlessFallback?: SupportedFabFileMimeTypes;
+  })
+  ```
+
+  A bare predicate passed as the third argument no longer works - wrap it as
+  `{ isAcceptable: yourPredicate }`. `precedence` controls whether the filename
+  extension or the caller-supplied MIME type is consulted first, and
+  `extensionlessFallback` is the type used for a filename that carries no
+  extension at all (and no claim) - omit it to keep a caller strict.
+
+  **Inputs that were previously accepted and are now refused:**
+
+  - A filename with a dot-tail that does not resolve to a known extension is
+    refused outright - a claimed MIME type no longer rescues it. (`deploy.sh` or
+    `malware.exe` claiming `text/plain` is no longer admitted.)
+  - A dotted date or version filename (`Meeting notes 2026.09.07`, `My Report
+v1.2`) is refused, because its tail is read as an unrecognized extension.
+  - A trailing-dot filename (`payload.`) is treated as malformed rather than
+    extension-less, so it no longer receives a plain-text fallback.
+  - A URL import that yields no extractable text is now refused with an error
+    instead of silently creating an empty file.
+  - The Slack ingest door now applies the same extension rule as the other
+    ingest doors: an attachment whose filename has an unrecognized or
+    date-style tail is refused.
+
+- [#2786](https://github.com/Bike4Mind/bike4mind/pull/2786) [`4f8f445`](https://github.com/Bike4Mind/bike4mind/commit/4f8f445aa1d025a5187158fc0a527f475cefbd91) Thanks [@jarlacut](https://github.com/jarlacut)! - resolve ingest file type by extension, with per-door precedence
+
+### Patch Changes
+
+- Updated dependencies [[`4f8f445`](https://github.com/Bike4Mind/bike4mind/commit/4f8f445aa1d025a5187158fc0a527f475cefbd91), [`7a214d5`](https://github.com/Bike4Mind/bike4mind/commit/7a214d5aa0fb5aa65302f887a3fac356ab3dc8ca), [`4f8f445`](https://github.com/Bike4Mind/bike4mind/commit/4f8f445aa1d025a5187158fc0a527f475cefbd91), [`10dd200`](https://github.com/Bike4Mind/bike4mind/commit/10dd2000171021022593d2c20d866f1d38cc30c7), [`6f662d8`](https://github.com/Bike4Mind/bike4mind/commit/6f662d81308d53bb430665ed048607da97c4e9ef), [`46ea8e1`](https://github.com/Bike4Mind/bike4mind/commit/46ea8e1efc42e992ebc0a19c4542f65d2665832c), [`2cfe44d`](https://github.com/Bike4Mind/bike4mind/commit/2cfe44d452803f4be8d6689edfb4ad250b0c881c), [`068e14f`](https://github.com/Bike4Mind/bike4mind/commit/068e14f2ab9e45cb7e7cecbae8a49fca1ce85dc6), [`fa08028`](https://github.com/Bike4Mind/bike4mind/commit/fa08028c91136b4f051a45bc4976a7714677f845), [`6ea0d28`](https://github.com/Bike4Mind/bike4mind/commit/6ea0d28a8a8db0625f81cba61fd7a5f545dc3483), [`0a4253e`](https://github.com/Bike4Mind/bike4mind/commit/0a4253e4f31492b6fea19976a469ffd5e79f4af9), [`8cc4c68`](https://github.com/Bike4Mind/bike4mind/commit/8cc4c68855dcb550815abba6ccbc665bb2b251f0), [`6ce4b99`](https://github.com/Bike4Mind/bike4mind/commit/6ce4b99b9ab5d4fe8142647a9b3dcef6f0c8ebfd)]:
+  - @bike4mind/services@9.0.0
+  - @bike4mind/utils@6.0.0
+  - @bike4mind/common@7.4.0
+  - @bike4mind/fab-pipeline@1.3.7
+  - @bike4mind/llm-adapters@0.15.1
+  - @bike4mind/agents@1.0.7
+  - @bike4mind/mcp@2.0.7
+
+## 1.0.0
+
+### Major Changes
+
+- [#2778](https://github.com/Bike4Mind/bike4mind/pull/2778) [`f3d4563`](https://github.com/Bike4Mind/bike4mind/commit/f3d4563c442e4471fd37d3bf35baac96095f5fc5) Thanks [@onoya](https://github.com/onoya)! - keep the LLM tool closure out of the package barrel
+
+### Patch Changes
+
+- Updated dependencies [[`f3d4563`](https://github.com/Bike4Mind/bike4mind/commit/f3d4563c442e4471fd37d3bf35baac96095f5fc5), [`5e1eee0`](https://github.com/Bike4Mind/bike4mind/commit/5e1eee08f765b93a1c30160c03858e7c5e9fd798), [`fee546f`](https://github.com/Bike4Mind/bike4mind/commit/fee546f162297fbd3cf5acdb41b71906bdabab46), [`a4e980d`](https://github.com/Bike4Mind/bike4mind/commit/a4e980d956c721aa734dde981420adcb4bfaa243), [`d1836db`](https://github.com/Bike4Mind/bike4mind/commit/d1836db1eb4c3d9c738a56b94d01da63f16e325a), [`2922d00`](https://github.com/Bike4Mind/bike4mind/commit/2922d0061d5ee3673da2a3b9bd88f11b7005e5db), [`afba631`](https://github.com/Bike4Mind/bike4mind/commit/afba6315105929e9b39672a2d0d23caad7f8e4aa), [`13322f6`](https://github.com/Bike4Mind/bike4mind/commit/13322f6bcc3473bdc243d1d4e397e069204273a6)]:
+  - @bike4mind/services@8.0.0
+  - @bike4mind/common@7.3.0
+  - @bike4mind/llm-adapters@0.15.0
+  - @bike4mind/utils@5.2.0
+  - @bike4mind/agents@1.0.6
+  - @bike4mind/fab-pipeline@1.3.6
+  - @bike4mind/mcp@2.0.6
+
 ## 0.5.2
 
 ### Patch Changes

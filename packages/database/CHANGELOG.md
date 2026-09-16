@@ -1,5 +1,67 @@
 # @bike4mind/database
 
+## 0.3.0
+
+### Minor Changes
+
+- [#2797](https://github.com/Bike4Mind/bike4mind/pull/2797) [`bf76770`](https://github.com/Bike4Mind/bike4mind/commit/bf7677008efbd820c9d235e1cbad8a7797fbd4b4) Thanks [@juicewaa](https://github.com/juicewaa)! - `BaseRepository.findById` now resolves `null` for a string that is not an ObjectId instead of
+  handing it to Mongoose and rejecting with a `CastError`, and it reports a row-not-found as `null`
+  rather than `undefined`. The single-id lookups on `SharableDocumentModel`
+  (`findAccessibleById`, `findUpdateAccessById`, `findShareAccessById`) and the `findById*`
+  variants on Session, ImportHistoryJob, IdentityProvider, ResearchAgent, ResearchData and Quest
+  follow the same contract.
+
+  Wire effect: routes that hand a caller-supplied path or query id to one of these now answer the
+  404 from their own `if (!doc) throw new NotFoundError(...)`. The status a caller sees for a
+  malformed id is unchanged (`404`) - it previously came from the API error handler's
+  `CastError path === '_id'` remapping - but it is now attributable to the route rather than to a
+  middleware rule that cannot tell a caller's junk id from a server-side cast. A caller narrowing
+  a miss with `=== undefined` instead of a falsy check will stop matching.
+
+  Two list routes do change their answer, for the better: `mementos` and `organizations/stats` build
+  an `_id: { $in: [...] }` from caller-supplied ids, where a single uncastable entry rejected the
+  whole query and surfaced as a `404` for the entire list. They now drop the unusable entries and
+  return the valid rows (`200`). An all-invalid list emits `$in: []`, so nothing widens to
+  "everything", and each route keeps its own ownership filter.
+
+  Not changed: `BaseRepository.update` and `delete` still address the row with `convertId`, which
+  calls `new Types.ObjectId(id)` and throws a `BSONError` - not a `CastError`, so the error
+  handler's cast remap never applied to them and they answer `500` for a malformed id both before
+  and after this change. Converging them needs its own decision about what an unaddressable id
+  should mean on a write (a no-op result, or a thrown not-found), so it is deliberately out of
+  scope here rather than overlooked.
+
+### Patch Changes
+
+- Updated dependencies [[`bf76770`](https://github.com/Bike4Mind/bike4mind/commit/bf7677008efbd820c9d235e1cbad8a7797fbd4b4), [`40f31bd`](https://github.com/Bike4Mind/bike4mind/commit/40f31bd9c9f63e6a2db9d5569222145c84fa46a0), [`bf76770`](https://github.com/Bike4Mind/bike4mind/commit/bf7677008efbd820c9d235e1cbad8a7797fbd4b4)]:
+  - @bike4mind/db-core@0.6.0
+  - @bike4mind/common@7.5.0
+  - @bike4mind/fab-pipeline@1.3.8
+  - @bike4mind/llm-adapters@0.15.2
+  - @bike4mind/utils@6.0.1
+
+## 0.2.7
+
+### Patch Changes
+
+- Updated dependencies [[`4f8f445`](https://github.com/Bike4Mind/bike4mind/commit/4f8f445aa1d025a5187158fc0a527f475cefbd91), [`7a214d5`](https://github.com/Bike4Mind/bike4mind/commit/7a214d5aa0fb5aa65302f887a3fac356ab3dc8ca), [`4f8f445`](https://github.com/Bike4Mind/bike4mind/commit/4f8f445aa1d025a5187158fc0a527f475cefbd91), [`6f662d8`](https://github.com/Bike4Mind/bike4mind/commit/6f662d81308d53bb430665ed048607da97c4e9ef), [`46ea8e1`](https://github.com/Bike4Mind/bike4mind/commit/46ea8e1efc42e992ebc0a19c4542f65d2665832c), [`2cfe44d`](https://github.com/Bike4Mind/bike4mind/commit/2cfe44d452803f4be8d6689edfb4ad250b0c881c), [`068e14f`](https://github.com/Bike4Mind/bike4mind/commit/068e14f2ab9e45cb7e7cecbae8a49fca1ce85dc6), [`fa08028`](https://github.com/Bike4Mind/bike4mind/commit/fa08028c91136b4f051a45bc4976a7714677f845), [`0a4253e`](https://github.com/Bike4Mind/bike4mind/commit/0a4253e4f31492b6fea19976a469ffd5e79f4af9), [`6ce4b99`](https://github.com/Bike4Mind/bike4mind/commit/6ce4b99b9ab5d4fe8142647a9b3dcef6f0c8ebfd)]:
+  - @bike4mind/utils@6.0.0
+  - @bike4mind/common@7.4.0
+  - @bike4mind/fab-pipeline@1.3.7
+  - @bike4mind/llm-adapters@0.15.1
+  - @bike4mind/db-core@0.5.7
+
+## 0.2.6
+
+### Patch Changes
+
+- Updated dependencies [[`5e1eee0`](https://github.com/Bike4Mind/bike4mind/commit/5e1eee08f765b93a1c30160c03858e7c5e9fd798), [`fee546f`](https://github.com/Bike4Mind/bike4mind/commit/fee546f162297fbd3cf5acdb41b71906bdabab46), [`a4e980d`](https://github.com/Bike4Mind/bike4mind/commit/a4e980d956c721aa734dde981420adcb4bfaa243), [`2922d00`](https://github.com/Bike4Mind/bike4mind/commit/2922d0061d5ee3673da2a3b9bd88f11b7005e5db), [`afba631`](https://github.com/Bike4Mind/bike4mind/commit/afba6315105929e9b39672a2d0d23caad7f8e4aa)]:
+  - @bike4mind/common@7.3.0
+  - @bike4mind/llm-adapters@0.15.0
+  - @bike4mind/utils@5.2.0
+  - @bike4mind/fab-pipeline@1.3.6
+  - @bike4mind/db-core@0.5.6
+
 ## 0.2.5
 
 ### Patch Changes

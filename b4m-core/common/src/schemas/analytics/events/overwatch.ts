@@ -26,9 +26,18 @@ export const OverwatchAnalyticsEventSchema = z.object({
   schemaVersion: z.number().int().positive(),
   /** Product identifier: 'vibeswire', 'bike4mind', 'stocksandvibes', 'k2kanji', etc. */
   productId: z.string().min(1).max(64),
-  /** Product's internal user ID */
+  /**
+   * Product's internal user ID, or OVERWATCH_ANONYMOUS_USER_ID when the event has no
+   * identified user. See the session and identity conventions below.
+   */
   userId: z.string().min(1).max(256),
-  /** Session identifier for retention/funnel analysis */
+  /**
+   * Visit identifier. Overwatch counts distinct values of this per product as the first
+   * stage of its acquisition funnel, so one value per visit is what makes that count a
+   * count of visits. An emitter that cannot tell which visit a request belongs to sends
+   * OVERWATCH_UNKNOWN_SESSION_ID rather than a value of its own invention - see the
+   * conventions below.
+   */
   sessionId: z.string().min(1).max(256),
   /** Event type: 'session_start', 'signup', 'feature_used', etc. */
   event: z.string().min(1).max(128),
@@ -65,6 +74,54 @@ export const OVERWATCH_ANALYTICS_SCHEMA_VERSION = 1;
 
 export const OVERWATCH_USERTYPE_VALUES = ['subscriber', 'free', 'trial'] as const;
 export type OverwatchUserType = (typeof OVERWATCH_USERTYPE_VALUES)[number];
+
+// ---------------------------------------------------------------------------
+// Session and identity conventions
+//
+// Overwatch does not mint identifiers; it counts distinct values of what a
+// product sends. That makes two cases worth naming rather than improvising,
+// because the improvised versions are both silent:
+//
+//   - An event with no identified user. Sending a per-visit value as the userId
+//     turns every anonymous visitor into a distinct user, which inflates DAU and
+//     makes a distinct-users/user-days ratio saturate; omitting the field is not
+//     an option because it is required. OVERWATCH_ANONYMOUS_USER_ID is one fixed
+//     value, so a consumer can recognise it and keep it out of per-user
+//     aggregates instead of counting it as one more user.
+//   - An event whose emitter cannot tell which visit it belongs to (a request
+//     carrying no visit cookie, a server-to-server call). A freshly invented id
+//     per event would add one phantom session per event to the funnel's first
+//     stage; OVERWATCH_UNKNOWN_SESSION_ID adds exactly one per product per range
+//     and can be excluded outright, which is the difference between a bounded
+//     known error and an unbounded unknown one.
+//
+// Both are colon-namespaced so they cannot collide with a product's own ids, and
+// both are plain strings the existing schema already accepts, so honouring them
+// costs a consumer a filter rather than a migration.
+// ---------------------------------------------------------------------------
+
+/**
+ * Event name for the start of a visit: exactly one per visit, carrying that visit's
+ * identifier as its sessionId. A product that emits these gives Overwatch's funnel a
+ * first stage that means visits, including visits by users who never sign in.
+ */
+export const OVERWATCH_VISIT_EVENT = 'visit';
+
+/** userId for an event with no identified user. Never fold it into a per-user aggregate. */
+export const OVERWATCH_ANONYMOUS_USER_ID = 'overwatch:anonymous';
+
+/** sessionId for an event whose emitter could not observe which visit it belonged to. */
+export const OVERWATCH_UNKNOWN_SESSION_ID = 'overwatch:no-session';
+
+/** True for an event that carries no user identity - exclude it from per-user counts. */
+export function isAnonymousOverwatchUserId(userId: string): boolean {
+  return userId === OVERWATCH_ANONYMOUS_USER_ID;
+}
+
+/** True for a sessionId that stands for "unknown visit" - exclude it from session counts. */
+export function isUnknownOverwatchSessionId(sessionId: string): boolean {
+  return sessionId === OVERWATCH_UNKNOWN_SESSION_ID;
+}
 
 // ---------------------------------------------------------------------------
 // UTM constants - use these when emitting events from product SDKs

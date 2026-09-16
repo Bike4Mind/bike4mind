@@ -32,6 +32,19 @@ export const DEFAULT_PASSAGE_TOKEN_TARGET = 512;
 export const MIN_PASSAGE_TOKEN_TARGET = 64;
 
 /**
+ * Floor on a single chunk's size, in Unicode code points (the unit `charLength` is stored in - see
+ * countCodePoints), below which a chunk carries no useful embedding. #2817: a captured production
+ * lake had chunks as short as 1 character, and one landed in the top-10 of 28/30 sampled retrieval
+ * queries purely on cosine noise - a retrieval slot spent on content nothing could act on. The
+ * chunker merges a chunk under this floor into the following chunk, falling back to the preceding
+ * one, and drops it only if neither can absorb it (see SmartChunker.mergeOrDropNearEmptyChunks).
+ * Chosen well below any real single-sentence passage
+ * (English sentences run 60+ characters) so this only catches genuinely degenerate output - stray
+ * punctuation, a lone header, a table cell overflow remnant - never a short-but-real sentence.
+ */
+export const MIN_CHUNK_CHARS_FLOOR = 50;
+
+/**
  * Model-INDEPENDENT sanity ceiling for a configured passage target, in tokens. A passage larger
  * than a full typical embedding context window (~8K) defeats retrieval granularity - one vector
  * would average a whole document (see DEFAULT_PASSAGE_TOKEN_TARGET).

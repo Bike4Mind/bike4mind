@@ -116,6 +116,27 @@ describe('POST /api/files/generate-presigned-url - S3 client config', () => {
   });
 });
 
+describe('POST /api/files/generate-presigned-url - extension-first MIME resolution', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.createFabFile.mockImplementation(async () => ({ id: 'f1' }));
+  });
+
+  it('persists the extension-derived type over a mismatched claim', async () => {
+    const { res } = makeRes();
+    await run(body({ fileName: 'deploy.sh', mimeType: 'text/plain' }), res);
+
+    expect(h.createFabFile.mock.calls[0][0]).toMatchObject({ mimeType: 'application/x-sh' });
+  });
+
+  it('persists text/markdown for a .md upload, not the legacy text/x-markdown spelling', async () => {
+    const { res } = makeRes();
+    await run(body({ fileName: 'notes.md', mimeType: 'text/markdown' }), res);
+
+    expect(h.createFabFile.mock.calls[0][0]).toMatchObject({ mimeType: 'text/markdown' });
+  });
+});
+
 describe('POST /api/files/generate-presigned-url - data-lake tags', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -328,6 +349,36 @@ describe('POST /api/files/generate-presigned-url - MaxFileSize resolution', () =
     const { res } = makeRes();
 
     await run(body({ fileSize: mb(DEFAULT_MB + 5) }), res);
+    expect(h.createFabFile).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('POST /api/files/generate-presigned-url - storage quota', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getSettingsMap).mockResolvedValue({});
+    h.createFabFile.mockImplementation(async () => ({ id: 'f1' }));
+  });
+
+  // Regression test: the route used to `if (!checkStorageLimit(...))`, negating an un-awaited
+  // Promise, so this gate was a silent no-op no matter how far over quota the upload was.
+  it('rejects an upload that would exceed the storage quota', async () => {
+    const { res } = makeRes();
+
+    await expect(
+      run(body({ fileSize: 200_000 }), res, {
+        user: { id: 'u1', isAdmin: false, storageLimit: 1, currentStorageSize: 900_000 },
+      })
+    ).rejects.toThrow(/file size exceeds storage limit/i);
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it('accepts an upload that fits within the storage quota', async () => {
+    const { res } = makeRes();
+
+    await run(body({ fileSize: 50_000 }), res, {
+      user: { id: 'u1', isAdmin: false, storageLimit: 1, currentStorageSize: 900_000 },
+    });
     expect(h.createFabFile).toHaveBeenCalledTimes(1);
   });
 });

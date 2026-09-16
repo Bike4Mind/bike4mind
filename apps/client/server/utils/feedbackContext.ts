@@ -7,6 +7,8 @@ import mongoose from 'mongoose';
 export interface ResolvedFeedbackContext {
   questId?: string;
   sessionId?: string;
+  /** Verified to belong to `sessionId`, and only ever set when `subject` is not 'turn'. */
+  contextQuestId?: string;
   /** The authenticated submitter's own organization only - never derived from a claim. */
   organizationId: string | null;
   subject: FeedbackSubject;
@@ -25,6 +27,9 @@ interface ResolveFeedbackContextArgs {
   claims: {
     questId?: string;
     sessionId?: string;
+    /** The turn on screen when the report was written. Never promotes `subject` to 'turn' - a
+     * report whose subject really is a turn sends `questId` instead. */
+    contextQuestId?: string;
   };
   logger: Pick<Logger, 'warn'>;
 }
@@ -53,13 +58,16 @@ export async function resolveFeedbackContext({
     return { organizationId: null, subject: 'product' };
   }
 
-  const resolvedSessionId = await resolveOwnedSessionId(claims, authenticatedUserId, logger);
+  const resolved = await resolveOwnedSessionId(claims, authenticatedUserId, logger);
 
   return {
-    questId: resolvedSessionId.questId,
-    sessionId: resolvedSessionId.sessionId,
+    questId: resolved.questId,
+    sessionId: resolved.sessionId,
+    contextQuestId: resolved.questId
+      ? undefined
+      : await resolveContextQuestId(claims.contextQuestId, resolved.sessionId, logger),
     organizationId,
-    subject: resolvedSessionId.questId ? 'turn' : resolvedSessionId.sessionId ? 'session' : 'product',
+    subject: resolved.questId ? 'turn' : resolved.sessionId ? 'session' : 'product',
   };
 }
 
@@ -98,6 +106,33 @@ async function resolveOwnedSessionId(
   }
 
   return {};
+}
+
+/**
+ * Keeps a context quest only when it belongs to the session the report is already scoped to -
+ * that session has itself been ownership-checked, so no second ownership read is needed, and a
+ * quest from anywhere else is dropped rather than stamped onto the record.
+ */
+async function resolveContextQuestId(
+  claimed: string | undefined,
+  resolvedSessionId: string | undefined,
+  logger: Pick<Logger, 'warn'>
+): Promise<string | undefined> {
+  if (!claimed || !resolvedSessionId) return undefined;
+  if (!mongoose.isValidObjectId(claimed)) {
+    logger.warn(`Dropped feedback contextQuestId claim: not a valid ObjectId (${claimed})`);
+    return undefined;
+  }
+  const quest = await questRepository.findById(claimed);
+  if (!quest) {
+    logger.warn('Dropped feedback contextQuestId claim: quest not found');
+    return undefined;
+  }
+  if (quest.sessionId !== resolvedSessionId) {
+    logger.warn('Dropped feedback contextQuestId claim: quest is not part of the reported session');
+    return undefined;
+  }
+  return claimed;
 }
 
 async function isOwnedSession(

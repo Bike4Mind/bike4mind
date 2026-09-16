@@ -67,9 +67,20 @@ export const setLakeVisibility = async (
   // actor org). Demotion to private stays full-manage. Deliberately isEffectiveOwner, not
   // canManageLake: it is the grant-aware owner check (a transferred owner qualifies, the creator
   // once superseded does not) WITHOUT the admin / curator / org-admin bypasses this must exclude.
-  // This invariant is not routable around via transfer: transferLakeOwnership's consent guard
-  // forbids an org admin from transferring a lake to THEMSELVES (they must name another member), so
-  // an org admin cannot self-grant ownership here and then expose. See transferLakeOwnership.ts.
+  // TRANSFER cannot route around this: transferLakeOwnership's consent guard forbids an org admin
+  // from transferring a lake to THEMSELVES (they must name another member). See
+  // transferLakeOwnership.ts.
+  //
+  // DEPARTURE can, and deliberately so. `lapseDepartedMemberLakeAccess` phase 2 mints an owner
+  // grant for the org's billing owner when a lake's creator leaves, with no consent step - because
+  // there is no longer an owner to consent, which is the premise the transfer guard rests on. The
+  // alternative is worse, not safer: ownership would stay resolved to the departed creator through
+  // resolveEffectiveOwnerIds' fallback, and canManageLake is consulted BEFORE the org prerequisite
+  // (classifyLakeAccess.ts:45 vs :66), so a FORMER member would keep full read and manage - and
+  // this very gate. So the expose capability moves to the billing owner rather than being denied to
+  // everyone. Narrower than it looks: an org admin can already share a lake org-wide via an
+  // organization-principal reader grant (lakeGrantWriteRule.ts:58-67), so `public` is the only
+  // genuinely new reach, and the gated-lake refusal below still blocks the PHI case.
   if (exposes && !isEffectiveOwner(existing, actor, grants)) {
     throw new BadRequestError('Only the lake’s owner can change how it is shared.');
   }
