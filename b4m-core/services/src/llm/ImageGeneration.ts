@@ -37,6 +37,8 @@ import {
   requiresImageInput,
   insufficientCreditsError,
   getQuestErrorCode,
+  ImageOutputFormatSchema,
+  toNonWebpOutputFormat,
 } from '@bike4mind/common';
 import {
   aiImageService,
@@ -98,7 +100,7 @@ export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
   safety_tolerance: BFLSafetyToleranceSchema,
   prompt_upsampling: z.boolean().optional().prefault(false),
   seed: z.number().nullable().optional(),
-  output_format: z.enum(['jpeg', 'png']).nullable().optional().prefault('png'),
+  output_format: ImageOutputFormatSchema.nullable().optional().prefault('png'),
   width: z.number().optional(),
   height: z.number().optional(),
   aspect_ratio: z.string().optional(),
@@ -245,6 +247,7 @@ export class ImageGenerationService {
         prompt_upsampling: rest.prompt_upsampling,
         seed: rest.seed,
         output_format: rest.output_format,
+        background: rest.background,
         // `null` means "unset" for seed/output_format (both nullable), and PromptMetaZodSchema
         // declares these as plain optional numbers/enums, not nullable - a persisted `null` (the
         // client's own default) fails /api/feedback's validation when a bug report posts it back.
@@ -629,11 +632,15 @@ export class ImageGenerationService {
       prompt_upsampling,
       seed,
       output_format,
+      background,
       aspect_ratio,
       fabFileIds,
       organizationId,
       intent = 'fresh',
     } = ImageGenerationBodySchema.parse(body);
+
+    // BFL and Gemini reject webp; only the gpt-image branch below gets the raw value.
+    const nonWebpOutputFormat = toNonWebpOutputFormat(output_format);
 
     logger.updateMetadata({ notebookId: sessionId, questId, userId });
 
@@ -869,7 +876,7 @@ export class ImageGenerationService {
           const editPromises = Array.from({ length: n }, () =>
             geminiService.edit(preparedImage, truncatedPrompt, {
               aspect_ratio,
-              output_format,
+              output_format: nonWebpOutputFormat,
               safety_tolerance,
             })
           );
@@ -929,7 +936,7 @@ export class ImageGenerationService {
             model: model as any,
             n,
             aspect_ratio,
-            output_format,
+            output_format: nonWebpOutputFormat,
             safety_tolerance,
             // prompt_upsampling/seed are intentionally passed through here - Gemini's own adapter
             // (GeminiImageService.buildGenerationConfig()) is the single place that refuses to
@@ -1042,7 +1049,7 @@ export class ImageGenerationService {
             safety_tolerance,
             prompt_upsampling,
             seed,
-            output_format,
+            output_format: nonWebpOutputFormat,
             aspect_ratio,
           };
 
@@ -1073,7 +1080,7 @@ export class ImageGenerationService {
             prompt_upsampling,
             image_prompt: base64Image,
             seed,
-            output_format,
+            output_format: nonWebpOutputFormat,
             n,
           });
         } else {
@@ -1087,7 +1094,7 @@ export class ImageGenerationService {
             image_prompt: base64Image,
             prompt_upsampling,
             seed,
-            output_format,
+            output_format: nonWebpOutputFormat,
             n,
           });
         }
@@ -1134,6 +1141,14 @@ export class ImageGenerationService {
           if (mappedQuality) {
             openaiParams.quality = mappedQuality;
           }
+          // Alpha controls: gpt-image is the only family that accepts them, and
+          // `background: 'transparent'` is what produces a real cutout PNG.
+          if (background) {
+            openaiParams.background = background;
+          }
+          if (output_format) {
+            openaiParams.output_format = output_format;
+          }
         } else {
           // Other OpenAI models support these parameters
           openaiParams.quality = quality;
@@ -1150,6 +1165,8 @@ export class ImageGenerationService {
           size: openaiParams.size,
           quality: openaiParams.quality,
           style: openaiParams.style,
+          background: openaiParams.background,
+          output_format: openaiParams.output_format,
           n: openaiParams.n,
         });
 

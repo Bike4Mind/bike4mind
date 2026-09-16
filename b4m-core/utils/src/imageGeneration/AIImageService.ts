@@ -1,5 +1,5 @@
 import { Logger } from '@bike4mind/observability';
-import { OpenAIImageSize } from '@bike4mind/common';
+import { OpenAIImageSize, type OpenAIImageBackground } from '@bike4mind/common';
 
 export interface AIImageGenerationOptions {
   width?: number;
@@ -12,6 +12,8 @@ export interface AIImageGenerationOptions {
   quality?: 'standard' | 'hd';
   style?: 'vivid' | 'natural';
   response_format?: 'url' | 'b64_json' | null;
+  /** gpt-image only; other providers ignore it. See OpenAIImageService. */
+  background?: OpenAIImageBackground | null;
   // BFL specific options
   output_format?: 'jpeg' | 'png' | null;
   prompt_upsampling?: boolean;

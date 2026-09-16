@@ -10,6 +10,7 @@ import {
   isGeminiImageModel,
   supportsImageEdit,
   EDIT_SUPPORTED_IMAGE_MODELS,
+  toNonWebpOutputFormat,
 } from '@bike4mind/common';
 import {
   OpenAIImageService,
@@ -311,6 +312,9 @@ Please select a supported edit model in your image settings modal.`;
       const size = imageConfig?.size || toolSize;
       const safety_tolerance = imageConfig?.safety_tolerance || toolSafetyTolerance;
       const output_format = imageConfig?.output_format ?? 'png';
+      const background = imageConfig?.background;
+      // BFL and Gemini reject webp; only the OpenAI branch below takes the raw value.
+      const nonWebpOutputFormat = toNonWebpOutputFormat(output_format);
       const prompt_upsampling = imageConfig?.prompt_upsampling ?? false;
       const seed = imageConfig?.seed;
       // BFL-specific parameters (not in imageConfig, use defaults or tool call override)
@@ -373,7 +377,7 @@ Please select a supported edit model in your image settings modal.`;
             safety_tolerance: safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT,
             prompt_upsampling,
             seed: seed ?? undefined,
-            output_format: output_format ?? 'jpeg',
+            output_format: nonWebpOutputFormat ?? 'jpeg',
             steps,
             guidance,
           });
@@ -424,7 +428,7 @@ Please check your BFL API key in settings and ensure it is configured correctly.
         try {
           const editResponse = await service.edit(dataUrlImage, prompt, {
             aspect_ratio: imageConfig?.aspect_ratio,
-            output_format: output_format ?? 'png',
+            output_format: nonWebpOutputFormat ?? 'png',
             safety_tolerance: safety_tolerance,
             model: editModel, // Pass edit model to service
           });
@@ -468,6 +472,8 @@ Please check your BFL API key in settings and ensure it is configured correctly.
             size,
             response_format: 'url',
             user: context.userId,
+            background,
+            output_format: nonWebpOutputFormat,
           });
 
           if (editResponse.type === 'success') {

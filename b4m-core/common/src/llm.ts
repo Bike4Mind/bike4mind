@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ChatCompletionCreateInputSchema, OpenAIImageGenerationInput } from './schemas/openai';
+import { ChatCompletionCreateInputSchema, ImageOutputFormatSchema, OpenAIImageGenerationInput } from './schemas/openai';
 import { b4mLLMTools, B4MLLMTools } from './schemas/llm';
 import { supportedVoiceGenerationVendor, voiceOutputFormatSchema } from './voiceGeneration';
 import { BFLSafetyToleranceSchema } from './schemas/bfl';
@@ -63,7 +63,7 @@ export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend(
   safety_tolerance: BFLSafetyToleranceSchema,
   prompt_upsampling: z.boolean().optional(),
   seed: z.number().nullable().optional(),
-  output_format: z.enum(['jpeg', 'png']).nullable().optional(),
+  output_format: ImageOutputFormatSchema.nullable().optional(),
   /** Resolved by the API route's prompt resolver. Defaults to 'fresh' for first-turn or sessions with no prior image. */
   intent: PromptIntentSchema.optional(),
   promptEnhancement: z
@@ -88,7 +88,7 @@ export type GenerateImageRequestBody = z.infer<typeof GenerateImageRequestBodySc
 export const GenerateImageToolCallSchema = OpenAIImageGenerationInput.extend({
   safety_tolerance: z.number().optional(),
   prompt_upsampling: z.boolean().optional(),
-  output_format: z.enum(['jpeg', 'png']).nullable().optional(),
+  output_format: ImageOutputFormatSchema.nullable().optional(),
   seed: z.number().nullable().optional(),
   editModel: z.string().optional(), // Model to use for image editing operations (separate from generation model)
 }).omit({

@@ -8,6 +8,9 @@ import {
   GenerateImageToolCall,
   isBflImageModel,
   isGeminiImageModel,
+  toNonWebpOutputFormat,
+  type ImageOutputFormat,
+  type OpenAIImageBackground,
 } from '@bike4mind/common';
 import {
   OpenAIImageService,
@@ -173,9 +176,13 @@ export const imageGenerationTool: ToolDefinition = {
         quality: toolQuality,
         size: toolSize,
         safety_tolerance: toolSafetyTolerance,
+        background: toolBackground,
+        output_format: toolOutputFormat,
       } = val as ImageGenerateParams & {
         model?: string;
         safety_tolerance?: number;
+        background?: OpenAIImageBackground;
+        output_format?: ImageOutputFormat;
       };
 
       // Use imageConfig settings as defaults, allow tool call to override
@@ -191,9 +198,12 @@ export const imageGenerationTool: ToolDefinition = {
       const width = imageConfig?.width;
       const height = imageConfig?.height;
       const aspect_ratio = imageConfig?.aspect_ratio;
-      const output_format = imageConfig?.output_format;
+      const output_format = toolOutputFormat ?? imageConfig?.output_format;
+      const background = toolBackground ?? imageConfig?.background;
       const prompt_upsampling = imageConfig?.prompt_upsampling;
       const seed = imageConfig?.seed;
+      // BFL and Gemini reject webp; only the OpenAI branch gets the raw value.
+      const nonWebpOutputFormat = toNonWebpOutputFormat(output_format);
 
       // Determine which service to use based on the model
       const isBFLModel = isBflImageModel(model);
@@ -257,7 +267,7 @@ export const imageGenerationTool: ToolDefinition = {
             width: width ?? 1024,
             height: height ?? 768,
             aspect_ratio: aspect_ratio,
-            output_format: output_format ?? 'png',
+            output_format: nonWebpOutputFormat ?? 'png',
             prompt_upsampling: prompt_upsampling ?? false,
             seed: seed ?? undefined,
             user: context.userId,
@@ -306,7 +316,7 @@ export const imageGenerationTool: ToolDefinition = {
           n,
           model,
           aspect_ratio: aspect_ratio,
-          output_format: output_format ?? 'png',
+          output_format: nonWebpOutputFormat ?? 'png',
           safety_tolerance: safety_tolerance,
           // prompt_upsampling/seed are intentionally passed through here - Gemini's own adapter
           // (GeminiImageService.buildGenerationConfig()) is the single place that refuses to
@@ -373,6 +383,8 @@ export const imageGenerationTool: ToolDefinition = {
             model,
             user: context.userId,
             safety_tolerance,
+            background,
+            output_format,
           });
         } catch (openaiError) {
           // OpenAIImageService maps known API failures (402/401/403/429, moderation) to friendly
@@ -419,6 +431,17 @@ export const imageGenerationTool: ToolDefinition = {
             description: 'Safety tolerance level for BFL models (0 most strict, 6 least strict)',
             minimum: BFL_SAFETY_TOLERANCE.MIN,
             maximum: BFL_SAFETY_TOLERANCE.MAX,
+          },
+          background: {
+            type: 'string',
+            description:
+              'Background handling (gpt-image only). Use "transparent" when the user asks for a cutout, sprite, icon, sticker or a logo with no backdrop; it needs an alpha-capable output_format (png or webp).',
+            enum: ['transparent', 'opaque', 'auto'],
+          },
+          output_format: {
+            type: 'string',
+            description: 'Output container. "webp" is gpt-image only; other providers fall back to png.',
+            enum: ['png', 'jpeg', 'webp'],
           },
         },
         additionalProperties: false,

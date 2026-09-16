@@ -2,7 +2,13 @@ import { AIImageService, ImageEditOptions, ImageEditResponse } from './AIImageSe
 import OpenAI from 'openai';
 import { ImageGenerateParams } from 'openai/resources/images';
 import { Logger } from '@bike4mind/observability';
-import { ImageModels, isGPTImageModel, isGPTImage2Model } from '@bike4mind/common';
+import {
+  ImageModels,
+  isGPTImageModel,
+  isGPTImage2Model,
+  type ImageOutputFormat,
+  type OpenAIImageBackground,
+} from '@bike4mind/common';
 import { invokeImageProcessor, downloadImageAsBuffer } from './imageProcessorUtils';
 
 // The image-generation Lambda has a 10-minute timeout. The OpenAI SDK's default
@@ -56,9 +62,36 @@ export type OpenAIImageGenerationOptions = Omit<ImageGenerateParams, 'prompt'> &
   safety_tolerance?: number;
   prompt_upsampling?: boolean;
   seed?: number | null;
-  output_format?: 'jpeg' | 'png' | null;
+  output_format?: ImageOutputFormat | null;
   imagePrompt?: string;
 };
+
+/**
+ * Resolve the alpha/container pair gpt-image accepts. OpenAI rejects
+ * `background: 'transparent'` together with jpeg (no alpha channel), so a transparent
+ * request promotes the container to png rather than failing the whole render.
+ * Returns the fields to spread onto the request; absent keys mean "let OpenAI default".
+ */
+export function resolveGptImageOutputOptions(
+  background: OpenAIImageBackground | null | undefined,
+  outputFormat: ImageOutputFormat | null | undefined,
+  warnings: string[]
+): { background?: OpenAIImageBackground; output_format?: ImageOutputFormat } {
+  const resolved: { background?: OpenAIImageBackground; output_format?: ImageOutputFormat } = {};
+  if (background) {
+    resolved.background = background;
+  }
+  if (outputFormat) {
+    resolved.output_format = outputFormat;
+  }
+  if (background === 'transparent' && outputFormat === 'jpeg') {
+    resolved.output_format = 'png';
+    warnings.push(
+      "Transparent background requires an alpha-capable format; output_format changed from 'jpeg' to 'png'"
+    );
+  }
+  return resolved;
+}
 
 export class OpenAIImageService extends AIImageService {
   async generate(prompt: string, options: OpenAIImageGenerationOptions): Promise<string[]> {
@@ -66,24 +99,30 @@ export class OpenAIImageService extends AIImageService {
     Logger.log('Generating image... with these params: ', options);
 
     try {
-      // Remove BFL-specific parameters since OpenAI doesn't use them
+      // Remove BFL-specific parameters since OpenAI doesn't use them. `background` and
+      // `output_format` are pulled out here and re-applied only on the gpt-image branch,
+      // which is the only family that accepts them.
       const {
         safety_tolerance,
         prompt_upsampling,
         seed: bflSeed,
         output_format,
+        background,
         imagePrompt,
         stream,
         ...openaiOptions
       } = options;
 
       const parameterWarnings: string[] = [];
+      let gptImageOutputOptions: ReturnType<typeof resolveGptImageOutputOptions> = {};
 
       // GPT-Image specific parameter validation and graceful fallback
       if (isGPTImageModel(options.model)) {
         const modelName = options.model || ImageModels.GPT_IMAGE_1_5;
 
         openaiOptions.model = modelName;
+
+        gptImageOutputOptions = resolveGptImageOutputOptions(background, output_format, parameterWarnings);
 
         // Remove unsupported parameters with warnings
         if (openaiOptions.style) {
@@ -161,6 +200,12 @@ export class OpenAIImageService extends AIImageService {
         // For other OpenAI models (legacy support)
         openaiOptions.response_format = 'url';
 
+        if (background) {
+          parameterWarnings.push(
+            `Background parameter ('${background}') is only supported by gpt-image models and was removed`
+          );
+        }
+
         if (openaiOptions.quality && !['standard', 'hd'].includes(openaiOptions.quality)) {
           const originalQuality = openaiOptions.quality;
           openaiOptions.quality = 'standard';
@@ -204,12 +249,14 @@ export class OpenAIImageService extends AIImageService {
           // NOTE: DALL-E 3 does NOT support image editing at all
           const editModel = options.model || ImageModels.GPT_IMAGE_2;
 
-          // IMPORTANT: GPT-Image models edit endpoint only supports: model, image (array), prompt
+          // IMPORTANT: GPT-Image models edit endpoint only supports: model, image (array),
+          // prompt, plus the background/output_format alpha controls.
           // Do not pass any other parameters (size, response_format, etc.)
           result = await openai.images.edit({
             model: editModel as 'gpt-image-1' | 'gpt-image-1.5' | 'gpt-image-1-mini' | 'gpt-image-2',
             image: [imageFile],
             prompt,
+            ...gptImageOutputOptions,
           });
         } else {
           // Legacy models (DALL-E 2) use the variation endpoint
@@ -227,6 +274,7 @@ export class OpenAIImageService extends AIImageService {
         result = await openai.images.generate({
           prompt,
           ...openaiOptions,
+          ...gptImageOutputOptions,
         });
       }
 
@@ -278,11 +326,15 @@ export class OpenAIImageService extends AIImageService {
   }
 
   private imageResponseToUrl(response: OpenAI.Images.ImagesResponse): string[] {
+    // The container is only reported on the envelope, so read it here rather than
+    // labelling every base64 payload image/png - a webp or jpeg render would otherwise
+    // reach storage with a data URL that contradicts its own bytes.
+    const mimeType = `image/${response?.output_format ?? 'png'}`;
     return (response?.data ?? []).map(imageData => {
       // GPT-Image-1 returns b64_json instead of url
       if (imageData.b64_json) {
         // Convert base64 to data URL for processing
-        return `data:image/png;base64,${imageData.b64_json}`;
+        return `data:${mimeType};base64,${imageData.b64_json}`;
       }
 
       // GPT-Image-1 and other OpenAI models return url
@@ -297,7 +349,16 @@ export class OpenAIImageService extends AIImageService {
   async edit(
     image: string,
     prompt: string,
-    { mask = null, model = ImageModels.GPT_IMAGE_2, n = 1, size, response_format = 'url', user }: ImageEditOptions
+    {
+      mask = null,
+      model = ImageModels.GPT_IMAGE_2,
+      n = 1,
+      size,
+      response_format = 'url',
+      user,
+      background,
+      output_format,
+    }: ImageEditOptions
   ): Promise<ImageEditResponse> {
     try {
       const openai = new OpenAI({ apiKey: this.apiKey, ...OPENAI_IMAGE_CLIENT_OPTS });
@@ -337,7 +398,14 @@ export class OpenAIImageService extends AIImageService {
         editModel = ImageModels.GPT_IMAGE_2;
       }
 
-      // IMPORTANT: GPT-Image models (1, 1.5, 1-mini) only support: model, image (array), prompt
+      const editWarnings: string[] = [];
+      const gptImageOutputOptions = resolveGptImageOutputOptions(background, output_format, editWarnings);
+      if (editWarnings.length > 0) {
+        Logger.globalInstance.debug(`[DEBUG] ⚠️ ${editModel} parameter adjustments:`, editWarnings);
+      }
+
+      // IMPORTANT: GPT-Image models (1, 1.5, 1-mini) only support: model, image (array), prompt,
+      // plus the background/output_format alpha controls
       // dall-e-2 supports: model, image (single), prompt, mask, n, size, response_format, user
       const response = await openai.images.edit(
         isGPTImageModel(editModel)
@@ -345,6 +413,7 @@ export class OpenAIImageService extends AIImageService {
               model: editModel as 'gpt-image-1' | 'gpt-image-1.5' | 'gpt-image-1-mini' | 'gpt-image-2',
               image: [imageFile],
               prompt,
+              ...gptImageOutputOptions,
             }
           : {
               model: editModel as 'dall-e-2',
@@ -363,7 +432,9 @@ export class OpenAIImageService extends AIImageService {
         const result = response.data[0];
         // Check what the response actually contains, not what we requested
         // gpt-image-1 returns b64_json by default, dall-e-2 returns based on response_format
-        const dataUrl = result.b64_json ? `data:image/png;base64,${result.b64_json}` : result.url;
+        const dataUrl = result.b64_json
+          ? `data:image/${response.output_format ?? 'png'};base64,${result.b64_json}`
+          : result.url;
 
         if (!dataUrl) {
           throw new Error(`Image response contains neither url nor b64_json: ${JSON.stringify(Object.keys(result))}`);
