@@ -22,6 +22,10 @@ const candidateRule = process.env.GROUNDED_EVAL_CANDIDATE_RULE;
 // run cannot echo it.
 const apiKey = process.env.GROUNDED_EVAL_API_KEY;
 
+// Generous per completion on purpose: a local model on CPU is the slow end of what this suite is
+// pointed at, and overrunning the budget throws away the whole sweep rather than one sample.
+const PER_COMPLETION_BUDGET_MS = 10 * 1000;
+
 // A bad sample count must not read as a clean run: at 0 (or `NaN`, from `GROUNDED_EVAL_SAMPLES=two`)
 // every passRate comes out `0/0 = NaN`, no comparison against it is ever true, and the suite goes
 // green having called the model zero times while the printed report says FAIL on every case.
@@ -53,7 +57,10 @@ describe.skipIf(!baseUrl || !model)('grounded no-invention rule (live model)', (
       );
       console.log(`\n${model} @ ${samples} samples/case (candidate rule)\n${formatEvalReport(candidateResults)}\n`);
     },
-    // A full sweep is cases x samples sequential completions; a local model needs the headroom.
-    10 * 60 * 1000
+    // The harness sends cases x samples sequentially, twice over when a candidate arm is set, so the
+    // budget has to scale with the sweep rather than sit at a constant: the default 3 samples is 27
+    // completions, but the sample count an A/B is actually worth reading at is 30, which is 540 - and
+    // a fixed 10 minutes killed that run partway through, discarding every completion already paid for.
+    GROUNDED_CASES.length * samples * (candidateRule ? 2 : 1) * PER_COMPLETION_BUDGET_MS + 60 * 1000
   );
 });
