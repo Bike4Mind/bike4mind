@@ -3,14 +3,19 @@ import { IAgent, isImageServeable } from '@bike4mind/common';
 import { getFilesStorage } from '@server/utils/storage';
 
 /**
- * Refresh agents' portrait signed URLs for display. `viewerId` is the REQUESTING user: the
- * signed-URL write-back mutates the FabFile record, so it is gated to the file's OWNER - a viewer
- * of a *shared* agent still gets a freshly minted display URL but never rewrites another user's
- * FabFile record.
+ * Refresh agents' portrait signed URLs for display. `viewerId` is the REQUESTING user.
  *
- * Shared by GET /api/agents and GET /api/sessions/:id/agents. These carried byte-identical copies
- * before; the owner gate must not drift between them, so it lives here once rather than in each
- * route. Held/blocked avatars are never re-minted.
+ * Access gate: a signed URL is only ever minted/served for a file the agent's OWNER owns, or a
+ * globally readable file. This stops an agent whose portraitUrl is pointed at a foreign private
+ * file's path from leaking a signed URL to that file to anyone who can view the agent. Note
+ * isImageServeable is a moderation check only and does NOT gate access, so this gate is separate.
+ * Write-back gate: persisting the fresh URL mutates the FabFile record, so it is additionally
+ * gated to the file's OWNER (viewerId) - a viewer of a *shared* agent still gets a freshly minted
+ * display URL but never rewrites another user's FabFile record.
+ *
+ * Shared by GET /api/agents, GET /api/sessions/:id/agents and GET /api/agents/:id. These carried
+ * near-identical copies before; the access gate must not drift between them, so it lives here once
+ * rather than in each route. Held/blocked avatars are never re-minted.
  */
 export const refreshAgentAvatarUrls = async (agents: IAgent[], viewerId: string): Promise<IAgent[]> => {
   const refreshedAgents = await Promise.all(
@@ -36,8 +41,10 @@ export const refreshAgentAvatarUrls = async (agents: IAgent[], viewerId: string)
 
         // Find the corresponding FabFile to get proper signed URL
         const fabFile = await fabFileRepository.findOne({ filePath });
-        // Don't re-mint a signed URL for a held/blocked avatar image.
-        if (fabFile && fabFile.filePath && isImageServeable(fabFile)) {
+        // Only serve a file the agent's owner owns, or a globally readable file - never a foreign
+        // private file resolved by path alone. isImageServeable is moderation-only, not access.
+        const viewerMayReadFile = !!fabFile && (fabFile.userId === agent.userId || fabFile.isGlobalRead);
+        if (fabFile && fabFile.filePath && isImageServeable(fabFile) && viewerMayReadFile) {
           // Check if the current URL is expired (older than 50 minutes)
           const now = new Date();
           const isExpired = !fabFile.fileUrlExpireAt || fabFile.fileUrlExpireAt <= now;

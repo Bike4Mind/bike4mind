@@ -1,11 +1,10 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
-import { fromZodError } from 'zod-validation-error';
 import { ApiKeyScope, CreditHolderType, SettingKeySchema, SettingScopeLevel } from '@bike4mind/common';
 import { scopedSettingsRepository } from '@bike4mind/database/infra';
 import { scopedSettingsService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ensureAdmin } from '@server/utils/errors';
+import { BadRequestError, ensureAdmin, parseOrBadRequest } from '@server/utils/errors';
 
 /**
  * Admin write surface for the scoped-settings overlay - the org/owner/lake OVERRIDES read by
@@ -50,17 +49,6 @@ const PutBodySchema = ScopeAddressSchema.extend({
 
 export type ScopedOverridePutBody = z.infer<typeof PutBodySchema>;
 export type ScopedOverrideDeleteQuery = z.infer<typeof ScopeAddressSchema>;
-
-/**
- * Every rejection on this route answers 400. A raw ZodError would instead reach `errorHandler` as a
- * 422 (see its `isZodError` branch), leaving the admin UI two statuses to message off for the same
- * class of mistake.
- */
-const parseOrBadRequest = <T>(schema: z.ZodType<T>, input: unknown): T => {
-  const parsed = schema.safeParse(input);
-  if (!parsed.success) throw new BadRequestError(fromZodError(parsed.error).message);
-  return parsed.data;
-};
 
 /**
  * How `writeScopedOverride` marks its own rejections (not settable at this level, sensitive, failed

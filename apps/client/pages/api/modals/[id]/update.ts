@@ -4,6 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { z } from 'zod';
 import { cacheExternalImage, cacheExternalImages } from '@server/utils/cacheExternalImage';
+import { isValidObjectId } from '@server/utils/objectId';
 import { WhatsNewDistributionService } from '@server/services/whatsNewDistribution';
 import { emitModalGenerationMetrics } from '@server/utils/cloudwatch';
 import { Logger } from '@bike4mind/observability';
@@ -65,7 +66,7 @@ const handler = baseApi().put(
 
     const updateData = UpdateModalRequestSchema.parse(req.body);
 
-    const modal = await ModalModel.findById(id);
+    const modal = isValidObjectId(id) ? await ModalModel.findById(id) : null;
     if (!modal) throw new NotFoundError('Modal not found');
 
     if (updateData.imageUrl) {

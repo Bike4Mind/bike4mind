@@ -3,6 +3,8 @@ import { Voice } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { NotFoundError } from '@server/utils/errors';
+import { isValidObjectId } from '@server/utils/objectId';
 
 const handler = baseApi()
   /**
@@ -12,6 +14,7 @@ const handler = baseApi()
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       const userId = req.user?.id;
       const id = req.query.id!;
+      if (!isValidObjectId(id)) throw new NotFoundError('Voice not found');
 
       const deletedApiKey = await Voice.findOneAndDelete({ _id: id, userId });
 

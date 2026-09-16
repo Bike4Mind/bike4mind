@@ -469,11 +469,18 @@ function compareByScore(a: SemanticChunkResult, b: SemanticChunkResult): number 
  * exploration in practice: FabFileModel's vector stage takes `numCandidates` as
  * `max(limit * 10, fileIds.length * 50, 100)`, and past a handful of files the per-file term
  * already dominates a tripled `limit * 10` (at topK 6, 180 vs. 200 from four files; at topK 10,
- * 300 vs. 300 from six), so the max moves by zero. The SCAN path reads no more rows than it
- * already would (scanAndRank's read volume is bounded by maxChunks, not topK; widening topK here
- * only changes how many of the chunks it was scanning anyway survive into `ranked`). So this is a
- * knob that trades ANN query work and a little CPU for diversity, not scan cost, and it is a
- * constant rather than a setting until an operator has a reason to want a different one.
+ * 300 vs. 300 from six), so the max moves by zero. That is correct rather than a shortfall, and
+ * the shape invites the opposite reading: `limit * 10` sits inside that same `max`, so
+ * `numCandidates` never falls below 10x the requested limit until Atlas's 10_000 ceiling clamps
+ * it, which needs a limit above 1000 and so is out of reach here, and `limit` truncates a
+ * traversal `numCandidates` has already paid for rather than extending it. A widened limit
+ * therefore appends lower-ranked rows to an identical candidate set and cannot degrade the
+ * prefix. Pinned by FabFileModel.vectorSearchCandidates.test.ts, which owns the arithmetic.
+ * The SCAN path reads no more rows than it already would (scanAndRank's read volume is bounded by
+ * maxChunks, not topK; widening topK here only changes how many of the chunks it was scanning
+ * anyway survive into `ranked`). So this is a knob that trades ANN query work and a little CPU for
+ * diversity, not scan cost, and it is a constant rather than a setting until an operator has a
+ * reason to want a different one.
  */
 const DIVERSITY_CANDIDATE_POOL_FACTOR = 3;
 

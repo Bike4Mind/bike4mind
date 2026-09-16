@@ -15,9 +15,9 @@ import {
   BadRequestError,
   checkStorageLimitForFile,
   getFileExtension,
-  getMimeTypeByExtension,
   getSettingsMap,
   getSettingsValue,
+  resolveSupportedMimeType,
   secureParameters,
 } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -111,6 +111,13 @@ export interface CreateFabFileAdapters {
    * that door's write gate ends up strictly narrower than the route gate in front of it.
    */
   administeredOrgIds?: string[];
+  /**
+   * Which of the filename extension and the claimed `mimeType` wins; defaults to 'extension-first'.
+   * An adapter rather than a `createFabFileSchema` field for the same reason as `provenance`: that
+   * schema is parsed from a caller-controlled HTTP body, so only a server-side caller that vouches
+   * for the claim (it read it off the stored object, not off the request) may let it outrank the name.
+   */
+  mimeTypePrecedence?: 'extension-first' | 'claim-first';
 }
 
 // Only reached when the `MaxFileSize` settings row exists but fails the schema (a non-numeric
@@ -140,7 +147,7 @@ const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
 export const createFabFile = async (
   userId: string,
   parameters: CreateFabFileParameters,
-  { db, storage, provenance, administeredOrgIds, logger }: CreateFabFileAdapters
+  { db, storage, provenance, administeredOrgIds, logger, mimeTypePrecedence }: CreateFabFileAdapters
 ) => {
   const params = secureParameters(parameters, createFabFileSchema);
   const user = await db.users.findById(userId);
@@ -163,19 +170,15 @@ export const createFabFile = async (
   const tags = params.tags === undefined ? undefined : await reconcileDataLakeFallbackTags(params.tags, { db, logger });
 
   const ext = getFileExtension(params.fileName);
-  let mimeType = params.mimeType || getMimeTypeByExtension(ext);
-
-  // Only assume plain text for genuinely extension-less files (e.g. LICENSE,
-  // Dockerfile). A file that HAS an extension but doesn't resolve to a
-  // supported type must be rejected below - never silently coerced to
-  // text/plain, which let unsupported binaries like .exe through.
-  if (!mimeType && !ext) {
-    mimeType = SupportedFabFileMimeTypes.TXT_PLAIN;
-  }
-
   // Storable is a superset of ingestable: audio (TTS / sound effects) is kept
   // and browsable but never chunked/vectorized or attached to an LLM.
-  if (!isStorableFabFileMimeType(mimeType)) {
+  const { mimeType, supported } = resolveSupportedMimeType(params.fileName, params.mimeType, {
+    isAcceptable: isStorableFabFileMimeType,
+    precedence: mimeTypePrecedence,
+    extensionlessFallback: SupportedFabFileMimeTypes.TXT_PLAIN,
+  });
+
+  if (!supported) {
     throw new BadRequestError(`File type ${mimeType || (ext ? `.${ext}` : 'unknown')} is not supported`);
   }
 

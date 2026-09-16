@@ -6,6 +6,8 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireUser } from '@server/middlewares/requireUser';
 import { requireExperimentalFeature } from '@server/middlewares/requireExperimentalFeature';
 import { respond } from '@server/utils/respond';
+import { isValidObjectId } from '@server/utils/objectId';
+import { NotFoundError } from '@server/utils/errors';
 import {
   QuestGraphCreatedResponseSchema,
   QuestGraphListResponseSchema,
@@ -48,6 +50,9 @@ const handler = baseApi()
     // Bind only to a session the caller owns - otherwise a graph could dispatch
     // runs into someone else's notebook, where their chat history would show
     // replies to prompts they never wrote.
+    // A malformed id has always answered 404 here (the error handler remapped the cast); the
+    // 400 below is this route's answer for a well-formed id that matches nothing.
+    if (!isValidObjectId(input.sessionId)) throw new NotFoundError('Session not found');
     const session = await sessionRepository.findById(input.sessionId);
     if (!session || session.userId !== req.user.id) throw new BadRequestError('Session not found');
 

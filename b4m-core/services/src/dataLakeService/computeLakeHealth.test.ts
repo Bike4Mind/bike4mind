@@ -57,6 +57,7 @@ const brokenMember = (id: string): Member => ({
 
 const lake = {
   id: 'lake-1',
+  status: 'active' as string,
   datalakeTag: 'datalake:acme',
   fileTagPrefix: 'acme:',
   createdByUserId: 'u1',
