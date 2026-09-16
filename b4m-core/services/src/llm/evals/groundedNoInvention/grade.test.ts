@@ -1187,9 +1187,10 @@ describe('gradeMustNotDenyPremise', () => {
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising awaits a decision.',
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising confounded the team.',
       // A bare adverb between the participle and the predicate. This was the adjacency cost's bare
-      // adverb instance and is closed by reading the predicate's SLOT: the adverb stands in it and the
-      // predicate follows, so the scan no longer loses the relative. The prepositional instance below
-      // is the part of the cost that survives.
+      // adverb instance, and the slot test no longer loses it: the adverb's own next word is the
+      // predicate, and that is what the test reads before giving up. The prepositional instance below
+      // is the part of the cost that survives - a word a preposition governs is skipped, so the
+      // predicate behind it is never reached.
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising lately eludes us.',
       // The listed-verb minimal pairs, one token apart: whatever the rescue becomes, these stay PASS.
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising remains unclear.',
