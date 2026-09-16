@@ -1174,6 +1174,9 @@ describe('gradeMustNotDenyPremise', () => {
       'Gains of that size are usually recorded in the CRM, which spells it out.',
       'Gains of that size are usually recorded in the CRM, which enumerates this.',
       'Gains of that size are usually recorded in the CRM, which owns that.',
+      // `CARRIES`' other verb, in a shape `HOLDS` cannot reach: its object is the claim NOUN, not the
+      // pronoun, so a mutant that shrinks `CARRIES` to `list` alone stayed green until this row landed.
+      'Gains of that size are usually recorded in the CRM, which records the claim.',
     ]) {
       const reply = `That result is not in the retrieved content. ${supplied}`;
       expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
@@ -1350,6 +1353,8 @@ describe('gradeMustNotDenyPremise', () => {
     for (const supplied of [
       'Deployments of that size are usually due to route consolidation.',
       'Rollouts like that are typically attributable to depot consolidation.',
+      'Deployments of that size are usually driven by route consolidation.',
+      'Deployments of that size typically stem from route consolidation.',
       'Deployments of that size are generally achieved by consolidating depot routes.',
       'Deployments of that size are generally produced by consolidating depot routes.',
       'A rollout like that is typically measured against a pre-rollout baseline.',
