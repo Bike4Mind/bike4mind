@@ -48,8 +48,14 @@ function splitNativeToolId(rawId: string, fallbackIndex: number): { name: string
 }
 
 /**
- * Parse the calls out of one section's inner text (between the section markers, or a
- * whole string that contains them - the per-call regex ignores the section markers).
+ * Parse the calls out of ONE section's text.
+ *
+ * Callers must pass text already scoped to the section - `inner.slice(sectionBegin)` at
+ * minimum, not a whole message. The cap below is applied to whatever arrives, and this
+ * parser's output drives execution: handed a whole message, a long monologue ahead of
+ * the section pushes it past the cap and every call silently disappears, or a call
+ * straddling the cut leaves a parallel set partly executed. Both callers in this repo
+ * (the stream below, and the non-streaming branch in moonshot.ts) slice first.
  */
 export function parseNativeToolSection(section: string): ParsedNativeToolCall[] {
   section = capForParse(section, NATIVE_TOOL_SECTION_PARSE_CAP);

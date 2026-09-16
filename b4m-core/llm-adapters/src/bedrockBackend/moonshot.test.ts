@@ -494,4 +494,60 @@ describe('MoonshotBedrockBackend native tool-call tokens', () => {
     expect(joined).toContain('<think>');
     expect(joined).not.toContain('<|');
   });
+
+  it('non-streaming: a native tool section still parses after a monologue past the parse cap', () => {
+    // parseNativeToolSection caps its input at 32k. This is a thinking model that inlines
+    // its monologue in `content` and emits the section after it, so handing the parser the
+    // whole message put the section past the cap and dropped every call - silently: the
+    // reasoning still rendered and the finish reason did not change. The caller slices to
+    // the section first. 32k characters is ~8k tokens of reasoning, which is ordinary.
+    const monologue = 'I need to think about this carefully. '.repeat(1_000);
+    expect(monologue.length).toBeGreaterThan(32_000);
+    const { chunk } = backend.translateChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
+      choices: [
+        {
+          message: {
+            content:
+              `<reasoning> ${monologue} <|tool_calls_section_begin|> <|tool_call_begin|> ` +
+              'functions.math_evaluate:0 <|tool_call_argument_begin|> {"expression": "384*27"} ' +
+              '<|tool_call_end|> <|tool_calls_section_end|></reasoning>',
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+      usage: { prompt_tokens: 46, completion_tokens: 30 },
+    });
+    const tool = chunk.choices.find(c => c.statusEndReason === ChoiceEndReason.TOOL_USE);
+    expect(tool?.tool).toEqual({
+      id: 'functions.math_evaluate:0',
+      name: 'math_evaluate',
+      parameters: '{"expression": "384*27"}',
+    });
+  });
+
+  it('non-streaming: every call in a parallel section survives a cap-length monologue', () => {
+    // The partial failure is worse than the total one: a cut inside the section leaves the
+    // calls before it parseable and the straddling one not, so the turn runs a SUBSET of
+    // what the model asked for, with nothing to signal it.
+    const monologue = 'Reasoning at length about the request. '.repeat(1_000);
+    const call = (name: string, index: number) =>
+      `<|tool_call_begin|> functions.${name}:${index} <|tool_call_argument_begin|> {"q":"${name}"} <|tool_call_end|> `;
+    const { chunk } = backend.translateChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
+      choices: [
+        {
+          message: {
+            content:
+              `<reasoning> ${monologue} <|tool_calls_section_begin|> ` +
+              call('math_evaluate', 0) +
+              call('get_weather', 1) +
+              '<|tool_calls_section_end|></reasoning>',
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+      usage: { prompt_tokens: 46, completion_tokens: 30 },
+    });
+    const tools = chunk.choices.filter(c => c.statusEndReason === ChoiceEndReason.TOOL_USE);
+    expect(tools.map(t => t.tool?.name)).toEqual(['math_evaluate', 'get_weather']);
+  });
 });

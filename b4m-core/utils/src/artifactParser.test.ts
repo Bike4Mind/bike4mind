@@ -347,13 +347,18 @@ describe('convertCodeBlocksToArtifacts - linear rewrite of the fenced-code detec
   });
 
   it('completes on an unterminated code fence without catastrophic backtracking', () => {
-    // The pre-rewrite `(?:.*\n)*?ANCHOR(?:\n.*)*?` shape backtracked quadratically on a
-    // fence with no closing delimiter. Linear now: this returns immediately. A
-    // regression blows the vitest timeout instead of hanging CI.
-    const adversarial = `${F}tsx\n` + 'const x = 1; function foo() {}\n'.repeat(20_000);
+    // The anchor has to MATCH on many lines for the pre-rewrite
+    // `(?:.*\n)*?ANCHOR(?:\n.*)*?` shape to enter its rescan - on a body where no line
+    // satisfies it, the old regex was already linear and this input proved nothing.
+    // `const App` satisfies it on every line: measured against the old shape the cost is
+    // ~4x per doubling (210ms at 2k lines, 822ms at 4k, ~3.3s at 8k). Linear now, so this
+    // returns immediately and a revert blows the budget below.
+    const adversarial = `${F}tsx\n` + 'const App = 1\n'.repeat(8_000);
+    const started = Date.now();
     const out = convertCodeBlocksToArtifacts(adversarial);
-    // No closing fence and no component line: left untouched.
+    // No closing fence, so neither fence regex matches: left untouched.
     expect(out).toBe(adversarial);
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 
   it('still promotes a React component and still leaves a non-component fence alone', () => {

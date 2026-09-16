@@ -18,17 +18,18 @@ describe('extractSnippetMeta', () => {
     expect(sections).toEqual([{ type: 'text', content: 'just a normal prompt with no snippet metadata' }]);
   });
 
-  it('completes on an oversized input (parse cap, no CPU pin)', () => {
-    // Runs on every chat prompt; the regex backtracks super-linearly. The parse cap
-    // bounds the scanned length so a pathological/oversized prompt returns immediately
-    // rather than pinning the process. A regression blows the vitest timeout.
+  it('completes on an adversarial input without pinning CPU', () => {
+    // Runs on every chat prompt. The regex this replaced backtracked super-linearly on a
+    // marker whose JSON never closes; the scan is linear, so this returns immediately. A
+    // regression blows the vitest timeout.
     const adversarial = '<!--snippet-meta {'.repeat(500_000);
+    const started = Date.now();
     const { sections } = extractSnippetMeta(adversarial);
     expect(Array.isArray(sections)).toBe(true);
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
-  it('keeps text past the parse cap in the returned sections', () => {
-    // The cap bounds the SCAN only. These sections are rendered as the user's own chat
-    // message, so a large paste must come back whole rather than silently shortened.
+
+  it('returns a large plain-text prompt whole', () => {
     const tail = 'TAIL_MARKER';
     const oversized = 'a'.repeat(300_000) + tail;
     const { sections } = extractSnippetMeta(oversized);
@@ -37,10 +38,33 @@ describe('extractSnippetMeta', () => {
     expect(rendered.endsWith(tail)).toBe(true);
   });
 
-  it('keeps the tail when a snippet ends exactly at the cap boundary', () => {
-    const meta = '<!--snippet-meta {"id":"1"} -->';
-    const head = meta + 'x'.repeat(256_000 - meta.length);
-    const { sections } = extractSnippetMeta(head + 'TAIL_MARKER');
-    expect(sections.map(s => s.content).join('')).toContain('TAIL_MARKER');
+  // Section SHAPE has to be independent of input length. Under the previous parse cap a
+  // snippet running past 256k re-emitted as a `text` section, and callers that skip
+  // snippets when collecting URLs to fetch would have started fetching the URLs in it.
+  it('still classifies a snippet as a snippet well past the old parse cap', () => {
+    const body = 'https://example.com/x\n' + 'y'.repeat(300_000);
+    const { sections } = extractSnippetMeta('<!--snippet-meta {"id":"1"} -->' + body);
+    expect(sections).toHaveLength(1);
+    expect(sections[0].type).toBe('snippet');
+    expect(sections[0].content).toBe(body.trim());
+  });
+
+  it('recognises a marker that begins past the old parse cap', () => {
+    const lead = 'a'.repeat(300_000);
+    const { sections } = extractSnippetMeta(lead + '<!--snippet-meta {"id":"2"} -->body');
+    expect(sections.map(s => s.type)).toEqual(['text', 'snippet']);
+    expect(sections[1].content).toBe('body');
+  });
+
+  it('does not end the marker on a "-->" inside the meta JSON', () => {
+    const { sections } = extractSnippetMeta('<!--snippet-meta {"title":"a-->b"} -->body');
+    expect(sections).toHaveLength(1);
+    expect(sections[0].type).toBe('snippet');
+    expect((sections[0] as { meta: { title: string } }).meta.title).toBe('a-->b');
+  });
+
+  it('leaves a marker with no closing "-->" as plain text', () => {
+    const input = 'lead <!--snippet-meta {"id":"3"} and nothing else';
+    expect(extractSnippetMeta(input).sections).toEqual([{ type: 'text', content: input }]);
   });
 });

@@ -17,12 +17,17 @@ export const DEFAULT_PARSE_CAP = 100_000;
  * cleaners and content detectors where an over-cap input should degrade quietly,
  * not crash the pipeline.
  *
- * SIZING RULE - pick `max` from the parser's measured cost AT the cap, not from the
- * headroom above real input. For an O(n^2)/O(n^3) inner loop, "far above anything
- * legitimate" is not a bound: the email cleaners were cubic, so a 512k cap still ran
- * for minutes, and it only became a bound once the regexes were linearized and the
- * cap re-derived from the new curve. Measure the worst-case shape at the cap you
- * intend to ship and make sure the number of milliseconds is one you can defend.
+ * PREFER LINEARIZING THE PARSER. A cap is the fallback, not the first move. The email
+ * cleaners in services/lib/turndown.ts and the snippet-meta extractor in common/utils.ts
+ * both started here and both ended up as single-pass scans instead, because a cap that
+ * was small enough to bound their cost was also small enough to stop them working on
+ * real content. When the parser is linear, the cap can go.
+ *
+ * SIZING RULE - if you do cap, pick `max` from the parser's measured cost AT the cap,
+ * not from the headroom above real input. For an O(n^2)/O(n^3) inner loop, "far above
+ * anything legitimate" is not a bound: the email cleaners were cubic, so a 512k cap
+ * still ran for minutes. Measure the worst-case shape at the cap you intend to ship and
+ * make sure the number of milliseconds is one you can defend.
  *
  * Two further traps this helper cannot solve for you:
  * - A per-item cap is not a total bound when the item count is also attacker-chosen
@@ -32,6 +37,15 @@ export const DEFAULT_PARSE_CAP = 100_000;
  *   drops content, and a cut inside an element can strand its closing tag. Splicing
  *   the original halves back together also avoids leaving a lone surrogate, since
  *   `slice` cuts by UTF-16 code unit.
+ * - Splicing the tail back is not enough when the cap changes the SHAPE of the parse
+ *   rather than only its length - a pattern terminated by `$`, say, whose sections then
+ *   end early and get classified differently. Check what an over-cap input parses INTO,
+ *   not just that its characters survive.
+ * - Cap in front of a best-effort cleaner or detector, where degrading quietly is
+ *   acceptable. Do not cap in front of a parser whose output drives execution (a
+ *   tool-call parser): silently parsing a prefix there means running a subset of what
+ *   was asked. If such a parser caps internally, its callers must pass it text already
+ *   scoped to the construct being parsed.
  *
  * @returns the input unchanged when within budget, otherwise its first `max` chars.
  */

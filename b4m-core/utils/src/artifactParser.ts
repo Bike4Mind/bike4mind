@@ -122,8 +122,12 @@ export function parseArtifacts(content: string): ArtifactParseResult {
 // Linear anchor checks for the fenced-code detectors below. Each detector used to
 // encode a content requirement inside a `(?:.*\n)*?ANCHOR(?:\n.*)*?` regex that
 // backtracks quadratically on a fence with no closing delimiter. Capturing the body
-// with a single lazy group and moving the ANCHOR check here keeps the accept/reject
-// decision identical while running in linear time.
+// with a single lazy group and moving the ANCHOR check here runs in linear time. The
+// decision is unchanged on a single well-formed fence; a multi-fence body no longer
+// over-matches. Two behaviours do change, both toward the intended reading: an anchor
+// in a LATER fence no longer promotes an earlier one, and a bare `\r` or `U+2028`
+// before the anchor now promotes, because `.` did not cross those but `split('\n')`
+// keeps them in-line.
 
 // True when some line has a declaration keyword followed, later on the SAME line, by
 // a component token - the React detector's original requirement (case-insensitive).
@@ -198,7 +202,9 @@ ${codeContent.trim()}
 
   // Detect full HTML-document code blocks (body captured linearly; see hasFullHtmlDocument).
   // A fence that is not a full document is left unchanged here so the fragment handler
-  // below still promotes it - preserving the original two-tier behavior.
+  // below still promotes it. The two-tier split is the original behavior; what changed is
+  // that two adjacent `html` fences are now two artifacts, where the old regex merged
+  // them into one.
   const htmlCodeBlockRegex = /```html\s*([\s\S]*?)```/gi;
 
   content = content.replace(htmlCodeBlockRegex, (match, codeContent) => {

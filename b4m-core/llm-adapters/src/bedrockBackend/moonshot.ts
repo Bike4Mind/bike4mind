@@ -381,7 +381,11 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         const inner = content.replace(/<\/?reasoning>/g, '');
         const begin = inner.indexOf('<|tool_calls_section_begin|>');
         const before = (begin >= 0 ? inner.slice(0, begin) : inner).trim();
-        const nativeCalls = parseNativeToolSection(inner);
+        // Slice to the section before parsing: parseNativeToolSection caps its input,
+        // and `inner` is the whole message - on a thinking model the monologue precedes
+        // the section, so an uncapped `inner` can push the section past the cap and
+        // silently drop every call (or execute a subset of a parallel call set).
+        const nativeCalls = parseNativeToolSection(begin >= 0 ? inner.slice(begin) : inner);
         const think = [reasoning, before].filter(Boolean).join(' ').trim();
         let usageAttached = false;
         if (think) {

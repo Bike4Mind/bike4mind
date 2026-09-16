@@ -511,6 +511,22 @@ describe('SmartChunker', () => {
       expect(Date.now() - start).toBeLessThan(5000);
     }, 30_000);
 
+    it('extracts every run on a slide with many well-formed runs', async () => {
+      // The case above exits on its FIRST `<a:t`: nothing closes anywhere, so indexOf
+      // returns -1 and the scan breaks immediately. That proves it cannot hang, but the
+      // loop never iterates, so it says nothing about extraction. This one drives the
+      // scan through 20k runs and checks what came out.
+      const runs = Array.from({ length: 20_000 }, (_, i) => `<a:t>run ${i}</a:t>`).join('<a:tab/>');
+      const pptx = await buildPptx([runs]);
+      const start = Date.now();
+      const chunks = await chunker.chunkFile(pptx, PPTX_MIME);
+      const allText = chunks.map(c => c.text).join(' ');
+      expect(allText).toContain('run 0');
+      expect(allText).toContain('run 19999');
+      expect(allText).not.toContain('<a:t>');
+      expect(Date.now() - start).toBeLessThan(5000);
+    }, 30_000);
+
     it('skips a slide whose decompressed XML exceeds the per-entry cap, keeping the rest', async () => {
       // A .pptx is a zip; one slide entry can inflate ~1000x when decompressed (zip-bomb shape).
       // The oversized slide is skipped before it is materialized; the normal slide still chunks.
