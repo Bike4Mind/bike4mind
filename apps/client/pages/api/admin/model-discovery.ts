@@ -57,6 +57,12 @@ const trimRun = (run: IModelDiscoveryRun) => ({
     durationMs: source.durationMs,
     ...(source.error ? { error: source.error } : {}),
   })),
+  // Names, not just a count: the card's tally is over configured sources, and a
+  // fully-skipped run has no attempted source to report at all.
+  skippedSources: (run.skippedSources ?? []).map(skipped => ({
+    name: skipped.name,
+    reason: skipped.reason,
+  })),
   joinCoverage: run.joinCoverage ?? [],
 });
 

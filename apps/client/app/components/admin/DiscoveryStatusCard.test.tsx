@@ -29,6 +29,7 @@ const CRON_RUN = {
     { name: 'anthropic', ok: true, durationMs: 140 },
     { name: 'models.dev', ok: false, durationMs: 900, error: 'ETIMEDOUT' },
   ],
+  skippedSources: [] as Array<{ name: string; reason: string }>,
   joinCoverage: [{ aggregator: 'models.dev', matched: 84, total: 113 }],
   changes: { added: 2, promoted: 1, deprecated: 0, repriced: 0, flagged: 0 },
 };
@@ -145,6 +146,44 @@ describe('DiscoveryStatusCard', () => {
     expect(screen.getByTestId('discovery-status-changes')).toHaveTextContent('2 added, 1 promoted');
     expect(screen.queryByTestId('discovery-status-disabled-chip')).not.toBeInTheDocument();
     expect(mockGet).toHaveBeenCalledWith('/api/admin/model-discovery');
+  });
+
+  it('names the skipped sources without folding them into the attempt tally', async () => {
+    mockGet.mockResolvedValue({
+      data: statusWith(runLike({ skippedSources: [{ name: 'vertex', reason: 'not-configured' }] })),
+    });
+    renderCard();
+
+    // 3 attempted, 1 of them failed: the skip must not move either number, or a
+    // skip reads as a failure.
+    expect(await screen.findByTestId('discovery-status-sources')).toHaveTextContent('2/3 sources ok');
+    expect(screen.getByTestId('discovery-status-skipped')).toHaveTextContent('1 skipped: vertex');
+  });
+
+  it('says a run attempted nothing rather than reporting 0/0 when every source was skipped', async () => {
+    mockGet.mockResolvedValue({
+      data: statusWith(
+        runLike({
+          status: 'ok',
+          sources: [],
+          skippedSources: [
+            { name: 'openai', reason: 'egress-disabled' },
+            { name: 'anthropic', reason: 'egress-disabled' },
+          ],
+        })
+      ),
+    });
+    renderCard();
+
+    expect(await screen.findByTestId('discovery-status-sources')).toHaveTextContent('no sources attempted');
+    expect(screen.getByTestId('discovery-status-skipped')).toHaveTextContent('2 skipped: openai, anthropic');
+  });
+
+  it('shows no skipped chip when the run skipped nothing', async () => {
+    renderCard();
+
+    await screen.findByTestId('discovery-status-sources');
+    expect(screen.queryByTestId('discovery-status-skipped')).not.toBeInTheDocument();
   });
 
   it('names the failed source and its error on demand', async () => {

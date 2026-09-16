@@ -188,6 +188,7 @@ describe('/api/admin/model-discovery', () => {
           { name: 'openai', ok: true, durationMs: 120 },
           { name: 'models.dev', ok: false, durationMs: 900, error: 'ETIMEDOUT' },
         ],
+        skippedSources: [],
         joinCoverage: [{ aggregator: 'models.dev', matched: 84, total: 113 }],
       },
       // The head of the list is the run the card shows, and the id is what the
@@ -330,6 +331,17 @@ describe('/api/admin/model-discovery', () => {
     const older = call({ method: 'GET', query: { runId: 'run-1' } });
     await older.run();
     expect(older.res._getJSONData().run.skippedSources).toEqual([]);
+  });
+
+  it('carries the skipped sources on the status payload, not just the one-run report', async () => {
+    recentRuns.mockResolvedValue([
+      { ...RUN, sources: [], skippedSources: [{ name: 'openai', reason: 'egress-disabled' }] },
+    ]);
+
+    const { run, res } = call({ method: 'GET' });
+    await run();
+
+    expect(res._getJSONData().lastRun.skippedSources).toEqual([{ name: 'openai', reason: 'egress-disabled' }]);
   });
 
   it('answers 404 for a run id that matches nothing', async () => {
