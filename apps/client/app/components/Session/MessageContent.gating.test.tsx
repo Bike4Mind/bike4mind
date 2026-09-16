@@ -170,7 +170,10 @@ const messageData = {
 function renderMessageContent(
   data: IChatHistoryItem = messageData,
   queryClient?: QueryClient,
-  onSendMessage: (...args: never[]) => Promise<void> = vi.fn()
+  {
+    onSendMessage = vi.fn(),
+    isLastMessage = false,
+  }: { onSendMessage?: (...args: never[]) => Promise<void>; isLastMessage?: boolean } = {}
 ) {
   render(
     <TestWrapper queryClient={queryClient}>
@@ -181,7 +184,7 @@ function renderMessageContent(
         onDelete={vi.fn()}
         onPinToggle={vi.fn()}
         onSendMessage={onSendMessage as never}
-        isLastMessage={false}
+        isLastMessage={isLastMessage}
         model="gpt-4o"
         totalMessages={1}
         canUseAdminTools={false}
@@ -206,6 +209,7 @@ beforeEach(() => {
   mocks.showCreditsUsed = true;
   mocks.serverSettings = [];
   mocks.sessionFeedback = [];
+  localStorage.clear();
 });
 
 describe('MessageContent actions menu - EnableDataLakes gating', () => {
@@ -515,7 +519,7 @@ describe('MessageContent correct-and-retry (#1871)', () => {
   const noAnswer = { ...messageData, replies: [], reply: undefined } as unknown as IChatHistoryItem;
 
   const openComposer = (data: IChatHistoryItem, onSendMessage = vi.fn()) => {
-    renderMessageContent(data, undefined, onSendMessage);
+    renderMessageContent(data, undefined, { onSendMessage });
     fireEvent.click(screen.getByTestId('message-correct-retry-btn'));
     return onSendMessage;
   };
@@ -644,5 +648,70 @@ describe('MessageContent per-message credits-used chip - enforceCredits gating',
     renderMessageContent(creditsMessageData);
 
     expect(screen.queryByTestId('credits-used')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Wiring for the proactive feedback prompt (#1873). AnswerFeedbackPrompt owns its own gating and
+ * is covered in its own file; what is only observable from here is that MessageContent actually
+ * mounts it, on the right turn, with the props its gating depends on - and mounts it exactly once
+ * despite the duplicated desktop/mobile action rows below it.
+ */
+describe('MessageContent - proactive answer feedback prompt', () => {
+  // Verdict 'fail': a recorded tool failure.
+  const brokenTurn = {
+    ...messageData,
+    promptMeta: { functionCalls: [{ name: 'search_knowledge_base', success: false }] },
+  } as unknown as IChatHistoryItem;
+
+  it('surfaces the prompt on the newest turn when the pipeline says it broke', () => {
+    renderMessageContent(brokenTurn, undefined, { isLastMessage: true });
+
+    expect(screen.getByTestId('answer-feedback-prompt')).toBeInTheDocument();
+  });
+
+  it('renders it once, not once per action row', () => {
+    renderMessageContent(brokenTurn, undefined, { isLastMessage: true });
+
+    expect(screen.getAllByTestId('answer-feedback-prompt')).toHaveLength(1);
+  });
+
+  it('leaves older turns alone - the newest turn is the frequency cap that matters', () => {
+    renderMessageContent(brokenTurn, undefined, { isLastMessage: false });
+
+    expect(screen.queryByTestId('answer-feedback-prompt')).not.toBeInTheDocument();
+  });
+
+  it('stays silent on a healthy turn', () => {
+    renderMessageContent(messageData, undefined, { isLastMessage: true });
+
+    expect(screen.queryByTestId('answer-feedback-prompt')).not.toBeInTheDocument();
+  });
+
+  it('stays silent while the turn is still streaming', () => {
+    // A turn that has not finished has no final verdict to ask about, and the BugReportModal the
+    // prompt targets is not even mounted until the action row renders.
+    const streaming = { ...brokenTurn, status: 'running' } as unknown as IChatHistoryItem;
+
+    renderMessageContent(streaming, undefined, { isLastMessage: true });
+
+    expect(screen.queryByTestId('answer-feedback-prompt')).not.toBeInTheDocument();
+  });
+
+  it('never nags about a turn the user already reported', () => {
+    mocks.sessionFeedback = [{ questId: 'quest-1' }];
+
+    renderMessageContent(brokenTurn, undefined, { isLastMessage: true });
+
+    expect(screen.queryByTestId('answer-feedback-prompt')).not.toBeInTheDocument();
+  });
+
+  it('opens the same report modal the persistent Report button opens, anchored to this turn', () => {
+    renderMessageContent(brokenTurn, undefined, { isLastMessage: true });
+    fireEvent.click(screen.getByTestId('answer-feedback-prompt-report-btn'));
+
+    const modal = screen.getByTestId('bug-report-modal-mock');
+    expect(modal).toBeInTheDocument();
+    expect(modal).toHaveAttribute('data-quest-id', 'quest-1');
   });
 });

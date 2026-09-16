@@ -47,6 +47,7 @@ import { DataLakeIcon, DATA_LAKE } from '@client/app/components/datalake/dataLak
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { usePromptMetaInspector } from '@client/app/components/Session/PromptMetaInspector';
+import { AnswerFeedbackPrompt } from '@client/app/components/Session/AnswerFeedbackPrompt';
 import HiveIcon from '@mui/icons-material/Hive';
 import ContextBreakdownModal from '@client/app/components/Session/ContextBreakdownModal';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
@@ -909,6 +910,20 @@ const MessageContent: React.FC<ContentProps> = memo(
               </Box>
             );
           })()}
+        {/* Proactive feedback ask, gated on the turn's own diagnosis (#1873). Restricted to the
+            newest turn: that is the frequency cap that matters, since a notebook whose retrieval is
+            broken produces a whole column of failing turns, and it is also the only turn the user
+            is still thinking about. Rendered here rather than inside either action row so the
+            desktop/mobile branches below cannot drift into showing it twice or not at all. */}
+        {!isProcessingPrompt && isLastMessage && (
+          <AnswerFeedbackPrompt
+            promptMeta={messageData.promptMeta}
+            questId={isPersistedMessage ? messageData.id : undefined}
+            isReported={isReported}
+            onReport={handleOpenBugReportModal}
+          />
+        )}
+
         <Box
           className="message-footer"
           sx={{
