@@ -26,7 +26,9 @@ export const listInvites = async (
 ) => {
   const { id: projectId, statuses, limit, page } = secureParameters(params, listProjectInvitesParamsSchema);
 
-  const project = await adapters.db.projects.shareable.findAccessibleById(user, projectId);
+  // Share-level, not read-level: this list exposes link-invite ids and pending
+  // invitees' email addresses, so a plain project member must not reach it.
+  const project = await adapters.db.projects.shareable.findShareAccessById(user, projectId);
   if (!project) {
     throw new NotFoundError('Project not found');
   }

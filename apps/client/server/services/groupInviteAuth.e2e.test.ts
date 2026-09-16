@@ -9,6 +9,7 @@ import {
   Group,
   Organization,
   Invite,
+  User,
   inviteRepository,
   organizationRepository,
   fabFileRepository,
@@ -35,6 +36,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 let mongoServer: MongoMemoryServer;
 
 const GROUP_NAME = 'Confidential Group';
+const RECIPIENT_EMAIL = 'x@y.com';
 
 const db = {
   fabFiles: fabFileRepository,
@@ -54,6 +56,9 @@ const platformAdminUser = { id: 'platform-1', username: 'padmin', groups: [], is
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
+  // createInvite refuses an invite whose recipients all fail to resolve, so the address the mint
+  // cases below name has to belong to a real account. Seeded once: the per-test cleanup leaves it.
+  await User.create({ name: 'Recipient', email: RECIPIENT_EMAIL, username: 'recipient' });
 });
 afterAll(async () => {
   await mongoose.disconnect();
@@ -104,7 +109,7 @@ const seedOrgAndGroup = async () => {
 const createGroupInvite = (user: unknown, groupId: string) =>
   sharingService.createInvite(
     user as any,
-    { id: groupId, type: InviteType.Group, permissions: [Permission.read], recipients: ['x@y.com'] } as any,
+    { id: groupId, type: InviteType.Group, permissions: [Permission.read], recipients: [RECIPIENT_EMAIL] } as any,
     { db } as any
   );
 

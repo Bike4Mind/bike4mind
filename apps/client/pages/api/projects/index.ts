@@ -1,10 +1,11 @@
 import { z } from 'zod';
 import { Permission, ProjectEvents } from '@bike4mind/common';
-import { Project, projectRepository } from '@bike4mind/database';
+import { fabFileRepository, Project, projectRepository, sessionRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import qs from 'qs';
 import { accessibleBy } from '@casl/mongoose';
+import { HTTPError } from '@bike4mind/common';
 import { InternalServerError, UnprocessableEntityError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 
@@ -35,9 +36,11 @@ const handler = baseApi()
   .post(async (req, res) => {
     const body = createProjectBodySchema.parse(req.body);
     try {
-      const project = await projectService.createProject(req.user.id, body, {
+      const project = await projectService.createProject(req.user, body, {
         db: {
           projects: projectRepository,
+          fabFiles: fabFileRepository,
+          sessions: sessionRepository,
         },
       });
 
@@ -95,11 +98,17 @@ const handler = baseApi()
 
       return res.json(project);
     } catch (error) {
+      // A typed error from the service already carries the right status - createProject raises
+      // BadRequestError when a supplied file or session does not resolve through the caller's
+      // access predicate, which is reachable whenever a pick is revoked between select and submit.
+      // Wrapping it in InternalServerError turned that 400 into a 500.
+      if (error instanceof HTTPError) {
+        throw error;
+      }
       if ((error as { code?: number })?.code === 11000) {
         throw new UnprocessableEntityError(`Project ${req.body.name} already exists`);
-      } else {
-        throw new InternalServerError((error as Error).message);
       }
+      throw new InternalServerError((error as Error).message);
     }
   });
 

@@ -5,7 +5,7 @@ import { InviteType, Permission } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import { Invite, Project, inviteRepository, projectRepository, userRepository } from '@bike4mind/database';
+import { Invite, Project, User, inviteRepository, projectRepository, userRepository } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
@@ -39,11 +39,19 @@ const outsiderUser = { id: 'outsider-1', username: 'outsider', groups: [], isAdm
 
 const PROJECT_NAME = 'Confidential Project';
 
+// A real user row, because createInvite resolves Project recipients through findByIds against
+// Mongo now: an unresolvable recipient is refused rather than persisted as an invite nobody can
+// see. Seeded once and left in place; afterEach only clears projects and invites.
+const RECIPIENT_EMAIL = 'invitee@example.com';
+let recipientId: string;
+
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
+  recipientId = String((await User.create({ name: 'Invitee', username: 'invitee', email: RECIPIENT_EMAIL }))._id);
 });
 afterAll(async () => {
+  await User.deleteMany({});
   await mongoose.disconnect();
   await mongoServer?.stop();
 });
@@ -78,7 +86,7 @@ const seedProject = async () =>
 const createProjectInvite = (user: unknown, projectId: string) =>
   sharingService.createInvite(
     user as any,
-    { id: projectId, type: InviteType.Project, permissions: [Permission.read], recipients: ['x@y.com'] } as any,
+    { id: projectId, type: InviteType.Project, permissions: [Permission.read], recipients: [recipientId] } as any,
     { db } as any
   );
 

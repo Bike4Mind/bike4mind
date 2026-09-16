@@ -39,7 +39,10 @@ const handler = baseApi().use(
     const document = await withTransaction(() =>
       sharingService.revoke(
         req.user.id,
-        { ...body, id, type: type as 'files' | 'sessions' },
+        // 'projects' included: the Members panel posts to /api/projects/<id>/revokeSharing, which
+        // lands on revoke's projects arm. The narrower cast excluded the one type that runs the
+        // revokeFromProject cascade.
+        { ...body, id, type: type as 'files' | 'sessions' | 'projects' },
         {
           db: {
             sessions: sessionRepository,
