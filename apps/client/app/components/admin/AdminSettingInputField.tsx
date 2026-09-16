@@ -215,6 +215,10 @@ const AdminSettingInputField = ({
                   // empty-string preprocess fall back to the setting's own default.
                   value={typeof value === 'number' ? value : value === null || value === '' ? '' : Number(value)}
                   onChange={e => setValue(e.target.value === '' ? '' : Number(e.target.value))}
+                  // Locked during the save round-trip: onSuccess resyncs this field from the
+                  // server's resolved value, so an edit typed mid-flight would be silently
+                  // overwritten by the response for the previous submission.
+                  disabled={updateSettings.isPending}
                 />
               ) : setting.type === 'string' ? (
                 setting.options ? (
