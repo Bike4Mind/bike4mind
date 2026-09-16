@@ -368,4 +368,43 @@ describe('OpenAIImageService.generate gpt-image quality forwarding (#2742)', () 
 
     expect(params.size).toBe('1536x1024');
   });
+
+  it("maps the legacy 'hd' tier to 'high' on the image-to-image branch too", async () => {
+    const params = await imageToImageParams({ model: ImageModels.GPT_IMAGE_1_5, quality: 'hd' });
+
+    expect(params.quality).toBe('high');
+  });
+
+  it('drops an out-of-enum quality value on the image-to-image branch rather than sending it', async () => {
+    const params = await imageToImageParams({ model: ImageModels.GPT_IMAGE_1_5, quality: 'ultra' });
+
+    expect(params).not.toHaveProperty('quality');
+  });
+
+  it('logs a warning when a quality value is dropped, so the drop is observable', async () => {
+    const debugSpy = vi.spyOn(Logger.globalInstance, 'debug');
+
+    await generateParams({ model: ImageModels.GPT_IMAGE_1_5, quality: 'ultra' });
+
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.stringContaining('parameter adjustments'),
+      expect.arrayContaining([expect.stringContaining("Quality parameter ('ultra')")])
+    );
+    debugSpy.mockRestore();
+  });
+
+  it('returns every generated image, not just the first, when OpenAI returns more than one', async () => {
+    imagesEdit.mockResolvedValue({
+      data: [{ b64_json: 'aW1hZ2Ux' }, { b64_json: 'aW1hZ2Uy' }, { b64_json: 'aW1hZ2Uz' }],
+    });
+    vi.mocked(downloadImageAsBuffer).mockResolvedValue(Buffer.from('fake-source-image'));
+
+    const images = await makeService().generate('a bicycle', {
+      model: ImageModels.GPT_IMAGE_1_5,
+      imagePrompt: 'https://example.com/source.png',
+      n: 3,
+    });
+
+    expect(images).toHaveLength(3);
+  });
 });
