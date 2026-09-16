@@ -289,6 +289,8 @@ describe('planLifecycle absence graduation', () => {
 
     expect(result.rows).toEqual([]);
     expect(result.dropped[0]).toMatchObject({ source: 'absence', modelId: 'gpt-5' });
+    // The reason has to name the field that failed, not just the schema.
+    expect(result.dropped[0].reason).toMatch(/append schema: [\w.]+: /);
   });
 });
 
