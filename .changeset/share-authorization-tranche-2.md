@@ -1,5 +1,5 @@
 ---
-'@bike4mind/common': minor
+'@bike4mind/common': major
 '@bike4mind/database': minor
 '@bike4mind/services': major
 ---
@@ -58,8 +58,9 @@ email and username only, so their `recipients.pending` always persisted as `[]`.
 on `pending.length` therefore fell open for exactly those two types: any authenticated caller
 holding the invite id could read its contents, and could accept it and join the project or
 organization with grants on every file and session inside. `createInvite` resolves id-shaped
-recipients through `findByIds`, refuses to mint an invite whose recipients all fail to resolve, and
-persists an `isLinkOnly` flag; `canViewInvite` and the accept-time recipient gate key on that flag
+recipients through `findByIds` (a new requirement on its `users` adapter, alongside the
+`findAllByEmailsOrUsernames` and `findById` it already took), refuses to mint an invite whose
+recipients all fail to resolve, and persists an `isLinkOnly` flag; `canViewInvite` and the accept-time recipient gate key on that flag
 via `isLinkOnlyInvite` (`@bike4mind/common`) rather than on an empty `pending`. Invites minted
 before the flag fall back to inferring it, and only for FabFile and Session, whose recipients always
 did resolve to emails - so a legacy Project or Organization invite fails closed at both gates and
@@ -91,9 +92,10 @@ live. Reconstructing provenance from accepted-invite history does not substitute
 outlives the invite that created it and can predate the address it would be keyed on; a gate on the
 session owner holding `share` authorizes the wrong principal, since the mint reads the inviter. It is
 not a regression either - before this change neither cascade existed at all, so those rows were
-already unreachable from this surface. The gap shrinks as legacy grants are revoked on the file, and
-the way to close the rest is an owner-facing surface that lists and clears untagged rows on a
-document, not a backfill that guesses at provenance.
+already unreachable from this surface. The gap shrinks as legacy grants are revoked on the file. Closing
+the rest is tracked as its own follow-up, `sharing: owner-facing surface to list and clear untagged
+grant rows`, which is a UI plus a scoped revoke endpoint rather than a backfill that guesses at
+provenance.
 
 Deleting a session cascades before it tombstones. The tombstone came first while the per-file grant
 rewrite came second, and `softDeletePlugin` puts `deletedAt: null` on every `findOne` - so a failure
@@ -148,16 +150,19 @@ The CASL share arm is now one exported function, `applySharedShareableRules`, ca
 builders instead of being hand-copied. Each caller still passes its own resource list, because CASL
 matches subjects by constructor and a shared list would close over db-core's models; list drift is
 what the structural test compares, and body drift is no longer possible. `findAllAccessibleByIds`
-declares the `Pick<IUserDocument, 'id' | 'groups'>` it actually consumes, matching
-`findAllUpdateAccessByIds` and removing two casts at the `createProject` call site.
+declares the `Pick<IUserDocument, 'id' | 'groups'>` it actually consumes, which removes two casts at
+the `createProject` call site. Its sibling `findAllUpdateAccessByIds` still takes a full
+`IUserDocument` and is unchanged here.
 `GET /api/invites/[id]` validates the id shape before `findById`, matching its sibling route.
 The `backfill-invite-inviter-id` migration backfills `Invite.inviterId` from the username every
 invite already persists, which is the closing move for the legacy propagation fallback in
 `accept.ts`. It scans on an `_id` cursor rather than loading the whole matching set at once, since
 invites are one of the higher-cardinality collections. Because `username` is mutable and the only
 reader of `inviterId` is an authorization gate, the backfill is narrowed twice: to Session invites,
-the only type that gate runs for, and to resolutions the target session corroborates (the account is
-its owner or holds a grant on it). A rename-then-reuse resolves to exactly one account, so the
+the only type that gate runs for, and to resolutions where the account still OWNS the target
+session. Not merely holds a grant on it: minting a Session invite is owner-only, so a sharee can
+never be the inviter, and admitting grant holders would readmit the squatter case the narrowing
+exists to exclude. A rename-then-reuse resolves to exactly one account, so the
 ambiguity guard never fires on it; anything uncorroborated stays on the conservative fallback, which
 is strictly safer than attributing the invite to the wrong person. `SkillShareDialog`, the surface that actually
 flips `isGlobalRead`/`isGlobalWrite`, reports the server's reason instead of a fixed string, so a
@@ -170,6 +175,13 @@ inferred from the recipient buckets - so `remaining` reaching zero is what stops
 invite becoming a live link. A decrement only matched the address count while `remaining` started
 equal to it, and `available` in the create body is taken at face value, so a row naming one person
 with five slots kept four of them after that person was cancelled.
+
+`POST /api/projects` no longer turns a typed service error into a 500. `createProject` raises
+`BadRequestError` when a supplied file or notebook does not resolve through the caller's access
+predicate, which the client hits whenever a pick is revoked between select and submit; the route's
+catch rewrapped every non-duplicate-key error as `InternalServerError`, so that 400 reached the
+client as a 500. `GET /api/[type]/[id]` now strips co-recipients' addresses from the response, the
+last invitee-facing route that was returning the whole recipient list to one named recipient.
 
 Invite redemption enforces `expiresAt` on both accept and refuse. Declining now affects only the
 decliner's own slot: one recipient declining used to zero the invite for every other recipient, and

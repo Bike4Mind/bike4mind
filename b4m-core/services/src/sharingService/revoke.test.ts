@@ -445,3 +445,117 @@ describe('sharingService - revoke (cross-project grants)', () => {
     expect(mockAdapters.db.fabFiles.updateGuarded).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The `type: 'projects'` arm, which the Members panel drives through
+ * POST /api/projects/<id>/revokeSharing. Two things are specific to it: the predicate is
+ * deliberately unscoped even when a projectId is supplied (rows on a project document are never
+ * themselves projectId-tagged, so scoping by one would match nothing), and it runs the
+ * revokeFromProject cascade and has to assign the pruned id lists back onto the document, since
+ * that function stopped mutating the caller's project.
+ */
+describe('sharingService - revoke on a project', () => {
+  const ownerId = 'owner-123';
+  const memberId = 'member-456';
+  const coMemberId = 'co-member-789';
+  const projectId = 'project-1';
+
+  let adapters: any;
+
+  const aProject = (overrides: Record<string, unknown> = {}) => ({
+    id: projectId,
+    userId: ownerId,
+    users: [
+      { userId: memberId, permissions: [Permission.read] },
+      { userId: coMemberId, permissions: [Permission.read] },
+    ],
+    fileIds: [],
+    sessionIds: [],
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    adapters = {
+      db: {
+        sessions: {
+          shareable: { findAccessibleById: vi.fn() },
+          findAllByIds: vi.fn(async () => []),
+          updateGuarded: vi.fn(),
+        },
+        fabFiles: {
+          shareable: { findAccessibleById: vi.fn() },
+          findAllByIds: vi.fn(async () => []),
+          updateGuarded: vi.fn(),
+        },
+        projects: { shareable: { findAccessibleById: vi.fn() }, updateGuarded: vi.fn() },
+        users: { findById: vi.fn(async () => ({ id: memberId })) },
+      },
+    };
+  });
+
+  it('removes only the target member, even when co-member rows carry the project id', async () => {
+    // The tag on a co-member row is what the old project-scoped filter matched on, which is how
+    // removing one member stripped the whole project's access. The projects arm has to key on the
+    // user alone.
+    const project = aProject({
+      users: [
+        { userId: memberId, permissions: [Permission.read] },
+        { userId: coMemberId, permissions: [Permission.read], projectId },
+      ],
+    });
+    adapters.db.projects.shareable.findAccessibleById.mockResolvedValue(project);
+
+    await revoke(ownerId, { id: projectId, type: 'projects', userId: memberId }, adapters);
+
+    expect(adapters.db.projects.updateGuarded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        users: [{ userId: coMemberId, permissions: [Permission.read], projectId }],
+      })
+    );
+  });
+
+  it('stays unscoped when a projectId is supplied, rather than matching nothing', async () => {
+    const project = aProject();
+    adapters.db.projects.shareable.findAccessibleById.mockResolvedValue(project);
+
+    // A project document's own rows carry no projectId tag, so a scoped predicate would find no
+    // match here and raise NotFoundError instead of revoking.
+    await revoke(ownerId, { id: projectId, type: 'projects', userId: memberId, projectId }, adapters);
+
+    expect(adapters.db.projects.updateGuarded).toHaveBeenCalledWith(
+      expect.objectContaining({ users: [{ userId: coMemberId, permissions: [Permission.read] }] })
+    );
+  });
+
+  it('persists the id lists revokeFromProject pruned rather than the originals', async () => {
+    // revokeFromProject returns the pruned lists instead of writing them onto the project it was
+    // handed; the arm has to assign them or the member's own file stays on the project.
+    const memberFile = { id: 'file-member', userId: memberId, users: [] };
+    const project = aProject({ fileIds: ['file-member'], sessionIds: [] });
+    adapters.db.projects.shareable.findAccessibleById.mockResolvedValue(project);
+    adapters.db.fabFiles.findAllByIds.mockResolvedValue([memberFile]);
+    adapters.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({
+      id: 'file-member',
+      userId: memberId,
+      users: [{ userId: coMemberId, permissions: [Permission.read], projectId }],
+    });
+    adapters.db.users.findById.mockResolvedValue({ id: coMemberId });
+
+    await revoke(ownerId, { id: projectId, type: 'projects', userId: memberId }, adapters);
+
+    expect(adapters.db.projects.updateGuarded).toHaveBeenCalledWith(
+      expect.objectContaining({ fileIds: [], users: [{ userId: coMemberId, permissions: [Permission.read] }] })
+    );
+  });
+
+  it('still refuses a caller who is neither the project owner nor the target', async () => {
+    const project = aProject();
+    adapters.db.projects.shareable.findAccessibleById.mockResolvedValue(project);
+
+    await expect(
+      revoke(coMemberId, { id: projectId, type: 'projects', userId: memberId }, adapters)
+    ).rejects.toThrow(UnauthorizedError);
+    expect(adapters.db.projects.updateGuarded).not.toHaveBeenCalled();
+  });
+});

@@ -270,11 +270,14 @@ describe('shared shareable arm', () => {
         })
         .join('\n');
 
+    // Quote-agnostic: a double-quoted or backticked `users.userId` is the same over-grant, and
+    // prettier's quote rule is not a security control.
+    const dottedPaths = ['users.userId', 'users.permissions', 'groups.groupId'];
     for (const source of [clientSource, dbCoreSource]) {
       const code = codeOnly(source);
-      expect(code).not.toContain("'users.userId'");
-      expect(code).not.toContain("'users.permissions'");
-      expect(code).not.toContain("'groups.groupId'");
+      for (const path of dottedPaths) {
+        expect(code).not.toMatch(new RegExp(`['"\`]${path.replace(/\./g, '\\.')}['"\`]`));
+      }
     }
   });
 });

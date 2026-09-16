@@ -126,7 +126,7 @@ describe('backfill-invite-inviter-id', () => {
   // `username` is mutable and the only reader of `inviterId` is an authorization gate, so a
   // rename-then-reuse must not be attributed. It resolves to exactly one account, so the ambiguity
   // guard never sees it - the session principal check is what catches it.
-  it('skips a username that now belongs to someone with no standing on the session', async () => {
+  it('skips a username that now belongs to someone who does not own the session', async () => {
     mockInviteFind.mockReturnValueOnce([{ _id: 'i1', username: 'alice', documentId: 's1' }]);
     mockUserFind.mockReturnValue([{ _id: 'u-squatter', username: 'alice' }]);
     mockSessionFind.mockReturnValue([{ _id: 's1', userId: 'u-original', users: [] }]);
@@ -134,19 +134,21 @@ describe('backfill-invite-inviter-id', () => {
     await migration.up();
 
     expect(mockInviteBulkWrite).not.toHaveBeenCalled();
-    expect(output()).toContain('1 invite(s) skipped because the resolved account is not a principal');
+    expect(output()).toContain('1 invite(s) skipped because the resolved account does not own the session');
   });
 
-  it('corroborates a sharee inviter through the session grant list, not just ownership', async () => {
+  // Minting a Session invite is owner-only, so a grant holder is never the inviter. Admitting one
+  // would readmit the squatter the narrowing exists to exclude: a renamed-into account that happens
+  // to hold a grant would get `inviterId` and then gate propagation on its own permissions.
+  it('skips a resolved account that only holds a grant on the session', async () => {
     mockInviteFind.mockReturnValueOnce([{ _id: 'i1', username: 'alice', documentId: 's1' }]);
     mockUserFind.mockReturnValue([{ _id: 'u-alice', username: 'alice' }]);
     mockSessionFind.mockReturnValue([{ _id: 's1', userId: 'u-owner', users: [{ userId: 'u-alice' }] }]);
 
     await migration.up();
 
-    expect(mockInviteBulkWrite).toHaveBeenCalledWith([
-      { updateOne: { filter: { _id: 'i1' }, update: { $set: { inviterId: 'u-alice' } } } },
-    ]);
+    expect(mockInviteBulkWrite).not.toHaveBeenCalled();
+    expect(output()).toContain('1 invite(s) skipped because the resolved account does not own the session');
   });
 
   // Every other invite type would be written for no reader at all, so the scan never sees them.

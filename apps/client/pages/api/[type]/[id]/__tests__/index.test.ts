@@ -118,4 +118,50 @@ describe('GET /api/[type]/[id] - authorization gate', () => {
 
     expect(res._getStatusCode()).toBe(404);
   });
+
+  // Passing the gate means the caller is ONE named recipient, not that they may read the rest of
+  // the list. Same filter the sibling invitee-facing routes apply.
+  it('strips the other recipients addresses from a named recipient response', async () => {
+    findById.mockResolvedValue({
+      id: 'inv-1',
+      type: 'FabFile',
+      documentId: 'doc-1',
+      recipients: { pending: ['me@x.com', 'other@x.com'], accepted: [], refused: [] },
+    });
+    getInviteDetails.mockResolvedValue({
+      id: 'inv-1',
+      name: 'Doc',
+      recipients: { pending: ['me@x.com', 'other@x.com'], accepted: ['gone@x.com'], refused: ['no@x.com'] },
+    });
+
+    const { req, res } = createMocks({ method: 'GET', query: { type: 'files', id: VALID_ID } });
+    (req as any).user = { id: 'u1', email: 'me@x.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().recipients).toEqual({ pending: ['me@x.com'], accepted: [], refused: [] });
+    expect(JSON.stringify(res._getJSONData())).not.toContain('other@x.com');
+  });
+
+  it('strips every recipient for a share-authorized caller who is not one of them', async () => {
+    findById.mockResolvedValue({
+      id: 'inv-1',
+      type: 'FabFile',
+      documentId: 'doc-1',
+      recipients: { pending: ['other@x.com'], accepted: [], refused: [] },
+    });
+    authorizeByInviteType.mockResolvedValue(undefined);
+    getInviteDetails.mockResolvedValue({
+      id: 'inv-1',
+      name: 'Doc',
+      recipients: { pending: ['other@x.com'], accepted: [], refused: [] },
+    });
+
+    const { req, res } = createMocks({ method: 'GET', query: { type: 'files', id: VALID_ID } });
+    (req as any).user = { id: 'owner-1', email: 'owner@x.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(JSON.stringify(res._getJSONData())).not.toContain('other@x.com');
+  });
 });
