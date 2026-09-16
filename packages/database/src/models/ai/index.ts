@@ -35,6 +35,7 @@ export * from './RepoHistoricalInsightsModel';
 export * from './ResearchAgentModel';
 export * from './ResearchTaskModel';
 export * from './SessionAgentConfigModel';
+export * from './SessionToolApprovalModel';
 export * from './SkillModel';
 export * from './ToolDefinitionOverrideModel';
 export * from './ToolExecutionLogModel';

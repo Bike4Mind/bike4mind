@@ -256,7 +256,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
   // reason ChatHistory re-rendered on every streaming chunk.)
   const sendMessage = useStableCallback(
     async (messageData: Partial<IChatHistoryItem>, options: SendMessageOptions = { isRetry: false }) => {
-      const { isRetry, isImageEdit, isVariation } = options;
+      const { isRetry, isImageEdit, isVariation, correctsQuestId } = options;
       if (!sessionId) return;
       if (!messageData.prompt) return;
       if (isRetry && !messageData.id) return;
@@ -314,7 +314,17 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
           enableQuestMaster: isQuestMasterEnabled,
           enableMementos: isMementosEnabled,
           enableArtifacts: isArtifactsEnabled,
-          questId: isVariation ? undefined : messageData?.id,
+          // A correction is a new turn, never a re-run of the flagged quest: passing its id as
+          // `questId` would overwrite the very answer the correction chain has to preserve. The
+          // `correctsQuestId` arm is defense in depth for a future call site, not today's gate -
+          // the only caller that sets the field passes a message with no `id` at all
+          // (MessageContent's handleSubmitCorrection), and the server refuses the combination
+          // outright with a BadRequestError. Both are pinned: MessageContent.gating.test.tsx
+          // 'sends a new turn linked to the corrected quest' and
+          // ChatCompletionInvokeCorrectionBinding.test.ts 'refuses to combine a correction with an
+          // in-place retry'.
+          questId: isVariation || correctsQuestId ? undefined : messageData?.id,
+          correctsQuestId,
           image: options?.image,
           queryClient,
           tools,
@@ -473,8 +483,11 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
                       Previously this lived in a fixed block above SessionBottom,
                       which created a large visual gap between the user prompt
                       (top) and the agent activity (bottom of viewport).
-                      Constrain to the same 950px column the chat bubbles and
-                      input box use — `width: 100%` matters here because the
+                      Constrain to the same 950px column the chat bubbles use.
+                      The prompt bar intentionally widens beyond this (up to
+                      1200px) when both side panels are closed; the asymmetry
+                      is deliberate - the transcript column stays narrow for
+                      readability. `width: 100%` matters here because the
                       footer slot in ChatHistory passes its full container to
                       us; without it, `maxWidth: 950px` alone would let the
                       flex children collapse to their natural width and the

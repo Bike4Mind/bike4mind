@@ -369,4 +369,54 @@ describe('FilesSection message-scoped files', () => {
     expect(mockSetWorkBenchFiles).not.toHaveBeenCalled();
     expect(mockSetQueriesData).not.toHaveBeenCalled();
   });
+
+  it('marks BOTH rows pending when the reprocessed file is in the system and workbench lists', () => {
+    // Both rows are doors to the same unthrottled /api/files/reprocess, so marking only the store
+    // the file id happens to resolve to leaves the other button armed mid-rebuild and a stray
+    // click buys a second real reset + re-embed.
+    effectiveEmbeddingModel = 'model-b';
+    const dual = {
+      ...fab('dup1', 'shared.pdf'),
+      embeddingModel: 'model-a',
+      chunked: true,
+      vectorized: true,
+    } as IFabFileDocument;
+    systemFiles = [dual];
+    workBenchFiles = [dual];
+
+    renderPanel();
+    fireEvent.click(screen.getByTestId('files-section-reprocess-btn-workbench-dup1'));
+    mockReprocessMutate.mock.calls[0][1].onSuccess();
+
+    expect(mockSetWorkBenchFiles).toHaveBeenCalledOnce();
+    expect(mockSetWorkBenchFiles.mock.calls[0][0]).toBe('s1');
+    expect(mockSetWorkBenchFiles.mock.calls[0][1](workBenchFiles)[0]).toMatchObject({
+      chunked: false,
+      vectorized: false,
+      isChunking: true,
+    });
+
+    expect(mockSetQueriesData).toHaveBeenCalledOnce();
+    expect(mockSetQueriesData.mock.calls[0][1](systemFiles)[0]).toMatchObject({
+      chunked: false,
+      vectorized: false,
+      isChunking: true,
+    });
+  });
+
+  it('leaves the workbench store untouched for a system file absent from the workbench list', () => {
+    // The membership guard must still be a guard: a system-only file has no workbench row to
+    // disable, and writing pending state into that store would touch a file the panel is not
+    // showing.
+    effectiveEmbeddingModel = 'model-b';
+    systemFiles = [{ ...fab('sys1', 'policy.pdf'), embeddingModel: 'model-a' } as IFabFileDocument];
+    workBenchFiles = [{ ...fab('w1', 'roster.pdf'), embeddingModel: 'model-b' } as IFabFileDocument];
+
+    renderPanel();
+    fireEvent.click(screen.getByTestId('files-section-reprocess-btn-system-sys1'));
+    mockReprocessMutate.mock.calls[0][1].onSuccess();
+
+    expect(mockSetQueriesData).toHaveBeenCalledOnce();
+    expect(mockSetWorkBenchFiles).not.toHaveBeenCalled();
+  });
 });

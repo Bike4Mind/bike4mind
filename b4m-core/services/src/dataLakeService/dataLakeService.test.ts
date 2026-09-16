@@ -2717,6 +2717,56 @@ describe('archiveDataLake - retrieval-index removal', () => {
     );
   });
 
+  it('clears the stale residency confirm for every removed member on a successful index removal', async () => {
+    // Without this, a file archived and later unarchived keeps its OLD retrievalIndexConfirmedModel
+    // even though the documents behind it were just dropped from the index - annResidentFabFileIds
+    // would keep reporting it resident with nothing left to serve.
+    const adapters = makeAdapters();
+    const fabFileChunks = { clearRetrievalIndexConfirmedByFabFileIds: vi.fn().mockResolvedValue(undefined) };
+    const retrievalIndex = indexPort();
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      ...adapters,
+      db: { ...adapters.db, fabFileChunks },
+      retrievalIndex,
+    });
+
+    expect(fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).toHaveBeenCalledWith(memberIds);
+  });
+
+  it('still clears the residency confirm even though the index removal itself then throws, so a clear-then-fail leaves the safe under-claim rather than nothing at all', async () => {
+    // Clearing runs BEFORE the removal attempt (see bestEffortIndexRemove's docblock): the worst
+    // case of the removal then failing is an unnecessary scan, never a stranded false-positive
+    // confirm.
+    const adapters = makeAdapters();
+    const fabFileChunks = { clearRetrievalIndexConfirmedByFabFileIds: vi.fn().mockResolvedValue(undefined) };
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      ...adapters,
+      db: { ...adapters.db, fabFileChunks },
+      retrievalIndex: indexPort('fails'),
+    });
+
+    expect(fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).toHaveBeenCalledWith(memberIds);
+  });
+
+  it('skips the best-effort index removal when the residency-confirm clear fails, rather than over-claiming', async () => {
+    const adapters = makeAdapters();
+    const fabFileChunks = {
+      clearRetrievalIndexConfirmedByFabFileIds: vi.fn().mockRejectedValue(new Error('mongo down')),
+    };
+    const retrievalIndex = indexPort();
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      ...adapters,
+      db: { ...adapters.db, fabFileChunks },
+      retrievalIndex,
+    });
+
+    expect(retrievalIndex.removeForDataLake).not.toHaveBeenCalled();
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to clear the retrieval-index confirm before best-effort removal'),
+      expect.any(Error)
+    );
+  });
+
   it('resolves no member ids when no index is wired', async () => {
     const adapters = makeAdapters();
     await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
@@ -3065,6 +3115,50 @@ describe('deleteDataLake - phase 1 retrieval-index removal', () => {
     ).resolves.toMatchObject({ status: 'deleted' });
     expect(adapters.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('Best-effort index removal failed for datalake:lake'),
+      expect.any(Error)
+    );
+  });
+
+  it('clears the stale residency confirm for every removed member on a successful index removal', async () => {
+    const adapters = makeAdapters();
+    const fabFileChunks = { clearRetrievalIndexConfirmedByFabFileIds: vi.fn().mockResolvedValue(undefined) };
+    const retrievalIndex = indexPort();
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      ...adapters,
+      db: { ...adapters.db, fabFileChunks },
+      retrievalIndex,
+    });
+
+    expect(fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).toHaveBeenCalledWith(memberIds);
+  });
+
+  it('still clears the residency confirm even though the index removal itself then throws, so a clear-then-fail leaves the safe under-claim rather than nothing at all', async () => {
+    const adapters = makeAdapters();
+    const fabFileChunks = { clearRetrievalIndexConfirmedByFabFileIds: vi.fn().mockResolvedValue(undefined) };
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      ...adapters,
+      db: { ...adapters.db, fabFileChunks },
+      retrievalIndex: indexPort('fails'),
+    });
+
+    expect(fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).toHaveBeenCalledWith(memberIds);
+  });
+
+  it('skips the best-effort index removal when the residency-confirm clear fails, rather than over-claiming', async () => {
+    const adapters = makeAdapters();
+    const fabFileChunks = {
+      clearRetrievalIndexConfirmedByFabFileIds: vi.fn().mockRejectedValue(new Error('mongo down')),
+    };
+    const retrievalIndex = indexPort();
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      ...adapters,
+      db: { ...adapters.db, fabFileChunks },
+      retrievalIndex,
+    });
+
+    expect(retrievalIndex.removeForDataLake).not.toHaveBeenCalled();
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to clear the retrieval-index confirm before best-effort removal'),
       expect.any(Error)
     );
   });
@@ -3680,7 +3774,10 @@ describe('cleanupDeletedDataLake - phase 2 sweep', () => {
         findById: vi.fn().mockResolvedValue(null),
         pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
       },
-      fabFileChunks: { deleteManyByFabFileId: vi.fn().mockResolvedValue(undefined) },
+      fabFileChunks: {
+        deleteManyByFabFileId: vi.fn().mockResolvedValue(undefined),
+        clearRetrievalIndexConfirmedByFabFileIds: vi.fn().mockResolvedValue(undefined),
+      },
     },
   });
 

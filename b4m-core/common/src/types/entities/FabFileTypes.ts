@@ -90,8 +90,24 @@ export interface IFabFileChunk {
    *
    * Written just BEFORE the OpenSearch write, not after: the write is fail-open, and a removal for
    * an index that holds nothing is a harmless no-op, whereas a missed one orphans documents.
+   *
+   * Because it is written before, it OVER-claims: set on a chunk whose index write then threw.
+   * Retrieval needs the opposite bias, which is what `retrievalIndexConfirmedModel` below is for.
    */
   retrievalIndexModel?: string;
+  /**
+   * The retrieval index this chunk's document is CONFIRMED to be resident in, written only after
+   * the index write for it came back successful (and survived indexChunks' per-batch rollback).
+   *
+   * The read-side counterpart to `retrievalIndexModel`, and necessarily a separate field: removal
+   * needs an over-approximation (miss one and documents are orphaned forever), retrieval needs an
+   * under-approximation (claim one that is not there and the file silently contributes nothing).
+   * One field cannot be written both before and after the same call.
+   *
+   * Absent on every chunk whose file predates self-host OpenSearch being enabled - there is no
+   * backfill (see SELF_HOST.md), so those files are ANN-ineligible and stay on the scan path.
+   */
+  retrievalIndexConfirmedModel?: string;
 }
 
 /**
@@ -566,6 +582,43 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
    * a two-model lake doubles its removal traffic and most of it matches nothing.
    */
   retrievalIndexModelsByFabFileIds(fabFileIds: string[]): Promise<Record<string, string[]>>;
+  /** Record `retrievalIndexConfirmedModel` on chunks whose index write has come back successful. */
+  confirmRetrievalIndexed(chunkIds: string[], model: string): Promise<void>;
+  /**
+   * Clear a stale `retrievalIndexConfirmedModel` for the given chunks under `model`. Needed
+   * because a redelivered vectorize message can hit `indexChunks`' own per-batch rollback, which
+   * deletes an OpenSearch document a PRIOR delivery already confirmed - without this, that chunk
+   * would keep claiming residency for a document that no longer exists. Called with exactly the
+   * chunks a delivery dispatched but did NOT get back as indexed.
+   */
+  clearRetrievalIndexConfirmed(chunkIds: string[], model: string): Promise<void>;
+  /**
+   * Clear `retrievalIndexConfirmedModel` for every chunk of the given files, under ANY model.
+   * Called after a best-effort or strict index removal (archive, delete) actually drops the
+   * files' documents from the external index - without this, a file's confirmed-resident stamp
+   * survives the removal and `annResidentFabFileIds` keeps reporting it resident for documents
+   * that are gone. Unlike `clearRetrievalIndexConfirmed`, this is keyed on the FILE, not on the
+   * chunks a specific vectorize delivery dispatched, and clears every model at once because index
+   * removal drops the file's documents wherever they were ever indexed.
+   */
+  clearRetrievalIndexConfirmedByFabFileIds(fabFileIds: string[]): Promise<void>;
+  /**
+   * The subset of `fabFileIds` whose chunks are confirmed RESIDENT in `model`'s external retrieval
+   * index: every chunk EMBEDDED under that model carries a matching `retrievalIndexConfirmedModel`.
+   *
+   * All-or-nothing per file, and deliberately so - a file half of whose chunks are missing from
+   * the index would serve half its content with no error anywhere, which is the failure this
+   * answers. Files with no chunk embedded under `model` at all (they predate the feature, or were
+   * never embedded with it) are simply absent.
+   *
+   * Denominator is `embeddingModel`, NOT `retrievalIndexModel`, despite the latter being the
+   * smaller indexable field: `retrievalIndexModel` is only written when the self-host flag was
+   * ALREADY on at write time, so a file straddling a rolling enable has chunks with neither field -
+   * invisible to that count, and falsely reported fully resident. `embeddingModel` is stamped
+   * unconditionally in the same transaction for every embeddable chunk (fabFileVectorize.ts), so it
+   * cannot be skipped by the flag and is the true set this model was asked to cover.
+   */
+  annResidentFabFileIds(fabFileIds: string[], model: string): Promise<string[]>;
   bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]): Promise<IFabFileChunkDocument[]>;
   findByFabFileId(fabFileId: string): Promise<IFabFileChunkDocument[]>;
   /**
@@ -1299,6 +1352,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   markUploaded(fabFileId: string): Promise<void>;
   markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean>;
+  /**
+   * Unconditional counterpart to markFailedIfNotAlready, for a PERMANENT verdict that outranks
+   * whatever error the file already carries. Returns the error it replaced (null if there was
+   * none) so the caller can log the text this write destroys.
+   */
+  supersedeFailureError(fabFileId: string, errorMessage: string): Promise<string | null>;
   /**
    * Guarded partial-progress write for the multi-message vectorize fan-out: applies only if the
    * stored count is not already higher and the file has not been stamped terminal, so a stale

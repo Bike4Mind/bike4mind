@@ -1,4 +1,5 @@
 export * from './accept';
+export * from './authorizeByInviteType';
 export * from './cancel';
 export * from './cancelInviteById';
 export * from './create';

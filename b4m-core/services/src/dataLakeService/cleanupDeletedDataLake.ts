@@ -42,7 +42,7 @@ interface CleanupDeletedDataLakeAdapters {
       IFabFileRepository,
       'findIdsByDataLakeTag' | 'hardDeleteOneById' | 'findById' | 'pullTagsByFabFileId'
     >;
-    fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId'>;
+    fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId' | 'clearRetrievalIndexConfirmedByFabFileIds'>;
   };
   retrievalIndex?: RetrievalIndexPort;
   /**
@@ -127,7 +127,7 @@ export const cleanupDeletedDataLake = async (
   const fileIds = await db.fabFiles.findIdsByDataLakeTag(scope);
 
   // 1. Retrieval index first, and strict: a throw here must cost no progress (see ports.ts).
-  await strictIndexRemove(retrievalIndex, { scope, fabFileIds: fileIds });
+  await strictIndexRemove(retrievalIndex, { scope, fabFileIds: fileIds }, db.fabFileChunks, logger);
 
   // 1b. Crypto-shred the lake's memory profile (#1440) BEFORE deleting the lake record - otherwise the
   // `{ kind: 'lake' }` ledger and its DEK would survive the delete, unreadable but also undeletable

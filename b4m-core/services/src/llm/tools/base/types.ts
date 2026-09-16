@@ -107,6 +107,10 @@ export interface ToolContext {
       // The models a corpus was ACTUALLY embedded with (describe_knowledge_base). Optional like
       // the rest of this repo: absent, that tool reports the platform default alone and says so.
       | 'distinctRetrievalIndexModelsByFabFileIds'
+      // Kept a superset match with ChatCompletionFeatures.ts's DatabaseAdapters.fabfilechunks
+      // (which feeds this via ToolBuilder), so a future literal here cannot silently drop the
+      // method semanticDataLakeSearch's residency gate depends on with no type error.
+      | 'annResidentFabFileIds'
     >;
     users?: Pick<IUserRepository, 'findById'>;
     projects?: IProjectRepository;
