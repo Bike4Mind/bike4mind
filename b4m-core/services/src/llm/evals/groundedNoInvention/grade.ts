@@ -347,9 +347,17 @@ const DEMONSTRATIVE_BACKREF = new RegExp(
  * consolidation" connects the absent result to a cause exactly as "stems from" does, and reading only
  * the verb forms left the adverb to anchor the supply in its own segment - where a pointer standing in
  * the other segment suppressed it. Both readings are pinned.
+ *
+ * The noun-phrase branch carries one bound, and it is the same distinction the whole class rests on:
+ * the phrase must ATTRIBUTE the result, so it must not be the subject of its own clause. "the effect
+ * of that is unknown" predicates the effect rather than attributing the result to a cause, and
+ * reading it as a supply predicate moved `Supply.at` into a segment where nothing explains it - a
+ * pointer standing beside it in the other segment stopped suppressing it. The lookahead stops at the
+ * first clause boundary, so a supply that names a cause and then continues ("...the consequence of
+ * route consolidation, which is why the number holds") is unaffected.
  */
 const SUPPLY_PREDICATE =
-  /\b(?:comes?\s+from|came\s+from|driven\s+by|due\s+to|stems?\s+from|attributable\s+to|achieved|produced|(?:the\s+)?(?:consequences?|effects?|outcomes?)\s+of)\b/i;
+  /\b(?:comes?\s+from|came\s+from|driven\s+by|due\s+to|stems?\s+from|attributable\s+to|achieved|produced|(?:the\s+)?(?:consequences?|effects?|outcomes?)\s+of(?![^.!?;,]{0,40}?\b(?:is|are|was|were)\b))\b/i;
 
 const SUPPLIED_SPECIFIC = new RegExp(
   String.raw`\b(?:gains?|results?|reductions?|improvements?|savings?|baselines?|uplift|speedups?)\b|` +
