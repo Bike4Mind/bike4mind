@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { admitsOptionalAuthUser } from '@server/middlewares/oauthRouteGate';
 import type { HelpIndex, HelpIndexEntry, HelpCategory } from '@bike4mind/scripts/help/types';
 import passport from 'passport';
 import fs from 'fs';
@@ -35,7 +36,10 @@ function optionalAuth(req: Request, res: Response, next: NextFunction) {
       authFailureCount++;
       console.warn(`[HelpIndex] Optional auth error #${authFailureCount} (proceeding unauthenticated):`, err);
     }
-    if (user) {
+    // Only admit a user the shared guard accepts; a pre-MFA session or a relying-party OAuth token
+    // must not be treated as a full user here (it would leak admin-only help entries). This route is
+    // auth:false so it bypasses the normal mfaPending block and oauthRouteGate. See oauthRouteGate.ts.
+    if (admitsOptionalAuthUser(user)) {
       req.user = user;
     }
     next();

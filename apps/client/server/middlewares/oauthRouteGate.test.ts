@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { oauthRouteGate } from './oauthRouteGate';
+import { oauthRouteGate, admitsOptionalAuthUser } from './oauthRouteGate';
 
 function mockRes() {
   const res: { status: ReturnType<typeof vi.fn>; json: ReturnType<typeof vi.fn> } = {
@@ -47,5 +47,24 @@ describe('oauthRouteGate', () => {
     const { next, res } = run({ oauthGrant: { scopes: ['openid', 'profile'] } }, { oauthScopes: ['openid'] });
     expect(next).toHaveBeenCalledTimes(1);
     expect(res.status).not.toHaveBeenCalled();
+  });
+});
+
+describe('admitsOptionalAuthUser', () => {
+  it('admits a plain first-party session', () => {
+    expect(admitsOptionalAuthUser({ id: 'u1' })).toBe(true);
+  });
+
+  it('rejects a null/absent user (anonymous)', () => {
+    expect(admitsOptionalAuthUser(null)).toBe(false);
+    expect(admitsOptionalAuthUser(undefined)).toBe(false);
+  });
+
+  it('rejects a pre-MFA (mfaPending) session', () => {
+    expect(admitsOptionalAuthUser({ id: 'u1', mfaPending: true })).toBe(false);
+  });
+
+  it('rejects a relying-party OAuth token (oauthGrant present)', () => {
+    expect(admitsOptionalAuthUser({ id: 'u1', oauthGrant: { scopes: ['openid'], clientId: 'c1' } })).toBe(false);
   });
 });

@@ -25,12 +25,10 @@ export function oauthRouteGate(policy?: OAuthRoutePolicy) {
     if (!grant) return next(); // not an OAuth token; unaffected
 
     if (!policy?.oauthScopes) {
-      return res
-        .status(403)
-        .json({
-          error: 'insufficient_scope',
-          error_description: 'This route is not accessible with an OAuth access token',
-        });
+      return res.status(403).json({
+        error: 'insufficient_scope',
+        error_description: 'This route is not accessible with an OAuth access token',
+      });
     }
 
     const missing = policy.oauthScopes.filter(s => !grant.scopes.includes(s));
@@ -42,4 +40,19 @@ export function oauthRouteGate(policy?: OAuthRoutePolicy) {
 
     next();
   };
+}
+
+/**
+ * Should a JWT-authenticated user be admitted as `req.user` on an OPTIONAL-auth (`auth: false`)
+ * route? Those routes bypass the normal chain's mfaPending block AND oauthRouteGate above, so every
+ * optional-auth shim must mirror those default-denies itself or it becomes a bypass: a pre-MFA
+ * session or a relying-party OAuth token would otherwise act as a full user (read a subject user's
+ * PRIVATE published artifacts, mint a passphrase gate-proof cookie, or create/edit annotations).
+ * Returns false for both markers; such callers fall through to the same anonymous posture as an
+ * un-credentialed viewer. This is the single choke point every optional-auth shim shares - keep it
+ * in sync with oauthRouteGate above.
+ */
+export function admitsOptionalAuthUser(user: unknown): boolean {
+  const u = user as { mfaPending?: boolean; oauthGrant?: unknown } | null | undefined;
+  return !!u && !u.mfaPending && !u.oauthGrant;
 }

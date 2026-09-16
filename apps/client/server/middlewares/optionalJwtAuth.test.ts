@@ -86,7 +86,7 @@ describe('optionalJwtAuth', () => {
     expect(next).toHaveBeenCalledOnce();
   });
 
-  it('degrades a relying-party OAuth access token to anonymous — does NOT set req.user', () => {
+  it('degrades a relying-party OAuth access token to anonymous - does NOT set req.user', () => {
     // verifyJwtPayload stamps oauthGrant onto the user and returns it as a success. On the normal
     // auth chain oauthRouteGate default-denies it, but this auth:false route bypasses that gate, so
     // the shim must mirror the default-deny here or an openid-only OAuth token would read a user's
