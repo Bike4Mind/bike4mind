@@ -124,6 +124,7 @@ const CreateFeedbackRequestSchema = z.object({
   // it survives onto the saved document.
   questId: z.string().min(1).optional(),
   sessionId: z.string().min(1).optional(),
+  contextQuestId: z.string().min(1).optional(),
 });
 
 // Trim each address and drop blanks so 'a@x.com, b@x.com' doesn't leave a leading space on every
@@ -292,7 +293,8 @@ const handler = baseApi()
       console.log('Authenticated');
     }
 
-    const { userId, content, tags, username, userEmail, promptMeta, type, questId, sessionId } = newFeedbackData;
+    const { userId, content, tags, username, userEmail, promptMeta, type, questId, sessionId, contextQuestId } =
+      newFeedbackData;
 
     // The org lookup must key off the resolved identity too, not the raw body userEmail -- otherwise
     // two authenticated submissions from the same account can be stamped with different organizations
@@ -339,6 +341,7 @@ const handler = baseApi()
         claims: {
           questId: questId ?? promptMeta?.questId,
           sessionId: sessionId ?? promptMeta?.session?.id,
+          contextQuestId,
         },
         logger: req.logger,
       }),
@@ -357,6 +360,7 @@ const handler = baseApi()
       type,
       sessionId: feedbackContext.sessionId,
       questId: feedbackContext.questId,
+      contextQuestId: feedbackContext.contextQuestId,
       organizationId: feedbackContext.organizationId,
       subject: feedbackContext.subject,
       contentStored,

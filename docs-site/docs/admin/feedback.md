@@ -9,6 +9,16 @@ tags: [admin, feedback, support]
 
 The Feedback tab provides a centralized interface for reviewing, triaging, and managing user-submitted feedback. Administrators can search, filter by status and organization, update feedback status, delete entries, and export data to CSV.
 
+## Where Feedback Comes From
+
+| Surface | Tags | What it is about |
+|---------|------|------------------|
+| Help modal | `feedback`, `cs` | The product in general |
+| Bug report modal | `bug`, `feedback`, `bugReport` | One answer, with its diagnostic snapshot attached |
+| `/feedback <message>` in the chat composer | `feedback`, `slash-command` | The conversation as a whole |
+
+A `/feedback` report is filed against the **session**, not a single turn. The newest turn in that session at the moment of writing is recorded separately as context, so a reader can see where the user was when they wrote it without the report being mistaken for a verdict on that one answer.
+
 ## Control Panel
 
 The feedback control panel provides all filtering and action controls in a single card at the top of the view.

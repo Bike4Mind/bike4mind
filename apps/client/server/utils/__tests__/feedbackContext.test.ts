@@ -142,6 +142,72 @@ describe('resolveFeedbackContext', () => {
     expect(context).toEqual({ organizationId: 'org-1', subject: 'product' });
   });
 
+  it('keeps contextQuestId alongside a session subject without promoting the subject to turn', async () => {
+    const { session, quest } = await makeOwnedQuest('owner-7');
+
+    const context = await resolveFeedbackContext({
+      authenticatedUserId: 'owner-7',
+      organizationId: 'org-1',
+      claims: { sessionId: session.id, contextQuestId: quest.id },
+      logger: stubLogger(),
+    });
+
+    expect(context).toEqual({
+      sessionId: session.id,
+      contextQuestId: quest.id,
+      organizationId: 'org-1',
+      subject: 'session',
+    });
+  });
+
+  it('drops a contextQuestId belonging to a different session', async () => {
+    const { session } = await makeOwnedQuest('owner-8');
+    const other = await makeOwnedQuest('owner-8');
+    const logger = stubLogger();
+
+    const context = await resolveFeedbackContext({
+      authenticatedUserId: 'owner-8',
+      organizationId: 'org-1',
+      claims: { sessionId: session.id, contextQuestId: other.quest.id },
+      logger,
+    });
+
+    expect(context.contextQuestId).toBeUndefined();
+    expect(context.subject).toBe('session');
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it('drops a contextQuestId when the session claim itself did not resolve', async () => {
+    const { quest } = await makeOwnedQuest('owner-9');
+
+    const context = await resolveFeedbackContext({
+      authenticatedUserId: 'stranger',
+      organizationId: 'org-1',
+      claims: { sessionId: new mongoose.Types.ObjectId().toString(), contextQuestId: quest.id },
+      logger: stubLogger(),
+    });
+
+    expect(context).toEqual({ organizationId: 'org-1', subject: 'product' });
+  });
+
+  it('ignores contextQuestId when the report already has a turn subject', async () => {
+    const { session, quest } = await makeOwnedQuest('owner-10');
+
+    const context = await resolveFeedbackContext({
+      authenticatedUserId: 'owner-10',
+      organizationId: 'org-1',
+      claims: { questId: quest.id, contextQuestId: quest.id },
+      logger: stubLogger(),
+    });
+
+    expect(context).toEqual({
+      questId: quest.id,
+      sessionId: session.id,
+      organizationId: 'org-1',
+      subject: 'turn',
+    });
+  });
+
   it('drops a junk (non-ObjectId) questId without throwing a CastError', async () => {
     const logger = stubLogger();
     const context = await resolveFeedbackContext({
