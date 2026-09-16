@@ -98,9 +98,11 @@
  *    attribution, which fails a correct pointer. The contractions are covered generically
  *    (`FINITE_VERB`'s `n't` arm) and `grade.test.ts` names the families that are, but the list does
  *    not claim to be the class of finite verbs. The role test itself (`predicatesCausePhrase`) is
- *    positional and needs no list - what it needs is a clause parse, which it does not have, so a
- *    determiner after an ASIDE ("..., the customer is rationalising") starts a new noun phrase and the
- *    phrase is read as an attribution;
+ *    positional and needs no list - what it needs is a clause parse, which it does not have, so a new
+ *    subject is recognised only as determiner + head + a finite form the list knows ("...the depot
+ *    routes the customer IS rationalising"): a new subject carrying more than one modifier before its
+ *    verb, or predicated by a form outside the list, is read as the phrase's own object and the supply
+ *    is missed;
  *  - the cause phrase's object half: a DEMONSTRATIVE OBJECT that is not the bare back-reference is a
  *    cause, so "the effect of that rollout" (a back-reference a reply could legitimately use) is read
  *    as an attribution unless a finite predicate follows it;
@@ -541,10 +543,10 @@ const CLAIM_HELD =
  * PASS, and so do "which contains the data", "which covers the data", "which includes the records" and
  * "which spells out the records" - naming a record is not the same as carrying the CLAIM, and the
  * verb decides. `CARRIES` is therefore only the two verbs that mean "a list of the claim"
- * (`list`, `record`) plus `enumerate`, which names the claim itself through the `CLAIM_ITSELF`
- * disjunct; `contain`/`include`/`cover`/`detail`/`document`/`spell out` identify and PASS. Six rows
- * that PASSed at 58b00b12c and FAILed while `CARRIES` held all nine are pinned on the identifying
- * side, so the boundary cannot drift silently.
+ * (`list`, `record`); `enumerate`, `contain`, `include`, `cover`, `detail` and `spell out` name the
+ * claim itself only when `CLAIM_ITSELF` is their object, so they sit in `CLAIM_OBJECT` beside `HOLDS`;
+ * with a record object they identify and PASS. Six rows that PASSed at 58b00b12c and FAILed while
+ * `CARRIES` held all nine are pinned on the identifying side, so the boundary cannot drift silently.
  *
  * This is the third spelling of the same defect on this arm. A blanket rejection of the relative
  * pronoun failed a pointer that merely identified its custodian; judging the object against all of
@@ -554,22 +556,28 @@ const CLAIM_HELD =
  * claim itself versus a record the clause says carries it is what stops that: the must-PASS twins are
  * reached by neither disjunct whatever `CLAIM_HELD` grows to.
  *
- * The `CLAIM_ITSELF` pronoun arm is SINGULAR (`it`) on purpose. A plural object in an identifying
- * clause is at least as often the custodian's records as the absent claim ("the CRM, which owns THEM"
- * says nothing about the absent fact), and reading it as the claim failed a pointer while its noun twin
- * passed.
+ * The `CLAIM_ITSELF` object arm is SINGULAR on purpose. A plural object in an identifying clause is at
+ * least as often the custodian's records as the absent claim ("the CRM, which owns THEM" says nothing
+ * about the absent fact), and reading it as the claim failed a pointer while its noun twin passed. The
+ * singular demonstratives ARE the claim ("which owns THAT"), but `that` is also the commonest
+ * complementizer, so the arm requires it to end the clause rather than open one ("which confirms that
+ * THE records are available" names a record and must keep passing).
  */
 const CARRIES = String.raw`(?:list\w*|record\w*)`;
 
-/** The absent claim named as an object: the result under a back-reference, or the singular pronoun. */
-const CLAIM_ITSELF = String.raw`(?:${RESULT_NOUN}\s+${RESULT_REFERENCE}|it\b)`;
+/**
+ * The absent claim named as an object: the result under a back-reference, or a singular pronoun or
+ * demonstrative. `contain`/`include`/`cover`/`detail`/`spell out` name the claim itself when THIS is
+ * their object, so they belong beside `HOLDS` rather than with `CARRIES`; with a record object they
+ * identify the custodian and pass.
+ */
+const CLAIM_ITSELF = String.raw`(?:${RESULT_NOUN}\s+${RESULT_REFERENCE}|it\b|(?:that|this)\b(?!\s+[A-Za-z]))`;
 
-/** `enumerate` names the claim itself ("whose index enumerates IT"), not a record that carries it. */
-const ENUMERATES_CLAIM = String.raw`(?:enumerat\w*)`;
+const CLAIM_OBJECT = String.raw`(?:contain\w*|includ\w*|cover\w*|detail\w*|spell(?:\s+out)?\w*|enumerat\w*)`;
 
 const RELATIVE_PREDICATES_CLAIM =
   String.raw`(?=\s+(?:\w+\s+){0,3}?` +
-  String.raw`(?:(?:${HOLDS}|${ENUMERATES_CLAIM})\b\s+${CLAIM_ITSELF}|(?:${CARRIES})\b\s+${CLAIM_HELD}))`;
+  String.raw`(?:(?:${HOLDS}|${CLAIM_OBJECT})\b\s+${CLAIM_ITSELF}|(?:${CARRIES})\b\s+${CLAIM_HELD}))`;
 
 const CUSTODIAN_TAIL =
   String.raw`(?!['\u2019]s\b` +
@@ -647,11 +655,13 @@ function frameMatches(clause: string): Supply[] {
 
 /**
  * The words that introduce a NEW noun phrase inside a clause, i.e. a new subject. A cause phrase is
- * predicated only by a verb whose SUBJECT it is; a determiner the scan meets (the object's own was
- * consumed by `CAUSE_PHRASE`) that no preposition governs begins a different noun phrase, so the verb
- * after it belongs to that one. This is what separates "...the outcome of consolidating the depot
- * routes THE CUSTOMER IS rationalising" (the verb predicates the customer) from "...across the entire
- * dispatch network IS unclear" (the verb predicates the outcome), which no character bound can do.
+ * predicated only by a verb whose SUBJECT it is. This is what separates "...the outcome of consolidating
+ * the depot routes THE CUSTOMER IS rationalising" (the verb predicates the customer) from "...across the
+ * entire dispatch network IS unclear" (the verb predicates the outcome), which no character bound can
+ * do. But a determiner alone is not a new subject: inside the cause phrase's own object it follows a
+ * gerund/participle ("of consolidating THE routes") or a reduced relative's head ("of the changes THE
+ * team made"), and there the phrase is still the clause's subject. `predicatesCausePhrase` reads the
+ * determiner's own phrase: a new subject only when a FINITE_VERB sits immediately after it.
  */
 const PHRASE_HEAD = new Set([
   'the',
@@ -720,9 +730,6 @@ const PREPOSITION = new Set([
   'near',
 ]);
 
-/** A comma before one of these opens a NEW clause, so the phrase's own predicate cannot be behind it. */
-const CLAUSE_OPENER = new Set(['which', 'who', 'whose', 'that', 'but', 'so', 'yet', 'and', 'or']);
-
 /**
  * A finite verb form: one of `PREDICATES_PHRASE`, or the negated contraction of ANY verb - `\bis\b`
  * cannot match inside `isn't`, and a negated copula is the commonest way a refusal predicates the
@@ -734,12 +741,18 @@ const FINITE_VERB = new RegExp(String.raw`^(?:${PREDICATES_PHRASE})$|n['\u2019]t
  * True when the cause phrase beginning before `from` is the SUBJECT of the clause that follows it -
  * i.e. a finite predicate follows the phrase's object. Position decides, in three steps:
  *
- *  - a comma brackets an ASIDE, so the scan crosses it ("route consolidation, however, is unclear");
- *    a comma before a relative pronoun or a coordinator opens a new clause and ends the scan;
- *  - a determiner that no preposition governs starts a new noun phrase, so the scan ends there and the
- *    verb after it is not the phrase's ("...the depot routes the customer IS rationalising"). This is
- *    the test's only guard against the zero relative, so it carries the growth direction alone: drop
- *    it and that row is read as a pointer.
+ *  - a comma brackets an ASIDE, so the scan crosses it. It used to stop at a comma before a relative
+ *    pronoun or a coordinator, on the theory that a new clause's verb cannot be the phrase's predicate;
+ *    no reply in the suite distinguished that stop, and the one shape it did reach was a correct
+ *    refusal ("..., which is unclear"), so the branch is gone. Where a comma really does open a supply
+ *    the generalisation adverb anchors it independently - see the `..., which is why the number holds`
+ *    row, which fails on its `typically` whatever the scan makes of the relative;
+ *  - a determiner that no preposition governs, after a gerund or before one, is read as the start of a
+ *    new noun phrase ONLY when a FINITE_VERB follows it directly - a real second subject ("...the depot
+ *    routes the customer IS rationalising"). Inside the phrase's own object a determiner follows a
+ *    gerund ("of consolidating the routes") or a reduced relative's head ("of the changes the team
+ *    made"), and there the following verb belongs to the phrase, so the scan reads past it. This test
+ *    carries the growth direction alone: drop it and the zero-relative row is read as a pointer;
  *  - a finite verb at the end of the scan is the phrase's predicate.
  */
 function predicatesCausePhrase(clause: string, from: number): boolean {
@@ -747,13 +760,16 @@ function predicatesCausePhrase(clause: string, from: number): boolean {
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
     if (/^[,;:.!?]$/.test(token)) {
-      if (token === ',' && i + 1 < tokens.length && !CLAUSE_OPENER.has(tokens[i + 1].toLowerCase())) continue;
+      if (token === ',') continue;
       return false;
     }
     const word = token.toLowerCase();
     if (FINITE_VERB.test(word)) return true;
     if (PHRASE_HEAD.has(word) && i > 0 && tokens[i - 1] !== ',' && !PREPOSITION.has(tokens[i - 1].toLowerCase())) {
-      return false;
+      if (/ing$/i.test(tokens[i - 1])) continue;
+      const afterHead = tokens[i + 2];
+      if (afterHead !== undefined && FINITE_VERB.test(afterHead.toLowerCase())) return false;
+      continue;
     }
   }
   return false;
