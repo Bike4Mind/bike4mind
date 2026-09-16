@@ -7,10 +7,21 @@ import {
   ADMIN_SESSION_EXPIRED,
   ADMIN_SESSION_VALIDATION_FAILED,
   useGetIdentify,
+  useUpdateUser,
 } from './user';
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: vi.fn() },
+}));
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
+}));
+
+vi.mock('@client/app/utils/userAPICalls', () => ({
+  updateUserToServer: vi.fn(),
+  fetchUsers: vi.fn(),
+  fetchUserTags: vi.fn(),
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({
@@ -23,6 +34,8 @@ vi.mock('../useAccessToken', () => ({
 
 const { useUser } = await import('@client/app/contexts/UserContext');
 const { useAccessToken } = await import('../useAccessToken');
+const { toast } = await import('sonner');
+const { updateUserToServer } = await import('@client/app/utils/userAPICalls');
 
 describe('useGetIdentify', () => {
   beforeEach(() => {
@@ -87,5 +100,51 @@ describe('adminReturnValidationError', () => {
 
   it('returns null for an OK response', () => {
     expect(adminReturnValidationError(200, true)).toBeNull();
+  });
+});
+
+describe('useUpdateUser', () => {
+  const wrapper = ({ children }: { children: React.ReactNode }) => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    return React.createElement(QueryClientProvider, { client: qc }, children);
+  };
+
+  const save = async (response: unknown) => {
+    vi.mocked(updateUserToServer).mockResolvedValue(response);
+    const { result } = renderHook(() => useUpdateUser(), { wrapper });
+    result.current.mutate({ id: 'u1', data: { name: 'New Name' } });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(useUser).mockImplementation((sel: any) => sel({ currentUser: { id: 'u1' } }));
+  });
+
+  it('warns instead of claiming success when the route reports ignored fields', async () => {
+    await save({ id: 'u1', name: 'New Name', ignoredFields: ['adminNote', 'nickname'] });
+
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('adminNote, nickname'));
+  });
+
+  it('keeps ignoredFields out of the cached user document', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const localWrapper = ({ children }: { children: React.ReactNode }) =>
+      React.createElement(QueryClientProvider, { client: qc }, children);
+
+    vi.mocked(updateUserToServer).mockResolvedValue({ id: 'u1', name: 'New Name', ignoredFields: ['adminNote'] });
+    const { result } = renderHook(() => useUpdateUser(), { wrapper: localWrapper });
+    result.current.mutate({ id: 'u1', data: { name: 'New Name' } });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(qc.getQueryData(['users', 'u1'])).toEqual({ id: 'u1', name: 'New Name' });
+  });
+
+  it('reports a plain success when nothing was ignored', async () => {
+    await save({ id: 'u1', name: 'New Name' });
+
+    expect(toast.warning).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith('Profile updated successfully');
   });
 });
