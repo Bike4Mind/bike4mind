@@ -144,7 +144,7 @@ describe('handlePermissionResponse', () => {
   });
 
   it('still resumes the run and logs a warning when rememberDecision rejects', async () => {
-    mockRememberDecision.mockRejectedValue(new Error('write failed'));
+    mockRememberDecision.mockRejectedValueOnce(new Error('write failed'));
 
     await handlePermissionResponse(
       baseCmd({ approved: true, rememberForSession: true }),
@@ -168,6 +168,7 @@ describe('handlePermissionResponse', () => {
       noopLogger as any
     );
 
+    expect(mockRememberDecision).toHaveBeenCalledWith('user-1', baseExecution.sessionId, 'web_search', 'denied');
     expect(mockMarkFailed).toHaveBeenCalledWith('exec-1', {
       message: 'Execution stopped: you denied "web_search".',
     });
@@ -175,5 +176,6 @@ describe('handlePermissionResponse', () => {
     const [sentCommand] = mockApiGwSend.mock.calls[0];
     expect(sentCommand.input.Data.toString()).toContain('"action":"failed"');
     expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(noopLogger.warn).not.toHaveBeenCalled();
   });
 });

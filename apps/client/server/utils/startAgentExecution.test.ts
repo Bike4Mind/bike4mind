@@ -297,6 +297,19 @@ describe('startAgentExecution', () => {
     expect(mockCreateExecution).toHaveBeenCalledWith(expect.objectContaining({ deniedTools: [] }));
   });
 
+  it('ignores a remembered session denial on a headless run, since there is no user present to ask', async () => {
+    // A REST/API-key/scheduled run cannot answer a permission prompt, so a denial recorded
+    // by an earlier interactive session must not carry over and fail the tool call here.
+    mockFindRememberedApprovals.mockResolvedValue({
+      approvedTools: [],
+      deniedTools: ['image_generation'],
+    });
+
+    await startAgentExecution(input({ userId: 'headless-with-remembered-denial' }), logger);
+
+    expect(mockCreateExecution).toHaveBeenCalledWith(expect.objectContaining({ deniedTools: [] }));
+  });
+
   it('refuses before creating anything when the executor is not linked to this deployment', async () => {
     // The frontend server links the executor's NAME, not the function, so a
     // hard-coded `Resource.AgentExecutor` resolves in the WebSocket Lambda and throws

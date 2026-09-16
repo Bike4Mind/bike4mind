@@ -107,13 +107,12 @@ describe('DELETE /api/sessions/[id]/tool-approvals', () => {
     expect(forgetTool).not.toHaveBeenCalled();
   });
 
-  it('forgets everything when tool is an empty string', async () => {
-    forgetAll.mockResolvedValue(undefined);
-
-    const { result } = call('deleteHandler', { tool: '' });
+  it('rejects an empty tool param instead of silently forgetting everything', async () => {
+    const { res, result } = call('deleteHandler', { tool: '' });
     await result;
 
-    expect(forgetAll).toHaveBeenCalledWith('user-1', SESSION_ID);
+    expect(res._getStatusCode()).toBe(400);
+    expect(forgetAll).not.toHaveBeenCalled();
     expect(forgetTool).not.toHaveBeenCalled();
   });
 

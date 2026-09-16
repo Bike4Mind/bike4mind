@@ -35,8 +35,11 @@ const handler = baseApi()
       });
     }
 
-    const toolName = tool ? String(tool) : undefined;
-    if (!toolName) {
+    const toolName = tool === undefined ? undefined : String(tool);
+    if (toolName === '') {
+      return res.status(400).json({ error: 'tool must not be empty' });
+    }
+    if (toolName === undefined) {
       await sessionToolApprovalRepository.forgetAll(req.user.id, sessionId);
       return res.json({ approvedTools: [], deniedTools: [] });
     }
