@@ -1,6 +1,7 @@
-import { ArtifactTypeSchema, queryBool } from '@bike4mind/common';
+import { ArtifactTypeSchema, queryBool, readExperimentalFeaturePreference } from '@bike4mind/common';
 import { artifactService } from '@bike4mind/services';
 import {
+  adminSettingsRepository,
   artifactRepository,
   artifactContentRepository,
   artifactVersionRepository,
@@ -9,6 +10,7 @@ import {
 } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { resolveUserArtifactGate } from '@server/utils/artifactGate';
 import { assertArtifactSourceRefsAccessible } from '@server/utils/assertArtifactSourceRefsAccessible';
 import { z } from 'zod';
 import qs from 'qs';
@@ -54,6 +56,41 @@ const CreateArtifactSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).prefault({}),
 });
 
+/**
+ * Whether a create is a model-authored row rather than something the user hand-wrote.
+ *
+ * Only the AI-authored writes honor the artifact opt-out. Deliberately keyed on `aiGenerated`, which
+ * only `artifactPersistence.ts` sets: the artifact editor and the Knowledge viewer's create-on-404
+ * fallbacks build their metadata from scratch, so a user who turned artifacts off can still author
+ * one by hand - the preference withdraws a feature, it does not seal the collection.
+ *
+ * Scoped to POST on purpose. The PUT path forwards an existing artifact's metadata verbatim, so the
+ * same check there would block a user's own edit of a row generated back when the flag was on.
+ */
+function isAiAuthoredCreate(metadata: Record<string, unknown>): boolean {
+  return metadata.aiGenerated === true;
+}
+
+/**
+ * Whether this user's model-authored artifacts may be persisted at all.
+ *
+ * Chat mode parses the finished quest in the BROWSER and posts the rows itself, so this route is the
+ * only server-side point where that write can be refused. Without it the preference gated the
+ * emission prompt and the extraction but not the durable row, and a fenced HTML block the fallback
+ * parser promoted still landed in the collection for a caller who had opted out.
+ */
+async function areUserArtifactsEnabled(user: Express.User): Promise<boolean> {
+  const [adminEnableArtifacts, adminEnableArtifactsDefault] = await Promise.all([
+    adminSettingsRepository.getSettingsValue('EnableArtifacts'),
+    adminSettingsRepository.getSettingsValue('EnableArtifactsDefault'),
+  ]);
+  return resolveUserArtifactGate({
+    adminEnableArtifacts,
+    adminEnableArtifactsDefault,
+    userPreference: readExperimentalFeaturePreference(user, 'enableArtifacts'),
+  });
+}
+
 const handler = baseApi()
   /**
    * GET /api/artifacts
@@ -84,12 +121,17 @@ const handler = baseApi()
    */
   .post(
     asyncHandler(async (req, res) => {
-      const userId = req.user?.id;
-      if (!userId) {
+      const user = req.user;
+      const userId = user?.id;
+      if (!user || !userId) {
         return res.status(401).json({ error: 'Unauthorized' });
       }
 
       const validatedData = CreateArtifactSchema.parse(req.body);
+
+      if (isAiAuthoredCreate(validatedData.metadata) && !(await areUserArtifactsEnabled(user))) {
+        return res.status(403).json({ error: 'Artifacts are disabled for this user' });
+      }
 
       // The refs below are written verbatim onto the new artifact, so a caller must be entitled to
       // any it supplies - otherwise it could claim another user's session/quest/artifact as its

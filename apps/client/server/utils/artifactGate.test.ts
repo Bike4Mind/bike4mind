@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ARTIFACT_EMISSION_PROMPT } from '@bike4mind/common';
-import { inheritedArtifactFields, resolveAgentArtifactEmissionPrompt, resolveAgentArtifactGate } from './artifactGate';
+import {
+  inheritedArtifactFields,
+  resolveAgentArtifactEmissionPrompt,
+  resolveAgentArtifactGate,
+  resolveUserArtifactGate,
+} from './artifactGate';
 
 describe('resolveAgentArtifactGate', () => {
   it('requires the admin setting: no caller flag can turn artifacts back on', () => {
@@ -115,5 +120,37 @@ describe('inheritedArtifactFields', () => {
     // `{ enableArtifacts: undefined }` is `toEqual({})` but is not an absent key.
     expect(Object.keys(inheritedArtifactFields(undefined))).toEqual([]);
     expect(Object.keys(inheritedArtifactFields())).toEqual([]);
+  });
+});
+
+describe('resolveUserArtifactGate', () => {
+  it('honors an explicit user opt-out over an admin default that says on', () => {
+    // The defect: chat mode read the admin settings only, so the browser still posted a durable row
+    // for a user who had turned the toggle off.
+    expect(
+      resolveUserArtifactGate({ adminEnableArtifacts: true, adminEnableArtifactsDefault: true, userPreference: false })
+    ).toBe(false);
+  });
+
+  it('honors an explicit user opt-in over an admin default that says off', () => {
+    expect(
+      resolveUserArtifactGate({ adminEnableArtifacts: true, adminEnableArtifactsDefault: false, userPreference: true })
+    ).toBe(true);
+  });
+
+  it('falls back to the admin default when the user has never toggled the flag', () => {
+    expect(resolveUserArtifactGate({ adminEnableArtifacts: true, adminEnableArtifactsDefault: false })).toBe(false);
+    expect(resolveUserArtifactGate({ adminEnableArtifacts: true, adminEnableArtifactsDefault: true })).toBe(true);
+  });
+
+  it('lets the master switch veto any user preference', () => {
+    expect(
+      resolveUserArtifactGate({ adminEnableArtifacts: false, adminEnableArtifactsDefault: true, userPreference: true })
+    ).toBe(false);
+  });
+
+  it('reads both settings as on when the repository returns nothing', () => {
+    // Both keys prefault to true, so absence means a read failure, not an admin who turned them off.
+    expect(resolveUserArtifactGate({})).toBe(true);
   });
 });

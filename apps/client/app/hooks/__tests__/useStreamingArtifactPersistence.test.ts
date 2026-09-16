@@ -11,6 +11,12 @@ vi.mock('../../utils/artifactPersistence', () => ({
   persistArtifacts: (...args: unknown[]) => persistArtifacts(...args),
 }));
 
+// The gate lives on the LLM store; mocked so this test does not pull the whole context module in.
+const llmState = { isArtifactsEnabled: undefined as boolean | undefined };
+vi.mock('@client/app/contexts/LLMContext', () => ({
+  useLLM: { getState: () => llmState },
+}));
+
 vi.mock('../../utils/artifactParser', () => ({
   parseArtifactsWithFallback: (...args: unknown[]) => parseArtifactsWithFallback(...args),
   getArtifactTimestamp: () => 1000,
@@ -34,6 +40,7 @@ const codeArtifact = {
 describe('useStreamingArtifactPersistence', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    llmState.isArtifactsEnabled = undefined;
     parseArtifactsWithFallback.mockReturnValue({ artifacts: [], cleanedContent: '' });
   });
 
@@ -125,5 +132,33 @@ describe('useStreamingArtifactPersistence', () => {
       result.current.persistArtifactsFromQuest({ id: 'q1', sessionId: 's1', replies: ['r'] });
     });
     await waitFor(() => expect(persistArtifacts).toHaveBeenCalledTimes(2));
+  });
+
+  it('writes nothing when the user has turned artifacts off', () => {
+    // The whole defect: the preference gated the emission prompt but this client-initiated write
+    // ran unconditionally, so a fenced-HTML-only reply still landed a durable row.
+    llmState.isArtifactsEnabled = false;
+    parseArtifactsWithFallback.mockReturnValue({ artifacts: [codeArtifact], cleanedContent: '' });
+    const { result } = renderHook(() => useStreamingArtifactPersistence());
+
+    act(() => {
+      result.current.persistArtifactsFromQuest({ id: 'q1', sessionId: 's1', replies: ['r'] });
+    });
+
+    expect(persistArtifacts).not.toHaveBeenCalled();
+    // Not even parsed - the skip is ahead of the work, not just ahead of the POST.
+    expect(parseArtifactsWithFallback).not.toHaveBeenCalled();
+  });
+
+  it('still persists while the gate is unresolved, rather than reading "not yet known" as off', () => {
+    llmState.isArtifactsEnabled = undefined;
+    parseArtifactsWithFallback.mockReturnValue({ artifacts: [codeArtifact], cleanedContent: '' });
+    const { result } = renderHook(() => useStreamingArtifactPersistence());
+
+    act(() => {
+      result.current.persistArtifactsFromQuest({ id: 'q1', sessionId: 's1', replies: ['r'] });
+    });
+
+    expect(persistArtifacts).toHaveBeenCalledTimes(1);
   });
 });

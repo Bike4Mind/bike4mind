@@ -8,6 +8,7 @@ import {
   getArtifactTimestamp,
 } from '../utils/artifactParser';
 import { persistArtifacts } from '../utils/artifactPersistence';
+import { useLLM } from '@client/app/contexts/LLMContext';
 
 /**
  * useStreamingArtifactPersistence - owns extracting + persisting artifacts from
@@ -31,6 +32,18 @@ export function useStreamingArtifactPersistence() {
         return;
       }
       if (!quest.replies || quest.replies.length === 0) {
+        return;
+      }
+
+      // Read at call time rather than subscribing: this callback is deliberately identity-stable
+      // (useSubscribeChatCompletion rebuilds its WebSocket handler whenever it changes), and
+      // `getState` also gives the freshest value if the user toggles mid-stream.
+      //
+      // Only an explicit `false` skips. `undefined` means the admin and user signals have not both
+      // resolved yet, and the same asymmetry the rest of the pipeline uses applies here - reading
+      // "not yet known" as "off" would drop artifacts for every cold load. `POST /api/artifacts`
+      // re-checks server-side, so that window loses nothing durable.
+      if (useLLM.getState().isArtifactsEnabled === false) {
         return;
       }
 
