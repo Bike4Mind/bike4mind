@@ -11,7 +11,60 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-const BLOCKED_SEVERITIES = new Set(['high', 'critical']);
+export const BLOCKED_SEVERITIES = new Set(['high', 'critical']);
+
+// Returns an array of {ghsa, severity, pkg} for new (not allowlisted) advisories.
+// Returns null when the report has no recognized shape -- callers should fail closed.
+export function extractNewAdvisories(data, allowlist) {
+  if (!data || typeof data !== 'object') return null;
+  const hasKnownShape =
+    (data.advisories && typeof data.advisories === 'object') ||
+    (data.vulnerabilities && typeof data.vulnerabilities === 'object');
+  if (!hasKnownShape) return null;
+
+  const newAdvisories = [];
+
+  // Classic pnpm/npm audit "advisories" shape
+  if (data.advisories && typeof data.advisories === 'object') {
+    for (const advisory of Object.values(data.advisories)) {
+      if (!advisory || typeof advisory !== 'object') continue;
+      const severity = String(advisory.severity || '').toLowerCase();
+      if (!BLOCKED_SEVERITIES.has(severity)) continue;
+      const pkg = advisory.module_name || 'unknown';
+      const ghsa = advisory.github_advisory_id;
+      if (!ghsa) {
+        // Fail closed: an unidentifiable high/critical advisory is exactly the
+        // thing a human should look at -- surface it rather than silently skip.
+        const id = advisory.id ?? advisory.cves?.[0] ?? 'unknown';
+        newAdvisories.push({ ghsa: `<no GHSA id> (${id})`, severity, pkg });
+        continue;
+      }
+      if (!allowlist.has(ghsa)) {
+        newAdvisories.push({ ghsa, severity, pkg });
+      }
+    }
+  }
+
+  // Newer npm audit v2 "vulnerabilities" shape (fallback when advisories is absent/empty)
+  if (newAdvisories.length === 0 && data.vulnerabilities && typeof data.vulnerabilities === 'object') {
+    const seenGhsas = new Set();
+    for (const [pkgName, vuln] of Object.entries(data.vulnerabilities)) {
+      if (!vuln || typeof vuln !== 'object') continue;
+      const severity = String(vuln.severity || '').toLowerCase();
+      if (!BLOCKED_SEVERITIES.has(severity)) continue;
+      const viaEntries = Array.isArray(vuln.via) ? vuln.via : [];
+      const ghsas = viaEntries.map(v => v && v.url && v.url.match(/GHSA-[a-z0-9-]+/)?.[0]).filter(Boolean);
+      for (const ghsa of ghsas) {
+        if (!allowlist.has(ghsa) && !seenGhsas.has(ghsa)) {
+          seenGhsas.add(ghsa);
+          newAdvisories.push({ ghsa, severity, pkg: pkgName });
+        }
+      }
+    }
+  }
+
+  return newAdvisories;
+}
 
 async function main() {
   const reportPath = process.env.PACKAGES_JSON_REPORT_PATH || 'packages-audit-report.json';
@@ -42,38 +95,12 @@ async function main() {
     process.exit(1);
   }
 
-  const newAdvisories = [];
+  const newAdvisories = extractNewAdvisories(data, allowlist);
 
-  // Classic pnpm/npm audit "advisories" shape
-  if (data.advisories && typeof data.advisories === 'object') {
-    for (const advisory of Object.values(data.advisories)) {
-      if (!advisory || typeof advisory !== 'object') continue;
-      const severity = String(advisory.severity || '').toLowerCase();
-      if (!BLOCKED_SEVERITIES.has(severity)) continue;
-      const ghsa = advisory.github_advisory_id;
-      if (!ghsa) continue;
-      if (!allowlist.has(ghsa)) {
-        newAdvisories.push({ ghsa, severity, pkg: advisory.module_name || 'unknown' });
-      }
-    }
-  }
-
-  // Newer npm audit v2 "vulnerabilities" shape (fallback when advisories is absent/empty)
-  if (newAdvisories.length === 0 && data.vulnerabilities && typeof data.vulnerabilities === 'object') {
-    const seenGhsas = new Set();
-    for (const [pkgName, vuln] of Object.entries(data.vulnerabilities)) {
-      if (!vuln || typeof vuln !== 'object') continue;
-      const severity = String(vuln.severity || '').toLowerCase();
-      if (!BLOCKED_SEVERITIES.has(severity)) continue;
-      const viaEntries = Array.isArray(vuln.via) ? vuln.via : [];
-      const ghsas = viaEntries.map(v => v && v.url && v.url.match(/GHSA-[a-z0-9-]+/)?.[0]).filter(Boolean);
-      for (const ghsa of ghsas) {
-        if (!allowlist.has(ghsa) && !seenGhsas.has(ghsa)) {
-          seenGhsas.add(ghsa);
-          newAdvisories.push({ ghsa, severity, pkg: pkgName });
-        }
-      }
-    }
+  if (newAdvisories === null) {
+    console.error('Unrecognized audit report shape -- refusing to pass the gate.');
+    console.error('Expected either "advisories" or "vulnerabilities" key in the JSON report.');
+    process.exit(1);
   }
 
   if (newAdvisories.length > 0) {
@@ -88,7 +115,9 @@ async function main() {
   console.log(`Audit gate passed. All high/critical advisories are in the allowlist (${allowlist.size} accepted, 0 new).`);
 }
 
-main().catch(err => {
-  console.error('Unexpected error in audit-gate:', err);
-  process.exit(1);
-});
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch(err => {
+    console.error('Unexpected error in audit-gate:', err);
+    process.exit(1);
+  });
+}

@@ -32,24 +32,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v5
-
-      - name: Cache pnpm dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.pnpm-store
-            node_modules
-            */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
+          cache: pnpm
+          cache-dependency-path: '**/pnpm-lock.yaml'
 
       - name: Install root dependencies
         run: pnpm install --frozen-lockfile
@@ -65,3 +58,6 @@ jobs:
         env:
           PACKAGES_JSON_REPORT_PATH: ${{ github.workspace }}/audit-report.json
         run: node scripts/audit-gate.mjs
+
+      - name: Run audit gate tests
+        run: pnpm exec vitest run --dir scripts/__tests__ --reporter=verbose audit-gate
