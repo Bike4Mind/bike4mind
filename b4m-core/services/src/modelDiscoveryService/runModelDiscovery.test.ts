@@ -213,9 +213,10 @@ describe('runModelDiscovery', () => {
       { name: 'openai', reason: 'egress-disabled' },
       { name: 'models.dev', reason: 'egress-disabled' },
     ]);
-    // Nothing failed, so nothing degrades the status; the empty source list and
-    // the named skips in the summary are what say no data was refreshed.
-    expect(result.outcome).toBe('ok');
+    // Nothing failed, so the run is not 'failed'; but nothing was refreshed
+    // either, so it may not report the success that advances lastSuccessfulRun.
+    expect(result.outcome).toBe('partial');
+    expect(walled.runs.docs[0].status).toBe('partial');
     expect(result.sources).toEqual([]);
     expect(walled.infos.some(message => message.includes('skipped=2(egress-disabled:openai+models.dev)'))).toBe(true);
     // The run document is what the admin surfaces read, and an all-skipped run is
@@ -226,6 +227,61 @@ describe('runModelDiscovery', () => {
       { name: 'models.dev', reason: 'egress-disabled' },
     ]);
     expect(walled.catalog.rows).toEqual([]);
+  });
+
+  it('withholds the success a deployment with nothing configured has not earned', async () => {
+    const bare = harness([
+      stubSource({ name: 'openai', configured: false }),
+      stubSource({ name: 'xai', configured: false }),
+    ]);
+
+    const result = await runModelDiscovery(bare.adapters, bare.options);
+
+    // lastSuccessfulRun is findOne({status:'ok'}), so 'partial' is what stops a
+    // deployment that fetches nothing from advancing it run after run.
+    expect(result.outcome).toBe('partial');
+    expect(bare.runs.docs[0].status).toBe('partial');
+    // 'failed' would page the consecutive-failure alarm, whose RunFailures
+    // counter has to keep meaning the sources themselves are broken.
+    expect(result.outcome).not.toBe('failed');
+    // Degrading the status may not cost the skips their visibility.
+    expect(result.skippedSources).toEqual([
+      { name: 'openai', reason: 'not-configured' },
+      { name: 'xai', reason: 'not-configured' },
+    ]);
+    expect(bare.runs.docs[0].skippedSources).toEqual(result.skippedSources);
+    expect(bare.infos.some(message => message.includes('skipped=2(not-configured:openai+xai)'))).toBe(true);
+  });
+
+  it('still reports ok when one source was attempted and succeeded beside the skips', async () => {
+    // The boundary the degrade must not cross: a self-host install that skips
+    // bedrock forever still needs a lastSuccessfulRun, or the startup staleness
+    // gate re-runs a full fan-out on every container boot.
+    const mostlySkipped = harness([
+      openaiSource(),
+      stubSource({ name: 'xai', configured: false }),
+      stubSource({ name: 'bedrock', configured: false }),
+    ]);
+
+    const result = await runModelDiscovery(mostlySkipped.adapters, mostlySkipped.options);
+
+    expect(result.sources.map(report => report.name)).toEqual(['openai']);
+    expect(result.outcome).toBe('ok');
+    expect(mostlySkipped.runs.docs[0].status).toBe('ok');
+  });
+
+  it('keeps a zero-attempt run ok when one of its skips was the freshness guard', async () => {
+    // Mixed on purpose: ONE source skipped as fresh is a refresh that happened,
+    // so the unconfigurable sources beside it cannot pull the run down.
+    const fresh = harness([openaiSource(), stubSource({ name: 'xai', configured: false })]);
+    await runModelDiscovery(fresh.adapters, fresh.options);
+    fresh.advance(60_000);
+
+    const result = await runModelDiscovery(fresh.adapters, { ...fresh.options, minSourceIntervalMs: 30 * 60_000 });
+
+    expect(result.sources).toEqual([]);
+    expect([...result.skippedSources].map(skip => skip.reason).sort()).toEqual(['not-configured', 'recently-fetched']);
+    expect(result.outcome).toBe('ok');
   });
 
   it('caps the named skips in the summary line so a wide registry cannot blow it up', async () => {

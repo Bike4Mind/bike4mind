@@ -424,7 +424,7 @@ async function executeRun(
         `${merged.pricesAppended}/${merged.plannedPriceRows} price rows landed`
     );
   }
-  const status = runStatus(attempts.length, succeededCount, deadlineHit || writesLost);
+  const status = runStatus(attempts.length, succeededCount, deadlineHit || writesLost, skippedSources);
   const summary = summarizeDiff(merged.diff);
   const added = [...new Set(summary.added)];
   const promoted = [...new Set(summary.promoted)];
@@ -1288,16 +1288,37 @@ async function recentRunHistory(adapters: ModelDiscoveryAdapters, startedAt: Dat
  * 'ok' when nothing FAILED: every source attempted came back and the run was not
  * cut short. A skip is not a failure - a self-host install skips bedrock on
  * every run for want of an IAM role, and a source skipped as recently-fetched is
- * fresh data by definition - so skips may not degrade the run. They used to, and
- * the cost was structural: lastSuccessfulRun is findOne({status:'ok'}), so a
- * deployment that always skips something never had one, the startup staleness
- * gate never tripped, and every container boot re-ran a full fan-out. A run with
- * nothing but skips is 'ok' too, with an empty `sources` list and the named
- * skips in the summary line to tell it apart from a full one.
+ * fresh data by definition - so a skip beside a successful attempt may not
+ * degrade the run. Skips used to degrade it unconditionally, and the cost was
+ * structural: lastSuccessfulRun is findOne({status:'ok'}), so a deployment that
+ * always skips something never had one, the startup staleness gate never
+ * tripped, and every container boot re-ran a full fan-out.
+ *
+ * Attempting nothing is the exception. Nothing failed, but nothing was
+ * refreshed either, so the run may not claim the success that advances
+ * lastSuccessfulRun - a deployment with no source configured would otherwise
+ * report an unbroken string of successes while the catalog never moved. The
+ * exception's own exception is 'recently-fetched', which is derived from a
+ * successful fetch inside the interval: that data IS fresh, and degrading the
+ * run that stood aside for it would degrade every stage sharing a cadence.
+ *
+ * It reports 'partial' and not a fourth status because 'partial' already
+ * carries exactly this contract - commits what it verified, does not advance
+ * lastSuccessfulRun - and every reader already handles it. Not 'failed',
+ * because RunFailures has to keep meaning "the sources are broken" for the
+ * consecutive-failure alarm; RunPartial is the counter that moves. The startup
+ * leg then re-runs on every boot for a deployment configured with nothing,
+ * which costs nothing: it has no source to fetch.
  */
-function runStatus(attempted: number, succeeded: number, deadlineHit: boolean): 'ok' | 'partial' | 'failed' {
+function runStatus(
+  attempted: number,
+  succeeded: number,
+  deadlineHit: boolean,
+  skipped: ReadonlyArray<{ reason: SourceSkipReason }>
+): 'ok' | 'partial' | 'failed' {
   if (attempted > 0 && succeeded === 0) return 'failed';
-  if (succeeded < attempted || deadlineHit) return 'partial';
+  const refreshedNothing = attempted === 0 && !skipped.some(skip => skip.reason === 'recently-fetched');
+  if (refreshedNothing || succeeded < attempted || deadlineHit) return 'partial';
   return 'ok';
 }
 

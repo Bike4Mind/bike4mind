@@ -164,7 +164,9 @@ describe('DiscoveryStatusCard', () => {
     mockGet.mockResolvedValue({
       data: statusWith(
         runLike({
-          status: 'ok',
+          // A zero-attempt run is 'partial': it refreshed nothing, so it does
+          // not advance lastSuccessfulRun (runStatus in runModelDiscovery).
+          status: 'partial',
           sources: [],
           skippedSources: [
             { name: 'openai', reason: 'egress-disabled' },
@@ -225,7 +227,7 @@ describe('DiscoveryStatusCard', () => {
   });
 
   it('says nothing was attempted when a run had no source to attempt or to skip', async () => {
-    mockGet.mockResolvedValue({ data: statusWith(runLike({ status: 'ok', sources: [], skippedSources: [] })) });
+    mockGet.mockResolvedValue({ data: statusWith(runLike({ status: 'partial', sources: [], skippedSources: [] })) });
     renderCard();
 
     expect(await screen.findByTestId('discovery-status-sources')).toHaveTextContent('no sources attempted');

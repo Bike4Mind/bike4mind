@@ -335,7 +335,7 @@ describe('/api/admin/model-discovery', () => {
 
   it('carries the skipped sources on the status payload, not just the one-run report', async () => {
     recentRuns.mockResolvedValue([
-      { ...RUN, sources: [], skippedSources: [{ name: 'openai', reason: 'egress-disabled' }] },
+      { ...RUN, status: 'partial', sources: [], skippedSources: [{ name: 'openai', reason: 'egress-disabled' }] },
     ]);
 
     const { run, res } = call({ method: 'GET' });
