@@ -324,8 +324,8 @@ describe('/api/admin/model-discovery', () => {
     await skipped.run();
     expect(skipped.res._getJSONData().run.skippedSources).toEqual([{ name: 'xai', reason: 'not-configured' }]);
 
-    // The client renders this array without guarding, so an older run document
-    // has to arrive as [] rather than undefined.
+    // fullRun defaults every array so the client never has to reason about a
+    // missing one; a run written before this field is no exception.
     runById.mockResolvedValue(DETAILED_RUN);
     const older = call({ method: 'GET', query: { runId: 'run-1' } });
     await older.run();

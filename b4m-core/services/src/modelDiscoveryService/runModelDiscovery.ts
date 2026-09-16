@@ -441,8 +441,9 @@ async function executeRun(
     status,
     finishedAt,
     sources: sourceReports,
-    // Uncapped like `sources` it sits beside: one entry per configured source,
-    // partitioned disjointly from the attempts, so it is bounded by construction.
+    // Uncapped like `sources` it sits beside: at most one entry per configured
+    // source, partitioned disjointly from the attempts, so it is bounded by
+    // construction.
     skippedSources,
     joinCoverage: merged.joinCoverage,
     unmatchedIds: merged.unmatchedIds,
@@ -465,9 +466,9 @@ async function executeRun(
     },
     passes: passes.length,
     droppedRecords: merged.droppedRecords.slice(0, MAX_PERSISTED_DROPPED_RECORDS),
-    // The detail behind the counts above, every array in this cluster capped at
-    // MAX_PERSISTED_RUN_DETAIL. Without it the
-    // admin reads a flag count with no way to learn which models or why.
+    // The detail behind the counts above, each array below capped at
+    // MAX_PERSISTED_RUN_DETAIL. Without it the admin reads a flag count with no
+    // way to learn which models or why.
     priceFlags: merged.priceFlags.slice(0, MAX_PERSISTED_RUN_DETAIL),
     priceRows: plannedPrices.slice(0, MAX_PERSISTED_RUN_DETAIL),
     priceOverrides: merged.priceOverrides.slice(0, MAX_PERSISTED_RUN_DETAIL),

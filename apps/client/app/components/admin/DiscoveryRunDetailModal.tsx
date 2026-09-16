@@ -120,7 +120,10 @@ interface RunDetail {
   mode?: 'report' | 'write';
   passes: number;
   sources: RunSource[];
-  /** Configured sources the run never attempted; absent on older run documents. */
+  /**
+   * Configured sources the run never attempted. The route always sends an array,
+   * so an absent one only reaches here from a payload cached before the field.
+   */
   skippedSources?: Array<{ name: string; reason: string }>;
   joinCoverage: Array<{ aggregator: string; matched: number; total: number }>;
   changes: {

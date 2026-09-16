@@ -214,7 +214,17 @@ describe('DiscoveryRunDetailModal', () => {
     expect(screen.getByTestId('discovery-run-skipped-row-models.dev')).toBeInTheDocument();
   });
 
-  it('renders a run document written before skipped sources were recorded', async () => {
+  it('renders a run that skipped nothing, sent as [] or missing altogether', async () => {
+    mockGet.mockResolvedValue({ data: { run: runWith({ skippedSources: [] }) } });
+    const { unmount } = renderModal();
+
+    expect(await screen.findByTestId('discovery-run-sources-table')).toBeInTheDocument();
+    expect(screen.queryByTestId('discovery-run-skipped-row-xai')).not.toBeInTheDocument();
+    unmount();
+
+    // [] is what the route sends; a missing array only reaches the component from
+    // a payload cached before the field existed.
+    mockGet.mockResolvedValue({ data: { run: RUN } });
     renderModal();
 
     expect(await screen.findByTestId('discovery-run-sources-table')).toBeInTheDocument();
