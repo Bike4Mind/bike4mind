@@ -492,6 +492,24 @@ describe('notebook import: knowledge file admission', () => {
     expect(adapters.knowledgeRepository.create).toHaveBeenCalledWith(expect.objectContaining({ fileName: 'real.pdf' }));
   });
 
+  it('refuses a URL reference as unimplemented even when its declared size is over the limit', async () => {
+    const { adapters, result } = await importKnowledge([
+      {
+        id: 'exported-huge-ref',
+        name: 'huge-ref.pdf',
+        mimeType: 'application/pdf',
+        size: MAX_FILE_SIZE_MB * 1024 * 1024 * 10,
+        contentUrl: 'https://x/y',
+      },
+    ]);
+
+    // The declared size is the only one this branch has, and it is unvalidated JSON, so neither
+    // gate may judge it. Blaming the file-size limit would tell the user to shrink a file that
+    // would be refused at any size.
+    expect(result.warnings).toEqual([expect.stringMatching(/huge-ref\.pdf.*not implemented/)]);
+    expect(adapters.fileStorageService.uploadFile).not.toHaveBeenCalled();
+  });
+
   it('gates on server-measured bytes rather than the declared size', async () => {
     const { adapters, result } = await importKnowledge([
       { ...embedded('liar.pdf', MAX_FILE_SIZE_MB * 1024 * 1024), size: 1 },

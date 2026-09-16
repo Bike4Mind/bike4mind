@@ -163,6 +163,12 @@ export type NotebookImportAdaptersStayNarrowed = Expect<
   0 extends 1 & NotebookImportAdapters[keyof NotebookImportAdapters] ? false : true
 >;
 
+/**
+ * One instance per import. The admission state below is per-import instance state, and
+ * `importNotebooks` resets it on entry, so sharing one instance across concurrent imports would let
+ * one run zero another run's accumulator. The live caller builds a fresh service per S3 event
+ * (apps/client/server/s3/notebookImportComplete.ts).
+ */
 export class NotebookImportService {
   constructor(private adapters: NotebookImportAdapters) {}
 
@@ -508,20 +514,20 @@ export class NotebookImportService {
         // URL) for a held or blocked image, and "neither" must be refused as that, not as oversized.
         // Annotated, not inferred: without it the ternary widens to one object with both keys
         // optional, and the `'base64' in source` narrowing below stops working.
-        const source: { base64: string } | { url: string } | undefined = file.content
-          ? { base64: file.content }
-          : file.contentUrl
-            ? { url: file.contentUrl }
-            : undefined;
-        if (!source) {
+        // A URL reference is refused for what it is, above both gates. Nothing is stored on this
+        // path, and the only size available for it is the client-declared `file.size`, so gating on
+        // it would blame the size or quota limit for what is really an unimplemented import.
+        if (!file.content && file.contentUrl) {
+          await this.copyFileFromUrl(file.contentUrl, targetUserId, storageKeySuffix);
+        }
+        if (!file.content) {
           throw new Error('No content or URL provided for file');
         }
 
         // Exact decoded length without allocating the buffer, so a file the gates refuse is never
         // decoded. Over-counts only on malformed base64, where Buffer.from drops characters that
-        // byteLength counts - fail-closed. Falls back to the client-declared value on the url path,
-        // where we hold no bytes to measure.
-        const measuredSize = 'base64' in source ? Buffer.byteLength(source.base64, 'base64') : file.size;
+        // byteLength counts - fail-closed.
+        const measuredSize = Buffer.byteLength(file.content, 'base64');
 
         // `>=` and server-measured bytes, matching fabFileService/create.ts exactly.
         if (measuredSize >= this.maxFileSize) {
@@ -540,17 +546,11 @@ export class NotebookImportService {
         // written for a file that is then refused would sit at knowledge/<userId>/<uuid> forever -
         // no FabFile row points at it, so nothing counts it against the quota, nothing moderates
         // it, and the bucket lifecycle rules (infra/buckets.ts) do not cover this prefix.
-        let filePath: string;
-        if ('base64' in source) {
-          filePath = `knowledge/${targetUserId}/${storageKeySuffix}`;
-          await this.adapters.fileStorageService.uploadFile(filePath, Buffer.from(source.base64, 'base64'));
-        } else {
-          filePath = await this.copyFileFromUrl(source.url, targetUserId, storageKeySuffix);
-        }
+        const filePath = `knowledge/${targetUserId}/${storageKeySuffix}`;
+        await this.adapters.fileStorageService.uploadFile(filePath, Buffer.from(file.content, 'base64'));
 
-        // Charged only once the bytes are in storage. Above the write it would also charge the URL
-        // branch, which stores nothing and always throws, letting a client-declared `file.size`
-        // burn the budget - or poison it outright, since that size is unvalidated JSON.
+        // Charged only once the bytes are in storage, so a file that fails to store cannot spend
+        // another file's headroom.
         this.admittedBytes += measuredSize;
 
         // No `id`: FabFile has no such path, so the store assigns one.
@@ -558,8 +558,7 @@ export class NotebookImportService {
           userId: targetUserId,
           fileName: file.name,
           mimeType: file.mimeType,
-          // Server-measured bytes for embedded content, not the client-declared file.size, so a
-          // caller cannot understate size (measuredSize falls back to file.size only on contentUrl).
+          // Server-measured bytes, not the client-declared file.size, so a caller cannot understate.
           fileSize: measuredSize,
           filePath,
           type: toKnowledgeType(file.type),
@@ -760,12 +759,13 @@ export class NotebookImportService {
     }
   }
 
-  private async copyFileFromUrl(_sourceUrl: string, _targetUserId: string, _newFileId: string): Promise<string> {
+  private async copyFileFromUrl(_sourceUrl: string, _targetUserId: string, _newFileId: string): Promise<never> {
     // Throws rather than returning the source URL: handing back the exporter's own storage key
     // records a file the importing user has no copy of, and counts it as imported. The caller
     // turns this into a per-file warning, so the notebook still imports.
-    // Whoever implements this: the caller's `measuredSize` for this branch is the client-declared
-    // `file.size`, so re-measure after the copy and re-run both admission gates on the real bytes.
+    // Whoever implements this: measure the fetched bytes and run both admission gates on them here,
+    // before storing anything. The caller refuses this branch before its own gates precisely because
+    // the only size it has is the client-declared one.
     throw new Error('importing a knowledge file by URL reference is not implemented');
   }
 }
