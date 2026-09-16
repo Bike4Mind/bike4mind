@@ -26,9 +26,12 @@ const OPENAI_IMAGE_CLIENT_OPTS = { timeout: 8 * 60 * 1000, maxRetries: 0 } as co
 // particular handles a broader range of prompts than gpt-image-*.
 const ALTERNATIVE_IMAGE_MODELS = 'Flux Pro, Flux Dev, or Grok';
 
-// GPT-Image models accept these quality values on both the generate and edit endpoints
-// (per the OpenAI SDK's ImageGenerateParams/ImageEditParams types) - unlike DALL-E's
-// legacy 'standard'/'hd' pair, which mapQualityForModel upstream already normalizes away.
+// GPT-Image models accept these quality values on both the generate and edit endpoints -
+// not the raw ImageGenerateParams/ImageEditParams `quality` union, which spans every model
+// (dall-e-2/3's 'standard'/'hd' included), but the SDK's own per-model prose on that field
+// ("high, medium and low are supported for the GPT image models") plus the live
+// /images/edits behavior. DALL-E's legacy 'standard'/'hd' pair is mapped away by
+// mapQualityForModel upstream before it reaches here.
 const GPT_IMAGE_QUALITY_VALUES = ['low', 'medium', 'high', 'auto'] as const;
 type GptImageQuality = (typeof GPT_IMAGE_QUALITY_VALUES)[number];
 
@@ -296,11 +299,12 @@ export class OpenAIImageService extends AIImageService {
           const editModel = options.model || ImageModels.GPT_IMAGE_2;
 
           // quality/size are already validated for this model above (same block that
-          // handles the text-to-image branch); forward them, plus n, because credits are
-          // reserved per requested image at the requested tier (validateUserCredits
+          // handles the text-to-image branch); forward them, plus n, because generate()'s
+          // credit reservation is per requested image at the requested tier (validateUserCredits
           // charges usdCost * n) - dropping any of the three bills for output OpenAI is
-          // never asked to produce.
-          const editQuality = isGptImageQuality(openaiOptions.quality) ? openaiOptions.quality : undefined;
+          // never asked to produce. (edit() below has its own, narrower n handling - see its
+          // own comment - this invariant does not extend to that method.)
+          const editQuality = toGptImageQuality(openaiOptions.quality);
           const editSize = isSupportedEditSize(editModel, openaiOptions.size) ? openaiOptions.size : undefined;
 
           this.logger.log('OpenAI image generation request (edit endpoint, image-to-image):', {
