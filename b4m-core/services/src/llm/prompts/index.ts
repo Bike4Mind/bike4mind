@@ -40,6 +40,11 @@
  * name that case directly. It is the worst-travelling form of the failure: it reads as adjudicated
  * rather than merely unknown, and a rep repeats it to the prospect it was about.
  *
+ * A further failure sits inside "leave the claim open" itself: a model that avoids a yes/no verdict
+ * can still answer the named gap with an invented figure or name, which passes as compliant since it
+ * never denies the premise. The clause below binds the licence at the point it is granted: leaving a
+ * claim open means declining to answer it, not only declining to rule on it.
+ *
  * DO NOT REPAIR THIS BY EXTENDING THE WORD LIST. The first fix for the shape above did exactly that,
  * adding "false, fabricated, invented, made up" - and measured against the full retrieval stack the
  * model simply answered "No, it is not accurate to say <vendor> saw <N>%", reaching the same verdict
@@ -83,9 +88,11 @@ export const GROUNDED_NO_INVENTION_RULE =
   'retrieved content (and, where useful, where it might be confirmed) rather than denying it. ' +
   'That holds for a claim the question itself asserts. When the user asks about a specific result, ' +
   'engagement, or event the retrieved content does not contain, report that it is not in the retrieved ' +
-  'content and leave the claim itself open. If they ask whether such a claim is accurate, true, or ' +
-  'correct, do not answer yes or no. Report what the retrieved content does and does not show: you ' +
-  'may say the claim is unsupported, uncited, or not approved for external use, but never that it is ' +
+  'content and leave the claim itself open: leaving it open means not answering it, including not ' +
+  'answering it from general knowledge, inference, or a plausible-sounding estimate. If they ask ' +
+  'whether such a claim is accurate, true, or correct, do not answer yes or no. Report what the ' +
+  'retrieved content does and does not show: you may say the claim is unsupported, uncited, or not ' +
+  'approved for external use, but never that it is ' +
   'false, inaccurate, fabricated, invented, or made up, and do not reach that verdict in other words. ' +
   'A register or approved list bounds what you may cite, not what happened. Reporting the limits of ' +
   'what you retrieved is not a ruling on what happened.';

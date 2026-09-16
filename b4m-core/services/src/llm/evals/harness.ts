@@ -15,6 +15,7 @@
  * Not run in CI - these need a live endpoint and prompt behaviour is not a green/red gate. See each
  * eval's README.
  */
+import { appendFileSync } from 'node:fs';
 
 /**
  * Splits a reply for per-sentence grading. Every grader here is lexical, and a phrase is scoped by
@@ -159,6 +160,22 @@ export const MIN_PASS_RATE = 2 / 3;
 function verdict(passRate: number): 'PASS' | 'WARN' | 'FAIL' {
   if (passRate === 1) return 'PASS';
   return passRate >= MIN_PASS_RATE ? 'WARN' : 'FAIL';
+}
+
+/**
+ * Emit a finished report so that it survives the run.
+ *
+ * `console.log` does not. vitest intercepts console output, and under this repo's config it is
+ * dropped outright - a live eval printing its report that way exits 0 having produced nothing, which
+ * on a sweep of several hundred sequential completions means paying for a measurement and keeping no
+ * part of it. `process.stdout.write` is not intercepted. `PROMPT_EVAL_REPORT_PATH` appends a copy
+ * that outlives the terminal buffer, which a long run wants regardless.
+ */
+export function emitEvalReport(report: string): void {
+  const block = `\n${report}\n`;
+  process.stdout.write(block);
+  const path = process.env.PROMPT_EVAL_REPORT_PATH;
+  if (path) appendFileSync(path, block);
 }
 
 export function formatEvalReport<TCase extends PromptEvalCase, TGrade extends EvalGrade = EvalGrade>(

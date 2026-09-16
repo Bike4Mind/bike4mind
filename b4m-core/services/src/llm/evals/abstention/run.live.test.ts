@@ -4,7 +4,7 @@
  * measurement, not a merge gate. See README.md in this directory for how to run it.
  */
 import { describe, expect, it } from 'vitest';
-import { MIN_PASS_RATE, formatEvalReport } from '../harness';
+import { MIN_PASS_RATE, emitEvalReport, formatEvalReport } from '../harness';
 import { ABSTENTION_CASES } from './cases';
 import { runAbstentionEval } from './run';
 
@@ -25,7 +25,7 @@ describe.skipIf(!baseUrl || !model)('forced-retrieval abstention (live model)', 
     async () => {
       const results = await runAbstentionEval({ baseUrl: baseUrl!, model: model!, samples }, ABSTENTION_CASES);
       // The report is the deliverable - a bare pass/fail on a stochastic suite is not actionable.
-      console.log(`\n${model} @ ${samples} samples/case\n${formatEvalReport(results)}\n`);
+      emitEvalReport(`${model} @ ${samples} samples/case\n${formatEvalReport(results)}`);
 
       const regressed = results.filter(r => r.passRate < MIN_PASS_RATE);
       expect(regressed.map(r => `${r.evalCase.id}: ${r.samples.find(s => !s.passed)?.reason}`)).toEqual([]);
