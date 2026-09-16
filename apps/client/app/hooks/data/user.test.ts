@@ -7,10 +7,21 @@ import {
   ADMIN_SESSION_EXPIRED,
   ADMIN_SESSION_VALIDATION_FAILED,
   useGetIdentify,
+  useUpdateUser,
 } from './user';
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: vi.fn() },
+}));
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
+}));
+
+vi.mock('@client/app/utils/userAPICalls', () => ({
+  updateUserToServer: vi.fn(),
+  fetchUsers: vi.fn(),
+  fetchUserTags: vi.fn(),
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({
@@ -23,6 +34,8 @@ vi.mock('../useAccessToken', () => ({
 
 const { useUser } = await import('@client/app/contexts/UserContext');
 const { useAccessToken } = await import('../useAccessToken');
+const { toast } = await import('sonner');
+const { updateUserToServer } = await import('@client/app/utils/userAPICalls');
 
 describe('useGetIdentify', () => {
   beforeEach(() => {
@@ -87,5 +100,63 @@ describe('adminReturnValidationError', () => {
 
   it('returns null for an OK response', () => {
     expect(adminReturnValidationError(200, true)).toBeNull();
+  });
+});
+
+describe('useUpdateUser', () => {
+  const createWrapper = () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const Wrapper = ({ children }: { children: React.ReactNode }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return { Wrapper, queryClient };
+  };
+
+  /** Runs one save against a fresh QueryClient and resolves once the mutation has settled. */
+  const save = async (response: unknown) => {
+    vi.mocked(updateUserToServer).mockResolvedValue(response);
+    const { Wrapper, queryClient } = createWrapper();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const { result } = renderHook(() => useUpdateUser(), { wrapper: Wrapper });
+    result.current.mutate({ id: 'u1', data: { name: 'New Name' } });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    return { queryClient, invalidateSpy };
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('warns instead of claiming success when the route reports ignored fields', async () => {
+    await save({ id: 'u1', name: 'New Name', ignoredFields: ['adminNote', 'nickname'] });
+
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('adminNote, nickname'));
+  });
+
+  it('keeps ignoredFields out of the cached user document', async () => {
+    const { queryClient } = await save({ id: 'u1', name: 'New Name', ignoredFields: ['adminNote'] });
+
+    expect(queryClient.getQueryData(['users', 'u1'])).toEqual({ id: 'u1', name: 'New Name' });
+  });
+
+  it('reports a plain success when nothing was ignored', async () => {
+    const { queryClient } = await save({ id: 'u1', name: 'New Name' });
+
+    expect(toast.warning).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith('Profile updated successfully');
+    expect(queryClient.getQueryData(['users', 'u1'])).toEqual({ id: 'u1', name: 'New Name' });
+  });
+
+  it('invalidates the identify query on success so the sidebar switcher refreshes', async () => {
+    const { invalidateSpy } = await save({ id: 'u1', name: 'New Name' });
+
+    const invalidatedKeys = invalidateSpy.mock.calls.map(call => call[0]?.queryKey);
+    expect(invalidatedKeys).toContainEqual(['identify']);
+    // Existing invalidations must remain intact.
+    expect(invalidatedKeys).toContainEqual(['users']);
+    expect(invalidatedKeys).toContainEqual(['sessions']);
+    expect(invalidatedKeys).toContainEqual(['organizations']);
   });
 });

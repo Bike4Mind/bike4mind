@@ -40,9 +40,16 @@ vi.mock('@bike4mind/services', () => ({
   userService: {
     adminUpdateUser: (...a: unknown[]) => mockAdminUpdateUser(...a),
     updateUser: (...a: unknown[]) => mockUpdateUser(...a),
-    adminUpdateUserSchema: z.object({}).passthrough(),
-    // A real allowlist (not passthrough) so the discarded-field detection under
-    // test actually exercises Zod's strip-unknown-keys behavior.
+    // Both stand-ins are real allowlists (not passthrough) so the discarded-field
+    // detection under test actually exercises Zod's strip-unknown-keys behavior.
+    adminUpdateUserSchema: z.object({
+      id: z.string(),
+      name: z.string().optional(),
+      isAdmin: z.boolean().optional(),
+      tags: z.array(z.string()).nullable().optional(),
+      currentCredits: z.number().optional(),
+      creditReason: z.string().optional(),
+    }),
     updateUserSchema: z.object({ name: z.string().optional(), role: z.string().optional() }),
   },
 }));
@@ -157,6 +164,59 @@ describe('PUT /api/users/:id/update - lockout guard', () => {
   });
 });
 
+describe('PUT /api/users/:id/update - admin unknown-field discard', () => {
+  it('reports unknown fields instead of silently dropping them', async () => {
+    const { res, promise } = run({
+      user: ADMIN,
+      userId: 'other-user',
+      // `adminNote` is the real misnaming that shipped once (see useUpdateUserCredits):
+      // the intended field is `creditReason`, so the admin's reason went nowhere.
+      body: { currentCredits: 500, adminNote: 'comped', nickname: 'Bob' },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const json = res._getJSONData();
+    expect(json.ignoredFields).toEqual(expect.arrayContaining(['adminNote', 'nickname']));
+    expect(json.ignoredFields).toHaveLength(2);
+
+    const [, calledBody] = mockAdminUpdateUser.mock.calls[0];
+    expect(calledBody).toEqual({ id: 'other-user', currentCredits: 500 });
+  });
+
+  it('omits ignoredFields entirely when every submitted key is allowed', async () => {
+    const { res, promise } = run({
+      user: ADMIN,
+      userId: 'other-user',
+      body: { currentCredits: 500, creditReason: 'comped' },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().ignoredFields).toBeUndefined();
+  });
+
+  it('does not count the route-param id as an ignored field when the body also carries one', async () => {
+    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { id: 'spoofed', name: 'New Name' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().ignoredFields).toBeUndefined();
+    // The route param still wins over the body's id.
+    const [, calledBody] = mockAdminUpdateUser.mock.calls[0];
+    expect(calledBody).toEqual({ id: 'other-user', name: 'New Name' });
+  });
+
+  it('returns a null body, not a bare { ignoredFields } object, when the user row is gone by the refetch', async () => {
+    mockUserFindById.mockReturnValue(null);
+    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { name: 'New Name', adminNote: 'x' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toBeNull();
+  });
+});
+
 describe('PUT /api/users/:id/update - self-service admin-only field discard', () => {
   const SELF = { id: 'u1', isAdmin: false };
 
@@ -236,5 +296,19 @@ describe('PUT /api/users/:id/update - real allowlist binds the ignoredFields gua
     const ignoredFields = Object.keys(submitted).filter(key => !allowedKeys.has(key));
     expect(ignoredFields).toEqual(expect.arrayContaining(['creditDelta', 'tags', 'isAdmin']));
     expect(ignoredFields).toHaveLength(3);
+  });
+
+  it('strips unknown keys from the real admin allowlist, so the handler has something to report', async () => {
+    const { userService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+    const allowedKeys = new Set(Object.keys(userService.adminUpdateUserSchema.shape));
+
+    // The credit-adjustment reason is `creditReason`; `adminNote` is the name that
+    // was mistakenly sent once and dropped. If the schema ever gained a passthrough
+    // or a catch-all, this would stop holding and the handler would report nothing.
+    expect(allowedKeys.has('creditReason')).toBe(true);
+    expect(allowedKeys.has('adminNote')).toBe(false);
+
+    const parsed = userService.adminUpdateUserSchema.parse({ id: 'u1', currentCredits: 500, adminNote: 'comped' });
+    expect(parsed).not.toHaveProperty('adminNote');
   });
 });
