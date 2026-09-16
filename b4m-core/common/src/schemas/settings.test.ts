@@ -1101,6 +1101,10 @@ describe('makeNumberSetting treats a cleared field as unset, not 0 (#2636)', () 
   it('still coerces a genuinely configured numeric string', () => {
     expect(settingsMap.MementoMaxTotalChars.schema.parse('12345')).toBe(12345);
   });
+
+  it('prefaults a raw null the same as a cleared string', () => {
+    expect(settingsMap.MementoMaxTotalChars.schema.parse(null)).toBe(32000);
+  });
 });
 
 describe('AbstentionPrompt default carries the anti-invention licence', () => {
