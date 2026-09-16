@@ -29,12 +29,15 @@ const MockInsufficientCreditsError = vi.hoisted(
       }
     }
 );
-vi.mock('@bike4mind/services', async () => {
+vi.mock('@bike4mind/services/cliCompletions', () => ({
+  executeCompletion: mockExecuteCompletion,
+}));
+
+vi.mock('@bike4mind/services/llm', async () => {
   // Mirror the real resolveQuestErrorCode against the stand-in class, delegating
   // tagged 422s to the REAL getQuestErrorCode so classification stays end-to-end.
   const { getQuestErrorCode } = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
   return {
-    executeCompletion: mockExecuteCompletion,
     InsufficientCreditsError: MockInsufficientCreditsError,
     resolveQuestErrorCode: (error: unknown) =>
       error instanceof MockInsufficientCreditsError ? error.code : getQuestErrorCode(error),
