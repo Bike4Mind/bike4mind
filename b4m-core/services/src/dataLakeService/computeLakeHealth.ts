@@ -99,11 +99,17 @@ export interface ComputeLakeHealthAdapters {
  * groups this same member scan by exact fileName; report-only, same as the rest of this module.
  * `groups` and each group's `members` are capped here for payload size (`DUPLICATE_GROUPS_RETURNED`,
  * `DUPLICATE_MEMBERS_PER_GROUP`); the counts stay exact regardless.
+ *
+ * Reports the lake's `serving` lifecycle state alongside all of that: every predicate here grades the
+ * CORPUS, and retrieval is gated on `status === 'active'` in two places the corpus cannot speak for
+ * (`getDynamicDataLakeTags`' pre-filter and the session-binding check), so a fully-indexed draft or
+ * archived lake would otherwise report healthy while serving nothing.
  */
 export async function computeLakeHealth(
   lake: Pick<
     IDataLakeDocument,
     | 'id'
+    | 'status'
     | 'datalakeTag'
     | 'fileTagPrefix'
     | 'createdByUserId'
@@ -115,7 +121,6 @@ export async function computeLakeHealth(
     | 'lakeMemoryExtractionAt'
     | 'lakeMemoryCursor'
     | 'lastSyncAt'
-    | 'status'
   >,
   { db, logger }: ComputeLakeHealthAdapters
 ): Promise<LakeHealthApiResponse> {

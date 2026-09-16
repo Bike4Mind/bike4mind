@@ -25,9 +25,15 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 type OrgRecord = { id: string; name: string; users: unknown[] };
 
+// Real ObjectId hex: the route drops ids that could never address a row, so a placeholder like
+// 'memberOrg' would be filtered before the membership intersection is what's under test.
+const MEMBER_ORG = '507f1f77bcf86cd799439021';
+const FOREIGN_ORG = '507f1f77bcf86cd799439022';
+const MISSING_ORG = '507f1f77bcf86cd799439023';
+
 const orgCatalog: Record<string, OrgRecord> = {
-  memberOrg: { id: 'memberOrg', name: 'Member Org', users: [] },
-  foreignOrg: { id: 'foreignOrg', name: 'Foreign Org', users: [] },
+  [MEMBER_ORG]: { id: MEMBER_ORG, name: 'Member Org', users: [] },
+  [FOREIGN_ORG]: { id: FOREIGN_ORG, name: 'Foreign Org', users: [] },
 };
 
 type ChainableQuery<T> = Promise<T> & {
@@ -47,7 +53,7 @@ const find = vi.hoisted(() =>
     chainable(filter._id.$in.map(id => orgCatalog[id]).filter((org): org is OrgRecord => Boolean(org)))
   )
 );
-const findMembershipOrgIds = vi.hoisted(() => vi.fn(async () => ['memberOrg']));
+const findMembershipOrgIds = vi.hoisted(() => vi.fn(async () => ['507f1f77bcf86cd799439021']));
 
 vi.mock('@bike4mind/database/infra', () => ({
   Organization: { find },
@@ -72,46 +78,56 @@ describe('GET /api/organizations/stats - membership-scoped ids', () => {
   });
 
   it('filters out an org id the non-admin caller is not a member of', async () => {
-    const { req, res } = mocks({ id: 'u1', isAdmin: false }, { organizationIds: ['memberOrg', 'foreignOrg'] });
+    const { req, res } = mocks({ id: 'u1', isAdmin: false }, { organizationIds: [MEMBER_ORG, FOREIGN_ORG] });
     await mockRefs.getHandler!(req, res);
 
     const [filter] = find.mock.calls[0];
-    expect(filter._id.$in).toEqual(['memberOrg']);
+    expect(filter._id.$in).toEqual([MEMBER_ORG]);
 
     const body = res._getJSONData();
-    expect('foreignOrg' in body).toBe(false);
+    expect(FOREIGN_ORG in body).toBe(false);
   });
 
   it('keeps an org id the non-admin caller IS a member of', async () => {
-    const { req, res } = mocks({ id: 'u1', isAdmin: false }, { organizationIds: ['memberOrg'] });
+    const { req, res } = mocks({ id: 'u1', isAdmin: false }, { organizationIds: [MEMBER_ORG] });
     await mockRefs.getHandler!(req, res);
 
     const body = res._getJSONData();
-    expect(body.memberOrg).toBeDefined();
-    expect(body.memberOrg.name).toBe('Member Org');
+    expect(body[MEMBER_ORG]).toBeDefined();
+    expect(body[MEMBER_ORG].name).toBe('Member Org');
   });
 
   it('skips the membership intersection entirely for an admin', async () => {
-    const { req, res } = mocks({ id: 'admin1', isAdmin: true }, { organizationIds: ['memberOrg', 'foreignOrg'] });
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true }, { organizationIds: [MEMBER_ORG, FOREIGN_ORG] });
     await mockRefs.getHandler!(req, res);
 
     expect(findMembershipOrgIds).not.toHaveBeenCalled();
     const [filter] = find.mock.calls[0];
-    expect(filter._id.$in).toEqual(['memberOrg', 'foreignOrg']);
+    expect(filter._id.$in).toEqual([MEMBER_ORG, FOREIGN_ORG]);
   });
 
   it('answers an unauthorized id and a nonexistent id identically (anti-enumeration)', async () => {
     const user = { id: 'u1', isAdmin: false };
 
-    const unauthorized = mocks(user, { organizationIds: ['foreignOrg'] });
+    const unauthorized = mocks(user, { organizationIds: [FOREIGN_ORG] });
     await mockRefs.getHandler!(unauthorized.req, unauthorized.res);
     const bodyForUnauthorized = unauthorized.res._getJSONData();
 
-    const nonexistent = mocks(user, { organizationIds: ['doesNotExistOrg'] });
+    const nonexistent = mocks(user, { organizationIds: [MISSING_ORG] });
     await mockRefs.getHandler!(nonexistent.req, nonexistent.res);
     const bodyForNonexistent = nonexistent.res._getJSONData();
 
     expect(bodyForUnauthorized).toEqual(bodyForNonexistent);
     expect(bodyForUnauthorized).toEqual({});
+  });
+
+  it('drops an uncastable id instead of rejecting the whole $in', async () => {
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true }, { organizationIds: ['not-an-objectid', MEMBER_ORG] });
+    await mockRefs.getHandler!(req, res);
+
+    // One uncastable entry used to reject the entire query, losing the valid rows with it.
+    const [filter] = find.mock.calls[0];
+    expect(filter._id.$in).toEqual([MEMBER_ORG]);
+    expect(res._getJSONData()[MEMBER_ORG]).toBeDefined();
   });
 });

@@ -2,6 +2,7 @@ import { Permission, isImageServeable, FAB_FILE_CONTENT_REWRITE_PATCH } from '@b
 import { FabFile, withTransaction } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { isValidObjectId } from '@server/utils/objectId';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { getFilesStorage } from '@server/utils/storage';
 import { isAiEditableOfficeMime, applyEditedText, appendEditedVersion, MAX_OFFICE_EDIT_BYTES } from '@bike4mind/utils';
@@ -38,7 +39,7 @@ const handler = baseApi()
 
       // Check if user has access to this file
       const file = await withTransaction(async () => {
-        return FabFile.findById(id).where({ userId: user.id });
+        return isValidObjectId(id) ? FabFile.findById(id).where({ userId: user.id }) : null;
       });
 
       if (!file) {

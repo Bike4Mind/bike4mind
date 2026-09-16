@@ -10,6 +10,7 @@ import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/er
 import { generateWebhookSecret } from '@server/integrations/github/webhookUtils';
 import { Logger } from '@bike4mind/observability';
 import { encryptToken } from '@server/security/tokenEncryption';
+import { isValidObjectId } from '@server/utils/objectId';
 
 const logger = new Logger({ metadata: { service: 'github-webhook-config' } });
 
@@ -23,7 +24,7 @@ const handler = baseApi()
   .patch(async (req, res) => {
     const { id } = req.query;
 
-    const server = await McpServer.findById(id);
+    const server = isValidObjectId(id) ? await McpServer.findById(id) : null;
     if (!server) {
       throw new NotFoundError('MCP Server not found');
     }

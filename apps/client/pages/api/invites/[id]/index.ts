@@ -14,6 +14,7 @@ import { getInviteDetails, filterInviteRecipientsToSelf } from '@server/managers
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sharingService } from '@bike4mind/services';
+import { isValidObjectId } from '@server/utils/objectId';
 
 const handler = baseApi()
   /**
@@ -27,7 +28,7 @@ const handler = baseApi()
         return res.status(400).json({ message: 'Invite Share request' });
       }
 
-      const invite = await Invite.findById(id);
+      const invite = isValidObjectId(id) ? await Invite.findById(id) : null;
       if (!invite) {
         return res.status(404).json({ message: 'Invite Not Found' });
       }

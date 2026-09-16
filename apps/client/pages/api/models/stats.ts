@@ -10,6 +10,9 @@ export interface ModelStatsResponse {
   avgResponseTime: Record<string, number>;
 }
 
+// Cached for 12h under a key that carries PAYLOAD_VERSIONS.modelStats
+// (server/utils/cacheKeys.ts). This route exposes no recache param, so bumping
+// that entry is the only way to retire a stale projection before it expires.
 async function fetchModelStats(): Promise<ModelStatsResponse> {
   const results = await Quest.aggregate([
     {

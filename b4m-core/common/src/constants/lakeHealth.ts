@@ -1,6 +1,5 @@
 import type { InconsistencyKind } from './corpusInconsistency';
 import type { WireLakeMembershipReport } from './lakeMembershipHealth';
-import type { DataLakeStatus } from '../types/entities/DataLakeTypes';
 /**
  * Derived data-lake health (#1666): the retrievability contract as four CHECKABLE predicates plus
  * one headline - "what share of the lake's content can actually reach the model". Health is
@@ -19,6 +18,7 @@ import type { DataLakeStatus } from '../types/entities/DataLakeTypes';
  * a substitute: the chars-per-token ratio swings by corpus, so a customer-facing percentage derived
  * from it is systematically wrong per lake - the exact "vibe" these predicates exist to remove.
  */
+import type { DataLakeStatus } from '../types/entities/DataLakeTypes';
 import {
   CHARS_PER_TOKEN_SERVE_BOUND,
   type ChunkStallReason,

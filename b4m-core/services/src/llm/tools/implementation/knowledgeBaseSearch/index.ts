@@ -20,6 +20,7 @@ import type { Logger } from '@bike4mind/observability';
 import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
 import { lakeMembershipsFrom, warnIfManyLakeMemberships } from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
+import { membershipOrgIdsForTurn } from '../../../../dataLakeService/membershipOrgIdsForTurn';
 import {
   defangRetrievedContent,
   documentDateClause,
@@ -909,12 +910,33 @@ const KB_SEARCH_CANDIDATE_FLOOR = 6;
  * `budgetsPromise` cache below) on the CALLER's org/owner scope (#1955 item 4) - a knowledge-base
  * search spans a mixed multi-lake corpus plus the caller's own/shared files, so there is no single
  * lake for a narrower rung to key on (see `scopeForCaller`'s own doc comment).
+ *
+ * `user.organizationId` is a selected-org display pointer, not proof of membership (#1674) - a
+ * stale pointer left over from #2607's still-pending migration must not let a former member read
+ * that org's budget ceiling. Verified via the same per-turn `membershipOrgIdsForTurn` memo the
+ * data-lake resolvers already share, so this costs nothing extra when either has already run this
+ * turn. A pointer that isn't in the caller's membership set falls back to personal scope (#2769).
+ *
+ * The membership read is wrapped, not left to propagate: unlike `scopeForCaller`'s pure predecessor,
+ * this now has an external failure mode, and a transient org-repo outage must not fail the whole
+ * search over a budget ceiling that's tolerable to get wrong (see `scopeForCaller`'s own doc
+ * comment) - it degrades to personal scope instead, same direction as a genuinely stale pointer.
  */
 async function resolveKbBudgets(context: ToolContext): Promise<ResolvedSearchBudgets> {
+  const pointerOrgId = normalizeId(context.user.organizationId);
+  let membershipOrgIds: string[] = [];
+  if (pointerOrgId) {
+    try {
+      membershipOrgIds = await membershipOrgIdsForTurn(context, context.userId, context.db.organizations);
+    } catch (err) {
+      context.logger.warn('[search_knowledge_base] failed to resolve org membership; using personal scope', err);
+    }
+  }
+  const verifiedOrgId = pointerOrgId && membershipOrgIds.includes(pointerOrgId) ? pointerOrgId : undefined;
   return resolveSearchBudgets(
     { adminSettings: context.db.adminSettings, scopedSettings: context.db.scopedSettings },
     context.logger,
-    scopeForCaller({ userId: context.userId, organizationId: context.user.organizationId })
+    scopeForCaller({ userId: context.userId, organizationId: verifiedOrgId })
   );
 }
 

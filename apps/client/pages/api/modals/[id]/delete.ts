@@ -4,6 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { WhatsNewDistributionService } from '@server/services/whatsNewDistribution';
 import { emitModalGenerationMetrics } from '@server/utils/cloudwatch';
+import { isValidObjectId } from '@server/utils/objectId';
 import { Logger } from '@bike4mind/observability';
 
 const logger = new Logger({ metadata: { service: 'modals/delete' } });
@@ -19,7 +20,7 @@ const handler = baseApi().delete(
     if (!req.ability.can('delete', ModalModel)) throw new ForbiddenError('Permission denied');
 
     // Capture metadata before delete for S3 sync
-    const modal = await ModalModel.findById(id);
+    const modal = isValidObjectId(id) ? await ModalModel.findById(id) : null;
     if (!modal) throw new NotFoundError('Modal not found');
 
     const isWhatsNewModal = modal.tags?.includes('whats-new');

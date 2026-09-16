@@ -52,6 +52,8 @@ export type SortField =
 export type SortDirection = 'asc' | 'desc';
 
 export interface ChartData {
+  /** Bucket width the date-keyed series were built at; drives the axis and heading wording. */
+  granularity: 'hourly' | 'daily';
   modelUsageData: Array<{
     id: string;
     label: string;
