@@ -106,9 +106,11 @@ export interface IIngestedEmailDocument extends IIngestedEmail, IMongoDocument {
 
 export interface IIngestedEmailRepository extends IBaseRepository<IIngestedEmailDocument> {
   /**
-   * Find email by RFC 822 Message-ID
+   * Find email by RFC 822 Message-ID, scoped to the owner. Message-ID is
+   * sender-controlled, so idempotency lookups must be per-tenant to avoid a
+   * forged header colliding with another user's email.
    */
-  findByMessageId(messageId: string): Promise<IIngestedEmailDocument | null>;
+  findByMessageId(messageId: string, userId: string): Promise<IIngestedEmailDocument | null>;
 
   /**
    * Find all emails in a conversation thread

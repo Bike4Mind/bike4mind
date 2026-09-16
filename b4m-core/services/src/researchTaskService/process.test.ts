@@ -4,7 +4,7 @@ const { process } = processModule;
 
 import { IResearchTask, ResearchTaskStatus, KnowledgeType, ResearchTaskType } from '@bike4mind/common';
 import { NotFoundError, BadRequestError } from '@bike4mind/utils';
-import { fabFilesService } from '..';
+import * as fabFilesService from '../fabFileService';
 import { mockResearchTask } from '../__tests__/utils/testUtils';
 import { findOrUpdateExistingResearchData, createSendStatusUpdate } from './utils';
 
@@ -17,17 +17,9 @@ vi.mock('../lib/cheerio', () => ({
   getLinksFromHtml: vi.fn().mockReturnValue([]),
 }));
 
-vi.mock('..', () => ({
-  fabFilesService: {
-    createFabFile: vi.fn(),
-  },
-  taskSchedulerService: {
-    create: vi.fn(),
-  },
-  tagService: {
-    createFileTag: vi.fn(),
-  },
-}));
+vi.mock('../fabFileService', () => ({ createFabFile: vi.fn() }));
+vi.mock('../taskSchedulerService', () => ({ create: vi.fn() }));
+vi.mock('../tagService', () => ({ createFileTag: vi.fn() }));
 
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
@@ -112,6 +104,7 @@ describe('researchTaskService - process', () => {
       findByMetadataUrlAndUserId: vi.fn().mockResolvedValue(null),
       findByMetadataUrlAndOrganizationId: vi.fn().mockResolvedValue(null),
       findByUrlAndOrganizationId: vi.fn().mockResolvedValue(null),
+      findByUrlAndUserIdAndOrganizationId: vi.fn().mockResolvedValue(null),
       findByUrlAndUserId: vi.fn().mockResolvedValue(null),
       existsByUrlAndResearchTaskId: vi.fn().mockResolvedValue(false),
     };

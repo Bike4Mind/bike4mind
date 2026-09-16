@@ -5,8 +5,10 @@ import { createMocks } from 'node-mocks-http';
  * PATCH /api/user-api-keys/[id] (embed-key configure, Phase E): the "nothing to
  * update" guard, the host-aware origin screen (validateEmbedKeyOrigins, run for
  * real here), and the analytics `updatedFields` that reflects only the fields
- * actually sent. The service is mocked - these assertions are about what the
- * route screens, forwards, and logs, not the service's own invariants.
+ * actually sent. Plus DELETE on the same route: the id guard, the adapters it
+ * threads, and the DELETED event. The services are mocked - these assertions are
+ * about what the route screens, forwards, and logs, not the services' own
+ * invariants (the revoked-only rule is covered in delete.test.ts).
  */
 
 // PUBLISH_HOST is read from SERVER_DOMAIN at module load, so set it before imports.
@@ -14,7 +16,10 @@ vi.hoisted(() => {
   process.env.SERVER_DOMAIN = 'bike4mind.com';
 });
 
-const mockRefs = vi.hoisted(() => ({ patchHandler: null as null | ((req: any, res: any) => unknown) }));
+const mockRefs = vi.hoisted(() => ({
+  patchHandler: null as null | ((req: any, res: any) => unknown),
+  deleteHandler: null as null | ((req: any, res: any) => unknown),
+}));
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: any = {
@@ -22,6 +27,10 @@ vi.mock('@server/middlewares/baseApi', () => {
     post: () => chain,
     patch: (fn: any) => {
       mockRefs.patchHandler = fn;
+      return chain;
+    },
+    delete: (fn: any) => {
+      mockRefs.deleteHandler = fn;
       return chain;
     },
   };
@@ -41,11 +50,13 @@ const updateEmbedKey = vi.hoisted(() =>
 // forwards), but resolveOwnedApiKey is the REAL one: the branding-owner read is
 // the site that must not drift from the service's resolution, so stubbing it
 // here would make the org-admin assertions below vacuous.
+const deleteUserApiKey = vi.hoisted(() => vi.fn().mockResolvedValue({ name: 'widget' }));
 vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();
   return {
     userApiKeyService: {
       updateEmbedKey,
+      deleteUserApiKey,
       resolveOwnedApiKey: actual.userApiKeyService.resolveOwnedApiKey,
     },
   };
@@ -60,8 +71,8 @@ const userApiKeyRepository = vi.hoisted(() => ({
   findByOrganizationIdsAndId: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository }));
-const logEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent }));
+const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
 
 // The real gateEmbedBrandingWrite AND embedKeyOwnerHasEntitlement run; only the
 // leaf entitlement source (getUserEntitlements) and the owner-doc lookups are
@@ -77,20 +88,75 @@ const organizationRepository = vi.hoisted(() => ({
 }));
 vi.mock('@bike4mind/database', () => ({ organizationRepository, userRepository }));
 
-import { CreditHolderType } from '@bike4mind/common';
+import { ConflictError, CreditHolderType } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import '@pages/api/user-api-keys/[id]/index';
 
 function patch(id: string | undefined, body: unknown) {
   const { req, res } = createMocks({ method: 'PATCH', query: id === undefined ? {} : { id }, body });
   (req as any).user = { id: 'u1', isAdmin: false };
+  (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return { req, res };
 }
+
+function del(id: string | undefined) {
+  const { req, res } = createMocks({ method: 'DELETE', query: id === undefined ? {} : { id } });
+  (req as any).user = { id: 'u1', isAdmin: false };
+  (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  return { req, res };
+}
+
+describe('DELETE /api/user-api-keys/[id] - remove a revoked key', () => {
+  beforeEach(() => {
+    deleteUserApiKey.mockClear();
+    logEventSafe.mockClear();
+  });
+
+  it('forwards the key id with both adapters and logs the DELETED event', async () => {
+    const { req, res } = del('key-1');
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(deleteUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      { keyId: 'key-1' },
+      // The org adapter must be threaded or the service's org-admin fallback
+      // would have no dependency to resolve with.
+      { db: { userApiKeys: userApiKeyRepository, organizations: organizationRepository } }
+    );
+    expect(logEventSafe).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: { keyId: 'key-1', name: 'widget' } }),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('logs the deletion through logEventSafe with the request logger', async () => {
+    const { req, res } = del('key-1');
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(logEventSafe).toHaveBeenCalledWith(expect.anything(), expect.anything(), req.logger);
+  });
+
+  it('rejects a missing key id with 400 and never calls the service', async () => {
+    const { req, res } = del(undefined);
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow(/Invalid key ID/i);
+    expect(deleteUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('propagates a service refusal without logging a deletion', async () => {
+    deleteUserApiKey.mockRejectedValueOnce(new ConflictError('Revoke this API key before deleting it'));
+    const { req, res } = del('key-1');
+
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow(/Revoke this API key/i);
+    expect(logEventSafe).not.toHaveBeenCalled();
+  });
+});
 
 describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
   beforeEach(() => {
     updateEmbedKey.mockClear();
-    logEvent.mockClear();
+    logEventSafe.mockClear();
   });
 
   it('updates the provided fields with normalized origins and returns 200', async () => {
@@ -120,8 +186,9 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
     await mockRefs.patchHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(logEvent).toHaveBeenCalledWith(
+    expect(logEventSafe).toHaveBeenCalledWith(
       expect.objectContaining({ metadata: expect.objectContaining({ updatedFields: ['agentId'] }) }),
+      expect.anything(),
       expect.anything()
     );
   });
@@ -390,5 +457,19 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
       expect.anything(),
       expect.objectContaining({ db: expect.objectContaining({ organizations: organizationRepository }) })
     );
+  });
+});
+
+/**
+ * The analytics write happens after the key change has committed, so it goes
+ * through the best-effort wrapper with the request logger attached: a failed
+ * counter write gets recorded, not turned into a 5xx the client will retry.
+ */
+describe('PATCH /api/user-api-keys/[id] - analytics is best effort', () => {
+  it('logs the update through logEventSafe with the request logger', async () => {
+    const { req, res } = patch('key-1', { agentId: 'agent-2' });
+    await mockRefs.patchHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(logEventSafe).toHaveBeenCalledWith(expect.anything(), expect.anything(), req.logger);
   });
 });

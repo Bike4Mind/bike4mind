@@ -31,8 +31,10 @@ Bike4Mind's Knowledge Management system transforms your documents into an intell
 
 ### Web Content
 - **HTML** - Web page content extraction
-- **URL Import** - Direct import from any public URL
+- **URL Import** - Direct import from any public URL. A URL that yields no extractable text is refused with an error rather than saved as an empty file.
 - **Google Drive** - Direct integration
+
+A file's type is determined by its filename extension, not by the type your browser or upload client reports. An unrecognized extension is refused even when the upload claims a supported type, and a date-style filename like `Meeting notes 2026.09.07` is read as having the unrecognized extension `07` - rename the file, or remove the trailing date, before uploading.
 
 ## Smart Document Processing
 
@@ -109,6 +111,13 @@ Check these in order, all of them visible in the plan the button reads:
   back in a minute is how a real warning stops being read. If a rebuild is somehow never carried out
   (the request was recorded but the work never ran), the file keeps reporting as re-indexing rather
   than vanishing, and **Rebuild passages** picks it up once the request is a couple of hours old.
+
+  **Rebuild passages is refused while the pause is on, and says so.** The rebuild door deletes and
+  re-embeds a whole wave, so it is gated the same way convergence is: starting it while background
+  lake work is paused changes nothing at all - no passages are removed and nothing is queued - and the
+  toast says the run was refused rather than reporting success. The "to rebuild" count beside the
+  button therefore stays where it was. This is the same pause described above, so the remedy is the
+  same: an administrator turns convergence back on, then run it again.
 
   **A rebuild restores searchability, not conformance.** "Rebuild passages" deliberately rebuilds at
   the owner's default passage size rather than the lake's declared target, because it has to work on

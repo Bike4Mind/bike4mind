@@ -38,13 +38,13 @@ type UserSecuritySummaryData = {
   userFailures: { total: number; items: IAuthFailLogDocument[] };
   suspiciousPatterns: { total: number; items: SuspiciousPatternSummary[] };
   since: string;
-  user: { email: string; username: string };
+  user: { email: string | null; username: string };
 };
 
 type UserRecentEventsData = {
   items: UserSecurityEvent[];
   since: string;
-  user: { email: string; username: string };
+  user: { email: string | null; username: string };
 };
 
 // Shared fetchers - a single queryFn per endpoint so React Query deduplicates the HTTP request

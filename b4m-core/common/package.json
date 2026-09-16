@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/common",
-  "version": "6.0.0",
+  "version": "7.4.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -87,7 +87,7 @@
   "dependencies": {
     "@bike4mind/hearth": "workspace:*",
     "axios": "1.18.0",
-    "dayjs": "^1.11.21",
+    "dayjs": "^1.11.23",
     "zod": "^4.4.3"
   }
 }

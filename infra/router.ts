@@ -193,12 +193,26 @@ const routerInstance = shouldUseSharedRouter
 export const LOCAL_FILE_PROXY_BASE = '/api/app-files/serve';
 
 /**
+ * `router.url` with any trailing slash removed. Shared by both URL injectors below so the
+ * two cannot disagree about what "a bare origin" means - they already did once, which is
+ * what this exists to prevent recurring.
+ */
+function bareOrigin(url: typeof routerInstance.url) {
+  return url.apply(u => u.replace(/\/+$/, ''));
+}
+
+/**
  * Returns the CDN base URL to inject into Lambda environment variables.
  * Personal `sst dev` stages (DEV_ROUTER_DISTRIBUTION_ID set) use the local
  * proxy; all deployed stages use the real CloudFront distribution URL.
+ *
+ * Normalized for the same reason as APP_URL (see appUrlForLambdaEnv): consumers treat
+ * NEXT_PUBLIC_CDN_URL as an origin and append their own path, so a trailing slash lands
+ * as a double slash in every URL built from it. LOCAL_FILE_PROXY_BASE is a literal with
+ * no trailing slash, so only the CloudFront arm needs normalizing.
  */
 export function cdnUrlForLambdaEnv() {
-  return $dev && process.env.DEV_ROUTER_DISTRIBUTION_ID ? LOCAL_FILE_PROXY_BASE : routerInstance.url;
+  return $dev && process.env.DEV_ROUTER_DISTRIBUTION_ID ? LOCAL_FILE_PROXY_BASE : bareOrigin(routerInstance.url);
 }
 
 // Export router for other infrastructure to use
@@ -222,7 +236,7 @@ export const router = routerInstance;
  * than each deciding for itself.
  */
 export function appUrlForLambdaEnv() {
-  return routerInstance.url.apply(u => u.replace(/\/+$/, ''));
+  return bareOrigin(routerInstance.url);
 }
 
 export const whatsNewDistributionId = new sst.Linkable('whatsNewDistributionId', {

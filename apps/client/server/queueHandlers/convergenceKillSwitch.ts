@@ -1,3 +1,4 @@
+import { isObjectIdOrHexString } from 'mongoose';
 import { IAdminSettingsRepository, IDataLakeRepository, IScopedSettingsRepository } from '@bike4mind/common';
 import { scopedSettingsService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
@@ -32,7 +33,13 @@ async function resolvePauseFlag(
   logger?: Logger
 ): Promise<boolean> {
   try {
-    if (lakeId) {
+    // A STATIC registry lake's id is a human slug, not an ObjectId (see isFallbackLake). Skipping
+    // the lookup falls through to the platform read, which is the correct answer for a lake that
+    // has no document to carry a scoped override in the first place. BaseRepository.findById now
+    // screens a non-ObjectId itself and reports `null`, so this guard no longer prevents a
+    // CastError from failing the kill switch open - it is kept because it states the STATIC-lake
+    // case at the call site and saves a query that cannot match.
+    if (lakeId && isObjectIdOrHexString(lakeId)) {
       const lake = await deps.dataLakes.findById(lakeId);
       if (lake) {
         const { value } = await scopedSettingsService.resolveScopedSetting(

@@ -99,15 +99,26 @@ describe('PurgeLakeDocumentAction', () => {
     // The document is gone but the bytes are not, and nothing else can name them any more.
     const user = userEvent.setup();
     h.mutate.mockImplementation((_id: string, opts: { onSuccess: (r: DataLakeDocumentPurgeReceipt) => void }) =>
-      opts.onSuccess({ ...RECEIPT, storageObjectDeleted: false, storageObjectsRemaining: 1, verified: false })
+      // The shape the service now produces when a prior version's key fails: that key AND the
+      // current one are still stored, because the sweep skips the current object on purpose.
+      opts.onSuccess({
+        ...RECEIPT,
+        storageObjectDeleted: false,
+        storageObjectsTotal: 2,
+        storageObjectsRemaining: 2,
+        verified: false,
+      })
     );
     renderAction();
     await user.click(screen.getByTestId('datalake-purgefile-btn-f1'));
     await user.click(screen.getByTestId('datalake-purgefile-confirm-btn'));
 
-    expect((await screen.findByTestId('datalake-purgefile-receipt-storage')).textContent).toContain(
-      'could not be removed'
-    );
+    const note = (await screen.findByTestId('datalake-purgefile-receipt-storage')).textContent;
+    expect(note).toContain('2 of 2 stored copies of this file remain');
+    // The count is what is still STORED, not what the store refused: once one copy fails the sweep
+    // leaves the current object alone on purpose, and the copy says so rather than implying every
+    // remaining object was individually rejected.
+    expect(note).toContain('left in place deliberately');
   });
 
   it('leaves the storage note out of a clean receipt', async () => {

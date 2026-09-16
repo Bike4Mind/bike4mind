@@ -170,7 +170,12 @@ export function useLatticeChartData(
     // Build data points array for Recharts
     const data: LatticeChartDataPoint[] = periods.map(period => {
       const categoryValues = periodMap.get(period) || new Map();
-      const dataPoint: LatticeChartDataPoint = { period };
+      // `category` is unvalidated entity-attribute text off the entities route, and the writes
+      // below are dynamic keys. On a plain literal a category of `__proto__` hits the
+      // Object.prototype setter, which silently no-ops: the series stays listed in
+      // config.yAxis but its data never lands, so Recharts draws an empty legend entry with
+      // no error. Same guard as LatticeTableView's groupedEntities.
+      const dataPoint: LatticeChartDataPoint = Object.assign(Object.create(null), { period });
 
       for (const category of categories) {
         dataPoint[category] = categoryValues.get(category) || 0;

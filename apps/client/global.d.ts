@@ -17,6 +17,13 @@ declare global {
       billingOwnerType?: ApiKeyBillingOwnerType;
       /** Organization the key bills, present iff billingOwnerType is Organization. */
       organizationId?: string;
+      /**
+       * Lake ids this key is bound to for the manage-but-not-member session admission
+       * (`preauthorizedLakeIds` on a session). Admin-minted only. A request from this key that
+       * names a `preauthorizedLakeIds` id outside this set is refused at session-create, even when
+       * the underlying user could otherwise manage that lake.
+       */
+      preauthorizedLakeIds?: string[];
     }
 
     interface ApiKeyUsageInfo {

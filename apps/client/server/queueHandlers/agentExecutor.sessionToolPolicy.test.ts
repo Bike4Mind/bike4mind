@@ -242,9 +242,20 @@ describe('delegationOffer -- profile and session denials reach the dependency ga
     });
   });
 
-  it('honors a session-level disabledTools entry', () => {
+  it('a delegate denial subsumes the DAG surface (coordinate_task also needs the store)', () => {
+    // {offerDelegate: false, offerDag: true} is a state production cannot produce -
+    // withholding agentStore removes both injections - so the helper never reports it.
     expect(delegationOffer({ profileDeniedTools: [], session: { disabledTools: ['delegate_to_agent'] } })).toEqual({
       offerDelegate: false,
+      offerDag: false,
+    });
+  });
+
+  // The most common production input: on a continuation the profile may be unresolved
+  // (undefined), and the session's disabledTools is admitted as null by the signature.
+  it('treats undefined and null denial sources as empty', () => {
+    expect(delegationOffer({ profileDeniedTools: undefined, session: { disabledTools: null } })).toEqual({
+      offerDelegate: true,
       offerDag: true,
     });
   });

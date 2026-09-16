@@ -153,6 +153,9 @@ jobs:
       - name: Check deploy contract matches infra
         run: python3 scripts/check-deploy-contract.py
 
+      - name: Check workflows pass values through env, not run-body interpolation
+        run: python3 scripts/check-no-run-interpolation.py
+
 
 
 
@@ -531,8 +534,13 @@ jobs:
           - name: data
             filter: '--filter @bike4mind/common --filter @bike4mind/database --filter @bike4mind/db-core --filter @bike4mind/core'
             workers: '25%'
+          # The catch-all: every workspace package the buckets above do not name. A `filter`
+          # value reaches the step as an env var and is split on whitespace into argv, so the
+          # tokens here must be BARE. Quotes around a pattern are not shell quoting at this
+          # point, they are characters inside the argument pnpm receives, and pnpm then matches
+          # nothing. `!` needs no quoting either: history expansion is interactive-only.
           - name: misc
-            filter: "--filter '!@bike4mind/client' --filter '!@bike4mind/services' --filter '!@bike4mind/cli' --filter '!@bike4mind/slack' --filter '!@bike4mind/voice' --filter '!@bike4mind/common' --filter '!@bike4mind/database' --filter '!@bike4mind/db-core' --filter '!@bike4mind/core'"
+            filter: '--filter !@bike4mind/client --filter !@bike4mind/services --filter !@bike4mind/cli --filter !@bike4mind/slack --filter !@bike4mind/voice --filter !@bike4mind/common --filter !@bike4mind/database --filter !@bike4mind/db-core --filter !@bike4mind/core'
             workers: '25%'
 
     steps:
@@ -629,10 +637,35 @@ jobs:
       # client ones, where it carries `--shard=i/3` - deliberately with no `--` separator
       # before it, see the matrix entries above for why that is load-bearing.
       - name: Run Tests (${{ matrix.shard.name }})
-        run: pnpm --recursive --workspace-concurrency=4 ${{ matrix.shard.filter }} ${{ matrix.shard.script || 'test' }} ${{ matrix.shard.args }}
         env:
           CI: true
           VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}
+          SHARD_NAME: ${{ matrix.shard.name }}
+          SHARD_FILTER: ${{ matrix.shard.filter }}
+          SHARD_SCRIPT: ${{ matrix.shard.script || 'test' }}
+          SHARD_ARGS: ${{ matrix.shard.args }}
+        run: |
+          # Split each env var on whitespace into a real argv array, so every token arrives at
+          # pnpm as its own argument. The matrix values stay in `env:` and are never interpolated
+          # into this command line, and there is no `eval`, so a matrix value is only ever data.
+          # `read -ra` does no quote processing - the tokens in the matrix must be bare, and
+          # checkClientTestShards.test.ts fails the build if one grows a quote character.
+          read -ra filter_args <<< "$SHARD_FILTER"
+          read -ra script_args <<< "$SHARD_ARGS"
+
+          # A filter set matching no project is not an error to pnpm: it prints "No projects
+          # matched the filters" and exits 0, so the leg runs nothing and still reports green -
+          # the same silent-success shape the `--dir` note below exists to close. Resolve the set
+          # up front and fail loudly when it is empty. `pnpm ls` counts the workspace root as a
+          # match where `pnpm run` does not, so drop it: only real packages count.
+          matched=$(pnpm --recursive "${filter_args[@]}" ls --depth -1 --parseable | grep -cvxF "$PWD" || true)
+          echo "${SHARD_NAME} matches ${matched} package(s)"
+          if [ "$matched" -eq 0 ]; then
+            echo "::error title=Empty test shard::The ${SHARD_NAME} leg's filters match no workspace package, so it would run no tests. Check the --filter tokens in the matrix."
+            exit 1
+          fi
+
+          pnpm --recursive --workspace-concurrency=4 "${filter_args[@]}" "$SHARD_SCRIPT" "${script_args[@]}"
 
       # Tests that live outside every pnpm workspace, which the sharded run above cannot reach:
       # infra/ has no package.json, and scripts/codemods is not in pnpm-workspace.yaml, so
@@ -675,9 +708,11 @@ jobs:
       # so an early failure (before the mark step) reports nothing instead of nonsense.
       - name: Report shard duration
         if: always() && env.SHARD_START_SECONDS != ''
+        env:
+          SHARD_NAME: ${{ matrix.shard.name }}
         run: |
           elapsed=$(( $(date +%s) - SHARD_START_SECONDS ))
-          summary=$(printf '%s: %dm%02ds' '${{ matrix.shard.name }}' "$(( elapsed / 60 ))" "$(( elapsed % 60 ))")
+          summary=$(printf '%s: %dm%02ds' "$SHARD_NAME" "$(( elapsed / 60 ))" "$(( elapsed % 60 ))")
           echo "- Run Tests (${summary})" >> "$GITHUB_STEP_SUMMARY"
           if [ "$elapsed" -gt "$SHARD_SOFT_BUDGET_SECONDS" ]; then
             echo "::warning title=Slow test shard::${summary} - over its ${SHARD_SOFT_BUDGET_SECONDS}s soft budget. Not a failure: split or speed up the shard before it reaches the job timeout."
@@ -700,8 +735,10 @@ jobs:
       contents: read
     steps:
       - name: Verify all test shards passed
+        env:
+          SHARDS_RESULT: ${{ needs.test-shards.result }}
         run: |
-          result='${{ needs.test-shards.result }}'
+          result="$SHARDS_RESULT"
           echo "test-shards result: $result"
           test "$result" = "success"
 
@@ -800,13 +837,32 @@ jobs:
   # holds regardless of deployability. On a deployable docs PR the suites also run in
   # the shards; the duplicate is ~1 min and worth the unconditional guarantee.
   #
-  # Deliberately does NOT need core-build: the help tooling imports only glob/gray-matter
-  # (see loadHelpArticles.ts), so this stays a light, standalone leg that a non-deployable
-  # run can satisfy on its own.
+  # This leg used to need no core build - the help tooling imported only glob/gray-matter.
+  # `ingestHelpDatalake.ts` now pulls in @bike4mind/common, whose package entries all point
+  # at dist/, so the suite fails to LOAD without it (not an assertion failure - a resolve
+  # error). `needs: core-build` alone would be a regression: core-build is gated on
+  # `deployable`, and a docs-only PR is non-deployable, so this job would inherit that skip
+  # and go quiet on exactly the changes it exists to guard. Hence the explicit `if` that
+  # keeps the `docs-changed` gate and tolerates core-build having been skipped, plus the
+  # artifact download with a local build as fallback.
+  #
+  # `!cancelled()` rather than `always()`: both lift the implicit `success()` on `needs` (which
+  # is what lets a skipped core-build through), but `always()` also survives run cancellation,
+  # and `cancel-in-progress` is on for PRs. A second push would cancel the run and this job
+  # would still claim a runner for a full install + core build + vitest on a superseded SHA -
+  # costly where runner slots are the queue bottleneck (see the concurrency note at the top).
+  # `needs.core-build.result != 'failure'` rather than an allowlist of success/skipped: a
+  # core-build that ends `cancelled` (runner loss) is not a build failure, and the allowlist
+  # form skipped this job on it while ci-complete only reddens on the literal `failure` - so
+  # the help guards could go missing on a green docs PR. The fallback build covers that case.
+  # Keep the block scalar: a bare `if: !cancelled() && ...` is a YAML tag indicator, not text.
   help-docs:
     name: Help Docs Guards
-    needs: changes
-    if: needs.changes.outputs.docs-changed == 'true'
+    needs: [changes, core-build]
+    if: |
+      !cancelled() &&
+      needs.changes.outputs.docs-changed == 'true' &&
+      needs.core-build.result != 'failure'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 10
     permissions:
@@ -840,6 +896,22 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --recursive
+
+      - name: Download core build artifacts
+        id: download-core
+        uses: actions/download-artifact@v7
+        with:
+          name: core-build-${{ needs.core-build.outputs.core-content-hash }}
+          # Artifact paths are relative to the repo root (the common ancestor of
+          # b4m-core/*/dist and packages/database/dist).
+          path: .
+        continue-on-error: true
+
+      # Covers both misses: core-build skipped (docs-only run, so no artifact and an empty
+      # name above) and a genuine download failure.
+      - name: Build bike4mind core packages (fallback)
+        if: steps.download-core.outcome == 'failure'
+        run: pnpm core:build
 
       - name: Run help corpus and help-id suites
         run: pnpm --filter @bike4mind/scripts exec vitest run help/__tests__

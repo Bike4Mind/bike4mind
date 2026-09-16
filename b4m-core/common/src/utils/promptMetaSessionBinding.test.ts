@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { rebindPromptMetaSession } from './promptMetaSessionBinding';
+import { materializePromptMetaSession, rebindPromptMetaSession } from './promptMetaSessionBinding';
 
 describe('rebindPromptMetaSession', () => {
   it('supplies a session block when the source promptMeta carries none', () => {
@@ -77,5 +77,47 @@ describe('rebindPromptMetaSession', () => {
   it('leaves an absent promptMeta absent rather than inventing one', () => {
     expect(rebindPromptMetaSession(undefined, { sessionId: 'fork-1', userId: 'caller-1' })).toBeUndefined();
     expect(rebindPromptMetaSession(null, { sessionId: 'fork-1', userId: 'caller-1' })).toBeUndefined();
+  });
+});
+
+describe('materializePromptMetaSession', () => {
+  it('builds a fresh promptMeta with a session block when none existed', () => {
+    // The bike4mind#2004 bug: `quest.promptMeta = quest.promptMeta ?? {}` writers left `session`
+    // out entirely, and that shape passes silently through update() (validators off).
+    expect(materializePromptMetaSession(undefined, { sessionId: 'session-1', userId: 'user-1' })).toEqual({
+      session: { id: 'session-1', userId: 'user-1' },
+    });
+    expect(materializePromptMetaSession(null, { sessionId: 'session-1', userId: 'user-1' })).toEqual({
+      session: { id: 'session-1', userId: 'user-1' },
+    });
+  });
+
+  it('adds the session block to an existing promptMeta that has none, preserving other fields', () => {
+    const materialized = materializePromptMetaSession(
+      { warnings: ['partial coverage'] },
+      { sessionId: 'session-1', userId: 'user-1' }
+    );
+
+    expect(materialized).toEqual({
+      warnings: ['partial coverage'],
+      session: { id: 'session-1', userId: 'user-1' },
+    });
+  });
+
+  it('re-asserts session on every call rather than trusting a prior write in the same turn', () => {
+    const materialized = materializePromptMetaSession(
+      { session: { id: 'session-1', userId: 'user-1' } },
+      { sessionId: 'session-1', userId: 'user-1' }
+    );
+
+    expect(materialized.session).toEqual({ id: 'session-1', userId: 'user-1' });
+  });
+
+  it('does not mutate the source promptMeta', () => {
+    const source = { warnings: ['partial coverage'] };
+
+    materializePromptMetaSession(source, { sessionId: 'session-1', userId: 'user-1' });
+
+    expect(source).toEqual({ warnings: ['partial coverage'] });
   });
 });

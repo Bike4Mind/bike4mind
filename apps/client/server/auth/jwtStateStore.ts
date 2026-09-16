@@ -36,8 +36,7 @@ export interface BaseStatePayload {
  * Result of verifying a state token
  */
 export type VerifyResult<T = unknown> =
-  | { valid: true; payload: T }
-  | { valid: false; reason: 'missing' | 'expired' | 'invalid'; message: string };
+  { valid: true; payload: T } | { valid: false; reason: 'missing' | 'expired' | 'invalid'; message: string };
 
 /**
  * Validates that JWT_SECRET is configured
@@ -62,11 +61,15 @@ export function validateJwtSecret(): string {
  *
  * @param options - Configuration options
  * @param additionalPayload - Optional additional data to include in the token
+ * @param nonceHash - Optional SHA-256 hash of the browser-binding nonce cookie
+ *   (from issueStateNonce). Stored as the `nh` claim and enforced at verify time,
+ *   binding the flow to the browser that started it.
  * @returns Signed JWT token string
  */
 export function createStateToken<T extends Record<string, unknown>>(
   options: JwtStateStoreOptions,
-  additionalPayload?: T
+  additionalPayload?: T,
+  nonceHash?: string
 ): string {
   const secret = validateJwtSecret();
 
@@ -76,6 +79,7 @@ export function createStateToken<T extends Record<string, unknown>>(
     aud: options.audience,
     iss: JWT_ISSUER,
     ...additionalPayload,
+    ...(nonceHash ? { nh: nonceHash } : {}),
   } as BaseStatePayload & T;
 
   const signOptions: SignOptions = {
@@ -96,11 +100,18 @@ export function createStateToken<T extends Record<string, unknown>>(
  *
  * @param token - The JWT token to verify
  * @param options - Configuration options (must match options used to create token)
+ * @param expectedNonceHash - Browser-binding enforcement. When provided (login
+ *   paths pass readStateNonceHash(req), a string or null), the token's `nh` claim
+ *   MUST be present and equal it - a token minted in another browser, or with no
+ *   nonce cookie on this request, is rejected. Omit (undefined) to opt out: the
+ *   injected Slack state verifier and unit tests keep the pre-binding behavior and
+ *   enforce the nonce at their own callback layer instead.
  * @returns Verification result with payload or error reason
  */
 export function verifyStateToken<T extends BaseStatePayload>(
   token: string,
-  options: JwtStateStoreOptions
+  options: JwtStateStoreOptions,
+  expectedNonceHash?: string | null
 ): VerifyResult<T> {
   if (!token) {
     return { valid: false, reason: 'missing', message: 'Missing state parameter' };
@@ -115,7 +126,16 @@ export function verifyStateToken<T extends BaseStatePayload>(
   };
 
   try {
-    const decoded = jwt.verify(token, secret, verifyOptions) as T;
+    const decoded = jwt.verify(token, secret, verifyOptions) as T & { nh?: unknown };
+    // Browser-binding: an opted-in caller (login paths) requires the token's `nh`
+    // to match this browser's nonce cookie. Fails closed - missing `nh`, or a
+    // request with no cookie (expectedNonceHash === null), never matches.
+    if (expectedNonceHash !== undefined) {
+      if (typeof decoded.nh !== 'string' || decoded.nh.length === 0 || decoded.nh !== expectedNonceHash) {
+        Logger.warn('JWT state nonce mismatch', { hasNonce: typeof decoded.nh === 'string' });
+        return { valid: false, reason: 'invalid', message: 'Invalid authorization state.' };
+      }
+    }
     return { valid: true, payload: decoded };
   } catch (err: unknown) {
     const error = err as { name?: string; message?: string };

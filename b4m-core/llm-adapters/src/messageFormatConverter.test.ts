@@ -90,3 +90,47 @@ describe('convertMessagesToOpenAIFormat - replayed tool history (utils.ts Priori
     ]);
   });
 });
+
+/**
+ * `reasoning_content` is DeepSeek's and nobody else's. deepseekBackend's
+ * pushToolMessages mutates the caller's message array in place, and
+ * ChatCompletionProcess builds that array once and hands the same object to every
+ * backend the fallback loop tries - so a DeepSeek turn that 429s mid-tool-loop and
+ * hops to GPT-4.1 reaches openaiBackend.formatMessages with the field still on the
+ * message. That hop exists to rescue a failing turn; it must not depend on the
+ * rescuer tolerating a foreign provider's field.
+ */
+describe('convertMessagesToOpenAIFormat - reasoning_content on a fallback hop', () => {
+  const deepseekToolTurn = () =>
+    ({
+      role: 'assistant',
+      content: null,
+      reasoning_content: 'step one',
+      tool_calls: [{ id: 't1', type: 'function', function: { name: 'search', arguments: '{"q":"x"}' } }],
+    }) as unknown as IMessage;
+
+  it('replays reasoning_content only when the caller opts in', () => {
+    const result = convertMessagesToOpenAIFormat([deepseekToolTurn()], { preserveReasoningContent: true });
+
+    expect(result[0]).toHaveProperty('reasoning_content', 'step one');
+  });
+
+  it('strips it by default, which is what every non-DeepSeek target gets', () => {
+    const result = convertMessagesToOpenAIFormat([deepseekToolTurn()]);
+
+    expect(result[0]).not.toHaveProperty('reasoning_content');
+    expect(result[0]).toEqual({
+      role: 'assistant',
+      content: null,
+      tool_calls: [{ id: 't1', type: 'function', function: { name: 'search', arguments: '{"q":"x"}' } }],
+    });
+  });
+
+  it('leaves the source message untouched, the array being shared with the next hop', () => {
+    const message = deepseekToolTurn();
+
+    convertMessagesToOpenAIFormat([message]);
+
+    expect(message).toHaveProperty('reasoning_content', 'step one');
+  });
+});

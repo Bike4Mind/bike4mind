@@ -19,6 +19,8 @@ interface ApiKeyTable {
   ollama?: string;
   bfl?: string;
   xai?: string;
+  kimi?: string;
+  deepseek?: string;
 }
 
 interface CompletionInfo {
@@ -71,6 +73,7 @@ class SyncModelDescriptions {
     [ModelBackend.BFL]: 'bflBackend.ts',
     [ModelBackend.XAI]: 'xaiBackend.ts',
     [ModelBackend.Kimi]: 'kimiBackend.ts',
+    [ModelBackend.DeepSeek]: 'deepseekBackend.ts',
     [ModelBackend.AWS]: 'awsBackend.ts',
     [ModelBackend.LocalImage]: 'localImageBackend.ts',
   } as const;
@@ -1118,6 +1121,10 @@ class SyncModelDescriptions {
       return { bfl: this.apiKey };
     } else if (this.modelId.includes('grok') || this.modelId.includes('xai')) {
       return { xai: this.apiKey };
+    } else if (this.modelId.includes('kimi') || this.modelId.includes('moonshot')) {
+      return { kimi: this.apiKey };
+    } else if (this.modelId.includes('deepseek')) {
+      return { deepseek: this.apiKey };
     } else {
       // Default to openai for backward compatibility
       return { openai: this.apiKey };

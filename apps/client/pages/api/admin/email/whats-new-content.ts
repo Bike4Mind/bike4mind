@@ -2,7 +2,8 @@ import { ModalModel } from '@bike4mind/database';
 import { IModalDocument } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
-import { marked } from 'marked';
+import { assertDateInRange } from '@server/utils/dateParam';
+import { renderAndSanitize } from '@server/utils/marketingReportRenderer';
 import { MODAL_SAFE_DEFAULT_KEY } from '@bike4mind/services';
 
 /**
@@ -42,6 +43,10 @@ const handler = baseApi().get(async (req, res) => {
     const daysAgo = parseInt(days, 10);
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - daysAgo);
+    // Assert the constructed date rather than the parsed number: setDate overflows to an
+    // Invalid Date for NaN and for a magnitude past the Date range in EITHER direction, so
+    // there is no single sane bound to clamp to.
+    assertDateInRange('days', startDate);
 
     const queryLimit = limitParam ? parseInt(limitParam, 10) : 20;
     modals = await ModalModel.find({
@@ -90,14 +95,14 @@ const handler = baseApi().get(async (req, res) => {
     }
 
     if (modal.description) {
-      // Description is Markdown, convert to HTML
-      const descriptionHtml = marked.parse(modal.description, { async: false }) as string;
+      // Description is Markdown; render + sanitize (marked passes raw HTML through).
+      const descriptionHtml = renderAndSanitize(modal.description);
       html += `<div style="margin: 0; color: #444; line-height: 1.6;">${descriptionHtml}</div>`;
     }
 
     if (modal.textMessage) {
-      // textMessage is Markdown, convert to HTML
-      const textMessageHtml = marked.parse(modal.textMessage, { async: false }) as string;
+      // textMessage is Markdown; render + sanitize (marked passes raw HTML through).
+      const textMessageHtml = renderAndSanitize(modal.textMessage);
       html += `<div style="margin: 12px 0 0 0; color: #444; line-height: 1.6;">${textMessageHtml}</div>`;
     }
 

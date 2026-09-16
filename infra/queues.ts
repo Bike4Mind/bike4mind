@@ -27,6 +27,21 @@ const dataLakeTaxonomyQueue = new sst.aws.Queue('dataLakeTaxonomyQueue', {
   },
 });
 
+// Data Lake Research Run Queue (#1682 producer). One message per user-triggered run: a web search,
+// an LLM relevance judgment per hit, a fetch per survivor, and a proposal write. retry: 1 - lower
+// than any sibling, and deliberately so. The run row is claimed with a compare-and-set on `queued`
+// and settled `failed` by the handler's own catch, so a redelivery can only ever find nothing to
+// claim; the single retry exists for a message that failed BEFORE the claim landed.
+const dataLakeResearchQueueDLQ = new sst.aws.Queue('dataLakeResearchQueueDLQ', {});
+const dataLakeResearchQueue = new sst.aws.Queue('dataLakeResearchQueue', {
+  // Must exceed the handler's 10-minute timeout below, or SQS redelivers while the run is in flight.
+  visibilityTimeout: '12 minutes',
+  dlq: {
+    queue: dataLakeResearchQueueDLQ.arn,
+    retry: 1,
+  },
+});
+
 // Lake Memory Extraction Queue (#1440 producer). Declared up here alongside taxonomy because the chunk
 // and vectorize Lambdas must link it too: finalizeBatchIfComplete (which they call) enqueues lake
 // memory extraction, so it needs Resource.lakeMemoryQueue.url. Full-lake LLM extraction, so retry: 2
@@ -755,6 +770,29 @@ const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
+// Research run execution (#1682). 10 minutes, matching lake memory rather than taxonomy's 5: a run
+// makes up to `maxResults` sequential LLM judgments and then one outbound page fetch per survivor,
+// and the URL fetcher alone allows a long per-page budget. The loop stops itself short of the
+// deadline (TIME_BUDGET_RESERVE_MS) so a run ends as `completed` with a `time_budget` stop reason
+// rather than being killed mid-candidate and left `running` forever. No bucket link: the run never
+// writes a file - approving one of its proposals does, through the ordinary ingestion door.
+const dataLakeResearchQueueSubscription = dataLakeResearchQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/dataLakeResearchRun.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
 const driveLakeIngestQueueSubscription = driveLakeIngestQueue.subscribe(
   {
     handler: 'apps/client/server/queueHandlers/driveLakeIngest.dispatch',
@@ -1017,6 +1055,15 @@ const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe(
         actions: ['rekognition:DetectModerationLabels'],
         resources: ['*'],
       },
+      {
+        // reactAct.ts publishes Lumina5/ReplSandbox SandboxUnavailable from its
+        // fail-closed branch, alarmed at infra/alarms.ts:1064. This handler is
+        // the only function that reaches it with Caller=wake - without the
+        // grant the emit AccessDenies and the alarm watches a metric nobody
+        // publishes. PutMetricData takes no resource scope.
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
     ],
     copyFiles: [
       {
@@ -1024,6 +1071,18 @@ const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe(
         to: 'tiktoken_bg.wasm',
       },
     ],
+    nodejs: {
+      // The wake's act step runs LLM-authored code in an isolated-vm isolate
+      // (b4m-core/agents/src/deepAgent/runtime/reactAct.ts). isolated-vm is a
+      // native addon pulled in by a runtime `createRequire`, so esbuild would
+      // inline a JS loader with no .node binary beside it. external + install
+      // ships the real prebuild. Without this the wake still runs, but fails
+      // closed: code_execute is dropped and an error is logged.
+      install: ['isolated-vm'],
+      esbuild: {
+        external: ['isolated-vm'],
+      },
+    },
   },
   SINGLE_RECORD_BATCH
 );
@@ -1385,6 +1444,7 @@ export {
   questExportQueue,
   dataLakeCleanupQueue,
   dataLakeTaxonomyQueue,
+  dataLakeResearchQueue,
   lakeMemoryQueue,
   driveLakeIngestQueue,
   liveOpsTriageQueue,
@@ -1414,6 +1474,7 @@ export {
   questExportQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
+  dataLakeResearchQueueDLQ,
   lakeMemoryQueueDLQ,
   driveLakeIngestQueueDLQ,
   liveOpsTriageQueueDLQ,
@@ -1445,6 +1506,7 @@ export {
   questExportQueueSubscription,
   dataLakeCleanupQueueSubscription,
   dataLakeTaxonomyQueueSubscription,
+  dataLakeResearchQueueSubscription,
   lakeMemoryQueueSubscription,
   driveLakeIngestQueueSubscription,
   liveOpsTriageQueueSubscription,

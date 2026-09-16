@@ -56,7 +56,9 @@ import { type MigrationFile } from './index';
  * arms honor the prose it restores, so the still-new stack keeps working until it is gone. It is a
  * PARTIAL restore by design (see its comment): a row whose owner typed a note after `up()` keeps
  * that note and loses its marker with the dropped field, so audit those rather than assume `down()`
- * recovered every row.
+ * recovered every row. A row carrying a stall reason this migration never backfilled - the runtime
+ * gained `unchunkedPaused` after it - is restored with the closest available wording rather than
+ * erased; `down()` says why that is the right way round.
  */
 
 /** Applied to the two stall notes only; they are fixed literals but contain a regex metacharacter ('.'). */
@@ -181,9 +183,19 @@ const migration: MigrationFile = {
     // exact harm this migration exists to undo - so its marker survives only in the dropped field.
     // Such a row grades as unstalled after a rollback, which is the same reading it had before the
     // marker was ever written.
+    //
+    // The third arm is deliberately NOT symmetric restoration: `unchunkedPaused` postdates this
+    // migration, so `up()` never wrote its prose and there is none to put back. It gets the
+    // `rechunkPaused` wording as the closest a pre-#2016 reader can understand, which MISLABELS the
+    // file - it never had passages to remove - but the alternative is writing nothing and then
+    // dropping the field below, leaving a kill-switch-stalled file that reads as healthy to every one
+    // of those readers. Mislabelled-but-visible beats invisible (FabFileTypes.ts makes the same trade
+    // for the same reason). That wording is also already in `LEGACY_CHUNK_STALL_NOTES`, so a stack
+    // still running new code keeps honoring what this restores instead of ignoring it.
     for (const [reason, note] of [
       ['vectorizePaused', VECTORIZE_PAUSED_NOTE],
       ['rechunkPaused', RECHUNK_PAUSED_NOTE],
+      ['unchunkedPaused', RECHUNK_PAUSED_NOTE],
     ] as const) {
       const result = await fabFiles.updateMany(
         { chunkStallReason: reason, $or: [{ notes: { $exists: false } }, { notes: '' }] },

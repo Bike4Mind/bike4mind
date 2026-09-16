@@ -163,7 +163,7 @@ const ResearchModeIndicator: FC = () => {
           ...fixedHeight,
           '&:hover': {
             backgroundColor: theme => theme.palette.primary.softHoverBg,
-            borderColor: 'primary.dark',
+            borderColor: 'primary.plainColor',
           },
         }}
         onClick={() => openModal('research-mode')}

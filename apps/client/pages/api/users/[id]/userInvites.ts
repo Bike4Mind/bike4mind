@@ -20,7 +20,11 @@ const handler = baseApi().get(async (req, res) => {
 
   if (!((currentUser && currentUser?.id === id) || currentUser?.isAdmin)) throw new UnauthorizedError('Unauthorized');
 
-  const cacheKey = CacheKeys.userInvites(id, limit, page);
+  // Key on the identity whose invites are actually fetched -- listOwnPendingInvites always
+  // reads `currentUser`, never the route's target. Keying on `id` meant an admin's request
+  // for another user's invites cached the ADMIN's invites under the target's key, and the
+  // target then read them back for the next 60s.
+  const cacheKey = CacheKeys.userInvites(currentUser.id, limit, page);
 
   const result = await cacheService.getCachedData(
     cacheKey,

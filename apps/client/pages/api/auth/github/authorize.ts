@@ -4,6 +4,7 @@ import { Config } from '@server/utils/config';
 import { InternalServerError } from '@server/utils/errors';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
+import { issueStateNonce } from '@server/auth/oauthFlowCookie';
 import jwt from 'jsonwebtoken';
 
 function getJwtSecret(): string {
@@ -31,21 +32,18 @@ const handler = baseApi().post(
       throw new InternalServerError('GitHub OAuth not configured');
     }
 
-    // Create state token with userId (for CSRF protection and user identification)
-    const state = jwt.sign({ userId }, getJwtSecret(), {
+    // Bind the flow to this browser: the shared nonce cookie carries a random
+    // secret, and only its hash (nh) rides the signed state token. The callback
+    // requires the same browser's cookie to match, so the state token is not the
+    // sole identity source even if it leaks (URL logs, browser history). This
+    // replaces the previous userId-valued cookie, which carried no secret and was
+    // forgeable by anyone who knew the target userId.
+    const nonceHash = issueStateNonce(res);
+
+    // Create state token with userId (identity) and the nonce hash (browser-binding).
+    const state = jwt.sign({ userId, nh: nonceHash }, getJwtSecret(), {
       expiresIn: '10m',
     });
-
-    // HYDRA-7733: Set a session-binding cookie so the callback can verify that
-    // the same browser that initiated the OAuth flow is the one completing it.
-    // This closes the account-linking hijack class even if the state token leaks
-    // (via URL logs, browser history, etc.). HttpOnly + Secure + SameSite=Lax
-    // ensures the cookie survives the GitHub redirect chain but can't be read or
-    // forged by JS or cross-site requests.
-    res.setHeader(
-      'Set-Cookie',
-      `gh_oauth_uid=${userId}; HttpOnly; Secure; SameSite=Lax; Max-Age=600; Path=/api/auth/github/mcp-callback`
-    );
 
     // Get the base URL for the callback
     const protocol = req.headers['x-forwarded-proto'] || 'http';

@@ -1,6 +1,7 @@
 import { Chip, Tooltip } from '@mui/joy';
 import CloudIcon from '@mui/icons-material/Cloud';
-import { DRIVE_STATUS_BADGE, useLakeDriveConnection } from '@client/app/hooks/data/googleDrive';
+import { useLakeDriveConnection } from '@client/app/hooks/data/googleDrive';
+import { describeDriveConnection } from '@client/app/hooks/data/driveConnectionDisplay';
 
 /**
  * Read-only "this lake has a Drive folder attached" marker, for the surfaces a user reaches when
@@ -10,10 +11,11 @@ import { DRIVE_STATUS_BADGE, useLakeDriveConnection } from '@client/app/hooks/da
  * permanently (#1807).
  *
  * A Drive connection is an ORG-lake concept, so a personal lake is not read at all - the route would
- * only ever 404. Beyond that, renders NOTHING when there is no connection, while the read is in
- * flight, or when the read fails (403 for a non-manager). Absence therefore means "no connection OR
- * not visible to you" - it is not a guarantee that none exists. Any surface making an irreversible
- * promise about the connection must consult the query itself rather than infer from this chip.
+ * only ever resolve `connection: null`. Beyond that, renders NOTHING when there is no connection,
+ * while the read is in flight, or when the read fails (404 for a non-manager). Absence therefore
+ * means "no connection OR not visible to you" - it is not a guarantee that none exists. Any surface
+ * making an irreversible promise about the connection must consult the query itself rather than
+ * infer from this chip.
  */
 export default function LakeDriveStatusChip({
   lakeId,
@@ -26,24 +28,17 @@ export default function LakeDriveStatusChip({
   const { data: connection } = useLakeDriveConnection(lakeId, !!organizationId);
   if (!connection) return null;
 
-  const badge = DRIVE_STATUS_BADGE[connection.status];
+  // Wording and severity both come from describeDriveConnection - notably it does NOT read a
+  // 'connected' connection carrying a lastError as a healthy sync (see its doc).
+  const { title, color } = describeDriveConnection(connection);
   const folder = connection.folderName || connection.driveFolderId;
 
   return (
-    <Tooltip
-      size="sm"
-      title={
-        connection.status === 'connected'
-          ? `Syncing the Google Drive folder "${folder}"`
-          : `Google Drive folder "${folder}": ${badge.label.toLowerCase()}${
-              connection.lastError ? ` - ${connection.lastError}` : ''
-            }`
-      }
-    >
+    <Tooltip size="sm" title={title}>
       <Chip
         size="sm"
         variant="soft"
-        color={badge.color}
+        color={color}
         startDecorator={<CloudIcon sx={{ fontSize: 12 }} />}
         sx={{ fontSize: '11px', maxWidth: 220 }}
         data-testid={`datalake-drive-status-chip-${lakeId}`}

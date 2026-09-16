@@ -1,4 +1,5 @@
 import type { DataLakeConfig, DataLakeMembershipScope, IDataLakeDocument } from '@bike4mind/common';
+import { isFallbackLake } from './assertLakeAccess';
 
 /** The lake fields the membership scope is derived from - always the persisted document. */
 type ScopeSourceLake = Pick<IDataLakeDocument, 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId'>;
@@ -32,3 +33,22 @@ export const registryMembershipScope = (
   datalakeTag: config.datalakeTag,
   fileTagPrefix: config.fileTagPrefix,
 });
+
+/**
+ * The scope for a lake as the ACCESS GATE handed it back, whichever kind that turned out to be.
+ * Use this on any path `assertLakeAccess` / `assertLakeRebuildAccess` can reach, because those
+ * resolve a DATA_LAKES lake to a synthetic document with `createdByUserId: ''` - and an `owned`
+ * scope over a creator-less lake fails closed to meta-tag-only (`effectiveTagPrefixArm`), silently
+ * dropping the prefix arm a registry lake is mostly made of.
+ *
+ * Every path behind `assertLakeWritable` refuses a fallback lake outright, so those can keep
+ * calling `lakeMembershipScope` directly; this exists so a path that CAN see a registry lake never
+ * open-codes the branch again and gets it wrong on the third try.
+ *
+ * Two copies remain open-coded on purpose, in `GET /api/data-lakes/:id` and
+ * `GET /api/data-lakes/:id/articles`: their tests assert the branch shape at the route, so folding
+ * them in is a test-touching change of its own. Keep them in step with this.
+ */
+export const resolveLakeMembershipScope = (
+  lake: ScopeSourceLake & Pick<IDataLakeDocument, 'id'>
+): DataLakeMembershipScope => (isFallbackLake(lake) ? registryMembershipScope(lake) : lakeMembershipScope(lake));

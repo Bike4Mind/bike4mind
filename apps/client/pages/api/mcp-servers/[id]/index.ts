@@ -5,15 +5,20 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { encryptEnvVariables, decryptEnvVariables } from '@server/security/tokenEncryption';
+import { mcpServerUpdateBodySchema } from '@server/validators/mcpServerValidators';
+import { assertNoForbiddenMcpEnvKeys } from '@server/utils/mcpEnvValidation';
+import { isValidObjectId } from '@server/utils/objectId';
 
 const handler = baseApi()
   .delete(async (req, res) => {
     const { id } = req.query;
 
-    const server = await McpServer.findOneAndDelete({
-      _id: id,
-      userId: req.user.id, // Ensure user owns the server
-    });
+    const server = isValidObjectId(id)
+      ? await McpServer.findOneAndDelete({
+          _id: id,
+          userId: req.user.id, // Ensure user owns the server
+        })
+      : null;
 
     if (!server) {
       throw new NotFoundError('MCP Server not found for id: ' + id);
@@ -24,8 +29,14 @@ const handler = baseApi()
   .put(async (req, res) => {
     const { id } = req.query;
 
-    const { name, envVariables, enabled } = req.body;
-    const server = await McpServer.findById(id);
+    const parsedBody = mcpServerUpdateBodySchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      throw new BadRequestError('Invalid request body');
+    }
+    const { name, envVariables, enabled } = parsedBody.data;
+    assertNoForbiddenMcpEnvKeys(envVariables);
+
+    const server = isValidObjectId(id) ? await McpServer.findById(id) : null;
 
     if (!server) {
       throw new NotFoundError('MCP Server not found for id: ' + id);
@@ -47,7 +58,7 @@ const handler = baseApi()
   })
   .get(async (req, res) => {
     const { id } = req.query;
-    const server = await McpServer.findOne({ _id: id, userId: req.user.id });
+    const server = isValidObjectId(id) ? await McpServer.findOne({ _id: id, userId: req.user.id }) : null;
     if (!server) {
       return res.status(404).json({ message: 'Server not found' });
     }

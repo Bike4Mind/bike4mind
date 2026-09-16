@@ -28,9 +28,12 @@ jobs:
     steps:
       - name: Resolve configuration
         id: config
+        env:
+          PR_NUMBER: ${{ github.event.number }}
+          PREVIEW_SERVER_DOMAIN: ${{ vars.PREVIEW_SERVER_DOMAIN }}
         run: |
-          STAGE="pr${{ github.event.number }}"
-          API_URL="https://app.pr${{ github.event.number }}.${{ vars.PREVIEW_SERVER_DOMAIN }}"
+          STAGE="pr${PR_NUMBER}"
+          API_URL="https://app.${STAGE}.${PREVIEW_SERVER_DOMAIN}"
           echo "stage=$STAGE" >> $GITHUB_OUTPUT
           echo "api_url=$API_URL" >> $GITHUB_OUTPUT
           echo "Stage: $STAGE"

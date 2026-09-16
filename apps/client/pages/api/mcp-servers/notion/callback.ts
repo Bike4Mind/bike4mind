@@ -174,12 +174,27 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     );
   }
 
-  // Idempotency check: avoid re-running token exchange if the callback fires more than once
-  const existingUser = await userRepository.findById(userId);
-  if (existingUser?.notionConnect?.status === 'connected') {
-    console.log('[Notion Callback] User already has valid Notion connection, skipping token exchange');
-    auditLogger.success({ isDuplicate: true });
-    return res.redirect('/profile?tab=integrations&notion=connected');
+  // Atomic nonce consume: a single updateMany with the nonce in the filter
+  // guarantees exactly-once consumption. If a concurrent replay or a second
+  // tab races, one of them gets modifiedCount 0 and fails cleanly.
+  const nonceConsumed = await userRepository.updateMany({ _id: userId, pendingNotionOAuthNonce: csrfToken }, {
+    pendingNotionOAuthNonce: null,
+  } as Record<string, unknown>);
+
+  if (nonceConsumed.modifiedCount !== 1) {
+    // Check whether they're already connected (benign duplicate)
+    const existingUser = await userRepository.findById(userId);
+    if (existingUser?.notionConnect?.status === 'connected') {
+      console.log('[Notion Callback] User already has valid Notion connection, skipping token exchange');
+      auditLogger.success({ isDuplicate: true });
+      return res.redirect('/profile?tab=integrations&notion=connected');
+    }
+    console.error('[Notion Callback] OAuth nonce mismatch or already consumed (replay?)');
+    auditLogger.failure('nonce_mismatch');
+    return redirectWithError(
+      res,
+      'Notion authorization failed: this link has already been used. Please try connecting again.'
+    );
   }
 
   const { clientId, clientSecret, redirectUri } = await getNotionOAuthConfig();
@@ -298,10 +313,14 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       : undefined,
     connectedAt: new Date(),
     status: 'connected' as const,
-    writeEnabled: true,
+    // New connections default to read-only. This only applies here (connect
+    // time); existing connections retain whatever writeEnabled value they had
+    // before -- there is no retroactive migration.
+    writeEnabled: false,
     ...(rootPageId && { rootPageId }),
   };
 
+  // Store connection details. The nonce was already consumed atomically above.
   await userRepository.update({
     id: userId,
     notionConnect,

@@ -62,8 +62,15 @@ describe('InboxModel.findByReceiverId sender projection', () => {
     expect(sender.name).toBe('Sender Person');
     expect(sender.username).toBe('sender');
     expect(sender.email).toBe('sender@example.com');
-    expect(sender.phone).toBe('+15551112222');
     expect(sender.photoUrl).toBe('https://cdn/sender.png');
+  });
+
+  it('does not project the sender phone number', async () => {
+    // Every inbox message used to hand the receiver the sender's phone number, whether or not
+    // the sender had ever shared it. SenderInfoModal no longer renders it, so nothing reads it.
+    const [msg] = await inboxRepository.findByReceiverId(receiverId);
+    expect('phone' in getSender(msg)).toBe(false);
+    expect(JSON.stringify(msg)).not.toContain('+15551112222');
   });
 
   it('excludes the sender secret fields from the response', async () => {

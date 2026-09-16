@@ -4,6 +4,7 @@ import type {
   IDataLakeRepository,
   IDataLakeBatchRepository,
   IFabFileRepository,
+  IFabFileChunkRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { canManageLake, type ManageActor } from './manageRule';
@@ -13,7 +14,12 @@ import { diffLakeConfig } from './diffLakeConfig';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
-import { bestEffortIndexRemove, type RetrievalIndexPort } from './ports';
+import {
+  bestEffortIndexRemove,
+  bestEffortSetDriveConnectionEnabled,
+  type RetrievalIndexPort,
+  type DriveConnectionEnablePort,
+} from './ports';
 
 interface DeleteDataLakeAdapters extends LakeConfigAuditAdapters {
   // The event repo is REQUIRED here, unlike the optional shape LakeConfigAuditAdapters carries
@@ -30,8 +36,16 @@ interface DeleteDataLakeAdapters extends LakeConfigAuditAdapters {
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'softDeleteByDataLakeTag' | 'findIdsByDataLakeTag'>;
+    // REQUIRED, not optional: `retrievalIndex` is itself optional (a host without self-host
+    // OpenSearch wires neither), but a host that DOES wire `retrievalIndex` must wire this half
+    // too, or an archive/unarchive cycle leaves a stale confirm no later step ever clears (see
+    // bestEffortIndexRemove's docblock). Making it optional here let all three doors go unwired
+    // silently and compile clean; this turns a missing door into a compile error instead.
+    fabFileChunks: Pick<IFabFileChunkRepository, 'clearRetrievalIndexConfirmedByFabFileIds'>;
   };
   retrievalIndex?: RetrievalIndexPort;
+  /** Disable the lake's Drive connection so the hourly poll stops enqueueing it. See ports.ts. */
+  disableDriveConnection?: DriveConnectionEnablePort;
   logger?: { warn: (msg: string, ...args: unknown[]) => void };
 }
 
@@ -45,7 +59,7 @@ interface DeleteDataLakeAdapters extends LakeConfigAuditAdapters {
 export const deleteDataLake = async (
   actor: ManageActor,
   dataLakeId: string,
-  { db, retrievalIndex, logger }: DeleteDataLakeAdapters
+  { db, retrievalIndex, disableDriveConnection, logger }: DeleteDataLakeAdapters
 ): Promise<IDataLakeDocument> => {
   const existing = await db.dataLakes.findById(dataLakeId);
   if (!existing) {
@@ -138,7 +152,13 @@ export const deleteDataLake = async (
   // Not softDeleteByDataLakeTag's return: it reports only the files this call flipped, so a re-run
   // after a crashed attempt would hand the index an empty set. findIdsByDataLakeTag sees
   // soft-deleted members too and stays stable across re-runs.
-  await bestEffortIndexRemove(retrievalIndex, scope, () => db.fabFiles.findIdsByDataLakeTag(scope), logger);
+  await bestEffortIndexRemove(
+    retrievalIndex,
+    scope,
+    () => db.fabFiles.findIdsByDataLakeTag(scope),
+    logger,
+    db.fabFileChunks
+  );
 
   // Terminal transition only, and conditional on the 'deleting' claimed above - see the note on
   // archiveDataLake's settle step for why a plain write here lets the loser of an archive-vs-delete
@@ -156,6 +176,8 @@ export const deleteDataLake = async (
       `This data lake moved to '${current.status}' while it was being deleted; its files were soft-deleted but the delete did not complete`
     );
   }
+  // Stops the hourly poll from enqueueing this lake again - best-effort, see ports.ts.
+  await bestEffortSetDriveConnectionEnabled(disableDriveConnection, dataLakeId, logger);
   await recordLakeConfigChange(
     {
       actor,

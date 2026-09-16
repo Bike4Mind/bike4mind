@@ -68,7 +68,6 @@
     "no_valid_emails_error": "براہ کرم درست ایمیل پتہ داخل کریں",
     "send_referral": "حوالہ بھیجیں",
     "send_referral_success": "حوالہ کامیابی سے بھیج دیا گیا!",
-    "send_referral_skipped": "{{count}} دعوت نامہ(ں) چھوڑ دیے گئے — ان ای میل پتوں کے لیے پہلے ہی اکاؤنٹ ہے۔",
     "send_referral_failed": "{{count}} دعوت نامے بھیجے نہیں جا سکے۔ براہ کرم دوبارہ کوشش کریں۔",
     "send_referral_error": "حوالہ بھیجنے میں خرابی۔ براہ کرم دوبارہ کوشش کریں.",
     "slack_notification_default": "حوالہ USER_NAME:USER_ID نے FRIEND_EMAIL کو بھیجا"

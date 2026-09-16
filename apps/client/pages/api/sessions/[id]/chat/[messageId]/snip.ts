@@ -1,4 +1,5 @@
 import {
+  agentRepository,
   questRepository,
   sessionRepository,
   userRepository,
@@ -29,6 +30,7 @@ const handler = baseApi().post(
             chatHistories: questRepository,
             projects: projectRepository,
             fabFiles: fabFileRepository,
+            agents: agentRepository,
           },
           // Lets the lake-tag derivation intersect against the CALLER's reachable lakes, instead of
           // persisting a tag scraped off a merely-readable file for a lake they cannot use. The case that

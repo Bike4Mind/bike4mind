@@ -47,6 +47,15 @@ const MAX_MESSAGES_PER_RECEIVE = 10;
 const BACKOFF_MIN_MS = 1000;
 const BACKOFF_MAX_MS = 30_000;
 
+/**
+ * What `getRemainingTimeInMillis` reports on self-host. The worker is a process, not an invocation,
+ * so there is no deadline to report - and handlers use this to decide whether to start one more
+ * unit of work, so it has to sit above every reserve they compare it against (the largest today is
+ * `TIME_BUDGET_RESERVE_MS`, 90s). A day is comfortably past any of them and still a finite number,
+ * so arithmetic on it stays sane.
+ */
+const NO_DEADLINE_REMAINING_MS = 24 * 60 * 60 * 1000;
+
 export class SelfHostWorker {
   private readonly queues: QueueHandlerRegistration[] = [];
   private readonly scheduled: ScheduledTaskRegistration[] = [];
@@ -218,12 +227,20 @@ export class SelfHostWorker {
     };
   }
 
-  /** Minimal Lambda Context - only the fields contextToLogs reads are populated. */
+  /**
+   * Minimal Lambda Context - the fields contextToLogs reads, plus `getRemainingTimeInMillis`.
+   *
+   * That last one is not decoration: handlers with a time budget (research runs, lake-memory
+   * extraction) call it unconditionally, and the `as unknown as Context` cast hides its absence
+   * from the compiler, so omitting it turns into a TypeError on the first candidate at runtime.
+   * A long-lived worker has no deadline, so the honest answer is a value no reserve can exceed.
+   */
   private fakeContext(name: string): Context {
     return {
       awsRequestId: randomUUID(),
       functionName: `selfHostWorker:${name}`,
       functionVersion: '$LATEST',
+      getRemainingTimeInMillis: () => NO_DEADLINE_REMAINING_MS,
     } as unknown as Context;
   }
 }

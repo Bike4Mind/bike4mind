@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import {
@@ -20,7 +21,7 @@ import { recordTaxonomyTagsApplySkipped } from '@server/utils/cloudwatch';
 const APPLY_TAXONOMY_HOURLY_CAP = 60;
 const HOUR_MS = 60 * 60 * 1000;
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .use(rateLimit({ limit: APPLY_TAXONOMY_HOURLY_CAP, windowMs: HOUR_MS, bucket: 'data-lakes/apply-taxonomy' }))
   // POST: apply the reviewed/edited AI tag suggestions to every matching file in the batch.

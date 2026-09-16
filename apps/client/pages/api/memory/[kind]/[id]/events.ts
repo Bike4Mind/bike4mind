@@ -80,7 +80,18 @@ const handler = baseApi().post(async (req, res) => {
   };
 
   const keys = createKeyProvider(memoryPrincipalKeyRepository);
-  const sealed = await appendMemoryEvent(memoryLedgerRepository, keys, ownerUserId, eventInput);
+  // `startedAt` is this request's own arrival, so the shred fence cannot block it: an erase that
+  // landed earlier lifts the tombstone and re-keys, which is what makes "erase, then remember
+  // something new" work. The branch below is only reachable if an erase lands DURING this request.
+  const sealed = await appendMemoryEvent(memoryLedgerRepository, keys, ownerUserId, eventInput, {
+    startedAt: new Date(),
+  });
+  if (!sealed) {
+    // Refused, not failed - so a 409 with the reason rather than the 500 a thrown error would produce.
+    return res
+      .status(409)
+      .json({ error: 'This memory was erased while the request was in flight; nothing was written.' });
+  }
   return res.status(201).json({ event: sealed });
 });
 
