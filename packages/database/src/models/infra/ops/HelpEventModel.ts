@@ -1,5 +1,10 @@
 import mongoose, { Document, Model, model, Schema } from 'mongoose';
-import { HELP_FEEDBACK_RATINGS, HelpFeedbackRating } from '@bike4mind/common';
+import {
+  HELP_FEEDBACK_RATINGS,
+  HELP_FEEDBACK_REPORT_TYPES,
+  HelpFeedbackRating,
+  HelpFeedbackReportType,
+} from '@bike4mind/common';
 
 export interface IHelpEventDocument extends Document {
   type: 'article_view' | 'search' | 'article_feedback' | 'chat_query' | 'chat_feedback';
@@ -9,7 +14,7 @@ export interface IHelpEventDocument extends Document {
   searchQuery?: string;
   searchResultCount?: number;
   rating?: HelpFeedbackRating;
-  reportType?: 'outdated';
+  reportType?: HelpFeedbackReportType;
   /** @deprecated No longer written - human-written comments route to `Feedback` (subject 'help')
    * via `helpFeedbackRouting.ts`. Kept so rows written before the split still read back until the
    * 90-day TTL below sweeps them; `withRoutedComment` in that module is the read-side fallback. */
@@ -33,7 +38,7 @@ const helpEventSchema = new Schema<IHelpEventDocument>(
     searchQuery: { type: String, required: false },
     searchResultCount: { type: Number, required: false },
     rating: { type: String, required: false, enum: HELP_FEEDBACK_RATINGS },
-    reportType: { type: String, required: false, enum: ['outdated'] },
+    reportType: { type: String, required: false, enum: HELP_FEEDBACK_REPORT_TYPES },
     // Deprecated - see IHelpEventDocument above. Read-only legacy field.
     comment: { type: String, required: false, maxlength: 1000 },
     chatQuestion: { type: String, required: false, maxlength: 2000 },

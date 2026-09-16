@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
@@ -10,6 +10,7 @@ import {
 import { FeedbackModel, FeedbackTextModel, HelpEventModel, User } from '@bike4mind/database';
 import { FEEDBACK_CONTENT_RETENTION_DAYS } from '@bike4mind/common';
 import errorHandler from '@server/middlewares/errorHandler';
+import { routeHelpCommentToFeedback } from '@server/utils/helpFeedbackRouting';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
 // hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
@@ -76,6 +77,12 @@ afterAll(async () => {
 afterEach(async () => {
   await mongoose.connection.dropDatabase();
   vi.clearAllMocks();
+});
+
+// dropDatabase above takes the indexes with it, so without this every test would run against a
+// collection with no unique constraint - and the two race tests below would pass vacuously.
+beforeEach(async () => {
+  await FeedbackModel.createIndexes();
 });
 
 const stubLogger = () => {
@@ -332,5 +339,161 @@ describe('help feedback consolidation', () => {
 
     expect(body.articleFeedback).toHaveLength(1);
     expect(body.articleFeedback[0].comment).toBeUndefined();
+  });
+
+  /**
+   * Zod puts no `.min(1)` on `comment`, so a whitespace-only note reaches the router as a real
+   * string. The trim guard is the only thing between it and a permanent report that says nothing,
+   * and it has to stay on the RAW text - see writeFeedbackText's contract.
+   */
+  it('writes no report for a whitespace-only comment', async () => {
+    const user = await makeUser();
+
+    await call(articleHandler, 'POST', user, { slug: 'a', rating: 'helpful', comment: '   \n  ' });
+
+    expect(await FeedbackModel.countDocuments({})).toBe(0);
+    expect(await HelpEventModel.countDocuments({ type: 'article_feedback' })).toBe(1);
+  });
+
+  /**
+   * Once the text sibling ages out under its TTL the report itself remains, so the read half has
+   * to drop that event's comment rather than surfacing an empty string as if the user wrote one.
+   */
+  it('reads back no comment once the text sibling has been swept', async () => {
+    const user = await makeUser();
+    await call(articleHandler, 'POST', user, { slug: 'a', rating: 'helpful', comment: 'will age out' });
+
+    const report = await FeedbackModel.findOne({}).lean();
+    await FeedbackTextModel.deleteOne({ _id: report!._id });
+
+    const body = (await call(myFeedbackHandler, 'GET', user))._getJSONData();
+    expect(body.articleFeedback).toHaveLength(1);
+    expect(body.articleFeedback[0].comment).toBeUndefined();
+    // The report is permanent and still says which article it was about.
+    expect(report!.helpContext?.slug).toBe('a');
+  });
+
+  /**
+   * `reportType` is copied for the same reason the rating is: the event it came from expires in
+   * 90 days and the report does not, so an admin triaging later would otherwise lose the single
+   * strongest signal the help center emits.
+   */
+  it('copies the outdated flag onto the routed report', async () => {
+    const user = await makeUser();
+
+    await call(articleHandler, 'POST', user, {
+      slug: 'a',
+      rating: 'not_helpful',
+      reportType: 'outdated',
+      comment: 'steps no longer match the UI',
+    });
+
+    const reports = await FeedbackModel.find({}).lean();
+    expect(reports).toHaveLength(1);
+    expect(reports[0].helpContext?.reportType).toBe('outdated');
+  });
+
+  /**
+   * The thumbs and the comment are two independent submissions, so a user can leave a note and
+   * then flip the thumb without retyping it. The report that note created has to follow, or an
+   * admin triages a "Thumbs Down" that the user already moved away from.
+   */
+  it('carries a rating flipped after the comment onto the routed report', async () => {
+    const user = await makeUser();
+
+    await call(articleHandler, 'POST', user, { slug: 'a', rating: 'not_helpful', comment: 'this article is wrong' });
+    await call(articleHandler, 'POST', user, { slug: 'a', rating: 'helpful' });
+
+    const reports = await FeedbackModel.find({}).lean();
+    expect(reports).toHaveLength(1);
+    expect(reports[0].type).toBe('Thumbs Up');
+    expect(reports[0].helpContext?.rating).toBe('helpful');
+    // The note itself is untouched by a rating change.
+    const text = await FeedbackTextModel.findById(reports[0]._id).lean();
+    expect(text?.content).toBe('this article is wrong');
+  });
+
+  it('carries a flipped chat rating onto the routed report too', async () => {
+    const user = await makeUser();
+    const chat = { chatQuestion: 'q', chatAnswer: 'a' };
+
+    await call(chatHandler, 'POST', user, { ...chat, rating: 'helpful', comment: 'actually incomplete' });
+    await call(chatHandler, 'POST', user, { ...chat, rating: 'not_helpful' });
+
+    const reports = await FeedbackModel.find({}).lean();
+    expect(reports).toHaveLength(1);
+    expect(reports[0].type).toBe('Thumbs Down');
+    expect(reports[0].helpContext?.rating).toBe('not_helpful');
+  });
+
+  /**
+   * The sync is update-only on purpose: a user who rates without ever writing anything has left
+   * behavior, not feedback, and it stays in the help event store.
+   */
+  it('creates no report when a rating changes on an article nobody commented on', async () => {
+    const user = await makeUser();
+
+    await call(articleHandler, 'POST', user, { slug: 'a', rating: 'helpful' });
+    await call(articleHandler, 'POST', user, { slug: 'a', rating: 'not_helpful' });
+
+    expect(await FeedbackModel.countDocuments({})).toBe(0);
+  });
+
+  /**
+   * The find-or-create in the router is two round trips, so the database is what has to refuse a
+   * second report for one help event. Asserted directly because the collapse-to-one behavior in
+   * the next test rests entirely on this constraint existing.
+   */
+  it('refuses a second report for one help event at the index', async () => {
+    const user = await makeUser();
+    await call(articleHandler, 'POST', user, { slug: 'a', rating: 'helpful', comment: 'first' });
+    const report = await FeedbackModel.findOne({}).lean();
+
+    await expect(
+      FeedbackModel.create({
+        userId: user.id,
+        status: 'New',
+        username: 'help-user',
+        type: 'Feedback',
+        subject: 'help',
+        helpContext: report!.helpContext,
+        contentStored: false,
+      })
+    ).rejects.toThrow(/E11000/);
+  });
+
+  /**
+   * A double-submit, a retried request or a second tab puts two writes on one help event at once.
+   * Whichever way they interleave - both reads missing, or the second serializing behind the
+   * first - the pair has to converge on a single report rather than giving an admin the same
+   * comment twice, and must leave no orphaned text sibling behind.
+   */
+  it('collapses two concurrent submissions for one help event into one report', async () => {
+    const user = await makeUser();
+    await call(articleHandler, 'POST', user, { slug: 'a', rating: 'helpful' });
+    const event = await HelpEventModel.findOne({}).lean();
+
+    const submitter = { id: user.id, username: user.username, email: user.email };
+    const helpContext = {
+      eventId: event!._id.toString(),
+      surface: 'article' as const,
+      slug: 'a',
+      rating: 'helpful' as const,
+    };
+    const logger = stubLogger() as Parameters<typeof routeHelpCommentToFeedback>[0]['logger'];
+
+    await Promise.all([
+      routeHelpCommentToFeedback({ submitter, comment: 'racing note A', helpContext, logger }),
+      routeHelpCommentToFeedback({ submitter, comment: 'racing note B', helpContext, logger }),
+    ]);
+
+    const reports = await FeedbackModel.find({}).lean();
+    expect(reports).toHaveLength(1);
+    // Last writer wins, but both are valid outcomes of a race - the assertion is that one of the
+    // two comments survived intact, not which.
+    const text = await FeedbackTextModel.findById(reports[0]._id).lean();
+    expect(['racing note A', 'racing note B']).toContain(text?.content);
+    // The loser rolled its own sibling back rather than stranding it under the 90-day TTL.
+    expect(await FeedbackTextModel.countDocuments({})).toBe(1);
   });
 });

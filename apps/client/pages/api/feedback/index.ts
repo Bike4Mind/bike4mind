@@ -65,6 +65,7 @@ export const FEEDBACK_LIST_FIELDS = [
   'organizationId',
   'type',
   'subject',
+  'helpContext',
   'sessionId',
   'questId',
   'createdAt',

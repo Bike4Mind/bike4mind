@@ -1,5 +1,11 @@
 import mongoose, { Model, model, Schema } from 'mongoose';
-import { FEEDBACK_SUBJECTS, HELP_FEEDBACK_RATINGS, HELP_FEEDBACK_SURFACES, IFeedbackDocument } from '@bike4mind/common';
+import {
+  FEEDBACK_SUBJECTS,
+  HELP_FEEDBACK_RATINGS,
+  HELP_FEEDBACK_REPORT_TYPES,
+  HELP_FEEDBACK_SURFACES,
+  IFeedbackDocument,
+} from '@bike4mind/common';
 
 const feedbackSchema = new Schema<IFeedbackDocument>(
   {
@@ -34,6 +40,7 @@ const feedbackSchema = new Schema<IFeedbackDocument>(
           surface: { type: String, enum: HELP_FEEDBACK_SURFACES, required: true },
           slug: { type: String, required: false },
           rating: { type: String, required: false, enum: HELP_FEEDBACK_RATINGS },
+          reportType: { type: String, required: false, enum: HELP_FEEDBACK_REPORT_TYPES },
         },
         { _id: false }
       ),
@@ -59,9 +66,29 @@ feedbackSchema.index({ sessionId: 1, createdAt: -1 }, { name: 'feedback_sessionI
 // `subject` has no standalone index - 4 values means a scan would touch ~1/4 of the collection
 // anyway, so it rides as this compound index's second key instead.
 feedbackSchema.index({ organizationId: 1, subject: 1, createdAt: -1 }, { name: 'feedback_org_subject_createdAt' });
-// Sparse: only help-routed reports carry this key, and the help read path looks a report up by
-// the HelpEvent it annotates on every panel load.
-feedbackSchema.index({ 'helpContext.eventId': 1 }, { name: 'feedback_helpContext_eventId', sparse: true });
+// Only help-routed reports carry this key, and the help read path looks a report up by the
+// HelpEvent it annotates on every panel load.
+//
+// Unique rather than merely indexed: the help router finds-or-creates the one report attached to
+// a help event, and two submissions racing that read would otherwise both insert. A help event
+// belongs to a single user, so the event alone is the right uniqueness key.
+//
+// partialFilterExpression, NOT sparse: sparse would still index every non-help report under a
+// null key and collide them all against each other.
+//
+// Left to autoIndex rather than pre-built by a migration, unlike the FabFile and Quest indexes:
+// `helpContext` ships with this change, so the partial filter matches nothing on the deploy that
+// first builds it and there is no foreground lock to take on DocumentDB. Note that autoIndex
+// cannot change the options of an index that already exists - narrowing or widening this one
+// later needs a migration that drops it first.
+feedbackSchema.index(
+  { 'helpContext.eventId': 1 },
+  {
+    name: 'feedback_helpContext_eventId',
+    unique: true,
+    partialFilterExpression: { 'helpContext.eventId': { $exists: true } },
+  }
+);
 
 export const FeedbackModel: Model<IFeedbackDocument> =
   mongoose.models.Feedback ?? model<IFeedbackDocument>('Feedback', feedbackSchema);

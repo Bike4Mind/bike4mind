@@ -33,24 +33,32 @@ export type HelpFeedbackSurface = (typeof HELP_FEEDBACK_SURFACES)[number];
 export const HELP_FEEDBACK_RATINGS = ['helpful', 'not_helpful'] as const;
 export type HelpFeedbackRating = (typeof HELP_FEEDBACK_RATINGS)[number];
 
+/** Structured problem reports a reader can file against an article, alongside the thumbs. Single
+ * source of truth for the same three consumers `HELP_FEEDBACK_RATINGS` serves. */
+export const HELP_FEEDBACK_REPORT_TYPES = ['outdated'] as const;
+export type HelpFeedbackReportType = (typeof HELP_FEEDBACK_REPORT_TYPES)[number];
+
 /**
  * Identifying context copied onto a report routed from the help center, so that a permanent row
  * saying "this help answer was wrong" is still actionable on its own. Deliberately carries no
- * free text: the article slug and the thumbs rating are structured signal and are safe to keep
- * permanently, whereas the chat question and answer are not, and stay on the 90-day `HelpEvent`
- * row that `eventId` points at.
+ * free text: the slug, the thumbs rating and the outdated report are structured signal and are
+ * safe to keep permanently, whereas the chat question and answer are not, and stay on the 90-day
+ * `HelpEvent` row that `eventId` points at.
  *
  * These rows carry no `sessionId`/`questId`, so they are invisible to the session-scoped reader
  * by design - `subject: 'help'` plus `organizationId` is how they are found instead.
  */
 export interface IHelpFeedbackContext {
-  /** The `HelpEvent` row this comment annotates. Expires on the same 90-day clock as the
-   * comment itself, so a live report always has a live event to join back to. */
+  /** The `HelpEvent` row this comment annotates. The event expires on a 90-day TTL and this
+   * report does not, so the join goes dead while the row lives on - which is exactly why the
+   * fields below are copied rather than read through it. */
   eventId: string;
   surface: HelpFeedbackSurface;
   /** Article slug - set for the 'article' surface only; help chat has no slug. */
   slug?: string;
   rating?: HelpFeedbackRating;
+  /** Set for the 'article' surface only; help chat has nothing to report as outdated. */
+  reportType?: HelpFeedbackReportType;
 }
 
 /**

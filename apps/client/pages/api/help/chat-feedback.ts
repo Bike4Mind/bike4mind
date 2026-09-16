@@ -3,7 +3,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { HelpEventModel } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import { HELP_FEEDBACK_RATINGS } from '@bike4mind/common';
-import { routeHelpCommentToFeedback } from '@server/utils/helpFeedbackRouting';
+import { routeHelpCommentToFeedback, syncRoutedVerdict } from '@server/utils/helpFeedbackRouting';
 import { z } from 'zod';
 
 const ChatFeedbackSchema = z.object({
@@ -72,6 +72,10 @@ const handler = baseApi()
         helpContext: { eventId: event.id, surface: 'chat', rating },
         logger: req.logger,
       });
+    } else if (rating) {
+      // Same two-site verdict as the article route - see syncRoutedVerdict. No reportType: help
+      // chat has no article to flag as outdated.
+      await syncRoutedVerdict({ eventId: event.id, userId, rating });
     }
 
     res.status(revised ? 200 : 201).json({ success: true });
