@@ -60,6 +60,7 @@ async function main() {
 
   // Newer npm audit v2 "vulnerabilities" shape (fallback when advisories is absent/empty)
   if (newAdvisories.length === 0 && data.vulnerabilities && typeof data.vulnerabilities === 'object') {
+    const seenGhsas = new Set();
     for (const [pkgName, vuln] of Object.entries(data.vulnerabilities)) {
       if (!vuln || typeof vuln !== 'object') continue;
       const severity = String(vuln.severity || '').toLowerCase();
@@ -67,7 +68,8 @@ async function main() {
       const viaEntries = Array.isArray(vuln.via) ? vuln.via : [];
       const ghsas = viaEntries.map(v => v && v.url && v.url.match(/GHSA-[a-z0-9-]+/)?.[0]).filter(Boolean);
       for (const ghsa of ghsas) {
-        if (!allowlist.has(ghsa)) {
+        if (!allowlist.has(ghsa) && !seenGhsas.has(ghsa)) {
+          seenGhsas.add(ghsa);
           newAdvisories.push({ ghsa, severity, pkg: pkgName });
         }
       }
