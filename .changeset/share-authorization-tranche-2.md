@@ -153,7 +153,8 @@ what the structural test compares, and body drift is no longer possible. `findAl
 declares the `Pick<IUserDocument, 'id' | 'groups'>` it actually consumes, which removes two casts at
 the `createProject` call site. Its sibling `findAllUpdateAccessByIds` still takes a full
 `IUserDocument` and is unchanged here.
-`GET /api/invites/[id]` validates the id shape before `findById`, matching its sibling route.
+`GET /api/invites/[id]` screens the id shape before `findById` and answers a malformed id with the
+same 404 as a missing or unauthorized one, so the status never tells a caller which ids exist.
 The `backfill-invite-inviter-id` migration backfills `Invite.inviterId` from the username every
 invite already persists, which is the closing move for the legacy propagation fallback in
 `accept.ts`. It scans on an `_id` cursor rather than loading the whole matching set at once, since
