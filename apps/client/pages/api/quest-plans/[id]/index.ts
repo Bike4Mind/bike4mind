@@ -60,8 +60,10 @@ const handler = baseApi()
         return res.status(403).json({ error: 'Access denied' });
       }
 
+      // Read-triggered touch: persist only lastAccessedAt, never the whole snapshot,
+      // so a concurrent owner revocation or visibility change is not reverted.
       plan.lastAccessedAt = new Date();
-      await questMasterPlanRepository.update(plan);
+      await questMasterPlanRepository.update({ id: planId, lastAccessedAt: plan.lastAccessedAt });
 
       res.json(plan);
     } catch (error) {
@@ -126,7 +128,11 @@ const handler = baseApi()
         }
       }
 
-      if (goal !== undefined) plan.goal = goal;
+      // Persist only the fields this request changed, never a spread of the read
+      // snapshot - a whole-document write would revert any concurrent atomic write
+      // (e.g. a share change) that landed during this handler.
+      const changes: Partial<typeof plan> & { id: string } = { id: planId };
+      if (goal !== undefined) changes.goal = goal;
       if (state !== undefined) {
         const currentState = plan.state || 'active';
         if (!questMasterPlanRepository.isValidStateTransition(currentState, state)) {
@@ -134,16 +140,16 @@ const handler = baseApi()
             error: `Invalid state transition from '${currentState}' to '${state}'`,
           });
         }
-        plan.state = state;
+        changes.state = state;
       }
-      if (visibility !== undefined) plan.visibility = visibility;
-      if (tags !== undefined) plan.tags = tags;
-      if (priority !== undefined) plan.priority = priority;
-      if (sharedUserIds !== undefined) plan.sharedWith = sharedUserIds;
+      if (visibility !== undefined) changes.visibility = visibility;
+      if (tags !== undefined) changes.tags = tags;
+      if (priority !== undefined) changes.priority = priority;
+      if (sharedUserIds !== undefined) changes.sharedWith = sharedUserIds;
 
-      plan.lastAccessedAt = new Date();
+      changes.lastAccessedAt = new Date();
 
-      const updated = await questMasterPlanRepository.update(plan);
+      const updated = await questMasterPlanRepository.update(changes);
       res.json(updated);
     } catch (error) {
       console.error('Error updating quest plan:', error);
@@ -174,9 +180,8 @@ const handler = baseApi()
         return res.status(403).json({ error: 'Only owner can archive quest plan' });
       }
 
-      // Soft delete by archiving
-      plan.state = 'archived';
-      await questMasterPlanRepository.update(plan);
+      // Soft delete by archiving - targeted write so it cannot revert a concurrent change.
+      await questMasterPlanRepository.update({ id: planId, state: 'archived' });
 
       res.status(204).end();
     } catch (error) {

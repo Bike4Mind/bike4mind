@@ -274,6 +274,30 @@ describe('KimiBackend streaming reasoning', () => {
     expect(joined.match(/<think>/g)?.length).toBe(joined.match(/<\/think>/g)?.length);
   });
 
+  it('keeps the prose from a delta that carries the monologue tail and the answer together', async () => {
+    // The reasoning branch used to return before the block-closing branch ever
+    // ran, so a chunk holding both fields lost its content silently - no error,
+    // just a missing first word. Same shape in deepseekBackend, fixed alongside.
+    const { backend } = streamingBackend([
+      [
+        { choices: [{ index: 0, delta: { reasoning_content: 'thinking' } }] },
+        { choices: [{ index: 0, delta: { reasoning_content: ' more', content: 'The answer' } }] },
+        {
+          choices: [{ index: 0, delta: { content: ' is 42' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        },
+      ],
+    ]);
+
+    const frames = await runStream(backend, ChatModels.KIMI_K3);
+    const joined = frames
+      .flatMap(f => f.text)
+      .filter(Boolean)
+      .join('');
+
+    expect(joined).toBe('<think>thinking more</think>The answer is 42');
+  });
+
   it('throws a diagnosable error when a stream produces no content and no tool', async () => {
     // The streaming path had no equivalent of the non-streaming length guard, so an
     // empty stream returned silently with zero callbacks and the chat hung.

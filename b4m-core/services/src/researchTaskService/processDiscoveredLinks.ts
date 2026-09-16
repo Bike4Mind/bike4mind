@@ -81,8 +81,15 @@ export const processDiscoveredLinks = async (
 
     if (!links || links.length === 0) return;
 
+    // Owner-scoped, matching findExistingResearchData: the org narrows the lookup, it never widens
+    // it to another member's research data. Resolving a colleague's record here would hand this
+    // task their FabFile.
     const researchData = researchTask.organizationId
-      ? await db.researchDatas.findByUrlAndOrganizationId(url, researchTask.organizationId)
+      ? await db.researchDatas.findByUrlAndUserIdAndOrganizationId(
+          url,
+          researchTask.userId,
+          researchTask.organizationId
+        )
       : await db.researchDatas.findByUrlAndUserId(url, researchTask.userId);
 
     if (!researchData)
@@ -345,7 +352,14 @@ export const processDiscoveredLinks = async (
       researchTask.status = ResearchTaskStatus.FAILED;
       researchTask.statusFailedMessage = e.message;
       researchTask.statusFailedAt = new Date();
-      db.researchTasks.update(researchTask);
+      // Write only the fields this error path sets, not the whole stale researchTask (see process.ts):
+      // a whole-doc write would clobber a concurrent update.
+      db.researchTasks.update({
+        id: researchTask.id,
+        status: researchTask.status,
+        statusFailedMessage: researchTask.statusFailedMessage,
+        statusFailedAt: researchTask.statusFailedAt,
+      });
     } else {
       throw e;
     }

@@ -1,4 +1,5 @@
 import {
+  type AttachmentLakeAccess,
   IChatHistoryItemDocument,
   IFabFileDocument,
   IMessage,
@@ -8,6 +9,8 @@ import {
   Permission,
   SettingKey,
   defaultEmbeddingModelForEnv,
+  isSupportedEmbeddingModel,
+  type SupportedEmbeddingModel,
   QueryComplexityType,
   getTextModelCost,
   CACHE_READ_MULTIPLIER,
@@ -39,7 +42,7 @@ import {
   calculateTotalTokenLength,
   ClientMessageSender,
   EmbeddingFactory,
-  getProviderFromModel,
+  resolveEmbeddingWithKeylessFallback,
   fetchAndConvertFabFiles,
   fetchAndProcessPreviousMessages,
   getLlmWithFallback,
@@ -68,7 +71,7 @@ import {
   effectiveContextWindow,
   safeInputWindow,
 } from '@bike4mind/utils';
-import type { FabFileNotice } from '@bike4mind/utils';
+import type { FabFileNotice, EmbeddingCredential } from '@bike4mind/utils';
 import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
@@ -95,13 +98,14 @@ import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
 import { settleToolCallCredits } from './settleToolCredits';
 import { resolvePersonalCorpusOnly } from './resolvePersonalCorpusOnly';
 import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
+import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedReplyAccumulator';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
+import { resolveCorrectionContext } from './buildCorrectionContext';
 import { LATTICE_TOOL_NAMES } from './tools';
 import {
   getDynamicDataLakeAccess,
   lakeMembershipsFrom,
   warnIfManyLakeMemberships,
-  type ResolvedLakeAccess,
 } from '../dataLakeService/getDynamicDataLakeTags';
 import {
   buildElisionStamp,
@@ -148,13 +152,19 @@ import {
   filterByPromptMode,
   filterFeaturesByPromptMode,
   markShareablePrefixBoundary,
+  PROMPT_MODE_SOURCES,
   PROMPT_SOURCE_METADATA,
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
+  resolveSkipAutoOffers,
   toPromptDetails,
   type PromptSourceId,
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
+import { vetPreauthorizedLakeIds } from './vetPreauthorizedLakeIds';
+import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
+import { narrowLakeAccessToSession, type ResolvedLakeAccessSet } from '../dataLakeService/narrowLakeAccessToSession';
+import { renderCallerPromptMessages } from './renderCallerPromptBlock';
 import { buildInsufficientCreditsMessage, buildMemberCreditCapMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
 import {
@@ -170,7 +180,13 @@ import {
   AnomalyAlertService,
   aggregateWebFetchContentTelemetry,
 } from '../telemetry';
-import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail, DataLakeGroundingMode } from '@bike4mind/common';
+import type {
+  ToolTelemetry,
+  ToolErrorCategory,
+  SystemPromptDetail,
+  DataLakeGroundingMode,
+  IAttachmentDelivery,
+} from '@bike4mind/common';
 import {
   buildAlwaysOnFloorDetails,
   buildInjectedBlockDetails,
@@ -577,12 +593,15 @@ export interface ResolveEnabledToolsInput {
    */
   hasAccessibleDataLake?: boolean;
   /**
-   * Skip OUR server-side auto-offers (step 2, the knowledge offer). Set for any `promptMode`,
-   * matching the auto-add gate at the request-parse site (`if (!parsedBody.promptMode)`): auto-adds
-   * are our additions, not the caller's, and attaching a tool also pulls the provider's tool-use
-   * preamble into the request - so a mode-driven eval, above all `raw` (the bare-model control
-   * arm), must not get surprise tools. Caller-selected and session-forced tools are unaffected;
-   * only step 2 is gated.
+   * Skip OUR server-side auto-offers (step 2, the knowledge offer). Resolved by
+   * resolveSkipAutoOffers from either trigger - any `promptMode`, or the `skipAutoOffers` request
+   * field - and every auto-add site reads that same helper: auto-adds are our additions, not the
+   * caller's, and attaching a tool also pulls the provider's tool-use preamble into the request, so
+   * a mode-driven eval, above all `raw` (the bare-model control arm), must not get surprise tools.
+   * The request field is that same suppression without a mode, for an arm that must not be OFFERED
+   * knowledge while keeping the authored prompts a mode would strip - it withholds the tool, not
+   * knowledge (same caveat as ChatCompletionInvokeParamsSchema.skipAutoOffers). Caller-selected and
+   * session-forced tools are unaffected; only step 2 is gated.
    */
   skipAutoOffers?: boolean;
 }
@@ -595,8 +614,9 @@ export interface ResolveEnabledToolsInput {
  *      knowledge: documents attached to THIS session (hasAttachedKnowledge) OR a data lake they
  *      can reach (hasAccessibleDataLake). Attaching files / having a lake is a far stronger
  *      retrieval signal than any phrase match, and offering a tool is cheap (the model may
- *      decline) whereas withholding it is unrecoverable. Skipped when `skipAutoOffers` is set
- *      (prompt-mode requests), since the offer is our addition, not the caller's.
+ *      decline) whereas withholding it is unrecoverable. Skipped when `skipAutoOffers` is set -
+ *      by a promptMode or by the caller's own request field, see resolveSkipAutoOffers - since the
+ *      offer is our addition, not the caller's.
  *   3. companion pairing        - a tool useless without its partner rides along
  *      (search_knowledge_base -> retrieve_knowledge_content, image_generation ->
  *      edit_image). Runs AFTER the union/offer so session-forced and auto-offered tools
@@ -635,6 +655,8 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
   // Cardinality rides along with search: a corpus you can search but not count is what made the
   // model treat a count question as proof it had no access at all.
   paired = addPairedTool(paired, 'search_knowledge_base', 'count_knowledge_base');
+  // Corpus shape rides along too (#1292): topics, folders and pipeline health, same reasoning.
+  paired = addPairedTool(paired, 'search_knowledge_base', 'describe_knowledge_base');
   return paired.filter(tool => !denied.has(tool));
 }
 
@@ -782,20 +804,61 @@ export class ChatCompletionProcess {
    */
   public personalCorpusOnly = false;
 
+  /**
+   * The vector space this turn's CORPUS is in, and the credential (if any) that was missing when
+   * that was resolved. Set once per turn at the credential-table seam in `process()`; read by
+   * KnowledgeRetrievalFeature, which must NOT re-derive either value from the EmbeddingFactory (see
+   * the note at the seam for the three states an empty factory config conflates).
+   *
+   * Deliberately NOT "the model this turn embeds with": a caller may name an `embeddingModel` on
+   * the request, and that parameter moves the QUERY embedder without moving the corpus or the
+   * knowledge tool, which resolves from `defaultEmbeddingModel` alone. Readers here are comparing
+   * against stored chunk labels, so the corpus is the basis they want - see the seam.
+   *
+   * `missing: null` is the only state that means "ready to embed": a non-null value means this turn
+   * holds no usable credential for `model` AND the resolver declined to substitute a keyless one,
+   * so the loud missing-credential error is still the right answer.
+   *
+   * Undefined before the seam runs, which readers must treat as "not resolved yet" rather than as
+   * any particular model - defaulting it to the stage-neutral advertised model is what would let a
+   * keyless stage compare its Bedrock-stamped corpus against ada-002 and call every file foreign.
+   *
+   * `requested` is what the seam was ASKED for, kept so a reader can tell a substitution from a
+   * deliberate choice. `model === requested` means no substitution happened, however keyless the
+   * provider looks: a caller (or an admin) may name a Bedrock model outright on a fully keyed
+   * stage, and reading that as "this deployment is keyless" would override the configured model
+   * with itself at best, and with the wrong vector space at worst.
+   *
+   * `configured` is false when `defaultEmbeddingModel` was unset or named an unregistered model and
+   * the seam fell back to the env default. The seam needs SOME model to build a factory with, but a
+   * reader whose job is to agree with `search_knowledge_base` must decline in that state, because
+   * the tool does not share this fallback: an unusable setting makes it abandon the semantic arm
+   * outright and answer from keyword search (knowledgeBaseSearch/index.ts), so a doc deferred on an
+   * env-derived match is deferred to a search that cannot vector-match it.
+   */
+  public embeddingBinding?: {
+    requested: SupportedEmbeddingModel;
+    model: SupportedEmbeddingModel;
+    missing: EmbeddingCredential | null;
+    configured: boolean;
+  };
+
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
   /**
    * Per-turn memo for the caller's resolved data-lake access. Shared by the tool-offer check
-   * (userHasAccessibleKnowledgeLake) and the corpus inline-defer plan (resolveCorpusInlinePlan) so
-   * the two can never disagree - it is the SAME access the knowledge tool resolves with.
+   * (userHasAccessibleKnowledgeLake), the corpus inline-defer plan (resolveCorpusInlinePlan) and
+   * the retrieval seed's `lakeScope`, so none of them can disagree - it is the SAME access the
+   * knowledge tool resolves with.
    */
-  private accessibleDataLakeAccessMemo:
-    | {
-        dataLakeTags: string[];
-        dataLakeTagPrefixes: string[];
-        lakes: ResolvedLakeAccess[];
-      }
-    | undefined;
+  private accessibleDataLakeAccessMemo: ResolvedLakeAccessSet | undefined;
+  /**
+   * This turn's VETTED `session.preauthorizedLakeIds` (see vetPreauthorizedLakeIds), captured on a
+   * field because `getAccessibleDataLakeAccess` is a session-less private method and its consumers
+   * - the attachment classifier, the tool-offer gate, the inline-defer plan - all read its memo.
+   * Undefined means no admission this turn, which makes the widening a no-op.
+   */
+  private turnPreauthorizedLakeIds: string[] | undefined;
   /**
    * Per-turn memo for the session's attached-knowledge file docs (`session.knowledgeIds`), shared
    * by the tool-offer gate (`hasAttachedKnowledge`, see `process()`) and `resolveCorpusInlinePlan`
@@ -923,19 +986,24 @@ export class ChatCompletionProcess {
    * tool-offer and the inline-defer decisions can never disagree. Fail-safe: any error degrades to
    * empty access (treated as "no lake"), never breaks the turn.
    */
-  private async getAccessibleDataLakeAccess(): Promise<{
-    dataLakeTags: string[];
-    dataLakeTagPrefixes: string[];
-    lakes: ResolvedLakeAccess[];
-  }> {
+  private async getAccessibleDataLakeAccess(): Promise<ResolvedLakeAccessSet> {
     if (this.accessibleDataLakeAccessMemo === undefined) {
       try {
         const entitlementKeys = await this.resolveEntitlementKeys();
-        this.accessibleDataLakeAccessMemo = await getDynamicDataLakeAccess({
+        const resolved = await getDynamicDataLakeAccess({
           db: this.db,
           user: this.user,
           entitlementKeys,
         });
+        // Same union the retrieval and tool doors run, so all three agree on what this session can
+        // reach; it re-derives the manage gate per call, so a revoked maintainer's memo comes back
+        // un-widened exactly as it would have before the admission.
+        this.accessibleDataLakeAccessMemo = await unionPreauthorizedLakeAccess(
+          resolved,
+          this.turnPreauthorizedLakeIds,
+          this.user.id,
+          this.db
+        );
       } catch (err) {
         this.logger.warn(
           `[dataLakes] accessible-lake resolution failed; treating as no lake: ${(err as Error)?.message}`
@@ -943,6 +1011,7 @@ export class ChatCompletionProcess {
         this.accessibleDataLakeAccessMemo = {
           dataLakeTags: [],
           dataLakeTagPrefixes: [],
+          scopedTagPrefixes: [],
           lakes: [],
         };
       }
@@ -953,10 +1022,11 @@ export class ChatCompletionProcess {
   /**
    * How many of `ids` are reachable AS LAKE CONTENT by this caller.
    *
-   * Deliberately a second read rather than reusing `getAttachedKnowledgeFiles`, whose CASL scope has
-   * no lake arm: an organization lake widens reach through the lake creator's identity, so a member
-   * attaching a teammate's lake file is invisible to an ownership/share-based reader. Classifying a
-   * corpus as "personal" off that reader alone is how such a session lost its grounding.
+   * Deliberately a second read rather than reusing `getAttachedKnowledgeFiles`: that method now also
+   * carries a lake arm (see `attachmentLakeAccess`), but it answers a different question - ownership-
+   * OR-lake reachability - while this one asks whether the file is lake content AT ALL. A file that
+   * resolves through `getAttachedKnowledgeFiles` might have matched purely on ownership, so its
+   * success can't tell "personal" from "lake"; running LAKE-ONLY here is what can.
    *
    * Runs LAKE-ONLY: `restrictToDataLake` makes buildOwnershipConditions start from no ownership
    * arms at all (fabFileSearchQuery: `restrictToDataLake ? [] : [...baseAccess]`), so only the lake
@@ -993,8 +1063,13 @@ export class ChatCompletionProcess {
           //   longer counts, since the arm now requires the lake creator's userId.
           //   WIDENS only where the attachment is readable by a route buildOwnershipConditions'
           //   baseAccess lacks: `isGlobalRead` is in the CASL FabFile read scope (ability.ts) but
-          //   NOT in baseAccess. Every other caller fails resolvePersonalCorpusOnly's
-          //   full-resolution guard first, so this count is never reached at all.
+          //   NOT in baseAccess. `getAttachedKnowledgeFiles` now also carries a lake arm (see
+          //   `attachmentLakeAccess`), so a lake reader attaching lake files they do not own now
+          //   resolves fully there too - resolvePersonalCorpusOnly's full-resolution guard
+          //   (`resolvePersonalCorpusOnly.ts:62`) passes, and this count IS reached for exactly that
+          //   caller. It is what correctly classifies the corpus as non-personal: the residual
+          //   affected set is a lake reader attaching lake files in a session that is neither
+          //   lake-scoped nor in `retrieve` mode.
           lakeMemberships,
           restrictToDataLake: true,
           excludeContent: true,
@@ -1010,6 +1085,33 @@ export class ChatCompletionProcess {
   }
 
   /**
+   * The lake arms the attachment door adds to its CASL scope.
+   *
+   * Owner-wide and deliberately NOT narrowed to `session.retrievalTags`: unlike every retrieval
+   * surface (which narrows via `narrowLakeAccessToSession`), the caller here named the file ids
+   * explicitly, and narrowing would turn an explicit request into a silent refusal.
+   *
+   * `lakeMembershipsFrom` must stay the source for `lakeMemberships` - it allow-lists
+   * `kind === 'owned'`, and an unanchored registry prefix arm sitting beside other lakes' arms in
+   * one `$or` is the cross-tenant promotion the SCOPED/OPEN split forbids. Registry lakes are
+   * covered by `dataLakeTagPrefixes` instead. Never construct `lakeMemberships` any other way here.
+   *
+   * Fail direction is inherited from `getAccessibleDataLakeAccess`, which catches its own failures
+   * and returns an empty access set - so a lake-resolution outage degrades to today's
+   * ownership-only behaviour. Never widen on error.
+   */
+  private async attachmentLakeAccess(): Promise<AttachmentLakeAccess> {
+    const access = await this.getAccessibleDataLakeAccess();
+    const lakeMemberships = lakeMembershipsFrom(access.lakes);
+    warnIfManyLakeMemberships(lakeMemberships, this.logger, 'attachment-resolution');
+    return {
+      lakeMemberships,
+      dataLakeTags: access.dataLakeTags,
+      dataLakeTagPrefixes: access.dataLakeTagPrefixes,
+    };
+  }
+
+  /**
    * The session's attached-knowledge file docs (`session.knowledgeIds`), memoized per turn.
    * Returns `null` on a lookup failure rather than throwing - callers decide their own fail
    * direction (the tool-offer gate fails toward offering; `resolveCorpusInlinePlan` fails toward
@@ -1022,7 +1124,8 @@ export class ChatCompletionProcess {
     if (this.attachedKnowledgeFilesMemo === undefined) {
       try {
         const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
-        this.attachedKnowledgeFilesMemo = await this.db.fabfiles.getAccessibleFiles(ids, scope);
+        const lakeAccess = await this.attachmentLakeAccess();
+        this.attachedKnowledgeFilesMemo = await this.db.fabfiles.getAccessibleFiles(ids, scope, lakeAccess);
       } catch (err) {
         this.logger.warn(
           `[knowledge] attached-file lookup failed; treating attached knowledge as indexed (fail open): ${(err as Error)?.message}`
@@ -1055,6 +1158,22 @@ export class ChatCompletionProcess {
     defaultAdminSettings: Record<string, string>;
     /** The SAME filter the knowledge tools are built with - see the retrievability comment below. */
     retrievalFilter: RetrievalExclusionOptions;
+    /**
+     * The vector space this turn's corpus is in, after the credential seam resolved it
+     * (`this.embeddingBinding`). NOT the raw `defaultEmbeddingModel` setting, which is deliberately
+     * stage-neutral and browser-safe: on a keyless stage the corpus is stamped with the keyless
+     * model the vectorizer settled on, so comparing file labels to the raw setting marks every
+     * correctly-embedded file as living in a foreign vector space. It is also NOT a caller's
+     * `embeddingModel` request parameter, which never reaches `search_knowledge_base` - see the
+     * seam. Undefined means the credential seam has not run, which - like a missing credential -
+     * means nothing is deferrable.
+     */
+    embeddingBinding?: {
+      requested: SupportedEmbeddingModel;
+      model: SupportedEmbeddingModel;
+      missing: EmbeddingCredential | null;
+      configured: boolean;
+    };
     /**
      * The session's resolved per-lake grounding mode (`session.corpusGroundingMode`), set at
      * create time for a lake session. Overrides the size heuristic: `inline` never defers,
@@ -1118,12 +1237,12 @@ export class ChatCompletionProcess {
     if ((skipAutoOffers || knowledgeSearchDisabled) && mode === 'retrieve') {
       this.logger.warn(
         `[dataLakes] grounding mode 'retrieve' requested but the knowledge tool is ${
-          skipAutoOffers ? 'not offered (promptMode)' : 'disabled for this session'
+          skipAutoOffers ? 'not offered (auto-offers suppressed)' : 'disabled for this session'
         }; inlining the corpus (${attachedCount} doc(s)) to avoid stranding it.`
       );
     }
-    // promptMode is an eval/passthrough surface where the tool is NOT offered - deferring there
-    // would strand the corpus with no retrieval path. Symmetric with the tool-offer gate.
+    // Whatever suppressed the offer (a promptMode, or the request field), the tool is NOT there -
+    // deferring to it would strand the corpus with no reader. Symmetric with the tool-offer gate.
     if (skipAutoOffers) return noDefer;
     // Same reasoning one step further: `session.disabledTools` wins over every other tool gate
     // (including the post-build denylist pass, which runs AFTER this plan), so deferring to a
@@ -1158,7 +1277,18 @@ export class ChatCompletionProcess {
       // the #1440 lake-memory copy of this same "can the knowledge tool actually reach this doc"
       // predicate (fully vectorized + same embedding model + live/not-excluded). The two live in
       // different packages with no shared symbol; change one, change the other.
-      const queryEmbeddingModel = getSettingsValue('defaultEmbeddingModel', defaultAdminSettings);
+      // The space `search_knowledge_base` will ACTUALLY query, after the credential seam - not the
+      // advertised setting, and not a caller's request parameter (the tool resolves from
+      // `defaultEmbeddingModel` and nothing else, so the parameter cannot move what it reads).
+      //
+      // Undefined unless BOTH halves of that agreement hold, and the `sameVectorSpace` test below
+      // reads undefined as "the semantic arm cannot run", so nothing is deferrable. `missing` non-
+      // null means no query vector can be produced at all. `configured` false means the setting was
+      // unset or unregistered and the seam fell back to the env default to have something to embed
+      // with - a fallback the tool does not share, so matching a file label against it would defer
+      // a doc to a search that has already abandoned its semantic arm.
+      const binding = input.embeddingBinding;
+      const toolVectorSpace = binding?.missing === null && binding.configured ? binding.model : undefined;
       const retrievableIds = files
         .filter(file => {
           const lakeTagged = (file.tags ?? []).some(tag => accessibleTags.has(tag.name));
@@ -1169,7 +1299,7 @@ export class ChatCompletionProcess {
           // unlabeled-but-vectorized doc stays inlined rather than risk a strand. Do NOT consolidate
           // this onto isForeignEmbeddingModel - that loosens the gate to defer unlabeled docs the
           // semantic arm may not actually reach, which is the content-losing direction.
-          const sameVectorSpace = Boolean(queryEmbeddingModel) && file.embeddingModel === queryEmbeddingModel;
+          const sameVectorSpace = Boolean(toolVectorSpace) && file.embeddingModel === toolVectorSpace;
           // The tool is built with `retrievalFilter: toRetrievalFilter(session)` and enforces it on
           // BOTH arms, so a doc the filter excludes is unreachable however well vectorized it is.
           // Checking the same predicate here is what stops the two lists diverging - the gap this
@@ -1291,7 +1421,7 @@ export class ChatCompletionProcess {
     // intent-or-continuation check needs the fetched history; `skill` needs the invocable-skill
     // catalog SkillsFeature populates later) - see the conditional auto-add in process(), after
     // previous messages are fetched and the feature loop has run.
-    if (!parsedBody.promptMode) {
+    if (!resolveSkipAutoOffers(parsedBody)) {
       if (!enabledTools.includes('navigate_view') && shouldAutoEnableNavigateView(parsedBody.extraContextMessages)) {
         finalEnabledTools.push('navigate_view');
       }
@@ -1629,9 +1759,20 @@ export class ChatCompletionProcess {
       }
       quest.status = 'running';
 
+      // Captured HERE, ahead of every consumer, because getAccessibleDataLakeAccess memoizes per
+      // turn: whoever touches it first freezes the access set for the rest of the turn. A
+      // pre-authorized lake missing from that set does not merely fail to widen retrieval - it
+      // reads to the attachment classifier as "this file belongs to no lake I can reach", which
+      // marks the corpus personal and SUPPRESSES the lake arms for the one session the admission
+      // exists to serve.
+      this.turnPreauthorizedLakeIds = vetPreauthorizedLakeIds(session, this.user.id);
+
       const hasAnyAttachment = (session.knowledgeIds?.length ?? 0) > 0;
-      // Any promptMode is an eval/passthrough that must not receive our server-side offers.
-      const skipAutoOffers = Boolean(promptMode);
+      // Withholds OUR auto-offers, via a promptMode or the caller's request field - see
+      // resolveSkipAutoOffers. Every gate after this point reads this local rather than re-deriving
+      // the rule; the one site that cannot is the navigate_view auto-add, which runs in
+      // initializeProcessContext before this exists and so calls the same helper directly.
+      const skipAutoOffers = resolveSkipAutoOffers(parsedBody);
       // Kicked off here (not awaited yet) so its DB read overlaps with the models/admin-settings
       // fetch below instead of serializing in front of it - folded into that Promise.all.
       //
@@ -1824,6 +1965,9 @@ export class ChatCompletionProcess {
       // must be the same value - a telemetry field that recomputes its own answer is a field that
       // can disagree with the behaviour it claims to describe.
       const forcedRetrievalEnabled = resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval);
+      // The field, not a second vetPreauthorizedLakeIds call: the offer/classification path above
+      // and the retrieval feature below must be admitted for the same lakes or they disagree.
+      const vettedPreauthorizedLakeIds = this.turnPreauthorizedLakeIds;
       await this.buildOptimizedFeatures(
         defaultAdminSettings,
         enableQuestMaster || false,
@@ -1841,7 +1985,9 @@ export class ChatCompletionProcess {
         forcedRetrievalEnabled,
         session.retrievalTags,
         session.citationStyle,
-        toRetrievalFilter(session)
+        toRetrievalFilter(session),
+        session.lakeScopeExplicit,
+        vettedPreauthorizedLakeIds
       );
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Optimized features built (${optimizedFeatureList.join(', ')}) in ${
@@ -2139,16 +2285,73 @@ export class ChatCompletionProcess {
       const historyStartTime = Date.now();
       this.sendStatusUpdate(quest, 'Reviewing previous messages...', { statusAt: new Date() });
 
-      const finalEmbeddingModel = embeddingModel || defaultEmbeddingModelForEnv();
-
-      // Give the factory only the credential the chosen model's provider needs.
+      // Give the factory only the credential the chosen model's provider needs - which the
+      // resolver already returns, keyed to the model it settled on. A keyless cloud stage lands on
+      // Bedrock here instead of building an OpenAI-shaped factory around an undefined key, which
+      // threw on the first embed; this is the same credential-table seam the ingest and search
+      // paths resolve at, so forced retrieval cannot disagree with the corpus it reads.
       // apiKeyTable.ollama carries the Ollama base URL (self-host); no secret.
-      const embeddingProvider = getProviderFromModel(finalEmbeddingModel);
-      const embeddingFactory = new EmbeddingFactory({
-        ...(embeddingProvider === 'openai' && { openaiApiKey: apiKeyTable?.openai }),
-        ...(embeddingProvider === 'voyageai' && { voyageApiKey: apiKeyTable?.voyageai }),
-        ...(embeddingProvider === 'ollama' && { ollamaBaseUrl: apiKeyTable?.ollama }),
-      });
+      //
+      // All THREE return values are kept, and that is load-bearing. `config` alone cannot tell the
+      // downstream readers apart, because `resolveEmbeddingConfig` returns an empty config for three
+      // different states: a real keyless-Bedrock substitution, an expired CALLER key, and a missing
+      // Ollama base URL - and the latter two are states the resolver deliberately refuses to
+      // substitute for. Any reader that re-derives "this deployment is keyless" from the factory's
+      // own default (which reports Titan for ANY empty config) collapses them back together and
+      // queries Bedrock on a keyed production stage or a self-host box. `missing` is what separates
+      // them: null means the config is ready to embed with, anything else means it is not.
+      //
+      // Two questions, and they are NOT the same one: which space the CORPUS is written in, and
+      // which model THIS request embeds its queries with. They agree on every ordinary request and
+      // diverge only when a caller names an `embeddingModel` explicitly, so collapsing them reads as
+      // a simplification - it is not. The binding below is read by the corpus defer gate, whose
+      // whole job is deciding what to hand to `search_knowledge_base`, and that tool resolves its
+      // own model from `defaultEmbeddingModel` alone (knowledgeBaseSearch/index.ts) - a request
+      // parameter never reaches it. Basing the gate on the parameter makes it compare against a
+      // space the tool will not query: every doc fails `sameVectorSpace`, nothing is deferrable, and
+      // the caller silently loses the corpus the parameter was supposed to search.
+      //
+      // The CORPUS basis is the admin setting, because that is what ingest writes with: it
+      // hard-requires `defaultEmbeddingModel` (fabFileChunk.ts) and stamps each chunk with whatever
+      // this same keyless seam then substituted for it. `defaultEmbeddingModelForEnv()` is
+      // env-derived (ada-002, or the Ollama model on a self-host), so it agrees with the corpus only
+      // by coincidence - whenever an admin picks any other model, every retrieval reader compares an
+      // env-derived model against an admin-chosen corpus and calls the whole library foreign. It
+      // stays as the last resort for an unset or unregistered setting.
+      const configuredEmbeddingModel = getSettingsValue('defaultEmbeddingModel', defaultAdminSettings);
+      const corpusIsConfigured =
+        typeof configuredEmbeddingModel === 'string' && isSupportedEmbeddingModel(configuredEmbeddingModel);
+      const corpusEmbeddingModel = corpusIsConfigured ? configuredEmbeddingModel : defaultEmbeddingModelForEnv();
+      // The QUERY basis honours an explicit request parameter, unchanged from before this seam
+      // existed. Searching an admin-chosen corpus with a caller-chosen model is its own (older)
+      // problem and not one this seam should start deciding silently.
+      const queryEmbeddingModel =
+        embeddingModel && isSupportedEmbeddingModel(embeddingModel) ? embeddingModel : corpusEmbeddingModel;
+
+      // Two resolutions rather than one memoized on equality: the resolver is a pure switch over a
+      // key table, so the second call is cheaper than the branch that would avoid it.
+      const corpusResolution = resolveEmbeddingWithKeylessFallback(corpusEmbeddingModel, apiKeyTable);
+      const { config: embeddingConfig } = resolveEmbeddingWithKeylessFallback(queryEmbeddingModel, apiKeyTable);
+      // Published on the instance rather than threaded through getContextMessages, whose signature
+      // is the shared feature interface - every feature implements it, so widening it to carry one
+      // feature's input would touch all of them. Same pattern as `personalCorpusOnly` above.
+      this.embeddingBinding = {
+        requested: corpusEmbeddingModel,
+        model: corpusResolution.model,
+        missing: corpusResolution.missing,
+        configured: corpusIsConfigured,
+      };
+      // The one diagnostic for a swap that is otherwise completely silent, and the symptom it
+      // produces - a retrieval that returns nothing because the query was embedded in a space the
+      // corpus was never written in - looks identical to an empty corpus from every surface above
+      // it. Matches the wording the vectorize handler and both semantic-search routes already use,
+      // so one grep finds every substitution on a stage.
+      if (corpusResolution.model !== corpusEmbeddingModel) {
+        logger.warn(
+          `[embeddings] no credential resolved for ${corpusEmbeddingModel}; this turn works in keyless ${corpusResolution.model} space instead`
+        );
+      }
+      const embeddingFactory = new EmbeddingFactory(embeddingConfig);
 
       // Fetch previous messages. Token-bound the verbatim window to a fraction of
       // the model's context so older turns fall outside it and get folded into
@@ -2234,7 +2437,7 @@ export class ChatCompletionProcess {
       // tool list (below, near buildTools) already strips any session-forbidden tool regardless
       // of when it was added to enabledTools.
       let hasContentTransform = false;
-      if (!promptMode) {
+      if (!skipAutoOffers) {
         const blogGates = shouldOfferBlogTools({
           isAdmin: this.user.isAdmin,
           hasBlogIntegration: Boolean(this.user.blogIntegration),
@@ -2284,6 +2487,11 @@ export class ChatCompletionProcess {
           `📨 [EXTRA_CONTEXT] Received ${extraContextMessages.length} extra context messages from external source`
         );
       }
+
+      // Correct-and-retry framing, including the session re-check that keeps a link copied into
+      // another session from dereferencing here. See resolveCorrectionContext for why the read side
+      // owns that check rather than trusting the writers.
+      const correctionContextMessages = await resolveCorrectionContext(quest, this.db.quests, logger);
 
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Previous messages loaded in ${
@@ -2370,7 +2578,8 @@ export class ChatCompletionProcess {
       // Once the knowledge tools are offered (above), stop ALSO force-inlining a large retrievable
       // corpus - the even-split inline goes breadth-shallow and the tool can fetch the relevant
       // docs on demand. Off by default; defers only the tool-retrievable subset. `skipAutoOffers`
-      // mirrors the tool-offer gate (the tool isn't offered under promptMode, so we don't defer).
+      // mirrors the tool-offer gate (the tool isn't offered when it is set, so we don't defer -
+      // the corpus is inlined instead, which is why suppressing the offer is not "no knowledge").
       const corpusInlinePlan = await this.resolveCorpusInlinePlan({
         sessionKnowledgeIds: session.knowledgeIds ?? [],
         attachedFileTokenBudget,
@@ -2382,6 +2591,9 @@ export class ChatCompletionProcess {
         // drift between them. Narrower than "the two agree": reachability also depends on the tool
         // surviving the denylist, which is what knowledgeSearchDisabled above covers.
         retrievalFilter: toRetrievalFilter(session),
+        // Resolved at the credential seam above, so the defer gate compares file labels to the space
+        // the query will really occupy rather than to the advertised default.
+        embeddingBinding: this.embeddingBinding,
         // Per-lake grounding mode, resolved onto the session at create time. Absent on a non-lake
         // session -> the plan keeps its pre-existing size-only behavior.
         groundingMode: session.corpusGroundingMode,
@@ -2415,12 +2627,17 @@ export class ChatCompletionProcess {
         actuallyInlinedKnowledgeIds,
         fullyInlinedAttachmentIds,
         attachmentNotices,
+        attachmentDelivery,
       } = dataSources;
 
       // Persisted before the completion runs: an attachment that failed to arrive is worth showing
       // even on a turn that later errors out, and this is the only durable record the user sees.
-      if (attachmentNotices.length > 0) {
-        quest.attachmentNotices = attachmentNotices;
+      // The delivery report goes with it and is written even when nothing failed - a turn whose
+      // attachments all arrived produces no notices, and that silence is exactly what #1576 is
+      // about: it reads identically to a turn that attached nothing.
+      if (attachmentNotices.length > 0 || attachmentDelivery) {
+        if (attachmentNotices.length > 0) quest.attachmentNotices = attachmentNotices;
+        if (attachmentDelivery) quest.attachmentDelivery = attachmentDelivery;
         await saveQuest(quest);
       }
 
@@ -2447,6 +2664,7 @@ export class ChatCompletionProcess {
         suppressLakeArms: this.personalCorpusOnly,
         // Narrows the knowledge tools' lake access to the lake this session is FOR.
         sessionRetrievalTags: session.retrievalTags,
+        sessionPreauthorizedLakeIds: vetPreauthorizedLakeIds(session, this.user.id),
         logger: this.logger,
         storage: this.storage,
         imageGenerateStorage: this.imageGenerateStorage,
@@ -2632,12 +2850,50 @@ export class ChatCompletionProcess {
       // and the knowledge tools write the same field later in the turn (mergeRetrievalSummary
       // keeps 'forced' and never lets this not-attempted seed erase a real outcome).
       const knowledgeToolOffered = offeredToolNames.includes('search_knowledge_base');
+      // Resolved here rather than inline at the buildToolPrompt call below so the seed can record
+      // whether the guidance section actually shipped. Read 2-arg on purpose: a cleared setting
+      // returns '' and the section drops out, which is its documented off switch.
+      const knowledgeBaseGuidance = getSettingsValue('KnowledgeBaseRetrievalPrompt', defaultAdminSettings);
+      // ToolBuilder's gate is not the last word: its output is tagged `toolPrompt`, which
+      // filterByPromptMode admits under no promptMode. A promptMode caller naming
+      // search_knowledge_base itself still gets knowledgeToolOffered (resolveEnabledTools unions
+      // requestTools before skipAutoOffers is consulted), so without this a `raw` turn - forced
+      // retrieval off, hence in the optional fold - would record `true` having received no
+      // section, biasing the exact arm the flag exists to measure. Read off PROMPT_MODE_SOURCES
+      // rather than `!promptMode` so admitting `toolPrompt` to a mode moves the flag with it.
+      const toolPromptAdmitted = !promptMode || PROMPT_MODE_SOURCES[promptMode].includes('toolPrompt');
+      // Mirrors ToolBuilder.buildToolPrompt's gate, narrowed by the prompt-mode filter above. The
+      // two ToolBuilder conditions are the same consts handed to the call below, so the recorded
+      // flag and the actual emission cannot drift; the third sits downstream of that call and has
+      // no ToolBuilder input to mirror.
+      const knowledgeBaseGuidanceInjected =
+        toolPromptAdmitted && knowledgeToolOffered && Boolean(knowledgeBaseGuidance);
       if (quest.promptMeta && (forcedRetrievalEnabled || knowledgeToolOffered)) {
+        // The scope a retrieval surface WOULD have searched this turn, recorded whether or not one
+        // ran - the point of the seed. `dataLakeTags` below stays empty because it means "what
+        // retrieval used", and on a not-attempted turn that is nothing; `lakeScope` is the other
+        // question, and recording it here is what lets the offline answerability replay probe the
+        // turn's real corpus instead of rebuilding one from the session's tags as they stand at
+        // replay time (see RetrievalSummarySchema.lakeScope).
+        //
+        // Mirrors resolveSessionLakeAccess, the one implementation every knowledge tool runs on:
+        // owner-wide access narrowed to the session, and nothing at all where the corpus is
+        // personal and the lake arms are suppressed. Fail direction is inherited from
+        // getAccessibleDataLakeAccess, which degrades to empty access rather than throwing, so a
+        // lake-resolution outage records an empty scope and the replay skips the turn.
+        const lakeScope = this.personalCorpusOnly
+          ? []
+          : narrowLakeAccessToSession(await this.getAccessibleDataLakeAccess(), session.retrievalTags).dataLakeTags;
         quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
           attempted: false,
           mode: forcedRetrievalEnabled ? 'forced' : 'optional',
           surfaces: [],
           dataLakeTags: [],
+          lakeScope,
+          // Recorded only when the tool was offered: a forced-only turn never had a section to
+          // ship, and writing `false` there would pad the A/B's control arm with turns that were
+          // never in the experiment.
+          ...(knowledgeToolOffered ? { knowledgeBaseGuidanceInjected } : {}),
         });
       }
 
@@ -2646,9 +2902,10 @@ export class ChatCompletionProcess {
       // offered set. Checked here against offeredToolNames (not at resolveEnabledTools) because
       // this is the authoritative post-build list - it sees the post-build denylist pass, the
       // Ollama auto-added trim, and tools injected inside buildTools, none of which the pre-build
-      // enabledTools filter can. Skipped under promptMode, where withholding the offer is
-      // deliberate (see skipAutoOffers), not a failure. Silent otherwise means the model answers
-      // from its weights while the user believes their knowledge was consulted.
+      // enabledTools filter can. Skipped whenever auto-offers are suppressed (a promptMode or the
+      // request field - see resolveSkipAutoOffers), where withholding the offer is deliberate, not
+      // a failure. Silent otherwise means the model answers from its weights while the user
+      // believes their knowledge was consulted.
       // The lake signal is held to a stricter bar than attached documents. The warning speaks to a
       // user belief that their knowledge was consulted, and attaching documents creates that belief
       // where merely owning a lake does not. So for the lake-only case we warn on an UNEXPECTED
@@ -2658,7 +2915,7 @@ export class ChatCompletionProcess {
       const knowledgeToolWithheldByConfig =
         (Array.isArray(session.disabledTools) && session.disabledTools.includes('search_knowledge_base')) ||
         offeredToolNames.length === 0;
-      if ((hasAttachedKnowledge || (hasAccessibleDataLake && !knowledgeToolWithheldByConfig)) && !promptMode) {
+      if ((hasAttachedKnowledge || (hasAccessibleDataLake && !knowledgeToolWithheldByConfig)) && !skipAutoOffers) {
         const source = hasAttachedKnowledge
           ? `${session.knowledgeIds!.length} attached document(s)`
           : 'an accessible data lake';
@@ -2704,6 +2961,19 @@ export class ChatCompletionProcess {
         hasContentTransform: hasContentTransform && blogDraftAvailable,
         hasChessEngine: enabledTools.includes('chess_engine'),
         hasCurrentDateTime: enabledTools.includes('current_datetime'),
+        // Unlike the two lines above, web_search is key-gated (GATED_TOOLS in toolAvailability.ts)
+        // and can be dropped from the built schemas while the requested list still carries it, so
+        // this reads the offered set for the same reason blog_draft and navigate_view do above.
+        hasWebSearch: offeredToolNames.includes('web_search'),
+        webSearchGuidance: getSettingsValue('WebSearchFreshnessPrompt', defaultAdminSettings),
+        // Same offered-set check that seeds `promptMeta.retrieval.mode` above, so the nudge covers
+        // the optional-path turns that fold measures. One caveat for a reader re-running that
+        // measurement: the seed splits this set by `forcedRetrievalEnabled`, so forced turns are
+        // nudged too and land in a different bucket. Whether the section actually shipped is
+        // recorded per turn as `retrieval.knowledgeBaseGuidanceInjected`, which is what makes an
+        // A/B driven by clearing the setting readable straight off the fold.
+        hasKnowledgeBase: knowledgeToolOffered,
+        knowledgeBaseGuidance,
         userTimezone,
         mcpTools: directMcpTools,
         sessionId,
@@ -2785,6 +3055,7 @@ export class ChatCompletionProcess {
       const taggedContextMessages = buildTaggedContextMessages({
         dateContext: [dateTimeContext], // Always provide current date/time awareness
         extraContext: extraContextMessages, // Extra context messages from external sources, at the top
+        ...correctionContextMessages,
         // Artifact emission guidance. Without this, correct <artifact> usage
         // is left to the model's defaults and large HTML/code can leak into the chat
         // body as raw markup. Gated on the same effective flag as extraction, so a turn is
@@ -2883,6 +3154,11 @@ export class ChatCompletionProcess {
             : [],
         urls: urlMessages,
         attachedFiles: fabMessages,
+        // Caller-supplied systemPrompt, reachable from both POST /api/chat and /api/ai/llm.
+        // Appended last so it sits at the tail of the stack - after even the caller's own
+        // attached files/URLs above. Note this is assembly order only: in the retention table
+        // it outranks lake grounding, so it defers by prose, not by budget priority.
+        callerPrompt: renderCallerPromptMessages(parsedBody.systemPrompt),
       });
       const admittedContextMessages = filterByPromptMode(taggedContextMessages, promptMode);
       // Close the deployment-wide shareable prefix with a cache breakpoint. Applied after the
@@ -3567,6 +3843,31 @@ export class ChatCompletionProcess {
       const streamStartTime = Date.now();
       let chunkCount = 0;
 
+      /**
+       * Wipe everything that describes a single streaming attempt, so a retry starts clean.
+       *
+       * The timings reset with the rest of it because a retry discards the reply the user was
+       * shown, and `promptMeta.model` is relabelled to whichever model finally answers. Keeping
+       * a first attempt's fast TTFVT would attribute it to the model that replaced it - the row
+       * would claim sub-second on a turn the user watched freeze.
+       *
+       * Scope, and it is not uniform: `streamStartTime` is declared outside the retry loop, so
+       * `streamingPerformance.totalStreamTime` spans every attempt - but `chunkCount` and `replies`
+       * are reset here, so `totalChars` and `chunkCount` describe the last attempt only, and
+       * `charsPerSecond` divides one by the other and understates on any retried turn. The resets
+       * are what let a retry restart cleanly and are deliberately kept; the TTFVT pair is
+       * per-attempt by design.
+       */
+      const resetStreamStateForRetry = () => {
+        for (const key of Object.keys(replies)) {
+          replies[parseInt(key)] = '';
+        }
+        quest.replies = [];
+        chunkCount = 0;
+        quest.promptMeta!.performance!.firstChunkTime = undefined;
+        quest.promptMeta!.performance!.firstTokenTime = undefined;
+      };
+
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] === LLM STREAMING PHASE START ===`);
 
       // Determine reasoning effort: user preference takes precedence over auto-classification
@@ -3898,13 +4199,14 @@ export class ChatCompletionProcess {
                     });
                   }
                 );
-                // Clear the interval on first response and calculate TTFVT
+                // First chunk of ANY kind, hidden reasoning included, so this is explicitly
+                // not the user-visible latency - a thinking-first turn stamps this while the
+                // transcript is still empty. TTFVT is stamped further down, off the
+                // accumulated reply.
                 if (streamedTexts.some(text => text != null && text.trim().length > 0)) {
-                  // Capture TTFVT on first non-empty chunk (regardless of chunk number)
-                  if (!quest.promptMeta!.performance!.firstTokenTime) {
+                  if (!quest.promptMeta!.performance!.firstChunkTime) {
                     const timeToFirstChunk = Date.now() - streamStartTime;
-                    const ttfvt = Date.now() - processStartTime; // Time to First Visible Token
-                    quest.promptMeta!.performance!.firstTokenTime = ttfvt;
+                    quest.promptMeta!.performance!.firstChunkTime = Date.now() - processStartTime;
                     this.sendStatusUpdate(quest, 'First model response', { statusAt: new Date(), silent: true });
 
                     logger.info(`⏱️ [${Date.now() - processStartTime}ms] Time to first chunk: ${timeToFirstChunk}ms`);
@@ -3977,30 +4279,41 @@ export class ChatCompletionProcess {
                   // Note: 'enhance' mode would be more complex and could be implemented later
                 }
 
-                await Promise.all(
-                  streamedTexts.map(async (text, index) => {
-                    if (!text) return;
+                streamedTexts.forEach((text, index) => {
+                  if (!text) return;
+                  appendStreamedChunk(replies, text, index, transitionMode);
+                  quest.replies = Object.values(replies);
+                  // Send message to the client for each received streamed message
+                  smartSend();
+                });
 
-                    // In append mode, always append to replies[0] regardless of stream index
-                    if (transitionMode === 'append') {
-                      replies[0] ??= '';
-                      replies[0] += text;
-                    } else {
-                      replies[index] ??= '';
-                      // If the last character is </think> which indicates the end of a thinking reply, append the text to the next reply
-                      // This happens when thinking models use other tools which causes the index to reset.
-                      if (replies[index].endsWith('</think>')) {
-                        replies[index + 1] ??= '';
-                        replies[index + 1] += text;
-                      } else {
-                        replies[index] += text;
-                      }
-                    }
-                    quest.replies = Object.values(replies);
-                    // Send message to the client for each received streamed message
-                    smartSend();
-                  })
-                );
+                // Time To First Visible Token: stamped off the ACCUMULATED reply, not the raw
+                // chunk, for two reasons. Hidden reasoning and the answer that follows it can
+                // land in a single chunk (kimiBackend and xaiBackend both prepend the close
+                // marker to real text), so only the accumulated slots say what the transcript
+                // now shows. And
+                // `replies` is already cleared on every fallback/overload/timeout retry path,
+                // where a running "am I inside a thinking block" flag would need resetting at
+                // each of the five - drift this derivation cannot have.
+                // Deliberately left unset when nothing visible ever streams: absent reads as
+                // "never rendered", where a number would read as fast.
+                if (
+                  shouldStampFirstVisibleToken(
+                    quest.promptMeta!.performance!,
+                    replies,
+                    transitionMode,
+                    rapidReplyContent
+                  )
+                ) {
+                  quest.promptMeta!.performance!.firstTokenTime = Date.now() - processStartTime;
+                  logger.info(
+                    `⏱️ [TTFVT] First visible token at ${
+                      quest.promptMeta!.performance!.firstTokenTime
+                    }ms (first chunk of any kind: ${
+                      quest.promptMeta!.performance!.firstChunkTime ?? 'n/a'
+                    }ms, model: ${currentModel.id})`
+                  );
+                }
                 // Field-wise assign-not-clobber (mirrors cliCompletions.ts:211-214). Some
                 // adapters fire intermediate callbacks carrying only {toolsUsed} or with
                 // inputTokens: 0 (see anthropicBackend.ts:1598-1604) before the terminal
@@ -4062,12 +4375,7 @@ export class ChatCompletionProcess {
               );
               messages = stripAllToolBlocks(messages, logger);
 
-              // Reset streaming state for clean retry
-              for (const key of Object.keys(replies)) {
-                replies[parseInt(key)] = '';
-              }
-              quest.replies = [];
-              chunkCount = 0;
+              resetStreamStateForRetry();
 
               continue; // Retry the while loop with cleaned messages
             }
@@ -4102,12 +4410,7 @@ export class ChatCompletionProcess {
 
                 await new Promise(resolve => setTimeout(resolve, totalDelay));
 
-                // Reset streaming state for clean retry
-                for (const key of Object.keys(replies)) {
-                  replies[parseInt(key)] = '';
-                }
-                quest.replies = [];
-                chunkCount = 0;
+                resetStreamStateForRetry();
 
                 continue; // Re-enter the while loop to retry with the same model
               }
@@ -4132,12 +4435,7 @@ export class ChatCompletionProcess {
 
               await new Promise(resolve => setTimeout(resolve, TIMEOUT_RETRY_DELAY_MS + jitter));
 
-              // Reset streaming state for clean retry
-              for (const key of Object.keys(replies)) {
-                replies[parseInt(key)] = '';
-              }
-              quest.replies = [];
-              chunkCount = 0;
+              resetStreamStateForRetry();
 
               continue;
             }
@@ -4158,12 +4456,7 @@ export class ChatCompletionProcess {
 
               await new Promise(resolve => setTimeout(resolve, STREAM_IDLE_RETRY_DELAY_MS + jitter));
 
-              // Reset streaming state for clean retry
-              for (const key of Object.keys(replies)) {
-                replies[parseInt(key)] = '';
-              }
-              quest.replies = [];
-              chunkCount = 0;
+              resetStreamStateForRetry();
 
               continue;
             }
@@ -4194,6 +4487,7 @@ export class ChatCompletionProcess {
                   forceSwitch: overloadRetriesExhausted,
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
+                  endUserId: this.user.id,
                 }
               );
 
@@ -4220,6 +4514,11 @@ export class ChatCompletionProcess {
                 primaryModelName: modelInfo.name,
                 fallbackModel: currentModel.id,
                 fallbackModelName: currentModel.name,
+                // The badge cannot infer the provider path from the id alone: a
+                // bare vendor slug is the direct API on a hosted deployment and
+                // an Ollama pull on a self-hosted one.
+                primaryModelBackend: modelInfo.backend,
+                fallbackModelBackend: currentModel.backend,
                 timestamp: Date.now(),
               };
 
@@ -4245,13 +4544,7 @@ export class ChatCompletionProcess {
               this.sendStatusUpdate(quest, `Trying alternative model: ${currentModel.id}...`, { statusAt: new Date() });
 
               // Clear previous replies for retry
-              Object.keys(replies).forEach(key => {
-                replies[parseInt(key)] = '';
-              });
-              quest.replies = [];
-
-              // Reset streaming state for retry
-              chunkCount = 0;
+              resetStreamStateForRetry();
               // Continue the loop with the new model
               continue;
             } catch (fallbackError) {
@@ -4317,8 +4610,14 @@ export class ChatCompletionProcess {
             }
           }
         } else if (chunkCount > 0) {
+          // The frozen-turn signature: chunks arrived (hidden reasoning; tool-call argument
+          // deltas are consumed without being forwarded, so they never show up here at all)
+          // while the user saw nothing. Deliberately left unstamped, which makes this log the
+          // only place such a turn surfaces - keep it a warning.
           logger.warn(
-            `⚠️ [TTFVT] Failed to capture first token time for ${currentModel.id} despite ${chunkCount} chunks - all chunks were empty`
+            `⚠️ [TTFVT] Never rendered for ${currentModel.id}: ${chunkCount} chunks streamed but no visible text (first chunk of any kind: ${
+              quest.promptMeta!.performance!.firstChunkTime ?? 'n/a'
+            }ms)`
           );
         } else {
           logger.warn(
@@ -5556,9 +5855,10 @@ export class ChatCompletionProcess {
     modelInfo: ModelInfo
   ) {
     const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
+    const lakeAccess = await this.attachmentLakeAccess();
     const { files: convertedFabFiles, missingIds } = await fetchAndConvertFabFiles(
       fabFileIds,
-      { scope },
+      { scope, lakeAccess },
       { db: this.db, storage: this.storage, logger: this.logger }
     );
     const {
@@ -5664,6 +5964,8 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       geminiDemoKey: '',
       bflApiKey: '',
       xaiApiKey: '',
+      moonshotApiKey: '',
+      deepseekApiKey: '',
       ollamaBackend: '',
       EnableOllama: 'false',
     };
@@ -5714,7 +6016,10 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     forceKnowledgeRetrieval?: boolean,
     retrievalTags?: string[],
     citationStyle?: 'named' | 'indexed',
-    retrievalFilter?: RetrievalExclusionOptions
+    retrievalFilter?: RetrievalExclusionOptions,
+    lakeScopeExplicit?: boolean,
+    /** Already vetted against the request's authenticated principal by the caller - see ChatCompletionProcess's call site. */
+    preauthorizedLakeIds?: string[]
   ) {
     const adminSettingsEnableMementos = getSettingsValue('EnableMementos', adminSettings);
     const adminSettingsEnableQuestMaster = getSettingsValue('EnableQuestMaster', adminSettings);
@@ -5792,7 +6097,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
 
     // Project feature - only if needed and available
     if (projectId) {
-      const project = await this.db.projects.findById(projectId);
+      const project = await this.db.projects.shareable.findAccessibleById(this.user, projectId);
       if (project) {
         this.logger.log('  - Enabling Project feature');
         this.features.set('project', new ProjectFeature(this, project));
@@ -5826,7 +6131,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.logger.log('  - Enabling KnowledgeRetrieval (forced) feature');
       this.features.set(
         'knowledgeRetrieval',
-        new KnowledgeRetrievalFeature(this, retrievalTags, citationStyle, retrievalFilter)
+        new KnowledgeRetrievalFeature(this, retrievalTags, citationStyle, retrievalFilter, preauthorizedLakeIds)
       );
 
       // Lake memory hot-card (#1440) rides the same Data-Lake toggle: a durable identity/context layer
@@ -5836,7 +6141,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       // being read forever). Also needs the host to have wired the app-layer ledger read.
       if (adminSettingsEnableLakeMemory && this.recallLakeMemory) {
         this.logger.log('  - Enabling LakeMemory (hot-card) feature');
-        this.features.set('lakeMemory', new LakeMemoryFeature(this, retrievalTags, retrievalFilter));
+        this.features.set('lakeMemory', new LakeMemoryFeature(this, retrievalTags, retrievalFilter, lakeScopeExplicit));
       }
     }
 
@@ -5901,6 +6206,10 @@ When using tools that require file IDs (like edit_image), use the ID shown above
      *  in a system message inside `fabMessages`. Stored on the quest so the transcript says the same
      *  thing - an attachment must never fail silently (#2228). */
     attachmentNotices: string[];
+    /** Affirmative delivery report - the counts behind the notices, and the only record of a turn
+     *  whose attachments ALL arrived (which produces no notices at all). `undefined` when the turn
+     *  carried no attachments, so a caller can tell "none sent" from "none arrived". */
+    attachmentDelivery?: IAttachmentDelivery;
   }> {
     // Load feature contexts in parallel with data sources
     const featureContextPromise = Promise.all(
@@ -6049,6 +6358,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     const fullyInlinedAttachmentIds = actuallyInlinedKnowledgeIds.filter(id => fullyDeliveredKnowledgeIds.has(id));
 
     const fileNotices: FabFileNotice[] = fabResult?.fileNotices ?? [];
+    let attachmentDelivery: IAttachmentDelivery | undefined;
     if (dedupedFileIds.length > 0) {
       // The one line a production attachment report is read from: what was asked for, what actually
       // reached the model, and why the rest did not. Requested-minus-delivered is computed here (not
@@ -6059,14 +6369,17 @@ When using tools that require file IDs (like edit_image), use the ID shown above
         acc[notice.band] = (acc[notice.band] ?? 0) + 1;
         return acc;
       }, {});
-      const summary = {
+      attachmentDelivery = {
+        // Counts everything handed to fabFilesToMessages - the turn's own attachments AND the
+        // session/message/system files inlined alongside them. So `delivered > 0` is not by itself
+        // proof that a CALLER's attachment arrived; `droppedIds` is what answers that exactly.
         requested: dedupedFileIds.length,
         delivered: delivered.size,
         fullyDelivered: fullyDeliveredKnowledgeIds.size,
         dropped: droppedIds.length,
         droppedIds,
-        bands: bandTally,
       };
+      const summary = { ...attachmentDelivery, bands: bandTally };
       if (droppedIds.length > 0 || fileNotices.length > 0) {
         logger.warn('📎 Attachment delivery summary', summary);
       } else {
@@ -6087,6 +6400,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       actuallyInlinedKnowledgeIds,
       fullyInlinedAttachmentIds,
       attachmentNotices: toAttachmentNoticeStrings(fileNotices),
+      attachmentDelivery,
     };
   }
 }

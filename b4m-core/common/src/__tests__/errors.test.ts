@@ -14,6 +14,8 @@ import {
   PermissionDeniedError,
   ChunkClaimLostError,
   isChunkClaimLostError,
+  DuplicateFabFileError,
+  isDuplicateFabFileError,
 } from '../errors';
 
 describe('HttpStatus enum', () => {
@@ -107,6 +109,33 @@ describe('isChunkClaimLostError', () => {
     expect(isChunkClaimLostError(new Error('nope'))).toBe(false);
     expect(isChunkClaimLostError(null)).toBe(false);
     expect(isChunkClaimLostError(undefined)).toBe(false);
+  });
+});
+
+describe('DuplicateFabFileError / isDuplicateFabFileError', () => {
+  it('carries the matched existing file and the newly-fetched title', () => {
+    const existing = { id: 'fab-1' } as never;
+    const err = new DuplicateFabFileError(existing, 'A New Title');
+    expect(err.existing).toBe(existing);
+    expect(err.fetchedTitle).toBe('A New Title');
+    expect(err.name).toBe('DuplicateFabFileError');
+  });
+
+  it('returns true for a real DuplicateFabFileError', () => {
+    expect(isDuplicateFabFileError(new DuplicateFabFileError({} as never, 'x'))).toBe(true);
+  });
+
+  // Same cross-package-boundary concern as isChunkClaimLostError above (thrown in
+  // @bike4mind/services, caught in apps/client) - only this test exercises the real dual-check.
+  it('returns true for a same-named error from another module realm', () => {
+    const crossRealm = Object.assign(new Error('cross-realm'), { name: 'DuplicateFabFileError' });
+    expect(isDuplicateFabFileError(crossRealm)).toBe(true);
+  });
+
+  it('returns false for unrelated errors and non-errors', () => {
+    expect(isDuplicateFabFileError(new Error('nope'))).toBe(false);
+    expect(isDuplicateFabFileError(null)).toBe(false);
+    expect(isDuplicateFabFileError(undefined)).toBe(false);
   });
 });
 

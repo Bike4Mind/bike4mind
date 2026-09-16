@@ -18,8 +18,9 @@ import { fabFilesService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { userCanAccessGeneratedImage } from '@server/utils/generatedImageAccess';
 import { z } from 'zod';
 
 const copyGeneratedImageSchema = z.object({
@@ -41,10 +42,27 @@ const handler = baseApi()
       const { user } = req;
       const { imageS3Key, fileName } = copyGeneratedImageSchema.parse(req.body);
 
+      // Object-level authz: generated-image keys are owner-less, so a caller could otherwise copy
+      // any user's image into their own files by supplying its key. Only copy an image the caller
+      // created (or one shared with them via the source chat).
+      if (!(await userCanAccessGeneratedImage(imageS3Key, user.id))) {
+        throw new ForbiddenError('You do not have access to this image');
+      }
+
       const imageBuffer = await getGeneratedImageStorage().download(imageS3Key);
 
       const metadata = await getGeneratedImageStorage().getMetadata(imageS3Key);
-      const contentType = metadata.contentType || SupportedFabFileMimeTypes.PNG;
+      const storedType = metadata.contentType;
+      // An octet-stream (what S3 reports for objects written without an explicit ContentType)
+      // carries no type at all, and claim-first would then fall through to the caller-supplied
+      // fileName - storing PNG bytes as whatever "notes.txt" claims. Treat it as absent. This
+      // single substring match is deliberately broader than the two-spelling check in
+      // b4m-core/fab-pipeline/src/ingest.ts, so it also catches cased and parameterised variants
+      // (e.g. "; charset=binary").
+      const contentType =
+        !storedType || storedType.trim().toLowerCase().includes('octet-stream')
+          ? SupportedFabFileMimeTypes.PNG
+          : storedType;
 
       // Derive the extension via the shared reverse lookup so structured types (e.g. Excel's
       // spreadsheetml) map to ".xlsx" instead of a bogus ".sheet".
@@ -62,6 +80,9 @@ const handler = baseApi()
             content: imageBuffer, // Pass the buffer as content to trigger upload
           },
           {
+            // The contentType comes off the stored S3 object, not the request body, so it outranks
+            // a caller-supplied fileName (an "image.txt" carrying image/png bytes stays image/png).
+            mimeTypePrecedence: 'claim-first',
             db: {
               adminSettings: adminSettingsRepository,
               // Absent, the admission lever (#1680) resolves platform-only here, so a per-org/owner/lake

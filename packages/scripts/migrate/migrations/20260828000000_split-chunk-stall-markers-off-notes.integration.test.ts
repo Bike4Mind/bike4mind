@@ -1,10 +1,15 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
-import { createMongoServer } from '../../../database/src/__test__/createMongoServer';
+import { LEGACY_CHUNK_STALL_NOTES } from '@bike4mind/common';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
 
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
 import migration from './20260828000000_split-chunk-stall-markers-off-notes';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const VECTORIZE_PAUSED_NOTE = 'Indexing paused by the data-lake convergence kill switch - reprocess to complete.';
 const RECHUNK_PAUSED_NOTE =
@@ -189,6 +194,28 @@ describe('split-chunk-stall-markers-off-notes migration (real DB)', () => {
       expect('chunkStallReason' in (row ?? {})).toBe(false);
       expect('noExtractableTextAt' in (row ?? {})).toBe(false);
     }
+  });
+
+  // A marker `up()` can never itself produce: the runtime gained `unchunkedPaused` after this
+  // migration, so the honest scenario is a row the post-split runtime stamped once `up()` had already
+  // run. Seeded with the raw driver for that reason - routing through `up()` like the tests above
+  // cannot reach this state. Before the third arm the sweep below dropped the field with no prose
+  // written in its place, so the file read as healthy to every pre-split reader.
+  it('down restores the closest prose for a marker up() never wrote, rather than erasing it', async () => {
+    const file = await insertLegacyFile({ chunkStallReason: 'unchunkedPaused' });
+
+    await migration.down();
+
+    const row = await rawFabFiles().findOne({ _id: file._id });
+    // The `rechunkPaused` wording, deliberately: it mislabels the file but keeps it visible as
+    // stalled, and it is prose the transitional read arms already honor. See `down()`.
+    expect(row?.notes).toBe(RECHUNK_PAUSED_NOTE);
+    // Restoring prose no transitional reader honors would make this arm cosmetic - the file would
+    // still read as healthy, which is the bug it exists to prevent. NOT covered by the reword guard
+    // in `chunking.test.ts`: that pins this file's literals against a reword of `CHUNK_STALL_NOTICES`
+    // and stays green if someone "fixes" the mislabelling by giving this arm a wording of its own.
+    expect(LEGACY_CHUNK_STALL_NOTES).toContain(row?.notes);
+    expect('chunkStallReason' in (row ?? {})).toBe(false);
   });
 
   it('down restores the prose only where notes is free, and always drops the new fields', async () => {

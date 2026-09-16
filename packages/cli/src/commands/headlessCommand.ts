@@ -13,7 +13,7 @@ import { RemoteSkillSource } from '../storage/RemoteSkillSource.js';
 import type { Session } from '../storage';
 import { ReActAgent } from '@bike4mind/agents';
 import type { AgentStep, AgentResult } from '@bike4mind/agents';
-import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services';
+import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
 import { isReadOnlyTool } from '../config/toolSafety.js';
 import { reconstructTurnBlocks } from '../context/ConversationContext.js';
 import { buildSystemPrompt } from '../core/prompts';

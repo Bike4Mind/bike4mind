@@ -37,6 +37,7 @@ vi.mock('@bike4mind/database', () => ({
     removeAllForLake: vi.fn().mockResolvedValue(0),
   },
   projectRepository: {},
+  agentRepository: {},
   sessionRepository: {},
   fabFileRepository: {},
   fallbackLakeSettingsRepository: {},

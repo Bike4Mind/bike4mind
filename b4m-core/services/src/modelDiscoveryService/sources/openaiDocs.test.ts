@@ -3,10 +3,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_PLAUSIBLE_TOKENS,
   OPENAI_PRICING_URL,
   openAiModelDocUrl,
   parseOpenAiLongContextBreakpoint,
   parseOpenAiModelCell,
+  parseOpenAiModelPage,
   parseOpenAiPricing,
   parseTokenCount,
   type OpenAiPriceRow,
@@ -171,6 +173,70 @@ describe('openai long-context breakpoint', () => {
 
   it('is undefined for a model with no long-context pricing', () => {
     expect(parseOpenAiLongContextBreakpoint(read('model-gpt-5.4-mini.md'))).toBeUndefined();
+  });
+});
+
+describe('openai model page', () => {
+  const page = (markdown: string) => {
+    const parsed = parseOpenAiModelPage(markdown);
+    return parsed.ok ? parsed.rows[0] : undefined;
+  };
+  const capture = (name: string) => page(read(name));
+
+  it('reads the facts a new model needs off its own page', () => {
+    expect(capture('model-gpt-5.6-luna.md')).toEqual({
+      name: 'GPT-5.6 Luna',
+      modelId: 'gpt-5.6-luna',
+      // The page also states "Maximum input tokens: 922,000" two bullets up; the
+      // context window is the whole window, and confusing the two understates it.
+      contextWindow: 1_050_000,
+      maxOutputTokens: 128_000,
+      inputModalities: ['text', 'image'],
+      reasoning: true,
+    });
+  });
+
+  it('takes the id off the Model ID line, not off the default snapshot', () => {
+    // gpt-5.4's snapshot bullet says `gpt-5.4-2026-03-05`, and the id is what the
+    // caller compares to decide the page is the one it asked for.
+    expect(capture('model-gpt-5.4.md')).toMatchObject({ name: 'GPT-5.4', modelId: 'gpt-5.4' });
+  });
+
+  it('says nothing about reasoning for a page with no reasoning bullet', () => {
+    // Absence of the bullet is not a published "does not reason", and the flag
+    // decides whether the fixed temperature a reasoner needs is sent.
+    const flat = '# GPT-5.6 Flat\n\nModel ID: `gpt-5.6-flat`\n\n- 400,000 context window\n';
+    expect(page(flat)).toEqual({ name: 'GPT-5.6 Flat', modelId: 'gpt-5.6-flat', contextWindow: 400_000 });
+  });
+
+  it('fails rather than yielding a partial row when the page shape moved', () => {
+    expect(parseOpenAiModelPage('Model ID: `gpt-5`\n\n- 400,000 context window\n').ok).toBe(false);
+    expect(parseOpenAiModelPage('# GPT-5\n\n- 400,000 context window\n').ok).toBe(false);
+    expect(parseOpenAiModelPage('# GPT-5\n\nModel ID: `gpt-5`\n').ok).toBe(false);
+  });
+
+  it('fails on the pricing page, which is not a model page', () => {
+    expect(parseOpenAiModelPage(pricingMarkdown).ok).toBe(false);
+  });
+
+  it('refuses a token figure past what any model ships, in either field', () => {
+    // A reformat that puts a stray figure before the label is the realistic way
+    // this happens. Nothing downstream can correct it: this source is a provider,
+    // so its window outranks every aggregator's, and it lands in the send budget.
+    const head = '# GPT-5.6 Wide\n\nModel ID: `gpt-5.6-wide`\n\n';
+    const window = parseOpenAiModelPage(`${head}- ${MAX_PLAUSIBLE_TOKENS + 1} context window\n`);
+    expect(window).toMatchObject({ ok: false, error: expect.stringContaining('past what any model ships') });
+
+    const output = parseOpenAiModelPage(
+      `${head}- 400,000 context window\n- ${MAX_PLAUSIBLE_TOKENS + 1} max output tokens\n`
+    );
+    expect(output.ok).toBe(false);
+
+    // The bound is a ceiling, not a limit anyone is near.
+    expect(page(`${head}- 1.05M context window\n- 128,000 max output tokens\n`)).toMatchObject({
+      contextWindow: 1_050_000,
+      maxOutputTokens: 128_000,
+    });
   });
 });
 

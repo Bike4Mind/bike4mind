@@ -1,17 +1,25 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 /**
- * GET /api/publish/widget - the trusted comment-overlay widget, served as
- * first-party JavaScript from the app origin so the bundle CSP (`script-src
- * 'self'`) permits it. Injected into every served bundle by the serve handler.
+ * GET /api/publish/widget - the trusted wrapper-side script for published artifacts,
+ * served as first-party JavaScript from the app origin so the wrapper CSP permits it.
+ * It is the ONLY script the tightened Approach-B wrapper CSP admits (no 'unsafe-inline'
+ * there), which is why both features below live in this one file. The serve handler
+ * emits it on every non-embed wrapper.
  *
- * This is the ONLY author-facing JS that runs on a published bundle page -
- * author inline scripts are stripped at serve time. The widget therefore must
- * be self-contained vanilla JS (no framework) and build its DOM with
- * createElement/textContent (NEVER innerHTML on user data - comment bodies are
- * untrusted user input rendered on the app origin).
+ * Two independent parts, in order:
+ *  1. The PRINT binder - shows the wrapper's "Save as PDF" button and asks the artifact
+ *     frame to print ITSELF (printing the wrapper captures only the frame's visible first
+ *     screen). The in-frame half is server/services/publish/printBridge.ts. It runs for
+ *     every wrapper, including artifacts with comments turned off.
+ *  2. The comment overlay, which early-returns unless the #b4m-annotate-root mount node
+ *     is present - that node's absence is how an artifact opts out of comments.
  *
- * It runs in the WRAPPER page on the app origin (see buildAnnotateOverlayHtml in
+ * Self-contained vanilla JS (no framework), building its DOM with createElement/
+ * textContent - NEVER innerHTML on user data, since comment bodies are untrusted user
+ * input rendered on the app origin.
+ *
+ * It runs in the WRAPPER page on the app origin (see renderBundleWrapper in
  * serve/[...path].ts), never inside the sandboxed bundle iframe - which is what
  * makes the same-origin cookie exchange in `ensureToken` reachable at all.
  *
@@ -25,6 +33,40 @@ const WIDGET_POWERED_BY = process.env.APP_NAME ? `Powered by ${process.env.APP_N
 
 const WIDGET_JS = String.raw`(function () {
   'use strict';
+
+  // ---- "Save as PDF" ----
+  // Self-contained and FIRST, because the comment overlay below early-returns on an
+  // artifact with comments disabled and printing must still work there.
+  (function () {
+    var frame = document.querySelector('iframe');
+    if (!frame) return;
+    function requestPrint() {
+      // targetOrigin '*': in the srcdoc model the frame's origin is opaque, so no other
+      // value is deliverable. Safe because the message carries no data - it is a bare
+      // request - and the in-frame bridge validates the sender's source (and, on the
+      // isolated cross-origin embed, its origin) before acting on it.
+      try { frame.contentWindow.postMessage({ b4m: 'print' }, '*'); } catch (e) {}
+    }
+    var buttons = document.querySelectorAll('.b4m-bar-print,.b4m-print');
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].addEventListener('click', requestPrint);
+      buttons[i].hidden = false; // server ships it hidden so there is no dead button without JS
+    }
+    function isEditing(t) {
+      return !!t && (t.isContentEditable === true || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ''));
+    }
+    // Claim the shortcut while focus is on the WRAPPER: the browser would otherwise print
+    // this page, which paginates only the frame's visible first screen. Not while typing
+    // (the comment box): on macOS Ctrl+P is cursor-up inside a text field.
+    document.addEventListener('keydown', function (e) {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      if (e.key !== 'p' && e.key !== 'P') return;
+      if (isEditing(e.target)) return;
+      e.preventDefault();
+      requestPrint();
+    });
+  })();
+
   var root = document.getElementById('b4m-annotate-root');
   if (!root) return;
   var publicId = root.getAttribute('data-public-id');

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, Mock } from 'vitest';
 import { addFiles } from './addFiles';
 import { createMockProjectRepository, createMockFabFileRepository } from '../__tests__/utils/testUtils';
-import { IFabFileRepository, IProjectRepository, IUserDocument, Permission } from '@bike4mind/common';
+import { IFabFileRepository, IProjectRepository, IUserDocument, NotFoundError, Permission } from '@bike4mind/common';
 
 // TODO: Skipped temporarily due to test failures that need fixing
 describe.skip('projectService - addFiles', () => {
@@ -60,7 +60,7 @@ describe.skip('projectService - addFiles', () => {
       groups: [],
     }));
 
-    (mockProjectRepo.shareable.findAccessibleById as Mock).mockResolvedValueOnce(mockProject);
+    (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce(mockProject);
     (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValueOnce(mockFiles);
 
     const result = await addFiles(mockUser, { projectId, fileIds }, adapters);
@@ -90,11 +90,9 @@ describe.skip('projectService - addFiles', () => {
 
   it('should throw error when project is not found', async () => {
     const mockUser = { id: contributorId } as IUserDocument;
-    (mockProjectRepo.shareable.findAccessibleById as Mock).mockResolvedValueOnce(null);
+    (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce(null);
 
-    await expect(addFiles(mockUser, { projectId: 'any', fileIds: ['any'] }, adapters)).rejects.toThrow(
-      'Project not found'
-    );
+    await expect(addFiles(mockUser, { projectId: 'any', fileIds: ['any'] }, adapters)).rejects.toThrow(NotFoundError);
   });
 
   it('should throw error when some files are not accessible', async () => {
@@ -103,7 +101,7 @@ describe.skip('projectService - addFiles', () => {
     const fileIds = ['file-1', 'file-2'];
     const mockFiles = [{ id: 'file-1' }]; // Only one file found
 
-    (mockProjectRepo.shareable.findAccessibleById as Mock).mockResolvedValueOnce(mockProject);
+    (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce(mockProject);
     (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValueOnce(mockFiles);
 
     await expect(addFiles(mockUser, { projectId: 'any', fileIds }, adapters)).rejects.toThrow(
@@ -120,7 +118,7 @@ describe.skip('projectService - addFiles', () => {
 
     await expect(addFiles(mockUser, invalidParams, adapters)).rejects.toThrow();
 
-    expect(mockProjectRepo.shareable.findAccessibleById).not.toHaveBeenCalled();
+    expect(mockProjectRepo.shareable.findUpdateAccessById).not.toHaveBeenCalled();
     expect(mockFabFileRepo.shareable.findAllAccessibleByIds).not.toHaveBeenCalled();
     expect(mockProjectRepo.update).not.toHaveBeenCalled();
   });

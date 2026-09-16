@@ -1,8 +1,11 @@
 import { Subscriber } from '@bike4mind/database';
-import { BadRequestError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import * as z from 'zod';
+
+// One body for every outcome. It also stops an anonymous caller receiving the stored
+// Subscriber document, which the 201 used to return in full.
+const SIGNUP_ACK = { message: 'Thanks -- you are on the list.' } as const;
 
 const handler = baseApi({ auth: false }).post(async (req, res) => {
   const validatedBody = z
@@ -13,12 +16,16 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     })
     .parse(req.body);
 
+  // This route is unauthenticated, so a 400 'Email already registered' vs a 201 let anyone
+  // test whether an address is on the waitlist. Both outcomes now return SIGNUP_ACK: a repeat
+  // signup is a no-op that looks exactly like a first one. The Slack alert below is skipped
+  // for a duplicate so admins are not paged twice for the same address.
   const existingSubscriber = await Subscriber.findOne({ email: validatedBody.email, deletedAt: null });
   if (existingSubscriber) {
-    throw new BadRequestError('Email already registered');
+    return res.status(201).json(SIGNUP_ACK);
   }
 
-  const subscriber = await Subscriber.create(validatedBody);
+  await Subscriber.create(validatedBody);
 
   try {
     const brand = process.env.APP_NAME || '';
@@ -38,7 +45,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     console.error('Failed to send Slack notification for new subscriber:', slackError);
   }
 
-  return res.status(201).json(subscriber);
+  return res.status(201).json(SIGNUP_ACK);
 });
 
 export const config = {

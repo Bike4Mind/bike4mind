@@ -25,6 +25,11 @@ describe('unsafeHostnameReason (literal, no DNS)', () => {
     'fd00::1',
     'fe80::1',
     '::ffff:169.254.169.254',
+    'fe00::1', // bottom of fe00::/9 (#1969)
+    'fe40::1', // mid fe00::/9 (#1969)
+    'fe7f::1', // top of fe00::/9, just below fe80::/10 (#1969)
+    'fec0::1', // fec0::/10 site-local (#1969)
+    'feff::1', // top of fec0::/10 (#1969)
   ])('rejects %s', host => {
     expect(unsafeHostnameReason(host)).not.toBeNull();
   });
@@ -38,6 +43,7 @@ describe('unsafeHostnameReason (literal, no DNS)', () => {
     '100.63.255.255', // just below the CGNAT range
     '100.128.0.1', // just above the CGNAT range
     '2606:4700::1111',
+    '2001:4860::8888',
   ])('allows %s', host => {
     expect(unsafeHostnameReason(host)).toBeNull();
   });
@@ -57,6 +63,18 @@ describe('unsafeFetchUrlReason (protocol + literal + resolved)', () => {
   it('allows a public host that resolves to a public address', async () => {
     lookup.mockResolvedValue([{ address: '93.184.216.34', family: 4 }]);
     expect(await unsafeFetchUrlReason(new URL('https://example.com/llms.txt'))).toBeNull();
+  });
+
+  it('allows a public host that resolves to a public AAAA record', async () => {
+    lookup.mockResolvedValue([{ address: '2606:4700::1111', family: 6 }]);
+    expect(await unsafeFetchUrlReason(new URL('https://example.com/llms.txt'))).toBeNull();
+  });
+
+  it('rejects a public host that resolves to a private AAAA record (rebinding-style, #1969)', async () => {
+    lookup.mockResolvedValue([{ address: 'fec0::1', family: 6 }]);
+    expect(await unsafeFetchUrlReason(new URL('https://rebind.attacker.com/llms.txt'))).toBe(
+      'resolves to a private/reserved address'
+    );
   });
 
   it('rejects a public host that resolves to a private address (rebinding-style)', async () => {

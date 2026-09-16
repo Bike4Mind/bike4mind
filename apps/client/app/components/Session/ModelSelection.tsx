@@ -60,6 +60,7 @@ import {
 import { useModelStats } from '@client/app/hooks/data/useModelStats';
 import { useFavoriteModels } from '@client/app/hooks/useFavoriteModels';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
+import { menuSurfaceSx, selectListboxSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 
 // List of model IDs to exclude from the dropdown
 // Add any model IDs you want to hide here
@@ -90,18 +91,18 @@ const filterRadioSx = {
   '& .MuiRadio-icon': { width: '12px', height: '12px', borderRadius: '50%' },
 } as const;
 
-// Function to get backend logo path
-const getBackendLogo = (backend: string): string | null => {
-  const logoMap: Record<string, string> = {
-    OpenAI: '/images/logos/llm/llm-logo-openai.png',
-    Anthropic: '/images/logos/llm/llm-logo-anthropic.png',
-    Meta: '/images/logos/llm/llm-logo-meta.png',
-    'Black Forest Labs': '/images/logos/llm/llm-logo-bfl.png',
-    xAI: '/images/logos/XAI_Logo.svg',
-  };
-
-  return logoMap[backend] || null;
+// Backend section logos. Providers absent here (Google, Moonshot, DeepSeek, ...)
+// render as text-only headers - shared by getBackendLogo and preloadBackendLogos.
+const BACKEND_LOGOS: Record<string, string> = {
+  OpenAI: '/images/logos/llm/llm-logo-openai.png',
+  Anthropic: '/images/logos/llm/llm-logo-anthropic.png',
+  Meta: '/images/logos/llm/llm-logo-meta.png',
+  'Black Forest Labs': '/images/logos/llm/llm-logo-bfl.png',
+  xAI: '/images/logos/XAI_Logo.svg',
 };
+
+// Function to get backend logo path
+const getBackendLogo = (backend: string): string | null => BACKEND_LOGOS[backend] || null;
 
 // Global image cache to prevent re-requests
 const imageCache = new Map<string, string>();
@@ -134,15 +135,7 @@ const preloadAndCacheImage = (src: string): Promise<string> => {
 
 // Preload all backend logos
 const preloadBackendLogos = async () => {
-  const logoMap: Record<string, string> = {
-    OpenAI: '/images/logos/llm/llm-logo-openai.png',
-    Anthropic: '/images/logos/llm/llm-logo-anthropic.png',
-    Meta: '/images/logos/llm/llm-logo-meta.png',
-    'Black Forest Labs': '/images/logos/llm/llm-logo-bfl.png',
-    xAI: '/images/logos/XAI_Logo.svg',
-  };
-
-  const preloadPromises = Object.values(logoMap).map(src => preloadAndCacheImage(src));
+  const preloadPromises = Object.values(BACKEND_LOGOS).map(src => preloadAndCacheImage(src));
   await Promise.allSettled(preloadPromises);
 };
 
@@ -220,18 +213,31 @@ export const getModelBackend = (model: ModelInfo): string => {
     return 'Moonshot';
   }
 
+  // DeepSeek models: first-party (deepseek-flash, deepseek-v4-pro) and the
+  // Bedrock-served rows (us.deepseek.r1-v1:0, deepseek.v3-v1:0) all contain
+  // "deepseek" in id/name. The Ollama-hosted deepseek-r1:latest also does, so it
+  // is excluded by backend here rather than by string, and is caught by the
+  // self-host branch above (or has no vendor grouping to speak of if a hosted
+  // deployment ever surfaced a remote Ollama model).
+  if (model.backend !== ModelBackend.Ollama && (modelName.includes('deepseek') || modelId.includes('deepseek'))) {
+    return 'DeepSeek';
+  }
+
   // Default to "Other" if no match found
   return 'Other';
 };
 
 // Display order of the provider sections. Anything absent sorts alphabetically after these.
-const BACKEND_PRIORITY = [
+// Exported for the ordering test - the next provider added here gets a signal if it's forgotten.
+export const BACKEND_PRIORITY = [
   SELF_HOSTED_BACKEND,
   'OpenAI',
   'Anthropic',
   'Google',
   'Meta',
   'xAI',
+  'DeepSeek',
+  'Moonshot',
   'Mistral',
   'Black Forest Labs',
   'Cohere',
@@ -239,7 +245,7 @@ const BACKEND_PRIORITY = [
 
 // Non-mutating: callers pass a fresh Object.keys() array, but the copy keeps that a contract
 // of this function rather than of each call site.
-const sortBackendsByPriority = (backends: string[]): string[] =>
+export const sortBackendsByPriority = (backends: string[]): string[] =>
   [...backends].sort((a, b) => {
     const aIndex = BACKEND_PRIORITY.indexOf(a);
     const bIndex = BACKEND_PRIORITY.indexOf(b);
@@ -763,7 +769,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
       {} as Record<string, ModelInfo[]>
     );
 
-    // Sort within each backend: newly released first, then curated rank, then recency
+    // Sort within each backend by curated rank, then recency (see modelRanking.ts)
     Object.keys(grouped).forEach(backend => {
       grouped[backend] = sortModelsForPicker(grouped[backend]);
     });
@@ -1084,42 +1090,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
               })}
               slotProps={{
                 listbox: {
-                  // Rows mirror the sidenav Filters panel's items (`Sidenav/FiltersPanel.tsx`):
-                  // same 36px height, 8px inset, 12px gap, 8px radius and the same two palette
-                  // tokens for hover and selected.
-                  sx: theme => ({
-                    border: 'none !important',
-                    p: '8px !important',
-                    backgroundColor: 'var(--joy-palette-background-body)',
-                    // The listbox is a Joy List, which spaces its items via this variable (default
-                    // 0px) rather than `gap` - it becomes marginBlockStart on every item after the
-                    // first. Same 4px the sidenav panel puts between its filter rows.
-                    '--List-gap': '4px',
-                    // Joy drives an Option's hover through its variant vars, and also uses this for
-                    // the keyboard-highlighted row - a plain `&:hover` would style only the mouse
-                    // case and lose to Joy's own rule anyway.
-                    '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
-                    '--variant-plainActiveBg': theme.palette.notebooklist.hoverBg,
-                    '& .MuiOption-root': {
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '12px',
-                      justifyContent: 'flex-start',
-                      color: 'text.primary',
-                      fontSize: '14px',
-                      fontWeight: '400',
-                      px: 1,
-                      minHeight: '36px',
-                      borderRadius: '8px',
-                      transition: 'background 0.15s',
-                      // Transparent, not the body colour: an explicit background here would sit on
-                      // top of the hover and selected fills below.
-                      backgroundColor: 'transparent',
-                    },
-                    '& .MuiOption-root[aria-selected="true"]': {
-                      backgroundColor: theme.palette.notebooklist.focusedBackground,
-                    },
-                  }),
+                  sx: theme => ({ ...menuSurfaceSx(theme), ...selectListboxSx(theme) }),
                   placement: 'bottom-end',
                   modifiers: [
                     { name: 'offset', options: { offset: [-0, 4] } },

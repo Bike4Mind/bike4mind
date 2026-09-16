@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { ToolDefinition } from '@bike4mind/services';
+import type { ToolDefinition } from '@bike4mind/services/llm';
 import { guardDecomposeOnce, DECOMPOSE_ALREADY_DONE_MSG } from './decomposeGuard';
 
 // Minimal fake tool: implementation() returns a toolFn that records its calls.

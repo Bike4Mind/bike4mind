@@ -206,6 +206,9 @@ async function resolveAccountRows(current: ISpendSummary): Promise<SpendByAccoun
   });
 }
 
+// Cached for 12h under a key that carries PAYLOAD_VERSIONS.spend
+// (server/utils/cacheKeys.ts). Change the shape or the values this projects and
+// bump that entry, or deployed instances keep serving the old projection.
 async function buildSpendData(query: Omit<SpendQuery, 'recache'>): Promise<SpendServerPayload> {
   const { current, prior } = resolveWindows(query.dateFrom, query.dateTo);
   const baseFilters = { userId: query.userFilter || undefined, model: query.modelFilter || undefined };

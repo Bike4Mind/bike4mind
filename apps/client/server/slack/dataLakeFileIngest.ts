@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto';
 import { FabFileSourceType, KnowledgeType, type IFabFileDocument } from '@bike4mind/common';
 import { validateSlackFileForIngest, type SlackAttachment } from '@bike4mind/slack';
+import { computeContentHash } from '@bike4mind/utils';
 import {
   authorizeLakeForWrite,
   refuseMockActor,
@@ -44,6 +44,19 @@ export interface CreateLakeFileParams {
   // db.organizations adapter and checkStorageLimitForFile then falls back to the user limit.
   // The web data-lake batch door does not set it either. Declaring the field is a repo-wide call.
   provenance: { sourceType: FabFileSourceType; sourceMetadata: Record<string, unknown> };
+  /**
+   * The orgs the actor administers, forwarded to `createFabFile`'s OWN tag gate - a THIRD manage
+   * check after this path's two, running inside the file create. It cannot derive the value from the
+   * user document (`create.ts:132-137` spells this out), so an omitted field silently zeroes the org
+   * rungs and refuses "a write the route's own manage gate just authorized" - which is exactly what
+   * happened here: `add` passed both prologue gates and then failed with "You do not have permission
+   * to change this data lake's files".
+   *
+   * REQUIRED, not optional: this path admits content into someone else's lake, so it is precisely the
+   * door that must pass it. Taken from the AUTHORIZED context rather than re-resolved, so the value
+   * that granted the write is the value the create re-checks against.
+   */
+  administeredOrgIds: string[];
 }
 
 export interface SlackLakeIngestDeps extends LakeAuthzDeps {
@@ -68,6 +81,10 @@ export interface SlackLakeIngestParams {
   /** Slack origin recorded on every created file so a lake editor can audit where it came from. */
   channel: string;
   messageTs: string;
+  /** The Slack workspace this message arrived on - see `notifySlackIndexingComplete.ts`. */
+  teamId: string;
+  /** The Slack app this message arrived on, stamped alongside `teamId` - see the same doc. */
+  apiAppId: string;
 }
 
 export type SlackLakeIngestRefusal = LakeWriteRefusalReason | 'no_files';
@@ -85,13 +102,11 @@ export type SlackLakeIngestOutcome =
     }
   | { ok: false; reason: SlackLakeIngestRefusal; message: string };
 
-const sha256 = (buffer: Buffer): string => createHash('sha256').update(buffer).digest('hex');
-
 export async function ingestSlackFilesIntoLake(
   params: SlackLakeIngestParams,
   deps: SlackLakeIngestDeps
 ): Promise<SlackLakeIngestOutcome> {
-  const { actor, lakeSlug, files, channel, messageTs } = params;
+  const { actor, lakeSlug, files, channel, messageTs, teamId, apiAppId } = params;
 
   const mockRefusal = refuseMockActor(actor, lakeSlug, deps);
   if (mockRefusal) return mockRefusal;
@@ -109,7 +124,7 @@ export async function ingestSlackFilesIntoLake(
   // Authorization first: resolve + write-gate the lake before any download or create.
   const authorized = await authorizeLakeForWrite(actor, lakeSlug, deps);
   if (!authorized.ok) return authorized;
-  const { lake, datalakeTag } = authorized;
+  const { lake, datalakeTag, ctx } = authorized;
 
   const rejected: string[] = [];
   // No `size` here on purpose - the authoritative length is the downloaded buffer's, below.
@@ -118,9 +133,9 @@ export async function ingestSlackFilesIntoLake(
   // The Slack validator's 50MB ceiling is not the binding one: createFabFile enforces the
   // `MaxFileSize` admin setting AFTER the download, so without this an over-limit file is
   // transferred in full and then refused. That setting's schema default is 30MB (create.ts's
-  // DEFAULT_MAX_FILE_SIZE of 20 applies only when the settings map has no entry at all).
-  // Checked against Slack's claimed size, which is all we have pre-download; createFabFile still
-  // re-checks the real buffer, so this only saves the wasted transfer.
+  // DEFAULT_MAX_FILE_SIZE also matches at 30, applying only when the settings map has no entry
+  // at all). Checked against Slack's claimed size, which is all we have pre-download;
+  // createFabFile still re-checks the real buffer, so this only saves the wasted transfer.
   const maxFileSizeBytes = await deps.resolveMaxFileSizeBytes?.();
 
   for (const file of files) {
@@ -143,7 +158,10 @@ export async function ingestSlackFilesIntoLake(
     }
     accepted.push({
       fileName: validation.file.name,
-      mimeType: validation.file.mimetype,
+      // resolvedMimeType, not the client's claim - accept/reject already derives from the
+      // extension, so persisting the raw claim here would let the two paths sharing this
+      // validator agree on what to accept while disagreeing on what gets recorded.
+      mimeType: validation.resolvedMimeType,
       url: validation.file.url_private_download,
     });
   }
@@ -182,7 +200,7 @@ export async function ingestSlackFilesIntoLake(
       continue;
     }
 
-    const hash = sha256(buffer);
+    const hash = computeContentHash(buffer);
 
     if (seenHashes.has(hash)) {
       duplicates.push(file.fileName);
@@ -211,8 +229,9 @@ export async function ingestSlackFilesIntoLake(
         tags,
         provenance: {
           sourceType: FabFileSourceType.SLACK,
-          sourceMetadata: { channel, messageTs },
+          sourceMetadata: { channel, messageTs, teamId, apiAppId },
         },
+        administeredOrgIds: ctx.administeredOrgIds ?? [],
       });
       added.push(file.fileName);
       // Marked seen only on success: a failed create must not make an identical second attachment

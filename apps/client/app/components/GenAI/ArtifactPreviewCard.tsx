@@ -1,5 +1,5 @@
 import React, { useState, type ReactNode } from 'react';
-import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
+import { Box, Button, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
 import type { Theme } from '@mui/joy';
 import {
   OpenInFullOutlined as ExpandIcon,
@@ -9,6 +9,7 @@ import {
   ExpandMoreOutlined as ExpandMoreIcon,
   ExpandLessOutlined as ExpandLessIcon,
   CodeOutlined as CodeViewIcon,
+  ShareOutlined as ShareIcon,
 } from '@mui/icons-material';
 import useSessionLayout, {
   setSessionLayout,
@@ -24,6 +25,11 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { brand } from '@client/app/utils/themes/colors';
 import SwitchSelector from '@client/app/components/common/fields/SwitchSelector';
+import { useUser } from '@client/app/contexts/UserContext';
+import { usePublishShare } from '@client/app/hooks/usePublishShare';
+import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
+import { buildArtifactPublishWiring } from '@client/app/utils/publishApi';
+import type { ArtifactType } from '@bike4mind/common';
 
 // Shared by copy / save / open-in-viewer: 18px glyphs dimmed to 70%, brightening to full
 // on hover, over the same hover fill the sidebar items use (notebooklist.hoverBg) rather
@@ -125,6 +131,12 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   const { isFeatureEnabled } = useFeatureEnabled();
   const artifactsEnabled = isFeatureEnabled('enableArtifacts');
 
+  const shareUser = useUser(s => s.currentUser);
+  const selectedAccount = useSelectedAccount(s => s.selectedAccount);
+  const activeOrg = selectedAccount && !selectedAccount.personal ? selectedAccount : null;
+  const teamOrg = activeOrg && String(activeOrg.id) === String(shareUser?.organizationId) ? activeOrg : null;
+  const { publishAndShare: publishAndShareArtifact, modal: artifactShareModal } = usePublishShare();
+
   const hasPreview = !!renderPreview;
   const hasSource = !!source || !!renderSource;
   // A code toggle only means something when there are two views to flip between.
@@ -198,6 +210,29 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
       console.error('Error saving file:', error);
       toast.error('Failed to save file');
     }
+  };
+
+  const handleShare = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!source?.trim()) return;
+    if (!shareUser?.id) {
+      toast.error('You must be signed in to publish');
+      return;
+    }
+    // questmaster publishes as 'code'; all other types use their own discriminant.
+    const publishType: ArtifactType = artifactType === 'questmaster' ? 'code' : (artifactType as ArtifactType);
+    publishAndShareArtifact({
+      title,
+      ...(teamOrg ? { orgOption: { label: 'Team', hint: `Members of ${teamOrg.name}` } } : {}),
+      ...buildArtifactPublishWiring({
+        artifactId,
+        type: publishType,
+        content: source,
+        title,
+        userId: String(shareUser.id),
+        orgId: teamOrg?.id,
+      }),
+    });
   };
 
   // Push live content changes to the Knowledge Base store. Guarded: a card that merely
@@ -411,6 +446,38 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
             </Box>
           )
         ) : null}
+
+        {isExpanded && source && (
+          <Box sx={{ mt: 2 }} onClick={e => e.stopPropagation()}>
+            <Button
+              size="sm"
+              variant="solid"
+              startDecorator={<ShareIcon sx={{ fontSize: 16 }} />}
+              onClick={handleShare}
+              data-testid={`${testIdPrefix}-artifact-share-btn`}
+              sx={{
+                backgroundColor: brand[800],
+                color: '#fff',
+                fontWeight: 600,
+                // Pin to the same rendered height as the sm IconButtons in the card header.
+                '--Button-minHeight': '2rem',
+                '--Button-paddingBlock': '0.25rem',
+                lineHeight: 1,
+                transition: 'transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease',
+                '&:hover': {
+                  backgroundColor: brand[900],
+                  transform: 'scale(1.04)',
+                  boxShadow: '0 0 14px rgba(11, 107, 203, 0.5)',
+                },
+              }}
+            >
+              Share
+            </Button>
+          </Box>
+        )}
+        {/* Stop propagation so clicks inside the modal don't reach the Card's
+            handleToggleExpand and toggle the expand state behind the open dialog. */}
+        <Box onClick={e => e.stopPropagation()}>{artifactShareModal}</Box>
       </Box>
     </Card>
   );

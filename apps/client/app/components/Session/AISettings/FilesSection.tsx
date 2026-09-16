@@ -15,7 +15,7 @@ import {
 import { useUser } from '@client/app/contexts/UserContext';
 import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
-import { useGetSettingsValue } from '@client/app/hooks/data/settings';
+import { useEffectiveEmbeddingModel } from '@client/app/hooks/data/settings';
 import { useReprocessFile } from '@client/app/hooks/data/fabFiles';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
@@ -154,7 +154,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
   const isAnyFileReprocessing = Object.values(reprocessingFiles).some(Boolean);
   const { currentUser } = useUser();
   const modelInfo = useModelInfo()?.data?.find(m => m.id === model);
-  const currentEmbeddingModel = useGetSettingsValue('defaultEmbeddingModel');
+  const effectiveEmbeddingModel = useEffectiveEmbeddingModel();
   const reprocessFile = useReprocessFile();
   const queryClient = useQueryClient();
 
@@ -176,12 +176,17 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
     return currentSession?.userId === currentUser?.id || !currentSession;
   }, [currentSession, currentUser]);
 
-  // Check if file has different embedding model than current setting
+  // Does this file's vectors live in a different space than the one this deployment would query
+  // with? Compared against the EFFECTIVE model, not the advertised `defaultEmbeddingModel` setting:
+  // on a stage that fell back to the keyless embedder the corpus carries the fallback's label, and
+  // comparing against the advertised model flags every healthy file with a mismatch badge whose
+  // reprocess button re-runs the same fallback and re-stamps the same label - an unclearable
+  // warning. Unknown effective model -> no badge, rather than a badge we cannot substantiate.
   const hasEmbeddingMismatch = useCallback(
     (file: IFabFileDocument) => {
-      return file.embeddingModel && currentEmbeddingModel && file.embeddingModel !== currentEmbeddingModel;
+      return file.embeddingModel && effectiveEmbeddingModel && file.embeddingModel !== effectiveEmbeddingModel;
     },
-    [currentEmbeddingModel]
+    [effectiveEmbeddingModel]
   );
 
   // Handle reprocessing file with new embedding model
@@ -221,7 +226,14 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
               }
               return oldData;
             });
-          } else if (currentSessionId) {
+          }
+
+          // Membership, not either/or: a file can be in BOTH lists at once - the notebook's
+          // knowledgeIds and Profile -> System Prompts - and each list renders its own reprocess
+          // button. Marking only one store leaves the other row armed on a rebuild already in
+          // flight, and /api/files/reprocess has no rate limit, so every extra click buys a real
+          // reset plus a real re-embed of the same document.
+          if (currentSessionId && workBenchFiles.some(f => f.id === file.id)) {
             setWorkBenchFiles(currentSessionId, prevFiles => prevFiles.map(markPending));
           }
         },
@@ -231,7 +243,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
         },
       });
     },
-    [reprocessFile, currentSessionId, setWorkBenchFiles, systemFiles, queryClient]
+    [reprocessFile, currentSessionId, setWorkBenchFiles, systemFiles, workBenchFiles, queryClient]
   );
 
   // Check if the file is supported by the model

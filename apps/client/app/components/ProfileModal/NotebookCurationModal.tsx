@@ -703,7 +703,7 @@ const NotebookCurationModal: React.FC<NotebookCurationModalProps> = ({ open, onC
                           cursor: 'pointer',
                           '&:hover': {
                             borderColor:
-                              curationType === CurationType.TRANSCRIPT ? 'success.600' : 'neutral.outlinedHoverBorder',
+                              curationType === CurationType.TRANSCRIPT ? 'success.600' : 'neutral.outlinedBorder',
                           },
                         }}
                       >
@@ -754,7 +754,7 @@ const NotebookCurationModal: React.FC<NotebookCurationModalProps> = ({ open, onC
                             borderColor:
                               curationType === CurationType.EXECUTIVE_SUMMARY
                                 ? 'success.600'
-                                : 'neutral.outlinedHoverBorder',
+                                : 'neutral.outlinedBorder',
                           },
                         }}
                       >

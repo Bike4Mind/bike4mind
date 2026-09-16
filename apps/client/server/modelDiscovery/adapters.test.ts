@@ -15,8 +15,9 @@ import type { Logger } from '@bike4mind/observability';
 /** Sentinel alias map, so "the seed export reaches the aggregators" is an identity check. */
 const MODEL_ID_ALIASES = { 'grok-3-fast': { litellm: 'xai/grok-3-fast-latest' } };
 
-const { rowsInForce, createBedrockControlPlane } = vi.hoisted(() => ({
+const { rowsInForce, createBedrockControlPlane, getDiscoveryCredentials } = vi.hoisted(() => ({
   rowsInForce: vi.fn(),
+  getDiscoveryCredentials: vi.fn(async () => ({})),
   createBedrockControlPlane: vi.fn(() => ({
     listFoundationModels: vi.fn(),
     getFoundationModelAvailability: vi.fn(),
@@ -38,6 +39,7 @@ vi.mock('./bedrockControlPlane', () => ({ createBedrockControlPlane }));
 
 // Real factories, wrapped so the options each one was handed are readable.
 const captured = {
+  openai: undefined as { knownModelIds?: () => unknown } | undefined,
   bedrock: undefined as { client: unknown; activeModelIds?: () => unknown } | undefined,
   modelsDev: undefined as { targets: () => unknown; aliases?: unknown } | undefined,
   litellm: undefined as { targets: () => unknown; aliases?: unknown } | undefined,
@@ -50,6 +52,10 @@ vi.mock('@bike4mind/services', async importOriginal => {
     ...actual,
     modelDiscoveryService: {
       ...real,
+      createOpenAiSource: (options: never) => {
+        captured.openai = options;
+        return real.createOpenAiSource(options);
+      },
       createBedrockSource: (options: never) => {
         captured.bedrock = options;
         return real.createBedrockSource(options);
@@ -62,6 +68,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
         captured.litellm = options;
         return real.createLiteLlmSource(options);
       },
+      getDiscoveryCredentials,
     },
   };
 });
@@ -89,6 +96,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  captured.openai = undefined;
   captured.bedrock = undefined;
   captured.modelsDev = undefined;
   captured.litellm = undefined;
@@ -105,6 +113,7 @@ describe('the source registry', () => {
         'anthropic',
         'xai',
         'kimi',
+        'deepseek',
         'gemini',
         'ollama',
         'bfl',
@@ -114,7 +123,7 @@ describe('the source registry', () => {
         'litellm',
       ])
     );
-    expect(names).toHaveLength(11);
+    expect(names).toHaveLength(12);
   });
 
   it('registers no duplicates: the report and the min-interval guard key on name', () => {
@@ -154,6 +163,26 @@ describe('bedrock wiring', () => {
     expect(active).toEqual(new Set(['claude-sonnet-5', 'grok-3-fast']));
     // The 'discovered' Bedrock id is absent, so it still gets its entitlement call.
     expect((active as Set<string>).has('us.anthropic.claude-sonnet-9')).toBe(false);
+  });
+});
+
+describe('openai wiring', () => {
+  it('hands the source every id the catalog holds', async () => {
+    buildModelDiscoveryAdapters(logger);
+
+    await expect(captured.openai!.knownModelIds!()).resolves.toEqual(
+      new Set(['claude-sonnet-5', 'us.anthropic.claude-sonnet-9', 'grok-3-fast'])
+    );
+  });
+
+  it('keeps the new-model docs leg off when the catalog read failed', async () => {
+    // An empty `known` set would make every listed id look new, so the leg would
+    // emit provider-authoritative name and window claims for models the catalog
+    // already holds - the one thing this source must never do.
+    rowsInForce.mockRejectedValue(new Error('mongo is down'));
+    buildModelDiscoveryAdapters(logger);
+
+    await expect(captured.openai!.knownModelIds!()).resolves.toBeUndefined();
   });
 });
 
@@ -222,5 +251,17 @@ describe('the shared catalog read', () => {
     await expect(captured.modelsDev!.targets()).resolves.toEqual([]);
     await expect(captured.bedrock!.activeModelIds!()).resolves.toEqual(new Set());
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('catalog read failed'));
+  });
+});
+
+describe('credential wiring', () => {
+  it('forwards the runner options, so a manual run reaches the uncached settings read', async () => {
+    const { resolveCredentials } = buildModelDiscoveryAdapters(logger);
+
+    await resolveCredentials({ skipCache: true });
+    await resolveCredentials();
+
+    expect(getDiscoveryCredentials.mock.calls[0][2]).toEqual({ skipCache: true });
+    expect(getDiscoveryCredentials.mock.calls[1][2]).toBeUndefined();
   });
 });

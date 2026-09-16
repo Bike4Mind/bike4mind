@@ -74,7 +74,7 @@ const ResearchTaskDetailInfo: FC<ResearchTaskDetailInfoProps> = ({ task }) => {
                 gridColumn: { xs: '1', md: '1 / -1' },
                 transition: 'all 0.2s ease',
                 '&:hover': {
-                  borderColor: 'info.300',
+                  borderColor: 'primary.plainColor',
                   boxShadow: `0 4px 20px ${brandAlpha[500][15]}`,
                   transform: 'translateY(-2px)',
                 },
@@ -82,7 +82,7 @@ const ResearchTaskDetailInfo: FC<ResearchTaskDetailInfoProps> = ({ task }) => {
             >
               <CardContent>
                 <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
-                  <Avatar variant="soft" sx={{ bgcolor: 'info.50', color: 'info.600' }}>
+                  <Avatar variant="soft" sx={{ color: 'primary.plainColor' }}>
                     <Description sx={{ fontSize: 20 }} />
                   </Avatar>
                   <Box sx={{ flex: 1, minWidth: 0 }}>

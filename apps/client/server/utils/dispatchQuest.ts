@@ -1,6 +1,6 @@
 import { Resource } from 'sst';
 import type { z } from 'zod';
-import type { QuestStartBodySchema } from '@bike4mind/services';
+import type { QuestStartBodySchema } from '@bike4mind/services/llm';
 import type { Logger } from '@bike4mind/observability';
 
 type QuestStartBody = z.infer<typeof QuestStartBodySchema>;

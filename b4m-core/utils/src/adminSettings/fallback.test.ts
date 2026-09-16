@@ -8,6 +8,7 @@ import {
 } from './fallback';
 import { AxiosError } from 'axios';
 import { ModelInfo, ModelBackend } from '@bike4mind/common';
+import { toProviderEndUserId } from '../llm';
 
 // Helper to create mock Axios errors
 function createAxiosError(status: number, code?: string): AxiosError {
@@ -135,6 +136,20 @@ describe('shouldTriggerFallback', () => {
 
     it('should return false for a non-transient SDK error (e.g. ValidationException 400)', () => {
       const error = createAwsSdkError('ValidationException', 400, 'Invalid request parameters.');
+      expect(shouldTriggerFallback(error)).toBe(false);
+    });
+  });
+
+  describe('bare `status` error shapes', () => {
+    // The provider SDKs' own error classes and SemaphoreBusyError put the code directly on
+    // `.status`, with no Axios `response` and no AWS `$metadata` to read it from.
+    it('should return true for a bare 429 (e.g. the Anthropic pool rejecting a full queue)', () => {
+      const error = Object.assign(new Error('Anthropic request queue is full for this tenant'), { status: 429 });
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should return false for a bare 400', () => {
+      const error = Object.assign(new Error('bad request'), { status: 400 });
       expect(shouldTriggerFallback(error)).toBe(false);
     });
   });
@@ -635,6 +650,48 @@ describe('getLlmWithFallback - cross-provider guarantee (preferUntriedBackend)',
       preferUntriedBackend: true,
     });
     expect(result).toBeNull();
+  });
+});
+
+describe('getLlmWithFallback - tenant key across the hop', () => {
+  // Guards the plumbing, not the pool: an unforwarded endUserId drops every fallen-back
+  // request into the Anthropic semaphore's shared anonymous tenant, collapsing its per-tenant
+  // fair scheduling during exactly the provider overload that triggered the fallback. The
+  // hashed id is only observable on the constructed backend, hence the narrow cast.
+  const readTenantKey = (backend: unknown) => (backend as { _endUserId?: string })._endUserId;
+  const expectedKey = toProviderEndUserId('internal-user-1');
+  const anthropicKeys = { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>;
+  const opus = createModelInfo({ id: 'claude-opus-5', backend: ModelBackend.Anthropic });
+  const sonnet = createModelInfo({ id: 'claude-sonnet-5', backend: ModelBackend.Anthropic });
+
+  it('forwards endUserId to the original model backend', async () => {
+    const result = await getLlmWithFallback(opus, undefined, [opus, sonnet], anthropicKeys, mockLogger, {
+      endUserId: 'internal-user-1',
+    });
+
+    expect(result!.attempt).toBe(0);
+    expect(readTenantKey(result!.backend)).toBe(expectedKey);
+  });
+
+  it('forwards endUserId to an automatically selected fallback', async () => {
+    const result = await getLlmWithFallback(opus, undefined, [opus, sonnet], anthropicKeys, mockLogger, {
+      forceSwitch: true,
+      excludeModelIds: new Set([opus.id]),
+      endUserId: 'internal-user-1',
+    });
+
+    expect(result!.model.id).not.toBe(opus.id);
+    expect(readTenantKey(result!.backend)).toBe(expectedKey);
+  });
+
+  it('forwards endUserId to a frontend-provided fallback', async () => {
+    const result = await getLlmWithFallback(opus, sonnet.id, [opus, sonnet], anthropicKeys, mockLogger, {
+      forceSwitch: true,
+      endUserId: 'internal-user-1',
+    });
+
+    expect(result!.model.id).toBe(sonnet.id);
+    expect(readTenantKey(result!.backend)).toBe(expectedKey);
   });
 });
 

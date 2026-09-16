@@ -1,7 +1,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { getImageEdit } from '@server/queueHandlers/imageEdit';
+import { ApiKeyScope } from '@bike4mind/common';
 
-const handler = baseApi().post(async (req, res) => {
+// Gate API-key callers on `ai:generate` so this billable action is auditable, mirroring
+// generate-image.ts. Scope checks apply only to API-key requests; browser/JWT sessions fall
+// through untouched (see apiKeyAuth).
+const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(async (req, res) => {
   // Include organizationId from request body or fall back to user's organization
   const effectiveOrgId =
     req.body.organizationId !== undefined ? req.body.organizationId : (req.user.organizationId?.toString() ?? null);

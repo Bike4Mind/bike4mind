@@ -101,7 +101,10 @@ HOW TO CARRY THIS
  * asserted as retrieved, this step governs arithmetic presented as arithmetic. Both arms of the
  * measurement below ran with that rule present, so the reconciliation is empirical, not theoretical -
  * but if `GROUNDED_NO_INVENTION_RULE` is ever tightened to cover derived figures too, this step stops
- * working and the tests here will NOT catch it (they assert only the router's own text).
+ * working and the tests here will NOT catch it (they assert only the router's own text). Nor is there
+ * a copy of that rule to keep in step - it is a single shared const, and "in sync" means this split
+ * still holds, not that two wordings match. The rule's `derive/capacity-sizing` case in
+ * b4m-core/services/src/llm/evals/groundedNoInvention now measures the split from the other side.
  *
  * Measured effect of the split, n=65 paired questions, arm W vs shipped in optihashi-eval:
  * composite +1.14 (CI [+0.05, +2.22]), no_invention +0.0000 (CI [-0.028, +0.028] - flat, so the

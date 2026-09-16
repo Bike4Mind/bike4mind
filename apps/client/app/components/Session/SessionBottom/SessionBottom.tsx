@@ -42,6 +42,7 @@ import useSessionLayout, {
   recordModerationStatus,
   hasBlockingPendingFiles,
 } from '@client/app/hooks/useSessionLayout';
+import { useNotebookLayout } from '@client/app/components/layouts/Notebook';
 import { useChatCompletionContext } from '@client/app/contexts/ChatCompletionContext';
 import { useAutoFocus } from '@client/app/hooks/useAutoFocus';
 import { useChatPaste } from '@client/app/hooks/useChatPaste';
@@ -237,7 +238,10 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
       };
 
   const pond = useNotebookFilepond();
-  const maxFileSize = useGetSettingsValue('MaxFileSize') || 100;
+  // Number(...) first so a stored '0' string (truthy) still falls through to the default -
+  // `|| 30` alone only catches the empty-string case. Fallback matches the server default of
+  // 30MB (`MaxFileSize`'s schema default), not the old unrelated 100MB.
+  const maxFileSize = Number(useGetSettingsValue('MaxFileSize')) || 30;
   const enforceCredits = !!useGetSettingsValue('enforceCredits');
 
   // Credit warning conditions - extracted for readability
@@ -275,6 +279,16 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // The Data Lake chat is embedded edge-to-edge in the Explorer (#836), so it drops
   // the outer bottom gutter like the docked/floating layouts do.
   const isDataLakeSurface = currentSession?.surface === 'datalake';
+
+  // Expand the prompt bar when both side panels are closed so the extra
+  // horizontal space is used instead of leaving wide empty gutters.
+  // 'vertical' is the only layout where the KV occupies horizontal space beside
+  // the chat; all others (hide, horizontal, pip, noAI, floatingChat) leave the
+  // full chat-pane width available, so none of them count as the right panel being open.
+  const isKnowledgeViewerBesideChat = useSessionLayout(s => s.layout === 'vertical');
+  const isSideNavOpen = useNotebookLayout(s => s.openSideNav);
+  const bothPanelsClosed = !isKnowledgeViewerBesideChat && !isSideNavOpen;
+  const promptBarMaxWidth = isDockedLayout || isFloatingLayout ? 'none' : bothPanelsClosed ? '1200px' : '950px';
 
   // Determine if the stop button should be shown
   const shouldShowStopButton = useMemo(() => {
@@ -501,7 +515,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           width: isMobile ? '100vw' : '100%',
           // Docked/floating panels are already width-constrained; capping the input
           // at 950px would leave visible panel-background gutters beside it.
-          maxWidth: isDockedLayout || isFloatingLayout ? 'none' : '950px',
+          maxWidth: promptBarMaxWidth,
           marginLeft: isCompactLayout ? '0px' : 'auto',
           marginRight: isCompactLayout ? '0px' : 'auto',
           ...(isDockedLayout

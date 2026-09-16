@@ -26,3 +26,35 @@ export const resolveBrowserUploadUrl = (fileId: string, directPresignedUrl: stri
  */
 export const resolveBrowserAppFileUploadUrl = (appFileId: string, directPresignedUrl: string): string =>
   process.env.B4M_SELF_HOST === 'true' ? `/api/app-files/${appFileId}/upload` : directPresignedUrl;
+
+/**
+ * The same rewrite for the LLM history import (import-history/upload.ts), which uploads a zip to
+ * the history-import bucket rather than a per-file bucket.
+ *
+ * Unlike the two above there is no id to name, because there is no owning DB record - the key is
+ * `<userId>/<source>/<timestamp>.zip`, chosen entirely server-side. That is deliberate and
+ * load-bearing: server/s3/historyUploadComplete.ts parses the userId and source back OUT of the
+ * key to decide whose import this is, so a client-supplied key would let a caller attribute an
+ * import to another user. The proxy therefore takes only the source and recomputes the key from
+ * the authenticated request; nothing about the destination is client-controlled.
+ */
+export const resolveBrowserHistoryImportUploadUrl = (source: string, directPresignedUrl: string): string =>
+  process.env.B4M_SELF_HOST === 'true'
+    ? `/api/import-history/upload?source=${encodeURIComponent(source)}`
+    : directPresignedUrl;
+
+/**
+ * The same rewrite for the notebook import (notebooks/import/upload.ts), which uploads the
+ * exported notebook JSON to the history-import bucket under a `notebooks/` prefix.
+ *
+ * importId is the one piece the client supplies, and that is safe only because it is not what
+ * scopes the write: the key is `notebooks/<userId>/<importId>.json`, and the userId segment
+ * comes from the authenticated request, so a caller can only ever write under their own prefix.
+ * importId exists solely to pair this data object with the server-written
+ * `<importId>.options.json` sibling that pages/api/notebooks/import.ts already wrote - it is an
+ * identifier, not a permission.
+ */
+export const resolveBrowserNotebookImportUploadUrl = (importId: string, directPresignedUrl: string): string =>
+  process.env.B4M_SELF_HOST === 'true'
+    ? `/api/notebooks/import/upload?importId=${encodeURIComponent(importId)}`
+    : directPresignedUrl;

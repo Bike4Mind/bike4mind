@@ -29,7 +29,14 @@ export const createCompletionContract = defineEndpoint({
     'A message `content` may be a string or an array of parts; image parts are accepted in ' +
     'OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a ' +
     '`source`) form and are translated to whatever the target model speaks. ' +
-    'Authenticate with an API key (`b4m_live_`) or a JWT.',
+    'Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
+    'BILLING FAILURES. Headers are flushed before authentication or pricing, so unlike the JSON ' +
+    'surfaces this endpoint has no pre-stream `422` + `errorCode: "insufficient_credits"` to pair ' +
+    'with: credit exhaustion ALWAYS arrives as the in-band `error` event, whether it is caught by ' +
+    'the reservation before the first token or by settlement mid-generation. Branch on that ' +
+    "event's `code` (`insufficient_credits` - buy credits; `spend_cap_exceeded` - the owner is " +
+    'solvent but this key hit its admin-set ceiling, so raise the cap), never on `message`, which ' +
+    'is prose and may change. `code` is absent on unclassified failures.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],

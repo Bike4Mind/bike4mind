@@ -172,6 +172,8 @@ page's context and navigates to `/` to bootstrap the authenticated app. An agent
 (Claude Code + Playwright MCP) authenticates the same way — by cookie-seeding, not
 by a password/OTC UI round-trip.
 
+`/api/test/create-user` also accepts **no `email`** (omit it or pass `null`) to mint an *emailless* account - the shape an OAuth signup with no provider-verified email produces (see `verifyCallback`'s create path). Such an account cannot receive a login one-time code, so enter it through the returned tokens or **Admin → Login as User**. The username must then end in `-e2e` so cleanup can still find it; the same two-tier rule as emails applies (`qa-emailless-e2e` is standing and never swept, `qa-emailless-12345678-e2e` is reclaimed by the aged sweep).
+
 Before setup runs, `global-setup.ts` calls `/api/test/cleanup` to remove stale test users from prior runs. After all tests, `global-teardown.ts` does the same.
 
 Both calls are **scoped to this run's `E2E_TEST_ID`**, so a run can only ever delete its own
@@ -362,7 +364,20 @@ Preview deploys are created on demand by maintainers via the internal deployer (
 3. Results are posted as a **comment on the PR** with pass/fail counts
 4. The **HTML report** is uploaded as a build artifact (`playwright-report-pr<N>-label`)
 
-In CI, `API_URL` points at the deployment under test. `E2E_CLEANUP_SECRET` is one stable value that every deploy writes into that stage's SST secret, so `pr{n}` previews, staging, and production all share it. Every Playwright step runs inside `pnpm sst shell`, so the test client reads `Resource.E2E_CLEANUP_SECRET.value` — the same value the cleanup/create-user API validates against. Previews used to self-provision a fresh random per deploy; that was dropped because it made manual QA against a preview a chore and let a redeploy invalidate the secret mid-run.
+In CI, `API_URL` points at the deployment under test. `E2E_CLEANUP_SECRET` is one stable value that every deploy writes into that stage's SST secret, so `pr{n}` previews, staging, and production all share it. Previews used to self-provision a fresh random per deploy; that was dropped because it made manual QA against a preview a chore and let a redeploy invalidate the secret mid-run.
+
+How the suite reads that value depends on the account it is running against:
+
+- **dev / staging (same account)** - the Playwright step runs inside `pnpm sst shell`, so the test client reads `Resource.E2E_CLEANUP_SECRET.value`, the same value the cleanup/create-user API validates against.
+- **`pr<N>` previews (separate account)** - the dev role cannot `sst shell` into a preview stack, so the workflows inject the `E2E_CLEANUP_SECRET` **repo secret** on `Bike4Mind/bike4mind` directly into the step's environment instead.
+
+That repo secret is a mirror of the value the deployer seeds onto every stage, and it has to be set on this repo specifically - a copy living only on the deployer repo is not visible here. **When it is unset, preview-targeted runs cannot start at all.** Zero tests ran, so neither a pass nor a failure would be true, and each workflow reports it as a labeled skip instead:
+
+- `e2e-on-label.yml` - the PR comment reads `E2E Tests Skipped` and names the secret.
+- `e2e-run.yml` - the Slack post reads `:fast_forward: Skipped (E2E_CLEANUP_SECRET not configured)`. The promotion commit status is left missing, which is not promotable.
+- `e2e-ai-latency.yml` - the Slack post reads `:fast_forward: Skipped (E2E_CLEANUP_SECRET not configured)` and the table legend names the configuration gap instead of blaming Playwright. **One exception:** a *full-matrix* preview dispatch still fails red, because model discovery cannot run without the secret and the matrix cannot be built without discovered models. That run names the cause in an `::error::` rather than reporting an empty discovery result.
+
+If you see any of these, the fix is to set the repo secret, not to debug the suite.
 
 ## Debugging
 

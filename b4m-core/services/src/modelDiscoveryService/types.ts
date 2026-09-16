@@ -42,6 +42,7 @@ export interface DiscoveryCredentials {
   xai: string | null;
   /** Moonshot AI, which serves the Kimi models. */
   kimi: string | null;
+  deepseek: string | null;
   voyageai: string | null;
   /** Base URL, not a key. */
   ollama: string | null;
@@ -232,6 +233,53 @@ export interface DiscoverySource {
  * family whose requests this build actually shapes correctly.
  */
 export type DispatchResolver = (record: ModelRecord) => Pick<ModelRecord, 'adapterFamily' | 'dispatchProfile'> | null;
+
+/** A resolver's answer, in the shape the probe can substitute for one. */
+export type DispatchAnswer = NonNullable<ReturnType<DispatchResolver>>;
+
+/**
+ * A probed answer plus how much of it a call actually proved. `dispatchProfile`
+ * always carries a maxTokensParam because the write schema requires one, so the
+ * flag is the only thing separating a value a 200 confirmed from
+ * predictMaxTokensParam's guess - and the guess reaches production on the chat
+ * path even for a responses-transport model (openaiBackend), so the write path
+ * has to be able to tell them apart.
+ */
+export interface ProbedDispatchAnswer extends DispatchAnswer {
+  maxTokensParamVerified: boolean;
+}
+
+/** The slice of `fetch` the probe uses, narrow so a test can stub it. */
+export type DispatchProbeFetch = (
+  url: string,
+  init: RequestInit
+) => Promise<{ status: number; text(): Promise<string> }>;
+
+export interface DispatchProbeDeps {
+  apiKey: string;
+  /** Injected: no test may reach a provider. */
+  fetch: DispatchProbeFetch;
+  /** Per-call deadline; the runner owns the value (PROBE_CALL_TIMEOUT_MS). */
+  timeoutMs: number;
+  /** The run's global deadline, which aborts a call in flight when the run is out of time. */
+  signal?: AbortSignal;
+  /** Defaults to the public OpenAI host. */
+  baseUrl?: string;
+}
+
+/** `retryable` is a transient upstream (429, 5xx, timeout), not a verdict about the model. */
+export interface DispatchProbeResult {
+  answer?: ProbedDispatchAnswer;
+  retryable: boolean;
+}
+
+/**
+ * Verifies a model's dispatch shape by calling it, for the one thing no id
+ * reveals: which of OpenAI's two tool conventions the model takes. Unset means
+ * a new OpenAI model keeps its tools withheld until an operator writes the
+ * profile (see withholdsOpenAiTools in catalogWrite.ts).
+ */
+export type DispatchProbe = (modelId: string, deps: DispatchProbeDeps) => Promise<DispatchProbeResult>;
 
 /**
  * 'report' writes no catalog rows and no bookkeeping; it only reports the diff.
@@ -474,7 +522,7 @@ export interface ModelDiscoveryAdapters {
     catalog: Pick<IModelCatalogRepository, 'append' | 'rowsInForceWithRejects'>;
     discoveryState: Pick<
       IModelDiscoveryStateRepository,
-      'recordSighting' | 'recordMiss' | 'findByModelIds' | 'recordSuggestion'
+      'recordSighting' | 'recordMiss' | 'findByModelIds' | 'recordSuggestion' | 'recordProbeAttempt'
     >;
     discoveryRuns: Pick<IModelDiscoveryRunRepository, 'create' | 'update' | 'find'>;
     /** claimDedup is the lease; deleteByKey is the only release path it has. */
@@ -484,14 +532,20 @@ export interface ModelDiscoveryAdapters {
     prices: Pick<IModelPriceRepository, 'append' | 'rowsInForce'>;
   };
   sources: readonly DiscoverySource[];
-  /** Step 1 of the run (sec 5.7). A thunk so a driver wires its own auth adapters once. */
-  resolveCredentials: () => Promise<DiscoveryCredentials>;
+  /**
+   * Step 1 of the run (sec 5.7). The driver wires its own auth adapters once.
+   * `skipCache` reads admin settings past the settings cache, which a manual run
+   * needs because a key saved seconds earlier lands in another process.
+   */
+  resolveCredentials: (options?: { skipCache?: boolean }) => Promise<DiscoveryCredentials>;
   /**
    * Derives the dispatch group for models no row covers. Without it a newly
    * discovered model has no adapterFamily or dispatchProfile and stays
    * metadata-only, which is the fail-closed default (see DispatchResolver).
    */
   resolveDispatch?: DispatchResolver;
+  /** Verifies that group by calling the model; see DispatchProbe. */
+  probeDispatch?: DispatchProbe;
   /**
    * Drops the driver's memoized catalog view, called between convergence passes.
    * A driver reads the rows in force ONCE per adapters object so its sources

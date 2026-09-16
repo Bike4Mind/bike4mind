@@ -68,7 +68,6 @@
     "no_valid_emails_error": "يرجى إدخال عناوين بريد إلكتروني صالحة",
     "send_referral": "إرسال الإحالة",
     "send_referral_success": "تم إرسال الإحالة بنجاح!",
-    "send_referral_skipped": "{{count}} دعوة مجدولة - هذه العناوين البريدية لديها حساب بالفعل.",
     "send_referral_failed": "لم تتمكن من إرسال {{count}} دعوة. يرجى المحاولة مرة أخرى.",
     "send_referral_error": "خطأ في إرسال الإحالة. يرجى المحاولة مرة أخرى.",
     "slack_notification_default": "تم إرسال الإحالة بواسطة المستخدم USER_NAME:USER_ID إلى FRIEND_EMAIL"

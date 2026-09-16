@@ -1,4 +1,4 @@
-import type { ToolDefinition } from '@bike4mind/services';
+import type { ToolDefinition } from '@bike4mind/services/llm';
 import type { IOptiPlanState } from '@bike4mind/database';
 
 /**

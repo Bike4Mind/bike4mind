@@ -8,7 +8,9 @@ const CreditTransactionsQuerySchema = z.object({
    * @description Number of days to get transactions for
    * @default 30
    */
-  days: z.number().optional().prefault(30),
+  // Bounded like this model's three other callers: unbounded, a finite-but-huge value
+  // overflows the repository's `setDate` into an Invalid Date that casts on `createdAt`.
+  days: z.number().int().min(1).max(365).optional().prefault(30),
   /**
    * @description Type of transactions to get
    * @default 'all'
@@ -29,7 +31,11 @@ const handler = baseApi().get(async (req, res) => {
   });
 
   if (!validation.success) {
-    return res.status(400).json({ error: 'Invalid query parameters', details: validation.error });
+    // Just the messages: serializing the ZodError puts a pretty-printed blob of zod's own
+    // issue structure on the wire, and `?days=400`/`0`/negatives now land here routinely.
+    return res
+      .status(400)
+      .json({ error: 'Invalid query parameters', details: validation.error.issues.map(i => i.message) });
   }
 
   const { days, type } = validation.data;

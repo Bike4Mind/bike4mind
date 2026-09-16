@@ -10,7 +10,7 @@ import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 const resolveToolAvailabilityMock = vi.fn();
 
 vi.mock('sst', () => ({ Resource: { ImageProcessor: { name: 'image-processor' } } }));
-vi.mock('@bike4mind/services', async importOriginal => {
+vi.mock('@bike4mind/services/llm', async importOriginal => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return { ...actual, resolveToolAvailability: (...args: unknown[]) => resolveToolAvailabilityMock(...args) };
 });
@@ -19,6 +19,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   apiKeyRepository: {},
   dataLakeRepository: {},
+  dataLakeAccessGrantRepository: { listActiveByLakes: vi.fn().mockResolvedValue([]) },
   fallbackLakeSettingsRepository: {},
   // ToolContext.db.organizations is required since #1674 (org membership set).
   organizationRepository: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
