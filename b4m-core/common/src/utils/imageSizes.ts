@@ -2,6 +2,13 @@ import { IMAGE_SIZE_CONSTRAINTS } from '../models';
 import { isGPTImage2Model, isGPTImageModel } from './modelHelpers';
 
 /**
+ * Exactly 'WIDTHxHEIGHT' - nothing else, no surrounding whitespace and no third segment.
+ * Anchored on purpose: this module is the single source of the size rule, so a value that
+ * only looks like a resolution ('1024x1024x1024') must not be measured as one.
+ */
+const SIZE_PATTERN = /^(\d+)x(\d+)$/;
+
+/**
  * Splits a 'WIDTHxHEIGHT' string into numeric edges, or null when it is not a pair
  * of positive numbers. Lets callers tell a resolution that breaks a rule apart from
  * a value that expresses no resolution at all ('auto', 'wide', undefined).
@@ -10,7 +17,12 @@ function parseSizeEdges(size?: string | null): { width: number; height: number }
   if (typeof size !== 'string') {
     return null;
   }
-  const [width, height] = size.split('x').map(Number);
+  const match = SIZE_PATTERN.exec(size);
+  if (!match) {
+    return null;
+  }
+  const width = Number(match[1]);
+  const height = Number(match[2]);
   if (!width || !height) {
     return null;
   }
@@ -70,7 +82,10 @@ export function isSupportedImageSize(model?: string | null, size?: string | null
 
   if (isGPTImage2Model(model)) {
     // A preset must never be rejected, even if the constraint numbers are later tightened.
-    if (size === 'auto' || (IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.sizes as readonly string[]).includes(size)) {
+    if (
+      size === IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.autoSize ||
+      (IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.sizes as readonly string[]).includes(size)
+    ) {
       return true;
     }
     const edges = parseSizeEdges(size);
@@ -119,7 +134,7 @@ export function resolveGptImageGenerateSize(model?: string | null, size?: string
   const isGptImage2 = isGPTImage2Model(model);
 
   if (!size) {
-    return isGptImage2 ? 'auto' : fallbackImageSize(model);
+    return isGptImage2 ? IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.autoSize : fallbackImageSize(model);
   }
   if (isSupportedImageSize(model, size)) {
     return size;
