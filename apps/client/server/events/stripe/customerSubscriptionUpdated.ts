@@ -7,6 +7,7 @@ import { setSeats } from '@server/services/organizationService';
 import { Config } from '@server/utils/config';
 import { emitMetric } from '@server/utils/cloudwatch';
 import { StripeEvents } from '@server/utils/eventBus';
+import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
 import { stripe } from '@server/integrations/stripe/stripe';
 import { sendToClient } from '@server/websocket/utils';
 import dayjs from 'dayjs';
@@ -51,6 +52,30 @@ export const handler = withEventContext(async (event, logger) => {
     // invisible beyond a log line (same metric/dimension as the other skips).
     await emitMetric('Lumina5/Entitlements', 'EntitlementSkipped', 1, { reason: 'stage_mismatch' });
     return;
+  }
+
+  // A cancel recorded at Stripe - the Billing Portal path, which never touches our
+  // code - leaves the unpaid invoice that triggered the dunning still open, and
+  // Stripe keeps retrying it and emailing the customer. Close it here. Cleanup must
+  // not break the status sync below, so failures are swallowed and surfaced.
+  if (subscription.cancel_at_period_end || subscription.canceled_at) {
+    let cleanupFailed = false;
+    try {
+      const { voided, failed } = await voidOpenSubscriptionInvoices(subscription.id);
+      if (voided.length) logger.info(`Voided open invoices on cancelled subscription ${subscription.id}`, { voided });
+      if (failed.length) {
+        logger.error(`Could not void every open invoice on cancelled subscription ${subscription.id}`, { failed });
+        cleanupFailed = true;
+      }
+    } catch (error) {
+      logger.error(`Failed to clean up open invoices for cancelled subscription ${subscription.id}`, { error });
+      cleanupFailed = true;
+    }
+    // Emitted outside the try so a metric failure cannot re-enter the catch and
+    // report the cleanup twice.
+    if (cleanupFailed) {
+      await emitMetric('Lumina5/Entitlements', 'DunningCleanupFailed', 1, { reason: 'void_failed' });
+    }
   }
 
   // Update subscription in unified Subscription model

@@ -99,5 +99,12 @@ export interface ISubscriptionRepository extends BaseRepository<ISubscription & 
     status: ISubscription['status']
   ): Promise<ISubscription | null>;
 
+  /**
+   * Find a user subscription that is not terminal, for the cancel route. Unlike
+   * findActiveUserSubscriptions this includes past_due/unpaid/incomplete rows, so
+   * a delinquent user can still stop dunning.
+   */
+  findCancelableUserSubscriptionByPriceId(priceId: string, userId: string): Promise<ISubscription | null>;
+
   updateByStripeSubscriptionId(subscriptionId: string, data: Partial<ISubscription>): Promise<ISubscription | null>;
 }

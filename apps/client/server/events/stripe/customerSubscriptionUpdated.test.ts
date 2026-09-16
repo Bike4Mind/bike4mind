@@ -3,6 +3,7 @@ import { organizationRepository } from '@bike4mind/database';
 import { setSeats } from '@server/services/organizationService';
 import { emitMetric } from '@server/utils/cloudwatch';
 import { stripe } from '@server/integrations/stripe/stripe';
+import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
 import { sendToClient } from '@server/websocket/utils';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { handler } from './customerSubscriptionUpdated';
@@ -34,6 +35,10 @@ vi.mock('@server/integrations/stripe/stripe', () => ({
   stripe: {
     subscriptions: { retrieve: vi.fn() },
   },
+}));
+
+vi.mock('@server/integrations/stripe/dunning', () => ({
+  voidOpenSubscriptionInvoices: vi.fn().mockResolvedValue({ voided: [], failed: [] }),
 }));
 
 vi.mock('@server/utils/eventBus', () => ({
@@ -133,10 +138,19 @@ describe('customerSubscriptionUpdated — resilient seat sync', () => {
   });
 });
 
-const buildUserSub = (overrides: { priceId?: string; status?: string; metadata?: Record<string, string> } = {}) => ({
+const buildUserSub = (
+  overrides: {
+    priceId?: string;
+    status?: string;
+    metadata?: Record<string, string>;
+    cancelAtPeriodEnd?: boolean;
+    canceledAt?: number | null;
+  } = {}
+) => ({
   id: 'sub_stripe_u',
   status: overrides.status ?? 'active',
-  canceled_at: null,
+  cancel_at_period_end: overrides.cancelAtPeriodEnd ?? false,
+  canceled_at: overrides.canceledAt ?? null,
   customer: 'cus_u',
   metadata: overrides.metadata ?? {
     userId: 'u1',
@@ -278,5 +292,68 @@ describe('customerSubscriptionUpdated — stage guard', () => {
 
     expect(subscriptionRepository.updateByStripeSubscriptionId).toHaveBeenCalled();
     expect(sendToClient).toHaveBeenCalledWith(...entitlementsPush('u1'));
+  });
+});
+
+describe('customerSubscriptionUpdated - stops dunning on a cancel Stripe recorded', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // vi.clearAllMocks keeps implementations, so re-arm the default after any
+    // test that made the helper reject.
+    (voidOpenSubscriptionInvoices as any).mockResolvedValue({ voided: [], failed: [] });
+  });
+
+  it('voids the open invoices when cancel_at_period_end is set (Billing Portal cancel)', async () => {
+    // The reported path: the customer cancels in Stripe's hosted portal, so the
+    // only signal our code gets is this event. The open invoice would otherwise
+    // keep retrying and keep emailing.
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(buildUserSub({ cancelAtPeriodEnd: true }));
+
+    await handler({ properties: { subscriptionId: 'sub_stripe_u' } } as any, logger as any);
+
+    expect(voidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_stripe_u');
+  });
+
+  it('voids the open invoices when the subscription arrives already canceled', async () => {
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(
+      buildUserSub({ status: 'canceled', canceledAt: 1700000000 })
+    );
+
+    await handler({ properties: { subscriptionId: 'sub_stripe_u' } } as any, logger as any);
+
+    expect(voidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_stripe_u');
+  });
+
+  it('does not touch invoices on a routine update', async () => {
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(buildUserSub());
+
+    await handler({ properties: { subscriptionId: 'sub_stripe_u' } } as any, logger as any);
+
+    expect(voidOpenSubscriptionInvoices).not.toHaveBeenCalled();
+  });
+
+  it('still completes the status sync when the invoice cleanup fails', async () => {
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(buildUserSub({ cancelAtPeriodEnd: true }));
+    (voidOpenSubscriptionInvoices as any).mockRejectedValue(new Error('stripe unavailable'));
+
+    await handler({ properties: { subscriptionId: 'sub_stripe_u' } } as any, logger as any);
+
+    expect(subscriptionRepository.updateByStripeSubscriptionId).toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalled();
+    expect(emitMetric).toHaveBeenCalledWith('Lumina5/Entitlements', 'DunningCleanupFailed', 1, {
+      reason: 'void_failed',
+    });
+  });
+
+  it('reports per-invoice void failures without breaking the status sync', async () => {
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(buildUserSub({ cancelAtPeriodEnd: true }));
+    (voidOpenSubscriptionInvoices as any).mockResolvedValue({ voided: ['in_a'], failed: ['in_b'] });
+
+    await handler({ properties: { subscriptionId: 'sub_stripe_u' } } as any, logger as any);
+
+    expect(subscriptionRepository.updateByStripeSubscriptionId).toHaveBeenCalled();
+    expect(emitMetric).toHaveBeenCalledWith('Lumina5/Entitlements', 'DunningCleanupFailed', 1, {
+      reason: 'void_failed',
+    });
   });
 });

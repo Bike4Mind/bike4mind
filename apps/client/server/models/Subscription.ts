@@ -315,6 +315,28 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
   }
 
   /**
+   * Find a user subscription that may still be cancelled - anything except the
+   * two terminal states. Deliberately a deny-list: `findActiveUserSubscriptions`
+   * only returns `status: 'active'`, which hides the past_due subscription of the
+   * very user trying to stop dunning. A status Stripe adds later should reach the
+   * cancel attempt (Stripe rejects it, the user gets a real error) rather than
+   * silently 400 the user who wants out.
+   */
+  findCancelableUserSubscriptionByPriceId(
+    priceId: string,
+    userId: string
+  ): Promise<(ISubscription & IMongoDocument) | null> {
+    return this.model
+      .findOne({
+        ownerType: SubscriptionOwnerType.User,
+        ownerId: userId,
+        priceId,
+        status: { $nin: ['canceled', 'incomplete_expired'] },
+      })
+      .lean({ virtuals: true });
+  }
+
+  /**
    * Find ALL user subscriptions (active, canceled, past)
    * Used by /api/subscriptions/own to display subscription history
    */

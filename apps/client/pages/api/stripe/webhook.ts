@@ -13,6 +13,7 @@ import { Config, isDevelopment } from '@server/utils/config';
 import { StripeEvents } from '@server/utils/eventBus';
 import { BadRequestError } from '@server/utils/errors';
 import { customerExists, CustomerType, isStripeConfigured, stripe } from '@server/integrations/stripe/stripe';
+import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { sendToClient } from '@server/websocket/utils';
 import { creditService } from '@bike4mind/services';
@@ -172,6 +173,22 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           action: 'invalidate_query',
           queryKey: ['subscriptions'],
         });
+      }
+
+      // Deletion is terminal, and a Billing Portal "cancel immediately" fires this
+      // without a cancel_at_period_end update. Void anything still open so Stripe
+      // stops retrying the invoice and emailing the customer. A no-op when nothing
+      // is open, and it must not fail the delivery - the status write above stands.
+      try {
+        const { voided, failed } = await voidOpenSubscriptionInvoices(subscription.id);
+        if (voided.length) {
+          req.logger.info(`Voided open invoices on deleted subscription ${subscription.id}`, { voided });
+        }
+        if (failed.length) {
+          req.logger.error(`Could not void every open invoice on deleted subscription ${subscription.id}`, { failed });
+        }
+      } catch (error) {
+        req.logger.error(`Failed to clean up open invoices for deleted subscription ${subscription.id}`, { error });
       }
 
       break;

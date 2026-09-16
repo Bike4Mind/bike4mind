@@ -83,6 +83,11 @@ vi.mock('@server/integrations/stripe/stripe', () => ({
   CustomerType: { User: 'user', Organization: 'organization' },
 }));
 
+const mockVoidOpenSubscriptionInvoices = vi.fn();
+vi.mock('@server/integrations/stripe/dunning', () => ({
+  voidOpenSubscriptionInvoices: (...args: unknown[]) => mockVoidOpenSubscriptionInvoices(...args),
+}));
+
 vi.mock('@server/utils/config', () => ({
   Config: {
     MONGODB_URI: 'mongodb://localhost/test',
@@ -202,6 +207,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
     mockStampCreditLot.mockResolvedValue(undefined);
     mockAddCredits.mockResolvedValue(undefined);
     mockClawbackCreditLotsByStripeRef.mockResolvedValue(undefined);
+    mockVoidOpenSubscriptionInvoices.mockResolvedValue({ voided: [], failed: [] });
   });
 
   describe('payment_intent.succeeded', () => {
@@ -627,6 +633,42 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
 
       await invokeWebhookWithEvent(intentFailedEvent);
       expect(mockUpdateTransactionStatus).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('customer.subscription.deleted', () => {
+    const deletedEvent = {
+      type: 'customer.subscription.deleted',
+      data: {
+        object: {
+          id: 'sub_deleted',
+          canceled_at: 1700000000,
+          metadata: { userId: 'user_xyz' },
+        },
+      },
+    };
+
+    it('voids the open invoices for the deleted subscription', async () => {
+      // A Billing Portal "cancel immediately" arrives only as this event, so it is
+      // the last chance to close the invoice that is still dunning the customer.
+      await invokeWebhookWithEvent(deletedEvent);
+
+      expect(mockUpdateByStripeSubscriptionId).toHaveBeenCalledWith(
+        'sub_deleted',
+        expect.objectContaining({ status: 'canceled' })
+      );
+      expect(mockVoidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_deleted');
+    });
+
+    it('still records the deletion when the invoice cleanup fails', async () => {
+      mockVoidOpenSubscriptionInvoices.mockRejectedValue(new Error('stripe unavailable'));
+
+      await invokeWebhookWithEvent(deletedEvent);
+
+      expect(mockUpdateByStripeSubscriptionId).toHaveBeenCalledWith(
+        'sub_deleted',
+        expect.objectContaining({ status: 'canceled' })
+      );
     });
   });
 });
