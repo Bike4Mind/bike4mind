@@ -72,6 +72,15 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   // about the keyless fallback, so the handler must stamp exactly what the payload asked for.
   resolveEmbeddingWithKeylessFallback: vi.fn((model: unknown) => ({ config: {}, missing: null, model })),
   isEmbeddingAuthError: (e: unknown) => e instanceof Error && e.name === 'EmbeddingAuthError',
+  // The embedding-space guard (#2791) runs on every vectorize message, so both its export and
+  // the error it throws have to exist here even though this suite's chunks are never split.
+  EmbeddingSpaceConflictError: class extends Error {
+    constructor(attemptedModel: string, existingModels: readonly string[]) {
+      super(`Refusing to embed with ${attemptedModel}: already holds ${existingModels.join(', ')}`);
+      this.name = 'EmbeddingSpaceConflictError';
+    }
+  },
+  isEmbeddingSpaceConflictError: (e: unknown) => e instanceof Error && e.name === 'EmbeddingSpaceConflictError',
   // See the sibling e2e: this suite's mock vectors are 3-wide, so Atlas dimension validation is
   // bypassed here and covered on its own elsewhere.
   getAtlasIndexForModel: vi.fn(() => null),

@@ -74,6 +74,15 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   resolveEmbeddingWithKeylessFallback: vi.fn((model: unknown) => ({ config: {}, missing: null, model })),
   // Mirror the real name-based guard so the failure branch classifies a plain Error correctly.
   isEmbeddingAuthError: (e: unknown) => e instanceof Error && e.name === 'EmbeddingAuthError',
+  // The embedding-space guard (#2791) runs on every vectorize message, so both its export and
+  // the error it throws have to exist here even though this suite's chunks are never split.
+  EmbeddingSpaceConflictError: class extends Error {
+    constructor(attemptedModel: string, existingModels: readonly string[]) {
+      super(`Refusing to embed with ${attemptedModel}: already holds ${existingModels.join(', ')}`);
+      this.name = 'EmbeddingSpaceConflictError';
+    }
+  },
+  isEmbeddingSpaceConflictError: (e: unknown) => e instanceof Error && e.name === 'EmbeddingSpaceConflictError',
   // Bypassed: this test's mock vectors are 3-wide, not a real model's actual width, and Atlas
   // dimension validation is covered on its own in atlasSearchIndex.test.ts / the
   // "embeddingModel discriminator stamp" describe block in fabFileVectorize.test.ts.

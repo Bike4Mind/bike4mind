@@ -23,6 +23,8 @@ import {
   EmbeddingFactory,
   resolveEmbeddingWithKeylessFallback,
   isEmbeddingAuthError,
+  EmbeddingSpaceConflictError,
+  isEmbeddingSpaceConflictError,
   getAtlasIndexForModel,
   FabFileChunkSearchIndex,
 } from '@bike4mind/fab-pipeline';
@@ -207,6 +209,34 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     );
     if (embeddingModel !== requestedEmbeddingModel) {
       logger.warn(`No credential for ${requestedEmbeddingModel}; embedding with keyless ${embeddingModel} instead`);
+    }
+
+    // Refuse to open a SECOND vector space in a file that already holds one (#2791). The
+    // substitution above is resolved independently per message and a file's chunks fan out across
+    // many of them, so a credential appearing or lapsing mid-ingest otherwise splits one file
+    // across two spaces at two widths - each message individually doing the most useful thing
+    // available to it. Placed upstream of the cache, the spend gate and every embed call: the harm
+    // is the spend, not just the write, and redelivery is far cheaper than a full re-embed.
+    //
+    // Checked UNCONDITIONALLY, not just when the substitution fired: in the credential-APPEARING
+    // direction a message resolves exactly the model it requested and is still the one that would
+    // open a second space, because the file's existing vectors are the substituted ones.
+    //
+    // An empty result means no LABELED vectors - NOT necessarily an unembedded file. Chunks written
+    // before per-chunk labeling carry a vector and no model, so a fully embedded file of that
+    // vintage reads empty here and is waved through into a second space. The guard inherits that
+    // blind spot from the read rather than introducing it (this handler checked nothing before),
+    // and cannot separate it from the normal first-message case, which also reads empty and must
+    // proceed. A file that already spans two spaces may likewise continue in either one: that
+    // damage predates this guard and blocking it would only strand the file short of the stamp
+    // that reports it.
+    //
+    // This closes the sequential window a rotation actually lands in. Messages running concurrently
+    // on a file with no vectors yet can all read empty and still split it; resolveFileLabel remains
+    // the backstop that refuses to label what slips through.
+    const existingEmbeddingSpaces = await fabFileChunkRepository.distinctEmbeddingModelsByFabFileId(fabFileId);
+    if (existingEmbeddingSpaces.length > 0 && !existingEmbeddingSpaces.includes(embeddingModel)) {
+      throw new EmbeddingSpaceConflictError(embeddingModel, existingEmbeddingSpaces);
     }
 
     const requiredProvider = getProviderFromModel(embeddingModel);
@@ -645,15 +675,23 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // it is still usable there; a data-lake file (batchId set) is retrieved only by cosine search
     // over its chunks, so with no vectors it is simply unfindable until re-indexed. The full
     // operator detail still goes to the logs below. Other failures (e.g. oversized chunk) keep
-    // their specific, user-actionable message.
+    // their specific, user-actionable message. A refused second embedding space is the same shape:
+    // its message names both models, which tells a user nothing they can act on, and re-indexing is
+    // the one action that does resolve it.
     const isAuthFailure = isEmbeddingAuthError(err);
-    const storedError = isAuthFailure
-      ? existingFabFile.batchId
-        ? 'This file could not be indexed for semantic search because the embedding service was unavailable. It will not be found by knowledge search until it is re-indexed.'
-        : 'This file could not be indexed for semantic search because the embedding service was unavailable. You can still ask about it directly in chat.'
-      : errorMessage;
+    const isEmbeddingSpaceConflict = isEmbeddingSpaceConflictError(err);
+    const storedError = isEmbeddingSpaceConflict
+      ? 'This file could not be finished indexing for semantic search because the embedding service changed while it was being indexed. Re-index the file to complete it.'
+      : isAuthFailure
+        ? existingFabFile.batchId
+          ? 'This file could not be indexed for semantic search because the embedding service was unavailable. It will not be found by knowledge search until it is re-indexed.'
+          : 'This file could not be indexed for semantic search because the embedding service was unavailable. You can still ask about it directly in chat.'
+        : errorMessage;
     if (isAuthFailure) {
       logger.warn(`Vectorization failed for ${fabFileId} (embedding auth): ${errorMessage}`);
+    }
+    if (isEmbeddingSpaceConflict) {
+      logger.warn(`Vectorization refused for ${fabFileId} (embedding space conflict): ${errorMessage}`);
     }
 
     // A non-retryable spend-gate denial is deterministic (a budget does not regrow, the
