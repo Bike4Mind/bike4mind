@@ -1,4 +1,4 @@
-import { Invite, User } from '@bike4mind/database';
+import { Invite, Session, User } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 
 /**
@@ -17,6 +17,20 @@ import { type MigrationFile } from './index';
  * uniqueness on this schema is case-SENSITIVE, so a case-insensitive match can return two real
  * accounts for one string. Attributing an invite to the wrong inviter would widen what acceptance
  * propagates, so an ambiguous or missing match is skipped and left on the fallback.
+ *
+ * Two narrowings, both because `username` is MUTABLE and the resolution feeds an authorization
+ * decision rather than a display string. A rename-then-reuse resolves to exactly one account - the
+ * wrong one - and the ambiguity guard above never fires on it.
+ *
+ * First, Session invites only. `inviterId` has exactly one production reader, the Session arm of
+ * sharingService/accept.ts, so setting it on any other type is risk with no benefit.
+ *
+ * Second, the resolved account has to be a principal on the session the invite targets: its owner,
+ * or a holder of a grant in `users[]`. Minting the invite required share authority on that session,
+ * so a correct resolution satisfies this and a stranger who merely holds the username now does not.
+ * An invite whose inviter has since lost their grant fails it too and stays on the fallback, which
+ * is the fail-closed direction - accept.ts propagates only to the session owner's own files when
+ * `inviterId` is absent, so not resolving is strictly safer than resolving wrongly.
  *
  * Re-running is a no-op only because the scan is narrowed to `inviterId: { $exists: false }`, which
  * is a property of the filter rather than of the write: anything that later unsets the field puts
@@ -40,14 +54,17 @@ const migration: MigrationFile = {
     const resolved = new Map<string, string>();
     const unresolvable = new Set<string>();
 
+    let uncorroborated = 0;
+
     while (true) {
       const filter: Record<string, unknown> = {
+        type: 'Session',
         inviterId: { $exists: false },
         username: { $type: 'string', $ne: '' },
       };
       if (lastId) filter._id = { $gt: lastId };
 
-      const batch = await Invite.find(filter).sort({ _id: 1 }).limit(BATCH_SIZE).select('username');
+      const batch = await Invite.find(filter).sort({ _id: 1 }).limit(BATCH_SIZE).select('username documentId');
       if (batch.length === 0) break;
 
       const unseen = [
@@ -72,14 +89,42 @@ const migration: MigrationFile = {
         }
       }
 
-      const writes = batch
-        .filter(invite => !!invite.username && resolved.has(invite.username))
-        .map(invite => ({
-          updateOne: {
-            filter: { _id: invite._id },
-            update: { $set: { inviterId: resolved.get(invite.username as string) } },
-          },
-        }));
+      // Per batch rather than cached across all of them: the batch bounds this at BATCH_SIZE
+      // sessions, where a run-long cache is unbounded in a collection this size.
+      const documentIds = [
+        ...new Set(
+          batch
+            .filter(invite => !!invite.username && resolved.has(invite.username))
+            .map(invite => invite.documentId)
+            .filter((id): id is string => !!id)
+        ),
+      ];
+      const principals = new Map<string, Set<string>>();
+      if (documentIds.length > 0) {
+        const sessions = await Session.find({ _id: { $in: documentIds } }).select('userId users');
+        for (const session of sessions) {
+          principals.set(
+            String(session._id),
+            new Set([
+              String(session.userId),
+              ...(session.users ?? []).map((entry: { userId?: unknown }) => String(entry?.userId)),
+            ])
+          );
+        }
+      }
+
+      const writes = [];
+      for (const invite of batch) {
+        const inviterId = invite.username ? resolved.get(invite.username) : undefined;
+        if (!inviterId) continue;
+        if (!principals.get(String(invite.documentId))?.has(inviterId)) {
+          uncorroborated += 1;
+          continue;
+        }
+        writes.push({
+          updateOne: { filter: { _id: invite._id }, update: { $set: { inviterId } } },
+        });
+      }
 
       if (writes.length > 0) {
         const result = await Invite.bulkWrite(writes, { ordered: false });
@@ -91,8 +136,9 @@ const migration: MigrationFile = {
     }
 
     console.log(
-      `[backfill-invite-inviter-id] set inviterId on ${updated} invite(s); ` +
-        `${unresolvable.size} username(s) skipped as unresolvable or ambiguous`
+      `[backfill-invite-inviter-id] set inviterId on ${updated} Session invite(s); ` +
+        `${unresolvable.size} username(s) skipped as unresolvable or ambiguous; ` +
+        `${uncorroborated} invite(s) skipped because the resolved account is not a principal on the session`
     );
   },
 

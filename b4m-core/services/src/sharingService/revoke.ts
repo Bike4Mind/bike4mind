@@ -69,16 +69,22 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
   // every row the user holds on this document - the direct share, each project's grant, and each
   // session's. That is the point of an unscoped revoke on a document you own, and it is why the
   // session tag is not part of this predicate: the cascades below filter on the tag, this does not.
+  // The `type === 'projects'` disjunct makes a revoke ON a project unscoped-broad even when a
+  // projectId is passed, which is not an exception to the above: rows on a project document are
+  // never themselves projectId-tagged, so scoping one by projectId would match nothing.
   const isRevoked = (user: IUserShare) =>
     user.userId.toString() === userIdToRevoke && (type === 'projects' || !projectId || user.projectId === projectId);
 
   // Scope-aware, so a scoped revoke that matches no entry says so instead of removing nothing and
-  // returning the document as if it had succeeded. Worth being honest about the reach: the only
-  // caller that passes a projectId today is revokeFromProject's cascade below, which swallows
-  // NotFoundError by design, and the HTTP route never sends one - so this currently guards a
-  // future scoped caller rather than surfacing an error anyone sees now. Entries written before
-  // pushShareable keyed on the pair carry only the last project's tag, so a scoped revoke against
-  // an earlier project can land here; revoking without a projectId still clears every entry.
+  // returning the document as if it had succeeded. Worth being honest about the reach: no
+  // first-party caller passes a projectId except revokeFromProject's cascade below, which swallows
+  // NotFoundError by design - but the HTTP route CAN send one. apps/client/pages/api/[type]/[id]/
+  // revokeSharing.ts declares `projectId` optional and spreads the parsed body through, so a client
+  // supplying a projectId that tags none of the target's rows gets a 404 here rather than the broad
+  // revoke it probably meant. That is the fail-closed direction and it is why the scoped arm says so
+  // instead of reporting a success that removed nothing. Entries written before pushShareable keyed
+  // on the pair carry only the last project's tag, so a scoped revoke against an earlier project can
+  // land here; revoking without a projectId still clears every entry.
   if (!document.users.some(isRevoked)) throw new NotFoundError(`User not found in document`);
 
   document.users = document.users.filter(user => !isRevoked(user));

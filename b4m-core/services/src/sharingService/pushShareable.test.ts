@@ -11,7 +11,9 @@ describe('sharingService - pushShareable', () => {
 
     pushShareable(entity, { userId: 'user-1', permissions: [Permission.read, Permission.share] });
 
-    expect(entity.users).toEqual([
+    // toStrictEqual, not toEqual: toEqual treats an `undefined`-valued key as equal to an absent
+    // one, so the two provenance tags below would assert nothing under it.
+    expect(entity.users).toStrictEqual([
       {
         userId: 'user-1',
         permissions: [Permission.read, Permission.share],
@@ -30,7 +32,7 @@ describe('sharingService - pushShareable', () => {
 
     pushShareable(entity, { userId: 'user-1', permissions: [Permission.read, Permission.share] });
 
-    expect(entity.users).toEqual([
+    expect(entity.users).toStrictEqual([
       { userId: 'user-1', permissions: [Permission.read], projectId: 'project-9' },
       {
         userId: 'user-1',

@@ -48,13 +48,19 @@ export const deleteSession = async (
   // Cascade BEFORE the tombstone. softDeletePlugin puts `deletedAt: null` on every findOne, and
   // findByIdAndUserId is a bare findOne, so a session tombstoned first is unreachable on a retry:
   // the guard above would throw and any grant this loop had not yet reached would stay live with
-  // no surface left to clear it. Nothing here is transactional, so ordering is the whole defence.
+  // no surface left to clear it. Both live callers now wrap this in a transaction (the DELETE route
+  // and the bulk route), so ordering is no longer the only defence - but it is the one that does not
+  // depend on the caller remembering, and the service itself opens no transaction.
   const ownedFileIds = new Set(ownedFiles.map(file => file.id));
 
   for (const file of grantedFiles) {
-    // A file about to be hard-deleted below has nothing left to revoke, and a guarded write on it
-    // can raise ConcurrencyConflictError and abort the whole delete over a document that is going
-    // away regardless.
+    // A file this session owner is deleting below is going away regardless, and a guarded write on
+    // it can raise ConcurrencyConflictError and abort the whole delete for nothing. Note the write
+    // below is `deleteManyInIds`, which is softDeletePlugin's TOMBSTONE path, not a hard delete
+    // (compare hardDeleteByIds, which passes `{ hardDelete: true }`) - so the skipped rows survive
+    // on the tombstoned document. No read path exposes them: every FabFile aggregate filters
+    // `deletedAt` and none projects `users`, findAccessibleById is a tombstone-filtered findOne, and
+    // the one includeDeleted read that returns `users[]` is admin-only.
     if (ownedFileIds.has(file.id)) continue;
     // Only rows this session minted, and every grantee's, not just the deleter's: the session is
     // the source of those grants and it is going away, so leaving a sharee's behind strands it with

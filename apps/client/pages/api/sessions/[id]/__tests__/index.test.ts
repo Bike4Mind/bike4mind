@@ -28,6 +28,7 @@ const {
   mockUpdateSession,
   mockDeleteSession,
   mockLogEvent,
+  mockWithTransaction,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
@@ -36,6 +37,7 @@ const {
   mockUpdateSession: vi.fn(),
   mockDeleteSession: vi.fn(),
   mockLogEvent: vi.fn(),
+  mockWithTransaction: vi.fn(),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -85,7 +87,7 @@ vi.mock('@bike4mind/database', async orig => {
     connectDB: vi.fn().mockResolvedValue(undefined),
     // The DELETE route wraps deleteSession's grant cascade in a transaction; the real one opens a
     // mongo session this suite has no server for, so run the callback inline.
-    withTransaction: vi.fn(async (fn: (s: unknown) => unknown) => fn(undefined)),
+    withTransaction: (...a: unknown[]) => mockWithTransaction(...a),
     User: Object.assign(Object.create(RealUser), { findById: (...a: unknown[]) => mockFindById(...a) }),
   };
 });
@@ -137,6 +139,9 @@ function keyWithScopes(scopes: ApiKeyScope[]) {
 describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The real withTransaction opens a mongo session this suite has no server for, so the default
+    // is to run the callback inline; the transaction test below swaps in its own.
+    mockWithTransaction.mockImplementation(async (fn: (s: unknown) => unknown) => fn(undefined));
     // aupAcceptedVersion is required by the shared consent-gate middleware (any
     // request without it 403s with "Policy acceptance required" before reaching
     // the handler) - a grandfathered sentinel, matching auth-behavior.integration.test.ts.
@@ -278,6 +283,33 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
   });
 
   describe('DELETE', () => {
+    it('runs the grant cascade inside a transaction', async () => {
+      // Asserting the call alone would pass on a route that opened a transaction and then ran the
+      // cascade outside it, which is the shape that actually leaves files half-rewritten. So the
+      // service records whether it was reached from within the callback.
+      let inTransaction = false;
+      let cascadeSawTransaction: boolean | null = null;
+      mockWithTransaction.mockImplementation(async (fn: (s: unknown) => unknown) => {
+        inTransaction = true;
+        try {
+          return await fn(undefined);
+        } finally {
+          inTransaction = false;
+        }
+      });
+      mockDeleteSession.mockImplementation(async () => {
+        cascadeSawTransaction = inTransaction;
+        return { id: 'other-session' };
+      });
+
+      const { req, res } = fire({ method: 'DELETE' });
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+      expect(cascadeSawTransaction).toBe(true);
+    });
+
     it('deletes the session by the path id and returns the new last-notebook id', async () => {
       mockDeleteSession.mockResolvedValue({ id: 'other-session' });
       const { req, res } = fire({ method: 'DELETE' });

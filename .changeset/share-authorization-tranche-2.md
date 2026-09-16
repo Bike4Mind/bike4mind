@@ -34,10 +34,12 @@ wrote last, while `revoke` filters on that tag: revoking via the earlier project
 and returned the document as if it had succeeded, leaving access live, and revoking via the later
 one tore out the other project's grant as well. Entries are keyed on `(userId, projectId, sessionId)`,
 so each project's grant, each session's, and any direct share are separate rows, and a scoped revoke that matches no row now
-raises `NotFoundError` instead of reporting a success that removed nothing. That last part guards a
-future scoped caller more than a present one: the only code passing a `projectId` today is
-`revokeFromProject`'s own cascade, which swallows `NotFoundError` by design, and the HTTP route
-never sends one. Rows written before
+raises `NotFoundError` instead of reporting a success that removed nothing. No first-party caller passes a
+`projectId` except `revokeFromProject`'s own cascade, which swallows `NotFoundError` by design, but
+the `revokeSharing` route accepts one in its body - so a client that supplies a `projectId` matching
+none of the target's rows now gets a 404 instead of the broad revoke it probably meant. That is the
+fail-closed direction, and it is the point: the old behaviour reported success and removed nothing.
+Rows written before
 this change carry only the last project's tag; a scoped revoke against an earlier project hits the
 new not-found path, and revoking without a `projectId` still clears every row the user holds. A
 user may now legitimately hold several rows on one document, so the client-side permission helpers
@@ -82,26 +84,33 @@ This is under-revocation, and it is the safe direction to fail - the alternative
 destruction above - but it is not costless, and the honest statement of the residue is narrower than
 "revoke it on the file instead". Where the session owner does not own the file, they have no
 surface at all: an unscoped revoke on the file is owner-or-self, so only the file's owner or the
-grant holder can clear it, and neither of them is the person who wanted the access gone. There is no
-backfill that closes this: an untagged row is indistinguishable from the direct share this change
-exists to protect, so tagging it re-creates the bug and adding a second tagged row leaves the
-untagged one live. It is not a regression either - before this change neither cascade existed at
-all, so those rows were already unreachable from this surface. The gap shrinks only as legacy grants
-are revoked on the file, and nothing should be filed to backfill it.
+grant holder can clear it, and neither of them is the person who wanted the access gone. No backfill closes this from
+code alone: an untagged row is indistinguishable from the direct share this change exists to
+protect, so tagging it re-creates the bug and adding a second tagged row leaves the untagged one
+live. Reconstructing provenance from accepted-invite history does not substitute, because a grant
+outlives the invite that created it and can predate the address it would be keyed on; a gate on the
+session owner holding `share` authorizes the wrong principal, since the mint reads the inviter. It is
+not a regression either - before this change neither cascade existed at all, so those rows were
+already unreachable from this surface. The gap shrinks as legacy grants are revoked on the file, and
+the way to close the rest is an owner-facing surface that lists and clears untagged rows on a
+document, not a backfill that guesses at provenance.
 
 Deleting a session cascades before it tombstones. The tombstone came first while the per-file grant
 rewrite came second, and `softDeletePlugin` puts `deletedAt: null` on every `findOne` - so a failure
 mid-cascade left the session unreachable on a retry with the remaining grants live and nothing left
-to clear them. The cascade now runs first, and the route wraps the whole call in a transaction, so a
-concurrency conflict partway through rolls back rather than leaving some files rewritten and some
-not; that matches the `revokeSharing` route, which already wrapped the sibling cascade.
+to clear them. The cascade now runs first, and both live entry points - `DELETE /api/sessions/[id]` and the bulk
+route - wrap each call in a transaction, so a concurrency conflict partway through rolls back rather
+than leaving some files rewritten and some not; that matches the `revokeSharing` route, which
+already wrapped the sibling cascade. The bulk route wraps per session rather than around its loop,
+because it is best-effort: one session failing must not roll back the ones already deleted.
 
 What that cascade touches, precisely: rows tagged with this session, on the union of files uploaded
 into it and files named in `knowledgeIds` (neither set contains the other), for every grantee rather
-than only the deleter, skipping files the deleter owns because those are hard-deleted moments later
-and a guarded write on them can abort the delete for nothing. It previously stripped every untagged
-row the deleter held, which took direct shares with it and left sharees' derived grants behind with
-no surface to revoke them. Its reach is bounded by `knowledgeIds` as of the call, which is
+than only the deleter, skipping files the deleter owns because those are deleted moments later and a
+guarded write on them can abort the delete for nothing. That delete is `deleteManyInIds`, the
+soft-delete plugin's tombstone path rather than a hard delete, so the skipped rows survive on the
+tombstoned document; no read path reaches them, since every FabFile aggregate filters `deletedAt`
+and none projects `users`, and the one `includeDeleted` read that returns `users[]` is admin-only. Its reach is bounded by `knowledgeIds` as of the call, which is
 client-writable, so a sharee holding update on the session can detach a file first and keep the
 grant; closing that needs a `users.sessionId` sweep across a high-cardinality collection and is not
 paid here. Both new whole-document grant writes, here and in the session knowledge-file cascade,
@@ -145,9 +154,22 @@ declares the `Pick<IUserDocument, 'id' | 'groups'>` it actually consumes, matchi
 The `backfill-invite-inviter-id` migration backfills `Invite.inviterId` from the username every
 invite already persists, which is the closing move for the legacy propagation fallback in
 `accept.ts`. It scans on an `_id` cursor rather than loading the whole matching set at once, since
-invites are one of the higher-cardinality collections. `SkillShareDialog`, the surface that actually
+invites are one of the higher-cardinality collections. Because `username` is mutable and the only
+reader of `inviterId` is an authorization gate, the backfill is narrowed twice: to Session invites,
+the only type that gate runs for, and to resolutions the target session corroborates (the account is
+its owner or holds a grant on it). A rename-then-reuse resolves to exactly one account, so the
+ambiguity guard never fires on it; anything uncorroborated stays on the conservative fallback, which
+is strictly safer than attributing the invite to the wrong person. `SkillShareDialog`, the surface that actually
 flips `isGlobalRead`/`isGlobalWrite`, reports the server's reason instead of a fixed string, so a
 holder refused by the predicate this change moves can tell that apart from a network failure.
+
+Cancelling one named recipient by email clamps `remaining` to the addresses still pending instead of
+decrementing it. The two gates that let anyone holding an invite id read and redeem it treat an
+invite naming nobody as a share link, and on a row minted before `isLinkOnly` existed that is
+inferred from the recipient buckets - so `remaining` reaching zero is what stops a cancelled named
+invite becoming a live link. A decrement only matched the address count while `remaining` started
+equal to it, and `available` in the create body is taken at face value, so a row naming one person
+with five slots kept four of them after that person was cancelled.
 
 Invite redemption enforces `expiresAt` on both accept and refuse. Declining now affects only the
 decliner's own slot: one recipient declining used to zero the invite for every other recipient, and

@@ -24,14 +24,20 @@ export type LinkOnlyInviteShape = Pick<IInvite, 'isLinkOnly' | 'recipients' | 't
  *
  * The union is NOT self-sufficient, and a caller must not read it as though it were. Three paths
  * empty `pending` without moving the addresses anywhere - cancelInviteById, refuseWholeInvite's
- * cancel-for-everyone branch, and cancel's clear-all branch - so on a pre-flag FabFile/Session row
- * each of them flips this predicate from "named" to "link-only". What makes that safe today is
- * `remaining`: all three zero it in the same write, and both consumers (inviteManager's
+ * cancel-for-everyone branch, and cancelInvite's by-email branch - so on a pre-flag FabFile/Session
+ * row each of them flips this predicate from "named" to "link-only". What makes that safe is
+ * `remaining` reaching zero in the same write, because both consumers (inviteManager's
  * canViewInvite and acceptInvite) refuse an invite with none left before this result can matter.
- * So a new cancel path that clears `pending` without zeroing `remaining`, or a third consumer that
- * reads this without the `remaining` check, re-opens view-and-redeem to any authenticated holder
- * of the id. Those addresses are deliberately not moved into `refused`: that bucket means the
- * recipient declined, and a sharer cancelling is not a decline.
+ * The first two zero it outright. The by-email branch removes one address at a time, so it CLAMPS
+ * `remaining` to the surviving `pending.length` rather than decrementing: a plain decrement is
+ * only equivalent while `remaining === pending.length`, and `available` in the create body is taken
+ * at face value, so a row naming one person with five slots left four behind and became a
+ * redeemable share link the moment that person was cancelled.
+ *
+ * So a new cancel path that clears `pending` without driving `remaining` down with it, or a third
+ * consumer that reads this without the `remaining` check, re-opens view-and-redeem to any
+ * authenticated holder of the id. Those addresses are deliberately not moved into `refused`: that
+ * bucket means the recipient declined, and a sharer cancelling is not a decline.
  */
 export const isLinkOnlyInvite = (invite: LinkOnlyInviteShape): boolean => {
   if (typeof invite.isLinkOnly === 'boolean') return invite.isLinkOnly;

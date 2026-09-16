@@ -47,7 +47,7 @@ describe('sessionService - delete', () => {
     expect(mockFabFileRepo.deleteManyInIds).not.toHaveBeenCalled();
   });
 
-  it('hard-deletes a file the session owner actually owns', async () => {
+  it('deletes a file the session owner actually owns', async () => {
     const session = { id: sessionId, userId: ownerId, deletedAt: null };
     const ownedFile = { id: 'file-owned', userId: ownerId, users: [] };
 
@@ -119,8 +119,10 @@ describe('sessionService - delete', () => {
   });
 
   // The guarded write can conflict and abort the whole delete, which is not a trade worth making
-  // for a document that is hard-deleted three lines later anyway.
-  it('does not take a guarded grant write on a file it is about to hard-delete', async () => {
+  // for a document that is deleted three lines later anyway. `deleteManyInIds` is the plugin's
+  // tombstone path, not a hard delete, so the skipped rows survive on the tombstone - see the
+  // comment at the skip in sessionService/delete.ts for why no read path reaches them.
+  it('does not take a guarded grant write on a file it is about to delete', async () => {
     const session = { id: sessionId, userId: ownerId, deletedAt: null };
     const ownedFile = {
       id: 'file-owned',
@@ -183,7 +185,7 @@ describe('sessionService - delete', () => {
     expect(mockFabFileRepo.deleteManyInIds).not.toHaveBeenCalled();
   });
 
-  it('does not hard-delete a file attached to the session but owned by someone else', async () => {
+  it('does not delete a file attached to the session but owned by someone else', async () => {
     const session = { id: sessionId, userId: ownerId, deletedAt: null };
     const sharedInFile = {
       id: 'file-shared-in',
@@ -197,7 +199,7 @@ describe('sessionService - delete', () => {
 
     await deleteSession(ownerId, { id: sessionId }, adapters);
 
-    // The other user's file must never be hard-deleted...
+    // The other user's file must never be deleted...
     expect(mockFabFileRepo.deleteManyInIds).toHaveBeenCalledWith([]);
     // ...only the grant this session minted on it is dropped.
     expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(

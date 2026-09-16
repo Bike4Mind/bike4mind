@@ -10,7 +10,7 @@ import {
   organizationRepository,
   Group,
 } from '@bike4mind/database';
-import { isValidObjectId } from 'mongoose';
+import { isValidObjectId } from '@server/utils/objectId';
 import { canViewInvite, getInviteDetails, filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -28,8 +28,10 @@ const handler = baseApi()
         return res.status(400).json({ message: 'Invite Share request' });
       }
 
-      // Matches the sibling at pages/api/[type]/[id]: an unvalidated id reaches findById as a cast
-      // error rather than the 404 the rest of this handler is careful to return.
+      // Matches the sibling at pages/api/[type]/[id], down to the shared helper: an unvalidated id
+      // reaches findById as a cast error rather than the 404 the rest of this handler is careful to
+      // return. The helper wraps `isObjectIdOrHexString`, not mongoose's exported `isValidObjectId`,
+      // which also accepts a number or a 12-byte Buffer and casts it to a fabricated id.
       if (!isValidObjectId(id)) {
         return res.status(400).json({ message: 'Invalid ID format' });
       }
