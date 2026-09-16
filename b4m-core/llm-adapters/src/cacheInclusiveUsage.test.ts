@@ -25,11 +25,56 @@ describe('splitCacheInclusiveInput', () => {
 
 describe('cachedTokensFromUsage', () => {
   it.each([
+    ['DeepSeek flat', { prompt_cache_hit_tokens: 1220 }],
     ['Moonshot flat', { cached_tokens: 1220 }],
     ['OpenAI chat completions', { prompt_tokens_details: { cached_tokens: 1220 } }],
     ['OpenAI responses', { input_tokens_details: { cached_tokens: 1220 } }],
   ])('reads the %s spelling', (_label, usage) => {
     expect(cachedTokensFromUsage(usage)).toBe(1220);
+  });
+
+  /** Ordered as cachedTokensFromUsage reads them, one distinct value per spelling. */
+  const RANKED_SPELLINGS: ReadonlyArray<{ label: string; shape: Record<string, unknown>; tokens: number }> = [
+    { label: 'prompt_cache_hit_tokens', shape: { prompt_cache_hit_tokens: 11 }, tokens: 11 },
+    { label: 'cached_tokens', shape: { cached_tokens: 22 }, tokens: 22 },
+    {
+      label: 'prompt_tokens_details.cached_tokens',
+      shape: { prompt_tokens_details: { cached_tokens: 33 } },
+      tokens: 33,
+    },
+    { label: 'input_tokens_details.cached_tokens', shape: { input_tokens_details: { cached_tokens: 44 } }, tokens: 44 },
+  ];
+
+  it('resolves the four spellings in a fixed order when a usage carries several', () => {
+    // The precedence guarantee itself, which no single-field adapter test reaches:
+    // DeepSeek sends its own field ALONGSIDE the OpenAI-shaped nesting, and the two
+    // need not agree. Each case supplies one rank and every rank below it, so the
+    // value returned names the branch that answered and any reordering of the
+    // candidate list breaks at least one expectation.
+    RANKED_SPELLINGS.forEach(({ label, tokens }, rank) => {
+      const usage: Record<string, unknown> = Object.assign({}, ...RANKED_SPELLINGS.slice(rank).map(e => e.shape));
+
+      expect(cachedTokensFromUsage(usage), `${label} lost to a lower-ranked spelling`).toBe(tokens);
+    });
+  });
+
+  it.each([
+    ['zero', 0],
+    ['a negative count', -5],
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['a numeric string', '1220'],
+    ['null', null],
+  ])('falls through %s in a higher-precedence field rather than settling on it', (_label, useless) => {
+    // Short-circuiting on the 0 a provider sends for a cold turn would bill a warm
+    // turn at the full input rate whenever a lower-ranked field carries the real count.
+    expect(cachedTokensFromUsage({ prompt_cache_hit_tokens: useless, cached_tokens: 1220 })).toBe(1220);
+  });
+
+  it('reads past a details object that is absent rather than empty', () => {
+    expect(
+      cachedTokensFromUsage({ prompt_tokens_details: undefined, input_tokens_details: { cached_tokens: 7 } })
+    ).toBe(7);
   });
 
   it.each([

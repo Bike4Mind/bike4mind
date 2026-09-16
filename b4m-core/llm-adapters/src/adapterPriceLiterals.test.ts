@@ -1,6 +1,6 @@
 import { ChatModels } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
-import { adapterPriceTiers } from './adapterPriceLiterals';
+import { adapterPriceTiers, staticPriceBackends } from './adapterPriceLiterals';
 
 describe('adapterPriceTiers', () => {
   it('carries the cache rate a feed never publishes, which is the whole reason it exists', async () => {
@@ -39,5 +39,39 @@ describe('adapterPriceTiers', () => {
 
   it('memoizes, the planner asking once per convergence pass', async () => {
     expect(await adapterPriceTiers()).toBe(await adapterPriceTiers());
+  });
+});
+
+describe('staticPriceBackends', () => {
+  it('pins the list, since both a price carry and the checked-in seed are drawn from it', () => {
+    // Deliberately a change detector: adding or dropping a backend changes which
+    // providers a first discovery row can carry rates for AND what
+    // modelPrices.seed.json covers. Both are price decisions, so the list should
+    // move as a reviewed diff rather than an edit nobody sees.
+    expect(staticPriceBackends().map(backend => backend.constructor.name)).toEqual([
+      'OpenAIBackend',
+      'AnthropicBackend',
+      'UndifferentiatedBedrockBackend',
+      'GeminiBackend',
+      'XAIBackend',
+      'KimiBackend',
+      'DeepSeekBackend',
+      'AWSBackend',
+    ]);
+  });
+
+  it('names the one entry that contributes no priced text model', async () => {
+    // Every other backend is covered by the seed-freshness test, which fails when
+    // its models leave the generated seed. AWSBackend offers only speech-to-text,
+    // which both consumers filter out, so nothing else would notice its removal -
+    // and if it ever ships a text model, this is where that shows up.
+    const backends = staticPriceBackends();
+    const pricesText = await Promise.all(
+      backends.map(async backend =>
+        (await backend.getModelInfo()).some(model => model.type === 'text' && !model.freeToRun)
+      )
+    );
+
+    expect(backends.filter((_, i) => !pricesText[i]).map(backend => backend.constructor.name)).toEqual(['AWSBackend']);
   });
 });
