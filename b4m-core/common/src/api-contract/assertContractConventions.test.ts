@@ -305,6 +305,80 @@ describe('assertContractConventions', () => {
     });
   });
 
+  describe('stream-error-frame', () => {
+    const streamEvent = (errorFrame: z.ZodTypeAny) =>
+      z.union([z.object({ type: z.literal('content'), text: z.string() }), errorFrame]);
+
+    /** A streaming contract whose 200 publishes `errorFrame` as its failure variant. */
+    const streamContract = (errorFrame: z.ZodTypeAny) =>
+      contract({
+        streaming: true,
+        responses: { 200: { description: 'SSE stream.', schema: streamEvent(errorFrame) } },
+      });
+
+    const conformingFrame = z.object({
+      type: z.literal('error'),
+      message: z.string(),
+      code: z.enum(['insufficient_credits', 'spend_cap_exceeded']).optional(),
+    });
+
+    it('accepts a stream whose error frame carries a shared-vocabulary classifier', () => {
+      expect(() => assertContractConventions([streamContract(conformingFrame)])).not.toThrow();
+    });
+
+    // The defect this gate closes: a `z.string()` classifier documents nothing, so
+    // callers fall back to regex-matching the prose `message`.
+    it('rejects an untyped classifier', () => {
+      const frame = z.object({ type: z.literal('error'), message: z.string(), code: z.string().optional() });
+      expect(() => assertContractConventions([streamContract(frame)])).toThrow(/stream-error-frame/);
+    });
+
+    it('rejects an error frame with no classifier at all', () => {
+      const frame = z.object({ type: z.literal('error'), message: z.string() });
+      expect(() => assertContractConventions([streamContract(frame)])).toThrow(/stream-error-frame/);
+    });
+
+    // A classifier from some private vocabulary is the drift the shared union exists
+    // to stop, and safeParse is the only way to see it from here.
+    it('rejects a classifier enum outside the shared vocabulary', () => {
+      const frame = z.object({
+        type: z.literal('error'),
+        message: z.string(),
+        code: z.enum(['not_a_shared_classifier']).optional(),
+      });
+      expect(() => assertContractConventions([streamContract(frame)])).toThrow(/stream-error-frame/);
+    });
+
+    // Required means a caller must handle a classifier on EVERY failure, which no
+    // handler can promise - an unclassified crash has no billing code to report.
+    it('rejects a required classifier', () => {
+      const frame = z.object({
+        type: z.literal('error'),
+        message: z.string(),
+        code: z.enum(['insufficient_credits']),
+      });
+      expect(() => assertContractConventions([streamContract(frame)])).toThrow(/stream-error-frame/);
+    });
+
+    it('rejects a stream with no error variant in its event union', () => {
+      const responses = {
+        200: { description: 'SSE stream.', schema: z.object({ type: z.literal('content'), text: z.string() }) },
+      };
+      expect(() => assertContractConventions([contract({ streaming: true, responses })])).toThrow(/stream-error-frame/);
+    });
+
+    it('rejects a streaming contract with no 200 schema to inspect', () => {
+      const responses = { 200: { description: 'SSE stream.' } };
+      expect(() => assertContractConventions([contract({ streaming: true, responses })])).toThrow(/stream-error-frame/);
+    });
+
+    // The rule is scoped to streams on purpose: a JSON endpoint reports these
+    // conditions as a classified 422, which the status table and envelope gates cover.
+    it('does not apply to a non-streaming contract', () => {
+      expect(() => assertContractConventions([contract()])).not.toThrow();
+    });
+  });
+
   it('names the offending contract and points at the conventions doc', () => {
     expect(() => assertContractConventions([contract({ path: '/api/widgets' })])).toThrow(
       /Contract "createWidget" \(POST \/api\/widgets\).+CONVENTIONS\.md/s

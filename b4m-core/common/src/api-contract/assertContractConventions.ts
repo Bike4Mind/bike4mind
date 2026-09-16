@@ -55,10 +55,10 @@ const CAMEL_CASE = /^[a-z][A-Za-z0-9]*$/;
 
 /**
  * Diagnostic label in the error message. A superset of {@link ConventionRule}:
- * these three are enforced but not exemptable via `conventionExemptions`
+ * these are enforced but not exemptable via `conventionExemptions`
  * (`error-envelope` uses the finer-grained per-response `bespokeErrorShape`).
  */
-type ConventionLabel = ConventionRule | 'operation-id' | 'error-envelope' | 'rate-limit-headers';
+type ConventionLabel = ConventionRule | 'operation-id' | 'error-envelope' | 'rate-limit-headers' | 'stream-error-frame';
 
 function fail(contract: EndpointContract, rule: ConventionLabel, problem: string, remedy: string): never {
   throw new Error(
@@ -97,6 +97,58 @@ function carriesErrorEnvelope(schema: z.ZodTypeAny): boolean {
   if (requestId && !(requestId.safeParse(undefined).success && requestId.safeParse('abc-123').success)) return false;
 
   return true;
+}
+
+/**
+ * The union members of a Zod union, or the schema itself for a non-union (a
+ * single-shape stream is still a stream). `.options` rather than `_def`
+ * introspection, for the same reason carriesErrorEnvelope uses safeParse.
+ */
+function unionOptionsOf(schema: z.ZodTypeAny): readonly z.ZodTypeAny[] {
+  const options = (schema as { options?: unknown }).options;
+  return Array.isArray(options) ? (options as z.ZodTypeAny[]) : [schema];
+}
+
+/**
+ * Probe values for the in-band classifier gate. The billing pair is what a
+ * streaming caller actually has to branch on, and the reject probe is what
+ * separates a real enum from a `z.string()` that documents nothing.
+ */
+const SHARED_CLASSIFIER_PROBE = 'insufficient_credits';
+const FOREIGN_CLASSIFIER_PROBE = 'not_a_shared_classifier';
+
+/**
+ * Does a streaming contract's 200 body carry a TYPED in-band error frame?
+ *
+ * A streaming endpoint's failures cannot be HTTP statuses once headers are
+ * flushed, so its `error` event is the whole error surface - and the >= 400
+ * envelope gate above never sees it. Without this, a stream could publish its
+ * classifier as a bare `z.string()`, which is what drove callers to regex the
+ * prose `message` instead (the defect this rule closes).
+ *
+ * Structural, like the envelope check: an `error`-typed variant with a required
+ * `message` string and an optional classifier drawn from the shared vocabulary
+ * (`insufficient_credits` accepted, a foreign code rejected). The field may be
+ * `code` or `errorCode` - the streaming frames shipped with `code` and are
+ * published wire shapes, so the vocabulary is what is gated, not the key.
+ */
+function carriesTypedStreamErrorFrame(schema: z.ZodTypeAny): boolean {
+  for (const option of unionOptionsOf(schema)) {
+    const shape = shapeOf(option);
+    if (!shape?.type?.safeParse('error').success) continue;
+
+    const message = shape.message;
+    if (!message?.safeParse('boom').success || message.safeParse(undefined).success) return false;
+
+    const classifier = shape.code ?? shape.errorCode;
+    if (!classifier) return false;
+    return (
+      classifier.safeParse(undefined).success &&
+      classifier.safeParse(SHARED_CLASSIFIER_PROBE).success &&
+      !classifier.safeParse(FOREIGN_CLASSIFIER_PROBE).success
+    );
+  }
+  return false;
 }
 
 /**
@@ -176,6 +228,23 @@ export function assertContractConventions(contracts: readonly EndpointContract[]
           'api-key chain, so it can never send them.',
         'Drop the flag; publishing a header the runtime cannot send is what this flag exists to prevent.'
       );
+    }
+
+    // A streaming endpoint reports every post-header failure in-band, so its 200
+    // event schema carries the error surface the >= 400 gate below cannot reach.
+    if (contract.streaming) {
+      const stream = contract.responses[200];
+      if (!stream?.schema || !carriesTypedStreamErrorFrame(stream.schema)) {
+        fail(
+          contract,
+          'stream-error-frame',
+          "a streaming endpoint's 200 event schema has no in-band error frame with a classifier " +
+            'drawn from the shared vocabulary (a `type: "error"` variant, a required `message` string, ' +
+            'and an optional `code`/`errorCode` enum).',
+          'Type the classifier against API_ERROR_CODES (or a narrowing of it, e.g. QUEST_ERROR_CODES). ' +
+            'An untyped classifier leaves callers regex-matching the prose `message`.'
+        );
+      }
     }
 
     for (const [rawStatus, spec] of Object.entries(contract.responses)) {

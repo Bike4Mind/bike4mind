@@ -3,7 +3,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { loadHelpArticles } from '../help/loadHelpArticles';
-import { NEGATIVES, NEVER_SUPPORTING, parseProbeQuestions, POSITIVES, PROBE_QUESTIONS, REFERENCED_SLUGS } from './corpus';
+import {
+  NEGATIVES,
+  NEVER_SUPPORTING,
+  parseProbeQuestions,
+  POSITIVES,
+  PROBE_QUESTIONS,
+  REFERENCED_SLUGS,
+} from './corpus';
 
 /**
  * CI gate on the probe's ground truth, validated against the REAL help corpus rather than a fixture.

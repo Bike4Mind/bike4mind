@@ -26,7 +26,14 @@ export const createCompletionContract = defineEndpoint({
     '`stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note ' +
     'that omitting `max_tokens` on the request lets the server size the output ceiling for the ' +
     'model (recommended for reasoning models, which spend thinking tokens inside that ceiling). ' +
-    'Authenticate with an API key (`b4m_live_`) or a JWT.',
+    'Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
+    'BILLING FAILURES. Headers are flushed before authentication or pricing, so unlike the JSON ' +
+    'surfaces this endpoint has no pre-stream `422` + `errorCode: "insufficient_credits"` to pair ' +
+    'with: credit exhaustion ALWAYS arrives as the in-band `error` event, whether it is caught by ' +
+    'the reservation before the first token or by settlement mid-generation. Branch on that ' +
+    "event's `code` (`insufficient_credits` - buy credits; `spend_cap_exceeded` - the owner is " +
+    'solvent but this key hit its admin-set ceiling, so raise the cap), never on `message`, which ' +
+    'is prose and may change. `code` is absent on unclassified failures.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
