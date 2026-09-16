@@ -148,6 +148,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
         batches: dataLakeBatchRepository,
         fabFiles: fabFileRepository,
+        fabFileChunks: fabFileChunkRepository,
         ...lakeConfigAuditDb,
       },
       // The SECOND archive door (the lifecycle route is the other) - both ports below have to be

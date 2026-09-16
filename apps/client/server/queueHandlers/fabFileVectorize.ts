@@ -459,14 +459,46 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // rolled back with Mongo) and fail-open (an indexing failure leaves the chunk scan-only, not
     // failed - the Mongo write above already succeeded and is the source of truth).
     if (indexesToOpenSearch) {
+      // Two separate fail-open steps, each logged under its own message: an index failure and a
+      // confirm failure are different root causes (a broken index write vs. a broken Mongo write
+      // for a document that IS in the index) and a shared log line would send whoever is on call
+      // to the wrong system.
+      let indexedChunkIds: string[] | null = null;
       try {
         // `embeddingModel` is already set on these chunks by the transaction above, which is also
         // what mapDocument reads to build the right per-model index document.
-        await FabFileChunkSearchIndex.indexChunks(embeddableChunks);
+        indexedChunkIds = await FabFileChunkSearchIndex.indexChunks(embeddableChunks);
       } catch (error) {
         logger.warn(`Self-host OpenSearch indexing failed for FabFile ${fabFileId}, chunks remain scan-only`, {
           error: error instanceof Error ? error.message : String(error),
         });
+      }
+      if (indexedChunkIds) {
+        try {
+          // Confirmed residency, the read path's ANN eligibility signal - written only for the
+          // chunks the index actually accepted. Cannot be folded into the pre-write
+          // `retrievalIndexModel` above: see IFabFileChunk.retrievalIndexConfirmedModel. Retried
+          // once: an index write that just succeeded should not leave a file permanently
+          // ANN-ineligible over one transient Mongo blip, and the write is idempotent.
+          try {
+            await fabFileChunkRepository.confirmRetrievalIndexed(indexedChunkIds, embeddingModel);
+          } catch {
+            await fabFileChunkRepository.confirmRetrievalIndexed(indexedChunkIds, embeddingModel);
+          }
+          // A chunk dispatched but NOT confirmed (rejected by mapDocument, or rolled back by
+          // indexChunks' own per-batch cleanup) must not keep a stale confirm from an earlier
+          // delivery of this same message.
+          const notIndexed = embeddableChunks.map(chunk => chunk.id).filter(id => !indexedChunkIds.includes(id));
+          if (notIndexed.length > 0) {
+            await fabFileChunkRepository.clearRetrievalIndexConfirmed(notIndexed, embeddingModel);
+          }
+        } catch (error) {
+          logger.warn(
+            `Self-host OpenSearch residency confirmation failed for FabFile ${fabFileId} despite a ` +
+              `successful index write; chunks remain scan-only`,
+            { error: error instanceof Error ? error.message : String(error) }
+          );
+        }
       }
     }
 

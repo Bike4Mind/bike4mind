@@ -36,3 +36,16 @@ export const selfHostOpenSearchEnabled = (): boolean =>
   getVectorBackend() === VectorBackend.COMMUNITY &&
   process.env.B4M_SELF_HOST_OPENSEARCH === 'true' &&
   !!process.env.OPENSEARCH_ENDPOINT;
+
+/**
+ * Whether the self-host OpenSearch ANN path must confirm a file's chunks are actually resident
+ * in the index before serving it from there, rather than the pre-residency behavior of trusting
+ * the Mongo-side vectorization stamp alone. Defaults OFF: a deployment that already has
+ * `B4M_SELF_HOST_OPENSEARCH` on and a fully-indexed corpus wrote every one of those chunks before
+ * `retrievalIndexConfirmedModel` existed, so gating on it by default would silently revert that
+ * corpus's whole ANN path to brute-force scan on upgrade, with no route back short of a full
+ * re-chunk (see SELF_HOST.md). Turn this on only after re-chunking the corpus under this version
+ * (re-upload, or POST /api/files/reprocess), so every stamped file's residency claim is real.
+ */
+export const selfHostOpenSearchResidencyRequired = (): boolean =>
+  process.env.B4M_SELF_HOST_OPENSEARCH_REQUIRE_RESIDENCY === 'true';

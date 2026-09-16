@@ -102,17 +102,25 @@ export class FabFileChunkSearchIndex extends BaseSearchIndex {
     this.ensuredModels.add(model);
   }
 
-  /** Index every embeddable chunk from a vectorize batch, one call each (self-host only, best-effort). */
-  static async indexChunks(chunks: IFabFileChunkDocument[]): Promise<void> {
+  /**
+   * Index every embeddable chunk from a vectorize batch, one call each (self-host only,
+   * best-effort). Returns the ids of the chunks whose document is actually resident in the index
+   * when this call ends - i.e. written successfully AND not undone by the per-batch rollback
+   * below. That is the caller's only way to record confirmed residency (see
+   * IFabFileChunk.retrievalIndexConfirmedModel); a chunk this call skipped because mapDocument
+   * could not build a document for it is not in the returned set either.
+   */
+  static async indexChunks(chunks: IFabFileChunkDocument[]): Promise<string[]> {
     const models = new Set(chunks.map(c => c.embeddingModel).filter((m): m is string => !!m));
     await Promise.all([...models].map(model => FabFileChunkSearchIndex.ensureIndexForModel(model)));
 
     const failedChunks: IFabFileChunkDocument[] = [];
-    await BaseSearchIndex.processInParallel(
+    const documents = await BaseSearchIndex.processInParallel(
       chunks.map(chunk => new FabFileChunkSearchIndex(chunk, failed => failedChunks.push(failed)))
     );
+    const indexedIds = new Set(documents.filter(doc => !!doc).map(doc => doc.id));
 
-    if (failedChunks.length === 0) return;
+    if (failedChunks.length === 0) return [...indexedIds];
 
     // Fail CLOSED per BATCH, never per file: `indexChunks` runs once per vectorize MESSAGE
     // (fabFileVectorize.ts), and a file can span several messages. Deleting by fabFileId alone
@@ -139,9 +147,11 @@ export class FabFileChunkSearchIndex extends BaseSearchIndex {
         Logger.globalInstance.warn(
           `Chunk indexing failed for FabFile ${fabFileId} (model ${embeddingModel}) - removing this batch's own OpenSearch docs (not the whole file) so its content falls back to scan`
         );
+        for (const id of ids) indexedIds.delete(id);
         return FabFileChunkSearchIndex.deleteByChunkIds(embeddingModel, ids);
       })
     );
+    return [...indexedIds];
   }
 
   /** Remove every OpenSearch doc for a deleted/re-chunked file, across the given model's index. */

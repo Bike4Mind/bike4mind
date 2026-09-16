@@ -3,6 +3,7 @@ import {
   getVectorBackend,
   supportsAtlasVectorSearch,
   selfHostOpenSearchEnabled,
+  selfHostOpenSearchResidencyRequired,
   VectorBackend,
 } from './vector-backend';
 
@@ -81,5 +82,28 @@ describe('selfHostOpenSearchEnabled', () => {
     process.env.B4M_SELF_HOST_OPENSEARCH = 'true';
     process.env.OPENSEARCH_ENDPOINT = 'localhost:9200';
     expect(selfHostOpenSearchEnabled()).toBe(true);
+  });
+});
+
+describe('selfHostOpenSearchResidencyRequired', () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it('defaults off when unset, so an existing corpus is not reverted to scan-only on upgrade', () => {
+    delete process.env.B4M_SELF_HOST_OPENSEARCH_REQUIRE_RESIDENCY;
+    expect(selfHostOpenSearchResidencyRequired()).toBe(false);
+  });
+
+  it('is off for any value other than the literal string "true"', () => {
+    process.env.B4M_SELF_HOST_OPENSEARCH_REQUIRE_RESIDENCY = '1';
+    expect(selfHostOpenSearchResidencyRequired()).toBe(false);
+  });
+
+  it('is on when explicitly opted in', () => {
+    process.env.B4M_SELF_HOST_OPENSEARCH_REQUIRE_RESIDENCY = 'true';
+    expect(selfHostOpenSearchResidencyRequired()).toBe(true);
   });
 });

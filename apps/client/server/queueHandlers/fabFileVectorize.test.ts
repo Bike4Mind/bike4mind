@@ -34,6 +34,8 @@ const h = vi.hoisted(() => ({
   resolveEmbeddingWithKeylessFallback: vi.fn((model: string) => ({ config: {}, missing: null, model })),
   stampChunkEmbeddingModel: vi.fn(),
   indexChunks: vi.fn(),
+  confirmRetrievalIndexed: vi.fn(async () => undefined),
+  clearRetrievalIndexConfirmed: vi.fn(async () => undefined),
   selfHostOpenSearchEnabled: vi.fn(() => false),
   enforceEmbeddingSpendGate: vi.fn(async () => undefined),
   // Mirrors the real resolver's rule closely enough for the handler's branch: batch uploads and
@@ -75,6 +77,8 @@ vi.mock('@bike4mind/database', () => ({
     findById: vi.fn(),
     computeChunkVectorRollup: h.computeChunkVectorRollup,
     update: h.chunkUpdate,
+    confirmRetrievalIndexed: h.confirmRetrievalIndexed,
+    clearRetrievalIndexConfirmed: h.clearRetrievalIndexConfirmed,
   },
   fabFileRepository: {
     shareable: { findAccessibleById: h.findAccessibleById },
@@ -872,7 +876,7 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
 
   it('indexes the vectorized chunks when self-host OpenSearch is enabled', async () => {
     h.selfHostOpenSearchEnabled.mockReturnValue(true);
-    h.indexChunks.mockResolvedValue(undefined);
+    h.indexChunks.mockResolvedValue(['c1']);
 
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
@@ -882,7 +886,7 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
 
   it('stamps embeddingModel onto the chunks passed to indexChunks (the same objects Mongo was given)', async () => {
     h.selfHostOpenSearchEnabled.mockReturnValue(true);
-    h.indexChunks.mockResolvedValue(undefined);
+    h.indexChunks.mockResolvedValue(['c1']);
 
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
@@ -926,13 +930,63 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
 
   it('persists retrievalIndexModel with the chunk vector, so index residency does not wait on the stamp', async () => {
     h.selfHostOpenSearchEnabled.mockReturnValue(true);
-    h.indexChunks.mockResolvedValue(undefined);
+    h.indexChunks.mockResolvedValue(['c1']);
 
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
     expect(h.chunkUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'c1', retrievalIndexModel: 'text-embedding-3-small' })
     );
+  });
+
+  it('confirms residency only for the chunks the index actually accepted', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue([]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.confirmRetrievalIndexed).toHaveBeenCalledWith([], 'text-embedding-3-small');
+    expect(h.chunkUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'c1', retrievalIndexModel: 'text-embedding-3-small' })
+    );
+  });
+
+  it('records confirmed residency after a successful index write', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue(['c1']);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.confirmRetrievalIndexed).toHaveBeenCalledWith(['c1'], 'text-embedding-3-small');
+    expect(h.clearRetrievalIndexConfirmed).not.toHaveBeenCalled();
+  });
+
+  it('clears a stale confirm for a chunk the index no longer accepted - a rollback must not leave the old stamp live', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue([]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.clearRetrievalIndexConfirmed).toHaveBeenCalledWith(['c1'], 'text-embedding-3-small');
+  });
+
+  it('fails open when the residency confirmation write fails - the file just stays scan-only', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue(['c1']);
+    h.confirmRetrievalIndexed.mockRejectedValueOnce(new Error('mongo unavailable'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.stampChunkEmbeddingModel).toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+  });
+
+  it('never confirms residency when self-host OpenSearch is disabled', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(false);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.confirmRetrievalIndexed).not.toHaveBeenCalled();
   });
 
   it('stamps the model it actually embedded with when a keyless stage falls back', async () => {
@@ -946,7 +1000,7 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
       model: 'amazon.titan-embed-text-v2:0',
     });
     h.selfHostOpenSearchEnabled.mockReturnValue(true);
-    h.indexChunks.mockResolvedValue(undefined);
+    h.indexChunks.mockResolvedValue(['c1']);
 
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
@@ -975,7 +1029,7 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
   // chunk rows, so residency has to be on them already or those documents are unreachable forever.
   it('records residency on a message that leaves the file short of complete, with no stamp', async () => {
     h.selfHostOpenSearchEnabled.mockReturnValue(true);
-    h.indexChunks.mockResolvedValue(undefined);
+    h.indexChunks.mockResolvedValue(['c1']);
     h.findAccessibleById.mockResolvedValue({ ...unvectorizedFile(undefined), chunkCount: 5 });
     h.computeChunkVectorRollup.mockResolvedValue({
       terminalChunkCount: 1,
@@ -993,7 +1047,7 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
 
   it('a terminal spend denial on a later message is consumed, leaving the earlier residency in place', async () => {
     h.selfHostOpenSearchEnabled.mockReturnValue(true);
-    h.indexChunks.mockResolvedValue(undefined);
+    h.indexChunks.mockResolvedValue(['c1']);
     // batchId present: the spend gate is the data-lake path only.
     h.findAccessibleById.mockResolvedValue({ ...unvectorizedFile('batch-1'), chunkCount: 5 });
     h.computeChunkVectorRollup.mockResolvedValue({

@@ -4,26 +4,30 @@ import { setupMongoTest, testFabFileId as fid } from '../__test__/utils';
 
 /**
  * The fabfilechunks index set is deliberately minimal: one compound index serves both the keyset
- * chunk walk and every bare `fabFileId` read. Two regressions would undo that silently - a second
- * declaration creeping back onto the schema (autoIndex builds whatever is declared, so it returns
- * on the next cold boot), or the compound itself going away. The plan tests below name the index
- * rather than just asserting "some index scan", because a resurrected `{ fabFileId: 1 }` would
- * satisfy the weaker form while being exactly the thing we do not want back.
+ * chunk walk and every bare `fabFileId` read, and a second compound covers the residency
+ * aggregate (annResidentFabFileIds). Two regressions would undo that silently - a stray
+ * declaration creeping back onto the schema (autoIndex builds whatever is declared, so it
+ * returns on the next cold boot), or either compound going away. The plan tests below name the
+ * indexes rather than just asserting "some index scan", because a resurrected `{ fabFileId: 1 }`
+ * would satisfy the weaker form while being exactly the thing we do not want back.
  */
 describe('fabfilechunks indexes', () => {
   setupMongoTest();
 
   // schema.indexes() also reports field-level `index: true` / `unique: true`, so this covers the
   // route CLAUDE.md forbids as well as an explicit declaration.
-  it('declares exactly one index: the keyset compound', () => {
-    expect(FabFileChunk.schema.indexes().map(([key]) => key)).toEqual([{ fabFileId: 1, _id: 1 }]);
+  it('declares exactly two indexes: the keyset compound and the residency compound', () => {
+    expect(FabFileChunk.schema.indexes().map(([key]) => key)).toEqual([
+      { fabFileId: 1, _id: 1 },
+      { fabFileId: 1, embeddingModel: 1, retrievalIndexConfirmedModel: 1 },
+    ]);
   });
 
-  it('builds only the _id index and the keyset compound', async () => {
+  it('builds only the _id index and the two declared compounds', async () => {
     await FabFileChunk.createIndexes();
 
     const names = (await FabFileChunk.collection.indexes()).map(index => index.name).sort();
-    expect(names).toEqual(['_id_', 'fabFileId_1__id_1']);
+    expect(names).toEqual(['_id_', 'fabFileId_1__id_1', 'fabFileId_1_embeddingModel_1_retrievalIndexConfirmedModel_1']);
   });
 
   // Key-pattern serialization contract for 20260810000000_drop-legacy-fabfilechunk-indexes.ts,
@@ -113,5 +117,42 @@ describe('fabfilechunks indexes', () => {
     const stages = JSON.stringify(plan.queryPlanner.winningPlan);
     expect(stages).toContain('"indexName":"fabFileId_1__id_1"');
     expect(stages).not.toContain('COLLSCAN');
+  });
+
+  it('serves the residency aggregate from the index alone, with no document fetch', async () => {
+    // Runs the SAME pipeline `annResidentFabFileIds` issues (FabFileModel.ts), not a `.find()`
+    // proxy for it - a `.find()` with a matching filter can stay covered while the real
+    // $match/$group/$match pipeline stops being covered, which is exactly the plan-drift shape
+    // this index exists to prevent. Keep this pipeline literal in sync with that method's.
+    await FabFileChunk.create(
+      Array.from({ length: 20 }, (_, i) => ({
+        fabFileId: fid('lake'),
+        text: `chunk ${i}`,
+        tokenCount: 2,
+        embeddingModel: 'model-a',
+        retrievalIndexConfirmedModel: 'model-a',
+      }))
+    );
+    await FabFileChunk.createIndexes();
+
+    const pipeline = [
+      { $match: { fabFileId: { $in: [fid('lake')] }, embeddingModel: 'model-a' } },
+      {
+        $group: {
+          _id: '$fabFileId',
+          dispatched: { $sum: 1 },
+          confirmed: { $sum: { $cond: [{ $eq: ['$retrievalIndexConfirmedModel', 'model-a'] }, 1, 0] } },
+        },
+      },
+      { $match: { $expr: { $eq: ['$confirmed', '$dispatched'] } } },
+    ];
+
+    const explainResult = await FabFileChunk.collection.aggregate(pipeline).explain('executionStats');
+    const cursorStage = explainResult.stages[0].$cursor ?? explainResult.stages[0];
+
+    expect(cursorStage.executionStats.totalDocsExamined).toBe(0);
+    expect(JSON.stringify(cursorStage)).toContain(
+      '"indexName":"fabFileId_1_embeddingModel_1_retrievalIndexConfirmedModel_1"'
+    );
   });
 });

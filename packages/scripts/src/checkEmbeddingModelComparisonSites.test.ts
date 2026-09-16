@@ -49,8 +49,11 @@ const SITES: { path: string; matches: number; note: string }[] = [
   },
   {
     path: 'packages/database/src/models/content/FabFileModel.ts',
-    matches: 1,
-    note: 'Atlas $vectorSearch filter clause - the match happens inside the database',
+    matches: 2,
+    note:
+      'Atlas $vectorSearch filter clause (scoring exclusion) AND the self-host residency aggregate ' +
+      '(annResidentFabFileIds, which chunks were dispatched TO this model) - same filter shape, same ' +
+      'field, both would need to move together if the exact-match rule ever grew aliases',
   },
   {
     path: 'b4m-core/services/src/dataLakeService/openSearchChunkAdapter.ts',
