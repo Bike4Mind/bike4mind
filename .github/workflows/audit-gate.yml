@@ -1,0 +1,67 @@
+name: Dependency Audit Gate
+
+# Regression-only pnpm audit check. Fails a PR if it introduces a new
+# high/critical advisory GHSA that is not in scripts/audit-allowlist.json.
+# This is NOT a reporting workflow -- it is a hard block on new regressions.
+# The existing packages-audit.yml sends a full report to the Security Dashboard
+# and remains workflow_dispatch-only; this workflow gates PRs independently.
+
+on:
+  pull_request:
+    branches-ignore: [prod]
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    branches: [main]
+
+env:
+  NODE_VERSION: '24'
+
+concurrency:
+  group: audit-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  audit-gate:
+    name: Dependency Audit Gate
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            */*/node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install root dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run pnpm audit
+        env:
+          AUDIT_REPORT_PATH: ${{ github.workspace }}/audit-report.json
+        # pnpm audit exits 1 when vulnerabilities are found; ignore exit code so
+        # the gate script always runs and can report clearly what is new vs known.
+        run: pnpm audit --json > "$AUDIT_REPORT_PATH" || true
+
+      - name: Run audit regression gate
+        env:
+          PACKAGES_JSON_REPORT_PATH: ${{ github.workspace }}/audit-report.json
+        run: node scripts/audit-gate.mjs
