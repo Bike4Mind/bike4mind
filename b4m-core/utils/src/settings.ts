@@ -162,7 +162,8 @@ export async function getSettingByName(
 ): Promise<string | null> {
   const logger = options?.logger;
 
-  // Allow bypassing cache for testing
+  // Bypass the cache for a read that must be fresher than the TTL - production
+  // callers take this branch too, not just tests (e.g. a live admin toggle).
   if (options?.skipCache) {
     const setting = await db.adminSettings.findBySettingName(settingName);
     // `?? null` (not `|| null`) so a stored boolean `false` survives - see AdminSettingsCache.
