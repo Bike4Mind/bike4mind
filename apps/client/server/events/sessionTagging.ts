@@ -191,9 +191,12 @@ export const handler = withEventContext(async (event, logger) => {
     logger.warn(`Failed to parse tags from LLM response for session ${sessionId}`);
     logger.debug(`Raw LLM response: ${tagsText?.substring(0, 500)}${(tagsText?.length || 0) > 500 ? '...' : ''}`);
 
-    // Mark as tagged with empty tags to prevent retry loops
-    session.tags = [];
+    // Stamp the attempt so the spider's `!taggedAt` gate stops retrying, but leave `tags` alone.
+    // Clearing them was invisible while strict mode dropped `taggedAt` - the spider re-tagged
+    // every notebook regardless, so a wipe healed itself on the next run. The stamp sticks now,
+    // and this branch also fires on an empty or unparseable completion, so wiping here would be
+    // permanent, silent loss of tags a clone or an import legitimately carried.
     session.taggedAt = new Date();
-    await sessionRepository.update({ id: session.id, tags: session.tags, taggedAt: session.taggedAt });
+    await sessionRepository.update({ id: session.id, taggedAt: session.taggedAt });
   }
 });
