@@ -79,7 +79,8 @@ describe('GET /api/users/[id]', () => {
 
   // Self / admin get the profile with credentials stripped (via redactUserSecretsForSelf),
   // but keep the self/admin-only fields (email, credits, ...) that the public DTO omits,
-  // plus securityQuestions + userNotes which the profile-edit form loads and round-trips.
+  // plus securityQuestions, which the profile-edit form loads and round-trips. userNotes
+  // are admin-authored notes ABOUT the subject and are gated on the VIEWER, not the subject.
   it('returns the profile with credentials stripped for the same user (self)', async () => {
     const targetUser = mockUserDoc({ id: 'user-self-123' });
     (User.findById as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -99,7 +100,8 @@ describe('GET /api/users/[id]', () => {
     expect(payload.currentCredits).toBe(9999);
     // edit-form fields kept
     expect(payload.securityQuestions).toBeDefined();
-    expect(payload.userNotes).toBeDefined();
+    // admin-only notes about this user are NOT returned to the user themselves
+    expect(payload.userNotes).toBeUndefined();
     // credentials stripped
     expect(payload.oauthCredentials).toBeUndefined();
     expect(payload.loginRecords).toBeUndefined();

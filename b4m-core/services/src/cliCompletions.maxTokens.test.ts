@@ -254,7 +254,7 @@ describe('executeCompletion - output budget', () => {
     // Proportional so the cap sees the estimate rather than this suite's flat stub.
     vi.mocked(getTextModelCost).mockImplementation((_model, _input, output) => (output ?? 0) / 1000);
     vi.mocked(usdToCredits).mockImplementation(usd => usd);
-    const organization = { id: 'org1', currentCredits: 100_000 };
+    const organization = { id: 'org1', currentCredits: 100_000, users: [{ userId: 'user1' }] };
     const organizations = {
       findById: vi.fn().mockResolvedValue(organization),
       incrementCredits: vi.fn().mockResolvedValue(organization),

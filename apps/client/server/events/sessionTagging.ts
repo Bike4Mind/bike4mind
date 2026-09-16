@@ -122,7 +122,7 @@ export const handler = withEventContext(async (event, logger) => {
     logger.info(`No quests found for session ${sessionId} - marking as tagged with empty tags`);
     session.tags = [];
     session.taggedAt = new Date();
-    await sessionRepository.update(session);
+    await sessionRepository.update({ id: session.id, tags: session.tags, taggedAt: session.taggedAt });
     return;
   }
 
@@ -182,7 +182,10 @@ export const handler = withEventContext(async (event, logger) => {
     session.tags = parsedTags;
     session.taggedAt = new Date();
     logger.info(`Tags: ${JSON.stringify(session.tags)}`);
-    await sessionRepository.update(session);
+    // Persist ONLY the tag fields. The read-to-write window spans a full LLM
+    // completion; a whole-session write would revert any share revocation,
+    // visibility change or soft-delete the owner made during it.
+    await sessionRepository.update({ id: session.id, tags: session.tags, taggedAt: session.taggedAt });
   } else {
     // Log the failure but don't throw - mark as attempted
     logger.warn(`Failed to parse tags from LLM response for session ${sessionId}`);
@@ -191,6 +194,6 @@ export const handler = withEventContext(async (event, logger) => {
     // Mark as tagged with empty tags to prevent retry loops
     session.tags = [];
     session.taggedAt = new Date();
-    await sessionRepository.update(session);
+    await sessionRepository.update({ id: session.id, tags: session.tags, taggedAt: session.taggedAt });
   }
 });

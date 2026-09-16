@@ -4,6 +4,7 @@ import { getAtlassianOAuthConfig, ATLASSIAN_OAUTH_SCOPES } from '@server/integra
 import { userRepository } from '@bike4mind/database';
 import crypto from 'crypto';
 import { Config } from '@server/utils/config';
+import { issueStateNonce } from '@server/auth/oauthFlowCookie';
 
 const handler = baseApi().get(async (req, res) => {
   const userId = req.user.id;
@@ -41,13 +42,20 @@ const handler = baseApi().get(async (req, res) => {
   const csrfToken = crypto.randomBytes(32).toString('hex');
   const timestamp = Date.now();
 
-  // HMAC-sign the state to detect tampering with userId or timestamp
+  // Bind the flow to this browser: the shared nonce cookie carries the secret,
+  // and its hash rides the signed state (see oauthFlowCookie.ts).
+  const nonceHash = issueStateNonce(res);
+
+  // HMAC-sign the state to detect tampering with userId, timestamp, or the nonce
+  // hash. Signing the nonce hash is essential: an attacker who intercepts the
+  // victim's signed state could otherwise swap in the hash of their own cookie
+  // and complete the flow in their browser.
   const secret = Config.JWT_SECRET;
   if (!secret) {
     throw new Error('JWT_SECRET environment variable is required');
   }
   const hmac = crypto.createHmac('sha256', secret);
-  hmac.update(`${req.user.id}:${csrfToken}:${timestamp}`);
+  hmac.update(`${req.user.id}:${csrfToken}:${timestamp}:${nonceHash}`);
   const signature = hmac.digest('hex');
 
   const referrer = req.headers.referer || '/profile?tab=integrations'; // Default to Integrations tab if no referrer
@@ -57,6 +65,7 @@ const handler = baseApi().get(async (req, res) => {
       referrer,
       csrfToken,
       timestamp,
+      nonceHash,
       signature,
     })
   );

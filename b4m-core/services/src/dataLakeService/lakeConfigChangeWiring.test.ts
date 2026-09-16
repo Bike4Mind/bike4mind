@@ -215,10 +215,11 @@ describe('updateDataLake', () => {
       expect(audit.record).not.toHaveBeenCalled();
     });
 
-    // The regression this separation exists to prevent. ' ' is accepted by the request schema and
-    // is TRUTHY, so it really does gate the lake - but the audit diff trims it to "unset", exactly
-    // like ''. When the diff was the write gate, the clearing PUT looked like a no-op and the lake
-    // stayed gated to a tag nobody can hold, with no API path left to clear it.
+    // The regression this separation exists to prevent. ' ' is TRUTHY, so a stored whitespace-only
+    // tag really does gate the lake - the request schema now trims and refuses one, but rows
+    // written before that still exist - while the audit diff trims it to "unset", exactly like ''.
+    // When the diff was the write gate, the clearing PUT looked like a no-op and the lake stayed
+    // gated to a tag nobody can hold, with no API path left to clear it.
     it('clears a whitespace-only gate instead of mistaking the clear for a no-op', async () => {
       const existing = lake({ requiredUserTag: ' ' });
       const update = echoUpdate(existing);
@@ -454,19 +455,30 @@ describe('setLakeVisibility', () => {
 });
 
 describe('transferLakeOwnership', () => {
+  // A PERSONAL lake is transferable only by a platform admin (resolveLakeTransferAuthority), so the
+  // two cases below driven by a non-admin owner need an org lake and an actor still in that org -
+  // otherwise they would assert against that refusal instead of the change row they exist to cover.
+  const orgLake = () => lake({ organizationId: 'org1' });
+  const orgOwner = { ...owner, organizationIds: ['org1'] };
   const transferDb = (existing: IDataLakeDocument) => ({
-    dataLakes: { findById: vi.fn().mockResolvedValue(existing), update: echoUpdate(existing) },
-    dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]), upsertGrant: vi.fn().mockResolvedValue({}) },
+    dataLakes: { update: echoUpdate(existing) },
+    dataLakeAccessGrants: { upsertGrant: vi.fn().mockResolvedValue({}) },
     users: { findById: vi.fn().mockResolvedValue({ id: 'newOwner' }) },
-    organizations: { findById: vi.fn() },
+    organizations: {
+      findById: vi.fn().mockResolvedValue({
+        userId: 'billing',
+        adminUserIds: [],
+        users: [{ userId: 'newOwner' }, { userId: 'owner' }],
+      }),
+    },
   });
 
   // Ownership lives in grant rows, so a document diff can never see it; the derived field is what
   // keeps a transfer an ordinary before -> after row instead of an action with nothing to show.
   it('records the ownership move on the derived field', async () => {
-    const existing = lake();
+    const existing = orgLake();
     const audit = auditSpy();
-    await transferLakeOwnership(owner, 'lake1', 'newOwner', { db: { ...transferDb(existing), ...audit.db } });
+    await transferLakeOwnership(orgOwner, existing, [], 'newOwner', { db: { ...transferDb(existing), ...audit.db } });
 
     expect(audit.only()).toMatchObject({
       action: 'transfer-ownership',
@@ -484,15 +496,13 @@ describe('transferLakeOwnership', () => {
     const existing = lake({ organizationId: 'org-1' });
     const audit = auditSpy();
     const db = transferDb(existing);
-    db.dataLakeAccessGrants.listByLake = vi
-      .fn()
-      .mockResolvedValue([{ principalType: 'user', principalId: 'orgAdmin', role: 'curator', status: 'active' }]);
     // An org-owned lake requires the incoming owner to be a member of that org.
     db.organizations.findById = vi.fn().mockResolvedValue({ id: 'org-1', users: [{ userId: 'newOwner' }] });
 
     await transferLakeOwnership(
       { userId: 'orgAdmin', isAdmin: false, administeredOrgIds: ['org-1'] },
-      'lake1',
+      existing,
+      [{ principalType: 'user', principalId: 'orgAdmin', role: 'curator' }],
       'newOwner',
       { db: { ...db, ...audit.db } }
     );
@@ -506,7 +516,7 @@ describe('transferLakeOwnership', () => {
   it('records ownership, not platform-admin, when an admin transfers a lake they own', async () => {
     const existing = lake();
     const audit = auditSpy();
-    await transferLakeOwnership({ userId: 'owner', isAdmin: true }, 'lake1', 'newOwner', {
+    await transferLakeOwnership({ userId: 'owner', isAdmin: true }, existing, [], 'newOwner', {
       db: { ...transferDb(existing), ...audit.db },
     });
 
@@ -516,7 +526,7 @@ describe('transferLakeOwnership', () => {
   it('records platform-admin when an admin transfers a lake they do NOT own', async () => {
     const existing = lake();
     const audit = auditSpy();
-    await transferLakeOwnership({ userId: 'root', isAdmin: true }, 'lake1', 'newOwner', {
+    await transferLakeOwnership({ userId: 'root', isAdmin: true }, existing, [], 'newOwner', {
       db: { ...transferDb(existing), ...audit.db },
     });
 
@@ -524,9 +534,9 @@ describe('transferLakeOwnership', () => {
   });
 
   it('records nothing when the named owner already solely owns the lake', async () => {
-    const existing = lake();
+    const existing = orgLake();
     const audit = auditSpy();
-    await transferLakeOwnership(owner, 'lake1', 'owner', { db: { ...transferDb(existing), ...audit.db } });
+    await transferLakeOwnership(orgOwner, existing, [], 'owner', { db: { ...transferDb(existing), ...audit.db } });
     expect(audit.record).not.toHaveBeenCalled();
   });
 });

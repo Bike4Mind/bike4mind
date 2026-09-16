@@ -27,6 +27,7 @@ import MoonshotBedrockBackend from './bedrockBackend/moonshot';
 import TitanBedrockBackend from './bedrockBackend/titan';
 import { UndifferentiatedBedrockBackend } from './bedrockBackend/undifferentiated';
 import { BFLBackend } from './bflBackend';
+import { DeepSeekBackend } from './deepseekBackend';
 import { GeminiBackend } from './geminiBackend';
 import { KimiBackend } from './kimiBackend';
 import { LocalImageBackend } from './localImageBackend';
@@ -167,6 +168,10 @@ export function getLlmByModel(
     case 'kimi':
       if (apiKeyTable.kimi === 'expired') throw new Error('Moonshot API key is expired');
       backend = apiKeyTable.kimi ? new KimiBackend(apiKeyTable.kimi, logger) : null;
+      break;
+    case 'deepseek':
+      if (apiKeyTable.deepseek === 'expired') throw new Error('DeepSeek API key is expired');
+      backend = apiKeyTable.deepseek ? new DeepSeekBackend(apiKeyTable.deepseek, logger) : null;
       break;
     case 'aws':
       backend = new AWSBackend();
@@ -350,6 +355,7 @@ export const getAvailableModels = async (
   const bflKey = resolveListingKey(ModelBackend.BFL, gateCtx);
   const xaiKey = resolveListingKey(ModelBackend.XAI, gateCtx);
   const kimiKey = resolveListingKey(ModelBackend.Kimi, gateCtx);
+  const deepseekKey = resolveListingKey(ModelBackend.DeepSeek, gateCtx);
   const localImageBaseUrl = resolveListingKey(ModelBackend.LocalImage, gateCtx);
 
   const backends = {
@@ -366,6 +372,7 @@ export const getAvailableModels = async (
     [ModelBackend.BFL]: bflKey ? new BFLBackend(bflKey) : null,
     [ModelBackend.XAI]: xaiKey ? new XAIBackend(xaiKey) : null,
     [ModelBackend.Kimi]: kimiKey ? new KimiBackend(kimiKey) : null,
+    [ModelBackend.DeepSeek]: deepseekKey ? new DeepSeekBackend(deepseekKey) : null,
     [ModelBackend.AWS]: isBackendUsable(ModelBackend.AWS, gateCtx) ? new AWSBackend() : null,
     [ModelBackend.LocalImage]: localImageBaseUrl
       ? new LocalImageBackend(localImageBaseUrl, Logger.globalInstance)
@@ -472,6 +479,7 @@ export const getSupersededModels = (currentModels: ModelInfo[]): SupersededModel
 
 // Types and core utils:
 export * from './adapterFamilyDispatch';
+export * from './adapterPriceLiterals';
 export * from './backend';
 export * from './backendGate';
 export * from './cacheInclusiveUsage';
@@ -489,6 +497,8 @@ export * from './bedrockBackend/base';
 export * from './bedrockBackend/undifferentiated';
 export * from './bflBackend';
 export * from './geminiBackend';
+export * from './deepseekBackend';
+export * from './deepseekParams';
 export * from './kimiBackend';
 export * from './kimiParams';
 export * from './localImageBackend';
@@ -505,6 +515,12 @@ export {
   TitanBedrockBackend,
 };
 
+export {
+  SemaphoreBusyError,
+  MAX_CONCURRENT_ANTHROPIC_CALLS,
+  MAX_QUEUED_PER_TENANT,
+  DEFAULT_ACQUIRE_TIMEOUT_MS,
+} from './_anthropicSemaphore';
 export * from './PipelineTimer';
 export * from './realtimeVoicePricing';
 export * from './resolveDeprecatedModel';

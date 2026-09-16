@@ -52,17 +52,17 @@ describe('DELETE /api/invites/[id]', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('delegates to cancelInviteById with the invite id and returns the result', async () => {
-    cancelInviteById.mockResolvedValue({ id: 'inv-1', remaining: 0 });
-    const { req, res } = createMocks({ method: 'DELETE', query: { id: 'inv-1' } });
+    cancelInviteById.mockResolvedValue({ id: '507f1f77bcf86cd799439021', remaining: 0 });
+    const { req, res } = createMocks({ method: 'DELETE', query: { id: '507f1f77bcf86cd799439021' } });
     (req as any).user = { id: 'u1' };
     await mockRefs.deleteHandler!(req, res);
 
     expect(cancelInviteById).toHaveBeenCalledWith(
       req.user,
-      { id: 'inv-1' },
+      { id: '507f1f77bcf86cd799439021' },
       expect.objectContaining({ db: expect.any(Object) })
     );
-    expect(res._getJSONData()).toEqual({ id: 'inv-1', remaining: 0 });
+    expect(res._getJSONData()).toEqual({ id: '507f1f77bcf86cd799439021', remaining: 0 });
   });
 
   it('returns 400 when id is missing', async () => {
@@ -78,15 +78,15 @@ describe('GET /api/invites/[id] - recipient email strip', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("keeps only the caller's own recipient entry, dropping co-invitees", async () => {
-    (Invite.findById as any).mockResolvedValue({ id: 'inv-1' });
+    (Invite.findById as any).mockResolvedValue({ id: '507f1f77bcf86cd799439021' });
     getInviteDetails.mockResolvedValue({
-      id: 'inv-1',
+      id: '507f1f77bcf86cd799439021',
       type: 'FabFile',
       name: 'Doc',
       username: 'inviter',
       recipients: { pending: ['me@x.com', 'other@x.com'], accepted: ['third@x.com'], refused: [] },
     });
-    const { req, res } = createMocks({ method: 'GET', query: { id: 'inv-1' } });
+    const { req, res } = createMocks({ method: 'GET', query: { id: '507f1f77bcf86cd799439021' } });
     (req as any).user = { id: 'u1', email: 'me@x.com' };
     await mockRefs.getHandler!(req, res);
 

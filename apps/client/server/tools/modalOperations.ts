@@ -1,4 +1,5 @@
 import { ModalModel } from '@bike4mind/database/social';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { ModalImageHandler } from './modalImageHandler';
 import { cacheExternalImage } from '@server/utils/cacheExternalImage';
 
@@ -161,10 +162,15 @@ export async function updateModal(modalId: string | undefined, params: any) {
     }
     // If title is provided but not modalId, try to find by title
     else if (params.title || modalId) {
-      const searchTerm = params.title || modalId;
+      // `params` is untyped model output, so the term can arrive as a number or boolean.
+      // `new RegExp` used to coerce it; `escapeRegex` would throw, so coerce explicitly.
+      const searchTerm = String(params.title || modalId);
+      // Escape before building the $regex operand: searchTerm is tool/LLM-supplied, and raw
+      // metacharacters would let it manipulate the query or trigger catastrophic backtracking.
+      const searchPattern = escapeRegex(searchTerm);
       // Try to find by title or textMessage (for banners)
       modal = await ModalModel.findOne({
-        $or: [{ title: new RegExp(searchTerm, 'i') }, { textMessage: new RegExp(searchTerm, 'i') }],
+        $or: [{ title: new RegExp(searchPattern, 'i') }, { textMessage: new RegExp(searchPattern, 'i') }],
       });
 
       if (!modal) {

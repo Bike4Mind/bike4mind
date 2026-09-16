@@ -9,6 +9,7 @@ import { FabFile, withTransaction, apiKeyRepository, adminSettingsRepository } f
 import { diffLines } from 'diff';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { isValidObjectId } from '@server/utils/objectId';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { getFilesStorage } from '@server/utils/storage';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -76,7 +77,7 @@ const handler = baseApi()
 
       // Check if user has access to this file
       const file = await withTransaction(async () => {
-        return FabFile.findById(id).where({ userId: user.id });
+        return isValidObjectId(id) ? FabFile.findById(id).where({ userId: user.id }) : null;
       });
 
       if (!file) {

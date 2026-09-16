@@ -1,10 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   dataLakeProposalRepository,
+  organizationRepository,
   userRepository,
   adminSettingsRepository,
   fallbackLakeSettingsRepository,
@@ -14,7 +16,7 @@ import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   // GET /api/data-lakes - list accessible data lakes
   .get(async (req: Request, res) => {
@@ -39,6 +41,9 @@ const handler = baseApi()
       // the queue's only discovery surface - without it a reviewer has to open a lake's settings to
       // learn whether anything is waiting, which nobody does unprompted.
       dataLakeProposals: dataLakeProposalRepository,
+      // Org repo: resolves the org-admin rung of `canPreauthorize` for an admin caller, whose
+      // ctx.administeredOrgIds is deliberately zeroed. Without it that rung goes dark on this list.
+      organizations: organizationRepository,
     };
     // Admins see all data lakes; non-admins see only those they can access (owner/org/tag).
     const dataLakes = ctx.isAdmin
@@ -49,6 +54,7 @@ const handler = baseApi()
   })
   // POST /api/data-lakes - create a new data lake
   .post(async (req: Request, res) => {
+    assertDataLakeWriteScope(req);
     const userId = req.user.id;
     const params = CreateDataLakeRequestInput.parse(req.body);
 

@@ -20,6 +20,7 @@ export function useNavigationExecutor() {
   const navigate = useNavigate();
   const setActiveTab = useAdminModal(state => state.setActiveTab);
   const requestFamily = useOptiNavigation(state => state.requestFamily);
+  const hostHandlesFamilyInPlace = useOptiNavigation(state => state.hostHandlesFamilyInPlace);
   const setFileBrowserOpen = useFileBrowser(state => state.setOpen);
 
   const execute = useCallback(
@@ -48,19 +49,28 @@ export function useNavigationExecutor() {
           // Opti family action: dispatch via Zustand store, then navigate to /opti
           // Support composite targets: "scheduling.solvers" -> family + subTab
           if (!optiRouteExists) break;
+          // userInitiated marks this as a click rather than the replayed side effect, so
+          // the surface honours it instead of dropping it the way it drops a replay.
           const dotIdx = intent.target.indexOf('.');
           if (dotIdx !== -1) {
-            requestFamily(intent.target.slice(0, dotIdx), intent.target.slice(dotIdx + 1));
+            requestFamily(intent.target.slice(0, dotIdx), intent.target.slice(dotIdx + 1), { userInitiated: true });
           } else {
-            requestFamily(intent.target);
+            requestFamily(intent.target, undefined, { userInitiated: true });
           }
+          // A host showing the console in its own pane is already on screen and owns
+          // its own way back, so the request above is the whole navigation.
+          if (hostHandlesFamilyInPlace) break;
+          // Name the target view in the search params rather than leaving the route to
+          // its default, which would render the wrong view for a frame before the
+          // consumer switches. The updater form is required: router-core passes a plain
+          // search object straight through, replacing every other param on the way in.
           // @ts-expect-error - /opti is a premium route, not in static route tree
-          navigate({ to: '/opti' });
+          navigate({ to: '/opti', search: prev => ({ ...prev, mode: 'optimize' }) });
           break;
         }
       }
     },
-    [navigate, setActiveTab, requestFamily, setFileBrowserOpen]
+    [navigate, setActiveTab, requestFamily, setFileBrowserOpen, hostHandlesFamilyInPlace]
   );
 
   return execute;

@@ -21,7 +21,10 @@ import {
   scopeForLake,
 } from './resolveScopedSetting';
 
-const KEY = 'dataLakeSearchMaxFiles'; // registered settableAt [organization, owner, lake], number, min 1
+const KEY = 'dataLakeSearchMaxFiles'; // registered settableAt [organization, owner], number, min 1
+// A key that still declares all three rungs, for the tests that exercise the full ladder. KEY lost
+// its Lake rung in #2624 because no retrieval caller could key one.
+const LAKE_KEY = 'LakeConvergenceBulkChangeSharePct'; // settableAt [organization, owner, lake], number, 1-100
 
 const owner = { id: 'u1', type: CreditHolderType.User } as const;
 const fullScope: SettingScope = { organizationId: 'o1', owner, lakeId: 'l1' };
@@ -56,8 +59,13 @@ function makeDb(
   } as const;
 }
 
-function override(scopeLevel: SettingScopeLevel, scopeId: string, settingValue: string): Partial<IScopedSetting> {
-  return { scopeLevel: scopeLevel as IScopedSetting['scopeLevel'], scopeId, settingName: KEY, settingValue };
+function override(
+  scopeLevel: SettingScopeLevel,
+  scopeId: string,
+  settingValue: string,
+  settingName: string = KEY
+): Partial<IScopedSetting> {
+  return { scopeLevel: scopeLevel as IScopedSetting['scopeLevel'], scopeId, settingName, settingValue };
 }
 
 // The global caches are process-wide; reset both so each test reads its own mock repos fresh.
@@ -152,7 +160,10 @@ describe('pickOverride (narrower-wins + parse guard)', () => {
       [key(SettingScopeLevel.Owner, 'u1'), '1500'],
       [key(SettingScopeLevel.Organization, 'o1'), '2000'],
     ]);
-    expect(pickOverride(KEY, refs, overrides, numberSchema)).toEqual({ value: 1500, source: SettingScopeLevel.Owner });
+    expect(pickOverride(KEY, refs, overrides, numberSchema)).toEqual({
+      won: { value: 1500, source: SettingScopeLevel.Owner },
+      ignored: [],
+    });
   });
 
   it('skips an unparseable narrower override and warns, falling through to the next rung', () => {
@@ -162,14 +173,14 @@ describe('pickOverride (narrower-wins + parse guard)', () => {
       [key(SettingScopeLevel.Organization, 'o1'), '2000'],
     ]);
     expect(pickOverride(KEY, refs, overrides, numberSchema, logger as never)).toEqual({
-      value: 2000,
-      source: SettingScopeLevel.Organization,
+      won: { value: 2000, source: SettingScopeLevel.Organization },
+      ignored: [{ scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1', reason: 'unparseable' }],
     });
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('unparseable override'));
   });
 
-  it('returns null when no rung has a value (caller keeps platform)', () => {
-    expect(pickOverride(KEY, refs, new Map(), numberSchema)).toBeNull();
+  it('returns won: null when no rung has a value (caller keeps platform)', () => {
+    expect(pickOverride(KEY, refs, new Map(), numberSchema)).toEqual({ won: null, ignored: [] });
   });
 });
 
@@ -217,17 +228,39 @@ describe('resolveScopedSetting (integration, through the real settingsMap)', () 
   });
 
   it('lake beats owner and org (narrowest wins)', async () => {
-    const db = makeDb({ [KEY]: '3000' }, [
-      override(SettingScopeLevel.Organization, 'o1', '2000'),
-      override(SettingScopeLevel.Owner, 'u1', '1500'),
-      override(SettingScopeLevel.Lake, 'l1', '1000'),
+    // On LAKE_KEY, since the ladder under test is the resolver's and KEY no longer climbs that far.
+    const db = makeDb({ [LAKE_KEY]: '80' }, [
+      override(SettingScopeLevel.Organization, 'o1', '60', LAKE_KEY),
+      override(SettingScopeLevel.Owner, 'u1', '40', LAKE_KEY),
+      override(SettingScopeLevel.Lake, 'l1', '20', LAKE_KEY),
     ]);
+    const r = await resolveScopedSetting(LAKE_KEY, fullScope, db);
+    expect(r).toEqual({ value: 20, source: SettingScopeLevel.Lake });
+  });
+
+  it('never consults a rung the setting does not declare, even with one in scope (#2624)', async () => {
+    // fullScope carries a lakeId and the row exists, so the ONLY thing keeping it out of the answer
+    // is settableAt. This is the defect the issue reported, pinned from the read side: a stored
+    // Lake override on a scan budget must not resolve.
+    const db = makeDb({ [KEY]: '3000' }, [override(SettingScopeLevel.Lake, 'l1', '1000')]);
     const r = await resolveScopedSetting(KEY, fullScope, db);
-    expect(r).toEqual({ value: 1000, source: SettingScopeLevel.Lake });
+    expect(r).toEqual({ value: 3000, source: SettingScopeLevel.Platform });
+  });
+
+  it('an unparseable override falls through to platform and is reported in ignoredOverrides', async () => {
+    const db = makeDb({ [KEY]: '3000' }, [override(SettingScopeLevel.Organization, 'o1', 'not-a-number')]);
+    const r = await resolveScopedSetting(KEY, { organizationId: 'o1', owner }, db);
+    expect(r).toEqual({
+      value: 3000,
+      source: SettingScopeLevel.Platform,
+      ignoredOverrides: [{ scopeLevel: SettingScopeLevel.Organization, scopeId: 'o1', reason: 'unparseable' }],
+    });
   });
 
   it('ignores overrides when no scoped store is wired (platform-only db)', async () => {
-    const db = makeDb({ [KEY]: '3000' }, [override(SettingScopeLevel.Lake, 'l1', '1000')]);
+    // An Organization row, not a Lake one: on a Lake row this would pass whether or not the store
+    // gate worked, because KEY has no Lake rung to resolve it with.
+    const db = makeDb({ [KEY]: '3000' }, [override(SettingScopeLevel.Organization, 'o1', '1000')]);
     const platformOnly = { adminSettings: db.adminSettings };
     const r = await resolveScopedSetting(KEY, fullScope, platformOnly);
     expect(r).toEqual({ value: 3000, source: SettingScopeLevel.Platform });
@@ -256,14 +289,14 @@ describe('resolveScopedSetting (integration, through the real settingsMap)', () 
 
   it('resolves several keys in one call, each keeping its own value', async () => {
     const db = makeDb({ dataLakeSearchMaxFiles: '3000', dataLakeSearchMaxChunks: '50000' }, [
-      override(SettingScopeLevel.Lake, 'l1', '1000'),
+      override(SettingScopeLevel.Organization, 'o1', '1000'),
     ]);
     const values = await resolveScopedSettingValues(
       ['dataLakeSearchMaxFiles', 'dataLakeSearchMaxChunks'],
       fullScope,
       db
     );
-    expect(values.dataLakeSearchMaxFiles).toBe(1000); // lake override
+    expect(values.dataLakeSearchMaxFiles).toBe(1000); // org override
     expect(values.dataLakeSearchMaxChunks).toBe(50000); // no override -> platform
   });
 });
@@ -379,7 +412,11 @@ describe('resolveScopedSettingFromOverrides (the bulk, pure resolver - #2157)', 
       pauseOverride(SettingScopeLevel.Lake, 'l1', 'sometimes'),
     ]);
 
-    expect(resolved[0]).toEqual({ value: true, source: SettingScopeLevel.Platform });
+    expect(resolved[0]).toEqual({
+      value: true,
+      source: SettingScopeLevel.Platform,
+      ignoredOverrides: [{ scopeLevel: SettingScopeLevel.Lake, scopeId: 'l1', reason: 'unparseable' }],
+    });
   });
 
   it('an empty row set returns the platform value for every scope, with no rung claimed', () => {
@@ -426,6 +463,10 @@ describe('resolveScopedSettingFromOverrides (the bulk, pure resolver - #2157)', 
     );
 
     expect(clamped).toEqual({ value: MIN_PASSAGE_TOKEN_TARGET, source: SettingScopeLevel.Platform });
-    expect(rejectedOverride).toEqual({ value: MIN_PASSAGE_TOKEN_TARGET, source: SettingScopeLevel.Platform });
+    expect(rejectedOverride).toEqual({
+      value: MIN_PASSAGE_TOKEN_TARGET,
+      source: SettingScopeLevel.Platform,
+      ignoredOverrides: [{ scopeLevel: SettingScopeLevel.Owner, scopeId: 'u2', reason: 'unparseable' }],
+    });
   });
 });

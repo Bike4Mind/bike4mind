@@ -55,8 +55,8 @@ vi.mock('@server/security/tokenEncryption', () => ({
 const processError = new Error('Model context window is smaller than its reserved output');
 const mockProcess = vi.fn().mockRejectedValue(processError);
 
-vi.mock('@bike4mind/services', async () => {
-  const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+vi.mock('@bike4mind/services/llm', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/services/llm')>('@bike4mind/services/llm');
   return {
     ...actual,
     ChatCompletionProcess: class {

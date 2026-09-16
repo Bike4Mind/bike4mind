@@ -1,0 +1,147 @@
+diff --git a/AccordionDetails/AccordionDetails.js b/AccordionDetails/AccordionDetails.js
+index 664c83c0416d08981c87f185cd2aab364753af25..c249032d824f3a29d5d799ae3fdcf17549458aed 100644
+--- a/AccordionDetails/AccordionDetails.js
++++ b/AccordionDetails/AccordionDetails.js
+@@ -103,21 +103,35 @@ const AccordionDetails = /*#__PURE__*/React.forwardRef(function AccordionDetails
+   React.useEffect(() => {
+     // When accordion is closed, prevent tabbing into the details content.
+     if (rootRef.current) {
+-      const elements = rootRef.current.querySelectorAll('a, button, input, textarea, select, details, [tabindex]:not([tabindex="-1"])');
++      // The [data-prev-tabindex] clause is what makes the expand pass able to find what
++      // the collapse pass untabbed. Without it an element that is not natively focusable
++      // is unreachable on expand: it matches none of the tag names, and the tabindex="-1"
++      // this effect just wrote is excluded by the :not() clause. Joy's own ListItemButton
++      // renders a div, so those panels never got their tab stops back.
++      const elements = rootRef.current.querySelectorAll('a, button, input, textarea, select, details, [tabindex]:not([tabindex="-1"]), [data-prev-tabindex]');
+       elements.forEach(elm => {
+         if (expanded) {
+           const prevTabIndex = elm.getAttribute('data-prev-tabindex');
+-          const currentTabIndex = elm.getAttribute('tabindex');
+-          if (currentTabIndex && prevTabIndex) {
+-            // restore tabindex
+-            elm.setAttribute('tabindex', prevTabIndex);
++          // No marker means this element was never untabbed by a collapse, so there is
++          // nothing to restore and its own tabindex must be left alone.
++          if (prevTabIndex !== null) {
++            // An empty marker means the element had no tabindex of its own (every native
++            // button/anchor), so removing the attribute IS the restore. The original code
++            // branched on prevTabIndex and currentTabIndex being both truthy or both
++            // falsy, and "" with "-1" satisfied neither - so the -1 was never lifted.
++            if (prevTabIndex === '') {
++              elm.removeAttribute('tabindex');
++            } else {
++              elm.setAttribute('tabindex', prevTabIndex);
++            }
+             elm.removeAttribute('data-prev-tabindex');
+           }
+-          if (!prevTabIndex && !currentTabIndex) {
+-            elm.removeAttribute('tabindex');
+-          }
+         } else {
+-          elm.setAttribute('data-prev-tabindex', elm.getAttribute('tabindex') || '');
++          // Stash only on the first collapse. Re-stashing would capture the -1 this
++          // effect itself wrote and make the original value unrecoverable.
++          if (elm.getAttribute('data-prev-tabindex') === null) {
++            elm.setAttribute('data-prev-tabindex', elm.getAttribute('tabindex') || '');
++          }
+           elm.setAttribute('tabindex', '-1');
+         }
+       });
+diff --git a/modern/AccordionDetails/AccordionDetails.js b/modern/AccordionDetails/AccordionDetails.js
+index 307bf5e9f2e380093382dcab88ce4e042ee43b50..f0bcd1dc89fb7ae0d043060b4a628d6afb2d8e61 100644
+--- a/modern/AccordionDetails/AccordionDetails.js
++++ b/modern/AccordionDetails/AccordionDetails.js
+@@ -100,21 +100,35 @@ const AccordionDetails = /*#__PURE__*/React.forwardRef(function AccordionDetails
+   React.useEffect(() => {
+     // When accordion is closed, prevent tabbing into the details content.
+     if (rootRef.current) {
+-      const elements = rootRef.current.querySelectorAll('a, button, input, textarea, select, details, [tabindex]:not([tabindex="-1"])');
++      // The [data-prev-tabindex] clause is what makes the expand pass able to find what
++      // the collapse pass untabbed. Without it an element that is not natively focusable
++      // is unreachable on expand: it matches none of the tag names, and the tabindex="-1"
++      // this effect just wrote is excluded by the :not() clause. Joy's own ListItemButton
++      // renders a div, so those panels never got their tab stops back.
++      const elements = rootRef.current.querySelectorAll('a, button, input, textarea, select, details, [tabindex]:not([tabindex="-1"]), [data-prev-tabindex]');
+       elements.forEach(elm => {
+         if (expanded) {
+           const prevTabIndex = elm.getAttribute('data-prev-tabindex');
+-          const currentTabIndex = elm.getAttribute('tabindex');
+-          if (currentTabIndex && prevTabIndex) {
+-            // restore tabindex
+-            elm.setAttribute('tabindex', prevTabIndex);
++          // No marker means this element was never untabbed by a collapse, so there is
++          // nothing to restore and its own tabindex must be left alone.
++          if (prevTabIndex !== null) {
++            // An empty marker means the element had no tabindex of its own (every native
++            // button/anchor), so removing the attribute IS the restore. The original code
++            // branched on prevTabIndex and currentTabIndex being both truthy or both
++            // falsy, and "" with "-1" satisfied neither - so the -1 was never lifted.
++            if (prevTabIndex === '') {
++              elm.removeAttribute('tabindex');
++            } else {
++              elm.setAttribute('tabindex', prevTabIndex);
++            }
+             elm.removeAttribute('data-prev-tabindex');
+           }
+-          if (!prevTabIndex && !currentTabIndex) {
+-            elm.removeAttribute('tabindex');
+-          }
+         } else {
+-          elm.setAttribute('data-prev-tabindex', elm.getAttribute('tabindex') || '');
++          // Stash only on the first collapse. Re-stashing would capture the -1 this
++          // effect itself wrote and make the original value unrecoverable.
++          if (elm.getAttribute('data-prev-tabindex') === null) {
++            elm.setAttribute('data-prev-tabindex', elm.getAttribute('tabindex') || '');
++          }
+           elm.setAttribute('tabindex', '-1');
+         }
+       });
+diff --git a/node/AccordionDetails/AccordionDetails.js b/node/AccordionDetails/AccordionDetails.js
+index 0efb90aaf03331ab6993dbccd3a1123c1a4a0901..526909d2de5ec12840fcce04769b6cd912ed8ded 100644
+--- a/node/AccordionDetails/AccordionDetails.js
++++ b/node/AccordionDetails/AccordionDetails.js
+@@ -111,21 +111,35 @@ const AccordionDetails = /*#__PURE__*/React.forwardRef(function AccordionDetails
+   React.useEffect(() => {
+     // When accordion is closed, prevent tabbing into the details content.
+     if (rootRef.current) {
+-      const elements = rootRef.current.querySelectorAll('a, button, input, textarea, select, details, [tabindex]:not([tabindex="-1"])');
++      // The [data-prev-tabindex] clause is what makes the expand pass able to find what
++      // the collapse pass untabbed. Without it an element that is not natively focusable
++      // is unreachable on expand: it matches none of the tag names, and the tabindex="-1"
++      // this effect just wrote is excluded by the :not() clause. Joy's own ListItemButton
++      // renders a div, so those panels never got their tab stops back.
++      const elements = rootRef.current.querySelectorAll('a, button, input, textarea, select, details, [tabindex]:not([tabindex="-1"]), [data-prev-tabindex]');
+       elements.forEach(elm => {
+         if (expanded) {
+           const prevTabIndex = elm.getAttribute('data-prev-tabindex');
+-          const currentTabIndex = elm.getAttribute('tabindex');
+-          if (currentTabIndex && prevTabIndex) {
+-            // restore tabindex
+-            elm.setAttribute('tabindex', prevTabIndex);
++          // No marker means this element was never untabbed by a collapse, so there is
++          // nothing to restore and its own tabindex must be left alone.
++          if (prevTabIndex !== null) {
++            // An empty marker means the element had no tabindex of its own (every native
++            // button/anchor), so removing the attribute IS the restore. The original code
++            // branched on prevTabIndex and currentTabIndex being both truthy or both
++            // falsy, and "" with "-1" satisfied neither - so the -1 was never lifted.
++            if (prevTabIndex === '') {
++              elm.removeAttribute('tabindex');
++            } else {
++              elm.setAttribute('tabindex', prevTabIndex);
++            }
+             elm.removeAttribute('data-prev-tabindex');
+           }
+-          if (!prevTabIndex && !currentTabIndex) {
+-            elm.removeAttribute('tabindex');
+-          }
+         } else {
+-          elm.setAttribute('data-prev-tabindex', elm.getAttribute('tabindex') || '');
++          // Stash only on the first collapse. Re-stashing would capture the -1 this
++          // effect itself wrote and make the original value unrecoverable.
++          if (elm.getAttribute('data-prev-tabindex') === null) {
++            elm.setAttribute('data-prev-tabindex', elm.getAttribute('tabindex') || '');
++          }
+           elm.setAttribute('tabindex', '-1');
+         }
+       });

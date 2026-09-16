@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { randomUUID } from 'node:crypto';
 import { Quest, PublishedArtifact, Session } from '@bike4mind/database';
-import { PublishReplyRequestSchema, type PublishResult } from '@bike4mind/common';
+import { PublishReplyRequestSchema, type PublishResult, visibleReplyText } from '@bike4mind/common';
 import { resolveVisibility, checkScopePermission, checkPublishQuota, type PublishUser } from '@server/services/publish';
 import { parseArtifactsWithFallback } from '@client/app/utils/artifactParser';
 
@@ -19,7 +19,9 @@ function publicId(): string {
 /**
  * Extract the assistant reply as markdown, mirroring the client's extractReplies:
  * prefer the `replies[]` array (the server streams into it), fall back to the flat
- * `reply`, then to text blocks in `structuredReplies`. Strips `<think>...</think>`.
+ * `reply`, then to text blocks in `structuredReplies`. Hidden reasoning is stripped by
+ * `visibleReplyText`, the same rule the transcript renders by - a published page must not
+ * show text the chat hides, and vice versa.
  */
 function extractReplyMarkdown(quest: {
   reply?: string | null;
@@ -31,13 +33,7 @@ function extractReplyMarkdown(quest: {
 
   const out: string[] = [];
   for (const part of parts) {
-    if (!part || !part.trim()) continue;
-    let cleaned = part;
-    if (cleaned.includes('<think>') && cleaned.includes('</think>')) {
-      cleaned = cleaned.slice(cleaned.lastIndexOf('</think>') + '</think>'.length).trim();
-    } else if (cleaned.startsWith('<think>')) {
-      cleaned = '';
-    }
+    const cleaned = visibleReplyText(part);
     if (cleaned) out.push(cleaned);
   }
   let combined = out.join('').trim();

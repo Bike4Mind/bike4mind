@@ -71,6 +71,11 @@ export const DEPRECATED_MODEL_MAP: Record<string, string> = {
   'grok-2-vision-1212': 'grok-4.5',
   'grok-beta': 'grok-4.5',
   'grok-vision-beta': 'grok-4.5',
+  // Discontinued upstream by Moonshot: api.moonshot.ai no longer serves kimi-k2.5, so a pinned
+  // session hard-fails without this. K2.6 is the capability successor and the cheapest current
+  // direct Kimi ($0.95/$4 against k2.5's $0.60/$3 per 1M) - a modest increase, and the only
+  // option that keeps the family, the 256K context, vision and tools.
+  'kimi-k2.5': 'kimi-k2.6',
   // Not grok-4.5: Grok 3 Mini Fast is the budget reasoning tier ($0.60/$4), and Grok 4.5 would
   // be a cost increase. Grok 3 Mini is both current and cheaper ($0.30/$0.50) while keeping
   // can_think, so it preserves intent without raising the bill.

@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService, scopedSettingsService } from '@bike4mind/services';
 import {
@@ -27,7 +28,7 @@ const QuerySchema = z.object({
  * `embeddingSpendMicroUsd` is withheld from the lake's own payload, kept as the single
  * source of truth rather than a second hand-rolled check.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
     const { id } = req.query;

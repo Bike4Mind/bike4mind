@@ -24,6 +24,7 @@ export const CREDENTIAL_OF_BACKEND: Record<string, (creds: DiscoveryCredentials)
   [ModelBackend.Gemini]: creds => creds.gemini !== null,
   [ModelBackend.XAI]: creds => creds.xai !== null,
   [ModelBackend.Kimi]: creds => creds.kimi !== null,
+  [ModelBackend.DeepSeek]: creds => creds.deepseek !== null,
   [ModelBackend.BFL]: creds => creds.bfl !== null,
   [ModelBackend.VoyageAI]: creds => creds.voyageai !== null,
   [ModelBackend.Ollama]: creds => creds.ollama !== null,

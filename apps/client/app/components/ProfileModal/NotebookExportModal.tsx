@@ -52,6 +52,33 @@ interface ExportOptions {
   format: ExportFormat;
 }
 
+/**
+ * Resolve the calendar date an `<input type="date">` yields to an instant at the edge of that day
+ * in the viewer's own zone. A bare "2026-01-15" carries no offset, so whoever resolves it picks the
+ * zone; doing it here is the only place the user's actual zone is known. Omitting the `Z` is what
+ * makes Date parse the literal as local rather than UTC.
+ */
+const localDayBoundary = (value: string, edge: 'start' | 'end'): string | undefined => {
+  if (!value) return undefined;
+  const time = edge === 'start' ? '00:00:00.000' : '23:59:59.999';
+  const at = new Date(`${value}T${time}`);
+  return Number.isNaN(at.getTime()) ? undefined : at.toISOString();
+};
+
+const SIZE_MB = { default: 10, min: 1, max: 100 } as const;
+
+/**
+ * Resolve the size box's text to the megabytes the request carries. A box that holds no usable
+ * number falls back to the default rather than keeping whatever last parsed: backspacing "10" yields
+ * "1" before "", so a guard that only skips the unparseable step submits 1MB while the box shows
+ * nothing. `Number` rather than `parseInt`, which reads "1e3" as 1 instead of 1000.
+ */
+const resolveSizeMb = (text: string): number => {
+  const mb = Number(text);
+  if (!text.trim() || !Number.isFinite(mb)) return SIZE_MB.default;
+  return Math.min(Math.max(Math.floor(mb), SIZE_MB.min), SIZE_MB.max);
+};
+
 const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose }) => {
   const [options, setOptions] = useState<ExportOptions>({
     includeKnowledge: true,
@@ -61,8 +88,17 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
     anonymize: false,
     includeMetadata: true,
     includeImages: true,
-    maxFileSize: 10 * 1024 * 1024, // 10MB
+    maxFileSize: SIZE_MB.default * 1024 * 1024,
     format: 'json',
+  });
+
+  // The date and size inputs display raw text while `options` holds the submitted value. Without
+  // that split, a value the input can show but the request cannot carry (an empty size box, a
+  // local calendar date) has nowhere to live, and the field becomes uneditable.
+  const [drafts, setDrafts] = useState({
+    fromDate: '',
+    toDate: '',
+    maxFileSizeMb: String(SIZE_MB.default),
   });
 
   const [isExporting, setIsExporting] = useState(false);
@@ -83,7 +119,14 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
       }
     } catch (error: any) {
       console.error('Export error:', error);
-      toast.error(error.message || 'Failed to export notebooks');
+      // Most specific first. axios's own error.message is "Request failed with status code 404",
+      // and a ZodError's message is the generic "Invalid request body" - in both cases the useful
+      // text is further in. `error` is the shared errorHandler envelope, the rest this route's own.
+      const data = error?.response?.data;
+      const fieldErrors: string | undefined = data?.errors
+        ?.map((e: { field: string; message: string }) => `${e.field}: ${e.message}`)
+        .join(', ');
+      toast.error(fieldErrors || data?.error || data?.message || error.message || 'Failed to export notebooks');
     } finally {
       setIsExporting(false);
     }
@@ -155,7 +198,12 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
 
   return (
     <Modal open={open} onClose={onClose} className="notebook-export-modal-root">
-      <ModalDialog size="md" sx={{ maxWidth: 600 }} className="notebook-export-modal-dialog">
+      <ModalDialog
+        size="md"
+        sx={{ maxWidth: 600 }}
+        className="notebook-export-modal-dialog"
+        data-testid="notebook-export-modal"
+      >
         <DialogTitle className="notebook-export-modal-title">
           <Box display="flex" alignItems="center" gap={1}>
             <CloudDownload sx={{ mr: 1 }} />
@@ -186,6 +234,7 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
                   <FormLabel className="notebook-export-modal-form-label">Knowledge Files</FormLabel>
                   <Switch
                     className="notebook-export-modal-switch"
+                    slotProps={{ input: { 'data-testid': 'notebook-export-knowledge-switch' } }}
                     checked={options.includeKnowledge}
                     onChange={e => updateOption('includeKnowledge', e.target.checked)}
                   />
@@ -194,6 +243,7 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
                 <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
                   <FormLabel>Artifacts</FormLabel>
                   <Switch
+                    slotProps={{ input: { 'data-testid': 'notebook-export-artifacts-switch' } }}
                     checked={options.includeArtifacts}
                     onChange={e => updateOption('includeArtifacts', e.target.checked)}
                   />
@@ -202,6 +252,7 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
                 <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
                   <FormLabel>Tools</FormLabel>
                   <Switch
+                    slotProps={{ input: { 'data-testid': 'notebook-export-tools-switch' } }}
                     checked={options.includeTools}
                     onChange={e => updateOption('includeTools', e.target.checked)}
                   />
@@ -210,6 +261,7 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
                 <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
                   <FormLabel>Agents</FormLabel>
                   <Switch
+                    slotProps={{ input: { 'data-testid': 'notebook-export-agents-switch' } }}
                     checked={options.includeAgents}
                     onChange={e => updateOption('includeAgents', e.target.checked)}
                   />
@@ -218,6 +270,7 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
                 <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
                   <FormLabel>Images</FormLabel>
                   <Switch
+                    slotProps={{ input: { 'data-testid': 'notebook-export-images-switch' } }}
                     checked={options.includeImages}
                     onChange={e => updateOption('includeImages', e.target.checked)}
                   />
@@ -272,13 +325,21 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
               <Input
                 className="notebook-export-modal-input"
                 type="number"
-                value={Math.round(options.maxFileSize / (1024 * 1024))}
-                onChange={e => updateOption('maxFileSize', parseInt(e.target.value) * 1024 * 1024)}
+                value={drafts.maxFileSizeMb}
+                onChange={e => {
+                  const text = e.target.value;
+                  setDrafts(d => ({ ...d, maxFileSizeMb: text }));
+                  updateOption('maxFileSize', resolveSizeMb(text) * 1024 * 1024);
+                }}
+                // The box must not show a number the request does not carry: resolveSizeMb clamps,
+                // so a typed 500 would sit on screen while 100 went out.
+                onBlur={() => setDrafts(d => ({ ...d, maxFileSizeMb: String(resolveSizeMb(d.maxFileSizeMb)) }))}
                 endDecorator="MB"
                 slotProps={{
                   input: {
-                    min: 1,
-                    max: 100,
+                    min: SIZE_MB.min,
+                    max: SIZE_MB.max,
+                    'data-testid': 'notebook-export-size-input',
                   },
                 }}
               />
@@ -295,16 +356,24 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
                   <FormLabel>From Date</FormLabel>
                   <Input
                     type="date"
-                    value={options.fromDate || ''}
-                    onChange={e => updateOption('fromDate', e.target.value || undefined)}
+                    value={drafts.fromDate}
+                    onChange={e => {
+                      setDrafts(d => ({ ...d, fromDate: e.target.value }));
+                      updateOption('fromDate', localDayBoundary(e.target.value, 'start'));
+                    }}
+                    slotProps={{ input: { 'data-testid': 'notebook-export-from-date-input' } }}
                   />
                 </FormControl>
                 <FormControl sx={{ flex: 1 }}>
                   <FormLabel>To Date</FormLabel>
                   <Input
                     type="date"
-                    value={options.toDate || ''}
-                    onChange={e => updateOption('toDate', e.target.value || undefined)}
+                    value={drafts.toDate}
+                    onChange={e => {
+                      setDrafts(d => ({ ...d, toDate: e.target.value }));
+                      updateOption('toDate', localDayBoundary(e.target.value, 'end'));
+                    }}
+                    slotProps={{ input: { 'data-testid': 'notebook-export-to-date-input' } }}
                   />
                 </FormControl>
               </Stack>
@@ -320,7 +389,7 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
 
             {/* Export Result */}
             {exportResult && (
-              <Alert color="success" className="notebook-export-modal-alert">
+              <Alert color="success" className="notebook-export-modal-alert" data-testid="notebook-export-result">
                 <Stack spacing={1}>
                   <Typography level="title-sm">Export Complete!</Typography>
                   <Stack spacing={0.5}>
@@ -333,6 +402,7 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
                   {exportResult.downloadUrl && (
                     <Button
                       className="notebook-export-modal-export-button"
+                      data-testid="notebook-export-download-btn"
                       size="sm"
                       startDecorator={!isConverting ? <CloudDownload /> : undefined}
                       onClick={handleDownload}
@@ -355,6 +425,7 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
           <Button
             variant="solid"
             color="primary"
+            data-testid="notebook-export-submit-btn"
             onClick={handleExport}
             loading={isExporting}
             disabled={isExporting}

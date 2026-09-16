@@ -1,5 +1,37 @@
 # @bike4mind/cli
 
+## 1.0.0
+
+### Major Changes
+
+- [#2778](https://github.com/Bike4Mind/bike4mind/pull/2778) [`f3d4563`](https://github.com/Bike4Mind/bike4mind/commit/f3d4563c442e4471fd37d3bf35baac96095f5fc5) Thanks [@onoya](https://github.com/onoya)! - keep the LLM tool closure out of the package barrel
+
+### Patch Changes
+
+- [#2823](https://github.com/Bike4Mind/bike4mind/pull/2823) [`a4e980d`](https://github.com/Bike4Mind/bike4mind/commit/a4e980d956c721aa734dde981420adcb4bfaa243) Thanks [@onoya](https://github.com/onoya)! - escape dynamic regex inputs and guard dynamic object writes
+
+## 0.22.0
+
+### Minor Changes
+
+- [#2762](https://github.com/Bike4Mind/bike4mind/pull/2762) [`adc900a`](https://github.com/Bike4Mind/bike4mind/commit/adc900ab152e00d3324bc228ac73c98a5cb5e2ef) Thanks [@maconard](https://github.com/maconard)! - add DeepSeek as a first-party provider and close Moonshot gaps
+
+## 0.21.0
+
+### Minor Changes
+
+- [#2417](https://github.com/Bike4Mind/bike4mind/pull/2417) [`b85c4ae`](https://github.com/Bike4Mind/bike4mind/commit/b85c4aea800dd4513ca3c749d6dd80705d7c21e6) Thanks [@ken-b4m](https://github.com/ken-b4m)! - add caller-supplied systemPrompt field to POST /api/chat
+
+### Patch Changes
+
+- [#2076](https://github.com/Bike4Mind/bike4mind/pull/2076) [`0b11eb7`](https://github.com/Bike4Mind/bike4mind/commit/0b11eb73ef02ce7acbf9fdfab991e36cec755ef7) Thanks [@TRAP-RCG](https://github.com/TRAP-RCG)! - make the published package installable, and add the MCP registry entry
+
+- [#2138](https://github.com/Bike4Mind/bike4mind/pull/2138) [`9c5588c`](https://github.com/Bike4Mind/bike4mind/commit/9c5588c25e8025755ebe0eab77c4af208ef27538) Thanks [@onoya](https://github.com/onoya)! - derive every sub-quest status surface from one enum
+
+- [#2345](https://github.com/Bike4Mind/bike4mind/pull/2345) [`e285e73`](https://github.com/Bike4Mind/bike4mind/commit/e285e738ff13227869492811f1a10865d6d82f03) Thanks [@vinchi777](https://github.com/vinchi777)! - hide gemini-2.5-flash and redirect pinned sessions
+
+- [#2379](https://github.com/Bike4Mind/bike4mind/pull/2379) [`9e88972`](https://github.com/Bike4Mind/bike4mind/commit/9e889727a1d83a25e38ccec9354c6ffbb2150b70) Thanks [@vinchi777](https://github.com/vinchi777)! - skip npm's audit when removing a plugin
+
 ## 0.20.2
 
 ### Patch Changes

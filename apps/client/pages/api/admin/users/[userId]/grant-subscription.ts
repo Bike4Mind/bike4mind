@@ -268,10 +268,11 @@ const handler = baseApi().post(
           }
         );
 
-        // Update organization seats if needed
+        // Update organization seats if needed. Targeted write: a whole-org snapshot
+        // here would $set the pre-grant currentCredits back over the atomic $inc
+        // addCredits just applied, erasing the credits granted above.
         if (targetOrganization.seats < seats) {
-          targetOrganization.seats = seats;
-          await organizationRepository.update(targetOrganization);
+          await organizationRepository.update({ id: targetOrganization.id, seats });
         }
 
         req.logger.info(`Admin ${req.user.id} granted team subscription to organization ${targetOrganization.id}`, {

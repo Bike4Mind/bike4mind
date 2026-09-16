@@ -1,18 +1,21 @@
 import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
+import { brand } from '@client/app/utils/themes/colors';
 import CopyTextButton from '@client/app/components/Session/CopyTextButton';
 import DownloadMenu from '../common/DownloadMenu';
 import PromptReplies from '@client/app/components/Session/PromptReplies';
+import RapidReplyBubble from '@client/app/components/Session/RapidReplyBubble';
 import ReasoningDisclosure from '@client/app/components/Session/AgentExecution/ReasoningDisclosure';
 import AutoRouteBadge from '@client/app/components/Session/AgentExecution/AutoRouteBadge';
 import UserPrompt from '@client/app/components/Session/UserPrompt';
 import ResearchModeResponseDisplay from '@client/app/components/Session/ResearchModeResponseDisplay';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import { useUser } from '@client/app/contexts/UserContext';
-import { IChatHistoryItem, SettingKey, ELISION_PUBLISH_BODY } from '@bike4mind/common';
+import { IChatHistoryItem, SettingKey, ELISION_PUBLISH_BODY, ANSWER_DIAGNOSIS_TITLE } from '@bike4mind/common';
 import { elidedReplyWarning } from '@client/app/utils/artifactParser';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import { Menu, MenuItem, ListItemDecorator } from '@mui/joy';
 import Box from '@mui/joy/Box';
+import Button from '@mui/joy/Button';
 import Divider from '@mui/joy/Divider';
 import Dropdown from '@mui/joy/Dropdown';
 import IconButton from '@mui/joy/IconButton';
@@ -36,6 +39,8 @@ import BugReportModal from '@client/app/components/BugReportModal';
 import { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useGetFabFilesByQuestId } from '@client/app/hooks/data/fabFiles';
+import { feedbackSessionQueryKey, useGetFeedbackBySessionId } from '@client/app/hooks/data/feedback';
+import { isOptimisticId } from '@client/app/utils/llm';
 import { Save as SaveIcon, Add as AddIcon } from '@mui/icons-material';
 import { DataLakeIcon, DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
@@ -161,6 +166,20 @@ const MessageContent: React.FC<ContentProps> = memo(
     const { data: questFiles = [] } = useGetFabFilesByQuestId(messageData.id!, {
       enabled: !!messageData.fabFileIds?.length,
     });
+    // A turn whose send failed keeps its optimistic id (createOptimisticQuest rewrites the bubble
+    // to status 'done' without ever persisting it), so the action row renders for a message the
+    // server has no row for. The report itself is still worth filing - it just cannot be anchored
+    // to a quest, so it is submitted and labelled as a notebook-level report instead of silently
+    // sending a questId that resolveFeedbackContext drops (feedbackContext.ts).
+    const isPersistedMessage = !isOptimisticId(messageData.id);
+    // Backs the persistent Report button's "already reported" state and the in-thread
+    // "Reported" annotation - see hooks/data/feedback.ts for why this is safe to call once per
+    // rendered message.
+    const { data: sessionFeedback = [] } = useGetFeedbackBySessionId(sessionId);
+    const isReported = useMemo(
+      () => isPersistedMessage && sessionFeedback.some(item => item.questId === messageData.id),
+      [isPersistedMessage, sessionFeedback, messageData.id]
+    );
     const researchMode = useLLM(state => state.researchMode);
     const setLLM = useLLM(state => state.setLLM);
 
@@ -277,6 +296,42 @@ const MessageContent: React.FC<ContentProps> = memo(
     const handleCloseBugReportModal = useCallback(() => {
       setIsBugReportModalOpen(false);
     }, []);
+
+    // Refreshes the session-scoped feedback read so the "Reported" annotation appears without
+    // waiting for staleTime to elapse.
+    const handleReportSubmitted = useCallback(() => {
+      queryClient.invalidateQueries({ queryKey: feedbackSessionQueryKey(sessionId, currentUser?.id) });
+    }, [queryClient, sessionId, currentUser?.id]);
+
+    // One element rendered into both the desktop and mobile action rows. They were byte-identical
+    // copies; keeping them as one is what stops the next edit from landing on only one of them.
+    const reportButton = (
+      <Tooltip
+        title={
+          isReported
+            ? 'You already reported this message'
+            : isPersistedMessage
+              ? 'Report an issue with this message'
+              : 'Report an issue with this notebook'
+        }
+      >
+        <IconButton
+          data-testid="message-report-btn"
+          variant="outlined"
+          color={isReported ? 'warning' : 'neutral'}
+          size="sm"
+          onClick={handleOpenBugReportModal}
+          sx={{
+            width: '28px',
+            height: '28px',
+            flexShrink: '0',
+            borderRadius: '6px',
+          }}
+        >
+          <BugReportIcon sx={{ fontSize: 16 }} />
+        </IconButton>
+      </Tooltip>
+    );
 
     useEffect(() => {
       // Check if the device is mobile
@@ -549,6 +604,9 @@ const MessageContent: React.FC<ContentProps> = memo(
             messageId={messageData.id}
           />
         )}
+        {/* Rapid reply - the instant acknowledgement, above the streaming reply body
+            it precedes. Only the streaming message is handed a chatCompletion. */}
+        {chatCompletion && <RapidReplyBubble chatCompletion={chatCompletion} />}
         {/* Auto-route notice. Sits above the reply body (not in the footer chip
             row) so the user reads it before internalizing the agent-style answer -
             false-positive remediation via Dismiss is more discoverable that way.
@@ -776,6 +834,20 @@ const MessageContent: React.FC<ContentProps> = memo(
             {!isProcessingPrompt && messageData.promptMeta?.functionCalls && (
               <ToolsUsed functionCalls={messageData.promptMeta.functionCalls} size="sm" />
             )}
+
+            {!isProcessingPrompt && isReported && (
+              <Tooltip title="You reported this message">
+                <Chip
+                  data-testid="message-reported-chip"
+                  size="sm"
+                  variant="soft"
+                  color="warning"
+                  startDecorator={<BugReportIcon sx={{ fontSize: 14 }} />}
+                >
+                  Reported
+                </Chip>
+              </Tooltip>
+            )}
           </Box>
 
           {!isMobile ? (
@@ -788,6 +860,33 @@ const MessageContent: React.FC<ContentProps> = memo(
                     content={extractedReplies ? extractedReplies[0] : ''}
                     fileName={`${messageData.id}.md`}
                   />
+                  {reportButton}
+                  {hasShareableReply && (
+                    <Button
+                      data-testid="message-publish-share-btn"
+                      variant="solid"
+                      size="sm"
+                      startDecorator={<ShareIcon sx={{ fontSize: 16 }} />}
+                      onClick={handleShareReply}
+                      sx={{
+                        minHeight: '28px',
+                        flexShrink: '0',
+                        borderRadius: '6px',
+                        fontSize: '13px',
+                        backgroundColor: brand[800],
+                        color: '#fff',
+                        fontWeight: 600,
+                        transition: 'transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease',
+                        '&:hover': {
+                          backgroundColor: brand[900],
+                          transform: 'scale(1.04)',
+                          boxShadow: '0 0 14px rgba(11, 107, 203, 0.5)',
+                        },
+                      }}
+                    >
+                      Publish &amp; Share
+                    </Button>
+                  )}
 
                   {/* Advanced actions in menu */}
                   <Dropdown>
@@ -833,19 +932,13 @@ const MessageContent: React.FC<ContentProps> = memo(
                         <ListItemDecorator>
                           <HiveIcon />
                         </ListItemDecorator>
-                        Prompt Meta
+                        {ANSWER_DIAGNOSIS_TITLE}
                       </MenuItem>
                       <MenuItem onClick={() => onPinToggle(messageData)}>
                         <ListItemDecorator>
                           {messageData.pinned ? <PushPinIcon /> : <PushPinOutlinedIcon />}
                         </ListItemDecorator>
                         {messageData.pinned ? 'Unpin' : 'Pin'}
-                      </MenuItem>
-                      <MenuItem onClick={handleOpenBugReportModal}>
-                        <ListItemDecorator>
-                          <BugReportIcon />
-                        </ListItemDecorator>
-                        Report
                       </MenuItem>
                       {canUseAdminTools && (
                         <MenuItem onClick={() => handlePreviewAsBlog(messageData)}>
@@ -902,14 +995,6 @@ const MessageContent: React.FC<ContentProps> = memo(
                           Send to {DATA_LAKE}
                         </MenuItem>
                       )}
-                      {hasShareableReply && (
-                        <MenuItem onClick={handleShareReply} data-testid="message-share-reply">
-                          <ListItemDecorator>
-                            <ShareIcon />
-                          </ListItemDecorator>
-                          Share
-                        </MenuItem>
-                      )}
                       <MenuItem onClick={() => handleDelete(messageData)} color="danger">
                         <ListItemDecorator sx={{ color: 'inherit' }}>
                           <DeleteOutline />
@@ -925,6 +1010,9 @@ const MessageContent: React.FC<ContentProps> = memo(
                     open={isBugReportModalOpen}
                     onClose={handleCloseBugReportModal}
                     promptMeta={messageData.promptMeta || null}
+                    sessionId={sessionId}
+                    questId={isPersistedMessage ? messageData.id : undefined}
+                    onSubmitted={handleReportSubmitted}
                   />
                   <ContentPreviewModal
                     open={showBlogPreviewModal}
@@ -947,6 +1035,26 @@ const MessageContent: React.FC<ContentProps> = memo(
                     content={extractedReplies ? extractedReplies[0] : ''}
                     fileName={`${messageData.id}.md`}
                   />
+                  {reportButton}
+                  {hasShareableReply && (
+                    <Tooltip title="Publish & Share">
+                      <IconButton
+                        data-testid="message-publish-share-btn"
+                        variant="outlined"
+                        color="neutral"
+                        size="sm"
+                        onClick={handleShareReply}
+                        sx={{
+                          width: '28px',
+                          height: '28px',
+                          flexShrink: '0',
+                          borderRadius: '6px',
+                        }}
+                      >
+                        <ShareIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                    </Tooltip>
+                  )}
 
                   {/* Advanced actions in menu */}
                   <Dropdown>
@@ -992,19 +1100,13 @@ const MessageContent: React.FC<ContentProps> = memo(
                         <ListItemDecorator>
                           <HiveIcon />
                         </ListItemDecorator>
-                        Prompt Meta
+                        {ANSWER_DIAGNOSIS_TITLE}
                       </MenuItem>
                       <MenuItem onClick={() => onPinToggle(messageData)}>
                         <ListItemDecorator>
                           {messageData.pinned ? <PushPinIcon /> : <PushPinOutlinedIcon />}
                         </ListItemDecorator>
                         {messageData.pinned ? 'Unpin' : 'Pin'}
-                      </MenuItem>
-                      <MenuItem onClick={handleOpenBugReportModal}>
-                        <ListItemDecorator>
-                          <BugReportIcon />
-                        </ListItemDecorator>
-                        Report
                       </MenuItem>
                       {canUseAdminTools && (
                         <MenuItem onClick={() => handlePreviewAsBlog(messageData)}>
@@ -1061,14 +1163,6 @@ const MessageContent: React.FC<ContentProps> = memo(
                           Send to {DATA_LAKE}
                         </MenuItem>
                       )}
-                      {hasShareableReply && (
-                        <MenuItem onClick={handleShareReply} data-testid="message-share-reply">
-                          <ListItemDecorator>
-                            <ShareIcon />
-                          </ListItemDecorator>
-                          Share
-                        </MenuItem>
-                      )}
                       <MenuItem onClick={() => handleDelete(messageData)} color="danger">
                         <ListItemDecorator sx={{ color: 'inherit' }}>
                           <DeleteOutline />
@@ -1084,6 +1178,9 @@ const MessageContent: React.FC<ContentProps> = memo(
                     open={isBugReportModalOpen}
                     onClose={handleCloseBugReportModal}
                     promptMeta={messageData.promptMeta || null}
+                    sessionId={sessionId}
+                    questId={isPersistedMessage ? messageData.id : undefined}
+                    onSubmitted={handleReportSubmitted}
                   />
                   <ContentPreviewModal
                     open={showBlogPreviewModal}

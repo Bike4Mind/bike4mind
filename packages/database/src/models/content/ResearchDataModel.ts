@@ -116,6 +116,9 @@ class ResearchDataRepository extends BaseRepository<IResearchData> implements IR
   }
 
   async findByIdAndResearchAgentId(id: string, researchAgentId: string): Promise<IResearchData | null> {
+    // A non-ObjectId id can never address a row - report no such row, not a CastError the
+    // calling route cannot attribute. Same contract as `BaseRepository.findById`.
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
     const result = await this.researchDataModel.findOne({ _id: id, researchAgentId });
     return result?.toJSON() ?? null;
   }
@@ -137,6 +140,15 @@ class ResearchDataRepository extends BaseRepository<IResearchData> implements IR
 
   async findByUrlAndOrganizationId(url: string, organizationId: string): Promise<IResearchData | null> {
     const result = await this.researchDataModel.findOne({ url, organizationId });
+    return result?.toJSON() ?? null;
+  }
+
+  async findByUrlAndUserIdAndOrganizationId(
+    url: string,
+    userId: string,
+    organizationId: string
+  ): Promise<IResearchData | null> {
+    const result = await this.researchDataModel.findOne({ url, userId, organizationId });
     return result?.toJSON() ?? null;
   }
 

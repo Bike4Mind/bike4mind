@@ -8,6 +8,11 @@ import { createMocks } from 'node-mocks-http';
  * userDetails) are preserved so member UIs keep working. The PUT (update) response
  * is routed through the same serializer so a manager updating org settings never
  * gets billing identifiers echoed back.
+ *
+ * The real protection against body-override of the org id is that updateOrgBodySchema
+ * is a plain z.object() with no .passthrough(): Zod strips any id field from
+ * req.body before the spread. The 'URL id wins' test documents that intent;
+ * the BadRequestError test is load-bearing.
  */
 
 const mockRefs = vi.hoisted(() => ({
@@ -52,12 +57,16 @@ const update = vi.hoisted(() =>
     stripeCustomerId: 'cus_SECRET',
   }))
 );
+vi.mock('@server/utils/errors', () => ({
+  BadRequestError: class BadRequestError extends Error {},
+}));
 vi.mock('@bike4mind/services', () => ({ organizationService: { get, update } }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
 vi.mock('@server/models/Subscription', () => ({ subscriptionRepository: {} }));
 vi.mock('@client/lib/subscriptions/types', () => ({ SubscriptionOwnerType: { Organization: 'organization' } }));
 
 import '@pages/api/organizations/[id]/index';
+import { BadRequestError } from '@server/utils/errors';
 
 function mocks(user: unknown, method: 'GET' | 'PUT' = 'GET') {
   const { req, res } = createMocks({ method, query: { id: 'org1' } });
@@ -85,6 +94,26 @@ describe('GET /api/organizations/[id] - safe serialization', () => {
     const body = res._getJSONData();
     expect(body.billingContact).toBe('billing@acme.com');
     expect('stripeCustomerId' in body).toBe(false);
+  });
+});
+
+describe('PUT /api/organizations/[id] - URL id wins', () => {
+  beforeEach(() => update.mockClear());
+
+  it('takes the org id from the URL, not from any id field in the body', async () => {
+    const { req, res } = mocks({ id: 'caller', isAdmin: true }, 'PUT');
+    (req as any).body = { id: 'from-body', name: 'renamed' };
+    await mockRefs.putHandler!(req, res);
+    const [, params] = update.mock.calls[0];
+    expect(params.id).toBe('org1');
+    expect(params.name).toBe('renamed');
+  });
+
+  it('rejects a missing id with BadRequestError before reaching the service', async () => {
+    const { req, res } = createMocks({ method: 'PUT', query: {} });
+    (req as any).user = { id: 'caller', isAdmin: true };
+    await expect(mockRefs.putHandler!(req, res)).rejects.toBeInstanceOf(BadRequestError);
+    expect(update).not.toHaveBeenCalled();
   });
 });
 

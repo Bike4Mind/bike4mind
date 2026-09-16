@@ -57,6 +57,7 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
       // tag clause, so the copy would silently widen to every lake the caller can reach. Copying also
       // takes createSession's "explicit wins" arm, so it costs no DB read.
       retrievalTags: session.retrievalTags,
+      lakeScopeExplicit: session.lakeScopeExplicit,
     },
     adapters
   );

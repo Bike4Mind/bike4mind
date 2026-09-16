@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -15,12 +16,12 @@ import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { Request } from 'express';
-import { Types } from 'mongoose';
 import { createHmac } from 'crypto';
 import { Resource } from 'sst';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { getFilesStorage } from '@server/utils/storage';
+import { isValidObjectId } from '@server/utils/objectId';
 import { DataLakeAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
@@ -57,16 +58,13 @@ const auditableReceipt = (receipt: DataLakeDocumentPurgeReceipt) => {
  * POST rather than DELETE so the two cannot be confused by a client that only varies the method:
  * one unpicks membership, the other destroys the file everywhere.
  */
-// Same local helper the quest-plan routes use. Needed BEFORE the destructive call because
-// `fabFileRepository.findById` hands a malformed id straight to Mongoose, which throws a CastError:
-// not one of the gate errors below, so it would file an unverified-purge audit row for a request
-// that never wrote anything.
-const isValidObjectId = (id: string): boolean => Types.ObjectId.isValid(id) && new Types.ObjectId(id).toString() === id;
-
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .post(async (req: Request<{}, unknown, unknown, { id: string; fabFileId: string }>, res) => {
     const { id, fabFileId } = req.query;
+    // Needed BEFORE the destructive call: a malformed id reaching `fabFileRepository.findById`
+    // used to throw a CastError, which is not one of the gate errors below, so it filed an
+    // unverified-purge audit row for a request that never wrote anything.
     if (!isValidObjectId(fabFileId)) {
       throw new BadRequestError('Invalid file id');
     }
@@ -174,12 +172,12 @@ const handler = baseApi()
           // same helper both file-delete routes call, over the file's pre-delete tags. That lake's
           // own meta-tag is filtered out: it is in `tagNames`, and leaving it in would run a second
           // identical aggregation over the lake the service already rebuilt.
+          //
+          // Same `actor` built above, not a narrowed literal - this rebuild can auto-activate a
+          // draft lake too, and must carry the same attribution.
           const purgedLakeTag = lake.datalakeTag?.toLowerCase();
           const otherLakeTags = tagNames.filter(name => name.toLowerCase() !== purgedLakeTag);
-          await recomputeStatsForLakeTags(otherLakeTags, {
-            logger: req.logger,
-            actor: { userId: ctx.userId, isAdmin: ctx.isAdmin },
-          });
+          await recomputeStatsForLakeTags(otherLakeTags, { logger: req.logger, actor });
         },
         logger: req.logger,
       });

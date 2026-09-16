@@ -29,12 +29,18 @@ function isPermanentlyDismissed(): boolean {
   }
 }
 
+// Distinguishes the two nag states from "no session yet". An account created via OAuth
+// without a provider-verified email has no address on file (see verifyCallback's create
+// path), which needs an add-an-email nag rather than silence; `hasUser` is what keeps the
+// banner off the logged-out and not-yet-loaded cases that `!email` used to absorb.
 function shouldBannerShow(
+  hasUser: boolean,
   email: string | null | undefined,
   emailVerified: boolean | null | undefined,
   pathname: string
 ): boolean {
-  if (!email || emailVerified) return false;
+  if (!hasUser) return false;
+  if (email && emailVerified) return false;
   if (EXCLUDED_ROUTES.some(r => pathname === r || pathname.startsWith(r + '/'))) return false;
   if (isPermanentlyDismissed()) return false;
   try {
@@ -48,16 +54,18 @@ const EmailVerificationBanner: React.FC = () => {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   // Scoped selector avoids re-renders from unrelated currentUser field updates.
-  const { email, emailVerified } = useUser(
+  const { hasUser, email, emailVerified } = useUser(
     useShallow(s => ({
+      hasUser: !!s.currentUser,
       email: s.currentUser?.email,
       emailVerified: s.currentUser?.emailVerified,
     }))
   );
+  const hasEmail = !!email;
 
   // Compute visibility synchronously on first render so there is no false->true flash
   // when the Zustand store is already populated (warm context after SPA navigation).
-  const [visible, setVisible] = useState(() => shouldBannerShow(email, emailVerified, pathname));
+  const [visible, setVisible] = useState(() => shouldBannerShow(hasUser, email, emailVerified, pathname));
   const [isSent, setIsSent] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
@@ -65,8 +73,8 @@ const EmailVerificationBanner: React.FC = () => {
   // Re-evaluate visibility whenever the user or route changes.
   // useLocation() is reactive, so pathname updates on every navigation.
   useEffect(() => {
-    setVisible(shouldBannerShow(email, emailVerified, pathname));
-  }, [email, emailVerified, pathname]);
+    setVisible(shouldBannerShow(hasUser, email, emailVerified, pathname));
+  }, [hasUser, email, emailVerified, pathname]);
 
   // Countdown timer for resend cooldown
   useEffect(() => {
@@ -159,30 +167,39 @@ const EmailVerificationBanner: React.FC = () => {
         }}
       >
         <Typography level="body-sm" sx={{ flex: 1, minWidth: 200 }}>
-          Please verify your email <strong style={{ fontWeight: 600 }}>{email}</strong> to unlock all features.
+          {hasEmail ? (
+            <>
+              Please verify your email <strong style={{ fontWeight: 600 }}>{email}</strong> to unlock all features.
+            </>
+          ) : (
+            'Add an email address to your account to unlock all features.'
+          )}
         </Typography>
 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0, flexWrap: 'wrap' }}>
-          <Button
-            variant="solid"
-            color="primary"
-            size="sm"
-            onClick={handleResend}
-            loading={resendVerification.isPending}
-            disabled={isSent || cooldownSeconds > 0}
-            data-testid="email-verification-banner-resend-btn"
-          >
-            {isSent ? 'Email Sent!' : cooldownSeconds > 0 ? `Resend in ${cooldownSeconds}s` : 'Resend'}
-          </Button>
+          {/* Resend needs an address to send to; with none on file the only action is to add one. */}
+          {hasEmail && (
+            <Button
+              variant="solid"
+              color="primary"
+              size="sm"
+              onClick={handleResend}
+              loading={resendVerification.isPending}
+              disabled={isSent || cooldownSeconds > 0}
+              data-testid="email-verification-banner-resend-btn"
+            >
+              {isSent ? 'Email Sent!' : cooldownSeconds > 0 ? `Resend in ${cooldownSeconds}s` : 'Resend'}
+            </Button>
+          )}
 
           <Button
-            variant="outlined"
-            color="neutral"
+            variant={hasEmail ? 'outlined' : 'solid'}
+            color={hasEmail ? 'neutral' : 'primary'}
             size="sm"
             onClick={() => navigate({ to: '/profile' })}
             data-testid="email-verification-banner-change-email-btn"
           >
-            Change email
+            {hasEmail ? 'Change email' : 'Add email'}
           </Button>
 
           <Button
