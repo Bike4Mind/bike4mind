@@ -45,10 +45,10 @@ import { parseProbeQuestions, PROBE_QUESTIONS, type ProbeQuestion } from './corp
 import {
   assertOnePerInput,
   chunkTokenCount,
+  collectCapturableFiles,
   embedAll,
   findOversizedChunks,
   formatCapturePlan,
-  isCapturableFile,
   modalLength,
   parseSupportedModels,
   planCapture,
@@ -166,7 +166,7 @@ if (lake.status !== 'active') throw new Error(`Lake "${argv.lake}" is ${lake.sta
 // The LIFECYCLE-SWEEP reader: it returns every id the lake has ever held, with no archivedAt or
 // deletedAt condition (see its index docblock in FabFileModel, and the findLakeMemoryExtractionMembers
 // docblock that explains what it deliberately is NOT). Everything it hands back is a candidate, not a
-// member - `isCapturableFile` below is what reduces it to the set the served path can actually reach.
+// member - `collectCapturableFiles` below reduces it to the set the served path can actually reach.
 const fileIds = await fabFileRepository.findIdsByDataLakeTag({ kind: 'registry', datalakeTag: lake.datalakeTag });
 if (fileIds.length === 0) throw new Error(`Lake "${argv.lake}" holds no files.`);
 
@@ -179,39 +179,12 @@ if (fileIds.length === 0) throw new Error(`Lake "${argv.lake}" holds no files.`)
 // returning whole mongoose documents become two paged, lean reads.
 const needStoredVectors = argv['reuse-stored-vectors'];
 
-// Batched, not per file. The lake read hands back every candidate id at once; reading them one at a
-// time was two sequential round-trips per file, which is fine on 49 help files and is not what the
-// runbook points this at.
-type CapturedFile = { fileId: string; docId: string; embeddingModel?: string | null };
-const capturedFiles: CapturedFile[] = [];
-let filesUnreachable = 0;
-for (const batch of toBatches(fileIds, FILE_ID_BATCH)) {
-  // Projected, not hydrated: this reads every candidate id the lake has ever held, and the
-  // unprojected reader builds a full mongoose document per id (`versions`, Mixed `sourceMetadata`
-  // and all) to answer a reachability question about eight scalars and a tag list.
-  const files = await fabFileRepository.findCitableFieldsWithTagsByIds(batch);
-  const byId = new Map(files.map(f => [String(f.id), f]));
-  // Iterated in the LAKE's id order rather than the read's, so what lands in the fixture does not
-  // depend on Mongo document order.
-  for (const fileId of batch) {
-    const file = byId.get(fileId);
-    // A tombstone (or a soft-deleted file) and a file the reachability predicate rejects are one
-    // class for this counter: the served path would never have returned either, so scoring their
-    // chunks would move the band by chunks production cannot surface.
-    if (!file || !isCapturableFile(file)) {
-      filesUnreachable++;
-      continue;
-    }
-    // Prefer the help slug so the capture joins to corpus.ts's ground truth; fall back to the file
-    // id, which is the right document identity for any other lake.
-    const helpTag = file.tags?.find(t => t.name.startsWith(HELP_TAG_PREFIX));
-    capturedFiles.push({
-      fileId,
-      docId: helpTag ? helpTag.name.slice(HELP_TAG_PREFIX.length) : fileId,
-      embeddingModel: file.embeddingModel,
-    });
-  }
-}
+const { captured: capturedFiles, filesUnreachable } = await collectCapturableFiles({
+  fabfiles: fabFileRepository,
+  fileIds,
+  batchSize: FILE_ID_BATCH,
+  helpTagPrefix: HELP_TAG_PREFIX,
+});
 
 const stored: StoredChunk[] = [];
 const tokenCounts: number[] = [];

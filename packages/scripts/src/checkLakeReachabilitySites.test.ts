@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { execSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import ts from 'typescript';
@@ -14,11 +14,37 @@ import ts from 'typescript';
  * the TypeScript AST and requires the live and retrieval-excluded clauses to be in it - deleting one
  * leaves the matched line byte-identical, so the site half alone would stay green.
  *
+ * The site half reads three spellings of the comparison, because a copy is only as findable as the
+ * narrowest of them: the counter named on the comparison line (FULLY_VECTORIZED), both counters
+ * destructured on one line (`bindsBothCounters`), and both counters read into locals by member access
+ * first (`findMemberAccessGates`). The last is the shape #2503 records, and the only one no line rule
+ * can reach - its comparison line names neither field, so the grep prefilter never emits it at all.
+ * What is still NOT covered is a copy that spells the comparison across a boundary none of the three
+ * follow - a helper taking two numbers, a counter carried through an object field. Those stay
+ * invisible, which is the honest limit of a grep-and-AST tripwire over duplicated logic.
+ *
  * Why the clause half is AST-scoped and not a wider regex: the clauses sit on their OWN lines (and
  * as a bare conjunction in one of the three copies rather than an early return), so a line-oriented
  * detector cannot see them however wide it is. A file-scoped symbol search would see them and be
  * vacuous - two of the three sites mention these symbols outside the predicate, so it would pass on
- * a predicate that had lost the clause entirely.
+ * a predicate that had lost the clause entirely. It is narrower still than the enclosing function:
+ * only what the predicate APPLIES counts (see appliedIdentifiers), so a clause left computed in a
+ * local that nothing returns or branches on is a failure rather than a pass.
+ *
+ * KNOWN RESIDUALS, listed because a tripwire that hides its blind spots reads as coverage:
+ *  - A clause satisfied by a bare MENTION. The clause half tests symbol presence, so an applied
+ *    object literal spelling the names (`return { deletedAt, archivedAt } && ...`) passes without
+ *    testing anything. Inherent to symbol matching; scoping to applied expressions narrows it but
+ *    does not close it, and a green run here is evidence the clause is NAMED, not that it is enforced.
+ *  - A gate line that starts INSIDE a wrapped callback. `enclosingPredicateBody` takes the innermost
+ *    function, so if formatting puts the comparison in a nested arrow whose body does not carry the
+ *    clauses, both report missing on a rule that is intact. It fails CLOSED - a red build on correct
+ *    code, never a silent pass - and the fix is to name the clauses in that region or hoist the gate.
+ *  - `isFileVectorized =` (NOT_THIS_RULE) exempts by NAME, tree-wide. Today its one hit is the
+ *    write-side vectorize handler the reason text describes, but that is also a natural name for a
+ *    new reachability gate, which would then be exempted anywhere. Kept a line-content rule rather
+ *    than a path exemption on purpose - see NOT_THIS_RULE's note - so tighten the pattern, not the
+ *    path, if it ever swallows a real copy.
  *
  * Sibling of checkEmbeddingModelComparisonSites, and deliberately a second test rather than a wider
  * one. That guard watches the `embeddingModel` exact-match clause; `isCapturableFile` omits that
@@ -72,6 +98,76 @@ const FULLY_VECTORIZED = /vectorizedChunkCount\b[^;]*>=|>=\s*[A-Za-z0-9_.]*\bchu
  */
 const bindsBothCounters = (text: string) =>
   /\{[^}]*\bvectorizedChunkCount\b[^}]*\}/.test(text) && /\bchunkCount\b/.test(text);
+
+/** The two counter fields, for the AST detector below. */
+const COUNTERS = { vectorized: 'vectorizedChunkCount', total: 'chunkCount' } as const;
+
+/**
+ * Locals that `body` binds to a member access of `field`, including the `?? 0` and optional-chaining
+ * wrappers these gates are usually written with. A declaration naming BOTH counters is skipped: that
+ * is a comparison being stored under a name, not a counter being bound.
+ */
+function localsBoundToField(body: ts.Node, field: string, otherField: string): Set<string> {
+  const bound = new Set<string>();
+  const visit = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      const names = identifiersIn(node.initializer);
+      if (names.has(field) && !names.has(otherField)) bound.add(node.name.text);
+    }
+    node.forEachChild(visit);
+  };
+  visit(body);
+  return bound;
+}
+
+/**
+ * The third spelling, and the one #2503 actually records: BOTH counters read into locals by member
+ * access first, so the comparison spells neither field name and the `[cC]hunkCount` prefilter never
+ * even emits that line, let alone matches it.
+ *
+ *     const done = f.vectorizedChunkCount;
+ *     const total = f.chunkCount;
+ *     return done >= total;
+ *
+ * Function-scoped and not a line rule, because that IS the difficulty: the evidence that this is the
+ * reachability comparison is spread over three lines. Both operands must be locals bound by member
+ * access - a copy with a counter still on the comparison line is FULLY_VECTORIZED's, and one that
+ * destructures is `bindsBothCounters`'.
+ */
+function findMemberAccessGates(source: ts.SourceFile): number[] {
+  const lines: number[] = [];
+  const inspect = (fn: ts.Node) => {
+    const body = (fn as ts.FunctionLikeDeclaration).body;
+    if (!body) return;
+    const vectorized = localsBoundToField(body, COUNTERS.vectorized, COUNTERS.total);
+    const total = localsBoundToField(body, COUNTERS.total, COUNTERS.vectorized);
+    if (vectorized.size === 0 || total.size === 0) return;
+    const visit = (node: ts.Node) => {
+      if (ts.isBinaryExpression(node) && ts.isIdentifier(node.left) && ts.isIdentifier(node.right)) {
+        const operator = node.operatorToken.kind;
+        const forward =
+          operator === ts.SyntaxKind.GreaterThanEqualsToken &&
+          vectorized.has(node.left.text) &&
+          total.has(node.right.text);
+        const reversed =
+          operator === ts.SyntaxKind.LessThanEqualsToken &&
+          total.has(node.left.text) &&
+          vectorized.has(node.right.text);
+        if (forward || reversed) {
+          lines.push(source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1);
+        }
+      }
+      node.forEachChild(visit);
+    };
+    visit(body);
+  };
+  const walk = (node: ts.Node) => {
+    if (isFunctionLike(node)) inspect(node);
+    node.forEachChild(walk);
+  };
+  source.forEachChild(walk);
+  return lines;
+}
 
 /**
  * Matches that are a DIFFERENT question about the same two counters. Line-content rules rather than
@@ -152,23 +248,57 @@ const stripTrailingComment = (text: string) => text.replace(/\/\/.*$/, '');
 type ReachabilityHit = { location: string; path: string; line: number; text: string };
 
 /**
+ * Where a copy could be written. `premium` stays excluded for the reason checkEmbeddingModelComparison
+ * Sites gives: that mount is a separate repo and is not always present. `infra` and the repo-root
+ * `scripts` are here and not in the sibling guard, so a copy written outside the packages is visible.
+ */
+const SCAN_ROOTS = ['apps/client', 'b4m-core', 'packages', 'infra', 'scripts'];
+
+/**
+ * Every `[cC]hunkCount` mention under SCAN_ROOTS, as `path:line:text`.
+ *
+ * `[cC]` because the clause is usually spelled `vectorizedChunkCount`, which a lowercase `chunkCount`
+ * prefilter walks straight past.
+ *
+ * Deliberately NOT `|| true`: that swallows a root that has been renamed or moved out from under this
+ * list along with the "no matches" case, which would leave a root silently unscanned on a green suite.
+ * grep's exit 1 means "searched, found nothing" and is the only non-zero status accepted here.
+ */
+function grepCounterMentions(): string {
+  const missing = SCAN_ROOTS.filter(root => !existsSync(path.join(REPO_ROOT, root)));
+  if (missing.length > 0) {
+    throw new Error(
+      `Scan roots no longer exist: ${missing.join(', ')}. A renamed root drops out of discovery ` +
+        'silently, so update SCAN_ROOTS rather than letting the grep miss it.'
+    );
+  }
+  try {
+    return execSync(
+      'grep -rn -E "[cC]hunkCount" --include="*.ts" --include="*.tsx" --include="*.mts" --include="*.cts" ' +
+        '--exclude-dir=node_modules --exclude-dir=premium --exclude-dir=dist --exclude-dir=.next ' +
+        SCAN_ROOTS.join(' '),
+      { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }
+    );
+  } catch (error) {
+    if ((error as { status?: number }).status === 1) return '';
+    throw error;
+  }
+}
+
+/** A file this guard is willing to read a gate out of: not a test, and not this guard itself. */
+const isScannableFile = (filePath: string) => filePath !== SELF_PATH && !isTestFile(filePath);
+
+/**
  * Every fully-vectorized gate in the tree, as `path:line` plus the source text.
  *
- * Roots include `infra` and the repo-root `scripts` alongside the three the sibling guard scans, so a
- * copy written outside the packages is visible here. `premium` stays excluded for the reason
- * checkEmbeddingModelComparisonSites gives: that mount is a separate repo and is not always present.
+ * Two passes over the same grep, because the three spellings are not all visible to the same kind of
+ * rule: the line pass matches FULLY_VECTORIZED / `bindsBothCounters` against the text grep emitted,
+ * and the AST pass re-reads the files that mention `vectorizedChunkCount` to find the member-access
+ * shape, whose comparison line grep never emits at all. Unioned and de-duplicated by `path:line`, so
+ * a gate both passes can see is still one gate.
  */
 function findReachabilitySites(): ReachabilityHit[] {
-  const out = execSync(
-    // `[cC]` because the clause is usually spelled `vectorizedChunkCount`, which a lowercase
-    // `chunkCount` prefilter walks straight past.
-    'grep -rn -E "[cC]hunkCount" --include="*.ts" --include="*.tsx" --include="*.mts" --include="*.cts" ' +
-      '--exclude-dir=node_modules --exclude-dir=premium --exclude-dir=dist --exclude-dir=.next ' +
-      'apps/client b4m-core packages infra scripts || true',
-    { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }
-  );
-
-  return out
+  const mentions = grepCounterMentions()
     .split('\n')
     .filter(Boolean)
     .map(line => {
@@ -176,12 +306,32 @@ function findReachabilitySites(): ReachabilityHit[] {
       return match ? { path: match[1], line: Number(match[2]), text: match[3] } : null;
     })
     .filter((hit): hit is { path: string; line: number; text: string } => hit !== null)
-    .filter(hit => hit.path !== SELF_PATH && !isTestFile(hit.path))
+    .filter(hit => isScannableFile(hit.path));
+
+  const lineHits = mentions
     .filter(hit => !isCommentLine(hit.text))
     .map(hit => ({ ...hit, text: stripTrailingComment(hit.text) }))
-    .filter(hit => FULLY_VECTORIZED.test(hit.text) || bindsBothCounters(hit.text))
-    .filter(hit => !NOT_THIS_RULE.some(exclusion => exclusion.pattern.test(hit.text)))
-    .map(hit => ({ location: `${hit.path}:${hit.line}`, path: hit.path, line: hit.line, text: hit.text.trim() }));
+    .filter(hit => FULLY_VECTORIZED.test(hit.text) || bindsBothCounters(hit.text));
+
+  // Only files that mention the vectorized counter at all, so the parse cost stays on the handful of
+  // files that could hold a copy rather than every file naming `chunkCount`.
+  const candidates = [...new Set(mentions.filter(hit => hit.text.includes(COUNTERS.vectorized)).map(hit => hit.path))];
+  const astHits = candidates.flatMap(filePath => {
+    const sourceText = readFileSync(path.join(REPO_ROOT, filePath), 'utf8');
+    const source = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, /* setParentNodes */ true);
+    const lines = sourceText.split('\n');
+    return findMemberAccessGates(source).map(line => ({ path: filePath, line, text: lines[line - 1] ?? '' }));
+  });
+
+  const byLocation = new Map<string, ReachabilityHit>();
+  for (const hit of [...lineHits, ...astHits]) {
+    if (NOT_THIS_RULE.some(exclusion => exclusion.pattern.test(hit.text))) continue;
+    const location = `${hit.path}:${hit.line}`;
+    if (!byLocation.has(location)) {
+      byLocation.set(location, { location, path: hit.path, line: hit.line, text: hit.text.trim() });
+    }
+  }
+  return [...byLocation.values()];
 }
 
 /** Character offset of the first non-whitespace character on a 1-based line, or null if there is none. */
@@ -240,6 +390,60 @@ function identifiersIn(node: ts.Node): Set<string> {
 }
 
 /**
+ * The expressions a predicate body actually APPLIES: what it returns, and what it branches or throws
+ * on. Everything else in the body is computation, which may or may not reach the outcome.
+ *
+ * Nested callbacks are walked rather than skipped: a predicate is free to spell a clause inside a
+ * `.some()`, and failing that copy would be a wrong failure.
+ */
+function appliedExpressions(body: ts.Node): ts.Node[] {
+  if (!ts.isBlock(body)) return [body]; // concise arrow body - the expression IS the outcome
+  const roots: ts.Node[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isReturnStatement(node) && node.expression) roots.push(node.expression);
+    else if (ts.isIfStatement(node) || ts.isWhileStatement(node) || ts.isDoStatement(node)) roots.push(node.expression);
+    else if (ts.isConditionalExpression(node)) roots.push(node.condition);
+    else if (ts.isThrowStatement(node) && node.expression) roots.push(node.expression);
+    node.forEachChild(visit);
+  };
+  visit(body);
+  return roots;
+}
+
+/**
+ * The identifiers the predicate applies: those named in an applied expression, plus - transitively -
+ * those in the initializer of any local such an expression names.
+ *
+ * Following the locals is what lets a predicate compute a clause into a `const` and still count (the
+ * corpus defer gate binds `liveAndReachable` before using it). Starting from the APPLIED expressions
+ * rather than the whole body is what stops a clause that is still computed but no longer applied from
+ * passing: drop `&& liveAndReachable` from that gate's return and nothing reaches the binding, so the
+ * clause reports missing - where a body-wide symbol search would happily still find it.
+ */
+function appliedIdentifiers(body: ts.Node): Set<string> {
+  const initializers = new Map<string, ts.Node>();
+  const collect = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      initializers.set(node.name.text, node.initializer);
+    }
+    node.forEachChild(collect);
+  };
+  collect(body);
+
+  const applied = new Set<string>();
+  const pending = appliedExpressions(body);
+  while (pending.length > 0) {
+    for (const name of identifiersIn(pending.pop() as ts.Node)) {
+      if (applied.has(name)) continue;
+      applied.add(name);
+      const initializer = initializers.get(name);
+      if (initializer) pending.push(initializer);
+    }
+  }
+  return applied;
+}
+
+/**
  * Which required clauses are missing from the predicate enclosing `line`, as reader-facing lines.
  * Empty means the clause set is intact.
  *
@@ -259,7 +463,7 @@ function missingClauses(filePath: string, sourceText: string, line: number): str
     ];
   }
 
-  const names = identifiersIn(body);
+  const names = appliedIdentifiers(body);
   return REQUIRED_CLAUSES.filter(clause => !clause.symbols.every(symbol => names.has(symbol))).map(
     clause =>
       `${filePath}:${line}: the ${clause.clause} clause (${clause.symbols.join(' + ')}) is missing from the ` +
@@ -393,11 +597,84 @@ describe('missingClauses', () => {
     ]);
   });
 
+  it('does not accept a clause that is computed but no longer applied', () => {
+    // The shape the corpus defer gate is written in: the clause is bound to a local, and the local is
+    // what the return names. Dropping it from the return leaves the binding - and every symbol in it -
+    // sitting in the body, which is what a body-wide search would keep finding.
+    const source = build([
+      'export function isCapturableFile(file: F, opts: O = {}): boolean {',
+      '  const live = !file.deletedAt && !file.archivedAt && !isRetrievalExcluded(file, opts);',
+      '  const chunks = file.chunkCount ?? 0;',
+      '  return chunks > 0 && (file.vectorizedChunkCount ?? 0) >= chunks;',
+      '}',
+    ]);
+    expect(missingClauses('f.ts', source, 4)).toEqual([
+      expect.stringContaining('live clause'),
+      expect.stringContaining('retrieval-excluded clause'),
+    ]);
+  });
+
+  it('accepts that same clause while the return still names its local', () => {
+    const source = build([
+      'export function isCapturableFile(file: F, opts: O = {}): boolean {',
+      '  const live = !file.deletedAt && !file.archivedAt && !isRetrievalExcluded(file, opts);',
+      '  const chunks = file.chunkCount ?? 0;',
+      '  return live && chunks > 0 && (file.vectorizedChunkCount ?? 0) >= chunks;',
+      '}',
+    ]);
+    expect(missingClauses('f.ts', source, 4)).toEqual([]);
+  });
+
   it('fails closed on a gate that sits at module scope', () => {
     const source = build([
       'const chunks = file.chunkCount ?? 0;',
       'const ok = (file.vectorizedChunkCount ?? 0) >= chunks;',
     ]);
     expect(missingClauses('f.ts', source, 2)).toEqual([expect.stringContaining('not inside any function')]);
+  });
+});
+
+/**
+ * The SITE detectors against the two evasions they exist for.
+ *
+ * Same argument as the clause fixtures above: a detector that cannot fire reads as coverage. Neither
+ * of these is pinned by the repo scan - the tree contains no copy in either shape, so neutering them
+ * leaves the suite green, which is exactly the state this file warns about.
+ */
+describe('gate detection', () => {
+  const gateLines = (lines: string[]) =>
+    findMemberAccessGates(ts.createSourceFile('f.ts', lines.join('\n'), ts.ScriptTarget.Latest, true));
+
+  it('sees a copy that binds both counters by member access, whose comparison names neither', () => {
+    // The shape #2503 records. `[cC]hunkCount` does not even emit line 4, so no line rule however
+    // wide can reach it - which is why this detector is AST-scoped.
+    expect(
+      gateLines([
+        'export function probe(file: F): boolean {',
+        '  const done = file.vectorizedChunkCount ?? 0;',
+        '  const total = file.chunkCount ?? 0;',
+        '  return total > 0 && done >= total;',
+        '}',
+      ])
+    ).toEqual([4]);
+  });
+
+  it('sees a copy that destructures both counters', () => {
+    expect(bindsBothCounters('  const { vectorizedChunkCount: done, chunkCount: total } = file;')).toBe(true);
+  });
+
+  it('leaves the writes and reports that name the counters without comparing them', () => {
+    // BOTH counters are required for a reason: `vectorizedChunkCount` alone appears in every $set,
+    // projection and stats aggregate that touches the field, and none of those gate anything.
+    expect(bindsBothCounters('  await FabFile.updateOne({ _id }, { $set: { vectorizedChunkCount: n } });')).toBe(false);
+    expect(
+      gateLines([
+        'export function report(file: F): number {',
+        '  const done = file.vectorizedChunkCount ?? 0;',
+        '  const total = file.chunkCount ?? 0;',
+        '  return total - done;',
+        '}',
+      ])
+    ).toEqual([]);
   });
 });

@@ -28,6 +28,24 @@ beforeEach(async () => {
   await FabFile.deleteMany({});
 });
 
+/**
+ * Every key either projected reader is allowed to return - CITABLE_PROJECTION plus `tags`, with `_id`
+ * surfacing as `id`. MUST STAY IN SYNC with CITABLE_PROJECTION in FabFileModel.ts: this list is what
+ * turns a widened projection into a failing test rather than a silently fatter hot-path read.
+ */
+const CITABLE_KEYS = new Set([
+  'id',
+  'deletedAt',
+  'archivedAt',
+  'chunkCount',
+  'vectorizedChunkCount',
+  'embeddingModel',
+  'fileName',
+  'vectorized',
+  'createdAt',
+  'tags',
+]);
+
 const makeFile = (fileName: string, extra: Record<string, unknown> = {}) =>
   FabFile.create({
     userId: 'u-citable',
@@ -36,7 +54,9 @@ const makeFile = (fileName: string, extra: Record<string, unknown> = {}) =>
     type: KnowledgeType.FILE,
     filePath: fileName,
     // The bulk the projection exists to leave behind: unbounded Mixed metadata, a subdocument array
-    // and an array of arbitrary tag objects, none of which a reachability check reads.
+    // and an array of arbitrary tag objects. `notes` is NOT in that class - `isRetrievalExcluded`
+    // reads it through `isChunkStalledFile` for the legacy stall rows - it is left out because it is
+    // owner-authored free text on a per-cited-source read. See CITABLE_PROJECTION's known-gap note.
     notes: 'operator notes nobody asking about reachability needs',
     presignedUrl: 'https://example.invalid/signed',
     sourceMetadata: { arbitrary: 'payload', of: ['no', 'fixed', 'size'] },
@@ -157,11 +177,13 @@ describe('FabFileRepository.findCitableFieldsWithTagsByIds', () => {
     expect(row).toMatchObject({ fileName: 'captured.md', chunkCount: 4, vectorizedChunkCount: 4 });
     // The one field this reader exists for: the capture joins its corpus to ground truth by tag.
     expect(row.tags?.map(t => t.name)).toEqual(['datalake:test']);
-    // Everything else the projection leaves behind stays behind - adding `tags` is not a doorway.
-    expect(row).not.toHaveProperty('notes');
-    expect(row).not.toHaveProperty('presignedUrl');
-    expect(row).not.toHaveProperty('sourceMetadata');
-    expect(row).not.toHaveProperty('_id');
+    // Closed over the WHOLE key set rather than a list of absences: naming fields to exclude only
+    // pins the ones someone thought of, so widening the `.select()` would keep a `not.toHaveProperty`
+    // suite green. Asserting no key OUTSIDE the projection - rather than an exact list - is what
+    // survives an optional field simply being unset on this fixture (`archivedAt` is; `deletedAt`
+    // comes back because the soft-delete plugin defaults it). This is what makes the comment above
+    // self-enforcing.
+    expect(Object.keys(row).filter(key => !CITABLE_KEYS.has(key))).toEqual([]);
   });
 
   it('applies the same liveness semantics as the tagless reader', async () => {
