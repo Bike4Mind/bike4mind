@@ -306,12 +306,13 @@ describe('MessageContent publish-and-share - visible action-bar button', () => {
     selectedAccountValue = null;
   });
 
-  it('renders the labeled button without opening any menu', () => {
+  it('renders the button without opening any menu', () => {
     renderMessageContent();
 
     const button = screen.getByTestId('message-publish-share-btn');
     expect(button).toBeInTheDocument();
-    expect(button).toHaveTextContent('Publish & Share');
+    // Icon-only, so the accessible name is what carries the label.
+    expect(button).toHaveAccessibleName('Publish & Share');
   });
 
   it('hides the button when the reply has no shareable content', () => {

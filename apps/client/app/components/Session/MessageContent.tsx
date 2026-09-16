@@ -1,6 +1,6 @@
 import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
-import { brand } from '@client/app/utils/themes/colors';
 import CopyTextButton from '@client/app/components/Session/CopyTextButton';
+import { chatActionButtonSx } from '@client/app/components/Session/chatActionButtonSx';
 import DownloadMenu from '../common/DownloadMenu';
 import PromptReplies from '@client/app/components/Session/PromptReplies';
 import RapidReplyBubble from '@client/app/components/Session/RapidReplyBubble';
@@ -15,7 +15,6 @@ import { elidedReplyWarning } from '@client/app/utils/artifactParser';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import { Menu, MenuItem, ListItemDecorator } from '@mui/joy';
 import Box from '@mui/joy/Box';
-import Button from '@mui/joy/Button';
 import Divider from '@mui/joy/Divider';
 import Dropdown from '@mui/joy/Dropdown';
 import IconButton from '@mui/joy/IconButton';
@@ -317,18 +316,13 @@ const MessageContent: React.FC<ContentProps> = memo(
       >
         <IconButton
           data-testid="message-report-btn"
-          variant="outlined"
+          variant="plain"
           color={isReported ? 'warning' : 'neutral'}
           size="sm"
           onClick={handleOpenBugReportModal}
-          sx={{
-            width: '28px',
-            height: '28px',
-            flexShrink: '0',
-            borderRadius: '6px',
-          }}
+          sx={chatActionButtonSx}
         >
-          <BugReportIcon sx={{ fontSize: 16 }} />
+          <BugReportIcon />
         </IconButton>
       </Tooltip>
     );
@@ -530,6 +524,24 @@ const MessageContent: React.FC<ContentProps> = memo(
       teamOrg,
       publishAndShareReply,
     ]);
+
+    // One element in both action rows, like reportButton above. Icon-only: the row is
+    // otherwise all icons, and a solid CTA under every single reply outshouted them.
+    const shareButton = (
+      <Tooltip title="Publish & Share">
+        <IconButton
+          data-testid="message-publish-share-btn"
+          aria-label="Publish & Share"
+          variant="plain"
+          color="neutral"
+          size="sm"
+          onClick={handleShareReply}
+          sx={chatActionButtonSx}
+        >
+          <ShareIcon />
+        </IconButton>
+      </Tooltip>
+    );
 
     // Get friendly model name from modelInfo repository
     const getModelDisplayName = (modelName: string): string => {
@@ -798,115 +810,24 @@ const MessageContent: React.FC<ContentProps> = memo(
             gap: '10px',
           }}
         >
-          <Box className="message-info" sx={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-            {adminSettings.enforceCredits &&
-            currentUser?.showCreditsUsed &&
-            !isProcessingPrompt &&
-            messageData.creditsUsed !== undefined ? (
-              <Tooltip title={`Credits Used: ${messageData.creditsUsed ?? 0}`}>
-                <Chip
-                  data-testid="credits-used"
-                  size="sm"
-                  variant="soft"
-                  sx={theme => ({
-                    bgcolor: theme.palette.fileBrowser.statusChip.backgroundColor,
-                    color: theme.palette.fileBrowser.statusChip.textColor,
-                    fontSize: '13px',
-                    height: '24px',
-                    border: `1px solid ${theme.palette.fileBrowser.statusChip.borderColor}`,
-                    gap: '4px',
-                    px: '8px',
-                    fontWeight: 500,
-                  })}
-                  startDecorator={<Bike4MindIcon size="12" fill="currentColor" />}
-                >
-                  {messageData.creditsUsed ?? 0}
-                </Chip>
-              </Tooltip>
-            ) : null}
-
-            {!isProcessingPrompt &&
-              messageData.promptMeta?.model?.name &&
-              !(messageData.researchModeResults && messageData.researchModeResults.length > 0) && (
-                <ModelChip displayName={getModelDisplayName(messageData.promptMeta.model.name)} />
-              )}
-
-            {!isProcessingPrompt && messageData.promptMeta?.functionCalls && (
-              <ToolsUsed functionCalls={messageData.promptMeta.functionCalls} size="sm" />
-            )}
-
-            {!isProcessingPrompt && isReported && (
-              <Tooltip title="You reported this message">
-                <Chip
-                  data-testid="message-reported-chip"
-                  size="sm"
-                  variant="soft"
-                  color="warning"
-                  startDecorator={<BugReportIcon sx={{ fontSize: 14 }} />}
-                >
-                  Reported
-                </Chip>
-              </Tooltip>
-            )}
-          </Box>
-
           {!isMobile ? (
             <Stack className="action-buttons-web" direction={'row'} gap="10px" alignItems="center">
               {!isProcessingPrompt && (
                 <>
-                  {/* Always visible primary action */}
-                  <CopyTextButton text={extractedReplies ? extractedReplies[0] : ''} />
-                  <DownloadMenu
-                    content={extractedReplies ? extractedReplies[0] : ''}
-                    fileName={`${messageData.id}.md`}
-                  />
-                  {reportButton}
-                  {hasShareableReply && (
-                    <Button
-                      data-testid="message-publish-share-btn"
-                      variant="solid"
-                      size="sm"
-                      startDecorator={<ShareIcon sx={{ fontSize: 16 }} />}
-                      onClick={handleShareReply}
-                      sx={{
-                        minHeight: '28px',
-                        flexShrink: '0',
-                        borderRadius: '6px',
-                        fontSize: '13px',
-                        backgroundColor: brand[800],
-                        color: '#fff',
-                        fontWeight: 600,
-                        transition: 'transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease',
-                        '&:hover': {
-                          backgroundColor: brand[900],
-                          transform: 'scale(1.04)',
-                          boxShadow: '0 0 14px rgba(11, 107, 203, 0.5)',
-                        },
-                      }}
-                    >
-                      Publish &amp; Share
-                    </Button>
-                  )}
-
                   {/* Advanced actions in menu */}
                   <Dropdown>
                     <Tooltip title="More options">
                       <MenuButton
                         data-testid="message-actions-menu-btn"
                         slots={{ root: IconButton }}
-                        slotProps={{ root: { variant: 'outlined', color: 'neutral', size: 'sm' } }}
-                        sx={{
-                          width: '28px',
-                          height: '28px',
-                          flexShrink: '0',
-                          borderRadius: '6px',
-                        }}
+                        slotProps={{ root: { variant: 'plain', color: 'neutral', size: 'sm' } }}
+                        sx={chatActionButtonSx}
                       >
                         <MoreVertIcon />
                       </MenuButton>
                     </Tooltip>
                     <Menu
-                      placement="bottom-end"
+                      placement="bottom-start"
                       className="menuSurface advanced-menu-web"
                       sx={_theme => ({
                         minWidth: '180px',
@@ -1004,6 +925,17 @@ const MessageContent: React.FC<ContentProps> = memo(
                     </Menu>
                   </Dropdown>
 
+                  {/* Always visible primary action */}
+                  <CopyTextButton text={extractedReplies ? extractedReplies[0] : ''} />
+                  <DownloadMenu
+                    content={extractedReplies ? extractedReplies[0] : ''}
+                    fileName={`${messageData.id}.md`}
+                    variant="plain"
+                    triggerSx={chatActionButtonSx}
+                  />
+                  {reportButton}
+                  {hasShareableReply && shareButton}
+
                   {/* Keep the modals */}
                   <BugReportModal
                     className="session-middle-bug-report-modal"
@@ -1029,52 +961,20 @@ const MessageContent: React.FC<ContentProps> = memo(
             <Stack className="action-buttons-mobile" direction={'row'} gap="10px" alignItems="center">
               {!isProcessingPrompt && (
                 <>
-                  {/* Always visible primary action */}
-                  <CopyTextButton text={extractedReplies ? extractedReplies[0] : ''} />
-                  <DownloadMenu
-                    content={extractedReplies ? extractedReplies[0] : ''}
-                    fileName={`${messageData.id}.md`}
-                  />
-                  {reportButton}
-                  {hasShareableReply && (
-                    <Tooltip title="Publish & Share">
-                      <IconButton
-                        data-testid="message-publish-share-btn"
-                        variant="outlined"
-                        color="neutral"
-                        size="sm"
-                        onClick={handleShareReply}
-                        sx={{
-                          width: '28px',
-                          height: '28px',
-                          flexShrink: '0',
-                          borderRadius: '6px',
-                        }}
-                      >
-                        <ShareIcon sx={{ fontSize: 16 }} />
-                      </IconButton>
-                    </Tooltip>
-                  )}
-
                   {/* Advanced actions in menu */}
                   <Dropdown>
                     <Tooltip title="More options">
                       <MenuButton
                         data-testid="message-actions-menu-btn"
                         slots={{ root: IconButton }}
-                        slotProps={{ root: { variant: 'outlined', color: 'neutral', size: 'sm' } }}
-                        sx={{
-                          width: '28px',
-                          height: '28px',
-                          flexShrink: '0',
-                          borderRadius: '6px',
-                        }}
+                        slotProps={{ root: { variant: 'plain', color: 'neutral', size: 'sm' } }}
+                        sx={chatActionButtonSx}
                       >
                         <MoreVertIcon />
                       </MenuButton>
                     </Tooltip>
                     <Menu
-                      placement="bottom-end"
+                      placement="bottom-start"
                       className="menuSurface advanced-menu-mobile"
                       sx={_theme => ({
                         minWidth: '180px',
@@ -1172,6 +1072,17 @@ const MessageContent: React.FC<ContentProps> = memo(
                     </Menu>
                   </Dropdown>
 
+                  {/* Always visible primary action */}
+                  <CopyTextButton text={extractedReplies ? extractedReplies[0] : ''} />
+                  <DownloadMenu
+                    content={extractedReplies ? extractedReplies[0] : ''}
+                    fileName={`${messageData.id}.md`}
+                    variant="plain"
+                    triggerSx={chatActionButtonSx}
+                  />
+                  {reportButton}
+                  {hasShareableReply && shareButton}
+
                   {/* Keep the modals */}
                   <BugReportModal
                     className="session-middle-bug-report-modal"
@@ -1194,6 +1105,58 @@ const MessageContent: React.FC<ContentProps> = memo(
               )}
             </Stack>
           )}
+
+          <Box className="message-info" sx={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            {adminSettings.enforceCredits &&
+            currentUser?.showCreditsUsed &&
+            !isProcessingPrompt &&
+            messageData.creditsUsed !== undefined ? (
+              <Tooltip title={`Credits Used: ${messageData.creditsUsed ?? 0}`}>
+                <Chip
+                  data-testid="credits-used"
+                  size="sm"
+                  variant="soft"
+                  sx={theme => ({
+                    bgcolor: theme.palette.fileBrowser.statusChip.backgroundColor,
+                    color: theme.palette.fileBrowser.statusChip.textColor,
+                    fontSize: '13px',
+                    height: '24px',
+                    border: `1px solid ${theme.palette.fileBrowser.statusChip.borderColor}`,
+                    gap: '4px',
+                    px: '8px',
+                    fontWeight: 500,
+                  })}
+                  startDecorator={<Bike4MindIcon size="12" fill="currentColor" />}
+                >
+                  {messageData.creditsUsed ?? 0}
+                </Chip>
+              </Tooltip>
+            ) : null}
+
+            {!isProcessingPrompt &&
+              messageData.promptMeta?.model?.name &&
+              !(messageData.researchModeResults && messageData.researchModeResults.length > 0) && (
+                <ModelChip displayName={getModelDisplayName(messageData.promptMeta.model.name)} />
+              )}
+
+            {!isProcessingPrompt && messageData.promptMeta?.functionCalls && (
+              <ToolsUsed functionCalls={messageData.promptMeta.functionCalls} size="sm" />
+            )}
+
+            {!isProcessingPrompt && isReported && (
+              <Tooltip title="You reported this message">
+                <Chip
+                  data-testid="message-reported-chip"
+                  size="sm"
+                  variant="soft"
+                  color="warning"
+                  startDecorator={<BugReportIcon sx={{ fontSize: 14 }} />}
+                >
+                  Reported
+                </Chip>
+              </Tooltip>
+            )}
+          </Box>
         </Box>
       </Stack>
     );

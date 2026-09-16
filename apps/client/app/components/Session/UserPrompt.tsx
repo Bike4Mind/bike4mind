@@ -20,6 +20,7 @@ import { Components } from 'react-markdown';
 import { extractSnippetMeta } from '@bike4mind/common';
 import EditModeContent from './EditModeContent';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
+import { chatActionButtonSx } from './chatActionButtonSx';
 
 const isCodeContent = (content: string): { isCode: boolean; language: string } => {
   try {
@@ -249,19 +250,9 @@ const EditButton: FC<{
         className="edit-button"
         size="sm"
         onClick={onEdit}
-        variant="outlined"
+        variant="plain"
         color="neutral"
-        sx={{
-          width: '28px',
-          height: '28px',
-          borderRadius: '6px',
-          flexShrink: 0,
-          marginBottom: '16px',
-          '& svg': {
-            width: '16px',
-            height: '16px',
-          },
-        }}
+        sx={{ ...chatActionButtonSx, marginBottom: '16px' }}
       >
         <EditIcon />
       </IconButton>
