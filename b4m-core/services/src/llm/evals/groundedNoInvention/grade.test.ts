@@ -949,6 +949,12 @@ describe('gradeMustNotDenyPremise', () => {
       'Gains of that size are usually recorded in the CRM and the effect of that, in practice, is unknown.',
       'Gains of that size are usually recorded in the CRM and the effect of that across the entire ' +
         'dispatch network is unknown.',
+      // One row per member of the object half, each behind an aside so the PREDICATION half cannot
+      // reach the copula: these are the only rows that make the object list itself load-bearing.
+      'Gains of that size are usually recorded in the CRM and the effect of it, however, is unknown.',
+      'Such results are typically recorded in the CRM and the effect of such a rollout, in practice, is unclear.',
+      'Gains of that size are usually recorded in the CRM and the outcome of the same, however, is unclear.',
+      'Such results are typically recorded in the CRM and the effect of them, however, is unclear.',
       // A LEXICAL object, so the object half cannot carry these - only the predication window can, and
       // narrowing `PREDICATES_PHRASE` back to `is|are|was|were` turns every one of them red.
       'Gains of that size are usually recorded in the CRM and the consequence of route consolidation is unclear.',
