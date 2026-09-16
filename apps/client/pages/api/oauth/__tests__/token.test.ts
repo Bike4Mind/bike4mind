@@ -19,6 +19,10 @@ const h = vi.hoisted(() => ({
   consumeValidCode: vi.fn(),
   findById: vi.fn(),
   issueSessionForRequest: vi.fn(async () => ({ accessToken: 'a.jwt', refreshToken: 'r.jwt' })),
+  findGrant: vi.fn(),
+  signAccessToken: vi.fn(() => 'oauth.jwt'),
+  grantCovers: vi.fn(() => true),
+  oauthAccessTokenAudience: vi.fn(() => 'https://app.example'),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -40,9 +44,17 @@ vi.mock('@server/auth/oauthServer', () => ({
 vi.mock('@bike4mind/database', () => ({
   oauthAuthorizationCodeRepository: { consumeValidCode: h.consumeValidCode },
   userRepository: { findById: h.findById },
+  oauthGrantRepository: { findGrant: h.findGrant },
 }));
 vi.mock('@server/auth/issueSession', () => ({ issueSessionForRequest: h.issueSessionForRequest }));
-vi.mock('@server/auth/tokenGenerator', () => ({ ACCESS_TOKEN_TTL_SECONDS: 3600 }));
+vi.mock('@server/auth/tokenGenerator', () => ({
+  ACCESS_TOKEN_TTL_SECONDS: 3600,
+  authTokenGenerator: { signAccessToken: h.signAccessToken },
+}));
+vi.mock('@server/auth/oauthConsent', () => ({
+  grantCovers: h.grantCovers,
+  oauthAccessTokenAudience: h.oauthAccessTokenAudience,
+}));
 
 import handler from '../token';
 
@@ -173,5 +185,64 @@ describe('POST /api/oauth/token authorization_code hardening', () => {
 
     expect(res.body?.access_token).toBe('a.jwt');
     expect(h.issueSessionForRequest).toHaveBeenCalledOnce();
+  });
+
+  it('mints a first-party id_token as NOT scope-limited (full claims even for scope=openid)', async () => {
+    (h.validateClient as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'none' });
+    (h.consumeValidCode as Mock).mockResolvedValue(authCode('challenge'));
+    (h.verifyPkce as Mock).mockReturnValue(true);
+
+    await call({ ...baseBody, code_verifier: 'good' });
+
+    expect(h.generateIdToken).toHaveBeenCalledWith(expect.objectContaining({ scopeLimited: false }));
+  });
+});
+
+/**
+ * The relying-party issuance path (token.ts kind:'oauth' branch). Without these the branch never
+ * executes under test, so a regression dropping kind:'oauth' - which would hand a relying party a
+ * full first-party-shaped session - would pass CI green.
+ */
+describe('POST /api/oauth/token relying-party issuance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (h.findById as Mock).mockResolvedValue({ id: 'u1', email: 'u@x.com', username: 'u', tokenVersion: 0 });
+    (h.grantCovers as Mock).mockReturnValue(true);
+    (h.signAccessToken as Mock).mockReturnValue('oauth.jwt');
+  });
+
+  const relyingPartyExchange = async () => {
+    (h.validateClient as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'none', clientType: 'relying-party' });
+    (h.consumeValidCode as Mock).mockResolvedValue(authCode('challenge'));
+    (h.verifyPkce as Mock).mockReturnValue(true);
+    return call({ ...baseBody, code_verifier: 'good' });
+  };
+
+  it('issues a kind:oauth access token with no refresh_token and echoes the granted scope', async () => {
+    (h.findGrant as Mock).mockResolvedValue({ scopes: ['openid'] });
+
+    const res = (await relyingPartyExchange()) as Res & {
+      body?: { access_token?: string; refresh_token?: string; scope?: string; id_token?: string };
+    };
+
+    // The oauth access token, minted via signAccessToken with kind:'oauth' - not a first-party session.
+    expect(res.body?.access_token).toBe('oauth.jwt');
+    expect(res.body?.refresh_token).toBeUndefined();
+    expect(res.body?.scope).toBe('openid');
+    expect(h.signAccessToken).toHaveBeenCalledWith('u1', 0, expect.objectContaining({ kind: 'oauth' }));
+    expect(h.issueSessionForRequest).not.toHaveBeenCalled();
+    // The id_token for a relying party IS scope-limited.
+    expect(h.generateIdToken).toHaveBeenCalledWith(expect.objectContaining({ scopeLimited: true }));
+  });
+
+  it('refuses to issue when no covering consent grant is recorded (400 access_denied)', async () => {
+    (h.findGrant as Mock).mockResolvedValue(null);
+
+    const res = await relyingPartyExchange();
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body?.error).toBe('access_denied');
+    expect(h.signAccessToken).not.toHaveBeenCalled();
+    expect(h.issueSessionForRequest).not.toHaveBeenCalled();
   });
 });

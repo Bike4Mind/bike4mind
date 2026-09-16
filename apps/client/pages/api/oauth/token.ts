@@ -107,6 +107,9 @@ const handler = baseApi({ auth: false })
         picture: (user.oauthCredentials as any)?.picture ?? null,
         clientId: client_id,
         scopes: authCode.scopes,
+        // Only a relying-party grant is scope-limited; a first-party client keeps the full claim
+        // set in the id_token, matching userinfo (releasedIdentityClaims).
+        scopeLimited: client.clientType === 'relying-party',
         nonce: authCode.nonce,
       });
 
@@ -137,8 +140,8 @@ const handler = baseApi({ auth: false })
           // RFC 6749 3.3: echo the granted scope so the client sees what it actually got.
           scope: scopeStr,
           // No refresh_token: a relying party re-authorizes through the browser flow, which its
-          // remembered consent makes silent. ponytail: rotated OAuth refresh tokens (RFC 9700
-          // 2.2.2) are the upgrade path if a headless relying party ever needs one.
+          // remembered consent makes silent. Rotated OAuth refresh tokens (RFC 9700 2.2.2) are the
+          // upgrade path if a headless relying party ever needs one.
         });
       }
 

@@ -6,6 +6,7 @@
  */
 
 import { baseApi } from '@server/middlewares/baseApi';
+import { releasedIdentityClaims } from '@server/auth/oauthServer';
 
 // OIDC identity endpoint: the one route a relying-party OAuth token is meant to reach. Requires
 // the openid scope; every other JWT-authed route stays first-party-only by default (oauthRouteGate).
@@ -16,20 +17,19 @@ const handler = baseApi({ auth: true, oauthScopes: ['openid'] }).get(async (req,
     return res.status(401).json({ error: 'Unauthorized', message: 'Authentication required' });
   }
 
-  // Release claims only for the scopes a relying-party OAuth token was actually granted (OIDC Core
-  // 5.4): `email` for the email claims, `profile` for name/picture; an openid-only token gets sub
-  // alone. Mirrors the id_token gating in generateIdToken. A first-party / legacy access token
-  // carries no oauthGrant marker (verifyJwtPayload stamps it only for kind==='oauth' tokens) and is
-  // NOT scope-limited, so it keeps the full claim set - the pre-scoping behavior, unchanged.
+  // Release claims through the shared decision so this stays in lockstep with the id_token
+  // (generateIdToken). A relying-party OAuth token is scope-limited (email -> email claims,
+  // profile -> name/picture; openid-only gets sub alone); a first-party / legacy token carries no
+  // oauthGrant marker (verifyJwtPayload stamps it only for kind==='oauth' tokens), so it is not
+  // scope-limited and keeps the full claim set - the pre-scoping behavior, unchanged.
   const grant = user.oauthGrant as { scopes?: string[] } | undefined;
-  const releaseAll = !grant;
-  const scopes: string[] = grant?.scopes ?? [];
+  const release = releasedIdentityClaims({ scopes: grant?.scopes ?? [], scopeLimited: !!grant });
   const claims: Record<string, unknown> = { sub: user.id };
-  if (releaseAll || scopes.includes('email')) {
+  if (release.email) {
     claims.email = user.email;
     claims.email_verified = user.emailVerified ?? false;
   }
-  if (releaseAll || scopes.includes('profile')) {
+  if (release.profile) {
     claims.name = user.username || user.email?.split('@')[0];
     claims.picture = user.oauthCredentials?.picture ?? null;
   }

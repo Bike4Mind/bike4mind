@@ -117,6 +117,25 @@ export interface OAuthTokens {
   expires_in: number;
 }
 
+/**
+ * Which identity claims a token may release, given its scopes and whether it is scope-limited.
+ * A relying-party OAuth grant is scope-limited: `email` releases the email claim, `profile` releases
+ * name/picture (OIDC Core 5.4). A first-party / legacy token is NOT scope-limited and keeps the full
+ * claim set (the pre-scoping behavior). Single source of truth for BOTH the id_token
+ * (generateIdToken below) and the userinfo endpoint (pages/api/oauth/userinfo.ts) so the two
+ * projections cannot drift apart.
+ */
+export function releasedIdentityClaims(opts: { scopes: string[]; scopeLimited: boolean }): {
+  email: boolean;
+  profile: boolean;
+} {
+  const releaseAll = !opts.scopeLimited;
+  return {
+    email: releaseAll || opts.scopes.includes('email'),
+    profile: releaseAll || opts.scopes.includes('profile'),
+  };
+}
+
 export function generateIdToken(params: {
   userId: string;
   email: string;
@@ -124,6 +143,9 @@ export function generateIdToken(params: {
   picture?: string | null;
   clientId: string;
   scopes: string[];
+  // True only for a relying-party OAuth grant; a first-party / legacy caller passes false and gets
+  // the full claim set. See releasedIdentityClaims.
+  scopeLimited: boolean;
   nonce?: string;
 }): string {
   const { privateKey } = getKeyPair();
@@ -138,11 +160,12 @@ export function generateIdToken(params: {
     exp: now + 3600,
   };
 
-  // OIDC claim gating (OpenID Connect Core 5.4): the `email` scope releases the email claim and
-  // `profile` releases name/picture. An openid-only grant carries identity (sub) but no PII -
-  // without this an openid-only token leaked the user's email and name in every id_token.
-  if (params.scopes.includes('email')) payload.email = params.email;
-  if (params.scopes.includes('profile')) {
+  // OIDC claim gating (OpenID Connect Core 5.4), via the shared decision so id_token and userinfo
+  // stay in lockstep: a relying-party grant releases email/name/picture only for the scopes it holds
+  // (an openid-only token carries sub but no PII); a first-party token keeps the full set.
+  const release = releasedIdentityClaims({ scopes: params.scopes, scopeLimited: params.scopeLimited });
+  if (release.email) payload.email = params.email;
+  if (release.profile) {
     payload.name = params.name;
     if (params.picture) payload.picture = params.picture;
   }
