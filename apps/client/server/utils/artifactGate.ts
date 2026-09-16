@@ -16,7 +16,9 @@
  * Lives in `utils/` rather than next to the executor because both the prompt-side gate
  * (`queueHandlers/agentExecutor.ts`) and the persistence-side gate (`persistAgentArtifacts.ts`)
  * must answer this question identically - two gates that can disagree is the defect this replaced -
- * and `utils/` is the half both may depend on.
+ * and `utils/` is the half both may depend on. `resolveUserArtifactGate` at the bottom joins it for
+ * the same reason: the browser-initiated `POST /api/artifacts` write is a third surface that must
+ * not answer differently.
  */
 import { ARTIFACT_EMISSION_PROMPT } from '@bike4mind/common';
 import { resolveArtifactsEnabled } from '@bike4mind/services';
@@ -84,4 +86,35 @@ export async function resolveAgentArtifactEmissionPrompt(args: {
  */
 export function inheritedArtifactFields(parentEnableArtifacts?: boolean): { enableArtifacts?: boolean } {
   return parentEnableArtifacts === undefined ? {} : { enableArtifacts: parentEnableArtifacts };
+}
+
+export interface ResolveUserArtifactGateInput {
+  /** The admin `EnableArtifacts` master switch. See the note on `adminEnableArtifacts` above. */
+  adminEnableArtifacts?: boolean;
+  /** The admin `EnableArtifactsDefault` setting - what a user who never toggled the flag gets. */
+  adminEnableArtifactsDefault?: boolean;
+  /** The user's EXPLICIT preference, or `undefined` when they have never toggled it. */
+  userPreference?: boolean;
+}
+
+/**
+ * The artifact gate for a request that carries no per-request `enableArtifacts` flag, resolved from
+ * the user's stored preference instead.
+ *
+ * `POST /api/artifacts` is the one artifact write the BROWSER initiates - chat mode parses the
+ * finished quest client-side and posts the rows itself - so unlike the chat and agent surfaces there
+ * is no caller-supplied flag to read, only the row that is about to be written. A client that skips
+ * the post is an optimization; this is what makes the opt-out durable against any caller.
+ *
+ * Must stay in step with the client's `useFeatureEnabled`: master switch first, then the user's
+ * explicit value, then the admin default. Folding "never toggled" into the caller slot of
+ * `resolveArtifactsEnabled` is what keeps that precedence in one place - absence there already means
+ * "no preference expressed", which is exactly what the `*Default` key answers.
+ */
+export function resolveUserArtifactGate({
+  adminEnableArtifacts,
+  adminEnableArtifactsDefault,
+  userPreference,
+}: ResolveUserArtifactGateInput): boolean {
+  return resolveArtifactsEnabled(adminEnableArtifacts ?? true, userPreference ?? adminEnableArtifactsDefault);
 }
