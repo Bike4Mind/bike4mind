@@ -475,7 +475,7 @@ GET /api/projects
 | GET | /api/projects/[id]/files | List project files |
 | GET | /api/projects/[id]/sessions | List project sessions |
 | GET | /api/projects/[id]/members | List project members |
-| GET | /api/projects/[id]/invites | List project invites |
+| GET | /api/projects/[id]/invites | List project invites (requires share permission) |
 | GET | /api/projects/[id]/systemPrompts | List project system prompts |
 | POST | /api/projects/[id]/systemPrompts/toggle | Toggle system prompt |
 | POST | /api/projects/removeNonExistintFiles | Clean up orphan file references |
@@ -793,7 +793,7 @@ Structured multi-step plans created by the QuestMaster agent.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | /api/[type]/[id]/updateSharing | Update sharing settings |
+| POST | /api/[type]/[id]/updateSharing | Update sharing settings (requires share permission) |
 | POST | /api/[type]/[id]/revokeSharing | Revoke sharing |
 | GET | /api/[type]/[id]/invites | List invites for resource |
 | GET | /api/invites | List all invites |

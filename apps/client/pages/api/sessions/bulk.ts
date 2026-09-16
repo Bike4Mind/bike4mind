@@ -3,7 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sessionService } from '@bike4mind/services';
 import { sessionRepository } from '@bike4mind/database/auth';
-import { projectRepository, fabFileRepository } from '@bike4mind/database';
+import { projectRepository, fabFileRepository, withTransaction } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
 
 const handler = baseApi()
@@ -26,16 +26,24 @@ const handler = baseApi()
         // Delete sessions one by one to get proper newLastNotebook result
         for (const sessionId of sessionIds) {
           try {
-            const result = await sessionService.deleteSession(
-              userId,
-              { id: sessionId },
-              {
-                db: {
-                  sessions: sessionRepository,
-                  projects: projectRepository,
-                  fabFiles: fabFileRepository,
-                },
-              }
+            // Per session, not around the loop: this is best-effort bulk, so one session failing
+            // must not roll back the ones already done. The transaction is what makes each
+            // individual delete all-or-nothing - deleteSession rewrites grant rows on every file
+            // the session touched before it tombstones anything, and a ConcurrencyConflictError
+            // partway through would otherwise leave some files rewritten and some not with the
+            // session still live. Same reason the single-delete route wraps it.
+            const result = await withTransaction(() =>
+              sessionService.deleteSession(
+                userId,
+                { id: sessionId },
+                {
+                  db: {
+                    sessions: sessionRepository,
+                    projects: projectRepository,
+                    fabFiles: fabFileRepository,
+                  },
+                }
+              )
             );
 
             // Keep track of the last valid notebook suggestion
@@ -49,8 +57,10 @@ const handler = baseApi()
               { ability: req.ability }
             );
           } catch (error) {
+            // Continue with other sessions even if one fails. `deletedCount` already excludes this
+            // one (the increment is past the await), so the response under-reports rather than
+            // claiming a delete that rolled back.
             console.error(`Failed to delete session ${sessionId}:`, error);
-            // Continue with other sessions even if one fails
           }
         }
 

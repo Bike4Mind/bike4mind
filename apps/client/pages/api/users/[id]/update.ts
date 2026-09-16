@@ -104,8 +104,16 @@ const handler = baseApi().put(
 
     if (currentUser.isAdmin) {
       // Parse with the admin schema -- includes email, isAdmin, tags, credits, etc.
+      const rawBody = (req.body ?? {}) as Record<string, unknown>;
+      // Zod strips unknown keys, so a misnamed admin field (the `adminNote` vs
+      // `creditReason` mix-up in useUpdateUserCredits was exactly this) parses away
+      // and the 200 reads as "fully applied" when a credit grant, tag, or role
+      // change never happened. Report them instead. Mirrors the self-service branch.
+      const adminKeys = new Set(Object.keys(userService.adminUpdateUserSchema.shape));
+      const ignoredFields = Object.keys(rawBody).filter(key => !adminKeys.has(key));
+
       // id comes from the route param; the spread ensures it wins over any id in the body.
-      const body = userService.adminUpdateUserSchema.parse({ ...(req.body as Record<string, unknown>), id: userId });
+      const body = userService.adminUpdateUserSchema.parse({ ...rawBody, id: userId });
 
       // Lockout guard: an explicit demote (isAdmin -> false) must not remove the
       // ONLY remaining Super Admin, and an admin must not remove their OWN Super
@@ -151,9 +159,13 @@ const handler = baseApi().put(
       // Double-check we have the latest state
       const finalUser = await User.findById(userId);
       // Admin branch: symmetric with the admin view of GET /users/[id].
-      return res.json(
-        redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions'], keepAdminOnly: ['userNotes'] })
-      );
+      const safeUser = redactUserSecretsForSelf(finalUser, {
+        keep: ['securityQuestions'],
+        keepAdminOnly: ['userNotes'],
+      });
+      // safeUser is null when the row vanished mid-request; spreading null there would
+      // turn the response into a bare { ignoredFields } that reads as a user document.
+      return res.json(safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser);
     } else {
       // Parse with the self-service schema -- excludes isAdmin, tags, email, etc.
       // secureParameters inside the service strips any keys not in this allowlist.
