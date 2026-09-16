@@ -4,7 +4,7 @@
  * measurement, not a merge gate. See README.md in this directory for how to run it.
  */
 import { describe, expect, it } from 'vitest';
-import { MIN_PASS_RATE, formatEvalReport } from '../harness';
+import { MIN_PASS_RATE, emitEvalReport, formatEvalReport } from '../harness';
 import { GROUNDED_CASES } from './cases';
 import { runGroundedNoInventionEval } from './run';
 
@@ -42,7 +42,7 @@ describe.skipIf(!baseUrl || !model)('grounded no-invention rule (live model)', (
         GROUNDED_CASES
       );
       // The report is the deliverable - a bare pass/fail on a stochastic suite is not actionable.
-      console.log(`\n${model} @ ${samples} samples/case (shipped rule)\n${formatEvalReport(results)}\n`);
+      emitEvalReport(`${model} @ ${samples} samples/case (shipped rule)\n${formatEvalReport(results)}`);
 
       // Reported, not gated: this arm exists to compare against the shipped one above, and a candidate
       // under active development is expected to fail cases the shipped rule already passes. It runs
@@ -54,7 +54,7 @@ describe.skipIf(!baseUrl || !model)('grounded no-invention rule (live model)', (
           GROUNDED_CASES,
           candidateRule
         );
-        console.log(`\n${model} @ ${samples} samples/case (candidate rule)\n${formatEvalReport(candidateResults)}\n`);
+        emitEvalReport(`${model} @ ${samples} samples/case (candidate rule)\n${formatEvalReport(candidateResults)}`);
       }
 
       const regressed = results.filter(r => r.passRate < MIN_PASS_RATE);

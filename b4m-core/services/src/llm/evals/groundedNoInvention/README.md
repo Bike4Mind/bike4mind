@@ -99,6 +99,10 @@ GROUNDED_EVAL_SAMPLES=3 \
   pnpm --filter @bike4mind/services test run.live
 ```
 
+Set `PROMPT_EVAL_REPORT_PATH` to a file and every report is appended to it as well as written to
+stdout. Worth doing for any real sweep: at 30 samples across both arms this is 540 sequential
+completions and most of an hour, and a terminal buffer is a poor place to keep the only copy.
+
 `GROUNDED_EVAL_API_KEY` is optional and sent as a bearer token - a local Ollama needs none, a hosted
 endpoint does. Export it in your own shell (`read -rs` into the variable) rather than writing it into
 a file or a command someone will scroll back to; nothing in the suite or the harness echoes it, but
