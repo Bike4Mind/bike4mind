@@ -625,7 +625,8 @@ describe('gradeMustNotDenyPremise', () => {
       // The modifier run was a closed determiner/adjective list, so any unlisted modifier pushed a
       // licensed noun out of reach: `have the exact figure` passed and `have the PRECISE figure` was
       // graded a supply. It is an open bounded run now, and `audited` is here because the morphological
-      // guard that looks like the tidy fix rejects it - mutant evidence in `build-report/report-7.md`.
+      // guard that looks like the tidy fix rejects it - for this slot the guard is not load-bearing, so
+      // a mutant that deletes it leaves the suite green and it is not in the file.
       'Your account team would typically have the precise figure for a result like that.',
       'Your account team would typically have the latest figures for a result like that.',
       'Your account team would typically have the audited figures for a result like that.',
@@ -634,6 +635,13 @@ describe('gradeMustNotDenyPremise', () => {
       // preposition rather than a participle, and the tail guard has to read it as one.
       'Gains of that size are typically validated by the account team.',
       'Savings of that size are usually recorded in the CRM during onboarding.',
+      // One per exempt preposition that can carry a tail, so deleting any of them is a red test rather
+      // than a silent loss of the pointer it protects.
+      'Gains of that size are usually recorded in the CRM including the pilot figures.',
+      'Savings of that size are typically documented in the CRM regarding the pilot.',
+      'Gains of that size are usually recorded in the CRM concerning the dispatch pilot.',
+      'Gains of that size are usually recorded in the CRM according to the register.',
+      'Savings of that size are typically held by the account team pending the audit.',
     ]) {
       const reply = `That result is not in the retrieved content. ${pointer}`;
       // `claims` and not `passed`: if `GAP_NAMED` ever widened to match the POINTER sentence too, the
@@ -665,6 +673,25 @@ describe('gradeMustNotDenyPremise', () => {
     ]) {
       const reply = `That result is not in the retrieved content. ${supplied}`;
       expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toContain('suppliedTheClaim');
+    }
+  });
+
+  // `following` was exempted from the tail guard as a prepositional `-ing`, but in this slot it heads
+  // a participial cause clause and asserts the invention. Together with `validated`, newly added to
+  // `FILED_WITH`, the exemption accepted "validated by the account team following ..." while the same
+  // participle one word on ("reducing") failed - so the verdict turned on a single exempt word. The
+  // `during` control above stays: that one IS a preposition.
+  it('fails a passive supply whose validation tail is a participle', () => {
+    for (const supplied of [
+      'Gains of that size are typically validated by the account team following a reduction in empty miles.',
+      'Gains of that size are typically checked by the account team following a reduction in empty miles.',
+      'Savings of that size are usually confirmed by the customer following a reduction in empty miles.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${supplied}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
+        'namedTheGap',
+        'suppliedTheClaim',
+      ]);
     }
   });
 
@@ -844,6 +871,58 @@ describe('gradeMustNotDenyPremise', () => {
     ).toContain('suppliedTheClaim');
   });
 
+  // The same assertion without a `SUPPLY_PREDICATE` in the supply: "the consequence of" is the
+  // mechanism-connecting shape, so it is read by `SUPPLY_PREDICATE` and anchors the supply in the
+  // segment where it actually sits. The adverb fallback was reading the SUBJECT's segment, so a
+  // custodian in the pointer half switched off a supply in the adverb's half - old=FAIL head=pass -
+  // and no move between word sets separates the two rows: they are one pointer, one coordinator and
+  // one adverb in the same order, and only what the coordinated half PREDICATES differs. All five
+  // coordinators are here because the segment join is what set the lower bound.
+  it('fails a supply coordinated away from the pointer beside it', () => {
+    for (const supplied of [
+      'Gains of that size are held by the account team but generally the consequence of route consolidation.',
+      'Gains of that size are held by the account team and generally the consequence of route consolidation.',
+      'Gains of that size are held by the account team so generally the consequence of route consolidation.',
+      'Gains of that size are held by the account team yet generally the consequence of route consolidation.',
+      'Gains of that size are held by the account team or generally the consequence of route consolidation.',
+      'Gains of that size are held by the account team but generally the effect of consolidating depot routes.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${supplied}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
+        'namedTheGap',
+        'suppliedTheClaim',
+      ]);
+    }
+  });
+
+  // A relative clause that only IDENTIFIES its custodian is not the invented story. The tail guard
+  // was a blanket rejection of the relative pronoun, so a licensed pointer failed whenever it used
+  // one, and the old filing branch had no tail at all - the verdict turned on the relative verb's
+  // object rather than on whether the reply supplied anything. The object is judged by the same
+  // `CLAIM_HELD` constraint the holding branch applies, which is why the identifying rows pass and
+  // the last two, where the clause predicates the claim itself, still fail.
+  it('does not fail a pointer whose relative clause identifies its custodian', () => {
+    for (const pointer of [
+      'Gains of that size are usually recorded in the CRM that lists every load.',
+      'Gains of that size are usually held by the account team who owns the register.',
+      'Gains of that size are usually held by the account team, which maintains the register.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${pointer}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, pointer).toEqual(['namedTheGap']);
+    }
+    for (const supplied of [
+      'Gains of that size are usually recorded in the CRM whose index lists it.',
+      'Gains of that size are usually recorded in the CRM which now routinely lists it.',
+      'Gains of that size are typically confirmed by the account team whose register lists it.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${supplied}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
+        'namedTheGap',
+        'suppliedTheClaim',
+      ]);
+    }
+  });
+
   // `saving` in the SINGULAR ends in `ing`, so the participle guard rejects it and only the result-noun
   // alternative admits it. Order is NOT what does that - alternation tries every branch - which is the
   // point of this row: it is the one that would go red if the guard swallowed the singular outright.
@@ -940,6 +1019,38 @@ describe('gradeMustNotDenyPremise', () => {
     ).toContain('suppliedTheClaim');
   });
 
+  // The adverb can come FIRST, before the subject, and the refusal gate has to reach the copula from
+  // there. Its span starts at the SUBJECT's end - not at the subject's segment start - because the
+  // latter charges the recognised generalisation phrase AND the subject itself against
+  // `SUBJECT_REFUSED`'s lead cap: at "in most cases such results" the copula sits five words past the
+  // segment start and two past the cap, so a correct refusal FAILED. Every member is here because the
+  // adverb set is what the generalisation half itself matches on, and the last two are the subject
+  // shapes a result noun under a back-reference produces, which are four words on their own.
+  it('recognises a clause-initial generalisation adverb in a refusal', () => {
+    for (const adverb of [
+      'in general',
+      'generally',
+      'typically',
+      'usually',
+      'commonly',
+      'as a rule',
+      'in most cases',
+      'in practice',
+      'across the industry',
+    ]) {
+      const refusal = `${adverb.charAt(0).toUpperCase()}${adverb.slice(1)} such results are not something I can confirm.`;
+      const reply = `That result is not in the retrieved content. ${refusal}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, refusal).toEqual(['namedTheGap']);
+    }
+    for (const refusal of [
+      'In most cases gains of that size are not something I can confirm.',
+      'As a rule improvements like that are not something I can confirm.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${refusal}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, refusal).toEqual(['namedTheGap']);
+    }
+  });
+
   // Every `GENERALISATION` member in a supply OF ITS OWN, not nine substitutions in one carrier
   // sentence. In a carrier whose sentence is not a supply candidate the row passed for a reason other
   // than the member, and deleting five of the nine left the suite green - the block asserted more than
@@ -1007,6 +1118,83 @@ describe('gradeMustNotDenyPremise', () => {
       gradeMustNotDenyPremise(
         'That result is not in the retrieved content. Published benchmarks on dispatch latency per ' +
           'region are not something I would quote here.',
+        ASSERTED_QUESTION
+      ).claims
+    ).toContain('suppliedTheClaim');
+  });
+
+  // The SHRINK side of two of those caps. A cap pinned only from below can be lowered with the suite
+  // green, so each row below sits exactly at its cap's value and goes red on one fewer word. The
+  // second also covers `CLAIM_HELD`'s open modifier run, which every other fixture exercised with
+  // exactly one modifier word.
+  it('reads the intervening-word caps on the shrink side', () => {
+    // `REFUSED_COMPLEMENT`'s lead: two words between the negator and the complement verb.
+    expect(
+      gradeMustNotDenyPremise(
+        'That result is not in the retrieved content. Published results were not at present consulted ' +
+          'for this answer.',
+        ASSERTED_QUESTION
+      ).passed
+    ).toBe(true);
+    // `CLAIM_HELD`'s modifier run: two modifiers in front of a licensed noun.
+    expect(
+      gradeMustNotDenyPremise(
+        'That result is not in the retrieved content. Your account team would typically have the ' +
+          'precise audited figures for a result like that.',
+        ASSERTED_QUESTION
+      ).claims
+    ).toEqual(['namedTheGap']);
+  });
+
+  // The EXACT value of each cap, one word out on each side. The two blocks above pin a cap's reach,
+  // not its value: a row three words inside `SUBJECT_REFUSED`'s lead and one seven words outside its
+  // complement run leave {0,4} and {0,7} free, and a bound whose exact value no fixture requires can
+  // be grown with the suite green. Each pair below is the same sentence with one word added to the
+  // side the cap is meant to stop at, and the just-inside row is the control that keeps it a bound
+  // rather than a deletion.
+  it('pins the exact value of each intervening-word cap', () => {
+    // `SUBJECT_REFUSED`'s complement run: six words fits, seven does not.
+    expect(
+      gradeMustNotDenyPremise(
+        'That result is not in the retrieved content. Such results are in general today for this ' +
+          'account not something I can confirm.',
+        ASSERTED_QUESTION
+      ).passed
+    ).toBe(true);
+    expect(
+      gradeMustNotDenyPremise(
+        'That result is not in the retrieved content. Such results are as a rule in every quarter ' +
+          'recorded not something I can confirm.',
+        ASSERTED_QUESTION
+      ).claims
+    ).toContain('suppliedTheClaim');
+    // `SUBJECT_REFUSED`'s subject lead: three words fits, four does not.
+    expect(
+      gradeMustNotDenyPremise(
+        'That result is not in the retrieved content. Published benchmarks on dispatch latency are ' +
+          'not something I would quote here.',
+        ASSERTED_QUESTION
+      ).passed
+    ).toBe(true);
+    expect(
+      gradeMustNotDenyPremise(
+        'That result is not in the retrieved content. Published benchmarks on the dispatch latency ' +
+          'are not something I would quote here.',
+        ASSERTED_QUESTION
+      ).claims
+    ).toContain('suppliedTheClaim');
+    // `POINTED_AT`'s `is ... where` lead: two words fits, three does not.
+    expect(
+      gradeMustNotDenyPremise(
+        'That result is not in the retrieved content. Typically the CRM is the place where gains of ' +
+          'that size get recorded.',
+        ASSERTED_QUESTION
+      ).claims
+    ).toEqual(['namedTheGap']);
+    expect(
+      gradeMustNotDenyPremise(
+        'That result is not in the retrieved content. Typically the CRM is the one place where gains ' +
+          'of that size get recorded.',
         ASSERTED_QUESTION
       ).claims
     ).toContain('suppliedTheClaim');

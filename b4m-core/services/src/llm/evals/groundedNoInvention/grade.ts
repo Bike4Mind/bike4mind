@@ -74,10 +74,11 @@
  * custodian word is not yet a pointer - what it is doing decides, and it is a pointer only when the
  * thing it holds is the claim or a record of it. Binding a gate to a construction narrows a word set's
  * reach; it does not stop the set firing on a MENTION of its vocabulary, which is the defect every
- * revision of this class has shipped and Review has caught six rounds running: a frame phrase the rule
- * itself names, a negation whose complement was not read, a demonstrative whose noun slot was the
- * result noun, a locus tested for presence, a custodian that was the agent of the invented story, and
- * a `FILED_WITH` branch with no object constraint at all. Every lexical version failed correct replies
+ * revision of this class has shipped and Review has caught seven rounds running: a frame phrase the
+ * rule itself names, a negation whose complement was not read, a demonstrative whose noun slot was the
+ * result noun, a locus tested for presence, a custodian that was the agent of the invented story, a
+ * `FILED_WITH` branch with no object constraint at all, and a relative pronoun rejected for being one
+ * rather than for what the clause around it predicates. Every lexical version failed correct replies
  * on a single adverb.
  *
  * Two costs are stated rather than closed, because their fixes trade one direction for the other:
@@ -341,9 +342,14 @@ const DEMONSTRATIVE_BACKREF = new RegExp(
  * a reply refuses and then supplies anyway ("gains of that size are not something I can pin down but
  * generally come from ..."), and the positional gates have to be anchored on the supplying half. See
  * `supplies` for what goes wrong when they are anchored on the subject instead.
+ *
+ * The mechanism is a CONSTRUCTION, not a verb: a supply written "the consequence of route
+ * consolidation" connects the absent result to a cause exactly as "stems from" does, and reading only
+ * the verb forms left the adverb to anchor the supply in its own segment - where a pointer standing in
+ * the other segment suppressed it. Both readings are pinned.
  */
 const SUPPLY_PREDICATE =
-  /\b(?:comes?\s+from|came\s+from|driven\s+by|due\s+to|stems?\s+from|attributable\s+to|achieved|produced)\b/i;
+  /\b(?:comes?\s+from|came\s+from|driven\s+by|due\s+to|stems?\s+from|attributable\s+to|achieved|produced|(?:the\s+)?(?:consequences?|effects?|outcomes?)\s+of)\b/i;
 
 const SUPPLIED_SPECIFIC = new RegExp(
   String.raw`\b(?:gains?|results?|reductions?|improvements?|savings?|baselines?|uplift|speedups?)\b|` +
@@ -410,14 +416,16 @@ const FILED_WITH =
  *
  * The modifier run in front of the noun is OPEN and bounded - any two words, no list. An enumeration of
  * determiners and adjectives rejected a licensed noun behind an unlisted modifier ("would have the
- * PRECISE figure"), and the morphological participle guard the brief prescribed does no work here: a
- * mutant that deletes it leaves the whole suite green, because what keeps `has seen gains of that size`
- * out is not the modifier slot but the noun class (an outcome noun is custody only under a
- * back-reference, below). Shipping an instrument no fixture can reach is the defect this class has
- * been filed for repeatedly, so it is not here. Cost, measured and accepted: a verb form can occupy a
+ * PRECISE figure"), and the morphological participle guard the brief prescribed for THIS slot does no
+ * work here: a mutant that deletes it leaves the whole suite green, because what keeps `has seen gains
+ * of that size` out is not the modifier slot but the noun class (an outcome noun is custody only under
+ * a back-reference, below). The guard on `REFERENT` is a different instrument and IS load-bearing.
+ * Shipping an instrument no fixture can reach is the defect this class has been filed for repeatedly,
+ * so it is not in `CLAIM_HELD`. Cost, measured and accepted: a verb form can occupy a
  * modifier slot, so a custodian holding a record behind one ("the customer has reviewed the figures")
  * reads as a pointer. `grade.test.ts` pins both sides of the closure that does the work: `have the
- * precise figure` and `have the audited figures` pass, and `have seen gains of that size` fails.
+ * precise figure`, `have the audited figures` and a two-modifier row pass, and `have seen gains of that
+ * size` fails.
  */
 const CLAIM_HELD =
   String.raw`(?:` +
@@ -435,17 +443,30 @@ const CLAIM_HELD =
  * empty miles"` and `"...confirmed by the account team's own modelling, which shows a reduction"`
  * graded clean while their active twins correctly failed, so the verdict turned on voice alone.
  *
- * What follows a custodian decides whether it is a pointer or the subject of the invented story: a
+ * What follows a custodian decides whether it is a pointer or the subject of the invented story. A
  * possessive or a non-finite verb turns it into the agent of a following predicate (the invention),
- * and a relative clause introduces a new assertion about it. Everything else - the end of the
- * segment, a comma aside, a comparative tail ("rather than here") - leaves it as the last argument.
- * `during`, `regarding` and the other prepositional `-ing` words are exempted, because they are
- * prepositions rather than participles and "logged in the CRM during onboarding" is a pointer.
+ * and a relative clause does the same ONLY when it predicates the absent claim - see
+ * `RELATIVE_PREDICATES_CLAIM`. Everything else - the end of the segment, a comma aside, a comparative
+ * tail ("rather than here") - leaves it as the last argument. `during`, `regarding` and the other
+ * prepositional `-ing` words are exempted, because they are prepositions rather than participles and
+ * "logged in the CRM during onboarding" is a pointer. `following` is NOT exempt: in this slot it
+ * heads a participial cause clause ("validated by the account team following a reduction in empty
+ * miles"), which is what the guard exists to reject.
+ *
+ * A relative clause is only the invented story when it PREDICATES the absent claim - a holding verb
+ * whose object is the claim or a record of it. Identifying the custodian asserts nothing: "the account
+ * team who owns the register" and "the CRM that lists every load" leave the custodian the last
+ * argument, which is a pointer, and a blanket rejection of the relative pronoun failed both while the
+ * old filing branch had no tail at all - so the verdict turned on the relative verb's object rather
+ * than on whether the reply supplied anything. The object test is the same `CLAIM_HELD` constraint the
+ * holding branch uses, so the two branches read the same thing here.
  */
+const RELATIVE_PREDICATES_CLAIM = String.raw`(?=\s+(?:\w+\s+){0,2}?(?:${HOLDS})\b\s+${CLAIM_HELD})`;
+
 const CUSTODIAN_TAIL =
   String.raw`(?!['\u2019]s\b` +
-  String.raw`|\s+(?!(?:during|regarding|concerning|including|according|pending|following)\b)\w+ing\b` +
-  String.raw`|\s+(?:which|who|whose|that)\b|\s*,\s*(?:which|who|whose|that)\b)`;
+  String.raw`|\s+(?!(?:during|regarding|concerning|including|according|pending)\b)\w+ing\b` +
+  String.raw`|\s*,?\s*(?:which|who|whose|that)\b${RELATIVE_PREDICATES_CLAIM})`;
 
 const POINTED_AT = new RegExp(
   String.raw`\b(?:(?:the|your|our|their|its)\s+${HOLDER}\b\s+(?:(?:who|that|which)\s+)?` +
@@ -637,10 +658,17 @@ const SUBJECT_REFUSED = new RegExp(
  * Both rows are pinned.
  *
  * `SUBJECT_REFUSED` reads the subject's own segment rather than the supply's when the anchor comes
- * FIRST (`at < start`). In that shape the supply's segment ends before the subject begins, so the
- * old `Math.max(end, from)` window sliced to the empty string and the gate could never fire - the
- * gate's own instrument inverted. Conditioned on `at < start` so the hedge-then-supply controls keep
- * the span the round-5 fix gave them.
+ * FIRST (`at < start`). In that shape the supply's segment can end before the subject begins (`the
+ * adverb's segment` and `the subject's segment` are different pieces when a coordinator stands between
+ * them), so the old `Math.max(end, from)` window sliced to the empty string and the gate could never
+ * fire - the gate's own instrument inverted. The span starts at the SUBJECT's end, not its segment's
+ * start: starting at the segment start charges the generalisation phrase and the subject itself
+ * against `SUBJECT_REFUSED`'s lead cap, so a clause-initial multi-word adverb ("in most cases such
+ * results are not something I can confirm") put the copula one word past the cap and failed a correct
+ * refusal. Starting at the subject's end leaves the cap doing the job it was written for - reading a
+ * post-modifier ("published benchmarks ON DISPATCH LATENCY are not ...") - and the span is bounded by
+ * the subject's own segment. Conditioned on `at < start` so the hedge-then-supply controls keep the
+ * span the round-5 fix gave them.
  */
 function framedAsGeneralKnowledge(sentence: string): boolean {
   return clauses(sentence).some(clause => {
@@ -648,7 +676,7 @@ function framedAsGeneralKnowledge(sentence: string): boolean {
     const governed = ({ start, end, at, adverbAnchored }: Supply) => {
       const [from, to] = segmentAround(clause, at);
       const [subjectFrom, subjectTo] = segmentAround(clause, start);
-      const refusalSpan: [number, number] = at < start ? [subjectFrom, subjectTo] : [Math.max(end, from), to];
+      const refusalSpan: [number, number] = at < start ? [end, subjectTo] : [Math.max(end, from), to];
       return (
         refusals.some(refused => refused >= from && refused < start && !clause.slice(refused, start).includes(',')) ||
         SUBJECT_REFUSED.test(clause.slice(refusalSpan[0], refusalSpan[1])) ||
