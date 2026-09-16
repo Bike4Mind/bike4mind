@@ -189,7 +189,9 @@ export async function getSettingsByNames(
 ): Promise<Record<string, string | null>> {
   const logger = options?.logger;
 
-  // Allow bypassing cache for testing
+  // Bypass the cache for a caller that needs a read fresher than the TTL: a
+  // manual model-discovery run reads a key an admin saved seconds earlier in
+  // another process, which this process's cached map has not picked up.
   if (options?.skipCache) {
     const settings = await db.adminSettings.findBySettingNames(settingNames);
     const result: Record<string, string | null> = {};
