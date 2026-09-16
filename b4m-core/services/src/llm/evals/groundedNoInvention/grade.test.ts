@@ -1146,15 +1146,13 @@ describe('gradeMustNotDenyPremise', () => {
     }
   });
 
-  // Finding 1 of Review 13. The marker above hands a bare-object reduced relative to the
-  // second-noun-phrase branch whose rescue was a membership test (`PREDICATES_PHRASE`), so when the
-  // MATRIX predicate was a verb that list had never heard of the relative was read as a new matrix
-  // subject, `Supply.at` moved into the phrase's coordinated segment and a correct refusal FAILed -
-  // one token from the pinned must-PASS controls above. The rescue is structural now: once a participle
-  // has taken its object inside the relative, a content word standing directly in that slot is the
-  // matrix predicate whatever form it takes. One row per unlisted-predicate family is pinned, with the
-  // listed-verb minimal pairs as the boundary the membership test used to draw, and the must-FAIL twin
-  // (same bare object, same second noun phrase, no further predicate) re-asserted below it.
+  // The marker above hands a bare-object reduced relative to the second-noun-phrase branch whose
+  // rescue was a membership test (`PREDICATES_PHRASE`), so when the MATRIX predicate was a verb that
+  // list had never heard of the relative was read as a new matrix subject, `Supply.at` moved into the
+  // phrase's coordinated segment and a correct refusal FAILed - one token from the pinned must-PASS
+  // controls above. The rescue reads the predicate STRUCTURALLY instead: a verb form standing in the
+  // participle's own slot. One row per unlisted-predicate family is pinned, with the listed-verb
+  // minimal pairs as the boundary the membership test used to draw.
   it('does not read a bare-object reduced relative with an unlisted matrix predicate as a supply', () => {
     for (const licensed of [
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising eludes us.',
@@ -1172,14 +1170,60 @@ describe('gradeMustNotDenyPremise', () => {
       const reply = `That result is not in the retrieved content. ${licensed}`;
       expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, licensed).toEqual(['namedTheGap']);
     }
-    for (const supplied of [
+  });
+
+  // The relative verb's own modifier belongs to the relative, NOT to the matrix predicate. This is the
+  // boundary the structural tell's first revision crossed: it fired on any non-function content word
+  // after the participle, so the relative's adverb was read as the matrix predicate, `Supply.at` fell
+  // back to the generalisation adverb in the pointer's own segment and a genuine supply one modifier
+  // from the committed row above graded clean. The tell is morphological now (`isInflectedVerb`): a
+  // token with no verb inflection cannot be a predicate, so the modifier run stays with the relative.
+  // One row per post-participle modifier class - the `-ly` adverb, the bare object, an adverb followed
+  // by a prepositional phrase - with the two committed must-FAIL twins re-asserted by shape.
+  it('does not read the relative verb own modifier as the matrix predicate', () => {
+    const relative =
       'Gains of that size are usually recorded in the CRM but the outcome of consolidating depot routes ' +
-        'the customer is rationalising across the region.',
-      'Gains of that size are usually recorded in the CRM but the outcome of consolidating depot routes ' +
-        'the customer is rationalising across the region and the fleet is growing.',
+      'the customer is rationalising ';
+    for (const modifier of [
+      'daily.',
+      'heavily.',
+      'regularly.',
+      'weekly.',
+      'carefully.',
+      'intensively.',
+      // The bare object of the relative's own verb, the second modifier class.
+      'everything.',
+      // An adverb followed by a prepositional phrase: a longer run, still the relative's.
+      'daily across the region.',
+      // The committed must-FAIL twins, whole: the boundary is the modifier's CLASS, not its length.
+      'across the region.',
+      'across the region and the fleet is growing.',
     ]) {
-      const reply = `That result is not in the retrieved content. ${supplied}`;
-      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
+      const reply = `That result is not in the retrieved content. ${relative}${modifier}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, modifier).toEqual([
+        'namedTheGap',
+        'suppliedTheClaim',
+      ]);
+    }
+  });
+
+  // The NAMED COST of reading the matrix predicate by ADJACENCY. A prepositional modifier between the
+  // participle and the predicate puts the predicate one token past the participle's own slot, so the
+  // tell cannot reach it and the honest refusal is graded as a supply. Closing it was measured and
+  // rejected: the scan can only recognise a verb morphologically, and a plural noun in the modifier run
+  // ("depot routes") is indistinguishable from the `-s` inflection, so the scan read the relative's own
+  // PP head as the matrix predicate and graded a supply one noun from the committed row clean. These
+  // rows are pinned at their CURRENT (wrong) verdict so the cost cannot change silently - changing
+  // these expectations is what closing it looks like. `finiteVerbFollows`' docblock carries the
+  // measurement and the refusal to trade.
+  it('grades an honest refusal whose predicate sits behind a prepositional modifier as a supply (known cost)', () => {
+    for (const pointer of [
+      'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising across the region eludes us.',
+      'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising in the eastern region escapes me.',
+      'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising across the fleet defies explanation.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${pointer}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, pointer).toEqual([
         'namedTheGap',
         'suppliedTheClaim',
       ]);
