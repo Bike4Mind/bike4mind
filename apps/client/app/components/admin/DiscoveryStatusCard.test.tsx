@@ -29,6 +29,7 @@ const CRON_RUN = {
     { name: 'anthropic', ok: true, durationMs: 140 },
     { name: 'models.dev', ok: false, durationMs: 900, error: 'ETIMEDOUT' },
   ],
+  skippedSources: [] as Array<{ name: string; reason: string }>,
   joinCoverage: [{ aggregator: 'models.dev', matched: 84, total: 113 }],
   changes: { added: 2, promoted: 1, deprecated: 0, repriced: 0, flagged: 0 },
 };
@@ -145,6 +146,92 @@ describe('DiscoveryStatusCard', () => {
     expect(screen.getByTestId('discovery-status-changes')).toHaveTextContent('2 added, 1 promoted');
     expect(screen.queryByTestId('discovery-status-disabled-chip')).not.toBeInTheDocument();
     expect(mockGet).toHaveBeenCalledWith('/api/admin/model-discovery');
+  });
+
+  it('names the skipped sources without folding them into the attempt tally', async () => {
+    mockGet.mockResolvedValue({
+      data: statusWith(runLike({ skippedSources: [{ name: 'vertex', reason: 'not-configured' }] })),
+    });
+    renderCard();
+
+    // 3 attempted, 1 of them failed: the skip must not move either number, or a
+    // skip reads as a failure.
+    expect(await screen.findByTestId('discovery-status-sources')).toHaveTextContent('2/3 sources ok');
+    expect(screen.getByTestId('discovery-status-skipped')).toHaveTextContent('1 skipped: vertex');
+  });
+
+  it('says a run attempted nothing rather than reporting 0/0 when every source was skipped', async () => {
+    mockGet.mockResolvedValue({
+      data: statusWith(
+        runLike({
+          // A zero-attempt run is 'partial': it refreshed nothing, so it does
+          // not advance lastSuccessfulRun (runStatus in runModelDiscovery).
+          status: 'partial',
+          sources: [],
+          skippedSources: [
+            { name: 'openai', reason: 'egress-disabled' },
+            { name: 'anthropic', reason: 'egress-disabled' },
+          ],
+        })
+      ),
+    });
+    renderCard();
+
+    expect(await screen.findByTestId('discovery-status-sources')).toHaveTextContent('no sources attempted');
+    expect(screen.getByTestId('discovery-status-skipped')).toHaveTextContent('2 skipped: openai, anthropic');
+  });
+
+  it('shows no skipped chip when the run skipped nothing', async () => {
+    renderCard();
+
+    await screen.findByTestId('discovery-status-sources');
+    expect(screen.queryByTestId('discovery-status-skipped')).not.toBeInTheDocument();
+  });
+
+  it('counts every attempted source as ok when none of them failed', async () => {
+    mockGet.mockResolvedValue({
+      data: statusWith(
+        runLike({
+          status: 'ok',
+          sources: [
+            { name: 'openai', ok: true, durationMs: 120 },
+            { name: 'anthropic', ok: true, durationMs: 140 },
+          ],
+        })
+      ),
+    });
+    renderCard();
+
+    expect(await screen.findByTestId('discovery-status-sources')).toHaveTextContent('2/2 sources ok');
+    expect(screen.queryByTestId('discovery-status-skipped')).not.toBeInTheDocument();
+  });
+
+  it('reports zero ok rather than no attempt when every attempted source failed', async () => {
+    mockGet.mockResolvedValue({
+      data: statusWith(
+        runLike({
+          status: 'failed',
+          sources: [
+            { name: 'openai', ok: false, durationMs: 120, error: 'HTTP 500' },
+            { name: 'anthropic', ok: false, durationMs: 140, error: 'ETIMEDOUT' },
+          ],
+        })
+      ),
+    });
+    renderCard();
+
+    // 0/2 is a fan-out that ran and failed; 'no sources attempted' is one that
+    // never ran at all, and the card must not say the second for the first.
+    expect(await screen.findByTestId('discovery-status-sources')).toHaveTextContent('0/2 sources ok');
+    expect(screen.queryByTestId('discovery-status-skipped')).not.toBeInTheDocument();
+  });
+
+  it('says nothing was attempted when a run had no source to attempt or to skip', async () => {
+    mockGet.mockResolvedValue({ data: statusWith(runLike({ status: 'partial', sources: [], skippedSources: [] })) });
+    renderCard();
+
+    expect(await screen.findByTestId('discovery-status-sources')).toHaveTextContent('no sources attempted');
+    expect(screen.queryByTestId('discovery-status-skipped')).not.toBeInTheDocument();
   });
 
   it('names the failed source and its error on demand', async () => {

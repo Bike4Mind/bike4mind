@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Box, Button, Chip, CircularProgress, Link, Sheet, Stack, Tooltip, Typography } from '@mui/joy';
 import type { ColorPaletteProp } from '@mui/joy/styles';
+import type { IDiscoverySkippedSource } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { DiscoveryRunDetailModal } from './DiscoveryRunDetailModal';
 
@@ -39,6 +40,11 @@ interface DiscoveryRunListItem {
 
 interface DiscoveryRunSummary extends DiscoveryRunListItem {
   sources: DiscoverySource[];
+  /**
+   * Configured sources the run never attempted. The route always sends an array,
+   * so an absent one only reaches here from a payload cached before the field.
+   */
+  skippedSources?: IDiscoverySkippedSource[];
   joinCoverage: DiscoveryJoinCoverage[];
 }
 
@@ -206,6 +212,7 @@ export const DiscoveryStatusCard: React.FC = () => {
   const lastRun = status?.lastRun ?? null;
   const runs = status?.runs ?? [];
   const failedSources = lastRun?.sources.filter(source => !source.ok) ?? [];
+  const skippedSources = lastRun?.skippedSources ?? [];
   const discoveryDisabled = status?.enabled === false;
   // One in-flight window covers dispatch plus the poll that follows it, so a
   // second click cannot start a second poll loop racing the first.
@@ -287,9 +294,18 @@ export const DiscoveryStatusCard: React.FC = () => {
             </Typography>
           </Stack>
           <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" sx={{ mt: 0.5 }}>
+            {/* The tally stays over attempts so it never conflates a skip with a
+                failure; a run with no attempt at all says so instead of "0/0". */}
             <Typography level="body-xs" data-testid="discovery-status-sources">
-              {lastRun.sources.length - failedSources.length}/{lastRun.sources.length} sources ok
+              {lastRun.sources.length > 0
+                ? `${lastRun.sources.length - failedSources.length}/${lastRun.sources.length} sources ok`
+                : 'no sources attempted'}
             </Typography>
+            {skippedSources.length > 0 && (
+              <Chip size="sm" variant="soft" color="neutral" data-testid="discovery-status-skipped">
+                {skippedSources.length} skipped: {skippedSources.map(skipped => skipped.name).join(', ')}
+              </Chip>
+            )}
             {failedSources.length > 0 && (
               <Link
                 level="body-xs"
