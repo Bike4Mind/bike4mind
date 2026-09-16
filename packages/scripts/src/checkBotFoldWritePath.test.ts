@@ -1753,9 +1753,9 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
 
     // And the file has to be YAML the runner can LOAD, which one spelling in this job does not
     // survive. A plain scalar may not begin with a YAML indicator, so `if: !cancelled() && ...`
-    // written on ONE line is not an expression at all - it is the tag `!cancelled()`, and the
-    // workflow fails to load with "unknown tag". Every other negation gate here is a block
-    // scalar, which is what kept the class out until a one-line edit was made into one. There is
+    // written on ONE line is not an expression at all - it is the tag `!cancelled()` (js-yaml:
+    // `unknown tag !<!cancelled()>`). Every other negation gate here is a block scalar, which is
+    // what kept the class out until a one-line edit was made into one. There is
     // no YAML parser resolvable from this package (the reason the docblock states for reading
     // these structures as text), so this is the narrow rule rather than the general one: a
     // mapping VALUE, on the same line as its key, may not open with an indicator.
@@ -3069,8 +3069,10 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       [...new Set(ghInvocations(src).flatMap(words => words.slice(1).filter(word => word.startsWith('-'))))].sort();
     expect(ghSubcommands(src)).toEqual(['api', 'pr']);
     expect(ghFlags(src)).toEqual(['--body', '--jq', '--json', '--paginate', '--remove-label', '--repo']);
-    // POSITIVE CONTROLS, one per reach. The first two were live at 31/31 against a filter that
-    // read flag SPELLINGS; the last two are the axes that filter could not see at all.
+    // POSITIVE CONTROLS, one per reach. The first two are the flag spellings the filter this
+    // replaces DID enumerate - kept so the replacement is not weaker than what it replaced. The
+    // last two are the axes that filter could not see at all: `--output` is a file write on a READ
+    // verb, and `extension` is a subcommand rather than a flag.
     for (const [injected, subcommand, flag] of [
       ['gh api --method PUT repos/$REPO/contents/x -f content=y', 'api', '--method'],
       ['gh api -XPUT repos/$REPO/contents/x -fcontent=y', 'api', '-XPUT'],
