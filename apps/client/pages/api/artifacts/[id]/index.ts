@@ -70,7 +70,10 @@ const handler = baseApi()
         } as any, // Temporary type assertion to bypass strict typing
         {
           db: {
-            artifacts: artifactRepository as any,            artifactContents: artifactContentRepository as any,            artifactVersions: artifactVersionRepository as any,          },
+            artifacts: artifactRepository as any,
+            artifactContents: artifactContentRepository as any,
+            artifactVersions: artifactVersionRepository as any,
+          },
         }
       );
 
@@ -137,7 +140,10 @@ const handler = baseApi()
         { id: artifactId, ...validatedData },
         {
           db: {
-            artifacts: artifactRepository as any,            artifactContents: artifactContentRepository as any,            artifactVersions: artifactVersionRepository as any,          },
+            artifacts: artifactRepository as any,
+            artifactContents: artifactContentRepository as any,
+            artifactVersions: artifactVersionRepository as any,
+          },
         }
       );
 
@@ -163,9 +169,11 @@ const handler = baseApi()
 
       const result = await artifactService.delete(
         userId,
-        { id: artifactId, hardDelete: false },        {
+        { id: artifactId, hardDelete: false },
+        {
           db: {
-            artifacts: artifactRepository as any,          },
+            artifacts: artifactRepository as any,
+          },
         }
       );
 

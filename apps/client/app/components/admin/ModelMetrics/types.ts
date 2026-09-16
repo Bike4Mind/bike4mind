@@ -22,7 +22,10 @@ export interface ModelMetric {
     totalResponseTime?: number;
     contextRetrievalTime?: number;
     modelInferenceTime?: number;
+    /** Unset when the turn never rendered anything visible. */
     firstTokenTime?: number;
+    /** First chunk of any kind, hidden reasoning included. */
+    firstChunkTime?: number;
     clientFirstTokenTime?: number;
     processPickupTime?: number;
     streamingPerformance?: {
@@ -44,18 +47,13 @@ export interface ModelMetric {
 }
 
 export type SortField =
-  | 'timestamp'
-  | 'model'
-  | 'inputTokens'
-  | 'outputTokens'
-  | 'creditsUsed'
-  | 'responseTime'
-  | 'contextTime'
-  | 'status';
+  'timestamp' | 'model' | 'inputTokens' | 'outputTokens' | 'creditsUsed' | 'responseTime' | 'contextTime' | 'status';
 
 export type SortDirection = 'asc' | 'desc';
 
 export interface ChartData {
+  /** Bucket width the date-keyed series were built at; drives the axis and heading wording. */
+  granularity: 'hourly' | 'daily';
   modelUsageData: Array<{
     id: string;
     label: string;

@@ -1,4 +1,4 @@
-import { SupportedEmbeddingModelSchema } from '@bike4mind/common';
+import { FabFileSourceType, SupportedEmbeddingModelSchema } from '@bike4mind/common';
 import { getVector } from '@server/managers/fabFileManager';
 import {
   adminSettingsRepository,
@@ -21,7 +21,7 @@ import { z } from 'zod';
 import {
   ChunkSchema,
   EmbeddingFactory,
-  resolveEmbeddingConfig,
+  resolveEmbeddingWithKeylessFallback,
   isEmbeddingAuthError,
   getAtlasIndexForModel,
   FabFileChunkSearchIndex,
@@ -37,9 +37,10 @@ import {
 import { getEmbeddingModelCost } from '@bike4mind/common';
 import {
   finalizeBatchIfComplete,
-  isBatchComplete,
+  completedBatchStatus,
   deferFailureIfRetryable,
 } from '@server/queueHandlers/dataLakeBatchProgress';
+import { notifySlackIndexingComplete } from '@server/queueHandlers/notifySlackIndexingComplete';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 import { dispatchWithLogger, MARK_PAUSED_MAX_ATTEMPTS, MARK_PAUSED_RETRY_DELAY_MS } from '@server/queueHandlers/utils';
 import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
@@ -65,15 +66,15 @@ const VectorizePayload = z.object({
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
   const payload = VectorizePayload.parse(JSON.parse(body));
-  const { userId, fabFileId, embeddingModel } = payload;
+  const { userId, fabFileId, embeddingModel: requestedEmbeddingModel } = payload;
 
   // Support both single chunk (backward compat) and batch processing
   const isBatch = payload.chunkIds && payload.chunkIds.length > 0;
   const chunkIds = isBatch ? payload.chunkIds! : [payload.chunkId!];
 
   // Runtime validation for embedding model
-  if (!embeddingModel || typeof embeddingModel !== 'string') {
-    throw new Error(`Invalid embedding model: ${embeddingModel}`);
+  if (!requestedEmbeddingModel || typeof requestedEmbeddingModel !== 'string') {
+    throw new Error(`Invalid embedding model: ${requestedEmbeddingModel}`);
   }
 
   logger.updateMetadata({
@@ -117,9 +118,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   // fanned out before it flipped. Placed AFTER the already-vectorized guard above so a completed
   // file is never touched, and before the embedding work (user work short-circuits in
   // isConvergenceHalted before any settings read). Unlike a chunk message, a dropped vectorize
-  // message does NOT auto-resume - fabFileChunk is its only producer and it early-returns on an
-  // already-chunked file - so flag the file so the abandoned, chunked-but-unvectorized state is
-  // enumerable and reprocessable (POST /api/files/reprocess re-drives it and clears the note).
+  // message does NOT auto-resume - not because a chunk message could not resume it (any redelivery
+  // for an already-chunked file does, via resumeVectorizeEnqueue in fabFileChunk) but because
+  // nothing produces one: the only automatic producer is the stranded sweep, and it selects on
+  // vectorizeEnqueueFailedAt (buildStrandedVectorizeScanFilter), which this branch never stamps.
+  // So flag the file, to keep the abandoned, chunked-but-unvectorized state enumerable and
+  // reprocessable (POST /api/files/reprocess re-drives it and clears the note).
   if (
     await isConvergenceHalted(
       { origin: payload.origin, lakeId: payload.lakeId },
@@ -189,12 +193,23 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       { logger }
     );
 
-    const requiredProvider = getProviderFromModel(embeddingModel);
-
     // Only pass the credential the chosen provider needs. A missing one is not fatal here:
     // the factory surfaces it when an embed call is made, which is where the batch's
     // failure counters can record it. Bedrock needs none and authenticates via AWS.
-    const { config: embeddingConfig } = resolveEmbeddingConfig(requiredProvider, apiKeyTable);
+    //
+    // A keyless cloud stage resolves to Bedrock instead of failing every chunk (see
+    // resolveEmbeddingWithKeylessFallback). Everything downstream keys off `embeddingModel` -
+    // the cache key, the cost estimate, the Atlas width guard and both chunk stamps - so binding
+    // it to the model actually used is what keeps a fallback from mislabelling the corpus.
+    const { config: embeddingConfig, model: embeddingModel } = resolveEmbeddingWithKeylessFallback(
+      requestedEmbeddingModel,
+      apiKeyTable
+    );
+    if (embeddingModel !== requestedEmbeddingModel) {
+      logger.warn(`No credential for ${requestedEmbeddingModel}; embedding with keyless ${embeddingModel} instead`);
+    }
+
+    const requiredProvider = getProviderFromModel(embeddingModel);
 
     const embeddingService = new EmbeddingFactory(embeddingConfig);
 
@@ -423,8 +438,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await Promise.all(
         embeddableChunks.map((chunk, index) => {
           chunk.vector = vectors[index];
-          // Index residency, recorded per MESSAGE and persisted here rather than with the
-          // file-complete `embeddingModel` stamp below - see IFabFileChunk.retrievalIndexModel.
+          // The model THIS message resolved, written beside the vector it produced and in the same
+          // transaction, so a chunk's label can never name a model other than the one its vector
+          // came from. A file's chunks are fanned across several messages that each resolve
+          // independently, so if a credential appears or lapses mid-ingest the halves genuinely
+          // differ in model AND width; labeling per message is what keeps each one honest and lets
+          // the file-complete stamp detect the split instead of flattening it (see
+          // stampChunkEmbeddingModel and updateEmbeddingModel).
+          chunk.embeddingModel = embeddingModel;
+          // Index residency, recorded per MESSAGE - see IFabFileChunk.retrievalIndexModel.
           // Deliberately written BEFORE the fail-open OpenSearch write it predicts: removing from
           // an index that holds nothing is a no-op, missing one orphans documents forever.
           if (indexesToOpenSearch) chunk.retrievalIndexModel = embeddingModel;
@@ -437,20 +459,46 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // rolled back with Mongo) and fail-open (an indexing failure leaves the chunk scan-only, not
     // failed - the Mongo write above already succeeded and is the source of truth).
     if (indexesToOpenSearch) {
+      // Two separate fail-open steps, each logged under its own message: an index failure and a
+      // confirm failure are different root causes (a broken index write vs. a broken Mongo write
+      // for a document that IS in the index) and a shared log line would send whoever is on call
+      // to the wrong system.
+      let indexedChunkIds: string[] | null = null;
       try {
-        // embeddingModel is NOT persisted per-chunk yet at this point - stampChunkEmbeddingModel
-        // below writes it to Mongo in bulk, only once the whole file finishes. Setting it on
-        // these in-memory objects is accurate right now regardless (this IS the model `vectors`
-        // was generated with) and mapDocument requires it to build the right per-model index
-        // document; it does not touch Mongo or the file-completion timing invariant.
-        embeddableChunks.forEach(chunk => {
-          chunk.embeddingModel = embeddingModel;
-        });
-        await FabFileChunkSearchIndex.indexChunks(embeddableChunks);
+        // `embeddingModel` is already set on these chunks by the transaction above, which is also
+        // what mapDocument reads to build the right per-model index document.
+        indexedChunkIds = await FabFileChunkSearchIndex.indexChunks(embeddableChunks);
       } catch (error) {
         logger.warn(`Self-host OpenSearch indexing failed for FabFile ${fabFileId}, chunks remain scan-only`, {
           error: error instanceof Error ? error.message : String(error),
         });
+      }
+      if (indexedChunkIds) {
+        try {
+          // Confirmed residency, the read path's ANN eligibility signal - written only for the
+          // chunks the index actually accepted. Cannot be folded into the pre-write
+          // `retrievalIndexModel` above: see IFabFileChunk.retrievalIndexConfirmedModel. Retried
+          // once: an index write that just succeeded should not leave a file permanently
+          // ANN-ineligible over one transient Mongo blip, and the write is idempotent.
+          try {
+            await fabFileChunkRepository.confirmRetrievalIndexed(indexedChunkIds, embeddingModel);
+          } catch {
+            await fabFileChunkRepository.confirmRetrievalIndexed(indexedChunkIds, embeddingModel);
+          }
+          // A chunk dispatched but NOT confirmed (rejected by mapDocument, or rolled back by
+          // indexChunks' own per-batch cleanup) must not keep a stale confirm from an earlier
+          // delivery of this same message.
+          const notIndexed = embeddableChunks.map(chunk => chunk.id).filter(id => !indexedChunkIds.includes(id));
+          if (notIndexed.length > 0) {
+            await fabFileChunkRepository.clearRetrievalIndexConfirmed(notIndexed, embeddingModel);
+          }
+        } catch (error) {
+          logger.warn(
+            `Self-host OpenSearch residency confirmation failed for FabFile ${fabFileId} despite a ` +
+              `successful index write; chunks remain scan-only`,
+            { error: error instanceof Error ? error.message : String(error) }
+          );
+        }
       }
     }
 
@@ -480,8 +528,18 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await fabFilesService.stampChunkEmbeddingModel(
         fabFileId,
         embeddingModel,
-        { db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository } },
-        { vectorized: true, vectorizedChunkCount, isVectorizing: false, embeddedChunkCount, embeddedCharCount }
+        { db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository }, logger },
+        {
+          vectorized: true,
+          vectorizedChunkCount,
+          isVectorizing: false,
+          embeddedChunkCount,
+          embeddedCharCount,
+          // The FILE-level label, which is exclusion authority for every retrieval reader, so only
+          // this path - the one that knows which model it just embedded with - asks for it. The
+          // backfill script deliberately does not; see stampChunkEmbeddingModel.
+          stampFile: true,
+        }
       );
     } else {
       // Guarded, not a plain update: sibling messages for this same file each recompute the
@@ -512,6 +570,37 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         vectorizeStatus: 'complete',
       }).catch(err => logger.error(`Error notifying vectorize-complete for ${fabFileId}: ${err}`));
 
+      // #2027: same non-fatal shape as the websocket push above - a failed or skipped Slack post
+      // must never fail or retry vectorization, which already persisted vectorized:true. Claimed
+      // BEFORE sending, unlike the websocket push above: a redelivered or concurrent completion
+      // message for this file must post the "finished indexing" reply at most once, not every time.
+      // Gated on sourceType up front: notifySlackIndexingComplete no-ops for non-Slack files anyway,
+      // and sourceType/sourceMetadata/tags never change during vectorization, so existingFabFile
+      // (fetched once, above) is used instead of the fabFile re-fetched for the chunkCount rollup.
+      //
+      // TRADEOFF, deliberate: claiming before sending makes this AT-MOST-ONCE, not
+      // at-least-once - a successful claim followed by a failed send (network error, Slack
+      // outage, the WebClient timeout above) is indistinguishable from a delivered notification
+      // in `dispatchedNotifications`: no retry, no queryable owed-state, no repair short of
+      // hand-editing that field. Chosen deliberately: a duplicate "now searchable" reply is a
+      // worse user-facing failure than a silent miss, and the miss is logged (the inner catch
+      // below) so it is at least observable. Claiming AFTER a successful send instead would trade
+      // this for a WORSE failure mode: it would reopen the exact concurrent-redelivery double-post
+      // this claim exists to prevent, since two concurrent invocations would both reach `sendMessage`
+      // before either claims. Not applied for that reason.
+      if (existingFabFile.sourceType === FabFileSourceType.SLACK) {
+        try {
+          const claimedSlackNotification = await fabFileRepository.claimIndexNotification(fabFileId, 'slack');
+          if (claimedSlackNotification) {
+            await notifySlackIndexingComplete(existingFabFile, logger).catch(err =>
+              logger.error(`Error sending the Slack indexing-complete notification for ${fabFileId}: ${err}`)
+            );
+          }
+        } catch (err) {
+          logger.error(`Error claiming the Slack indexing-complete notification for ${fabFileId}: ${err}`);
+        }
+      }
+
       // Track batch progress if file belongs to a data lake batch.
       // Atomic claim gates the increment so a redelivered "complete" message is a no-op.
       if (fabFile.batchId) {
@@ -526,12 +615,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             const batch = await dataLakeBatchRepository.incrementCounter(fabFile.batchId, 'vectorizedFiles');
             await finalizeBatchIfComplete(batch, logger);
 
-            const isComplete = isBatchComplete(batch);
             await sendToClient(userId, Resource.websocket.managementEndpoint, {
               action: 'data_lake_batch_progress',
               batchId: fabFile.batchId,
               vectorizedFiles: batch?.vectorizedFiles ?? 1,
-              status: isComplete ? (batch!.failedFiles > 0 ? 'completed_with_errors' : 'completed') : undefined,
+              status: completedBatchStatus(batch),
             });
           }
         } catch (error) {
@@ -602,15 +690,24 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           failedFiles: 1,
           processingFailedFiles: 1,
         });
+        // updateFileStatus stamped failureCounted: false with the status; raise it only once the
+        // guarded $inc above has actually landed, so revertFileFailure can attribute a decrement to
+        // this entry rather than spending another file's failure. Advisory - see fabFileChunk.ts.
+        if (batch) {
+          await dataLakeBatchRepository
+            .markFailureCounted(existingFabFile.batchId, fabFileId, true)
+            .catch(markErr =>
+              logger.error(`Failed to record the charged failure counters on ${fabFileId}: ${markErr}`)
+            );
+        }
         await finalizeBatchIfComplete(batch, logger);
 
-        const isComplete = isBatchComplete(batch);
         await sendToClient(userId, Resource.websocket.managementEndpoint, {
           action: 'data_lake_batch_progress',
           batchId: existingFabFile.batchId,
           failedFiles: batch?.failedFiles ?? 1,
           processingFailedFiles: batch?.processingFailedFiles ?? 1,
-          status: isComplete ? (batch!.failedFiles > 0 ? 'completed_with_errors' : 'completed') : undefined,
+          status: completedBatchStatus(batch),
         });
       } catch (innerErr) {
         logger.error(`Error reporting batch failure: ${innerErr}`);

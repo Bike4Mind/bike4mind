@@ -42,6 +42,11 @@ COPY --parents **/package.json ./
 #     Copied here (not with source) so it's available before the install step below.
 COPY apps/client/scripts ./apps/client/scripts
 
+# 1b) pnpm hashes every patchedDependencies entry during install, so a missing patches/
+#     fails the install with ENOENT rather than silently skipping the patch. Must be
+#     copied before the install step, not with the source below.
+COPY patches ./patches
+
 # 2) Install the client workspace + all its workspace dependencies, INCLUDING devDeps
 #    (tsx lives in devDependencies). Do not pass --prod here for that reason. The native
 #    compiles happen here; this layer is reused until the lockfile/manifests change.

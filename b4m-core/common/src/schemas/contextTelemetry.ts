@@ -47,7 +47,7 @@ export const OperationSchema = z.object({
 export const ModelTelemetrySchema = z.object({
   /** gen_ai.request.model */
   modelId: z.string(),
-  provider: z.enum(['anthropic', 'openai', 'bedrock', 'google', 'xai', 'ollama', 'moonshot']),
+  provider: z.enum(['anthropic', 'openai', 'bedrock', 'google', 'xai', 'ollama', 'moonshot', 'deepseek']),
   fallbackUsed: z.boolean(),
   fallbackReason: z.string().optional(),
   originalModelId: z.string().optional(),
@@ -59,7 +59,7 @@ export const ModelTelemetrySchema = z.object({
 
 // System prompt detail
 export const SystemPromptDetailSchema = z.object({
-  source: z.enum(['hardcoded', 'admin', 'user', 'project', 'session', 'org']),
+  source: z.enum(['hardcoded', 'admin', 'user', 'project', 'session', 'org', 'caller']),
   /** e.g., "date_context", "tool_guidance" */
   name: z.string(),
   tokenCount: z.number(),

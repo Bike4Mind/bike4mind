@@ -12,7 +12,7 @@ import {
   ChatCompletionProcess,
   featureNames,
   type ToolDefinition,
-} from '@bike4mind/services';
+} from '@bike4mind/services/llm';
 import { getSettingsMap, getSettingsValue, type IQueueService } from '@bike4mind/utils';
 import { type Logger } from '@bike4mind/observability';
 import {

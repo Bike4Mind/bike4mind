@@ -7,6 +7,7 @@
  *
  *   app/premium-generated/premiumRoutes.generated.ts   - Tanstack SPA routes
  *   app/premium-generated/premiumNavItems.generated.ts  - nav/HUD slots
+ *   app/premium-generated/premiumRouteIndexing.generated.ts - robots/sitemap policy
  *   app/premium-generated/premiumNotebookSidenav.generated.ts - notebook sidenav slot
  *   pages/api/<stub>.ts (per-package)                  - Next.js API stubs
  *   server/premium-generated/<stub>.ts (per-package)   - SST Lambda handler stubs
@@ -212,6 +213,47 @@ function generateNavItems(packages) {
   writeFile(
     outPath,
     `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumNavItems: PremiumNavDescriptor[] = [\n${exports}\n];\n`
+  );
+}
+
+// --- Generate route indexing (crawler policy) ---
+
+// An overlay declares which of its contributed routes are crawlable
+// (b4mContributions.routeIndexingExport -> a module exporting `routeIndexing`).
+// app/robots.ts and app/sitemap.ts consume the generated array: core cannot derive
+// the policy itself, and must not name an overlay's surface in this repo. Unlike the
+// route/nav glue this is pure data, so the consumers can be server-rendered without
+// dragging the overlay's lazy component graph in behind a `lazyImport` thunk.
+function generateRouteIndexing(packages) {
+  const outPath = join(GENERATED_DIR, 'premiumRouteIndexing.generated.ts');
+  // Same annotate-both-forms rule as routes/nav: an untyped empty array would widen
+  // to `never[]`/`unknown[]` and break the consumers only in the fork build.
+  const typeImport = `import type { PremiumRouteIndexing } from '../premiumContract';`;
+
+  const contributors = packages.filter(p => p.contributions.routeIndexingExport);
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.routeIndexingExport, p.name, 'routeIndexingExport')
+  );
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumRouteIndexing: PremiumRouteIndexing[] = [];\n`
+    );
+    return;
+  }
+
+  const imports = contributors
+    .map(
+      (p, i) => `import { routeIndexing as indexing${i} } from '${p.contributions.routeIndexingExport}';`
+    )
+    .join('\n');
+
+  const exports = contributors.map((_, i) => `  indexing${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumRouteIndexing: PremiumRouteIndexing[] = [\n${exports}\n];\n`
   );
 }
 
@@ -530,7 +572,7 @@ function generateServerHandlerStubs(packages) {
 // server/premium-generated/ dir.
 function generateLlmTools(packages) {
   const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumLlmTools.generated.ts');
-  const typeImport = `import type { ToolDefinition } from '@bike4mind/services';`;
+  const typeImport = `import type { ToolDefinition } from '@bike4mind/services/llm/tools';`;
 
   const contributors = packages.filter(p => p.contributions.llmToolsExport);
 
@@ -746,6 +788,7 @@ ensureDir(GENERATED_DIR);
 // Bare-specifier glue: linked packages only (an unresolvable import fails every build).
 generateSpaRoutes(linkedPackages);
 generateNavItems(linkedPackages);
+generateRouteIndexing(linkedPackages);
 generateNotebookSidenav(linkedPackages);
 generateApiStubs(linkedPackages);
 generateServerHandlerStubs(linkedPackages);

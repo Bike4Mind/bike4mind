@@ -1,8 +1,10 @@
 import React from 'react';
 import { Card, Typography, FormControl, FormLabel, Input, Select, Option, Box, ListItemDecorator } from '@mui/joy';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import type { ModelBackend } from '@bike4mind/common';
 import { FormState } from '../../types/agentForm';
 import { useAccessibleModels } from '../../hooks/useAccessibleModels';
+import { backendLabel } from '../../utils/agentOpsModels';
 
 interface ModelConfigSectionProps {
   formState: FormState;
@@ -88,7 +90,7 @@ const ModelConfigSection: React.FC<ModelConfigSectionProps> = ({
               <Option key={`header-${backend}`} value={`__header_${backend}`} disabled>
                 <ListItemDecorator>
                   <Typography level="body-xs" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>
-                    {backend}
+                    {backendLabel(backend as ModelBackend)}
                   </Typography>
                 </ListItemDecorator>
               </Option>,
@@ -192,7 +194,7 @@ const ModelConfigSection: React.FC<ModelConfigSectionProps> = ({
               <Option key={`img-header-${backend}`} value={`__img_header_${backend}`} disabled>
                 <ListItemDecorator>
                   <Typography level="body-xs" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>
-                    {backend}
+                    {backendLabel(backend as ModelBackend)}
                   </Typography>
                 </ListItemDecorator>
               </Option>,

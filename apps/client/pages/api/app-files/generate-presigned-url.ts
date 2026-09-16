@@ -6,6 +6,7 @@ import {
   FileGeneratePresignedUrlRequestInput,
   FileGeneratePresignedUrlRequestInputType,
   FileGeneratePresignedUrlResponseType,
+  isExecutableUploadMimeType,
 } from '@bike4mind/common';
 import { AppFile } from '@bike4mind/database/content';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -27,6 +28,8 @@ const handler = baseApi().post(
 
       const ext = mime.extension(data.mimeType);
       if (!ext) throw new BadRequestError(`Invalid mime type ${data.mimeType}`);
+      if (isExecutableUploadMimeType(data.mimeType))
+        throw new BadRequestError(`Content type ${data.mimeType} is not allowed`);
 
       let fileKey = `${uuidv4()}.${ext}`;
       if (data.path) {
@@ -34,9 +37,13 @@ const handler = baseApi().post(
         fileKey = `${filePath}${fileKey}`;
       }
 
+      // Bind ContentType into the signature so the caller cannot PUT bytes under a different
+      // (e.g. executable) content type than the one validated above. The browser PUT sends a
+      // matching Content-Type header (see uploadFileToUrl).
       const command = new PutObjectCommand({
         Bucket: Resource.appFilesBucket.name,
         Key: fileKey,
+        ContentType: data.mimeType,
       });
 
       const file = await AppFile.create({

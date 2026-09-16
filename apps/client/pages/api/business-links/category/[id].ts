@@ -5,10 +5,19 @@ import { ResearchLinkCategory } from '@bike4mind/database/content';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin } from '@server/utils/errors';
+import { z } from 'zod';
 
 interface IParams {
   id?: string;
 }
+
+// Both fields are String-typed and reach an update payload, which casts before validators run.
+// An array or object from a JSON body throws `CastError kind='string'` instead of being
+// rejected. Same guard and same reasoning as the sibling route on ../[id].ts.
+const updateBodySchema = z.object({
+  name: z.string().optional(),
+  description: z.string().optional(),
+});
 
 const handler = baseApi()
   .put(
@@ -20,8 +29,11 @@ const handler = baseApi()
         return res.status(400).json({ message: 'Category ID is required' });
       }
 
-      const body = req.body as { name?: string; description?: string };
-      const { name, description } = body;
+      const parsedBody = updateBodySchema.safeParse(req.body);
+      if (!parsedBody.success) {
+        return res.status(400).json({ message: 'Invalid request body' });
+      }
+      const { name, description } = parsedBody.data;
 
       const category = await ResearchLinkCategory.findByIdAndUpdate(
         id,

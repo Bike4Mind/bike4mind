@@ -1,5 +1,9 @@
 import crypto from 'crypto';
-import { OVERWATCH_ANALYTICS_SCHEMA_VERSION } from '@bike4mind/common';
+import {
+  OVERWATCH_ANALYTICS_SCHEMA_VERSION,
+  OVERWATCH_ANONYMOUS_USER_ID,
+  OVERWATCH_VISIT_EVENT,
+} from '@bike4mind/common';
 import type { OverwatchUtm } from '@bike4mind/common';
 import { Config } from '@server/utils/config';
 
@@ -40,7 +44,58 @@ export interface EmitOptions {
   utm?: OverwatchUtm;
 }
 
+export interface VisitEmitOptions {
+  /** The visit's own identifier - see visitSession.ts for what one visit means. */
+  sessionId: string;
+  referrer?: string;
+  utm?: OverwatchUtm;
+}
+
+/**
+ * One event per active user per day: the signal DAU is counted from.
+ */
 export async function emitActiveEvent(opts: EmitOptions): Promise<void> {
+  return postEvent({
+    userId: opts.pseudoUserId,
+    sessionId: opts.sessionId,
+    event: 'active',
+    ...(opts.referrer !== undefined && { referrer: opts.referrer }),
+    ...(opts.utm !== undefined && { utm: opts.utm }),
+    metadata: { userType: opts.userType },
+  });
+}
+
+/**
+ * One event per visit, carrying no user identity at all.
+ *
+ * Deliberately anonymous even when the visitor is signed in. A visit count needs an
+ * identifier per visit, not a person per visit, and the person is already reported by
+ * emitActiveEvent above; sending one here would mean a signed-in visit and an anonymous
+ * visit were stored as different kinds of record, and the funnel's first stage would go
+ * back to counting two different things. It also means the acquisition stage carries the
+ * least data that can answer it: an id this server minted, a referrer, and the campaign
+ * cookie - no user, no user type.
+ */
+export async function emitVisitEvent(opts: VisitEmitOptions): Promise<void> {
+  return postEvent({
+    userId: OVERWATCH_ANONYMOUS_USER_ID,
+    sessionId: opts.sessionId,
+    event: OVERWATCH_VISIT_EVENT,
+    ...(opts.referrer !== undefined && { referrer: opts.referrer }),
+    ...(opts.utm !== undefined && { utm: opts.utm }),
+  });
+}
+
+interface EventFields {
+  userId: string;
+  sessionId: string;
+  event: string;
+  referrer?: string;
+  utm?: OverwatchUtm;
+  metadata?: Record<string, string>;
+}
+
+async function postEvent(fields: EventFields): Promise<void> {
   if (!isAnalyticsConfigured()) return;
 
   const eventId = crypto.randomUUID();
@@ -50,13 +105,8 @@ export async function emitActiveEvent(opts: EmitOptions): Promise<void> {
     eventId,
     schemaVersion: OVERWATCH_ANALYTICS_SCHEMA_VERSION,
     productId: 'bike4mind',
-    userId: opts.pseudoUserId,
-    sessionId: opts.sessionId,
-    event: 'active',
     timestamp,
-    ...(opts.referrer !== undefined && { referrer: opts.referrer }),
-    ...(opts.utm !== undefined && { utm: opts.utm }),
-    metadata: { userType: opts.userType },
+    ...fields,
   };
 
   const url = Config.OVERWATCH_INGEST_URL;

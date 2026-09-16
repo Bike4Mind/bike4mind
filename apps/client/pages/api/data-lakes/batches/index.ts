@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import {
   dataLakeBatchRepository,
@@ -9,14 +10,14 @@ import {
   scopedSettingsRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import { CreateBatchRequestInput } from '@bike4mind/common';
+import { CreateBatchRequestInput, isLakeIngestable } from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { recordReconcilerForcedTerminal } from '@server/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   // GET: list batches the user still needs to see - either ingest is in flight, or the
   // background AI-tagging phase is running/awaiting review. These are independent
@@ -76,6 +77,7 @@ const handler = baseApi()
   })
   // POST: create a new batch
   .post(async (req: Request, res) => {
+    assertDataLakeWriteScope(req);
     const userId = req.user.id;
     const data = CreateBatchRequestInput.parse(req.body);
 
@@ -87,9 +89,7 @@ const handler = baseApi()
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
-    // Don't accept new uploads into an archived/deleted (or transitional) lake - only
-    // draft (first batch) or active lakes can receive a batch.
-    if (dataLake.status !== 'draft' && dataLake.status !== 'active') {
+    if (!isLakeIngestable(dataLake.status)) {
       return res.status(400).json({ error: `Cannot create a batch for a data lake in '${dataLake.status}' status` });
     }
 
@@ -115,6 +115,7 @@ const handler = baseApi()
       failedFiles: 0,
       processingFailedFiles: 0,
       skippedFiles: 0,
+      deferredFiles: 0,
       uploadedSizeBytes: 0,
       files: [],
       appliedTags: data.appliedTags || [],

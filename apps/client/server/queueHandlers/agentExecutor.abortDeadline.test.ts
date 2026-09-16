@@ -69,6 +69,17 @@ vi.mock('@bike4mind/llm-adapters', async () => {
 const delegateToAgentMock = vi.fn();
 vi.mock('@bike4mind/services', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+  return {
+    ...actual,
+    // Real key lookup hits the DB (`apikeys.find()`), which has no connection in this test
+    // and buffers until Mongoose's 10s timeout - short-circuit it to an empty table instead.
+    // `apiKeyService` is an ES module namespace export (`export * as`), so it can't be
+    // `vi.spyOn`'d in place - the whole binding is replaced instead.
+    apiKeyService: { ...actual.apiKeyService, getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) },
+  };
+});
+vi.mock('@bike4mind/services/llm', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/services/llm')>('@bike4mind/services/llm');
   class MockOrchestrator {
     constructor(public deps: unknown) {}
     delegateToAgent(...args: unknown[]) {
@@ -79,11 +90,6 @@ vi.mock('@bike4mind/services', async () => {
     ...actual,
     resolveToolAvailability: vi.fn().mockResolvedValue({}),
     ServerSubagentOrchestrator: MockOrchestrator,
-    // Real key lookup hits the DB (`apikeys.find()`), which has no connection in this test
-    // and buffers until Mongoose's 10s timeout - short-circuit it to an empty table instead.
-    // `apiKeyService` is an ES module namespace export (`export * as`), so it can't be
-    // `vi.spyOn`'d in place - the whole binding is replaced instead.
-    apiKeyService: { ...actual.apiKeyService, getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) },
   };
 });
 

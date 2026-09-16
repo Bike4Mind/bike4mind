@@ -4,6 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 
 import { NotFoundError } from '@server/utils/errors';
+import { isValidObjectId } from '@server/utils/objectId';
 import { z } from 'zod';
 import { AppFileEvents } from '@bike4mind/common';
 import { S3Storage } from '@bike4mind/fab-pipeline';
@@ -21,7 +22,7 @@ const handler = baseApi().delete(
     // Ownership check: scope lookup to the requesting user so an attacker
     // cannot delete (or probe for) files belonging to other users. Both
     // "not found" and "not yours" return NotFoundError to avoid enumeration.
-    const file = await AppFile.findOne({ _id: data.id, userId });
+    const file = isValidObjectId(data.id) ? await AppFile.findOne({ _id: data.id, userId }) : null;
     if (!file) throw new NotFoundError('File not found');
 
     await AppFile.deleteOne({ _id: file._id, userId });

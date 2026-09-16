@@ -32,6 +32,18 @@ jobs:
       SEMGREP_JSON_REPORT_PATH: ${{ github.workspace }}/semgrep-report.json
 
     steps:
+      # `stage` selects the ingest host that receives the report, so it is
+      # constrained to the shapes this workflow documents before any step can
+      # send anything. Job-level env above is evaluated before the first step
+      # runs, so this gate works by failing the job ahead of the ingest step,
+      # not by preventing the URL from being built.
+      - name: Validate stage input
+        run: |
+          if [ -n "$CODE_STAGE" ] && ! printf '%s' "$CODE_STAGE" | grep -qxE '(dev|staging|production|pr[0-9]+)'; then
+            echo "::error::stage must be dev, staging, production or prNNN"
+            exit 1
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v6
 

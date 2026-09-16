@@ -7,6 +7,7 @@ import { diffLakeConfig } from './diffLakeConfig';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import { lakeMembershipScope } from './lakeMembershipScope';
+import { bestEffortSetDriveConnectionEnabled, type DriveConnectionEnablePort } from './ports';
 
 export interface UnarchiveResult {
   restoredCount: number;
@@ -35,6 +36,8 @@ interface UnarchiveDataLakeAdapters extends LakeConfigAuditAdapters {
       | 'computeDataLakeStats'
     >;
   };
+  /** Re-enable the lake's Drive connection, reversing archiveDataLake's disable. See ports.ts. */
+  enableDriveConnection?: DriveConnectionEnablePort;
 }
 
 /**
@@ -51,7 +54,7 @@ interface UnarchiveDataLakeAdapters extends LakeConfigAuditAdapters {
 export const unarchiveDataLake = async (
   actor: ManageActor,
   dataLakeId: string,
-  { db, logger }: UnarchiveDataLakeAdapters
+  { db, enableDriveConnection, logger }: UnarchiveDataLakeAdapters
 ): Promise<UnarchiveResult> => {
   const existing = await db.dataLakes.findById(dataLakeId);
   if (!existing) {
@@ -173,6 +176,8 @@ export const unarchiveDataLake = async (
       },
       { db, logger }
     );
+    // Reverses archiveDataLake's disable - see ports.ts for why this is best-effort.
+    await bestEffortSetDriveConnectionEnabled(enableDriveConnection, dataLakeId, logger);
   }
   // Logger forwarded for parity with every other recompute call, not because an audit row is
   // expected here: this runs AFTER the status move, which puts the lake beyond activateIfDraft's

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
-import { FabFileSourceType, KnowledgeType } from '@bike4mind/common';
+import { DuplicateFabFileError, FabFileSourceType, KnowledgeType } from '@bike4mind/common';
+import { BadRequestError } from '@bike4mind/utils';
 
 /**
  * `createFabFileByUrl` had no tests. These cover the tag/provenance pass-through added for LINK
@@ -63,6 +64,69 @@ describe('createFabFileByUrl', () => {
     // Uploaded to the path createFabFile allocated, so S3 ObjectCreated picks it up as usual.
     expect(storageUpload).toHaveBeenCalledWith(created.filePath, 'body text', { ContentType: 'text/plain' });
     expect(result.id).toBe('fab-1');
+  });
+
+  it('accepts a dotted page title and keeps it as the fileName', async () => {
+    // Regression guard: `path.extname` treats any mid-string dot as an extension, so a title like
+    // this used to be refused as an unresolvable extension. The door's mimeType comes from the
+    // fetch response, not the title, so it must win.
+    fetchAndParseURL.mockResolvedValue({
+      title: 'Node.js Documentation',
+      textContent: 'body text',
+      mimeType: 'text/html',
+    });
+
+    const result = await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, adapters());
+
+    const created = fabFilesCreate.mock.calls[0][0];
+    expect(created.fileName).toBe('Node.js Documentation');
+    expect(result.id).toBe('fab-1');
+  });
+
+  it('accepts another dotted title shape with no resolvable extension', async () => {
+    fetchAndParseURL.mockResolvedValue({
+      title: 'docs.python.org',
+      textContent: 'body text',
+      mimeType: 'text/html',
+    });
+
+    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, adapters());
+
+    expect(fabFilesCreate.mock.calls[0][0].fileName).toBe('docs.python.org');
+  });
+
+  it('creates normally when textContent is a non-empty Buffer (the PDF arm)', async () => {
+    // The PDF arm of fetchAndParseURL returns raw bytes rather than a string; confirms the
+    // zero-length guard does not reject a Buffer that legitimately carries content.
+    fetchAndParseURL.mockResolvedValue({
+      title: 'report.pdf',
+      textContent: Buffer.from('%PDF-1.4 fake pdf bytes'),
+      mimeType: 'application/pdf',
+    });
+
+    const result = await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, adapters());
+
+    expect(result.id).toBe('fab-1');
+    expect(storageUpload).toHaveBeenCalledWith(expect.any(String), Buffer.from('%PDF-1.4 fake pdf bytes'), {
+      ContentType: 'application/pdf',
+    });
+  });
+
+  it('rejects a zero-length Buffer instead of creating a phantom 0-byte PDF file', async () => {
+    // Inverted from a prior version of this test that pinned a zero-length Buffer as an accepted
+    // create - that was the phantom-file bug: a PDF-typed response with an empty body must be
+    // refused the same as an empty extracted string, not treated as "legitimately empty".
+    fetchAndParseURL.mockResolvedValue({
+      title: 'report.pdf',
+      textContent: Buffer.alloc(0),
+      mimeType: 'application/pdf',
+    });
+
+    const thrown: unknown = await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, adapters()).catch(e => e);
+
+    expect(thrown).toBeInstanceOf(BadRequestError);
+    expect((thrown as BadRequestError).message).toMatch(/no readable text/i);
+    expect(fabFilesCreate).not.toHaveBeenCalled();
   });
 
   it('stamps adapter-supplied tags on the created file', async () => {
@@ -129,6 +193,105 @@ describe('createFabFileByUrl', () => {
     ).rejects.toThrow();
 
     expect(fetchAndParseURL).not.toHaveBeenCalled();
+  });
+
+  it('stamps a contentHash of the fetched textContent when a caller opts into checkDuplicate', async () => {
+    // #2027: URL-created files previously stored NO contentHash at all, which is why the link path
+    // had nothing to dedupe against. Stamped only for a caller that opts into ingest-time dedup -
+    // see the next test for why NOT stamping it for every caller matters.
+    const checkDuplicate = vi.fn().mockResolvedValue(null);
+
+    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), checkDuplicate });
+
+    const created = fabFilesCreate.mock.calls[0][0];
+    // sha256('body text'), computed independently rather than trusted from the implementation.
+    expect(created.contentHash).toBe('d9fbbc91492fbb3ba8e57ca15b039134e7098030a89578315a4c354f9117ccf2');
+  });
+
+  it('does NOT stamp a contentHash when no caller opts into checkDuplicate (web upload, proposal admission)', async () => {
+    // The stamp is deliberately coupled to opting into dedup, not stamped unconditionally:
+    // `unarchiveDataLake`'s hard-delete dedup pass reads `contentHash` across every FabFile
+    // regardless of door, and this door hashes extracted TEXT (not the URL) - two provenance-distinct
+    // rows with identical body text would otherwise collide there too, for doors that never asked
+    // for content-hash dedup at all.
+    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, adapters());
+
+    const created = fabFilesCreate.mock.calls[0][0];
+    expect(created.contentHash).toBeUndefined();
+  });
+
+  it('rejects a URL that yields no extractable text instead of creating a phantom file', async () => {
+    // A page with no extractable text used to create a zero-byte file: fileSize 0 only trips the
+    // upper size bound, and the upload happily succeeds with empty content. Refusing here means
+    // the row is never created at all, instead of relying on a later chunk scan to notice.
+    fetchAndParseURL.mockResolvedValue({ textContent: '', mimeType: 'text/html', title: 'Empty Page' });
+    const checkDuplicate = vi.fn().mockResolvedValue(null);
+
+    const thrown: unknown = await createFabFileByUrl(
+      'user-1',
+      { url: URL_UNDER_TEST },
+      { ...adapters(), checkDuplicate }
+    ).catch(e => e);
+
+    expect(thrown).toBeInstanceOf(BadRequestError);
+    expect((thrown as BadRequestError).message).toMatch(/no readable text/i);
+    expect(checkDuplicate).not.toHaveBeenCalled();
+    expect(fabFilesCreate).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * #2027: the link path had no dedup at all - `createFabFileByUrl` fetches and creates as one step,
+ * so there is nowhere to check a hash unless the service itself is taught to. `checkDuplicate` is
+ * the hook for that: optional, so the web URL door and the proposal-admission door (neither passes
+ * it) are provably unaffected.
+ */
+describe('createFabFileByUrl per-content dedup (checkDuplicate)', () => {
+  it('creates normally with no checkDuplicate adapter at all (every existing caller)', async () => {
+    // Not a spy call assertion (there is nothing to spy on when the field is genuinely absent from
+    // the adapters object) - this proves the OPTIONAL adapter's absence doesn't change create
+    // behavior for the web URL door and the proposal-admission door, neither of which passes it.
+    const result = await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, adapters());
+
+    expect(result.id).toBe('fab-1');
+    expect(fabFilesCreate).toHaveBeenCalled();
+  });
+
+  it('creates normally when checkDuplicate finds nothing', async () => {
+    const checkDuplicate = vi.fn().mockResolvedValue(null);
+
+    const result = await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), checkDuplicate });
+
+    // Pinned to the actual hash, not just "some string": proves checkDuplicate is keyed on the
+    // real content hash rather than a placeholder that happens to also be a string.
+    expect(checkDuplicate).toHaveBeenCalledWith('d9fbbc91492fbb3ba8e57ca15b039134e7098030a89578315a4c354f9117ccf2');
+    expect(result.id).toBe('fab-1');
+    expect(fabFilesCreate).toHaveBeenCalled();
+  });
+
+  it('throws DuplicateFabFileError carrying the match and the newly-fetched title, and creates nothing', async () => {
+    const existing = { id: 'fab-existing', fileName: 'An Article (older)' };
+    const checkDuplicate = vi.fn().mockResolvedValue(existing);
+
+    const thrown: unknown = await createFabFileByUrl(
+      'user-1',
+      { url: URL_UNDER_TEST },
+      { ...adapters(), checkDuplicate }
+    ).catch(e => e);
+
+    expect(thrown).toBeInstanceOf(DuplicateFabFileError);
+    expect((thrown as DuplicateFabFileError).existing).toBe(existing);
+    expect((thrown as DuplicateFabFileError).fetchedTitle).toBe('An Article');
+    expect(fabFilesCreate).not.toHaveBeenCalled();
+    expect(storageUpload).not.toHaveBeenCalled();
+  });
+
+  it('runs the fetch exactly once even when a duplicate is found - no re-fetch to re-check', async () => {
+    const checkDuplicate = vi.fn().mockResolvedValue({ id: 'fab-existing' });
+
+    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), checkDuplicate }).catch(() => {});
+
+    expect(fetchAndParseURL).toHaveBeenCalledTimes(1);
   });
 });
 

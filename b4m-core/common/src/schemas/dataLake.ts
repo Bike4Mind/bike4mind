@@ -25,6 +25,20 @@ const sha256Regex = /^[a-f0-9]{64}$/;
 
 // Data Lake CRUD
 
+// Both write paths (create wizard, settings modal) share one definition so the two can never
+// drift. Trimmed at parse time (like fileTagPrefix) rather than relying on a client-side trim,
+// and refused when it is not a single tag: lakeMatchesAccess does an exact, whole-string
+// membership test with no comma-splitting, so a multi-value string saves as a gate nobody holds.
+const requiredUserTagValue = z
+  .string()
+  .trim()
+  .min(1)
+  .max(100)
+  .refine(
+    s => !/[,;]/.test(s),
+    'User tag must be a single tag with no commas or semicolons (e.g. "vip" or "Sales Team")'
+  );
+
 export const CreateDataLakeRequestInput = z.object({
   name: z.string().min(1).max(200),
   slug: z
@@ -52,7 +66,7 @@ export const CreateDataLakeRequestInput = z.object({
     // mirrors this via tagPrefixIssue / hasBlankTagPrefixSegment so the rules cannot drift.
     .refine(s => !hasBlankTagPrefixSegment(s), 'Tag prefix segments must be non-empty (e.g. "acme:" or "acme:legal:")')
     .refine(s => !isReservedTagPrefix(s), `Tag prefix cannot use the reserved "${DATALAKE_TAG_PREFIX}" namespace`),
-  requiredUserTag: z.string().min(1).max(100).optional(),
+  requiredUserTag: requiredUserTagValue.optional(),
   // Entitlement keys are namespaced (must contain ":") so a bare user-tag value can never
   // be a requiredEntitlement - tags pass through 1:1 as entitlement keys, so an un-namespaced
   // value would be self-grantable. Stored normalized (lowercase) by the service.
@@ -94,7 +108,7 @@ export const UpdateDataLakeRequestInput = z.object({
   // already treats '' as ungated - the access queries in DataLakeModel carry explicit
   // `requiredUserTag: ''` arms, and lakeMatchesAccess/canAccessLake test truthiness.
   // Omitting the field still means "leave unchanged" (Mongo $set strips undefined).
-  requiredUserTag: z.union([z.literal(''), z.string().min(1).max(100)]).optional(),
+  requiredUserTag: z.union([z.literal(''), requiredUserTagValue]).optional(),
   requiredEntitlement: z
     .union([
       z.literal(''),
@@ -110,6 +124,10 @@ export const UpdateDataLakeRequestInput = z.object({
     .optional(),
   // Per-lake opt-in to query-text audit logging (see IDataLake.auditQueryTextEnabled).
   auditQueryTextEnabled: z.boolean().optional(),
+  // Per-lake opt-in to lake memory (see IDataLake.lakeMemoryEnabled). Recorded whatever the platform
+  // `EnableLakeMemory` setting says: that flag gates behaviour at each consumer, not the stored
+  // preference - see updateDataLake.
+  lakeMemoryEnabled: z.boolean().optional(),
   // The chunk passage target (TOKENS) this lake REQUIRES of its member files (#1662). A
   // CONSTRAINT the chunk handler checks, never an override of the file-owner-altitude policy: a
   // member file whose effective target differs is reported as a conflict, not re-chunked. Bounded

@@ -47,7 +47,24 @@ export interface BatchItemResult {
   status: 'done' | 'failed';
   /** Concatenated text content when `status === "done"`. */
   reply?: string;
-  tokenUsage?: { inputTokens: number; outputTokens: number };
+  /**
+   * `inputTokens` counts only what was billed at the full rate - Anthropic
+   * reports cached tokens in their own fields, so a consumer pricing a cached
+   * request needs all of them.
+   *
+   * `cacheCreationInputTokens` is the SUM of the two TTLs, which bill at
+   * different multipliers (5m at 1.25x base input, 1h at 2x). A request
+   * mixing both is unpriceable from the sum alone, so the split is relayed
+   * too - the submit endpoint accepts either TTL.
+   */
+  tokenUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadInputTokens?: number;
+    cacheCreationInputTokens?: number;
+    cacheWrite5mInputTokens?: number;
+    cacheWrite1hInputTokens?: number;
+  };
   /** Reason when `status === "failed"` (error / canceled / expired). */
   error?: string;
 }
@@ -199,6 +216,10 @@ export class AnthropicBatchService {
           tokenUsage: {
             inputTokens: msg.usage?.input_tokens ?? 0,
             outputTokens: msg.usage?.output_tokens ?? 0,
+            cacheReadInputTokens: msg.usage?.cache_read_input_tokens ?? undefined,
+            cacheCreationInputTokens: msg.usage?.cache_creation_input_tokens ?? undefined,
+            cacheWrite5mInputTokens: msg.usage?.cache_creation?.ephemeral_5m_input_tokens ?? undefined,
+            cacheWrite1hInputTokens: msg.usage?.cache_creation?.ephemeral_1h_input_tokens ?? undefined,
           },
         };
       }

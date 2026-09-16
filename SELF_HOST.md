@@ -14,7 +14,7 @@ Run the open core of Bike4Mind on your own hardware - a laptop, a server, or you
 
 - **Docker** and **Docker Compose** (Docker Desktop, or Docker Engine + the compose plugin).
 - ~4 GB free RAM for the stack (more if you build the image yourself, see below).
-- API keys for whichever LLM providers you want to use (Anthropic, OpenAI, Google Gemini, xAI, or a local Ollama endpoint).
+- API keys for whichever LLM providers you want to use (Anthropic, OpenAI, Google Gemini, xAI, DeepSeek, Moonshot (Kimi), or a local Ollama endpoint).
 
 You do **not** need Node, pnpm, or a local build - the app ships as a prebuilt image at `ghcr.io/bike4mind/bike4mind-selfhost` (multi-arch: amd64 + arm64), published by CI from `main`.
 
@@ -56,6 +56,8 @@ ANTHROPIC_API_KEY=      # Claude
 OPENAI_API_KEY=         # GPT
 GEMINI_API_KEY=         # Google Gemini
 XAI_API_KEY=            # Grok
+DEEPSEEK_API_KEY=       # DeepSeek
+MOONSHOT_API_KEY=       # Kimi
 # ...plus optional GitHub/Google OAuth, Stripe, Slack - see the template
 ```
 
@@ -583,8 +585,9 @@ By default, self-host Data Lake search ranks every chunk with a bounded brute-fo
 
 Known limitations:
 
-- **No backfill.** Only chunks vectorized AFTER both variables are set get indexed into OpenSearch. Chunks from before that point keep working (still retrievable) but stay on the brute-force scan path until a future re-embed. This is a correctness-neutral gap: retrieval always re-derives which files you can currently access from live data, so a chunk that isn't in OpenSearch yet just gets scanned instead of returning nothing.
-- **A chunk lost to a transient indexing failure has no automatic repair.** If an OpenSearch write fails mid-vectorize (a transient cluster outage), that chunk's content is missing from OpenSearch results until a future re-embed re-processes the file - the same shape as the no-backfill gap above, and equally correctness-neutral (the scan path still sees it in Mongo). The compensating cleanup that makes this safe is itself best-effort: it only ever touches the chunks from the batch that failed (never a sibling batch for the same file, so it cannot destroy already-good data), and if the cleanup delete itself fails - most likely from the same outage that failed the write - it logs and moves on rather than retrying.
+- **No backfill, and "resident in the index" is tracked separately from "vectorized".** Only chunks vectorized AFTER both variables are set get indexed into OpenSearch, and only once that OpenSearch write comes back successful is the chunk recorded as CONFIRMED resident - a file missing that confirmation on any of its chunks is routed to the scan path. Chunks that predate the feature, or whose write failed, keep working (still retrievable) but stay on the brute-force scan path indefinitely - nothing runs automatically to catch them up. This is correctness-neutral (retrieval always re-derives which files you can access from live data, so a chunk that isn't confirmed resident just gets scanned instead of returning nothing), but it does mean an unconfirmed corpus pays scan cost/latency instead of real kNN retrieval. The only way to get a file's chunks confirmed resident is to re-chunk it - re-upload, or POST `/api/files/reprocess` - which re-embeds it from scratch under the running version; there is no lighter-weight repair (a `retrievalIndexModel` value alone does NOT mean the confirm can be safely backfilled onto it, since that field is deliberately written before the OpenSearch write and stays set even when that write failed).
+- **`B4M_SELF_HOST_OPENSEARCH_REQUIRE_RESIDENCY` gates whether the confirm above is actually enforced, and it defaults OFF.** Turning `B4M_SELF_HOST_OPENSEARCH` on for the first time is safe as-is: with the requirement off, retrieval falls back to the older stamp-only eligibility check. Once your corpus has been re-chunked under this version (so its chunks carry a real confirm) and you want the scan-only fallback for anything NOT yet confirmed, set `B4M_SELF_HOST_OPENSEARCH_REQUIRE_RESIDENCY=true`. Turning it on before re-chunking an existing corpus reverts that whole corpus to scan-only until you do.
+- **A chunk lost to a transient indexing failure has no automatic repair.** If an OpenSearch write fails mid-vectorize (a transient cluster outage), that chunk's content is missing from OpenSearch results until a future re-embed re-processes the file, and its file goes back to the scan path in the meantime - the same shape as the no-backfill gap above, and equally correctness-neutral (the scan path still sees it in Mongo). The compensating cleanup that makes this safe is itself best-effort: it only ever touches the chunks from the batch that failed (never a sibling batch for the same file, so it cannot destroy already-good data), and if the cleanup delete itself fails - most likely from the same outage that failed the write - it logs and moves on rather than retrying.
 - Disable it again by unsetting `B4M_SELF_HOST_OPENSEARCH` - search falls back to the scan path immediately, no data loss.
 
 ## Background worker

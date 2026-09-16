@@ -60,4 +60,31 @@ describe('fetchAndConvertFabFiles reports ids it could not resolve', () => {
 
     expect(missingIds).toEqual([]);
   });
+
+  it('forwards lakeAccess to getAccessibleFiles unchanged, and omits it when absent', async () => {
+    vi.clearAllMocks();
+    const d = deps([{ id: 'a' }]);
+    const lakeAccess = { lakeMemberships: [{ kind: 'owned' as const, datalakeTag: 'datalake:org1:acme' }] };
+
+    await fetchAndConvertFabFiles(['a'], { scope: { userId: 'u1' }, lakeAccess }, d);
+    expect(d.db.fabfiles.getAccessibleFiles).toHaveBeenCalledWith(['a'], { userId: 'u1' }, lakeAccess);
+
+    d.db.fabfiles.getAccessibleFiles.mockClear();
+    await fetchAndConvertFabFiles(['a'], { scope: { userId: 'u1' } }, d);
+    expect(d.db.fabfiles.getAccessibleFiles).toHaveBeenCalledWith(['a'], { userId: 'u1' }, undefined);
+  });
+
+  it('still reports missingIds correctly when lakeAccess widens what resolves', async () => {
+    vi.clearAllMocks();
+    const lakeAccess = { dataLakeTags: ['datalake:org1:acme'] };
+
+    const { files, missingIds } = await fetchAndConvertFabFiles(
+      ['keep-1', 'gone-1'],
+      { scope: {}, lakeAccess },
+      deps([{ id: 'keep-1' }])
+    );
+
+    expect(files.map(f => f.id)).toEqual(['keep-1']);
+    expect(missingIds).toEqual(['gone-1']);
+  });
 });

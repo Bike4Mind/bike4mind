@@ -19,19 +19,23 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
 }));
-vi.mock('@bike4mind/services', () => ({
-  dataLakeService: { assertCanWriteDataLakeTags: h.assertCanWriteDataLakeTags },
-  fabFilesService: { toggleTags: h.toggleTags },
-}));
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  return {
+    dataLakeService: {
+      assertCanWriteDataLakeTags: h.assertCanWriteDataLakeTags,
+      // Real implementation: a pure prefix filter, and the scope-gate branch under test needs it
+      // to actually recognize a `datalake:*` tag rather than a blanket mock.
+      extractDataLakeMetaTags: actual.dataLakeService.extractDataLakeMetaTags,
+    },
+    fabFilesService: { toggleTags: h.toggleTags },
+  };
+});
 vi.mock('@bike4mind/database', () => ({
   // The config-audit repos the code under test now wires (see lakeConfigAuditDb). Stubbed
   // rather than omitted because this mock REPLACES the whole module: a missing export is an
   // import-time failure, not a silent undefined.
   lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
-  adminSettingsRepository: {
-    findBySettingNames: vi.fn().mockResolvedValue([]),
-    findAll: vi.fn().mockResolvedValue([]),
-  },
   dataLakeRepository: { name: 'dataLakes' },
   dataLakeAccessGrantRepository: {
     listByLake: vi.fn().mockResolvedValue([]),
@@ -51,14 +55,31 @@ vi.mock('@bike4mind/database', () => ({
   scopedSettingsRepository: { name: 'scopedSettings' },
 }));
 
+// The route resolves its actor via toAccessContext so the gate sees `administeredOrgIds`; stub it
+// so the real one's entitlement + org-admin Mongo reads stay out of this unit test. The behavioural
+// coverage of the org-admin rung reaching the gate lives in toggle.lakeAuthz.test.ts.
+vi.mock('@server/dataLakes/toAccessContext', () => ({
+  toAccessContext: vi.fn(async (req: { user: { id: string; isAdmin?: boolean } }) => ({
+    userId: req.user.id,
+    isAdmin: !!req.user.isAdmin,
+    userTags: [],
+    organizationIds: [],
+    entitlementKeys: [],
+    administeredOrgIds: [],
+  })),
+}));
+
 import handler from '../toggle';
 
 const makeRes = () => {
   const json = vi.fn();
   return { res: { json, status: vi.fn(() => ({ json })) } as never, json };
 };
-const req = (body: unknown, user: Record<string, unknown> = { id: 'u1', isAdmin: false }) =>
-  ({ method: 'POST', body, user }) as never;
+const req = (
+  body: unknown,
+  user: Record<string, unknown> = { id: 'u1', isAdmin: false },
+  apiKeyInfo?: { keyId: string; scopes?: string[] }
+) => ({ method: 'POST', body, user, apiKeyInfo }) as never;
 const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(r, res);
 
 describe('POST /api/files/tags/toggle', () => {
@@ -136,11 +157,45 @@ describe('POST /api/files/tags/toggle', () => {
     await call(req({ ids: ['f1'], tags: ['datalake:lake'], userId: 'attacker', isAdmin: true }), res);
 
     expect(h.assertCanWriteDataLakeTags).toHaveBeenCalledWith(
-      { userId: 'u1', isAdmin: false },
+      expect.objectContaining({ userId: 'u1', isAdmin: false }),
       ['datalake:lake'],
       expect.anything()
     );
     expect(h.toggleTags.mock.calls[0][0]).toBe('u1');
+  });
+
+  // #1964: this is the door #1917 wired the other four config-write routes through but not this
+  // one, so a key-driven toggle that auto-activates a draft lake recorded the human instead of the
+  // key. A service-level test alone cannot catch a route that never resolves the principal at
+  // all - see toggleTags.test.ts's "auto-activate audit principal (#1964)" for the service-side
+  // half of this regression.
+  it('resolves the caller as the auditPrincipal for a key-authenticated toggle', async () => {
+    const { res } = makeRes();
+
+    // A real API key always carries scopes; this test is about auditPrincipal resolution, not the
+    // scope gate itself, so it holds the write scope the tag toggle requires.
+    await call(
+      req(
+        { ids: ['f1'], tags: ['datalake:lake'] },
+        { id: 'u1', isAdmin: false },
+        { keyId: 'key-abc', scopes: ['datalake:write'] }
+      ),
+      res
+    );
+
+    expect(h.toggleTags.mock.calls[0][2].auditPrincipal).toEqual({
+      principalKind: 'apiKey',
+      principalId: 'key-abc',
+      onBehalfOfUserId: 'u1',
+    });
+  });
+
+  it('passes no auditPrincipal for an ordinary session toggle', async () => {
+    const { res } = makeRes();
+
+    await call(req({ ids: ['f1'], tags: ['datalake:lake'] }), res);
+
+    expect(h.toggleTags.mock.calls[0][2].auditPrincipal).toBeUndefined();
   });
 
   it('survives a malformed tags payload rather than throwing on the gate', async () => {
@@ -148,6 +203,54 @@ describe('POST /api/files/tags/toggle', () => {
 
     await call(req({ ids: ['f1'], tags: 'not-an-array' }), res);
 
-    expect(h.assertCanWriteDataLakeTags).toHaveBeenCalledWith({ userId: 'u1', isAdmin: false }, [], expect.anything());
+    expect(h.assertCanWriteDataLakeTags).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u1', isAdmin: false }),
+      [],
+      expect.anything()
+    );
+  });
+
+  it('refuses an API key without datalake:write when the payload names a lake meta-tag', async () => {
+    const { res } = makeRes();
+
+    await expect(
+      call(
+        {
+          method: 'POST',
+          body: { ids: ['f1'], tags: ['datalake:lake'] },
+          user: { id: 'u1' },
+          apiKeyInfo: { scopes: [] },
+        },
+        res
+      )
+    ).rejects.toThrow(/datalake:write/);
+    expect(h.toggleTags).not.toHaveBeenCalled();
+  });
+
+  it('lets an API key holding datalake:write toggle a lake meta-tag', async () => {
+    const { res, json } = makeRes();
+
+    await call(
+      {
+        method: 'POST',
+        body: { ids: ['f1'], tags: ['datalake:lake'] },
+        user: { id: 'u1' },
+        apiKeyInfo: { scopes: ['datalake:write'] },
+      },
+      res
+    );
+
+    expect(json).toHaveBeenCalledWith([{ id: 'f1' }]);
+  });
+
+  it('lets an API key with no data-lake scope toggle a plain, non-lake tag', async () => {
+    const { res, json } = makeRes();
+
+    await call(
+      { method: 'POST', body: { ids: ['f1'], tags: ['color:red'] }, user: { id: 'u1' }, apiKeyInfo: { scopes: [] } },
+      res
+    );
+
+    expect(json).toHaveBeenCalledWith([{ id: 'f1' }]);
   });
 });

@@ -4,7 +4,7 @@
  * extraction falls back to pattern matching when no ChatCompletion is passed.
  */
 
-import { ChatCompletionInvoke } from '@bike4mind/services';
+import { ChatCompletionInvoke } from '@bike4mind/services/llm';
 import { Logger } from '@bike4mind/observability';
 
 // Type exports

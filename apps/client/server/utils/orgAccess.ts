@@ -11,8 +11,11 @@
  */
 
 import { organizationRepository } from '@bike4mind/database/infra';
+import type { IUserDocument } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { isValidObjectId } from '@server/utils/objectId';
+import { resolveActiveOrg } from './resolveActiveOrg';
+import type { Request } from 'express';
 
 /**
  * Verify user has update access to the organization
@@ -54,4 +57,107 @@ export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, or
   }
 
   return org;
+}
+
+/**
+ * Verify the caller BELONGS to the organization, returning the organization document.
+ *
+ * The membership-level sibling of `verifyOrgAccess`: use this for org-scoped READS a plain member
+ * legitimately makes (the org's own subscription plan, say), and `verifyOrgAccess` for anything
+ * only an owner/manager should see or change. Picking the wrong one either leaks across a tenant
+ * boundary or breaks a members' screen, so state which you mean at every call site.
+ *
+ * Deliberately non-oracular: `findAccessibleById` returns null for BOTH a nonexistent org and one
+ * the caller has no access to, and both collapse to the same NotFoundError, so this route cannot be
+ * used to enumerate which organization ids exist.
+ *
+ * Uses the shareable ACL (owner + `users[]` + the groups arm), matching `resolveActiveOrg` rather
+ * than the narrower `findMembershipOrgIds`; a read gate must not be stricter than the write-target
+ * validator or a member loses sight of an org they can already act as.
+ */
+// Takes the whole user rather than the `id`/`groups`/`isAdmin` slice it actually reads: the
+// shareable ACL is declared as `findAccessibleById(user: IUserDocument, id)`, so narrowing here
+// would only move the lie to a cast at that call site. Callers pass `req.user`.
+export async function verifyOrgMembership(user: IUserDocument, orgId: string) {
+  if (!orgId || !isValidObjectId(orgId)) {
+    throw new BadRequestError('Invalid organization ID');
+  }
+
+  // Admins already reach every org through the gates below them; verify existence only.
+  if (user.isAdmin) {
+    const org = await organizationRepository.findById(orgId);
+    if (!org) {
+      throw new NotFoundError('Organization not found');
+    }
+    return org;
+  }
+
+  const org = await organizationRepository.shareable.findAccessibleById(user, orgId);
+  if (!org) {
+    throw new NotFoundError('Organization not found');
+  }
+  return org;
+}
+
+/**
+ * Resolve the organization to bill for an AI action from a client-supplied value, rejecting any org
+ * the caller is not a member of. This is the trust boundary for the LLM/media routes, which
+ * otherwise pass `req.body.organizationId` through to the debit unverified.
+ *
+ * - `null`       -> personal account (no org billing)
+ * - `undefined`  -> the caller's own organization (their `organizationId`), or null if they have none
+ * - an org id    -> the client-supplied billing target
+ *
+ * A client-supplied org id is validated strictly through `resolveActiveOrg` - the ONE place a
+ * route turns a client-supplied active org into a trusted scope - so billing authorization can't
+ * drift from data-lake scoping (both must use the same shareable ACL gate); its ForbiddenError /
+ * NotFoundError propagates, because the caller explicitly asked to bill that org and may not.
+ *
+ * The IMPLICIT own-org fallback (`undefined` request) is different: the caller did not choose it,
+ * so a stale `organizationId` pointer must degrade to personal scope rather than 403-lock the
+ * caller out of a route they could always reach. Stale pointers already exist in the data (the
+ * `deleteOrganization` and `assignManager` paths leave them), so validating the fallback through
+ * the same gate and catching a non-member/missing rejection matches `chat.ts`: billing is never an
+ * automatic consequence of the home-org field. Security holds either way - a non-member org is
+ * never billed; the fallback just bills personally instead of failing the request.
+ */
+export async function resolveBillingOrgId(
+  // Accept any authenticated request shape: the LLM/media routes type `req` with a narrowed `Params`
+  // generic that a bare `Request` would reject, and only `req.user`/`req.logger` are needed here.
+  req: Pick<Request, 'user' | 'logger'>,
+  requestedOrgId: string | null | undefined
+): Promise<string | null> {
+  // Explicit personal (null) carries no cross-tenant risk and skips org billing entirely.
+  if (requestedOrgId === null) {
+    return null;
+  }
+
+  // The caller always hands us a full express request (these are authenticated routes); the cast
+  // just bridges `Pick<Request, ...>` back to the `Request` the shared gate is typed against.
+  const reqAsExpress = req as Request;
+
+  // A client-supplied target is a hard trust boundary: validate strictly and let a rejection surface.
+  if (requestedOrgId !== undefined) {
+    return (await resolveActiveOrg(reqAsExpress, requestedOrgId)) ?? null;
+  }
+
+  // Implicit own-org fallback: validate, but degrade to personal scope on a stale pointer.
+  const ownOrgId = req.user?.organizationId?.toString();
+  if (!ownOrgId) {
+    return null;
+  }
+  try {
+    return (await resolveActiveOrg(reqAsExpress, ownOrgId)) ?? null;
+  } catch (err) {
+    // Match by name, not instanceof: resolveActiveOrg throws @bike4mind/common's error classes,
+    // which are not identity-equal to this file's @bike4mind/utils imports.
+    const name = (err as { name?: string })?.name;
+    if (name === 'ForbiddenError' || name === 'NotFoundError') {
+      req.logger?.warn(
+        `resolveBillingOrgId: stale home-org pointer for user ${req.user?.id ?? 'unknown'} -> personal billing scope (${name})`
+      );
+      return null;
+    }
+    throw err; // a transient DB failure must surface as a 5xx, not silently bill personally
+  }
 }

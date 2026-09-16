@@ -109,3 +109,40 @@ describe('apiKeyAuth scope gate', () => {
     expect((await run(undefined, makeReq())).passed).toBe(true);
   });
 });
+
+describe('apiKeyAuth preauthorizedLakeIds binding', () => {
+  const bindingOf = (req: Request) =>
+    (req as Request & { apiKeyInfo?: { preauthorizedLakeIds?: string[] } }).apiKeyInfo?.preauthorizedLakeIds;
+
+  const validation = (extra: Record<string, unknown> = {}) => ({
+    isValid: true,
+    keyId: 'key-1',
+    userId: 'user-1',
+    scopes: [ApiKeyScope.AI_CHAT],
+    rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    ...extra,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    findByIdMock.mockResolvedValue({ id: 'user-1', isBanned: false });
+  });
+
+  it('copies the key binding from the validation onto req.apiKeyInfo', async () => {
+    validateUserApiKeyMock.mockResolvedValue(validation({ preauthorizedLakeIds: ['lake-a'] }));
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    // /api/sessions/create reads this to refuse any lake the key was not bound to at mint time.
+    // Dropping it here fails that containment OPEN for every bound key.
+    expect(bindingOf(req)).toEqual(['lake-a']);
+  });
+
+  it('leaves the binding undefined for a key that carries none', async () => {
+    validateUserApiKeyMock.mockResolvedValue(validation());
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(bindingOf(req)).toBeUndefined();
+  });
+});

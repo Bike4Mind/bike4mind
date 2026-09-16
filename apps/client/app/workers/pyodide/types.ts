@@ -15,6 +15,8 @@ export interface ExecutionResult {
 /** Messages sent from main thread to worker */
 export type PyodideWorkerMessage =
   | { type: 'initialize'; baseUrl?: string }
+  // timeoutMs is advisory: nothing inside the worker preempts a running Python step. The
+  // enforcement is the parent calling interrupt(), which drops the sandbox frame.
   | { type: 'execute'; code: string; packages: string[]; timeoutMs: number }
   | { type: 'cancel' };
 

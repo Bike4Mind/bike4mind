@@ -120,6 +120,7 @@ export function toModelInfo(record: RenderableModelRecord): ModelInfo {
       record.disabledReason ?? record.autoDisabledReason ?? (retired ? 'retired by the provider' : undefined),
     // Absent means "not filtered": deprecation is never inferred by the adapter.
     deprecationDate: record.lifecycle?.deprecationDate,
+    replacedBy: record.lifecycle?.replacedBy,
     trainingCutoff: record.trainingCutoff,
     releaseDate: record.releaseDate,
     logoFile: record.logoFile,
@@ -164,6 +165,9 @@ const VENDOR_BY_BACKEND: Record<ModelBackend, string> = {
   // Vendor, not backend: Bedrock-served Kimi carries the same 'moonshotai'
   // vendor while routing through ModelBackend.Bedrock.
   [ModelBackend.Kimi]: 'moonshotai',
+  // Matches the `deepseek.` prefix the Bedrock-served rows resolve to, so both
+  // tiers file under one vendor in the admin dashboard.
+  [ModelBackend.DeepSeek]: 'deepseek',
   [ModelBackend.BFL]: 'black-forest-labs',
   [ModelBackend.AWS]: 'amazon',
   [ModelBackend.VoyageAI]: 'voyageai',
@@ -241,9 +245,12 @@ export function toModelRecord(info: ModelInfo): RenderableModelRecord {
     supportsTools: info.supportsTools,
     supportsImageVariation: info.supportsImageVariation,
     supportsSafetyTolerance: info.supportsSafetyTolerance,
-    lifecycle: info.deprecationDate
-      ? { status: 'deprecated', deprecationDate: info.deprecationDate }
-      : { status: 'active' },
+    lifecycle: {
+      ...(info.deprecationDate
+        ? { status: 'deprecated' as const, deprecationDate: info.deprecationDate }
+        : { status: 'active' as const }),
+      ...(info.replacedBy ? { replacedBy: info.replacedBy } : {}),
+    },
     description: info.description,
     logoFile: info.logoFile,
     rank: info.rank,

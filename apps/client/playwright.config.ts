@@ -76,6 +76,21 @@ const specProjects = [
     testMatch: /(?:^|\/)skills\.spec\.ts$/,
     auth: './e2e/.auth/skills-user.json',
   },
+  // Byte-fidelity suite: opt-in via EXPORT_BYTES_RUN. Three tests that each wait out an async S3
+  // moderation scan before the export can embed anything, so left in the default set they would
+  // eat most of the suite's 30-min globalTimeout on the serial (PW_WORKERS=1) label run and fail
+  // unrelated specs.
+  ...(process.env.EXPORT_BYTES_RUN === 'true'
+    ? [
+        {
+          name: 'notebook-export-bytes',
+          setupMatch: /(?:^|\/)notebook-export-bytes\.setup\.ts$/,
+          testMatch: /(?:^|\/)notebook-export-bytes\.spec\.ts$/,
+          auth: './e2e/.auth/notebook-export-bytes-user.json',
+          skipWarmup: true,
+        },
+      ]
+    : []),
   // AI latency suites: only included when AI_LATENCY_RUN=true (e2e-ai-latency workflow)
   ...(process.env.AI_LATENCY_RUN === 'true'
     ? [
@@ -146,10 +161,13 @@ export default defineConfig({
       use: { storageState: adminAuthFile },
     },
     // Per-spec setup projects (each creates only its own user)
-    ...specProjects.map(({ name, setupMatch }) => ({
+    // `skipWarmup` opts a suite out of priming the AI containers. Only for a suite that makes no
+    // model call at all: warmup's AI legs are the slowest and flakiest part of it, and a suite that
+    // never reaches a model pays their cost and inherits their failures for nothing.
+    ...specProjects.map(({ name, setupMatch, skipWarmup }) => ({
       name: `setup-${name}`,
       testMatch: [setupMatch],
-      dependencies: ['warmup'],
+      dependencies: skipWarmup ? ['setup-core'] : ['warmup'],
     })),
     // Unauthenticated specs need core + projects user (for login credentials)
     {

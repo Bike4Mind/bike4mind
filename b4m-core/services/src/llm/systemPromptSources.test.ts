@@ -202,7 +202,12 @@ describe('filterByPromptMode', () => {
   });
 
   it('keeps what the caller themselves supplied under raw', () => {
-    expect(filterByPromptMode(everything, 'raw').map(t => t.source)).toEqual(['extraContext', 'urls', 'attachedFiles']);
+    expect(filterByPromptMode(everything, 'raw').map(t => t.source)).toEqual([
+      'extraContext',
+      'urls',
+      'attachedFiles',
+      'callerPrompt',
+    ]);
   });
 
   it('adds retrieval and nothing else under grounded', () => {
@@ -212,6 +217,7 @@ describe('filterByPromptMode', () => {
       'lakeMemory',
       'urls',
       'attachedFiles',
+      'callerPrompt',
     ]);
   });
 
@@ -224,6 +230,7 @@ describe('filterByPromptMode', () => {
       'lakeMemory',
       'urls',
       'attachedFiles',
+      'callerPrompt',
     ]);
   });
 

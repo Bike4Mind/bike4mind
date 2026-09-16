@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
+  MANAGEMENT_RATE_LIMIT,
   buildRateLimitKeys,
   checkApiKeyRateLimit,
   extractApiKeyFromHeaders,
@@ -343,6 +344,53 @@ describe('apiKeyRateLimitCheck', () => {
         expect(result.limitType).toBe('minute');
         // Day counter never consulted once the minute limit rejects.
         expect(cacheRepository.findByKey).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("counter: 'management'", () => {
+      it('charges its own keys and ceilings, so an exhausted request window cannot block it', async () => {
+        // Both increments succeed: the request-quota day counter is a different
+        // cache key, so the key being at its daily ceiling is not consulted here.
+        vi.mocked(cacheRepository.tryIncrementWithinLimitFixedWindow)
+          .mockResolvedValueOnce({ success: true, count: 1, expiresAt: future(MINUTE_MS) })
+          .mockResolvedValueOnce({ success: true, count: 1, expiresAt: future(DAY_MS) });
+
+        const result = await checkApiKeyRateLimit(mockKeyId, mockRateLimit, mockContext, { counter: 'management' });
+
+        expect(result.allowed).toBe(true);
+        const keys = vi.mocked(cacheRepository.tryIncrementWithinLimitFixedWindow).mock.calls.map(call => call[0]);
+        expect(keys).toEqual([
+          `api-key-rate-limit:${mockKeyId}:management:minute`,
+          `api-key-rate-limit:${mockKeyId}:management:day`,
+        ]);
+        // Ceilings are the management ones, not the key's configured 5/100.
+        const limits = vi.mocked(cacheRepository.tryIncrementWithinLimitFixedWindow).mock.calls.map(call => call[1]);
+        expect(limits).toEqual([MANAGEMENT_RATE_LIMIT.requestsPerMinute, MANAGEMENT_RATE_LIMIT.requestsPerDay]);
+        expect(result.headers['X-RateLimit-Limit-Day']).toBe(MANAGEMENT_RATE_LIMIT.requestsPerDay);
+      });
+
+      it('still rejects once the management quota itself is exhausted', async () => {
+        vi.mocked(cacheRepository.tryIncrementWithinLimitFixedWindow)
+          .mockResolvedValueOnce({ success: true, count: 1, expiresAt: future(MINUTE_MS) })
+          .mockResolvedValueOnce({
+            success: false,
+            count: MANAGEMENT_RATE_LIMIT.requestsPerDay,
+            expiresAt: future(DAY_MS),
+          });
+
+        const result = await checkApiKeyRateLimit(mockKeyId, mockRateLimit, mockContext, { counter: 'management' });
+
+        expect(result.allowed).toBe(false);
+        expect(result.limitType).toBe('day');
+        expect(result.error).toContain(`${MANAGEMENT_RATE_LIMIT.requestsPerDay} requests per day`);
+      });
+
+      it('leaves the default counter on its original unnamespaced keys', () => {
+        expect(buildRateLimitKeys(mockKeyId)).toEqual(buildRateLimitKeys(mockKeyId, 'request'));
+        expect(buildRateLimitKeys(mockKeyId, 'request')).toEqual({
+          minuteKey: `api-key-rate-limit:${mockKeyId}:minute`,
+          dayKey: `api-key-rate-limit:${mockKeyId}:day`,
+        });
       });
     });
 

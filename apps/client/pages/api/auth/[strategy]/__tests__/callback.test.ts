@@ -33,6 +33,11 @@ vi.mock('@server/auth/authSuccessRedirect', () => ({ authSuccessRedirectQuery: (
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 
+const mockIssueBrowserSession = vi.fn().mockResolvedValue({ accessToken: 'jwt-access', sid: 'sid' });
+vi.mock('@server/auth/issueSession', () => ({
+  issueBrowserSession: (...a: any[]) => mockIssueBrowserSession(...a),
+}));
+
 // Import after mocks are registered.
 import handler from '@pages/api/auth/[strategy]/callback';
 
@@ -129,5 +134,38 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
 
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'forbidden_system_user' }));
     expect(res._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+  });
+});
+
+describe('[strategy]/callback - banned user gate', () => {
+  it('refuses to issue a session for a banned user and records the refusal', async () => {
+    const res = await runCallback(null, { id: 'u-banned', email: 'banned@example.com', isBanned: true }, undefined);
+
+    expect(res._getRedirectUrl()).toBe('/login?error=account_suspended');
+    expect(mockAuthFailCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ strategy: 'github', reason: 'user_banned', email: 'banned@example.com' })
+    );
+    expect(mockIssueBrowserSession).not.toHaveBeenCalled();
+  });
+
+  it('still signs in a user who is not banned', async () => {
+    const res = await runCallback(null, { id: 'u-ok', email: 'ok@example.com', isBanned: false }, undefined);
+    // The handler does not await passport's callback, and the success path awaits more
+    // than the refusal paths do, so let its remaining microtasks drain before asserting.
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(mockIssueBrowserSession).toHaveBeenCalled();
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+  });
+});
+
+describe('[strategy]/callback - invite gate', () => {
+  it('surfaces registration_closed with an invite-only message', async () => {
+    const res = await runCallback(null, undefined, { code: 'registration_closed' });
+
+    expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'registration_closed' }));
+    expect(res._getRedirectUrl()).toBe(
+      `/login?error=${encodeURIComponent('This instance is invite-only. Ask an administrator for an invite.')}`
+    );
   });
 });

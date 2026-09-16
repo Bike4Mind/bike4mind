@@ -1,9 +1,23 @@
 import { accessibleBy } from '@casl/mongoose';
 import { baseApi } from '@server/middlewares/baseApi';
-import { IUserObject, Project, User, executeFacetCompatible, convertPipelineForDocumentDB } from '@bike4mind/database';
+import {
+  IUserObject,
+  Project,
+  User,
+  executeFacetCompatible,
+  convertPipelineForDocumentDB,
+  projectRepository,
+} from '@bike4mind/database';
 import { mongoose } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import { ADMIN_USER_PROJECTION, PUBLIC_USER_LIST_PROJECTION } from '@client/app/utils/adminUserProjection';
+import {
+  ADMIN_DEFAULT_SORT_FIELD,
+  ADMIN_USER_PROJECTION,
+  ADMIN_USER_SORT_FIELDS,
+  PUBLIC_DEFAULT_SORT_FIELD,
+  PUBLIC_USER_LIST_PROJECTION,
+  PUBLIC_USER_SORT_FIELDS,
+} from '@client/app/utils/adminUserProjection';
 import * as z from 'zod';
 import qs from 'qs';
 import { Request } from 'express';
@@ -16,10 +30,15 @@ const querySchema = z.object({
     .optional()
     .transform(val => val?.trim()),
   sortField: z.string().default('createdAt'),
-  sortOrder: z.enum(['asc', 'desc']).default('desc'),
+  // No default here - the effective order depends on which sort field is actually applied,
+  // resolved below once effectiveSortField is known.
+  sortOrder: z.enum(['asc', 'desc']).optional(),
   orgSearch: z.array(z.string()).default(['all']),
   tags: z.array(z.string()).optional(),
-  projectId: z.string().optional(),
+  projectId: z
+    .string()
+    .regex(/^[0-9a-fA-F]{24}$/)
+    .optional(),
   publicView: z
     .string()
     .optional()
@@ -42,8 +61,9 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     // users, downloadAll is admin-only, and the page size is hard-capped.
     const isAdmin = !!req.user?.isAdmin;
     if (publicView && !isAdmin) {
-      // projectId-scoped requests show members of one specific project -- not a full-directory
-      // enumeration path -- so they are exempt from the search-term minimum.
+      // projectId-scoped requests show members of one specific project rather than the whole
+      // directory, so they are exempt from the search-term minimum. What makes that safe is
+      // the access check on the project itself, further down -- not the narrowing alone.
       if (!projectId && (!search || search.length < 3)) {
         return res.status(400).json({ message: 'A search term of at least 3 characters is required.' });
       }
@@ -56,6 +76,18 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     const PUBLIC_VIEW_MAX_LIMIT = 50;
     const effectiveLimit = publicView && !isAdmin ? Math.min(limit, PUBLIC_VIEW_MAX_LIMIT) : limit;
 
+    // $sort runs before $project, so the allowlist is keyed off the same publicView flag that
+    // picks the projection: a caller can only rank on fields their own response returns.
+    // Out-of-allowlist values fall back to the default rather than 400, so a stale bookmark
+    // still renders a list instead of an error.
+    const allowedSortFields = publicView ? PUBLIC_USER_SORT_FIELDS : ADMIN_USER_SORT_FIELDS;
+    const defaultSortField = publicView ? PUBLIC_DEFAULT_SORT_FIELD : ADMIN_DEFAULT_SORT_FIELD;
+    const effectiveSortField = allowedSortFields.has(sortField) ? sortField : defaultSortField;
+    // username reads better ascending (A-Z); createdAt keeps the historical newest-first
+    // default. Only kicks in when the caller did not explicitly ask for an order, so an
+    // explicit sortOrder=desc on the public picker still reverses it.
+    const effectiveSortOrder = sortOrder ?? (effectiveSortField === PUBLIC_DEFAULT_SORT_FIELD ? 'asc' : 'desc');
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let query: mongoose.FilterQuery<any> = publicView
       ? User.find().getQuery()
@@ -64,11 +96,22 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     const conditions = [];
     if (search) {
       const escapedSearch = escapeRegex(search);
-      const searchConditions: mongoose.FilterQuery<typeof User>[] = [
-        { name: { $regex: escapedSearch, $options: 'i' } },
-        { username: { $regex: escapedSearch, $options: 'i' } },
-        { email: { $regex: escapedSearch, $options: 'i' } },
-      ];
+      // An unanchored substring over email made publicView a directory crawl: `search=com`
+      // matched every address on the instance. Anchor the public picker's match instead --
+      // username/email at the start, name at the start of any word so a last-name lookup
+      // still works. Admins and the CASL-scoped path keep substring search.
+      const searchConditions: mongoose.FilterQuery<typeof User>[] =
+        publicView && !isAdmin
+          ? [
+              { name: { $regex: `(?:^|[\\s.\\-])${escapedSearch}`, $options: 'i' } },
+              { username: { $regex: `^${escapedSearch}`, $options: 'i' } },
+              { email: { $regex: `^${escapedSearch}`, $options: 'i' } },
+            ]
+          : [
+              { name: { $regex: escapedSearch, $options: 'i' } },
+              { username: { $regex: escapedSearch, $options: 'i' } },
+              { email: { $regex: escapedSearch, $options: 'i' } },
+            ];
 
       // If the search string looks like a valid ObjectId, add exact match condition
       if (/^[0-9a-fA-F]{24}$/.test(search)) {
@@ -80,8 +123,11 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
       });
     }
 
-    // Add tag filtering conditions
-    if (tags && tags.length > 0) {
+    // tags selects on isAdmin/tags, neither of which the public projection returns. On the
+    // CASL-scoped path that reveals nothing the caller could not already read, but publicView
+    // bypasses CASL, so for a non-admin there `tags[]=Admin` answers "who are the admins".
+    const canFilterByTags = isAdmin || !publicView;
+    if (canFilterByTags && tags && tags.length > 0) {
       const hasAdminTag = tags.includes('Admin');
       const otherTags = tags.filter(tag => tag !== 'Admin');
 
@@ -130,10 +176,22 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     }
 
     if (projectId) {
-      const project = await Project.findById(projectId);
+      // This branch is exempt from the search-term minimum and publicView bypasses CASL, so
+      // without an access check it hands any caller an arbitrary project's roster. Admins keep
+      // the unrestricted lookup; everyone else must hold read/write on the project. A caller
+      // without access gets the same 404 as a project that does not exist, so this does not
+      // become a project-existence oracle.
+      const project = isAdmin
+        ? await Project.findById(projectId)
+        : await projectRepository.shareable.findAccessibleById(req.user, projectId);
+
+      if (!project) {
+        return res.status(404).json({ message: 'Project not found.' });
+      }
+
       query = {
         ...query,
-        _id: { $in: project?.users.map(u => new mongoose.Types.ObjectId(u.userId)) },
+        _id: { $in: project.users.map(u => new mongoose.Types.ObjectId(u.userId)) },
       };
     }
 
@@ -177,7 +235,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
         {
           $sort: {
             score: -1,
-            [sortField]: sortOrder === 'asc' ? 1 : -1,
+            [effectiveSortField]: effectiveSortOrder === 'asc' ? 1 : -1,
           },
         },
         {
@@ -209,7 +267,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
             $and: [query, organizationFilter],
           },
         },
-        { $sort: { [sortField]: sortOrder === 'asc' ? 1 : -1 } },
+        { $sort: { [effectiveSortField]: effectiveSortOrder === 'asc' ? 1 : -1 } },
         { $project: publicView ? PUBLIC_USER_LIST_PROJECTION : ADMIN_USER_PROJECTION },
       ];
     }

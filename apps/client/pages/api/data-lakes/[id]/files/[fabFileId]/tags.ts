@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import { SetLakeFileTagsRequestInput } from '@bike4mind/common';
@@ -42,7 +43,7 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
  * client-side invalidation fan-out a future UI hook for this door must call - exported for that
  * reason, since a membership-affecting write here is invisible to the query cache otherwise.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .put(async (req: Request<{}, unknown, unknown, { id: string; fabFileId: string }>, res) => {
     const { id, fabFileId } = req.query;

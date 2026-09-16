@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { attributeAccessedLakeIds } from './attributeAccessedLakes';
+import { attributeAccessedLakeIds, attributeFileToLakeIds } from './attributeAccessedLakes';
 
 const LAKES = [
   { id: 'lake1', datalakeTag: 'datalake:lake1' },
@@ -91,5 +91,127 @@ describe('attributeAccessedLakeIds', () => {
       });
       expect(ids).toEqual(['opti-knowledge']);
     });
+  });
+
+  describe('nameless tag entries', () => {
+    const STATIC = { id: 'opti-knowledge', datalakeTag: 'datalake:opti', fileTagPrefix: 'opti:' };
+
+    // FabFile.tags is a schema-less [Object] array, so `tags.map(t => t.name)` on a legacy row can
+    // hand this a list with holes in it. Callers string-inspect nothing themselves, so a throw here
+    // would take down a whole search.
+    it('ignores non-string tag names rather than throwing', () => {
+      const tags = [undefined, null, 'datalake:lake1', 42] as unknown as string[];
+      expect(attributeFileToLakeIds(tags, LAKES)).toEqual(['lake1']);
+    });
+
+    it('ignores non-string tag names on the open-prefix arm too', () => {
+      const tags = [undefined, 'opti:policy'] as unknown as string[];
+      expect(attributeFileToLakeIds(tags, [STATIC])).toEqual(['opti-knowledge']);
+    });
+
+    it('a file whose tags are all unnameable attributes to nothing', () => {
+      const tags = [undefined, null] as unknown as string[];
+      expect(attributeFileToLakeIds(tags, LAKES)).toEqual([]);
+    });
+  });
+});
+
+/**
+ * The creator-anchored prefix arm: a DYNAMIC lake's `fileTagPrefix` is user-chosen, so it names a
+ * lake only in conjunction with the lake creator owning the file. This is the in-memory mirror of
+ * `buildDataLakeMembershipFilter`'s `owned` branch; the real-server parity guard for it lives in
+ * apps/client/server/services/dataLakeMembershipAttributionParity.e2e.test.ts.
+ */
+describe('attributeFileToLakeIds: dynamic-lake membership arm', () => {
+  const CREATOR = 'creator-1';
+  const DYNAMIC = {
+    id: 'lakeDyn',
+    datalakeTag: 'datalake:acme',
+    fileTagPrefix: 'acme:',
+    membership: {
+      kind: 'owned' as const,
+      datalakeTag: 'datalake:acme',
+      fileTagPrefix: 'acme:',
+      creatorUserId: CREATOR,
+    },
+  };
+
+  it("attributes a prefix-only member the lake's creator owns", () => {
+    expect(attributeFileToLakeIds(['acme:legal'], [DYNAMIC], CREATOR)).toEqual(['lakeDyn']);
+  });
+
+  // The whole reason the prefix alone was refused before. `fileTagPrefix` is unique only per
+  // creator, so without this conjunct anyone could mint a lake with prefix `acme:` and have every
+  // `acme:*` file in the database attribute to it.
+  it('refuses the same tag on a file owned by anyone else', () => {
+    expect(attributeFileToLakeIds(['acme:legal'], [DYNAMIC], 'someone-else')).toEqual([]);
+  });
+
+  it('leaves the meta-tag arm working for a file the creator does not own', () => {
+    expect(attributeFileToLakeIds(['datalake:acme'], [DYNAMIC], 'someone-else')).toEqual(['lakeDyn']);
+  });
+
+  // The audit-trail caller reverses bare tag lists and has no owner to pass. Widening the function
+  // must not have changed what it already returned.
+  it('is inert when no owner is supplied', () => {
+    expect(attributeFileToLakeIds(['acme:legal'], [DYNAMIC])).toEqual([]);
+  });
+
+  it('fails closed to meta-tag-only for a creator-less lake row', () => {
+    const creatorless = { ...DYNAMIC, membership: { ...DYNAMIC.membership, creatorUserId: null } };
+    expect(attributeFileToLakeIds(['acme:legal'], [creatorless], CREATOR)).toEqual([]);
+    expect(attributeFileToLakeIds(['datalake:acme'], [creatorless], CREATOR)).toEqual(['lakeDyn']);
+  });
+
+  // A registry scope's prefix arm carries NO ownership conjunct, so routing one through this arm
+  // would reopen the cross-tenant hole. Registry lakes are the openLakeTagPrefix arm instead.
+  it('never applies the ownership arm to a registry-kind scope', () => {
+    const registryScoped = {
+      id: 'not-a-static-lake',
+      datalakeTag: 'datalake:acme',
+      fileTagPrefix: 'acme:',
+      membership: { kind: 'registry' as const, datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:' },
+    };
+    expect(attributeFileToLakeIds(['acme:legal'], [registryScoped], CREATOR)).toEqual([]);
+  });
+
+  it('refuses a reserved-namespace prefix, which would match every other lake meta-tag', () => {
+    const reserved = {
+      ...DYNAMIC,
+      membership: { ...DYNAMIC.membership, fileTagPrefix: 'datalake:' },
+    };
+    expect(attributeFileToLakeIds(['datalake:someone-elses-lake'], [reserved], CREATOR)).toEqual([]);
+  });
+
+  // prefixArmTagNames, not satisfiesTagPrefix: the read arm's regex has no suffix requirement, so
+  // a bare `acme:` genuinely IS membership and must attribute the same way the browse lists it.
+  it('treats a bare prefix tag as membership, matching the read arm', () => {
+    expect(attributeFileToLakeIds(['acme:'], [DYNAMIC], CREATOR)).toEqual(['lakeDyn']);
+  });
+
+  it('does not attribute a tag that merely contains the prefix', () => {
+    expect(attributeFileToLakeIds(['not-acme:legal'], [DYNAMIC], CREATOR)).toEqual([]);
+  });
+
+  // Attribution is case-SENSITIVE because the read arm's regex is unflagged - a file the query
+  // does not see under the prefix must not be attributed to that lake either.
+  it('is case-sensitive, matching the unflagged read-arm regex', () => {
+    expect(attributeFileToLakeIds(['Acme:legal'], [DYNAMIC], CREATOR)).toEqual([]);
+  });
+
+  it("a file matching two of the creator's lakes attributes to both, so the caller can refuse it", () => {
+    const second = {
+      id: 'lakeDyn2',
+      datalakeTag: 'datalake:acme2',
+      fileTagPrefix: 'acme:sub:',
+      membership: {
+        kind: 'owned' as const,
+        datalakeTag: 'datalake:acme2',
+        fileTagPrefix: 'acme:sub:',
+        creatorUserId: CREATOR,
+      },
+    };
+    const ids = attributeFileToLakeIds(['acme:sub:legal'], [DYNAMIC, second], CREATOR);
+    expect(new Set(ids)).toEqual(new Set(['lakeDyn', 'lakeDyn2']));
   });
 });

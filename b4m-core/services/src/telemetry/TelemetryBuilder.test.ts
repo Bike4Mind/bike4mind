@@ -5,7 +5,7 @@ import {
   type SubagentTelemetry,
   type ToolTelemetry,
 } from '@bike4mind/common';
-import { TelemetryBuilder } from './TelemetryBuilder';
+import { categorizeToolError, TelemetryBuilder } from './TelemetryBuilder';
 
 const sessionId = { hash: 'test-hash', dateKey: '2026-01-01' };
 
@@ -194,5 +194,25 @@ describe('TelemetryBuilder anomaly classification', () => {
 
       expect(anomalies.anomalyScore > 0).toBe(anomalies.primaryAnomaly !== 'none');
     });
+  });
+});
+
+// Pins the classification of every message observed on the quest-processing failure path, so
+// a future keyword addition can't silently re-bucket a neighbouring message.
+describe('categorizeToolError', () => {
+  const cases: Array<[string, ReturnType<typeof categorizeToolError>]> = [
+    ['OpenAI API key is expired', 'auth_error'],
+    ['Invalid API key', 'auth_error'],
+    ['XAI API key is required', 'auth_error'],
+    ['Incorrect API key provided: sk-...', 'auth_error'],
+    ['401 Incorrect API key provided', 'auth_error'],
+    ['Invalid credential supplied', 'auth_error'],
+    ['User not found', 'internal_error'],
+    ['Session not found', 'internal_error'],
+    ['validation failed: missing field', 'validation_error'],
+  ];
+
+  it.each(cases)('classifies %j as %s', (message, expected) => {
+    expect(categorizeToolError(message)).toBe(expected);
   });
 });

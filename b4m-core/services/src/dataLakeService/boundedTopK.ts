@@ -3,9 +3,11 @@
  * memory is O(capacity) rather than O(items). Lets a caller rank a corpus far larger than
  * memory by streaming it through in pages.
  *
- * Sorted-array insert rather than a heap: capacity here is a retrieval topK (tens, capped at
- * 100), where the O(capacity) splice is cheaper in practice than heap bookkeeping and the
- * ordering is directly inspectable. Revisit if capacity ever grows by orders of magnitude.
+ * Sorted-array insert rather than a heap: capacity here is a retrieval topK, or a small fixed
+ * multiple of one where the per-document cap widens the candidate pool - so tens, and a few
+ * hundred at the ceiling (topK itself is capped at 100). At that size the O(capacity) splice is
+ * cheaper in practice than heap bookkeeping and the ordering is directly inspectable. Revisit if
+ * capacity ever grows by orders of magnitude.
  *
  * `compare` must be a TOTAL order (no ties left to arrival order), otherwise the result depends
  * on the order pages happen to arrive and stops being reproducible.

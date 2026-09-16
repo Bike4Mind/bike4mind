@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Alert, Box, Button, Chip, CircularProgress, Divider, Input, Link, Stack, Typography } from '@mui/joy';
 import type { IDataLakeProposalDocument } from '@bike4mind/common';
+import { RESEARCH_RUN_PRODUCER } from '@bike4mind/common';
 
 export interface DataLakeProposalsPanelProps {
   proposals: IDataLakeProposalDocument[] | undefined;
@@ -17,6 +18,13 @@ export interface DataLakeProposalsPanelProps {
   onApprove: (proposalId: string) => void;
   onDecline: (proposalId: string, reason?: string) => void;
 }
+
+/**
+ * `producer` is deliberately free-form so a new producer needs no schema change, which means this
+ * renders straight into a reviewer's sentence. Known producers get a human name; anything else falls
+ * back to the raw token, so an unmapped producer reads oddly rather than disappearing.
+ */
+const producerLabel = (producer: string): string => (producer === RESEARCH_RUN_PRODUCER ? 'a research run' : producer);
 
 const formatRetrieved = (value: Date | string | undefined): string => {
   if (!value) return 'unknown date';
@@ -134,7 +142,7 @@ export function DataLakeProposalsPanel({
               </Link>
 
               <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-proposal-provenance">
-                {`Found by ${proposal.provenance.producer}`}
+                {`Found by ${producerLabel(proposal.provenance.producer)}`}
                 {proposal.provenance.query ? ` while researching "${proposal.provenance.query}"` : ''}
                 {` \u00b7 retrieved ${formatRetrieved(proposal.provenance.retrievedAt)}`}
               </Typography>

@@ -273,16 +273,20 @@ jobs:
 
       - name: Validate GitHub Secrets
         if: steps.prs-initial.outputs.count > 0
+        env:
+          WHATS_NEW_AWS_ACCESS_KEY_ID: ${{ secrets.WHATS_NEW_AWS_ACCESS_KEY_ID }}
+          WHATS_NEW_AWS_SECRET_ACCESS_KEY: ${{ secrets.WHATS_NEW_AWS_SECRET_ACCESS_KEY }}
+          WHATS_NEW_QUEUE_URL: ${{ secrets.WHATS_NEW_QUEUE_URL }}
         run: |
-          if [ -z "${{ secrets.WHATS_NEW_AWS_ACCESS_KEY_ID }}" ]; then
+          if [ -z "$WHATS_NEW_AWS_ACCESS_KEY_ID" ]; then
             echo "::error::WHATS_NEW_AWS_ACCESS_KEY_ID secret is not configured"
             exit 1
           fi
-          if [ -z "${{ secrets.WHATS_NEW_AWS_SECRET_ACCESS_KEY }}" ]; then
+          if [ -z "$WHATS_NEW_AWS_SECRET_ACCESS_KEY" ]; then
             echo "::error::WHATS_NEW_AWS_SECRET_ACCESS_KEY secret is not configured"
             exit 1
           fi
-          if [ -z "${{ secrets.WHATS_NEW_QUEUE_URL }}" ]; then
+          if [ -z "$WHATS_NEW_QUEUE_URL" ]; then
             echo "::error::WHATS_NEW_QUEUE_URL secret is not configured"
             exit 1
           fi
@@ -295,6 +299,9 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.WHATS_NEW_AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.WHATS_NEW_AWS_SECRET_ACCESS_KEY }}
           WHATS_NEW_QUEUE_URL: ${{ secrets.WHATS_NEW_QUEUE_URL }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          REPOSITORY_URL: ${{ github.repositoryUrl }}
+          CHANGELOG_EXCERPT: ${{ steps.changelog-excerpt.outputs.excerpt }}
         run: |
           # Read collected data
           commits=$(cat commits.json)
@@ -309,15 +316,15 @@ jobs:
 
           echo "Generated Date: $GENERATED_DATE"
           echo "Correlation ID: $CORRELATION_ID"
-          echo "Environment: ${{ inputs.environment }}"
+          echo "Environment: $ENVIRONMENT"
 
           # Build JSON payload (PR-based, no releases)
           jq -n \
             --arg correlationId "$CORRELATION_ID" \
             --arg generatedDate "$GENERATED_DATE" \
-            --arg environment "${{ inputs.environment }}" \
-            --arg repo "${{ github.repositoryUrl }}" \
-            --arg changelogExcerpt "${{ steps.changelog-excerpt.outputs.excerpt }}" \
+            --arg environment "$ENVIRONMENT" \
+            --arg repo "$REPOSITORY_URL" \
+            --arg changelogExcerpt "$CHANGELOG_EXCERPT" \
             --argjson commits "$commits" \
             --argjson prs "$prs" \
             --argjson changelogData "$changelog" \
@@ -351,17 +358,23 @@ jobs:
 
       - name: Report success
         if: success() && steps.prs-initial.outputs.count > 0
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          PR_COUNT: ${{ steps.prs-initial.outputs.count }}
+          COMMIT_COUNT: ${{ steps.commits.outputs.count }}
         run: |
           echo "::notice::What's New modal generation queued successfully!"
           echo "::notice::Date: $(date -u +%Y-%m-%d)"
-          echo "::notice::Environment: ${{ inputs.environment }}"
-          echo "::notice::PRs: ${{ steps.prs-initial.outputs.count }}, Commits: ${{ steps.commits.outputs.count }}"
+          echo "::notice::Environment: $ENVIRONMENT"
+          echo "::notice::PRs: $PR_COUNT, Commits: $COMMIT_COUNT"
 
       - name: Report dry run
         if: success() && steps.prs-initial.outputs.count > 0 && inputs.dry_run == true
+        env:
+          PR_COUNT: ${{ steps.prs-initial.outputs.count }}
         run: |
           echo "::notice::DRY RUN MODE - No message sent to SQS"
-          echo "::notice::Would have processed ${{ steps.prs-initial.outputs.count }} PRs"
+          echo "::notice::Would have processed $PR_COUNT PRs"
 
       - name: Report failure
         if: failure()

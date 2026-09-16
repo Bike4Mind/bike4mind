@@ -16,7 +16,10 @@ export interface IOrganizationObject extends HydratedDocument<IOrganizationDocum
 
 interface IOrganizationModel extends Model<IOrganizationDocument, {}> {
   isNew: boolean;
-  update: (organization: IOrganizationDocument) => Promise<unknown>;
+  // Accepts a targeted partial (id + only the changed fields), not just a whole document -
+  // the static below just $sets whatever it is handed, and passing a partial is how callers
+  // avoid reverting a concurrent write to fields they did not touch.
+  update: (organization: Partial<IOrganizationDocument> & { id: string }) => Promise<unknown>;
   findShareAccessById: (userId: string, id: string) => Promise<IOrganizationDocument | null>;
 }
 
@@ -40,6 +43,13 @@ const MEMBER_PERMISSIONS = ORG_MEMBERSHIP_ACL_PERMISSIONS;
  *
  * Deliberately NO groups arm, unlike the shareable ACL (`findAccessibleById`) that the write-side
  * `resolveActiveOrg` validates against; see that function's note on the wider write predicate.
+ *
+ * Deliberately NO managerId/adminUserIds arms either, and #2005 is the reason to keep it that way:
+ * org-admin rights DO grant lake visibility, but they earn it through `AccessContext
+ * .administeredOrgIds` (`findIdsWithAdminRights` -> the org-admin arm of `findAccessible`), not by
+ * being folded in here. Widening this predicate would reach the switcher and therefore
+ * `resolveActiveOrg`, turning "may administer that org" into "may write as that org" - a privilege
+ * change, not a visibility fix. Admin rights and membership are meant to be different sets.
  */
 const orgMembershipFilter = (userId: string): Record<string, unknown> => ({
   $or: [{ userId }, { users: { $elemMatch: { userId, permissions: { $in: MEMBER_PERMISSIONS } } } }],
@@ -162,7 +172,7 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
 
         return result;
       },
-      update: function (organization: IOrganizationDocument) {
+      update: function (organization: Partial<IOrganizationDocument> & { id: string }) {
         return this.updateOne({ _id: organization.id }, { $set: organization });
       },
     },

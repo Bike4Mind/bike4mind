@@ -25,7 +25,10 @@ interface AnalyticsMetricResponse {
     totalResponseTime?: number;
     contextRetrievalTime?: number;
     modelInferenceTime?: number;
+    /** Unset when the turn never rendered anything visible. */
     firstTokenTime?: number;
+    /** First chunk of any kind, hidden reasoning included. */
+    firstChunkTime?: number;
     clientFirstTokenTime?: number;
     processPickupTime?: number;
     streamingPerformance?: {

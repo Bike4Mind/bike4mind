@@ -43,7 +43,8 @@ function mapToFabFileAdapters(
     fabFiles: IFabFileRepository;
     adminSettings: IAdminSettingsRepository;
     users: IUserRepository;
-    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
+    // 'find' is forwarded straight to createFabFile, for its fallback tagger's prefix-overlap check.
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'find'>;
   }
 ) {
   return {
@@ -96,7 +97,8 @@ export async function processAttachments(
       fabFiles: IFabFileRepository;
       adminSettings: IAdminSettingsRepository;
       users: IUserRepository;
-      dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
+      // 'find' is forwarded straight to createFabFile, for its fallback tagger's prefix-overlap check.
+      dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'find'>;
     };
   },
   organizationId?: string

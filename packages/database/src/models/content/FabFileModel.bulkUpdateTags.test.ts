@@ -59,6 +59,37 @@ describe('FabFileRepository.bulkUpdateTags', () => {
     expect(freshB?.tags?.map(t => t.name)).toEqual(['acme:finance']);
   });
 
+  it('still reports a modification for an identical-value op, because the schema stamps updatedAt', async () => {
+    // The load-bearing fact for applyTaxonomySuggestions, pinned at the layer that owns it: an op
+    // whose $set writes the value already stored is STILL modified, because FabFileSchema sets
+    // `timestamps: true` and Mongoose injects `updatedAt` into every bulkWrite updateOne unless a
+    // `timestamps` option says otherwise (bulkUpdateTags passes only `ordered`/`session`).
+    //
+    // So modifiedCount is NOT a change-detector on this path, and `skipped = updates.length -
+    // filesUpdated` only means "lost a CAS race" because no-op merges are filtered out BEFORE the
+    // write. Suppressing them is what keeps that arithmetic honest - and what stops a re-apply
+    // rewriting updatedAt on every file for nothing.
+    //
+    // This fails loudly the day someone adds `timestamps: false` here as an obvious churn
+    // optimisation, which would silently turn modifiedCount into a change-detector.
+    const tags = [{ name: 'acme:legal', strength: 1 }];
+    const a = await FabFile.create({
+      userId,
+      fileName: 'a.txt',
+      mimeType: 'text/plain',
+      type: KnowledgeType.FILE,
+      filePath: 'a.txt',
+      tags,
+    });
+    const before = (await fabFileRepository.findById(a.id))?.updatedAt;
+
+    const modifiedCount = await fabFileRepository.bulkUpdateTags([{ id: a.id, tags, expectedTags: tags }]);
+
+    expect(modifiedCount).toBe(1);
+    const after = (await fabFileRepository.findById(a.id))?.updatedAt;
+    expect(after?.getTime()).toBeGreaterThan(before!.getTime());
+  });
+
   it('is a no-op for an empty update list', async () => {
     const modifiedCount = await fabFileRepository.bulkUpdateTags([]);
     expect(modifiedCount).toBe(0);

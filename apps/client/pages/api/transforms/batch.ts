@@ -18,9 +18,23 @@ import { z } from 'zod';
  * and Anthropic bills it on the separate (discounted) batch pool.
  */
 
+/**
+ * Anthropic caches a byte-identical prefix of the request, so a caller that
+ * wants a cache breakpoint has to send `content` as blocks rather than a flat
+ * string. Only text blocks are accepted - batches are tool-less, single-shot
+ * inference, so images and tool blocks have no path here.
+ */
+const TextBlockSchema = z.object({
+  type: z.literal('text'),
+  text: z.string(),
+  // Anthropic allows at most 4 breakpoints per request and rejects more; we
+  // pass through rather than counting, so an over-budget request 400s there.
+  cache_control: z.object({ type: z.literal('ephemeral'), ttl: z.enum(['5m', '1h']).optional() }).optional(),
+});
+
 const MessageSchema = z.object({
   role: z.enum(['user', 'assistant']),
-  content: z.string(),
+  content: z.union([z.string(), z.array(TextBlockSchema).min(1)]),
 });
 
 const BatchSubmitSchema = z.object({

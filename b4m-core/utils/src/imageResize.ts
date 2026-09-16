@@ -6,9 +6,33 @@
  * processFabFilesServer, which takes this as a dependency). See issue #660.
  */
 import type { Logger } from '@bike4mind/observability';
+import imageSize from 'image-size';
 
 /** Bedrock rejects images >2000px in multi-image requests. */
 const MAX_IMAGE_DIMENSION_PX = 2000;
+
+/**
+ * Pixel-count ceiling for any image we fully decode with jimp. Decoding materializes a
+ * width*height*4 RGBA bitmap, so a small (highly compressible) file that declares a huge canvas
+ * is a decompression bomb - an 8000x8000 solid PNG is ~250KB on disk but 244MB decoded. 60 MP
+ * caps the decoded bitmap near ~240MB while staying above any real photo (pro cameras ~50 MP).
+ */
+export const MAX_IMAGE_PIXELS = 60_000_000;
+
+/**
+ * Read an image's pixel count from its header WITHOUT decoding it (image-size parses only the
+ * dimensions). Returns null when the header can't be read - a format image-size doesn't know is
+ * one jimp is unlikely to decode either, so callers proceed and let jimp fail naturally.
+ */
+export function imagePixelCount(imageBuffer: Buffer): number | null {
+  try {
+    const { width, height } = imageSize(imageBuffer);
+    if (typeof width === 'number' && typeof height === 'number') return width * height;
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Supported output MIME types for jimp's getBuffer.
@@ -26,14 +50,27 @@ const JIMP_SUPPORTED_MIMES = new Set([
 /**
  * Ensures an image buffer's dimensions do not exceed the max allowed pixels.
  * Bedrock rejects images >2000px in multi-image requests.
- * Returns the original buffer unchanged if already within limits.
+ * Returns the original buffer unchanged if already within limits, or `null` when the image
+ * declares more pixels than MAX_IMAGE_PIXELS.
  * Uses jimp (pure JS) instead of sharp to avoid native dependency issues in Lambda.
  */
 export async function ensureImageWithinDimensionLimit(
   imageBuffer: Buffer,
   maxDimension: number = MAX_IMAGE_DIMENSION_PX,
   logger?: Logger
-): Promise<Buffer> {
+): Promise<Buffer | null> {
+  // Reject a decompression bomb before decoding: a small file can declare a huge canvas. Signal
+  // over-budget rather than returning the bytes undecoded - this function's contract is that its
+  // result fits maxDimension, and an image that cannot be checked does not. Passing it through
+  // would send a provider an image it rejects, failing the whole turn (and every other file
+  // attached to it); `null` lets the caller skip just this file with a notice.
+  const pixels = imagePixelCount(imageBuffer);
+  if (pixels !== null && pixels > MAX_IMAGE_PIXELS) {
+    logger?.warn(
+      `[ensureImageWithinDimensionLimit] image declares ${pixels} pixels, over the ${MAX_IMAGE_PIXELS} decode limit; skipping`
+    );
+    return null;
+  }
   try {
     // Dynamic import: jimp is only needed by server-side callers (Lambda, services).
     // A static import would cause bundlers (e.g., CLI's tsdown) to mark jimp as an

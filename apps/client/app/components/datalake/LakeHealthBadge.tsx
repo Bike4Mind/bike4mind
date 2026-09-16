@@ -4,18 +4,19 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import WarningIcon from '@mui/icons-material/Warning';
 import ErrorIcon from '@mui/icons-material/Error';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import DoDisturbOnIcon from '@mui/icons-material/DoDisturbOn';
 import type { LakeHealthApiResponse, LakeHealthPredicate } from '@bike4mind/common';
 import { useGetDataLakeHealth } from '@client/app/hooks/data/dataLakes';
 
 /**
- * Three-state lake-health badge + reachable-content headline + affected-member drill-down (#1666).
+ * Lake-health badge + reachable-content headline + affected-member drill-down (#1666).
  *
  * The API reports the four predicates as RAW results; the badge level is DERIVED here, so the
  * contract stays stable when this presentation changes. Report-only: it describes retrievability, it
  * never blocks anything.
  */
 
-type BadgeLevel = 'healthy' | 'degraded' | 'unhealthy' | 'unknown';
+type BadgeLevel = 'notServing' | 'healthy' | 'degraded' | 'unhealthy' | 'unknown';
 
 /** Human labels for the four predicates - the drill-down names which each member fails. */
 const PREDICATE_LABEL: Record<LakeHealthPredicate, string> = {
@@ -29,10 +30,14 @@ const PREDICATE_LABEL: Record<LakeHealthPredicate, string> = {
  * Derive the badge from the raw report. Pure and exported so the thresholds are testable and live in
  * ONE place. `unknown` (nothing measured yet - the char backfill has not reached this lake) is
  * deliberately distinct from a real low score, so a lake pending measurement never reads as broken. A
- * serve-cap-below-policy (P4) defect is structural and lake-wide, so it is never "healthy".
+ * serve-cap-below-policy (P4) defect is structural and lake-wide, so it is never "healthy". A lake
+ * whose lifecycle status serves no retrieval outranks all of it - see `notServing` below.
  */
 export function deriveLakeHealthBadge(
-  health: Pick<LakeHealthApiResponse, 'reachableShare' | 'predicates'>,
+  // `serving` is optional only so a response cached before the field existed still grades; a live
+  // response always carries it.
+  health: Pick<LakeHealthApiResponse, 'reachableShare' | 'predicates'> &
+    Partial<Pick<LakeHealthApiResponse, 'serving'>>,
   /**
    * Files that failed before producing any chunk (`countFailedFilesByScope`). Health and this count
    * partition the lake on the SAME field in opposite directions - health takes `chunkCount > 0`, the
@@ -45,7 +50,11 @@ export function deriveLakeHealthBadge(
    */
   failedFileCount = 0
 ): BadgeLevel {
-  const { reachableShare, predicates } = health;
+  const { reachableShare, predicates, serving } = health;
+  // Lifecycle outranks every corpus predicate: a non-active lake serves no retrieval at all, so how
+  // well its content is chunked and embedded cannot make it healthy. Reported as its own level
+  // rather than as a failure, because nothing is wrong with the corpus.
+  if (serving && !serving.servesRetrieval) return 'notServing';
   const anyMemberPredicateFails =
     predicates.chunkWithinPolicy.fail > 0 ||
     predicates.chunkCountConsistent.fail > 0 ||
@@ -65,12 +74,14 @@ export function deriveLakeHealthBadge(
 }
 
 const LEVEL_COLOR: Record<BadgeLevel, 'success' | 'warning' | 'danger' | 'neutral'> = {
+  notServing: 'warning',
   healthy: 'success',
   degraded: 'warning',
   unhealthy: 'danger',
   unknown: 'neutral',
 };
 const LEVEL_ICON: Record<BadgeLevel, ReactNode> = {
+  notServing: <DoDisturbOnIcon sx={{ fontSize: 12 }} />,
   healthy: <CheckCircleIcon sx={{ fontSize: 12 }} />,
   degraded: <WarningIcon sx={{ fontSize: 12 }} />,
   unhealthy: <ErrorIcon sx={{ fontSize: 12 }} />,
@@ -81,6 +92,8 @@ const pct = (share: number) => `${Math.round(share * 100)}%`;
 
 /** The chip label leads with the ONE headline metric: reachable content share (#1666). */
 function badgeLabel(level: BadgeLevel, health: LakeHealthApiResponse): string {
+  const { serving } = health;
+  if (level === 'notServing') return `Not serving: ${serving.status}`;
   if (health.reachableShare === null) {
     // Nothing is measured, so never render a share ("Reachable 0%" - Math.round(null) - would misread
     // as "nothing is reachable"). The level still carries a known defect: P4 -> unhealthy, a failing
@@ -89,13 +102,15 @@ function badgeLabel(level: BadgeLevel, health: LakeHealthApiResponse): string {
     if (level === 'degraded') return 'Health: needs attention';
     return 'Health: not measured';
   }
-  return `Reachable ${pct(health.reachableShare)}`;
+  // Scoped like the member-count chip beside it (LakeInfoPanel): membership, and so this share, is
+  // computed against the lake's CREATOR - see buildDataLakeMembershipFilter's docblock.
+  return `Reachable ${pct(health.reachableShare)} (as creator)`;
 }
 
 const DRILLDOWN_ROWS = 8;
 
 function HealthTooltip({ health, failedFileCount = 0 }: { health: LakeHealthApiResponse; failedFileCount?: number }) {
-  const { predicates, coverage, affectedMembers, affectedMemberCount, duplicateMembers } = health;
+  const { predicates, coverage, affectedMembers, affectedMemberCount, duplicateMembers, serving } = health;
   const measuredGap = coverage.membersWithChunks - coverage.measuredMembers;
   const anyMemberFails =
     predicates.chunkWithinPolicy.fail > 0 ||
@@ -103,6 +118,12 @@ function HealthTooltip({ health, failedFileCount = 0 }: { health: LakeHealthApiR
     predicates.fullyVectorized.fail > 0;
   return (
     <Box sx={{ p: 0.5, maxWidth: 340 }}>
+      {serving && !serving.servesRetrieval && (
+        <Typography level="body-xs" sx={{ fontWeight: 'lg', color: 'warning.400', mb: 0.25 }}>
+          This lake is {serving.status}, so it serves no retrieval - search and session bindings skip it whatever the
+          figures below say.
+        </Typography>
+      )}
       <Typography level="body-xs" sx={{ fontWeight: 'lg' }}>
         {health.reachableShare !== null
           ? `${pct(health.reachableShare)} of chunked content is reachable by search.`

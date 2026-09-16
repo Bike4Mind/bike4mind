@@ -15,7 +15,7 @@
  */
 import { agentExecutionRepository, Quest } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import type { PromptMeta } from '@bike4mind/common';
+import { materializePromptMetaSession, type PromptMeta } from '@bike4mind/common';
 import { persistAgentArtifacts } from './persistAgentArtifacts';
 
 export async function persistRunAsQuest(
@@ -77,6 +77,12 @@ export async function persistRunAsQuest(
     // pollers (CommandHandler / WorkflowStepHandler) only observe `done`
     // once `replies` is populated - flipping it earlier would let pollers
     // read an empty reply array and silently drop the response.
+    // The dispatch-time Quest (`startAgentExecution.ts`) is created with no promptMeta at all, so
+    // this is a first materialization, same as the writers bike4mind#2004 fixed - and this write
+    // goes through findOneAndUpdate (no validators), so a promptMeta with no session block would
+    // persist silently instead of throwing. Only set when some OTHER promptMeta.* key is also
+    // being set: an untouched quest should stay with no promptMeta, matching the dispatch-time shape.
+    const promptMetaTouched = Boolean(execution.usedMementoIds?.length || finishReason || retrieval);
     const updated = await Quest.findOneAndUpdate(
       { agentExecutionId: executionId },
       {
@@ -92,6 +98,7 @@ export async function persistRunAsQuest(
           // Dotted key coexists with `promptMeta.context.mementoIds` above - no clobber.
           ...(finishReason ? { 'promptMeta.finishReason': finishReason } : {}),
           ...(retrieval ? { 'promptMeta.retrieval': retrieval } : {}),
+          ...(promptMetaTouched ? { 'promptMeta.session': { id: execution.sessionId, userId: execution.userId } } : {}),
           // The agent Quest is authored once at completion (no subagent race like images),
           // so a plain $set is safe here.
           ...(sideEffects ? { uiSideEffects: sideEffects } : {}),
@@ -119,14 +126,23 @@ export async function persistRunAsQuest(
         // iteration trace on a "Show reasoning" disclosure under the reply.
         agentExecutionId: executionId,
         // Compose one promptMeta from both sources so neither clobbers the
-        // other; omit it entirely when both are absent.
+        // other; omit it entirely when both are absent. Quest.create() DOES run validators
+        // (unlike the findOneAndUpdate above), so a non-empty promptMeta with no session block
+        // throws here rather than persisting silently - materializePromptMetaSession supplies it.
         ...(() => {
           const promptMeta = {
             ...(finishReason ? { finishReason } : {}),
             ...(execution.usedMementoIds?.length ? { context: { mementoIds: execution.usedMementoIds } } : {}),
             ...(retrieval ? { retrieval } : {}),
           };
-          return Object.keys(promptMeta).length ? { promptMeta } : {};
+          return Object.keys(promptMeta).length
+            ? {
+                promptMeta: materializePromptMetaSession(promptMeta, {
+                  sessionId: execution.sessionId,
+                  userId: execution.userId,
+                }),
+              }
+            : {};
         })(),
       });
     }

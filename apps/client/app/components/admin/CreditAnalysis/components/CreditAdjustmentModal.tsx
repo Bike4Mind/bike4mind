@@ -26,7 +26,7 @@ interface CreditAdjustmentModalProps {
   open: boolean;
   onClose: () => void;
   selectedUser: AdminUserListItem | null;
-  onCreditAdjustment: (userId: string, currentCredits: number, adjustment: number, note?: string) => Promise<void>;
+  onCreditAdjustment: (userId: string, adjustment: number, note?: string) => Promise<void>;
 }
 
 export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
@@ -50,12 +50,7 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
   const handleCreditAdjustment = async (isAdd: boolean) => {
     if (selectedUser && creditAmount > 0) {
       const adjustment = isAdd ? creditAmount : -creditAmount;
-      await onCreditAdjustment(
-        selectedUser.id,
-        selectedUser.currentCredits || 0,
-        adjustment,
-        creditNote.trim() || undefined
-      );
+      await onCreditAdjustment(selectedUser.id, adjustment, creditNote.trim() || undefined);
       queryClient.invalidateQueries({ queryKey: userCreditAdjustmentsKey(selectedUser.id) });
       handleClose();
     }

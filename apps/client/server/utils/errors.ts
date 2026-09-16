@@ -2,6 +2,8 @@
  * Re-exported from @bike4mind/common - the canonical location for HTTP error classes.
  * Only `ensureAdmin` is defined locally.
  */
+import { z } from 'zod';
+import { fromZodError } from 'zod-validation-error';
 import {
   HttpStatus,
   HTTPError,
@@ -13,6 +15,7 @@ import {
   ForbiddenError,
   ConflictError,
   BadGatewayError,
+  TooManyRequestsError,
   isZodError,
   canAccessTavern,
 } from '@bike4mind/common';
@@ -28,6 +31,7 @@ export {
   ForbiddenError,
   ConflictError,
   BadGatewayError,
+  TooManyRequestsError,
   isZodError,
 };
 
@@ -56,4 +60,16 @@ export function ensureTavernAccess(user?: { isAdmin?: boolean | null; tags?: rea
   if (!canAccessTavern(user)) {
     throw new ForbiddenError('Unauthorized. Tavern access required.');
   }
+}
+
+/**
+ * Validate `input` against `schema`, throwing a 400 on failure. Every rejection on a route that calls
+ * this answers 400, not the 422 a raw ZodError would reach `errorHandler` as (see its `isZodError`
+ * branch) - shared so every admin route using it messages off the same status for the same class of
+ * mistake instead of each route re-deriving the policy.
+ */
+export function parseOrBadRequest<T>(schema: z.ZodType<T>, input: unknown): T {
+  const parsed = schema.safeParse(input);
+  if (!parsed.success) throw new BadRequestError(fromZodError(parsed.error).message);
+  return parsed.data;
 }

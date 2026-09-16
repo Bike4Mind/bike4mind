@@ -41,8 +41,24 @@ import { subtractCredits } from './creditService';
 
 const mockSubtractCredits = vi.mocked(subtractCredits);
 
+/**
+ * executeCompletion re-verifies org membership at USE time, so every org fixture that expects to
+ * bill the org must carry the acting user on its roster. Built here rather than inline so a new
+ * case cannot forget the row and silently assert against the fail-closed path instead.
+ */
+function buildOrg(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'org1',
+    currentCredits: 500,
+    maxCreditsPerMember: null,
+    userDetails: [],
+    users: [{ userId: 'user1' }],
+    ...overrides,
+  };
+}
+
 function buildDb(overrides: { org?: any } = {}) {
-  const org = overrides.org ?? { id: 'org1', currentCredits: 500, maxCreditsPerMember: null, userDetails: [] };
+  const org = overrides.org ?? buildOrg();
   const users = {
     incrementCredits: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100 }),
     findById: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100 }),
@@ -132,7 +148,7 @@ describe('executeCompletion - org billing routing', () => {
     // matching ledger transaction. Org loads fine at the top, then the settlement
     // re-fetch (creditDifference === 0 branch) comes back null.
     const { db, organizations } = buildDb();
-    const org = { id: 'org1', currentCredits: 500, maxCreditsPerMember: null, userDetails: [] };
+    const org = buildOrg();
     organizations.findById.mockReset();
     organizations.findById.mockResolvedValueOnce(org).mockResolvedValue(null);
 
@@ -169,14 +185,7 @@ describe('executeCompletion - org billing routing', () => {
   });
 
   it('does not self-heal when the member already has a userDetails row', async () => {
-    const { db, organizations } = buildDb({
-      org: {
-        id: 'org1',
-        currentCredits: 500,
-        maxCreditsPerMember: null,
-        userDetails: [{ id: 'user1', usedCredits: 0 }],
-      },
-    });
+    const { db, organizations } = buildDb({ org: buildOrg({ userDetails: [{ id: 'user1', usedCredits: 0 }] }) });
 
     await executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' });
 
@@ -190,16 +199,46 @@ describe('executeCompletion - org billing routing', () => {
 
   it('rejects when the org member credit cap would be exceeded', async () => {
     const { db } = buildDb({
-      org: {
-        id: 'org1',
-        currentCredits: 500,
-        maxCreditsPerMember: 5,
-        userDetails: [{ id: 'user1', usedCredits: 0 }],
-      },
+      org: buildOrg({ maxCreditsPerMember: 5, userDetails: [{ id: 'user1', usedCredits: 0 }] }),
     });
 
     await expect(executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' })).rejects.toThrow(
       /member credit limit/i
     );
+  });
+  it('fails closed without reserving when the acting user has left the billing organization', async () => {
+    // The billing target is stamped on the API key at mint time; a key whose holder was since
+    // removed must stop drawing on that org's pool rather than fall back to personal billing.
+    const { db, users, organizations } = buildDb({ org: buildOrg({ users: [{ userId: 'someone-else' }] }) });
+
+    await expect(executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' })).rejects.toThrow(
+      /no longer a member of billing organization org1/i
+    );
+
+    // Nothing was reserved from either pool - the refusal precedes the credit hold.
+    expect(organizations.incrementCredits).not.toHaveBeenCalled();
+    expect(users.incrementCredits).not.toHaveBeenCalled();
+    expect(mockSubtractCredits).not.toHaveBeenCalled();
+  });
+
+  it('bills the org for a platform admin, who is on no org roster', async () => {
+    // The mint route lets a platform admin create an org-billed key for a customer org, so a
+    // roster-only gate would break that key on its very first call, not just after someone left.
+    const { db, organizations } = buildDb({ org: buildOrg({ users: [{ userId: 'someone-else' }] }) });
+    db.users.findById = vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100, isAdmin: true });
+
+    await executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' });
+
+    expect(organizations.incrementCredits).toHaveBeenCalledWith('org1', -10);
+  });
+
+  it('bills the org for its billing owner, who holds no users[] row', async () => {
+    // assignManager/ownership never write a roster row, so a roster-only check would 403 the two
+    // principals most entitled to spend the pool.
+    const { db, organizations } = buildDb({ org: buildOrg({ userId: 'user1', users: [] }) });
+
+    await executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' });
+
+    expect(organizations.incrementCredits).toHaveBeenCalledWith('org1', -10);
   });
 });

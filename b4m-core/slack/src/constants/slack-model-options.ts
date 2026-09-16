@@ -1,6 +1,7 @@
 import {
   AnthropicBackend,
   UndifferentiatedBedrockBackend,
+  DeepSeekBackend,
   GeminiBackend,
   KimiBackend,
   OllamaBackend,
@@ -34,6 +35,7 @@ const BACKEND_DISPLAY_NAMES: Partial<Record<ModelBackend, string>> = {
   [ModelBackend.Gemini]: 'Gemini',
   [ModelBackend.XAI]: 'xAI',
   [ModelBackend.Kimi]: 'Moonshot (Kimi)',
+  [ModelBackend.DeepSeek]: 'DeepSeek',
   [ModelBackend.Ollama]: 'Ollama',
   [ModelBackend.AWS]: 'AWS',
 };
@@ -64,6 +66,7 @@ export async function buildSlackModelOptionsFromDashboard(): Promise<{
       [ModelBackend.Ollama]: apiKeys.ollama ? new OllamaBackend(apiKeys.ollama) : undefined,
       [ModelBackend.XAI]: apiKeys.xai ? new XAIBackend(apiKeys.xai) : undefined,
       [ModelBackend.Kimi]: apiKeys.kimi ? new KimiBackend(apiKeys.kimi) : undefined,
+      [ModelBackend.DeepSeek]: apiKeys.deepseek ? new DeepSeekBackend(apiKeys.deepseek) : undefined,
       [ModelBackend.AWS]: new AWSBackend(),
     };
 
@@ -133,6 +136,8 @@ export async function buildSlackModelOptionsFromDashboard(): Promise<{
       ModelBackend.Bedrock,
       ModelBackend.Gemini,
       ModelBackend.XAI,
+      ModelBackend.Kimi,
+      ModelBackend.DeepSeek,
       ModelBackend.Ollama,
       ModelBackend.AWS,
     ];

@@ -175,11 +175,31 @@ function csvEscape(value: string) {
 }
 
 export function useExportCSV() {
-  const { data: linksData } = useBusinessLinks({ pageSize: PAGE_SIZE, pageNumber: 1 }, true);
+  const {
+    state: { categoryId, searchTerm },
+  } = usePopularTargets();
+  // Must stay identical to the list's call in BusinessLink.tsx: the export writes the rows on
+  // screen, and matching params also collapse both hooks into one react-query cache entry.
+  const { data: linksData } = useBusinessLinks(
+    {
+      pageSize: PAGE_SIZE,
+      pageNumber: 1,
+      filters: {
+        search: searchTerm,
+        categoryId,
+      },
+    },
+    !!categoryId
+  );
 
   return async () => {
     try {
-      const links = linksData?.data || [];
+      // No rows yet (the query is gated until a category resolves), so there is nothing to write.
+      if (!linksData) {
+        toast.error('Links are still loading, please try again');
+        return;
+      }
+      const links = linksData.data || [];
       const header = 'Company,Ticker,URL,Type,Category,Category Description';
       const rows = links.map((link: IResearchLinkWithCategory) => {
         const values = [
