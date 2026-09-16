@@ -9,7 +9,6 @@ import {
   ExpandMoreOutlined as ExpandMoreIcon,
   ExpandLessOutlined as ExpandLessIcon,
   CodeOutlined as CodeViewIcon,
-  ShareOutlined as ShareIcon,
 } from '@mui/icons-material';
 import useSessionLayout, {
   setSessionLayout,
@@ -408,6 +407,36 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
               <ExpandIcon />
             </IconButton>
           </Tooltip>
+
+          {source && (
+            // The card's own onClick collapses it, so swallow clicks meant for the button.
+            <Box onClick={e => e.stopPropagation()} sx={{ display: 'flex', flexShrink: 0 }}>
+              <Button
+                size="sm"
+                variant="solid"
+                onClick={handleShare}
+                data-testid={`${testIdPrefix}-artifact-share-btn`}
+                sx={{
+                  backgroundColor: brand[800],
+                  color: '#fff',
+                  fontWeight: 600,
+                  // Pin to the same rendered height as the sm IconButtons beside it.
+                  '--Button-minHeight': '2rem',
+                  '--Button-paddingBlock': '0.25rem',
+                  '--Button-paddingInline': '12px',
+                  lineHeight: 1,
+                  transition: 'transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease',
+                  '&:hover': {
+                    backgroundColor: brand[900],
+                    transform: 'scale(1.04)',
+                    boxShadow: '0 0 14px rgba(11, 107, 203, 0.5)',
+                  },
+                }}
+              >
+                Share
+              </Button>
+            </Box>
+          )}
         </Stack>
 
         {stats && (
@@ -453,34 +482,6 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
           )
         ) : null}
 
-        {isExpanded && source && (
-          <Box sx={{ mt: 2 }} onClick={e => e.stopPropagation()}>
-            <Button
-              size="sm"
-              variant="solid"
-              startDecorator={<ShareIcon sx={{ fontSize: 16 }} />}
-              onClick={handleShare}
-              data-testid={`${testIdPrefix}-artifact-share-btn`}
-              sx={{
-                backgroundColor: brand[800],
-                color: '#fff',
-                fontWeight: 600,
-                // Pin to the same rendered height as the sm IconButtons in the card header.
-                '--Button-minHeight': '2rem',
-                '--Button-paddingBlock': '0.25rem',
-                lineHeight: 1,
-                transition: 'transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease',
-                '&:hover': {
-                  backgroundColor: brand[900],
-                  transform: 'scale(1.04)',
-                  boxShadow: '0 0 14px rgba(11, 107, 203, 0.5)',
-                },
-              }}
-            >
-              Share
-            </Button>
-          </Box>
-        )}
         {/* Stop propagation so clicks inside the modal don't reach the Card's
             handleToggleExpand and toggle the expand state behind the open dialog. */}
         <Box onClick={e => e.stopPropagation()}>{artifactShareModal}</Box>
