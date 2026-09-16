@@ -730,7 +730,9 @@ const FINITE_VERB = new RegExp(String.raw`^(?:${PREDICATES_PHRASE})$|n['\u2019]t
  *  - a comma brackets an ASIDE, so the scan crosses it ("route consolidation, however, is unclear");
  *    a comma before a relative pronoun or a coordinator opens a new clause and ends the scan;
  *  - a determiner that no preposition governs starts a new noun phrase, so the scan ends there and the
- *    verb after it is not the phrase's ("...the depot routes the customer IS rationalising");
+ *    verb after it is not the phrase's ("...the depot routes the customer IS rationalising"). This is
+ *    the test's only guard against the zero relative, so it carries the growth direction alone: drop
+ *    it and that row is read as a pointer.
  *  - a finite verb at the end of the scan is the phrase's predicate.
  */
 function predicatesCausePhrase(clause: string, from: number): boolean {
@@ -742,11 +744,7 @@ function predicatesCausePhrase(clause: string, from: number): boolean {
       return false;
     }
     const word = token.toLowerCase();
-    if (FINITE_VERB.test(word)) {
-      const introducer = (tokens[i - 2] ?? '').toLowerCase();
-      const governed = PREPOSITION.has((tokens[i - 3] ?? '').toLowerCase());
-      return !(PHRASE_HEAD.has(introducer) && !governed);
-    }
+    if (FINITE_VERB.test(word)) return true;
     if (PHRASE_HEAD.has(word) && i > 0 && tokens[i - 1] !== ',' && !PREPOSITION.has(tokens[i - 1].toLowerCase())) {
       return false;
     }
