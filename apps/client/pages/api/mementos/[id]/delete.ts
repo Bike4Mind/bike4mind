@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { Memento } from '@bike4mind/database/content';
 import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/utils';
+import { isValidObjectId } from '@server/utils/objectId';
 
 const handler = baseApi().delete(async (req: Request, res: Response) => {
   const { id } = req.query;
@@ -9,7 +10,7 @@ const handler = baseApi().delete(async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Memento ID is required' });
   }
 
-  const memento = await Memento.findById(id);
+  const memento = isValidObjectId(id) ? await Memento.findById(id) : null;
   if (!memento) {
     return res.status(404).json({ error: `Memento ${id} not found` });
   }

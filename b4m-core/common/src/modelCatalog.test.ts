@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_MAX_OUTPUT_TOKENS,
   inferVendor,
+  isPromptMetaModelType,
   isRenderableModelType,
+  MODEL_INFO_TYPES,
+  PROMPT_META_MODEL_TYPES,
   toModelInfo,
   toModelRecord,
 } from './modelCatalog';
@@ -165,5 +168,35 @@ describe('isRenderableModelType', () => {
     expect(isRenderableModelType('video')).toBe(true);
     expect(isRenderableModelType('embedding')).toBe(false);
     expect(isRenderableModelType('realtime-voice')).toBe(false);
+  });
+});
+
+describe('isPromptMetaModelType', () => {
+  it('accepts the modalities a completion may record', () => {
+    expect(isPromptMetaModelType('text')).toBe(true);
+    expect(isPromptMetaModelType('image')).toBe(true);
+    expect(isPromptMetaModelType('video')).toBe(true);
+  });
+
+  // The whole point of the predicate: speech-to-text is a real ModelInfo type, so it reaches the
+  // completion path as a catalog value, and it is the one member promptMeta must never persist.
+  it('rejects speech-to-text, the catalog type promptMeta does not declare', () => {
+    expect(isPromptMetaModelType('speech-to-text')).toBe(false);
+  });
+
+  it('rejects a value that is not a model type at all, which is what a legacy row can hold', () => {
+    expect(isPromptMetaModelType('')).toBe(false);
+    expect(isPromptMetaModelType('embedding')).toBe(false);
+  });
+
+  // A new ModelInfo type must be classified deliberately: either promptMeta records it (add it to
+  // PROMPT_META_MODEL_TYPES) or the completion path rejects it. This fails until someone chooses.
+  it('classifies every ModelInfo type', () => {
+    const unclassified = MODEL_INFO_TYPES.filter(type => !isPromptMetaModelType(type) && type !== 'speech-to-text');
+    expect(unclassified).toEqual([]);
+  });
+
+  it('declares only types that are real ModelInfo types', () => {
+    expect(PROMPT_META_MODEL_TYPES.every(type => isRenderableModelType(type))).toBe(true);
   });
 });

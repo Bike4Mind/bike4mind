@@ -16,6 +16,7 @@ import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import {
   Box,
+  Button,
   Stack,
   Typography,
   Tabs,
@@ -84,6 +85,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { usePublishShare } from '@client/app/hooks/usePublishShare';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { buildArtifactPublishWiring } from '@client/app/utils/publishApi';
+import { brand } from '@client/app/utils/themes/colors';
 import JSONViewer from './JSONViewer';
 import { api } from '@client/app/contexts/ApiContext';
 import { useQueryClient } from '@tanstack/react-query';
@@ -1541,13 +1543,26 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
                 </span>
               </Tooltip>
               {knowledgeItems[selectedTabIndex]?.type !== 'file' && (
-                <Tooltip title="Publish to public link" disableInteractive>
-                  <span>
-                    <IconButton size="sm" onClick={handleShareArtifact} data-testid="artifact-viewer-share">
-                      <ShareIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </span>
-                </Tooltip>
+                <Button
+                  size="sm"
+                  variant="solid"
+                  startDecorator={<ShareIcon sx={{ fontSize: 16 }} />}
+                  onClick={handleShareArtifact}
+                  data-testid="artifact-viewer-share"
+                  sx={{
+                    backgroundColor: brand[800],
+                    color: '#fff',
+                    fontWeight: 600,
+                    transition: 'transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease',
+                    '&:hover': {
+                      backgroundColor: brand[900],
+                      transform: 'scale(1.04)',
+                      boxShadow: '0 0 14px rgba(11, 107, 203, 0.5)',
+                    },
+                  }}
+                >
+                  Share
+                </Button>
               )}
               {artifactShareModal}
               {isMarkdownFile(knowledgeItems[selectedTabIndex]) ? (

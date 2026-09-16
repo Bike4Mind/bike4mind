@@ -8,6 +8,7 @@ import {
 } from '@client/app/components/commands/ImageGenerationCommand';
 import { handleVideoGenerationCommand } from '@client/app/components/commands/VideoGenerationCommand';
 import { handleCreateAgentCommand } from '@client/app/components/commands/CreateAgentCommand';
+import { handleFeedbackCommand } from '@client/app/components/commands/FeedbackCommand';
 import { CommandHandlers } from '@client/app/utils/commands';
 
 export const fixedIconSize = {
@@ -28,4 +29,5 @@ export const commandHandlers: CommandHandlers = {
   '/gen_video': handleVideoGenerationCommand,
   '/edit_image': handleImageEditCommand,
   '/create_agent': handleCreateAgentCommand,
+  '/feedback': handleFeedbackCommand,
 };

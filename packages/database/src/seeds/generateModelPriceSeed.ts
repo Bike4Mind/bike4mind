@@ -1,14 +1,4 @@
-import {
-  AnthropicBackend,
-  AWSBackend,
-  DeepSeekBackend,
-  GeminiBackend,
-  KimiBackend,
-  OpenAIBackend,
-  REALTIME_VOICE_PRICING,
-  UndifferentiatedBedrockBackend,
-  XAIBackend,
-} from '@bike4mind/llm-adapters';
+import { REALTIME_VOICE_PRICING, staticPriceBackends } from '@bike4mind/llm-adapters';
 import type { IModelPriceTier, ModelInfo, ModelPriceUnit } from '@bike4mind/common';
 
 export interface ModelPriceSeedEntry {
@@ -19,21 +9,12 @@ export interface ModelPriceSeedEntry {
 
 /**
  * Text models from every backend whose getModelInfo() is a static table (no
- * network, no real key needed). Ollama is excluded: its list is a live server
- * call and its models are freeToRun.
+ * network, no real key needed). The backend list is `staticPriceBackends` in
+ * llm-adapters, shared with the in-code price carry it also feeds, so the seed
+ * and that carry cannot end up covering different providers.
  */
 export async function collectStaticTextModels(): Promise<ModelInfo[]> {
-  const backends = [
-    new OpenAIBackend('seed-key'),
-    new AnthropicBackend('seed-key'),
-    new UndifferentiatedBedrockBackend(),
-    new GeminiBackend('seed-key'),
-    new XAIBackend('seed-key'),
-    new KimiBackend('seed-key'),
-    new DeepSeekBackend('seed-key'),
-    new AWSBackend(),
-  ];
-  const models = (await Promise.all(backends.map(b => b.getModelInfo()))).flat();
+  const models = (await Promise.all(staticPriceBackends().map(b => b.getModelInfo()))).flat();
   return models.filter(m => m.type === 'text');
 }
 

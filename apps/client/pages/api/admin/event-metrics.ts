@@ -21,7 +21,7 @@ const EventMetricQuerySchema = z.object({
 
 export type EventMetricsQuery = z.infer<typeof EventMetricQuerySchema>;
 
-interface EventMetricsFilters {
+export interface EventMetricsFilters {
   dateFrom?: string;
   dateTo?: string;
   userFilter?: string;
@@ -63,6 +63,9 @@ function categorizeEvent(eventName: string): string {
   return 'Other';
 }
 
+// Cached for 12h under a key that carries PAYLOAD_VERSIONS.eventMetrics
+// (server/utils/cacheKeys.ts). Change the shape or the values this projects and
+// bump that entry, or deployed instances keep serving the old projection.
 async function fetchEventMetrics(filters: EventMetricsFilters): Promise<EventMetricResponse[]> {
   const { dateFrom, dateTo, userFilter, eventFilter, eventCategoryFilter } = filters;
 

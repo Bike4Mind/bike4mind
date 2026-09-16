@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState } from 'react';
 import { captureUtmParams } from '@client/app/utils/utmCapture';
+import { beaconVisit } from '@client/app/utils/visitBeacon';
 import {
   createRouter,
   createRoute,
@@ -1086,6 +1087,10 @@ function createNextCompatibleHistory() {
 // guard redirects an unauthenticated landing to /login (which strips the query string). See
 // captureUtmParams() for why this cannot live in a React effect.
 captureUtmParams();
+
+// Then tell the server a visit is happening. Order matters: the beacon is the request the
+// server reads the campaign cookie from, so it has to follow the line above.
+beaconVisit();
 
 // Create the router
 export const router = createRouter({

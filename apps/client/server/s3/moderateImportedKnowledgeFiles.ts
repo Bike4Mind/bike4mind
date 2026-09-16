@@ -10,6 +10,17 @@ interface ClaimedFabFile {
   _id: unknown;
   id: string;
   mimeType?: string;
+  /**
+   * The exact `moderationClaimedAt` this claim was acquired with. Threaded back into `persist`,
+   * `release` and `retireMissingObject` so each is guarded on the claim it owns rather than on
+   * `moderationStatus: 'scanning'` alone: the rescue sweep's stale-claim reclaim can free this row
+   * mid-scan and a successor can re-claim it, and an unguarded terminal write would then clobber the
+   * successor's verdict. Required, not optional: today's only `claim` always returns it, and an
+   * optional stamp here would let a future second claim implementation silently degrade every
+   * guarded write below back to the bare `moderationStatus: 'scanning'` filter this comment warns
+   * against, with no compiler or test catching it.
+   */
+  moderationClaimedAt: Date;
 }
 
 export interface ModerateImportedKnowledgeFilesArgs {
@@ -29,13 +40,24 @@ export interface ModerateImportedKnowledgeFilesArgs {
    * terminal. Returns the claimed row so the verdict can be written back to its `_id`.
    */
   claim(filePath: string): Promise<ClaimedFabFile | null>;
-  /** Persist the terminal verdict (and any byte-sniff-corrected mime / block reason). */
+  /**
+   * Persist the terminal verdict (and any byte-sniff-corrected mime / block reason), guarded on the
+   * `claimedAt` stamp this run claimed with. Returns false when the guard misses - the claim was
+   * superseded mid-scan - so the caller counts only a verdict that actually landed.
+   */
   persist(
     _id: unknown,
-    patch: { moderationStatus: 'clean' | 'blocked'; mimeType?: string; blockReason?: string }
-  ): Promise<void>;
-  /** Release a claim back to `pending` after a transient scan failure so the row is never stranded on `scanning`. */
-  release(_id: unknown): Promise<void>;
+    patch: { moderationStatus: 'clean' | 'blocked'; mimeType?: string; blockReason?: string },
+    claimedAt: Date
+  ): Promise<boolean>;
+  /**
+   * Release a claim back to `pending` after a transient scan failure so the row is never stranded on
+   * `scanning`. Guarded on `claimedAt` like `persist`: a superseded run must not clear its
+   * successor's claim, which would turn one takeover into a cascade. Returns whether the guard
+   * matched, for parity with `persist`; the caller does not currently act on a dropped release since
+   * the successor already owns the row either way.
+   */
+  release(_id: unknown, claimedAt: Date): Promise<boolean>;
   /**
    * When true, a scan that fails because the object does not exist in storage (NoSuchKey only, never
    * a bare 404 - see isMissingObjectError) SOFT-DELETES the row (via `retireMissingObject`) instead
@@ -50,9 +72,13 @@ export interface ModerateImportedKnowledgeFilesArgs {
   terminalOnMissingObject?: boolean;
   /**
    * Soft-delete a missing-object orphan (see `terminalOnMissingObject`). Distinct from `persist`
-   * because a never-landed file is not a moderation verdict - it is retired, not blocked.
+   * because a never-landed file is not a moderation verdict - it is retired, not blocked. Guarded on
+   * `claimedAt` like `persist`/`release`: the row can be reclaimed and re-scanned clean by a
+   * successor between this run's download failing and this call landing, and an unguarded delete
+   * would destroy that successor's verdict rather than merely dropping one. Returns whether the
+   * guard matched, so a superseded retire is not counted as a resolved file.
    */
-  retireMissingObject(_id: unknown): Promise<void>;
+  retireMissingObject(_id: unknown, claimedAt: Date): Promise<boolean>;
   downloadBytes(filePath: string): Promise<Buffer>;
   downloadPartialBytes(filePath: string, length: number): Promise<Buffer>;
 }
@@ -130,14 +156,25 @@ export async function moderateImportedKnowledgeFiles(
         logger,
       });
 
-      await persist(claimed._id, {
-        moderationStatus: result.moderationStatus,
-        ...(result.correctedMimeType && result.correctedMimeType !== claimed.mimeType
-          ? { mimeType: result.correctedMimeType }
-          : {}),
-        ...(result.blockReason ? { blockReason: result.blockReason } : {}),
-      });
-      scanned++;
+      const applied = await persist(
+        claimed._id,
+        {
+          moderationStatus: result.moderationStatus,
+          ...(result.correctedMimeType && result.correctedMimeType !== claimed.mimeType
+            ? { mimeType: result.correctedMimeType }
+            : {}),
+          ...(result.blockReason ? { blockReason: result.blockReason } : {}),
+        },
+        claimed.moderationClaimedAt
+      );
+      if (applied) {
+        scanned++;
+      } else {
+        // The rescue sweep reclaimed this row mid-scan and a successor now owns it. Dropping our
+        // verdict is the correct outcome - the successor writes its own - but it is not progress
+        // this run may count, or the sweep's own recovery accounting overstates itself.
+        logger.warn(`Moderation claim for ${filePath} was superseded mid-scan; discarding this run's verdict`);
+      }
     } catch (err) {
       if (claimed && terminalOnMissingObject && isMissingObjectError(err)) {
         // The object was never written to storage - an import whose bytes never landed leaves a
@@ -148,11 +185,15 @@ export async function moderateImportedKnowledgeFiles(
         // un-appealable (no CAS re-claims it, no admin unblock route). A soft-deleted row drops out of
         // every deletedAt:null query, including this sweep, so it never recirculates.
         try {
-          await retireMissingObject(claimed._id);
-          scanned++; // count only a successful retire; a failed one leaves the row pending for a later sweep
-          logger.warn(
-            `Imported knowledge file ${filePath} has no stored object; soft-deleting (missing_object orphan)`
-          );
+          const retired = await retireMissingObject(claimed._id, claimed.moderationClaimedAt);
+          if (retired) {
+            scanned++; // count only a retire that actually landed; a superseded one is the successor's row now
+            logger.warn(
+              `Imported knowledge file ${filePath} has no stored object; soft-deleting (missing_object orphan)`
+            );
+          } else {
+            logger.warn(`Retire claim for ${filePath} was superseded mid-scan; discarding this run's retire`);
+          }
         } catch (retireErr) {
           logger.warn(
             `Failed to retire missing-object orphan ${filePath}: ${
@@ -164,7 +205,7 @@ export async function moderateImportedKnowledgeFiles(
       }
       // Transient failure (Rekognition throttle/5xx, download error): release the claim so the
       // file stays held ('pending') and never stuck on 'scanning'. Fail-closed: still not servable.
-      if (claimed) await release(claimed._id).catch(() => undefined);
+      if (claimed) await release(claimed._id, claimed.moderationClaimedAt).catch(() => undefined);
       logger.warn(
         `Failed to moderate imported knowledge file ${filePath}: ${err instanceof Error ? err.message : String(err)}`
       );

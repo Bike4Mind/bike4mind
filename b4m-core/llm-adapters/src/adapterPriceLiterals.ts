@@ -9,34 +9,43 @@ import { OpenAIBackend } from './openaiBackend';
 import { XAIBackend } from './xaiBackend';
 
 /**
- * The prices this build ships in code, keyed by model id.
+ * Every backend whose `getModelInfo()` is a static table - no network, no real key.
  *
- * Same provenance as packages/database's modelPrices.seed.json - the adapter
- * `getModelInfo()` literals - reachable without a database, which is what the
- * price planner needs: a model's FIRST discovery-written row has no row in force
- * to carry the rates no feed publishes from, and a tier that reaches
- * getTextModelCost without `cache_read` settles cached reads at
- * input * CACHE_READ_MULTIPLIER. On DeepSeek Flash that default is 0.03/1M
- * against a real 0.006/1M. MUST STAY IN SYNC with collectStaticTextModels in
- * packages/database/src/seeds/generateModelPriceSeed.ts: both lists are "every
- * backend whose getModelInfo() is a static table", and Ollama is absent from
- * both because its listing is a live server call.
+ * The one list both in-code price paths draw from: `adapterPriceTiers` below, and
+ * collectStaticTextModels in packages/database/src/seeds/generateModelPriceSeed.ts,
+ * which generates modelPrices.seed.json. They were two hand-synced copies, and a
+ * backend reaching one but not the other is a silent billing defect on that
+ * provider - a model with no carried `cache_read` settles cached reads at
+ * input * CACHE_READ_MULTIPLIER (see `adapterPriceTiers`).
+ *
+ * Ollama is absent because its listing is a live server call; BFL and the image
+ * backends publish no text models. The key is a placeholder - a static table needs
+ * none, but the constructors take the argument. Both consumers filter to text
+ * models, so AWSBackend (speech-to-text only) contributes nothing today.
  */
-const STATIC_PRICE_BACKENDS = () => [
-  new OpenAIBackend('price-literal'),
-  new AnthropicBackend('price-literal'),
+export const staticPriceBackends = () => [
+  new OpenAIBackend('static-price-table'),
+  new AnthropicBackend('static-price-table'),
   new UndifferentiatedBedrockBackend(),
-  new GeminiBackend('price-literal'),
-  new XAIBackend('price-literal'),
-  new KimiBackend('price-literal'),
-  new DeepSeekBackend('price-literal'),
+  new GeminiBackend('static-price-table'),
+  new XAIBackend('static-price-table'),
+  new KimiBackend('static-price-table'),
+  new DeepSeekBackend('static-price-table'),
   new AWSBackend(),
 ];
 
 let cached: Promise<ReadonlyMap<string, IModelPriceTier>> | undefined;
 
 /**
- * The lowest-threshold tier of each priced text model's adapter literal.
+ * The prices this build ships in code: the lowest-threshold tier of each priced
+ * text model's adapter literal, keyed by model id.
+ *
+ * Same provenance as packages/database's modelPrices.seed.json, but reachable
+ * without a database, which is what the price planner needs: a model's FIRST
+ * discovery-written row has no row in force to carry the rates no feed publishes
+ * from, and a tier that reaches getTextModelCost without `cache_read` settles
+ * cached reads at input * CACHE_READ_MULTIPLIER. On DeepSeek Flash that default
+ * is 0.03/1M against a real 0.006/1M.
  *
  * Lowest tier on purpose: this is a last-resort carry for rates no feed
  * publishes (cache and audio), and those do not vary by context bracket in any
@@ -50,7 +59,7 @@ export async function adapterPriceTiers(): Promise<ReadonlyMap<string, IModelPri
 }
 
 async function collect(): Promise<ReadonlyMap<string, IModelPriceTier>> {
-  const tables = await Promise.all(STATIC_PRICE_BACKENDS().map(backend => backend.getModelInfo()));
+  const tables = await Promise.all(staticPriceBackends().map(backend => backend.getModelInfo()));
   const tiers = new Map<string, IModelPriceTier>();
   for (const model of tables.flat()) {
     if (model.type !== 'text' || model.freeToRun) continue;
