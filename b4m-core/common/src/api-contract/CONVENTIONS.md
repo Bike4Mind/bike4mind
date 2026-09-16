@@ -190,6 +190,30 @@ rule forbids, and is what the TTS provider codes were before they were folded in
 
 Adding a classifier means adding it to `API_ERROR_CODES`, not inventing a local one.
 
+### Streaming surfaces classify in-band
+
+A streaming endpoint flushes its headers before it authenticates or prices anything, so
+once the stream is open the status is pinned at `200` and every failure past that point
+is reported as an in-band `error` event. That event is the endpoint's whole error
+surface: the status table and the envelope gate above never see it.
+
+**[gated]** A contract with `streaming: true` must publish, in its `200` event schema, a
+`type: "error"` variant carrying a required `message` string and an **optional**
+classifier (`code` or `errorCode`) whose values come from `API_ERROR_CODES` or a
+narrowing of it. The gate probes the schema with `safeParse`: it must accept
+`insufficient_credits`, accept `undefined` (an unclassified crash has no billing code to
+report), and reject a code outside the shared vocabulary. A bare `z.string()` therefore
+fails - which is the point, because an untyped classifier is what left callers
+regex-matching the prose `message` to detect mid-generation credit exhaustion.
+
+The field is `code` rather than `errorCode` on the SSE frames: they shipped that way and
+are published wire shapes, so what had to be shared was the vocabulary, not the key.
+
+The pairing a caller needs is worth stating in the contract `description`, because it
+differs per surface: `/api/chat` and `/api/embed/chat` can still refuse pre-stream with a
+classified `422`, whereas `/api/ai/v1/completions` cannot and reports even a pre-token
+refusal in-band.
+
 ### Why RFC 9457 is not the answer here
 
 The obvious alternative is `application/problem+json` (RFC 9457): standard, and

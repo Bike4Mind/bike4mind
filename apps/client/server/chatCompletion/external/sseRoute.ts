@@ -15,7 +15,7 @@ import {
   type CompletionSource,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { executeCompletion } from '@bike4mind/services';
+import { executeCompletion, resolveQuestErrorCode } from '@bike4mind/services';
 import {
   connectDB,
   mongoose,
@@ -276,7 +276,11 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       }
 
       try {
-        write(serializeSSEEvent(formatSSEError(error, requestId)));
+        // Classify before serializing: this endpoint has already flushed SSE headers, so a
+        // credit failure - including one raised mid-generation by executeCompletion's
+        // reservation/settlement path - can only reach the caller as an in-band frame. Without
+        // the classifier the only signal is the prose `message`, which callers were regexing.
+        write(serializeSSEEvent(formatSSEError(error, requestId, resolveQuestErrorCode(error))));
         end();
       } catch (streamError) {
         logger.error('[CLI_LLM] Failed to write error to stream', {
