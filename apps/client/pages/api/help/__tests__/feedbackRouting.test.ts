@@ -7,10 +7,10 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
-import { FeedbackModel, FeedbackTextModel, HelpEventModel, User } from '@bike4mind/database';
+import { FeedbackModel, FeedbackTextModel, HelpEventModel, Organization, User } from '@bike4mind/database';
 import { FEEDBACK_CONTENT_RETENTION_DAYS } from '@bike4mind/common';
 import errorHandler from '@server/middlewares/errorHandler';
-import { routeHelpCommentToFeedback } from '@server/utils/helpFeedbackRouting';
+import { routeHelpCommentToFeedback, stitchRoutedComments } from '@server/utils/helpFeedbackRouting';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
 // hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
@@ -76,7 +76,9 @@ afterAll(async () => {
 
 afterEach(async () => {
   await mongoose.connection.dropDatabase();
-  vi.clearAllMocks();
+  // restoreAllMocks, not just clearAllMocks: clear wipes call history but leaves a spy's
+  // implementation in place, so one that escapes a failing test rewrites every test after it.
+  vi.restoreAllMocks();
 });
 
 // dropDatabase above takes the indexes with it, so without this every test would run against a
@@ -98,7 +100,9 @@ async function makeUser() {
 async function call(
   handler: CapturedHandler,
   method: 'GET' | 'POST',
-  user: { id: string; username: string; email: string; isAdmin?: boolean },
+  // username/email are optional so the identity-fallback cases below can omit them, the way a
+  // session carrying neither display field reaches the router in production.
+  user: { id: string; username?: string; email?: string; isAdmin?: boolean },
   body?: Record<string, unknown>
 ) {
   const { req, res } = createMocks({ method, body, query: {} });
@@ -495,5 +499,228 @@ describe('help feedback consolidation', () => {
     expect(['racing note A', 'racing note B']).toContain(text?.content);
     // The loser rolled its own sibling back rather than stranding it under the 90-day TTL.
     expect(await FeedbackTextModel.countDocuments({})).toBe(1);
+  });
+  /**
+   * The outdated flag has the same two submission sites the thumbs do: `useArticleFeedbackState`
+   * sends `rating` + `reportType` with no comment when a reader ticks the box after writing their
+   * note, which takes the verdict-sync branch rather than the router. Without the carry-over the
+   * permanent report keeps saying the article was fine while the (expiring) event says otherwise.
+   */
+  it('carries an outdated flag raised after the comment onto the routed report', async () => {
+    const user = await makeUser();
+
+    await call(articleHandler, 'POST', user, { slug: 'a', rating: 'not_helpful', comment: 'steps are stale' });
+    await call(articleHandler, 'POST', user, { slug: 'a', rating: 'not_helpful', reportType: 'outdated' });
+
+    const reports = await FeedbackModel.find({}).lean();
+    expect(reports).toHaveLength(1);
+    expect(reports[0].helpContext?.reportType).toBe('outdated');
+    // The note the flag was raised against is untouched by it.
+    const text = await FeedbackTextModel.findById(reports[0]._id).lean();
+    expect(text?.content).toBe('steps are stale');
+  });
+
+  /**
+   * `organizationId` is the authorization key a scoped reader filters these reports on, so the
+   * router re-deriving it from the submitter's User row is a correctness property, not a display
+   * detail - a report that lands with a null org is invisible to the org admins who should triage
+   * it. Every other test here uses a user with no organization, which exercises only the fallback.
+   */
+  it('derives the submitter organization onto the routed report', async () => {
+    const org = await Organization.create({ name: 'Acme Health', userId: 'owner-1' });
+    const user = await User.create({
+      username: 'org-user',
+      name: 'Org User',
+      email: 'org-user@example.com',
+      organizationId: org._id,
+    });
+
+    await call(articleHandler, 'POST', user, { slug: 'a', rating: 'not_helpful', comment: 'scoped note' });
+
+    const report = await FeedbackModel.findOne({}).lean();
+    expect(report?.organization).toBe('Acme Health');
+    expect(String(report?.organizationId)).toBe(String(org._id));
+  });
+
+  it('records no organization for a submitter who belongs to none', async () => {
+    const user = await makeUser();
+
+    await call(articleHandler, 'POST', user, { slug: 'a', rating: 'helpful', comment: 'unaffiliated' });
+
+    const report = await FeedbackModel.findOne({}).lean();
+    expect(report?.organization).toBe('Unknown');
+    expect(report?.organizationId).toBeNull();
+  });
+
+  /**
+   * `username` is required by the schema, so the fallback chain is what keeps a session missing a
+   * display field from failing an otherwise valid report outright.
+   */
+  it('falls back to the email, then the user id, when a session carries no username', async () => {
+    const emailOnly = await User.create({ username: 'e', name: 'E', email: 'email-only@example.com' });
+    const idOnly = await User.create({ username: 'i', name: 'I', email: 'id-only@example.com' });
+
+    await call(
+      articleHandler,
+      'POST',
+      { id: emailOnly.id, email: 'email-only@example.com' },
+      { slug: 'a', rating: 'helpful', comment: 'no username here' }
+    );
+    await call(articleHandler, 'POST', { id: idOnly.id }, { slug: 'b', rating: 'helpful', comment: 'neither here' });
+
+    const byUser = new Map((await FeedbackModel.find({}).lean()).map(report => [report.userId, report.username]));
+    expect(byUser.get(emailOnly.id)).toBe('email-only@example.com');
+    expect(byUser.get(idOnly.id)).toBe(idOnly.id);
+  });
+
+  /**
+   * The outcome assertion in 'revises the one report...' above also passes if `expiresAt` moves
+   * from `$setOnInsert` into `$set`, because the schema marks the field immutable and mongoose
+   * strips it before it reaches Mongo. That makes the outcome test unable to fail for the
+   * mechanism it names, so the mechanism is pinned directly here.
+   */
+  it('revises the sibling text without writing expiresAt or upserting one back', async () => {
+    const user = await makeUser();
+    await call(articleHandler, 'POST', user, { slug: 'a', rating: 'helpful', comment: 'first draft' });
+
+    const updateSpy = vi.spyOn(FeedbackTextModel, 'updateOne');
+    await call(articleHandler, 'POST', user, { slug: 'a', rating: 'helpful', comment: 'revised text' });
+
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    const [, update, options] = updateSpy.mock.calls[0] as [
+      unknown,
+      Record<string, unknown>,
+      { upsert?: boolean } | undefined,
+    ];
+    // Asserted on the update itself because the outcome is reachable two ways: not re-stamping
+    // expiresAt, and not re-inserting a row that would carry a fresh one.
+    expect(JSON.stringify(update)).not.toContain('expiresAt');
+    expect(options?.upsert).not.toBe(true);
+  });
+
+  /**
+   * The other writer of this collection refuses the same insert for the same stated reason
+   * (`pages/api/feedback/[id]/update.ts`): `expiresAt` is immutable, so a swept sibling that gets
+   * re-inserted comes back with a window minted from now - the retention extension the whole
+   * permanent/TTL split exists to make impossible. Both writers have to agree or retention
+   * depends on which path the caller took.
+   */
+  it('does not resurrect a text sibling the TTL already swept', async () => {
+    const user = await makeUser();
+    await call(articleHandler, 'POST', user, { slug: 'a', rating: 'helpful', comment: 'first draft' });
+    const report = await FeedbackModel.findOne({}).lean();
+    await FeedbackTextModel.deleteOne({ _id: report!._id });
+
+    const res = await call(articleHandler, 'POST', user, { slug: 'a', rating: 'helpful', comment: 'revised text' });
+
+    expect(res._getStatusCode()).toBeLessThan(400);
+    expect(await FeedbackTextModel.countDocuments({})).toBe(0);
+    // The permanent report survives and still reports that it once carried text.
+    const after = await FeedbackModel.findOne({}).lean();
+    expect(after?.contentStored).toBe(true);
+  });
+
+  /**
+   * The text sibling is written before the report it belongs to, so a failed save has to take it
+   * back out - otherwise a user's words sit in the store for 90 days with no report pointing at
+   * them, unreadable by every surface and unattributable to anyone.
+   */
+  it('deletes the orphaned text sibling when the report itself fails to save', async () => {
+    const user = await makeUser();
+    const saveSpy = vi
+      .spyOn(FeedbackModel.prototype, 'save')
+      .mockRejectedValueOnce(new Error('feedback store unavailable') as never);
+
+    const res = await call(articleHandler, 'POST', user, { slug: 'a', rating: 'helpful', comment: 'orphan?' });
+
+    expect(saveSpy).toHaveBeenCalled();
+    // The original save error surfaces rather than being masked by the cleanup.
+    expect(res._getStatusCode()).toBeGreaterThanOrEqual(500);
+    expect(await FeedbackModel.countDocuments({})).toBe(0);
+    expect(await FeedbackTextModel.countDocuments({})).toBe(0);
+    saveSpy.mockRestore();
+  });
+
+  /**
+   * `my-feedback` passes `{ userId }` into the read, but its own query already limits the event
+   * ids it hands over, so removing that argument leaves the round-trip tests green. The filter is
+   * asserted here instead, against a call that deliberately passes both users' events in.
+   */
+  it('scopes the routed-comment read to the requesting user', async () => {
+    const mine = await makeUser();
+    const theirs = await User.create({ username: 'other', name: 'Other', email: 'other@example.com' });
+
+    await call(articleHandler, 'POST', mine, { slug: 'shared', rating: 'helpful', comment: 'my note' });
+    await call(articleHandler, 'POST', theirs, { slug: 'shared', rating: 'helpful', comment: 'their note' });
+
+    const events = await HelpEventModel.find({ type: 'article_feedback' }).lean();
+    expect(events).toHaveLength(2);
+
+    const [scoped] = await stitchRoutedComments([events, []], { userId: mine.id });
+    expect(scoped.map(event => event.comment).filter(Boolean)).toEqual(['my note']);
+
+    // The admin surface omits the scope on purpose and relies on its own permission check.
+    const [unscoped] = await stitchRoutedComments([events, []]);
+    expect(unscoped.map(event => event.comment).sort()).toEqual(['my note', 'their note']);
+  });
+  /**
+   * The "collapses two concurrent submissions" test above asserts outcomes that hold whichever way
+   * the two calls interleave - through the catch, or serialized through the `existing` revise -
+   * so it cannot say the E11000 recovery actually ran. These two force the loser's path directly:
+   * a first read that misses, then a save rejected with a duplicate-key error.
+   */
+  describe('losing the insert race', () => {
+    const duplicateKeyError = () => Object.assign(new Error('E11000 duplicate key error'), { code: 11000 });
+
+    const routeAs = (user: { id: string; username?: string; email?: string }, eventId: string, comment: string) => {
+      const logger = stubLogger();
+      return {
+        logger,
+        run: routeHelpCommentToFeedback({
+          submitter: { id: user.id, username: user.username, email: user.email },
+          comment,
+          helpContext: { eventId, surface: 'article', slug: 'a', rating: 'helpful' },
+          logger: logger as Parameters<typeof routeHelpCommentToFeedback>[0]['logger'],
+        }),
+      };
+    };
+
+    it('revises the winner rather than stacking a second report', async () => {
+      const user = await makeUser();
+      await call(articleHandler, 'POST', user, { slug: 'a', rating: 'helpful', comment: 'the winner' });
+      const winner = await FeedbackModel.findOne({}).lean();
+
+      // The miss is what puts this call on the insert path at all; the rejection is the index
+      // refusing it. Both are one-shot, so the recovery read below runs against the real store.
+      vi.spyOn(FeedbackModel, 'findOne').mockReturnValueOnce(Promise.resolve(null) as never);
+      vi.spyOn(FeedbackModel.prototype, 'save').mockRejectedValueOnce(duplicateKeyError() as never);
+
+      const { logger, run } = routeAs(user, winner!.helpContext!.eventId, 'the loser');
+      await run;
+
+      // Logged precisely so this branch can be told apart from "the race never happened".
+      expect(logger.warn).toHaveBeenCalled();
+      expect(await FeedbackModel.countDocuments({})).toBe(1);
+      const text = await FeedbackTextModel.findById(winner!._id).lean();
+      expect(text?.content).toBe('the loser');
+      // The loser's own sibling was rolled back by the failed save, not stranded under the TTL.
+      expect(await FeedbackTextModel.countDocuments({})).toBe(1);
+    });
+
+    it('rethrows when the winner it lost to cannot be read back', async () => {
+      const user = await makeUser();
+      await call(articleHandler, 'POST', user, { slug: 'a', rating: 'helpful' });
+      const event = await HelpEventModel.findOne({}).lean();
+
+      // Both reads miss, so there is no row to revise onto. Swallowing here would answer success
+      // for a comment that reached neither store.
+      vi.spyOn(FeedbackModel, 'findOne').mockReturnValue(Promise.resolve(null) as never);
+      vi.spyOn(FeedbackModel.prototype, 'save').mockRejectedValueOnce(duplicateKeyError() as never);
+
+      const { run } = routeAs(user, event!._id.toString(), 'goes nowhere');
+      await expect(run).rejects.toThrow(/E11000/);
+
+      expect(await FeedbackTextModel.countDocuments({})).toBe(0);
+    });
   });
 });

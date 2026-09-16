@@ -1,4 +1,4 @@
-import { FeedbackModel, FeedbackTextModel, User } from '@bike4mind/database';
+import { FeedbackModel, User } from '@bike4mind/database';
 import {
   FeedbackStatus,
   FeedbackType,
@@ -7,12 +7,11 @@ import {
   HelpFeedbackReportType,
   IHelpFeedbackContext,
   IOrganizationDocument,
-  feedbackContentExpiresAt,
   truncateFeedbackContent,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import mongoose from 'mongoose';
-import { saveFeedbackOrRollbackText, writeFeedbackText } from '@server/utils/feedbackText';
+import { reviseFeedbackText, saveFeedbackOrRollbackText, writeFeedbackText } from '@server/utils/feedbackText';
 import { hydrateFeedbackText } from '@server/utils/redactedFeedback';
 
 /**
@@ -53,7 +52,7 @@ function isDuplicateKeyError(error: unknown): boolean {
  * Keyed on `helpContext.eventId` so it tracks the help handlers' own 10-minute dedup window: while
  * they are still revising one help event, this revises the one report attached to it instead of
  * stacking duplicates. Revising updates the text sibling's `content` but never its `expiresAt` -
- * the $setOnInsert below is what actually holds that line - so an edit cannot extend retention.
+ * `reviseFeedbackText` is what actually holds that line - so an edit cannot extend retention.
  *
  * The find-or-create is not atomic on its own, and two submissions for one help event do race it
  * (a double-submit, a retried request, a second tab). The unique partial index on
@@ -83,7 +82,7 @@ export async function routeHelpCommentToFeedback({
 
   const existing = await FeedbackModel.findOne({ 'helpContext.eventId': helpContext.eventId, userId });
   if (existing) {
-    await reviseRoutedComment({ existing, content, contentTruncated, helpContext });
+    await reviseRoutedComment({ existing, content, contentTruncated, helpContext, logger });
     return;
   }
 
@@ -106,8 +105,9 @@ export async function routeHelpCommentToFeedback({
     _id: feedbackId,
     userId,
     status: FeedbackStatus.New,
-    // `username` is required by the schema, so it falls back the same way the rest of the app
-    // does (see admin/whats-new-config.ts) rather than failing an otherwise valid report.
+    // `username` is required by the schema, so a submitter carrying neither display field would
+    // fail validation on an otherwise valid report. `userId` is the last resort for exactly that
+    // case - it is always present, and an opaque id in the admin list beats a dropped comment.
     username: submitter.username ?? submitter.email ?? userId,
     userEmail: submitter.email,
     organization: organizationDoc?.name || 'Unknown',
@@ -133,7 +133,7 @@ export async function routeHelpCommentToFeedback({
     });
     const winner = await FeedbackModel.findOne({ 'helpContext.eventId': helpContext.eventId, userId });
     if (!winner) throw error;
-    await reviseRoutedComment({ existing: winner, content, contentTruncated, helpContext });
+    await reviseRoutedComment({ existing: winner, content, contentTruncated, helpContext, logger });
   }
 }
 
@@ -144,8 +144,15 @@ export async function routeHelpCommentToFeedback({
  * The thumbs and the comment are submitted independently - a user can rate, write a note, then
  * flip the thumb without touching the note - so the rating has two state-change sites and only
  * one of them carries a comment. Without this, a report routed as THUMBS_DOWN would keep saying
- * so after the user settled on "helpful", and the permanent record an admin triages would
- * contradict the verdict the user actually left.
+ * so after the user settled on "helpful", within the one editing session the two submissions
+ * share.
+ *
+ * That bound is real and worth stating precisely: this keys on `eventId`, and the handlers only
+ * reuse an event for 10 minutes (see the dedup window in `api/help/feedback.ts`). A rating left
+ * after the window opens a NEW event, which no report points at, so this matches nothing and the
+ * report keeps the verdict its own submission carried. That is the intended binding - a report
+ * belongs to the submission that wrote the comment, not to the article forever - but it does mean
+ * the guarantee is "for as long as the user is still on this submission", not "permanently".
  *
  * Deliberately update-only: a bare rating is behavior-shaped and belongs in the help event store,
  * so this never creates a report for a user who has not written anything.
@@ -174,34 +181,34 @@ export async function syncRoutedVerdict({
 }
 
 /**
- * Updates the text of a report already routed for this help event.
- *
- * Upserts rather than updating in place. A revise only runs against an event inside the 10-minute
- * dedup window, so the sibling is minutes old and should always be there - the upsert is
- * defensive, not a TTL case, and costs nothing if that assumption ever stops holding.
+ * Updates the text of a report already routed for this help event, and carries any verdict the
+ * user changed while editing onto the report with it.
  */
 async function reviseRoutedComment({
   existing,
   content,
   contentTruncated,
   helpContext,
+  logger,
 }: {
   existing: mongoose.HydratedDocument<IFeedbackDocument>;
   content: string;
   contentTruncated: boolean;
   helpContext: IHelpFeedbackContext;
+  logger: Pick<Logger, 'warn'>;
 }): Promise<void> {
-  // $setOnInsert is the only path that sets `expiresAt`, so an existing row keeps the window it
-  // was created with and an edit cannot extend it. Left to throw for the same reason the create
-  // path above does: a revision the user cannot see fail is a revision they believe was saved.
-  await FeedbackTextModel.updateOne(
-    { _id: existing._id },
-    {
-      $set: { content, contentTruncated },
-      $setOnInsert: { expiresAt: feedbackContentExpiresAt(new Date()) },
-    },
-    { upsert: true }
-  );
+  // Retention is that helper's contract, not this one's: an edit must never extend the window the
+  // sibling was created with, nor re-create one the TTL has already swept.
+  const revised = await reviseFeedbackText({ feedbackId: existing._id, content, contentTruncated });
+  if (!revised) {
+    // Unreachable while both handlers only ever hand over an event from inside their 10-minute
+    // dedup window, which is far short of the sibling's 90 days. Logged rather than asserted so
+    // the day that stops holding is visible instead of silently dropping the user's revision.
+    logger.warn('Revised a help report whose text sibling was already gone', {
+      feedbackId: existing._id.toString(),
+      eventId: helpContext.eventId,
+    });
+  }
 
   // The rating can change within the dedup window (a user flipping thumbs while editing their
   // note), so the stored context and the derived type must follow it rather than stay at the
@@ -214,16 +221,44 @@ async function reviseRoutedComment({
   await existing.save();
 }
 
+/** A help-event row read back for rendering, whatever else the caller projected onto it. */
+type RoutedCommentHost = { _id: unknown; comment?: string };
+
 /**
- * The read half of the same seam: given the help events a caller is rendering, returns the routed
- * comment for each, keyed by event id. Every surface that used to project `HelpEvent.comment` has
- * to go through this now - the user's own panel (`api/help/my-feedback.ts`) and the admin help
- * analytics tab (`api/admin/help-analytics.ts`) - or it silently renders every comment as absent.
+ * The read half of the seam, and the only entry point into it.
  *
- * One batched lookup per store, never N+1. Pass `userId` to scope the read to one user; the admin
- * surface deliberately omits it and relies on its own permission check instead.
+ * Every surface that used to project `HelpEvent.comment` has to go through this now - the user's
+ * own panel (`api/help/my-feedback.ts`) and the admin help analytics tab
+ * (`api/admin/help-analytics.ts`). Exposed as one call that returns stitched rows rather than a
+ * lookup plus a mapper the caller has to remember to apply: forgetting the second half renders
+ * every comment as absent with no error anywhere, which is not a mistake a reader of the call site
+ * would catch.
+ *
+ * Takes the groups a caller renders separately (articles and chat answers) so both are served by
+ * one batched lookup, never N+1 and never two round trips. Pass `userId` to scope the read to one
+ * user; the admin surface deliberately omits it and relies on its own permission check instead.
  */
-export async function routedCommentsByEventId(
+export async function stitchRoutedComments<A extends RoutedCommentHost, B extends RoutedCommentHost>(
+  [first, second]: [A[], B[]],
+  { userId }: { userId?: string } = {}
+): Promise<[Array<A & { comment?: string }>, Array<B & { comment?: string }>]> {
+  const comments = await routedCommentsByEventId(
+    [...first, ...second].map(event => String(event._id)),
+    { userId }
+  );
+  // Mapped inline rather than through one hoisted closure: a closure fixes its type parameter at
+  // the constraint, so both groups would come back widened to `RoutedCommentHost`.
+  return [
+    first.map(event => withRoutedComment(event, comments)),
+    second.map(event => withRoutedComment(event, comments)),
+  ];
+}
+
+/**
+ * Given the help events a caller is rendering, returns the routed comment for each, keyed by
+ * event id. Internal to the seam - callers go through `stitchRoutedComments` above.
+ */
+async function routedCommentsByEventId(
   eventIds: string[],
   { userId }: { userId?: string } = {}
 ): Promise<Map<string, string>> {
@@ -260,8 +295,9 @@ export async function routedCommentsByEventId(
  * falling back to the event's own deprecated field so rows written before the split still render
  * until the 90-day TTL sweeps them.
  */
-export function withRoutedComment<T extends { _id: unknown; comment?: string }>(
+function withRoutedComment<T extends RoutedCommentHost>(
+  event: T,
   comments: Map<string, string>
-): (event: T) => T & { comment?: string } {
-  return event => ({ ...event, comment: comments.get(String(event._id)) ?? event.comment });
+): T & { comment?: string } {
+  return { ...event, comment: comments.get(String(event._id)) ?? event.comment };
 }

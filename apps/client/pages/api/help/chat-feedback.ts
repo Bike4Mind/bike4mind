@@ -32,6 +32,9 @@ const handler = baseApi()
     }
 
     const { chatQuestion, chatAnswer, rating, comment } = parsed.data;
+    // Trimmed for the same reason as the article route: a whitespace-only note would otherwise
+    // take the comment branch, be dropped by the router, and skip the verdict sync below.
+    const writtenComment = comment?.trim();
 
     // The behavior half (the question/answer pair and the thumbs) stays here; the comment is
     // human-written and routes to Feedback below. Both stores carry the same 90-day TTL.
@@ -63,12 +66,12 @@ const handler = baseApi()
         rating,
       }));
 
-    if (comment) {
+    if (writtenComment) {
       // No slug: help chat has no article. The question and answer are free text and stay on the
       // TTL'd event that `eventId` points at rather than being copied onto the permanent report.
       await routeHelpCommentToFeedback({
         submitter: { id: userId, username: req.user?.username, email: req.user?.email },
-        comment,
+        comment: writtenComment,
         helpContext: { eventId: event.id, surface: 'chat', rating },
         logger: req.logger,
       });

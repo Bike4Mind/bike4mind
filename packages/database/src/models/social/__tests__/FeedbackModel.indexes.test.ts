@@ -113,4 +113,37 @@ describe('FeedbackModel indexes', () => {
     expect(defaulted.subject).toBe('product');
     expect(defaulted.contentStored).toBe(false);
   });
+
+  /**
+   * `helpContext.eventId` is both the join key the help read path stitches on and the key the
+   * unique index above is declared against. A drift in this sub-schema does not fail loudly: an
+   * unindexed or absent eventId just makes the routed comment unfindable, so the panel renders
+   * every row commentless and the uniqueness that serializes the router stops applying.
+   */
+  describe('helpContext sub-schema', () => {
+    const base = { userId: 'u1', username: 'user', status: 'New', subject: 'help' as const };
+
+    it('requires an eventId', async () => {
+      const doc = new FeedbackModel({ ...base, helpContext: { surface: 'article' } });
+      await expect(doc.validate()).rejects.toThrow();
+    });
+
+    it.each([
+      ['surface', { eventId: 'e1', surface: 'sidebar' }],
+      ['rating', { eventId: 'e1', surface: 'article', rating: 'meh' }],
+      ['reportType', { eventId: 'e1', surface: 'article', reportType: 'wrong' }],
+    ])('rejects an unknown %s', async (_field, helpContext) => {
+      await expect(new FeedbackModel({ ...base, helpContext }).validate()).rejects.toThrow();
+    });
+
+    it('requires a surface, and accepts a context carrying nothing else', async () => {
+      await expect(new FeedbackModel({ ...base, helpContext: { eventId: 'e1' } }).validate()).rejects.toThrow();
+
+      // The chat surface has neither a slug nor anything to report as outdated.
+      const chat = new FeedbackModel({ ...base, helpContext: { eventId: 'e1', surface: 'chat' } });
+      await chat.validate();
+      expect(chat.helpContext?.slug).toBeUndefined();
+      expect(chat.helpContext?.reportType).toBeUndefined();
+    });
+  });
 });

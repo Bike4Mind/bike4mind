@@ -49,6 +49,35 @@ export async function writeFeedbackText({
 }
 
 /**
+ * Replaces the text of a report whose sibling already exists, leaving its retention window alone.
+ * Returns whether the sibling was still there to revise.
+ *
+ * Writes no `expiresAt` at all, and does not upsert. Both halves are the same rule the other
+ * writer of this collection states inline (`pages/api/feedback/[id]/update.ts`): `expiresAt` is
+ * immutable, so a report whose text has already expired must not be resurrected by editing it
+ * back in - an insert here would mint a fresh 90-day window from now, which is precisely the
+ * retention extension the permanent/TTL split exists to make impossible. Two writers of one
+ * collection have to agree on that, or retention depends on which path a caller happened to take.
+ *
+ * Every caller revises inside a short dedup window where the sibling is minutes old, so a `false`
+ * return means that assumption has stopped holding - worth a log line at the call site rather than
+ * a silent no-op. A real write failure is left to throw: a revision the user cannot see fail is a
+ * revision they believe was saved.
+ */
+export async function reviseFeedbackText({
+  feedbackId,
+  content,
+  contentTruncated,
+}: {
+  feedbackId: mongoose.Types.ObjectId;
+  content: string;
+  contentTruncated: boolean;
+}): Promise<boolean> {
+  const result = await FeedbackTextModel.updateOne({ _id: feedbackId }, { $set: { content, contentTruncated } });
+  return result.matchedCount > 0;
+}
+
+/**
  * Saves the report, deleting the already-written text sibling if the save fails. Rethrows the
  * original save error either way: a report that did not persist must not return success, and the
  * cleanup failing on top of it is a log line, not a second thrown error that would mask the first.

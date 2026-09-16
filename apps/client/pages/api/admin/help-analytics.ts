@@ -3,7 +3,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { HelpEventModel } from '@bike4mind/database';
 import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
 import { assertDateInRange } from '@server/utils/dateParam';
-import { routedCommentsByEventId, withRoutedComment } from '@server/utils/helpFeedbackRouting';
+import { stitchRoutedComments } from '@server/utils/helpFeedbackRouting';
 
 function parseDate(value: string, label: string): Date {
   const d = new Date(value);
@@ -186,9 +186,7 @@ const handler = baseApi()
     // Comments no longer live on the help event - they route to Feedback (see
     // helpFeedbackRouting.ts), so this tab has to stitch them back or it renders every row
     // commentless. Unscoped by user on purpose: this route is already admin-gated above.
-    const comments = await routedCommentsByEventId(
-      [...recentFeedback, ...chatFeedback].map(event => event._id.toString())
-    );
+    const [stitchedFeedback, stitchedChatFeedback] = await stitchRoutedComments([recentFeedback, chatFeedback]);
 
     res.json({
       topArticles,
@@ -196,8 +194,8 @@ const handler = baseApi()
       feedbackSummary,
       chatTopics,
       overview,
-      recentFeedback: recentFeedback.map(withRoutedComment(comments)),
-      chatFeedback: chatFeedback.map(withRoutedComment(comments)),
+      recentFeedback: stitchedFeedback,
+      chatFeedback: stitchedChatFeedback,
     });
   });
 

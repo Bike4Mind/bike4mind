@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { HelpEventModel } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
-import { routedCommentsByEventId, withRoutedComment } from '@server/utils/helpFeedbackRouting';
+import { stitchRoutedComments } from '@server/utils/helpFeedbackRouting';
 
 const handler = baseApi()
   .use(
@@ -27,7 +27,7 @@ const handler = baseApi()
       })
         .sort({ createdAt: -1 })
         // `comment` is no longer written here, but rows from before the split still carry one and
-        // are read back as a fallback (see withRoutedComment) until they age out under the TTL.
+        // are read back as a fallback (see stitchRoutedComments) until they age out under the TTL.
         .select('slug rating reportType comment createdAt')
         .lean(),
 
@@ -43,17 +43,11 @@ const handler = baseApi()
 
     // Re-populates the feedback UI on re-navigation, so both stores have to be read back as one:
     // the behavior half lives on HelpEvent, the comment on the Feedback report routed from it.
-    const comments = await routedCommentsByEventId(
-      [...articleEvents, ...chatEvents].map(event => event._id.toString()),
-      { userId }
-    );
+    const [articleFeedback, chatFeedback] = await stitchRoutedComments([articleEvents, chatEvents], { userId });
 
     // Field-for-field the shape the clients already consume - `HelpChat.tsx` matches a chat entry
     // by exact (chatQuestion, chatAnswer) equality, so these must survive verbatim.
-    res.json({
-      articleFeedback: articleEvents.map(withRoutedComment(comments)),
-      chatFeedback: chatEvents.map(withRoutedComment(comments)),
-    });
+    res.json({ articleFeedback, chatFeedback });
   });
 
 export default handler;

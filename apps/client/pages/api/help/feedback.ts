@@ -32,6 +32,11 @@ const handler = baseApi()
     }
 
     const { slug, rating, reportType, comment } = parsed.data;
+    // Trimmed here, not just inside the router: zod puts no `.min(1)` on `comment`, so a
+    // whitespace-only note is a truthy string that would take the comment branch below, get
+    // dropped by the router's own blank guard, and leave the verdict sync unrun - the event would
+    // take the new rating while the report kept the old one.
+    const writtenComment = comment?.trim();
 
     // The behavior half (which article, thumbs, the outdated report) stays here; the comment is
     // human-written and routes to Feedback below. Both stores carry the same 90-day TTL.
@@ -69,10 +74,10 @@ const handler = baseApi()
         reportType,
       }));
 
-    if (comment) {
+    if (writtenComment) {
       await routeHelpCommentToFeedback({
         submitter: { id: userId, username: req.user?.username, email: req.user?.email },
-        comment,
+        comment: writtenComment,
         helpContext: {
           eventId: event.id,
           surface: 'article',
