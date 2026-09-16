@@ -108,6 +108,22 @@ describe('KimiBackend reasoning capture', () => {
     await expect(runTurn(backend, ChatModels.KIMI_K3)).rejects.toThrow(/output budget was exhausted/);
   });
 
+  it('throws when the reasoning monologue alone consumed the whole output budget', async () => {
+    // Same hole as deepseekBackend: the guard has to key on prose produced, not on
+    // streamedText, because the <think>-wrapped monologue is what streamedText holds
+    // on a reasoning-only turn. Keyed there it declines to fire and the user gets a
+    // blank reply instead of the error.
+    const { backend } = backendReturning([
+      {
+        index: 0,
+        message: { content: '', reasoning_content: 'thinking at great length' },
+        finish_reason: 'length',
+      },
+    ]);
+
+    await expect(runTurn(backend, ChatModels.KIMI_K3)).rejects.toThrow(/output budget was exhausted/);
+  });
+
   /**
    * Moonshot's `prompt_tokens` is CACHE-INCLUSIVE. Verified live 2026-07-28: a
    * repeated 1220-token prompt came back `prompt_tokens: 1220` WITH
@@ -303,6 +319,23 @@ describe('KimiBackend streaming reasoning', () => {
     // empty stream returned silently with zero callbacks and the chat hung.
     const { backend } = streamingBackend([
       [
+        {
+          choices: [{ index: 0, delta: {}, finish_reason: 'length' }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        },
+      ],
+    ]);
+
+    await expect(runStream(backend, ChatModels.KIMI_K3)).rejects.toThrow(/output budget was exhausted/);
+  });
+
+  it('throws when a stream spent the whole output budget reasoning and never produced prose', async () => {
+    // One reasoning delta per chunk on purpose: two choices in one chunk at the same
+    // index overwrite each other and a fixture that does it silently looks like a pass.
+    const { backend } = streamingBackend([
+      [
+        { choices: [{ index: 0, delta: { reasoning_content: 'thinking at ' } }] },
+        { choices: [{ index: 0, delta: { reasoning_content: 'great length' } }] },
         {
           choices: [{ index: 0, delta: {}, finish_reason: 'length' }],
           usage: { prompt_tokens: 10, completion_tokens: 5 },
