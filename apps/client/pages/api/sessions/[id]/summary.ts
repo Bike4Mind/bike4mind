@@ -5,14 +5,17 @@ import { accessibleBy } from '@casl/mongoose';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Request } from 'express';
 import { SessionEvents } from '@server/utils/eventBus';
+import { isValidObjectId } from '@server/utils/objectId';
 
 const handler = baseApi().post<Request<{}, unknown, unknown, { id: string }>>(async (req, res) => {
   const sessionId = req.query.id;
 
-  const session = await Session.findOne({
-    _id: sessionId,
-    ...accessibleBy(req.ability!, Permission.update).ofType(Session),
-  });
+  const session = isValidObjectId(sessionId)
+    ? await Session.findOne({
+        _id: sessionId,
+        ...accessibleBy(req.ability!, Permission.update).ofType(Session),
+      })
+    : null;
   if (!session) throw new NotFoundError('Cannot update session');
 
   const requestId = await SessionEvents.Summarize.publish({

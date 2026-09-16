@@ -6,6 +6,7 @@ import qs from 'qs';
 import { Request } from 'express';
 import { Organization, organizationRepository } from '@bike4mind/database/infra';
 import { UserActivityCounter } from '@bike4mind/database/auth';
+import { isValidObjectId } from '@server/utils/objectId';
 
 const OrganizationStatsSchema = z.object({
   organizationIds: z.array(z.string()),
@@ -27,7 +28,9 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(
     const visibleOrganizationIds = memberOrgIds ? organizationIds.filter(id => memberOrgIds.has(id)) : organizationIds;
 
     const organizations = await Organization.find({
-      _id: { $in: visibleOrganizationIds },
+      // One uncastable id rejects the whole $in, taking the valid rows with it. Such an id
+      // could never have matched, so drop it rather than fail the request.
+      _id: { $in: visibleOrganizationIds.filter(isValidObjectId) },
     })
       .select('id name users')
       .populate('users.userId', 'loginRecords counters');

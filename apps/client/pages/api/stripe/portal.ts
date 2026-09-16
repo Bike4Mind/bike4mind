@@ -1,6 +1,7 @@
 import { Organization, organizationRepository, User, userRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
-import { ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { isValidObjectId } from '@server/utils/objectId';
 import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { resolveSubscriptionSource } from '@server/services/organizationService';
@@ -31,6 +32,9 @@ const handler = baseApi()
     let customerId: string;
 
     if (ownerType === SubscriptionOwnerType.Organization) {
+      // A malformed id has always answered 404 here (the error handler remapped the cast);
+      // the 400 below is this route's answer for a well-formed id that matches nothing.
+      if (!isValidObjectId(ownerId)) throw new NotFoundError('Organization not found');
       const organization = await organizationRepository.findById(ownerId);
       if (!organization) throw new BadRequestError('Organization not found');
 
@@ -77,6 +81,7 @@ const handler = baseApi()
 
       customerId = organization.stripeCustomerId;
     } else {
+      if (!isValidObjectId(ownerId)) throw new NotFoundError('User not found');
       const user = await userRepository.findById(ownerId);
       if (!user) throw new BadRequestError('User not found');
 

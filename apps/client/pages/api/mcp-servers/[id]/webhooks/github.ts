@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { requireEnv } from '@bike4mind/common';
 import { McpServer } from '@bike4mind/database/ai';
 import { baseApi } from '@server/middlewares/baseApi';
+import { isValidObjectId } from '@server/utils/objectId';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { generateWebhookToken, generateWebhookSecret } from '@server/integrations/github/webhookUtils';
 import { SUPPORTED_GITHUB_EVENTS, isValidGitHubEventType } from '@server/integrations/github/types';
@@ -71,7 +72,7 @@ const handler = baseApi()
   .post(async (req, res) => {
     const { id } = req.query;
 
-    const server = await McpServer.findById(id);
+    const server = isValidObjectId(id) ? await McpServer.findById(id) : null;
     if (!server) {
       throw new NotFoundError('MCP Server not found');
     }
@@ -176,7 +177,7 @@ const handler = baseApi()
   .get(async (req, res) => {
     const { id } = req.query;
 
-    const server = await McpServer.findById(id);
+    const server = isValidObjectId(id) ? await McpServer.findById(id) : null;
     if (!server) {
       throw new NotFoundError('MCP Server not found');
     }
@@ -211,7 +212,7 @@ const handler = baseApi()
   .delete(async (req, res) => {
     const { id } = req.query;
 
-    const server = await McpServer.findById(id);
+    const server = isValidObjectId(id) ? await McpServer.findById(id) : null;
     if (!server) {
       throw new NotFoundError('MCP Server not found');
     }

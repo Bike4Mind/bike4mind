@@ -329,6 +329,9 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     return query;
   }
   async findByIdAndUserId(id: string, userId: string) {
+    // A non-ObjectId id can never address a row - report no such row, not a CastError the
+    // calling route cannot attribute. Same contract as `BaseRepository.findById`.
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
     return this.sessionModel.findOne({ _id: id, userId });
   }
   async findRecentlyUpdatedByUserId(userId: string, ctx: mongoose.mongo.ClientSession | null = null) {

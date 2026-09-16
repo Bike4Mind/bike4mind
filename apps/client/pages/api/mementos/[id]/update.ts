@@ -3,6 +3,7 @@ import { Memento } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { MementoGroomingService } from '../../../../services/MementoGroomingService';
 import { UpdateMementoSchema } from '@server/validators/mementoValidators';
+import { isValidObjectId } from '@server/utils/objectId';
 
 const handler = baseApi().patch(async (req: Request, res: Response) => {
   req.logger.updateMetadata({ endpoint: 'mementos/[id]/update' });
@@ -19,7 +20,7 @@ const handler = baseApi().patch(async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid memento ID' });
     }
 
-    const memento = await Memento.findById(id);
+    const memento = isValidObjectId(id) ? await Memento.findById(id) : null;
     if (!memento) {
       return res.status(404).json({ error: 'Memento not found' });
     }

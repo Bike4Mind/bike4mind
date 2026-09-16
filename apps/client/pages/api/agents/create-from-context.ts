@@ -11,10 +11,11 @@ import {
   fabFileRepository,
 } from '@bike4mind/database';
 import { IAgent, IChatHistoryItemDocument, IFabFileDocument, Permission, isImageAttachment } from '@bike4mind/common';
-import { BadRequestError, ForbiddenError, getFileContent, getSettingsByNames } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError, NotFoundError, getFileContent, getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { getFilesStorage } from '@server/utils/storage';
+import { isValidObjectId } from '@server/utils/objectId';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { apiKeyService } from '@bike4mind/services';
 import { v4 as uuidv4 } from 'uuid';
@@ -371,6 +372,10 @@ const handler = baseApi().post<Request<{}, CreateFromContextResponse, CreateFrom
   if (!agentName || !sessionId) {
     throw new BadRequestError('Agent name and session ID are required');
   }
+
+  // A malformed id has always answered 404 here (the error handler remapped the cast); the
+  // 400 below is this route's answer for a well-formed id that matches nothing.
+  if (!isValidObjectId(sessionId)) throw new NotFoundError('Session not found');
 
   // Verify user owns the session OR has shared access
   const session = await sessionRepository.findById(sessionId);

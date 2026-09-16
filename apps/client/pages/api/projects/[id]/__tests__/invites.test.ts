@@ -59,8 +59,8 @@ describe('POST /api/projects/:id/invites', () => {
   it('does not allow a body id to redirect the invite to a different project', async () => {
     const { req, res } = createMocks({
       method: 'POST',
-      query: { id: 'proj-path-id' },
-      body: { permissions: ['read'], id: 'attacker-proj-id' },
+      query: { id: '507f1f77bcf86cd799439031' },
+      body: { permissions: ['read'], id: '507f1f77bcf86cd799439032' },
     });
     (req as any).user = { id: 'u1' };
 
@@ -68,12 +68,12 @@ describe('POST /api/projects/:id/invites', () => {
 
     expect(createInvite).toHaveBeenCalledWith(
       req.user,
-      expect.objectContaining({ id: 'proj-path-id', type: 'Project' }),
+      expect.objectContaining({ id: '507f1f77bcf86cd799439031', type: 'Project' }),
       expect.anything()
     );
     expect(createInvite).not.toHaveBeenCalledWith(
       req.user,
-      expect.objectContaining({ id: 'attacker-proj-id' }),
+      expect.objectContaining({ id: '507f1f77bcf86cd799439032' }),
       expect.anything()
     );
   });
@@ -81,7 +81,7 @@ describe('POST /api/projects/:id/invites', () => {
   it('creates the invite for the path project id', async () => {
     const { req, res } = createMocks({
       method: 'POST',
-      query: { id: 'proj-1' },
+      query: { id: '507f1f77bcf86cd799439033' },
       body: { permissions: ['read'] },
     });
     (req as any).user = { id: 'u1' };
@@ -90,7 +90,7 @@ describe('POST /api/projects/:id/invites', () => {
 
     expect(createInvite).toHaveBeenCalledWith(
       req.user,
-      expect.objectContaining({ id: 'proj-1', type: 'Project' }),
+      expect.objectContaining({ id: '507f1f77bcf86cd799439033', type: 'Project' }),
       expect.anything()
     );
   });
@@ -112,7 +112,7 @@ describe('POST /api/projects/:id/invites', () => {
   it('accepts a future ISO expiresAt and coerces it to Date', async () => {
     const { req, res } = createMocks({
       method: 'POST',
-      query: { id: 'proj-1' },
+      query: { id: '507f1f77bcf86cd799439033' },
       body: { permissions: ['read'], expiresAt: '2099-12-31T00:00:00.000Z' },
     });
     (req as any).user = { id: 'u1' };
@@ -127,7 +127,7 @@ describe('POST /api/projects/:id/invites', () => {
   it('maps null expiresAt to undefined so the service prefault applies', async () => {
     const { req, res } = createMocks({
       method: 'POST',
-      query: { id: 'proj-1' },
+      query: { id: '507f1f77bcf86cd799439033' },
       body: { permissions: ['read'], expiresAt: null },
     });
     (req as any).user = { id: 'u1' };
@@ -142,7 +142,7 @@ describe('POST /api/projects/:id/invites', () => {
   it('rejects a past expiresAt without calling the service', async () => {
     const { req, res } = createMocks({
       method: 'POST',
-      query: { id: 'proj-1' },
+      query: { id: '507f1f77bcf86cd799439033' },
       body: { permissions: ['read'], expiresAt: '2020-01-01T00:00:00.000Z' },
     });
     (req as any).user = { id: 'u1' };
@@ -153,7 +153,7 @@ describe('POST /api/projects/:id/invites', () => {
   it('rejects a missing permissions field without calling the service', async () => {
     const { req, res } = createMocks({
       method: 'POST',
-      query: { id: 'proj-1' },
+      query: { id: '507f1f77bcf86cd799439033' },
       body: {},
     });
     (req as any).user = { id: 'u1' };

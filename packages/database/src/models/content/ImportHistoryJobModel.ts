@@ -130,6 +130,9 @@ class ImportHistoryJobRepository extends BaseRepository<IImportHistoryJob> {
   }
 
   async findByIdAndUserId(id: string, userId: string): Promise<IImportHistoryJob | null> {
+    // A non-ObjectId id can never address a row - report no such row, not a CastError the
+    // calling route cannot attribute. Same contract as `BaseRepository.findById`.
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
     const result = await this.model.findOne({ _id: id, userId });
     return result?.toObject() ?? null;
   }

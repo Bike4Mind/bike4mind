@@ -41,9 +41,10 @@ export async function resolveActiveOrg(
     try {
       org = await organizationRepository.findById(orgId);
     } catch (err) {
-      // A malformed org id casts to a Mongoose CastError - treat that as "no such org" and
-      // fail closed. Any other error is a transient DB failure that must surface as a 5xx,
-      // not masquerade as a missing org.
+      // BaseRepository.findById screens a non-ObjectId and reports `null`, so a malformed org id
+      // reaches the not-found exit below rather than this catch. Retained as a backstop for any
+      // other cast on this path; any non-cast error is a transient DB failure that must surface
+      // as a 5xx, not masquerade as a missing org.
       if ((err as { name?: string })?.name !== 'CastError') throw err;
       org = null;
     }

@@ -5,6 +5,8 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sharingService } from '@bike4mind/services';
 import { InviteEvents, InviteType, ProjectEvents, Permission } from '@bike4mind/common';
 import { logEvent } from '@server/utils/analyticsLog';
+import { isValidObjectId } from '@server/utils/objectId';
+import { NotFoundError } from '@server/utils/errors';
 import {
   withTransaction,
   userRepository,
@@ -48,6 +50,9 @@ const handler = baseApi()
       if (!id || typeof id !== 'string') {
         return res.status(400).json({ message: 'Invalid project ID' });
       }
+      // An id that is not an ObjectId names no project, so this route answers the 404 itself
+      // rather than letting the lookup cast and raise a CastError.
+      if (!isValidObjectId(id)) throw new NotFoundError('Project not found');
 
       const { expiresAt, ...restBody } = createInviteBodySchema.parse(req.body);
       const created = await withTransaction(() => {

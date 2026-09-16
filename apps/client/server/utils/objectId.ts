@@ -4,10 +4,16 @@ import { isObjectIdOrHexString } from 'mongoose';
 // (that lowercases, so it rejects a valid uppercase-hex id) and not
 // `Types.ObjectId.isValid` (that accepts a number or a 12-byte Buffer and casts it to a
 // fabricated id). Same choice, for the same reason, as b4m-core/services/src/utils/objectIds.ts.
-// Callers should reject with a 4xx before the value reaches a query: an ObjectId-typed
-// filter or update payload casts it and throws a CastError well past the point where a
-// 400 was the right answer.
-export const isValidObjectId = (id: string): boolean => isObjectIdOrHexString(id);
+// Callers must check before the value reaches a query: an ObjectId-typed filter or update
+// payload casts it and throws a CastError from deep inside the driver, well past the point
+// where the route could answer for itself. For a path/query resource id that check is the
+// route's own 404 - see the status table in b4m-core/common/src/api-contract/CONVENTIONS.md.
+//
+// Takes `unknown` because a Next.js route param is `string | string[] | undefined`: a
+// non-string can never be a hex id, and narrowing here beats `String(id)` at each call site,
+// which would turn `undefined` into the literal 'undefined'. Returns a type predicate so the
+// narrowed value still composes with the `string` signatures below.
+export const isValidObjectId = (id: unknown): id is string => isObjectIdOrHexString(id);
 
 /**
  * The canonical lowercase form of `id`, or `undefined` when it is not an ObjectId hex
@@ -18,4 +24,4 @@ export const isValidObjectId = (id: string): boolean => isObjectIdOrHexString(id
  * silently misses instead of erroring.
  */
 export const toObjectIdString = (id: string): string | undefined =>
-  isValidObjectId(id) ? String(id).toLowerCase() : undefined;
+  isValidObjectId(id) ? id.toLowerCase() : undefined;

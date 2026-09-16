@@ -15,7 +15,8 @@ import {
   inviteRepository,
   Organization,
 } from '@bike4mind/database';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { isValidObjectId } from '@server/utils/objectId';
 import { z } from 'zod';
 import { sharingService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -80,11 +81,14 @@ const handler = baseApi()
       if (!id) {
         return res.status(400).json({ message: 'Invalid get invite request' });
       }
-
       const inviteType = resolveInviteType(type);
       if (!inviteType) {
         return res.status(400).json({ message: 'Invalid type' });
       }
+      // An id that is not an ObjectId names no document, so this route answers the 404 itself
+      // rather than letting the lookup cast and raise a CastError. After the type check, so a
+      // bad type still reports the bad type.
+      if (!isValidObjectId(id)) throw new NotFoundError('Document not found');
 
       // Share-scoped: the service authorizes via the document's share access
       // (owner, a users[]-with-share grant, or a groups[]-with-share grant),
@@ -116,9 +120,9 @@ const handler = baseApi()
       if (!urlPathType || !id) {
         return res.status(400).json({ message: 'Invalid invite request' });
       }
-
       const inviteType = resolveInviteType(urlPathType);
       if (!inviteType) throw new BadRequestError('Invalid type');
+      if (!isValidObjectId(id)) throw new NotFoundError('Document not found');
 
       const { expiresAt, ...restBody } = createInviteBodySchema.parse(req.body);
       const created = await withTransaction(() => {
@@ -235,6 +239,7 @@ const handler = baseApi()
       if (!id) throw new BadRequestError('Invalid cancel invite request');
       const inviteType = resolveInviteType(type);
       if (!inviteType) throw new BadRequestError('Invalid cancel invite request');
+      if (!isValidObjectId(id)) throw new NotFoundError('Document not found');
       const { email } = (req.body ?? {}) as { email?: string };
 
       const invites = await sharingService.cancelInvite(

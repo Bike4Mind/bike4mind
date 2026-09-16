@@ -189,6 +189,39 @@ describe('BaseRepository', () => {
   });
 
   // updateMany had the same `.session(this._txn)` bug as update.
+  describe('findById', () => {
+    const makeRepo = (findByIdImpl: ReturnType<typeof vi.fn>) =>
+      new TestRepository({ findById: findByIdImpl } as unknown as mongoose.Model<TestDoc>);
+
+    it('resolves null for a string that cannot address a row, without querying', async () => {
+      // The route's own `if (!doc) throw new NotFoundError(...)` is what answers the caller.
+      // Reaching Mongoose here would raise a CastError instead, which the API error handler
+      // cannot attribute to the caller.
+      const findById = vi.fn();
+      await expect(makeRepo(findById).findById('not-an-objectid')).resolves.toBeNull();
+      expect(findById).not.toHaveBeenCalled();
+    });
+
+    it('does not treat a 12-character string as an id, matching mongoose 8', async () => {
+      const findById = vi.fn();
+      await expect(makeRepo(findById).findById('0123456789ab')).resolves.toBeNull();
+      expect(findById).not.toHaveBeenCalled();
+    });
+
+    it('still queries for a valid id, including uppercase hex', async () => {
+      const doc = { toJSON: () => ({ id: '507F1F77BCF86CD799439011', userId: 'user1', name: 'x' }) };
+      const findById = vi.fn().mockResolvedValue(doc);
+      await expect(makeRepo(findById).findById('507F1F77BCF86CD799439011')).resolves.toMatchObject({ name: 'x' });
+      expect(findById).toHaveBeenCalledWith('507F1F77BCF86CD799439011');
+    });
+
+    it('still resolves null when a valid id matches no row', async () => {
+      const findById = vi.fn().mockResolvedValue(null);
+      await expect(makeRepo(findById).findById('507f1f77bcf86cd799439011')).resolves.toBeNull();
+      expect(findById).toHaveBeenCalled();
+    });
+  });
+
   describe('updateMany', () => {
     let updateManyQuery: ThenableQuery<{ modifiedCount: number }>;
     let mockUpdateMany: ReturnType<typeof vi.fn>;

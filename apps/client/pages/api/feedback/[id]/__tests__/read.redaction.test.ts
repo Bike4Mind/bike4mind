@@ -24,14 +24,14 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 const { feedbackDoc } = vi.hoisted(() => ({
   feedbackDoc: {
-    id: 'fb1',
+    id: '507f1f77bcf86cd7994390fb',
     promptMeta: {
       functionCalls: [
         { name: 'web_search', parameters: {}, id: 'call_1', returnValue: 'PRIVATE TOOL OUTPUT', success: true },
       ],
     },
     toJSON: () => ({
-      id: 'fb1',
+      id: '507f1f77bcf86cd7994390fb',
       promptMeta: {
         functionCalls: [
           { name: 'web_search', parameters: {}, id: 'call_1', returnValue: 'PRIVATE TOOL OUTPUT', success: true },
@@ -50,7 +50,7 @@ import '../read';
 
 describe('GET /api/feedback/[id]/read - redacts tool output before returning it to an admin', () => {
   it('strips returnValue from functionCalls', async () => {
-    const { req, res } = createMocks({ method: 'GET', query: { id: 'fb1' } });
+    const { req, res } = createMocks({ method: 'GET', query: { id: '507f1f77bcf86cd7994390fb' } });
     (req as unknown as { ability: { can: () => boolean } }).ability = { can: () => true };
 
     await mockRefs.getHandler!(req, res);

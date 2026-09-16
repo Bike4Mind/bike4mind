@@ -4,6 +4,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@server/utils/errors';
+import { isValidObjectId } from '@server/utils/objectId';
 import { z } from 'zod';
 
 const AppFileUpdateTagsRequestInput = z.object({
@@ -20,11 +21,13 @@ const handler = baseApi().patch(
     // Ownership check: scope the update filter to the requesting user so an
     // attacker cannot modify tags/description on another user's file. Both
     // "not found" and "not yours" return NotFoundError to avoid enumeration.
-    const updatedAppFile = await AppFile.findOneAndUpdate(
-      { _id: data.id, userId },
-      { tags: data.tags, description: data.description },
-      { new: true }
-    );
+    const updatedAppFile = isValidObjectId(data.id)
+      ? await AppFile.findOneAndUpdate(
+          { _id: data.id, userId },
+          { tags: data.tags, description: data.description },
+          { new: true }
+        )
+      : null;
     if (updatedAppFile === null) throw new NotFoundError('App file not found');
 
     await logEvent(

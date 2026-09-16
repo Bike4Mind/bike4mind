@@ -5,6 +5,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { FeedbackEvents, feedbackContentExpiresAt, truncateFeedbackContent } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
+import { isValidObjectId } from '@server/utils/objectId';
 import { z } from 'zod';
 
 const UpdateFeedbackRequestSchema = z.object({
@@ -30,7 +31,7 @@ const handler = baseApi().put(
 
     const updateData = UpdateFeedbackRequestSchema.parse(req.body);
 
-    const feedback = await FeedbackModel.findById(id);
+    const feedback = isValidObjectId(id) ? await FeedbackModel.findById(id) : null;
 
     if (!feedback) {
       throw new NotFoundError('Feedback not found');

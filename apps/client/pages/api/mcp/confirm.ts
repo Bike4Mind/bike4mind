@@ -6,6 +6,7 @@ import { Quest, Session } from '@bike4mind/database';
 import { isImageServeable } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
+import { isValidObjectId } from '@server/utils/objectId';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { GitHubResource } from '@bike4mind/slack';
 import { JiraResource } from '@bike4mind/slack';
@@ -51,7 +52,7 @@ const handler = baseApi().post(async (req, res) => {
     userId: user.id,
   });
 
-  const session = await Session.findById(sessionId);
+  const session = isValidObjectId(sessionId) ? await Session.findById(sessionId) : null;
   if (!session) {
     logger.error('[Web MCP Confirm] Session not found', { sessionId });
     return res.status(404).json({ error: 'Session not found' });
@@ -65,7 +66,7 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(403).json({ error: 'Unauthorized access to session' });
   }
 
-  const quest = await Quest.findById(questId);
+  const quest = isValidObjectId(questId) ? await Quest.findById(questId) : null;
   if (!quest) {
     logger.error('[Web MCP Confirm] Quest not found', { questId });
     return res.status(404).json({ error: 'Quest not found' });

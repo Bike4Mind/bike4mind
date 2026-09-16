@@ -28,7 +28,7 @@ const { deletedFeedbackDoc } = vi.hoisted(() => {
       { name: 'web_search', parameters: {}, id: 'call_1', returnValue: 'PRIVATE TOOL OUTPUT', success: true },
     ],
   };
-  const plain = { id: 'fb1', promptMeta };
+  const plain = { id: '507f1f77bcf86cd7994390fb', promptMeta };
   return { deletedFeedbackDoc: { ...plain, toJSON: () => plain } };
 });
 
@@ -49,7 +49,7 @@ import '../delete';
 
 describe('DELETE /api/feedback/[id] - redacts tool output before returning it to an admin', () => {
   it('strips returnValue from functionCalls', async () => {
-    const { req, res } = createMocks({ method: 'DELETE', query: { id: 'fb1' } });
+    const { req, res } = createMocks({ method: 'DELETE', query: { id: '507f1f77bcf86cd7994390fb' } });
     (req as unknown as { ability: { can: () => boolean }; user: { id: string } }).ability = { can: () => true };
     (req as unknown as { user: { id: string } }).user = { id: 'admin1' };
 

@@ -3,6 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
+import { isValidObjectId } from '@server/utils/objectId';
 
 const handler = baseApi().get(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
@@ -13,7 +14,7 @@ const handler = baseApi().get(
       throw new NotFoundError('Ability not found');
     }
 
-    const feedback = await FeedbackModel.findById(id);
+    const feedback = isValidObjectId(id) ? await FeedbackModel.findById(id) : null;
 
     if (!feedback) {
       throw new NotFoundError('Feedback not found');
