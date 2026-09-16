@@ -5,10 +5,11 @@ import { MCPClient } from '@bike4mind/mcp';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { BadRequestError } from '@server/utils/errors';
 import { decryptEnvVariables } from '@server/security/tokenEncryption';
+import { isValidObjectId } from '@server/utils/objectId';
 
 const handler = baseApi().post(async (req, res) => {
   const { id } = req.query;
-  const server = await McpServer.findOne({ _id: id, userId: req.user.id });
+  const server = isValidObjectId(id) ? await McpServer.findOne({ _id: id, userId: req.user.id }) : null;
   if (!server) {
     throw new NotFoundError('Server not found');
   }

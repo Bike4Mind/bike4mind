@@ -99,7 +99,14 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
     });
   }
 
+  /**
+   * Single-id counterpart to findAllAccessibleByIds. The `$in` guard there drops an id that
+   * cannot address a row; here there is only one, so an uncastable id means no such row -
+   * reported as `null` rather than as a CastError the calling route cannot attribute. Same
+   * contract, and same reasoning, as `BaseRepository.findById` in db-core.
+   */
   async findAccessibleById(user: Pick<IUserDocument, 'id' | 'groups'>, id: string): Promise<T | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
     const doc = await this.model.findOne({
       _id: id,
       $or: [
@@ -125,14 +132,18 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
       ],
     });
 
-    return doc?.toJSON() as T | null;
+    // `?? null` so both misses report the same value: `doc?.toJSON()` yields undefined, which the
+    // `as T | null` cast hid from a caller narrowing with `!== null`.
+    return (doc?.toJSON() ?? null) as T | null;
   }
 
+  /** Same id guard as findAccessibleById. */
   async findUpdateAccessById(
     user: Pick<IUserDocument, 'id' | 'groups'>,
     id: string,
     opts?: { includeGlobalWrite?: boolean }
   ): Promise<T | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
     return this.model.findOne({
       _id: { $in: id },
       $or: [
@@ -160,7 +171,9 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
     });
   }
 
+  /** Same id guard as findAccessibleById. */
   async findShareAccessById(user: Pick<IUserDocument, 'id' | 'groups'>, id: string): Promise<T | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
     return this.model.findOne({
       _id: id,
       // Own / users-share / groups-share, mirroring the CASL `Permission.share` arms
