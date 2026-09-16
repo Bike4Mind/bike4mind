@@ -10,6 +10,7 @@ import useSessionLayout, {
   getSendableMessageFileIds,
   recordModerationStatus,
   consumeBufferedModerationStatus,
+  migrateLayoutControl,
   type ArtifactData,
   type PendingMessageFile,
 } from '../useSessionLayout';
@@ -663,5 +664,28 @@ describe('useSessionLayout - LRU Cache Functions', () => {
       expect(reconciled[0].status).toBe('blocked');
       expect(reconciled[0].fabFile.moderationStatus).toBe('blocked');
     });
+  });
+});
+
+describe('migrateLayoutControl', () => {
+  it('drops the dead docked-chat sizing keys from a pre-version blob', () => {
+    const migrated = migrateLayoutControl(
+      { layout: 'dockRight', knowledgeViewerWidth: 50, dockChatWidth: 35, dockChatHeight: 35 },
+      0
+    ) as Record<string, unknown>;
+
+    expect(migrated).not.toHaveProperty('dockChatWidth');
+    expect(migrated).not.toHaveProperty('dockChatHeight');
+    expect(migrated).toEqual({ layout: 'dockRight', knowledgeViewerWidth: 50 });
+  });
+
+  it('leaves an already-migrated blob untouched', () => {
+    const stored = { layout: 'vertical', knowledgeViewerWidth: 60 };
+    expect(migrateLayoutControl(stored, 1)).toBe(stored);
+  });
+
+  it('passes through a non-object blob rather than throwing', () => {
+    expect(migrateLayoutControl(null, 0)).toBeNull();
+    expect(migrateLayoutControl(undefined, 0)).toBeUndefined();
   });
 });
