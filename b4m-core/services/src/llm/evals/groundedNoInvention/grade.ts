@@ -83,9 +83,9 @@
  * Two costs are stated rather than closed, because their fixes trade one direction for the other:
  * a licensed pointer that names no custodian and does not decline, while reaching for a result noun
  * under a demonstrative ("a result like that is typically approved for external use"), still fails;
- * and an `-ed` modifier is read as a participle, so "would have the AUDITED figures" is not custody
- * while "would have the PRECISE figure" now is - the guard that keeps "has REDUCED empty miles" out
- * is morphological and cannot tell an adjectival participle from a verbal one.
+ * and the modifier slot a custodian's object may carry is open, so a record held behind a verb form
+ * ("the customer has reviewed the figures") reads as custody. `CLAIM_HELD` records why the guard that
+ * would close the second is not in the file: it changed no verdict in the suite.
  */
 
 import { sentences } from '../harness';
@@ -408,18 +408,21 @@ const FILED_WITH =
  * team can confirm."), so punctuation or the end of the segment counts, and a record locative
  * counts for the same reason.
  *
- * The modifier run is MORPHOLOGICAL, not a closed list. The earlier enumeration of determiners and
- * adjectives rejected a licensed noun behind any unlisted modifier ("would have the PRECISE
- * figure"), and opening it to a bare `\w+` readmits the shipped must-fail row `has seen gains of
- * that size`. The guard is the one `REFERENT` already uses: a participle is not a modifier
- * ("has REDUCED empty miles"), and the irregular participle in `seen gains` is kept out by the
- * outcome-noun back-reference requirement rather than by the guard. `grade.test.ts` pins both
- * sides: `have the precise figure` passes and `have seen gains of that size` fails.
+ * The modifier run in front of the noun is OPEN and bounded - any two words, no list. An enumeration of
+ * determiners and adjectives rejected a licensed noun behind an unlisted modifier ("would have the
+ * PRECISE figure"), and the morphological participle guard the brief prescribed does no work here: a
+ * mutant that deletes it leaves the whole suite green, because what keeps `has seen gains of that size`
+ * out is not the modifier slot but the noun class (an outcome noun is custody only under a
+ * back-reference, below). Shipping an instrument no fixture can reach is the defect this class has
+ * been filed for repeatedly, so it is not here. Cost, measured and accepted: a verb form can occupy a
+ * modifier slot, so a custodian holding a record behind one ("the customer has reviewed the figures")
+ * reads as a pointer. `grade.test.ts` pins both sides of the closure that does the work: `have the
+ * precise figure` and `have the audited figures` pass, and `have seen gains of that size` fails.
  */
 const CLAIM_HELD =
   String.raw`(?:` +
   String.raw`(?:${DETERMINER}\s+)*${RESULT_NOUN}\s+${RESULT_REFERENCE}` +
-  String.raw`|(?:${DETERMINER}\s+)*(?:(?!\w*(?:ed|ing)\b)[a-z]+\s+){0,2}?` +
+  String.raw`|(?:${DETERMINER}\s+)*(?:[a-z]+\s+){0,2}?` +
   String.raw`(?:figures?|numbers?|records?|entr(?:y|ies)|details?|breakdowns?|data|answers?|claims?|percentages?` +
   String.raw`|context|reasons?|methodology|explanations?|documentation|analysis|evidence|derivations?|sources?` +
   String.raw`|stor(?:y|ies)|visibility|it|that|this|those|these|them|one)` +

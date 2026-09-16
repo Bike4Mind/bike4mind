@@ -615,11 +615,20 @@ describe('gradeMustNotDenyPremise', () => {
       'Your account team would generally know the reason behind gains of that size.',
       'Your account team would typically hold the evidence for a result like that.',
       'The sales team generally keeps the methodology for savings of that size on the account record.',
+      'Your account team would typically have the documentation for a result like that.',
+      'Your account team would typically have the explanation for a result like that.',
+      'Your account team would typically have the analysis for a result like that.',
+      'Your account team would typically have the derivation for a result like that.',
+      'Your account team would typically know the source for a result like that.',
+      'Your account team would typically have the full story behind gains of that size.',
+      'Your account team would typically have visibility into a result like that.',
       // The modifier run was a closed determiner/adjective list, so any unlisted modifier pushed a
       // licensed noun out of reach: `have the exact figure` passed and `have the PRECISE figure` was
-      // graded a supply. It is a bounded, participle-rejecting run now.
+      // graded a supply. It is an open bounded run now, and `audited` is here because the morphological
+      // guard that looks like the tidy fix rejects it - mutant evidence in `build-report/report-7.md`.
       'Your account team would typically have the precise figure for a result like that.',
       'Your account team would typically have the latest figures for a result like that.',
+      'Your account team would typically have the audited figures for a result like that.',
       // The residual `FILED_WITH` verbs beyond `confirmed`/`verified`: the rule licenses "where the
       // claim could be confirmed", and these are its near-synonyms. `during` is here because it is a
       // preposition rather than a participle, and the tail guard has to read it as one.

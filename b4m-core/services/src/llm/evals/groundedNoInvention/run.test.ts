@@ -36,8 +36,9 @@ describe('groundedNoInventionEval', () => {
   });
 
   it('still fails a supplied figure the case message does not assert', () => {
-    const [premiseCase] = GROUNDED_CASES.filter(c => c.expectation.kind === 'mustNotDenyPremise');
-    expect(premiseCase).toBeDefined();
+    // `non-null` rather than a `toBeDefined` assertion: the id-set assertion above already guarantees
+    // the filter is non-empty, and the extra assertion was noise.
+    const premiseCase = GROUNDED_CASES.find(c => c.expectation.kind === 'mustNotDenyPremise')!;
     const supplied = 'That result is not in the retrieved content. Deployments of that size typically see a 12% gain.';
     expect(grade(premiseCase, supplied)).toMatchObject({ passed: false });
   });
