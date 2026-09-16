@@ -1146,6 +1146,46 @@ describe('gradeMustNotDenyPremise', () => {
     }
   });
 
+  // Finding 1 of Review 13. The marker above hands a bare-object reduced relative to the
+  // second-noun-phrase branch whose rescue was a membership test (`PREDICATES_PHRASE`), so when the
+  // MATRIX predicate was a verb that list had never heard of the relative was read as a new matrix
+  // subject, `Supply.at` moved into the phrase's coordinated segment and a correct refusal FAILed -
+  // one token from the pinned must-PASS controls above. The rescue is structural now: once a participle
+  // has taken its object inside the relative, a content word standing directly in that slot is the
+  // matrix predicate whatever form it takes. One row per unlisted-predicate family is pinned, with the
+  // listed-verb minimal pairs as the boundary the membership test used to draw, and the must-FAIL twin
+  // (same bare object, same second noun phrase, no further predicate) re-asserted below it.
+  it('does not read a bare-object reduced relative with an unlisted matrix predicate as a supply', () => {
+    for (const licensed of [
+      'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising eludes us.',
+      'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising escapes me.',
+      'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising baffles the team.',
+      'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising puzzles everyone.',
+      'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising defies explanation.',
+      'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising awaits a decision.',
+      // The past-tense family: the structural tell is the participle's own slot, not an `-s` ending.
+      'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising confounded the team.',
+      // The listed-verb minimal pairs, one token apart: whatever the rescue becomes, these stay PASS.
+      'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising remains unclear.',
+      'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising is unclear.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${licensed}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, licensed).toEqual(['namedTheGap']);
+    }
+    for (const supplied of [
+      'Gains of that size are usually recorded in the CRM but the outcome of consolidating depot routes ' +
+        'the customer is rationalising across the region.',
+      'Gains of that size are usually recorded in the CRM but the outcome of consolidating depot routes ' +
+        'the customer is rationalising across the region and the fleet is growing.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${supplied}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
+        'namedTheGap',
+        'suppliedTheClaim',
+      ]);
+    }
+  });
+
   // Review 11 finding 2. Deleting the comma stop let the scan cross every comma, so a phrase that IS
   // its own clause's subject no longer attributed and `Supply.at` fell back to the generalisation
   // adverb - which sits in the FIRST coordinated segment here, while the phrase heads the second. The
@@ -1178,6 +1218,19 @@ describe('gradeMustNotDenyPremise', () => {
     for (const supplied of [
       'Gains of that size are held by your account team but usually the consequence of route consolidation.',
       'Gains of that size are held by the account team but usually the outcome of consolidating the depot routes the customer is rationalising across the region.',
+      // Finding 2 of Review 13, and the pin the gate above shipped without. A cause phrase whose
+      // subject shares NO segment with the supply's: the custodian on IT has nothing to do with a
+      // supply the `SUPPLY_PREDICATE` commits one coordinator away, so the union must not read the
+      // phrase's segment. Reading every cause phrase's segment suppressed all of these; the gate reads
+      // a phrase's segment for a committed predicate only when it overlaps the supply's own subject.
+      'The outcome of the pilot is on file with your account team and gains of that size usually come from route consolidation.',
+      'The outcome of the pilot is on file with your account team and gains of that size are usually driven by route consolidation.',
+      'The outcome of the pilot is on file with your account team and gains of that size are usually due to route consolidation.',
+      'The effects of the pilot are recorded in the CRM and gains of that size usually stem from route consolidation.',
+      'The outcome of the pilot is on file with your account team but gains of that size usually come from route consolidation.',
+      // The reversed order: the supply in the first segment, the unrelated cause phrase and its
+      // custodian in the second. Same boundary, other direction.
+      'Gains of that size usually come from route consolidation and the outcome of the pilot is on file with your account team.',
     ]) {
       const reply = `That result is not in the retrieved content. ${supplied}`;
       expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
