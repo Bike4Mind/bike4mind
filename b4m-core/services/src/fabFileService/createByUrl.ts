@@ -129,7 +129,7 @@ export const createFabFileByUrl = async (
   const isThinHtmlExtraction = typeof textContent === 'string' && textContent.length < MIN_CONTENT_LENGTH_FOR_DEDUP;
   const contentHash = isThinHtmlExtraction ? undefined : computeContentHash(textContent);
 
-  if (checkDuplicate) {
+  if (contentHash && checkDuplicate) {
     const existing = await checkDuplicate(contentHash);
     if (existing) throw new DuplicateFabFileError(existing, title);
   }
