@@ -231,7 +231,12 @@ const ChatHistory: React.FC<ChatHistoryProps> = memo(
         atBottomStateChange={onAtBottomStateChange}
         itemContent={itemContent}
         context={virtuosoContext}
-        increaseViewportBy={{ top: 400, bottom: 400 }}
+        // Generous overscan: chat items are few and wildly uneven (a one-line reply next to a
+        // multi-thousand-pixel artifact), so every mount/unmount changes how much of the list
+        // is measured rather than estimated, and the total size - and the scroll position -
+        // moves under the reader. Keeping items mounted across a screen's worth of scrolling
+        // is what stops that churn.
+        increaseViewportBy={{ top: 1500, bottom: 1500 }}
         components={VIRTUOSO_COMPONENTS}
         scrollerRef={scrollerRef}
         style={
