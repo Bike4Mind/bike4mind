@@ -6,8 +6,25 @@ const LEGACY_ID = '65a1f77bcf86cd7994390001';
 const TOKENIZED_ID = '65a1f77bcf86cd7994390002';
 const TOKEN = 'wVvJ0hEr1sKq7nQ9YpB2fL4dXz8TcMuGaSiN3ROZjkw';
 
+/** Link invite by default - names nobody, so holding the key is the whole authorization. */
 const invite = (overrides: Partial<IInviteDocument> = {}): IInviteDocument =>
-  ({ id: LEGACY_ID, type: 'FabFile', documentId: 'doc1', accepted: 0, remaining: 1, ...overrides }) as IInviteDocument;
+  ({
+    id: LEGACY_ID,
+    type: 'FabFile',
+    documentId: 'doc1',
+    accepted: 0,
+    remaining: 1,
+    isLinkOnly: true,
+    ...overrides,
+  }) as IInviteDocument;
+
+/** Named invite: every door re-checks the caller's email or share authority independently. */
+const namedInvite = (overrides: Partial<IInviteDocument> = {}): IInviteDocument =>
+  invite({
+    isLinkOnly: false,
+    recipients: { pending: ['recipient@x.com'], accepted: [], refused: [] },
+    ...overrides,
+  });
 
 /** Rows keyed both ways, so the fake answers exactly as the real repo would for each door. */
 const dbOf = (rows: IInviteDocument[]) => {
@@ -73,6 +90,45 @@ describe('resolveRedeemableInvite - the share link bearer secret', () => {
     const { db } = dbOf([invite({ id: LEGACY_ID, token: undefined })]);
 
     await expect(resolveRedeemableInvite('', { db })).resolves.toBeNull();
+  });
+
+  // The id door closes for a LINK invite because nothing else gates it. A named invite re-checks
+  // the caller's email (accept, refuse's decline arm) or share authority (refuse's revoke arm, the
+  // landing GET), so its id is an address rather than a secret - and the inbox, which lists invites
+  // through a projection carrying no token, has no other key to address them with.
+  it('still resolves a tokenized NAMED invite by its _id, which is all the inbox has', async () => {
+    const row = namedInvite({ id: TOKENIZED_ID, token: TOKEN });
+    const { db } = dbOf([row]);
+
+    await expect(resolveRedeemableInvite(TOKENIZED_ID, { db })).resolves.toMatchObject({ id: TOKENIZED_ID });
+    await expect(resolveRedeemableInvite(TOKEN, { db })).resolves.toMatchObject({ id: TOKENIZED_ID });
+  });
+
+  // The pair that makes the distinction load-bearing: same row, same token, same id, and the only
+  // difference is whether anyone is named on it.
+  it('keys the id door on whether the invite names anyone, not on having a token', async () => {
+    const link = dbOf([invite({ id: TOKENIZED_ID, token: TOKEN })]);
+    await expect(resolveRedeemableInvite(TOKENIZED_ID, { db: link.db })).resolves.toBeNull();
+
+    const named = dbOf([namedInvite({ id: TOKENIZED_ID, token: TOKEN })]);
+    await expect(resolveRedeemableInvite(TOKENIZED_ID, { db: named.db })).resolves.not.toBeNull();
+  });
+
+  // Rows minted before `isLinkOnly` existed carry no flag; isLinkOnlyInvite infers from the absence
+  // of named recipients, so a legacy link invite is still treated as one.
+  it('infers link-only for a row minted before the flag existed', async () => {
+    const legacyShape = {
+      id: TOKENIZED_ID,
+      token: TOKEN,
+      type: 'FabFile',
+      documentId: 'doc1',
+      accepted: 0,
+      remaining: 1,
+      recipients: { pending: [], accepted: [], refused: [] },
+    } as unknown as IInviteDocument;
+    const { db } = dbOf([legacyShape]);
+
+    await expect(resolveRedeemableInvite(TOKENIZED_ID, { db })).resolves.toBeNull();
   });
 
   // The legacy population can only shrink. Once a row has a token there is no key that reaches it

@@ -1,4 +1,4 @@
-import { IInviteDocument, isObjectIdShaped } from '@bike4mind/common';
+import { IInviteDocument, isLinkOnlyInvite, isObjectIdShaped } from '@bike4mind/common';
 
 /** The invite reads a redemption needs. Narrow so a route can pass its own repo without widening. */
 export interface RedeemableInviteAdapters {
@@ -11,19 +11,28 @@ export interface RedeemableInviteAdapters {
 }
 
 /**
- * Resolve the invite a redemption key addresses, for every path where holding the key IS the
- * authorization: the share-link landing GET, and accept.
+ * Resolve the invite a redemption key addresses, for the paths that take a key off a share URL:
+ * the landing GET, accept, and refuse.
  *
- * Two doors, and the second one is closing. An invite minted since the token cutover is addressable
- * ONLY by its token; its `_id` no longer resolves here. An invite minted before carries no token and
- * is still addressable by `_id`, because the links are already sitting in people's inboxes and
- * breaking them would strand every unredeemed share.
+ * The token always resolves. Whether the `_id` ALSO resolves turns on whether the key is acting as
+ * a credential, which depends on the kind of invite:
  *
- * Keyed on the ABSENCE of a token rather than a cutover timestamp deliberately: the row describes
- * its own era, so there is no clock constant to keep correct, no skew at the boundary, and no way
- * for the legacy door to widen back open once a row has a token. The legacy population only ever
- * shrinks - it cannot be added to, since every mint now issues a token - and expiry is what finally
- * empties it (see the expiry cap migration, and the `expiresAt` check every caller applies).
+ * - A LINK invite names nobody, so holding the key is the entire authorization and nothing else
+ *   gates it. That is the one case finding 169 is about, and there a tokenized invite is refused by
+ *   `_id` even though the row exists. An ObjectId is only partially random and is disclosed by every
+ *   surface that lists invites, so it cannot be the secret.
+ * - A NAMED invite re-checks the caller's identity independently at every door: accept requires the
+ *   caller's email in `recipients.pending`, refuse's decline arm requires the same, and refuse's
+ *   revoke arm and the landing GET require share authority on the underlying document. The key is an
+ *   ADDRESS there, not a secret, so both forms resolve. This is not a concession: the inbox lists
+ *   invites through `findAllByPendingUserIdOrEmail`, whose projection carries no token, so the `_id`
+ *   is the only key that surface has. Closing it would 404 every inbox accept and decline.
+ *
+ * The legacy arm is keyed on the ABSENCE of a token rather than a cutover timestamp: the row
+ * describes its own era, so there is no clock constant to keep correct, no skew at the boundary, and
+ * no way for the door to widen back open once a row has a token. That population only ever shrinks -
+ * it cannot be added to, since every mint now issues a token - and expiry is what finally empties it
+ * (see the expiry cap migration, and the `expiresAt` check every caller applies).
  *
  * Returns null rather than throwing so each caller keeps its own not-found shape; every one of them
  * answers an unresolvable key with a 404 rather than a 403, so probing cannot confirm an id exists.
@@ -43,7 +52,7 @@ export const resolveRedeemableInvite = async (
   const byId = await db.invites.findById(key);
   if (!byId) return null;
 
-  // The whole point. A tokenized invite presented by its id is refused even though the row exists,
-  // so the id stops being a credential the moment the invite has a real one.
-  return byId.token ? null : byId;
+  // The whole point, scoped to where the key is the only thing standing between a caller and the
+  // grant. `isLinkOnlyInvite` carries the legacy inference for rows minted before the flag existed.
+  return byId.token && isLinkOnlyInvite(byId) ? null : byId;
 };

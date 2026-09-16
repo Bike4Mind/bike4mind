@@ -2,6 +2,7 @@ import { IInviteDocument, IInviteRepository, IUserDocument } from '@bike4mind/co
 import { NotFoundError, secureParameters, UnprocessableEntityError } from '@bike4mind/utils';
 import { z } from 'zod';
 import { authorizeByInviteType, InviteTypeAuthAdapters } from './authorizeByInviteType';
+import { resolveRedeemableInvite } from './resolveRedeemableInvite';
 
 const refuseWholeInviteSchema = z.object({
   id: z.string(),
@@ -11,7 +12,7 @@ type RefuseWholeInviteParameters = z.infer<typeof refuseWholeInviteSchema>;
 
 interface RefuseWholeInviteAdapters {
   db: InviteTypeAuthAdapters & {
-    invites: Pick<IInviteRepository, 'findById' | 'update'>;
+    invites: Pick<IInviteRepository, 'findById' | 'findByToken' | 'update'>;
   };
 }
 
@@ -33,7 +34,12 @@ export const refuseWholeInvite = async (
 ): Promise<IInviteDocument | null> => {
   const { id } = secureParameters(parameters, refuseWholeInviteSchema);
 
-  const invite = await db.invites.findById(id);
+  // Reached from the share URL as well as the inbox, so the key can be either the invite's bearer
+  // token or its `_id` - `findById` alone shape-guards a token to null and 404s the Refuse button on
+  // every emailed share link. resolveRedeemableInvite admits both and keeps the id door closed only
+  // for a tokenized LINK invite, which neither arm below can be reached with anyway: a link invite
+  // names nobody, so the decline arm cannot match and the revoke arm demands share authority.
+  const invite = await resolveRedeemableInvite(id, { db });
   if (!invite) throw new NotFoundError('Invite not found');
 
   // createInvite defaults expiresAt 100 years out, so this only bites a real expiration.
