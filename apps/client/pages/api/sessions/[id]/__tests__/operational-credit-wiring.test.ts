@@ -46,7 +46,10 @@ import summaryHandler from '../summary';
 
 const OWNER_ID = 'owner-1';
 const REQUESTER_ID = 'requester-2';
-const SESSION_ID = 'session-1';
+// Must be ObjectId-shaped: both routes narrow on `isValidObjectId(sessionId)` before they query
+// (tag.ts:14, summary.ts:15), so a non-hex id short-circuits the lookup to null and the handler
+// throws "Cannot update session" without ever reaching the pre-flight these tests assert on.
+const SESSION_ID = '65a1f2c3d4e5f60718293a4b';
 
 const run = async (handler: unknown) => {
   const res = { json: vi.fn(), status: vi.fn().mockReturnThis() };
