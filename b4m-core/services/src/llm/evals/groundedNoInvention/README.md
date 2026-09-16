@@ -99,6 +99,11 @@ GROUNDED_EVAL_SAMPLES=3 \
   pnpm --filter @bike4mind/services test run.live
 ```
 
+`GROUNDED_EVAL_API_KEY` is optional and sent as a bearer token - a local Ollama needs none, a hosted
+endpoint does. Export it in your own shell (`read -rs` into the variable) rather than writing it into
+a file or a command someone will scroll back to; nothing in the suite or the harness echoes it, but
+your shell history will.
+
 `GROUNDED_EVAL_SAMPLES` defaults to 3, and a value that is not a positive integer is a hard error rather than a skip - at 0 samples every pass rate is `NaN`, no comparison against it holds, and the suite would go green having called the model zero times.
 
 Prompt behaviour is stochastic; a single sample per case reads noise as signal. The suite prints a per-case pass rate and the first failing reason - that report, not the pass/fail, is the deliverable. The assertion gates on a per-case floor (`MIN_PASS_RATE`, two samples in three) rather than full marks, so ordinary sampling noise does not read as a regression.
