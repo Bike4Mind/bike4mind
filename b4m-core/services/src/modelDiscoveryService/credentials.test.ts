@@ -88,6 +88,17 @@ describe('getDiscoveryCredentials', () => {
     expect(creds.xai).toBe('demo-xai');
   });
 
+  it('forwards skipCache to the key resolver and asks for nothing without it', async () => {
+    const cached = adapters(keys());
+    const fresh = adapters(keys());
+
+    await getDiscoveryCredentials(cached, {});
+    await getDiscoveryCredentials(fresh, {}, { skipCache: true });
+
+    expect(cached.resolveLLMKeys.mock.calls[0][2]).toEqual({ skipCache: undefined });
+    expect(fresh.resolveLLMKeys.mock.calls[0][2]).toEqual({ skipCache: true });
+  });
+
   it('leaves every unset provider null instead of inventing a placeholder', async () => {
     const creds = await getDiscoveryCredentials(
       adapters(keys({ openai: null, anthropic: null, gemini: null, bfl: null, xai: null, voyageai: null })),

@@ -61,14 +61,18 @@ const usable = (value: string | null | undefined): string | null => {
  * the string `'system'` as a userId: that is not a sentinel, it produces a literal
  * `find({ userId: 'system' })` that returns nothing and then falls through to the
  * demo-key tier by accident. `null` is the documented no-user path.
+ *
+ * `skipCache` bypasses the admin-settings cache on the demo-key tier only; the
+ * ElevenLabs read below is a direct repository call and was never cached.
  */
 export async function getDiscoveryCredentials(
   adapters: DiscoveryCredentialAdapters,
-  env: DiscoveryEnv = process.env
+  env: DiscoveryEnv = process.env,
+  options?: { skipCache?: boolean }
 ): Promise<DiscoveryCredentials> {
   const resolve = adapters.resolveLLMKeys ?? getEffectiveLLMApiKeys;
   const [keys, elevenLabsSetting] = await Promise.all([
-    resolve(null, adapters),
+    resolve(null, adapters, { skipCache: options?.skipCache }),
     adapters.db.adminSettings.findBySettingName(ELEVENLABS_SETTING),
   ]);
 

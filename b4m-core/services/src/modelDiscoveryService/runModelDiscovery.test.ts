@@ -248,6 +248,17 @@ describe('runModelDiscovery', () => {
     expect(result.sources.map(report => report.name)).toEqual(['openai']);
   });
 
+  it('reads credentials past the settings cache for a manual run only', async () => {
+    const resolveCredentials = vi.fn(async () => testCredentials());
+    const adapters = { ...bench.adapters, resolveCredentials };
+
+    await runModelDiscovery(adapters, { ...bench.options, trigger: 'manual' });
+    bench.advance(60_000);
+    await runModelDiscovery(adapters, { ...bench.options, trigger: 'cron' });
+
+    expect(resolveCredentials.mock.calls).toEqual([[{ skipCache: true }], [{ skipCache: false }]]);
+  });
+
   it('skips a source with no credential without failing the run', async () => {
     const partial = harness([openaiSource(), stubSource({ name: 'xai', configured: false })]);
 
