@@ -14,6 +14,21 @@ export enum SubscriptionSource {
   AdminGrant = 'admin_grant',
 }
 
+/**
+ * Statuses Stripe will not move a subscription out of. A row in one of these is
+ * finished: there is nothing left to cancel and Stripe rejects further updates,
+ * so every "does this user have a plan" check wants the complement of this set
+ * rather than `status === 'active'` - which hides the past_due row of the very
+ * user trying to stop dunning.
+ */
+export const TERMINAL_SUBSCRIPTION_STATUSES: ReadonlySet<Stripe.Subscription.Status> = new Set([
+  'canceled',
+  'incomplete_expired',
+]);
+
+export const isCancellableSubscriptionStatus = (status: Stripe.Subscription.Status): boolean =>
+  !TERMINAL_SUBSCRIPTION_STATUSES.has(status);
+
 export interface ISubscription {
   ownerType: SubscriptionOwnerType;
   /** The document ID of the owner of the subscription */
@@ -100,9 +115,10 @@ export interface ISubscriptionRepository extends BaseRepository<ISubscription & 
   ): Promise<ISubscription | null>;
 
   /**
-   * Find a user subscription that is not terminal, for the cancel route. Unlike
-   * findActiveUserSubscriptions this includes past_due/unpaid/incomplete rows, so
-   * a delinquent user can still stop dunning.
+   * Find the user subscription to cancel for `priceId` - anything except the two
+   * terminal states. Unlike findActiveUserSubscriptions this includes
+   * past_due/unpaid/incomplete rows, so a delinquent user can still stop dunning.
+   * An active row wins outright.
    */
   findCancelableUserSubscriptionByPriceId(priceId: string, userId: string): Promise<ISubscription | null>;
 

@@ -4,6 +4,7 @@ import {
   ISubscriptionRepository,
   SubscriptionOwnerType,
   SubscriptionSource,
+  TERMINAL_SUBSCRIPTION_STATUSES,
 } from '@client/lib/subscriptions/types';
 import BaseRepository from '@bike4mind/database';
 import { IMongoDocument } from '@bike4mind/common';
@@ -315,24 +316,31 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
   }
 
   /**
-   * Find a user subscription that may still be cancelled - anything except the
-   * two terminal states. Deliberately a deny-list: `findActiveUserSubscriptions`
-   * only returns `status: 'active'`, which hides the past_due subscription of the
-   * very user trying to stop dunning. A status Stripe adds later should reach the
+   * Find the user subscription to cancel for `priceId` - anything except the two
+   * terminal states. Deliberately a deny-list: `findActiveUserSubscriptions` only
+   * returns `status: 'active'`, which hides the past_due subscription of the very
+   * user trying to stop dunning. A status Stripe adds later should reach the
    * cancel attempt (Stripe rejects it, the user gets a real error) rather than
    * silently 400 the user who wants out.
+   *
+   * An active row wins outright. A re-subscribe after a failed renewal leaves a
+   * stale past_due/unpaid row at the same price (nothing blocks the second
+   * checkout), and cancelling that one would leave the live subscription billing.
+   * Newest-first breaks any remaining tie: `findOne` returns whatever the query
+   * plan picked, and that is not an ordering anything can rely on.
    */
-  findCancelableUserSubscriptionByPriceId(
+  async findCancelableUserSubscriptionByPriceId(
     priceId: string,
     userId: string
   ): Promise<(ISubscription & IMongoDocument) | null> {
+    const scope = { ownerType: SubscriptionOwnerType.User, ownerId: userId, priceId };
+
+    const active = await this.model.findOne({ ...scope, status: 'active' }).lean({ virtuals: true });
+    if (active) return active;
+
     return this.model
-      .findOne({
-        ownerType: SubscriptionOwnerType.User,
-        ownerId: userId,
-        priceId,
-        status: { $nin: ['canceled', 'incomplete_expired'] },
-      })
+      .findOne({ ...scope, status: { $nin: [...TERMINAL_SUBSCRIPTION_STATUSES] } })
+      .sort({ createdAt: -1 })
       .lean({ virtuals: true });
   }
 

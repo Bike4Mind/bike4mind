@@ -307,11 +307,16 @@ describe('customerSubscriptionUpdated - stops dunning on a cancel Stripe recorde
     // The reported path: the customer cancels in Stripe's hosted portal, so the
     // only signal our code gets is this event. The open invoice would otherwise
     // keep retrying and keep emailing.
-    (stripe.subscriptions.retrieve as any).mockResolvedValue(buildUserSub({ cancelAtPeriodEnd: true }));
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(
+      buildUserSub({ cancelAtPeriodEnd: true, canceledAt: 1700000000 })
+    );
 
     await handler({ properties: { subscriptionId: 'sub_stripe_u' } } as any, logger as any);
 
-    expect(voidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_stripe_u');
+    // Bounded to what existed when the cancel was requested: this event fires again
+    // on every later update, and a proration invoice from a legitimate change made
+    // during the pending-cancellation window must not be swept up with the stale one.
+    expect(voidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_stripe_u', { createdBefore: 1700000000 });
   });
 
   it('voids the open invoices when the subscription arrives already canceled', async () => {
@@ -321,7 +326,7 @@ describe('customerSubscriptionUpdated - stops dunning on a cancel Stripe recorde
 
     await handler({ properties: { subscriptionId: 'sub_stripe_u' } } as any, logger as any);
 
-    expect(voidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_stripe_u');
+    expect(voidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_stripe_u', { createdBefore: 1700000000 });
   });
 
   it('does not touch invoices on a routine update', async () => {

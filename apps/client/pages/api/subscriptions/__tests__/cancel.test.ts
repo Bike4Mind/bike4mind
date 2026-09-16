@@ -19,6 +19,7 @@ vi.mock('@server/middlewares/requireStripeWebhook', () => ({
 // Real error classes: BadRequestError carries statusCode 400, so the rejection
 // tests assert the status the client receives, not only the message.
 import { BadRequestError, HttpStatus } from '@bike4mind/common';
+import Stripe from 'stripe';
 
 const mockFindCancelable = vi.fn();
 const mockFindActive = vi.fn();
@@ -78,25 +79,30 @@ describe('POST /api/subscriptions/cancel', () => {
     mockVoidOpenSubscriptionInvoices.mockResolvedValue({ voided: [], failed: [] });
   });
 
-  it('cancels immediately and voids open invoices when Stripe reports past_due', async () => {
-    // The repro's starting point: a past_due row. The old lookup filtered
-    // status: 'active', so this request 400'd before it ever reached Stripe.
-    mockFindCancelable.mockResolvedValue(subscriptionRow());
-    mockRetrieve.mockResolvedValue({ id: 'sub_1', status: 'past_due' });
-    mockCancel.mockResolvedValue({ id: 'sub_1', canceled_at: 1700000000 });
-    mockVoidOpenSubscriptionInvoices.mockResolvedValue({ voided: ['in_1'], failed: [] });
-    const { req, res } = makeReq();
+  it.each(['past_due', 'unpaid', 'incomplete'] as const)(
+    'cancels immediately and voids open invoices when Stripe reports %s',
+    async liveStatus => {
+      // The repro's starting point: a delinquent row. The old lookup filtered
+      // status: 'active', so this request 400'd before it ever reached Stripe.
+      // 'unpaid' is where Stripe's dunning cycle lands, so it must not silently
+      // fall back to cancel_at_period_end.
+      mockFindCancelable.mockResolvedValue(subscriptionRow({ status: liveStatus }));
+      mockRetrieve.mockResolvedValue({ id: 'sub_1', status: liveStatus });
+      mockCancel.mockResolvedValue({ id: 'sub_1', canceled_at: 1700000000 });
+      mockVoidOpenSubscriptionInvoices.mockResolvedValue({ voided: ['in_1'], failed: [] });
+      const { req, res } = makeReq();
 
-    await (handler as HandlerFn)(req, res);
+      await (handler as HandlerFn)(req, res);
 
-    expect(mockFindCancelable).toHaveBeenCalledWith('price_pro', 'user_1');
-    expect(mockFindActive).not.toHaveBeenCalled();
-    expect(mockCancel).toHaveBeenCalledWith('sub_1');
-    expect(mockUpdate).not.toHaveBeenCalled();
-    expect(mockVoidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_1');
-    expect(res.statusCode).toBe(200);
-    expect(res._getJSONData()).toEqual({ priceId: 'price_pro', canceledAt: '2023-11-14T22:13:20.000Z' });
-  });
+      expect(mockFindCancelable).toHaveBeenCalledWith('price_pro', 'user_1');
+      expect(mockFindActive).not.toHaveBeenCalled();
+      expect(mockCancel).toHaveBeenCalledWith('sub_1');
+      expect(mockUpdate).not.toHaveBeenCalled();
+      expect(mockVoidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_1');
+      expect(res.statusCode).toBe(200);
+      expect(res._getJSONData()).toEqual({ priceId: 'price_pro', canceledAt: '2023-11-14T22:13:20.000Z' });
+    }
+  );
 
   it('cancels at period end and still voids when the subscription is in good standing', async () => {
     mockFindCancelable.mockResolvedValue(subscriptionRow({ status: 'active' }));
@@ -123,6 +129,48 @@ describe('POST /api/subscriptions/cancel', () => {
 
     expect(mockCancel).toHaveBeenCalledWith('sub_1');
     expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('is an idempotent success when Stripe already terminated the subscription', async () => {
+    // Reachable when our webhook lags Stripe's own dunning auto-cancel. Update on a
+    // terminal subscription is rejected by Stripe, so reporting 500 here would alarm
+    // on a user whose intent is already satisfied.
+    mockFindCancelable.mockResolvedValue(subscriptionRow({ status: 'past_due' }));
+    mockRetrieve.mockResolvedValue({ id: 'sub_1', status: 'canceled', canceled_at: 1700000000 });
+    const { req, res } = makeReq();
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockCancel).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockVoidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_1');
+    expect(res.statusCode).toBe(200);
+    expect(res._getJSONData()).toEqual({ priceId: 'price_pro', canceledAt: '2023-11-14T22:13:20.000Z' });
+  });
+
+  it('turns a rejected Stripe call into a 400 rather than a 500 that alarms', async () => {
+    // StripeError carries statusCode, which the shared error handler does not read.
+    mockFindCancelable.mockResolvedValue(subscriptionRow());
+    mockRetrieve.mockRejectedValue(
+      new Stripe.errors.StripeInvalidRequestError({ statusCode: 400, message: 'No such subscription: sub_1' })
+    );
+    const { req, res } = makeReq();
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
+      constructor: BadRequestError,
+      statusCode: HttpStatus.BadRequest,
+      message: 'Stripe rejected the cancellation: No such subscription: sub_1',
+    });
+  });
+
+  it('leaves a genuine Stripe fault as a 5xx', async () => {
+    // Only user-facing rejections are remapped - a Stripe outage is still an incident.
+    mockFindCancelable.mockResolvedValue(subscriptionRow());
+    const stripeFault = new Stripe.errors.StripeAPIError({ statusCode: 500, message: 'Stripe is down' });
+    mockRetrieve.mockRejectedValue(stripeFault);
+    const { req, res } = makeReq();
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toBe(stripeFault);
   });
 
   it('still returns 200 when the invoice cleanup fails', async () => {

@@ -1,5 +1,5 @@
 import { BadRequestError } from '@bike4mind/utils';
-import { SubscriptionSource } from '@client/lib/subscriptions/types';
+import { SubscriptionSource, TERMINAL_SUBSCRIPTION_STATUSES } from '@client/lib/subscriptions/types';
 import { IUserSubscription } from '@client/lib/userSubscriptions/types';
 import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
 import { stripe } from '@server/integrations/stripe/stripe';
@@ -7,6 +7,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { resolveSubscriptionSource } from '@server/services/organizationService';
+import Stripe from 'stripe';
 import { z } from 'zod';
 
 const CancelSubscriptionSchema = z.object({
@@ -18,7 +19,40 @@ const CancelSubscriptionSchema = z.object({
 // have not paid for, so these are cancelled outright.
 const DELINQUENT_STATUSES = new Set(['past_due', 'unpaid', 'incomplete']);
 
-const handler = baseApi()
+/**
+ * Ask Stripe to stop billing `subscriptionId`.
+ *
+ * Deliberately parameterless: invoice_now and prorate both default to false, so
+ * the cancel cannot mint a new invoice that would itself start dunning.
+ */
+async function cancelAtStripe(subscriptionId: string): Promise<Stripe.Subscription> {
+  try {
+    const live = await stripe.subscriptions.retrieve(subscriptionId);
+
+    // Stripe already terminated it. There is nothing left to cancel, and Stripe
+    // rejects updates on a terminal subscription - so treat the user's intent as
+    // already satisfied rather than turning it into an error.
+    if (TERMINAL_SUBSCRIPTION_STATUSES.has(live.status)) return live;
+
+    // Stripe owns the live status; the local row can lag a failed renewal.
+    return DELINQUENT_STATUSES.has(live.status)
+      ? await stripe.subscriptions.cancel(subscriptionId)
+      : await stripe.subscriptions.update(subscriptionId, { cancel_at_period_end: true });
+  } catch (error) {
+    // StripeError exposes `statusCode`, not `status`, so the shared error handler
+    // cannot map it and reports a 500 - which trips the LiveOps alarm for what is
+    // a user-facing rejection. Genuine Stripe faults (>4xx) stay 5xx.
+    if (error instanceof Stripe.errors.StripeError && (error.statusCode ?? 500) < 500) {
+      throw new BadRequestError(`Stripe rejected the cancellation: ${error.message}`);
+    }
+    throw error;
+  }
+}
+
+// jwtOnly: this route can irreversibly cancel a subscription and void its
+// invoices, and ApiKeyScope has no billing scope to gate a key on - so no API
+// key reaches it. Browser JWT callers are unaffected.
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(requireStripeWebhook())
   .post(async (req, res) => {
     const user = req.user;
@@ -33,21 +67,17 @@ const handler = baseApi()
       throw new BadRequestError('User does not have an active subscription to cancel');
     }
 
-    // Admin grants carry a synthetic `admin_granted_*` id that Stripe has never
-    // heard of. Rejecting here keeps the caller's 400 truthful instead of sending
-    // the sentinel to Stripe and getting a 500 back.
+    // The guard is source-based: `resolveSubscriptionSource` only falls back to
+    // Stripe for rows that predate the `source` field. A current admin grant writes
+    // `source: 'admin_grant'` with a synthetic `admin_grant_<uuid>` subscriptionId
+    // Stripe has never heard of, so rejecting here keeps the caller's 400 truthful
+    // instead of sending that sentinel to Stripe and getting a 500 back.
     const subscriptionId = userSubscription.subscriptionId;
     if (resolveSubscriptionSource(userSubscription) !== SubscriptionSource.Stripe || !subscriptionId) {
       throw new BadRequestError('This subscription is not managed by Stripe and cannot be canceled here');
     }
 
-    // Stripe owns the live status - the local row can lag a failed renewal. Pass no
-    // params to cancel on purpose: invoice_now and prorate default to false, so it
-    // cannot mint a new invoice that would itself start dunning.
-    const live = await stripe.subscriptions.retrieve(subscriptionId);
-    const subscription = DELINQUENT_STATUSES.has(live.status)
-      ? await stripe.subscriptions.cancel(subscriptionId)
-      : await stripe.subscriptions.update(subscriptionId, { cancel_at_period_end: true });
+    const subscription = await cancelAtStripe(subscriptionId);
 
     // Closing the subscription does not close an invoice that is already open, and
     // an open invoice keeps Stripe's dunning retries (and emails) running. Cleanup

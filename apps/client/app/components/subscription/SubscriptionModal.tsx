@@ -2,6 +2,7 @@ import { useCreateTeamModal } from '@client/app/components/organizations/CreateT
 import { useGetSettingsValue, useConfig } from '@client/app/hooks/data/settings';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
+import { isCancellableSubscriptionStatus } from '@client/lib/subscriptions/types';
 import {
   SubscriptionPlanInterval,
   UserSubscriptionTier,
@@ -71,8 +72,10 @@ const SubscriptionModalContent = () => {
   const subscriptions = useGetSubscriptions({ enabled: true });
   const plans = useGetSubscriptionPlans();
   const activePlans = useMemo(() => (plans.data ?? []).filter(plan => plan.active), [plans.data]);
-  const activeSubscriptions = useMemo(
-    () => (subscriptions.data ?? []).filter(sub => sub.status === 'active'),
+  // Non-terminal, not just active: a past_due subscription is still the user's
+  // current plan, and its card has to offer Cancel rather than a second checkout.
+  const cancellableSubscriptions = useMemo(
+    () => (subscriptions.data ?? []).filter(sub => isCancellableSubscriptionStatus(sub.status)),
     [subscriptions.data]
   );
   const openCreateTeamModal = useCreateTeamModal(state => state.open);
@@ -209,7 +212,7 @@ const SubscriptionModalContent = () => {
         {activeTab === SubscriptionModalTabs.Personal && (
           <>
             {availablePlans.map(plan => {
-              const isCurrentPlan = activeSubscriptions.find(sub => sub.priceId === plan.priceId);
+              const isCurrentPlan = cancellableSubscriptions.find(sub => sub.priceId === plan.priceId);
               return (
                 <PlanCard
                   key={plan.priceId}
@@ -223,7 +226,9 @@ const SubscriptionModalContent = () => {
                   isCurrentPlan={!!isCurrentPlan}
                   currentPlanDetails={isCurrentPlan}
                   priceId={plan.priceId}
-                  actionButton={<SubscribeButton priceId={plan.priceId} activeSubscriptions={activeSubscriptions} />}
+                  actionButton={
+                    <SubscribeButton priceId={plan.priceId} cancellableSubscriptions={cancellableSubscriptions} />
+                  }
                 />
               );
             })}

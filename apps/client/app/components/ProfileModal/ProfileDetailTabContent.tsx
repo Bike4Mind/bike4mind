@@ -22,7 +22,7 @@ import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { useGetSubscriptionPlans, useStripePortal } from '@client/app/hooks/data/stripe';
 import dayjs from 'dayjs';
 import { useTheme } from '@mui/joy';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { isCancellableSubscriptionStatus, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { useToggleShowCreditsUsed } from '@client/app/hooks/data/user';
 
 function centsToDollars(cents: number | undefined) {
@@ -178,7 +178,10 @@ const SubscriptionCard = () => {
   const stripePortal = useStripePortal();
   const { currentUser } = useUser();
   const subscriptions = useGetSubscriptions({ enabled: true });
-  const subscription = (subscriptions.data || []).find(sub => sub.status === 'active');
+  // Non-terminal, not just active: a past_due user still holds this plan, and this
+  // is the gate that decides whether the corner button opens Stripe's portal (where
+  // they fix the card or cancel) or the upgrade modal.
+  const subscription = (subscriptions.data || []).find(sub => isCancellableSubscriptionStatus(sub.status));
   const subscriptionPlan = SUBSCRIPTION_PLANS.find(plan => plan.priceId === subscription?.priceId);
   const plans = useGetSubscriptionPlans();
   const priceMap = useMemo(() => {

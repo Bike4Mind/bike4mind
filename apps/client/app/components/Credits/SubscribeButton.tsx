@@ -6,26 +6,31 @@ import { ComponentProps, useMemo } from 'react';
 
 interface SubscribeButtonProps {
   priceId: string;
-  activeSubscriptions: IUserSubscription[];
+  /**
+   * The user's non-terminal subscriptions. A delinquent (past_due/unpaid) row is
+   * deliberately included: it is still the subscription they need to cancel, and
+   * holding it back is what left a dunned user with no way to stop the emails.
+   */
+  cancellableSubscriptions: IUserSubscription[];
 }
 
-const SubscribeButton = ({ priceId, activeSubscriptions }: SubscribeButtonProps) => {
+const SubscribeButton = ({ priceId, cancellableSubscriptions }: SubscribeButtonProps) => {
   const subscribe = useSubscribePlan();
   const cancelSubscription = useCancelSubscription();
   const changeSubscription = useChangeSubscription();
 
   const type: 'subscribe' | 'cancel' | 'change' = useMemo(() => {
-    const activeSubscription = activeSubscriptions.find(subscription => subscription.priceId === priceId);
+    const activeSubscription = cancellableSubscriptions.find(subscription => subscription.priceId === priceId);
     if (activeSubscription) {
       return 'cancel';
-    } else if (activeSubscriptions.length > 0) {
+    } else if (cancellableSubscriptions.length > 0) {
       return 'change';
     } else {
       return 'subscribe';
     }
-  }, [activeSubscriptions, priceId]);
+  }, [cancellableSubscriptions, priceId]);
 
-  const activeSubscription = activeSubscriptions.find(subscription => subscription.priceId === priceId);
+  const activeSubscription = cancellableSubscriptions.find(subscription => subscription.priceId === priceId);
 
   const handleClick = () => {
     switch (type) {

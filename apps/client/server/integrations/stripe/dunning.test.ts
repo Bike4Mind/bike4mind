@@ -41,6 +41,32 @@ describe('voidOpenSubscriptionInvoices', () => {
     expect(mockList).toHaveBeenCalledWith({ subscription: 'sub_1', status: 'open', limit: 100 });
   });
 
+  it('bounds the sweep to invoices created before the cutoff when one is given', async () => {
+    // A period-end cancel keeps the subscriber spending, and their new proration
+    // invoice is a real charge - only the invoices that already existed go.
+    mockList.mockResolvedValue({ data: [openInvoice('in_a')] });
+
+    await voidOpenSubscriptionInvoices('sub_1', { createdBefore: 1700000000 });
+
+    expect(mockList).toHaveBeenCalledWith({
+      subscription: 'sub_1',
+      status: 'open',
+      limit: 100,
+      created: { lt: 1700000000 },
+    });
+  });
+
+  it('does not send a created filter when the cutoff is absent or null', async () => {
+    mockList.mockResolvedValue({ data: [] });
+
+    await voidOpenSubscriptionInvoices('sub_1');
+    await voidOpenSubscriptionInvoices('sub_1', { createdBefore: null });
+
+    for (const call of mockList.mock.calls) {
+      expect(call[0]).not.toHaveProperty('created');
+    }
+  });
+
   it('is a silent no-op when nothing is open', async () => {
     mockList.mockResolvedValue({ data: [] });
 

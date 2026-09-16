@@ -54,14 +54,22 @@ export const handler = withEventContext(async (event, logger) => {
     return;
   }
 
-  // A cancel recorded at Stripe - the Billing Portal path, which never touches our
-  // code - leaves the unpaid invoice that triggered the dunning still open, and
-  // Stripe keeps retrying it and emailing the customer. Close it here. Cleanup must
-  // not break the status sync below, so failures are swallowed and surfaced.
+  // A cancel recorded at Stripe - the Billing Portal path, where Stripe is the
+  // only actor and none of our API routes are called - leaves the unpaid invoice
+  // that triggered the dunning still open, and Stripe keeps retrying it and
+  // emailing the customer. Close it here. Cleanup must not break the status sync
+  // below, so failures are swallowed and surfaced.
+  //
+  // Bounded to invoices that already existed when the cancel was requested: this
+  // event fires on every later update too, and a subscriber can still spend while
+  // a period-end cancellation is pending. A fresh proration invoice from such a
+  // change is a real charge, not the stale dunning one this is here to close.
   if (subscription.cancel_at_period_end || subscription.canceled_at) {
     let cleanupFailed = false;
     try {
-      const { voided, failed } = await voidOpenSubscriptionInvoices(subscription.id);
+      const { voided, failed } = await voidOpenSubscriptionInvoices(subscription.id, {
+        createdBefore: subscription.canceled_at,
+      });
       if (voided.length) logger.info(`Voided open invoices on cancelled subscription ${subscription.id}`, { voided });
       if (failed.length) {
         logger.error(`Could not void every open invoice on cancelled subscription ${subscription.id}`, { failed });
@@ -71,8 +79,6 @@ export const handler = withEventContext(async (event, logger) => {
       logger.error(`Failed to clean up open invoices for cancelled subscription ${subscription.id}`, { error });
       cleanupFailed = true;
     }
-    // Emitted outside the try so a metric failure cannot re-enter the catch and
-    // report the cleanup twice.
     if (cleanupFailed) {
       await emitMetric('Lumina5/Entitlements', 'DunningCleanupFailed', 1, { reason: 'void_failed' });
     }
