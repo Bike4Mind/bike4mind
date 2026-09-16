@@ -52,7 +52,7 @@ export function oauthRouteGate(policy?: OAuthRoutePolicy) {
  * un-credentialed viewer. This is the single choke point every optional-auth shim shares - keep it
  * in sync with oauthRouteGate above.
  */
-export function admitsOptionalAuthUser(user: unknown): boolean {
+export function admitsOptionalAuthUser(user: unknown): user is Express.User {
   const u = user as { mfaPending?: boolean; oauthGrant?: unknown } | null | undefined;
   return !!u && !u.mfaPending && !u.oauthGrant;
 }
