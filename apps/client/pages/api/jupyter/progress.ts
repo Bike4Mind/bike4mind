@@ -17,6 +17,7 @@
  */
 import { baseApi } from '@server/middlewares/baseApi';
 import { Quest } from '@bike4mind/database/content';
+import { isValidObjectId } from '@server/utils/objectId';
 import { z } from 'zod';
 
 const ProgressBody = z.object({
@@ -67,11 +68,9 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
 
   // `promptMeta.session.userId`, not `userId`: the Quest schema declares no top-level owner
   // field, so the filter this used to carry could never match and the route always 403'd.
-  const updated = await Quest.findOneAndUpdate(
-    { _id: questId, 'promptMeta.session.userId': userId },
-    { $set: updateData },
-    { new: true }
-  );
+  const updated = isValidObjectId(questId)
+    ? await Quest.findOneAndUpdate({ _id: questId, 'promptMeta.session.userId': userId }, { $set: updateData }, { new: true })
+    : null;
 
   if (!updated) {
     return res.status(403).json({ error: 'Quest not found or access denied' });

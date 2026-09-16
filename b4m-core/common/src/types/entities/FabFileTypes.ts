@@ -373,6 +373,23 @@ export interface IFabFile {
   moderationClaimedAt?: Date;
 
   /**
+   * How many moderation scan attempts have been made on this row and failed without reaching a
+   * terminal verdict - incremented by the rescue sweep's stale-claim reclaim and by a transient
+   * release. The rescue sweep orders its selection by this ascending, so a never-attempted
+   * stranded row always wins a bounded window over a cluster of repeatedly-failing siblings
+   * (see server/s3/moderationRescueSweep.ts). Absent on a row that has never failed.
+   */
+  moderationAttempts?: number;
+
+  /**
+   * When the last failed moderation attempt released this row back to `pending`. The rescue sweep
+   * backs off on it, so a row whose scan just failed transiently (AccessDenied, a Rekognition
+   * 5xx/throttle, a storage 503) is not re-selected at full cap on the very next run. Absent until
+   * an attempt fails, and a missing value is always eligible.
+   */
+  moderationLastAttemptAt?: Date;
+
+  /**
    * Error message for the file.
    * This is set when the file is not processed successfully, such as when the file is corrupted or unsupported.
    */

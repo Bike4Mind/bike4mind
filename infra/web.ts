@@ -409,6 +409,12 @@ export const web = new sst.aws.Nextjs(
       // fallback (issue #9310). Empty == client renders without a product name / external links.
       NEXT_PUBLIC_APP_NAME: process.env.APP_NAME || '',
       NEXT_PUBLIC_WEBSITE_URL: process.env.WEBSITE_URL || '',
+      // The origin THIS app is served at, read at build time by app/robots.ts and
+      // app/sitemap.ts. Distinct from WEBSITE_URL (the marketing site) and from APP_URL
+      // above, which resolves at deploy time and so cannot reach a force-static build.
+      // Empty == no sitemap entries and no Sitemap: line, which is the correct output
+      // for a stage that has not declared a canonical host.
+      NEXT_PUBLIC_CANONICAL_ORIGIN: process.env.CANONICAL_ORIGIN || '',
       // Operator blog host for the optional blog-integration feature (open-core #9392). Inlined
       // into the client bundle AND read by the proxy CSP (apps/client/proxy.ts) at runtime; no
       // brand fallback. Empty == blog integration ships without a default host and the CSP omits it.

@@ -711,6 +711,9 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   async findBySessionIdAndId(sessionId: string, id: string) {
+    // A non-ObjectId id can never address a row - report no such row, not a CastError the
+    // calling route cannot attribute. Same contract as `BaseRepository.findById`.
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
     const result = await this.model.findOne({ sessionId, _id: id });
     if (!result) return null;
     const doc = result.toJSON();

@@ -46,8 +46,13 @@ function makeRes() {
   return { res: { json } as unknown as NextApiResponse, json };
 }
 
-const req = (userId: string) =>
-  ({ method: 'POST', user: { id: userId }, ability: {}, body: { imageS3Key: KEY } }) as unknown as NextApiRequest;
+const req = (userId: string, body: Record<string, unknown> = {}) =>
+  ({
+    method: 'POST',
+    user: { id: userId },
+    ability: {},
+    body: { imageS3Key: KEY, ...body },
+  }) as unknown as NextApiRequest;
 
 describe('POST /api/files/copy-generated-image object-level authz', () => {
   beforeEach(() => {
@@ -78,5 +83,75 @@ describe('POST /api/files/copy-generated-image object-level authz', () => {
     expect(h.download).toHaveBeenCalledWith(KEY);
     expect(h.createFabFile).toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith({ id: 'file-1' });
+  });
+
+  // createFabFile is mocked here, so this pins only the wiring - which type and precedence the
+  // route hands over. What that precedence then resolves to is covered in utils/file.test.ts.
+  it('hands createFabFile the stored contentType and claim-first precedence, keeping the caller name', async () => {
+    h.findSessionIdsByImage.mockResolvedValue(['s1']);
+    h.findAllByIds.mockResolvedValue([{ userId: 'me', users: [] }]);
+
+    const { res } = makeRes();
+    await handler(req('me', { fileName: 'notes.txt' }), res);
+
+    expect(h.createFabFile).toHaveBeenCalledWith(
+      'me',
+      expect.objectContaining({ fileName: 'notes.txt', mimeType: 'image/png' }),
+      expect.objectContaining({ mimeTypePrecedence: 'claim-first' })
+    );
+  });
+
+  // A generic type is no type at all: passed on, claim-first would fall through to the caller's
+  // filename and store the image bytes as text/plain.
+  it.each(['application/octet-stream', 'binary/octet-stream', undefined])(
+    'substitutes PNG for a stored contentType of %s',
+    async contentType => {
+      h.findSessionIdsByImage.mockResolvedValue(['s1']);
+      h.findAllByIds.mockResolvedValue([{ userId: 'me', users: [] }]);
+      h.getMetadata.mockResolvedValue({ contentType });
+
+      const { res } = makeRes();
+      await handler(req('me', { fileName: 'notes.txt' }), res);
+
+      expect(h.createFabFile).toHaveBeenCalledWith(
+        'me',
+        expect.objectContaining({ mimeType: 'image/png' }),
+        expect.anything()
+      );
+    }
+  );
+
+  // The guard must be tolerant, not exact: a cased or parameterised generic type is still generic.
+  it.each(['Application/Octet-Stream', 'application/octet-stream; charset=binary'])(
+    'substitutes PNG for a stored contentType of %s (case/parameter tolerant)',
+    async contentType => {
+      h.findSessionIdsByImage.mockResolvedValue(['s1']);
+      h.findAllByIds.mockResolvedValue([{ userId: 'me', users: [] }]);
+      h.getMetadata.mockResolvedValue({ contentType });
+
+      const { res } = makeRes();
+      await handler(req('me', { fileName: 'notes.txt' }), res);
+
+      expect(h.createFabFile).toHaveBeenCalledWith(
+        'me',
+        expect.objectContaining({ mimeType: 'image/png' }),
+        expect.anything()
+      );
+    }
+  );
+
+  it('keeps a genuine stored contentType like image/webp', async () => {
+    h.findSessionIdsByImage.mockResolvedValue(['s1']);
+    h.findAllByIds.mockResolvedValue([{ userId: 'me', users: [] }]);
+    h.getMetadata.mockResolvedValue({ contentType: 'image/webp' });
+
+    const { res } = makeRes();
+    await handler(req('me', { fileName: 'notes.txt' }), res);
+
+    expect(h.createFabFile).toHaveBeenCalledWith(
+      'me',
+      expect.objectContaining({ mimeType: 'image/webp' }),
+      expect.anything()
+    );
   });
 });

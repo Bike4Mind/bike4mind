@@ -11,7 +11,7 @@ const h = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', () => ({ fabFileRepository: { findOne: h.findOne, update: h.update } }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: h.getSignedUrl }) }));
 // Keep the rest of common (IAgent, etc.); only force the serveability gate true so the test
-// exercises the owner gate, not isImageServeable's internals.
+// exercises the access/owner gate, not isImageServeable's internals.
 vi.mock('@bike4mind/common', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/common')>();
   return { ...actual, isImageServeable: () => true };
@@ -19,41 +19,64 @@ vi.mock('@bike4mind/common', async importOriginal => {
 
 const { refreshAgentAvatarUrls } = await import('./refreshAgentAvatarUrls');
 
-// A shared agent whose portrait's signed URL has expired, so the refresh path reaches the
-// owner-gated write-back. portraitUrl's pathname ("/abc.png") is what maps to the FabFile.
-const makeAgent = (): IAgent =>
-  ({ name: 'A', visual: { portraitUrl: 'https://bucket.s3.amazonaws.com/abc.png?sig=1' } }) as unknown as IAgent;
+const ORIGINAL_PORTRAIT = 'https://bucket.s3.amazonaws.com/abc.png?sig=1';
 
-const expiredOwnedBy = (userId: string) => ({
+// An agent owned by `ownerId` whose portrait's pathname ("/abc.png") maps to a FabFile.
+const makeAgent = (ownerId = 'owner'): IAgent =>
+  ({ name: 'A', userId: ownerId, visual: { portraitUrl: ORIGINAL_PORTRAIT } }) as unknown as IAgent;
+
+// An expired FabFile so the refresh path is reached; vary owner and global-read to probe the gate.
+const expiredFile = (userId: string, isGlobalRead = false) => ({
   filePath: 'abc.png',
   userId,
+  isGlobalRead,
   fileUrlExpireAt: new Date(Date.now() - 60 * 60 * 1000), // expired
   fileUrl: 'https://old.example/abc.png',
   mimeType: 'image/png',
   moderationStatus: 'clean',
 });
 
-describe('refreshAgentAvatarUrls owner gate', () => {
+describe('refreshAgentAvatarUrls access gate', () => {
   beforeEach(() => {
-    h.findOne.mockReset().mockResolvedValue(expiredOwnedBy('owner'));
+    h.findOne.mockReset();
     h.update.mockReset().mockResolvedValue(undefined);
     h.getSignedUrl.mockReset().mockResolvedValue('https://signed.example/new.png');
   });
 
   it('a shared-agent viewer (non-owner) gets a fresh display URL but never rewrites the record', async () => {
-    const [agent] = await refreshAgentAvatarUrls([makeAgent()], 'viewer'); // viewer !== owner
-    // Display URL is minted for the viewer...
+    // File is owned by the agent owner (the real-world invariant) -> served to any viewer.
+    h.findOne.mockResolvedValue(expiredFile('owner'));
+    const [agent] = await refreshAgentAvatarUrls([makeAgent('owner')], 'viewer'); // viewer !== owner
     expect(agent.visual?.portraitUrl).toBe('https://signed.example/new.png');
     // ...but the owner's FabFile is NOT mutated by a non-owner.
     expect(h.update).not.toHaveBeenCalled();
   });
 
   it('the owner both gets the fresh URL and persists it back onto their own record', async () => {
-    const [agent] = await refreshAgentAvatarUrls([makeAgent()], 'owner'); // owner === owner
+    h.findOne.mockResolvedValue(expiredFile('owner'));
+    const [agent] = await refreshAgentAvatarUrls([makeAgent('owner')], 'owner'); // owner === owner
     expect(agent.visual?.portraitUrl).toBe('https://signed.example/new.png');
     expect(h.update).toHaveBeenCalledTimes(1);
     expect(h.update).toHaveBeenCalledWith(
       expect.objectContaining({ fileUrl: 'https://signed.example/new.png', userId: 'owner' })
     );
+  });
+
+  it('refuses to sign a foreign private file the agent portrait points at (exploit)', async () => {
+    // Agent owned by attacker, portrait pointed at a victim's private file resolved by path alone.
+    h.findOne.mockResolvedValue(expiredFile('victim', false));
+    const [agent] = await refreshAgentAvatarUrls([makeAgent('attacker')], 'attacker');
+    // No signed URL is minted, the stored (unusable) URL is returned unchanged, no write-back.
+    expect(h.getSignedUrl).not.toHaveBeenCalled();
+    expect(agent.visual?.portraitUrl).toBe(ORIGINAL_PORTRAIT);
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it('still serves a globally readable file not owned by the agent owner', async () => {
+    h.findOne.mockResolvedValue(expiredFile('other', true)); // isGlobalRead
+    const [agent] = await refreshAgentAvatarUrls([makeAgent('owner')], 'viewer');
+    expect(agent.visual?.portraitUrl).toBe('https://signed.example/new.png');
+    // Write-back is still owner-of-file gated, so a non-owner viewer does not rewrite it.
+    expect(h.update).not.toHaveBeenCalled();
   });
 });

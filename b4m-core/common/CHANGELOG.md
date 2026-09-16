@@ -1,5 +1,25 @@
 # @bike4mind/common
 
+## 7.4.0
+
+### Minor Changes
+
+- [#2819](https://github.com/Bike4Mind/bike4mind/pull/2819) [`6f662d8`](https://github.com/Bike4Mind/bike4mind/commit/6f662d81308d53bb430665ed048607da97c4e9ef) Thanks [@TRAP-RCG](https://github.com/TRAP-RCG)! - send a per-visit session id, and count anonymous visits
+
+### Patch Changes
+
+- [#2782](https://github.com/Bike4Mind/bike4mind/pull/2782) [`7a214d5`](https://github.com/Bike4Mind/bike4mind/commit/7a214d5aa0fb5aa65302f887a3fac356ab3dc8ca) Thanks [@onoya](https://github.com/onoya)! - end a departing member's lake access, and pass on lakes they created
+
+- [#2833](https://github.com/Bike4Mind/bike4mind/pull/2833) [`46ea8e1`](https://github.com/Bike4Mind/bike4mind/commit/46ea8e1efc42e992ebc0a19c4542f65d2665832c) Thanks [@onoya](https://github.com/onoya)! - bound oversized structured inputs before allocation and decode
+
+- [#2842](https://github.com/Bike4Mind/bike4mind/pull/2842) [`068e14f`](https://github.com/Bike4Mind/bike4mind/commit/068e14f2ab9e45cb7e7cecbae8a49fca1ce85dc6) Thanks [@choyno](https://github.com/choyno)! - validate requiredUserTag as a single matchable tag
+
+- [#2844](https://github.com/Bike4Mind/bike4mind/pull/2844) [`fa08028`](https://github.com/Bike4Mind/bike4mind/commit/fa08028c91136b4f051a45bc4976a7714677f845) Thanks [@choyno](https://github.com/choyno)! - surface lake status on computeLakeHealth so a non-active lake cannot read healthy
+
+- [#2861](https://github.com/Bike4Mind/bike4mind/pull/2861) [`0a4253e`](https://github.com/Bike4Mind/bike4mind/commit/0a4253e4f31492b6fea19976a469ffd5e79f4af9) Thanks [@vinchi777](https://github.com/vinchi777)! - report lake lifecycle status in lake health
+
+- [#2865](https://github.com/Bike4Mind/bike4mind/pull/2865) [`6ce4b99`](https://github.com/Bike4Mind/bike4mind/commit/6ce4b99b9ab5d4fe8142647a9b3dcef6f0c8ebfd) Thanks [@vinchi777](https://github.com/vinchi777)! - stop a failing cluster starving the rescue sweep
+
 ## 7.3.0
 
 ### Minor Changes

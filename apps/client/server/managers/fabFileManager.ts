@@ -43,6 +43,8 @@ export const generateNewFabFile = (data: IFabFile): IFabFile => {
   return { ...data };
 };
 
+// Performs no admission checks - not the admin MaxFileSize, not the storage quota. Every caller
+// must gate before calling, or route through fabFileService.createFabFile which gates for you.
 export const createFabFile = async (data: IFabFile, ability: Ability) => {
   if (!ability.can(Permission.create, FabFile)) {
     throw new BadRequestError('Unauthorized');
