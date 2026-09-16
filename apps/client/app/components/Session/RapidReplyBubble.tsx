@@ -23,7 +23,9 @@ const RapidReplyBubble = ({ chatCompletion }: RapidReplyBubbleProps) => {
         width: '100%',
         mt: 2,
         mb: 1,
-        p: 2,
+        // Unframed like the reply body below, so no inline padding either.
+        py: 2,
+        px: 0,
         // Unframed, matching the reply body below it: the two are the same voice,
         // and the spinner under the streaming reply already carries progress.
         backgroundColor: 'transparent',
