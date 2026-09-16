@@ -751,9 +751,33 @@ const COORDINATOR_WORD = /^(?:and|but|so|yet|or)$/i;
 /** Prepositional `-ing` words: they end in `ing` but cannot be a participle. */
 const PREPOSITIONAL_ING = new Set(['during', 'regarding', 'concerning', 'including', 'according', 'pending']);
 
-/** A participle or gerund - a verb form that cannot be the clause's finite predicate. */
+/**
+ * A word ending in `ing`/`ed` - the participle/gerund shape that cannot, on its own, be the clause's
+ * finite predicate. The ending is only a SHAPE: `-ed` is also a past finite verb ("confounded") and
+ * `-ing` also a noun ("everything"). It is read here only as the word whose own slot the NEXT token
+ * occupies, so over-inclusion widens which tokens may be tested, never which verdict they carry -
+ * `isInflectedVerb` is what the tested token has to satisfy.
+ */
 function isNonFiniteVerb(word: string): boolean {
   return /(?:ing|ed)$/i.test(word) && !PREPOSITIONAL_ING.has(word);
+}
+
+/**
+ * A verb form recognised from its INFLECTION rather than from `FINITE_VERB`'s list: the third-person
+ * `-s`/`-es` and the past `-ed`. This is the structural half of "a further finite verb follows" - it
+ * reaches a matrix predicate the list has never heard of ("...RATIONALISING ELUDES us") without having
+ * to enumerate one. It is deliberately morphological: a token with no verb inflection is NOT read as
+ * the predicate, which is what keeps the relative's own modifier out of the matrix slot. Reading "any
+ * non-function content word" instead let the relative verb's adverb be taken for the matrix predicate
+ * ("...RATIONALISING DAILY"), which un-guarded the supply exactly one modifier from the committed row.
+ *
+ * The shape is necessary and not sufficient: `-s` is also the plural noun and the adverb ("routes",
+ * "sometimes"), which is why the caller keeps `isFunctionWord` beside it - "across" and "towards" are
+ * this shape and must be read as the modifier. A non-function plural after the participle's own slot
+ * still matches, and is the cost of an inflectional test; no shape in the suite reaches it.
+ */
+function isInflectedVerb(word: string): boolean {
+  return /(?:[a-z]s|ed)$/i.test(word);
 }
 
 /** A word that introduces or joins a phrase rather than heading a predicate. */
@@ -767,13 +791,23 @@ function isFunctionWord(word: string): boolean {
  * of the cause phrase's object rather than a matrix subject - see `predicatesCausePhrase`.
  *
  * Two recognisers, because one of them cannot be a list. `FINITE_VERB` covers the forms this corpus
- * predicates a phrase with, and the STRUCTURAL tell covers everything else: once a participle has
- * taken its object inside the relative, the next content word is the matrix predicate whatever form it
- * takes ("...the customer is RATIONALISING ELUDES us"). A word that a preposition, determiner or
- * coordinator introduces belongs to the relative's own modifier instead ("...RATIONALISING ACROSS the
- * region"), so it is skipped rather than matched. Without the second recogniser every unlisted matrix
- * verb left the relative reading as a matrix subject, and a correct refusal FAILed one determiner from
- * the pinned zero-relative row.
+ * predicates a phrase with, and the structural tell covers everything else: once a participle has
+ * taken its object inside the relative, the next CONTENT word at the participle's own boundary is the
+ * matrix predicate ("...the customer is RATIONALISING ELUDES us"). It has to be a verb FORM, not just
+ * any content word - see `isInflectedVerb` - or the relative verb's own adverb is taken for the
+ * predicate ("...RATIONALISING DAILY"), `Supply.at` moves off the phrase and a supply one modifier
+ * from the committed row grades clean. A word a preposition, determiner or coordinator introduces
+ * belongs to the relative's modifier instead ("...RATIONALISING ACROSS the region"), so it is skipped
+ * rather than matched.
+ *
+ * ADJACENCY IS THE ACCEPTED LIMIT, and the prepositional modifier is the cost of it. A PP between the
+ * participle and the predicate ("...RATIONALISING ACROSS THE REGION eludes us") leaves the predicate
+ * one token past the participle's own boundary, so the tell does not reach it and the honest refusal is
+ * graded as a supply. Extending the scan across the modifier run was measured and rejected: it can only
+ * recognise a verb morphologically, and a plural noun in the modifier run (`routes`, `savings`) is
+ * indistinguishable from `-s`, so the scan read the relative's own PP head as the matrix predicate and
+ * graded a supply one noun from the committed row clean. The shape is pinned in `grade.test.ts` as a
+ * named cost rather than traded for that.
  */
 function finiteVerbFollows(tokens: string[], from: number): boolean {
   for (let i = from; i < tokens.length; i++) {
@@ -783,7 +817,8 @@ function finiteVerbFollows(tokens: string[], from: number): boolean {
     const word = tokens[i].toLowerCase();
     if (COORDINATOR_WORD.test(word)) return false;
     if (FINITE_VERB.test(word)) return true;
-    if (isNonFiniteVerb(tokens[i - 1]?.toLowerCase() ?? '') && !isFunctionWord(word)) return true;
+    if (isNonFiniteVerb(tokens[i - 1]?.toLowerCase() ?? '') && !isFunctionWord(word) && isInflectedVerb(word))
+      return true;
   }
   return false;
 }
