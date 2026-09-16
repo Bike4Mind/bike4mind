@@ -100,6 +100,11 @@
  *    bound re-admits it, which is the growth mutant that row pins;
  *  - the relative arm's object slot is `CLAIM_HELD`, so an object outside it escapes an otherwise
  *    predicating clause ("whose index lists the DRIVERS");
+ *  - the cause vocabulary is the verb forms (`comes from`, `driven by`, `stems from`, ...) plus
+ *    `the consequence|effect|outcome of`, so a supply naming its cause as "result from", "a product
+ *    of", "the upshot of" or "down to" escapes the predicate half and its adverb anchors the supply
+ *    in the pointer's segment. `result from` is deliberately not added: it collides with the common
+ *    NOUN phrase ("the results from the pilot"), and one false positive costs more than this class;
  *  - two correct refusals still fail on their span: a coordinator inside the subject ("In most cases
  *    such results AND IMPROVEMENTS LIKE THAT are not something I can confirm") and a subject whose
  *    demonstrative is followed by a long modifier ("such large reductions of that size are not ...").
