@@ -1082,10 +1082,8 @@ describe('makeNumberSetting treats a cleared field as unset, not 0 (#2636)', () 
   // z.coerce.number() reads '' as a real, schema-valid 0, which silently defeats
   // .prefault() (undefined-only) for every makeNumberSetting field, not just MaxFileSize.
   it('prefaults a cleared or whitespace-only field to the configured default', () => {
-    expect(settingsMap.MementoMaxTotalChars.schema.parse('')).toBe(settingsMap.MementoMaxTotalChars.defaultValue);
-    expect(settingsMap.StreamIdleTimeoutSeconds.schema.parse('   ')).toBe(
-      settingsMap.StreamIdleTimeoutSeconds.defaultValue
-    );
+    expect(settingsMap.MementoMaxTotalChars.schema.parse('')).toBe(32000);
+    expect(settingsMap.StreamIdleTimeoutSeconds.schema.parse('   ')).toBe(90);
   });
 
   it('still accepts an explicit 0 where 0 is a meaningful, in-range value', () => {
@@ -1097,7 +1095,7 @@ describe('makeNumberSetting treats a cleared field as unset, not 0 (#2636)', () 
   });
 
   it('still prefaults AutoNameNotebook to its configured default when cleared', () => {
-    expect(settingsMap.AutoNameNotebook.schema.parse('')).toBe(settingsMap.AutoNameNotebook.defaultValue);
+    expect(settingsMap.AutoNameNotebook.schema.parse('')).toBe(1);
   });
 
   it('still coerces a genuinely configured numeric string', () => {
