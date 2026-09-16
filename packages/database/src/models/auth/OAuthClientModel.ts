@@ -4,21 +4,36 @@ import mongoose, { Schema, model, Model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 
 /**
- * Trust config for a Pattern-A *federated* client: an app whose own AWS Cognito
- * pool federates B4M as its upstream IdP. Its presence turns an ordinary
- * "Sign in with B4M" client into one allowed to mint per-user `ai:generate`
- * keys via `POST /api/oauth/ai-token`, by exchanging a Cognito ID token the app
- * already holds for its logged-in user. Absent → the client cannot mint AI keys.
+ * Trust config for a Pattern-A *federated* client. Its presence turns an ordinary
+ * "Sign in with B4M" client into one allowed to mint per-user `ai:generate` keys via
+ * `POST /api/oauth/ai-token`, by exchanging an ID token the app already holds for its
+ * logged-in user. Absent means the client cannot mint AI keys.
+ *
+ * Two issuer shapes, discriminated by `issuer` (see verifyFederatedIdToken.ts):
+ * an external AWS Cognito pool that federates B4M upstream, or B4M itself for an app
+ * that signs users in directly against B4M.
  */
 export interface IOAuthClientFederatedIdp {
-  /** Expected `iss` of the Cognito ID token, e.g. `https://cognito-idp.<region>.amazonaws.com/<poolId>`. */
+  /**
+   * Expected `iss` of the ID token: a Cognito pool
+   * (`https://cognito-idp.<region>.amazonaws.com/<poolId>`), or B4M's own OIDC issuer
+   * (APP_URL) for a B4M-issued token.
+   */
   issuer: string;
-  /** JWKS endpoint. Defaults to `${issuer}/.well-known/jwks.json` (Cognito) when omitted. */
+  /**
+   * JWKS endpoint. Optional for a Cognito pool (defaults to
+   * `${issuer}/.well-known/jwks.json`); REQUIRED when the issuer is B4M itself, whose
+   * canonical endpoint is `${issuer}/api/oauth/jwks` and must not be derived.
+   */
   jwksUri?: string;
-  /** Expected `aud` claim — the Cognito app-client id the token was issued to. */
+  /** Expected `aud` claim: the app-client id the token was issued to. */
   audience: string;
-  /** `identities[].providerName` that carries B4M's `sub` (== B4M user id) after federation. */
-  providerName: string;
+  /**
+   * `identities[].providerName` that carries B4M's `sub` (== B4M user id) after
+   * federation. Required for the external-Cognito shape; unused for a B4M-issued token,
+   * whose subject is plain `sub`.
+   */
+  providerName?: string;
 }
 
 export interface IOAuthClientDocument extends IMongoDocument {
@@ -59,7 +74,7 @@ const OAuthClientSchema = new Schema<IOAuthClientDocument>(
           issuer: { type: String, required: true },
           jwksUri: { type: String },
           audience: { type: String, required: true },
-          providerName: { type: String, required: true },
+          providerName: { type: String },
         },
         { _id: false }
       ),
