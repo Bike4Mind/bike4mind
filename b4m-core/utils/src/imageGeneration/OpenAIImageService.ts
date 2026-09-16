@@ -26,6 +26,28 @@ const OPENAI_IMAGE_CLIENT_OPTS = { timeout: 8 * 60 * 1000, maxRetries: 0 } as co
 // particular handles a broader range of prompts than gpt-image-*.
 const ALTERNATIVE_IMAGE_MODELS = 'Flux Pro, Flux Dev, or Grok';
 
+// GPT-Image models accept these quality values on both the generate and edit endpoints
+// (per the OpenAI SDK's ImageGenerateParams/ImageEditParams types) - unlike DALL-E's
+// legacy 'standard'/'hd' pair, which mapQualityForModel upstream already normalizes away.
+const GPT_IMAGE_QUALITY_VALUES = ['low', 'medium', 'high', 'auto'] as const;
+type GptImageQuality = (typeof GPT_IMAGE_QUALITY_VALUES)[number];
+
+function isGptImageQuality(value: unknown): value is GptImageQuality {
+  return typeof value === 'string' && (GPT_IMAGE_QUALITY_VALUES as readonly string[]).includes(value);
+}
+
+/**
+ * Normalizes a requested quality to the tier a GPT-Image model actually accepts, or
+ * undefined when it maps to nothing usable. The 'standard'/'hd' translation must stay
+ * in step with OpenAIImageCostCalculator.normalizeInput (services) and
+ * ImageGeneration's mapQualityForModel, which bill against the mapped tier - if they
+ * diverge, the user is charged one tier and rendered another.
+ */
+export function toGptImageQuality(quality?: string | null): GptImageQuality | undefined {
+  const mapped = quality === 'standard' ? 'medium' : quality === 'hd' ? 'high' : quality;
+  return isGptImageQuality(mapped) ? mapped : undefined;
+}
+
 // Only appends "..." when the prompt is actually cut, so a short prompt in a log line
 // doesn't misleadingly read as truncated.
 const truncatePromptForLog = (prompt: string): string => (prompt.length > 100 ? `${prompt.slice(0, 100)}...` : prompt);
@@ -174,12 +196,18 @@ export class OpenAIImageService extends AIImageService {
           delete openaiOptions.response_format;
         }
 
-        // GPT-Image models don't support quality parameter for text-to-image generation
+        // GPT-Image models bill by quality tier (see validateUserCredits upstream), so an
+        // accepted value must actually reach OpenAI - only an unmappable value is dropped.
         if (openaiOptions.quality) {
-          parameterWarnings.push(
-            `Quality parameter ('${openaiOptions.quality}') is not supported by ${modelName} text-to-image generation and was removed`
-          );
-          delete openaiOptions.quality;
+          const mappedQuality = toGptImageQuality(openaiOptions.quality);
+          if (mappedQuality) {
+            openaiOptions.quality = mappedQuality;
+          } else {
+            parameterWarnings.push(
+              `Quality parameter ('${openaiOptions.quality}') is not supported by ${modelName} and was removed`
+            );
+            delete openaiOptions.quality;
+          }
         }
 
         if (isGPTImage2Model(options.model)) {
@@ -267,16 +295,28 @@ export class OpenAIImageService extends AIImageService {
           // NOTE: DALL-E 3 does NOT support image editing at all
           const editModel = options.model || ImageModels.GPT_IMAGE_2;
 
-          // IMPORTANT: GPT-Image models edit endpoint only supports: model, image (array), prompt
-          // Do not pass any other parameters (size, response_format, etc.)
+          // quality/size are already validated for this model above (same block that
+          // handles the text-to-image branch); forward them, plus n, because credits are
+          // reserved per requested image at the requested tier (validateUserCredits
+          // charges usdCost * n) - dropping any of the three bills for output OpenAI is
+          // never asked to produce.
+          const editQuality = isGptImageQuality(openaiOptions.quality) ? openaiOptions.quality : undefined;
+          const editSize = isSupportedEditSize(editModel, openaiOptions.size) ? openaiOptions.size : undefined;
+
           this.logger.log('OpenAI image generation request (edit endpoint, image-to-image):', {
             model: editModel,
             prompt: truncatePromptForLog(prompt),
+            quality: editQuality,
+            size: editSize,
+            n: openaiOptions.n,
           });
           result = await openai.images.edit({
             model: editModel as 'gpt-image-1' | 'gpt-image-1.5' | 'gpt-image-1-mini' | 'gpt-image-2',
             image: [imageFile],
             prompt,
+            ...(editQuality ? { quality: editQuality } : {}),
+            ...(editSize ? { size: editSize } : {}),
+            ...(openaiOptions.n ? { n: openaiOptions.n } : {}),
           });
         } else {
           // Legacy models (DALL-E 2) use the variation endpoint
@@ -367,7 +407,15 @@ export class OpenAIImageService extends AIImageService {
   async edit(
     image: string,
     prompt: string,
-    { mask = null, model = ImageModels.GPT_IMAGE_2, n = 1, size, response_format = 'url', user }: ImageEditOptions
+    {
+      mask = null,
+      model = ImageModels.GPT_IMAGE_2,
+      n = 1,
+      quality,
+      size,
+      response_format = 'url',
+      user,
+    }: ImageEditOptions
   ): Promise<ImageEditResponse> {
     try {
       const openai = new OpenAI({ apiKey: this.apiKey, ...OPENAI_IMAGE_CLIENT_OPTS });
@@ -414,6 +462,9 @@ export class OpenAIImageService extends AIImageService {
       // absent size is omitted so OpenAI's own default sizing applies, as it did before.
       // dall-e-2 supports: model, image (single), prompt, mask, n, size, response_format, user
       const forwardSize = isSupportedEditSize(editModel, size);
+      // Callers bill against the requested tier before getting here, so it has to reach
+      // OpenAI; an unmappable value is dropped rather than 400-ing the whole request.
+      const editQuality = toGptImageQuality(quality);
 
       this.logger.log('OpenAI image edit request:', {
         model: editModel,
@@ -421,6 +472,7 @@ export class OpenAIImageService extends AIImageService {
         hasMask: !!maskFile,
         n,
         size,
+        quality: editQuality,
         response_format,
       });
 
@@ -432,6 +484,7 @@ export class OpenAIImageService extends AIImageService {
               prompt,
               ...(forwardSize ? { size } : {}),
               ...(maskFile ? { mask: maskFile } : {}),
+              ...(editQuality ? { quality: editQuality } : {}),
             }
           : {
               model: editModel as 'dall-e-2',
