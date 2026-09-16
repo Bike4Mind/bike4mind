@@ -1,4 +1,4 @@
-import { getTextModelCost, insufficientCreditsError, type ISessionDocument, type ModelInfo } from '@bike4mind/common';
+import { insufficientCreditsError, type ISessionDocument, type ModelInfo } from '@bike4mind/common';
 import { adminSettingsRepository, organizationRepository, userRepository } from '@bike4mind/database';
 import { creditService, isOperationalBillingEnabled } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
@@ -17,13 +17,6 @@ import type { Logger } from '@bike4mind/observability';
  * why a refusal is not final until `operationalSpendSettlesFree` has ruled the model out.
  */
 const MIN_CREDITS_PER_OPERATION = 1;
-
-/**
- * Input and output token volume the zero-settlement probe below prices at. Far above any real
- * operational call (a summary of the largest notebook is orders of magnitude under it), because
- * the probe is asking "is this model costless at ANY volume", not what this call will cost.
- */
-const FREE_SETTLEMENT_PROBE_TOKENS = 1_000_000;
 
 export interface SessionOperationalCreditPreflightArgs {
   /**
@@ -72,35 +65,43 @@ type BillingOrg = Awaited<ReturnType<typeof organizationRepository.findById>>;
  *    stops a `freeToRun` model from also carrying a priced tier (the discovery append at
  *    runModelDiscovery.ts:999 bypasses the admin route's known-model gate). The flag alone would
  *    therefore waive the gate on work that settlement then charges in full.
- * 2. So settlement's own pricing function gets asked what it would compute, at a volume no real
- *    operational call reaches. `getTextModelCost` is what the settlement caller uses
- *    (recordSessionOperationalUsage.ts:63), so a zero here is the zero that would be debited -
- *    and `tierForTokens` falls back to the highest tier rather than returning null
- *    (models.ts:692-697), so a priced model cannot dodge the probe by having no tier this wide.
+ * 2. So the model's own price map has to agree, on EVERY tier. Pricing one large sample volume
+ *    would not: `tierForTokens` selects by input tokens and falls back to the WIDEST tier rather
+ *    than returning null (models.ts:692-697), so a sample reads whichever tier is widest and says
+ *    nothing about the narrower one a real operational call lands in. `{128000: {input: 0.15,
+ *    output: 0.6}, 2000000: {input: 0, output: 0}}` prices free at 1M and charges a 10k call in
+ *    full. Reading every tier is also what covers the cache legs, which settlement passes real
+ *    counts for (recordSessionOperationalUsage.ts:63) and a sample priced at zero cache tokens
+ *    never exercises.
  *
- * Order matters: `freeToRun` is tested FIRST so the probe can never raise `[UNPRICED_MODEL]`
- * itself, which is exactly what a computed zero on a model without the flag would do.
+ * Checking the map directly rather than calling `getTextModelCost` also keeps this total and
+ * side-effect free: there is no volume to choose, and no way for the check to raise the
+ * `[UNPRICED_MODEL]` alarm that a computed zero would.
  *
  * The same carve-out the sibling pre-flight makes on `embeddingCostUsd > 0`
  * (pages/api/data-lakes/semantic-search.ts:486). That one can price the exact call because the
- * token count is known at request time; here it is not, so the question is asked at a volume
- * chosen to exceed any real one instead.
+ * token count is known at request time; here it is not, so the question is asked of the price
+ * map at model granularity instead.
  *
  * An empty or all-zero `pricing` map is deliberately NOT accepted as the declaration on its own,
- * even though the probe returns $0 for it. Both write paths reject that state outright
- * with "mark the model freeToRun instead" (ModelPriceModel.ts:91-98, model-prices.ts:213-216)
+ * even though an empty map satisfies the every-tier test vacuously. Both write paths reject that
+ * state outright with "mark the model freeToRun instead" (ModelPriceModel.ts:91-98,
+ * model-prices.ts:213-216)
  * and modelCatalog.ts:78-81 calls it the intended fail-loud signal, so it only ever reaches a
  * reader as a gap: price-seed lag, or the per-process `_modelCache` serving this process a map
  * the SessionEvents process already prices from. Inferring "free" from it would waive the charge
  * here while settlement debits normally - and this pre-flight is the sole `maxCreditsPerMember`
  * enforcement point on these paths (recordOperationalUsage.ts:84-88), so a false waive costs
  * more than the ordinary fail-open elsewhere in this file. Requiring the flag is what keeps that
- * gap out; requiring the probe is what keeps a mislabelled model from exploiting the flag.
+ * gap out; requiring every tier to be zero is what keeps a mislabelled model from exploiting
+ * the flag.
  */
 function settlesFreeForAnyVolume(modelInfo: ModelInfo): boolean {
   return (
     modelInfo.freeToRun === true &&
-    getTextModelCost(modelInfo, FREE_SETTLEMENT_PROBE_TOKENS, FREE_SETTLEMENT_PROBE_TOKENS) === 0
+    Object.values(modelInfo.pricing).every(
+      tier => tier.input === 0 && tier.output === 0 && !tier.cache_read && !tier.cache_write
+    )
   );
 }
 

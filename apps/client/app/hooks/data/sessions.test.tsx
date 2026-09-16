@@ -35,8 +35,13 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 
+// Hoisted rather than created inside the factory: a factory that returns fresh `vi.fn()`s on every
+// call leaves `endJob` unassertable, and deleting it from both error paths keeps the suite green -
+// a surviving mutant on the user-visible half of a refusal, which is the spinner never stopping.
+const { startJob, endJob } = vi.hoisted(() => ({ startJob: vi.fn(), endJob: vi.fn() }));
+
 vi.mock('@client/app/hooks/useJobStatus', () => ({
-  useJobStatus: () => ({ startJob: vi.fn(), endJob: vi.fn(), isJobRunning: vi.fn(() => false) }),
+  useJobStatus: () => ({ startJob, endJob, isJobRunning: vi.fn(() => false) }),
 }));
 
 import {
@@ -277,6 +282,21 @@ describe('useSummarizeSession', () => {
     expect(toast.error).toHaveBeenCalledWith(serverMessage);
   });
 
+  // The refusal's other half: the toast explains it, but the spinner started in `mutationFn` has
+  // to stop too, or the notebook reads as "still summarizing" forever.
+  it('clears the running job when the request is refused', async () => {
+    vi.mocked(generateSessionSummary).mockRejectedValueOnce(
+      axiosRefusal(422, 'Not enough credits', 'insufficient_credits')
+    );
+    const { result } = renderMutationWithSeededSession(() => useSummarizeSession());
+
+    result.current.mutate(SESSION_ID);
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(startJob).toHaveBeenCalledWith(SESSION_ID, 'summarize');
+    expect(endJob).toHaveBeenCalledWith(SESSION_ID, 'summarize');
+  });
+
   it('falls back to the generic failure message for an unrelated rejection', async () => {
     vi.mocked(generateSessionSummary).mockRejectedValueOnce(axiosRefusal(500, 'Internal error'));
     const { result } = renderMutationWithSeededSession(() => useSummarizeSession());
@@ -324,6 +344,20 @@ describe('useUpdateSessionTags', () => {
 
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(toast.error).toHaveBeenCalledWith(serverMessage);
+  });
+
+  // See useSummarizeSession: a refusal has to stop the spinner it started, not just toast.
+  it('clears the running job when the request is refused', async () => {
+    vi.mocked(generateSessionTags).mockRejectedValueOnce(
+      axiosRefusal(422, 'Not enough credits', 'insufficient_credits')
+    );
+    const { result } = renderMutationWithSeededSession(() => useUpdateSessionTags());
+
+    result.current.mutate(SESSION_ID);
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(startJob).toHaveBeenCalledWith(SESSION_ID, 'generateTags');
+    expect(endJob).toHaveBeenCalledWith(SESSION_ID, 'generateTags');
   });
 
   it('falls back to the generic failure message for an unrelated rejection', async () => {

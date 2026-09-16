@@ -252,11 +252,44 @@ describe('checkSessionOperationalCredits', () => {
     // to suppress [UNPRICED_MODEL] (models.ts:678-686) and no write path stops a freeToRun model
     // from carrying a priced tier (runModelDiscovery.ts:999 appends without the admin route's
     // known-model gate). Waiving on the flag alone would hand this work through while settlement
-    // charged $750k of tokens at full rate, so the probe has to agree with the flag.
+    // charged those tokens at full rate, so the price map has to agree with the flag.
     it('keeps the refusal when a freeToRun model still carries a priced tier', async () => {
       brokeHolder();
       mockGetOperationsModel.mockResolvedValue({
         modelInfo: { id: 'llama3-mislabelled', freeToRun: true, pricing: { 128000: { input: 0.15, output: 0.6 } } },
+      });
+
+      await expect(preflight()).resolves.toMatchObject({ allowed: false });
+    });
+
+    // Sampling one large volume would pass this: tierForTokens selects by input tokens and falls
+    // back to the WIDEST tier (models.ts:692-697), so a 1M sample reads the zero-rate 2M tier
+    // while a real 10k operational call is priced by the 128k one. Both write paths accept this
+    // map, because each gates on SOME tier being nonzero (ModelPriceModel.ts:93,
+    // admin/model-prices.ts:213), so one priced tier is enough to pass them.
+    it('keeps the refusal when a freeToRun model prices a narrow tier and zeroes a wider one', async () => {
+      brokeHolder();
+      mockGetOperationsModel.mockResolvedValue({
+        modelInfo: {
+          id: 'llama3-mixed-tiers',
+          freeToRun: true,
+          pricing: { 128000: { input: 0.15, output: 0.6 }, 2000000: { input: 0, output: 0 } },
+        },
+      });
+
+      await expect(preflight()).resolves.toMatchObject({ allowed: false });
+    });
+
+    // Settlement passes real cache token counts (recordSessionOperationalUsage.ts:63), so a tier
+    // that charges only for cache still charges. Zero input/output is not zero cost.
+    it('keeps the refusal when a freeToRun model carries cache-only rates', async () => {
+      brokeHolder();
+      mockGetOperationsModel.mockResolvedValue({
+        modelInfo: {
+          id: 'llama3-cache-priced',
+          freeToRun: true,
+          pricing: { 128000: { input: 0, output: 0, cache_read: 0.01, cache_write: 0.1 } },
+        },
       });
 
       await expect(preflight()).resolves.toMatchObject({ allowed: false });
