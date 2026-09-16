@@ -194,6 +194,19 @@ describe('AdminSettingInputField number setting', () => {
     expect(mutate).toHaveBeenCalledWith({ key: 'modelDiscoveryPriceBandPct', value: '' }, expect.anything());
   });
 
+  it('re-displays the resolved default once the save response comes back, not the cleared field', () => {
+    renderBandField(50);
+    fireEvent.change(bandInput(), { target: { value: '' } });
+    fireEvent.click(bandSaveButton());
+
+    // The server resolves a cleared numeric field to the setting's own default (#2636) and
+    // returns it as settingValue - the field must pick that up instead of sitting empty until
+    // a full settings refetch.
+    const { onSuccess } = mutate.mock.calls[0][1];
+    act(() => onSuccess({ settingName: 'modelDiscoveryPriceBandPct', settingValue: 50 }));
+    expect(bandInput().value).toBe('50');
+  });
+
   it('surfaces the server reason when a write is rejected anyway', () => {
     updateError = { isAxiosError: true, response: { status: 400, data: { message: 'Number must be <= 500' } } };
 
