@@ -745,9 +745,29 @@ const PREPOSITION = new Set([
  */
 const FINITE_VERB = new RegExp(String.raw`^(?:${PREDICATES_PHRASE})$|n['\u2019]t$`, 'i');
 
+/** A coordinator word, which ends the segment a pointer test is scoped to. Mirrors `segmentAround`. */
+const COORDINATOR_WORD = /^(?:and|but|so|yet|or)$/i;
+
+/**
+ * True when a FINITE_VERB follows `tokens[from]` before the clause's end or the segment's coordinator.
+ * One further finite verb after a reduced relative's own is what makes that relative part of the cause
+ * phrase's object rather than a matrix subject - see `predicatesCausePhrase`.
+ */
+function finiteVerbFollows(tokens: string[], from: number): boolean {
+  for (let i = from; i < tokens.length; i++) {
+    // A comma brackets an aside, exactly as it does in the scan that calls this.
+    if (tokens[i] === ',') continue;
+    if (/^[;:.!?]$/.test(tokens[i])) return false;
+    const word = tokens[i].toLowerCase();
+    if (COORDINATOR_WORD.test(word)) return false;
+    if (FINITE_VERB.test(word)) return true;
+  }
+  return false;
+}
+
 /**
  * True when the cause phrase beginning before `from` is the SUBJECT of the clause that follows it -
- * i.e. a finite predicate follows the phrase's object. Position decides, in three steps:
+ * i.e. a finite predicate follows the phrase's object. Position decides, in four steps:
  *
  *  - a comma brackets an ASIDE, so the scan crosses it. It used to stop at a comma before a relative
  *    pronoun or a coordinator, on the theory that a new clause's verb cannot be the phrase's predicate;
@@ -755,24 +775,22 @@ const FINITE_VERB = new RegExp(String.raw`^(?:${PREDICATES_PHRASE})$|n['\u2019]t
  *    refusal ("..., which is unclear"), so the branch is gone. Where a comma really does open a supply
  *    the generalisation adverb anchors it independently - see the `..., which is why the number holds`
  *    row, which fails on its `typically` whatever the scan makes of the relative;
- *  - a determiner that no preposition governs opens the phrase's object when no noun phrase is open
- *    yet - after a gerund ("of consolidating the routes") or after the object's own head ("of the
- *    changes the team made") - and starts a SECOND noun phrase only once one is open ("...of
- *    consolidating the depot routes the customer IS rationalising"). A second noun phrase is read as a
- *    new subject only when a FINITE_VERB follows it directly, so the relative's own finite verb
- *    ("of the changes THE TEAM IS making") no longer counts as one. This test carries the growth
- *    direction alone: drop it and the zero-relative row is read as a pointer;
+ *  - the object's own noun phrase OPENS at its first content word: the determiner standing at the
+ *    object's head when the cause phrase did not consume one ("of consolidating THE routes"), or the
+ *    bare head the phrase left behind ("of consolidating DEPOT ROUTES"). A determiner reached after
+ *    that opens a SECOND noun phrase. Reading the object as a single determiner - which is what this
+ *    did - swallowed the MATRIX subject's determiner whenever the object was bare, so the clause's own
+ *    verb was read as the phrase's predicate and a supply one determiner from the pinned zero-relative
+ *    row graded clean;
+ *  - a second noun phrase whose own finite verb follows directly is a new matrix subject only when no
+ *    further finite verb follows that verb in the same coordinated segment. A later verb is what makes
+ *    it a REDUCED RELATIVE inside the object instead ("of the changes THE TEAM IS making IS unclear"):
+ *    the later verb predicates the phrase. This test carries the growth direction alone: drop it and
+ *    the zero-relative row is read as a pointer;
  *  - a finite verb at the end of the scan is the phrase's predicate.
  */
 function predicatesCausePhrase(clause: string, from: number): boolean {
   const tokens = clause.slice(from).match(/[A-Za-z][A-Za-z'\u2019-]*|[,;:.!?]/g) ?? [];
-  // A determiner opens the object's FIRST noun phrase when none has opened one yet: the head noun is
-  // still ahead of it ("of the changes THE TEAM is making") or a gerund's object is ("of consolidating
-  // THE routes"). Either way it is the object's own determiner, not a new matrix subject. A determiner
-  // after the object's noun phrase is already open starts a second one, and only THAT can be the
-  // subject of a verb that does not predate the phrase ("...of consolidating the depot routes THE
-  // customer IS rationalising"). One modifier before the head still leaves the noun phrase unopened, so
-  // "...the effect of the recent changes THE TEAM is making" reads as the relative it is.
   let objectOpened = false;
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
@@ -787,11 +805,18 @@ function predicatesCausePhrase(clause: string, from: number): boolean {
         objectOpened = true;
         continue;
       }
+      // A determiner right after a gerund/participle is that verb's object ("of merging THE two
+      // depots"), so it belongs to the object's own noun phrase, not to a new subject.
       if (/ing$/i.test(tokens[i - 1])) continue;
       const afterHead = tokens[i + 2];
-      if (afterHead !== undefined && FINITE_VERB.test(afterHead.toLowerCase())) return false;
+      if (afterHead !== undefined && FINITE_VERB.test(afterHead.toLowerCase()) && !finiteVerbFollows(tokens, i + 3)) {
+        return false;
+      }
       continue;
     }
+    // The object's own head: the leading gerund/participle is its verb, not a noun of it, so it does
+    // not open the phrase. Everything else at the object's head does.
+    if (!objectOpened && !/ing$/i.test(word)) objectOpened = true;
   }
   return false;
 }
@@ -869,10 +894,13 @@ function segmentAround(clause: string, at: number): [number, number] {
 }
 
 /**
- * The segments the clause's cause phrases sit in. Only an ADVERB-anchored supply needs them: `at` falls
- * back to the generalisation adverb exactly when no predicate committed the clause, so `attributedCause`
- * found every cause phrase in it to be its own clause's subject - the clause is TALKING ABOUT the
- * outcome, and a custodian standing in that phrase's own segment explains the construction away.
+ * The segments the clause's cause phrases sit in. Read when the clause carries NO attributed cause
+ * phrase: every cause phrase in it is then its own clause's subject, so the clause is TALKING ABOUT
+ * the outcome and a custodian standing in that phrase's own segment explains the construction away.
+ * This used to turn on `adverbAnchored` alone, which is the same condition only while no
+ * `SUPPLY_PREDICATE` committed the clause - a predicate that stole `at` moved the anchor off the
+ * phrase, left `adverbAnchored` false and took the phrase's own segment out of the pointer test, so a
+ * refusal whose pointer stood in that segment was graded as a supply.
  *
  * Reading only the adverb's segment stranded a pointer whenever the adverb and the phrase sat in
  * different coordinated segments. The mirror row - the pointer in the ADVERB's segment - is pinned too,
@@ -949,14 +977,13 @@ const SUBJECT_REFUSED = new RegExp(
  * supply with a genuine pointer beside it - the exact shape the segment scoping exists to keep apart.
  * Both rows are pinned.
  *
- * The pointer test is also the one gate that reads the segment a CAUSE PHRASE heads, and only for the
- * adverb-anchored supply (see `causePhraseSegments`). An adverb-anchored supply is one whose clause
- * carries no attributed cause phrase, so every cause phrase in it is its own clause's subject: the
- * clause is talking ABOUT the outcome rather than asserting it, and a custodian in that phrase's
- * segment explains it. Without that, the adverb fallback moved `at` off the phrase and stranded a
- * pointer standing in the phrase's own coordinated segment - three segments in the reply, and the gate
- * read two. The row is pinned, and so is its must-FAIL twin, where the pointer stands in the adverb's
- * segment and the phrase attributes.
+ * The pointer test is also the one gate that reads the segment a CAUSE PHRASE heads, and only when
+ * the clause carries no attributed cause phrase (see `causePhraseSegments`). Such a clause is talking
+ * ABOUT the outcome rather than asserting a cause, so a custodian in that phrase's segment explains
+ * it. Without that, the adverb fallback moved `at` off the phrase and stranded a pointer standing in
+ * the phrase's own coordinated segment - three segments in the reply, and the gate read two. The row
+ * is pinned, and so is its must-FAIL twin, where the pointer stands in the adverb's segment and the
+ * phrase attributes.
  *
  * `SUBJECT_REFUSED` reads the subject's own segment rather than the supply's when the anchor comes
  * FIRST (`at < start`). In that shape the supply's segment can end before the subject begins (`the
@@ -975,11 +1002,18 @@ const SUBJECT_REFUSED = new RegExp(
 function framedAsGeneralKnowledge(sentence: string): boolean {
   return clauses(sentence).some(clause => {
     const refusals = matchOffsets(SUPPLY_DISCLAIMED, clause);
+    // A clause with NO attributed cause phrase is one whose every cause phrase is its own clause's
+    // subject, so the clause is talking ABOUT the outcome rather than asserting a cause - and a
+    // custodian standing in one of their segments explains the construction away. Gated on that
+    // condition rather than on `adverbAnchored`, which agrees with it only while no SUPPLY_PREDICATE
+    // committed the clause: when one did, the predicate stole `Supply.at`, the adverb fallback was
+    // never taken and the phrase's own segment went unread, so a correct refusal with a pointer there
+    // was graded as a supply.
+    const causeSegments = attributedCause(clause, sentence) === null ? causePhraseSegments(clause) : [];
     const governed = ({ start, end, at, adverbAnchored }: Supply) => {
       const [from, to] = segmentAround(clause, at);
       const [subjectFrom, subjectTo] = segmentAround(clause, start);
       const refusalSpan: [number, number] = at < start ? [end, subjectTo] : [Math.max(end, from), to];
-      const causeSegments = adverbAnchored ? causePhraseSegments(clause) : [];
       return (
         refusals.some(refused => refused >= from && refused < start && !clause.slice(refused, start).includes(',')) ||
         SUBJECT_REFUSED.test(clause.slice(refusalSpan[0], refusalSpan[1])) ||
