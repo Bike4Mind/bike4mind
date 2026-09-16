@@ -1306,9 +1306,12 @@ async function recentRunHistory(adapters: ModelDiscoveryAdapters, startedAt: Dat
  * carries exactly this contract - commits what it verified, does not advance
  * lastSuccessfulRun - and every reader already handles it. Not 'failed',
  * because RunFailures has to keep meaning "the sources are broken" for the
- * consecutive-failure alarm; RunPartial is the counter that moves. The startup
- * leg then re-runs on every boot for a deployment configured with nothing,
- * which costs nothing: it has no source to fetch.
+ * consecutive-failure alarm; RunPartial is the counter that moves, and a
+ * "Last success" that stops advancing on the admin card is the operator-facing
+ * signal. The startup leg (apps/client/server/modelDiscovery/startupLeg.ts)
+ * then re-runs on every boot for a deployment configured with nothing: no
+ * provider egress, but still a lease, a run document and a full read of the
+ * rows and prices in force.
  */
 function runStatus(
   attempted: number,

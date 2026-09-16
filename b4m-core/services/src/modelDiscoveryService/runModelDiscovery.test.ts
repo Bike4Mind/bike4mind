@@ -240,10 +240,9 @@ describe('runModelDiscovery', () => {
     // lastSuccessfulRun is findOne({status:'ok'}), so 'partial' is what stops a
     // deployment that fetches nothing from advancing it run after run.
     expect(result.outcome).toBe('partial');
+    // Not 'failed': RunFailures has to keep meaning the sources themselves are
+    // broken, or the consecutive-failure alarm pages for a deliberate config.
     expect(bare.runs.docs[0].status).toBe('partial');
-    // 'failed' would page the consecutive-failure alarm, whose RunFailures
-    // counter has to keep meaning the sources themselves are broken.
-    expect(result.outcome).not.toBe('failed');
     // Degrading the status may not cost the skips their visibility.
     expect(result.skippedSources).toEqual([
       { name: 'openai', reason: 'not-configured' },
@@ -253,21 +252,17 @@ describe('runModelDiscovery', () => {
     expect(bare.infos.some(message => message.includes('skipped=2(not-configured:openai+xai)'))).toBe(true);
   });
 
-  it('still reports ok when one source was attempted and succeeded beside the skips', async () => {
-    // The boundary the degrade must not cross: a self-host install that skips
-    // bedrock forever still needs a lastSuccessfulRun, or the startup staleness
-    // gate re-runs a full fan-out on every container boot.
-    const mostlySkipped = harness([
-      openaiSource(),
-      stubSource({ name: 'xai', configured: false }),
-      stubSource({ name: 'bedrock', configured: false }),
-    ]);
+  it('withholds it from an empty registry too, which has nothing even to skip', async () => {
+    // Zero attempts with zero skips is the other way to refresh nothing, and the
+    // one a predicate written around the skip list is likeliest to miss.
+    const empty = harness([]);
 
-    const result = await runModelDiscovery(mostlySkipped.adapters, mostlySkipped.options);
+    const result = await runModelDiscovery(empty.adapters, empty.options);
 
-    expect(result.sources.map(report => report.name)).toEqual(['openai']);
-    expect(result.outcome).toBe('ok');
-    expect(mostlySkipped.runs.docs[0].status).toBe('ok');
+    expect(result.sources).toEqual([]);
+    expect(result.skippedSources).toEqual([]);
+    expect(result.outcome).toBe('partial');
+    expect(empty.runs.docs[0].status).toBe('partial');
   });
 
   it('keeps a zero-attempt run ok when one of its skips was the freshness guard', async () => {
