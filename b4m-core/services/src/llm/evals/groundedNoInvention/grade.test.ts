@@ -1003,13 +1003,17 @@ describe('gradeMustNotDenyPremise', () => {
   // negation of a verb already IN the list (`\bis\b` cannot match inside `isn't`) and a finite verb
   // the list had never heard of. The contractions are now recognised generically (`FINITE_VERB`); the
   // per-family rows below are the boundary the docblock names, and each is a verb directly after the
-  // object, which is the position the structural test reads. FAILs at 9a62bcf45 and 58b00b12c.
+  // object, which is the position the structural test reads. The `isn't`/`wasn't`/`aren't` rows FAIL at
+  // 9a62bcf45 and 58b00b12c; the `hasn't` row does NOT (review 10 finding 5 - `\bhas\b` already matched
+  // inside it, so it asserts nothing about the `n't` arm and is here only as the `has`-family row).
   it('does not read a cause phrase predicated through a negated contraction or an unlisted verb as a supply', () => {
     for (const licensed of [
       // One row per contraction family: copula, past, plural.
       "Gains of that size are usually recorded in the CRM and the consequence of route consolidation isn't clear.",
       "Gains of that size are usually recorded in the CRM and the consequence of route consolidation wasn't established.",
       "Gains of that size are usually recorded in the CRM and the consequences of route consolidation aren't known.",
+      // The `has` family: it passed before the fix as well, because the old window already matched
+      // `\bhas\b` here. Kept so a future shrink of the `n't` arm cannot look covered by it.
       "Gains of that size are usually recorded in the CRM and the consequence of route consolidation hasn't been established.",
       // One row per unlisted predicate family: intransitive, comparative, distributive, locative.
       'Gains of that size are usually recorded in the CRM and the consequence of route consolidation depends on the fleet.',
@@ -1048,13 +1052,18 @@ describe('gradeMustNotDenyPremise', () => {
       // The same two shapes with the object's own determiner, so the determiner the scan DOES meet is
       // unambiguously a second noun phrase.
       'Gains of that size are usually recorded in the CRM and the consequence of the rollout across the entire dispatch network is unclear.',
+      // Review 10, finding 2: a comma before a relative pronoun no longer ends the scan. The old stop
+      // reached this correct refusal and turned it into an attribution, and no reply in the suite
+      // distinguished the stop, so the branch is gone. Its must-FAIL twin is below.
+      'Gains of that size are usually recorded in the CRM and the consequence of route consolidation, which is unclear.',
     ]) {
       const reply = `That result is not in the retrieved content. ${licensed}`;
       expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, licensed).toEqual(['namedTheGap']);
     }
     for (const supplied of [
-      // The pinned must-FAIL control for both new bounds: a comma before a RELATIVE clause is not an
-      // aside, so the phrase's own predicate is not behind it and the supply stands.
+      // The must-FAIL twin of the row above. It is carried by its `typically`, which anchors the supply
+      // whatever the scan makes of the relative - NOT by the comma stop the comment here used to claim
+      // (the stop is deleted, and stopping at every comma is the mutant that reds the must-PASS row).
       'Gains of that size are typically the consequence of route consolidation, which is why the number holds.',
       // The structural test's own GROWTH direction, and the reason the character window is gone: the
       // verb sits inside the object's own modifier (a zero relative), so a scan for any verb at any
@@ -1071,6 +1080,33 @@ describe('gradeMustNotDenyPremise', () => {
         'namedTheGap',
         'suppliedTheClaim',
       ]);
+    }
+  });
+
+  // Finding 1 of Review 10. The `PHRASE_HEAD` guard read a determiner inside the cause phrase's own
+  // OBJECT as a new subject, so a phrase that IS its own clause's subject was read as an attribution,
+  // `Supply.at` moved into the phrase's segment and the custodian pointer in the other coordinated
+  // segment stopped governing - one determiner away from the pinned must-PASS control above. The scan
+  // now reads the determiner's own phrase: a new subject only when a FINITE_VERB follows it directly,
+  // and a determiner after a gerund/participle is the gerund's object. Every row FAILs at
+  // `9a62bcf45`/`58b00b12c`/`d08886485` and PASSes here.
+  it('does not read a determiner inside the cause phrase own object as a new subject', () => {
+    for (const licensed of [
+      // The minimal pair: one determiner is the whole difference.
+      'Gains of that size are usually recorded in the CRM and the consequence of consolidating routes is unclear.',
+      'Gains of that size are usually recorded in the CRM and the consequence of consolidating the routes is unclear.',
+      // A quantifier inside the object, the other PHRASE_HEAD spelling.
+      'Gains of that size are usually recorded in the CRM and the consequence of consolidating all depot routes is unclear.',
+      'Gains of that size are usually recorded in the CRM and the outcome of adding each new route is unclear.',
+      // A gerund whose object carries its own determiner.
+      'Gains of that size are usually recorded in the CRM and the effect of merging the two depots is unclear.',
+      // A reduced relative: the determiner after the head noun opens the relative's own subject.
+      'Gains of that size are usually recorded in the CRM and the effect of the changes the team made is unclear.',
+      'Gains of that size are usually recorded in the CRM and the outcome of the pilot the customer ran is unclear.',
+      'Gains of that size are usually recorded in the CRM and the consequence of the rollout the vendor delivered is unclear.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${licensed}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, licensed).toEqual(['namedTheGap']);
     }
   });
 
@@ -1109,6 +1145,10 @@ describe('gradeMustNotDenyPremise', () => {
       // records at least as often as the absent claim - the singular arm is what `CLAIM_ITSELF` reads.
       'Gains of that size are usually recorded in the CRM, which owns them.',
       'Gains of that size are usually recorded in the CRM, which maintains them.',
+      // Review 10 finding 4's counter-row: `that` as a COMPLEMENTIZER opens a clause rather than
+      // naming the claim, so the singular demonstrative arm must not reach it.
+      'Gains of that size are usually held by the account team, which confirms that the records are available.',
+      'Gains of that size are usually recorded in the CRM, which documents that the figures are ready.',
     ]) {
       const reply = `That result is not in the retrieved content. ${pointer}`;
       expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, pointer).toEqual(['namedTheGap']);
@@ -1123,6 +1163,17 @@ describe('gradeMustNotDenyPremise', () => {
       // when its object IS the claim, which is the only shape that reaches the `HOLDS` disjunct.
       'Gains of that size are typically confirmed by the account team whose register maintains it.',
       'Gains of that size are usually recorded in the CRM which now routinely also lists the records.',
+      // Review 10 finding 4: a clause whose object IS the claim predicates it whatever the verb, so the
+      // verbs that name the claim only under this object (`contain`, `cover`, `include`, `detail`,
+      // `spell out`, `enumerate`) and the singular demonstratives are pinned on the supplying side.
+      // These PASSed at the round's HEAD, and `owns that` also FAILed at 58b00b12c.
+      'Gains of that size are usually recorded in the CRM, which contains it.',
+      'Gains of that size are usually recorded in the CRM, which covers it.',
+      'Gains of that size are usually recorded in the CRM, which includes it.',
+      'Gains of that size are usually recorded in the CRM, which details it.',
+      'Gains of that size are usually recorded in the CRM, which spells it out.',
+      'Gains of that size are usually recorded in the CRM, which enumerates this.',
+      'Gains of that size are usually recorded in the CRM, which owns that.',
     ]) {
       const reply = `That result is not in the retrieved content. ${supplied}`;
       expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
