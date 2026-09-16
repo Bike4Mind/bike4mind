@@ -27,6 +27,7 @@ import {
   assertLakeRebuildAccess,
   assertCanWriteDataLakeTags,
 } from './authorizeLakeWrite';
+import type { LakeGrant } from './manageRule';
 import { createDataLake } from './createDataLake';
 import { archiveDataLake } from './archiveDataLake';
 import { deleteDataLake } from './deleteDataLake';
@@ -1998,6 +1999,134 @@ describe('updateDataLake - clearing an access gate', () => {
     const cleared = lake({ createdByUserId: 'owner', requiredUserTag: '', requiredEntitlement: '' });
     expect(canAccessLake(cleared, ctx({ userId: 'stranger' }))).toBe(false);
     expect(canAccessLake(cleared, ctx({ userId: 'owner' }))).toBe(true);
+  });
+});
+
+describe('updateDataLake - widening the gate is owner-only', () => {
+  const makeDb = (l: IDataLakeDocument, grants: LakeGrant[] = []) => {
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    return {
+      db: {
+        dataLakes: { findById: vi.fn().mockResolvedValue(l), update },
+        dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue(grants) },
+      },
+      update,
+    };
+  };
+  const curator: LakeGrant[] = [{ principalType: 'user', principalId: 'curator', role: 'curator' }];
+
+  // The exposure itself, stated in read terms so it does not depend on which predicate the gate
+  // happens to call: stamping a tag on a private, org-less lake moves it off the private-deny arm.
+  it('a gate on a private, org-less lake is what makes it readable app-wide', () => {
+    const ungated = lake({ createdByUserId: 'owner' });
+    expect(canAccessLake(ungated, ctx({ userId: 'stranger', userTags: ['opti'] }))).toBe(false);
+
+    const gated = lake({ createdByUserId: 'owner', requiredUserTag: 'Opti' });
+    expect(canAccessLake(gated, ctx({ userId: 'stranger', userTags: ['opti'] }))).toBe(true);
+  });
+
+  it('refuses a curator stamping a gate onto a private lake, and writes nothing', async () => {
+    const { db, update } = makeDb(lake({ createdByUserId: 'owner' }), curator);
+
+    await expect(
+      updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { requiredUserTag: 'Opti' }, { db })
+    ).rejects.toThrow(/only the owner/i);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  // The curator rung is real on this lake, so the refusal above is the widening gate talking and not
+  // simply a caller who could never manage it.
+  it('lets that same curator rename the lake, so the refusal is about widening only', async () => {
+    const { db, update } = makeDb(lake({ createdByUserId: 'owner' }), curator);
+
+    await expect(
+      updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { name: 'Renamed' }, { db })
+    ).resolves.toMatchObject({ name: 'Renamed' });
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets that same curator clear a gate, because clearing narrows to owner-only', async () => {
+    const { db } = makeDb(lake({ createdByUserId: 'owner', requiredUserTag: 'Opti' }), curator);
+
+    await expect(
+      updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { requiredUserTag: '' }, { db })
+    ).resolves.toMatchObject({ requiredUserTag: '' });
+  });
+
+  it('refuses a platform admin too - the same exclusion setLakeVisibility applies to exposing', async () => {
+    const { db, update } = makeDb(lake({ createdByUserId: 'owner' }));
+
+    await expect(
+      updateDataLake({ userId: 'admin', isAdmin: true }, 'lake1', { requiredEntitlement: 'product:pro' }, { db })
+    ).rejects.toThrow(/only the owner/i);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('lets the owner widen', async () => {
+    const { db } = makeDb(lake({ createdByUserId: 'owner' }));
+
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { requiredUserTag: 'Opti' }, { db })
+    ).resolves.toMatchObject({ requiredUserTag: 'Opti' });
+  });
+
+  // A transferred owner holds the grant and the creator no longer does, so the gate must follow
+  // ownership rather than provenance - isEffectiveOwner's whole reason for existing. The creator is
+  // left a curator here on purpose: demoted to nothing they would be refused one gate earlier by
+  // canManageLake, which would prove nothing about this one.
+  it('follows a transfer: the new owner may widen, the demoted creator may not', async () => {
+    const transferred: LakeGrant[] = [
+      { principalType: 'user', principalId: 'newOwner', role: 'owner' },
+      { principalType: 'user', principalId: 'creator', role: 'curator' },
+    ];
+
+    const moved = makeDb(lake({ createdByUserId: 'creator' }), transferred);
+    await expect(
+      updateDataLake({ userId: 'newOwner', isAdmin: false }, 'lake1', { requiredUserTag: 'Opti' }, { db: moved.db })
+    ).resolves.toMatchObject({ requiredUserTag: 'Opti' });
+
+    const stale = makeDb(lake({ createdByUserId: 'creator' }), transferred);
+    await expect(
+      updateDataLake({ userId: 'creator', isAdmin: false }, 'lake1', { requiredUserTag: 'Opti' }, { db: stale.db })
+    ).rejects.toThrow(/only the owner/i);
+    expect(stale.update).not.toHaveBeenCalled();
+  });
+
+  // On an org lake the org is a hard prerequisite, so a gate only ever selects a subset of members.
+  // The direction therefore inverts, and the rule has to invert with it.
+  it('inverts on an org lake: a curator may add a gate but not clear one', async () => {
+    const adding = makeDb(lake({ createdByUserId: 'owner', organizationId: 'org1' }), curator);
+    await expect(
+      updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { requiredUserTag: 'Opti' }, { db: adding.db })
+    ).resolves.toMatchObject({ requiredUserTag: 'Opti' });
+
+    const clearing = makeDb(
+      lake({ createdByUserId: 'owner', organizationId: 'org1', requiredUserTag: 'Opti' }),
+      curator
+    );
+    await expect(
+      updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { requiredUserTag: '' }, { db: clearing.db })
+    ).rejects.toThrow(/only the owner/i);
+    expect(clearing.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a curator swapping one gate value for another', async () => {
+    const { db, update } = makeDb(lake({ createdByUserId: 'owner', requiredUserTag: 'Opti' }), curator);
+
+    await expect(
+      updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { requiredUserTag: 'Other' }, { db })
+    ).rejects.toThrow(/only the owner/i);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  // Reads lowercase the tag, so this edit cannot move a single reader and must not be treated as a
+  // widening the owner has to be summoned for.
+  it('lets a curator restyle a gate value that normalizes to the same population', async () => {
+    const { db } = makeDb(lake({ createdByUserId: 'owner', requiredUserTag: 'Opti' }), curator);
+
+    await expect(
+      updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { requiredUserTag: 'OPTI' }, { db })
+    ).resolves.toMatchObject({ requiredUserTag: 'OPTI' });
   });
 });
 
