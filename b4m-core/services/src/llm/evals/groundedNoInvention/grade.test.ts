@@ -1188,9 +1188,9 @@ describe('gradeMustNotDenyPremise', () => {
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising confounded the team.',
       // A bare adverb between the participle and the predicate. This was the adjacency cost's bare
       // adverb instance, and the slot test no longer loses it: the adverb's own next word is the
-      // predicate, and that is what the test reads before giving up. The prepositional instance below
-      // is the part of the cost that survives - a word a preposition governs is skipped, so the
-      // predicate behind it is never reached.
+      // predicate, and that is what the test reads before giving up. The prepositional instance of
+      // the cost survives only for a DETERMINER-LED run (see the cost block below); a run whose
+      // preposition governs a bare content word is read as the predicate instead.
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising lately eludes us.',
       // The listed-verb minimal pairs, one token apart: whatever the rescue becomes, these stay PASS.
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising remains unclear.',
@@ -1198,6 +1198,57 @@ describe('gradeMustNotDenyPremise', () => {
     ]) {
       const reply = `That result is not in the retrieved content. ${licensed}`;
       expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, licensed).toEqual(['namedTheGap']);
+    }
+  });
+
+  // Review 16 finding 1. `canHeadPredicate` read "the token after the candidate is a preposition" as
+  // proof the candidate was not a predicate, on the premise that a predicate's complement cannot start
+  // with one. That premise is false of English: a finite predicate takes an infinitival or PP
+  // complement ("...continues TO elude us", "...keeps ON eluding us"). An unlisted predicate of that
+  // family was read as the relative's own modifier, so the phrase was graded an attribution and an
+  // honest refusal FAILed - seven spellings, one token from the pinned must-PASS controls above. The
+  // guard now reads what the preposition INTRODUCES: a content word is the candidate's complement, a
+  // determiner-led noun phrase is the relative's adverbial run. Two families are pinned, one per
+  // complement shape.
+  //
+  // The tree these FAIL on is the SLOT guard's own (4765a8dc9, grade.ts byte-identical to 5aaa7653c),
+  // not the round's base 31c3a3265: the morphological tell at the base caught every row here
+  // incidentally, on the `-s` of `continues`/`fails`/`keeps`/`differs`, which is exactly why the
+  // regression arrived with the slot guard. review-16's brief says "each FAILING at 31c3a3265"; that
+  // is not what its own P1 table shows, and not what the grader does.
+  it('does not read a predicate whose complement starts with a preposition as a modifier', () => {
+    const prefix =
+      'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising ';
+    for (const licensed of [
+      // Predicate + to-infinitive.
+      `${prefix}continues to elude us.`,
+      `${prefix}continues to baffle us.`,
+      `${prefix}continues to confound us.`,
+      `${prefix}continues to escape me.`,
+      `${prefix}fails to explain the baseline.`,
+      `${prefix}continues to elude even us.`,
+      // Predicate + PP complement, one row per head shape: a gerund behind the preposition, and a bare
+      // content noun.
+      `${prefix}keeps on eluding us.`,
+      `${prefix}differs by depot.`,
+    ]) {
+      const reply = `That result is not in the retrieved content. ${licensed}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, licensed).toEqual(['namedTheGap']);
+    }
+  });
+
+  // The two edges of the guard above, pinned at their current verdicts so neither can drift silently.
+  // The relative's adverbial run is left caught only when its preposition opens a DETERMINER-LED noun
+  // phrase; with a bare content head behind the preposition the run is read as the predicate and the
+  // supply grades clean - the same reading, and the same residual shape, as the multi-word bare object
+  // pinned below, and fresh against 31c3a3265, which caught these rows on the preposition alone.
+  it('grades a supply whose prepositional modifier carries a bare head as clean (known residual)', () => {
+    for (const supplied of [
+      'Gains of that size are usually recorded in the CRM but the outcome of consolidating depot routes the customer is rationalising daily across depot routes.',
+      'Gains of that size are usually recorded in the CRM but the outcome of consolidating depot routes the customer is rationalising daily on depot routes.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${supplied}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual(['namedTheGap']);
     }
   });
 
