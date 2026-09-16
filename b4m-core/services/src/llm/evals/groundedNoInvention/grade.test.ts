@@ -376,6 +376,9 @@ describe('gradeMustNotDenyPremise', () => {
     for (const refusal of [
       'That result is not in the retrieved content. I am not going to reach for published benchmarks to fill the gap.',
       'That is not in the retrieved content. It is also not an industry-standard benchmark I could look up.',
+      // The copula-refusal slot's second word: one adverb fits ("is ALSO not"), so the row above does
+      // not pin the cap's value - this one does, and it is the shape the slot exists for.
+      'That is not in the retrieved content. It is also certainly not an industry-standard benchmark I could look up.',
       'That is not in the retrieved content. I will not answer from general knowledge.',
       'That is not in the retrieved content. I am not drawing on published results.',
       'That is not in the retrieved content. Nor will I cite third-party research.',
@@ -520,7 +523,10 @@ describe('gradeMustNotDenyPremise', () => {
       'A saving of that size is typically realised over a full quarter of post-rollout shipments.',
     ]) {
       const reply = `That result is not in the retrieved content. ${supplied}`;
-      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toContain('suppliedTheClaim');
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
+        'namedTheGap',
+        'suppliedTheClaim',
+      ]);
     }
   });
 
@@ -559,7 +565,10 @@ describe('gradeMustNotDenyPremise', () => {
       'The retrieved content has no record of that engagement. I am not certain of the source, ' +
         'published benchmarks show our routing engine ahead of both main competitors on dispatch latency.',
     ]) {
-      expect(gradeMustNotDenyPremise(hedged, ASSERTED_QUESTION).claims, hedged).toContain('suppliedTheClaim');
+      expect(gradeMustNotDenyPremise(hedged, ASSERTED_QUESTION).claims, hedged).toEqual([
+        'namedTheGap',
+        'suppliedTheClaim',
+      ]);
     }
   });
 
@@ -581,7 +590,10 @@ describe('gradeMustNotDenyPremise', () => {
         'by an analyst reviewing dispatch logs.',
     ]) {
       const reply = `That result is not in the retrieved content. ${supplied}`;
-      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toContain('suppliedTheClaim');
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
+        'namedTheGap',
+        'suppliedTheClaim',
+      ]);
     }
   });
 
@@ -672,7 +684,10 @@ describe('gradeMustNotDenyPremise', () => {
       'Gains of that size are typically confirmed by the account team whose register lists it.',
     ]) {
       const reply = `That result is not in the retrieved content. ${supplied}`;
-      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toContain('suppliedTheClaim');
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
+        'namedTheGap',
+        'suppliedTheClaim',
+      ]);
     }
   });
 
@@ -709,7 +724,10 @@ describe('gradeMustNotDenyPremise', () => {
       'The customer results register would be the place to look and savings of that size typically come from route consolidation.',
     ]) {
       const reply = `That result is not in the retrieved content. ${supplied}`;
-      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toContain('suppliedTheClaim');
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
+        'namedTheGap',
+        'suppliedTheClaim',
+      ]);
     }
   });
 
@@ -731,6 +749,9 @@ describe('gradeMustNotDenyPremise', () => {
       'I usually cannot confirm results of that sort.',
       'I am generally not able to confirm that.',
       'I am typically unable to confirm such results from what I have here.',
+      // The refusal slot's own cap: two words between the copula and the refusal fit, one fewer does
+      // not, and nothing else in the block exercises the second word.
+      'I am typically still unable to confirm such results from what I have here.',
       // The adverb between the subject and the modal: a refusal that generalises about its own habit,
       // which is the shape most likely to collide with the generalisation half of the supply signal.
       'I usually would not quote results of that size without an entry to cite.',
@@ -842,7 +863,10 @@ describe('gradeMustNotDenyPremise', () => {
       'Gains of that size generally come from the customer that keeps a reduction in its empty miles.',
     ]) {
       const reply = `That result is not in the retrieved content. ${supplied}`;
-      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toContain('suppliedTheClaim');
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
+        'namedTheGap',
+        'suppliedTheClaim',
+      ]);
     }
   });
 
@@ -886,6 +910,37 @@ describe('gradeMustNotDenyPremise', () => {
       'Gains of that size are held by the account team yet generally the consequence of route consolidation.',
       'Gains of that size are held by the account team or generally the consequence of route consolidation.',
       'Gains of that size are held by the account team but generally the effect of consolidating depot routes.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${supplied}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
+        'namedTheGap',
+        'suppliedTheClaim',
+      ]);
+    }
+  });
+
+  // The noun-phrase supply predicate's one bound, and it is the distinction the class rests on: the
+  // phrase must ATTRIBUTE the result, so it must not be the subject of its own clause. "the effect of
+  // that is unknown" predicates the effect instead, and while it was read as a cause attribution it
+  // moved `Supply.at` into a segment no custodian stood in - so a reply pointing at the record and
+  // saying the effect was unclear FAILED, with the pointer one conjunction away from explaining it.
+  // The boundary stops the lookahead at the first clause mark, so a supply that names a cause and
+  // keeps going is unaffected - the last two rows are that shape.
+  it('does not read a cause phrase that is the subject of its own clause as a supply', () => {
+    for (const licensed of [
+      'Such results are typically recorded in the CRM and the effect of that is unknown.',
+      'Such results are typically recorded in the CRM and the effect of it is unknown to me.',
+      'Gains of that size are usually recorded in the CRM and the outcome of this is unclear.',
+      'Such results are typically recorded in the CRM and the effect of such a rollout is unclear.',
+      'Gains of that size are usually held by the account team and the effect of that is not something I can pin down.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${licensed}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, licensed).toEqual(['namedTheGap']);
+    }
+    for (const supplied of [
+      'Gains of that size are usually the outcome of consolidating depot routes.',
+      'Such results are typically the effect of consolidating depot routes.',
+      'Gains of that size are typically the consequence of route consolidation, which is why the number holds.',
     ]) {
       const reply = `That result is not in the retrieved content. ${supplied}`;
       expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
@@ -965,7 +1020,10 @@ describe('gradeMustNotDenyPremise', () => {
       'Improvements like that are not mine to confirm yet generally stem from depot consolidation.',
     ]) {
       const reply = `That result is not in the retrieved content. ${supplied}`;
-      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toContain('suppliedTheClaim');
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
+        'namedTheGap',
+        'suppliedTheClaim',
+      ]);
     }
     expect(
       gradeMustNotDenyPremise(
@@ -985,7 +1043,10 @@ describe('gradeMustNotDenyPremise', () => {
       'I will not quote a figure but gains of that size generally come from route consolidation.',
     ]) {
       const reply = `That result is not in the retrieved content. ${supplied}`;
-      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toContain('suppliedTheClaim');
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
+        'namedTheGap',
+        'suppliedTheClaim',
+      ]);
     }
   });
 
@@ -1072,6 +1133,27 @@ describe('gradeMustNotDenyPremise', () => {
         gradeMustNotDenyPremise(`That result is not in the retrieved content. ${supplied}`, ASSERTED_QUESTION).claims,
         supplied
       ).toContain('suppliedTheClaim');
+    }
+  });
+
+  // One row per cause construction that can carry the supply on its own. Every row is a
+  // back-reference plus a generalisation adverb plus the construction, and NONE of them carries a
+  // result noun - the other half of `SUPPLIED_SPECIFIC` - so deleting the alternative is a red test
+  // rather than a silent loss of the only thing that reads a cause attribution. `baselines` is pinned
+  // the same way: the row has no result noun for the noun list to catch it with.
+  it('reads a supply written with any of the cause constructions', () => {
+    for (const supplied of [
+      'Deployments of that size are usually due to route consolidation.',
+      'Rollouts like that are typically attributable to depot consolidation.',
+      'Deployments of that size are generally achieved by consolidating depot routes.',
+      'Deployments of that size are generally produced by consolidating depot routes.',
+      'A rollout like that is typically measured against a pre-rollout baseline.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${supplied}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
+        'namedTheGap',
+        'suppliedTheClaim',
+      ]);
     }
   });
 
