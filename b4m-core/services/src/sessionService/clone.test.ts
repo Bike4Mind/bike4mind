@@ -226,6 +226,19 @@ describe('cloneSession - redaction at the copy boundary', () => {
     expect(created[2].promptMeta).toBeUndefined();
   });
 
+  // See forkSession: a copied correction link would name a quest in the source session. It matters
+  // most here - a clone taken while a session was shared keeps resolving into it after unsharing.
+  it('drops correctsQuestId rather than copying a link into the new session', async () => {
+    const { db, created } = makeAdapters('owner-1');
+    db.chatHistories.findAllBySessionId.mockResolvedValueOnce([
+      { id: 'msg-1', sessionId: 'session-1', prompt: 'a correction', correctsQuestId: 'quest-in-source-session' },
+    ]);
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(created[0]).not.toHaveProperty('correctsQuestId');
+  });
+
   it('keeps returnValue/error when the caller owns the session being cloned', async () => {
     const { db, created } = makeAdapters('caller-1');
 

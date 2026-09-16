@@ -82,6 +82,15 @@ describe('SYSTEM_PROMPT_PRIORITY', () => {
     expect(SYSTEM_PROMPT_PRIORITY.sessionPrompt).toBeLessThan(mostImportantAuthored);
   });
 
+  // The quote carries up to MAX_QUOTED_ANSWER_CHARS + MAX_QUOTED_PROMPT_CHARS of text the model
+  // usually still has in history. Ranked with the framing it would evict the two prompts below it.
+  it('ranks the correction framing ahead of the tenant prompts but its quote behind them', () => {
+    expect(SYSTEM_PROMPT_PRIORITY.correction).toBeLessThan(SYSTEM_PROMPT_PRIORITY.organizationPrompt);
+    expect(SYSTEM_PROMPT_PRIORITY.correction).toBeLessThan(SYSTEM_PROMPT_PRIORITY.sessionPrompt);
+    expect(SYSTEM_PROMPT_PRIORITY.correctionQuote).toBeGreaterThan(SYSTEM_PROMPT_PRIORITY.organizationPrompt);
+    expect(SYSTEM_PROMPT_PRIORITY.correctionQuote).toBeGreaterThan(SYSTEM_PROMPT_PRIORITY.sessionPrompt);
+  });
+
   it('keeps grounding data ahead of authored guidance, since the model cannot infer it', () => {
     expect(SYSTEM_PROMPT_PRIORITY.knowledgeRetrieval).toBeLessThan(SYSTEM_PROMPT_PRIORITY.artifactEmission);
     expect(SYSTEM_PROMPT_PRIORITY.contextSummary).toBeLessThan(SYSTEM_PROMPT_PRIORITY.helpCenter);
@@ -189,6 +198,16 @@ describe('filterByPromptMode', () => {
     expect(filterByPromptMode(everything, undefined)).toEqual(everything);
   });
 
+  // Correct-and-retry is reachable from any surface that can send a turn, and the framing is the
+  // only thing separating "re-answer this correctly" from "answer this critique as a question".
+  it('keeps the correction framing and its quote under every mode', () => {
+    for (const mode of ['raw', 'grounded', 'surface'] as const) {
+      const kept = filterByPromptMode(everything, mode).map(t => t.source);
+      expect(kept).toContain('correction');
+      expect(kept).toContain('correctionQuote');
+    }
+  });
+
   it('drops every prompt we inject under raw', () => {
     const kept = filterByPromptMode(everything, 'raw').map(t => t.source);
 
@@ -206,6 +225,8 @@ describe('filterByPromptMode', () => {
       'extraContext',
       'urls',
       'attachedFiles',
+      'correction',
+      'correctionQuote',
       'callerPrompt',
     ]);
   });
@@ -217,6 +238,8 @@ describe('filterByPromptMode', () => {
       'lakeMemory',
       'urls',
       'attachedFiles',
+      'correction',
+      'correctionQuote',
       'callerPrompt',
     ]);
   });
@@ -230,6 +253,8 @@ describe('filterByPromptMode', () => {
       'lakeMemory',
       'urls',
       'attachedFiles',
+      'correction',
+      'correctionQuote',
       'callerPrompt',
     ]);
   });
@@ -385,5 +410,22 @@ describe('feature-to-source reconciliation', () => {
     );
 
     expect(notWired).toEqual([]);
+  });
+
+  // Correct-and-retry is not a ChatCompletionFeature, so the two checks above never see it, and
+  // nothing else does either: deleting the spread leaves the suite green while the feature becomes a
+  // no-op that still writes the link and still renders the "Correction" chip. Same literal-substring
+  // trade-off as above - a cosmetic reformat of the spread trips this, so read the diff first.
+  it('spreads the correction sources into the ChatCompletionProcess assembly', () => {
+    const assemblySource = readFileSync(join(__dirname, 'ChatCompletionProcess.ts'), 'utf-8');
+
+    // Anchored to a whole line rather than a bare substring, so commenting the wiring out fails
+    // too - `// ...correctionContextMessages,` satisfies `includes` just as happily as the live line.
+    expect(/^\s*\.\.\.correctionContextMessages,\s*$/m.test(assemblySource)).toBe(true);
+    expect(
+      /^\s*const correctionContextMessages = await resolveCorrectionContext\(quest, this\.db\.quests, logger\);\s*$/m.test(
+        assemblySource
+      )
+    ).toBe(true);
   });
 });
