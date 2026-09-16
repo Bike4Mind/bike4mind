@@ -226,7 +226,14 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
               }
               return oldData;
             });
-          } else if (currentSessionId) {
+          }
+
+          // Membership, not either/or: a file can be in BOTH lists at once - the notebook's
+          // knowledgeIds and Profile -> System Prompts - and each list renders its own reprocess
+          // button. Marking only one store leaves the other row armed on a rebuild already in
+          // flight, and /api/files/reprocess has no rate limit, so every extra click buys a real
+          // reset plus a real re-embed of the same document.
+          if (currentSessionId && workBenchFiles.some(f => f.id === file.id)) {
             setWorkBenchFiles(currentSessionId, prevFiles => prevFiles.map(markPending));
           }
         },
@@ -236,7 +243,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
         },
       });
     },
-    [reprocessFile, currentSessionId, setWorkBenchFiles, systemFiles, queryClient]
+    [reprocessFile, currentSessionId, setWorkBenchFiles, systemFiles, workBenchFiles, queryClient]
   );
 
   // Check if the file is supported by the model
