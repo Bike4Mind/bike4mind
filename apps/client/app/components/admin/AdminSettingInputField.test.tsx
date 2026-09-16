@@ -179,6 +179,21 @@ describe('AdminSettingInputField number setting', () => {
     expect(mutate).toHaveBeenCalledWith({ key: 'modelDiscoveryPriceBandPct', value: 200 }, expect.anything());
   });
 
+  it('forwards a cleared field as an empty value instead of coercing it to 0', () => {
+    renderBandField(50);
+    fireEvent.change(bandInput(), { target: { value: '' } });
+
+    // Number('') is 0, which this setting's min 0 accepts as a genuine zero - so a field that
+    // coerced here would store a real 0 and step past makeNumberSetting's empty-string
+    // preprocess, the one thing that restores the setting's own default.
+    expect(bandInput().value).toBe('');
+    expect(bandHelperText()).toHaveTextContent(bandSetting.description);
+    expect(bandSaveButton()).not.toBeDisabled();
+
+    fireEvent.click(bandSaveButton());
+    expect(mutate).toHaveBeenCalledWith({ key: 'modelDiscoveryPriceBandPct', value: '' }, expect.anything());
+  });
+
   it('surfaces the server reason when a write is rejected anyway', () => {
     updateError = { isAxiosError: true, response: { status: 400, data: { message: 'Number must be <= 500' } } };
 
