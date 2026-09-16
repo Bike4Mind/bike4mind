@@ -201,9 +201,10 @@ export async function getSettingsByNames(
       result[name] = null;
     });
 
-    // Set values for found settings
+    // `?? null` keeps this branch's contract identical to the cached branch below:
+    // a row with no stored value reads as absent, never as undefined.
     settings.forEach(setting => {
-      result[setting.settingName] = setting.settingValue;
+      result[setting.settingName] = setting.settingValue ?? null;
     });
 
     return result;

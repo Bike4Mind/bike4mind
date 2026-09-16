@@ -62,8 +62,9 @@ const usable = (value: string | null | undefined): string | null => {
  * `find({ userId: 'system' })` that returns nothing and then falls through to the
  * demo-key tier by accident. `null` is the documented no-user path.
  *
- * `skipCache` applies to the demo-key tier: the ElevenLabs read below is a
- * direct repository call and does not go through that cache.
+ * `skipCache` applies to the admin-settings read behind the resolved keys (demo
+ * keys plus the Ollama backend); the ElevenLabs read below is a direct
+ * repository call and does not go through that cache.
  */
 export async function getDiscoveryCredentials(
   adapters: DiscoveryCredentialAdapters,
