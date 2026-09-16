@@ -48,6 +48,7 @@ const makeDb = (fileOverrides: Record<string, unknown> = {}) => {
         chunkCount = 0;
       }),
       distinctRetrievalIndexModelsByFabFileIds: vi.fn(async () => ['text-embedding-3-small']),
+      clearRetrievalIndexConfirmedByFabFileIds: vi.fn(async () => {}),
     },
   };
 };
@@ -239,6 +240,68 @@ describe('purgeDataLakeDocument', () => {
       purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage(), retrievalIndex })
     ).rejects.toThrow('index down');
     expect(db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
+    expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
+  });
+
+  it('clears the stale residency confirm for the purged file BEFORE the index removal, so a refused storage delete does not leave the surviving chunks falsely confirmed resident', async () => {
+    // Storage refusal keeps the file's row and chunks (see the ordering note above
+    // strictIndexRemove's call site), while the retrieval index has already dropped the file's
+    // documents unconditionally. Without a clear, those surviving chunks would keep claiming
+    // residency for documents that no longer exist.
+    const order: string[] = [];
+    const storage = {
+      delete: vi.fn(async () => {
+        throw new Error('object store refused');
+      }),
+    };
+    const db = makeDb({ filePath: 'files/q3.pdf' });
+    db.fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds = vi.fn(async () => {
+      order.push('clear');
+    });
+    const removeForDataLake = vi.fn(async () => {
+      order.push('index');
+    });
+
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', {
+      db,
+      storage,
+      retrievalIndex: { removeForDataLake },
+    });
+
+    expect(order).toEqual(['clear', 'index']);
+    expect(db.fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).toHaveBeenCalledWith(['file-1']);
+    expect(receipt.documentDeleted).toBe(false);
+  });
+
+  it('still clears the residency confirm even though the index removal itself then throws, since the removal may have already partially applied', async () => {
+    const db = makeDb();
+    const retrievalIndex = {
+      removeForDataLake: vi.fn(async () => {
+        throw new Error('index down');
+      }),
+    };
+
+    await expect(
+      purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage(), retrievalIndex })
+    ).rejects.toThrow('index down');
+    expect(db.fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).toHaveBeenCalledWith(['file-1']);
+  });
+
+  it('aborts the strict index removal (and the whole purge) when the residency-confirm clear fails, rather than over-claiming', async () => {
+    const db = makeDb();
+    db.fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds = vi.fn(async () => {
+      throw new Error('mongo down');
+    });
+    const removeForDataLake = vi.fn(async () => {});
+
+    await expect(
+      purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', {
+        db,
+        storage: makeStorage(),
+        retrievalIndex: { removeForDataLake },
+      })
+    ).rejects.toThrow('mongo down');
+    expect(removeForDataLake).not.toHaveBeenCalled();
     expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
   });
 
