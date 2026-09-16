@@ -111,14 +111,22 @@ jobs:
           CI: 'true'
         run: |
           set -o pipefail
+          # An unset secret means the suite cannot start at all. Report that as a labeled
+          # skip rather than `exit 1`: a red job here is indistinguishable from a real test
+          # failure, so the PR comment below would tell a reviewer e2e broke when nothing
+          # ever ran. That comment branches on `preview_skipped` ahead of pass/fail for the same
+          # reason - a skip must never render as either.
           if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
-            echo "::error::E2E_CLEANUP_SECRET repo secret is required for preview runs"
-            exit 1
+            echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured; skipping (0 tests run)"
+            echo "preview_skipped=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           pnpm --filter client exec playwright test 2>&1 | tee apps/client/playwright-output.txt
 
       - name: Upload Playwright report
-        if: always()
+        # Nothing to upload on a skip; without this the upload emits a "No files were
+        # found" warning that reads like the run lost its report.
+        if: always() && steps.e2e.outputs.preview_skipped != 'true'
         uses: actions/upload-artifact@v6
         with:
           name: playwright-report-${{ steps.config.outputs.stage }}-label
@@ -137,18 +145,30 @@ jobs:
             } catch { }
 
             const summaryMatch = output.match(/\d+ (?:passed|failed|skipped|flaky)[\s\S]*?(?=\n|$)/);
-            const summary = summaryMatch ? summaryMatch[0].trim() : 'See report for details';
 
+            // Three states, not two: a run that could not start is neither. Checked first,
+            // because a skip exits 0 and would otherwise report as a green "Passed" on a PR
+            // where zero tests ran.
+            const skipped = '${{ steps.e2e.outputs.preview_skipped }}' === 'true';
             const passed = '${{ steps.e2e.outcome }}' === 'success';
-            const icon = passed ? '✅' : '❌';
-            const status = passed ? 'Passed' : 'Failed';
+            const icon = skipped ? '⏭️' : passed ? '✅' : '❌';
+            const status = skipped ? 'Skipped' : passed ? 'Passed' : 'Failed';
+            const summary = skipped
+              ? 'Preview e2e is unavailable: the `E2E_CLEANUP_SECRET` repo secret is not configured, so no tests ran.'
+              : (summaryMatch ? summaryMatch[0].trim() : 'See report for details');
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            // The report upload is gated off on a skip, so offering a download would point at
+            // an artifact list with no Playwright report in it. Link the run itself instead -
+            // that is where the ::warning:: naming the missing secret actually is.
+            const reportLine = skipped
+              ? `**Run:** [View workflow run](${runUrl})`
+              : `**Report:** [Download from artifacts](${runUrl})`;
 
             const body = `${icon} **E2E Tests ${status}**
 
             **Results:** ${summary}
             **Preview:** \`${process.env.API_URL}\`
-            **Report:** [Download from artifacts](${runUrl})
+            ${reportLine}
 
             <sub>Tested against preview deployment for PR #${context.issue.number} (triggered by run-e2e label)</sub>`;
 
