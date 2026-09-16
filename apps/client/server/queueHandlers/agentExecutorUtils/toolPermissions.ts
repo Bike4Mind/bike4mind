@@ -2,49 +2,16 @@
  * Tool Permission System
  *
  * Three-tier classification for agent tool execution:
- * 1. Always safe - read-only tools that can execute without approval
- * 2. Requires approval - tools with side effects that need user permission
- * 3. Session-rememberable - once approved, stored for the execution session
+ * 1. Allowed - the tool declares no side effect worth pausing for (see ToolSideEffects)
+ * 2. Requires approval - tools with external side effects, and anything undeclared
+ * 3. Remembered - an approval the user asked to keep survives the execution, because
+ *    `approvedTools` / `deniedTools` are seeded from the per-user, per-session store
+ *    (`sessionToolApprovalRepository`) when the execution is created.
  */
 
 import type { AgentStep } from '@bike4mind/agents';
+import { getToolSideEffects } from '@bike4mind/common';
 import { isHeadlessConnection } from '@server/utils/headlessConnection';
-
-// Tools that never require permission - not all strictly read-only, but none have
-// an unreviewed side effect: `recharts` / `mermaid_chart` only emit an <artifact>
-// block (no storage, no user-data mutation), and the OptiHashi tools only emit an
-// /opti-gated __uiSideEffect the user can Undo. Same-risk tools must stay paired
-// (see the inline notes), or agent mode would auto-run one while pausing its twin
-// for approval.
-const ALWAYS_SAFE_TOOLS = new Set([
-  'web_search',
-  'deep_research',
-  'recharts',
-  'mermaid_chart',
-  'chess_engine',
-  // All five OptiHashi tools share one risk surface: each invokes an LLM/solver and emits
-  // only an /opti-gated __uiSideEffect the user can Undo - none mutates stored user data or
-  // calls out externally (durable/hardware compute submission is separately flag-gated). They
-  // must stay grouped so agent mode doesn't auto-run one while pausing its twin for approval,
-  // AND so the autonomous decompose -> formulate -> schedule -> advance loop isn't interrupted
-  // by an approval prompt at every step.
-  'optihashi_decompose',
-  'optihashi_formulate',
-  'optihashi_edit_problem',
-  'optihashi_schedule',
-  'optihashi_solve',
-]);
-
-// Tools with side effects that always require first-time approval
-const REQUIRES_APPROVAL_TOOLS = new Set([
-  'send_slack_message',
-  'delegate_to_agent',
-  'image_generation',
-  'edit_image',
-  'music_generation',
-  'audio_generation',
-  'video_generation',
-]);
 
 export type ToolPermissionResult = 'allowed' | 'denied' | 'needs_approval';
 
@@ -54,42 +21,38 @@ export type ToolPermissionResult = 'allowed' | 'denied' | 'needs_approval';
  * Priority:
  * 1. Explicitly denied tools -> denied
  * 2. Explicitly approved tools -> allowed
- * 3. Always-safe tools -> allowed
- * 4. MCP tools (prefixed with mcp__) -> needs_approval (first time)
- * 5. Known side-effect tools -> needs_approval
- * 6. Unknown tools -> needs_approval (safe default)
+ * 3. MCP tools (prefixed with mcp__) -> needs_approval regardless of any declaration:
+ *    they are third-party and their risk is not knowable locally, so a declaration
+ *    shipped alongside one would not be evidence of anything.
+ * 4. Tools declaring `none` / `local` side effects -> allowed
+ * 5. Everything else, including every undeclared tool -> needs_approval (safe default)
+ *
+ * Rule 4 is the inversion that matters: the classification lives next to the tool-name
+ * enum in `@bike4mind/common` and is exhaustive over it, so a read-only tool is correct
+ * the day it is added rather than the day someone notices it prompting in production.
  */
 export function classifyToolPermission(
   toolName: string,
   approvedTools: string[],
   deniedTools: string[]
 ): ToolPermissionResult {
-  // Explicitly denied - session-level denial
   if (deniedTools.includes(toolName)) {
     return 'denied';
   }
 
-  // Explicitly approved - session-level approval
   if (approvedTools.includes(toolName)) {
     return 'allowed';
   }
 
-  // Always-safe read-only tools
-  if (ALWAYS_SAFE_TOOLS.has(toolName)) {
-    return 'allowed';
-  }
-
-  // MCP tools always need first-time approval
   if (toolName.startsWith('mcp__')) {
     return 'needs_approval';
   }
 
-  // Known side-effect tools need approval
-  if (REQUIRES_APPROVAL_TOOLS.has(toolName)) {
-    return 'needs_approval';
+  const sideEffects = getToolSideEffects(toolName);
+  if (sideEffects === 'none' || sideEffects === 'local') {
+    return 'allowed';
   }
 
-  // Unknown tools default to needing approval (safe default)
   return 'needs_approval';
 }
 
