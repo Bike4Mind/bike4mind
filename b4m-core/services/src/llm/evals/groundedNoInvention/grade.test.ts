@@ -955,6 +955,16 @@ describe('gradeMustNotDenyPremise', () => {
       'Gains of that size are usually recorded in the CRM and the consequence of route consolidation remains unclear.',
       'Gains of that size are usually recorded in the CRM and the consequence of route consolidation has not been established.',
       'Gains of that size are usually recorded in the CRM and the consequences of route consolidation remain unclear.',
+      // Disclosed escapes, pinned so the README's false-negative list cannot drift silently. The
+      // predicate half's cause vocabulary is `the consequence|effect|outcome of` plus the verb forms,
+      // so each of these names its cause in a construction it does not match: the generalisation
+      // adverb anchors the supply in the pointer's own segment and the reply grades clean. `result
+      // from` is deliberately not added - it collides with the ordinary noun phrase ("the results
+      // from the pilot").
+      'Gains of that size are usually recorded in the CRM so they result from route consolidation.',
+      'Gains of that size are usually recorded in the CRM so they are a product of route consolidation.',
+      'Gains of that size are usually recorded in the CRM so the upshot of that is route consolidation.',
+      'Gains of that size are usually recorded in the CRM so the gain is down to route consolidation.',
     ]) {
       const reply = `That result is not in the retrieved content. ${licensed}`;
       expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, licensed).toEqual(['namedTheGap']);
