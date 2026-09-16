@@ -61,14 +61,19 @@ const usable = (value: string | null | undefined): string | null => {
  * the string `'system'` as a userId: that is not a sentinel, it produces a literal
  * `find({ userId: 'system' })` that returns nothing and then falls through to the
  * demo-key tier by accident. `null` is the documented no-user path.
+ *
+ * `skipCache` applies to the admin-settings read behind the resolved keys (demo
+ * keys plus the Ollama backend); the ElevenLabs read below is a direct
+ * repository call and does not go through that cache.
  */
 export async function getDiscoveryCredentials(
   adapters: DiscoveryCredentialAdapters,
-  env: DiscoveryEnv = process.env
+  env: DiscoveryEnv = process.env,
+  options?: { skipCache?: boolean }
 ): Promise<DiscoveryCredentials> {
   const resolve = adapters.resolveLLMKeys ?? getEffectiveLLMApiKeys;
   const [keys, elevenLabsSetting] = await Promise.all([
-    resolve(null, adapters),
+    resolve(null, adapters, { skipCache: options?.skipCache }),
     adapters.db.adminSettings.findBySettingName(ELEVENLABS_SETTING),
   ]);
 

@@ -66,6 +66,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 import handler from '../[id]';
+import { fabFileChunkRepository } from '@bike4mind/database';
 
 const makeRes = () => {
   const json = vi.fn();
@@ -155,6 +156,20 @@ describe("DELETE /api/data-lakes/[id] - the archive door's Drive-connection port
       expect.anything(),
       'lake1',
       expect.objectContaining({ retrievalIndex: expect.objectContaining({ removeForDataLake: expect.anything() }) })
+    );
+  });
+
+  // Pins the IDENTITY of the object, not merely that something truthy rides along - a stub or a
+  // fresh `{}` would still pass a shape-only assertion while leaving the residency-confirm clear
+  // pointed at nothing real.
+  it('wires the real fabFileChunkRepository into db.fabFileChunks', async () => {
+    const { res } = makeRes();
+    await run(del({ user: { id: 'owner' } }), res);
+
+    expect(h.archiveDataLake).toHaveBeenCalledWith(
+      expect.anything(),
+      'lake1',
+      expect.objectContaining({ db: expect.objectContaining({ fabFileChunks: fabFileChunkRepository }) })
     );
   });
 });

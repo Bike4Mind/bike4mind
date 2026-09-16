@@ -76,6 +76,74 @@ describe('FabFileChunkRepository.findVectorsByFabFileIds scoping', () => {
   });
 });
 
+// The other half of the same reading, and the one the resume's embedding-space guard rests on
+// (resolveResumeEmbeddingModel in apps/client/server/queueHandlers/fabFileChunk.ts): which spaces
+// the file's VECTORS occupy. One means finish there, two means refuse - so a row that votes
+// without holding a vector can turn a healthy file into a permanent refusal.
+describe('FabFileChunkRepository.distinctEmbeddingModelsByFabFileId', () => {
+  setupMongoTest();
+
+  beforeEach(async () => {
+    await FabFileChunk.deleteMany({});
+  });
+
+  it("returns every distinct space the file's vectors are in, deduped", async () => {
+    await FabFileChunk.create([
+      { fabFileId: fid('f1'), text: 'a', tokenCount: 1, vector: [0.1], embeddingModel: 'voyage-3' },
+      { fabFileId: fid('f1'), text: 'b', tokenCount: 1, vector: [0.2], embeddingModel: 'voyage-3' },
+      { fabFileId: fid('f1'), text: 'c', tokenCount: 1, vector: [0.3], embeddingModel: 'text-embedding-3-small' },
+    ]);
+
+    const models = await fabFileChunkRepository.distinctEmbeddingModelsByFabFileId(fid('f1'));
+
+    expect(models.sort()).toEqual(['text-embedding-3-small', 'voyage-3']);
+  });
+
+  // The load-bearing filter, and the one nothing else pins: `'vector.0': { $exists: true }`. A
+  // labelled chunk with no vector names a space it does not occupy - updateEmbeddingModel is scoped
+  // so it can no longer create one, but rows written before that scoping exist. Letting one vote
+  // reads a single-space file as split, which the guard turns into a REFUSAL the file can only
+  // leave through a manual reprocess. Drop the filter and this is the only test that reddens.
+  it('ignores a labelled chunk that holds no vector', async () => {
+    await FabFileChunk.create([
+      { fabFileId: fid('f1'), text: 'embedded', tokenCount: 1, vector: [0.1], embeddingModel: 'voyage-3' },
+      { fabFileId: fid('f1'), text: 'oversized, never embedded', tokenCount: 99999, embeddingModel: 'voyage-3' },
+      {
+        fabFileId: fid('f1'),
+        text: 'empty vector',
+        tokenCount: 1,
+        vector: [],
+        embeddingModel: 'text-embedding-3-small',
+      },
+    ]);
+
+    const models = await fabFileChunkRepository.distinctEmbeddingModelsByFabFileId(fid('f1'));
+
+    expect(models).toEqual(['voyage-3']);
+  });
+
+  // Empty is not the same answer as one model: it means nothing here has been embedded, which the
+  // guard reads as "no space to preserve" rather than "this space".
+  it('excludes blank labels however they are spelled, and returns empty for a file with none', async () => {
+    await FabFileChunk.create([
+      { fabFileId: fid('f1'), text: 'missing field', tokenCount: 1, vector: [0.1] },
+      { fabFileId: fid('f1'), text: 'explicit null', tokenCount: 1, vector: [0.2], embeddingModel: null },
+      { fabFileId: fid('f1'), text: 'empty string', tokenCount: 1, vector: [0.3], embeddingModel: '' },
+    ]);
+
+    expect(await fabFileChunkRepository.distinctEmbeddingModelsByFabFileId(fid('f1'))).toEqual([]);
+  });
+
+  it('is scoped to the requested file', async () => {
+    await FabFileChunk.create([
+      { fabFileId: fid('f1'), text: 'mine', tokenCount: 1, vector: [0.1], embeddingModel: 'voyage-3' },
+      { fabFileId: fid('f2'), text: 'theirs', tokenCount: 1, vector: [0.2], embeddingModel: 'text-embedding-3-small' },
+    ]);
+
+    expect(await fabFileChunkRepository.distinctEmbeddingModelsByFabFileId(fid('f1'))).toEqual(['voyage-3']);
+  });
+});
+
 // What the FILE label is resolved from at vectorize completion. The distinct query cannot answer
 // this on its own: it only sees chunks that already carry a label, so it comes back empty both for
 // a file with no vectors at all and for one whose vectors are merely unlabelled so far - and those
@@ -494,5 +562,203 @@ describe('FabFileChunkRepository.countByFabFileId', () => {
     expect(await fabFileChunkRepository.countByFabFileId(fid('f1'))).toBe(3);
     expect(await fabFileChunkRepository.countByFabFileId(fid('f2'))).toBe(1);
     expect(await fabFileChunkRepository.countByFabFileId(fid('absent'))).toBe(0);
+  });
+});
+
+// The RETRIEVAL-side counterpart to the two removal resolvers above, and the opposite bias: a file
+// counts as resident only when every chunk dispatched to the index came back confirmed. Claiming
+// one that is not there makes it ANN-eligible and permanently empty, with no error anywhere.
+describe('FabFileChunkRepository.annResidentFabFileIds', () => {
+  setupMongoTest();
+
+  beforeEach(async () => {
+    await FabFileChunk.deleteMany({});
+  });
+
+  // embeddingModel is always set alongside retrievalIndexModel on the real write path
+  // (fabFileVectorize.ts writes both in the same transaction when self-host is on) - the
+  // denominator below keys on embeddingModel specifically because it CANNOT be skipped, unlike
+  // retrievalIndexModel (see the straddle test below).
+  const dispatched = (fabFileId: string, text: string, confirmed: boolean, model = 'model-a') => ({
+    fabFileId: fid(fabFileId),
+    text,
+    tokenCount: 1,
+    embeddingModel: model,
+    retrievalIndexModel: model,
+    ...(confirmed ? { retrievalIndexConfirmedModel: model } : {}),
+  });
+
+  it('returns a file whose every dispatched chunk is confirmed', async () => {
+    await FabFileChunk.create([dispatched('f1', 'a', true), dispatched('f1', 'b', true)]);
+
+    expect(await fabFileChunkRepository.annResidentFabFileIds([fid('f1')], 'model-a')).toEqual([fid('f1')]);
+  });
+
+  it('withholds a file with even one unconfirmed chunk - a half-indexed file serves half its content', async () => {
+    await FabFileChunk.create([dispatched('f1', 'a', true), dispatched('f1', 'b', false)]);
+
+    expect(await fabFileChunkRepository.annResidentFabFileIds([fid('f1')], 'model-a')).toEqual([]);
+  });
+
+  it('withholds a file that predates the feature - it was embedded but never dispatched to the index', async () => {
+    await FabFileChunk.create([{ fabFileId: fid('f1'), text: 'a', tokenCount: 1, embeddingModel: 'model-a' }]);
+
+    expect(await fabFileChunkRepository.annResidentFabFileIds([fid('f1')], 'model-a')).toEqual([]);
+  });
+
+  it('withholds a file straddling a rolling self-host enable - a chunk embedded before the flag flipped carries no retrievalIndexModel or confirm, but still counts toward the denominator', async () => {
+    // Regression coverage for the denominator switching from retrievalIndexModel to
+    // embeddingModel: under the old denominator this file would have been reported resident,
+    // since the un-dispatched chunk was invisible to the count entirely.
+    await FabFileChunk.create([
+      dispatched('f1', 'a', true),
+      { fabFileId: fid('f1'), text: 'b', tokenCount: 1, embeddingModel: 'model-a' },
+    ]);
+
+    expect(await fabFileChunkRepository.annResidentFabFileIds([fid('f1')], 'model-a')).toEqual([]);
+  });
+
+  it('answers per model, so a file resident under one is not claimed for another', async () => {
+    await FabFileChunk.create([dispatched('f1', 'a', true, 'model-a'), dispatched('f1', 'b', false, 'model-b')]);
+
+    expect(await fabFileChunkRepository.annResidentFabFileIds([fid('f1')], 'model-a')).toEqual([fid('f1')]);
+    expect(await fabFileChunkRepository.annResidentFabFileIds([fid('f1')], 'model-b')).toEqual([]);
+  });
+
+  it('excludes files outside the requested ids and returns nothing for an empty list', async () => {
+    await FabFileChunk.create([dispatched('in-scope', 'a', true), dispatched('out-of-scope', 'b', true)]);
+
+    expect(await fabFileChunkRepository.annResidentFabFileIds([fid('in-scope')], 'model-a')).toEqual([fid('in-scope')]);
+    expect(await fabFileChunkRepository.annResidentFabFileIds([], 'model-a')).toEqual([]);
+  });
+});
+
+describe('FabFileChunkRepository.confirmRetrievalIndexed', () => {
+  setupMongoTest();
+
+  beforeEach(async () => {
+    await FabFileChunk.deleteMany({});
+  });
+
+  it('stamps only the chunks it was given, leaving the rest of the batch unconfirmed', async () => {
+    const [c1, c2] = await FabFileChunk.create([
+      { fabFileId: fid('f1'), text: 'a', tokenCount: 1, embeddingModel: 'model-a', retrievalIndexModel: 'model-a' },
+      { fabFileId: fid('f1'), text: 'b', tokenCount: 1, embeddingModel: 'model-a', retrievalIndexModel: 'model-a' },
+    ]);
+
+    await fabFileChunkRepository.confirmRetrievalIndexed([c1.id], 'model-a');
+
+    expect((await FabFileChunk.findById(c1.id))?.retrievalIndexConfirmedModel).toBe('model-a');
+    expect((await FabFileChunk.findById(c2.id))?.retrievalIndexConfirmedModel).toBeUndefined();
+    expect(await fabFileChunkRepository.annResidentFabFileIds([fid('f1')], 'model-a')).toEqual([]);
+  });
+
+  it('is a no-op on an empty id list', async () => {
+    await expect(fabFileChunkRepository.confirmRetrievalIndexed([], 'model-a')).resolves.toBeUndefined();
+  });
+});
+
+describe('FabFileChunkRepository.clearRetrievalIndexConfirmed', () => {
+  setupMongoTest();
+
+  beforeEach(async () => {
+    await FabFileChunk.deleteMany({});
+  });
+
+  it('unsets a stale confirm - a rollback deleted the OpenSearch doc a prior delivery confirmed', async () => {
+    const [c1, c2] = await FabFileChunk.create([
+      {
+        fabFileId: fid('f1'),
+        text: 'a',
+        tokenCount: 1,
+        embeddingModel: 'model-a',
+        retrievalIndexModel: 'model-a',
+        retrievalIndexConfirmedModel: 'model-a',
+      },
+      {
+        fabFileId: fid('f1'),
+        text: 'b',
+        tokenCount: 1,
+        embeddingModel: 'model-a',
+        retrievalIndexModel: 'model-a',
+        retrievalIndexConfirmedModel: 'model-a',
+      },
+    ]);
+
+    await fabFileChunkRepository.clearRetrievalIndexConfirmed([c1.id], 'model-a');
+
+    expect((await FabFileChunk.findById(c1.id))?.retrievalIndexConfirmedModel).toBeUndefined();
+    expect((await FabFileChunk.findById(c2.id))?.retrievalIndexConfirmedModel).toBe('model-a');
+    expect(await fabFileChunkRepository.annResidentFabFileIds([fid('f1')], 'model-a')).toEqual([]);
+  });
+
+  it('never clears a confirm for a different model', async () => {
+    const [c1] = await FabFileChunk.create([
+      {
+        fabFileId: fid('f1'),
+        text: 'a',
+        tokenCount: 1,
+        embeddingModel: 'model-a',
+        retrievalIndexModel: 'model-a',
+        retrievalIndexConfirmedModel: 'model-a',
+      },
+    ]);
+
+    await fabFileChunkRepository.clearRetrievalIndexConfirmed([c1.id], 'model-b');
+
+    expect((await FabFileChunk.findById(c1.id))?.retrievalIndexConfirmedModel).toBe('model-a');
+  });
+
+  it('is a no-op on an empty id list', async () => {
+    await expect(fabFileChunkRepository.clearRetrievalIndexConfirmed([], 'model-a')).resolves.toBeUndefined();
+  });
+});
+
+describe('FabFileChunkRepository.clearRetrievalIndexConfirmedByFabFileIds', () => {
+  setupMongoTest();
+
+  beforeEach(async () => {
+    await FabFileChunk.deleteMany({});
+  });
+
+  it('clears the confirm across every model for the given files, leaving other files untouched', async () => {
+    const [c1, c2, c3] = await FabFileChunk.create([
+      {
+        fabFileId: fid('f1'),
+        text: 'a',
+        tokenCount: 1,
+        embeddingModel: 'model-a',
+        retrievalIndexModel: 'model-a',
+        retrievalIndexConfirmedModel: 'model-a',
+      },
+      {
+        fabFileId: fid('f1'),
+        text: 'b',
+        tokenCount: 1,
+        embeddingModel: 'model-b',
+        retrievalIndexModel: 'model-b',
+        retrievalIndexConfirmedModel: 'model-b',
+      },
+      {
+        fabFileId: fid('f2'),
+        text: 'c',
+        tokenCount: 1,
+        embeddingModel: 'model-a',
+        retrievalIndexModel: 'model-a',
+        retrievalIndexConfirmedModel: 'model-a',
+      },
+    ]);
+
+    await fabFileChunkRepository.clearRetrievalIndexConfirmedByFabFileIds([fid('f1')]);
+
+    expect((await FabFileChunk.findById(c1.id))?.retrievalIndexConfirmedModel).toBeUndefined();
+    expect((await FabFileChunk.findById(c2.id))?.retrievalIndexConfirmedModel).toBeUndefined();
+    expect((await FabFileChunk.findById(c3.id))?.retrievalIndexConfirmedModel).toBe('model-a');
+    expect(await fabFileChunkRepository.annResidentFabFileIds([fid('f1')], 'model-a')).toEqual([]);
+    expect(await fabFileChunkRepository.annResidentFabFileIds([fid('f2')], 'model-a')).toEqual([fid('f2')]);
+  });
+
+  it('is a no-op on an empty id list', async () => {
+    await expect(fabFileChunkRepository.clearRetrievalIndexConfirmedByFabFileIds([])).resolves.toBeUndefined();
   });
 });

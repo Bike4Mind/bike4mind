@@ -162,6 +162,11 @@ interface DatabaseAdapters {
     | 'countByFabFileId'
     // Must stay a superset of ToolContext.db.fabfilechunks - this is what feeds it (ToolBuilder).
     | 'distinctRetrievalIndexModelsByFabFileIds'
+    // Optional on semanticDataLakeSearch's adapter shape (resolveIndexResidency treats a missing
+    // method the same as a failed lookup - pre-residency behavior, not an error). Declared here so
+    // a future literal replacing this repo cannot silently drop it with no type error; every
+    // current call site already wires the real repository, which has it.
+    | 'annResidentFabFileIds'
   >;
   mementos: IMementoRepository;
   projects: IProjectRepository;
