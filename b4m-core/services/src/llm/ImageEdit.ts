@@ -464,6 +464,7 @@ export class ImageEditService {
           model,
           n: 1,
           size: size as OpenAIImageSize | undefined,
+          quality,
           response_format: 'url',
           user: userId,
         });

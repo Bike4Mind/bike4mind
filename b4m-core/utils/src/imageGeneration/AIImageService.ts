@@ -1,5 +1,5 @@
 import { Logger } from '@bike4mind/observability';
-import { OpenAIImageSize } from '@bike4mind/common';
+import { OpenAIImageQuality, OpenAIImageSize } from '@bike4mind/common';
 
 export interface AIImageGenerationOptions {
   width?: number;
@@ -9,7 +9,10 @@ export interface AIImageGenerationOptions {
   model?: string;
   safety_tolerance?: number;
   size?: '256x256' | '512x512' | '1024x1024' | '1792x1024' | '1024x1792' | null;
-  quality?: 'standard' | 'hd';
+  // The full API-accepted set: DALL-E's 'standard'/'hd' plus the GPT-Image tiers.
+  // Narrowing this to the DALL-E pair is what let callers silently drop a GPT-Image
+  // tier they had already charged the user for.
+  quality?: OpenAIImageQuality;
   style?: 'vivid' | 'natural';
   response_format?: 'url' | 'b64_json' | null;
   // BFL specific options

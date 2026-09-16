@@ -28,6 +28,7 @@ vi.mock('./imageProcessorUtils', () => ({
 }));
 
 import { buildModerationBlockedError, isSupportedEditSize, OpenAIImageService } from './OpenAIImageService';
+import { downloadImageAsBuffer } from './imageProcessorUtils';
 
 // The helper only reads `code`, `status`, and `requestID` off the error, so a
 // minimal object cast to the APIError instance type is sufficient and avoids
@@ -213,6 +214,29 @@ describe('OpenAIImageService.edit', () => {
     expect(params).not.toHaveProperty('mask');
   });
 
+  it('forwards quality to a gpt-image model, which callers have already billed for', async () => {
+    // ImageEdit.ts and the chat edit_image tool both price the requested tier before
+    // calling here, so dropping it charges for a tier OpenAI was never asked to render.
+    const params = await editParams({ model: ImageModels.GPT_IMAGE_2, quality: 'high' });
+
+    expect(params.quality).toBe('high');
+  });
+
+  it.each([
+    ['standard', 'medium'],
+    ['hd', 'high'],
+  ])("maps the legacy '%s' tier to '%s' on the edit endpoint", async (requested, expected) => {
+    const params = await editParams({ model: ImageModels.GPT_IMAGE_2, quality: requested as 'standard' | 'hd' });
+
+    expect(params.quality).toBe(expected);
+  });
+
+  it('omits quality entirely when none is requested', async () => {
+    const params = await editParams({ model: ImageModels.GPT_IMAGE_2 });
+
+    expect(params).not.toHaveProperty('quality');
+  });
+
   it('leaves the dall-e-2 request shape unchanged', async () => {
     const params = await editParams({
       model: ImageModels.DALL_E_2,
@@ -268,5 +292,119 @@ describe('OpenAIImageService.generate gpt-image-2 sizing', () => {
     const params = await generateParams({ model: ImageModels.GPT_IMAGE_2 });
 
     expect(params.size).toBe('auto');
+  });
+});
+
+describe('OpenAIImageService.generate gpt-image quality forwarding (#2742)', () => {
+  beforeEach(() => {
+    imagesGenerate.mockReset();
+    imagesEdit.mockReset();
+    vi.mocked(downloadImageAsBuffer).mockReset();
+  });
+
+  /** Runs generate() against the mocked SDK and returns the params it sent. */
+  async function generateParams(options: Record<string, unknown>): Promise<Record<string, unknown>> {
+    imagesGenerate.mockResolvedValue({ data: [{ b64_json: 'R0VO' }] });
+    await makeService().generate('a bicycle', options);
+    return imagesGenerate.mock.calls[0][0] as Record<string, unknown>;
+  }
+
+  it.each(['low', 'medium', 'high', 'auto'] as const)(
+    "forwards a '%s' quality value to the OpenAI generate call instead of stripping it",
+    async quality => {
+      // ImageGeneration.ts's validateUserCredits bills this exact tier before reaching
+      // here - if it's stripped, the user pays for a quality they never receive.
+      const params = await generateParams({ model: ImageModels.GPT_IMAGE_1_5, quality });
+
+      expect(params.quality).toBe(quality);
+    }
+  );
+
+  it('drops an out-of-enum quality value rather than sending an invalid enum to OpenAI', async () => {
+    const params = await generateParams({ model: ImageModels.GPT_IMAGE_1_5, quality: 'ultra' });
+
+    expect(params).not.toHaveProperty('quality');
+  });
+
+  it.each([
+    ['standard', 'medium'],
+    ['hd', 'high'],
+  ])("maps the legacy '%s' tier to '%s' rather than dropping it", async (requested, expected) => {
+    // The cost calculator bills 'standard'/'hd' as medium/high, so mapping (not dropping)
+    // is what keeps the charge and the render on the same tier.
+    const params = await generateParams({ model: ImageModels.GPT_IMAGE_1_5, quality: requested });
+
+    expect(params.quality).toBe(expected);
+  });
+
+  /** Runs the image-to-image branch of generate() and returns the params sent to images.edit. */
+  async function imageToImageParams(options: Record<string, unknown>): Promise<Record<string, unknown>> {
+    vi.mocked(downloadImageAsBuffer).mockResolvedValue(Buffer.from('fake-source-image'));
+    imagesEdit.mockResolvedValue({ data: [{ b64_json: 'RURJVA==' }] });
+    await makeService().generate('a bicycle', { imagePrompt: 'https://example.com/source.png', ...options });
+    expect(imagesEdit).toHaveBeenCalledTimes(1);
+    return imagesEdit.mock.calls[0][0] as Record<string, unknown>;
+  }
+
+  it('forwards quality on the image-to-image (edit-endpoint) branch too', async () => {
+    // generate() routes imagePrompt requests through images.edit for GPT-Image models;
+    // validateUserCredits bills the same mapped tier for this branch, so it must not
+    // silently drop quality the way the text-to-image branch used to.
+    const params = await imageToImageParams({ model: ImageModels.GPT_IMAGE_1_5, quality: 'high' });
+
+    expect(params.quality).toBe('high');
+  });
+
+  it('forwards n on the image-to-image branch, since credits are charged per image', async () => {
+    // validateUserCredits charges usdCost * n up front; requesting 3 and sending none
+    // bills for three images and returns one.
+    const params = await imageToImageParams({ model: ImageModels.GPT_IMAGE_1_5, n: 3 });
+
+    expect(params.n).toBe(3);
+  });
+
+  it('forwards the normalized size on the image-to-image branch', async () => {
+    const params = await imageToImageParams({ model: ImageModels.GPT_IMAGE_1_5, size: '1536x1024' });
+
+    expect(params.size).toBe('1536x1024');
+  });
+
+  it("maps the legacy 'hd' tier to 'high' on the image-to-image branch too", async () => {
+    const params = await imageToImageParams({ model: ImageModels.GPT_IMAGE_1_5, quality: 'hd' });
+
+    expect(params.quality).toBe('high');
+  });
+
+  it('drops an out-of-enum quality value on the image-to-image branch rather than sending it', async () => {
+    const params = await imageToImageParams({ model: ImageModels.GPT_IMAGE_1_5, quality: 'ultra' });
+
+    expect(params).not.toHaveProperty('quality');
+  });
+
+  it('logs a warning when a quality value is dropped, so the drop is observable', async () => {
+    const debugSpy = vi.spyOn(Logger.globalInstance, 'debug');
+
+    await generateParams({ model: ImageModels.GPT_IMAGE_1_5, quality: 'ultra' });
+
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.stringContaining('parameter adjustments'),
+      expect.arrayContaining([expect.stringContaining("Quality parameter ('ultra')")])
+    );
+    debugSpy.mockRestore();
+  });
+
+  it('returns every generated image, not just the first, when OpenAI returns more than one', async () => {
+    imagesEdit.mockResolvedValue({
+      data: [{ b64_json: 'aW1hZ2Ux' }, { b64_json: 'aW1hZ2Uy' }, { b64_json: 'aW1hZ2Uz' }],
+    });
+    vi.mocked(downloadImageAsBuffer).mockResolvedValue(Buffer.from('fake-source-image'));
+
+    const images = await makeService().generate('a bicycle', {
+      model: ImageModels.GPT_IMAGE_1_5,
+      imagePrompt: 'https://example.com/source.png',
+      n: 3,
+    });
+
+    expect(images).toHaveLength(3);
   });
 });
