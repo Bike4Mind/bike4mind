@@ -143,16 +143,18 @@ export const ChatAckSchema = z.object({
   message: z.string().optional(),
   // Present unconditionally on the `wait: true` body, carrying the quest's own value -
   // same as the polled quest (`GET /api/quests/{id}`). Absent only on the immediate async
-  // ack, where nothing has run yet. `errorCode` (not this field) is what separates a
-  // failure from an answer: `type` is `'error'` for every failure class, coded or not.
+  // ack, where nothing has run yet. `type` (not `errorCode`) is what separates a
+  // failure from an answer: it is `'error'` for every failure class that sets it, coded
+  // or not.
   type: z.enum(CHAT_HISTORY_ITEM_TYPES).optional(),
   // Reason for a `type: 'error'` turn, when there is a machine-readable one. Only the
   // billing failures set it, so a `type: 'error'` turn with no `errorCode` is still a
-  // failure (aborted, provider timeout/overload, recovered stuck quest) - never read its
-  // absence as success. Same vocabulary as the tts/music/soundEffects `errorCode`
-  // (CONVENTIONS.md "One error-code vocabulary"), narrowed via QUEST_ERROR_CODES;
-  // `spend_cap_exceeded` belongs to that shared union but is raised only by the embed
-  // chat route's pre-flight 422, never as a quest errorCode on this endpoint.
+  // failure - never read its absence as success. Same vocabulary as the
+  // tts/music/soundEffects `errorCode` (CONVENTIONS.md "One error-code vocabulary"),
+  // narrowed via QUEST_ERROR_CODES; `spend_cap_exceeded` belongs to that shared union but
+  // is not raised as a quest errorCode by any current throw site on this endpoint (its
+  // only throw site, the embed chat route's pre-flight 422, fires outside the process
+  // try/catch that would classify it onto the quest).
   errorCode: z.enum(QUEST_ERROR_CODES).optional(),
   // The tool decision the API layer made for this turn, echoed back so a caller can see what was
   // offered and what was thrown away. Absent when the layer made no decision and had nothing to

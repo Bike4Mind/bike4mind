@@ -527,11 +527,25 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
   });
 
   describe('errorCode classifier (a poller must be able to tell a credit failure from a real answer)', () => {
-    it('is undefined on a normal completed quest', async () => {
+    it('is not echoed on a type: "message" quest, even when a stale errorCode is still on the document', async () => {
+      // A retry does not necessarily clear errorCode at the storage layer in every path this
+      // test's fixture models directly on the returned document - this is the negative control
+      // for the gate itself: without `quest.type === 'error'` gating the field, this fixture
+      // would report a credit failure on a turn that succeeded.
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'done',
+        type: 'message',
+        errorCode: 'insufficient_credits',
+        reply: 'hi',
+        replies: ['hi'],
+        promptMeta: {},
+      });
       const { req, res } = fire();
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
-      expect(res._getJSONData().errorCode).toBeUndefined();
+      expect(res._getJSONData()).not.toHaveProperty('errorCode');
     });
 
     it('surfaces errorCode alongside type: "error" and the credit-copy reply, still as 200', async () => {
@@ -554,7 +568,10 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(body.reply).toMatch(/out of credits/i);
     });
 
-    it('surfaces errorCode: "spend_cap_exceeded" for the sibling classifier', async () => {
+    // No current throw site raises spend_cap_exceeded onto a quest on this endpoint (only
+    // embedRoute's pre-flight 422 does, outside this process path) - this only confirms the
+    // pass-through is not hardcoded to insufficient_credits, should that ever change.
+    it('passes through errorCode: "spend_cap_exceeded" the same way, if the quest ever carried it', async () => {
       mockQuestFindById.mockResolvedValue({
         id: 'quest-1',
         sessionId: 'sess-1',
@@ -569,6 +586,24 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData().errorCode).toBe('spend_cap_exceeded');
+    });
+
+    it('is a failure with no errorCode at all - never read its absence as success', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'done',
+        type: 'error',
+        reply: 'The provider timed out.',
+        replies: [],
+        promptMeta: {},
+      });
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const body = res._getJSONData();
+      expect(body.type).toBe('error');
+      expect(body).not.toHaveProperty('errorCode');
     });
   });
 });

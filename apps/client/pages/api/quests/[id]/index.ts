@@ -95,9 +95,11 @@ const handler = baseApi({
     // needs `type` to machine-distinguish it from a genuine success.
     type: quest.type,
     // Reason for a `type: 'error'` quest, when there is a machine-readable one (credit
-    // exhaustion today) - see chatContract's 200 description. Undefined on a successful quest
-    // AND on the error classes that carry no code, so `type` stays the failure signal.
-    errorCode: quest.errorCode,
+    // exhaustion today) - see chatContract's 200 description. Gated on `type` (mirrors
+    // chat.ts) because `errorCode` is persisted on the quest and a retry does not clear it;
+    // an ungated read would resurface a stale code from a prior failed attempt on a quest
+    // that has since succeeded.
+    ...(quest.type === 'error' && { errorCode: quest.errorCode }),
     sessionId: quest.sessionId,
     reply: quest.reply,
     replies: quest.replies,

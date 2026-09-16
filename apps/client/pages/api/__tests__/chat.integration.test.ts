@@ -946,11 +946,28 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
       expect(body.errorCode).toBe('insufficient_credits');
     });
 
-    it('carries errorCode: "spend_cap_exceeded" for the sibling classifier', async () => {
+    // This endpoint's process path does not itself raise spend_cap_exceeded today (its only
+    // throw site is embedRoute's pre-flight 422, outside this try/catch) - this test only
+    // confirms the pass-through is not hardcoded to insufficient_credits.
+    it('passes through errorCode: "spend_cap_exceeded" the same way, if the quest ever carried it', async () => {
       processErroringWith('spend_cap_exceeded');
       const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
       await handler(req, res);
       expect(res._getJSONData().errorCode).toBe('spend_cap_exceeded');
+    });
+
+    it('is a failure with no errorCode at all - never read its absence as success', async () => {
+      mockProcess.mockImplementation(async ({ prefetchedQuest }: { prefetchedQuest: Record<string, unknown> }) => {
+        prefetchedQuest.reply = 'The provider timed out.';
+        prefetchedQuest.replies = [prefetchedQuest.reply as string];
+        prefetchedQuest.type = 'error';
+        prefetchedQuest.status = 'done';
+      });
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      const body = res._getJSONData();
+      expect(body.type).toBe('error');
+      expect(body).not.toHaveProperty('errorCode');
     });
 
     it('carries type unconditionally on a real answer, matching the polled quest, and omits errorCode', async () => {

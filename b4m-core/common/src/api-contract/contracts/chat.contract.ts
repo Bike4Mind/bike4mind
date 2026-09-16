@@ -38,9 +38,13 @@ export const chatContract = defineEndpoint({
         'both that `wait: true` body and the polled quest (`GET /api/quests/{id}`) - the prose ' +
         'explaining why lands in `reply`/`response` like any other answer, so the reply text alone ' +
         'cannot tell a failure from an answer. `type` is the field that can: both surfaces carry it ' +
-        'unconditionally, so match on `type: "error"` first, for EVERY failure class (out of credits, ' +
-        'an aborted turn, a provider timeout or overload, a recovered stuck quest); a real answer ' +
-        'carries the turn\'s actual completion type instead (`"message"` for an ordinary reply). ' +
+        'unconditionally, so match on `type: "error"` first - it covers credit exhaustion, a ' +
+        'provider timeout or overload, and an in-process aborted turn; a real answer carries the ' +
+        'turn\'s actual completion type instead (`"message"` for an ordinary reply). Two related ' +
+        'states do NOT set `type: "error"`: a user-cancelled turn resolves as `status: "stopped"` ' +
+        'with `type` left at `"message"`, and a recovered stuck quest that still has renderable ' +
+        'content resolves as a success (`status: "done"`, no error) by design, to avoid destroying ' +
+        'content to report a failure. ' +
         '`errorCode` then names the failure reason, but only for the billing failures that have one - ' +
         '`"insufficient_credits"` today; it is absent on every other `type: "error"` turn, so never use ' +
         'its absence to infer success. On a real answer `errorCode` is absent from the `wait: true` ' +

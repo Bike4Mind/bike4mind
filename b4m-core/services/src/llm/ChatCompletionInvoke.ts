@@ -287,6 +287,9 @@ export class ChatCompletionInvoke {
             q.status = 'running';
             q.promptMeta = promptMeta;
             q.agentIds = session.agentIds || [];
+            // Clear a stale classifier from a prior failed attempt - otherwise a retry that
+            // succeeds (or fails for a different, uncoded reason) still reports the old code.
+            q.errorCode = undefined;
             await this.db.quests.update(q);
             return q;
           })
