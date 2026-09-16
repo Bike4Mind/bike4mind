@@ -39,7 +39,11 @@ function servers() {
 function infoDescription(): string {
   return [
     'Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions ' +
-      'that validate requests at runtime, so this spec cannot drift from the implementation.',
+      'that validate requests at runtime, so this spec cannot drift from the implementation - with ' +
+      'one documented exception: a `pollResult` schema (see the `x-poll-result` extension) describes ' +
+      "a handoff response's outcome on a plain, non-contract endpoint, so it is hand-maintained " +
+      'against that handler rather than runtime-validated, and can drift if the handler changes ' +
+      'without a matching schema update.',
     '',
     '## Authentication',
     'Send an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` ' +

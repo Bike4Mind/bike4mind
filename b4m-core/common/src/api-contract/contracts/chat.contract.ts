@@ -24,13 +24,15 @@ export const chatContract = defineEndpoint({
     '`wait: true` to block until the reply is ready and receive it inline. A tool that produced ' +
     'machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` ' +
     'entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` ' +
-    'body and on the polled quest. A turn can FAIL after the ACK - notably when the caller runs out ' +
-    'of credits, which is reported on the quest rather than as a status, since the ACK was already ' +
-    'sent: the polled quest is then `type: "error"` with `errorCode: "insufficient_credits"` and the ' +
-    'failure text in `reply`. Match on the classifier rather than reading `reply`, which carries ' +
-    'that failure message in the same field a real answer uses. A spend-cap-exceeded rejection is ' +
+    'body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as ' +
+    '`type: "error"`, since the ACK was already sent. `type` is the failure signal for every failure ' +
+    'class (an abort, a provider timeout, a recovered stuck quest, credit exhaustion); `errorCode` ' +
+    'is an optional refinement present only when the failure is a classified billing reason - ' +
+    'currently `insufficient_credits`, `type: "error"` with the failure text in `reply`. A caller ' +
+    'must treat `type: "error"` as failure even when `errorCode` is absent, and must not read ' +
+    '`reply` as an answer without checking `type` first. A spend-cap-exceeded rejection is ' +
     'checked before a quest exists and never reaches the poll path; it surfaces as a synchronous ' +
-    '422 on `/api/embed` instead. Authenticate with an API key (`b4m_live_`) or a JWT.',
+    '422 on `/api/embed/chat` instead. Authenticate with an API key (`b4m_live_`) or a JWT.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
@@ -54,15 +56,19 @@ export const chatContract = defineEndpoint({
         description:
           'Outcome fields of the quest polled at `GET /api/quests/{id}` after this ACK. A finished ' +
           'turn that failed is `status: "done"` with `type: "error"` and the failure text in ' +
-          '`reply`, so a caller reading `reply` alone cannot tell a classified failure from an ' +
-          'answer - `errorCode` is the classifier to match on; credit exhaustion arrives here as ' +
-          '`insufficient_credits`, the same vocabulary the synchronous 422s on `/api/ai/music`, ' +
-          '`/api/ai/sound-effects` and `/api/ai/tts` use. (A spend-cap-exceeded rejection is caught ' +
-          'before a quest exists and surfaces as a synchronous 422 on `/api/embed` instead - it ' +
-          'never reaches this poll.) `type`/`errorCode` separate a classified failure only: a run ' +
+          '`reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check ' +
+          '`type` first. `errorCode` is an optional refinement of `type: "error"`, present only for ' +
+          'a classified billing failure; credit exhaustion arrives here as `insufficient_credits`, ' +
+          'the same vocabulary the synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and ' +
+          '`/api/ai/tts` use. Most `type: "error"` turns - an abort, a provider timeout or overload, ' +
+          'a recovered stuck quest - have NO `errorCode`; its absence does not mean success, only ' +
+          'that the failure is unclassified. (A spend-cap-exceeded rejection is caught before a ' +
+          'quest exists and surfaces as a synchronous 422 on `/api/embed/chat` instead - it never ' +
+          'reaches this poll.) `type`/`errorCode` separate a classified failure only: a run ' +
           'recovered from a timeout with partial content keeps `type: "message"` even though it did ' +
-          'not finish. The poll body carries further fields (`images`, `files`, `toolPayloads`, ' +
-          '`promptMeta`); only the outcome subset is modelled here.',
+          'not finish. The poll body carries further fields not modelled here, including `images`, ' +
+          '`files`, `toolPayloads`, `promptMeta`, and the attachment report ' +
+          '(`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.',
         example: {
           id: '664f1c2b9a1e4d0012ab34cd',
           status: 'done',

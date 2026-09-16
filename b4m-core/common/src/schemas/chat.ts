@@ -179,7 +179,13 @@ export type ChatAck = z.infer<typeof ChatAckSchema>;
  * handler rather than a contract, so this models only what decides whether the
  * turn succeeded, and a poll body carries further fields (`images`, `files`,
  * `toolPayloads`, `promptMeta`, ...). Must stay in sync with that handler's
- * `res.json` shape (apps/client/pages/api/quests/[id]/index.ts).
+ * `res.json` shape (apps/client/pages/api/quests/[id]/index.ts) - unlike a
+ * contract-registered request/response schema, nothing validates this at
+ * runtime, so the "parses against the published ChatQuestPollResultSchema"
+ * integration test (index.integration.test.ts) is what actually pins the two
+ * together; a field added to the handler without this schema keeps that test
+ * green (it only rejects an UNEXPECTED shape), so a shape addition still needs
+ * a schema update by hand.
  *
  * A failed turn is still `status: 'done'` with the failure text in `reply`, so
  * `reply` alone cannot tell an answer from a failure - `type` and `errorCode` are

@@ -225,6 +225,26 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getJSONData()).toMatchObject({ type: 'error', errorCode: 'insufficient_credits' });
     });
 
+    // ChatQuestPollResultSchema (b4m-core/common/src/schemas/chat.ts) is hand-maintained
+    // against this handler's res.json shape rather than imported by it - nothing else
+    // catches the two drifting apart, so parse the real response through it here.
+    it('parses against the published ChatQuestPollResultSchema', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'done',
+        type: 'error',
+        errorCode: 'insufficient_credits',
+        reply: "You're out of credits. This request needs about 12 credits, but only 3 are available.",
+        promptMeta: {},
+      });
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      const { ChatQuestPollResultSchema } = await import('@bike4mind/common');
+      expect(() => ChatQuestPollResultSchema.parse(res._getJSONData())).not.toThrow();
+    });
+
     it('omits it on a successful turn', async () => {
       validateWithScopes([ApiKeyScope.AI_CHAT]);
       const { req, res } = fire();
