@@ -109,7 +109,7 @@ const NOT_THIS_RULE: { pattern: RegExp; reason: string }[] = [
       'A Mongo aggregation asking the INVERSE question - which files are still PARTIALLY vectorized ' +
       '(`vectorizedChunkCount < chunkCount`), for reporting indexing progress. Reachability is the ' +
       '>= direction; these two can never be satisfied at once. Only reachable via ' +
-      'DESTRUCTURED_COUNTERS, which sees any object literal naming the counter.',
+      '`bindsBothCounters`, which sees any object literal naming both counters.',
   },
 ];
 
@@ -246,7 +246,7 @@ function identifiersIn(node: ts.Node): Set<string> {
  * Fails CLOSED: a comparison that sits in no function at all is reported rather than skipped, so a
  * refactor that moves the rule somewhere this cannot read is a failure and not a silent pass.
  */
-export function missingClauses(filePath: string, sourceText: string, line: number): string[] {
+function missingClauses(filePath: string, sourceText: string, line: number): string[] {
   const source = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, /* setParentNodes */ true);
   const offset = firstCodeOffset(source, line);
   if (offset === null) return [`${filePath}:${line}: no code on this line - the site list is out of date.`];
