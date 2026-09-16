@@ -67,7 +67,12 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
   );
 
   await Promise.all(
-    messagesToSnip.map(async ({ id, promptMeta, ...messageData }) => {
+    messagesToSnip.map(async ({ id, promptMeta, correctsQuestId, ...messageData }) => {
+      // `correctsQuestId` names a quest in the SOURCE session, so it is dropped rather than copied:
+      // a copied chain link would dereference across the session boundary, and the access that
+      // authorized this copy is not rechecked when the pointer is later read. Remap it through an
+      // old-id to new-id table if preserving copied correction chains is ever wanted. Paired with
+      // the session re-check in resolveCorrectionContext (llm/buildCorrectionContext.ts).
       await db.chatHistories.create({
         ...messageData,
         sessionId: newSession.id,

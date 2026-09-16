@@ -489,6 +489,11 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     // AgentExecution doc so the chat-history disclosure can lazy-load the
     // iteration trace on demand.
     agentExecutionId: { type: String, required: false },
+    // Set when this turn corrects an earlier one (correct-and-retry). Points at the PREVIOUS
+    // attempt, so the chain walks backwards through every retry. Must stay in sync with
+    // `IChatHistoryItem.correctsQuestId` - a field declared only on the type is dropped on write
+    // by Mongoose strict mode, with no error.
+    correctsQuestId: { type: String, required: false },
     // Provenance of the routing decision that produced this quest.
     // Drives the `AutoRouteBadge` rendering above auto-routed responses
     // (classifier- or rule-based complexity-routed).

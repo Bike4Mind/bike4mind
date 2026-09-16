@@ -182,6 +182,22 @@ describe('getEffectiveLLMApiKeys', () => {
     expect(options?.logger).toBe(logger);
   });
 
+  it('propagates the skipCache option to getSettingsByNames', async () => {
+    const getSettingsByNames = makeGetSettingsByNames();
+    const deps = {
+      db: { apiKeys: makeApiKeyRepo(), adminSettings: makeAdminSettingsRepo() },
+      getSettingsByNames,
+    };
+
+    await getEffectiveLLMApiKeys(null, deps, { skipCache: true });
+    await getEffectiveLLMApiKeys(null, deps);
+
+    const [, , withFlag] = getSettingsByNames.mock.calls[0];
+    const [, , withoutFlag] = getSettingsByNames.mock.calls[1];
+    expect(withFlag?.skipCache).toBe(true);
+    expect(withoutFlag?.skipCache).toBeUndefined();
+  });
+
   describe('self-host env-key fallback', () => {
     const withEnv = async (env: Record<string, string | undefined>, fn: () => Promise<void>) => {
       const saved = Object.fromEntries(Object.keys(env).map(k => [k, process.env[k]]));

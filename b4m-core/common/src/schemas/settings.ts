@@ -960,7 +960,16 @@ function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: 
   return {
     ...config,
     type: 'number' as const,
-    schema: numberSchema.prefault(config.defaultValue ?? 0),
+    // A cleared field submits '', which z.coerce.number() reads as a schema-valid 0, silently
+    // defeating the undefined-only prefault; rewriting it (and a raw null) to undefined first
+    // restores the default. Only whitespace/null is rewritten, so a real 0 (AutoNameNotebook's
+    // "0 = disable") still passes through. prefault must stay INSIDE the preprocess: it
+    // substitutes only on the raw value it receives, so chaining it outside would feed the
+    // rewritten undefined into z.coerce.number() and fail with a NaN instead of defaulting.
+    schema: z.preprocess(
+      val => (val === null || (typeof val === 'string' && val.trim() === '') ? undefined : val),
+      numberSchema.prefault(config.defaultValue ?? 0)
+    ),
   };
 }
 

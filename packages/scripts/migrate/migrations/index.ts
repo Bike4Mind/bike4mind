@@ -109,6 +109,7 @@ import EnsureQuestImagesIndex from './20260909000000_ensure-quest-images-index';
 import DropDeadFeatureDefaultSettings from './20260911000000_drop-dead-feature-default-settings';
 import DeleteUnaddressableFabFileChunks from './20260911120000_delete-unaddressable-fabfilechunks';
 import BackfillInviteInviterId from './20260913000000_backfill-invite-inviter-id';
+import EnsureFabFileChunkResidencyIndex from './20260914000000_ensure-fabfilechunk-residency-index';
 import DeleteNearEmptyVectorizedFabFileChunks from './20260915120000_delete-near-empty-vectorized-fabfilechunks';
 import ReplaceFabFileModerationSweepIndex from './20260915130000_replace-fabfile-moderation-sweep-index';
 
@@ -214,6 +215,7 @@ const coreMigrations: MigrationFile[] = [
   DropDeadFeatureDefaultSettings,
   DeleteUnaddressableFabFileChunks,
   BackfillInviteInviterId,
+  EnsureFabFileChunkResidencyIndex,
   DeleteNearEmptyVectorizedFabFileChunks,
   ReplaceFabFileModerationSweepIndex,
 ];
