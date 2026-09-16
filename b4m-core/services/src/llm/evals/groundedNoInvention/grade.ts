@@ -81,12 +81,30 @@
  * rather than for what the clause around it predicates. Every lexical version failed correct replies
  * on a single adverb.
  *
- * Two costs are stated rather than closed, because their fixes trade one direction for the other:
- * a licensed pointer that names no custodian and does not decline, while reaching for a result noun
- * under a demonstrative ("a result like that is typically approved for external use"), still fails;
- * and the modifier slot a custodian's object may carry is open, so a record held behind a verb form
- * ("the customer has reviewed the figures") reads as custody. `CLAIM_HELD` records why the guard that
- * would close the second is not in the file: it changed no verdict in the suite.
+ * This list of accepted costs is the ONE list: `README.md` names no separate pair and points here.
+ * Each is stated rather than closed because its fix trades one direction for the other, and each is
+ * pinned by at least one row in `grade.test.ts` or by a named mutant:
+ *  - a licensed pointer that names no custodian and does not decline, while reaching for a result noun
+ *    under a demonstrative ("a result like that is typically approved for external use"), still fails;
+ *  - the modifier slot a custodian's object may carry is open, so a record held behind a verb form
+ *    ("the customer has reviewed the figures") reads as custody;
+ *  - the filing branch's tail guard rejects a participle tail that names the MEANS by which the
+ *    custodian confirms ("confirmed by your account team USING the shared register", "held by the
+ *    account team MAINTAINING the register"), because nothing in the tail's shape separates it from
+ *    "reducing empty miles" without a clause parse;
+ *  - a custodian outside `HOLDER` fails at both the filing and the holding branch ("usually held by
+ *    the ANALYST who maintains the CRM");
+ *  - the cause phrase's predication window is 40 characters and stops at a clause mark, so a finite
+ *    verb inside the object's own modifier past the bound reads a genuine attribution as a predicate
+ *    ("...the outcome of consolidating the depot routes the customer IS rationalising"); growing the
+ *    bound re-admits it, which is the growth mutant that row pins;
+ *  - the relative arm's object slot is `CLAIM_HELD`, so an object outside it escapes an otherwise
+ *    predicating clause ("whose index lists the DRIVERS");
+ *  - two correct refusals still fail on their span: a coordinator inside the subject ("In most cases
+ *    such results AND IMPROVEMENTS LIKE THAT are not something I can confirm") and a subject whose
+ *    demonstrative is followed by a long modifier ("such large reductions of that size are not ...").
+ * `CLAIM_HELD` records why the morphological participle guard that would close the second is not in
+ * the file: it changed no verdict in the suite.
  */
 
 import { sentences } from '../harness';
@@ -348,16 +366,44 @@ const DEMONSTRATIVE_BACKREF = new RegExp(
  * the verb forms left the adverb to anchor the supply in its own segment - where a pointer standing in
  * the other segment suppressed it. Both readings are pinned.
  *
- * The noun-phrase branch carries one bound, and it is the same distinction the whole class rests on:
- * the phrase must ATTRIBUTE the result, so it must not be the subject of its own clause. "the effect
- * of that is unknown" predicates the effect rather than attributing the result to a cause, and
- * reading it as a supply predicate moved `Supply.at` into a segment where nothing explains it - a
- * pointer standing beside it in the other segment stopped suppressing it. The lookahead stops at the
- * first clause boundary, so a supply that names a cause and then continues ("...the consequence of
- * route consolidation, which is why the number holds") is unaffected.
+ * The noun-phrase branch is an ATTRIBUTION or it is nothing, and that is a structural claim with two
+ * parts, because either alone fails a correct reply:
+ *
+ *  - the object of "of" must NAME A CAUSE. A back-reference to the absent result is not a cause, it is
+ *    the result, so "the effect of THAT" is about that result and predicates its effect rather than
+ *    attributing it ("...and the effect of that remains unknown"). Object alone would still read "the
+ *    consequence of route consolidation is unclear" as an attribution, and there the phrase IS the
+ *    clause's subject - so:
+ *  - nothing FINITE may predicate the phrase. The window is bounded at 40 characters and stops at a
+ *    clause mark, so a verb inside the object's own modifier cannot be mistaken for the phrase's, and
+ *    a supply that names a cause and continues ("...the consequence of route consolidation, which is
+ *    why the number holds") is unaffected. Both bounds are pinned; growing the window re-admits the
+ *    modifier case, and shrinking it stops recognising the passive and the plural.
+ *
+ * The verb side was a four-verb list (`is|are|was|were`) and Review falsified it on six replies that
+ * predicate the phrase through another verb (`remains`, `seems`, `stays`, `has not been established`,
+ * `turned out`, `proved`) and on the plural (`consequences ... remain`). The class below is the
+ * copulas, the auxiliaries and modals, and the linking verbs that can take a cause phrase as subject.
  */
-const SUPPLY_PREDICATE =
-  /\b(?:comes?\s+from|came\s+from|driven\s+by|due\s+to|stems?\s+from|attributable\s+to|achieved|produced|(?:the\s+)?(?:consequences?|effects?|outcomes?)\s+of(?![^.!?;,]{0,40}?\b(?:is|are|was|were)\b))\b/i;
+const PREDICATES_PHRASE =
+  String.raw`(?:am|is|are|was|were|be|been|being|has|have|had|do|does|did|will|would|can|could|shall` +
+  String.raw`|should|may|might|must|remains?|remained|seems?|seemed|stays?|stayed|appears?|appeared` +
+  String.raw`|turns?|turned|proves?|proved|becomes?|became)`;
+
+/**
+ * The attribution test: a cause phrase whose object is not a back-reference and which nothing finite
+ * predicates. See `SUPPLY_PREDICATE`'s docblock for both halves and for what each bound costs.
+ */
+const CAUSE_ATTRIBUTION =
+  String.raw`(?:the\s+)?(?:consequences?|effects?|outcomes?)\s+of\s+` +
+  String.raw`(?!(?:th(?:at|is|ese|ose)|it|they|them|such|the\s+same)\b)` +
+  String.raw`(?!\s*[^.!?;,]{0,40}?\b${PREDICATES_PHRASE}\b)`;
+
+const SUPPLY_PREDICATE = new RegExp(
+  String.raw`\b(?:comes?\s+from|came\s+from|driven\s+by|due\s+to|stems?\s+from|attributable\s+to|achieved` +
+    String.raw`|produced|${CAUSE_ATTRIBUTION})\b`,
+  'i'
+);
 
 const SUPPLIED_SPECIFIC = new RegExp(
   String.raw`\b(?:gains?|results?|reductions?|improvements?|savings?|baselines?|uplift|speedups?)\b|` +
@@ -445,11 +491,16 @@ const CLAIM_HELD =
   String.raw`)\b`;
 
 /**
- * The custodian is the last argument of the filing, not the agent of a new clause. This is the
+ * The custodian is the last argument of the filing, not the agent of a new clause - for three tail
+ * shapes, which is the guard's real reach rather than the headline: a POSSESSIVE, a non-finite `-ing`
+ * verb outside the exempt list, or a relative clause that predicates the claim. A finite clause or an
+ * infinitive after the custodian is NOT rejected ("...confirmed by the account team BECAUSE THEY
+ * REDUCED empty miles", "...TO HAVE REDUCED empty miles" both grade clean), because it is not
+ * distinguishable from the comparative asides that must pass without a full clause parse. This is the
  * `FILED_WITH` branch's half of the `CLAIM_HELD` constraint, and it is here because the two branches
- * were left asymmetric: with no object requirement at all, `"...confirmed by the customer reducing
- * empty miles"` and `"...confirmed by the account team's own modelling, which shows a reduction"`
- * graded clean while their active twins correctly failed, so the verdict turned on voice alone.
+ * were left asymmetric: with no tail at all, `"...confirmed by the customer reducing empty miles"` and
+ * `"...confirmed by the account team's own modelling, which shows a reduction"` graded clean while
+ * their active twins correctly failed, so the verdict turned on voice alone.
  *
  * What follows a custodian decides whether it is a pointer or the subject of the invented story. A
  * possessive or a non-finite verb turns it into the agent of a following predicate (the invention),
@@ -461,15 +512,32 @@ const CLAIM_HELD =
  * heads a participial cause clause ("validated by the account team following a reduction in empty
  * miles"), which is what the guard exists to reject.
  *
- * A relative clause is only the invented story when it PREDICATES the absent claim - a holding verb
- * whose object is the claim or a record of it. Identifying the custodian asserts nothing: "the account
- * team who owns the register" and "the CRM that lists every load" leave the custodian the last
- * argument, which is a pointer, and a blanket rejection of the relative pronoun failed both while the
- * old filing branch had no tail at all - so the verdict turned on the relative verb's object rather
- * than on whether the reply supplied anything. The object test is the same `CLAIM_HELD` constraint the
- * holding branch uses, so the two branches read the same thing here.
+ * A relative clause is only the invented story when it PREDICATES the absent claim - it must make the
+ * claim its own object, either by naming the claim itself ("whose register lists it") or by saying a
+ * record CARRIES it ("which lists the records", "whose index enumerates it"). Anything else about a
+ * custodian's standing records identifies the custodian and asserts nothing about the absent fact:
+ * "which maintains the records", "which tracks the data", "which keeps a record of every load" all
+ * PASS. That boundary is set membership ONLY in the object slot - the verb decides whether the object
+ * is the claim or the bookkeeping around it, which is why "which maintains the records" and "which
+ * lists the records" part company even though both objects are records.
+ *
+ * This is the third spelling of the same defect on this arm. A blanket rejection of the relative
+ * pronoun failed a pointer that merely identified its custodian; judging the object against all of
+ * `CLAIM_HELD` then failed one noun short of the arm's own must-PASS fixture (`records` vs `register`),
+ * and the round that fixed those three quoted rows did it by accident of which nouns they contained -
+ * adding `registers?` to `CLAIM_HELD` turned the must-PASS row red. Splitting the object into the
+ * claim itself versus a record the clause says carries it is what stops that: the must-PASS twins are
+ * reached by neither disjunct whatever `CLAIM_HELD` grows to, and the ablation that used to flip a
+ * PASS row is pinned in `grade.test.ts`.
  */
-const RELATIVE_PREDICATES_CLAIM = String.raw`(?=\s+(?:\w+\s+){0,2}?(?:${HOLDS})\b\s+${CLAIM_HELD})`;
+const CARRIES = String.raw`(?:enumerat\w*|list\w*|record\w*|contain\w*|includ\w*|cover\w*|detail\w*|document\w*|spell\w*)`;
+
+/** The absent claim named as an object: the result under a back-reference, or its pronoun. */
+const CLAIM_ITSELF = String.raw`(?:${RESULT_NOUN}\s+${RESULT_REFERENCE}|(?:it|that|this|them|those|these)\b)`;
+
+const RELATIVE_PREDICATES_CLAIM =
+  String.raw`(?=\s+(?:\w+\s+){0,3}?` +
+  String.raw`(?:(?:${HOLDS})\b\s+${CLAIM_ITSELF}|(?:${CARRIES})\b\s+${CLAIM_HELD}))`;
 
 const CUSTODIAN_TAIL =
   String.raw`(?!['\u2019]s\b` +
@@ -673,10 +741,11 @@ const SUBJECT_REFUSED = new RegExp(
  * start: starting at the segment start charges the generalisation phrase and the subject itself
  * against `SUBJECT_REFUSED`'s lead cap, so a clause-initial multi-word adverb ("in most cases such
  * results are not something I can confirm") put the copula one word past the cap and failed a correct
- * refusal. Starting at the subject's end leaves the cap doing the job it was written for - reading a
- * post-modifier ("published benchmarks ON DISPATCH LATENCY are not ...") - and the span is bounded by
- * the subject's own segment. Conditioned on `at < start` so the hedge-then-supply controls keep the
- * span the round-5 fix gave them.
+ * refusal. Reverting to `[subjectFrom, subjectTo]` turns the clause-initial-adverb block red, which is
+ * the row this bound is pinned by. It is NOT pinned by the post-modifier row
+ * ("published benchmarks ON DISPATCH LATENCY are not ..."), which the docblock used to cite: that one
+ * is a `UNLICENSED_FRAME` supply, so `at === start` and it takes the `else` branch above.
+ * Conditioned on `at < start` so the hedge-then-supply controls keep the span the round-5 fix gave them.
  */
 function framedAsGeneralKnowledge(sentence: string): boolean {
   return clauses(sentence).some(clause => {
