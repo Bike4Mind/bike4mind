@@ -8,9 +8,9 @@ import BaseRepository from '@bike4mind/db-core';
  * revoke stamps `revokedAt`. The authorize flow upserts it before minting a code, and the token
  * endpoint requires it before issuing a relying-party access token.
  *
- * Deliberately shared across client-authorization surfaces: the federated ai-token exchange
- * (finding 277) is meant to read the same (user, client) grant. Keep this the single source of
- * truth rather than adding a parallel record.
+ * Deliberately shared across client-authorization surfaces: the federated ai-token exchange is
+ * meant to read the same (user, client) grant. Keep this the single source of truth rather than
+ * adding a parallel record.
  */
 export interface IOAuthGrantDocument extends IMongoDocument {
   userId: string;

@@ -56,7 +56,7 @@ const handler = baseApi({ auth: false })
     // that then needs NO credential at all - it outlives the short-lived source token by two hours
     // and carries no identity, so a tokenVersion bump (this codebase's revocation mechanism) could
     // not reach it. For an admin principal that would be every passphrase-gated artifact in the system.
-    const principal = req.user as (Express.User & { mfaPending?: boolean; oauthGrant?: unknown }) | undefined;
+    const principal = req.user;
     if (!principal?.id || principal.mfaPending || principal.oauthGrant) {
       return res.status(401).json({ error: 'Authentication required' });
     }

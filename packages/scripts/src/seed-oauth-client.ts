@@ -180,6 +180,7 @@ async function main() {
   const clientSecretHash = await bcrypt.hash(clientSecret, 10);
 
   const federatedIdp = resolveFederatedIdp(clientId);
+  const clientType = resolveClientType();
 
   await OAuthClient.create({
     clientId,
@@ -188,7 +189,7 @@ async function main() {
     redirectUris,
     allowedScopes: ['openid', 'email', 'profile'],
     tokenEndpointAuthMethod: 'client_secret_post',
-    clientType: resolveClientType(),
+    clientType,
     isActive: true,
     ...(federatedIdp ? { federatedIdp } : {}),
   });
@@ -196,6 +197,9 @@ async function main() {
   console.log('\n✅ OAuth client registered!\n');
   console.log('  client_id    :', clientId);
   console.log('  client_secret:', clientSecret);
+  // Surface the trust class explicitly - it defaults to relying-party and set CLIENT_TYPE=first-party
+  // to opt in, so an operator can confirm which one this registration got.
+  console.log('  client_type  :', clientType);
   if (federatedIdp) {
     console.log('  federated    : yes (may mint per-user ai:generate keys via /api/oauth/ai-token)');
     console.log('    issuer      :', federatedIdp.issuer);

@@ -16,8 +16,10 @@ export interface OAuthRoutePolicy {
  * First-party sessions carry no oauthGrant marker (verifyJwtPayload only sets it for kind==='oauth'
  * tokens), so this is a no-op for them and for API-key callers - they are never affected. An OAuth
  * token reaches only routes that opt in via `oauthScopes`, and only when the token's granted scopes
- * satisfy the route's requirement. This is the one choke point that contains the blast radius of an
- * OAuth token (which is otherwise a valid Bearer for every JWT-authed route).
+ * satisfy the route's requirement. This is the OAuth choke point for the NORMAL authenticated chain
+ * (routes mounted with `auth`); the parallel choke point for optional-auth (`auth: false`) routes,
+ * which never run this gate, is admitsOptionalAuthUser below. The two together cover every path an
+ * OAuth token (otherwise a valid Bearer for every JWT-authed route) can reach.
  */
 export function oauthRouteGate(policy?: OAuthRoutePolicy) {
   return (req: Request, res: Response, next: NextFunction) => {
