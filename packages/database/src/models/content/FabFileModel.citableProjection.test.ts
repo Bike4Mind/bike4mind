@@ -5,10 +5,11 @@ import { createMongoServer } from '../../__test__/createMongoServer';
 import { FabFile, fabFileRepository } from './FabFileModel';
 
 /**
- * The two projected readers the lake-memory source-reachability filter runs on. A lake profile cites
- * one source document per belief with no cap, so this filter reads a document per cited source on
- * every profile render - and `findAllByIds` builds a full mongoose document for each of them to
- * answer a question about existence and eight scalars.
+ * The projected readers the lake-memory source-reachability filter runs on, plus the tag-carrying
+ * variant the embedding-comparison capture reads. A lake profile cites one source document per belief
+ * with no cap, so this filter reads a document per cited source on every profile render - and
+ * `findAllByIds` builds a full mongoose document for each of them to answer a question about
+ * existence and eight scalars.
  *
  * These have to be exercised against a real Mongo: the resolvers' own unit tests mock the repository,
  * so they can pin WHICH method is called and nothing about what it projects.
@@ -114,6 +115,18 @@ describe('FabFileRepository.findCitableFieldsByIds', () => {
     expect(rows[0].archivedAt).toBeInstanceOf(Date);
   });
 
+  it('omits tags, which is why the tag-carrying variant exists', async () => {
+    // Pinned as its own case because the capture path's document identity depends on the difference:
+    // pointing it at this reader instead would leave every `tags` undefined, and the corpus would
+    // join to ground truth by file id rather than help slug - silently scoring zero recall.
+    const file = await makeFile('tagged.md', { chunkCount: 1, vectorizedChunkCount: 1 });
+
+    const [row] = await fabFileRepository.findCitableFieldsByIds([String(file._id)]);
+
+    expect(row.id).toBe(String(file._id));
+    expect(row).not.toHaveProperty('tags');
+  });
+
   it('is consistent with findExistingIdsByIds about what still exists', async () => {
     // The two readers answer for two different arms of the same filter (surviving vs citable), so a
     // divergence here would show up as a belief that is withheld by one arm and cited by the other.
@@ -126,5 +139,51 @@ describe('FabFileRepository.findCitableFieldsByIds', () => {
 
     expect(surviving).toEqual([String(alive._id)]);
     expect(citable.map(r => r.id)).toEqual(surviving);
+  });
+});
+
+describe('FabFileRepository.findCitableFieldsWithTagsByIds', () => {
+  it('returns the citability fields AND tags, still without the document body', async () => {
+    const file = await makeFile('captured.md', {
+      chunkCount: 4,
+      vectorizedChunkCount: 4,
+      embeddingModel: 'text-embedding-3-small',
+      vectorized: true,
+    });
+
+    const [row] = await fabFileRepository.findCitableFieldsWithTagsByIds([String(file._id)]);
+
+    expect(row.id).toBe(String(file._id));
+    expect(row).toMatchObject({ fileName: 'captured.md', chunkCount: 4, vectorizedChunkCount: 4 });
+    // The one field this reader exists for: the capture joins its corpus to ground truth by tag.
+    expect(row.tags?.map(t => t.name)).toEqual(['datalake:test']);
+    // Everything else the projection leaves behind stays behind - adding `tags` is not a doorway.
+    expect(row).not.toHaveProperty('notes');
+    expect(row).not.toHaveProperty('presignedUrl');
+    expect(row).not.toHaveProperty('sourceMetadata');
+    expect(row).not.toHaveProperty('_id');
+  });
+
+  it('applies the same liveness semantics as the tagless reader', async () => {
+    // The capture's reachability filter reads `deletedAt`/`archivedAt` off these rows, so the two
+    // readers disagreeing about what comes back would move which files enter a scored corpus.
+    const deleted = await makeFile('deleted.md', { deletedAt: new Date() });
+    const archived = await makeFile('archived.md', { archivedAt: new Date() });
+    const ids = [String(deleted._id), String(archived._id)];
+
+    const tagged = await fabFileRepository.findCitableFieldsWithTagsByIds(ids);
+    const tagless = await fabFileRepository.findCitableFieldsByIds(ids);
+
+    expect(tagged.map(r => r.id)).toEqual(tagless.map(r => r.id));
+    expect(tagged.map(r => r.id)).toEqual([String(archived._id)]);
+  });
+
+  it('tolerates an unusable id rather than throwing the capture that asked', async () => {
+    const alive = await makeFile('alive.md', { chunkCount: 1, vectorizedChunkCount: 1 });
+
+    expect(
+      (await fabFileRepository.findCitableFieldsWithTagsByIds(['not-an-objectid', String(alive._id)])).map(r => r.id)
+    ).toEqual([String(alive._id)]);
+    expect(await fabFileRepository.findCitableFieldsWithTagsByIds([])).toEqual([]);
   });
 });

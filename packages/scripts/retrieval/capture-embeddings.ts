@@ -186,7 +186,10 @@ type CapturedFile = { fileId: string; docId: string; embeddingModel?: string | n
 const capturedFiles: CapturedFile[] = [];
 let filesUnreachable = 0;
 for (const batch of toBatches(fileIds, FILE_ID_BATCH)) {
-  const files = await fabFileRepository.findAllByIds(batch);
+  // Projected, not hydrated: this reads every candidate id the lake has ever held, and the
+  // unprojected reader builds a full mongoose document per id (`versions`, Mixed `sourceMetadata`
+  // and all) to answer a reachability question about eight scalars and a tag list.
+  const files = await fabFileRepository.findCitableFieldsWithTagsByIds(batch);
   const byId = new Map(files.map(f => [String(f.id), f]));
   // Iterated in the LAKE's id order rather than the read's, so what lands in the fixture does not
   // depend on Mongo document order.
