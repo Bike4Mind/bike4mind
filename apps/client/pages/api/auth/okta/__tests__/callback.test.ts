@@ -119,6 +119,9 @@ beforeEach(() => {
   mockUpdateOne.mockResolvedValue({});
   mockCreate.mockResolvedValue({ id: 'new-user', _id: 'new-user', tokenVersion: 0, isBanned: false });
   mockRevokeAllByUserId.mockResolvedValue(0);
+  // Default both lookup stages to "no match" so tests that drive the handler
+  // directly (rather than through runCallback) exercise the create path.
+  mockFindOne.mockResolvedValue(null);
 });
 
 describe('/api/auth/okta/callback — account-link email-equality gate', () => {
@@ -341,13 +344,11 @@ describe('/api/auth/okta/callback - re-login finds the emailless account by sub 
         _id: 'created-1',
         tokenVersion: 0,
         isBanned: false,
-        authProviders: [
-          {
-            strategy: AuthStrategy.Okta,
-            id: doc.oauthCredentials.id,
-            oktaIdentityProviderId: doc.oauthCredentials.oktaIdentityProviderId,
-          },
-        ],
+        // Read back the authProviders the create branch actually wrote
+        // (createUniqueOAuthUser stores authProviders: [oauthCredentials]) rather
+        // than synthesizing them, so the test exercises the real create shape the
+        // Stage-1 re-find depends on.
+        authProviders: doc.authProviders,
       };
       return account;
     });
@@ -373,6 +374,90 @@ describe('/api/auth/okta/callback - re-login finds the emailless account by sub 
         },
       })
     );
+  });
+});
+
+describe('/api/auth/okta/callback - backfill emailless account on later verified login', () => {
+  /** An account created emailless (unverified at signup), now re-found by Stage 1. */
+  const emaillessAccount = {
+    id: 'u-backfill',
+    _id: 'u-backfill',
+    email: null,
+    emailVerified: false,
+    tokenVersion: 2,
+    authProviders: [{ strategy: AuthStrategy.Okta, id: 'okta-bf', oktaIdentityProviderId: 'idp-1' }],
+  };
+
+  it('adopts the provider email once the same identity re-logs in with email_verified === true', async () => {
+    const res = await runCallback({
+      user: emaillessAccount,
+      userInfo: { sub: 'okta-bf', email: 'now-verified@example.com', email_verified: true, preferred_username: 'user' },
+    });
+
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    // Same-identity refresh: no tokenVersion bump, but the verified email is written.
+    const updateArg = mockUpdateOne.mock.calls[0][1];
+    expect(updateArg.email).toBe('now-verified@example.com');
+    expect(updateArg).not.toHaveProperty('$inc');
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockAuthFailCreate).not.toHaveBeenCalled();
+  });
+
+  it('does NOT backfill when the re-login still does not assert email_verified', async () => {
+    const res = await runCallback({
+      user: emaillessAccount,
+      userInfo: {
+        sub: 'okta-bf',
+        email: 'still-unverified@example.com',
+        email_verified: false,
+        preferred_username: 'user',
+      },
+    });
+
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    const updateArg = mockUpdateOne.mock.calls[0][1];
+    expect(updateArg.email).toBeUndefined();
+  });
+});
+
+describe('/api/auth/okta/callback - new-account create guards (username dedupe + empty name)', () => {
+  it('retries with a disambiguated username on a username collision instead of E11000-ing', async () => {
+    mockFetchUserInfo.mockResolvedValue({
+      sub: 'okta-dup',
+      email: 'dup@example.com',
+      email_verified: true,
+      name: 'Dup Name',
+    });
+    const usernameDup = Object.assign(new Error('E11000 dup key: index users.username_1'), {
+      code: 11000,
+      keyPattern: { username: 1 },
+    });
+    mockCreate
+      .mockRejectedValueOnce(usernameDup)
+      .mockResolvedValueOnce({ id: 'created', _id: 'created', tokenVersion: 0, isBanned: false });
+
+    const { req, res } = makeReqRes();
+    await handler(req, res);
+
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+    expect(mockAuthFailCreate).not.toHaveBeenCalled();
+  });
+
+  it('derives a non-empty username from the email when the provider sends no name or handle', async () => {
+    // Only a verified email - no name, no preferred_username. A bare
+    // User.create({ username: name }) would attempt username='' and fail
+    // validation; the shared helper falls back to the email local-part.
+    mockFetchUserInfo.mockResolvedValue({ sub: 'okta-noname', email: 'lonely@example.com', email_verified: true });
+
+    const { req, res } = makeReqRes();
+    await handler(req, res);
+
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    const createArg = mockCreate.mock.calls[0][0];
+    expect(createArg.username).toBe('lonely');
+    expect(createArg.name).toBe('lonely');
   });
 });
 
@@ -448,5 +533,10 @@ describe('/api/auth/okta/callback - IDP email-domain bind', () => {
     });
 
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    // Stage 1 for the unbound fallback queries WITHOUT oktaIdentityProviderId
+    // (idpScope = {}), matching the shape the SST-fallback create branch writes.
+    expect(mockFindOne).toHaveBeenCalledWith({
+      authProviders: { $elemMatch: { strategy: AuthStrategy.Okta, id: 'okta-sst' } },
+    });
   });
 });

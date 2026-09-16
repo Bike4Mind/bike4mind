@@ -39,6 +39,7 @@ import { encryptSecret } from '@server/security/secretEncryption';
 import { Config } from '@server/utils/config';
 import { Logger } from '@bike4mind/observability';
 import { decideAutoLink, applyAccountLink } from '@server/utils/auth/oauthAccountLink';
+import { createUniqueOAuthUser, deriveOAuthUsername } from '@server/utils/auth/createOAuthUser';
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
 import { isLocalAppUrl } from '@server/utils/validators';
 
@@ -206,8 +207,12 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     }
 
     // Trust anchor (mirrors the SAML strategy in server/auth/auth.ts): an Okta tenant may
-    // only assert addresses in the domain its IDP row is registered for. Enforced BEFORE
-    // the lookup below, so a rogue tenant cannot resolve a victim in another tenant.
+    // only assert addresses in the domain its IDP row is registered for. This binds the
+    // asserted EMAIL, so it guards the Stage-2 email/username lookup below - a rogue tenant
+    // cannot resolve a victim by asserting that victim's address from another tenant. The
+    // Stage-1 immutable lookup never consults the email; its cross-tenant guard is separate,
+    // the oktaIdentityProviderId scope on the query (see the idpScope note at Stage 1, and
+    // the parallel samlIdentityProviderId reasoning in verifyCallback.ts).
     //
     // The SST-secret fallback has no IDP row and therefore no domain to bind to; it is a
     // single deploy-level Okta tenant configured by an operator, so it stays unbound - but
@@ -239,8 +244,8 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     // email login identity - findable on re-login. Without it Stage 2 misses (the
     // email was dropped and the stored username is the display name, not
     // preferred_username), the create branch runs again, and the deterministic
-    // username E11000s on its unique index -> callback_error. Mirrors
-    // verifyCallback.ts:153. The sub guard stops $elemMatch matching legacy falsy-id
+    // username E11000s on its unique index -> callback_error. Mirrors the Stage 1
+    // lookup in verifyCallback.ts. The sub guard stops $elemMatch matching legacy falsy-id
     // rows; idpScope is omitted (not queried as null) for the unbound SST fallback,
     // matching the shape the create branch writes.
     const idpScope = idp?.id ? { oktaIdentityProviderId: idp.id } : {};
@@ -374,6 +379,23 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         promoteEmailVerified,
         currentTokenVersion: user.tokenVersion,
       });
+
+      // Backfill-on-login: an account created emailless - because the provider had
+      // not verified the email at signup (see the create branch below) - acquires
+      // its email the first time the SAME provider identity re-logs in asserting
+      // email_verified === true. Stage 1 matched on the immutable identity, so the
+      // decideAutoLink gate never ran and applyAccountLink never writes `email`;
+      // without this the account stays permanently emailless (no notifications, no
+      // partner-rule org membership, not findable by email in admin). The IDP domain
+      // bind above already constrained `email` to the tenant's registered domain, so
+      // this can only adopt an in-tenant address. existingSameIdentity implies a
+      // pre-existing provider entry, so `update` is the flat (non-$set) refresh shape.
+      // Mirrors the create gate: adopt `email` only, no emailVerified promotion.
+      if (existingSameIdentity && !user.email && userInfo.email_verified === true) {
+        update.email = email;
+        user.email = email;
+      }
+
       await User.updateOne({ _id: user._id }, update);
       Object.assign(user, reflect);
       // Invariant (mirrors verifyCallback.ts): the new-provider tokenVersion bump must also revoke
@@ -392,16 +414,18 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       // the passport create path applies (verifyCallback.ts) and the same
       // OIDC-native boolean the link branch above reads (do NOT use
       // isProviderEmailVerified() here - see that comment). Emailless accounts are
-      // schema-valid (partial unique index on email); sign-in still succeeds.
-      user = await User.create({
-        name,
-        username: name,
-        ...(userInfo.email_verified === true ? { email } : {}),
-        hasUsablePassword: false,
-        isAdmin: false,
-        oauthCredentials,
-        authProviders: [oauthCredentials],
-      });
+      // schema-valid (partial unique index on email); sign-in still succeeds, and
+      // the identity is re-found by Stage 1 (then backfilled) on the next login.
+      //
+      // Route through the shared createUniqueOAuthUser (as verifyCallback.ts does):
+      // a bare User.create({ username: name }) E11000s on a username collision and
+      // crashes on an empty `name`, both surfacing as an opaque callback_error.
+      // deriveOAuthUsername prefers preferred_username, then name, then the email
+      // local-part, and never returns '' - so an emailless account still gets a
+      // non-empty username even when the provider sends only a display name.
+      const emailForNewAccount = userInfo.email_verified === true ? email : null;
+      const baseUsername = deriveOAuthUsername(username ?? null, name, emailForNewAccount);
+      user = await createUniqueOAuthUser({ name, baseUsername, email: emailForNewAccount, oauthCredentials });
       Logger.debug('[Okta Callback] Created new user:', user.id);
     }
 
