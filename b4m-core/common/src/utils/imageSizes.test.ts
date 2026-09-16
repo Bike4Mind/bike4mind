@@ -50,6 +50,15 @@ describe('isSupportedImageSize', () => {
     expect(isSupportedImageSize(ImageModels.GPT_IMAGE_2, 'wide')).toBe(false);
   });
 
+  it('rejects a value that only looks like a resolution', () => {
+    // The pattern is anchored: extra segments and surrounding whitespace are not resolutions,
+    // so they must not be measured against the constraints as if they were.
+    expect(isSupportedImageSize(ImageModels.GPT_IMAGE_2, '1024x1024x1024')).toBe(false);
+    expect(isSupportedImageSize(ImageModels.GPT_IMAGE_2, ' 1280x960')).toBe(false);
+    expect(isSupportedImageSize(ImageModels.GPT_IMAGE_2, '1280x960 ')).toBe(false);
+    expect(isSupportedImageSize(ImageModels.GPT_IMAGE_2, '1280 x 960')).toBe(false);
+  });
+
   it('measures a non-GPT-Image model against the legacy dall-e list', () => {
     for (const size of OPENAI_LEGACY_IMAGE_SIZES) {
       expect(isSupportedImageSize(ImageModels.DALL_E_2, size)).toBe(true);
@@ -92,5 +101,8 @@ describe('resolveGptImageGenerateSize', () => {
     // gpt-image-2 sizing is open-ended, so an unrecognised token is OpenAI's to interpret.
     expect(resolveGptImageGenerateSize(ImageModels.GPT_IMAGE_2, 'wide')).toBe('wide');
     expect(resolveGptImageGenerateSize(ImageModels.GPT_IMAGE_1_5, 'wide')).toBe('1024x1024');
+    // A malformed pair names no resolution either, so it takes the same route.
+    expect(resolveGptImageGenerateSize(ImageModels.GPT_IMAGE_2, '1024x1024x1024')).toBe('1024x1024x1024');
+    expect(resolveGptImageGenerateSize(ImageModels.GPT_IMAGE_1_5, '1024x1024x1024')).toBe('1024x1024');
   });
 });

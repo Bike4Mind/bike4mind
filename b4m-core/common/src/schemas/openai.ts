@@ -54,11 +54,11 @@ export const ALL_IMAGE_MODELS = [
 ] as const;
 
 export const OPENAI_GPT_IMAGE_1_IMAGE_SIZES = IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes;
-/**
- * The UI presets plus 'auto', which the API accepts but is not a resolution, so it has no
- * place in the preset list the size picker renders.
- */
-export const OPENAI_GPT_IMAGE_2_IMAGE_SIZES = [...IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.sizes, 'auto'] as const;
+/** The UI presets plus the tier's non-resolution `autoSize`, which the picker cannot render. */
+export const OPENAI_GPT_IMAGE_2_IMAGE_SIZES = [
+  ...IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.sizes,
+  IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.autoSize,
+] as const;
 export const BFL_IMAGE_SIZES = ['1024x768'] as const;
 
 export const OPENAI_IMAGE_SIZES = [...OPENAI_GPT_IMAGE_1_IMAGE_SIZES] as const;

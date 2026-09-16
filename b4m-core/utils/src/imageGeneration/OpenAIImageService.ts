@@ -207,9 +207,7 @@ export class OpenAIImageService extends AIImageService {
               `Size '${openaiOptions.size}' is not supported by ${modelName}, changed to '${resolvedSize}'`
             );
           }
-          // cast: the resolver returns string because gpt-image-2 sizes are open-ended, but a
-          // value that differs from the input is always 'auto' or a tier default, both in the union.
-          openaiOptions.size = resolvedSize as typeof openaiOptions.size;
+          openaiOptions.size = resolvedSize;
         }
 
         // Remove any custom dimensions (width/height) as GPT-Image models use fixed sizes
