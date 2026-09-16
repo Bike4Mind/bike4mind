@@ -129,5 +129,9 @@ export function filterInviteRecipientsToSelf<T>(invite: T, userEmail?: string | 
       refused: keepSelf(recipients.refused),
     };
   }
+  // The bearer token never travels in an invitee-facing body. Whoever legitimately reaches one of
+  // these routes already holds it (it is the key they addressed the request with), so echoing it
+  // buys nothing and would hand a redeemable secret to any future caller of this serializer.
+  delete plain.token;
   return plain;
 }

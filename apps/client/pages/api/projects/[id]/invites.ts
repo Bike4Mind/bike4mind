@@ -104,11 +104,12 @@ const handler = baseApi()
         );
       }
 
-      const generateInviteLink = (inviteId: string) => {
-        return `${process.env.APP_URL}/share/${inviteId}`;
+      // Token, not `_id` - see generateInviteLink in pages/api/[type]/[id]/invites/index.ts for why.
+      const generateInviteLink = (invite: { id: string; token?: string }) => {
+        return `${process.env.APP_URL}/share/${invite.token ?? invite.id}`;
       };
 
-      return res.json({ ...created, link: generateInviteLink(created.id) });
+      return res.json({ ...created, link: generateInviteLink(created) });
     })
   );
 

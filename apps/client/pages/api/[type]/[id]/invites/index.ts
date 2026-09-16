@@ -200,7 +200,7 @@ const handler = baseApi()
       // Send email notifications to recipients
       const pendingRecipients = created.recipients?.pending || [];
       if (pendingRecipients.length > 0) {
-        const inviteLink = generateInviteLink(created.id);
+        const inviteLink = generateInviteLink(created);
         const documentName = await getDocumentName(inviteType, id);
         const typeName = getTypeName(inviteType);
         const brand = process.env.APP_NAME || '';
@@ -221,7 +221,7 @@ const handler = baseApi()
         });
       }
 
-      return res.json({ ...created, link: generateInviteLink(created.id) });
+      return res.json({ ...created, link: generateInviteLink(created) });
     })
   )
   /**
@@ -271,8 +271,14 @@ const handler = baseApi()
     })
   );
 
-export const generateInviteLink = (id: string) => {
-  return `${process.env.APP_URL}/share/${id}`;
+/**
+ * The share URL. Addressed by the invite's bearer TOKEN, never its `_id`: the id is only partially
+ * random and is disclosed by every surface that lists invites, so using it as the link secret let
+ * anyone who saw one guess its neighbours. Falls back to the id for a legacy tokenless invite, which
+ * `resolveRedeemableInvite` still admits until it expires.
+ */
+export const generateInviteLink = (invite: { id: string; token?: string }) => {
+  return `${process.env.APP_URL}/share/${invite.token ?? invite.id}`;
 };
 
 // Helper to get document name for email

@@ -95,6 +95,15 @@ export const InviteSchema = new Schema<IInviteDocument>(
       type: Boolean,
       required: false,
     },
+    // The share link's bearer secret (see IBaseInvite.token). `unique` is the data constraint that
+    // makes it safe to resolve an invite by this field alone; `sparse` so the legacy tokenless rows
+    // do not all collide on null.
+    token: {
+      type: String,
+      required: false,
+      unique: true,
+      sparse: true,
+    },
     accepted: {
       type: Number,
       required: true,
@@ -146,6 +155,17 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
     if (!pendingEmail) return 0;
     const result = await this.inviteModel.countDocuments(pendingEmailMatch(pendingEmail));
     return result;
+  }
+
+  /**
+   * Resolve an invite by its share-link bearer token. The empty-string guard matters: `token` is a
+   * sparse field, so querying it with '' (or any falsy value coerced to one) must not be allowed to
+   * match a row that simply has no token.
+   */
+  async findByToken(token: string): Promise<IInviteDocument | null> {
+    if (!token) return null;
+    const result = await this.inviteModel.findOne({ token });
+    return result ? (result.toJSON() as IInviteDocument) : null;
   }
 
   async findAllByDocumentId(documentId: string): Promise<IInviteDocument[]> {

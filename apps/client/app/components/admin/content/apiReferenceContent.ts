@@ -797,9 +797,13 @@ Structured multi-step plans created by the QuestMaster agent.
 | POST | /api/[type]/[id]/revokeSharing | Revoke sharing |
 | GET | /api/[type]/[id]/invites | List invites for resource |
 | GET | /api/invites | List all invites |
-| GET | /api/invites/[id] | Get invite details |
-| POST | /api/invites/[id]/accept | Accept invite |
+| GET | /api/invites/[id] | Get invite details (\`[id]\` is the invite's share token) |
+| POST | /api/invites/[id]/accept | Accept invite (\`[id]\` is the invite's share token) |
 | POST | /api/invites/[id]/refuse | Refuse invite |
+
+On the two routes above that redeem a share, \`[id]\` is the invite's **share token** - the opaque value carried by the link returned as \`link\` when the invite is created - and not the invite's database id. An invite's database id is not a credential and will not resolve on those routes. Invites created before share tokens existed still resolve by their database id until they expire.
+
+\`DELETE /api/invites/[id]\` is the exception and still takes the database id: cancelling is authorized by your share permission on the underlying document, not by holding the link.
 
 ---
 

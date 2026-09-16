@@ -6,11 +6,11 @@ import { acceptInvite } from './accept';
 describe('sharingService - acceptInvite (Organization)', () => {
   const userId = 'user-123';
   const organizationId = 'org-456';
-  const inviteId = 'invite-789';
+  const inviteId = '65a1f77bcf86cd7994390789';
 
   let mockAdapters: {
     db: {
-      invites: { findById: Mock; update: Mock };
+      invites: { findById: Mock; findByToken: Mock; update: Mock };
       sessions: { findById: Mock; update: Mock; findAllByIds: Mock };
       projects: { findById: Mock; update: Mock };
       fabFiles: { findById: Mock; update: Mock; findAllByIds: Mock };
@@ -51,7 +51,7 @@ describe('sharingService - acceptInvite (Organization)', () => {
     vi.clearAllMocks();
     mockAdapters = {
       db: {
-        invites: { findById: vi.fn(), update: vi.fn() },
+        invites: { findById: vi.fn(), findByToken: vi.fn(async () => null), update: vi.fn() },
         sessions: { findById: vi.fn(), update: vi.fn(), findAllByIds: vi.fn() },
         projects: { findById: vi.fn(), update: vi.fn() },
         fabFiles: { findById: vi.fn(), update: vi.fn(), findAllByIds: vi.fn() },
@@ -181,11 +181,11 @@ describe('sharingService - acceptInvite (Group)', () => {
   const userId = 'user-123';
   const groupId = 'group-456';
   const organizationId = 'org-789';
-  const inviteId = 'invite-999';
+  const inviteId = '65a1f77bcf86cd7994390999';
 
   let mockAdapters: {
     db: {
-      invites: { findById: Mock; update: Mock };
+      invites: { findById: Mock; findByToken: Mock; update: Mock };
       sessions: { findById: Mock; update: Mock; findAllByIds: Mock };
       projects: { findById: Mock; update: Mock };
       fabFiles: { findById: Mock; update: Mock; findAllByIds: Mock };
@@ -232,7 +232,7 @@ describe('sharingService - acceptInvite (Group)', () => {
     vi.clearAllMocks();
     mockAdapters = {
       db: {
-        invites: { findById: vi.fn(), update: vi.fn() },
+        invites: { findById: vi.fn(), findByToken: vi.fn(async () => null), update: vi.fn() },
         sessions: { findById: vi.fn(), update: vi.fn(), findAllByIds: vi.fn() },
         projects: { findById: vi.fn(), update: vi.fn() },
         fabFiles: { findById: vi.fn(), update: vi.fn(), findAllByIds: vi.fn() },
@@ -309,7 +309,7 @@ describe('sharingService - acceptInvite (Group)', () => {
 describe('sharingService - acceptInvite (FabFile recipient membership)', () => {
   const userId = 'user-1';
   const fileId = 'file-1';
-  const inviteId = 'invite-1';
+  const inviteId = '65a1f77bcf86cd7994390001';
 
   const makeUser = (email: string) => ({ id: userId, email, username: 'u' });
 
@@ -325,7 +325,7 @@ describe('sharingService - acceptInvite (FabFile recipient membership)', () => {
 
   const makeAdapters = () => ({
     db: {
-      invites: { findById: vi.fn(), update: vi.fn() },
+      invites: { findById: vi.fn(), findByToken: vi.fn(async () => null), update: vi.fn() },
       fabFiles: { findById: vi.fn(async () => ({ id: fileId, users: [] })), update: vi.fn() },
       sessions: { findById: vi.fn(), update: vi.fn() },
       projects: { findById: vi.fn(), update: vi.fn() },
@@ -423,7 +423,7 @@ describe('sharingService - acceptInvite (FabFile recipient membership)', () => {
 describe('sharingService - acceptInvite (expiry)', () => {
   const userId = 'user-1';
   const fileId = 'file-1';
-  const inviteId = 'invite-1';
+  const inviteId = '65a1f77bcf86cd7994390001';
 
   const makeUser = () => ({ id: userId, email: 'a@x.com', username: 'a' });
 
@@ -440,7 +440,7 @@ describe('sharingService - acceptInvite (expiry)', () => {
 
   const makeAdapters = () => ({
     db: {
-      invites: { findById: vi.fn(), update: vi.fn() },
+      invites: { findById: vi.fn(), findByToken: vi.fn(async () => null), update: vi.fn() },
       fabFiles: { findById: vi.fn(async () => ({ id: fileId, users: [] })), update: vi.fn() },
       sessions: { findById: vi.fn(), update: vi.fn() },
       projects: { findById: vi.fn(), update: vi.fn() },
@@ -491,7 +491,7 @@ describe('sharingService - acceptInvite (Session knowledgeId propagation)', () =
   const userId = 'user-1';
   const inviterId = 'inviter-1';
   const sessionId = 'session-1';
-  const inviteId = 'invite-1';
+  const inviteId = '65a1f77bcf86cd7994390001';
 
   const makeUser = () => ({ id: userId, email: 'accepter@x.com', username: 'accepter' });
 
@@ -515,7 +515,7 @@ describe('sharingService - acceptInvite (Session knowledgeId propagation)', () =
 
   const makeAdapters = () => ({
     db: {
-      invites: { findById: vi.fn(), update: vi.fn() },
+      invites: { findById: vi.fn(), findByToken: vi.fn(async () => null), update: vi.fn() },
       fabFiles: { findById: vi.fn(), update: vi.fn() },
       sessions: { findById: vi.fn(), update: vi.fn() },
       projects: { findById: vi.fn(), update: vi.fn() },
