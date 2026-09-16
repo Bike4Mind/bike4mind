@@ -70,9 +70,31 @@ import ToolsUsed from '@client/app/components/Session/ToolsUsed';
 import { useMessageEditMode } from '@client/app/hooks/useMessageEditMode';
 
 const ModelChip: React.FC<{ displayName: string }> = ({ displayName }) => (
-  <Chip className="model-chip-web" size="sm" variant="soft" sx={messageMetaChipSx}>
-    {displayName}
-  </Chip>
+  // The only item in the footer with no natural width limit: model names run from "GPT-4.1"
+  // to a long vendor string, and on a phone one of those pushes the row onto a second line
+  // or crowds out the actions opposite it. Capped and ellipsized, with the full name on the
+  // tooltip so nothing is lost.
+  <Tooltip title={displayName}>
+    <Chip
+      className="model-chip-web"
+      size="sm"
+      variant="soft"
+      sx={theme => ({
+        ...messageMetaChipSx(theme),
+        minWidth: 0,
+        maxWidth: { xs: '110px', sm: '220px' },
+        '& .MuiChip-label': {
+          display: 'block',
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        },
+      })}
+    >
+      {displayName}
+    </Chip>
+  </Tooltip>
 );
 
 const DeleteMessageModal = ({
