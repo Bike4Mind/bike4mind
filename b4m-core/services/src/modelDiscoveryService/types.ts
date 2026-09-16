@@ -532,8 +532,12 @@ export interface ModelDiscoveryAdapters {
     prices: Pick<IModelPriceRepository, 'append' | 'rowsInForce'>;
   };
   sources: readonly DiscoverySource[];
-  /** Step 1 of the run (sec 5.7). A thunk so a driver wires its own auth adapters once. */
-  resolveCredentials: () => Promise<DiscoveryCredentials>;
+  /**
+   * Step 1 of the run (sec 5.7). The driver wires its own auth adapters once.
+   * `skipCache` reads admin settings past the settings cache, which a manual run
+   * needs because a key saved seconds earlier lands in another process.
+   */
+  resolveCredentials: (options?: { skipCache?: boolean }) => Promise<DiscoveryCredentials>;
   /**
    * Derives the dispatch group for models no row covers. Without it a newly
    * discovered model has no adapterFamily or dispatchProfile and stays

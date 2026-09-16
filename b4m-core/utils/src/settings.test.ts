@@ -122,4 +122,31 @@ describe('getSettingsByNames - stored falsy values survive the cached path', () 
     expect(values.falseSwitchRegression).toBe(false);
     expect(values.absentRegression).toBeNull();
   });
+
+  // The skipCache branch is production code (a manual model-discovery run takes it), so it owes
+  // the same contract as the cached branch: falsy stored values survive, absent reads as null.
+  it('returns the same shape on the skipCache path', async () => {
+    const db = {
+      adminSettings: {
+        findAll: vi.fn(),
+        findBySettingNames: vi
+          .fn()
+          .mockResolvedValue([
+            { settingName: 'zeroBudgetRegression', settingValue: 0 },
+            { settingName: 'falseSwitchRegression', settingValue: false },
+            { settingName: 'valuelessRowRegression' },
+          ]),
+      },
+    };
+    const values: Record<string, unknown> = await getSettingsByNames(
+      ['zeroBudgetRegression', 'falseSwitchRegression', 'valuelessRowRegression', 'absentRegression'] as never,
+      db as never,
+      { skipCache: true }
+    );
+    expect(values.zeroBudgetRegression).toBe(0);
+    expect(values.falseSwitchRegression).toBe(false);
+    expect(values.valuelessRowRegression).toBeNull();
+    expect(values.absentRegression).toBeNull();
+    expect(db.adminSettings.findAll).not.toHaveBeenCalled();
+  });
 });

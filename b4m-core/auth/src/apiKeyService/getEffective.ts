@@ -134,6 +134,8 @@ export const getEffectiveLLMApiKeys = async (
   adapters: GetEffectiveLLMApiKeysAdapters,
   options?: {
     logger?: Logger;
+    /** Read admin settings past the process-wide settings cache (see getSettingsByNames). */
+    skipCache?: boolean;
   }
 ) => {
   const { db } = adapters;
@@ -175,7 +177,11 @@ export const getEffectiveLLMApiKeys = async (
           adapters
         )
       : Promise.resolve<IApiKeyDocument[]>([]),
-    adapters.getSettingsByNames(adminSettingNames, { adminSettings: db.adminSettings }, { logger }),
+    adapters.getSettingsByNames(
+      adminSettingNames,
+      { adminSettings: db.adminSettings },
+      { logger, skipCache: options?.skipCache }
+    ),
   ]);
 
   const userKeyMap = new Map<ApiKeyType, IApiKeyDocument>();

@@ -191,10 +191,11 @@ export function buildModelDiscoveryAdapters(logger: Logger): ModelDiscoveryAdapt
     },
     sources: buildSources(catalogView),
     refreshCatalogView: catalogView.refresh,
-    resolveCredentials: () =>
+    resolveCredentials: options =>
       modelDiscoveryService.getDiscoveryCredentials(
         { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
-        env
+        env,
+        options
       ),
     // Seed-side derivation of the dispatch group: without it a newly discovered
     // model has no adapterFamily and stays metadata-only forever.
