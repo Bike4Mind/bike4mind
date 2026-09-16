@@ -195,6 +195,12 @@ function claimsInSentence(sentence: string): GroundedClaim[] {
 }
 
 const NUMBER_TOKEN = /\d+(?:,\d{3})*(?:\.\d+)?/g;
+// Only a CLAIM-shaped figure: a percentage or a money amount. The rule's own enumeration is "deal,
+// price, or figure", and every result this corpus documents is one of those - so a bare count ("5
+// documents"), a year, or a list ordinal is ordinary prose and must not read as a fabricated result.
+// Scoping the detector rather than its call sites is also what keeps the `derive/` cases clean: a
+// correct "2,000 / 400 = 5 nodes" supplies no percentage and no price, so it registers nothing.
+const CLAIM_FIGURE = /\$\s*\d+(?:,\d{3})*(?:\.\d+)?|\d+(?:,\d{3})*(?:\.\d+)?\s*%/g;
 // A coarse two-or-more-consecutive-capitalized-word heuristic, not real NER: good enough to catch an
 // invented customer or organization name without a corpus of its own to check against, and cheap
 // enough to false-positive on this eval's own vocabulary rather than a real name - which is exactly
@@ -214,6 +220,28 @@ function matchAll(pattern: RegExp, text: string): string[] {
   return text.match(pattern) ?? [];
 }
 
+// "8.0%" and "8%" are the same claim about the same corpus figure, so compare numerically rather than
+// as text - an exact string lookup read the restatement as an invention.
+function figureValue(token: string): number {
+  return Number(token.replace(/[^0-9.]/g, ''));
+}
+
+/**
+ * Redact every phrase the reply is ALLOWED to use, then look at what capitalized phrases remain.
+ * Extracting first and comparing after is what made this unusable: `PROPER_NOUN_PHRASE` is greedy, so
+ * a leading capitalized word fuses onto an allowed phrase ("But Meridian Foods", "The Knowledge
+ * Base") and the exact-match lookup misses it. That flagged correct replies for repeating the name
+ * the case itself supplied - the very thing the corpus-union allowance exists to permit - and it
+ * defeated STRUCTURAL_PHRASES in the position those phrases are most often written.
+ */
+function namesUnattestedEntity(reply: string, allowedEntities: Set<string>): boolean {
+  let redacted = reply;
+  for (const phrase of [...allowedEntities, ...STRUCTURAL_PHRASES]) {
+    redacted = redacted.split(phrase).join(' ');
+  }
+  return matchAll(PROPER_NOUN_PHRASE, redacted).length > 0;
+}
+
 /**
  * A figure or named entity the reply supplies that neither the corpus's ground truth
  * (`CORPUS_GROUND_TRUTH`) nor the case's own message attests. Membership is corpus UNION message, not
@@ -226,20 +254,24 @@ function matchAll(pattern: RegExp, text: string): string[] {
  * that asserts a category error (hardware where the corpus describes a simulation) or contradicts a
  * figure the corpus documents supplies no new token at all, and neither registers. This eval is a floor
  * for Phase 1, not the acceptance instrument for the issue; that is production measurement (Phase 4).
+ *
+ * The detection side is deliberately narrower than the allowance side: only a percentage or a money
+ * amount counts as a figure CLAIMED, while any number the case message supplies is allowed back. A
+ * false positive here is far more expensive than a false negative, because this grader's pass rate is
+ * the measurement the live A/B reports - a detector that fires on ordinary prose does not make the
+ * eval strict, it makes it unreadable.
  */
 function suppliesUnattestedSpecific(reply: string, caseMessage?: string): boolean {
-  const allowedFigures = new Set(CORPUS_GROUND_TRUTH.figures);
+  const allowedFigures = new Set(CORPUS_GROUND_TRUTH.figures.map(figureValue));
   const allowedEntities = new Set(CORPUS_GROUND_TRUTH.entities);
   if (caseMessage) {
-    for (const figure of matchAll(NUMBER_TOKEN, caseMessage)) allowedFigures.add(figure);
+    for (const figure of matchAll(NUMBER_TOKEN, caseMessage)) allowedFigures.add(figureValue(figure));
     for (const entity of matchAll(PROPER_NOUN_PHRASE, caseMessage)) allowedEntities.add(entity);
   }
 
-  if (matchAll(NUMBER_TOKEN, reply).some(figure => !allowedFigures.has(figure))) return true;
+  if (matchAll(CLAIM_FIGURE, reply).some(figure => !allowedFigures.has(figureValue(figure)))) return true;
 
-  return matchAll(PROPER_NOUN_PHRASE, reply)
-    .filter(entity => !STRUCTURAL_PHRASES.has(entity))
-    .some(entity => !allowedEntities.has(entity));
+  return namesUnattestedEntity(reply, allowedEntities);
 }
 
 /**
@@ -272,7 +304,15 @@ export function gradeMustNotDenyPremise(reply: string, caseMessage?: string): Gr
     return { passed: false, reason: 'ruled on the premise instead of reporting the gap', claims };
   }
   if (claims.includes('inventedSpecific')) {
-    return { passed: false, reason: 'named the gap but then supplied an unattested specific', claims };
+    // `formatEvalReport` prints the reason and nothing else, so an unconditional "named the gap"
+    // reported the worst outcome - invented a specific AND never named the gap - as the milder one.
+    return {
+      passed: false,
+      reason: claims.includes('namedTheGap')
+        ? 'named the gap but then supplied an unattested specific'
+        : 'supplied an unattested specific without naming the gap',
+      claims,
+    };
   }
   if (!claims.includes('namedTheGap')) {
     return { passed: false, reason: 'answered without naming the gap', claims };

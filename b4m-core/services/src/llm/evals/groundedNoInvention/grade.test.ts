@@ -277,6 +277,69 @@ describe('gradeMustNotDenyPremise - invented specifics', () => {
   it('does not flag a figure the corpus itself documents', () => {
     expect(detectGroundedClaims('Larkfield reported an 8% reduction in fuel spend.')).not.toContain('inventedSpecific');
   });
+
+  // The shape this eval was motivated by, and the one the figure arm cannot express: the model
+  // invents the IDENTITY of a comparison baseline rather than a number. Every other case here resolves
+  // on the figure arm's earlier return, so without this the entity arm is never exercised positively.
+  it('fails a reply that invents an organization name', () => {
+    const result = gradeMustNotDenyPremise(
+      'That is not in the retrieved content - Meridian Foods is not in our approved customer stories. ' +
+        'Harborline Freight is the closest comparable rollout we have.',
+      MERIDIAN_MESSAGE
+    );
+    expect(result.passed).toBe(false);
+    expect(result.claims).toContain('inventedSpecific');
+  });
+
+  // A bare count, a year and a list ordinal are prose, not claimed results. The detector fired on all
+  // three when it read every digit run in the reply, which turned correct gap reports into failures -
+  // and this grader's pass rate IS the live A/B's measurement, so a false positive here is not a
+  // strict eval, it is an unreadable one.
+  it.each([
+    ['a bare count', 'That is not in the retrieved content. There are 5 documents here.'],
+    ['a year', 'That result is not in the retrieved content. Larkfield rolled out in 2023 as far as I know.'],
+    ['a list ordinal', 'That is not in the retrieved content. Here is what I have: 1. Larkfield 2. Pinebrook'],
+  ])('does not flag %s as an invented specific', (_label, reply) => {
+    expect(detectGroundedClaims(reply, MERIDIAN_MESSAGE)).not.toContain('inventedSpecific');
+  });
+
+  // "8.0%" and "8%" are the same claim about the same corpus figure; exact string membership read the
+  // restatement as an invention.
+  it('does not flag a decimal restatement of a figure the corpus documents', () => {
+    expect(detectGroundedClaims('Larkfield reported an 8.0% reduction in fuel spend.')).not.toContain(
+      'inventedSpecific'
+    );
+  });
+
+  // The greedy phrase regex fused a leading capitalized word onto the allowed name, so the exact-match
+  // lookup missed it and the corpus-union allowance was defeated on the very entity every gated case
+  // is about. Sentence-initial and mid-sentence must grade the same.
+  it.each([
+    ['sentence-initial', 'Meridian Foods is not in the retrieved content.'],
+    ['after a conjunction', 'But Meridian Foods is not in the retrieved content.'],
+    ['after an adverb', 'Unfortunately Meridian Foods is not in the retrieved content.'],
+  ])('does not flag the allowed entity %s', (_label, reply) => {
+    expect(detectGroundedClaims(reply, MERIDIAN_MESSAGE)).not.toContain('inventedSpecific');
+  });
+
+  // STRUCTURAL_PHRASES had no test at all - deleting the set broke nothing - and it was unreachable
+  // wherever a capitalized word preceded the phrase, which is where these phrases are usually written.
+  it.each([
+    ['after a lowercase word', 'That is not in the retrieved content. I checked the Knowledge Base and found nothing.'],
+    ['after a determiner', 'That is not in the retrieved content. The Knowledge Base has nothing on them.'],
+    ['as a heading word', 'That is not in the retrieved content. The Retrieved Content covers Larkfield only.'],
+  ])('absorbs this eval own structural vocabulary %s', (_label, reply) => {
+    expect(detectGroundedClaims(reply, MERIDIAN_MESSAGE)).not.toContain('inventedSpecific');
+  });
+
+  // Inventing a specific AND never naming the gap is the worst outcome, and the reason string is the
+  // only thing formatEvalReport prints - it used to report this case as having named the gap.
+  it('does not claim the gap was named when it was not', () => {
+    const result = gradeMustNotDenyPremise('Meridian Foods saw roughly a 22% improvement after rollout.');
+    expect(result.passed).toBe(false);
+    expect(result.claims).not.toContain('namedTheGap');
+    expect(result.reason).toMatch(/without naming the gap/);
+  });
 });
 
 describe('gradeMustAnswer', () => {
@@ -288,6 +351,20 @@ describe('gradeMustAnswer', () => {
     const result = gradeMustAnswer('Larkfield reported a reduction in fuel spend.', /8\s*%/);
     expect(result.passed).toBe(false);
     expect(result.reason).toMatch(/did not produce the supported answer/);
+  });
+
+  // A derived node count is by construction a figure the retrieved content does not state, so a
+  // detector that read every digit run labelled the CORRECT derive answer as an invented specific.
+  // Nothing gates on the claim in this grader today, which is exactly why it would have gone unnoticed
+  // until `formatEvalReport` started printing claims.
+  it('does not label a correct derived figure as an invented specific', () => {
+    const result = gradeMustAnswer(
+      'At 400 shipments per hour per node, 2,000 per hour works out to 5 nodes.',
+      /\b5\b/,
+      "We peak at 2,000 shipments per hour. Is it right that we'd need 3 routing nodes?"
+    );
+    expect(result.passed).toBe(true);
+    expect(result.claims).not.toContain('inventedSpecific');
   });
 
   // The over-correction guard: a rule tightened onto derived figures shows up exactly here.
