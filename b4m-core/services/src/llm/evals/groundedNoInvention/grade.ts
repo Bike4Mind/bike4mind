@@ -107,6 +107,15 @@
  *  - the cause phrase's object half: a DEMONSTRATIVE OBJECT that is not the bare back-reference is a
  *    cause, so "the effect of that rollout" (a back-reference a reply could legitimately use) is read
  *    as an attribution unless a finite predicate follows it;
+ *  - the reduced relative's matrix predicate is read from the participle's own SLOT rather than from
+ *    its INFLECTION (`canHeadPredicate`), so a predicate that ENDS its clause is not recognised, and a
+ *    MULTI-WORD bare object puts its own first word in that slot ("...RATIONALISING DEPOT ROUTES"
+ *    grades clean where the committed single-noun row does not). A preposition a modifier run opens
+ *    keeps the predicate out of the slot too, which is why a PREPOSITIONAL modifier run still FAILS an
+ *    honest refusal while the bare-adverb instance of the same cost no longer does. The slot's
+ *    boundary is pinned on both sides in `grade.test.ts`; only a part-of-speech test closes the
+ *    multi-word case, and the word-shape test that stood there failed correct replies and supplies
+ *    alike;
  *  - the relative arm's object slot is `CLAIM_HELD` under the `CARRIES` branch of
  *    `RELATIVE_PREDICATES_CLAIM`, so an object outside it escapes an otherwise predicating clause
  *    ("whose index lists the DRIVERS"); the `HOLDS` branch takes `CLAIM_ITSELF` instead;
@@ -756,28 +765,51 @@ const PREPOSITIONAL_ING = new Set(['during', 'regarding', 'concerning', 'includi
  * finite predicate. The ending is only a SHAPE: `-ed` is also a past finite verb ("confounded") and
  * `-ing` also a noun ("everything"). It is read here only as the word whose own slot the NEXT token
  * occupies, so over-inclusion widens which tokens may be tested, never which verdict they carry -
- * `isInflectedVerb` is what the tested token has to satisfy.
+ * `canHeadPredicate` is what the tested token's own slot has to satisfy.
  */
 function isNonFiniteVerb(word: string): boolean {
   return /(?:ing|ed)$/i.test(word) && !PREPOSITIONAL_ING.has(word);
 }
 
 /**
- * A verb form recognised from its INFLECTION rather than from `FINITE_VERB`'s list: the third-person
- * `-s`/`-es` and the past `-ed`. This is the structural half of "a further finite verb follows" - it
- * reaches a matrix predicate the list has never heard of ("...RATIONALISING ELUDES us") without having
- * to enumerate one. It is deliberately morphological: a token with no verb inflection is NOT read as
- * the predicate, which is what keeps the relative's own modifier out of the matrix slot. Reading "any
- * non-function content word" instead let the relative verb's adverb be taken for the matrix predicate
- * ("...RATIONALISING DAILY"), which un-guarded the supply exactly one modifier from the committed row.
+ * A word standing in the matrix PREDICATE's own slot: a content word directly after the participle that
+ * has the predicate's own COMPLEMENT behind it ("...RATIONALISING ELUDE us", "...RATIONALISING DEFY
+ * explanation", "...RATIONALISING REMAINS unclear").
  *
- * The shape is necessary and not sufficient: `-s` is also the plural noun and the adverb ("routes",
- * "sometimes"), which is why the caller keeps `isFunctionWord` beside it - "across" and "towards" are
- * this shape and must be read as the modifier. A non-function plural after the participle's own slot
- * still matches, and is the cost of an inflectional test; no shape in the suite reaches it.
+ * The test is SYNTACTIC rather than morphological, and that is a measured requirement, not a
+ * preference. The previous instrument recognised a verb by its INFLECTION (`-s`/`-es`/`-ed`), which
+ * failed both ways at once: a finite form with no inflection - the base present plural (`elude`,
+ * `escape`, `baffle`, `confound`, `defy`, `make`, `await`) and the irregular past (`left`, `kept`,
+ * `held`, `made`, `brought`, `took`) - was not recognised, so an honest refusal one number-agreement
+ * step from the pinned must-PASS row was graded as a supply (`...the effects ... eluding elude us.`
+ * FAILed where `...the effect ... eludes us.` PASSed); and because `-s` is also the plural noun and
+ * the adverb, the relative's own object was read as the predicate and a genuine supply graded clean
+ * (`...rationalising routes.` / `...rationalising sometimes.`). No word-shape test can do both:
+ * `elude` and `routes` are both uninflected content words, and `routes`/`eludes` are both `-s` words.
+ *
+ * What separates the two is what a word in the relative's own slot is FOLLOWED by. The relative's
+ * continuation is the relative's own object or adverbial run, and it ENDS the phrase - at the clause
+ * end ("routes.", "everything.", "daily.") or in a modifier a preposition or coordinator opens
+ * ("daily ACROSS THE REGION", "ACROSS THE REGION AND the fleet is growing"). A finite predicate is
+ * followed by its own complement, which a preposition or a coordinator does not start ("elude US",
+ * "defy EXPLANATION", "make NO sense", "remains UNCLEAR").
+ *
+ * Cost, measured and accepted, in the two shapes this leaves open:
+ *  - a matrix predicate that ends its clause takes no complement, so "...rationalising PERSISTS." is
+ *    graded as a supply. No row in the suite reaches the shape, but the same reading is why the
+ *    bare-object modifier run opens: a multi-word bare object puts its FIRST word where a predicate
+ *    would stand and the word behind it where a complement would ("...rationalising DEPOT ROUTES."),
+ *    so that row grades clean where the committed single-noun row ("...rationalising ROUTES.") does
+ *    not. Closing it needs the candidate's part of speech, which no shape test and no complement test
+ *    recovers: `defy explanation` (a predicate and its object) and `depot routes` (a modifier and its
+ *    head) are the same two uninflected content words in the same two slots. Both spellings are pinned
+ *    in `grade.test.ts` at their current verdict, and measured in the report.
  */
-function isInflectedVerb(word: string): boolean {
-  return /(?:[a-z]s|ed)$/i.test(word);
+function canHeadPredicate(tokens: string[], i: number): boolean {
+  const next = tokens[i + 1];
+  if (next === undefined || /^[;:,!?.]$/.test(next)) return false;
+  const nextWord = next.toLowerCase();
+  return !PREPOSITION.has(nextWord) && !COORDINATOR_WORD.test(nextWord);
 }
 
 /** A word that introduces or joins a phrase rather than heading a predicate. */
@@ -792,22 +824,22 @@ function isFunctionWord(word: string): boolean {
  *
  * Two recognisers, because one of them cannot be a list. `FINITE_VERB` covers the forms this corpus
  * predicates a phrase with, and the structural tell covers everything else: once a participle has
- * taken its object inside the relative, the next CONTENT word at the participle's own boundary is the
- * matrix predicate ("...the customer is RATIONALISING ELUDES us"). It has to be a verb FORM, not just
- * any content word - see `isInflectedVerb` - or the relative verb's own adverb is taken for the
- * predicate ("...RATIONALISING DAILY"), `Supply.at` moves off the phrase and a supply one modifier
- * from the committed row grades clean. A word a preposition, determiner or coordinator introduces
- * belongs to the relative's modifier instead ("...RATIONALISING ACROSS the region"), so it is skipped
- * rather than matched.
+ * taken its object inside the relative, the next CONTENT word standing in the participle's own slot is
+ * the matrix predicate ("...the customer is RATIONALISING ELUDE us"). It has to be a word in the
+ * PREDICATE's slot, not just any content word - see `canHeadPredicate` - or the relative verb's own
+ * adverb is taken for the predicate ("...RATIONALISING DAILY"), `Supply.at` moves off the phrase and a
+ * supply one modifier from the committed row grades clean. A word a preposition, determiner or
+ * coordinator introduces belongs to the relative's modifier instead ("...RATIONALISING ACROSS the
+ * region"), so it is skipped rather than matched.
  *
  * ADJACENCY IS THE ACCEPTED LIMIT, and the prepositional modifier is the cost of it. A PP between the
  * participle and the predicate ("...RATIONALISING ACROSS THE REGION eludes us") leaves the predicate
- * one token past the participle's own boundary, so the tell does not reach it and the honest refusal is
- * graded as a supply. Extending the scan across the modifier run was measured and rejected: it can only
- * recognise a verb morphologically, and a plural noun in the modifier run (`routes`, `savings`) is
- * indistinguishable from `-s`, so the scan read the relative's own PP head as the matrix predicate and
- * graded a supply one noun from the committed row clean. The shape is pinned in `grade.test.ts` as a
- * named cost rather than traded for that.
+ * past the participle's own slot, so the tell does not reach it and the honest refusal is graded as a
+ * supply. Extending the scan across the modifier run was measured and rejected: a plural noun in the
+ * modifier run (`routes`, `savings`) cannot be told from a base-form verb by any word-shape test, so a
+ * scan that read the run read the relative's own PP head as the matrix predicate and graded a supply
+ * one noun from the committed row clean. The shape is pinned in `grade.test.ts` as a named cost rather
+ * than traded for that.
  */
 function finiteVerbFollows(tokens: string[], from: number): boolean {
   for (let i = from; i < tokens.length; i++) {
@@ -817,7 +849,7 @@ function finiteVerbFollows(tokens: string[], from: number): boolean {
     const word = tokens[i].toLowerCase();
     if (COORDINATOR_WORD.test(word)) return false;
     if (FINITE_VERB.test(word)) return true;
-    if (isNonFiniteVerb(tokens[i - 1]?.toLowerCase() ?? '') && !isFunctionWord(word) && isInflectedVerb(word))
+    if (isNonFiniteVerb(tokens[i - 1]?.toLowerCase() ?? '') && !isFunctionWord(word) && canHeadPredicate(tokens, i))
       return true;
   }
   return false;

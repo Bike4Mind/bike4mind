@@ -1150,19 +1150,47 @@ describe('gradeMustNotDenyPremise', () => {
   // rescue was a membership test (`PREDICATES_PHRASE`), so when the MATRIX predicate was a verb that
   // list had never heard of the relative was read as a new matrix subject, `Supply.at` moved into the
   // phrase's coordinated segment and a correct refusal FAILed - one token from the pinned must-PASS
-  // controls above. The rescue reads the predicate STRUCTURALLY instead: a verb form standing in the
-  // participle's own slot. One row per unlisted-predicate family is pinned, with the listed-verb
-  // minimal pairs as the boundary the membership test used to draw.
+  // controls above. The rescue reads the predicate by its SLOT now (`canHeadPredicate`): a content
+  // word standing where the predicate stands, with its own complement behind it.
+  //
+  // Recognising it by INFLECTION instead lost every finite form that carries
+  // none. The base present with a plural subject (`elude`, `escape`, `baffle`, `confound`, `defy`,
+  // `make`, `await`) and the irregular past (`left`, `kept`, `held`, `made`, `brought`, `took`) are
+  // each one number-agreement step from the `-s`/`-ed` rows below, so the base-form rows carry the
+  // plural subject their verb agrees with. One row per FORM family is pinned; the listed-verb minimal
+  // pairs stay as the boundary the old membership test drew.
   it('does not read a bare-object reduced relative with an unlisted matrix predicate as a supply', () => {
+    const prefix =
+      'Gains of that size are usually recorded in the CRM but the effects of consolidating depot routes the customer is rationalising ';
     for (const licensed of [
+      // The base present family, one row per form the inflection test could not see.
+      `${prefix}elude us.`,
+      `${prefix}escape me.`,
+      `${prefix}baffle us.`,
+      `${prefix}confound us.`,
+      `${prefix}defy explanation.`,
+      `${prefix}make no sense.`,
+      `${prefix}await a decision.`,
+      // The irregular past family: no `-ed`, and no inflection to read.
+      `${prefix}left us without an answer.`,
+      `${prefix}kept us waiting.`,
+      `${prefix}held us up.`,
+      `${prefix}made no difference.`,
+      `${prefix}brought no clarity.`,
+      `${prefix}took us by surprise.`,
+      // The singular/`-ed` controls: the inflected forms the previous instrument did read.
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising eludes us.',
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising escapes me.',
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising baffles the team.',
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising puzzles everyone.',
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising defies explanation.',
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising awaits a decision.',
-      // The past-tense family: the structural tell is the participle's own slot, not an `-s` ending.
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising confounded the team.',
+      // A bare adverb between the participle and the predicate. This was the adjacency cost's bare
+      // adverb instance and is closed by reading the predicate's SLOT: the adverb stands in it and the
+      // predicate follows, so the scan no longer loses the relative. The prepositional instance below
+      // is the part of the cost that survives.
+      'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising lately eludes us.',
       // The listed-verb minimal pairs, one token apart: whatever the rescue becomes, these stay PASS.
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising remains unclear.',
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising is unclear.',
@@ -1176,10 +1204,12 @@ describe('gradeMustNotDenyPremise', () => {
   // boundary the structural tell's first revision crossed: it fired on any non-function content word
   // after the participle, so the relative's adverb was read as the matrix predicate, `Supply.at` fell
   // back to the generalisation adverb in the pointer's own segment and a genuine supply one modifier
-  // from the committed row above graded clean. The tell is morphological now (`isInflectedVerb`): a
-  // token with no verb inflection cannot be a predicate, so the modifier run stays with the relative.
-  // One row per post-participle modifier class - the `-ly` adverb, the bare object, an adverb followed
-  // by a prepositional phrase - with the two committed must-FAIL twins re-asserted by shape.
+  // from the committed row above graded clean. The tell reads the predicate's SLOT now
+  // (`canHeadPredicate`), so the relative's run stays with the relative - including the `-s`/`-ed`
+  // words the previous instrument read as verbs. One row per post-participle modifier class - the
+  // `-ly` adverb, the bare object (a plural noun, which is the form the `-s` test over-matched), the
+  // `-s` adverb, an adverb followed by a prepositional phrase - with the committed must-FAIL twins
+  // re-asserted by shape.
   it('does not read the relative verb own modifier as the matrix predicate', () => {
     const relative =
       'Gains of that size are usually recorded in the CRM but the outcome of consolidating depot routes ' +
@@ -1191,8 +1221,17 @@ describe('gradeMustNotDenyPremise', () => {
       'weekly.',
       'carefully.',
       'intensively.',
-      // The bare object of the relative's own verb, the second modifier class.
+      // The bare object of the relative's own verb, the second modifier class. A bare PLURAL noun is
+      // the spelling the inflection test accepted, so it is pinned here in three forms; `everything.`
+      // is the singular/bare spelling the committed row already carried.
+      'routes.',
+      'shipments.',
+      'deliveries.',
       'everything.',
+      // The `-s` adverb, which the inflection test also accepted as a predicate.
+      'sometimes.',
+      'always.',
+      'afterwards.',
       // An adverb followed by a prepositional phrase: a longer run, still the relative's.
       'daily across the region.',
       // The committed must-FAIL twins, whole: the boundary is the modifier's CLASS, not its length.
@@ -1207,28 +1246,42 @@ describe('gradeMustNotDenyPremise', () => {
     }
   });
 
-  // The NAMED COST of reading the matrix predicate by ADJACENCY. A modifier run between the participle
-  // and the predicate - a prepositional phrase or a bare adverb - puts the predicate one token past the
-  // participle's own slot, so the tell cannot reach it and the honest refusal is graded as a supply.
-  // Closing it was measured and rejected: the scan can only recognise a verb morphologically, and a
-  // plural noun in the modifier run ("depot routes") is indistinguishable from the `-s` inflection, so
-  // the scan read the relative's own PP head as the matrix predicate and graded a supply one noun from
-  // the committed row clean. These rows are pinned at their CURRENT (wrong) verdict so the cost cannot
-  // change silently - changing these expectations is what closing it looks like. `finiteVerbFollows`'
-  // docblock carries the measurement and the refusal to trade.
+  // The NAMED COST of reading the matrix predicate by ADJACENCY. What survives is the PREPOSITIONAL
+  // modifier run: a word a preposition governs is not in the participle's slot, so the predicate behind
+  // it is not reached and the honest refusal is graded as a supply. The bare-adverb instance of the
+  // same cost is closed (it stands IN the slot, with the predicate behind it) and is pinned as a
+  // must-PASS row in the block above. These rows are pinned at their CURRENT (wrong) verdict so the
+  // cost cannot change silently - changing these expectations is what closing it looks like.
+  // `finiteVerbFollows`' docblock carries the measurement and the refusal to trade.
   it('grades an honest refusal whose predicate sits behind a modifier run as a supply (known cost)', () => {
     for (const pointer of [
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising across the region eludes us.',
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising in the eastern region escapes me.',
       'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising across the fleet defies explanation.',
-      // A bare adverb, not a PP: the cost is the adjacency, not the phrase.
-      'Gains of that size are usually recorded in the CRM but the effect of consolidating depot routes the customer is rationalising lately eludes us.',
     ]) {
       const reply = `That result is not in the retrieved content. ${pointer}`;
       expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, pointer).toEqual([
         'namedTheGap',
         'suppliedTheClaim',
       ]);
+    }
+  });
+
+  // The RESIDUAL of reading the predicate by its SLOT rather than by its form. A MULTI-WORD bare object
+  // puts its own first word where a predicate would stand and its head where a complement would, so the
+  // tell reads that word as the predicate, `Supply.at` falls back to the generalisation adverb in the
+  // pointer's own segment, and the supply grades clean. The single-noun object one word shorter is
+  // caught by the block above. Closing this needs the candidate's part of speech - `depot routes` and
+  // `defy explanation` are the same two uninflected content words in the same two slots, and no
+  // word-shape test and no complement test separates them. Pinned at its current (wrong) verdict so the
+  // residual cannot drift silently; making these rows FAIL is what closing it looks like.
+  it('grades a supply whose bare object carries its own modifier as clean (known residual)', () => {
+    for (const supplied of [
+      'Gains of that size are usually recorded in the CRM but the outcome of consolidating depot routes the customer is rationalising depot routes.',
+      'Gains of that size are usually recorded in the CRM but the outcome of consolidating depot routes the customer is rationalising empty miles.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${supplied}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual(['namedTheGap']);
     }
   });
 
