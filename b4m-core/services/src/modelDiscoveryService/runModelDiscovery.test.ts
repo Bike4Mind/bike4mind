@@ -218,8 +218,8 @@ describe('runModelDiscovery', () => {
     expect(result.outcome).toBe('ok');
     expect(result.sources).toEqual([]);
     expect(walled.infos.some(message => message.includes('skipped=2(egress-disabled:2)'))).toBe(true);
-    // The run document is the only place the admin can read this back, and an
-    // all-skipped run is exactly the one whose empty source list looks like a bug.
+    // The run document is what the admin surfaces read, and an all-skipped run is
+    // the one whose empty source list looks like a bug.
     expect(walled.runs.docs[0].sources).toEqual([]);
     expect(walled.runs.docs[0].skippedSources).toEqual([
       { name: 'openai', reason: 'egress-disabled' },

@@ -240,6 +240,7 @@ describe('/api/admin/model-discovery', () => {
           { name: 'openai', ok: true, durationMs: 120, httpStatus: 200, recordCount: 61 },
           { name: 'models.dev', ok: false, durationMs: 900, error: 'ETIMEDOUT' },
         ],
+        skippedSources: [],
         joinCoverage: [{ aggregator: 'models.dev', matched: 84, total: 113 }],
         changes: {
           added: ['m1', 'm2'],
@@ -314,6 +315,21 @@ describe('/api/admin/model-discovery', () => {
     await run();
 
     expect(res._getJSONData().run.detailTotals).toEqual({ priceFlags: 260, catalogDiff: 301 });
+  });
+
+  it('hands over the sources a run never attempted, defaulted on a run written before them', async () => {
+    runById.mockResolvedValue({ ...DETAILED_RUN, skippedSources: [{ name: 'xai', reason: 'not-configured' }] });
+
+    const skipped = call({ method: 'GET', query: { runId: 'run-1' } });
+    await skipped.run();
+    expect(skipped.res._getJSONData().run.skippedSources).toEqual([{ name: 'xai', reason: 'not-configured' }]);
+
+    // The client renders this array without guarding, so an older run document
+    // has to arrive as [] rather than undefined.
+    runById.mockResolvedValue(DETAILED_RUN);
+    const older = call({ method: 'GET', query: { runId: 'run-1' } });
+    await older.run();
+    expect(older.res._getJSONData().run.skippedSources).toEqual([]);
   });
 
   it('answers 404 for a run id that matches nothing', async () => {

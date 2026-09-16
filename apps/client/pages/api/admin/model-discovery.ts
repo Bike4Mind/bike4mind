@@ -82,6 +82,10 @@ const fullRun = (run: IModelDiscoveryRun) => ({
     ...(source.recordCount === undefined ? {} : { recordCount: source.recordCount }),
     ...(source.error ? { error: source.error } : {}),
   })),
+  skippedSources: (run.skippedSources ?? []).map(skipped => ({
+    name: skipped.name,
+    reason: skipped.reason,
+  })),
   joinCoverage: run.joinCoverage ?? [],
   changes: {
     added: run.changes?.added ?? [],

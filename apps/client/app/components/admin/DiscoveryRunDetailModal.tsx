@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -120,6 +120,8 @@ interface RunDetail {
   mode?: 'report' | 'write';
   passes: number;
   sources: RunSource[];
+  /** Configured sources the run never attempted; absent on older run documents. */
+  skippedSources?: Array<{ name: string; reason: string }>;
   joinCoverage: Array<{ aggregator: string; matched: number; total: number }>;
   changes: {
     added: string[];
@@ -145,6 +147,27 @@ interface RunDetail {
   unmatchedIds: string[];
   droppedRecords: Array<{ source: string; modelId: string; reason: string }>;
 }
+
+type SourceOutcome = 'ok' | 'failed' | 'skipped';
+
+/** One row of the sources table, attempted or skipped. */
+interface SourceRow {
+  key: string;
+  name: string;
+  outcome: SourceOutcome;
+  durationMs?: number;
+  httpStatus?: number;
+  recordCount?: number;
+  detail?: string;
+}
+
+// A skipped source is not a failed one; colouring it danger is the misreading
+// this table exists to remove.
+const OUTCOME_COLOR: Record<SourceOutcome, ColorPaletteProp> = {
+  ok: 'success',
+  failed: 'danger',
+  skipped: 'neutral',
+};
 
 const STATUS_COLOR: Record<RunDetail['status'], ColorPaletteProp> = {
   ok: 'success',
@@ -220,6 +243,27 @@ export const DiscoveryRunDetailModal: React.FC<{ runId: string | null; onClose: 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSkips, setShowSkips] = useState(false);
+
+  const sourceRows = useMemo<SourceRow[]>(
+    () => [
+      ...(run?.sources ?? []).map(source => ({
+        key: `attempted:${source.name}`,
+        name: source.name,
+        outcome: (source.ok ? 'ok' : 'failed') as SourceOutcome,
+        durationMs: source.durationMs,
+        httpStatus: source.httpStatus,
+        recordCount: source.recordCount,
+        detail: source.error,
+      })),
+      ...(run?.skippedSources ?? []).map(skipped => ({
+        key: `skipped:${skipped.name}`,
+        name: skipped.name,
+        outcome: 'skipped' as SourceOutcome,
+        detail: skipped.reason,
+      })),
+    ],
+    [run]
+  );
 
   const setAdminTab = useAdminModal(state => state.setActiveTab);
   const focusPricingModel = useCreditAnalysisStore(state => state.focusPricingModel);
@@ -616,12 +660,12 @@ export const DiscoveryRunDetailModal: React.FC<{ runId: string | null; onClose: 
                     {run.changes.appendedPriceRows}/{run.changes.plannedPriceRows} appended
                   </Typography>
                 </Stack>
-                {run.sources.length > 0 && (
+                {sourceRows.length > 0 && (
                   <Table size="sm" data-testid="discovery-run-sources-table">
                     <thead>
                       <tr>
                         <th>Source</th>
-                        <th>Ok</th>
+                        <th>Outcome</th>
                         <th>ms</th>
                         <th>HTTP</th>
                         <th>Records</th>
@@ -629,18 +673,25 @@ export const DiscoveryRunDetailModal: React.FC<{ runId: string | null; onClose: 
                       </tr>
                     </thead>
                     <tbody>
-                      {run.sources.map(source => (
-                        <tr key={source.name} data-testid={`discovery-run-source-row-${source.name}`}>
-                          <td>{source.name}</td>
+                      {sourceRows.map(row => (
+                        <tr
+                          key={row.key}
+                          data-testid={
+                            row.outcome === 'skipped'
+                              ? `discovery-run-skipped-row-${row.name}`
+                              : `discovery-run-source-row-${row.name}`
+                          }
+                        >
+                          <td>{row.name}</td>
                           <td>
-                            <Chip size="sm" variant="soft" color={source.ok ? 'success' : 'danger'}>
-                              {source.ok ? 'ok' : 'failed'}
+                            <Chip size="sm" variant="soft" color={OUTCOME_COLOR[row.outcome]}>
+                              {row.outcome}
                             </Chip>
                           </td>
-                          <td>{source.durationMs}</td>
-                          <td>{source.httpStatus ?? '-'}</td>
-                          <td>{source.recordCount ?? '-'}</td>
-                          <td>{source.error ?? '-'}</td>
+                          <td>{row.durationMs ?? '-'}</td>
+                          <td>{row.httpStatus ?? '-'}</td>
+                          <td>{row.recordCount ?? '-'}</td>
+                          <td>{row.detail ?? '-'}</td>
                         </tr>
                       ))}
                     </tbody>
