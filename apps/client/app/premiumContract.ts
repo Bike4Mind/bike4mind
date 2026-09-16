@@ -97,6 +97,56 @@ export interface PremiumNavDescriptor {
 export type PremiumNotebookSidenav = ComponentType | null;
 
 /**
+ * A premium overlay's crawler policy for the routes it contributes, consumed by
+ * core's `app/robots.ts` and `app/sitemap.ts` via `premiumRouteIndexing.generated.ts`.
+ *
+ * Core cannot derive this. Which of an overlay's routes are publicly crawlable and
+ * which sit behind a gate is the overlay's own knowledge, and core must not name an
+ * overlay's surface in this repo. Contributed via `b4mContributions.routeIndexingExport`
+ * (a module exporting `routeIndexing`), with the same annotate-both-forms rule as
+ * routes/nav so the consumers typecheck identically with no overlay installed.
+ *
+ * DATA ONLY, and deliberately not the route descriptors: `PremiumRouteDescriptor`
+ * carries `lazyImport` thunks, so deriving the policy from `premiumRoutes` would pull
+ * the overlay's lazy component graph into a server-rendered route.
+ *
+ * Both fields are origin-relative paths beginning with `/`, restricted to characters
+ * that cannot change the meaning of the file they land in. Next's metadata serializer
+ * does no escaping, so `app/seo/crawlPolicy.ts` drops anything else rather than trust
+ * it into a served file - a newline would emit extra robots.txt directives, and a bare
+ * `&` would make the sitemap XML unparseable.
+ */
+export interface PremiumRouteIndexing {
+  /**
+   * Paths safe to publish in the sitemap. Concrete URLs only: a router param segment
+   * is not a URL, so a parameterised route either stays out or is expanded by the
+   * overlay itself. An overlay whose routes are gated or client-only contributes an
+   * empty list - an indexed empty shell is a thin-content signal, and a sitemap full
+   * of login redirects is worse than no sitemap.
+   *
+   * A path covered by ANY `disallowPaths` prefix - this overlay's, another overlay's,
+   * or core's - is dropped rather than advertised, because robots.txt is one file for
+   * the whole origin. There is deliberately no `allowPaths` sibling to order against a
+   * broader disallow: expressing that correctly needs longest-match reasoning across
+   * every contributor, so the contract makes the conflict impossible instead of
+   * letting an overlay publish a sitemap entry its own robots.txt forbids.
+   */
+  sitemapPaths: string[];
+  /**
+   * `Disallow:` patterns for everything else the overlay owns. A trailing `/` makes
+   * the entry a subtree prefix, which is how a parameterised route is expressed
+   * (robots.txt has no notion of a router param).
+   *
+   * Never list a path whose URL is itself a capability (a share or invite token). A
+   * crawler blocked from fetching such a page never reads the `noindex` it was blocked
+   * from seeing, and can still index the URL from a link elsewhere - so a disallow
+   * makes a leaked link MORE exposed. Serve those a per-response `X-Robots-Tag`
+   * instead, the way the core share surfaces do.
+   */
+  disallowPaths: string[];
+}
+
+/**
  * localStorage key prefixes a premium overlay owns, contributed as literal data in
  * `b4mContributions.localStorageKeyPrefixes` and swept by `clearClientCaches()` on
  * every identity change.

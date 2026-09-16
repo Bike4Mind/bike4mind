@@ -59,6 +59,13 @@ export interface TransferLakeOwnershipResult {
  * invariant that gate documents. Reassigning to another member is fine: the recipient is then a real
  * owner exposing their own lake. A platform admin is unconstrained (global superuser by definition).
  *
+ * The guard's premise is that there IS an owner whose consent is being bypassed. It therefore does
+ * not extend to `lapseDepartedMemberLakeAccess`, which mints an owner grant for the billing owner
+ * when a lake's creator leaves the org: there, the owner is gone, and refusing succession would
+ * leave ownership - and this door, and the expose gate - resolved to a former member. This is the
+ * only other writer of an `owner` grant; the general door (`lakeGrantWriteRule.ts:50`) still
+ * refuses the role outright, so ownership moves through exactly these two places and no others.
+ *
  * Refused for a fallback (hardcoded registry) lake, which has no backing document to hang a grant on
  * (`assertLakeGrantable`). For an org-scoped lake BOTH parties must belong to that org - the new
  * owner by the candidate predicate below, the actor by `resolveLakeTransferAuthority`'s membership
@@ -73,14 +80,28 @@ export interface TransferLakeOwnershipResult {
  * the call knowingly. Contrast `setLakeVisibility`, which hard-refuses publishing a gated lake:
  * exposing it app-wide has no named recipient to hold accountable, a handover does.
  *
- * NOT ATOMIC: the recipient's grant, each demotion, the actor stamp and the audit row are separate
- * writes with no session. A session IS available in this layer (db-core's `withTransaction`, whose
- * AsyncLocalStorage enrolls repo writes automatically), but it is not taken here because this service
- * is adapter-injected and connection-free by design; wrapping belongs at the route seam if we want
- * it. The consequence is a failure mid-loop leaving the lake with two effective owners and no
- * transfer row to explain it in the very view this feature exists to make trustworthy. Mitigated,
- * not solved, by every write being idempotent (retrying the same transfer converges) and by the
- * ordering: the audit is written LAST so it can never claim a transfer that failed partway.
+ * TAKES NO SESSION ITSELF, but its one caller now supplies one. The recipient's grant, each
+ * demotion, the actor stamp and the audit row are separate writes; this service stays
+ * adapter-injected and connection-free by design, so the wrapping belongs at the route seam - and
+ * `pages/api/data-lakes/[id]/transfer-ownership.ts` does it, with the access gate INSIDE the
+ * callback so a retry re-reads the grants rather than reusing a stale snapshot. Two failures that
+ * buys: a failure mid-loop no longer leaves the lake with two effective owners and no transfer row
+ * to explain it, and a concurrent DEPARTURE can no longer interleave.
+ *
+ * That second one is worth spelling out, because it is the only cross-operation race on ownership.
+ * `lapseDepartedMemberLakeAccess` expires a departing member's grants and may mint an owner grant
+ * for the billing owner. Between this function's gate and its writes, that can commit - and the
+ * demotion loop below would then upsert the departed member back to `curator` with `expiresAt:
+ * null`, over the very row the departure expired, leaving the lake with two owners and the departed
+ * member holding live access. Both paths inside a transaction turns that interleaving into a write
+ * conflict on a shared document, which Mongo aborts and retries. The shared document is the
+ * demoted grant row when the departing member held one, and the LAKE document otherwise - both
+ * paths write it for their actor stamp, which is why that stamp is load-bearing beyond attribution.
+ * The LAKE arm needs the departure's own trigger to be attributable, which both of its callers are;
+ * see the serialization note on `lapseDepartedMemberLakeAccess`'s phase 2.
+ *
+ * Every write is still idempotent (retrying the same transfer converges) and the ordering still
+ * holds - the audit is written LAST so it can never claim a transfer that failed partway.
  */
 export const transferLakeOwnership = async (
   actor: LakeTransferActor,

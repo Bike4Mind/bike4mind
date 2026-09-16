@@ -81,6 +81,15 @@ export function canShredLakeMemory(
  * (which upserts an owner grant) supersedes the creator everywhere without ever mutating
  * `createdByUserId`. Existing lakes carry no grants, so they resolve to `[createdByUserId]` exactly
  * as before - no backfill needed.
+ *
+ * CAUTION for callers that EXPIRE an owner grant: the fallback makes that a RE-ASSIGNMENT, not a
+ * removal. Expiring the last active owner row on a lake that was transferred away from its creator
+ * hands ownership back to that creator - who may have been deliberately moved off it. There is no
+ * "nobody owns this" state to land in, by design (it would make a lake unadministrable), so a
+ * caller ending an owner's tenure must decide who takes it: see `lapseDepartedMemberLakeAccess`
+ * phase 2, which names a successor for exactly this reason, and `transferLakeOwnership`, which
+ * demotes rather than expires. Accepted, not solved, for the transferred-away case: the departing
+ * owner's lapse can still resolve back to the original creator.
  */
 export function resolveEffectiveOwnerIds(
   lake: Pick<IDataLakeDocument, 'createdByUserId'>,

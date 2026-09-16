@@ -4480,6 +4480,7 @@ export class ChatCompletionProcess {
                   forceSwitch: overloadRetriesExhausted,
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
+                  endUserId: this.user.id,
                 }
               );
 

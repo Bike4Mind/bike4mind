@@ -121,3 +121,4 @@ export * from './slackManifestTemplate';
 export * from './surfaces';
 export * from './retry';
 export * from './memoryContext';
+export * from './zipEntry';

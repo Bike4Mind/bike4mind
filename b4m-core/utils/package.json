@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/utils",
-  "version": "5.1.2",
+  "version": "6.0.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -183,6 +183,7 @@
     "dayjs": "^1.11.21",
     "dotenv": "^17.4.2",
     "file-type": "^22.0.1",
+    "image-size": "^1.2.1",
     "jimp": "^1.6.1",
     "jszip": "^3.10.1",
     "lodash": "^4.18.1",

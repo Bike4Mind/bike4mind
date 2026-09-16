@@ -216,6 +216,74 @@ describe('runModerationRescueSweep (DB integration)', () => {
     expect(row?.deletedAt ?? null).toBe(null);
   });
 
+  it('reaches a stranded import even when a cluster of repeatedly-failing siblings fills the window', async () => {
+    // The starvation the sort exists to prevent: N siblings whose scans keep failing transiently
+    // (Rekognition 5xx / storage 503, NOT a 404 - so the missing-object retire never applies) are
+    // released back to 'pending' and re-selected in natural order at full cap every run. Seeded
+    // FIRST, so natural order puts every one of them ahead of the stranded row.
+    const failingKeys = ['knowledge/user1/flaky-a', 'knowledge/user1/flaky-b', 'knowledge/user1/flaky-c'];
+    for (const filePath of failingKeys) {
+      store.objects.set(filePath, Buffer.from('bytes exist but the read fails'));
+      store.transient.add(filePath);
+      await seedPending(filePath, 'text/plain');
+    }
+
+    // The genuinely-stranded row: NEWEST of the four, so createdAt order alone would also put it last.
+    store.objects.set('knowledge/user1/stranded', Buffer.from('plain text, definitely not an image'));
+    await seedPending('knowledge/user1/stranded', 'text/plain');
+
+    // limit == the failing-sibling count, so run 1's window can be filled entirely by them.
+    await runModerationRescueSweep({ enabled: true, limit: 3, logger });
+    // Each failure was released with its attempt counted, which both backs it off and drops it
+    // behind the untried row in the fairness sort.
+    for (const filePath of failingKeys) {
+      const row = await FabFile.findOne({ filePath }).lean();
+      expect(row?.moderationStatus).toBe('pending'); // still recoverable, never terminal
+      expect(row?.moderationAttempts).toBe(1);
+      expect(row?.moderationLastAttemptAt).toBeInstanceOf(Date);
+    }
+
+    // Run 2 is where the old code starved: it would re-select the same 3 siblings forever. Now they
+    // are both backed off and sorted behind, so the window reaches the stranded row and scans it.
+    await runModerationRescueSweep({ enabled: true, limit: 3, logger });
+
+    const stranded = await FabFile.findOne({ filePath: 'knowledge/user1/stranded' }).lean();
+    expect(stranded?.moderationStatus).toBe('clean');
+    // And the siblings were not retried in that run (backoff), so they did not consume the window.
+    for (const filePath of failingKeys) {
+      expect((await FabFile.findOne({ filePath }).lean())?.moderationAttempts).toBe(1);
+    }
+  });
+
+  it('counts an attempt and drops the claim stamp when it reclaims a crashed scanning row', async () => {
+    // A row that crashes its runner every time is never released (the release never runs), so the
+    // reclaim is the only place its attempt can be counted - without that it stays at 0 attempts
+    // and keeps winning the fairness sort ahead of rows that have never been tried at all.
+    store.transient.add('knowledge/user1/crash-loop');
+    store.objects.set('knowledge/user1/crash-loop', Buffer.from('bytes'));
+    await seedScanning('knowledge/user1/crash-loop', 'text/plain');
+
+    await runModerationRescueSweep({ enabled: true, limit: 5, logger });
+
+    const row = await FabFile.findOne({ filePath: 'knowledge/user1/crash-loop' }).lean();
+    // Reclaim counted one, and the transient release inside the same run counted another.
+    expect(row?.moderationAttempts).toBe(2);
+    // Cleared by the release: only meaningful while 'scanning', and leaving it set would let a
+    // superseded runner's identity-guarded write still match.
+    expect(row?.moderationClaimedAt ?? null).toBe(null);
+  });
+
+  it('clears the claim stamp when a scan reaches a terminal verdict', async () => {
+    store.objects.set('knowledge/user1/resolved', Buffer.from('plain text, not an image'));
+    await seedPending('knowledge/user1/resolved', 'text/plain');
+
+    await runModerationRescueSweep({ enabled: true, limit: 5, logger });
+
+    const row = await FabFile.findOne({ filePath: 'knowledge/user1/resolved' }).lean();
+    expect(row?.moderationStatus).toBe('clean');
+    expect(row?.moderationClaimedAt ?? null).toBe(null);
+  });
+
   it('reclaims a crashed scanning row by claim age (not updatedAt) and rescans it', async () => {
     // A claim whose scan crashed before releasing it: stuck 'scanning' with an OLD claim stamp but a
     // FRESH updatedAt. Only a moderationClaimedAt-gated reclaim frees it; an updatedAt-gated one would
