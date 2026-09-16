@@ -241,20 +241,31 @@
   border-top: 1px solid var(--b4m-md-line);
 }
 
+/* h3 and h4 are where a chat reply actually starts - a model writes `###` for a section,
+   not `#` - so they carry the structure most of the time. At 0.86em/0.8em they sat BELOW
+   body size, and at 660/640 they were within a hair of bold body text (`strong` is 620),
+   which is exactly what they read as. Now they are at least body size and clearly heavier,
+   and the tracking is the headings' own rather than the positive tracking that made them
+   look like small labels. */
+/* Serif, like h1 and h2: a chat reply starts at `###`, so this is the level that carries
+   structure most of the time, and it is where a change of voice actually earns its keep.
+   1.06em, not 1em: the serif has the smaller x-height of the two faces, so matching the
+   body's nominal size would leave it looking smaller than the text it heads. */
 .b4m-md h3 {
-  font-family: var(--b4m-md-font-body);
-  font-size: 0.86em;
-  font-weight: 660;
-  letter-spacing: 0.02em;
-  margin: 1.5em 0 0.5em;
+  font-family: var(--b4m-md-font-display);
+  font-optical-sizing: auto;
+  font-size: 1.06em;
+  font-weight: 600;
+  margin: 1.6em 0 0.5em;
 }
 
+/* Sans, so it reads as subordinate to the serif above it. It cannot step down by size -
+   that would put it under the body text it heads - so the family is what separates them. */
 .b4m-md h4 {
   font-family: var(--b4m-md-font-body);
-  font-size: 0.8em;
-  font-weight: 640;
-  letter-spacing: 0.03em;
-  margin: 1.35em 0 0.45em;
+  font-size: 1em;
+  font-weight: 700;
+  margin: 1.4em 0 0.45em;
 }
 
 .b4m-md h5 {
