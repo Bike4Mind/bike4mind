@@ -83,6 +83,7 @@ function makeService(overrides: Record<string, unknown> = {}, uploaded: string[]
     toolRepository: { create: async () => null },
     agentRepository: { create: async () => null },
     userRepository: { findById: async () => ({ id: USER }) },
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
     fileStorageService: {
       uploadFile: async (path: string) => {
         uploaded.push(path);

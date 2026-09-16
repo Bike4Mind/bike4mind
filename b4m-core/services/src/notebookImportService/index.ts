@@ -17,11 +17,12 @@ import {
   DefaultLLMParams,
   isValidEnumValue,
   KnowledgeType,
+  MAX_FILE_SIZE_DEFAULT_MB,
   remintArtifactId,
 } from '@bike4mind/common';
 import type { ArtifactType } from '@bike4mind/common';
-import { normalizeId } from '@bike4mind/utils';
-import type { IChatHistoryItem } from '@bike4mind/common';
+import { checkStorageLimit, getSettingsMap, getSettingsValue, normalizeId } from '@bike4mind/utils';
+import type { IAdminSettingsRepository, IChatHistoryItem, IUserDocument } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
 
 /** A notebook the import can address: found by name, or just created. */
@@ -110,10 +111,21 @@ export interface NotebookImportAdapters {
   fileStorageService: {
     uploadFile: (path: string, content: Buffer) => Promise<unknown>;
   };
-  /** Only checked for existence - the import never reads a field off the user. */
+  /**
+   * Resolved once per import: existence is checked up front, and that same document then feeds the
+   * per-user storage quota on every knowledge file (`storageLimit`/`currentStorageSize` only).
+   * Deliberately still `unknown` - narrowing happens at that one point of use, so this port does
+   * not have to promise the app's own User document matches `IUserDocument` structurally.
+   */
   userRepository: {
     findById: (id: string) => Promise<unknown>;
   };
+  /**
+   * Read once per import to resolve `MaxFileSize`. Required, not optional: this is the same admin
+   * setting the upload door (fabFileService/create.ts) gates on, and a caller that could omit it
+   * would silently admit files that door refuses.
+   */
+  adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
   logger: ILogger;
   generateId: () => string;
 }
@@ -166,6 +178,19 @@ export class NotebookImportService {
   /** S3 keys of imported knowledge files, surfaced so the caller can scan them post-commit. */
   private importedKnowledgeFilePaths: string[] = [];
 
+  /** Bytes. Resolved once per import: nothing here reacts to a setting changed mid-import, so
+   * re-reading it per file would buy nothing. */
+  private maxFileSize = MAX_FILE_SIZE_DEFAULT_MB * 1024 * 1024;
+
+  /** The importing user, reused by the per-file storage-quota gate. */
+  private importingUser: IUserDocument | null = null;
+
+  /** Bytes admitted so far in THIS import. `currentStorageSize` on the user document is a snapshot
+   * read once - uploaded bytes are only debited later, by the S3 objectCreated event - so several
+   * files that each pass against that stale value can overshoot the quota together. Same reason as
+   * the accumulator in b4m-core/slack/src/CommandHandler.ts. */
+  private admittedBytes = 0;
+
   /**
    * The store assigns the id; anything else records a reference that resolves to nothing.
    * `normalizeId` rather than `String()`: these adapters may hand back a populated document,
@@ -213,6 +238,19 @@ export class NotebookImportService {
       this.attachmentWarnings = [];
       this.attachmentsWritten = 0;
       this.importedKnowledgeFilePaths = [];
+      // Unchecked cast: `checkStorageLimit` defaults storageLimit/currentStorageSize with `??`, so
+      // a document missing them is admitted against 1000MB/0 rather than misread - fail-open, not
+      // safety. Both are required on IUser, so only a lean projection or an old document gets there.
+      this.importingUser = targetUser as IUserDocument;
+      this.admittedBytes = 0;
+      this.maxFileSize =
+        getSettingsValue(
+          'MaxFileSize',
+          await getSettingsMap({ adminSettings: this.adapters.adminSettings }),
+          MAX_FILE_SIZE_DEFAULT_MB
+        ) *
+        1024 *
+        1024;
 
       // Process each notebook
       for (const notebook of parsedData.notebooks) {
@@ -466,24 +504,54 @@ export class NotebookImportService {
         // Not branched on `preserveIds`: reusing the source id would imply this is the same document.
         const storageKeySuffix = this.adapters.generateId();
 
-        let filePath: string;
-        // Server-measured size; falls back to the client-declared value only for the
-        // reference (contentUrl) path, where we hold no bytes to measure.
-        let measuredSize = file.size;
-
-        // Handle embedded content vs. reference
-        if (file.content) {
-          // Decode base64 content and upload
-          const content = Buffer.from(file.content, 'base64');
-          measuredSize = content.byteLength;
-          filePath = `knowledge/${targetUserId}/${storageKeySuffix}`;
-          await this.adapters.fileStorageService.uploadFile(filePath, content);
-        } else if (file.contentUrl) {
-          // Copy from existing location
-          filePath = await this.copyFileFromUrl(file.contentUrl, targetUserId, storageKeySuffix);
-        } else {
+        // One value, not two flags: the export emits a listing-only entry (real size, no content, no
+        // URL) for a held or blocked image, and "neither" must be refused as that, not as oversized.
+        // Annotated, not inferred: without it the ternary widens to one object with both keys
+        // optional, and the `'base64' in source` narrowing below stops working.
+        const source: { base64: string } | { url: string } | undefined = file.content
+          ? { base64: file.content }
+          : file.contentUrl
+            ? { url: file.contentUrl }
+            : undefined;
+        if (!source) {
           throw new Error('No content or URL provided for file');
         }
+
+        // Exact decoded length without allocating the buffer, so a file the gates refuse is never
+        // decoded. Over-counts only on malformed base64, where Buffer.from drops characters that
+        // byteLength counts - fail-closed. Falls back to the client-declared value on the url path,
+        // where we hold no bytes to measure.
+        const measuredSize = 'base64' in source ? Buffer.byteLength(source.base64, 'base64') : file.size;
+
+        // `>=` and server-measured bytes, matching fabFileService/create.ts exactly.
+        if (measuredSize >= this.maxFileSize) {
+          throw new Error(`exceeds the ${Math.round(this.maxFileSize / (1024 * 1024))}MB maximum file size`);
+        }
+
+        // Per-user quota, not checkStorageLimitForFile: no organizationId is plumbed through this
+        // path, and the org branch would be wrong anyway - organization.currentStorageSize is never
+        // incremented on upload, so uploaded bytes are debited to the user.
+        if (!this.importingUser) {
+          throw new Error('no importing user resolved, refusing to skip the storage quota check');
+        }
+        await checkStorageLimit(this.importingUser, this.admittedBytes + measuredSize);
+
+        // The first write of any kind for this file, and deliberately below both gates: an object
+        // written for a file that is then refused would sit at knowledge/<userId>/<uuid> forever -
+        // no FabFile row points at it, so nothing counts it against the quota, nothing moderates
+        // it, and the bucket lifecycle rules (infra/buckets.ts) do not cover this prefix.
+        let filePath: string;
+        if ('base64' in source) {
+          filePath = `knowledge/${targetUserId}/${storageKeySuffix}`;
+          await this.adapters.fileStorageService.uploadFile(filePath, Buffer.from(source.base64, 'base64'));
+        } else {
+          filePath = await this.copyFileFromUrl(source.url, targetUserId, storageKeySuffix);
+        }
+
+        // Charged only once the bytes are in storage. Above the write it would also charge the URL
+        // branch, which stores nothing and always throws, letting a client-declared `file.size`
+        // burn the budget - or poison it outright, since that size is unvalidated JSON.
+        this.admittedBytes += measuredSize;
 
         // No `id`: FabFile has no such path, so the store assigns one.
         const knowledgeData = {
@@ -696,6 +764,8 @@ export class NotebookImportService {
     // Throws rather than returning the source URL: handing back the exporter's own storage key
     // records a file the importing user has no copy of, and counts it as imported. The caller
     // turns this into a per-file warning, so the notebook still imports.
+    // Whoever implements this: the caller's `measuredSize` for this branch is the client-declared
+    // `file.size`, so re-measure after the copy and re-run both admission gates on the real bytes.
     throw new Error('importing a knowledge file by URL reference is not implemented');
   }
 }

@@ -4766,6 +4766,14 @@ export const settingsMap = {
   };
 };
 
+/**
+ * MB. The fallback every ingest door uses when a stored `MaxFileSize` row fails its schema - a
+ * missing row resolves through the schema's own prefault first. `?? 30` rather than `!`:
+ * makeNumberSetting types defaultValue as optional, and an undefined here would make a door's
+ * byte limit NaN, which admits every file.
+ */
+export const MAX_FILE_SIZE_DEFAULT_MB = settingsMap.MaxFileSize.defaultValue ?? 30;
+
 export type SettingValue<K extends SettingKey> = z.infer<(typeof settingsMap)[K]['schema']>;
 
 /**
