@@ -8,6 +8,7 @@ export default defineConfig({
     'src/imageCost/index.ts',
     'src/apiKeyService/index.ts',
     'src/creditService/index.ts',
+    'src/llm/index.ts',
     'src/llm/StatusManager.ts',
     'src/llm/tools/cliTools.ts',
     'src/llm/tools/index.ts',

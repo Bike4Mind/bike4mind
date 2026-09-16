@@ -50,6 +50,16 @@
         "default": "./dist/creditService/index.cjs"
       }
     },
+    "./llm": {
+      "import": {
+        "types": "./dist/llm/index.d.mts",
+        "default": "./dist/llm/index.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/index.d.cts",
+        "default": "./dist/llm/index.cjs"
+      }
+    },
     "./llm/StatusManager": {
       "import": {
         "types": "./dist/llm/StatusManager.d.mts",
