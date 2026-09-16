@@ -276,6 +276,16 @@ describe('ModelDiscoveryRunRepository', () => {
     expect((await modelDiscoveryRunRepository.latestRun())?.skippedSources).toBeUndefined();
   });
 
+  it('reads the placeholder a run writes before its fan-out as having skipped nothing', async () => {
+    // The runner creates this doc before it knows what it will skip, so the field
+    // is absent on the write and mongoose defaults the array. Every other detail
+    // array on that placeholder reads the same way, which is why no surface may
+    // treat an empty skip list as evidence the fan-out completed.
+    await ModelDiscoveryRun.create(run({ status: 'failed' }));
+
+    expect((await modelDiscoveryRunRepository.latestRun())?.skippedSources).toEqual([]);
+  });
+
   it('has no run to open for an unknown or malformed id', async () => {
     // A runId out of a query string is whatever the caller typed: a CastError
     // here would be a 500 on what is really a 404.

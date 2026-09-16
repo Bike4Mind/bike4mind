@@ -186,6 +186,52 @@ describe('DiscoveryStatusCard', () => {
     expect(screen.queryByTestId('discovery-status-skipped')).not.toBeInTheDocument();
   });
 
+  it('counts every attempted source as ok when none of them failed', async () => {
+    mockGet.mockResolvedValue({
+      data: statusWith(
+        runLike({
+          status: 'ok',
+          sources: [
+            { name: 'openai', ok: true, durationMs: 120 },
+            { name: 'anthropic', ok: true, durationMs: 140 },
+          ],
+        })
+      ),
+    });
+    renderCard();
+
+    expect(await screen.findByTestId('discovery-status-sources')).toHaveTextContent('2/2 sources ok');
+    expect(screen.queryByTestId('discovery-status-skipped')).not.toBeInTheDocument();
+  });
+
+  it('reports zero ok rather than no attempt when every attempted source failed', async () => {
+    mockGet.mockResolvedValue({
+      data: statusWith(
+        runLike({
+          status: 'failed',
+          sources: [
+            { name: 'openai', ok: false, durationMs: 120, error: 'HTTP 500' },
+            { name: 'anthropic', ok: false, durationMs: 140, error: 'ETIMEDOUT' },
+          ],
+        })
+      ),
+    });
+    renderCard();
+
+    // 0/2 is a fan-out that ran and failed; 'no sources attempted' is one that
+    // never ran at all, and the card must not say the second for the first.
+    expect(await screen.findByTestId('discovery-status-sources')).toHaveTextContent('0/2 sources ok');
+    expect(screen.queryByTestId('discovery-status-skipped')).not.toBeInTheDocument();
+  });
+
+  it('says nothing was attempted when a run had no source to attempt or to skip', async () => {
+    mockGet.mockResolvedValue({ data: statusWith(runLike({ status: 'ok', sources: [], skippedSources: [] })) });
+    renderCard();
+
+    expect(await screen.findByTestId('discovery-status-sources')).toHaveTextContent('no sources attempted');
+    expect(screen.queryByTestId('discovery-status-skipped')).not.toBeInTheDocument();
+  });
+
   it('names the failed source and its error on demand', async () => {
     renderCard();
     fireEvent.click(await screen.findByTestId('discovery-status-failures-toggle'));

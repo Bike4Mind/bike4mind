@@ -243,6 +243,73 @@ describe('runModelDiscovery', () => {
     ).toBe(true);
   });
 
+  it('names every skip up to the cap and marks the overflow only past it', async () => {
+    const summaryFor = async (count: number) => {
+      const many = harness(
+        Array.from({ length: count }, (_, index) => stubSource({ name: `source-${index + 1}` })),
+        { modelDiscoveryAllowEgress: false }
+      );
+      await runModelDiscovery(many.adapters, many.options);
+      return many.infos.find(message => message.includes('skipped=')) ?? '';
+    };
+
+    // The cap decides whether a name is dropped, so both sides of it are pinned:
+    // a case well past the boundary passes whether the cap is 5, 4 or 6.
+    expect(await summaryFor(5)).toContain('skipped=5(egress-disabled:source-1+source-2+source-3+source-4+source-5)');
+    expect(await summaryFor(6)).toContain(
+      'skipped=6(egress-disabled:source-1+source-2+source-3+source-4+source-5+1more)'
+    );
+  });
+
+  it('accounts for every skip in the summary when one run skips for more than one reason', async () => {
+    const mixed = harness([
+      openaiSource(),
+      stubSource({ name: 'xai', configured: false }),
+      stubSource({ name: 'models.dev', kind: 'aggregator' }),
+    ]);
+    await runModelDiscovery(mixed.adapters, mixed.options);
+    mixed.advance(60_000);
+
+    const result = await runModelDiscovery(mixed.adapters, { ...mixed.options, minSourceIntervalMs: 30 * 60_000 });
+
+    expect([...result.skippedSources].sort((a, b) => a.name.localeCompare(b.name))).toEqual([
+      { name: 'models.dev', reason: 'recently-fetched' },
+      { name: 'openai', reason: 'recently-fetched' },
+      { name: 'xai', reason: 'not-configured' },
+    ]);
+    const summary = mixed.infos.filter(message => message.includes('skipped=')).at(-1) ?? '';
+    const [, total, named] = /skipped=(\d+)\(([^)]*)\)/.exec(summary) ?? [];
+    // The count before the parentheses is what an operator reads first, so it has
+    // to equal the names that follow however many reasons they are grouped into.
+    expect(Number(total)).toBe(result.skippedSources.length);
+    expect(
+      named
+        .split(',')
+        .flatMap(group => group.split(':')[1].split('+'))
+        .sort()
+    ).toEqual(result.skippedSources.map(skipped => skipped.name).sort());
+  });
+
+  it('partitions the configured registry between attempted and skipped on a mixed run', async () => {
+    const mixed = harness([
+      openaiSource(),
+      stubSource({ name: 'litellm', kind: 'aggregator', result: { ok: false, error: 'HTTP 500' } }),
+      stubSource({ name: 'xai', configured: false }),
+    ]);
+
+    const result = await runModelDiscovery(mixed.adapters, mixed.options);
+
+    expect(result.sources.map(report => report.name).sort()).toEqual(['litellm', 'openai']);
+    expect(result.skippedSources).toEqual([{ name: 'xai', reason: 'not-configured' }]);
+    // Both admin surfaces read the two arrays together, so a name in both would
+    // double-count the source and let a skip read as an attempt as well.
+    const attempted = new Set(result.sources.map(report => report.name));
+    expect(result.skippedSources.filter(skipped => attempted.has(skipped.name))).toEqual([]);
+    const doc = mixed.runs.docs[0];
+    expect((doc.sources ?? []).map(source => source.name).sort()).toEqual(['litellm', 'openai']);
+    expect(doc.skippedSources).toEqual([{ name: 'xai', reason: 'not-configured' }]);
+  });
+
   it('skips a source another host fetched successfully within the interval', async () => {
     await runModelDiscovery(bench.adapters, bench.options);
     bench.advance(60_000);
