@@ -261,7 +261,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
     return 'GPT_IMAGE_1';
   };
   const isKontextModel = isKontextImageModel(contextImageModel);
-  const getAvailableSizes = (modelId: string) => {
+  const getSizePresets = (modelId: string): readonly string[] => {
     if (isGPTImage2Model(modelId)) return IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.sizes;
     if (isGPTImageModel(modelId)) return IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes;
     if ((BFL_IMAGE_MODELS as readonly string[]).includes(modelId)) {
@@ -269,6 +269,18 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
       return IMAGE_SIZE_CONSTRAINTS.BFL.sizes;
     }
     return IMAGE_SIZE_CONSTRAINTS.BFL.sizes;
+  };
+  const getAvailableSizes = (modelId: string): readonly string[] => {
+    const presets = getSizePresets(modelId);
+    // gpt-image-2 accepts any resolution meeting its constraints, not just the presets, so
+    // handleModelChange can legitimately keep a size that has no <Option> here - 'auto', or a
+    // carried-over 1280x960. Joy renders the Select blank when the value matches no option
+    // (no placeholder is passed), which would hide what the user is about to generate, so
+    // surface the live value alongside the presets.
+    if (_size && !presets.includes(_size) && isGPTImageModel(modelId) && isSupportedImageSize(modelId, _size)) {
+      return [...presets, _size];
+    }
+    return presets;
   };
 
   // Coerce quality only when the selected model cannot express the current value - i.e. it
