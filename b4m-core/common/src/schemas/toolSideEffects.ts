@@ -52,6 +52,7 @@ const CORE_TOOL_SIDE_EFFECTS: Record<B4MLLMTools, ToolSideEffects> = {
   search_knowledge_base: 'none',
   retrieve_knowledge_content: 'none',
   count_knowledge_base: 'none',
+  describe_knowledge_base: 'none',
   chess_engine: 'none',
   fmp_financial_data: 'none',
   bob_panel_read: 'none',
