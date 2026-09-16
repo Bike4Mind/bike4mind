@@ -940,6 +940,13 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    */
   updateFileStatus(batchId: string, fabFileId: string, status: BatchFileStatus, error?: string): Promise<void>;
   /**
+   * Replace the error text on an already-'failed' manifest entry and nothing else, so an entry
+   * stays in step with a FabFile whose error a permanent verdict has superseded. Not
+   * updateFileStatus: that would restamp `failureCounted: false` and strip the outgoing failure's
+   * charge attribution, which revertFileFailure needs to hand those counters back.
+   */
+  supersedeFileError(batchId: string, fabFileId: string, error: string): Promise<void>;
+  /**
    * Append manifest entries to a batch atomically ($push). Called as files are
    * created (presigned-URL issuance) so the manifest is populated incrementally.
    */
