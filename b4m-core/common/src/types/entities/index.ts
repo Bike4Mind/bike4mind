@@ -18,6 +18,7 @@ export * from './MessageTypes';
 export * from './OrganizationTypes';
 export * from './SessionTypes';
 export * from './SessionAgentConfigTypes';
+export * from './SessionToolApprovalTypes';
 export * from './SettingTypes';
 export * from './ScopedSettingTypes';
 export * from './TransformBatchTypes';

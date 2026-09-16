@@ -15,6 +15,7 @@ const {
   mockSettleStrandedQuests,
   mockPersistLinkedQuestId,
   mockResolveExecutorName,
+  mockFindRememberedApprovals,
 } = vi.hoisted(() => ({
   mockSend: vi.fn(),
   mockSessionFindById: vi.fn(),
@@ -27,6 +28,7 @@ const {
   mockSettleStrandedQuests: vi.fn(),
   mockPersistLinkedQuestId: vi.fn(),
   mockResolveExecutorName: vi.fn(),
+  mockFindRememberedApprovals: vi.fn(),
 }));
 
 vi.mock('@aws-sdk/client-lambda', () => ({
@@ -48,6 +50,7 @@ vi.mock('@bike4mind/database', () => ({
     persistLinkedQuestId: mockPersistLinkedQuestId,
   },
   Quest: { create: mockQuestCreate, deleteOne: mockQuestDeleteOne },
+  sessionToolApprovalRepository: { findByUserAndSession: mockFindRememberedApprovals },
 }));
 
 vi.mock('@server/utils/settleStrandedQuests', () => ({
@@ -102,6 +105,7 @@ beforeEach(() => {
   mockSend.mockResolvedValue(undefined);
   mockPersistLinkedQuestId.mockResolvedValue(undefined);
   mockResolveExecutorName.mockReturnValue('agent-executor-fn');
+  mockFindRememberedApprovals.mockResolvedValue(null);
 });
 
 describe('startAgentExecution', () => {
@@ -256,13 +260,41 @@ describe('startAgentExecution', () => {
     );
   });
 
-  it('leaves approvedTools empty for an interactive run, which can approve per-tool instead', async () => {
+  it('ignores the dispatch payload on an interactive run, which can approve per-tool instead', async () => {
     await startAgentExecution(
       input({ userId: 'interactive-run', connectionId: 'real-ws-conn', enabledTools: ['web_search'] }),
       logger
     );
 
     expect(mockCreateExecution).toHaveBeenCalledWith(expect.objectContaining({ approvedTools: [] }));
+  });
+
+  it('seeds an interactive run from the decisions the user asked this notebook to remember', async () => {
+    // Without this, "Allow for Session" only survives the one execution and the same tool
+    // re-prompts on the very next message.
+    mockFindRememberedApprovals.mockResolvedValue({
+      approvedTools: ['send_slack_message'],
+      deniedTools: ['image_generation'],
+    });
+
+    await startAgentExecution(input({ userId: 'remembered-run', connectionId: 'real-ws-conn' }), logger);
+
+    expect(mockFindRememberedApprovals).toHaveBeenCalledWith('remembered-run', 's1');
+    expect(mockCreateExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvedTools: ['send_slack_message'],
+        deniedTools: ['image_generation'],
+      })
+    );
+  });
+
+  it('still starts the run when the remembered-approvals lookup fails', async () => {
+    mockFindRememberedApprovals.mockRejectedValue(new Error('mongo down'));
+
+    const result = await startAgentExecution(input({ userId: 'approvals-unreadable' }), logger);
+
+    expect(result).toMatchObject({ ok: true });
+    expect(mockCreateExecution).toHaveBeenCalledWith(expect.objectContaining({ deniedTools: [] }));
   });
 
   it('refuses before creating anything when the executor is not linked to this deployment', async () => {

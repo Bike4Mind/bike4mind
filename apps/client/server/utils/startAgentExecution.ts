@@ -17,6 +17,7 @@ import {
   agentExecutionRepository,
   organizationRepository,
   sessionRepository,
+  sessionToolApprovalRepository,
   Quest,
   type AgentExecutionStatus,
 } from '@bike4mind/database';
@@ -239,6 +240,18 @@ export async function startAgentExecution(
     };
   }
 
+  // Decisions the user asked this notebook to remember. Without this the approval the
+  // permission card just collected dies with the execution, so the same tool prompts again
+  // on the next message - see `handlePermissionResponse`, which writes the other half.
+  const remembered = await sessionToolApprovalRepository.findByUserAndSession(userId, input.sessionId).catch(error => {
+    logger.warn('[Start] Could not load remembered tool approvals - starting with none', {
+      userId,
+      sessionId: input.sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  });
+
   const execution = await agentExecutionRepository.create({
     userId,
     organizationId: input.organizationId,
@@ -249,14 +262,16 @@ export async function startAgentExecution(
     status: 'pending' as AgentExecutionStatus,
     connectionId: input.connectionId,
     // A headless run has nobody to answer a permission prompt, so naming a tool in the
-    // request IS the caller's approval - otherwise the first gated tool the agent
-    // reaches for kills the run, and tools as ordinary as `current_datetime` are gated
-    // (only ALWAYS_SAFE_TOOLS bypass it). Without this the REST surface can run a
-    // prompt but barely any real tool use. An interactive run keeps the empty set: it
-    // has a client that can approve per-tool, which is strictly better than trusting
-    // the dispatch payload.
-    approvedTools: isHeadlessConnection(input.connectionId) ? (input.enabledTools ?? []) : [],
-    deniedTools: [],
+    // request IS the caller's approval - otherwise the first gated tool the agent reaches
+    // for kills the run. Read-only tools no longer need that crutch (they classify as
+    // allowed on their own declaration), but a side-effecting tool the caller explicitly
+    // asked for still does. An interactive run ignores the dispatch payload and takes only
+    // what the user chose to remember in this notebook, which is strictly better than
+    // trusting a client-supplied tool list.
+    approvedTools: isHeadlessConnection(input.connectionId)
+      ? (input.enabledTools ?? [])
+      : (remembered?.approvedTools ?? []),
+    deniedTools: remembered?.deniedTools ?? [],
     iterationBilling: [],
     totalCreditsUsed: 0,
     lambdaInvocationCount: 1,

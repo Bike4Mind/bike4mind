@@ -14,7 +14,7 @@
  */
 
 import { withWebSocketContext } from '@server/websocket/utils';
-import { adminSettingsRepository, agentExecutionRepository } from '@bike4mind/database';
+import { adminSettingsRepository, agentExecutionRepository, sessionToolApprovalRepository } from '@bike4mind/database';
 import type { AgentCheckpoint, AgentStep } from '@bike4mind/agents';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
@@ -398,6 +398,36 @@ async function handleAbort(
   });
 }
 
+/**
+ * Persist an "Allow/Deny for Session" choice beyond this execution.
+ *
+ * `AgentExecution.approvedTools` only lives as long as the run; the next message starts a
+ * fresh document and would re-ask. `startAgentExecution` seeds the new run from this store,
+ * which is what makes "for Session" mean the notebook rather than the execution.
+ *
+ * Best-effort: the run is already resuming on the in-execution approval, so a write failure
+ * here costs the user a repeat prompt next message, not the current turn.
+ */
+async function rememberToolDecision(
+  sessionId: string | undefined,
+  userId: string,
+  toolName: string,
+  decision: 'approved' | 'denied',
+  logger: Logger
+): Promise<void> {
+  if (!sessionId) return;
+  try {
+    await sessionToolApprovalRepository.rememberDecision(userId, sessionId, toolName, decision);
+  } catch (error) {
+    logger.warn('[Permission] Could not persist the remembered decision for this session', {
+      sessionId,
+      toolName,
+      decision,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 async function handlePermissionResponse(
   cmd: z.infer<typeof PermissionResponseSchema>,
   userId: string,
@@ -430,6 +460,9 @@ async function handlePermissionResponse(
       pendingPermission: null,
       deniedTool: cmd.rememberForSession ? cmd.toolName : undefined,
     });
+    if (cmd.rememberForSession) {
+      await rememberToolDecision(execution.sessionId, userId, cmd.toolName, 'denied', logger);
+    }
     await agentExecutionRepository.markFailed(cmd.executionId, {
       message: `Execution stopped: you denied "${cmd.toolName}".`,
     });
@@ -452,6 +485,9 @@ async function handlePermissionResponse(
     pendingPermission: null,
     approvedTool: cmd.rememberForSession ? cmd.toolName : undefined,
   });
+  if (cmd.rememberForSession) {
+    await rememberToolDecision(execution.sessionId, userId, cmd.toolName, 'approved', logger);
+  }
 
   // Re-invoke Lambda to resume execution.
   // Note: checkpointDepth is not carried here - it lives in the SQS message from the previous

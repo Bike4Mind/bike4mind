@@ -1196,8 +1196,12 @@ async function processExecution(
           linkedQuestId: execution.linkedQuestId,
           query: info.task,
           model: info.model,
-          approvedTools: [] as string[],
-          deniedTools: [] as string[],
+          // Inherited, not reset: the child runs in the parent's session on the parent's
+          // behalf, so a decision the user already made there applies to it. Starting the
+          // child empty re-asks for a tool the user has approved - and a subagent has no
+          // permission card of its own, so on a headless dispatch it fails the child outright.
+          approvedTools: [...(execution.approvedTools ?? [])],
+          deniedTools: [...(execution.deniedTools ?? [])],
           iterationBilling: [],
           totalCreditsUsed: 0,
           lambdaInvocationCount: 1,
