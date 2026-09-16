@@ -1,4 +1,4 @@
-import { Box, Button, IconButton, Sheet, Typography } from '@mui/joy';
+import { Box, IconButton, Sheet, Typography } from '@mui/joy';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { tutorialDetailFor, type TutorialItem } from './tutorialCatalog';
 
@@ -6,9 +6,11 @@ import { tutorialDetailFor, type TutorialItem } from './tutorialCatalog';
  * The long-form view behind a card: the four explanation sections and a single
  * call to action.
  *
- * The CTA is inert for now, as on the cards. When it is wired it follows the
- * gear's own `ctaAction` grammar (navigate:<path> / external:<url> / files),
- * which the Gears page already interprets.
+ * The CTA renders as a label, not a control, for the reason given in
+ * TutorialCard: nothing here is wired, and something that looks clickable and
+ * does nothing is worse than something that plainly is not. When it is wired it
+ * follows the gear's own `ctaAction` grammar (navigate:<path> / external:<url> /
+ * files), which the Gears page already interprets.
  */
 
 const SECTION_MEASURE = 'min(100%, 72ch)';
@@ -78,17 +80,16 @@ const TutorialDetailView = ({ item, onBack }: { item: TutorialItem; onBack: () =
         <Section heading="Gotchas" body={detail.gotchas} />
 
         <Box sx={{ mt: '32px', display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
-          <Button
-            variant="solid"
-            color="primary"
+          {/* A label, not a Button: the same rule TutorialCard applies to its own
+              un-wired CTA. An entity rather than the arrow character keeps this
+              file ASCII - Prettier rewrites a unicode escape back to the glyph. */}
+          <Typography
+            level="title-sm"
             data-testid={`tutorial-detail-cta-${item.key}`}
-            // The arrow is a decorator rather than part of the label, so Joy's own
-            // gap sets the spacing instead of a literal space in the text.
-            endDecorator={<>&rarr;</>}
-            sx={{ '--Button-minHeight': '40px', '--Button-gap': '10px' }}
+            sx={{ fontSize: '14px', fontWeight: 500, color: 'text.primary' }}
           >
-            {item.cta}
-          </Button>
+            {item.cta} &rarr;
+          </Typography>
           {detail.ctaHelper && (
             <Typography level="body-sm" sx={{ fontSize: '13px', color: 'text.tertiary' }}>
               {detail.ctaHelper}

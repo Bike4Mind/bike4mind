@@ -57,7 +57,7 @@ const VerifyEmailPage = lazy(() => import('./routes/verify-email'));
 const VerifyEmailChangePage = lazy(() => import('./routes/verify-change'));
 const SubscribePage = lazy(() => import('./routes/subscribe'));
 const TutorialsPage = lazy(() => import('./routes/tutorials'));
-const TutorialsExplorePage = lazy(() => import('./components/Tutorials/TutorialsPage'));
+const TutorialsExplorePage = lazy(() => import('./components/Tutorials/TutorialsExplorePage'));
 const ArtifactsDemoPage = lazy(() => import('./routes/artifacts-demo'));
 const AdminEmergencyPage = lazy(() => import('./routes/admin-emergency'));
 const GoogleDriveCallbackPage = lazy(() => import('./routes/google-drive/callback'));
@@ -764,9 +764,14 @@ const tutorialsExploreRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/tutorials/explore',
   component: () => (
-    <Suspense fallback={<RouteLoadingFallback />}>
-      <TutorialsExplorePage />
-    </Suspense>
+    // Admin-gated on the ROUTE, not just on the menu row that reaches it: the
+    // gate has to be visible from here, because this is where the follow-ups
+    // that give the page real behaviour will land.
+    <RestrictedPage requireAdmin>
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <TutorialsExplorePage />
+      </Suspense>
+    </RestrictedPage>
   ),
 });
 

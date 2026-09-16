@@ -28,7 +28,7 @@ const TABS: { key: TutorialsTabKey; label: string }[] = [
   { key: 'achievements', label: 'Achievements' },
 ];
 
-const TutorialsPage = () => {
+const TutorialsExplorePage = () => {
   const [tab, setTab] = useState<TutorialsTabKey>('getting-started');
   // Which card is expanded, per tab. Cleared on tab change so switching away and
   // back lands on the list rather than reopening whatever was last read.
@@ -186,7 +186,7 @@ const TutorialsPanel = ({
         // Cards size themselves; the column count follows the frame width rather
         // than the viewport, so the grid reflows with the sidenav open or closed
         // without a media query.
-        gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(min(320px, 100%), 1fr))',
         gap: '16px',
         alignItems: 'stretch',
       }}
@@ -233,4 +233,4 @@ const StyledTab = styled(Tab)(({ theme }) => ({
   },
 }));
 
-export default TutorialsPage;
+export default TutorialsExplorePage;
