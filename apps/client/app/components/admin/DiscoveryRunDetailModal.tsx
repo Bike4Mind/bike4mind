@@ -15,6 +15,7 @@ import {
 } from '@mui/joy';
 import type { ColorPaletteProp } from '@mui/joy/styles';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import type { IDiscoverySkippedSource } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
@@ -106,12 +107,6 @@ interface DetailTotals {
   catalogDiff?: number;
 }
 
-/** Wire shape of a skipped source; shared with DiscoveryStatusCard so both surfaces read one type. */
-export interface DiscoverySkippedSource {
-  name: string;
-  reason: string;
-}
-
 interface RunDetail {
   id: string;
   startedAt: string;
@@ -130,7 +125,7 @@ interface RunDetail {
    * Configured sources the run never attempted. The route always sends an array,
    * so an absent one only reaches here from a payload cached before the field.
    */
-  skippedSources?: DiscoverySkippedSource[];
+  skippedSources?: IDiscoverySkippedSource[];
   joinCoverage: Array<{ aggregator: string; matched: number; total: number }>;
   changes: {
     added: string[];
@@ -172,7 +167,7 @@ interface SourceRow {
 
 // A skipped source is not a failed one; colouring it danger is the misreading
 // this table exists to remove.
-export const OUTCOME_COLOR: Record<SourceOutcome, ColorPaletteProp> = {
+const OUTCOME_COLOR: Record<SourceOutcome, ColorPaletteProp> = {
   ok: 'success',
   failed: 'danger',
   skipped: 'neutral',
@@ -678,7 +673,7 @@ export const DiscoveryRunDetailModal: React.FC<{ runId: string | null; onClose: 
                         <th>ms</th>
                         <th>HTTP</th>
                         <th>Records</th>
-                        <th>Error</th>
+                        <th>Detail</th>
                       </tr>
                     </thead>
                     <tbody>

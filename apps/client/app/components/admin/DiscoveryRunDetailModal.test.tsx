@@ -10,7 +10,7 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: (...a: unknown[]) => mockGet(...a), post: (...a: unknown[]) => mockPost(...a) },
 }));
 
-import { DiscoveryRunDetailModal, OUTCOME_COLOR } from './DiscoveryRunDetailModal';
+import { DiscoveryRunDetailModal } from './DiscoveryRunDetailModal';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
 import { useCreditAnalysisStore } from './CreditAnalysis/store';
@@ -180,17 +180,31 @@ describe('DiscoveryRunDetailModal', () => {
     });
     renderModal();
 
-    expect(await screen.findByTestId('discovery-run-sources-table')).toBeInTheDocument();
+    const table = await screen.findByTestId('discovery-run-sources-table');
+    // A skip reason is not an error; the column both row kinds share is named for
+    // what it holds, or the header re-states the misreading the chip removed.
+    expect([...table.querySelectorAll('thead th')].map(cell => cell.textContent)).toEqual([
+      'Source',
+      'Outcome',
+      'ms',
+      'HTTP',
+      'Records',
+      'Detail',
+    ]);
     expect(screen.getByTestId('discovery-run-source-row-models.dev')).toHaveTextContent('ok');
     expect(screen.getByTestId('discovery-run-source-row-litellm')).toHaveTextContent('failed');
 
     const skipped = screen.getByTestId('discovery-run-skipped-row-xai');
     expect(skipped).toHaveTextContent('skipped');
     // Appending these rows under the old ok/failed chip painted every skipped
-    // source red, which is the misreading this row exists to remove. Asserted on
-    // the map rather than a rendered class, which Joy generates.
-    expect(OUTCOME_COLOR.skipped).toBe('neutral');
-    expect(OUTCOME_COLOR.skipped).not.toBe(OUTCOME_COLOR.failed);
+    // source red, which is the misreading this row exists to remove. Joy's colour
+    // is a stable semantic class, unlike the hashed styling classes around it.
+    const chip = skipped.querySelector('.MuiChip-root');
+    expect(chip).toHaveClass('MuiChip-colorNeutral');
+    expect(chip).not.toHaveClass('MuiChip-colorDanger');
+    expect(screen.getByTestId('discovery-run-source-row-litellm').querySelector('.MuiChip-root')).toHaveClass(
+      'MuiChip-colorDanger'
+    );
     expect(skipped).toHaveTextContent('not-configured');
   });
 

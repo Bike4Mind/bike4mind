@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Box, Button, Chip, CircularProgress, Link, Sheet, Stack, Tooltip, Typography } from '@mui/joy';
 import type { ColorPaletteProp } from '@mui/joy/styles';
+import type { IDiscoverySkippedSource } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
-import { DiscoveryRunDetailModal, type DiscoverySkippedSource } from './DiscoveryRunDetailModal';
+import { DiscoveryRunDetailModal } from './DiscoveryRunDetailModal';
 
 /** Wire shapes of /api/admin/model-discovery (dates arrive as strings). */
 interface DiscoverySource {
@@ -43,7 +44,7 @@ interface DiscoveryRunSummary extends DiscoveryRunListItem {
    * Configured sources the run never attempted. The route always sends an array,
    * so an absent one only reaches here from a payload cached before the field.
    */
-  skippedSources?: DiscoverySkippedSource[];
+  skippedSources?: IDiscoverySkippedSource[];
   joinCoverage: DiscoveryJoinCoverage[];
 }
 

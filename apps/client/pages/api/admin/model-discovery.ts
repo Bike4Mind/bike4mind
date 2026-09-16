@@ -49,6 +49,11 @@ const listRun = (run: IModelDiscoveryRun) => ({
   changes: countChanges(run.changes),
 });
 
+// An explicit whitelist rather than passing the stored array through: a field
+// added to the run's skip subdoc must not appear in an admin payload by default.
+const pickSkippedSources = (run: IModelDiscoveryRun) =>
+  (run.skippedSources ?? []).map(skipped => ({ name: skipped.name, reason: skipped.reason }));
+
 const trimRun = (run: IModelDiscoveryRun) => ({
   ...listRun(run),
   sources: (run.sources ?? []).map(source => ({
@@ -59,10 +64,7 @@ const trimRun = (run: IModelDiscoveryRun) => ({
   })),
   // Names, not just a count: a fully-skipped run has no attempted source for the
   // card to report, so the skips are the only thing it can say about that run.
-  skippedSources: (run.skippedSources ?? []).map(skipped => ({
-    name: skipped.name,
-    reason: skipped.reason,
-  })),
+  skippedSources: pickSkippedSources(run),
   joinCoverage: run.joinCoverage ?? [],
 });
 
@@ -88,10 +90,7 @@ const fullRun = (run: IModelDiscoveryRun) => ({
     ...(source.recordCount === undefined ? {} : { recordCount: source.recordCount }),
     ...(source.error ? { error: source.error } : {}),
   })),
-  skippedSources: (run.skippedSources ?? []).map(skipped => ({
-    name: skipped.name,
-    reason: skipped.reason,
-  })),
+  skippedSources: pickSkippedSources(run),
   joinCoverage: run.joinCoverage ?? [],
   changes: {
     added: run.changes?.added ?? [],
