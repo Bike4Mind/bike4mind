@@ -19,7 +19,6 @@ import { promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
 import { Components } from 'react-markdown';
 import { extractSnippetMeta } from '@bike4mind/common';
 import EditModeContent from './EditModeContent';
-import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
 
 const isCodeContent = (content: string): { isCode: boolean; language: string } => {
@@ -116,7 +115,6 @@ const PromptContent: FC<{
   search?: string;
 }> = ({ content, search }) => {
   const { isCode, language } = isCodeContent(content);
-  const isMobile = useIsMobile();
 
   const markdownComponents: Components = {
     p: ({ node, children, ...props }: ComponentProps<'p'> & ExtraProps) => {
@@ -138,7 +136,7 @@ const PromptContent: FC<{
       return (
         <Typography
           component="p"
-          level={isMobile ? 'body-sm' : 'body-md'}
+          level="body-md"
           gutterBottom={false}
           sx={{ display: 'block', color: 'text.primary', mb: isLast ? '0 !important' : '8px !important' }}
         >
@@ -201,7 +199,6 @@ const TruncatablePromptContent: FC<{
   search?: string;
   isEnabled?: boolean;
 }> = ({ content, search, isEnabled = true }) => {
-  const isMobile = useIsMobile();
   const { needsTruncation, isExpanded, toggleExpanded, displayContent } = useContentTruncation({
     content,
     isEnabled,
@@ -212,7 +209,7 @@ const TruncatablePromptContent: FC<{
       <Typography
         className="prompt-content"
         variant="soft"
-        level={isMobile ? 'body-sm' : 'body-md'}
+        level="body-md"
         component="div"
         // The bubble is fill + hairline, as in the mockup: with a defined edge the
         // fill only has to sit slightly off the page, so the existing panel token
@@ -492,8 +489,6 @@ const SnippetSection: FC<{
   search?: string;
   isEditMode: boolean;
 }> = ({ section, isExpanded, onToggle, search, isEditMode }) => {
-  const isMobile = useIsMobile();
-
   const {
     needsTruncation,
     isExpanded: isTruncationExpanded,
@@ -528,7 +523,7 @@ const SnippetSection: FC<{
           <Typography
             className="prompt-content"
             variant="soft"
-            level={isMobile ? 'body-sm' : 'body-md'}
+            level="body-md"
             component="div"
             sx={theme => ({
               margin: 0,

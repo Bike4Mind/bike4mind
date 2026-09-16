@@ -1,6 +1,5 @@
 import { Box, Typography } from '@mui/joy';
 import type { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
-import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import './markdown/observatory.css';
 
 interface RapidReplyBubbleProps {
@@ -11,7 +10,6 @@ interface RapidReplyBubbleProps {
  *  Rendered above the streaming reply body so the transcript reads in the order
  *  the two responses were produced. */
 const RapidReplyBubble = ({ chatCompletion }: RapidReplyBubbleProps) => {
-  const isMobile = useIsMobile();
   const rapidReply = chatCompletion.rapidReply;
   if (!rapidReply || rapidReply.status === 'replaced' || !chatCompletion.statusMessage) return null;
 
@@ -35,7 +33,7 @@ const RapidReplyBubble = ({ chatCompletion }: RapidReplyBubbleProps) => {
     >
       {/* Level and color mirror the reply body's wrapper in PromptReplies, so the
           two set the same base size for observatory.css's em-based scale. */}
-      <Typography level={isMobile ? 'body-sm' : 'body-md'} component="div" sx={{ color: 'text.primary' }}>
+      <Typography level="body-md" component="div" sx={{ color: 'text.primary' }}>
         {/* Same reading treatment as the reply below. The class goes on a plain
             <div>, never on the Typography: Joy's emotion class on that element
             would tie on specificity and win on injection order. Content is plain

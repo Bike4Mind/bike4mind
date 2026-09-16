@@ -56,7 +56,6 @@ import DeepResearchProgress from '../GenAI/DeepResearchProgress';
 import PromptEnhancementBanner from './PromptEnhancementBanner';
 import { extractCodeBlockTitle } from '@client/app/utils/codeBlockTitleExtractor';
 import CitableSources from './CitableSources';
-import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/app/utils/chartJsonParser';
 import NavigationButtons from './NavigationButtons';
 import AttachmentNotices from './AttachmentNotices';
@@ -1121,7 +1120,6 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   notebookContent,
 }) => {
   const { currentSessionId } = useSessions();
-  const isMobile = useIsMobile();
   const [isEditMode, setIsEditMode] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -1529,7 +1527,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                     // variant would paint its own background once the explicit one
                     // below is gone. The user's prompt keeps its bubble.
                     variant="plain"
-                    level={isMobile ? 'body-sm' : 'body-md'}
+                    level="body-md"
                     component="div"
                     sx={{
                       margin: 0,
