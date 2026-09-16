@@ -213,12 +213,152 @@ describe('runModelDiscovery', () => {
       { name: 'openai', reason: 'egress-disabled' },
       { name: 'models.dev', reason: 'egress-disabled' },
     ]);
-    // Nothing failed, so nothing degrades the status; the empty source list and
-    // the skip counts in the summary are what say no data was refreshed.
-    expect(result.outcome).toBe('ok');
+    // Nothing failed, so the run is not 'failed'; but nothing was refreshed
+    // either, so it may not report the success that advances lastSuccessfulRun.
+    expect(result.outcome).toBe('partial');
+    expect(walled.runs.docs[0].status).toBe('partial');
     expect(result.sources).toEqual([]);
-    expect(walled.infos.some(message => message.includes('skipped=2(egress-disabled:2)'))).toBe(true);
+    expect(walled.infos.some(message => message.includes('skipped=2(egress-disabled:openai+models.dev)'))).toBe(true);
+    // The run document is what the admin surfaces read, and an all-skipped run is
+    // the one whose empty source list looks like a bug.
+    expect(walled.runs.docs[0].sources).toEqual([]);
+    expect(walled.runs.docs[0].skippedSources).toEqual([
+      { name: 'openai', reason: 'egress-disabled' },
+      { name: 'models.dev', reason: 'egress-disabled' },
+    ]);
     expect(walled.catalog.rows).toEqual([]);
+  });
+
+  it('withholds the success a deployment with nothing configured has not earned', async () => {
+    const bare = harness([
+      stubSource({ name: 'openai', configured: false }),
+      stubSource({ name: 'xai', configured: false }),
+    ]);
+
+    const result = await runModelDiscovery(bare.adapters, bare.options);
+
+    // lastSuccessfulRun is findOne({status:'ok'}), so 'partial' is what stops a
+    // deployment that fetches nothing from advancing it run after run.
+    expect(result.outcome).toBe('partial');
+    // Not 'failed': RunFailures has to keep meaning the sources themselves are
+    // broken, or the consecutive-failure alarm pages for a deliberate config.
+    expect(bare.runs.docs[0].status).toBe('partial');
+    // Degrading the status may not cost the skips their visibility.
+    expect(result.skippedSources).toEqual([
+      { name: 'openai', reason: 'not-configured' },
+      { name: 'xai', reason: 'not-configured' },
+    ]);
+    expect(bare.runs.docs[0].skippedSources).toEqual(result.skippedSources);
+    expect(bare.infos.some(message => message.includes('skipped=2(not-configured:openai+xai)'))).toBe(true);
+  });
+
+  it('withholds it from an empty registry too, which has nothing even to skip', async () => {
+    // Zero attempts with zero skips is the other way to refresh nothing, and the
+    // one a predicate written around the skip list is likeliest to miss.
+    const empty = harness([]);
+
+    const result = await runModelDiscovery(empty.adapters, empty.options);
+
+    expect(result.sources).toEqual([]);
+    expect(result.skippedSources).toEqual([]);
+    expect(result.outcome).toBe('partial');
+    expect(empty.runs.docs[0].status).toBe('partial');
+  });
+
+  it('keeps a zero-attempt run ok when one of its skips was the freshness guard', async () => {
+    // Mixed on purpose: ONE source skipped as fresh is a refresh that happened,
+    // so the unconfigurable sources beside it cannot pull the run down.
+    const fresh = harness([openaiSource(), stubSource({ name: 'xai', configured: false })]);
+    await runModelDiscovery(fresh.adapters, fresh.options);
+    fresh.advance(60_000);
+
+    const result = await runModelDiscovery(fresh.adapters, { ...fresh.options, minSourceIntervalMs: 30 * 60_000 });
+
+    expect(result.sources).toEqual([]);
+    expect([...result.skippedSources].map(skip => skip.reason).sort()).toEqual(['not-configured', 'recently-fetched']);
+    expect(result.outcome).toBe('ok');
+  });
+
+  it('caps the named skips in the summary line so a wide registry cannot blow it up', async () => {
+    const many = harness(
+      Array.from({ length: 7 }, (_, index) => stubSource({ name: `source-${index + 1}` })),
+      { modelDiscoveryAllowEgress: false }
+    );
+
+    await runModelDiscovery(many.adapters, many.options);
+
+    expect(
+      many.infos.some(message =>
+        message.includes('skipped=7(egress-disabled:source-1+source-2+source-3+source-4+source-5+2more)')
+      )
+    ).toBe(true);
+  });
+
+  it('names every skip up to the cap and marks the overflow only past it', async () => {
+    const summaryFor = async (count: number) => {
+      const many = harness(
+        Array.from({ length: count }, (_, index) => stubSource({ name: `source-${index + 1}` })),
+        { modelDiscoveryAllowEgress: false }
+      );
+      await runModelDiscovery(many.adapters, many.options);
+      return many.infos.find(message => message.includes('skipped=')) ?? '';
+    };
+
+    // The cap decides whether a name is dropped, so both sides of it are pinned:
+    // a case well past the boundary passes whether the cap is 5, 4 or 6.
+    expect(await summaryFor(5)).toContain('skipped=5(egress-disabled:source-1+source-2+source-3+source-4+source-5)');
+    expect(await summaryFor(6)).toContain(
+      'skipped=6(egress-disabled:source-1+source-2+source-3+source-4+source-5+1more)'
+    );
+  });
+
+  it('accounts for every skip in the summary when one run skips for more than one reason', async () => {
+    const mixed = harness([
+      openaiSource(),
+      stubSource({ name: 'xai', configured: false }),
+      stubSource({ name: 'models.dev', kind: 'aggregator' }),
+    ]);
+    await runModelDiscovery(mixed.adapters, mixed.options);
+    mixed.advance(60_000);
+
+    const result = await runModelDiscovery(mixed.adapters, { ...mixed.options, minSourceIntervalMs: 30 * 60_000 });
+
+    expect([...result.skippedSources].sort((a, b) => a.name.localeCompare(b.name))).toEqual([
+      { name: 'models.dev', reason: 'recently-fetched' },
+      { name: 'openai', reason: 'recently-fetched' },
+      { name: 'xai', reason: 'not-configured' },
+    ]);
+    const summary = mixed.infos.filter(message => message.includes('skipped=')).at(-1) ?? '';
+    const [, total, named] = /skipped=(\d+)\(([^)]*)\)/.exec(summary) ?? [];
+    // The count before the parentheses is what an operator reads first, so it has
+    // to equal the names that follow however many reasons they are grouped into.
+    expect(Number(total)).toBe(result.skippedSources.length);
+    expect(
+      named
+        .split(',')
+        .flatMap(group => group.split(':')[1].split('+'))
+        .sort()
+    ).toEqual(result.skippedSources.map(skipped => skipped.name).sort());
+  });
+
+  it('partitions the configured registry between attempted and skipped on a mixed run', async () => {
+    const mixed = harness([
+      openaiSource(),
+      stubSource({ name: 'litellm', kind: 'aggregator', result: { ok: false, error: 'HTTP 500' } }),
+      stubSource({ name: 'xai', configured: false }),
+    ]);
+
+    const result = await runModelDiscovery(mixed.adapters, mixed.options);
+
+    expect(result.sources.map(report => report.name).sort()).toEqual(['litellm', 'openai']);
+    expect(result.skippedSources).toEqual([{ name: 'xai', reason: 'not-configured' }]);
+    // Both admin surfaces read the two arrays together, so a name in both would
+    // double-count the source and let a skip read as an attempt as well.
+    const attempted = new Set(result.sources.map(report => report.name));
+    expect(result.skippedSources.filter(skipped => attempted.has(skipped.name))).toEqual([]);
+    const doc = mixed.runs.docs[0];
+    expect((doc.sources ?? []).map(source => source.name).sort()).toEqual(['litellm', 'openai']);
+    expect(doc.skippedSources).toEqual([{ name: 'xai', reason: 'not-configured' }]);
   });
 
   it('skips a source another host fetched successfully within the interval', async () => {
@@ -228,6 +368,7 @@ describe('runModelDiscovery', () => {
     const result = await runModelDiscovery(bench.adapters, { ...bench.options, minSourceIntervalMs: 30 * 60_000 });
 
     expect(result.skippedSources).toEqual([{ name: 'openai', reason: 'recently-fetched' }]);
+    expect(bench.runs.docs.at(-1)?.skippedSources).toEqual([{ name: 'openai', reason: 'recently-fetched' }]);
     // A source skipped as fresh is fresh data, not a degraded run.
     expect(result.outcome).toBe('ok');
   });
@@ -276,6 +417,7 @@ describe('runModelDiscovery', () => {
     // status === 'ok', and without one the startup staleness gate never trips.
     expect(result.outcome).toBe('ok');
     expect(partial.runs.docs[0].status).toBe('ok');
+    expect(partial.runs.docs[0].skippedSources).toEqual([{ name: 'xai', reason: 'not-configured' }]);
     expect(partial.catalog.rows).toHaveLength(1);
   });
 
