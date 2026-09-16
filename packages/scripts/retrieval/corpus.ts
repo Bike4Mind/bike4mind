@@ -304,7 +304,9 @@ export function parseProbeQuestions(raw: unknown, source: string): ProbeQuestion
   const parsed = raw.map((entry, i) => {
     const result = ProbeQuestionSchema.safeParse(entry);
     if (!result.success) {
-      throw new Error(`Question file "${source}" entry ${i}: ${result.error.issues.map(e => `${e.path.join('.')} ${e.message}`).join('; ')}`);
+      throw new Error(
+        `Question file "${source}" entry ${i}: ${result.error.issues.map(e => `${e.path.join('.')} ${e.message}`).join('; ')}`
+      );
     }
     return result.data;
   });

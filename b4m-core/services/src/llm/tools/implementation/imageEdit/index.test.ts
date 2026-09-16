@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
+import { ImageModels, type GenerateImageToolCall } from '@bike4mind/common';
 import type { ToolContext } from '../../base/types';
 
 // The agent-tool edit_image path must run the SAME moderation gate the
@@ -21,8 +22,25 @@ vi.mock('@bike4mind/utils/imageModeration', async importOriginal => {
   };
 });
 
-// Imported after the mock so `processAndStoreImage` picks up the mocked service.
-const { processAndStoreImage, getImageFromFileId } = await import('./index');
+// Mocks for the edit_image toolFn's OpenAI branch - see the 'imageEditTool - OpenAI branch'
+// describe below. Same constructor-function pattern as RekognitionImageModerationService above.
+const mockEditSpy = vi.fn();
+vi.mock('@bike4mind/utils', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/utils')>();
+  return {
+    ...actual,
+    OpenAIImageService: vi.fn().mockImplementation(function () {
+      return { edit: mockEditSpy };
+    }),
+  };
+});
+
+vi.mock('../../../../apiKeyService', () => ({
+  getEffectiveApiKey: vi.fn().mockResolvedValue('fake-openai-key'),
+}));
+
+// Imported after the mocks so `processAndStoreImage` and `imageEditTool` pick up the mocked services.
+const { processAndStoreImage, getImageFromFileId, imageEditTool } = await import('./index');
 
 // 1x1 transparent PNG - downloadImage() short-circuits data: URLs with no network call.
 const PNG_DATA_URL =
@@ -160,5 +178,32 @@ describe('edit_image processAndStoreImage moderation gate (agent-tool serve-gate
     expect(mockCheckImage).toHaveBeenCalledTimes(1);
     expect(context.imageGenerateStorage.upload).toHaveBeenCalledTimes(1);
     expect(result).toBe('generated/stored-key.png');
+  });
+});
+
+describe('imageEditTool - OpenAI branch', () => {
+  beforeEach(() => {
+    mockEditSpy.mockReset();
+    // Stop right after dispatch: the assertion is about what reached the provider,
+    // not about the post-edit moderation/storage pipeline.
+    mockEditSpy.mockRejectedValue(new Error('stop-after-dispatch'));
+  });
+
+  it('forwards the requested quality to the OpenAI edit service', async () => {
+    const context = createFakeContext();
+    context.onStart = vi.fn();
+
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.GPT_IMAGE_1_5,
+      quality: 'high',
+    } as GenerateImageToolCall);
+
+    await toolFn({ image: PNG_DATA_URL, prompt: 'make it blue' });
+
+    expect(mockEditSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ quality: 'high' })
+    );
   });
 });

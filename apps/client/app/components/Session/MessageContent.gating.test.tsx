@@ -164,7 +164,11 @@ const messageData = {
 
 // Accepts an explicit queryClient so a test can spy on it (e.g. asserting invalidateQueries is
 // called with the right key) rather than only observing DOM effects.
-function renderMessageContent(data: IChatHistoryItem = messageData, queryClient?: QueryClient) {
+function renderMessageContent(
+  data: IChatHistoryItem = messageData,
+  queryClient?: QueryClient,
+  onSendMessage: (...args: never[]) => Promise<void> = vi.fn()
+) {
   render(
     <TestWrapper queryClient={queryClient}>
       <MessageContent
@@ -173,7 +177,7 @@ function renderMessageContent(data: IChatHistoryItem = messageData, queryClient?
         index={0}
         onDelete={vi.fn()}
         onPinToggle={vi.fn()}
-        onSendMessage={vi.fn()}
+        onSendMessage={onSendMessage as never}
         isLastMessage={false}
         model="gpt-4o"
         totalMessages={1}
@@ -499,6 +503,111 @@ describe('MessageContent report action - persistent affordance (#1869)', () => {
       expect(document.querySelector('.action-buttons-mobile')).not.toBeNull();
       expect(screen.getByTestId('message-report-btn')).toBeInTheDocument();
     });
+  });
+});
+
+describe('MessageContent correct-and-retry (#1871)', () => {
+  const unpersisted = { ...messageData, id: 'optimistic-quest-abc' } as unknown as IChatHistoryItem;
+  const stillRunning = { ...messageData, status: 'running' } as unknown as IChatHistoryItem;
+  const noAnswer = { ...messageData, replies: [], reply: undefined } as unknown as IChatHistoryItem;
+
+  const openComposer = (data: IChatHistoryItem, onSendMessage = vi.fn()) => {
+    renderMessageContent(data, undefined, onSendMessage);
+    fireEvent.click(screen.getByTestId('message-correct-retry-btn'));
+    return onSendMessage;
+  };
+
+  it('offers the affordance on an answered, persisted turn', () => {
+    renderMessageContent();
+
+    expect(screen.getByTestId('message-correct-retry-btn')).toBeInTheDocument();
+  });
+
+  it('opens the inline composer beneath the message rather than a modal', () => {
+    renderMessageContent();
+    expect(screen.queryByTestId('message-correction-composer')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('message-correct-retry-btn'));
+
+    expect(screen.getByTestId('message-correction-composer')).toBeInTheDocument();
+  });
+
+  it('closes the composer when the button is clicked again', () => {
+    renderMessageContent();
+    fireEvent.click(screen.getByTestId('message-correct-retry-btn'));
+    fireEvent.click(screen.getByTestId('message-correct-retry-btn'));
+
+    expect(screen.queryByTestId('message-correction-composer')).not.toBeInTheDocument();
+  });
+
+  // The link has to resolve to something, and an optimistic id resolves to nothing.
+  it('hides the affordance on a turn that was never persisted', () => {
+    renderMessageContent(unpersisted);
+
+    expect(screen.queryByTestId('message-correct-retry-btn')).not.toBeInTheDocument();
+  });
+
+  it('hides the affordance while the turn is still running', () => {
+    renderMessageContent(stillRunning);
+
+    expect(screen.queryByTestId('message-correct-retry-btn')).not.toBeInTheDocument();
+  });
+
+  it('hides the affordance on a turn that produced no answer to correct', () => {
+    renderMessageContent(noAnswer);
+
+    expect(screen.queryByTestId('message-correct-retry-btn')).not.toBeInTheDocument();
+  });
+
+  // The load-bearing assertion: a NEW turn carrying correctsQuestId, never an in-place retry.
+  // `isRetry` would overwrite the flagged quest and destroy the answer the chain exists to keep.
+  it('sends a new turn linked to the corrected quest, not an in-place retry', async () => {
+    const onSendMessage = openComposer(messageData);
+
+    fireEvent.change(screen.getByTestId('message-correction-input'), {
+      target: { value: 'the figure is Q3, not Q2' },
+    });
+    fireEvent.click(screen.getByTestId('message-correction-submit-btn'));
+
+    await waitFor(() => expect(onSendMessage).toHaveBeenCalled());
+    const [sentMessage, options] = onSendMessage.mock.calls[0];
+    expect(sentMessage).toEqual({ prompt: 'the figure is Q3, not Q2' });
+    expect(options).toEqual({ correctsQuestId: 'quest-1' });
+    expect(options.isRetry).toBeUndefined();
+  });
+
+  it('closes the composer once the correction is sent', async () => {
+    const onSendMessage = openComposer(messageData, vi.fn().mockResolvedValue(undefined));
+
+    fireEvent.change(screen.getByTestId('message-correction-input'), { target: { value: 'wrong quarter' } });
+    fireEvent.click(screen.getByTestId('message-correction-submit-btn'));
+
+    await waitFor(() => expect(screen.queryByTestId('message-correction-composer')).not.toBeInTheDocument());
+    expect(onSendMessage).toHaveBeenCalled();
+  });
+
+  // A failed send must not eat the user's text - they would have to retype the correction.
+  it('keeps the composer and its text open when the send fails', async () => {
+    openComposer(messageData, vi.fn().mockRejectedValue(new Error('network')));
+
+    fireEvent.change(screen.getByTestId('message-correction-input'), { target: { value: 'wrong quarter' } });
+    fireEvent.click(screen.getByTestId('message-correction-submit-btn'));
+
+    await waitFor(() => expect(screen.getByTestId('message-correction-submit-btn')).not.toBeDisabled());
+    expect(screen.getByTestId('message-correction-composer')).toBeInTheDocument();
+    expect(screen.getByTestId('message-correction-input')).toHaveValue('wrong quarter');
+  });
+
+  it('annotates a turn that was itself sent as a correction', () => {
+    renderMessageContent({ ...messageData, correctsQuestId: 'quest-0' } as unknown as IChatHistoryItem);
+
+    expect(screen.getByTestId('message-correction-chip')).toBeInTheDocument();
+  });
+
+  it('leaves an ordinary turn unannotated', () => {
+    renderMessageContent();
+
+    expect(screen.queryByTestId('message-correction-chip')).not.toBeInTheDocument();
   });
 });
 
