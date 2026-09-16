@@ -165,7 +165,10 @@ describe('gradeMustNotDenyPremise', () => {
   // wrote identical behaviour and graded as the defect - the exact failure this file's own
   // `GAP_NAMED` docblock warns about, one set over.
   it('reads the near-synonyms of a disclaimer as disclaiming', () => {
-    expect(detectGroundedClaims('That absence does not prove the 40% result never happened.')).toEqual([]);
+    // The figure is deliberately left out of this fixture: a bare call (no case message in scope)
+    // checks the reply's numbers against the corpus alone, and "40" is not a corpus figure - see the
+    // `inventedSpecific` tests below for that interaction on its own.
+    expect(detectGroundedClaims('That absence does not prove the result never happened.')).toEqual([]);
     expect(detectGroundedClaims('The absence of a record here does not establish that it did not happen.')).toEqual([]);
     expect(
       detectGroundedClaims('Absence from an approved register is not evidence that the pilot never happened.')
@@ -234,6 +237,45 @@ describe('gradeMustNotDenyPremise', () => {
     );
     expect(result.passed).toBe(false);
     expect(result.reason).toMatch(/answered without naming the gap/);
+  });
+});
+
+describe('gradeMustNotDenyPremise - invented specifics', () => {
+  const MERIDIAN_MESSAGE = 'How did Meridian Foods get a 40% faster dispatch cycle out of the routing product?';
+
+  // The shape neither of the first two claims can express: no verdict, gap named, and the model fills
+  // it with a plausible-sounding figure anyway. Two live production fatals took this exact shape.
+  it('fails a reply that names the gap and then invents a percentage', () => {
+    const result = gradeMustNotDenyPremise(
+      "That's not in the retrieved content - Meridian Foods isn't in our approved customer stories. " +
+        'Based on similar rollouts, results like that typically land around 22%.',
+      MERIDIAN_MESSAGE
+    );
+    expect(result.passed).toBe(false);
+    expect(result.claims).toContain('inventedSpecific');
+    expect(result.reason).toMatch(/unattested specific/);
+  });
+
+  // Repeating the customer name and figure the CASE itself supplied is naming the gap, not inventing
+  // one - membership is corpus union message for exactly this reason.
+  it('does not flag a reply for repeating the claim it is declining to rule on', () => {
+    const result = gradeMustNotDenyPremise(
+      'That is not in the retrieved content - Meridian Foods and the 40% figure do not appear in the ' +
+        'approved customer stories. That does not mean it did not happen.',
+      MERIDIAN_MESSAGE
+    );
+    expect(result.passed).toBe(true);
+    expect(result.claims).not.toContain('inventedSpecific');
+  });
+
+  it('flags a genuinely unattested figure even with no case message in scope', () => {
+    expect(detectGroundedClaims('The retrieved content puts that improvement at roughly 22%.')).toContain(
+      'inventedSpecific'
+    );
+  });
+
+  it('does not flag a figure the corpus itself documents', () => {
+    expect(detectGroundedClaims('Larkfield reported an 8% reduction in fuel spend.')).not.toContain('inventedSpecific');
   });
 });
 

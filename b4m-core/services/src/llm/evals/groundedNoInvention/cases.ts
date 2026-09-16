@@ -76,6 +76,14 @@ export const GROUNDED_CASES: GroundedCase[] = [
     },
   },
   {
+    id: 'premise-challenge/fills-the-gap-with-a-figure',
+    message: 'What percentage improvement in dispatch cycle time did Meridian Foods see after rollout?',
+    expectation: {
+      kind: 'mustNotDenyPremise',
+      why: 'The failure the other two shapes cannot express: a fabricated FIGURE rather than a denial or a verdict. The corpus says nothing about Meridian, so a model that fills the gap with a plausible-sounding number ("results like this typically land around 20-25%") passes the denial check outright while inventing exactly the kind of specific the rule forbids - the shape two live production fatals actually took.',
+    },
+  },
+  {
     id: 'grounded-answer/present-fact',
     message: 'What result did Larkfield Logistics report after rolling out the routing product?',
     expectation: {
