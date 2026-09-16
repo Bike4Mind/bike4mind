@@ -23,7 +23,7 @@
  * Drop --dry-run and add --yes once the printed cost is acceptable.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yargs from 'yargs';
@@ -41,7 +41,7 @@ import { apiKeyService } from '@bike4mind/services';
 import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { ApiKeyType, countCodePoints } from '@bike4mind/common';
-import { PROBE_QUESTIONS } from './corpus';
+import { parseProbeQuestions, PROBE_QUESTIONS, type ProbeQuestion } from './corpus';
 import {
   assertOnePerInput,
   chunkTokenCount,
@@ -93,9 +93,50 @@ const argv = await yargs(hideBin(process.argv))
   })
   .option('dry-run', { type: 'boolean', default: false, describe: 'Print the cost and corpus regime, then stop' })
   .option('yes', { type: 'boolean', default: false, describe: 'Approve the printed spend and embed' })
+  .option('questions', {
+    type: 'string',
+    describe:
+      'Path to a JSON question set to use instead of the committed PROBE_QUESTIONS. Required to score ' +
+      'any lake but system-help, whose ground truth cannot live in this public repo',
+  })
   .option('out-dir', { type: 'string', default: path.resolve(SCRIPTS_PACKAGE_DIR, 'out') })
   .strict()
   .parse();
+
+// Both `--questions=` and a bare trailing `--questions` parse to the empty string, which is falsy -
+// so without this the flag reads as absent, the committed set is used, and the mistake surfaces only
+// after the embedding spend, as a fixture whose quality columns are all n/a.
+if (argv.questions !== undefined && argv.questions.trim() === '') {
+  throw new Error(
+    '--questions was given with no path. Supply the question file, or omit the flag to use PROBE_QUESTIONS.'
+  );
+}
+
+/**
+ * Neither `readFileSync` nor `JSON.parse` names the file or the flag, and their messages are the
+ * likeliest ones to hit. The read is its own try: folded into the parse's, a path typo reports as
+ * "could not be read as JSON", blaming the contents for a filename.
+ */
+function readQuestionFile(file: string): ProbeQuestion[] {
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (error) {
+    throw new Error(`Question file "${file}" could not be read: ${(error as Error).message}`);
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`Question file "${file}" could not be read as JSON: ${(error as Error).message}`);
+  }
+  return parseProbeQuestions(raw, file);
+}
+
+// Resolved before the DB connection and before any spend: a malformed question file should fail on
+// the file, not after a capture has been paid for.
+const usingExternalQuestions = Boolean(argv.questions);
+const probeQuestions: ProbeQuestion[] = argv.questions ? readQuestionFile(argv.questions) : PROBE_QUESTIONS;
 
 const models = parseSupportedModels(
   argv.models
@@ -309,7 +350,7 @@ for (const model of models) {
 
   // Query vectors are always freshly embedded: the corpus stores no vector for a probe question, and
   // a query must live in the same space as the chunks it is scored against.
-  const questions = PROBE_QUESTIONS.map(q => q.question);
+  const questions = probeQuestions.map(q => q.question);
   const queryVectors = await embedAll(service, questions);
   assertOnePerInput(queryVectors, questions.length, `${model} probe queries`);
 
@@ -365,10 +406,14 @@ for (const model of models) {
     filesExcluded,
     filesUnreachable,
     chunks,
-    queries: PROBE_QUESTIONS.map((q, i) => ({
+    // `supporting` is written ONLY for an external set. The committed corpus deliberately joins by id
+    // instead, so that re-wording a question in corpus.ts invalidates old fixtures (see
+    // assertQuestionTextMatches) rather than letting them carry their own stale copy of the answer.
+    queries: probeQuestions.map((q, i) => ({
       id: q.id,
       vector: queryVectors[i],
       questionHash: hashQuestionText(q.question),
+      ...(usingExternalQuestions ? { supporting: q.supporting } : {}),
     })),
   };
 

@@ -43,6 +43,16 @@ const CapturedQuerySchema = z.object({
    * different questions under one id - see `assertQuestionTextMatches`.
    */
   questionHash: z.string().min(1),
+  /**
+   * The question's supporting document ids, carried IN the fixture. Present only for a capture made
+   * with `--questions`, where the ground truth lives outside this repo and so cannot be joined to by
+   * id. Absent means the committed `PROBE_QUESTIONS` is the ground truth, which is the `system-help`
+   * case.
+   *
+   * An EMPTY array is a real value, not a missing one - it declares a negative, whose correct
+   * behavior is to serve nothing. Every read must test for `undefined`, never for length.
+   */
+  supporting: z.array(z.string().min(1)).optional(),
 });
 
 export const EmbeddingFixtureSchema = z.object({
@@ -99,7 +109,11 @@ const QUESTION_HASH_BY_ID = new Map(PROBE_QUESTIONS.map(q => [q.id, hashQuestion
  * re-capture actually needs.
  */
 function assertQuestionTextMatches(fixture: EmbeddingFixture): void {
+  // A query carrying its own `supporting` came from an external question file, so corpus.ts holds no
+  // text to pin it to and an id collision with a committed question is meaningless. Those are pinned
+  // across arms instead, by `assertSameQuerySet` comparing id AND text hash.
   const stale = fixture.queries
+    .filter(q => q.supporting === undefined)
     .filter(q => QUESTION_HASH_BY_ID.has(q.id) && QUESTION_HASH_BY_ID.get(q.id) !== q.questionHash)
     .map(q => q.id);
   if (stale.length > 0) {

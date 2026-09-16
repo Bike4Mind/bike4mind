@@ -8,6 +8,7 @@ import {
   resolveQueries,
   assertSameCorpus,
   assertSameQuerySet,
+  assertSameGroundTruth,
 } from './modelComparison';
 import { loadEmbeddingFixture, type EmbeddingFixture } from './embeddingFixture';
 import tinyFixture from './fixtures/tiny-comparison.fixture.json';
@@ -42,6 +43,13 @@ describe('assertSameQuerySet', () => {
     expect(() => assertSameQuerySet([fixture, short])).toThrow(/different question sets/);
   });
 
+  it('refuses two fixtures whose question TEXT differs under the same ids', () => {
+    // An external question set has no committed text for assertQuestionTextMatches to pin it to, so
+    // a reworded question between two captures would otherwise reach the table under one id.
+    const reworded = other({ queries: fixture.queries.map(q => ({ ...q, questionHash: `${q.questionHash}x` })) });
+    expect(() => assertSameQuerySet([fixture, reworded])).toThrow(/different question sets/);
+  });
+
   it('refuses two same-size fixtures whose question ids differ', () => {
     // The count check a reader would reach for first passes here, which is why the compare is on sets.
     const swapped = other({
@@ -71,6 +79,82 @@ describe('resolveQueries', () => {
     // questions reads as a better model.
     const bad = other({ queries: [...fixture.queries, { ...fixture.queries[0], id: 'q99' }] });
     expect(() => resolveQueries(bad)).toThrow(/q99/);
+  });
+
+  it('prefers ground truth carried in the fixture over the committed set', () => {
+    // The --questions case: ids that corpus.ts has never heard of, scored anyway.
+    const external = other({
+      queries: fixture.queries.map((q, i) => ({ ...q, id: `ext${i}`, supporting: [`file-${i}`] })),
+    });
+    const queries = resolveQueries(external);
+    expect(queries.map(q => q.supporting)).toEqual(fixture.queries.map((_, i) => [`file-${i}`]));
+  });
+
+  it('keeps an empty carried supporting set as a negative rather than reading it as absent', () => {
+    // [] and undefined mean opposite things here: a declared negative vs no ground truth at all.
+    const external = other({ queries: fixture.queries.map(q => ({ ...q, supporting: [] })) });
+    expect(resolveQueries(external).every(q => q.supporting.length === 0)).toBe(true);
+  });
+
+  it('refuses a fixture where only some queries carry ground truth', () => {
+    // The dangerous shape: the uncarried half silently falls back to corpus.ts, and a miss there
+    // defaults to [] - indistinguishable from a legitimate negative.
+    const half = other({
+      queries: fixture.queries.map((q, i) => (i === 0 ? { ...q, supporting: ['file-0'] } : q)),
+    });
+    expect(() => resolveQueries(half)).toThrow(/partly external/);
+  });
+});
+
+describe('assertSameGroundTruth', () => {
+  // Built the way compareArms builds it, so the test exercises the real resolution and not a
+  // hand-written answer key that could agree with nothing.
+  const resolvedPair = (a: EmbeddingFixture, b: EmbeddingFixture) => [
+    { fixture: a, queries: resolveQueries(a) },
+    { fixture: b, queries: resolveQueries(b) },
+  ];
+  const external = (supporting: string[]) =>
+    other({ model: 'external-arm', queries: fixture.queries.map(q => ({ ...q, supporting })) });
+
+  it('refuses an external arm tabled beside a committed one', () => {
+    // The ids, the question hashes AND the vectors are identical - only the ground truth source
+    // differs, which renders as a large quality gap the models did not produce.
+    expect(() => assertSameGroundTruth(resolvedPair(fixture, external(['features/overview'])))).toThrow(
+      /resolve different ground truth/
+    );
+  });
+
+  it('refuses two external arms captured either side of an edit to the question file', () => {
+    // Editing `supporting` alone leaves every id and text hash untouched, so assertSameQuerySet
+    // passes - this is the only thing standing between that edit and a scored table.
+    const [before, after] = [external(['file-a']), external(['file-b'])];
+    expect(() => assertSameQuerySet([before, after])).not.toThrow();
+    expect(() => assertSameGroundTruth(resolvedPair(before, after))).toThrow(/resolve different ground truth/);
+  });
+
+  it('accepts two external arms whose supporting sets differ only in order', () => {
+    // `supporting` is a set; the order an author listed the documents in is not a difference.
+    const pair = resolvedPair(external(['file-a', 'file-b']), external(['file-b', 'file-a']));
+    expect(() => assertSameGroundTruth(pair)).not.toThrow();
+  });
+
+  it('accepts an external arm whose carried ground truth agrees with the committed set', () => {
+    // Divergence is the hazard, not provenance: two sources that answer identically table fine.
+    const agreeing = other({
+      model: 'external-arm',
+      queries: fixture.queries.map(q => ({
+        ...q,
+        supporting: resolveQueries(fixture).find(r => r.id === q.id)?.supporting,
+      })),
+    });
+    expect(() => assertSameGroundTruth(resolvedPair(fixture, agreeing))).not.toThrow();
+  });
+
+  it('is wired into compareArms', () => {
+    // The guard is worth nothing if the report path does not run it.
+    expect(() => compareArms([fixture, external(['features/overview'])], [16])).toThrow(
+      /resolve different ground truth/
+    );
   });
 });
 
