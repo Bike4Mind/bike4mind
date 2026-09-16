@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ContextTelemetrySchema, SystemPromptDetailSchema } from './contextTelemetry';
+import { PROMPT_META_MODEL_TYPES } from '../modelCatalog';
 
 /**
  * A Date that also accepts its own JSON form. promptMeta makes a round trip through the client:
@@ -43,7 +44,7 @@ const PromptMetaModelSchema = z.object({
   // or other public sources
   name: z.string(),
   parameters: PromptMetaModelParametersSchema.optional(),
-  type: z.enum(['text', 'image', 'video']).optional(),
+  type: z.enum(PROMPT_META_MODEL_TYPES).optional(),
   backend: z.string().optional(),
   contextWindow: z.number().optional(),
   maxTokens: z.number().optional(),

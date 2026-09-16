@@ -59,6 +59,32 @@ export const isRenderableModelType = (type: string): type is ModelInfoType =>
 export const isMediaModelType = (type: ModelInfo['type']): boolean => type === 'image' || type === 'video';
 
 /**
+ * The modalities promptMeta.model.type is allowed to record. Deliberately NARROWER than
+ * MODEL_INFO_TYPES: 'speech-to-text' is served by its own transcription route, never by a
+ * completion, so recording it would put a value in the field that no reader narrows on.
+ * PromptMetaModelSchema.type (schemas/promptMeta) builds its z.enum from this const, and
+ * QuestModelType (apps/client admin reporting) is an alias of the type - one source, three uses.
+ */
+export const PROMPT_META_MODEL_TYPES = ['text', 'image', 'video'] as const;
+
+export type PromptMetaModelType = (typeof PROMPT_META_MODEL_TYPES)[number];
+
+/**
+ * Compile-time guard: every member must be a real ModelInfo type, so the completion write path can
+ * NARROW a catalog type into this union rather than cast into it. Breaks the build if the two
+ * unions drift apart - which is how the unchecked cast went unnoticed in the first place.
+ */
+export type PromptMetaModelTypesAreModelInfoTypes = Expect<PromptMetaModelType extends ModelInfoType ? true : false>;
+
+/**
+ * Whether a type is one a completion may record. Takes a bare string, like isRenderableModelType:
+ * the write path narrows a ModelInfo['type'] with it, and the read path screens a value that came
+ * back from Mongo, where the subschema is an unconstrained String.
+ */
+export const isPromptMetaModelType = (type: string): type is PromptMetaModelType =>
+  (PROMPT_META_MODEL_TYPES as readonly string[]).includes(type);
+
+/**
  * Compile-time guard (T1): toModelInfo must turn a record carrying only the
  * required fields into a complete ModelInfo. If ModelInfo gains a required field
  * that no default covers, this stops compiling until someone decides where the
