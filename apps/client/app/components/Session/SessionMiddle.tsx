@@ -568,6 +568,11 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
                       <CircularProgress />
                     </Box>
                   )}
+                  {/* Clearance under the last message, whose action row is always on screen and
+                      was landing right on top of the composer. Inside the scroll area rather
+                      than on SessionBottom, so it costs no fixed chrome height and the list
+                      keeps the room it has. */}
+                  <Box sx={{ height: '40px', flexShrink: 0 }} />
                 </>
               }
             />
