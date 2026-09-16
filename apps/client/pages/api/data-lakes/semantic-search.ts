@@ -76,6 +76,13 @@ function getSharedTokenizer(logger: Logger): ITokenizer {
  *
  * Budgets are read-only, so this is a tighter standard than the rung strictly needs. It is the
  * cheap one here, and it keeps the route from being the precedent that a looser derivation is fine.
+ *
+ * Deliberately diverges from the billing block further down (`billingOrg`, via
+ * `organizationRepository.shareable.findAccessibleById`), which also grants on a `groups[]`
+ * share. A caller with only group-share access is therefore not a member here but is billed
+ * against and capped by that org there, in the same request - both checks are individually
+ * correct for their own purpose; see #2857 for why that disagreement is accepted as-is rather
+ * than reconciled.
  */
 async function resolveBudgetScope(req: Request): Promise<SettingScope> {
   const userId = req.user.id;
@@ -366,6 +373,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
         // billing/capping against an org they've left. Same shareable ACL resolveActiveOrg
         // uses (#2769), deliberately WITHOUT its isAdmin arm - platform admin rights are not
         // a billing relationship, so an admin's own stale pointer bills personally too.
+        // Deliberately diverges from resolveBudgetScope above (#2709), which does not grant on a
+        // groups[] share: a caller with only group-share access is billed/capped here but resolves
+        // at their personal owner rung there (no org rung at all), so their own override governs
+        // instead of the org's - see #2857 for why that disagreement is accepted as-is rather than
+        // reconciled.
         const resolvedOrg = resolvedUser?.organizationId
           ? await organizationRepository.shareable.findAccessibleById(req.user, resolvedUser.organizationId)
           : null;
