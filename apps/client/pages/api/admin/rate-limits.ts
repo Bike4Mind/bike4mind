@@ -2,6 +2,7 @@ import { Request } from 'express';
 import { ForbiddenError } from '@server/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
 import { RateLimitSnapshot } from '@bike4mind/database';
+import { assertParseableDate } from '@server/utils/dateParam';
 
 const handler = baseApi().get(async (req: Request, res) => {
   if (!req.user?.isAdmin) {
@@ -15,6 +16,8 @@ const handler = baseApi().get(async (req: Request, res) => {
 
   if (dateFrom || dateTo) {
     const timestampFilter: Record<string, Date> = {};
+    assertParseableDate('dateFrom', dateFrom as string | undefined);
+    assertParseableDate('dateTo', dateTo as string | undefined);
     if (dateFrom) timestampFilter.$gte = new Date(dateFrom as string);
     if (dateTo) timestampFilter.$lte = new Date(dateTo as string);
     query.timestamp = timestampFilter;

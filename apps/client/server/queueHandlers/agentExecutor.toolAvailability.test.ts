@@ -9,7 +9,7 @@
  * `packages/scripts/src/checkToolAvailabilityWired.test.ts`.
  */
 import { describe, it, expect } from 'vitest';
-import { buildSharedTools, type ToolAvailability } from '@bike4mind/services';
+import { buildSharedTools, type ToolAvailability } from '@bike4mind/services/llm';
 import { filterToolsByPatterns } from '@bike4mind/agents';
 import { makeToolBuilderDeps, makeToolBuilderCallbacks } from './toolBuilderDeps.fixture';
 

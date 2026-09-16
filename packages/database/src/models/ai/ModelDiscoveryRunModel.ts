@@ -61,6 +61,18 @@ const ModelDiscoveryRunSchema = new Schema<IModelDiscoveryRunDocument>(
       ],
       required: false,
     },
+    skippedSources: {
+      type: [
+        new Schema(
+          {
+            name: { type: String, required: true },
+            reason: { type: String, required: true },
+          },
+          { _id: false }
+        ),
+      ],
+      required: false,
+    },
     joinCoverage: {
       type: [
         new Schema(

@@ -218,7 +218,9 @@ describe('organizationService.update - Manager Permissions', () => {
       shareable: {
         findUpdateAccessById: vi.fn().mockResolvedValue(mockOrganization),
       },
-      update: vi.fn().mockImplementation(org => Promise.resolve(org)),
+      // Mirror findOneAndUpdate({ new: true }): the real repo returns the full merged
+      // document, not just the $set partial the service now passes.
+      update: vi.fn().mockImplementation(org => Promise.resolve({ ...mockOrganization, ...org })),
       findById: vi.fn().mockResolvedValue(mockOrganization),
     };
   });
@@ -341,15 +343,36 @@ describe('organizationService.revokeAccess - Manager Permissions', () => {
   let mockOrganizationRepository: any;
   let mockGroupRepository: any;
   let mockUserRepository: any;
+  let mockLakeRepositories: any;
 
   beforeEach(() => {
     mockOrganizationRepository = {
       findById: vi.fn().mockResolvedValue({ ...mockOrganization }),
       update: vi.fn().mockImplementation(org => Promise.resolve(org)),
     };
-    // revokeAccess now purges the removed member's org group ids + adminUserIds (org-groups #1172).
+    // revokeAccess now purges the removed member's org group ids + adminUserIds (org-groups #1172),
+    // and clears their organizationId when it pointed at this org (findById returns null here, so
+    // that clear is a no-op for these cases).
     mockGroupRepository = { findByOrganization: vi.fn().mockResolvedValue([]) };
-    mockUserRepository = { removeGroupsFromUser: vi.fn().mockResolvedValue(undefined) };
+    mockUserRepository = {
+      removeGroupsFromUser: vi.fn().mockResolvedValue(undefined),
+      findById: vi.fn().mockResolvedValue(null),
+      update: vi.fn().mockResolvedValue(undefined),
+    };
+    // revokeAccess also ends the removed member's data-lake access on this org's lakes. No org
+    // lakes here, so that step is a no-op and the assertions below stay about membership.
+    mockLakeRepositories = {
+      dataLakes: {
+        findByOrganizationId: vi.fn().mockResolvedValue([]),
+        update: vi.fn().mockImplementation(async (input: { id: string }) => ({ id: input.id })),
+      },
+      dataLakeAccessGrants: {
+        listByPrincipal: vi.fn().mockResolvedValue([]),
+        listActiveByLakes: vi.fn().mockResolvedValue([]),
+        upsertGrant: vi.fn().mockResolvedValue(undefined),
+      },
+      lakeConfigChangeEvents: { record: vi.fn().mockResolvedValue(undefined) },
+    };
   });
 
   it('should allow manager to revoke access from members', async () => {
@@ -364,6 +387,7 @@ describe('organizationService.revokeAccess - Manager Permissions', () => {
           organizations: mockOrganizationRepository,
           groups: mockGroupRepository,
           users: mockUserRepository,
+          ...mockLakeRepositories,
         },
       }
     );
@@ -391,6 +415,7 @@ describe('organizationService.revokeAccess - Manager Permissions', () => {
             organizations: mockOrganizationRepository,
             groups: mockGroupRepository,
             users: mockUserRepository,
+            ...mockLakeRepositories,
           },
         }
       )
@@ -409,6 +434,7 @@ describe('organizationService.revokeAccess - Manager Permissions', () => {
           organizations: mockOrganizationRepository,
           groups: mockGroupRepository,
           users: mockUserRepository,
+          ...mockLakeRepositories,
         },
       }
     );

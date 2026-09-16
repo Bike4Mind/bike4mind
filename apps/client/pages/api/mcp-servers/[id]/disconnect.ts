@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/utils';
 import { mcpServerRepository, userRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
+import { isValidObjectId } from '@server/utils/objectId';
 
 const handler = baseApi().delete(async (req, res) => {
   const { id } = req.query;
@@ -35,10 +36,12 @@ const handler = baseApi().delete(async (req, res) => {
     return;
   }
 
-  const server = await mcpServerRepository.findOne({
-    _id: id,
-    userId: req.user.id,
-  });
+  const server = isValidObjectId(id)
+    ? await mcpServerRepository.findOne({
+        _id: id,
+        userId: req.user.id,
+      })
+    : null;
 
   if (!server) {
     throw new NotFoundError('MCP server not found');

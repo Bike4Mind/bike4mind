@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { Alert, Typography } from '@mui/joy';
-import { useGetSettingsValue } from '@client/app/hooks/data/settings';
+import { useEffectiveEmbeddingModel, useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { estimateEmbeddingCostUsd, estimateEmbeddingTokens } from '@client/app/utils/embeddingCostEstimate';
 
 /** A stored admin setting arrives as a raw string ('true'/'false') from the server, but the
@@ -25,7 +25,14 @@ export interface EmbeddingBudgetEstimateProps {
 export function EmbeddingBudgetEstimate({ files }: EmbeddingBudgetEstimateProps) {
   const spendEnabledRaw = useGetSettingsValue('dataLakeEmbeddingSpendEnabled');
   const perRunBudgetRaw = useGetSettingsValue('dataLakeEmbeddingBudgetPerRunUsd');
-  const model = useGetSettingsValue('defaultEmbeddingModel');
+  // Priced off the EFFECTIVE model, because that is what the ingest will actually bill: a stage
+  // holding no key for the advertised one substitutes the keyless Bedrock embedder, whose rate is
+  // different, so quoting the advertised model's price here is a number for a call that will never
+  // be made. Falls back to the setting only while the effective model is unknown - which is also
+  // the state where the banner below stays silent rather than quote a figure it cannot stand behind.
+  const effectiveModel = useEffectiveEmbeddingModel();
+  const advertisedModel = useGetSettingsValue('defaultEmbeddingModel');
+  const model = effectiveModel ?? advertisedModel;
 
   const tokens = useMemo(() => estimateEmbeddingTokens(files), [files]);
   const estimatedCostUsd = model ? estimateEmbeddingCostUsd(tokens, String(model)) : 0;

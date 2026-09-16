@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { LATTICE_TOOL_NAMES } from '@bike4mind/services';
+import { LATTICE_TOOL_NAMES } from '@bike4mind/services/llm';
 import { buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
 import { makeToolBuilderDeps, makeToolBuilderCallbacks } from './toolBuilderDeps.fixture';
 

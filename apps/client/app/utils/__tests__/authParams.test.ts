@@ -194,7 +194,7 @@ describe('authParams', () => {
       expect(replaceStateMock).toHaveBeenCalledWith(null, '', '/auth/success');
     });
 
-    it('should fall back to query params when no hash', () => {
+    it('never adopts a query-string token when there is no hash (legacy fallback removed)', () => {
       const mockWindow = {
         location: {
           hash: '',
@@ -213,14 +213,12 @@ describe('authParams', () => {
 
       const result = parseAuthParams(search, mockWindow);
 
-      expect(result).toEqual({
-        token: 'queryToken',
-        userId: 'queryUser',
-        error: undefined,
-      });
+      // A token in the query string is loggable/referer-leakable and was the
+      // silent-session-adoption vector - it is no longer honored.
+      expect(result).toEqual({});
     });
 
-    it('should fall back to query params when hash is incomplete', () => {
+    it('never adopts a query-string token when the hash is incomplete', () => {
       const mockWindow = {
         location: {
           hash: '#token=hashToken', // incomplete
@@ -239,11 +237,18 @@ describe('authParams', () => {
 
       const result = parseAuthParams(search, mockWindow);
 
-      expect(result).toEqual({
-        token: 'queryToken',
-        userId: 'queryUser',
-        error: undefined,
-      });
+      expect(result).toEqual({});
+    });
+
+    it('still surfaces a query-string error code', () => {
+      const mockWindow = {
+        location: { hash: '', pathname: '/auth/success', search: '' },
+        history: { replaceState: vi.fn() },
+      } as unknown as Window;
+
+      const result = parseAuthParams({ error: 'access_denied' }, mockWindow);
+
+      expect(result).toEqual({ error: 'access_denied' });
     });
 
     it('should return hash error when only error in hash', () => {
@@ -279,7 +284,7 @@ describe('authParams', () => {
       expect(replaceStateMock).toHaveBeenCalledWith(null, '', '/auth/success?redirectTo=%2Fnew');
     });
 
-    it('should handle undefined window (SSR)', () => {
+    it('should handle undefined window (SSR) without adopting a query token', () => {
       const search = {
         token: 'queryToken',
         userId: 'queryUser',
@@ -288,11 +293,7 @@ describe('authParams', () => {
       // Pass undefined explicitly to simulate SSR
       const result = parseAuthParams(search, undefined);
 
-      expect(result).toEqual({
-        token: 'queryToken',
-        userId: 'queryUser',
-        error: undefined,
-      });
+      expect(result).toEqual({});
     });
 
     it('should handle window without history (edge case)', () => {

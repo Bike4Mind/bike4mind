@@ -29,9 +29,13 @@ const settingsValues = vi.hoisted(() => ({
     dataLakeEmbeddingBudgetPerRunUsd: '5' as string | number | undefined,
     defaultEmbeddingModel: 'text-embedding-3-small' as string | undefined,
   },
+  // Server-resolved, so it is NOT a settings key - undefined is the steady state (unknown, or a
+  // deployment that holds the advertised model's credential and substitutes nothing).
+  effectiveModel: undefined as string | undefined,
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useGetSettingsValue: (key: keyof typeof settingsValues.current) => settingsValues.current[key],
+  useEffectiveEmbeddingModel: () => settingsValues.effectiveModel,
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -85,6 +89,7 @@ afterEach(() => {
     dataLakeEmbeddingBudgetPerRunUsd: '5',
     defaultEmbeddingModel: 'text-embedding-3-small',
   };
+  settingsValues.effectiveModel = undefined;
 });
 
 /**
@@ -273,6 +278,31 @@ describe('ConfigStep - embedding cost estimate banner', () => {
     // Nothing left to embed once the only file is a skipped duplicate - no estimate at all.
     expect(screen.queryByTestId('datalake-estimate-line')).not.toBeInTheDocument();
     expect(screen.queryByTestId('datalake-estimate-over-budget-alert')).not.toBeInTheDocument();
+  });
+
+  it('prices off the EFFECTIVE model, not the advertised one', () => {
+    // On a stage that substitutes, the advertised model names a call that will never be made.
+    // The two models here sit on opposite sides of the estimate's own silence rule - ada-002 is
+    // priced, nomic-embed-text is zero-price - so the banner's ABSENCE is the assertion: pricing
+    // off the advertised model would put a confident dollar figure on a run billing another rate.
+    settingsValues.current.defaultEmbeddingModel = 'text-embedding-ada-002';
+    settingsValues.effectiveModel = 'nomic-embed-text';
+    seedConfig({ allFiles: [mockWizardFile('a.txt', 5_000_000)] });
+
+    renderStep();
+
+    expect(screen.queryByTestId('datalake-estimate-line')).not.toBeInTheDocument();
+  });
+
+  it('falls back to the advertised model while the effective one is unknown', () => {
+    // undefined means "not resolved yet", not "no model" - the estimate is advisory, so the
+    // advertised setting is the right stand-in here rather than going silent.
+    settingsValues.effectiveModel = undefined;
+    seedConfig({ allFiles: [mockWizardFile('a.txt', 50_000)] });
+
+    renderStep();
+
+    expect(screen.getByTestId('datalake-estimate-line')).toBeInTheDocument();
   });
 
   it('never touches the Start Upload button - advisory only', () => {

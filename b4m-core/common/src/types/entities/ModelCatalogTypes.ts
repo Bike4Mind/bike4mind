@@ -36,6 +36,10 @@ export const ADAPTER_FAMILIES = [
   // controls, the sampling pins and max_completion_tokens do not, so a Kimi row
   // routed to the OpenAI shaper would 400.
   'kimi',
+  // DeepSeek direct. Not 'openai-chat' for the same reason as 'kimi': thinking
+  // mode is a per-request parameter, the sampling group is silently ignored
+  // while it is on, and the cache counters have their own field names.
+  'deepseek',
   'ollama',
   'bfl',
   'local-image',
@@ -333,6 +337,7 @@ export const MODEL_INFO_FIELD_GROUP_OF: Record<
   supportsSafetyTolerance: 'modalities',
 
   deprecationDate: 'lifecycle',
+  replacedBy: 'lifecycle',
 
   adapterFamily: 'dispatch',
   dispatchProfile: 'dispatch',
@@ -540,6 +545,8 @@ export const ModelDiscoveryState = z.object({
     .optional(),
   /** Optional: a state row written before Phase 4 has none, and must keep parsing. */
   suggestion: ModelLifecycleSuggestion.optional(),
+  /** Dispatch probes spent on this model, so one that always fails stops taking a budget slot. */
+  probeAttempts: z.number().int().nonnegative().optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -570,6 +577,9 @@ export interface IModelDiscoveryStateRepository extends IBaseRepository<IModelDi
     suggestion: ModelLifecycleSuggestionInput,
     at?: Date
   ): Promise<IModelDiscoveryState>;
+
+  /** One more spent dispatch probe. */
+  recordProbeAttempt(modelId: string): Promise<IModelDiscoveryState>;
 
   /** The deprecation queue: every model carrying a suggestion nobody has settled, oldest first. */
   pendingSuggestions(): Promise<IModelDiscoveryState[]>;
@@ -722,6 +732,17 @@ export const DiscoveryPriceSkip = z.object({
   reason: z.string(),
 });
 
+/**
+ * A configured source the run never attempted, and why. Produced by
+ * `skipReasonFor` in runModelDiscovery (services/modelDiscoveryService); the
+ * reason stays a plain string rather than that module's SourceSkipReason union
+ * so a new reason needs no schema or UI change.
+ */
+export const DiscoverySkippedSource = z.object({
+  name: z.string().min(1),
+  reason: z.string(),
+});
+
 export const DiscoveryLifecycleTransition = z.object({
   modelId: z.string().min(1),
   /** Absent when no row in force carried a lifecycle for this model. */
@@ -772,6 +793,7 @@ export type IDiscoveryPriceFlag = z.infer<typeof DiscoveryPriceFlag>;
 export type IDiscoveryPlannedPriceRow = z.infer<typeof DiscoveryPlannedPriceRow>;
 export type IDiscoveryPriceOverride = z.infer<typeof DiscoveryPriceOverride>;
 export type IDiscoveryPriceSkip = z.infer<typeof DiscoveryPriceSkip>;
+export type IDiscoverySkippedSource = z.infer<typeof DiscoverySkippedSource>;
 export type IDiscoveryLifecycleTransition = z.infer<typeof DiscoveryLifecycleTransition>;
 export type IDiscoveryCatalogDiffEntry = z.infer<typeof DiscoveryCatalogDiffEntry>;
 export type IDiscoveryRunDetailTotals = z.infer<typeof DiscoveryRunDetailTotals>;
@@ -793,6 +815,8 @@ export const ModelDiscoveryRun = z.object({
    */
   mode: z.enum(DISCOVERY_RUN_MODES).optional(),
   sources: z.array(DiscoverySourceReport).optional(),
+  /** Configured sources this run never attempted; disjoint from `sources`. */
+  skippedSources: z.array(DiscoverySkippedSource).optional(),
   joinCoverage: z.array(DiscoveryJoinCoverage).optional(),
   /** Ids no aggregator matched: a work item, not a log line. */
   unmatchedIds: z.array(z.string()).optional(),

@@ -4,7 +4,7 @@
  */
 
 // @ts-ignore - types may not be exported in types yet
-import type { Searcher, SearchResult } from '@bike4mind/services';
+import type { Searcher, SearchResult } from '@bike4mind/services/llm';
 import type { IChatHistoryItemRepository, IChatHistoryItemDocument } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 

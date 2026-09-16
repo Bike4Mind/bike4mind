@@ -5,6 +5,8 @@ import {
   type ChunkStallReason,
 } from '@bike4mind/common';
 import { describeEmbeddingMismatch, type EmbeddingMismatchReport } from './embeddingMismatch';
+import { toSingleLine } from './renderDataLakePromptBlock';
+import { describeSupersession, type SupersessionReport } from './supersession';
 
 /**
  * Content that is in scope and authorized but temporarily UNSERVABLE, because it is mid-(re)index.
@@ -174,8 +176,15 @@ export function buildRetrievalUnavailableReport(withheld: readonly IndexStateFil
 export function describeRetrievalUnavailable(report: RetrievalUnavailableReport | undefined): string | null {
   if (!report?.partial) return null;
 
+  // toSingleLine (toContentLabel at the prompt sinks) because these names are attacker-influenced
+  // and this prose lands in the column-0 `NOTE:` region of a tool result, OUTSIDE the untrusted
+  // block that defangRetrievedContent guards - so a name carrying a line break plus a forged marker
+  // would be read as our framing. Same defense the passage headers already apply to the same value.
   const namesOf = (bucket: { count: number; sample: { fileName?: string }[] }) => {
-    const names = bucket.sample.map(f => f.fileName).filter((n): n is string => typeof n === 'string' && n.length > 0);
+    const names = bucket.sample
+      .map(f => f.fileName)
+      .filter((n): n is string => typeof n === 'string' && n.length > 0)
+      .map(toSingleLine);
     return names.length > 0 ? ` (${names.join(', ')}${bucket.count > names.length ? ', ...' : ''})` : '';
   };
 
@@ -241,16 +250,28 @@ export function describeRetrievalUnavailable(report: RetrievalUnavailableReport 
 export function describeSearchLimitations(search: {
   embeddingMismatch?: EmbeddingMismatchReport;
   retrievalUnavailable?: RetrievalUnavailableReport;
+  supersession?: SupersessionReport;
   embeddingModel: string;
 }): string | null {
   const sentences = [
     describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel),
     describeRetrievalUnavailable(search.retrievalUnavailable),
+    describeSupersession(search.supersession),
   ].filter((s): s is string => s !== null);
   return sentences.length > 0 ? sentences.join(' ') : null;
 }
 
-/** Whether a search returned a partial corpus for ANY reason - the flag a wire contract exposes. */
+/**
+ * Whether a search returned a partial corpus for ANY reason - the flag a wire contract exposes.
+ *
+ * Deliberately NOT widened to `supersession`, even though that report is part of the wording seam
+ * above. The two existing reasons mean "content that should have been comparable/servable was not",
+ * which is abnormal and repairable; a supersession means "we deliberately ranked one of two
+ * generations", which is permanent and is the steady state of any lake holding a re-uploaded
+ * document. Counting it here would raise `partial` on every search against a healthy lake forever,
+ * which is exactly how a reader learns to ignore the flag (see the module comment at the top). A
+ * reader who needs to KNOW still gets the prose from `describeSearchLimitations`.
+ */
 export function isPartialSearch(search: {
   embeddingMismatch?: EmbeddingMismatchReport;
   retrievalUnavailable?: RetrievalUnavailableReport;

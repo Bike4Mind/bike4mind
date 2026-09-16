@@ -3,9 +3,12 @@ import OpenAI from 'openai';
 import { ImageGenerateParams } from 'openai/resources/images';
 import { Logger } from '@bike4mind/observability';
 import {
+  IMAGE_SIZE_CONSTRAINTS,
   ImageModels,
   isGPTImageModel,
   isGPTImage2Model,
+  OPENAI_GPT_IMAGE_1_IMAGE_SIZES,
+  OPENAI_GPT_IMAGE_2_IMAGE_SIZES,
   type ImageOutputFormat,
   type OpenAIImageBackground,
 } from '@bike4mind/common';
@@ -24,6 +27,35 @@ const OPENAI_IMAGE_CLIENT_OPTS = { timeout: 8 * 60 * 1000, maxRetries: 0 } as co
 // whose prompt is blocked by OpenAI's safety system. Flux Pro in
 // particular handles a broader range of prompts than gpt-image-*.
 const ALTERNATIVE_IMAGE_MODELS = 'Flux Pro, Flux Dev, or Grok';
+
+// GPT-Image models accept these quality values on both the generate and edit endpoints -
+// not the raw ImageGenerateParams/ImageEditParams `quality` union, which spans every model
+// (dall-e-2/3's 'standard'/'hd' included), but the SDK's own per-model prose on that field
+// ("high, medium and low are supported for the GPT image models") plus the live
+// /images/edits behavior. DALL-E's legacy 'standard'/'hd' pair is mapped away by
+// mapQualityForModel upstream before it reaches here.
+const GPT_IMAGE_QUALITY_VALUES = ['low', 'medium', 'high', 'auto'] as const;
+type GptImageQuality = (typeof GPT_IMAGE_QUALITY_VALUES)[number];
+
+function isGptImageQuality(value: unknown): value is GptImageQuality {
+  return typeof value === 'string' && (GPT_IMAGE_QUALITY_VALUES as readonly string[]).includes(value);
+}
+
+/**
+ * Normalizes a requested quality to the tier a GPT-Image model actually accepts, or
+ * undefined when it maps to nothing usable. The 'standard'/'hd' translation must stay
+ * in step with OpenAIImageCostCalculator.normalizeInput (services) and
+ * ImageGeneration's mapQualityForModel, which bill against the mapped tier - if they
+ * diverge, the user is charged one tier and rendered another.
+ */
+export function toGptImageQuality(quality?: string | null): GptImageQuality | undefined {
+  const mapped = quality === 'standard' ? 'medium' : quality === 'hd' ? 'high' : quality;
+  return isGptImageQuality(mapped) ? mapped : undefined;
+}
+
+// Only appends "..." when the prompt is actually cut, so a short prompt in a log line
+// doesn't misleadingly read as truncated.
+const truncatePromptForLog = (prompt: string): string => (prompt.length > 100 ? `${prompt.slice(0, 100)}...` : prompt);
 
 /**
  * Builds a user-friendly error when OpenAI's safety system blocks an image
@@ -56,6 +88,72 @@ export function buildModerationBlockedError(error: InstanceType<typeof OpenAI.AP
       `Tip: Switch to an alternative model with different content policies — e.g. ${ALTERNATIVE_IMAGE_MODELS} — which may accept this prompt.\n\n` +
       `If you believe this is an error, you can report it to OpenAI with request ID: ${requestId}`
   );
+}
+
+/**
+ * Splits a WIDTHxHEIGHT size into its two edges, or null when the value is not a
+ * pair of non-zero numbers (e.g. 'auto', '', 'wide'). Null means "not a custom
+ * resolution" rather than "invalid": generate() has always left such values
+ * untouched, and that behaviour is preserved.
+ */
+function parseSizeEdges(size?: string | null): { width: number; height: number } | null {
+  if (typeof size !== 'string') {
+    return null;
+  }
+  const [width, height] = size.split('x').map(Number);
+  if (!width || !height) {
+    return null;
+  }
+  return { width, height };
+}
+
+/**
+ * True when a custom gpt-image-2 resolution meets OpenAI's documented limits.
+ * gpt-image-2 accepts any resolution satisfying these, not only the presets in
+ * OPENAI_GPT_IMAGE_2_IMAGE_SIZES, so a flat preset check would reject valid
+ * custom sizes. Must stay the single source of this rule for generate() and edit().
+ */
+function satisfiesGptImage2Constraints({ width, height }: { width: number; height: number }): boolean {
+  const { maxEdge, minTotalPixels, maxTotalPixels, edgeMultiple, maxAspectRatio } =
+    IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.constraints;
+  const longEdge = Math.max(width, height);
+  const shortEdge = Math.min(width, height);
+  const totalPixels = width * height;
+
+  return (
+    longEdge <= maxEdge &&
+    width % edgeMultiple === 0 &&
+    height % edgeMultiple === 0 &&
+    longEdge / shortEdge <= maxAspectRatio &&
+    totalPixels >= minTotalPixels &&
+    totalPixels <= maxTotalPixels
+  );
+}
+
+/**
+ * True when `size` may be forwarded to images.edit for `model`. gpt-image-2 takes
+ * its presets (including 'auto') or any custom WIDTHxHEIGHT meeting the same
+ * constraints generate() enforces; the gpt-image-1 family is limited to its three
+ * fixed sizes. An unsupported size is dropped by the caller so OpenAI applies its
+ * own default instead of rejecting the whole request with a 400.
+ *
+ * GPT-Image tiers only: dall-e-2 has its own size list and passes size through
+ * untouched, so do not route that model here.
+ */
+export function isSupportedEditSize(model?: string | null, size?: string | null): boolean {
+  if (typeof size !== 'string') {
+    return false;
+  }
+
+  if (isGPTImage2Model(model)) {
+    if ((OPENAI_GPT_IMAGE_2_IMAGE_SIZES as readonly string[]).includes(size)) {
+      return true;
+    }
+    const edges = parseSizeEdges(size);
+    return edges !== null && satisfiesGptImage2Constraints(edges);
+  }
+
+  return (OPENAI_GPT_IMAGE_1_IMAGE_SIZES as readonly string[]).includes(size);
 }
 
 export type OpenAIImageGenerationOptions = Omit<ImageGenerateParams, 'prompt'> & {
@@ -136,36 +234,28 @@ export class OpenAIImageService extends AIImageService {
           delete openaiOptions.response_format;
         }
 
-        // GPT-Image models don't support quality parameter for text-to-image generation
+        // GPT-Image models bill by quality tier (see validateUserCredits upstream), so an
+        // accepted value must actually reach OpenAI - only an unmappable value is dropped.
         if (openaiOptions.quality) {
-          parameterWarnings.push(
-            `Quality parameter ('${openaiOptions.quality}') is not supported by ${modelName} text-to-image generation and was removed`
-          );
-          delete openaiOptions.quality;
+          const mappedQuality = toGptImageQuality(openaiOptions.quality);
+          if (mappedQuality) {
+            openaiOptions.quality = mappedQuality;
+          } else {
+            parameterWarnings.push(
+              `Quality parameter ('${openaiOptions.quality}') is not supported by ${modelName} and was removed`
+            );
+            delete openaiOptions.quality;
+          }
         }
 
         if (isGPTImage2Model(options.model)) {
           // gpt-image-2 supports flexible sizes - validate constraints instead of fixed list
           if (openaiOptions.size && openaiOptions.size !== 'auto') {
-            const [w, h] = openaiOptions.size.split('x').map(Number);
-            if (w && h) {
-              const maxEdge = Math.max(w, h);
-              const minEdge = Math.min(w, h);
-              const totalPixels = w * h;
-              if (
-                maxEdge > 3840 ||
-                w % 16 !== 0 ||
-                h % 16 !== 0 ||
-                maxEdge / minEdge > 3 ||
-                totalPixels < 655_360 ||
-                totalPixels > 8_294_400
-              ) {
-                const originalSize = openaiOptions.size;
-                openaiOptions.size = '1024x1024';
-                parameterWarnings.push(
-                  `Size '${originalSize}' violates gpt-image-2 constraints, changed to '1024x1024'`
-                );
-              }
+            const edges = parseSizeEdges(openaiOptions.size);
+            if (edges && !satisfiesGptImage2Constraints(edges)) {
+              const originalSize = openaiOptions.size;
+              openaiOptions.size = '1024x1024';
+              parameterWarnings.push(`Size '${originalSize}' violates gpt-image-2 constraints, changed to '1024x1024'`);
             }
           } else if (!openaiOptions.size) {
             // gpt-image-2 defaults to 'auto' if no size provided
@@ -249,28 +339,49 @@ export class OpenAIImageService extends AIImageService {
           // NOTE: DALL-E 3 does NOT support image editing at all
           const editModel = options.model || ImageModels.GPT_IMAGE_2;
 
-          // IMPORTANT: GPT-Image models edit endpoint only supports: model, image (array),
-          // prompt, plus the background/output_format alpha controls.
-          // Do not pass any other parameters (size, response_format, etc.)
+          // quality/size are already validated for this model above (same block that
+          // handles the text-to-image branch); forward them, plus n, because generate()'s
+          // credit reservation is per requested image at the requested tier (validateUserCredits
+          // charges usdCost * n) - dropping any of the three bills for output OpenAI is
+          // never asked to produce. (edit() below has its own, narrower n handling - see its
+          // own comment - this invariant does not extend to that method.) The background/output_format
+          // alpha controls are resolved above alongside the other gpt-image parameter validation.
+          const editQuality = toGptImageQuality(openaiOptions.quality);
+          const editSize = isSupportedEditSize(editModel, openaiOptions.size) ? openaiOptions.size : undefined;
+
+          this.logger.log('OpenAI image generation request (edit endpoint, image-to-image):', {
+            model: editModel,
+            prompt: truncatePromptForLog(prompt),
+            quality: editQuality,
+            size: editSize,
+            n: openaiOptions.n,
+            ...gptImageOutputOptions,
+          });
           result = await openai.images.edit({
             model: editModel as 'gpt-image-1' | 'gpt-image-1.5' | 'gpt-image-1-mini' | 'gpt-image-2',
             image: [imageFile],
             prompt,
+            ...(editQuality ? { quality: editQuality } : {}),
+            ...(editSize ? { size: editSize } : {}),
+            ...(openaiOptions.n ? { n: openaiOptions.n } : {}),
             ...gptImageOutputOptions,
           });
         } else {
           // Legacy models (DALL-E 2) use the variation endpoint
 
           const { style, quality, model, ...opts } = openaiOptions; // Remove unsupported params for variations
+          const variationSize = ['256x256', '512x512', '1024x1024'].find(s => s === openaiOptions.size) as
+            '256x256' | '512x512' | '1024x1024';
 
+          this.logger.log('OpenAI image generation request (variation endpoint):', { ...opts, size: variationSize });
           result = await openai.images.createVariation({
             ...opts,
             image: imageFile,
-            size: ['256x256', '512x512', '1024x1024'].find(s => s === openaiOptions.size) as
-              '256x256' | '512x512' | '1024x1024',
+            size: variationSize,
           });
         }
       } else {
+        this.logger.log('OpenAI image generation request:', { prompt: truncatePromptForLog(prompt), ...openaiOptions });
         result = await openai.images.generate({
           prompt,
           ...openaiOptions,
@@ -353,6 +464,7 @@ export class OpenAIImageService extends AIImageService {
       mask = null,
       model = ImageModels.GPT_IMAGE_2,
       n = 1,
+      quality,
       size,
       response_format = 'url',
       user,
@@ -404,15 +516,37 @@ export class OpenAIImageService extends AIImageService {
         Logger.globalInstance.debug(`[DEBUG] ⚠️ ${editModel} parameter adjustments:`, editWarnings);
       }
 
-      // IMPORTANT: GPT-Image models (1, 1.5, 1-mini) only support: model, image (array), prompt,
-      // plus the background/output_format alpha controls
+      // GPT-Image models (1, 1.5, 1-mini, 2) also accept `size` and `mask`, but only a size
+      // their own tier supports - a dall-e-2 size (e.g. 256x256/512x512) or an out-of-range
+      // resolution is a 400 from OpenAI. gpt-image-2 also takes any custom WIDTHxHEIGHT
+      // meeting its constraints, so this must not be a flat preset check. An unsupported or
+      // absent size is omitted so OpenAI's own default sizing applies, as it did before.
+      // The background/output_format alpha controls are resolved above via gptImageOutputOptions.
       // dall-e-2 supports: model, image (single), prompt, mask, n, size, response_format, user
+      const forwardSize = isSupportedEditSize(editModel, size);
+      // Callers bill against the requested tier before getting here, so it has to reach
+      // OpenAI; an unmappable value is dropped rather than 400-ing the whole request.
+      const editQuality = toGptImageQuality(quality);
+
+      this.logger.log('OpenAI image edit request:', {
+        model: editModel,
+        prompt: truncatePromptForLog(prompt),
+        hasMask: !!maskFile,
+        n,
+        size,
+        quality: editQuality,
+        response_format,
+      });
+
       const response = await openai.images.edit(
         isGPTImageModel(editModel)
           ? {
               model: editModel as 'gpt-image-1' | 'gpt-image-1.5' | 'gpt-image-1-mini' | 'gpt-image-2',
               image: [imageFile],
               prompt,
+              ...(forwardSize ? { size } : {}),
+              ...(maskFile ? { mask: maskFile } : {}),
+              ...(editQuality ? { quality: editQuality } : {}),
               ...gptImageOutputOptions,
             }
           : {

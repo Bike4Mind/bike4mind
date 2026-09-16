@@ -510,4 +510,116 @@ describe('tagService - update', () => {
       expect(renameOrder).toBeLessThan(recomputeOrder);
     });
   });
+
+  /**
+   * `assertWriteScope` is API-KEY SCOPE, a separate axis from the manage-rights gate above: this
+   * service only ever touches files `userId` owns, so no manage-rights check is needed, but a
+   * `files:write`-only key should not be able to walk a file into or out of a lake via this path
+   * any more than `files/tags/toggle.ts` lets it via a meta-tag. Fired only when a prefix-arm match
+   * is actually detected, and BEFORE the file rewrite - this service is not transactional, so a
+   * denial must land before any write, not alongside the stats recompute after it.
+   */
+  describe('API-key write-scope gate on a prefix-arm rename', () => {
+    it('calls assertWriteScope before rewriting files when the OLD name matches a lake prefix', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'lk:invoices' }));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+      const assertWriteScope = vi.fn();
+
+      await update(userId, { id: existingTagId, name: 'archived' }, { ...adapters, assertWriteScope });
+
+      expect(assertWriteScope).toHaveBeenCalledTimes(1);
+      const gateOrder = assertWriteScope.mock.invocationCallOrder[0];
+      const renameOrder = (mockFabFileRepo.updateTagsByUserId as Mock).mock.invocationCallOrder[0];
+      expect(gateOrder).toBeLessThan(renameOrder);
+    });
+
+    it('calls assertWriteScope when the NEW name matches a lake prefix (a possible join)', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'archived' }));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+      const assertWriteScope = vi.fn();
+
+      await update(userId, { id: existingTagId, name: 'lk:invoices' }, { ...adapters, assertWriteScope });
+
+      expect(assertWriteScope).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not call assertWriteScope when neither name matches any prefix', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'foo' }));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+      const assertWriteScope = vi.fn();
+
+      await update(userId, { id: existingTagId, name: 'bar' }, { ...adapters, assertWriteScope });
+
+      expect(assertWriteScope).not.toHaveBeenCalled();
+    });
+
+    it('propagates a denial from assertWriteScope before any file is touched', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'lk:invoices' }));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+      const assertWriteScope = vi.fn(() => {
+        throw new Error('datalake:write is required');
+      });
+
+      await expect(
+        update(userId, { id: existingTagId, name: 'archived' }, { ...adapters, assertWriteScope })
+      ).rejects.toThrow('datalake:write is required');
+      expect(mockFabFileRepo.updateTagsByUserId).not.toHaveBeenCalled();
+      expect(mockTagRepo.update).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * The audit principal on the auto-activate row a prefix-arm rename can emit. Sibling of #1964's
+   * tag-toggle door: this path built its actor with no `auditPrincipal`, so a key-driven rename
+   * that published a draft lake recorded the human instead of the key. Removing `auditPrincipal`
+   * from the actor at update.ts's recompute call turns the key case red.
+   */
+  describe('auto-activate audit principal', () => {
+    const auditSpy = () => {
+      const record = vi.fn().mockResolvedValue({});
+      return { db: { lakeConfigChangeEvents: { record } }, record };
+    };
+
+    const drivingActivation = (audit: ReturnType<typeof auditSpy>) => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'lk:invoices' }));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake({ status: 'draft' })]);
+      // fileCount > 0 is what makes the flip eligible (see recomputeLakeStats).
+      (mockFabFileRepo.computeDataLakeStats as Mock).mockResolvedValue({
+        fileCount: 1,
+        totalSizeBytes: 10,
+        totalChunkedChars: 0,
+      });
+      (mockDataLakeRepo.activateIfDraft as Mock).mockResolvedValue(true);
+      return { db: { ...adapters.db, ...audit.db } };
+    };
+
+    it('names the API key, not the human, when a key-driven rename publishes a draft lake', async () => {
+      const audit = auditSpy();
+      const withAudit = {
+        ...drivingActivation(audit),
+        auditPrincipal: { principalKind: 'apiKey' as const, principalId: 'key-abc', onBehalfOfUserId: userId },
+      };
+
+      await update(userId, { id: existingTagId, name: 'archived' }, withAudit);
+
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'auto-activate',
+          principalKind: 'apiKey',
+          principalId: 'key-abc',
+          onBehalfOfUserId: userId,
+        })
+      );
+    });
+
+    it('still names the tag owner when no key is involved', async () => {
+      const audit = auditSpy();
+
+      await update(userId, { id: existingTagId, name: 'archived' }, drivingActivation(audit));
+
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'auto-activate', principalKind: 'user', principalId: userId })
+      );
+    });
+  });
 });

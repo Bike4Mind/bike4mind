@@ -28,6 +28,7 @@ import {
   rapidReplyResultRepository,
   cacheRepository,
   mementoRepository,
+  dataLakeAccessGrantRepository,
   dataLakeRepository,
   fallbackLakeSettingsRepository,
   latticeModelRepository,
@@ -45,7 +46,7 @@ registerLambdaErrorHandlers();
 import { Config } from '@server/utils/config';
 import { getUserEntitlements } from '@server/entitlements';
 import { z } from 'zod';
-import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services';
+import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services/llm';
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { withLatticeTools } from './latticeChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
@@ -100,6 +101,7 @@ const getStaticOptions = () => {
       fabfiles: fabFileRepository,
       fabfilechunks: fabFileChunkRepository,
       dataLakes: dataLakeRepository,
+      dataLakeAccessGrants: dataLakeAccessGrantRepository,
       fallbackLakeSettings: fallbackLakeSettingsRepository,
       mementos: mementoRepository,
       projects: projectRepository,

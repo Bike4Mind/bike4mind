@@ -61,11 +61,18 @@ const handler = baseApi()
         return res.status(401).json({ error: 'User not authenticated' });
       }
 
-      const accessible = accessibleBy(req.ability, Permission.delete).ofType(FabFile);
+      // "Delete all my files" must only destroy the caller's OWN files. A delete grant on someone
+      // else's shared file authorizes removing it from the caller's view, not destroying the
+      // owner's document and its S3 bytes - so that half of the scope is unshared instead.
+      // $and rather than a merged object literal: the CASL scope carries its own $or/userId arms
+      // and a spread would silently drop one of them.
+      const deletable = accessibleBy(req.ability, Permission.delete).ofType(FabFile);
+      const ownedFilter = { $and: [deletable, { userId }] };
+      const sharedInFilter = { $and: [deletable, { userId: { $ne: userId } }] };
 
       await withTransaction(async session => {
         try {
-          const files = await FabFile.find(accessible).select('filePath').session(session);
+          const files = await FabFile.find(ownedFilter).select('filePath').session(session);
           const user = await User.findById(userId).session(session);
 
           if (!user) {
@@ -74,9 +81,14 @@ const handler = baseApi()
 
           const filePaths = files.map(file => file.filePath).filter((filePath): filePath is string => !!filePath);
 
+          // Every owned file is going, and storage only ever counted the caller's own files.
           user.currentStorageSize = 0;
 
-          await Promise.all([user.save({ session }), FabFile.deleteMany(accessible, { session })]);
+          await Promise.all([
+            user.save({ session }),
+            FabFile.deleteMany(ownedFilter, { session }),
+            FabFile.updateMany(sharedInFilter, { $pull: { users: { userId } } }, { session }),
+          ]);
 
           await Promise.all(
             filePaths.map(async filePath => {

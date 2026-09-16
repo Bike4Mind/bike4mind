@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { ApiErrorCode } from '../apiErrorCodes';
+import { PROMPT_TEXT_MAX } from './briefcasePrompt';
 
 /**
  * Request schema for POST /api/chat - the simplified external chat surface.
@@ -37,14 +38,35 @@ export const SimplifiedChatRequestSchema = z.object({
   fileIds: z.array(z.string()).prefault([]),
   // New synchronous option - wait for completion before returning
   wait: z.boolean().prefault(false),
-  // Enable full tool access for agent requests (e.g., voice agent_request portal)
+  // Enable full tool access for agent requests (e.g., voice agent_request portal). A `tools`
+  // array sent alongside is added to the offered set (it used to be dropped), and the
+  // full-capability defaults below still apply.
   enableTools: z.boolean().prefault(false),
-  // Tool selection mode: 'fast' = no tools (pure chat), 'smart' = auto-select tools based on prompt
-  // When set, overrides enableTools. When not set, falls back to enableTools behavior.
+  // Tool selection mode: 'fast' = no tools from the request, 'smart' = auto-select tools based on
+  // prompt. When set, overrides enableTools. When not set, a non-empty `tools` array both enables
+  // tools and supplies the set; absent that too, it falls back to enableTools behavior.
   toolMode: z.enum(['fast', 'smart']).optional(),
-  // Explicit tool ids (combined with auto-selected in smart mode). Unknown ids are
-  // filtered by the handler (filterKnownTools), not here - see the rule above.
-  tools: z.array(z.string()).optional(),
+  // Explicit tool ids (combined with auto-selected in smart mode). Non-empty is itself
+  // intent to enable tools, so no companion toolMode/enableTools is required - the array
+  // used to be dropped in silence without one. Unknown ids are filtered by the handler
+  // (filterKnownTools), not here - see the rule above.
+  tools: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Explicit tool ids to offer the model. A non-empty array enables tools on its own; no ' +
+        'companion `toolMode` or `enableTools` is required. Merged with the auto-selected set ' +
+        'under `toolMode: "smart"`, and ignored under `toolMode: "fast"`. This list ADDS to what ' +
+        'is offered rather than restricting it - the server still offers tools of its own (for ' +
+        'example knowledge retrieval when the session has reachable documents). Unrecognized ids ' +
+        'are dropped rather than rejecting the request; the response reports the surviving set as ' +
+        '`tools.effectiveTools` and the ids that are not tools in this deployment as ' +
+        '`tools.unrecognizedTools`, since no endpoint enumerates the valid ids. ' +
+        '`unrecognizedTools` is reported under every `toolMode` - it describes the ids, not what ' +
+        'the mode did with them - so under `toolMode: "fast"` an id can be absent from ' +
+        '`effectiveTools` (the mode discarded it) without being unrecognized. Both reported lists ' +
+        'are deduplicated, and `unrecognizedTools` names at most the first 10 distinct ids.'
+    ),
   // Explicit overrides - when enableTools is true, these default to true but can be
   // individually disabled (e.g., voice agent_request disables QuestMaster so replies
   // aren't cleared and replaced with a plan document)
@@ -56,6 +78,22 @@ export const SimplifiedChatRequestSchema = z.object({
   // 'grounded' adds data-lake retrieval only; 'surface' adds the org/session prompts on top.
   // Retrieval itself comes from the session (forceKnowledgeRetrieval), not from this flag.
   promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
+  // Wire spelling is snake_case per api-contract/CONVENTIONS.md; transformToInternalFormat maps it
+  // to the camelCase `skipAutoOffers` of the flag it feeds. Exists so the offer can be suppressed
+  // WITHOUT a promptMode, which also strips every authored prompt including the abstention licence.
+  skip_auto_offers: z
+    .boolean()
+    .optional()
+    .describe(
+      'Suppress tools the server would otherwise attach on its own for this session (the ' +
+        'knowledge-base search offer, in-app view navigation, blog drafting/editing/publishing, ' +
+        'and skill invocation). Tools you request explicitly are unaffected. One system-prompt ' +
+        'block goes with them: withholding in-app view navigation also drops the view-registry ' +
+        'block that exists only to describe it. No other prompt content changes. This does not ' +
+        'switch off retrieval: a session with forced knowledge retrieval still retrieves, and ' +
+        'documents already attached to the session are still placed in the prompt directly. Any ' +
+        'promptMode suppresses these too, so false has no effect alongside one.'
+    ),
   // With wait, also return the per-source system prompt breakdown the completion was
   // assembled from (promptDetails), so callers can verify what fed the model instead of
   // inferring it from behavior.
@@ -64,6 +102,25 @@ export const SimplifiedChatRequestSchema = z.object({
   // Returned inline on this response only and never persisted, since a stored prompt would
   // reach every reader of the quest. Server-authored blocks stay redacted even here.
   includeSystemPrompt: z.boolean().optional(),
+  // Caller-supplied system-prompt text. No SPA control authors this, but it is not exclusive to
+  // this route: /api/ai/llm spreads its body into the same invoke params, so the browser-facing
+  // path reaches the field too.
+  //
+  // Rendered as a defended, deference-postured block appended after every other system-prompt
+  // source. The block's prose instructs the model to defer to org/session/lake guidance; that is
+  // instruction authority, NOT budget retention - under system-budget pressure this block is
+  // retained ahead of retrieval (SYSTEM_PROMPT_PRIORITY in systemPromptSources.ts), so it can
+  // outlive the lake grounding rather than yield to it.
+  systemPrompt: z
+    .string()
+    .max(PROMPT_TEXT_MAX)
+    .optional()
+    .describe(
+      'System-prompt text for this request only, never persisted. Rendered as a defended block ' +
+        'appended after every other system-prompt source, with prose instructing the model to ' +
+        'defer to organization, session and data-lake guidance. Over the cap is a 422, never ' +
+        'truncated.'
+    ),
 });
 
 export type SimplifiedChatRequest = z.infer<typeof SimplifiedChatRequestSchema>;
@@ -80,6 +137,26 @@ export const ChatAckSchema = z.object({
   timestamp: z.string(),
   model: z.string(),
   message: z.string().optional(),
+  // The tool decision the API layer made for this turn, echoed back so a caller can see what was
+  // offered and what was thrown away. Absent when the layer made no decision and had nothing to
+  // report (the `enableTools`-only path, where the service layer resolves the set). Present on
+  // both the async ACK and the `wait: true` body, and modelled here so the spec and the typed
+  // client carry it - the request field's description points callers at `unrecognizedTools` as the
+  // only way to discover a mistyped tool id, and a documented discovery mechanism has to be in the
+  // contract rather than in prose. Built by `buildToolMeta` in apps/client/pages/api/chat.ts.
+  tools: z
+    .object({
+      // Absent when the caller named tools without sending a mode.
+      toolMode: z.enum(['fast', 'smart']).optional(),
+      // Smart mode only: what the prompt-based recommender picked.
+      autoSelectedTools: z.array(z.string()).optional(),
+      effectiveTools: z.array(z.string()),
+      // Ids the caller sent that are not tools in this deployment. A registry fact, so it is
+      // reported under every toolMode - an id dropped by `fast` is NOT listed here unless it is
+      // also unrecognized. Deduplicated and capped; see the `tools` request field's description.
+      unrecognizedTools: z.array(z.string()).optional(),
+    })
+    .optional(),
   tracking_info: z.object({
     quest_id: z.string(),
     check_status_url: z.string(),

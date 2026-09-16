@@ -4,6 +4,7 @@ import { OpenAICachingAdapter } from './openai';
 import { GeminiCachingAdapter } from './gemini';
 import { XAICachingAdapter } from './xai';
 import { KimiCachingAdapter } from './kimi';
+import { DeepSeekCachingAdapter } from './deepseek';
 import { ModelBackend } from '@bike4mind/common';
 
 /**
@@ -29,6 +30,7 @@ const ADAPTERS: Record<ModelBackend, ICachingAdapter> = {
   [ModelBackend.Bedrock]: new AnthropicCachingAdapter(), // Uses Anthropic format
   [ModelBackend.XAI]: new XAICachingAdapter(),
   [ModelBackend.Kimi]: new KimiCachingAdapter(),
+  [ModelBackend.DeepSeek]: new DeepSeekCachingAdapter(),
   [ModelBackend.Ollama]: new NoOpCachingAdapter(),
   [ModelBackend.BFL]: new NoOpCachingAdapter(),
   [ModelBackend.VoyageAI]: new NoOpCachingAdapter(),
@@ -49,3 +51,4 @@ export * from './openai';
 export * from './gemini';
 export * from './xai';
 export * from './kimi';
+export * from './deepseek';

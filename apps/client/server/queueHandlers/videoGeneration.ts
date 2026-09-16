@@ -10,7 +10,7 @@ import {
   usageEventRepository,
   userRepository,
 } from '@bike4mind/database';
-import { VideoGenerationService } from '@bike4mind/services';
+import { VideoGenerationService } from '@bike4mind/services/llm';
 import { SQSService } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@server/utils/analyticsLog';

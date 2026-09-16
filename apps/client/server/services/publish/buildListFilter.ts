@@ -7,11 +7,16 @@ import type { PublishVisibility } from '@bike4mind/common';
  * B4M's visibility ladder (private -> project -> organization -> public).
  *
  * Non-admin can see an artifact when it isn't soft-deleted AND:
- *   (a) ownerId === user.id        - your own, regardless of visibility
- *   (b) visibility === 'public'    - anyone
+ *   (a) ownerId === user.id        - your own, regardless of visibility or gate
+ *   (b) visibility === 'public'    - anyone, UNLESS it carries an accessGate
  *   (c) visibility === 'organization' AND it belongs to your org
  *   (d) visibility === 'project'   AND it belongs to one of your projects
  * Admins see everything (null filter = no restriction).
+ *
+ * The gate exclusion in (b) mirrors GET /api/publish/artifacts/[id], which 404s a gated
+ * public artifact for a non-manager. Without it the list handed out the title, tags and
+ * URL-constituent fields of passphrase/domain-gated artifacts to any caller - the gate held
+ * on the serve path, but the list told you exactly what was behind it.
  */
 export interface BuildListFilterInput {
   userId: string;
@@ -27,7 +32,9 @@ export function buildListVisibilityFilter(input: BuildListFilterInput): { $or: A
 
   const clauses: Array<Record<string, unknown>> = [
     { ownerId: input.userId },
-    { visibility: 'public' satisfies PublishVisibility },
+    // `accessGate: null` matches both an absent field and an explicit null, so only
+    // genuinely ungated public artifacts list to non-owners.
+    { visibility: 'public' satisfies PublishVisibility, accessGate: null },
   ];
 
   if (input.userOrganizationId) {

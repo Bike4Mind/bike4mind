@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { ForbiddenError } from '@bike4mind/common';
-import { ensureAdmin, ensureTavernAccess } from './errors';
+import { z } from 'zod';
+import { BadRequestError, ForbiddenError } from '@bike4mind/common';
+import { ensureAdmin, ensureTavernAccess, parseOrBadRequest } from './errors';
 
 describe('ensureAdmin', () => {
   it('passes for an admin', () => {
@@ -40,6 +41,27 @@ describe('ensureTavernAccess', () => {
       expect.unreachable('should have thrown');
     } catch (err) {
       expect((err as ForbiddenError).statusCode).toBe(403);
+    }
+  });
+});
+
+describe('parseOrBadRequest', () => {
+  const schema = z.object({ name: z.string().min(1) });
+
+  it('returns the parsed data on success', () => {
+    expect(parseOrBadRequest(schema, { name: 'x' })).toEqual({ name: 'x' });
+  });
+
+  it('throws BadRequestError (not a raw ZodError) on failure', () => {
+    expect(() => parseOrBadRequest(schema, { name: '' })).toThrow(BadRequestError);
+  });
+
+  it('throws a 400-status error', () => {
+    try {
+      parseOrBadRequest(schema, {});
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      expect((err as BadRequestError).statusCode).toBe(400);
     }
   });
 });

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ForbiddenError } from '@bike4mind/common';
 
 // The @datalake grammar parser is unit-tested in the slack package; here we mock it and exercise
 // the handler's dispatch, listing and ingest-reply behavior in isolation.
@@ -8,20 +9,37 @@ const { ingestSlackFilesIntoLake, ingestSlackLinkIntoLake, buildSlackAccessConte
   ingestSlackLinkIntoLake: vi.fn(),
   buildSlackAccessContext: vi.fn(),
 }));
-const { listDataLakes } = vi.hoisted(() => ({ listDataLakes: vi.fn() }));
+const { listDataLakes, grantedLakeReachFor } = vi.hoisted(() => ({
+  listDataLakes: vi.fn(),
+  grantedLakeReachFor: vi.fn(),
+}));
 
-vi.mock('@bike4mind/slack', () => ({ parseDataLakeCommand }));
-vi.mock('@bike4mind/services', () => ({ dataLakeService: { listDataLakes } }));
+vi.mock('@bike4mind/slack', async importOriginal => {
+  // escapeSlackMrkdwn imported from the REAL module, not reimplemented: some tests assert on exact
+  // reply text pinned to what it neutralizes (e.g. "<!channel>"), and a hand-copy would silently
+  // stop matching if the real implementation ever gains a new escaped character.
+  const actual = await importOriginal<typeof import('@bike4mind/slack')>();
+  return { parseDataLakeCommand, escapeSlackMrkdwn: actual.escapeSlackMrkdwn };
+});
+vi.mock('@bike4mind/services', () => ({ dataLakeService: { listDataLakes, grantedLakeReachFor } }));
 // Both ingest paths and the shared AccessContext builder are stubbed, so these tests exercise
 // dispatch and reply composition only. Each path's own behavior has its own test file.
 vi.mock('./dataLakeIngestAuthz', () => ({ buildSlackAccessContext }));
 vi.mock('./dataLakeFileIngest', () => ({ ingestSlackFilesIntoLake }));
 vi.mock('./dataLakeLinkIngest', () => ({ ingestSlackLinkIntoLake }));
 
-import { handleDataLakeCommand, runDataLakeSlackCommand, formatIngestOutcome } from './handleDataLakeCommand';
+import {
+  handleDataLakeCommand,
+  runDataLakeSlackCommand,
+  formatIngestOutcome,
+  formatBareDataLakeMentionHint,
+  slugTier,
+  type ListScope,
+} from './handleDataLakeCommand';
 
 const actor = { id: 'u1', isAdmin: false };
-const ingestDeps = { dataLakes: {} } as never;
+const dataLakeAccessGrants = { listByLake: vi.fn(), listActiveByLakes: vi.fn(), listByPrincipal: vi.fn() };
+const ingestDeps = { dataLakes: {}, dataLakeAccessGrants } as never;
 
 const baseParams = (overrides: Record<string, unknown> = {}) => ({
   command: '@datalake help',
@@ -36,6 +54,7 @@ const baseParams = (overrides: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   buildSlackAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false, userTags: [], entitlementKeys: [] });
+  grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: [], orgGrantedLakes: {} });
 });
 
 describe('handleDataLakeCommand', () => {
@@ -114,6 +133,32 @@ describe('handleDataLakeCommand', () => {
         );
       });
 
+      it('threads the grants repository, so a grant-held lake is reachable and labelled', async () => {
+        listDataLakes.mockResolvedValue([{ slug: 'mine', name: 'Mine', canManage: true }]);
+
+        await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        // Both of listDataLakes' grant reads degrade to empty when the repo is absent, so without it
+        // a curator-granted or transferred lake neither enters the row set nor earns a manage label -
+        // and `add`, which does resolve grants, accepts it. That disagreement is #2034.
+        expect(listDataLakes).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ db: expect.objectContaining({ dataLakeAccessGrants }) })
+        );
+      });
+
+      it('passes NO settings adapter, which would admit reader grants a write gate refuses', async () => {
+        listDataLakes.mockResolvedValue([{ slug: 'mine', name: 'Mine', canManage: true }]);
+
+        await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        // The settings repo is the read-grant cutover flag, which admits READER and org-principal
+        // grants into the list. A reader cannot write, so passing it would advertise lakes `add`
+        // then refuses - #2022 in a new place. Absent, resolveEnforceReadGrants returns false.
+        const [, adapters] = listDataLakes.mock.calls[0] as [unknown, { db: Record<string, unknown> }];
+        expect(adapters.db).not.toHaveProperty('settings');
+      });
+
       it('resolves entitlement keys for an admin, since the row set is built from the non-admin arms', async () => {
         listDataLakes.mockResolvedValue([{ slug: 'mine', name: 'Mine', canManage: true }]);
 
@@ -184,6 +229,19 @@ describe('handleDataLakeCommand', () => {
         expect(reply).toContain('ours');
       });
 
+      it('loses no row for an admin whose administeredOrgIds is empty', async () => {
+        // Deliberate composition of two suppressions: the query runs with isAdmin false, and an
+        // admin's administeredOrgIds is zeroed at the context builder, so canManageLake's platform,
+        // org-admin and org-grant rungs ALL miss and every org row arrives canManage:false. Only
+        // `isWritable` reading the unsuppressed ctx keeps the reply non-empty.
+        buildSlackAccessContext.mockResolvedValue({ ...adminCtx, administeredOrgIds: [] });
+        listDataLakes.mockResolvedValue([{ slug: 'ours', name: 'Ours', canManage: false, organizationId: 'org-a' }]);
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(printedSlugs(reply)).toEqual(['ours']);
+      });
+
       it('prints one row per slug, naming the lake `add` would resolve', async () => {
         listDataLakes.mockResolvedValue([
           { slug: 'notes', name: 'Org-less Notes', canManage: true },
@@ -219,40 +277,57 @@ describe('handleDataLakeCommand', () => {
 
       it('never prints a slug `add` cannot resolve (listed implies addable)', async () => {
         const catalog = [
-          { slug: 'personal', name: 'Personal', canManage: true },
-          { slug: 'ours', name: 'Ours', canManage: true, organizationId: 'org-a' },
-          { slug: 'theirs', name: 'Theirs', canManage: true, organizationId: 'org-b' },
-          { slug: 'open-lake', name: 'Open', canManage: true, organizationId: 'org-b', isPublic: true },
-          { slug: 'notes', name: 'Org-less Notes', canManage: true },
-          { slug: 'notes', name: 'Org Notes', canManage: true, organizationId: 'org-a' },
+          { id: 'personal', slug: 'personal', name: 'Personal', canManage: true },
+          { id: 'ours', slug: 'ours', name: 'Ours', canManage: true, organizationId: 'org-a' },
+          { id: 'theirs', slug: 'theirs', name: 'Theirs', canManage: true, organizationId: 'org-b' },
+          { id: 'open', slug: 'open-lake', name: 'Open', canManage: true, organizationId: 'org-b', isPublic: true },
+          { id: 'notes-orgless', slug: 'notes', name: 'Org-less Notes', canManage: true },
+          { id: 'notes-org', slug: 'notes', name: 'Org Notes', canManage: true, organizationId: 'org-a' },
           // Deliberately NOT uniformly writable: the winning lake for `shared` is unwritable, so
           // `add` refuses the slug and the guard must see the reply omit it rather than print the
           // writable org-less one. A catalog with canManage: true everywhere cannot catch that.
-          { slug: 'shared', name: 'Writable Org-less Shared', canManage: true },
-          { slug: 'shared', name: 'Read-only Org Shared', canManage: false, organizationId: 'org-a' },
+          { id: 'shared-orgless', slug: 'shared', name: 'Writable Org-less Shared', canManage: true },
+          {
+            id: 'shared-org',
+            slug: 'shared',
+            name: 'Read-only Org Shared',
+            canManage: false,
+            organizationId: 'org-a',
+          },
+          // A grant-held (tier 2) lake, present so this guard exercises all three tiers `slugTier`
+          // ranks - not just own-org/org-less - and would catch a future tier this reply omits.
+          { id: 'granted-lake', slug: 'granted-only', name: 'Granted Only', canManage: true, organizationId: 'org-z' },
         ];
         listDataLakes.mockResolvedValue(catalog);
+        grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: ['granted-lake'], orgGrantedLakes: {} });
 
-        // Mirrors DataLakeModel.findBySlug: an own-org match first (lowest org id), then the
-        // org-less fallback. If that rule changes, this guard is what catches the divergence.
-        const findBySlug = (slug: string) => {
-          const own = catalog
-            .filter(l => l.slug === slug && l.organizationId && adminCtx.organizationIds.includes(l.organizationId))
-            .sort((a, b) => String(a.organizationId).localeCompare(String(b.organizationId)));
-          return own[0] ?? catalog.find(l => l.slug === slug && !l.organizationId) ?? null;
+        // Mirrors `add` by calling the SAME production ranking function `list` itself uses
+        // (`slugTier`, exported from handleDataLakeCommand.ts) rather than a hand-rolled copy of
+        // the arm order - a hand-rolled copy is exactly what let the grant tier go uncovered here
+        // before #2425's review caught it.
+        const resolveBySlug = (slug: string, scope: ListScope, grantedLakeIds: ReadonlySet<string>) => {
+          let best: { lake: (typeof catalog)[number]; tier: 0 | 1 | 2 } | null = null;
+          for (const lake of catalog) {
+            if (lake.slug !== slug) continue;
+            const tier = slugTier(lake, scope, grantedLakeIds);
+            if (tier !== null && (!best || tier < best.tier)) best = { lake, tier };
+          }
+          return best?.lake ?? null;
         };
 
         // Both actors, because the write gate differs: an admin is granted outright on any
         // non-registry lake, so an admin-only run cannot see an unwritable winner at all.
         for (const isAdmin of [true, false]) {
-          buildSlackAccessContext.mockResolvedValue({ ...adminCtx, isAdmin });
+          const scope = { ...adminCtx, isAdmin };
+          buildSlackAccessContext.mockResolvedValue(scope);
 
           const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin } }));
 
           const slugs = printedSlugs(reply);
           expect(slugs.length, `no rows printed for isAdmin=${isAdmin}`).toBeGreaterThan(0);
+          const grantedLakeIds = new Set(['granted-lake']);
           for (const slug of slugs) {
-            const resolved = findBySlug(slug);
+            const resolved = resolveBySlug(slug, scope, grantedLakeIds);
             expect(resolved, `add to \`${slug}\` would be refused`).not.toBeNull();
             expect(reply).toContain(resolved!.name);
             // `add` gates the lake findBySlug returned, with no retry against a same-slug sibling,
@@ -263,6 +338,105 @@ describe('handleDataLakeCommand', () => {
             );
           }
         }
+      });
+
+      it('resolves a foreign-org grant-held lake by slug, mirroring findBySlug (#2425)', async () => {
+        // A lake in an org the caller does not belong to still reaches `add` when the grants
+        // fallback resolves it - `list` must agree, or it omits exactly the lake `add` accepts.
+        listDataLakes.mockResolvedValue([
+          { id: 'lake-1', slug: 'granted', name: 'Granted Lake', canManage: true, organizationId: 'org-b' },
+        ]);
+        grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: ['lake-1'], orgGrantedLakes: {} });
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(reply).toContain('granted');
+        expect(reply).toContain('Granted Lake');
+      });
+
+      it('still omits a foreign-org lake with NO grant, even though listDataLakes returned it', async () => {
+        listDataLakes.mockResolvedValue([
+          { id: 'lake-1', slug: 'ungranted', name: 'Ungranted Lake', canManage: true, organizationId: 'org-b' },
+        ]);
+        grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: [], orgGrantedLakes: {} });
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(reply).toMatch(/cannot add to any data lakes/i);
+      });
+
+      it("prefers the caller's own-org lake over a same-slug foreign-org grant-held one", async () => {
+        // findBySlug never reaches its grant-fallback arm when an own-org match exists for the
+        // slug - the grant tier must lose the tie regardless of org-id string ordering.
+        listDataLakes.mockResolvedValue([
+          { id: 'lake-own', slug: 'notes', name: 'Own Org Notes', canManage: true, organizationId: 'org-a' },
+          { id: 'lake-foreign', slug: 'notes', name: 'Foreign Grant Notes', canManage: true, organizationId: 'org-z' },
+        ]);
+        grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: ['lake-foreign'], orgGrantedLakes: {} });
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(reply).toContain('Own Org Notes');
+        expect(reply).not.toContain('Foreign Grant Notes');
+      });
+
+      it('prefers a personal (org-less) lake over a same-slug foreign-org grant-held one', async () => {
+        // The other new tie this change introduces: org-less (tier 1) still beats grant-held
+        // (tier 2), so a caller's own personal lake wins the slug over a lake transferred to them
+        // from a foreign org - decided by tier alone here, not by name/id ordering.
+        listDataLakes.mockResolvedValue([
+          { id: 'lake-personal', slug: 'notes', name: 'Personal Notes', canManage: true },
+          { id: 'lake-foreign', slug: 'notes', name: 'Foreign Grant Notes', canManage: true, organizationId: 'org-z' },
+        ]);
+        grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: ['lake-foreign'], orgGrantedLakes: {} });
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(reply).toContain('Personal Notes');
+        expect(reply).not.toContain('Foreign Grant Notes');
+      });
+
+      it('picks the lower lake id between two same-slug foreign-org grant-held lakes', async () => {
+        // Mirrors DataLakeModel.findBySlugAmongIds' `.sort({_id: 1})`: two grant-held lakes across
+        // two different non-member orgs sharing a slug must resolve to the same winner every time.
+        listDataLakes.mockResolvedValue([
+          { id: 'lake-b', slug: 'shared-grant', name: 'From Org B', canManage: true, organizationId: 'org-b' },
+          { id: 'lake-a', slug: 'shared-grant', name: 'From Org A', canManage: true, organizationId: 'org-a-foreign' },
+        ]);
+        grantedLakeReachFor.mockResolvedValue({ grantedLakeIds: ['lake-b', 'lake-a'], orgGrantedLakes: {} });
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(reply).toContain('From Org A');
+        expect(reply).not.toContain('From Org B');
+      });
+
+      it('resolves two same-slug org-less lakes deterministically (null vs empty-string organizationId)', async () => {
+        // #2425 review: null and '' are both stored as "org-less" but are distinct index keys, so
+        // two org-less lakes CAN share a slug - unlike own-org/grant-held, this had no tie-break at
+        // all before this fix. orgSortKey treats null/undefined (BSON Null) as sorting before any
+        // string, mirroring DataLakeModel's own `.sort({organizationId:1})` on this arm.
+        listDataLakes.mockResolvedValue([
+          { id: 'lake-empty', slug: 'orgless-tie', name: 'Empty String Org', canManage: true, organizationId: '' },
+          { id: 'lake-null', slug: 'orgless-tie', name: 'Null Org', canManage: true, organizationId: undefined },
+        ]);
+
+        const reply = await handleDataLakeCommand(baseParams({ actor: { id: 'u1', isAdmin: true } }));
+
+        expect(reply).toContain('Null Org');
+        expect(reply).not.toContain('Empty String Org');
+      });
+
+      it('slugTier ranks a foreign-org lake null (unaddressable) when no grant covers it', () => {
+        // Direct unit coverage of the exported ranker itself, not just through the Slack reply -
+        // the same function `list` and this guard both call, so nothing here can drift from it.
+        const scope: ListScope = { isAdmin: false, organizationIds: ['org-a'] };
+        const foreign = { id: 'x', slug: 'x', name: 'X', organizationId: 'org-z', canManage: true };
+
+        expect(slugTier(foreign, scope, new Set())).toBeNull();
+        expect(slugTier(foreign, scope, new Set(['x']))).toBe(2);
+        expect(slugTier({ ...foreign, organizationId: 'org-a' }, scope, new Set())).toBe(0);
+        expect(slugTier({ ...foreign, organizationId: undefined }, scope, new Set())).toBe(1);
       });
     });
   });
@@ -295,6 +469,24 @@ describe('handleDataLakeCommand', () => {
       // No attachments, so the file path must not run at all.
       expect(ingestSlackFilesIntoLake).not.toHaveBeenCalled();
       expect(reply).toContain('Added 1 file to *Sales*: "An Article"');
+    });
+
+    it('reports a re-added link as skipped, matching the FILE path wording', async () => {
+      // Acceptance criterion: re-adding the same URL answers "Already in <lake>, skipped", not a
+      // second "Added 1 file" - the bug #2027 was filed for.
+      parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', link: 'https://x', rawArgs: '' });
+      ingestSlackLinkIntoLake.mockResolvedValue({
+        ok: true,
+        lakeName: 'Sales',
+        fileName: 'An Article',
+        sourceUrl: 'https://x',
+        duplicate: true,
+      });
+
+      const reply = await handleDataLakeCommand(baseParams({ files: [] }));
+
+      expect(reply).toContain('Already in *Sales*, skipped: "An Article"');
+      expect(reply).not.toContain('Added 1 file');
     });
 
     it('surfaces a link refusal verbatim', async () => {
@@ -345,12 +537,12 @@ describe('handleDataLakeCommand', () => {
       ingestSlackFilesIntoLake.mockResolvedValue({
         ok: false,
         reason: 'not_authorized',
-        message: 'You can only add files to a data lake you created.',
+        message: 'You do not have permission to add files to `ghost`.',
       });
 
       const reply = await handleDataLakeCommand(baseParams({ files: [{ id: 'F1' }] }));
 
-      expect(reply).toBe('You can only add files to a data lake you created.');
+      expect(reply).toBe('You do not have permission to add files to `ghost`.');
     });
 
     it('ingests BOTH when a message carries a file and a link, reporting each', async () => {
@@ -519,6 +711,21 @@ describe('formatIngestOutcome', () => {
     expect(text).toContain('x.exe');
   });
 
+  it('escapes a rejection reason embedding an attempted file name, so it cannot post as a broadcast', () => {
+    // Rejection reasons embed the attempted file name (dataLakeFileIngest.ts), which any channel
+    // member can set by naming an oversized or unsupported-type file "<!channel>" and attaching it.
+    const text = formatIngestOutcome({
+      ok: true,
+      lakeName: 'S',
+      added: [],
+      duplicates: [],
+      rejected: ['Could not add "<!channel>": some error.'],
+    });
+
+    expect(text).toContain('&lt;!channel&gt;');
+    expect(text).not.toContain('<!channel>');
+  });
+
   it('does not claim success when nothing happened at all', () => {
     const text = formatIngestOutcome({ ok: true, lakeName: 'S', added: [], duplicates: [], rejected: [] });
     expect(text).toMatch(/nothing to add/i);
@@ -544,6 +751,16 @@ describe('formatIngestOutcome', () => {
     );
 
     expect(text).toMatch(/searchable once indexing finishes/i);
+  });
+});
+
+describe('formatBareDataLakeMentionHint (#2027)', () => {
+  it('points at @datalake and the help subcommand, distinct from the unrecognized-subcommand reply', () => {
+    const text = formatBareDataLakeMentionHint();
+
+    expect(text).toContain('@datalake');
+    expect(text).toContain('@datalake help');
+    expect(text).not.toMatch(/unrecognized/i);
   });
 });
 
@@ -645,5 +862,62 @@ describe('runDataLakeSlackCommand (gate + dispatch)', () => {
 
     expect(logger.error).toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('went wrong') }));
+  });
+
+  it('surfaces an HTTPError message rethrown by the write gate (#2639)', async () => {
+    // dataLakeIngestAuthz.ts rethrows anything that is not a refusal (NotFoundError/BadRequestError),
+    // so an HTTPError subclass reaching here already carries a message written to be shown to the
+    // caller, unlike the generic "db down" case above.
+    getSettingsValue.mockResolvedValue(true);
+    parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', rawArgs: '' });
+    ingestSlackFilesIntoLake.mockRejectedValue(new ForbiddenError('This lake is locked pending a compliance review'));
+
+    await runDataLakeSlackCommand({ ...baseDeps(), files: [{ id: 'F1' }] as never });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'This lake is locked pending a compliance review' })
+    );
+  });
+
+  it('surfaces the message from an HTTPError-shaped error that fails instanceof (cross-realm)', async () => {
+    // Simulates @bike4mind/common resolving as two module realms across the
+    // @bike4mind/services -> this file boundary: a class with the exact shape a real
+    // ForbiddenError constructor produces (statusCode, a name ending in "Error", and an
+    // additionalInfo key) but NOT an instance of the imported HTTPError class.
+    class OtherRealmForbiddenError extends Error {
+      statusCode = 403;
+      additionalInfo?: Record<string, unknown>;
+      constructor(message: string) {
+        super(message);
+        this.name = 'ForbiddenError';
+      }
+    }
+    getSettingsValue.mockResolvedValue(true);
+    parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', rawArgs: '' });
+    ingestSlackFilesIntoLake.mockRejectedValue(new OtherRealmForbiddenError('Cross-realm refusal message'));
+
+    await runDataLakeSlackCommand({ ...baseDeps(), files: [{ id: 'F1' }] as never });
+
+    expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ text: 'Cross-realm refusal message' }));
+  });
+
+  it('falls back to the generic reply for an HTTPError with an empty message', async () => {
+    getSettingsValue.mockResolvedValue(true);
+    parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', rawArgs: '' });
+    ingestSlackFilesIntoLake.mockRejectedValue(new ForbiddenError(''));
+
+    await runDataLakeSlackCommand({ ...baseDeps(), files: [{ id: 'F1' }] as never });
+
+    expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('went wrong') }));
+  });
+
+  it('caps an oversized HTTPError message instead of relaying it verbatim', async () => {
+    getSettingsValue.mockResolvedValue(true);
+    parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', rawArgs: '' });
+    ingestSlackFilesIntoLake.mockRejectedValue(new ForbiddenError('x'.repeat(400)));
+
+    await runDataLakeSlackCommand({ ...baseDeps(), files: [{ id: 'F1' }] as never });
+
+    expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ text: `${'x'.repeat(300)}...` }));
   });
 });

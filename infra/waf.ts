@@ -9,6 +9,7 @@
  */
 
 import { buildDevWafRuleJson, getDevWafMeta } from './wafPolicy';
+import { WAF_REDACTED_HEADERS } from './wafRedaction';
 import { secrets } from './secrets';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 
@@ -124,7 +125,7 @@ export const wafWebAcl = isWafEnabled
  * This resource:
  * 1. Enables real-time logging for all traffic evaluated by the WebACL
  * 2. Sends logs to the CloudWatch log group automatically
- * 3. Redacts sensitive headers (authorization, cookie) to protect PII and credentials
+ * 3. Redacts every credential-bearing header listed in infra/wafRedaction.ts
  *
  * The log format is AWS WAF's standard JSON structure containing all fields
  * required by the 4 Security Dashboard graphs:
@@ -163,9 +164,10 @@ export const wafLoggingConfig =
           resourceArn: wafWebAcl.arn,
           // CloudWatch log group destination (AWS requires :* suffix)
           logDestinationConfigs: [wafLogGroup.arn.apply(arn => `${arn}:*`)],
-          // Redact sensitive headers to prevent logging PII/credentials
-          // Values are replaced with 'REDACTED' in logs while keeping field names visible
-          redactedFields: [{ singleHeader: { name: 'authorization' } }, { singleHeader: { name: 'cookie' } }],
+          // Values are replaced with 'REDACTED' in logs while keeping field names visible.
+          // Redaction applies from the moment this configuration is updated; log records already
+          // written keep whatever they captured until the group's retention window expires.
+          redactedFields: WAF_REDACTED_HEADERS.map(name => ({ singleHeader: { name } })),
         },
         {
           // MUST be us-east-1 for CloudFront-scope WAF
@@ -263,6 +265,90 @@ if (isWafEnabled && $app.stage === 'production' && wafAiRateLimitAlarmTopic && w
       redrivePolicy: wafAlarmDlq.arn.apply(arn => JSON.stringify({ deadLetterTargetArn: arn })),
     },
     { provider: wafProviderUsEast1, dependsOn: [wafAlarmSlackHandlerSnsPermission, wafAlarmDlqPolicy] }
+  );
+
+  // Out-of-band alarm for WafAlarmSlackHandlerDlq itself.
+  // Cannot route to wafAiRateLimitAlarmTopic -- that would loop into the same failing Lambda.
+  // Must be in us-east-1: CloudWatch alarm actions must be in the same region as the alarm,
+  // and the DLQ + its alarm both live in us-east-1. This topic is intentionally separate from
+  // the OobAlarmTopic in dlqAlarms.ts (different regions -- they cannot be merged).
+  // NOTE: after the first deploy, check your inbox for an SNS confirmation email and click
+  // the link -- subscriptions stay in PendingConfirmation and deliver nothing until confirmed.
+  const wafOobAlarmTopic = new aws.sns.Topic(
+    'WafOobAlarmTopic',
+    { name: `${$app.name}-${$app.stage}-waf-oob-alarm` },
+    { provider: wafProviderUsEast1 }
+  );
+
+  if (process.env.OPS_ALERT_EMAIL) {
+    // retainOnDelete: same reason as OobAlarmTopicEmailSub in dlqAlarms.ts -- the AWS
+    // provider cannot destroy a PendingConfirmation subscription, so retain it rather
+    // than leaving dangling state if the variable is removed before confirmation.
+    // Note: rotating OPS_ALERT_EMAIL is a replace (endpoint is force-new), so the old
+    // subscription is retained rather than unsubscribed -- manually unsubscribe the old
+    // endpoint from the SNS console (us-east-1) after any address change.
+    new aws.sns.TopicSubscription(
+      'WafOobAlarmTopicEmailSub',
+      {
+        topic: wafOobAlarmTopic.arn,
+        protocol: 'email',
+        endpoint: process.env.OPS_ALERT_EMAIL,
+      },
+      { provider: wafProviderUsEast1, retainOnDelete: true }
+    );
+  } else {
+    console.warn(
+      `[WARN] OPS_ALERT_EMAIL is unset on stage '${$app.stage}'. ` +
+        `WafOobAlarmTopic will be created with no subscriber -- WafAlarmSlackHandlerDlq alarms ` +
+        `will publish into the void. Set OPS_ALERT_EMAIL in the deploy pipeline variables.`
+    );
+  }
+
+  // Message-count alarm: any message in the DLQ means WAF alert delivery to Slack is failing.
+  // evaluationPeriods: 1 is intentional -- any DLQ message here is an immediate failure
+  // signal, not transient noise, so a single breaching period is the right sensitivity.
+  new aws.cloudwatch.MetricAlarm(
+    'WafAlarmSlackHandlerDlqMessages',
+    {
+      name: `${$app.name}-${$app.stage}-waf-alarm-slack-handler-dlq-messages`,
+      alarmDescription:
+        'WafAlarmSlackHandlerDlq has messages -- WAF rate-limit alert delivery to Slack is failing; check SLACK_ERROR_REPORTING_WEBHOOK_URL and Lambda errors.',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      metricName: 'ApproximateNumberOfMessagesVisible',
+      namespace: 'AWS/SQS',
+      period: 60,
+      statistic: 'Maximum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: { QueueName: wafAlarmDlq.name },
+      alarmActions: [wafOobAlarmTopic.arn],
+      tags: { Application: 'WAF', Severity: 'Critical', MonitoringType: 'DLQ' },
+    },
+    { provider: wafProviderUsEast1 }
+  );
+
+  // Age alarm: same 1-hour threshold as the standard DLQ fleet. period is 60s (vs fleet
+  // 300s) to match the message-count alarm above and keep both alarms on the same cadence.
+  new aws.cloudwatch.MetricAlarm(
+    'WafAlarmSlackHandlerDlqAge',
+    {
+      name: `${$app.name}-${$app.stage}-waf-alarm-slack-handler-dlq-age`,
+      alarmDescription:
+        'WafAlarmSlackHandlerDlq oldest message exceeds 1 hour -- WAF alert delivery to Slack has been failing for an extended period.',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      metricName: 'ApproximateAgeOfOldestMessage',
+      namespace: 'AWS/SQS',
+      period: 60,
+      statistic: 'Maximum',
+      threshold: 3600,
+      treatMissingData: 'notBreaching',
+      dimensions: { QueueName: wafAlarmDlq.name },
+      alarmActions: [wafOobAlarmTopic.arn],
+      tags: { Application: 'WAF', Severity: 'High', MonitoringType: 'DLQ' },
+    },
+    { provider: wafProviderUsEast1 }
   );
 }
 

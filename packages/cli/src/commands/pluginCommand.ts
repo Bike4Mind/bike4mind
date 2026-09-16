@@ -242,7 +242,16 @@ export async function handleRemove(name: string, pluginsDir: string, configStore
     return; // unreachable; keeps the type narrowing honest under tests that stub exit
   }
 
-  runNpmOrExit(['uninstall', '--prefix', pluginsDir, plugin.name], pluginsDir, 'remove', plugin.name);
+  // --no-audit/--no-fund for the same reason install passes them: the audit is a
+  // registry round trip, and it dominates the command (~85s vs ~90ms locally) for
+  // a directory that only ever holds plugins. It also has to stay off the network
+  // for the e2e round trip, which installs from a file: spec.
+  runNpmOrExit(
+    ['uninstall', '--prefix', pluginsDir, '--no-fund', '--no-audit', plugin.name],
+    pluginsDir,
+    'remove',
+    plugin.name
+  );
 
   if (plugin.valid) {
     const config = await configStore.load();

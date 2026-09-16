@@ -52,6 +52,8 @@ import type { BeautifulMentionsMenuProps } from 'lexical-beautiful-mentions';
 import React, { forwardRef, useImperativeHandle, useRef, useEffect, useMemo, useCallback } from 'react';
 import { toast } from 'sonner';
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
+import { Box } from '@mui/joy';
+import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 
 // Custom menu component - minimal wrapper to preserve event handlers
 // Memoized to prevent unnecessary re-renders when agent list hasn't changed
@@ -613,7 +615,14 @@ export const LexicalChatInput = forwardRef<LexicalChatInputRef, LexicalChatInput
 
     return (
       <LexicalComposer initialConfig={initialConfig}>
-        <div className="lexical-chat-input-container">
+        <Box
+          className="lexical-chat-input-container"
+          // The composer scrolls once it passes its max height (globals.css), and left
+          // to the platform it drew a stock bar inside the chat box while every other
+          // scroll region in the app draws this one. Shared object rather than a copy of
+          // its rules, so the composer and the sidenav cannot drift apart.
+          sx={{ '& .lexical-chat-input': scrollbarStyles }}
+        >
           <RichTextPlugin
             contentEditable={
               <ContentEditable
@@ -704,7 +713,7 @@ export const LexicalChatInput = forwardRef<LexicalChatInputRef, LexicalChatInput
           <PluginErrorBoundary pluginName="EditorRefPlugin">
             <EditorRefPlugin onRef={handleEditorRef} skipSyncRef={skipSyncRef} />
           </PluginErrorBoundary>
-        </div>
+        </Box>
       </LexicalComposer>
     );
   }

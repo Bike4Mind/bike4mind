@@ -76,6 +76,9 @@ jobs:
     outputs:
       latest_gpt: ${{ steps.discover.outputs.latest_gpt }}
       latest_claude: ${{ steps.discover.outputs.latest_claude }}
+      # Distinguishes "discovery ran and found nothing" from "discovery could not run
+      # because the preview secret is unset" - setup-matrix reports them differently.
+      discovery_skipped: ${{ steps.discover.outputs.preview_skipped }}
     steps:
       - name: Resolve configuration
         id: config
@@ -182,9 +185,14 @@ jobs:
           case "$STAGE" in
             pr[0-9]*)
               # Preview (cross-account): use the injected repo secret, no sst shell.
+              # Skip rather than `exit 1` so this does not read as a broken discovery
+              # test. A full-matrix run genuinely cannot continue without the discovered
+              # models, so setup-matrix still stops the run - but it names THIS cause,
+              # rather than reporting an unexplained empty discovery result.
               if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
-                echo "::error::E2E_CLEANUP_SECRET repo secret is required for preview runs"
-                exit 1
+                echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured; skipping model discovery (0 tests run)"
+                echo "preview_skipped=true" >> "$GITHUB_OUTPUT"
+                exit 0
               fi
               pnpm --filter client exec playwright test --project=ai-latency-discover e2e/ai-latency-discover.spec.ts \
                 2>&1 | tee apps/client/playwright-output.txt
@@ -226,6 +234,12 @@ jobs:
         env:
           DISCOVERED_GPT: ${{ needs.discover-models.outputs.latest_gpt }}
           DISCOVERED_CLAUDE: ${{ needs.discover-models.outputs.latest_claude }}
+          DISCOVERY_SKIPPED: ${{ needs.discover-models.outputs.discovery_skipped }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_FULL_MATRIX: ${{ inputs.run_full_matrix }}
+          RUN_ALL_SPECS: ${{ inputs.run_all_specs }}
+          AI_MODEL: ${{ inputs.ai_model }}
+          SPEC_FILE: ${{ inputs.spec_file }}
         run: |
           ALL_SPECS='["ai-latency-short-answers","ai-latency-long-answers","ai-latency-tool-prompts","ai-latency-intermediate-tools"]'
 
@@ -233,23 +247,27 @@ jobs:
           # the target environment's AI Settings modal (see the discover-models job).
           build_full_matrix() {
             if [ -z "$DISCOVERED_GPT" ] || [ -z "$DISCOVERED_CLAUDE" ]; then
-              echo "Full matrix requested but model discovery did not return both models (gpt='$DISCOVERED_GPT', claude='$DISCOVERED_CLAUDE')."
+              if [ "$DISCOVERY_SKIPPED" = "true" ]; then
+                echo "::error::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured, so model discovery could not run. No tests were executed - this is a configuration gap, not a test failure."
+              else
+                echo "Full matrix requested but model discovery did not return both models (gpt='$DISCOVERED_GPT', claude='$DISCOVERED_CLAUDE')."
+              fi
               exit 1
             fi
             echo "spec_files=$ALL_SPECS" >> $GITHUB_OUTPUT
             echo "ai_models=$(jq -cn --arg c "$DISCOVERED_CLAUDE" --arg g "$DISCOVERED_GPT" '[$c, $g]')" >> $GITHUB_OUTPUT
           }
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.run_full_matrix }}" = "true" ]; then
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$RUN_FULL_MATRIX" = "true" ]; then
             build_full_matrix
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.run_all_specs }}" = "true" ]; then
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$RUN_ALL_SPECS" = "true" ]; then
             # All specs on the single selected model.
             echo "spec_files=$ALL_SPECS" >> $GITHUB_OUTPUT
-            echo "ai_models=[\"${{ inputs.ai_model }}\"]" >> $GITHUB_OUTPUT
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "ai_models=$(jq -cn --arg m "$AI_MODEL" '[$m]')" >> $GITHUB_OUTPUT
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             # Single cell: selected spec × selected model.
-            echo "spec_files=[\"${{ inputs.spec_file }}\"]" >> $GITHUB_OUTPUT
-            echo "ai_models=[\"${{ inputs.ai_model }}\"]" >> $GITHUB_OUTPUT
+            echo "spec_files=$(jq -cn --arg s "$SPEC_FILE" '[$s]')" >> $GITHUB_OUTPUT
+            echo "ai_models=$(jq -cn --arg m "$AI_MODEL" '[$m]')" >> $GITHUB_OUTPUT
           else
             # Scheduled run: full matrix.
             build_full_matrix
@@ -262,6 +280,12 @@ jobs:
     # skip this job under the default `success()` condition. Gate explicitly on setup-matrix
     # succeeding so the matrix runs whenever it produced a valid spec/model list.
     if: ${{ always() && needs.setup-matrix.result == 'success' }}
+    # Matrix job outputs are last-writer-wins across cells, which is safe here only because
+    # this value is uniform per run: the guard it comes from is reached by every cell on a
+    # preview run (all of them see the same unset repo secret) and by none on dev/staging.
+    # There is no run shape in which some cells skip and others do not.
+    outputs:
+      preview_skipped: ${{ steps.e2e.outputs.preview_skipped }}
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: '${{ matrix.spec_file }} — ${{ matrix.ai_model }}'
     timeout-minutes: 90
@@ -284,20 +308,26 @@ jobs:
     steps:
       - name: Sanitize names for artifact labels
         id: sanitize
+        env:
+          AI_MODEL: ${{ matrix.ai_model }}
         run: |
-          MODEL_SAFE="${{ matrix.ai_model }}"
+          MODEL_SAFE="$AI_MODEL"
           MODEL_SAFE="${MODEL_SAFE// /-}"
           MODEL_SAFE="${MODEL_SAFE//./-}"
           echo "model_safe=$MODEL_SAFE" >> $GITHUB_OUTPUT
 
       - name: Compute per-cell E2E test ID
         id: testid
+        env:
+          E2E_TEST_ID_INPUT: ${{ inputs.e2e_test_id }}
+          MODEL_SAFE: ${{ steps.sanitize.outputs.model_safe }}
+          SPEC_FILE: ${{ matrix.spec_file }}
         run: |
           # Derive a unique-per-cell ID so concurrent matrix cells isolate their test data.
           # Without this, the cleanup endpoint (no testId) deletes ALL e2e users globally,
           # causing the first-finishing cell to wipe data for the rest.
-          USER_PREFIX="${{ inputs.e2e_test_id }}"
-          CELL_ID="${{ steps.sanitize.outputs.model_safe }}-${{ matrix.spec_file }}"
+          USER_PREFIX="$E2E_TEST_ID_INPUT"
+          CELL_ID="${MODEL_SAFE}-${SPEC_FILE}"
           if [ -n "$USER_PREFIX" ]; then
             TEST_ID="${USER_PREFIX}-${CELL_ID}"
           else
@@ -315,6 +345,8 @@ jobs:
           STAGE_INPUT: ${{ inputs.stage }}
           PREVIEW_SERVER_DOMAIN: ${{ vars.PREVIEW_SERVER_DOMAIN }}
           STAGING_SERVER_DOMAIN: ${{ vars.STAGING_SERVER_DOMAIN }}
+          SPEC_FILE: ${{ matrix.spec_file }}
+          AI_MODEL: ${{ matrix.ai_model }}
         run: |
           if [ -n "$PR_NUMBER" ]; then
             if ! printf '%s' "$PR_NUMBER" | grep -qE '^[0-9]+$'; then
@@ -331,8 +363,8 @@ jobs:
           echo "api_url=$API_URL" >> $GITHUB_OUTPUT
           echo "Stage: $STAGE"
           echo "API URL: $API_URL"
-          echo "Spec: ${{ matrix.spec_file }}"
-          echo "AI Model: ${{ matrix.ai_model }}"
+          echo "Spec: $SPEC_FILE"
+          echo "AI Model: $AI_MODEL"
 
       - name: Checkout code
         uses: actions/checkout@v6
@@ -413,6 +445,7 @@ jobs:
           STAGE: ${{ steps.config.outputs.stage }}
           E2E_TEST_ID: ${{ steps.testid.outputs.test_id }}
           AI_MODEL: ${{ matrix.ai_model }}
+          SPEC_FILE: ${{ matrix.spec_file }}
           AI_LATENCY_RUN: 'true'
           PW_WORKERS: '3'
           CI: 'true'
@@ -421,47 +454,58 @@ jobs:
           case "$STAGE" in
             pr[0-9]*)
               # Preview (cross-account): use the injected repo secret, no sst shell.
+              # Skip rather than `exit 1` - a red cell here is indistinguishable from a
+              # real latency/quality failure. Exiting 0 alone would only swap that for a
+              # misleading green, so `preview_skipped` is published as a job output and the
+              # aggregate step in `notify` branches its overall status on it AHEAD of
+              # pass/fail. Must stay in sync with that branch: without it, every cell
+              # renders "No Data", whose legend blames Playwright for a config gap.
               if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
-                echo "::error::E2E_CLEANUP_SECRET repo secret is required for preview runs"
-                exit 1
+                echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured; skipping (0 tests run)"
+                echo "preview_skipped=true" >> "$GITHUB_OUTPUT"
+                exit 0
               fi
-              pnpm --filter client exec playwright test e2e/${{ matrix.spec_file }}.spec.ts \
+              pnpm --filter client exec playwright test "e2e/${SPEC_FILE}.spec.ts" \
                 2>&1 | tee apps/client/playwright-output.txt
               ;;
             *)
               # dev (same account): resolve the secret from SST.
               pnpm sst shell --stage "$STAGE" -- \
-                pnpm --filter client exec playwright test e2e/${{ matrix.spec_file }}.spec.ts \
+                pnpm --filter client exec playwright test "e2e/${SPEC_FILE}.spec.ts" \
                 2>&1 | tee apps/client/playwright-output.txt
               ;;
           esac
 
       - name: Persist test results
         if: always()
+        env:
+          SPEC_FILE: ${{ matrix.spec_file }}
         run: |
           mkdir -p apps/client/playwright-report
           # Prefer the deterministic path from `apps/client/playwright.config.ts`.
           if [ -f apps/client/playwright-report/pw-results.json ]; then
-            cp apps/client/playwright-report/pw-results.json apps/client/playwright-report/${{ matrix.spec_file }}-pw-results.json
+            cp apps/client/playwright-report/pw-results.json "apps/client/playwright-report/${SPEC_FILE}-pw-results.json"
           elif [ -f apps/client/pw-results.json ]; then
             # Backwards-compat fallback.
-            cp apps/client/pw-results.json apps/client/playwright-report/${{ matrix.spec_file }}-pw-results.json
+            cp apps/client/pw-results.json "apps/client/playwright-report/${SPEC_FILE}-pw-results.json"
           else
             # Last-resort: Playwright may have written relative to a different CWD or config resolution.
             FOUND="$(find . -type f -name 'pw-results.json' 2>/dev/null | head -1 || true)"
             if [ -n "$FOUND" ]; then
-              cp "$FOUND" apps/client/playwright-report/${{ matrix.spec_file }}-pw-results.json
+              cp "$FOUND" "apps/client/playwright-report/${SPEC_FILE}-pw-results.json"
             fi
           fi
 
           echo "=== pw-results debug ==="
-          echo "Spec file: ${{ matrix.spec_file }}"
-          echo "Copied summary exists? $(test -f apps/client/playwright-report/${{ matrix.spec_file }}-pw-results.json && echo yes || echo no)"
+          echo "Spec file: $SPEC_FILE"
+          echo "Copied summary exists? $(test -f "apps/client/playwright-report/${SPEC_FILE}-pw-results.json" && echo yes || echo no)"
           echo "Found pw-results.json candidates:"
           find . -type f -name 'pw-results.json' 2>/dev/null | head -20 || true
 
       - name: Upload Playwright report
-        if: always()
+        # Nothing to upload on a skip; without this the upload emits a "No files were
+        # found" warning that reads like the run lost its report.
+        if: always() && steps.e2e.outputs.preview_skipped != 'true'
         uses: actions/upload-artifact@v6
         with:
           name: ai-latency-${{ matrix.spec_file }}-${{ steps.sanitize.outputs.model_safe }}-${{ steps.config.outputs.stage }}${{ inputs.e2e_test_id && format('-{0}', inputs.e2e_test_id) || '' }}
@@ -482,12 +526,16 @@ jobs:
     steps:
       - name: Resolve environment URL
         id: config
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          PREVIEW_SERVER_DOMAIN: ${{ vars.PREVIEW_SERVER_DOMAIN }}
+          STAGING_SERVER_DOMAIN: ${{ vars.STAGING_SERVER_DOMAIN }}
         run: |
-          if [ -n "${{ inputs.pr_number }}" ]; then
-            API_URL="https://app.pr${{ inputs.pr_number }}.${{ vars.PREVIEW_SERVER_DOMAIN }}"
-            ENV_LABEL="preview-${{ inputs.pr_number }}"
+          if [ -n "$PR_NUMBER" ]; then
+            API_URL="https://app.pr${PR_NUMBER}.${PREVIEW_SERVER_DOMAIN}"
+            ENV_LABEL="preview-${PR_NUMBER}"
           else
-            API_URL="https://app.${{ vars.STAGING_SERVER_DOMAIN }}"
+            API_URL="https://app.${STAGING_SERVER_DOMAIN}"
             ENV_LABEL="Staging"
           fi
           echo "api_url=$API_URL" >> $GITHUB_OUTPUT
@@ -495,8 +543,10 @@ jobs:
 
       - name: Set trigger label
         id: trigger
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "label=Run via Dispatch" >> $GITHUB_OUTPUT
           else
             echo "label=Run via Schedule" >> $GITHUB_OUTPUT
@@ -521,6 +571,15 @@ jobs:
         env:
           AI_MODELS_JSON: ${{ needs.setup-matrix.outputs.ai_models }}
           SPEC_FILES_JSON: ${{ needs.setup-matrix.outputs.spec_files }}
+          TRIGGER_LABEL: ${{ steps.trigger.outputs.label }}
+          BRANCH: ${{ github.ref_name }}
+          NOTIFY_API_URL: ${{ steps.config.outputs.api_url }}
+          ENV_LABEL: ${{ steps.config.outputs.env_label }}
+          PREVIEW_SKIPPED: ${{ needs.e2e-ai-latency.outputs.preview_skipped }}
+          # No report is uploaded on a skip, so the #artifacts anchor would land the reader on
+          # an empty list. The non-empty branch must come FIRST: GitHub expressions treat '' as
+          # falsy, so `skipped && '' || '#artifacts'` would append the anchor in both states.
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}${{ needs.e2e-ai-latency.outputs.preview_skipped != 'true' && '#artifacts' || '' }}
         run: |
           mapfile -t ALL_PW_RESULTS < <(find downloaded-results -type f -name '*-pw-results.json' 2>/dev/null | sort)
           mapfile -t ALL_LATENCY_JSONS < <(find downloaded-results -type f -name '*-results.json' ! -name '*-pw-results.json' 2>/dev/null | sort)
@@ -539,7 +598,14 @@ jobs:
           mapfile -t AI_MODELS < <(echo "$AI_MODELS_JSON" | jq -r '.[]')
           mapfile -t SPEC_FILES < <(echo "$SPEC_FILES_JSON" | jq -r '.[]')
 
-          if [ "${#ALL_PW_RESULTS[@]}" -gt 0 ]; then
+          # Three states, checked skip-FIRST. A preview run that could not start is neither a
+          # pass nor a failure, and it must not fall through to the no-quality-data branch
+          # either: that string's legend below blames Playwright, which points the #e2e reader
+          # at the suite when the cause is a missing repo secret. The benchmark cells exit 0 on
+          # a skip, so without this branch the whole run renders green.
+          if [ "${PREVIEW_SKIPPED:-}" = "true" ]; then
+            OVERALL_STATUS=":fast_forward: Skipped (E2E_CLEANUP_SECRET not configured)"
+          elif [ "${#ALL_PW_RESULTS[@]}" -gt 0 ]; then
             PASSED=$(jq -rs '[.[].stats.expected] | add // 0' "${ALL_PW_RESULTS[@]}")
             FAILED=$(jq -rs '[.[].stats.unexpected] | add // 0' "${ALL_PW_RESULTS[@]}")
             OVERALL_STATUS=":white_check_mark: Passed"
@@ -661,7 +727,9 @@ jobs:
           done
 
           # Average latency exceeding threshold is a real failure — downgrade overall status.
-          if [ "$EXCEEDED" = "true" ]; then
+          # Never over a skip: no cell produced latency data, so a breach here could only be
+          # stale, and the skip is the honest verdict either way.
+          if [ "$EXCEEDED" = "true" ] && [ "${PREVIEW_SKIPPED:-}" != "true" ]; then
             OVERALL_STATUS=":x: Failed"
           fi
 
@@ -671,19 +739,26 @@ jobs:
 
           LATENCY_SUMMARY=":white_check_mark: ${LATENCY_WITHIN} Within  :x: ${LATENCY_EXCEEDED_COUNT} Exceeded  :fast_forward: ${LATENCY_NO_DATA} No Data"
 
-          FOOTNOTE_1="--- = No quality data: Playwright crashed, timed out, or failed before results were collected"
-          FOOTNOTE_2="No Data = Latency results unavailable: an error was encountered prior to latency data collection"
+          # On a skip every cell is empty for one known reason, so the default legend would
+          # send the reader to debug a suite that never ran. Name the cause instead.
+          if [ "${PREVIEW_SKIPPED:-}" = "true" ]; then
+            FOOTNOTE_1="--- / No Data = preview e2e unavailable: the E2E_CLEANUP_SECRET repo secret is not configured, so no tests ran"
+            FOOTNOTE_2="This is a configuration gap, not a test failure. Set the repo secret; do not debug the suite."
+          else
+            FOOTNOTE_1="--- = No quality data: Playwright crashed, timed out, or failed before results were collected"
+            FOOTNOTE_2="No Data = Latency results unavailable: an error was encountered prior to latency data collection"
+          fi
           NORMAL_PROMPTS_TEXT="*Normal Prompts*${NL}\`\`\`${TABLE_HDR}${NL}${TABLE_SEP}${NL}${TABLE_ROWS}\`\`\`${NL}${FOOTNOTE_1}${NL}${FOOTNOTE_2}"
 
           jq -n \
             --arg overall_status "$OVERALL_STATUS" \
-            --arg trigger_label "${{ steps.trigger.outputs.label }}" \
-            --arg branch "${{ github.ref_name }}" \
-            --arg api_url "${{ steps.config.outputs.api_url }}" \
-            --arg env_label "${{ steps.config.outputs.env_label }}" \
+            --arg trigger_label "$TRIGGER_LABEL" \
+            --arg branch "$BRANCH" \
+            --arg api_url "$NOTIFY_API_URL" \
+            --arg env_label "$ENV_LABEL" \
             --arg latency_summary "$LATENCY_SUMMARY" \
             --arg normal_prompts "$NORMAL_PROMPTS_TEXT" \
-            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts" \
+            --arg run_url "$RUN_URL" \
             '{
               "text": ("AI Latency — " + $overall_status),
               "blocks": [
@@ -712,7 +787,11 @@ jobs:
           payload-file-path: /tmp/slack-payload.json
 
       - name: Send Slack alert for latency threshold breach
-        if: steps.aggregate.outputs.exceeded == 'true' || steps.aggregate.outputs.has_no_data == 'true'
+        # A skip trips has_no_data (no cell produced results), but paging #slow-responses for a
+        # missing repo secret sends people after a latency problem that does not exist. The
+        # parens matter: `&&` binds tighter than `||`, so without them the skip guard would
+        # apply only to the has_no_data arm.
+        if: ${{ (steps.aggregate.outputs.exceeded == 'true' || steps.aggregate.outputs.has_no_data == 'true') && needs.e2e-ai-latency.outputs.preview_skipped != 'true' }}
         uses: slackapi/slack-github-action@v2.1.0
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL_SLOW_RESPONSES }}

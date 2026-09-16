@@ -436,7 +436,8 @@ const ModalManager: React.FC = () => {
         { filePaths: [filePath], expiresIn: 3600 },
         {
           onSuccess: data => {
-            const [presignedUrl] = data;
+            // A withheld URL comes back null (held/blocked or not the caller's); treat it as absent.
+            const presignedUrl = data[0] ?? undefined;
 
             dispatch({
               type: 'UPDATE_ACTIVE_MODAL_PRESIGNED_URL',

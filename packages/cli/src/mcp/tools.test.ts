@@ -114,6 +114,19 @@ describe('tool handlers', () => {
     expect(result.reply).toBe('a\n\nb');
   });
 
+  it('send_message forwards a supplied systemPrompt through to sendChat', async () => {
+    const sendChat = vi
+      .fn()
+      .mockResolvedValue({ id: 'q1', status: 'done', response: null, responses: ['hello'], model: 'gpt' });
+    const client = mockClient({ sendChat, getQuest: vi.fn() });
+
+    await sendMessage(client, { message: 'hi', notebookId: 'nb1', systemPrompt: 'Reply only in haiku.' });
+
+    expect(sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'hi', notebookId: 'nb1', systemPrompt: 'Reply only in haiku.' })
+    );
+  });
+
   it('send_message resolves the notebookId from the quest when none was supplied', async () => {
     const client = mockClient({
       sendChat: vi

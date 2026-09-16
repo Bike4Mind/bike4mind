@@ -21,6 +21,7 @@ import type {
   LatticeOperation,
   PrimitiveValue,
 } from '@bike4mind/common';
+import { isForbiddenObjectKey } from '@bike4mind/utils/safeObjectKey';
 
 // TYPES
 
@@ -168,11 +169,14 @@ function parseFormula(formula: string): {
 // HYDRATION ENGINE (client-side, simplified)
 
 function hydrateModel(model: ILatticeModel): Record<string, Record<string, PrimitiveValue>> {
-  const computedValues: Record<string, Record<string, PrimitiveValue>> = {};
+  // Client-side twin of HydrationEngine.hydrate: entity ids, attribute keys and rule outputs are
+  // all rule-authored and persisted unvalidated, so the containers are null-proto and reserved
+  // output names are skipped, exactly as the server does.
+  const computedValues: Record<string, Record<string, PrimitiveValue>> = Object.create(null);
 
   // Initialize with base values
   for (const entity of model.data.entities) {
-    computedValues[entity.id] = {};
+    computedValues[entity.id] = Object.create(null);
     for (const attr of entity.attributes) {
       if (!attr.isComputed) {
         // Filter out Date values - convert to ISO string if needed
@@ -254,8 +258,11 @@ function hydrateModel(model: ILatticeModel): Record<string, Record<string, Primi
     // Store result
     if (result !== null) {
       const { targetEntityId, targetAttribute } = definition.output;
+      // Mirrors the server's assertSafeObjectKey rejection; skipping keeps one bad rule from
+      // killing the whole client-side pass, which is what the server's per-rule catch does too.
+      if (isForbiddenObjectKey(targetEntityId) || isForbiddenObjectKey(targetAttribute)) continue;
       if (!computedValues[targetEntityId]) {
-        computedValues[targetEntityId] = {};
+        computedValues[targetEntityId] = Object.create(null);
       }
       computedValues[targetEntityId][targetAttribute] = result;
     }
@@ -649,10 +656,14 @@ export function useLatticeLocalDev() {
 
     const computed = hydrateModel(currentModel);
 
-    // Convert to ILatticeComputedValues format
-    const formattedComputed: ILatticeComputedValues = {};
+    // Convert to ILatticeComputedValues format. Null-proto for the same reason as the containers
+    // in hydrateModel: entityId/key are rule-authored, and `formattedComputed['__proto__'] = {}`
+    // on a plain object runs the __proto__ setter instead of creating an own key, which would
+    // reparent this object and leak one entity's values into every other lookup. Matches
+    // HydrationEngine's own ILatticeComputedValues container.
+    const formattedComputed: ILatticeComputedValues = Object.create(null);
     for (const [entityId, attrs] of Object.entries(computed)) {
-      formattedComputed[entityId] = {};
+      formattedComputed[entityId] = Object.create(null);
       for (const [key, value] of Object.entries(attrs)) {
         formattedComputed[entityId][key] = {
           value,

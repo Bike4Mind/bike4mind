@@ -361,3 +361,58 @@ describe('GET /api/publish/artifacts - cost', () => {
     expect(addIdx).toBeGreaterThan(limitIdx);
   });
 });
+
+describe('GET /api/publish/artifacts - non-owner row trimming', () => {
+  const OWN = { publicId: 'mine', ownerId: USER, scopeId: 'org-1', previousVersionMeta: { by: 'x' }, gateKind: 'none' };
+  const THEIRS = {
+    publicId: 'theirs',
+    ownerId: 'user-2',
+    scopeId: 'org-9',
+    previousVersionMeta: { by: 'y' },
+    gateKind: 'none',
+    title: 'Their artifact',
+    versionsCount: 4,
+    discoverable: true,
+  };
+
+  const withRows = (rows: unknown[]) =>
+    aggregate.mockResolvedValue([{ rows, total: [{ n: rows.length }], byKind: [], byVisibility: [], byGate: [] }]);
+
+  const artifacts = (res: { _getJSONData: () => { artifacts: Array<Record<string, unknown>> } }) =>
+    res._getJSONData().artifacts;
+
+  it('strips the owner, scope and version-provenance identifiers from another user row', async () => {
+    withRows([THEIRS]);
+    const [row] = artifacts(await run({}));
+    for (const field of ['ownerId', 'scopeId', 'previousVersionMeta', 'gateKind']) {
+      expect(field in row).toBe(false);
+    }
+    expect(row.title).toBe('Their artifact');
+  });
+
+  it('keeps versionsCount and discoverable, which the owner management tab reads', async () => {
+    withRows([THEIRS]);
+    const [row] = artifacts(await run({}));
+    expect(row.versionsCount).toBe(4);
+    expect(row.discoverable).toBe(true);
+  });
+
+  it('leaves the caller own row whole', async () => {
+    withRows([OWN]);
+    const [row] = artifacts(await run({}));
+    expect(row).toEqual(OWN);
+  });
+
+  it('trims per row, so a mixed page keeps the caller own fields only', async () => {
+    withRows([OWN, THEIRS]);
+    const [mine, theirs] = artifacts(await run({}));
+    expect(mine.ownerId).toBe(USER);
+    expect('ownerId' in theirs).toBe(false);
+  });
+
+  it('does not trim for an admin, whose surface is the reason the projection is wide', async () => {
+    withRows([THEIRS]);
+    const [row] = artifacts(await run({}, { id: USER, isAdmin: true }));
+    expect(row).toEqual(THEIRS);
+  });
+});

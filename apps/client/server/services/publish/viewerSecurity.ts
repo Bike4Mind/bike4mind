@@ -212,8 +212,16 @@ export function buildBundleScriptSrc(hostHeader?: string, forwardedProtoHeader?:
  * typed themselves; the bundle cannot script it (opaque origin -> cross-origin), and
  * `renderSandboxedBundle` adds `rel="noopener"` on top.
  *
+ * `allow-modals` is what lets the framed document open the PRINT dialog: `window.print()` is
+ * gated on the sandboxed-modals flag, so without this token it is a silent no-op and both the
+ * wrapper's "Save as PDF" (see printBridge.ts) and the `window.print()` export button the
+ * artifact-authoring prompt tells models to write would do nothing. It also admits
+ * alert/confirm/prompt, which are nuisance-only here: the origin stays opaque, so a modal
+ * cannot reach the app's cookies, storage or DOM - it can only annoy the viewer of a page
+ * that is already running the author's own JS.
+ *
  * `allow-same-origin` is NEVER part of this list - the srcdoc/reply frames must stay on an
  * opaque origin. Approach B adds it at its own call site, where it resolves to the isolated
  * usercontent origin rather than the app's.
  */
-export const VIEWER_SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-sandbox';
+export const VIEWER_SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals';

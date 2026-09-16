@@ -27,6 +27,8 @@ import {
   Box,
 } from '@mui/joy';
 import { useState } from 'react';
+import ScopedSettingOverrides from './ScopedSettingOverrides';
+import { rangeMessage } from './settingFieldHelpers';
 
 interface SubSetting {
   setting: (typeof settingsMap)[keyof typeof settingsMap];
@@ -51,47 +53,40 @@ const SubSettingToggle = ({ setting, defaultValue }: SubSetting) => {
   const isDirty = value !== resolvedDefault;
 
   return (
-    <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2, py: 0.75 }}>
-      <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography level="title-md" sx={{ fontSize: '13px' }}>
-          {setting.name}
-        </Typography>
-        <Typography level="body-xs" sx={{ color: 'text.secondary', mt: 0.25 }}>
-          {setting.description}
-        </Typography>
+    <Box sx={{ py: 0.75 }}>
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography level="title-md" sx={{ fontSize: '13px' }}>
+            {setting.name}
+          </Typography>
+          <Typography level="body-xs" sx={{ color: 'text.secondary', mt: 0.25 }}>
+            {setting.description}
+          </Typography>
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
+          <Switch checked={value} onChange={e => setValue(e.target.checked)} />
+          {isDirty && (
+            <Tooltip title="Save" placement="top">
+              <Button
+                color="success"
+                size="sm"
+                loading={updateSettings.isPending}
+                onClick={() => updateSettings.mutate({ key: setting.key, value })}
+              >
+                <SaveIcon sx={{ fontSize: '16px' }} />
+              </Button>
+            </Tooltip>
+          )}
+        </Box>
       </Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
-        <Switch checked={value} onChange={e => setValue(e.target.checked)} />
-        {isDirty && (
-          <Tooltip title="Save" placement="top">
-            <Button
-              color="success"
-              size="sm"
-              loading={updateSettings.isPending}
-              onClick={() => updateSettings.mutate({ key: setting.key, value })}
-            >
-              <SaveIcon sx={{ fontSize: '16px' }} />
-            </Button>
-          </Tooltip>
-        )}
-      </Box>
+
+      {/* A scope-capable setting can be an inline child rather than a card of its own (a boolean
+          whose dependsOn points into its own group - see AdminSettingsTab.renderSettingGroup), so
+          the override section has to render here as well or two of the nine scope-capable settings
+          would have no write surface at all. */}
+      {setting.scope && <ScopedSettingOverrides setting={setting} />}
     </Box>
   );
-};
-
-/**
- * Why the server would refuse this number, in the words the field shows. The setting's own
- * schema carries the same bounds (makeNumberSetting in @bike4mind/common), and the update
- * route parses with it directly, so an out-of-range value comes back as an untranslated
- * ZodError: without this the admin sees Save do nothing and is told nothing.
- */
-const rangeMessage = (value: number, min?: number, max?: number): string | undefined => {
-  const inRange = (min === undefined || value >= min) && (max === undefined || value <= max);
-  if (!Number.isNaN(value) && inRange) return undefined;
-  if (min !== undefined && max !== undefined) return `Enter a number between ${min} and ${max}.`;
-  if (min !== undefined) return `Enter a number of ${min} or more.`;
-  if (max !== undefined) return `Enter a number of ${max} or less.`;
-  return 'Enter a number.';
 };
 
 const AdminSettingInputField = ({
@@ -127,8 +122,10 @@ const AdminSettingInputField = ({
   // Only number settings declare bounds, and only some of those, so they are read through
   // the type discriminant rather than off the union.
   const bounds: { min?: number; max?: number } = setting.type === 'number' ? setting : {};
+  // An emptied field is "unset", not a zero: Number('') is 0, which would report a bogus
+  // below-minimum error on a bounded setting and block the save that resets it to its default.
   const rangeError =
-    setting.type === 'number' && value !== null
+    setting.type === 'number' && value !== null && value !== ''
       ? rangeMessage(typeof value === 'number' ? value : Number(value), bounds.min, bounds.max)
       : undefined;
   // A rejected write is otherwise silent: the mutation surfaces nothing of its own and the
@@ -156,6 +153,10 @@ const AdminSettingInputField = ({
         onSuccess: (data: { settingValue?: unknown } | undefined) => {
           setSecretEdited(false);
           if (setting.isSensitive && typeof data?.settingValue === 'string') setValue(data.settingValue);
+          // A cleared number field resolves server-side to the setting's own default (#2636),
+          // not to what was submitted - sync from the response instead of leaving the field
+          // empty until the next full settings refetch.
+          if (setting.type === 'number' && typeof data?.settingValue === 'number') setValue(data.settingValue);
         },
       }
     );
@@ -209,8 +210,15 @@ const AdminSettingInputField = ({
                     },
                   }}
                   type="number"
-                  value={typeof value === 'number' ? value : Number(value)}
-                  onChange={e => setValue(Number(e.target.value))}
+                  // A cleared field is kept as '' rather than coerced: Number('') is 0, which
+                  // the server would store as a real zero instead of letting makeNumberSetting's
+                  // empty-string preprocess fall back to the setting's own default.
+                  value={typeof value === 'number' ? value : value === null || value === '' ? '' : Number(value)}
+                  onChange={e => setValue(e.target.value === '' ? '' : Number(e.target.value))}
+                  // Locked during the save round-trip: onSuccess resyncs this field from the
+                  // server's resolved value, so an edit typed mid-flight would be silently
+                  // overwritten by the response for the previous submission.
+                  disabled={updateSettings.isPending}
                 />
               ) : setting.type === 'string' ? (
                 setting.options ? (
@@ -298,6 +306,14 @@ const AdminSettingInputField = ({
                 />
               ))}
             </Stack>
+          </>
+        )}
+
+        {/* Only a setting that opts into scoping gets a write surface for the narrower rungs. */}
+        {setting.scope && (
+          <>
+            <Divider sx={{ my: 1 }} />
+            <ScopedSettingOverrides setting={setting} />
           </>
         )}
       </Card>

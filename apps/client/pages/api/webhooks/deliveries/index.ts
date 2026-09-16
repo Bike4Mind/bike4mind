@@ -14,7 +14,8 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { webhookDeliveryRepository } from '@bike4mind/database/infra';
 import { webhookSubscriptionRepository } from '@bike4mind/database/infra';
-import { BadRequestError } from '@bike4mind/utils';
+import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { isValidObjectId } from '@server/utils/objectId';
 import { WebhookDeliveryStatus, IWebhookDeliveryDocument } from '@bike4mind/common';
 
 interface DeliveryListQuery {
@@ -61,6 +62,9 @@ const handler = baseApi().get(
 
     // If subscriptionId provided, verify user owns it
     if (subscriptionId) {
+      // A malformed id has always answered 404 here (the error handler remapped the cast); the
+      // 400 below is this route's answer for a well-formed id that matches nothing.
+      if (!isValidObjectId(subscriptionId)) throw new NotFoundError('Subscription not found');
       const subscription = await webhookSubscriptionRepository.findById(subscriptionId);
       if (!subscription || subscription.userId !== user.id) {
         throw new BadRequestError('Subscription not found');

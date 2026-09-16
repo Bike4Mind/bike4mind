@@ -21,15 +21,24 @@ const h = vi.hoisted(() => ({
   updateFileStatus: vi.fn(),
   incrementCounter: vi.fn(async () => ({ failedFiles: 1, processingFailedFiles: 1 })),
   incrementCounters: vi.fn(async () => ({ failedFiles: 1, processingFailedFiles: 1 })),
+  markFailureCounted: vi.fn(async () => undefined),
   claimFileStatus: vi.fn(),
   deferFailureIfRetryable: vi.fn(),
   fabFileUpdate: vi.fn(),
   advanceVectorizeProgress: vi.fn(async () => true),
   computeChunkVectorRollup: vi.fn(async () => ({ terminalChunkCount: 0, embeddedChunkCount: 0, embeddedCharCount: 0 })),
   chunkUpdate: vi.fn(),
+  // Empty = nothing embedded yet, the normal first-message case. The space-conflict tests override
+  // it to put the file in a space the message's resolved model is not in.
+  distinctEmbeddingModelsByFabFileId: vi.fn(async () => [] as string[]),
   getAtlasIndexForModel: vi.fn(() => ({ name: 'idx', numDimensions: 3 })),
+  // Echoes the requested model, matching the real helper's no-fallback path. The keyless-arm
+  // test overrides this to return a different `model` and asserts the stamp follows.
+  resolveEmbeddingWithKeylessFallback: vi.fn((model: string) => ({ config: {}, missing: null, model })),
   stampChunkEmbeddingModel: vi.fn(),
   indexChunks: vi.fn(),
+  confirmRetrievalIndexed: vi.fn(async () => undefined),
+  clearRetrievalIndexConfirmed: vi.fn(async () => undefined),
   selfHostOpenSearchEnabled: vi.fn(() => false),
   enforceEmbeddingSpendGate: vi.fn(async () => undefined),
   // Mirrors the real resolver's rule closely enough for the handler's branch: batch uploads and
@@ -45,6 +54,8 @@ const h = vi.hoisted(() => ({
   organizationFindById: vi.fn(async () => null),
   recordOperationalUsage: vi.fn(async () => undefined),
   spendNotifier: vi.fn(async () => undefined),
+  notifySlackIndexingComplete: vi.fn(async () => undefined),
+  claimIndexNotification: vi.fn(async () => true),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -55,6 +66,7 @@ vi.mock('@bike4mind/database', () => ({
     incrementCounter: h.incrementCounter,
     incrementCounters: h.incrementCounters,
     claimFileStatus: h.claimFileStatus,
+    markFailureCounted: h.markFailureCounted,
     findById: h.batchFindById,
     releaseEmbeddingSpend: h.batchReleaseSpend,
   },
@@ -67,13 +79,17 @@ vi.mock('@bike4mind/database', () => ({
   fabFileChunkRepository: {
     findById: vi.fn(),
     computeChunkVectorRollup: h.computeChunkVectorRollup,
+    distinctEmbeddingModelsByFabFileId: h.distinctEmbeddingModelsByFabFileId,
     update: h.chunkUpdate,
+    confirmRetrievalIndexed: h.confirmRetrievalIndexed,
+    clearRetrievalIndexConfirmed: h.clearRetrievalIndexConfirmed,
   },
   fabFileRepository: {
     shareable: { findAccessibleById: h.findAccessibleById },
     markFailedIfNotAlready: h.markFailedIfNotAlready,
     update: h.fabFileUpdate,
     advanceVectorizeProgress: h.advanceVectorizeProgress,
+    claimIndexNotification: h.claimIndexNotification,
   },
   organizationRepository: { findById: h.organizationFindById },
   usageEventRepository: {},
@@ -103,10 +119,15 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: vi.fn(),
-  isBatchComplete: vi.fn(),
+  completedBatchStatus: vi.fn(),
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
+// #2027: its own dedicated unit tests (notifySlackIndexingComplete.test.ts) cover the resolution
+// chain and every skip case - mocked here so this suite doesn't have to exercise the real thing.
+vi.mock('@server/queueHandlers/notifySlackIndexingComplete', () => ({
+  notifySlackIndexingComplete: (...a: unknown[]) => h.notifySlackIndexingComplete(...a),
+}));
 vi.mock('@server/utils/dataLakeSpendNotifier', () => ({ makeDataLakeSpendNotifier: () => h.spendNotifier }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@server/utils/errors', () => ({ NotFoundError: class NotFoundError extends Error {} }));
@@ -116,6 +137,9 @@ vi.mock('@bike4mind/common', async () => {
   return {
     SupportedEmbeddingModelSchema: z.string(),
     getEmbeddingModelCost: vi.fn(() => 0.0001),
+    // Real enum, not a stub: the sourceType gate around the Slack notification claim compares
+    // against this directly, so a fake value here would make every test pass for the wrong reason.
+    FabFileSourceType: actual.FabFileSourceType,
     // Pulled from the real module rather than retyped, for the provenance vocabulary
     // convergenceProvenance.ts re-exports from common:
     // the payload schema's fail-soft `origin` and the halt rule are exactly what the kill-switch
@@ -135,9 +159,20 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
     }
   },
   getProviderFromModel: vi.fn(() => 'openai'),
-  resolveEmbeddingConfig: vi.fn(() => ({ config: {}, missing: null })),
+  resolveEmbeddingWithKeylessFallback: h.resolveEmbeddingWithKeylessFallback,
   // Mirror the real name-based guard so any test that reaches the failure branch classifies correctly.
   isEmbeddingAuthError: (e: unknown) => e instanceof Error && e.name === 'EmbeddingAuthError',
+  // Same mirroring for the space-conflict pair. Only `name` and the operator-detail message matter
+  // to the handler; the real class's exact copy is pinned in EmbeddingErrors.test.ts.
+  EmbeddingSpaceConflictError: class extends Error {
+    constructor(attemptedModel: string, existingModels: readonly string[]) {
+      super(
+        `Refusing to embed with ${attemptedModel}: this file already holds vectors in ${existingModels.join(', ')}.`
+      );
+      this.name = 'EmbeddingSpaceConflictError';
+    }
+  },
+  isEmbeddingSpaceConflictError: (e: unknown) => e instanceof Error && e.name === 'EmbeddingSpaceConflictError',
   getAtlasIndexForModel: h.getAtlasIndexForModel,
   FabFileChunkSearchIndex: { indexChunks: h.indexChunks },
 }));
@@ -147,6 +182,7 @@ vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => new Proxy({}, { get
 const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() } as never;
 
 import { fabFileChunkRepository, User } from '@bike4mind/database';
+import { FabFileSourceType } from '@bike4mind/common';
 import { sendToClient } from '@server/websocket/utils';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from './sqsDelivery';
 import { dispatch } from './fabFileVectorize';
@@ -324,6 +360,21 @@ describe('fabFileVectorize handler - stored error copy on vectorization failure'
     h.deferFailureIfRetryable.mockResolvedValue(false);
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'rate limit exceeded');
+  });
+
+  // #2027 review: the "no Slack message on a failed vectorize" choice is correctly in the code
+  // (the notify call sits only in the isFileVectorized success branch), but nothing pinned it with
+  // a test - a future refactor could move the call above the success gate without any test
+  // noticing. A Slack-origin fixture, not just any failure, is the point: this must fail because
+  // the branch was never reached, not because sourceType happened to skip it anyway.
+  it('never claims or sends the Slack notification when vectorization fails, even for a Slack-origin file', async () => {
+    h.findAccessibleById.mockResolvedValue({ ...unvectorizedFile('batch-1'), sourceType: FabFileSourceType.SLACK });
+    h.getVector.mockRejectedValue(new Error('rate limit exceeded'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
+
+    expect(h.claimIndexNotification).not.toHaveBeenCalled();
+    expect(h.notifySlackIndexingComplete).not.toHaveBeenCalled();
   });
 });
 
@@ -549,6 +600,7 @@ describe('fabFileVectorize handler - notification failures are non-fatal (human 
     vectorized: false,
     chunkCount: 1,
     vectorizedChunkCount: 0,
+    sourceType: FabFileSourceType.SLACK,
   });
 
   beforeEach(() => {
@@ -567,6 +619,10 @@ describe('fabFileVectorize handler - notification failures are non-fatal (human 
     });
     h.claimFileStatus.mockResolvedValue(true);
     h.incrementCounter.mockResolvedValue({ vectorizedFiles: 1, failedFiles: 0, totalFiles: 1 });
+    h.claimIndexNotification.mockResolvedValue(true);
+    // `vi.clearAllMocks()` above resets call history but NOT a mockRejectedValue/mockResolvedValue
+    // set by an earlier test - reset explicitly so one test's rejection can't leak into the next.
+    h.notifySlackIndexingComplete.mockResolvedValue(undefined);
   });
 
   it('a rejecting sendToClient does not prevent the batch claim/increment from completing', async () => {
@@ -575,6 +631,60 @@ describe('fabFileVectorize handler - notification failures are non-fatal (human 
 
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
 
+    expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['chunking', 'uploaded', 'pending'], 'complete');
+    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
+  });
+
+  it('#2027: notifies Slack on completion, and a rejection does not prevent the batch claim/increment', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.notifySlackIndexingComplete.mockRejectedValue(new Error('slack unreachable'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.claimIndexNotification).toHaveBeenCalledWith('ff1', 'slack');
+    expect(h.notifySlackIndexingComplete).toHaveBeenCalledWith(unvectorizedFile('batch-1'), mockLogger);
+    expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['chunking', 'uploaded', 'pending'], 'complete');
+    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
+  });
+
+  it('#2027: skips the Slack notification, without failing, when the claim is already taken (redelivery)', async () => {
+    // Proves "at most once": a redelivered or concurrent completion message for the same file
+    // must not post the reply a second time, even though the rest of completion still proceeds.
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.claimIndexNotification.mockResolvedValue(false);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.claimIndexNotification).toHaveBeenCalledWith('ff1', 'slack');
+    expect(h.notifySlackIndexingComplete).not.toHaveBeenCalled();
+    expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['chunking', 'uploaded', 'pending'], 'complete');
+    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
+  });
+
+  it('#2027: a rejecting claim does not prevent the batch claim/increment from completing', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.claimIndexNotification.mockRejectedValue(new Error('db unreachable'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.notifySlackIndexingComplete).not.toHaveBeenCalled();
+    expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['chunking', 'uploaded', 'pending'], 'complete');
+    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
+  });
+
+  it('never claims or sends the Slack notification for a non-Slack-origin file', async () => {
+    // The claim write and the notifier both cost something for a file that will never be
+    // Slack-notified anyway (notifySlackIndexingComplete no-ops on sourceType); this proves the
+    // sourceType gate skips both up front instead of paying for a claim nothing will use.
+    h.findAccessibleById.mockResolvedValue({
+      ...unvectorizedFile('batch-1'),
+      sourceType: FabFileSourceType.GOOGLE_DRIVE,
+    });
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.claimIndexNotification).not.toHaveBeenCalled();
+    expect(h.notifySlackIndexingComplete).not.toHaveBeenCalled();
     expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['chunking', 'uploaded', 'pending'], 'complete');
     expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
   });
@@ -645,6 +755,19 @@ describe('fabFileVectorize handler - retry gating (#1412)', () => {
     // One atomic call for both counters, so a crash between two sequential $inc writes can
     // never misclassify a processing failure as an upload one (#1412).
     expect(h.incrementCounters).toHaveBeenCalledWith('batch-1', { failedFiles: 1, processingFailedFiles: 1 });
+    // Raised only once the guarded $inc has landed - updateFileStatus already stamped it false, so
+    // revertFileFailure can attribute a decrement to this entry rather than another file's.
+    expect(h.markFailureCounted).toHaveBeenCalledWith('batch-1', 'ff1', true);
+  });
+
+  it('leaves the entry uncounted when the guarded failure $inc was swallowed', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getVector.mockRejectedValue(new Error(RATE_LIMIT_ERR));
+    h.deferFailureIfRetryable.mockResolvedValue(false);
+    h.incrementCounters.mockResolvedValue(null); // batch already terminal
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(RATE_LIMIT_ERR);
+    expect(h.markFailureCounted).not.toHaveBeenCalled();
   });
 
   it('a deferred failure followed by a successful retry never touches failedFiles', async () => {
@@ -714,7 +837,16 @@ describe('fabFileVectorize handler - embeddingModel discriminator stamp', () => 
       'ff1',
       'text-embedding-3-small',
       expect.objectContaining({ db: expect.anything() }),
-      { vectorized: true, vectorizedChunkCount: 1, isVectorizing: false, embeddedChunkCount: 0, embeddedCharCount: 0 }
+      {
+        vectorized: true,
+        vectorizedChunkCount: 1,
+        isVectorizing: false,
+        embeddedChunkCount: 0,
+        embeddedCharCount: 0,
+        // The handler is the only caller that knows which model it just embedded with, so it is
+        // the only one allowed to move the FILE-level label.
+        stampFile: true,
+      }
     );
   });
 
@@ -759,7 +891,7 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
 
   it('indexes the vectorized chunks when self-host OpenSearch is enabled', async () => {
     h.selfHostOpenSearchEnabled.mockReturnValue(true);
-    h.indexChunks.mockResolvedValue(undefined);
+    h.indexChunks.mockResolvedValue(['c1']);
 
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
@@ -767,14 +899,28 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
     expect(h.chunkUpdate).toHaveBeenCalled();
   });
 
-  it('stamps embeddingModel onto the chunks passed to indexChunks - not persisted per-chunk in Mongo yet at this point', async () => {
+  it('stamps embeddingModel onto the chunks passed to indexChunks (the same objects Mongo was given)', async () => {
     h.selfHostOpenSearchEnabled.mockReturnValue(true);
-    h.indexChunks.mockResolvedValue(undefined);
+    h.indexChunks.mockResolvedValue(['c1']);
 
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
     const indexedChunks = h.indexChunks.mock.calls[0][0];
     expect(indexedChunks).toEqual([expect.objectContaining({ id: 'c1', embeddingModel: 'text-embedding-3-small' })]);
+  });
+
+  it('persists embeddingModel on the chunk in the SAME write as its vector', async () => {
+    // The label and the vector it describes must land together: a chunk whose label names a model
+    // other than the one that produced its vector is matched by that model's Atlas filter and
+    // scored against vectors from a different space - silently wrong hits, at a width that may not
+    // even match. Writing both in one `update` is what makes that state unrepresentable, and it is
+    // also what lets the file-complete stamp DETECT a mid-ingest credential change (the file's
+    // chunks then declare two models) instead of flattening it to whichever message finished last.
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.chunkUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'c1', vector: [0.1, 0.2, 0.3], embeddingModel: 'text-embedding-3-small' })
+    );
   });
 
   it('never calls indexChunks when self-host OpenSearch is disabled', async () => {
@@ -799,12 +945,88 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
 
   it('persists retrievalIndexModel with the chunk vector, so index residency does not wait on the stamp', async () => {
     h.selfHostOpenSearchEnabled.mockReturnValue(true);
-    h.indexChunks.mockResolvedValue(undefined);
+    h.indexChunks.mockResolvedValue(['c1']);
 
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
     expect(h.chunkUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'c1', retrievalIndexModel: 'text-embedding-3-small' })
+    );
+  });
+
+  it('confirms residency only for the chunks the index actually accepted', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue([]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.confirmRetrievalIndexed).toHaveBeenCalledWith([], 'text-embedding-3-small');
+    expect(h.chunkUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'c1', retrievalIndexModel: 'text-embedding-3-small' })
+    );
+  });
+
+  it('records confirmed residency after a successful index write', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue(['c1']);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.confirmRetrievalIndexed).toHaveBeenCalledWith(['c1'], 'text-embedding-3-small');
+    expect(h.clearRetrievalIndexConfirmed).not.toHaveBeenCalled();
+  });
+
+  it('clears a stale confirm for a chunk the index no longer accepted - a rollback must not leave the old stamp live', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue([]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.clearRetrievalIndexConfirmed).toHaveBeenCalledWith(['c1'], 'text-embedding-3-small');
+  });
+
+  it('fails open when the residency confirmation write fails - the file just stays scan-only', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue(['c1']);
+    h.confirmRetrievalIndexed.mockRejectedValueOnce(new Error('mongo unavailable'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.stampChunkEmbeddingModel).toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+  });
+
+  it('never confirms residency when self-host OpenSearch is disabled', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(false);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.confirmRetrievalIndexed).not.toHaveBeenCalled();
+  });
+
+  it('stamps the model it actually embedded with when a keyless stage falls back', async () => {
+    // The corpus-mislabelling hazard: on a stage with no provider key the vectorizer embeds on
+    // Bedrock, and every downstream key - the cache entry, the Atlas width guard, both chunk
+    // stamps - has to follow that model rather than the one the payload asked for. Stamping
+    // ada-002 onto Titan vectors would make them unsearchable and silently wrong.
+    h.resolveEmbeddingWithKeylessFallback.mockReturnValueOnce({
+      config: {},
+      missing: null,
+      model: 'amazon.titan-embed-text-v2:0',
+    });
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue(['c1']);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.chunkUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'c1', retrievalIndexModel: 'amazon.titan-embed-text-v2:0' })
+    );
+    expect(h.stampChunkEmbeddingModel).toHaveBeenCalledWith(
+      expect.anything(),
+      'amazon.titan-embed-text-v2:0',
+      expect.anything(),
+      expect.anything()
     );
   });
 
@@ -822,7 +1044,7 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
   // chunk rows, so residency has to be on them already or those documents are unreachable forever.
   it('records residency on a message that leaves the file short of complete, with no stamp', async () => {
     h.selfHostOpenSearchEnabled.mockReturnValue(true);
-    h.indexChunks.mockResolvedValue(undefined);
+    h.indexChunks.mockResolvedValue(['c1']);
     h.findAccessibleById.mockResolvedValue({ ...unvectorizedFile(undefined), chunkCount: 5 });
     h.computeChunkVectorRollup.mockResolvedValue({
       terminalChunkCount: 1,
@@ -840,7 +1062,7 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
 
   it('a terminal spend denial on a later message is consumed, leaving the earlier residency in place', async () => {
     h.selfHostOpenSearchEnabled.mockReturnValue(true);
-    h.indexChunks.mockResolvedValue(undefined);
+    h.indexChunks.mockResolvedValue(['c1']);
     // batchId present: the spend gate is the data-lake path only.
     h.findAccessibleById.mockResolvedValue({ ...unvectorizedFile('batch-1'), chunkCount: 5 });
     h.computeChunkVectorRollup.mockResolvedValue({
@@ -923,5 +1145,180 @@ describe('fabFileVectorize handler - partial rollup write is guarded', () => {
 
     expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
     expect(h.stampChunkEmbeddingModel).not.toHaveBeenCalled();
+  });
+});
+
+// #2791: the substitution in resolveEmbeddingWithKeylessFallback is resolved independently in every
+// message of a file's vectorize fan-out, so a credential appearing or lapsing mid-ingest used to
+// split one file across two vector spaces at two widths - detected at file completion by
+// resolveFileLabel, but only after the second space had been paid for and written.
+describe('fabFileVectorize handler - second embedding space refusal', () => {
+  const TITAN = 'amazon.titan-embed-text-v2:0';
+  const unvectorizedFile = (batchId?: string) => ({
+    id: 'ff1',
+    batchId,
+    vectorized: false,
+    chunkCount: 1,
+    vectorizedChunkCount: 0,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getAtlasIndexForModel.mockReturnValue({ name: 'idx', numDimensions: 3 });
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null);
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+    h.computeChunkVectorRollup.mockResolvedValue({
+      terminalChunkCount: 1,
+      embeddedChunkCount: 0,
+      embeddedCharCount: 0,
+    });
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+    h.selfHostOpenSearchEnabled.mockReturnValue(false);
+    // Nothing embedded yet: the default every other describe in this file relies on.
+    h.distinctEmbeddingModelsByFabFileId.mockResolvedValue([]);
+    // Pinned explicitly because vi.clearAllMocks() clears calls but NOT implementations, so an
+    // earlier describe's mockResolvedValue(true) would otherwise still be in force here and defer
+    // every refusal as a non-final attempt. false = final attempt, which is what accounts the
+    // failure; the retry-path test below opts back into true.
+    h.deferFailureIfRetryable.mockResolvedValue(false);
+  });
+
+  it('refuses when a lapsed credential substitutes a model the file holds no vectors in', async () => {
+    h.distinctEmbeddingModelsByFabFileId.mockResolvedValueOnce(['text-embedding-3-small']);
+    h.resolveEmbeddingWithKeylessFallback.mockReturnValueOnce({ config: {}, missing: null, model: TITAN });
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(/already holds vectors/);
+
+    expect(h.chunkUpdate).not.toHaveBeenCalled();
+    expect(h.stampChunkEmbeddingModel).not.toHaveBeenCalled();
+  });
+
+  it('refuses BEFORE spending, so the refused half is never paid for', async () => {
+    // The whole point of refusing in the consumer rather than reporting at completion: by the time
+    // resolveFileLabel can see the split, both spaces have been embedded and the repair is a full
+    // re-embed. The guard therefore sits upstream of the cache, the spend gate and getVector.
+    //
+    // batchId set deliberately: the spend gate only runs for data-lake work (resolveIngestSpendScope
+    // returns null without it), so asserting it was skipped on a turn-attached file would pass
+    // vacuously whether the guard exists or not.
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.distinctEmbeddingModelsByFabFileId.mockResolvedValueOnce(['text-embedding-3-small']);
+    h.resolveEmbeddingWithKeylessFallback.mockReturnValueOnce({ config: {}, missing: null, model: TITAN });
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
+
+    expect(h.enforceEmbeddingSpendGate).not.toHaveBeenCalled();
+    expect(h.getVector).not.toHaveBeenCalled();
+    expect(h.getEmbedding).not.toHaveBeenCalled();
+  });
+
+  it('still reaches the spend gate on a data-lake file the guard allows', async () => {
+    // The control for the test above: same batchId, same path, guard satisfied. Without this, a
+    // spend gate that had silently stopped being called at all would make that assertion pass.
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.distinctEmbeddingModelsByFabFileId.mockResolvedValueOnce(['text-embedding-3-small']);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.enforceEmbeddingSpendGate).toHaveBeenCalled();
+    expect(h.chunkUpdate).toHaveBeenCalled();
+  });
+
+  // The load-bearing case for checking UNCONDITIONALLY rather than only when the substitution
+  // fired. Here no substitution happens - the message resolves exactly the model it requested - and
+  // it is still the message that would open a second space, because the file's existing vectors are
+  // the substituted ones from before the credential came back. A guard gated on
+  // `embeddingModel !== requestedEmbeddingModel` passes this through and splits the file.
+  it('refuses when a credential APPEARING mid-ingest resolves the requested model into a Titan file', async () => {
+    h.distinctEmbeddingModelsByFabFileId.mockResolvedValueOnce([TITAN]);
+    // No mockReturnValueOnce: the default echoes the request, i.e. no fallback fired.
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(/already holds vectors/);
+
+    expect(h.chunkUpdate).not.toHaveBeenCalled();
+  });
+
+  it('proceeds on the first message of a file, when nothing is embedded yet', async () => {
+    h.distinctEmbeddingModelsByFabFileId.mockResolvedValueOnce([]);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.chunkUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'c1', embeddingModel: 'text-embedding-3-small' })
+    );
+  });
+
+  it('proceeds when the resolved model is the space the file is already in', async () => {
+    h.distinctEmbeddingModelsByFabFileId.mockResolvedValueOnce(['text-embedding-3-small']);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.chunkUpdate).toHaveBeenCalled();
+  });
+
+  it('lets an ALREADY-split file continue in a space it is in, rather than stranding it', async () => {
+    // That damage predates this guard and only resolveFileLabel can report it. Refusing here would
+    // hold the file short of the file-complete stamp that blanks its label, turning a detected
+    // split into a silent one.
+    h.distinctEmbeddingModelsByFabFileId.mockResolvedValueOnce([TITAN, 'text-embedding-3-small']);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.chunkUpdate).toHaveBeenCalled();
+  });
+
+  it('refuses a THIRD space on an already-split file, and names both spaces it found', async () => {
+    h.distinctEmbeddingModelsByFabFileId.mockResolvedValueOnce([TITAN, 'text-embedding-3-small']);
+    h.resolveEmbeddingWithKeylessFallback.mockReturnValueOnce({ config: {}, missing: null, model: 'voyage-3' });
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(
+      /amazon\.titan-embed-text-v2:0, text-embedding-3-small/
+    );
+
+    expect(h.chunkUpdate).not.toHaveBeenCalled();
+  });
+
+  it('persists user-safe copy, never the operator detail naming both models', async () => {
+    // FabFile.error renders verbatim in non-admin tooltips, and the error's own message names both
+    // embedding models - meaningless to a user, and not something they can act on.
+    h.distinctEmbeddingModelsByFabFileId.mockResolvedValueOnce(['text-embedding-3-small']);
+    h.resolveEmbeddingWithKeylessFallback.mockReturnValueOnce({ config: {}, missing: null, model: TITAN });
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
+
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith(
+      'ff1',
+      'This file could not be finished indexing for semantic search because the embedding service changed while it was being indexed. Re-index the file to complete it.'
+    );
+    const stored = h.markFailedIfNotAlready.mock.calls[0][1] as string;
+    expect(stored).not.toContain(TITAN);
+    expect(stored).not.toContain('text-embedding-3-small');
+    // Operator detail still reaches the logs.
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('embedding space conflict'));
+  });
+
+  it('rides the normal retry path on a non-final delivery, so a returning credential can still win', async () => {
+    // Redelivery is cheap and a rotation often completes within the queue's 3 attempts; a split
+    // file is not repairable without a full re-embed. So the refusal must not be terminal.
+    h.distinctEmbeddingModelsByFabFileId.mockResolvedValueOnce(['text-embedding-3-small']);
+    h.resolveEmbeddingWithKeylessFallback.mockReturnValueOnce({ config: {}, missing: null, model: TITAN });
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
+
+    expect(h.deferFailureIfRetryable).toHaveBeenCalledWith(expect.anything(), FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT, {
+      fabFileId: 'ff1',
+      batchId: undefined,
+      action: 'Vectorization',
+      errorMessage: expect.stringContaining('Refusing to embed'),
+      logger: mockLogger,
+    });
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
   });
 });

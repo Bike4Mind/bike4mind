@@ -103,6 +103,11 @@ export function parseAuthParams(search: Record<string, unknown>, windowRef?: Win
     }
   }
 
-  // Fall back to query params for backwards compatibility
-  return parseQueryParams(search);
+  // A URL-borne access token is only ever accepted from the hash fragment. The
+  // legacy query-string token fallback is removed: a token in the query string is
+  // logged in access logs and leaked via Referer, and was the vector for silently
+  // adopting a session from a crafted /auth/success?token=... link. Only an error
+  // code may still arrive via the query string.
+  const query = parseQueryParams(search);
+  return query.error ? { error: query.error } : {};
 }

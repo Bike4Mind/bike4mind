@@ -4,16 +4,12 @@ import { NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
 import { ResearchTaskType, ResearchTaskStatus, KnowledgeType } from '@bike4mind/common';
 import axios from 'axios';
 import { fileTypeFromBuffer } from 'file-type';
-import { fabFilesService } from '..';
+import * as fabFilesService from '../fabFileService';
 import { findOrUpdateExistingResearchData, prepareTagsForResearchTask, createSendStatusUpdate } from './utils';
 
 vi.mock('axios');
 vi.mock('file-type');
-vi.mock('..', () => ({
-  fabFilesService: {
-    createFabFile: vi.fn(),
-  },
-}));
+vi.mock('../fabFileService', () => ({ createFabFile: vi.fn() }));
 vi.mock('./utils', () => ({
   findOrUpdateExistingResearchData: vi.fn(),
   prepareTagsForResearchTask: vi.fn(),
@@ -530,7 +526,8 @@ describe('downloadRelevantLinks', () => {
           { name: 'Important', strength: 1.0 },
         ],
       }),
-      adapters
+      // Narrowed to {db, storage} - createFabFile never sees this door's `jobs`/`logger` adapters.
+      { db: adapters.db, storage: adapters.storage }
     );
   });
 
@@ -565,7 +562,8 @@ describe('downloadRelevantLinks', () => {
         organizationId: 'test-org-id',
         prefix: 'research-tasks/test-task-id',
       }),
-      adapters
+      // Narrowed to {db, storage} - createFabFile never sees this door's `jobs`/`logger` adapters.
+      { db: adapters.db, storage: adapters.storage }
     );
     expect(mockDb.researchDatas.existsByUrlAndResearchTaskId).toHaveBeenCalledWith(
       'https://example.com/document1.pdf',
@@ -607,7 +605,8 @@ describe('downloadRelevantLinks', () => {
         fileSize: mockFileBuffer.length,
         content: mockFileBuffer,
       }),
-      adapters
+      // Narrowed to {db, storage} - createFabFile never sees this door's `jobs`/`logger` adapters.
+      { db: adapters.db, storage: adapters.storage }
     );
   });
 

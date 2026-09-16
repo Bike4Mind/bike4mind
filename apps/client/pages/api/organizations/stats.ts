@@ -4,8 +4,9 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
 import qs from 'qs';
 import { Request } from 'express';
-import { Organization } from '@bike4mind/database/infra';
+import { Organization, organizationRepository } from '@bike4mind/database/infra';
 import { UserActivityCounter } from '@bike4mind/database/auth';
+import { isValidObjectId } from '@server/utils/objectId';
 
 const OrganizationStatsSchema = z.object({
   organizationIds: z.array(z.string()),
@@ -15,8 +16,21 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(
   asyncHandler(async (req, res) => {
     const { organizationIds } = OrganizationStatsSchema.parse(qs.parse(req.query));
 
+    // The ids are caller-supplied, so intersect them with the caller's own membership before
+    // querying: this route previously returned the name and login/export activity of ANY
+    // organization to any authenticated caller, making it an existence-and-name oracle over the
+    // whole tenant list. Filtering the input (rather than rejecting the request) keeps the
+    // response indistinguishable from one naming ids that simply do not exist - an unauthorized id
+    // is absent from the map exactly as a nonexistent one is.
+    const memberOrgIds = req.user.isAdmin
+      ? null
+      : new Set(await organizationRepository.findMembershipOrgIds(req.user.id));
+    const visibleOrganizationIds = memberOrgIds ? organizationIds.filter(id => memberOrgIds.has(id)) : organizationIds;
+
     const organizations = await Organization.find({
-      _id: { $in: organizationIds },
+      // One uncastable id rejects the whole $in, taking the valid rows with it. Such an id
+      // could never have matched, so drop it rather than fail the request.
+      _id: { $in: visibleOrganizationIds.filter(isValidObjectId) },
     })
       .select('id name users')
       .populate('users.userId', 'loginRecords counters');
@@ -61,8 +75,6 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(
         }
       }
     }
-
-    console.log('Stats Map:', JSON.stringify(statsMap, null, 2));
 
     return res.json(statsMap);
   })

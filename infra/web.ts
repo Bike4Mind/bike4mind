@@ -39,6 +39,8 @@ import {
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueue,
   dataLakeTaxonomyQueueDLQ,
+  dataLakeResearchQueue,
+  dataLakeResearchQueueDLQ,
   lakeMemoryQueue,
   lakeMemoryQueueDLQ,
   driveLakeIngestQueue,
@@ -127,6 +129,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'bob-run': bobRunQueueDLQ.url,
     'data-lake-cleanup': dataLakeCleanupQueueDLQ.url,
     'data-lake-taxonomy': dataLakeTaxonomyQueueDLQ.url,
+    'data-lake-research': dataLakeResearchQueueDLQ.url,
     'lake-memory': lakeMemoryQueueDLQ.url,
     'drive-lake-ingest': driveLakeIngestQueueDLQ.url,
   },
@@ -182,6 +185,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     bobRunQueue: bobRunQueue.url,
     dataLakeCleanupQueue: dataLakeCleanupQueue.url,
     dataLakeTaxonomyQueue: dataLakeTaxonomyQueue.url,
+    dataLakeResearchQueue: dataLakeResearchQueue.url,
     lakeMemoryQueue: lakeMemoryQueue.url,
     driveLakeIngestQueue: driveLakeIngestQueue.url,
   },
@@ -237,6 +241,12 @@ export const web = new sst.aws.Nextjs(
       // exports). Resource.dataLakeTaxonomyQueue.url resolves in both Lambdas this way.
       dataLakeTaxonomyQueue,
       driveLakeIngestQueue,
+      // Directly linked for the plainer reason: `POST /api/data-lakes/:id/research/runs` reads
+      // Resource.dataLakeResearchQueue.url to enqueue the run. Via sourceQueueUrls alone the key is
+      // only reachable as Resource.sourceQueueUrls.dataLakeResearchQueue, and sst's Resource proxy
+      // THROWS on an unlinked key rather than returning undefined - so the route's optional-chained
+      // guard would never run and every start would 500.
+      dataLakeResearchQueue,
       ...(whatsNewDistributionBucket ? [whatsNewDistributionBucket] : []),
       ...(whatsNewDistributionId ? [whatsNewDistributionId] : []),
     ],
@@ -394,6 +404,12 @@ export const web = new sst.aws.Nextjs(
       // fallback (issue #9310). Empty == client renders without a product name / external links.
       NEXT_PUBLIC_APP_NAME: process.env.APP_NAME || '',
       NEXT_PUBLIC_WEBSITE_URL: process.env.WEBSITE_URL || '',
+      // The origin THIS app is served at, read at build time by app/robots.ts and
+      // app/sitemap.ts. Distinct from WEBSITE_URL (the marketing site) and from APP_URL
+      // above, which resolves at deploy time and so cannot reach a force-static build.
+      // Empty == no sitemap entries and no Sitemap: line, which is the correct output
+      // for a stage that has not declared a canonical host.
+      NEXT_PUBLIC_CANONICAL_ORIGIN: process.env.CANONICAL_ORIGIN || '',
       // Operator blog host for the optional blog-integration feature (open-core #9392). Inlined
       // into the client bundle AND read by the proxy CSP (apps/client/proxy.ts) at runtime; no
       // brand fallback. Empty == blog integration ships without a default host and the CSP omits it.

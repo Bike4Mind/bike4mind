@@ -12,11 +12,14 @@
  */
 
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import { globMatches } from '@bike4mind/utils/globMatches';
 
 /**
  * Check if a tool name matches a pattern
  *
- * Supports wildcards (*) that match any sequence of characters.
+ * Supports wildcards (*) that match any sequence of characters. Every other character is a
+ * literal - see {@link globMatches} for why this is a two-pointer walk and not a compiled
+ * RegExp. Must stay in sync with b4m-core/agents/src/toolFilter.ts.
  *
  * @param toolName - The actual tool name to check
  * @param pattern - The pattern to match against (may include * wildcards)
@@ -31,11 +34,7 @@ import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
  * matchesToolPattern('bash_execute', 'file_*') // false
  */
 export function matchesToolPattern(toolName: string, pattern: string): boolean {
-  // Convert wildcard pattern to regex
-  // Escape special regex characters except *
-  const regexPattern = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
-
-  return new RegExp(`^${regexPattern}$`).test(toolName);
+  return globMatches(toolName, pattern);
 }
 
 /**
