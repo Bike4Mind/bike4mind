@@ -146,6 +146,9 @@ describe('notebook import writes knowledge files', () => {
     );
 
     expect(result.errors).toEqual([]);
+    // Without this, a regression that skips the upload entirely fails on `undefined.byteLength`
+    // rather than on the size assertion below.
+    expect(written).toHaveLength(1);
     expect(written[0].byteLength).toBe(0);
 
     // The row is what every refund reads: fabFileService/delete.ts deducts this number from the
