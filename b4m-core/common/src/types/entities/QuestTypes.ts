@@ -35,6 +35,10 @@ export interface IChatHistoryItemRepository extends IBaseRepository<IChatHistory
   // Cheap existence check - used by the voice proxy to decide whether to emit
   // an initial buffer chunk for brand-new sessions (no prior turns).
   existsBySessionId: (sessionId: string) => Promise<boolean>;
+  // Session ids of every quest that references a generated-file key in its `images` array.
+  // The only server-side ownership signal for owner-less generated-image keys - see
+  // userCanAccessGeneratedImage.
+  findSessionIdsByImage: (image: string) => Promise<string[]>;
 }
 
 /**

@@ -165,11 +165,17 @@ export class B4mApiClient {
     });
   }
 
-  async sendChat(args: { notebookId?: string; message: string; model?: string }): Promise<ChatWaitResponse> {
+  async sendChat(args: {
+    notebookId?: string;
+    message: string;
+    model?: string;
+    systemPrompt?: string;
+  }): Promise<ChatWaitResponse> {
     return this.client.post<ChatWaitResponse>('/api/chat', {
       ...(args.notebookId ? { sessionId: args.notebookId } : {}),
       message: args.message,
       ...(args.model ? { model: args.model } : {}),
+      ...(args.systemPrompt ? { systemPrompt: args.systemPrompt } : {}),
       wait: true,
     });
   }

@@ -678,6 +678,9 @@ export default function EmailTemplateEditor({ templateId, existingSlugs, onBack,
               >
                 <iframe
                   srcDoc={previewHtml}
+                  // Opaque-origin, no scripts: template HTML plus substitutions must not run
+                  // with the admin's app-origin session.
+                  sandbox=""
                   style={{
                     width: '100%',
                     height: '100%',

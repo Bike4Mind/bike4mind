@@ -1,12 +1,16 @@
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { getFileExtension, resolveSupportedMimeType } from '@bike4mind/utils';
 import type { SlackEventData } from './SlackEvent';
 
 export type SlackAttachment = NonNullable<SlackEventData['files']>[number];
 
-/** A Slack attachment carrying every field an ingest path needs to download and store it. */
+/**
+ * A Slack attachment carrying every field an ingest path needs to download and store it.
+ * `mimetype` stays whatever Slack sent (possibly absent) - it is never validated or read past
+ * this point; type resolution is fully extension-based (see `resolvedMimeType`).
+ */
 export type CompleteSlackAttachment = SlackAttachment & {
   name: string;
-  mimetype: string;
   url_private_download: string;
   size: number;
 };
@@ -47,7 +51,8 @@ export const SUPPORTED_SLACK_FILE_MIME_TYPES: readonly string[] = [
 export type SlackFileRejectionReason = 'incomplete' | 'unsupported_type' | 'too_large';
 
 export type SlackFileValidation =
-  { ok: true; file: CompleteSlackAttachment } | { ok: false; reason: SlackFileRejectionReason; message: string };
+  | { ok: true; file: CompleteSlackAttachment; resolvedMimeType: string }
+  | { ok: false; reason: SlackFileRejectionReason; message: string };
 
 /**
  * Validate one Slack attachment for ingest. On success the returned `file` is narrowed so callers
@@ -55,7 +60,10 @@ export type SlackFileValidation =
  * trailing disposition ("Skipping.") so each caller frames it in its own voice.
  */
 export function validateSlackFileForIngest(file: SlackAttachment): SlackFileValidation {
-  if (!file.mimetype || !file.name || !file.url_private_download || file.size === undefined) {
+  // `file.mimetype` is not checked here - nothing below reads it, type resolution is fully
+  // extension-based (see resolvedMimeType). Requiring it would silently drop a well-formed
+  // attachment whose client-reported mimetype happens to be empty.
+  if (!file.name || !file.url_private_download || file.size === undefined) {
     return {
       ok: false,
       reason: 'incomplete',
@@ -63,15 +71,36 @@ export function validateSlackFileForIngest(file: SlackAttachment): SlackFileVali
     };
   }
 
-  if (!SUPPORTED_SLACK_FILE_MIME_TYPES.includes(file.mimetype)) {
+  // No claim is passed: `file.mimetype` is whatever the Slack client reported, and Slack labels
+  // most plain-text files `text/plain` regardless of extension, so a `.sh`/`.srt`/`.yaml` file
+  // claiming `text/plain` used to sail through. The resolved value also decides the size cap
+  // below, so a claimed `image/png` on a non-image file no longer gets the looser cap either.
+  // The resolver is shared with the web ingest door, so the two cannot drift apart on what
+  // counts as an extension or on which names earn the plain-text fallback.
+  const ext = getFileExtension(file.name);
+  const { mimeType: resolvedMimeType, supported } = resolveSupportedMimeType(file.name, undefined, {
+    isAcceptable: m => !!m && SUPPORTED_SLACK_FILE_MIME_TYPES.includes(m),
+    extensionlessFallback: SupportedFabFileMimeTypes.TXT_PLAIN,
+  });
+  if (!supported) {
+    // Name what actually decided the rejection - the resolved (extension-based) type, or the raw
+    // extension when nothing resolved - never `file.mimetype` (only the client's claim, which can
+    // name a type that IS on the allow-list). A digit tail that `path.extname` grabbed out of a
+    // date or version suffix is not a type either, so it falls through to the no-type wording.
+    // Wording only: acceptance is already decided above, and the resolver treats a digit tail
+    // as an extension like any other. Do not read this as a gating distinction.
+    const isDateOrVersionFragment = /^\d+$/.test(ext);
+    const reportedType = resolvedMimeType || (isDateOrVersionFragment ? '' : ext);
     return {
       ok: false,
       reason: 'unsupported_type',
-      message: `File "${file.name}" has unsupported type ${file.mimetype}.`,
+      message: reportedType
+        ? `File "${file.name}" has unsupported type ${reportedType}.`
+        : `File "${file.name}" has no recognized file type.`,
     };
   }
 
-  const maxSize = file.mimetype.startsWith('image/') ? SLACK_MAX_IMAGE_SIZE_BYTES : SLACK_MAX_FILE_SIZE_BYTES;
+  const maxSize = resolvedMimeType.startsWith('image/') ? SLACK_MAX_IMAGE_SIZE_BYTES : SLACK_MAX_FILE_SIZE_BYTES;
   if (file.size > maxSize) {
     const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
     const maxMB = (maxSize / (1024 * 1024)).toFixed(0);
@@ -84,5 +113,5 @@ export function validateSlackFileForIngest(file: SlackAttachment): SlackFileVali
     };
   }
 
-  return { ok: true, file: file as CompleteSlackAttachment };
+  return { ok: true, file: file as CompleteSlackAttachment, resolvedMimeType };
 }

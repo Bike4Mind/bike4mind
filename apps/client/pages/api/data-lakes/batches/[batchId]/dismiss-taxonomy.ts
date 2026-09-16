@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { dataLakeBatchRepository, dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
@@ -11,7 +12,7 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 const DISMISS_TAXONOMY_HOURLY_CAP = 60;
 const HOUR_MS = 60 * 60 * 1000;
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .use(rateLimit({ limit: DISMISS_TAXONOMY_HOURLY_CAP, windowMs: HOUR_MS, bucket: 'data-lakes/dismiss-taxonomy' }))
   // POST: clear a ready/failed taxonomy batch from the attention list without applying or

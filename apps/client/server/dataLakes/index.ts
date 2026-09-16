@@ -26,6 +26,7 @@ import type { DataLakeConfig, DataLakeMembershipScope } from '@bike4mind/common'
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
   adminSettingsRepository,
+  dataLakeAccessGrantRepository,
   dataLakeRepository,
   fabFileRepository,
   projectRepository,
@@ -70,9 +71,27 @@ export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<D
 
   // No `users` adapter: this is the content-scope path (article/tag-count/answer gating), which
   // never renders an owner, so it must not pay for the owner-name lookup the manager list does.
+  // Grants and settings only matter on the `listDataLakes` (non-admin) branch below - without
+  // them it degrades both grant reads to empty, so a lake reached by an owner or curator grant is
+  // absent from every browse surface - including the file-access check in `pages/api/files/[id]`
+  // - even though the read gate admits it. Settings rides along, unlike the Slack `list` reply
+  // which deliberately omits it: this is a READ surface, so it must track the
+  // `EnforceLakeReadGrants` cutover rather than freeze at owner/curator, or a reader-granted lake
+  // would pass the gate post-cutover and still be invisible here.
+  //
+  // `listAllDataLakes` (admin branch) gets neither adapter: it never calls
+  // `resolveEnforceReadGrants`/`grantedLakeReachFor`, so an admin already sees every draft/active
+  // lake regardless, and the one grant read that adapter would trigger only feeds the `isOwn`
+  // label - which this content-scope path never reads (see the return-type comment above).
   const dynamic = ctx.isAdmin
     ? await dataLakeService.listAllDataLakes(ctx, { db: { dataLakes: dataLakeRepository } })
-    : await dataLakeService.listDataLakes(ctx, { db: { dataLakes: dataLakeRepository } });
+    : await dataLakeService.listDataLakes(ctx, {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          settings: adminSettingsRepository,
+        },
+      });
 
   // Admin/developer see every static lake; everyone else is scoped by the any-of
   // requiredUserTag/requiredEntitlement filter, reusing the keys toAccessContext already
@@ -326,6 +345,12 @@ export async function queryDataLakeTagCounts(
   tagCounts: Awaited<ReturnType<typeof fabFileRepository.countDataLakeTagsByPrefix>>;
   uniqueArticleCounts: Awaited<ReturnType<typeof fabFileRepository.countDataLakeUniqueFilesByPrefix>>;
   lakeFileCounts: Record<string, number>;
+  /**
+   * Same lakes as `lakeFileCounts`, split into the two disjoint membership arms - meta-tagged vs
+   * prefix-only. Lets the lake manager say "48 by lake tag, 37 by content prefix" instead of a
+   * single opaque count that hides which arm a member belongs by.
+   */
+  lakeArmCounts: Record<string, { metaCount: number; prefixOnlyCount: number }>;
   uncategorizedFileCounts: Record<string, number>;
   totalLakeFileCount: number;
   totalUncategorizedFileCount: number;
@@ -335,6 +360,7 @@ export async function queryDataLakeTagCounts(
       tagCounts: [],
       uniqueArticleCounts: { total: 0, byPrefix: {} },
       lakeFileCounts: {},
+      lakeArmCounts: {},
       uncategorizedFileCounts: {},
       totalLakeFileCount: 0,
       totalUncategorizedFileCount: 0,
@@ -375,14 +401,21 @@ export async function queryDataLakeTagCounts(
   //                                   no accessible prefix, so a file categorized in any one lake
   //                                   stays out of it
   // `uniqueArticleCounts` stays prefix-based: it sizes the tag TREE, which is prefix-keyed.
-  const [tagCounts, uniqueArticleCounts, membershipCounts, totalLakeFileCount, totalUncategorizedFileCount] =
-    await Promise.all([
-      fabFileRepository.countDataLakeTagsByPrefix(user.id, allPrefixes, countOptions),
-      fabFileRepository.countDataLakeUniqueFilesByPrefix(user.id, allPrefixes, countOptions),
-      fabFileRepository.countDataLakeFilesByMembership(membershipScopes),
-      fabFileRepository.countDistinctDataLakeFilesByMembership(membershipScopes),
-      fabFileRepository.countDistinctUncategorizedDataLakeFilesByMembership(membershipScopes, allPrefixes),
-    ]);
+  const [
+    tagCounts,
+    uniqueArticleCounts,
+    membershipCounts,
+    lakeArmCounts,
+    totalLakeFileCount,
+    totalUncategorizedFileCount,
+  ] = await Promise.all([
+    fabFileRepository.countDataLakeTagsByPrefix(user.id, allPrefixes, countOptions),
+    fabFileRepository.countDataLakeUniqueFilesByPrefix(user.id, allPrefixes, countOptions),
+    fabFileRepository.countDataLakeFilesByMembership(membershipScopes),
+    fabFileRepository.countDataLakeFilesByMembershipArm(membershipScopes),
+    fabFileRepository.countDistinctDataLakeFilesByMembership(membershipScopes),
+    fabFileRepository.countDistinctUncategorizedDataLakeFilesByMembership(membershipScopes, allPrefixes),
+  ]);
 
   const lakeFileCounts: Record<string, number> = {};
   const uncategorizedFileCounts: Record<string, number> = {};
@@ -395,6 +428,7 @@ export async function queryDataLakeTagCounts(
     tagCounts,
     uniqueArticleCounts,
     lakeFileCounts,
+    lakeArmCounts,
     uncategorizedFileCounts,
     totalLakeFileCount,
     totalUncategorizedFileCount,

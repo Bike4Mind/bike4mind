@@ -19,7 +19,10 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 }));
 
 const openManager = vi.fn();
-vi.mock('@client/app/stores/useDataLakeWizardStore', () => ({
+vi.mock('@client/app/stores/useDataLakeWizardStore', async importOriginal => ({
+  // Keep the real toWizardTargetLake: it is a pure projection, and stubbing it would hide a
+  // drifted field from every caller this suite covers.
+  ...(await importOriginal<typeof import('@client/app/stores/useDataLakeWizardStore')>()),
   useDataLakeWizardStore: (selector: (s: { openManager: typeof openManager }) => unknown) => selector({ openManager }),
 }));
 

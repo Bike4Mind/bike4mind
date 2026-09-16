@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState } from 'react';
 import { captureUtmParams } from '@client/app/utils/utmCapture';
+import { beaconVisit } from '@client/app/utils/visitBeacon';
 import {
   createRouter,
   createRoute,
@@ -294,9 +295,12 @@ const notebookRoute = createRoute({
       <NotebookPage />
     </Suspense>
   ),
-  validateSearch: (search: Record<string, unknown>): { projectId?: string } => {
+  // `questId` is the turn anchor a feedback deep link carries (see common/utils/deepLinks) - the
+  // session loads normally and ChatHistory scrolls to that turn once it has rendered.
+  validateSearch: (search: Record<string, unknown>): { projectId?: string; questId?: string } => {
     return {
       projectId: search.projectId ? String(search.projectId) : undefined,
+      questId: search.questId ? String(search.questId) : undefined,
     };
   },
 });
@@ -941,9 +945,16 @@ const adminRoute = createRoute({
       </ProviderBundle>
     </RestrictedPage>
   ),
-  validateSearch: (search: Record<string, unknown>): { emergency_access?: string } => {
+  // `tab` and `feedbackId` make the console addressable: a feedback deep link opens the Feedback
+  // tab focused on one record. `tab` is a stable slug, never the positional AdminTab enum value -
+  // see common/utils/deepLinks for why, and adminTabSlugs.ts for the slug <-> enum mapping.
+  validateSearch: (
+    search: Record<string, unknown>
+  ): { emergency_access?: string; tab?: string; feedbackId?: string } => {
     return {
       emergency_access: search.emergency_access ? String(search.emergency_access) : undefined,
+      tab: search.tab ? String(search.tab) : undefined,
+      feedbackId: search.feedbackId ? String(search.feedbackId) : undefined,
     };
   },
 });
@@ -1076,6 +1087,10 @@ function createNextCompatibleHistory() {
 // guard redirects an unauthenticated landing to /login (which strips the query string). See
 // captureUtmParams() for why this cannot live in a React effect.
 captureUtmParams();
+
+// Then tell the server a visit is happening. Order matters: the beacon is the request the
+// server reads the campaign cookie from, so it has to follow the line above.
+beaconVisit();
 
 // Create the router
 export const router = createRouter({

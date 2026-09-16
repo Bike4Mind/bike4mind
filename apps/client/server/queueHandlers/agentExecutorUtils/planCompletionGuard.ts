@@ -1,4 +1,4 @@
-import type { ToolDefinition } from '@bike4mind/services';
+import type { ToolDefinition } from '@bike4mind/services/llm';
 import type { IOptiPlanState, IOptiPlanStep } from '@bike4mind/database';
 
 /** One planned sub-problem: its family and the short title the decomposition gave it. */

@@ -74,10 +74,15 @@ export const createFabFileOnServerWithUpload = async (
       const newSize = fileToUpload.size / (1024 * 1024);
       console.log(`[Upload] Image resized from ${originalSize.toFixed(2)}MB to ${newSize.toFixed(2)}MB`);
 
-      // Update formData with new file size
+      // Update formData with the resized file's size AND type. This posts to
+      // /api/files/createFabFile; its presigned PUT is not ContentType-bound, but the declared
+      // mimeType is stored on the file record and drives type-based handling, so it must match the
+      // bytes uploadFileToUrl actually sends (fileToUpload.type), which resizing can change (e.g.
+      // webp -> jpeg).
       formData = {
         ...formData,
         fileSize: fileToUpload.size,
+        mimeType: fileToUpload.type,
       };
     }
   }
@@ -180,10 +185,14 @@ export const createAppFileOnServerWithUpload = async (
       const newSize = fileToUpload.size / (1024 * 1024);
       console.log(`[Upload] Image resized from ${originalSize.toFixed(2)}MB to ${newSize.toFixed(2)}MB`);
 
-      // Update formData with new file size
+      // Update formData with the resized file's size AND type. The app-files presign binds
+      // ContentType into the signature, so the declared mimeType must match the Content-Type
+      // header uploadFileToUrl sends (fileToUpload.type), which resizing can change (e.g.
+      // webp -> jpeg); keeping them in sync also stores the accurate type on the file record.
       formData = {
         ...formData,
         fileSize: fileToUpload.size,
+        mimeType: fileToUpload.type,
       };
     }
   }

@@ -1,5 +1,6 @@
 import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
-import { DataSubscribeRequestAction, InviteType, Permission } from '@bike4mind/common';
+import { DataSubscribeRequestAction, Permission } from '@bike4mind/common';
+import { z } from 'zod';
 import {
   AdminSettings,
   ApiKey,
@@ -21,7 +22,7 @@ import {
 import { Session as SessionModel } from '@bike4mind/database/auth';
 import { accessibleBy } from '@casl/mongoose';
 import { Subscription } from '@server/models/Subscription';
-import { questMasterPlanSubscriptionScope } from '@server/websocket/subscriptionScopes';
+import { inviteSubscriptionScope, questMasterPlanSubscriptionScope } from '@server/websocket/subscriptionScopes';
 import { sendToConnection, withWebSocketContext } from '@server/websocket/utils';
 import { verifyWsAccessToken } from '@server/websocket/verifyWsAccessToken';
 import crypto from 'crypto';
@@ -34,12 +35,63 @@ import { resolveFieldLimits } from './dataSubscribeFieldLimits';
 
 const HARD_LIMIT = 200;
 
+// Server-side ceiling (ms) on the one-time initial fetch. The filter is client-authored, so even
+// with the operator allow-list on DataSubscribeRequestAction a badly-shaped-but-legal filter can
+// be slow; this makes the database abort it instead of letting it pin a pooled connection for the
+// whole Lambda timeout.
+const INITIAL_FETCH_MAX_TIME_MS = 5_000;
+
+/** Best-effort extraction, for the notifySubscribeError call on a frame that failed to parse. */
+function extractRawSubscriptionId(rawBody: unknown): string | undefined {
+  if (typeof rawBody !== 'object' || rawBody === null) return undefined;
+  const subscriptionId = (rawBody as Record<string, unknown>).subscriptionId;
+  return typeof subscriptionId === 'string' ? subscriptionId : undefined;
+}
+
+/**
+ * Notifies the client that its `subscribe_query` frame was refused or its initial fetch was
+ * aborted - the two failure modes on this path that are content-dependent rather than auth- or
+ * infra-dependent, so they can fire for a caller whose frame is otherwise well-formed. Neither
+ * throws an UnauthorizedError/JsonWebTokenError, so withWebSocketContext's status code never
+ * reaches the client as a frame; without this, the caller sees silence and the surface just
+ * never updates. Deliberately not used for auth failures - those keep their existing behavior.
+ * Best-effort: a failure here must not mask the original error from withWebSocketContext's log.
+ */
+async function notifySubscribeError(
+  connectionId: string,
+  endpoint: string,
+  subscriptionId: string | undefined,
+  error: unknown
+): Promise<void> {
+  if (!subscriptionId) return;
+  const message =
+    error instanceof z.ZodError
+      ? error.issues.map(issue => issue.message).join('; ')
+      : error instanceof Error
+        ? error.message
+        : 'Internal server error';
+  try {
+    await sendToConnection(connectionId, endpoint, { action: 'data_subscribe_error', subscriptionId, error: message });
+  } catch {
+    // Best-effort notification only.
+  }
+}
+
 // Adds a subscription for the given collection/query; the subscriber-fanout package
 // handles the actual change-stream delivery. Query is scoped to the user's ability here
 // so subscriber-fanout doesn't need to re-check access.
 export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async (event, context, logger) => {
   const endpoint = Resource.websocket.managementEndpoint;
   const connectionId = event.requestContext.connectionId;
+  const rawBody: unknown = JSON.parse(event.body ?? '');
+
+  let parsedRequest;
+  try {
+    parsedRequest = DataSubscribeRequestAction.parse(rawBody);
+  } catch (error) {
+    await notifySubscribeError(connectionId, endpoint, extractRawSubscriptionId(rawBody), error);
+    throw error;
+  }
 
   const {
     accessToken,
@@ -48,7 +100,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     query,
     fields,
     fetchInitialData,
-  } = DataSubscribeRequestAction.parse(JSON.parse(event.body ?? ''));
+  } = parsedRequest;
 
   const user = await verifyWsAccessToken(accessToken);
   const userAbility = ability(user);
@@ -83,14 +135,10 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   } else if (collectionName === Invite.collection.collectionName) {
     const canShareProjectsQuery = accessibleBy(userAbility, Permission.share).ofType(Project);
     const shareableProjectIds = await Project.find(canShareProjectsQuery).distinct('_id');
-    scope = {
-      $or: [
-        { 'recipients.pending': { $in: [user.email] } },
-        {
-          $and: [{ type: InviteType.Project }, { documentId: { $in: shareableProjectIds.map(id => id.toString()) } }],
-        },
-      ],
-    };
+    scope = inviteSubscriptionScope(
+      user.email,
+      shareableProjectIds.map(id => id.toString())
+    );
   } else {
     // To make a collection subscribeable, add it to this scope mapping:
     scope = {
@@ -120,7 +168,12 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // as `fields`, which is what the separate subscriber-fanout service reads to build its own
   // change-stream projection - so this exclusion applies to live update/insert events fanout
   // relays, not just the one-time fetchInitialData query above.
-  const fieldLimits = resolveFieldLimits(collectionName, Quest.collection.collectionName, isOwnQuestSession);
+  const fieldLimits = resolveFieldLimits(collectionName, {
+    questCollectionName: Quest.collection.collectionName,
+    organizationCollectionName: Organization.collection.collectionName,
+    isQuestOwner: isOwnQuestSession,
+    isPlatformAdmin: !!user.isAdmin,
+  });
 
   let scopedFields: undefined | Record<string, boolean | number> =
     (fields || fieldLimits) &&
@@ -169,12 +222,18 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   const scopedQuery = { $and: [query, scope] };
   const findPromise = collection
     .find(scopedQuery, scopedFields ?? undefined)
-    .setOptions({ includeDeleted: true, limit: HARD_LIMIT });
+    .setOptions({ includeDeleted: true, limit: HARD_LIMIT, maxTimeMS: INITIAL_FETCH_MAX_TIME_MS });
   const normalizedQuery = findPromise.getQuery();
   const subscriber = { endpoint, connectionId, clientId: clientSubscriberId, attempts: 0 };
 
   if (fetchInitialData) {
-    const results = await findPromise;
+    let results;
+    try {
+      results = await findPromise;
+    } catch (error) {
+      await notifySubscribeError(connectionId, endpoint, clientSubscriberId, error);
+      throw error;
+    }
     const limit = pLimit(50);
     const sendingOutcomes = await Promise.allSettled(
       results.map(r =>

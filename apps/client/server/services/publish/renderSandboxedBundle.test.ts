@@ -253,4 +253,50 @@ describe('renderSandboxedBundle', () => {
       expect(srcdoc).not.toContain(`b4m:'fragment'`);
     });
   });
+
+  describe('print bridge', () => {
+    it('appends the bridge after author content, inside the body', () => {
+      const html = `<html><head></head><body><h1 id="last">Hi</h1></body></html>`;
+      const { srcdoc } = renderSandboxedBundle({
+        indexHtml: html,
+        urlBase: URL_BASE,
+        origin: ORIGIN,
+        visibility: 'public',
+      });
+      expect(srcdoc).toContain(`b4m==='print'`);
+      expect(srcdoc.indexOf(`b4m==='print'`)).toBeGreaterThan(srcdoc.indexOf('id="last"'));
+      expect(srcdoc.indexOf(`b4m==='print'`)).toBeLessThan(srcdoc.indexOf('</body>'));
+    });
+
+    it('rides along on every render - gated, ?a= sub-document, and the ?export=html download', () => {
+      const html = `<html><head></head><body><h1>Hi</h1></body></html>`;
+      const gated = renderSandboxedBundle({
+        indexHtml: html,
+        urlBase: URL_BASE,
+        origin: ORIGIN,
+        visibility: 'private',
+        assets: new Map(),
+        pagePaths: [URL_BASE],
+      });
+      const subDoc = renderSandboxedBundle({
+        indexHtml: html,
+        urlBase: '',
+        origin: ORIGIN,
+        visibility: 'public',
+        assetMode: 'inline',
+      });
+      expect(gated.srcdoc).toContain('print-color-adjust');
+      expect(subDoc.srcdoc).toContain('print-color-adjust');
+    });
+
+    it('still lands when the author ships a bare fragment rather than a document', () => {
+      const { srcdoc } = renderSandboxedBundle({
+        indexHtml: `<h1>Hi</h1>`,
+        urlBase: URL_BASE,
+        origin: ORIGIN,
+        visibility: 'public',
+      });
+      expect(srcdoc).toContain('window.print');
+    });
+  });
 });

@@ -89,6 +89,32 @@ describe('ShareableDocumentRepository.findUpdateAccessById', () => {
   });
 });
 
+describe('ShareableDocumentRepository.findAllUpdateAccessByIds', () => {
+  it('returns the owner document and omits one the caller only holds read on', async () => {
+    const owned = await seed();
+    const readOnly = await seed({ userId: 'owner-2', users: [{ userId: 'owner-1', permissions: ['read'] }] });
+
+    const got = await fabFileRepository.shareable.findAllUpdateAccessByIds({ id: 'owner-1', groups: [] }, [
+      owned.id,
+      readOnly.id,
+    ]);
+
+    expect(got.map(doc => doc.id)).toEqual([owned.id]);
+  });
+
+  it('includes a document whose user grant carries update, and one via a group update grant', async () => {
+    const viaUser = await seed({ userId: 'owner-2', users: [{ userId: 'editor-1', permissions: ['update'] }] });
+    const viaGroup = await seed({ userId: 'owner-2', groups: [{ groupId: 'grp-1', permissions: ['update'] }] });
+
+    const got = await fabFileRepository.shareable.findAllUpdateAccessByIds({ id: 'editor-1', groups: ['grp-1'] }, [
+      viaUser.id,
+      viaGroup.id,
+    ]);
+
+    expect(got.map(doc => doc.id).sort()).toEqual([viaUser.id, viaGroup.id].sort());
+  });
+});
+
 describe('targeted sharing-flag write preserves moderation/URL state', () => {
   it('update({ id, isGlobalRead, isGlobalWrite }) leaves moderationStatus/blockReason/fileUrl untouched', async () => {
     const doc = await seed({

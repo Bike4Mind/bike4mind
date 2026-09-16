@@ -259,6 +259,36 @@ describe('POST /api/feedback - server-derived foreign keys', () => {
     expect(saved!.organizationId).toBeNull();
   });
 
+  it('creates no quest and leaves the reported quest untouched - the #1869 acceptance bar', async () => {
+    // getMostRecentChatHistory (QuestModel.ts) has no `type` filter, so anything landed as a
+    // Quest/ChatHistoryItem gets replayed into the next turn's context - a report must never
+    // create or mutate one (see feedbackContext.ts's module doc for the full rationale).
+    const { user } = await makeUserWithOrg('acceptance');
+    const { quest, session } = await makeOwnedQuest(user.id);
+
+    const questCountBefore = await Quest.countDocuments();
+    const questBefore = await Quest.findById(quest.id).lean();
+
+    const { req, res } = mockRequest(
+      {
+        userId: user.id,
+        content: 'reporting a bad reply',
+        tags: ['bug'],
+        username: user.username,
+        userEmail: user.email,
+        questId: quest.id,
+        sessionId: session.id,
+      },
+      { id: user.id, username: user.username, email: user.email }
+    );
+
+    await runHandler(req, res);
+    expect(res._getStatusCode()).toBe(201);
+
+    expect(await Quest.countDocuments()).toBe(questCountBefore);
+    expect(await Quest.findById(quest.id).lean()).toEqual(questBefore);
+  });
+
   it('stores content in the FeedbackText sibling, not on the permanent document', async () => {
     const { user } = await makeUserWithOrg('retention');
 

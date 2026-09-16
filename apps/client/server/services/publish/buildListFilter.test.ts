@@ -6,10 +6,25 @@ describe('buildListVisibilityFilter', () => {
     expect(buildListVisibilityFilter({ userId: 'u1', isAdmin: true })).toBeNull();
   });
 
-  it('non-admin sees own + public', () => {
+  it('non-admin sees own + ungated public', () => {
     const f = buildListVisibilityFilter({ userId: 'u1', isAdmin: false });
     expect(f).not.toBeNull();
-    expect(f!.$or).toEqual([{ ownerId: 'u1' }, { visibility: 'public' }]);
+    expect(f!.$or).toEqual([{ ownerId: 'u1' }, { visibility: 'public', accessGate: null }]);
+  });
+
+  it('excludes gated public artifacts from the non-owner clause', () => {
+    // A passphrase/domain-gated public artifact must not list to a stranger: the gate holds
+    // on the serve path, but the row itself disclosed the title, tags and URL parts. Matches
+    // the 404 that GET /api/publish/artifacts/[id] already returns for the same case.
+    const f = buildListVisibilityFilter({ userId: 'u1', isAdmin: false });
+    const publicClause = f!.$or.find(c => (c as { visibility?: string }).visibility === 'public');
+    expect(publicClause).toEqual({ visibility: 'public', accessGate: null });
+  });
+
+  it('still lists the owner own gated artifacts', () => {
+    // The ownerId clause carries no gate condition, so a gate never hides your own row.
+    const f = buildListVisibilityFilter({ userId: 'u1', isAdmin: false });
+    expect(f!.$or).toContainEqual({ ownerId: 'u1' });
   });
 
   it('includes an org clause when the user has an organizationId', () => {

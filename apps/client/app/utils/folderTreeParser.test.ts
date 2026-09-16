@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { isSupportedFabFileMimeType, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { getMimeTypeByExtension } from '@bike4mind/utils';
 import {
   parseFilesToTree,
   getAllFiles,
   toggleFolderExclusion,
   reapplyExclusions,
+  EXT_TO_SUPPORTED_MIME,
   type FolderTreeNode,
 } from './folderTreeParser';
 
@@ -40,6 +42,35 @@ describe('folderTreeParser guessMimeType (via parseFilesToTree)', () => {
 
   it('honors a real browser-provided MIME type over the extension guess', () => {
     expect(resolvedType('doc.pdf', 'application/pdf')).toBe(SupportedFabFileMimeTypes.PDF);
+  });
+});
+
+/**
+ * Pins the client's EXT_TO_SUPPORTED_MIME (guessMimeType's map, this file) and the server's
+ * getMimeTypeByExtension (b4m-core/utils/src/file.ts, consumed by resolveSupportedMimeType) to
+ * the same notion of "supported": every extension the client's map resolves to a
+ * SupportedFabFileMimeTypes member must also resolve, server-side, to a type
+ * isSupportedFabFileMimeType accepts. A file the Data Lake wizard admits but the
+ * server refuses fails the whole presigned-URL batch it was uploaded in.
+ *
+ * This checks supported-ness, not exact MIME equality - the two sides legitimately
+ * disagree on the precise value for some extensions (e.g. "tsx") while both still
+ * resolving to a supported type, which is fine.
+ */
+describe('guessMimeType stays in sync with the server-side allow-list', () => {
+  it.each(Object.entries(EXT_TO_SUPPORTED_MIME))('extension "%s": client-supported implies server-supported', ext => {
+    const serverType = getMimeTypeByExtension(ext);
+    expect(isSupportedFabFileMimeType(serverType)).toBe(true);
+  });
+
+  // The three extensions that regressed: guessMimeType already mapped them, but the
+  // server-side extension table didn't, so they passed the wizard's client-side filter
+  // and then failed the whole presigned-URL batch server-side. Unlike the block above,
+  // this also pins that the client map still HAS these entries - iterating the map (above)
+  // can't notice one being deleted from it, since a deleted key just drops out of iteration.
+  it.each(['log', 'yml', 'htm'])('extension "%s" is supported by both the client map and the server', ext => {
+    expect(isSupportedFabFileMimeType(EXT_TO_SUPPORTED_MIME[ext])).toBe(true);
+    expect(isSupportedFabFileMimeType(getMimeTypeByExtension(ext))).toBe(true);
   });
 });
 

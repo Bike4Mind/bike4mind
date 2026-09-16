@@ -16,7 +16,7 @@ import {
   ResearchTaskType,
   IResearchAgentRepository,
 } from '@bike4mind/common';
-import { taskSchedulerService } from '..';
+import * as taskSchedulerService from '../taskSchedulerService';
 import { assertCanWriteStaticRegistryTags } from '../dataLakeService/authorizeLakeWrite';
 
 const researchTaskCreateSchema = z.object({

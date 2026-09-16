@@ -2,12 +2,17 @@ import { Permission, IUserDocument, IOrganizationRepository, IUserRepository } f
 import { secureParameters } from '@bike4mind/utils';
 import { NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
 import { z } from 'zod';
+import { canAdministerOrganization } from './orgAuthority';
 
 const addMemberSchema = z.object({
   userId: z.string().optional(),
   email: z.string().optional(),
   organizationId: z.string(),
-  force: z.boolean().optional(), // If true, add the user to the organization even if it's at full capacity
+  // Seat-ceiling override. SERVER-SIDE CALLERS ONLY - reg-invites/migrate.ts (platform-admin
+  // migration) is the sole legitimate user. It must never be reachable from a request body: the
+  // HTTP route's own schema deliberately omits it, so a client cannot buy seats it has not paid
+  // for by setting a flag.
+  force: z.boolean().optional(),
 });
 
 type AddMemberParameters = z.infer<typeof addMemberSchema>;
@@ -32,14 +37,18 @@ export async function addMember(user: IUserDocument, parameters: AddMemberParame
   const userToAdd = userId ? await db.users.findById(userId) : email ? await db.users.findByEmail(email) : null;
   if (!userToAdd) throw new NotFoundError('User not found');
 
-  let organization = await db.organizations.shareable.findAccessibleById(user, organizationId);
-  if (!organization && user.isAdmin) {
-    logger?.info(`User ${user.id} is an admin, accessing organization ${organizationId}`);
-
-    organization = await db.organizations.findById(organizationId);
-  }
-
+  const organization = await db.organizations.findById(organizationId);
   if (!organization) throw new NotFoundError('Organization not found');
+
+  // Roster administration is owner/manager/platform-admin only. This previously gated on
+  // `shareable.findAccessibleById`, a MEMBERSHIP ACL that admits any `users[]` entry holding
+  // `read` - and this function only ever grants `[Permission.read]` - so every ordinary member
+  // could enroll arbitrary accounts into the org. Same NotFoundError as a missing org, so the
+  // route is not an existence oracle (matches revokeAccess).
+  if (!canAdministerOrganization(user, organization)) {
+    logger?.info(`User ${user.id} may not administer organization ${organizationId}`);
+    throw new NotFoundError('Organization not found');
+  }
 
   // Owner-inclusive team size: the owner is not a `users[]` row (see organizationService/create.ts)
   // but still occupies a seat, so full means owner + members >= seats (#1423). This matches the
@@ -80,8 +89,16 @@ export async function addMember(user: IUserDocument, parameters: AddMemberParame
   // this, members added via this path stay organizationId: null and have no org
   // selected in the UI - the same defect fixed for invite acceptance in
   // sharingService/accept.ts.
-  userToAdd.organizationId = organizationId;
-  await db.users.update(userToAdd);
+  //
+  // Only ever FILLS a vacant pointer, never repoints one. Being added to a second org is not
+  // consent to be moved out of the one you are working in: overwriting would silently switch the
+  // target's active-org billing and team prompt context out from under them mid-session. Adding
+  // them to the roster is the administrator's call; which org they are currently acting in is
+  // theirs, and they change it through the switcher.
+  if (!userToAdd.organizationId) {
+    userToAdd.organizationId = organizationId;
+    await db.users.update(userToAdd);
+  }
 
   return { organization, user: userToAdd };
 }

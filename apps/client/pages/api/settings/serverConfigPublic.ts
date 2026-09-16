@@ -1,7 +1,8 @@
 import { settingsMap } from '@bike4mind/common';
-import { adminSettingsRepository, userRepository } from '@bike4mind/database';
+import { adminSettingsRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { isOpenRegistrationAllowed } from '@server/utils/auth/openRegistration';
 import { isLocalAppUrl } from '@server/utils/validators';
 
 export type ServerConfigPublic = {
@@ -21,19 +22,10 @@ export type ServerConfigPublic = {
 const handler = baseApi({ auth: false }).get(
   asyncHandler(async (req, res) => {
     // Surface only the registration master switch - never any sensitive setting - so the
-    // pre-login register form knows whether an invite code is required. Parse through the
-    // canonical Zod schema so persisted booleans, "true"/"false" strings, and missing records
-    // all resolve correctly (raw `=== 'true'` would silently miss boolean-stored values).
-    const setting = await adminSettingsRepository.findBySettingName('allowOpenRegistration').catch(() => null);
-    const parsed = settingsMap.allowOpenRegistration.schema.safeParse(setting?.settingValue);
-    let allowOpenRegistration = parsed.success ? parsed.data : false;
-
-    // Self-host bootstrap: a fresh install (no users yet) accepts its first
-    // registration without an invite, so report registration as open. This
-    // mirrors the gate in the OTC verify route and flips back once a user exists.
-    if (!allowOpenRegistration && process.env.B4M_SELF_HOST === 'true') {
-      allowOpenRegistration = (await userRepository.count({})) === 0;
-    }
+    // pre-login register form knows whether an invite code is required. Shared with the
+    // server-side gates that enforce it (see isOpenRegistrationAllowed) so what the form
+    // shows and what the server accepts can never diverge.
+    const allowOpenRegistration = await isOpenRegistrationAllowed();
 
     // Same treatment for the trusted-device switch, so the MFA prompt knows whether to
     // offer "remember this device". Defaults OPEN (unlike registration) to match the

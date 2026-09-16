@@ -30,12 +30,17 @@ import {
   useRechunkDataLake,
   useLakeConvergencePlan,
   useConvergeDataLake,
+  useGetLakeMemoryHealth,
+  useBuildLakeMemory,
+  usePurgeLakeMemory,
 } from '@client/app/hooks/data/dataLakes';
+import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined';
 import { toast } from 'sonner';
-import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import useStartChatWithLake from '@client/app/hooks/useStartChatWithLake';
 import DataLakeEmptyState from '@client/app/components/datalake/DataLakeEmptyState';
 import LakeHealthBadge from '@client/app/components/datalake/LakeHealthBadge';
+import DuplicateAdmissionsChip from '@client/app/components/datalake/DuplicateAdmissionDialog';
 import LakeDriveStatusChip from '@client/app/components/datalake/LakeDriveStatusChip';
 import { lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
 import type { IDataLakeBatchSummary } from '@bike4mind/common';
@@ -46,6 +51,7 @@ import type { ManagerLake } from './shared';
 export function LakeInfoPanel({
   lake,
   fileCount,
+  armCounts,
   taxonomyBatch,
   onOpenSettings,
   onOpenAccess,
@@ -56,7 +62,9 @@ export function LakeInfoPanel({
 }: {
   lake: ManagerLake;
   fileCount: number | undefined;
-  /** This lake's attention-worthy taxonomy batch, if any (see taxonomyBatchByLakeId). */
+  /** Membership split by arm - meta-tagged vs prefix-only. See lakeArmCounts. */
+  armCounts: { metaCount: number; prefixOnlyCount: number } | undefined;
+  /** This lake's attention-worthy taxonomy batch, if any (see manager/taxonomySlot.ts). */
   taxonomyBatch: IDataLakeBatchSummary | undefined;
   onOpenSettings: () => void;
   /** Opens the owner-facing access & membership view (#1672) - manager-only, like settings. */
@@ -114,6 +122,32 @@ export function LakeInfoPanel({
   const showConvergeBlocked =
     !!lake.canRebuild && convergencePlan?.refusal === null && convergeWaveSize === 0 && convergeBlockedCount > 0;
 
+  // Lake memory: the manual build/rebuild door + purge, manage-gated like Settings/Access -
+  // only an editor can spend the daily build cap or erase the profile.
+  const { data: lakeMemory } = useGetLakeMemoryHealth(lake.id, lake.canManage);
+  const buildLakeMemory = useBuildLakeMemory(lake.id);
+  const purgeLakeMemory = usePurgeLakeMemory(lake.id);
+  const [purgeMemoryConfirmOpen, setPurgeMemoryConfirmOpen] = useState(false);
+  const lakeMemoryBuilding = lakeMemory?.state === 'building';
+  // `building` covers two situations, and only one of them is waiting for a run: a held lease means a
+  // run is working, while `building` with no lease is a chain that ENDED unfinished (slice ceiling,
+  // a flag flipped mid-chain, a dead run) and its parked cursor. Offering the build control in the
+  // second case is the only way out of it - gating on `building` alone made the state a dead end,
+  // since nothing clears a parked cursor on its own.
+  const lakeMemoryStalledMidBuild = lakeMemoryBuilding && lakeMemory?.running === false;
+  const canBuildLakeMemory =
+    lakeMemory?.state === 'never-built' || lakeMemory?.state === 'stale' || lakeMemoryStalledMidBuild;
+  const hasLakeMemoryProfile = (lakeMemory?.factCount ?? 0) > 0;
+  const LAKE_MEMORY_STATE_LABEL: Record<string, string> = {
+    'platform-off': 'Lake memory is off platform-wide',
+    'lake-off': 'Lake memory is off for this lake',
+    building: "Building this lake's memory profile...",
+    'building-stalled': 'Build stopped before finishing - build again to pick it up',
+    'never-built': 'No memory profile yet',
+    stale: 'Memory profile is out of date',
+    current: 'Memory profile is up to date',
+  };
+
   return (
     <Box
       data-testid="datalake-manager-lakeinfo"
@@ -161,16 +195,7 @@ export function LakeInfoPanel({
                 color="primary"
                 startDecorator={<AddIcon sx={{ fontSize: 16 }} />}
                 data-testid={`datalake-addfiles-btn-${lake.id}`}
-                onClick={() =>
-                  openWizardForLake({
-                    id: lake.id,
-                    slug: lake.slug,
-                    name: lake.name,
-                    fileTagPrefix: lake.fileTagPrefix,
-                    requiredUserTag: lake.requiredUserTag,
-                    requiredEntitlement: lake.requiredEntitlement,
-                  })
-                }
+                onClick={() => openWizardForLake(toWizardTargetLake(lake))}
                 sx={{ flexShrink: 0, fontSize: '13px' }}
               >
                 Add files
@@ -387,8 +412,28 @@ export function LakeInfoPanel({
             {visibility}
           </Chip>
           {typeof fileCount === 'number' && (
-            <Chip size="sm" variant="outlined" color="neutral" sx={{ fontSize: '11px' }}>
-              {fileCount} {fileCount === 1 ? 'file' : 'files'}
+            <Tooltip
+              title={
+                armCounts
+                  ? `${armCounts.metaCount} by lake tag, ${armCounts.prefixOnlyCount} by content prefix only - counted in this lake's own membership scope`
+                  : "Counted in this lake's own membership scope"
+              }
+              size="sm"
+            >
+              <Chip size="sm" variant="outlined" color="neutral" sx={{ fontSize: '11px' }}>
+                {fileCount} {fileCount === 1 ? 'file' : 'files'} (as creator)
+              </Chip>
+            </Tooltip>
+          )}
+          {armCounts && armCounts.prefixOnlyCount > 0 && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="warning"
+              sx={{ fontSize: '11px' }}
+              data-testid={`datalake-armcounts-chip-${lake.id}`}
+            >
+              {armCounts.metaCount} by lake tag, {armCounts.prefixOnlyCount} by content prefix
             </Chip>
           )}
           {/* Attached-source marker: this panel is where a user comes to inspect or delete a lake,
@@ -397,6 +442,84 @@ export function LakeInfoPanel({
           {/* Derived retrievability health (#1666): reachable-content share + affected-file drill-down.
               Advisory only. Fetched lazily for the lake in view; renders nothing for an empty lake. */}
           <LakeHealthBadge lakeId={lake.id} failedFileCount={failedCount} />
+          {/* Same-identity duplicates (#2238): two generations of one document in this lake, with
+              the decision that resolves them. The health badge beside it only COUNTS duplicates and
+              is blind to what the owner already decided; this reads the ruling-aware door and is the
+              affordance that acts. Gated on canManage to match that door, which refuses a reader. */}
+          <DuplicateAdmissionsChip lakeId={lake.id} lakeName={lake.name} canManage={!!lake.canManage} />
+          {/* Lake memory: manage-gated state chip + build/rebuild trigger, next to the
+              retrievability badge above - a different axis of "can this lake answer well" (extracted
+              facts vs raw passages). Hidden entirely while off (no chip for a state nobody can act on). */}
+          {lake.canManage && lakeMemory && lakeMemory.state !== 'lake-off' && (
+            <Tooltip
+              title={
+                LAKE_MEMORY_STATE_LABEL[lakeMemoryStalledMidBuild ? 'building-stalled' : lakeMemory.state] ??
+                lakeMemory.state
+              }
+              size="sm"
+            >
+              <Chip
+                size="sm"
+                variant="soft"
+                color={
+                  lakeMemory.state === 'current' ? 'success' : lakeMemory.state === 'stale' ? 'warning' : 'neutral'
+                }
+                startDecorator={<PsychologyOutlinedIcon sx={{ fontSize: 12 }} />}
+                sx={{ fontSize: '11px' }}
+                data-testid={`datalake-memory-state-chip-${lake.id}`}
+              >
+                {lakeMemory.factCount} fact(s)
+              </Chip>
+            </Tooltip>
+          )}
+          {lake.canManage && lakeMemory?.state === 'platform-off' && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="neutral"
+              sx={{ fontSize: '11px' }}
+              data-testid={`datalake-memory-platform-off-chip-${lake.id}`}
+            >
+              Lake memory off platform-wide
+            </Chip>
+          )}
+          {lake.canManage && canBuildLakeMemory && (
+            <Tooltip
+              title={
+                lakeMemoryStalledMidBuild
+                  ? 'The last build stopped before it finished. Build again to re-scan the lake.'
+                  : lakeMemory?.state === 'stale'
+                    ? "Re-extract this lake's memory profile from its current documents."
+                    : "Extract a reusable fact profile from this lake's documents."
+              }
+              size="sm"
+            >
+              <Button
+                size="sm"
+                variant="outlined"
+                color="primary"
+                startDecorator={<PsychologyOutlinedIcon sx={{ fontSize: 16 }} />}
+                data-testid={`datalake-build-memory-btn-${lake.id}`}
+                loading={buildLakeMemory.isPending}
+                onClick={() => buildLakeMemory.mutate()}
+                sx={{ flexShrink: 0, fontSize: '13px' }}
+              >
+                {lakeMemory?.state === 'stale' ? 'Rebuild memory' : 'Build memory'}
+              </Button>
+            </Tooltip>
+          )}
+          {lake.canManage && lakeMemory?.running === true && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="primary"
+              startDecorator={<PsychologyOutlinedIcon sx={{ fontSize: 12 }} />}
+              sx={{ fontSize: '11px' }}
+              data-testid={`datalake-memory-building-chip-${lake.id}`}
+            >
+              Building memory...
+            </Chip>
+          )}
           {/* Retrievability health: files still stored as oversized (pre-passage-target) chunks.
               Gated on canRebuild (not canManage), matching the button above - the count self-polls
               down as the Rebuild passages wave drains. */}
@@ -439,8 +562,11 @@ export function LakeInfoPanel({
               </Chip>
             </Tooltip>
           )}
-          {/* Background AI-tag suggestion progress - an independent clock from ingest, so this
-              can appear well after the lake's files are already fully uploaded/searchable. */}
+          {/* Background AI-tag suggestion chips (progress, review, failed) - an independent
+              clock from ingest, so these can appear well after the lake's files are already
+              fully uploaded/searchable. Adding or removing a taxonomyStatus gate anywhere in
+              this block means revisiting SLOT_PRIORITY in manager/taxonomySlot.ts, whose
+              order is argued from which statuses these gates render. */}
           {(taxonomyBatch?.taxonomyStatus === 'queued' || taxonomyBatch?.taxonomyStatus === 'analyzing') && (
             <Tooltip title="Usually ready in under a minute" size="sm">
               <Chip
@@ -483,7 +609,7 @@ export function LakeInfoPanel({
           )}
         </Box>
         {lake.canManage && (
-          <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+          <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider', display: 'flex', gap: 1 }}>
             <Tooltip title="Delete (recoverable - restore from the Deleted section)" size="sm">
               <Button
                 variant="outlined"
@@ -498,8 +624,49 @@ export function LakeInfoPanel({
                 Delete
               </Button>
             </Tooltip>
+            {hasLakeMemoryProfile && lake.canManageMemory && (
+              <Tooltip
+                title="Permanently erase this lake's extracted memory profile. The lake itself and its files are untouched."
+                size="sm"
+              >
+                <Button
+                  variant="outlined"
+                  color="danger"
+                  size="sm"
+                  startDecorator={<PsychologyOutlinedIcon sx={{ fontSize: 16 }} />}
+                  data-testid={`datalake-purge-memory-btn-${lake.id}`}
+                  onClick={() => setPurgeMemoryConfirmOpen(true)}
+                  sx={{ flexShrink: 0, fontSize: '13px' }}
+                >
+                  Erase memory
+                </Button>
+              </Tooltip>
+            )}
           </Box>
         )}
+        <Modal open={purgeMemoryConfirmOpen} onClose={() => setPurgeMemoryConfirmOpen(false)}>
+          <ModalDialog role="alertdialog" data-testid="datalake-purge-memory-confirm" sx={{ maxWidth: '28rem' }}>
+            <DialogTitle>Erase this lake&apos;s memory profile?</DialogTitle>
+            <DialogContent>
+              Every extracted fact ({lakeMemory?.factCount ?? 0}) is permanently destroyed. The lake&apos;s files and
+              search index are untouched, and a new profile can be built again from here at any time.
+            </DialogContent>
+            <DialogActions>
+              <Button
+                variant="solid"
+                color="danger"
+                loading={purgeLakeMemory.isPending}
+                data-testid="datalake-purge-memory-confirm-btn"
+                onClick={() => purgeLakeMemory.mutate(undefined, { onSuccess: () => setPurgeMemoryConfirmOpen(false) })}
+              >
+                Erase memory
+              </Button>
+              <Button variant="plain" color="neutral" onClick={() => setPurgeMemoryConfirmOpen(false)}>
+                Cancel
+              </Button>
+            </DialogActions>
+          </ModalDialog>
+        </Modal>
       </Box>
       <Box sx={{ ...TREE_SCROLL_SX, px: 3, py: 2 }}>
         {lake.description ? (

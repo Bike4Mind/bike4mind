@@ -69,6 +69,9 @@ describe('QuestMasterFeature - Status State Machine', () => {
 
   const mockQuestMasterPlan = {
     id: 'plan1',
+    // Owned by the caller so the plan-write guard in processQuestMasterTask lets the status
+    // transition run - these tests exercise the state machine, not the authz gate.
+    userId: 'user1',
     quests: [{ id: 'quest1', subQuests: [{ id: 'subquest1', title: 'Test SubQuest' }] }],
   };
 

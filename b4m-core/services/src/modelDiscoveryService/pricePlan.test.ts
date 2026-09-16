@@ -1092,6 +1092,42 @@ describe('planPriceWrites idempotence and carry-forward', () => {
     expect(result.rows[0].pricing['0']).toEqual({ input: 6e-6, output: 25e-6, cache_read: 0.5e-6 });
   });
 
+  it("falls back to the adapter literal's cache rate on a model's FIRST row", () => {
+    // The trigger this closes: discovery writes the first per_token row for a
+    // model before the seed establishes one. applyModelPriceCatalog replaces each
+    // tier WHOLESALE, so a row without cache_read does not inherit the literal at
+    // read time either - getTextModelCost lands on input * CACHE_READ_MULTIPLIER.
+    // For DeepSeek Flash that is 0.03/1M against a real 0.006/1M, a 5x over-bill.
+    const result = plan({
+      contributions: [provider({ inputPerMTok: 0.3, outputPerMTok: 1.2 }, 'deepseek-flash')],
+      knownModelIds: new Set(['deepseek-flash']),
+      adapterTiers: new Map([['deepseek-flash', { input: 0.3e-6, output: 1.2e-6, cache_read: 0.006e-6 }]]),
+    });
+
+    expect(perMTok(result.rows[0].pricing)).toEqual({ '0': { input: 0.3, output: 1.2, cache_read: 0.006 } });
+  });
+
+  it('prefers the row in force over the literal, an omission there being deliberate', () => {
+    // Only the first row has nothing to carry from. A stored row that drops a
+    // rate dropped it on purpose, and a code default must not resurrect it.
+    const result = plan({
+      contributions: [provider({ inputPerMTok: 6, outputPerMTok: 25 })],
+      rowsInForce: [inForce({ '0': FIVE_AND_TWENTY_FIVE }, 'discovery:openai@2026-01-01T00:00:00.000Z')],
+      adapterTiers: new Map([['gpt-6', { input: 5e-6, output: 25e-6, cache_read: 0.5e-6 }]]),
+    });
+
+    expect(result.rows[0].pricing['0']).toEqual({ input: 6e-6, output: 25e-6 });
+  });
+
+  it('still prefers a published cache rate over the literal', () => {
+    const result = plan({
+      contributions: [provider({ inputPerMTok: 5, outputPerMTok: 25, cacheReadPerMTok: 0.25 })],
+      adapterTiers: new Map([['gpt-6', { input: 5e-6, output: 25e-6, cache_read: 0.5e-6 }]]),
+    });
+
+    expect(result.rows[0].pricing['0'].cache_read).toBe(0.25e-6);
+  });
+
   it('treats a cache-rate-only change as a change', () => {
     const contributions = [provider({ inputPerMTok: 5, outputPerMTok: 25, cacheReadPerMTok: 0.25 })];
 

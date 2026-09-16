@@ -29,10 +29,25 @@ import { Logger } from '@bike4mind/observability';
  * nothing") is exactly what the epic's "a lever with no consumer is worse than no lever" rule forbids.
  */
 
+/** A narrower-rung override that existed but was skipped during resolution, and why. */
+export interface IgnoredOverride {
+  scopeLevel: SettingScopeLevel;
+  scopeId: string;
+  reason: 'unparseable';
+}
+
 export interface ResolvedSetting<T> {
   value: T;
   /** Which rung supplied the winning value - for observability, so a smoke test can see a lever fire. */
   source: SettingScopeLevel;
+  /**
+   * Narrower rungs that had a stored override but were skipped rather than winning (currently: failed
+   * the setting's own schema parse). Absent/empty when nothing was skipped. Lets a caller distinguish
+   * "no override exists" from "an override exists but was discarded" - the same `source: 'platform'`
+   * response otherwise looks identical for both, which is exactly the silent-lever failure epic #1658
+   * exists to prevent.
+   */
+  ignoredOverrides?: IgnoredOverride[];
 }
 
 /** The repositories the resolver reads. `scopedSettings` is optional: absent means platform-only. */
@@ -55,12 +70,26 @@ function scopeIdForLevel(scope: SettingScope, level: SettingScopeLevel): string 
 }
 
 /**
+ * The rungs whose absence from a scope is STRUCTURAL rather than incidental, so an inert declaration
+ * of one is a caller bug worth reporting. All three scope builders always populate `owner` (falling
+ * back to the individual user), and only `scopeForLake` ever populates `lakeId` - so either one
+ * missing means the caller built the wrong shape of scope. `Organization` is deliberately absent:
+ * `SettingScope.organizationId` is "the organization boundary the resource lives under, if any", so
+ * every personal (non-org) caller legitimately keys no org rung.
+ *
+ * This checks the SCOPE, not the declaration. The epic's companion mandate - a lake-settable setting
+ * is also owner-settable (#1660) - is a property of the registration, and is pinned where it belongs,
+ * by `settings.scopeMetadata.test.ts`, so there is no need to re-derive it on every resolve.
+ */
+const STRUCTURAL_RUNGS: readonly SettingScopeLevel[] = [SettingScopeLevel.Owner, SettingScopeLevel.Lake];
+
+/**
  * The override rungs a key can be resolved from for this scope, narrowest-first. Pure and free of the
  * global `settingsMap` (settableAt/isSensitive are passed in) so the gating logic - which encodes epic
  * decision 7: a chunk-policy setting `settableAt: ['owner']` yields no lake rung, so a lake can never
  * override it - is seam-testable. Empty when the key is platform-only, sensitive, has no store, or the
- * scope carries none of its rungs. Warns (never throws) when an owner/lake-settable key is resolved
- * with no owner in scope: the epic's "owner rung is required" enforced without breaking a platform read.
+ * scope carries none of its rungs. Warns (never throws) when the scope cannot key a declared rung that
+ * {@link STRUCTURAL_RUNGS} says it always should - an override stored at that rung would be inert.
  */
 export function computeCandidateRefs(
   key: string,
@@ -92,12 +121,22 @@ export function computeCandidateRefs(
     logger?.warn?.(`[scopedSettings] refusing to scope sensitive setting '${key}'; using platform value`);
     return [];
   }
-  const ownerRequired = settableAt.includes(SettingScopeLevel.Owner) || settableAt.includes(SettingScopeLevel.Lake);
-  if (ownerRequired && !scope.owner) {
+  // A declared rung this scope cannot key is an inert lever: an operator stores an override there and
+  // this caller silently ignores it. That is #2624 exactly - three search budgets declared Lake while
+  // their only callers passed `scopeForCaller`, a builder that never carries a lakeId, so the rung
+  // resolved nothing and nothing said so. The pre-#2709 check reported only a missing OWNER, which is
+  // why the Lake half of that stayed invisible. Reporting it here rather than in a declaration-side
+  // guard is deliberate: whether a rung is honored is a property of the CALL SITE, and every consumer
+  // passes through this function - including one in a private overlay, which no static check over
+  // this repo could see (the false-positive that scoped #1683's guard down to one setting family).
+  const inert = settableAt.filter(level => STRUCTURAL_RUNGS.includes(level) && !scopeIdForLevel(scope, level));
+  if (inert.length > 0) {
     logger?.warn?.(
-      `[scopedSettings] '${key}' is settable at owner/lake but no owner is in scope; resolving wider scopes only`
+      `[scopedSettings] '${key}' is settable at ${inert.join('/')} but no such rung is in scope; ` +
+        `an override stored there is inert for this caller`
     );
   }
+
   const refs: ScopeRef[] = [];
   for (const level of SETTING_SCOPE_PRECEDENCE) {
     if (!settableAt.includes(level)) continue;
@@ -109,9 +148,10 @@ export function computeCandidateRefs(
 
 /**
  * Pick the winning override for one key from a pre-fetched overrides map: the narrowest rung whose
- * value parses against `schema` wins; an unparseable override is skipped (warn) and resolution falls
- * through. Returns null when no override wins (the caller keeps the platform value). Pure, so the
- * narrower-wins + parse-guard decision is seam-testable without a DB or the global settingsMap.
+ * value parses against `schema` wins; an unparseable override is skipped (warn, and reported in
+ * `ignored`) and resolution falls through. `won` is null when no override wins (the caller keeps the
+ * platform value). Pure, so the narrower-wins + parse-guard decision is seam-testable without a DB or
+ * the global settingsMap.
  */
 export function pickOverride(
   key: string,
@@ -119,18 +159,20 @@ export function pickOverride(
   overrides: Map<string, string | null>,
   schema: { safeParse: (v: unknown) => { success: boolean; data?: unknown } },
   logger?: Logger
-): { value: unknown; source: SettingScopeLevel } | null {
+): { won: { value: unknown; source: SettingScopeLevel } | null; ignored: IgnoredOverride[] } {
+  const ignored: IgnoredOverride[] = [];
   for (const ref of refs) {
     const raw = overrides.get(scopedOverrideKey(ref.scopeLevel, ref.scopeId, key));
     if (raw === null || raw === undefined) continue;
     const parsed = schema.safeParse(raw);
     if (!parsed.success) {
       logger?.warn?.(`[scopedSettings] ignoring unparseable override for '${key}' at ${ref.scopeLevel}:${ref.scopeId}`);
+      ignored.push({ scopeLevel: ref.scopeLevel, scopeId: ref.scopeId, reason: 'unparseable' });
       continue;
     }
-    return { value: parsed.data, source: ref.scopeLevel };
+    return { won: { value: parsed.data, source: ref.scopeLevel }, ignored };
   }
-  return null;
+  return { won: null, ignored };
 }
 
 /**
@@ -214,7 +256,7 @@ async function resolveAll<K extends SettingKey>(
     let value: unknown = getSettingsValue(key, platformRecord, def.defaultValue as never);
     let source = SettingScopeLevel.Platform;
 
-    const won = pickOverride(key, refsByKey.get(key) ?? [], overrides, def.schema, logger);
+    const { won, ignored } = pickOverride(key, refsByKey.get(key) ?? [], overrides, def.schema, logger);
     if (won) {
       value = won.value;
       source = won.source;
@@ -230,7 +272,11 @@ async function resolveAll<K extends SettingKey>(
     if (source !== SettingScopeLevel.Platform) {
       logger?.debug?.(`[scopedSettings] '${key}' resolved from ${source} scope`);
     }
-    result.set(key, { value: value as SettingValue<K>, source });
+    result.set(key, {
+      value: value as SettingValue<K>,
+      source,
+      ...(ignored.length > 0 ? { ignoredOverrides: ignored } : {}),
+    });
   }
 
   return result;
@@ -305,9 +351,13 @@ export function resolveScopedSettingFromOverrides<K extends SettingKey>(
     // hasStore: true - the caller HAS read the overlay, which is what that flag reports. Passing
     // false would make computeCandidateRefs warn about a missing store and resolve platform-only.
     const refs = computeCandidateRefs(key, def.scope?.settableAt, !!def.isSensitive, scope, true, logger);
-    const won = pickOverride(key, refs, overrides, def.schema, logger);
+    const { won, ignored } = pickOverride(key, refs, overrides, def.schema, logger);
     const value = applyClamp(won ? won.value : platformValue, scope, def.scope?.clamp);
-    return { value: value as SettingValue<K>, source: won ? won.source : SettingScopeLevel.Platform };
+    return {
+      value: value as SettingValue<K>,
+      source: won ? won.source : SettingScopeLevel.Platform,
+      ...(ignored.length > 0 ? { ignoredOverrides: ignored } : {}),
+    };
   });
 }
 
@@ -364,6 +414,15 @@ export function scopeForFileOwner(file: { userId: string; organizationId?: strin
  * the caller's own and shared files), so there is no single lake for a narrower rung to key on.
  * Owner derivation matches `scopeForLake`/`scopeForFileOwner`: an org member resolves at
  * `owner:<orgId>`, otherwise at `owner:<userId>`.
+ *
+ * CAVEAT for a second consumer: unlike its two siblings, this one cannot derive the org from the
+ * resource - there is no resource - so it keys on `caller.organizationId`, which callers feed from
+ * `user.organizationId`: the SELECTED-org display pointer, not proof of membership. The #1674
+ * invariant is that org resolution comes from membership, and this is the one derivation that does
+ * not satisfy it. Tolerable for a read-only BUDGET (worst case a member of two orgs reads the
+ * other's ceiling for one search), and NOT tolerable for anything that grants access, hides data or
+ * spends money. A consumer in that class must resolve membership first and pass the result here,
+ * not reach for this function as-is.
  */
 export function scopeForCaller(caller: { userId: string; organizationId?: string | null }): SettingScope {
   const orgId = caller.organizationId || undefined;

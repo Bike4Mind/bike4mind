@@ -83,6 +83,23 @@ describe('B4mApiClient', () => {
     });
   });
 
+  it('forwards a supplied systemPrompt in the chat body', async () => {
+    mockPost.mockResolvedValue({ id: 'q1', status: 'complete' });
+    await client.sendChat({ notebookId: 'nb1', message: 'hi', systemPrompt: 'Reply only in haiku.' });
+    expect(mockPost).toHaveBeenCalledWith('/api/chat', {
+      sessionId: 'nb1',
+      message: 'hi',
+      systemPrompt: 'Reply only in haiku.',
+      wait: true,
+    });
+  });
+
+  it('omits systemPrompt entirely from the body when not supplied', async () => {
+    mockPost.mockResolvedValue({ id: 'q1', status: 'complete' });
+    await client.sendChat({ notebookId: 'nb1', message: 'hi' });
+    expect(mockPost).toHaveBeenCalledWith('/api/chat', { sessionId: 'nb1', message: 'hi', wait: true });
+  });
+
   it('searches the knowledge base via semantic-search and returns scores', async () => {
     mockPost.mockResolvedValue({
       sessionIds: ['s1'],

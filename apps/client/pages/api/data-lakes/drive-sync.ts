@@ -1,6 +1,8 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeRepository, orgGoogleDriveConnectionRepository, User } from '@bike4mind/database';
+import { isLakeIngestable } from '@bike4mind/common';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import {
   isValidDriveFolderId,
@@ -10,7 +12,13 @@ import {
 import { getValidUserDriveAccessToken } from '@server/integrations/google/drive/common';
 import { decryptToken } from '@server/security/tokenEncryption';
 import { isEncrypted } from '@server/security/secretEncryption';
-import { BadRequestError, ForbiddenError, InternalServerError, NotFoundError } from '@server/utils/errors';
+import {
+  BadRequestError,
+  ForbiddenError,
+  InternalServerError,
+  NotFoundError,
+  TooManyRequestsError,
+} from '@server/utils/errors';
 import { sendToQueue } from '@server/utils/sqs';
 import { Request } from 'express';
 import { Resource } from 'sst';
@@ -61,7 +69,7 @@ async function captureOrgCredential(userId: string): Promise<string> {
  * is an org-administrative act, so this gates on org owner/manager (verifyOrgAccess), NOT merely the
  * lake's creator. The folder picker that supplies driveFolderId lands in the same PR's UI commit.
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .post(async (req: Request, res) => {
     const { dataLakeId, driveFolderId, folderName } = Body.parse(req.body);
@@ -82,6 +90,14 @@ const handler = baseApi()
     // Org owner/manager (or platform admin) only - not the lake creator (see the handler note).
     await verifyOrgAccess(req.user, lake.organizationId);
 
+    // Gated AFTER verifyOrgAccess so the status is not readable by a non-member, and before the
+    // credential capture so a refused connect costs no Drive calls. Without this the connect door
+    // would hand an archived lake an `enabled: true` connection - the poll would enqueue it forever
+    // (dropped every time by the ingest guard) and the UI would toast a sync that never happens.
+    if (!isLakeIngestable(lake.status)) {
+      throw new BadRequestError(`Cannot connect a Drive folder to a data lake in '${lake.status}' status`);
+    }
+
     const oauthRefreshToken = await captureOrgCredential(req.user.id);
 
     // Verify the connecting user can actually READ the folder before claiming it. The claim is GLOBAL
@@ -93,6 +109,14 @@ const handler = baseApi()
       createDriveClient(await getValidUserDriveAccessToken(req.user.id)),
       driveFolderId
     );
+    // A throttle is not an access verdict: without this, Drive rate-limiting the probe would tell the
+    // user they have no access to a folder they own, and they would go hunting a permission problem
+    // that does not exist (#2395).
+    if (!folderAccess.ok) {
+      throw new TooManyRequestsError(
+        'Google Drive is rate-limiting us right now, so we could not check that folder. Try connecting it again in a minute.'
+      );
+    }
     if (!folderAccess.exists) {
       throw new ForbiddenError('That Google Drive folder does not exist or you do not have access to it.');
     }
@@ -155,7 +179,14 @@ const handler = baseApi()
     }
 
     try {
-      await sendToQueue(Resource.driveLakeIngestQueue.url, { connectionId });
+      // A reconnect of an EXISTING connection (byFolder matched, claimedByThisRequest false) is the
+      // "Re-sync" button on a folder that already has a syncCursor - the explicit "re-sync everything"
+      // action (#2396), so it bypasses the cursor and forces a full walk. A brand-new connection has no
+      // cursor yet regardless, so forceFullWalk is a no-op there and omitted for clarity.
+      await sendToQueue(
+        Resource.driveLakeIngestQueue.url,
+        claimedByThisRequest ? { connectionId } : { connectionId, forceFullWalk: true }
+      );
     } catch (e) {
       // The connection row is what holds the GLOBAL driveFolderId claim, so an enqueue that fails
       // after we created it (SQS unavailable/throttled, an IAM denial, an unregistered queue) would

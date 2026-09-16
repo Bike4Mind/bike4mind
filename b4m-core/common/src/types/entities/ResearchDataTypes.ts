@@ -109,11 +109,35 @@ export interface IResearchDataRepository extends IBaseRepository<IResearchData> 
   findByUrlAndUserId(url: string, userId: string): Promise<IResearchData | null>;
 
   /**
-   * Find Research Data by url and organization id
+   * Find Research Data by url and organization id.
+   *
+   * @deprecated Has no caller. Matching on url + org ALONE returns whichever member scraped the
+   * url first, so using it for dedup makes the caller overwrite and re-link that member's FabFile.
+   * Use `findByUrlAndUserIdAndOrganizationId` instead; kept only so an out-of-repo implementer of
+   * this interface does not break on a patch release.
+   *
    * @param url - The url of the research data
    * @param organizationId - The id of the organization
    */
   findByUrlAndOrganizationId(url: string, organizationId: string): Promise<IResearchData | null>;
+
+  /**
+   * Find the CALLER'S OWN research data for a url within an organization.
+   *
+   * The dedup lookup for an org-scoped research task. Deliberately narrower than
+   * `findByUrlAndOrganizationId`, which matches on url + org alone and therefore returns whichever
+   * org member scraped the url first - reusing that record overwrites and re-links another user's
+   * file. Dedup is a per-user optimization; sharing is not implied by sharing an organization.
+   *
+   * @param url - The url of the research data
+   * @param userId - The id of the user whose own research data to match
+   * @param organizationId - The id of the organization
+   */
+  findByUrlAndUserIdAndOrganizationId(
+    url: string,
+    userId: string,
+    organizationId: string
+  ): Promise<IResearchData | null>;
 
   /**
    * Exists Research Data by url and research task id

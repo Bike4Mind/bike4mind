@@ -6,6 +6,7 @@ import {
   KeyboardArrowDown as KeyboardArrowDownIcon,
   SwapVert as SwapVertIcon,
 } from '@mui/icons-material';
+import { menuSurfaceSx, selectListboxSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 import { FILE_TYPE_OPTIONS } from './constants';
 import { UploadActionsSelect } from './UploadActionsSelect';
 
@@ -113,18 +114,7 @@ export const MobileSearchFilter: React.FC<MobileSearchFilterProps> = ({
             }}
             slotProps={{
               listbox: {
-                sx: {
-                  minWidth: '140px',
-                  border: 'none !important',
-                  py: '4px !important',
-                  backgroundColor: 'var(--joy-palette-background-body)',
-                  '& .MuiOption-root': {
-                    color: 'text.primary',
-                    fontSize: '14px',
-                    fontWeight: '400',
-                    backgroundColor: 'var(--joy-palette-background-body)',
-                  },
-                },
+                sx: theme => ({ ...menuSurfaceSx(theme), ...selectListboxSx(theme), minWidth: '140px' }),
                 placement: 'bottom-end',
                 modifiers: [
                   { name: 'offset', options: { offset: [0, 4] } },
@@ -215,22 +205,7 @@ export const MobileSearchFilter: React.FC<MobileSearchFilterProps> = ({
           }}
           slotProps={{
             listbox: {
-              sx: {
-                minWidth: '200px',
-                border: 'none !important',
-                py: '4px !important',
-                backgroundColor: 'var(--joy-palette-background-body)',
-                '& .MuiOption-root': {
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 1,
-                  justifyContent: 'flex-start',
-                  color: 'text.primary',
-                  fontSize: '14px',
-                  fontWeight: '400',
-                  backgroundColor: 'var(--joy-palette-background-body)',
-                },
-              },
+              sx: theme => ({ ...menuSurfaceSx(theme), ...selectListboxSx(theme), minWidth: '200px' }),
               placement: 'bottom-end',
               modifiers: [
                 { name: 'offset', options: { offset: [-0, 4] } },
@@ -396,22 +371,7 @@ export const MobileSearchFilter: React.FC<MobileSearchFilterProps> = ({
             }}
             slotProps={{
               listbox: {
-                sx: {
-                  minWidth: '160px',
-                  border: 'none !important',
-                  py: '4px !important',
-                  backgroundColor: 'var(--joy-palette-background-body)',
-                  '& .MuiOption-root': {
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 1,
-                    justifyContent: 'flex-start',
-                    color: 'text.primary',
-                    fontSize: '14px',
-                    fontWeight: '400',
-                    backgroundColor: 'var(--joy-palette-background-body)',
-                  },
-                },
+                sx: theme => ({ ...menuSurfaceSx(theme), ...selectListboxSx(theme), minWidth: '160px' }),
                 placement: 'bottom-end',
                 modifiers: [
                   { name: 'offset', options: { offset: [-0, 4] } },

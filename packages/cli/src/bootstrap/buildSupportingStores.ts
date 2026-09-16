@@ -14,7 +14,7 @@ import { BackgroundAgentManager } from '../agents/BackgroundAgentManager.js';
 import { AgentHistoryStore } from '../agents/AgentHistoryStore.js';
 import { DEFAULT_SUBAGENT_HISTORY_TTL_MS } from '../config/constants.js';
 import { deferredToolRegistry } from '../tools/deferredToolRegistry.js';
-import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services';
+import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
 import type { PermissionResponse } from '../components';
 import type { SilentLogger } from './types.js';
 

@@ -11,33 +11,40 @@
 #                         legal content, CI and governance files. The former
 #                         engine-maintainers and client-maintainers teams are
 #                         folded into this one.
+#   @bike4mind/devops     infra, CI and scanner config, co-owned with core-team
+#                         (see below - co-owned, not exclusive).
 #   @bike4mind/triage     issue/PR routing ONLY; owns no code paths here
 #                         (its home is .github/ISSUE_TEMPLATE/config.yml).
 #
-# WHY @bike4mind/devops IS NOT IN THIS FILE
+# HOW THE DEVOPS ENTRIES BEHAVE
 #
-# devops review of infra / CI / scanner config is meant to be an ADDITIONAL
-# requirement layered on top of core-team, and CODEOWNERS cannot express that.
 # Owners listed against a pattern are ALTERNATIVES: any one of them satisfies
-# "Require review from Code Owners". So `/infra/ @core-team @devops` would let
-# either team approve alone, and `/infra/ @devops` would REPLACE the core-team
-# requirement instead of adding to it. Neither is what we want.
+# "Require review from Code Owners". Naming both teams on the infra and CI
+# paths therefore does two things. It routes those PRs to devops, and it lets a
+# devops approval stand on its own there - core-team is not a second, separate
+# requirement on those paths, and equally a core-team approval alone still
+# satisfies them. devops is deliberately not a gate: it is a two-person team
+# that does not otherwise overlap core-team, so requiring it would add waiting
+# rather than a reviewer who was already reachable.
 #
-# The devops requirement therefore lives in the `main-protection` ruleset as a
-# path-scoped `required_reviewers` entry, covering:
+# Do NOT list devops as the sole owner of these paths. Because owners are
+# alternatives and last match wins, `/infra/ @bike4mind/devops` would drop
+# core-team's claim on that path entirely rather than sit beside it.
 #
-#   infra/**                       sst.config.ts
-#   .github/workflows/**           .github/actions/**
-#   .github/dependabot.yml         .gitleaks.toml{,.simple} / .gitleaksignore
-#   .semgrep.yml
-#
-# Both gates then apply independently: core-team from this file, devops from
-# the ruleset. Editing this file does not relax the devops requirement, and
-# editing the ruleset does not relax core-team's.
-#
-# NOTE: `main` has "Require review from Code Owners" ON, so the pattern below
+# NOTE: `main` has "Require review from Code Owners" ON, so every pattern below
 # is load-bearing, not documentation.
 
 
 # --- Default owner: everything ---
 *                                           @bike4mind/core-team
+
+# --- Infra, CI and scanner config: either team's approval satisfies ---
+/infra/                                     @bike4mind/core-team @bike4mind/devops
+/sst.config.ts                              @bike4mind/core-team @bike4mind/devops
+/.github/workflows/                         @bike4mind/core-team @bike4mind/devops
+/.github/actions/                           @bike4mind/core-team @bike4mind/devops
+/.github/dependabot.yml                     @bike4mind/core-team @bike4mind/devops
+/.gitleaks.toml                             @bike4mind/core-team @bike4mind/devops
+/.gitleaks.toml.simple                      @bike4mind/core-team @bike4mind/devops
+/.gitleaksignore                            @bike4mind/core-team @bike4mind/devops
+/.semgrep.yml                               @bike4mind/core-team @bike4mind/devops

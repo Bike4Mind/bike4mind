@@ -48,7 +48,7 @@ const navButtonSx = {
   '--IconButton-size': { xs: '32px' },
   '&:hover': {
     backgroundColor: 'neutral.outlinedHoverBg',
-    borderColor: 'neutral.outlinedHoverBorder',
+    borderColor: 'neutral.outlinedBorder',
   },
 } as const;
 
@@ -160,7 +160,7 @@ const WhatsNewSliderModal: React.FC<WhatsNewSliderModalProps> = ({ tagToTrigger 
 
           Object.entries(pathFiles).forEach(([modalId, filePath]) => {
             data.forEach(url => {
-              if (url.includes(filePath)) {
+              if (url && url.includes(filePath)) {
                 pathFilesImages[modalId] = url;
               }
             });

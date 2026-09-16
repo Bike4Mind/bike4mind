@@ -47,7 +47,7 @@ import {
   type ThinkingConfig,
 } from './thinkingParams';
 import { DispatchModel } from './dispatchModel';
-import { acquireSlot, releaseSlot } from './_anthropicSemaphore';
+import { acquireSlot, type SlotRelease } from './_anthropicSemaphore';
 import {
   createDegenerateStreamGuard,
   DEGENERATE_STREAM_STOP_REASON,
@@ -352,7 +352,7 @@ export class AnthropicBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         logoFile: 'Anthropic_logo.png',
-        rank: 1, // premium tier - ranked below the Sonnet 4.6 default (opt-in via picker)
+        rank: 1,
         trainingCutoff: '2024-10-01',
         releaseDate: '2025-05-23',
         description:
@@ -374,7 +374,7 @@ export class AnthropicBackend implements ICompletionBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 1, // premium tier - ranked below the Sonnet 4.6 default (opt-in via picker)
+        rank: 1,
         supportsTools: true,
         trainingCutoff: '2025-08-01',
         releaseDate: '2025-08-06',
@@ -400,7 +400,7 @@ export class AnthropicBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         logoFile: 'Anthropic_logo.png',
-        rank: 1,
+        rank: 2,
         trainingCutoff: '2024-10-01',
         releaseDate: '2025-05-23',
         // Retired upstream by Anthropic - the dated snapshot claude-sonnet-4-20250514 no longer
@@ -429,7 +429,7 @@ export class AnthropicBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         logoFile: 'Anthropic_logo.png',
-        rank: 1,
+        rank: 2,
         trainingCutoff: '2025-07-01',
         releaseDate: '2025-09-30',
         description:
@@ -449,7 +449,7 @@ export class AnthropicBackend implements ICompletionBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 1,
+        rank: 3,
         supportsTools: true,
         trainingCutoff: '2025-07-01',
         releaseDate: '2025-10-16',
@@ -498,7 +498,7 @@ export class AnthropicBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         logoFile: 'Anthropic_logo.png',
-        rank: 1, // demoted below Sonnet 5 (the new default) - opt-in via picker
+        rank: 2,
         trainingCutoff: '2025-10-01',
         releaseDate: '2026-02-19',
         description:
@@ -524,7 +524,7 @@ export class AnthropicBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         logoFile: 'Anthropic_logo.png',
-        rank: 0, // new default workhorse tier
+        rank: 1, // the Opus and Fable flagships hold rank 0
         trainingCutoff: '2026-01-01',
         releaseDate: '2026-07-01',
         description:
@@ -545,7 +545,7 @@ export class AnthropicBackend implements ICompletionBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 1, // premium tier - ranked below the Sonnet 4.6 default (opt-in via picker)
+        rank: 1,
         supportsTools: true,
         trainingCutoff: '2025-08-01',
         releaseDate: '2026-02-06',
@@ -569,7 +569,7 @@ export class AnthropicBackend implements ICompletionBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 1, // premium tier - ranked below the Sonnet 4.6 default (opt-in via picker)
+        rank: 1,
         supportsTools: true,
         trainingCutoff: '2026-01-31',
         releaseDate: '2026-04-17',
@@ -593,7 +593,7 @@ export class AnthropicBackend implements ICompletionBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 1, // premium tier - ranked below the Sonnet 4.6 default (opt-in via picker)
+        rank: 1,
         supportsTools: true,
         trainingCutoff: '2026-01-01',
         releaseDate: '2026-05-28',
@@ -617,7 +617,7 @@ export class AnthropicBackend implements ICompletionBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 1, // premium tier - opt-in via the picker, not the default workhorse tier
+        rank: 0,
         supportsTools: true,
         trainingCutoff: '2026-01-01',
         releaseDate: '2026-07-01',
@@ -646,7 +646,7 @@ export class AnthropicBackend implements ICompletionBackend {
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
-        rank: 1, // premium tier - ranked below the Sonnet 5 default (opt-in via picker)
+        rank: 0,
         supportsTools: true,
         releaseDate: '2026-07-24',
         description:
@@ -1183,11 +1183,16 @@ export class AnthropicBackend implements ICompletionBackend {
           let degenerateVerdict: DegenerateStreamVerdict | undefined;
 
           (async () => {
-            // Acquire semaphore slot before the API call. Released in the finally
-            // block below after the stream is fully consumed (or on any error),
-            // so the slot accurately reflects the real Anthropic connection lifetime.
-            await acquireSlot();
+            // Acquire a semaphore slot before the API call, released in the finally
+            // below once the stream is fully consumed (or on any error), so the slot
+            // reflects the real Anthropic connection lifetime. Scheduled fairly per
+            // tenant (keyed on the hashed end-user id) and abortable: the acquire lives
+            // INSIDE the try so an abort while waiting for a slot flows through the same
+            // benign-abort handling as an abort during the call, and a waiter that
+            // aborts leaves the queue instead of consuming a slot it can no longer use.
+            let release: SlotRelease | undefined;
             try {
+              release = await acquireSlot({ tenantKey: this._endUserId, signal: combinedSignal });
               // Diagnostic logging: Capture payload size to help debug hanging issues
               const payloadForSize = { ...apiParams, stream: true };
               const payloadSizeBytes = Buffer.byteLength(JSON.stringify(payloadForSize), 'utf8');
@@ -1697,7 +1702,7 @@ export class AnthropicBackend implements ICompletionBackend {
                 reject(error);
               }
             } finally {
-              releaseSlot();
+              release?.();
             }
           })();
         });
@@ -1954,12 +1959,14 @@ export class AnthropicBackend implements ICompletionBackend {
         }
       } else {
         // Non-streaming path
-        // Acquire semaphore slot for the API call. For non-streaming, the full
-        // response body is received when the call resolves, so we release
-        // immediately after.
-        await acquireSlot();
+        // Acquire a semaphore slot for the API call (scheduled fairly per tenant,
+        // abortable while waiting). Non-streaming receives the full body on resolve,
+        // so the slot releases immediately after. Acquire lives inside the try so an
+        // abort while waiting propagates to generateResponse's outer abort handling.
         let response;
+        let release: SlotRelease | undefined;
         try {
+          release = await acquireSlot({ tenantKey: this._endUserId, signal: options.abortSignal });
           // Wrap with retry for transient network errors (TLS abort, fetch terminated)
           response = await withRetry(
             () =>
@@ -1978,7 +1985,7 @@ export class AnthropicBackend implements ICompletionBackend {
             }
           ).then(r => r.result);
         } finally {
-          releaseSlot();
+          release?.();
         }
         const streamedText: string[] = [];
 

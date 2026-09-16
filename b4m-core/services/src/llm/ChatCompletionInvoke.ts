@@ -1,5 +1,7 @@
 import {
+  canUpdateShareable,
   ChatCompletionInvokeParamsSchema,
+  isPromptMetaModelType,
   isSupportedEmbeddingModel,
   IUserDocument,
   LLMModelConfig,
@@ -11,6 +13,7 @@ import {
   BadRequestError,
   ForbiddenError,
   InternalServerError,
+  NotFoundError,
   isModelAccessible,
   isZodError,
   getSettingsByNames,
@@ -87,6 +90,8 @@ export class ChatCompletionInvoke {
       enableAgents,
       enableLattice,
       promptMode,
+      skipAutoOffers,
+      systemPrompt,
       tools,
       projectId,
       organizationId,
@@ -100,16 +105,23 @@ export class ChatCompletionInvoke {
       audioConfig,
       mcpServers,
       extraContextMessages,
+      correctsQuestId,
       allowedAgents,
       enableSlackTools,
     } = ChatCompletionInvokeParamsSchema.parse(body);
 
-    // Parallelize independent operations: API keys, session, and organization fetch
-    const [apiKeyTable, session, organization] = await Promise.all([
+    // Parallelize independent operations: API keys, session, organization, and the correction
+    // target. The correction lookup rides this batch rather than the quest batch below because its
+    // validation has to settle BEFORE the quest is created - a refused correction must not mint one.
+    const [apiKeyTable, session, organization, correctedTurn] = await Promise.all([
       this.apiKeyTableCache ||
         getEffectiveLLMApiKeys(userId, { db: this.db, getSettingsByNames }, { logger: new Logger() }),
       this.db.sessions.findById(sessionId),
       organizationId ? this.db.organizations.findById(organizationId) : Promise.resolve(null),
+      // Gated on `!questId` too, not just `correctsQuestId`: the combination is refused below with a
+      // BadRequestError, and `correctsQuestId` carries no ObjectId-shape constraint, so fetching it
+      // here would let a malformed id raise a CastError out of this batch ahead of that refusal.
+      correctsQuestId && !questId ? this.db.quests.findById(correctsQuestId) : Promise.resolve(null),
     ]);
 
     if (!this.apiKeyTableCache) {
@@ -134,8 +146,13 @@ export class ChatCompletionInvoke {
     // have that notebook's full prior context sent to the model, and (with wait: true) read the
     // reply straight back in the response, bypassing the promptMeta redaction on GET
     // /api/quests/{id} entirely. Same owner-or-sharee rule as that route (quests/[id]/index.ts).
-    const isOwnerOrSharee = session.userId === userId || session.users?.some(u => u.userId === userId);
-    if (!isOwnerOrSharee) {
+    // Update-level, not any-share: a completion appends to this notebook's history and writes
+    // lastUsedModel/lastUpdated onto it, so a read-only sharee must not reach it. `this.user` is
+    // the acting principal only when it is the id invoke was called for - the two are separate
+    // inputs - so its groups are consulted only then, and group grants are otherwise absent
+    // rather than assumed.
+    const actorGroups = this.user?.id === userId ? (this.user.groups ?? []) : [];
+    if (!canUpdateShareable(session, userId, actorGroups)) {
       throw new ForbiddenError('You do not have access to this session');
     }
 
@@ -160,6 +177,18 @@ export class ChatCompletionInvoke {
       );
     }
 
+    // What promptMeta.model.type is allowed to record, resolved once so the write below needs no
+    // cast. A completion legitimately resolves to text, image or video - the media backends run
+    // through this same path - and speech-to-text is the one catalog type it cannot: that is served
+    // by the transcription route, and dispatching it here would fail at the provider with a raw
+    // error, so reject it up front like a disabled model. An ABSENT type is a separate case and
+    // must not fail the turn: the field is declared required but assembled from discovery feeds and
+    // cached catalog rows, so it degrades to unrecorded and resolveQuestModelType falls back.
+    const modelType = isPromptMetaModelType(model.type) ? model.type : undefined;
+    if (model.type && !modelType) {
+      throw new BadRequestError(`Model "${model.id}" is a ${model.type} model and cannot run a chat completion`);
+    }
+
     // Start sessions.update early (will await later in parallel with admin settings)
     const sessionUpdatePromise = this.db.sessions.update({
       id: sessionId,
@@ -172,7 +201,7 @@ export class ChatCompletionInvoke {
     const promptMeta: Partial<PromptMeta> = {
       model: {
         name: model.id,
-        type: model?.type as 'text' | 'image' | undefined,
+        type: modelType,
         backend: model?.backend,
         contextWindow: model?.contextWindow,
         maxTokens: model?.max_tokens,
@@ -244,6 +273,28 @@ export class ChatCompletionInvoke {
       ],
     };
 
+    // Correct-and-retry: bind the claimed correction target to the caller's session before it is
+    // persisted, for the same reason the retry path below re-checks `questId` - `sessionId` was
+    // resolved through an access-scoped lookup, so a quest from another session must not become a
+    // link in this session's correction chain. Refusing loudly (rather than dropping the field) is
+    // deliberate: a silently-unlinked correction still sends the turn, so the user sees a normal
+    // answer and the eval-pair export never learns the turn was a correction at all.
+    if (correctsQuestId) {
+      // A correction must create a new quest, so it cannot ride a retry: the `questId` branch
+      // below overwrites the flagged quest in place, which would both destroy the answer the
+      // chain exists to preserve and drop this field on the floor without a word.
+      if (questId) {
+        this.logger.warn(`Refusing correction of ${correctsQuestId}: correctsQuestId cannot be combined with questId.`);
+        throw new BadRequestError('correctsQuestId cannot be combined with questId');
+      }
+      if (!correctedTurn || correctedTurn.sessionId !== sessionId) {
+        this.logger.warn(
+          `Quest ${correctsQuestId} is not a correctable turn in session ${sessionId}; refusing correction.`
+        );
+        throw new NotFoundError('Quest not found');
+      }
+    }
+
     // Parallelize independent operations: quest ops + admin settings + session update
     const [quest, defaultEmbeddingModel, modelConfigurations] = await Promise.all([
       // Quest creation/update
@@ -253,7 +304,18 @@ export class ChatCompletionInvoke {
               this.logger.warn(
                 `Quest not found for questId: ${questId}. Quest may have been deleted before the quest was started.`
               );
-              return null;
+              throw new NotFoundError('Quest not found');
+            }
+            // Bind the retry to the caller's target session. `sessionId` was resolved through an
+            // access-scoped lookup upstream (getOrCreateSession), so refusing a quest that belongs
+            // to a different session stops a caller retrying/overwriting another user's quest by id.
+            // Throw rather than returning null: a bare null flowed to `if (!quest) return` and made
+            // the invoke a silent no-op (a 200 with no quest on the media routes). The same generic
+            // NotFound as the missing-quest case keeps the refusal from leaking whether the quest
+            // exists in a session the caller cannot see.
+            if (q.sessionId !== sessionId) {
+              this.logger.warn(`Quest ${questId} does not belong to session ${sessionId}; refusing retry.`);
+              throw new NotFoundError('Quest not found');
             }
             // Retry path: clear prior replies and images.
             q.type = 'message';
@@ -280,6 +342,9 @@ export class ChatCompletionInvoke {
             status: 'running',
             promptMeta,
             agentIds: session.agentIds || [],
+            // Session-bound by the guard above, so the chain a correction claims to extend is
+            // always one the caller can actually see.
+            correctsQuestId,
           }),
 
       // Admin settings fetches
@@ -356,6 +421,11 @@ export class ChatCompletionInvoke {
         enableAgents,
         enableLattice,
         promptMode,
+        // Must be carried explicitly: this literal - not the parsed request - is what
+        // dispatchQuest ships to the async worker, so a field omitted here is silently dropped on
+        // every path except `wait: true`.
+        skipAutoOffers,
+        systemPrompt,
         promptMeta: PromptMetaZodSchema.parse(quest.promptMeta),
         sessionId: session.id,
         tools,

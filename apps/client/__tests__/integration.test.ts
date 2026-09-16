@@ -24,6 +24,9 @@ vi.mock('@bike4mind/services', () => ({
     searchOwnSessions: vi.fn(),
     create: vi.fn(),
   },
+}));
+
+vi.mock('@bike4mind/services/llm', () => ({
   ChatCompletionInvoke: vi.fn(),
   ChatCompletionProcess: vi.fn(),
   featureNames: {},

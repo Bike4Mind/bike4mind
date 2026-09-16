@@ -167,11 +167,10 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
     // The Slack identity fields (username/userEmail/userId) went through the same raw-vs-resolved
     // swap as logEvent -- pin that the resolved (authenticated) identity actually reached Slack,
     // not the raw body fields ('reporter' / 'reporter@example.com').
-    // postFeedbackToSlack(type, organization, username, userEmail, userId, content, promptMeta)
-    const [, , slackUsername, slackEmail, slackUserId] = mockPostFeedbackToSlack.mock.calls[0];
-    expect(slackUsername).toBe(realUser.username);
-    expect(slackEmail).toBe(realUser.email);
-    expect(slackUserId).toBe(realUser.id);
+    const [slackInput] = mockPostFeedbackToSlack.mock.calls[0];
+    expect(slackInput.username).toBe(realUser.username);
+    expect(slackInput.userEmail).toBe(realUser.email);
+    expect(slackInput.userId).toBe(realUser.id);
 
     // Same identity substitution went into the notification email's HTML body -- pin that too,
     // not just the Slack half, since the two egress points share the same underlying fix.

@@ -24,10 +24,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const WORKER_FILE = 'pdf.worker.min.mjs';
 
+// Must stay in step with PdfViewer's `pdfjs-dist/legacy/build/pdf.mjs` import: pdf.js refuses to
+// run an API and a worker from different builds, and the polyfills the legacy build relies on live
+// in the legacy worker.
+const BUILD_DIR = path.join('legacy', 'build');
+
 function main() {
   // Resolve the worker from the installed package (works with pnpm's nested node_modules).
   const pdfjsPkg = require.resolve('pdfjs-dist/package.json');
-  const source = path.join(path.dirname(pdfjsPkg), 'build', WORKER_FILE);
+  const source = path.join(path.dirname(pdfjsPkg), BUILD_DIR, WORKER_FILE);
 
   const destinationDir = path.resolve(__dirname, '../public');
   const destination = path.join(destinationDir, WORKER_FILE);

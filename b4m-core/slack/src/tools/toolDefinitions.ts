@@ -1,4 +1,4 @@
-import { ToolDefinition } from '@bike4mind/services';
+import { ToolDefinition } from '@bike4mind/services/llm';
 import { isImageServeable } from '@bike4mind/common';
 import { generateHelpMessage } from './slackbotHelp';
 import { listCuratedFiles, getCuratedFiles } from './listCuratedFiles';

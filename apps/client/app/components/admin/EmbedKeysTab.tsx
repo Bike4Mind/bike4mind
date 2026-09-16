@@ -62,7 +62,7 @@ import { useGetOrganization, useSearchOrganizations } from '@client/app/hooks/da
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { tableHeaderSx } from '@client/app/components/ProfileModal/settingsStyles';
-import { revocationTooltip } from '@client/app/utils/apiKeyRevocation';
+import { isRevoked, revocationTooltip } from '@client/app/utils/apiKeyRevocation';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
@@ -722,7 +722,7 @@ export default function EmbedKeysTab() {
             </thead>
             <tbody>
               {embedKeys.map(key => {
-                const disabled = key.status === 'disabled';
+                const revoked = isRevoked(key);
                 const boundAgent = key.agentId ? agentById.get(key.agentId) : undefined;
                 return (
                   <tr key={key.id} data-testid={`embed-key-row-${key.id}`}>
@@ -773,8 +773,8 @@ export default function EmbedKeysTab() {
                     </td>
                     <td>
                       <Tooltip title={revocationTooltip(key) ?? ''} data-testid={`embed-key-status-${key.id}`}>
-                        <Chip variant="soft" color={disabled ? 'danger' : 'success'}>
-                          {disabled ? 'Revoked' : 'Active'}
+                        <Chip variant="soft" color={revoked ? 'danger' : 'success'}>
+                          {revoked ? 'Revoked' : 'Active'}
                         </Chip>
                       </Tooltip>
                     </td>
@@ -793,7 +793,7 @@ export default function EmbedKeysTab() {
                             size="sm"
                             variant="outlined"
                             onClick={() => setConfiguringKey(key)}
-                            disabled={disabled}
+                            disabled={revoked}
                             data-testid={`embed-key-configure-${key.id}`}
                           >
                             <SettingsIcon />
@@ -805,7 +805,7 @@ export default function EmbedKeysTab() {
                             variant="outlined"
                             onClick={() => rotateMutation.mutate(key.id)}
                             loading={rotateMutation.isPending}
-                            disabled={disabled}
+                            disabled={revoked}
                           >
                             <RotateLeftIcon />
                           </IconButton>
@@ -817,7 +817,7 @@ export default function EmbedKeysTab() {
                             color="danger"
                             onClick={() => revokeMutation.mutate({ keyId: key.id, reason: 'Revoked by admin' })}
                             loading={revokeMutation.isPending}
-                            disabled={disabled}
+                            disabled={revoked}
                             data-testid={`embed-key-revoke-${key.id}`}
                           >
                             <BlockIcon />
