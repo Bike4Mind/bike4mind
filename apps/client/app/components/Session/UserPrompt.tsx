@@ -10,7 +10,7 @@ import { GetFileIcon } from '@client/app/utils/fabFileUtils';
 import { FC, useState, useEffect, ComponentProps, Children } from 'react';
 import { useMessageEditMode } from '@client/app/hooks/useMessageEditMode';
 import { highlightTextSearch } from '@client/app/components/GenAI/highlight';
-import { Edit as EditIcon, KeyboardArrowDown, KeyboardArrowUp } from '@mui/icons-material';
+import { EditOutlined as EditOutlinedIcon, KeyboardArrowDown, KeyboardArrowUp } from '@mui/icons-material';
 import { useContentTruncation } from '@client/app/hooks/useContentTruncation';
 import remarkBreaks from 'remark-breaks';
 import remarkMath from 'remark-math';
@@ -254,7 +254,7 @@ const EditButton: FC<{
         color="neutral"
         sx={{ ...chatActionButtonSx, marginBottom: '16px' }}
       >
-        <EditIcon />
+        <EditOutlinedIcon />
       </IconButton>
     </Tooltip>
   );
@@ -281,7 +281,22 @@ const UserPrompt: FC<UserPromptProps> = ({ prompt, messageFiles = [], search, on
 
   if (sections.length > 0) {
     return (
-      <Box sx={{ display: 'flex', flexDirection: 'column', width: '100%', gap: 2 }}>
+      <Box
+        className="user-prompt-block"
+        sx={{
+          display: 'flex',
+          flexDirection: 'column',
+          width: '100%',
+          gap: 2,
+          // Edit belongs to the prompt, so the prompt is its hover target: reading the
+          // reply below should not summon an affordance for the message above it. Gated on
+          // a real pointer, since on touch there is no hover to reveal it with.
+          '@media (hover: hover)': {
+            '& .prompt-actions': { opacity: 0, transition: 'opacity 150ms ease' },
+            '&:hover .prompt-actions, &:focus-within .prompt-actions': { opacity: 1 },
+          },
+        }}
+      >
         <Box
           sx={{
             display: 'flex',
@@ -408,12 +423,16 @@ const UserPrompt: FC<UserPromptProps> = ({ prompt, messageFiles = [], search, on
               )}
             </Box>
           )}
+          {/* Wrapper, not the button: MessageContent reveals .prompt-actions on message hover,
+              and the button's own resting opacity has to compose with that. */}
           {!!onEdit && !isEditMode && (
-            <EditButton
-              onEdit={() => {
-                setIsEditMode(true);
-              }}
-            />
+            <Box className="prompt-actions">
+              <EditButton
+                onEdit={() => {
+                  setIsEditMode(true);
+                }}
+              />
+            </Box>
           )}
         </Box>
       </Box>

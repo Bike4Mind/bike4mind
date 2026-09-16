@@ -14,4 +14,11 @@ export const chatActionButtonSx = {
   flexShrink: 0,
   borderRadius: '6px',
   '& svg': { width: '16px', height: '16px' },
+  // Secondary to the message they sit under: half strength at rest, full on the one the
+  // pointer is over. focus-visible matches it, or a keyboard user would tab through a row
+  // that never brightens.
+  opacity: 0.5,
+  transition: 'opacity 150ms ease',
+  '&:hover': { opacity: 1 },
+  '&:focus-visible': { opacity: 1 },
 } as const;

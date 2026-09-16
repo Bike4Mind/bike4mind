@@ -1,6 +1,7 @@
 import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
 import CopyTextButton from '@client/app/components/Session/CopyTextButton';
 import { chatActionButtonSx } from '@client/app/components/Session/chatActionButtonSx';
+import { messageMetaChipSx } from '@client/app/components/Session/messageMetaChipSx';
 import DownloadMenu from '../common/DownloadMenu';
 import PromptReplies from '@client/app/components/Session/PromptReplies';
 import RapidReplyBubble from '@client/app/components/Session/RapidReplyBubble';
@@ -32,7 +33,7 @@ import { useLLM } from '@client/app/contexts/LLMContext';
 import CodeIcon from '@mui/icons-material/Code';
 import ForkRightIcon from '@mui/icons-material/ForkRight';
 import StartIcon from '@mui/icons-material/Start';
-import BugReportIcon from '@mui/icons-material/BugReport';
+import BugReportOutlinedIcon from '@mui/icons-material/BugReportOutlined';
 import { useNavigate } from '@tanstack/react-router';
 import BugReportModal from '@client/app/components/BugReportModal';
 import { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
@@ -53,7 +54,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
 import { APP_NAME } from '@client/config/general';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
-import ShareIcon from '@mui/icons-material/Share';
+import ShareOutlinedIcon from '@mui/icons-material/ShareOutlined';
 import { usePublishShare } from '@client/app/hooks/usePublishShare';
 import { replyPublisher } from '@client/app/utils/publishApi';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
@@ -70,19 +71,7 @@ import ToolsUsed from '@client/app/components/Session/ToolsUsed';
 import { useMessageEditMode } from '@client/app/hooks/useMessageEditMode';
 
 const ModelChip: React.FC<{ displayName: string }> = ({ displayName }) => (
-  <Chip
-    className="model-chip-web"
-    size="sm"
-    variant="soft"
-    sx={theme => ({
-      bgcolor: theme.palette.fileBrowser.statusChip.backgroundColor,
-      color: theme.palette.fileBrowser.statusChip.textColor,
-      fontSize: '13px',
-      height: '24px',
-      border: `1px solid ${theme.palette.fileBrowser.statusChip.borderColor}`,
-      px: '8px',
-    })}
-  >
+  <Chip className="model-chip-web" size="sm" variant="soft" sx={messageMetaChipSx}>
     {displayName}
   </Chip>
 );
@@ -320,9 +309,22 @@ const MessageContent: React.FC<ContentProps> = memo(
           color={isReported ? 'warning' : 'neutral'}
           size="sm"
           onClick={handleOpenBugReportModal}
-          sx={chatActionButtonSx}
+          sx={theme => ({
+            ...chatActionButtonSx,
+            // The theme overrides warning.softColor but leaves Joy's own plainColor in
+            // place, so a plain warning icon is a different orange from the soft chips.
+            // Reported state is carried by this glyph alone, so take the chip's colour.
+            ...(isReported
+              ? {
+                  '--Icon-color': theme.vars.palette.warning.softColor,
+                  // Full strength while the rest of the row rests at half: this one is
+                  // reporting a state, not just offering an action.
+                  opacity: 1,
+                }
+              : {}),
+          })}
         >
-          <BugReportIcon />
+          <BugReportOutlinedIcon />
         </IconButton>
       </Tooltip>
     );
@@ -538,7 +540,7 @@ const MessageContent: React.FC<ContentProps> = memo(
           onClick={handleShareReply}
           sx={chatActionButtonSx}
         >
-          <ShareIcon />
+          <ShareOutlinedIcon />
         </IconButton>
       </Tooltip>
     );
@@ -560,6 +562,38 @@ const MessageContent: React.FC<ContentProps> = memo(
           maxWidth: '100%',
           px: isMobile ? '0px' : '20px',
           overflow: 'visible',
+          // The footer belongs to the reply, and stays out of the way until the pointer is
+          // over it: this Stack spans the reply, the footer and the gap between them, so
+          // crossing that gap keeps it open. Opacity rather than display, so the row holds
+          // its space and the thread never reflows under the cursor. Buttons keep their own
+          // 50%/100% treatment on top of this, since that lives on a different element.
+          // Gated on a real pointer rather than a breakpoint - a touch device has no hover
+          // to reveal anything with, and there the rows stay visible.
+          '@media (hover: hover)': {
+            // Only older messages hide their footer. The newest one keeps its actions and
+            // metadata on screen: it is the reply most likely to be acted on, and it is what
+            // teaches the pattern - a reader who never hovers would otherwise never learn
+            // the row exists.
+            ...(!isLastMessage && {
+              '& .action-buttons-web, & .message-info': {
+                opacity: 0,
+                transition: 'opacity 200ms ease-out',
+              },
+              '&:hover, &:focus-within': {
+                '& .action-buttons-web, & .message-info': { opacity: 1 },
+              },
+              // Inverse of the row it stands in for.
+              '& .reported-badge': { opacity: 1, transition: 'opacity 200ms ease-out' },
+              '&:hover .reported-badge, &:focus-within .reported-badge': { opacity: 0 },
+              // The prompt owns its own edit affordance, so hovering it must not also summon
+              // the reply's row. It precedes the footer in the stack, so a sibling rule can
+              // undo the reveal above; it outranks it on specificity.
+              '& .user-prompt-block:hover ~ .message-footer': {
+                '& .action-buttons-web, & .message-info': { opacity: 0 },
+                '& .reported-badge': { opacity: 1 },
+              },
+            }),
+          },
         }}
         data-testid={`message-${messageData.id}`}
       >
@@ -808,10 +842,32 @@ const MessageContent: React.FC<ContentProps> = memo(
             justifyContent: 'space-between',
             flexWrap: 'wrap',
             gap: '10px',
+            position: 'relative',
           }}
         >
+          {/* Sits outside the action row, not in it: the row is hidden until the message is
+              hovered, and a child cannot be more opaque than its parent. Out of flow, so it
+              takes the row's resting place without displacing it. Desktop only - the mobile
+              row is always visible, where the orange glyph is already the marker. */}
+          {!isMobile && isReported && !isProcessingPrompt && !isLastMessage && (
+            <Typography
+              className="reported-badge"
+              data-testid="message-reported-badge"
+              level="body-xs"
+              sx={theme => ({
+                position: 'absolute',
+                left: 0,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                pointerEvents: 'none',
+                color: theme.vars.palette.warning.softColor,
+              })}
+            >
+              Reported
+            </Typography>
+          )}
           {!isMobile ? (
-            <Stack className="action-buttons-web" direction={'row'} gap="10px" alignItems="center">
+            <Stack className="action-buttons-web" direction={'row'} gap="8px" alignItems="center">
               {!isProcessingPrompt && (
                 <>
                   {/* Advanced actions in menu */}
@@ -958,7 +1014,7 @@ const MessageContent: React.FC<ContentProps> = memo(
               )}
             </Stack>
           ) : (
-            <Stack className="action-buttons-mobile" direction={'row'} gap="10px" alignItems="center">
+            <Stack className="action-buttons-mobile" direction={'row'} gap="8px" alignItems="center">
               {!isProcessingPrompt && (
                 <>
                   {/* Advanced actions in menu */}
@@ -1106,7 +1162,11 @@ const MessageContent: React.FC<ContentProps> = memo(
             </Stack>
           )}
 
-          <Box className="message-info" sx={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+          <Box className="message-info" sx={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            {!isProcessingPrompt && messageData.promptMeta?.functionCalls && (
+              <ToolsUsed functionCalls={messageData.promptMeta.functionCalls} size="sm" />
+            )}
+
             {adminSettings.enforceCredits &&
             currentUser?.showCreditsUsed &&
             !isProcessingPrompt &&
@@ -1116,16 +1176,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                   data-testid="credits-used"
                   size="sm"
                   variant="soft"
-                  sx={theme => ({
-                    bgcolor: theme.palette.fileBrowser.statusChip.backgroundColor,
-                    color: theme.palette.fileBrowser.statusChip.textColor,
-                    fontSize: '13px',
-                    height: '24px',
-                    border: `1px solid ${theme.palette.fileBrowser.statusChip.borderColor}`,
-                    gap: '4px',
-                    px: '8px',
-                    fontWeight: 500,
-                  })}
+                  sx={messageMetaChipSx}
                   startDecorator={<Bike4MindIcon size="12" fill="currentColor" />}
                 >
                   {messageData.creditsUsed ?? 0}
@@ -1138,24 +1189,6 @@ const MessageContent: React.FC<ContentProps> = memo(
               !(messageData.researchModeResults && messageData.researchModeResults.length > 0) && (
                 <ModelChip displayName={getModelDisplayName(messageData.promptMeta.model.name)} />
               )}
-
-            {!isProcessingPrompt && messageData.promptMeta?.functionCalls && (
-              <ToolsUsed functionCalls={messageData.promptMeta.functionCalls} size="sm" />
-            )}
-
-            {!isProcessingPrompt && isReported && (
-              <Tooltip title="You reported this message">
-                <Chip
-                  data-testid="message-reported-chip"
-                  size="sm"
-                  variant="soft"
-                  color="warning"
-                  startDecorator={<BugReportIcon sx={{ fontSize: 14 }} />}
-                >
-                  Reported
-                </Chip>
-              </Tooltip>
-            )}
           </Box>
         </Box>
       </Stack>

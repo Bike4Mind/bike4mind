@@ -10,7 +10,13 @@ const CopyTextButton: React.FC<{ text: string }> = ({ text }) => {
   return (
     <Tooltip title={copied ? 'Copied to Clipboard!' : 'Copy to Clipboard'}>
       <IconButton
-        sx={chatActionButtonSx}
+        sx={{
+          ...chatActionButtonSx,
+          // 14px, not the row's 16: the copy glyph is two filled sheets and reads larger
+          // than the open outlines beside it at the same box size.
+          '--Icon-fontSize': '14px',
+          '& svg': { width: '14px', height: '14px' },
+        }}
         size="sm"
         variant="plain"
         color={copied ? 'success' : 'neutral'}
