@@ -748,10 +748,32 @@ const FINITE_VERB = new RegExp(String.raw`^(?:${PREDICATES_PHRASE})$|n['\u2019]t
 /** A coordinator word, which ends the segment a pointer test is scoped to. Mirrors `segmentAround`. */
 const COORDINATOR_WORD = /^(?:and|but|so|yet|or)$/i;
 
+/** Prepositional `-ing` words: they end in `ing` but cannot be a participle. */
+const PREPOSITIONAL_ING = new Set(['during', 'regarding', 'concerning', 'including', 'according', 'pending']);
+
+/** A participle or gerund - a verb form that cannot be the clause's finite predicate. */
+function isNonFiniteVerb(word: string): boolean {
+  return /(?:ing|ed)$/i.test(word) && !PREPOSITIONAL_ING.has(word);
+}
+
+/** A word that introduces or joins a phrase rather than heading a predicate. */
+function isFunctionWord(word: string): boolean {
+  return PREPOSITION.has(word) || PHRASE_HEAD.has(word) || COORDINATOR_WORD.test(word);
+}
+
 /**
- * True when a FINITE_VERB follows `tokens[from]` before the clause's end or the segment's coordinator.
- * One further finite verb after a reduced relative's own is what makes that relative part of the cause
- * phrase's object rather than a matrix subject - see `predicatesCausePhrase`.
+ * True when a further finite verb follows `tokens[from]` before the clause's end or the segment's
+ * coordinator. One further finite verb after a reduced relative's own is what makes that relative part
+ * of the cause phrase's object rather than a matrix subject - see `predicatesCausePhrase`.
+ *
+ * Two recognisers, because one of them cannot be a list. `FINITE_VERB` covers the forms this corpus
+ * predicates a phrase with, and the STRUCTURAL tell covers everything else: once a participle has
+ * taken its object inside the relative, the next content word is the matrix predicate whatever form it
+ * takes ("...the customer is RATIONALISING ELUDES us"). A word that a preposition, determiner or
+ * coordinator introduces belongs to the relative's own modifier instead ("...RATIONALISING ACROSS the
+ * region"), so it is skipped rather than matched. Without the second recogniser every unlisted matrix
+ * verb left the relative reading as a matrix subject, and a correct refusal FAILed one determiner from
+ * the pinned zero-relative row.
  */
 function finiteVerbFollows(tokens: string[], from: number): boolean {
   for (let i = from; i < tokens.length; i++) {
@@ -761,6 +783,7 @@ function finiteVerbFollows(tokens: string[], from: number): boolean {
     const word = tokens[i].toLowerCase();
     if (COORDINATOR_WORD.test(word)) return false;
     if (FINITE_VERB.test(word)) return true;
+    if (isNonFiniteVerb(tokens[i - 1]?.toLowerCase() ?? '') && !isFunctionWord(word)) return true;
   }
   return false;
 }
@@ -786,7 +809,10 @@ function finiteVerbFollows(tokens: string[], from: number): boolean {
  *    further finite verb follows that verb in the same coordinated segment. A later verb is what makes
  *    it a REDUCED RELATIVE inside the object instead ("of the changes THE TEAM IS making IS unclear"):
  *    the later verb predicates the phrase. This test carries the growth direction alone: drop it and
- *    the zero-relative row is read as a pointer;
+ *    the zero-relative row is read as a pointer. "Further finite verb" is read STRUCTURALLY as well as
+ *    from `PREDICATES_PHRASE` (see `finiteVerbFollows`), because a bare object hands this branch a
+ *    matrix predicate the list does not know ("...of consolidating DEPOT ROUTES the customer is
+ *    rationalising ELUDES us") and a membership test there failed the honest refusal;
  *  - a finite verb at the end of the scan is the phrase's predicate.
  */
 function predicatesCausePhrase(clause: string, from: number): boolean {
@@ -906,6 +932,15 @@ function segmentAround(clause: string, at: number): [number, number] {
  * different coordinated segments. The mirror row - the pointer in the ADVERB's segment - is pinned too,
  * which is why this is a union rather than a replacement: "...recorded in the CRM and the consequence of
  * route consolidation, which is unclear" is already governed by the first test.
+ *
+ * The union is one-directional and segment-bounded: it reaches every cause phrase's segment for an
+ * ADVERB-anchored supply (the adverb localises nothing), but for a supply a `SUPPLY_PREDICATE`
+ * commits, only a cause phrase whose segment overlaps the segment that supply's own SUBJECT sits in.
+ * A committed supply sits in its own segment, so a custodian attached to a cause phrase one
+ * coordinator away belongs to a different subject and must not explain the supply away. Reading every
+ * cause phrase's segment for a committed supply suppressed "...The outcome of the pilot IS ON FILE with
+ * your account team AND gains of that size usually COME FROM route consolidation", which fails at every
+ * base; the filter is what the must-FAIL rows beside the pointer fixtures pin.
  */
 function causePhraseSegments(clause: string): Array<[number, number]> {
   return [...clause.matchAll(globally(CAUSE_PHRASE))].map(m => segmentAround(clause, m.index));
@@ -1014,12 +1049,21 @@ function framedAsGeneralKnowledge(sentence: string): boolean {
       const [from, to] = segmentAround(clause, at);
       const [subjectFrom, subjectTo] = segmentAround(clause, start);
       const refusalSpan: [number, number] = at < start ? [end, subjectTo] : [Math.max(end, from), to];
+      // A cause phrase explains the construction away only in the segment the supply commits in. An
+      // adverb localises nothing, so any cause phrase's segment counts; a committed predicate sits in
+      // the segment its own SUBJECT sits in, so a cause phrase one coordinator away belongs to a
+      // different subject and a custodian on IT must not suppress the supply. Reading every cause
+      // phrase's segment for a predicate-anchored supply suppressed a genuine one whose subject shared
+      // no segment with the phrase - see `causePhraseSegments`.
+      const causeExplains = causeSegments
+        .filter(([causeFrom, causeTo]) => adverbAnchored || (causeFrom < subjectTo && causeTo > subjectFrom))
+        .some(([causeFrom, causeTo]) => POINTED_AT.test(clause.slice(causeFrom, causeTo)));
       return (
         refusals.some(refused => refused >= from && refused < start && !clause.slice(refused, start).includes(',')) ||
         SUBJECT_REFUSED.test(clause.slice(refusalSpan[0], refusalSpan[1])) ||
         POINTED_AT.test(clause.slice(from, to)) ||
         (adverbAnchored && POINTED_AT.test(clause.slice(subjectFrom, subjectTo))) ||
-        causeSegments.some(([causeFrom, causeTo]) => POINTED_AT.test(clause.slice(causeFrom, causeTo)))
+        causeExplains
       );
     };
     return supplies(clause, sentence).some(supply => !governed(supply));
