@@ -428,7 +428,7 @@ async function rememberToolDecision(
   }
 }
 
-async function handlePermissionResponse(
+export async function handlePermissionResponse(
   cmd: z.infer<typeof PermissionResponseSchema>,
   userId: string,
   connectionId: string,

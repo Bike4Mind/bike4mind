@@ -271,7 +271,9 @@ export async function startAgentExecution(
     approvedTools: isHeadlessConnection(input.connectionId)
       ? (input.enabledTools ?? [])
       : (remembered?.approvedTools ?? []),
-    deniedTools: remembered?.deniedTools ?? [],
+    // A headless caller's explicit tool list is the approval; it must not be second-guessed by a
+    // stale interactive-session denial (deny is checked first in classifyToolPermission).
+    deniedTools: isHeadlessConnection(input.connectionId) ? [] : (remembered?.deniedTools ?? []),
     iterationBilling: [],
     totalCreditsUsed: 0,
     lambdaInvocationCount: 1,

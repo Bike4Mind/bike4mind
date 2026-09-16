@@ -20,8 +20,22 @@ const handler = baseApi()
   })
   .delete(async (req, res) => {
     const sessionId = req.query.id as string;
-    const toolName = typeof req.query.tool === 'string' ? req.query.tool : undefined;
+    const { tool } = req.query;
 
+    // `?tool=a&tool=b` parses to an array; revoke each named tool rather than
+    // falling through to forgetAll, which would silently revoke everything.
+    if (Array.isArray(tool)) {
+      let remaining;
+      for (const toolName of tool) {
+        remaining = await sessionToolApprovalRepository.forgetTool(req.user.id, sessionId, String(toolName));
+      }
+      return res.json({
+        approvedTools: remaining?.approvedTools ?? [],
+        deniedTools: remaining?.deniedTools ?? [],
+      });
+    }
+
+    const toolName = tool ? String(tool) : undefined;
     if (!toolName) {
       await sessionToolApprovalRepository.forgetAll(req.user.id, sessionId);
       return res.json({ approvedTools: [], deniedTools: [] });
