@@ -86,6 +86,10 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     contextSummaryAt: { type: Date, required: false },
     contextSummaryModelId: { type: String, required: false },
     tags: { type: [TagSchema], required: false },
+    // Pairs with `tags` the way `summaryAt` pairs with `summary`. The schema is strict, so WITHOUT
+    // this declaration the field is dropped from every write and the `!session.taggedAt` gate in
+    // apps/client/server/events/spider.ts re-tags notebooks it already paid a completion to tag.
+    taggedAt: { type: Date, required: false },
     clonedSourceId: { type: String, required: false },
     forkedSourceId: { type: String, required: false },
     isAutoNamed: { type: Boolean, required: false },
