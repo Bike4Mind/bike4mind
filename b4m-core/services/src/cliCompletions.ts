@@ -14,6 +14,7 @@ import {
   IUsageEventRepository,
   IUserApiKeyRepository,
   IUserRepository,
+  normalizeMultimodalMessages,
   type CompletionSource,
 } from '@bike4mind/common';
 import {
@@ -152,7 +153,11 @@ function estimateInputTokens(messages: IMessage[]): number {
  * Used by Next.js API route, Lambda function, and available for 3rd party integrations
  */
 export async function executeCompletion(params: CompletionParams): Promise<void> {
-  const { userId, model, messages, options, db, logger, onChunk, apiKeyInfo } = params;
+  const { userId, model, options, db, logger, onChunk, apiKeyInfo } = params;
+  // Callers write multimodal parts in whichever dialect their SDK speaks and the wire
+  // schema accepts any of them (z.array(z.any())). Canonicalize once, here, so the
+  // token estimate below and every backend translator read the same shape.
+  const messages = normalizeMultimodalMessages(params.messages);
   const source: CompletionSource = params.source ?? 'api';
   const completionStartTime = Date.now();
 
