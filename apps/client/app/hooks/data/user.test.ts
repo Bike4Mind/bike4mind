@@ -104,21 +104,28 @@ describe('adminReturnValidationError', () => {
 });
 
 describe('useUpdateUser', () => {
-  const wrapper = ({ children }: { children: React.ReactNode }) => {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-    return React.createElement(QueryClientProvider, { client: qc }, children);
+  const createWrapper = () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const Wrapper = ({ children }: { children: React.ReactNode }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return { Wrapper, queryClient };
   };
 
+  /** Runs one save against a fresh QueryClient and resolves once the mutation has settled. */
   const save = async (response: unknown) => {
     vi.mocked(updateUserToServer).mockResolvedValue(response);
-    const { result } = renderHook(() => useUpdateUser(), { wrapper });
+    const { Wrapper, queryClient } = createWrapper();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const { result } = renderHook(() => useUpdateUser(), { wrapper: Wrapper });
     result.current.mutate({ id: 'u1', data: { name: 'New Name' } });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    return { queryClient, invalidateSpy };
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(useUser).mockImplementation((sel: any) => sel({ currentUser: { id: 'u1' } }));
   });
 
   it('warns instead of claiming success when the route reports ignored fields', async () => {
@@ -129,22 +136,27 @@ describe('useUpdateUser', () => {
   });
 
   it('keeps ignoredFields out of the cached user document', async () => {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-    const localWrapper = ({ children }: { children: React.ReactNode }) =>
-      React.createElement(QueryClientProvider, { client: qc }, children);
+    const { queryClient } = await save({ id: 'u1', name: 'New Name', ignoredFields: ['adminNote'] });
 
-    vi.mocked(updateUserToServer).mockResolvedValue({ id: 'u1', name: 'New Name', ignoredFields: ['adminNote'] });
-    const { result } = renderHook(() => useUpdateUser(), { wrapper: localWrapper });
-    result.current.mutate({ id: 'u1', data: { name: 'New Name' } });
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-    expect(qc.getQueryData(['users', 'u1'])).toEqual({ id: 'u1', name: 'New Name' });
+    expect(queryClient.getQueryData(['users', 'u1'])).toEqual({ id: 'u1', name: 'New Name' });
   });
 
   it('reports a plain success when nothing was ignored', async () => {
-    await save({ id: 'u1', name: 'New Name' });
+    const { queryClient } = await save({ id: 'u1', name: 'New Name' });
 
     expect(toast.warning).not.toHaveBeenCalled();
     expect(toast.success).toHaveBeenCalledWith('Profile updated successfully');
+    expect(queryClient.getQueryData(['users', 'u1'])).toEqual({ id: 'u1', name: 'New Name' });
+  });
+
+  it('invalidates the identify query on success so the sidebar switcher refreshes', async () => {
+    const { invalidateSpy } = await save({ id: 'u1', name: 'New Name' });
+
+    const invalidatedKeys = invalidateSpy.mock.calls.map(call => call[0]?.queryKey);
+    expect(invalidatedKeys).toContainEqual(['identify']);
+    // Existing invalidations must remain intact.
+    expect(invalidatedKeys).toContainEqual(['users']);
+    expect(invalidatedKeys).toContainEqual(['sessions']);
+    expect(invalidatedKeys).toContainEqual(['organizations']);
   });
 });
