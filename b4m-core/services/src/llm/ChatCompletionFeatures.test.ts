@@ -2352,7 +2352,9 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
       user: { id: 'u1', organizationId: opts.scoped ? 'org1' : undefined, tags: [], groups: [] },
       db: {
-        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        // #2769: readForcedRetrievalSettings now verifies organizationId against membership before
+        // trusting it - a verified member of 'org1' whenever the fixture claims that pointer.
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(opts.scoped ? ['org1'] : []) },
         fabfiles: {
           search: vi
             .fn()
@@ -2481,6 +2483,19 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
     expect(bodyLen(content)).toBe(9_000);
   });
 
+  it('falls back to the platform value, without throwing, when the membership lookup itself fails (#2769)', async () => {
+    // A transient org-repo outage must not fail the whole turn over a budget that's tolerable to
+    // get wrong - it degrades exactly like a non-member: the org override must not apply.
+    const ctx = makeCtx({
+      getSettingsValue: platformBudgetOnly('2000'),
+      chunkText: 'z'.repeat(30_000),
+      scoped: { orgOverride: '9000' },
+    });
+    ctx.db.organizations.findMembershipOrgIds = vi.fn().mockRejectedValue(new Error('org repo unavailable'));
+    const content = await run(ctx);
+    expect(bodyLen(content)).toBe(2_000);
+  });
+
   it('falls through to the platform value when the overlay holds no override (#2572)', async () => {
     // The common case on a scoped-overlay host: an org with nothing overridden must not lose the
     // platform value, which is what a resolver bug that treated "no override" as "unset" would do.
@@ -2527,7 +2542,9 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
       user: { id: 'u1', organizationId: 'org1', tags: [], groups: [] },
       db: {
-        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        // #2769: readForcedRetrievalSettings now verifies organizationId against membership before
+        // trusting it - every fixture here claims 'org1', so a verified member of it.
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(['org1']) },
         fabfiles: {
           search: vi
             .fn()

@@ -24,7 +24,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-const feedbackDoc = { id: 'fb1', userId: 'owner1', contentStored: false };
+const feedbackDoc = { id: '507f1f77bcf86cd7994390fb', userId: 'owner1', contentStored: false };
 const model = vi.hoisted(() => ({
   findById: vi.fn(),
   findOneAndUpdate: vi.fn(),
@@ -42,7 +42,7 @@ import '@pages/api/feedback/[id]/update';
 function mocks(can: (action: string, subject: unknown) => boolean) {
   const { req, res } = createMocks({
     method: 'PUT',
-    query: { id: 'fb1' },
+    query: { id: '507f1f77bcf86cd7994390fb' },
     body: { userId: 'someone', content: 'edited', username: 'x', status: 'open' },
   });
   (req as any).user = { id: 'attacker', isAdmin: false };

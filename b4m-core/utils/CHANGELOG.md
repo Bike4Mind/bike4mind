@@ -1,5 +1,71 @@
 # @bike4mind/utils
 
+## 6.0.0
+
+### Major Changes
+
+- [#2786](https://github.com/Bike4Mind/bike4mind/pull/2786) [`4f8f445`](https://github.com/Bike4Mind/bike4mind/commit/4f8f445aa1d025a5187158fc0a527f475cefbd91) Thanks [@jarlacut](https://github.com/jarlacut)! - resolve ingest file type by extension, with per-door precedence
+
+  **Breaking change.** `resolveSupportedMimeType`'s third parameter is now an options object instead of
+  a bare predicate function:
+
+  ```ts
+  resolveSupportedMimeType(fileName, claimedMimeType, {
+    isAcceptable?: (mimeType: string | null | undefined) => boolean; // defaults to isSupportedFabFileMimeType
+    precedence?: 'extension-first' | 'claim-first'; // defaults to 'extension-first'
+    extensionlessFallback?: SupportedFabFileMimeTypes;
+  })
+  ```
+
+  A bare predicate passed as the third argument no longer works - wrap it as
+  `{ isAcceptable: yourPredicate }`. `precedence` controls whether the filename
+  extension or the caller-supplied MIME type is consulted first, and
+  `extensionlessFallback` is the type used for a filename that carries no
+  extension at all (and no claim) - omit it to keep a caller strict.
+
+  **Inputs that were previously accepted and are now refused:**
+
+  - A filename with a dot-tail that does not resolve to a known extension is
+    refused outright - a claimed MIME type no longer rescues it. (`deploy.sh` or
+    `malware.exe` claiming `text/plain` is no longer admitted.)
+  - A dotted date or version filename (`Meeting notes 2026.09.07`, `My Report
+v1.2`) is refused, because its tail is read as an unrecognized extension.
+  - A trailing-dot filename (`payload.`) is treated as malformed rather than
+    extension-less, so it no longer receives a plain-text fallback.
+  - A URL import that yields no extractable text is now refused with an error
+    instead of silently creating an empty file.
+  - The Slack ingest door now applies the same extension rule as the other
+    ingest doors: an attachment whose filename has an unrecognized or
+    date-style tail is refused.
+
+- [#2786](https://github.com/Bike4Mind/bike4mind/pull/2786) [`4f8f445`](https://github.com/Bike4Mind/bike4mind/commit/4f8f445aa1d025a5187158fc0a527f475cefbd91) Thanks [@jarlacut](https://github.com/jarlacut)! - resolve ingest file type by extension, with per-door precedence
+
+### Patch Changes
+
+- [#2833](https://github.com/Bike4Mind/bike4mind/pull/2833) [`46ea8e1`](https://github.com/Bike4Mind/bike4mind/commit/46ea8e1efc42e992ebc0a19c4542f65d2665832c) Thanks [@onoya](https://github.com/onoya)! - bound oversized structured inputs before allocation and decode
+
+- [#2841](https://github.com/Bike4Mind/bike4mind/pull/2841) [`2cfe44d`](https://github.com/Bike4Mind/bike4mind/commit/2cfe44d452803f4be8d6689edfb4ad250b0c881c) Thanks [@onoya](https://github.com/onoya)! - schedule the Anthropic concurrency pool fairly and bound its wait line
+
+- Updated dependencies [[`7a214d5`](https://github.com/Bike4Mind/bike4mind/commit/7a214d5aa0fb5aa65302f887a3fac356ab3dc8ca), [`6f662d8`](https://github.com/Bike4Mind/bike4mind/commit/6f662d81308d53bb430665ed048607da97c4e9ef), [`46ea8e1`](https://github.com/Bike4Mind/bike4mind/commit/46ea8e1efc42e992ebc0a19c4542f65d2665832c), [`2cfe44d`](https://github.com/Bike4Mind/bike4mind/commit/2cfe44d452803f4be8d6689edfb4ad250b0c881c), [`068e14f`](https://github.com/Bike4Mind/bike4mind/commit/068e14f2ab9e45cb7e7cecbae8a49fca1ce85dc6), [`fa08028`](https://github.com/Bike4Mind/bike4mind/commit/fa08028c91136b4f051a45bc4976a7714677f845), [`0a4253e`](https://github.com/Bike4Mind/bike4mind/commit/0a4253e4f31492b6fea19976a469ffd5e79f4af9), [`6ce4b99`](https://github.com/Bike4Mind/bike4mind/commit/6ce4b99b9ab5d4fe8142647a9b3dcef6f0c8ebfd)]:
+  - @bike4mind/common@7.4.0
+  - @bike4mind/fab-pipeline@1.3.7
+  - @bike4mind/llm-adapters@0.15.1
+
+## 5.2.0
+
+### Minor Changes
+
+- [#2812](https://github.com/Bike4Mind/bike4mind/pull/2812) [`fee546f`](https://github.com/Bike4Mind/bike4mind/commit/fee546f162297fbd3cf5acdb41b71906bdabab46) Thanks [@maconard](https://github.com/maconard)! - restore DeepSeek V4 Pro
+
+### Patch Changes
+
+- [#2823](https://github.com/Bike4Mind/bike4mind/pull/2823) [`a4e980d`](https://github.com/Bike4Mind/bike4mind/commit/a4e980d956c721aa734dde981420adcb4bfaa243) Thanks [@onoya](https://github.com/onoya)! - escape dynamic regex inputs and guard dynamic object writes
+
+- Updated dependencies [[`5e1eee0`](https://github.com/Bike4Mind/bike4mind/commit/5e1eee08f765b93a1c30160c03858e7c5e9fd798), [`fee546f`](https://github.com/Bike4Mind/bike4mind/commit/fee546f162297fbd3cf5acdb41b71906bdabab46), [`2922d00`](https://github.com/Bike4Mind/bike4mind/commit/2922d0061d5ee3673da2a3b9bd88f11b7005e5db), [`afba631`](https://github.com/Bike4Mind/bike4mind/commit/afba6315105929e9b39672a2d0d23caad7f8e4aa)]:
+  - @bike4mind/common@7.3.0
+  - @bike4mind/llm-adapters@0.15.0
+  - @bike4mind/fab-pipeline@1.3.6
+
 ## 5.1.2
 
 ### Patch Changes

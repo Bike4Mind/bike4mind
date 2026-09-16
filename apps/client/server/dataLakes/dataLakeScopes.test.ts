@@ -125,4 +125,15 @@ describe('data-lake API-key scopes', () => {
     expect(() => assertDataLakeWriteScope(key(ApiKeyScope.AI_CHAT))).not.toThrow();
     expect(() => assertDataLakeShareScope(key(ApiKeyScope.AI_CHAT))).toThrow();
   });
+
+  it('staging datalake:share re-opens the share doors that already enforce', () => {
+    // The lever is per-scope, not per-route, so staging this scope to grandfather a
+    // late-arriving door also drops the guard on every door already enforcing it:
+    // data-lakes/[id]/grants, .../visibility, and .../transfer-ownership (which comes
+    // through this assert). Pinned because that cost is invisible at the call site -
+    // and this assert, unlike apiKeyAuth's door gate, logs nothing on a staged pass,
+    // so the keys sliding through never reach the re-mint cross-check either.
+    process.env[SCOPE_STAGING_ENV_VAR] = ApiKeyScope.DATALAKE_SHARE;
+    expect(() => assertDataLakeShareScope(key(ApiKeyScope.AI_CHAT))).not.toThrow();
+  });
 });

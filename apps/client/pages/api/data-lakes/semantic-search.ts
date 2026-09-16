@@ -76,6 +76,13 @@ function getSharedTokenizer(logger: Logger): ITokenizer {
  *
  * Budgets are read-only, so this is a tighter standard than the rung strictly needs. It is the
  * cheap one here, and it keeps the route from being the precedent that a looser derivation is fine.
+ *
+ * Deliberately diverges from the billing block further down (`billingOrg`, via
+ * `organizationRepository.shareable.findAccessibleById`), which also grants on a `groups[]`
+ * share. A caller with only group-share access is therefore not a member here but is billed
+ * against and capped by that org there, in the same request - both checks are individually
+ * correct for their own purpose; see #2857 for why that disagreement is accepted as-is rather
+ * than reconciled.
  */
 async function resolveBudgetScope(req: Request): Promise<SettingScope> {
   const userId = req.user.id;
@@ -356,13 +363,23 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       // both the check and the charge undone, which is the pre-existing behaviour - it must not
       // turn a working search into a 500.
       let billingUser: Awaited<ReturnType<typeof userRepository.findById>> | null = null;
-      let billingOrg: Awaited<ReturnType<typeof organizationRepository.findById>> | null = null;
+      let billingOrg: Awaited<ReturnType<typeof organizationRepository.shareable.findAccessibleById>> | null = null;
       try {
         // Both assigned only after both reads succeed: a half-resolved pair (user set, org
         // null) would skip the member cap and bill the member personally for org usage.
         const resolvedUser = await userRepository.findById(req.user.id);
+        // ACL-checked, not the plain accessor: a stale organizationId pointer (the roster no
+        // longer carries this user, #2607) must fall back to personal billing rather than
+        // billing/capping against an org they've left. Same shareable ACL resolveActiveOrg
+        // uses (#2769), deliberately WITHOUT its isAdmin arm - platform admin rights are not
+        // a billing relationship, so an admin's own stale pointer bills personally too.
+        // Deliberately diverges from resolveBudgetScope above (#2709), which does not grant on a
+        // groups[] share: a caller with only group-share access is billed/capped here but resolves
+        // at their personal owner rung there (no org rung at all), so their own override governs
+        // instead of the org's - see #2857 for why that disagreement is accepted as-is rather than
+        // reconciled.
         const resolvedOrg = resolvedUser?.organizationId
-          ? await organizationRepository.findById(resolvedUser.organizationId)
+          ? await organizationRepository.shareable.findAccessibleById(req.user, resolvedUser.organizationId)
           : null;
         billingUser = resolvedUser;
         billingOrg = resolvedOrg;

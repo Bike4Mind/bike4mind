@@ -105,16 +105,19 @@ export const createFabFileByUrl = async (
   const { textContent, mimeType, title } = await fetchAndParseURL(params.url, { logger });
 
   const fileSize = typeof textContent === 'string' ? Buffer.byteLength(textContent) : textContent.length;
+  // A zero-length body is refused on BOTH arms: an empty extracted string (no readable text on the
+  // page) and an empty PDF Buffer alike (a zero-byte PDF is no more legitimate content than a
+  // zero-character page) - either would otherwise create a phantom 0-byte FabFile.
+  if (fileSize === 0) {
+    throw new BadRequestError('No readable text could be extracted from that URL');
+  }
+
   // Hashes whatever `fetchAndParseURL` returned - extracted text for most content, raw bytes for a
   // PDF (see `ingest.ts`'s `urlContent = body` arm). Either way, identical input deterministically
   // produces identical `textContent`, so this still satisfies "byte-identical fetched bodies are
   // duplicates" without widening `fetchAndParseURL`'s own contract.
   //
-  // Only computed/checked when there is content: an empty fetch (a JS-only or paywalled page)
-  // would otherwise share one `computeContentHash('')` key across every such page, making
-  // unrelated empty fetches collide with each other as false "duplicates".
-  //
-  // For HTML extraction specifically, also skipped below `MIN_CONTENT_LENGTH_FOR_DEDUP`: `ingest.ts`'s
+  // For HTML extraction specifically, skipped below `MIN_CONTENT_LENGTH_FOR_DEDUP`: `ingest.ts`'s
   // chrome-pruning rollback trusts a prune once as little as ~20 characters of the page's own text
   // survive it, so a link-directory-style page can legitimately extract down to nothing but a short
   // boilerplate remnant (a copyright line, a "Further reading." label). Two UNRELATED pages that both
@@ -124,9 +127,9 @@ export const createFabFileByUrl = async (
   // it anyway is not, so this is deliberately conservative. PDFs (`textContent` is a `Buffer`) are
   // unaffected - the chrome-pruning floor above only applies to the HTML extraction path.
   const isThinHtmlExtraction = typeof textContent === 'string' && textContent.length < MIN_CONTENT_LENGTH_FOR_DEDUP;
-  const contentHash = fileSize > 0 && !isThinHtmlExtraction ? computeContentHash(textContent) : undefined;
+  const contentHash = isThinHtmlExtraction ? undefined : computeContentHash(textContent);
 
-  if (contentHash && checkDuplicate) {
+  if (checkDuplicate) {
     const existing = await checkDuplicate(contentHash);
     if (existing) throw new DuplicateFabFileError(existing, title);
   }
@@ -160,6 +163,14 @@ export const createFabFileByUrl = async (
       storage,
       provenance,
       administeredOrgIds,
+      // mimeType comes from fetchAndParseURL's HTTP response, not the client; title is free-form
+      // page text (a <title> or URL segment) and must not be able to outrank it.
+      //
+      // createFabFile still passes its own extensionlessFallback (text/plain) through unconditionally,
+      // but it is unreachable from this door: fetchAndParseURL only ever returns 'application/pdf' or
+      // 'text/plain' (both supported), so under claim-first the claim always resolves first. A future
+      // change widening fetchAndParseURL's mimeType set must keep that invariant in mind.
+      mimeTypePrecedence: 'claim-first',
     }
   );
 

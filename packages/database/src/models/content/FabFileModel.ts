@@ -3101,6 +3101,11 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // bumps it on any write, so an unrelated edit would reset the staleness clock. Only meaningful
     // while moderationStatus === 'scanning'.
     moderationClaimedAt: { type: Date, required: false },
+    // Failed-attempt bookkeeping for the rescue sweep's fairness ordering and backoff - see
+    // IFabFile.moderationAttempts / .moderationLastAttemptAt. Left unset (not defaulted to 0) so
+    // "never failed" sorts ahead of any attempted row without a backfill.
+    moderationAttempts: { type: Number, required: false },
+    moderationLastAttemptAt: { type: Date, required: false },
     error: { type: String, required: false },
     presignedUrl: { type: String },
     fileUrl: { type: String },
@@ -3256,9 +3261,14 @@ FabFileSchema.index({ batchId: 1 });
 // Moderation queue / audit lookups
 FabFileSchema.index({ userId: 1, moderationStatus: 1 });
 
-// Serves the moderation rescue sweep's stale-'pending' scan (moderationRescueSweep.ts): seeks the
-// status + deletedAt equality and the createdAt range without touching every non-deleted row.
-FabFileSchema.index({ moderationStatus: 1, deletedAt: 1, createdAt: 1 });
+// Serves both moderation rescue sweep queries (moderationRescueSweep.ts): the stale-'pending'
+// selection and the stale-'scanning' reclaim. The status + deletedAt equality prefix is what keeps
+// either off a collection scan - load-bearing on self-host, where the worker runs both every 60s.
+// moderationAttempts sits third so it also SUPPLIES the selection's fairness sort, letting the
+// planner stream in sort order and stop at `limit` instead of a blocking top-K over every pending
+// row; createdAt trails as the tiebreaker. The sweep's remaining predicates (the createdAt age
+// floor, the two $ors) ride along as residual filters. Pinned by fabFileModerationSweep.test.ts.
+FabFileSchema.index({ moderationStatus: 1, deletedAt: 1, moderationAttempts: 1, createdAt: 1 });
 
 // No index currently serves the `fileName` sort's `_id` tiebreaker (buildFabFileSearchQuery).
 // Two things to know before adding one: (a) any future `fileName` sort index would need

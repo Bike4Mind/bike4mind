@@ -183,7 +183,7 @@ describe('/api/jupyter/execute', () => {
       ]);
       (sendToConnection as Mock).mockResolvedValue(undefined);
       // findOneAndUpdate returns the updated document (or null if not found)
-      (Quest.findOneAndUpdate as Mock).mockResolvedValue({ _id: 'quest-456' });
+      (Quest.findOneAndUpdate as Mock).mockResolvedValue({ _id: '507f1f77bcf86cd799439041' });
     });
 
     it('should send keep_command to first CLI connection and return success', async () => {
@@ -227,7 +227,7 @@ describe('/api/jupyter/execute', () => {
       mockReq.body = {
         notebookJson: validNotebook,
         sessionId: 'session-123',
-        questId: 'quest-456',
+        questId: '507f1f77bcf86cd799439041',
       };
 
       const { default: handler } = await import('@client/pages/api/jupyter/execute');
@@ -237,7 +237,7 @@ describe('/api/jupyter/execute', () => {
       // top-level `userId`, so the filter this used to assert could never match a real document
       // and the route 403'd every caller. The mock made it look correct.
       expect(Quest.findOneAndUpdate).toHaveBeenCalledWith(
-        { _id: 'quest-456', 'promptMeta.session.userId': 'user-123' },
+        { _id: '507f1f77bcf86cd799439041', 'promptMeta.session.userId': 'user-123' },
         expect.objectContaining({
           $set: expect.objectContaining({
             'jupyterNotebook.status': 'executing',
@@ -300,7 +300,7 @@ describe('/api/jupyter/execute', () => {
       mockReq.body = {
         notebookJson: validNotebook,
         sessionId: 'session-123',
-        questId: 'quest-456',
+        questId: '507f1f77bcf86cd799439041',
       };
 
       (Connection.find as Mock).mockResolvedValue([{ connectionId: 'conn-1', source: 'cli' }]);

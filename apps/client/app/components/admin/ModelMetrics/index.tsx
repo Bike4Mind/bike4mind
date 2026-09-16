@@ -204,7 +204,7 @@ const ModelMetricsTab: React.FC = () => {
 
         {/* Analytics Tab */}
         <TabPanel value="analytics" sx={{ p: 1 }}>
-          <AnalyticsTab chartData={chartData} filters={appliedFilters} />
+          <AnalyticsTab filters={appliedFilters} />
         </TabPanel>
 
         {/* Raw Data Tab */}

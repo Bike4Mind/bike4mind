@@ -35,8 +35,8 @@ describe('getClientIp', () => {
   });
 
   it('falls through to other headers when cloudfront-viewer-address is absent', () => {
-    const req = mockReq({ headers: { 'x-real-ip': '203.0.113.50' } });
-    expect(getClientIp(req)).toBe('203.0.113.50');
+    const req = mockReq({ headers: { 'x-real-ip': '8.8.8.8' } });
+    expect(getClientIp(req)).toBe('8.8.8.8');
   });
 
   it('prefers cf-connecting-ip over a spoofed x-forwarded-for', () => {
@@ -44,18 +44,18 @@ describe('getClientIp', () => {
     // cf-connecting-ip must win so the spoofed value is never recorded.
     const req = mockReq({
       headers: {
-        'x-forwarded-for': '1.1.1.1, 203.0.113.7',
-        'cf-connecting-ip': '203.0.113.7',
+        'x-forwarded-for': '1.1.1.1, 8.8.4.4',
+        'cf-connecting-ip': '8.8.4.4',
       },
     });
-    expect(getClientIp(req)).toBe('203.0.113.7');
+    expect(getClientIp(req)).toBe('8.8.4.4');
   });
 
   it('uses a public x-forwarded-for when it is the only header present', () => {
     const req = mockReq({
-      headers: { 'x-forwarded-for': '198.51.100.23' },
+      headers: { 'x-forwarded-for': '9.9.9.9' },
     });
-    expect(getClientIp(req)).toBe('198.51.100.23');
+    expect(getClientIp(req)).toBe('9.9.9.9');
   });
 
   it('filters a private leftmost x-forwarded-for and falls back to the socket', () => {
@@ -68,14 +68,17 @@ describe('getClientIp', () => {
     expect(getClientIp(req)).toBe('203.0.113.7');
   });
 
-  it('uses a public IPv6 x-forwarded-for when it is the only header present', () => {
-    const req = mockReq({ headers: { 'x-forwarded-for': '2001:db8::1' } });
-    expect(getClientIp(req)).toBe('2001:db8::1');
-  });
+  it.each(['2606:4700::1111', '2001:4860::8888'])(
+    'uses a public IPv6 x-forwarded-for when it is the only header present (%s)',
+    addr => {
+      const req = mockReq({ headers: { 'x-forwarded-for': addr } });
+      expect(getClientIp(req)).toBe(addr);
+    }
+  );
 
   it('accepts a public IPv4-mapped IPv6 (strip must not over-reject)', () => {
-    const req = mockReq({ headers: { 'x-forwarded-for': '::ffff:203.0.113.7' } });
-    expect(getClientIp(req)).toBe('::ffff:203.0.113.7');
+    const req = mockReq({ headers: { 'x-forwarded-for': '::ffff:8.8.8.8' } });
+    expect(getClientIp(req)).toBe('::ffff:8.8.8.8');
   });
 
   it.each([
@@ -86,6 +89,8 @@ describe('getClientIp', () => {
     ['unique-local fc00::/7', 'fc00::1'],
     ['unique-local fd00::/8', 'fd12:3456::1'],
     ['IPv4-mapped private', '::ffff:10.0.0.1'],
+    ['IETF-reserved fe00::/9', 'fe00::1'], // #1969
+    ['site-local fec0::/10', 'fec0::1'], // #1969
   ])('filters a private/reserved IPv6 (%s) and falls back to the socket', (_label, addr) => {
     const req = mockReq({
       headers: { 'x-forwarded-for': addr },
@@ -94,19 +99,34 @@ describe('getClientIp', () => {
     expect(getClientIp(req)).toBe('203.0.113.7');
   });
 
+  // `isPrivateIP` (delegated to `@bike4mind/fab-pipeline`, see #1969) is wider than the local regex
+  // list this file used to carry: it also refuses CGNAT (100.64.0.0/10) and the RFC 5737/3849
+  // documentation ranges. Pinned here so reverting that delegation is caught by a failing test, not
+  // just by a description in a PR.
+  it.each(['100.64.0.1', '203.0.113.7', '198.51.100.23'])(
+    'filters a CGNAT/documentation-range x-forwarded-for (%s) and falls back to the socket',
+    addr => {
+      const req = mockReq({
+        headers: { 'x-forwarded-for': addr },
+        socketIp: '8.8.8.8',
+      });
+      expect(getClientIp(req)).toBe('8.8.8.8');
+    }
+  );
+
   it('does NOT blindly trust the leftmost x-forwarded-for when a higher-priority header exists', () => {
     const req = mockReq({
       headers: {
         'x-forwarded-for': '1.1.1.1',
-        'true-client-ip': '203.0.113.50',
+        'true-client-ip': '9.9.9.9',
       },
     });
-    expect(getClientIp(req)).toBe('203.0.113.50');
+    expect(getClientIp(req)).toBe('9.9.9.9');
   });
 
   it('strips a port from the resolved IP', () => {
-    const req = mockReq({ headers: { 'x-real-ip': '203.0.113.99:54321' } });
-    expect(getClientIp(req)).toBe('203.0.113.99');
+    const req = mockReq({ headers: { 'x-real-ip': '8.8.8.8:54321' } });
+    expect(getClientIp(req)).toBe('8.8.8.8');
   });
 
   it('falls back to the socket address when no usable headers are present', () => {
