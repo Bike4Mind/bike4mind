@@ -44,18 +44,21 @@ describe.skipIf(!baseUrl || !model)('grounded no-invention rule (live model)', (
       // The report is the deliverable - a bare pass/fail on a stochastic suite is not actionable.
       console.log(`\n${model} @ ${samples} samples/case (shipped rule)\n${formatEvalReport(results)}\n`);
 
+      // Reported, not gated: this arm exists to compare against the shipped one above, and a candidate
+      // under active development is expected to fail cases the shipped rule already passes. It runs
+      // BEFORE the assertion because the assertion throws - gating first would abort the comparison
+      // arm exactly when a regression made the comparison worth having, after paying for half of it.
+      if (candidateRule) {
+        const candidateResults = await runGroundedNoInventionEval(
+          { baseUrl: baseUrl!, model: model!, samples, apiKey },
+          GROUNDED_CASES,
+          candidateRule
+        );
+        console.log(`\n${model} @ ${samples} samples/case (candidate rule)\n${formatEvalReport(candidateResults)}\n`);
+      }
+
       const regressed = results.filter(r => r.passRate < MIN_PASS_RATE);
       expect(regressed.map(r => `${r.evalCase.id}: ${r.samples.find(s => !s.passed)?.reason}`)).toEqual([]);
-
-      // Reported, not gated: this arm exists to compare against the shipped one above, and a candidate
-      // under active development is expected to fail cases the shipped rule already passes.
-      if (!candidateRule) return;
-      const candidateResults = await runGroundedNoInventionEval(
-        { baseUrl: baseUrl!, model: model!, samples, apiKey },
-        GROUNDED_CASES,
-        candidateRule
-      );
-      console.log(`\n${model} @ ${samples} samples/case (candidate rule)\n${formatEvalReport(candidateResults)}\n`);
     },
     // The harness sends cases x samples sequentially, twice over when a candidate arm is set, so the
     // budget has to scale with the sweep rather than sit at a constant: the default 3 samples is 27
