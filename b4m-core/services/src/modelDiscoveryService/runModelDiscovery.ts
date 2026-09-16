@@ -1291,8 +1291,8 @@ async function recentRunHistory(adapters: ModelDiscoveryAdapters, startedAt: Dat
  * the cost was structural: lastSuccessfulRun is findOne({status:'ok'}), so a
  * deployment that always skips something never had one, the startup staleness
  * gate never tripped, and every container boot re-ran a full fan-out. A run with
- * nothing but skips is 'ok' too, with an empty `sources` list and the skip
- * counts in the summary line to tell it apart from a full one.
+ * nothing but skips is 'ok' too, with an empty `sources` list and the named
+ * skips in the summary line to tell it apart from a full one.
  */
 function runStatus(attempted: number, succeeded: number, deadlineHit: boolean): 'ok' | 'partial' | 'failed' {
   if (attempted > 0 && succeeded === 0) return 'failed';
@@ -1300,12 +1300,27 @@ function runStatus(attempted: number, succeeded: number, deadlineHit: boolean): 
   return 'ok';
 }
 
-/** Skip counts for the summary line: "ok with nothing attempted" has to be readable. */
-function describeSkips(skipped: ReadonlyArray<{ reason: SourceSkipReason }>): string {
+/** Keeps the summary line bounded when a wide source registry skips everything. */
+const MAX_LOGGED_SKIP_NAMES_PER_REASON = 5;
+
+/**
+ * Skips for the summary line: "ok with nothing attempted" has to be readable,
+ * and a bare count leaves the reader unable to say which source went missing.
+ */
+function describeSkips(skipped: ReadonlyArray<{ name: string; reason: SourceSkipReason }>): string {
   if (skipped.length === 0) return '0';
-  const byReason = new Map<SourceSkipReason, number>();
-  for (const { reason } of skipped) byReason.set(reason, (byReason.get(reason) ?? 0) + 1);
-  return `${skipped.length}(${[...byReason].map(([reason, count]) => `${reason}:${count}`).join(',')})`;
+  const byReason = new Map<SourceSkipReason, string[]>();
+  for (const { name, reason } of skipped) {
+    const names = byReason.get(reason);
+    if (names) names.push(name);
+    else byReason.set(reason, [name]);
+  }
+  const groups = [...byReason].map(([reason, names]) => {
+    const shown = names.slice(0, MAX_LOGGED_SKIP_NAMES_PER_REASON).join('+');
+    const overflow = names.length - MAX_LOGGED_SKIP_NAMES_PER_REASON;
+    return `${reason}:${overflow > 0 ? `${shown}+${overflow}more` : shown}`;
+  });
+  return `${skipped.length}(${groups.join(',')})`;
 }
 
 function computeJoinCoverage(

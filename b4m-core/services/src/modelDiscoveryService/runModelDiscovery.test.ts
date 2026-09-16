@@ -214,10 +214,10 @@ describe('runModelDiscovery', () => {
       { name: 'models.dev', reason: 'egress-disabled' },
     ]);
     // Nothing failed, so nothing degrades the status; the empty source list and
-    // the skip counts in the summary are what say no data was refreshed.
+    // the named skips in the summary are what say no data was refreshed.
     expect(result.outcome).toBe('ok');
     expect(result.sources).toEqual([]);
-    expect(walled.infos.some(message => message.includes('skipped=2(egress-disabled:2)'))).toBe(true);
+    expect(walled.infos.some(message => message.includes('skipped=2(egress-disabled:openai+models.dev)'))).toBe(true);
     // The run document is what the admin surfaces read, and an all-skipped run is
     // the one whose empty source list looks like a bug.
     expect(walled.runs.docs[0].sources).toEqual([]);
@@ -226,6 +226,21 @@ describe('runModelDiscovery', () => {
       { name: 'models.dev', reason: 'egress-disabled' },
     ]);
     expect(walled.catalog.rows).toEqual([]);
+  });
+
+  it('caps the named skips in the summary line so a wide registry cannot blow it up', async () => {
+    const many = harness(
+      Array.from({ length: 7 }, (_, index) => stubSource({ name: `source-${index + 1}` })),
+      { modelDiscoveryAllowEgress: false }
+    );
+
+    await runModelDiscovery(many.adapters, many.options);
+
+    expect(
+      many.infos.some(message =>
+        message.includes('skipped=7(egress-disabled:source-1+source-2+source-3+source-4+source-5+2more)')
+      )
+    ).toBe(true);
   });
 
   it('skips a source another host fetched successfully within the interval', async () => {
