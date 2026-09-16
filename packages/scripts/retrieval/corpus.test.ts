@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { loadHelpArticles } from '../help/loadHelpArticles';
-import { NEGATIVES, NEVER_SUPPORTING, POSITIVES, PROBE_QUESTIONS, REFERENCED_SLUGS } from './corpus';
+import { NEGATIVES, NEVER_SUPPORTING, parseProbeQuestions, POSITIVES, PROBE_QUESTIONS, REFERENCED_SLUGS } from './corpus';
 
 /**
  * CI gate on the probe's ground truth, validated against the REAL help corpus rather than a fixture.
@@ -84,5 +84,32 @@ describe('probe ground truth', () => {
 
   it('partitions cleanly into positives and negatives', () => {
     expect(POSITIVES.length + NEGATIVES.length).toBe(PROBE_QUESTIONS.length);
+  });
+});
+
+describe('parseProbeQuestions', () => {
+  const one = { id: 'q1', question: 'what drives the monthly charge?', supporting: ['file-a'] };
+
+  it('accepts a well-formed external set and keeps an empty supporting array as a negative', () => {
+    const parsed = parseProbeQuestions([one, { id: 'n1', question: 'unrelated?', supporting: [] }], 'set.json');
+    expect(parsed).toHaveLength(2);
+    expect(parsed[1].supporting).toEqual([]);
+  });
+
+  it('names the file and the entry index on a schema failure', () => {
+    expect(() => parseProbeQuestions([one, { id: 'q2', question: 'no supporting key' }], 'set.json')).toThrow(
+      /set\.json" entry 1: supporting/
+    );
+  });
+
+  it('rejects a duplicate id rather than silently dropping one question', () => {
+    // resolveQueries and assertSameQuerySet both key on the id, so a duplicate shrinks the scored
+    // set - and an arm scored on fewer questions reads as a better model.
+    expect(() => parseProbeQuestions([one, { ...one, question: 'different text' }], 'set.json')).toThrow(/q1/);
+  });
+
+  it('rejects a non-array and an empty set', () => {
+    expect(() => parseProbeQuestions({ questions: [one] }, 'set.json')).toThrow(/JSON array/);
+    expect(() => parseProbeQuestions([], 'set.json')).toThrow(/empty/);
   });
 });
