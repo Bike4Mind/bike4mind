@@ -1,17 +1,18 @@
-import { GenerateImageToolCall, ImageModels } from '@bike4mind/common';
+import { GenerateImageToolCall, ImageModels, type OpenAIImageQuality } from '@bike4mind/common';
 
-/** Tool-call args that may override the client's saved image selections. */
+/** Tool-call args that may override the client's saved image selections. Nulls are
+ *  accepted because the OpenAI SDK types them that way; the resolver normalizes them out. */
 export interface ImageToolArgs {
-  n?: number;
+  n?: number | null;
   size?: string | null;
-  quality?: string;
+  quality?: OpenAIImageQuality | null;
 }
 
 export interface ResolvedImageArgs {
   model: string;
   n: number;
   size?: string | null;
-  quality?: string;
+  quality?: OpenAIImageQuality;
 }
 
 /**
