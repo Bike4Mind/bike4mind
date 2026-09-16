@@ -19,7 +19,11 @@ import {
 } from '@bike4mind/utils';
 import { filterRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { Logger } from '@bike4mind/observability';
-import { supportsAtlasVectorSearch, selfHostOpenSearchEnabled } from '@bike4mind/db-core';
+import {
+  supportsAtlasVectorSearch,
+  selfHostOpenSearchEnabled,
+  selfHostOpenSearchResidencyRequired,
+} from '@bike4mind/db-core';
 import {
   classifyLoadedChunk,
   createEmbeddingMismatchAccumulator,
@@ -32,7 +36,11 @@ import {
 import { BoundedTopK } from './boundedTopK';
 import { recordDataLakeSearchMetrics } from './dataLakeSearchMetrics';
 import { reportScanTruncation, type ScanTruncationReport, type SearchEntrypoint } from './scanTruncationMetrics';
-import { isVectorSearchReady, partitionByVectorSearchReadiness } from './vectorSearchEligibility';
+import {
+  isVectorSearchReady,
+  partitionByIndexResidency,
+  partitionByVectorSearchReadiness,
+} from './vectorSearchEligibility';
 import {
   buildRetrievalUnavailableReport,
   emptyRetrievalUnavailableReport,
@@ -176,10 +184,11 @@ export interface SemanticSearchScanAccounting {
    * That is what keeps the sum above honest: a ready file the saturation rebucket hands back to
    * the scan path drops out of this count and turns up in `filesScanned` instead. So the three
    * cases differ on purpose:
-   *   - Atlas, saturated: unranked ready files are deliberately not scanned, so they stay counted
-   *     here - the index covered them and they simply lost on rank.
-   *   - Atlas under-saturated, and self-host always: the rebucket moves those files, so this
-   *     narrows to the ones that returned hits.
+   *   - Saturated (Atlas, or self-host with confirmed index residency): unranked eligible files
+   *     are deliberately not scanned, so they stay counted here - the index covered them and they
+   *     simply lost on rank.
+   *   - Under-saturated, and self-host without a residency signal: the rebucket moves those
+   *     files, so this narrows to the ones that returned hits.
    *   - Alternate models: always only the files that returned hits. They have no scan fallback, so
    *     an unranked file is searched by neither route (the caveat above).
    */
@@ -194,8 +203,9 @@ export interface SemanticSearchScanAccounting {
    * RANK-BOUNDED, not a coverage claim: it counts files absent from a topK-saturated result,
    * which is not the same as "chunks avoided" and says nothing about whether a file is indexed.
    * Only an under-saturated result (`hitsReturned < topK`) is evidence about coverage, and that
-   * case rebuckets to the scan path instead of counting here. Atlas only - self-host still
-   * rebuckets on absence alone (see the saturation comment in rankChunksForFiles).
+   * case rebuckets to the scan path instead of counting here. Self-host only produces this once
+   * its ANN split is gated on confirmed index residency (see the saturation comment in
+   * rankChunksForFiles); without that signal it still rebuckets on absence alone.
    */
   annUnrankedFilesLeftOffScan: number;
   /**
@@ -375,7 +385,7 @@ export interface SemanticDataLakeSearchParams {
 
 /** Optional Atlas-cutover methods, on top of the scan path's required ones. Optional so every existing adapter/mock that predates the cutover keeps compiling unchanged. */
 type FabFileChunksAdapter = Pick<IFabFileChunkRepository, 'findVectorsByFabFileIds'> &
-  Partial<Pick<IFabFileChunkRepository, 'vectorSearch' | 'getAtlasIndexStatus'>>;
+  Partial<Pick<IFabFileChunkRepository, 'vectorSearch' | 'getAtlasIndexStatus' | 'annResidentFabFileIds'>>;
 
 export interface SemanticDataLakeSearchAdapters {
   db: {
@@ -384,6 +394,38 @@ export interface SemanticDataLakeSearchAdapters {
   };
   /** Self-host OpenSearch retrieval, undefined elsewhere - a separate cluster, not a Mongo repo method. */
   vectorIndex?: OpenSearchVectorSearchAdapters;
+}
+
+/**
+ * Confirmed index residency for the self-host OpenSearch ANN path, or `null` when it cannot be
+ * established - no port wired, the lookup itself failed, or the caller has not opted into
+ * requiring it (`selfHostOpenSearchResidencyRequired`). `null` means "unknown", NOT "none": the
+ * caller then keeps the pre-residency behavior rather than dropping every file off the ANN path,
+ * so a repository that has not adopted the port - or a deployment that has not opted in - loses
+ * no capability.
+ */
+async function resolveIndexResidency(
+  annReady: Array<{ id: string }>,
+  model: string,
+  fabfilechunks: FabFileChunksAdapter,
+  logger?: Logger
+): Promise<ReadonlySet<string> | null> {
+  if (annReady.length === 0 || !fabfilechunks.annResidentFabFileIds) return null;
+  try {
+    return new Set(
+      await fabfilechunks.annResidentFabFileIds(
+        annReady.map(f => f.id),
+        model
+      )
+    );
+  } catch (error) {
+    logger?.warn?.('[semanticSearch] index residency lookup failed, falling back to absence-keyed rebucket', {
+      model,
+      fileCount: annReady.length,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 }
 
 /** Shape both entrypoints need from a scoped file's metadata. */
@@ -469,11 +511,18 @@ function compareByScore(a: SemanticChunkResult, b: SemanticChunkResult): number 
  * exploration in practice: FabFileModel's vector stage takes `numCandidates` as
  * `max(limit * 10, fileIds.length * 50, 100)`, and past a handful of files the per-file term
  * already dominates a tripled `limit * 10` (at topK 6, 180 vs. 200 from four files; at topK 10,
- * 300 vs. 300 from six), so the max moves by zero. The SCAN path reads no more rows than it
- * already would (scanAndRank's read volume is bounded by maxChunks, not topK; widening topK here
- * only changes how many of the chunks it was scanning anyway survive into `ranked`). So this is a
- * knob that trades ANN query work and a little CPU for diversity, not scan cost, and it is a
- * constant rather than a setting until an operator has a reason to want a different one.
+ * 300 vs. 300 from six), so the max moves by zero. That is correct rather than a shortfall, and
+ * the shape invites the opposite reading: `limit * 10` sits inside that same `max`, so
+ * `numCandidates` never falls below 10x the requested limit until Atlas's 10_000 ceiling clamps
+ * it, which needs a limit above 1000 and so is out of reach here, and `limit` truncates a
+ * traversal `numCandidates` has already paid for rather than extending it. A widened limit
+ * therefore appends lower-ranked rows to an identical candidate set and cannot degrade the
+ * prefix. Pinned by FabFileModel.vectorSearchCandidates.test.ts, which owns the arithmetic.
+ * The SCAN path reads no more rows than it already would (scanAndRank's read volume is bounded by
+ * maxChunks, not topK; widening topK here only changes how many of the chunks it was scanning
+ * anyway survive into `ranked`). So this is a knob that trades ANN query work and a little CPU for
+ * diversity, not scan cost, and it is a constant rather than a setting until an operator has a
+ * reason to want a different one.
  */
 const DIVERSITY_CANDIDATE_POOL_FACTOR = 3;
 
@@ -1021,8 +1070,16 @@ async function rankChunksForFiles(args: {
   // Why the ANN path did not engage, for the "flag on but nothing is using it" alert below. Each
   // cause needs a different fix and none of them is visible from `annModelsQueried` alone, so the
   // reason has to be captured here where it is actually known.
-  let annBlockedReason: 'no-backend' | 'index-not-queryable' | 'no-ready-files' | 'ready-files-within-lag' | null =
-    null;
+  let annBlockedReason:
+    | 'no-backend'
+    | 'index-not-queryable'
+    | 'no-ready-files'
+    | 'ready-files-within-lag'
+    | 'no-index-resident-files'
+    | null = null;
+  // Whether the self-host ANN split is backed by CONFIRMED index residency, which is what makes
+  // absence from a saturated result readable as a ranking outcome rather than a missing document.
+  let openSearchResidencyKnown = false;
   // One clock for the readiness partition AND the within-lag diagnosis below, so the alarm can
   // never disagree with the partition that produced it.
   const annReadinessNow = new Date();
@@ -1047,13 +1104,36 @@ async function rankChunksForFiles(args: {
       annBlockedReason = 'index-not-queryable';
     }
   } else if (canUseOpenSearch) {
-    // The readiness stamp still applies (same-model chunks must be fully vectorized+stamped), but
-    // it says nothing about whether the SEPARATE OpenSearch cluster actually holds the documents.
-    // That gap is covered below by the absence-keyed rebucket this path deliberately keeps.
+    // Two gates, not one. The readiness stamp still applies (same-model chunks must be fully
+    // vectorized+stamped), but it is a Mongo-side fact and the OpenSearch documents live in a
+    // SEPARATE cluster fed by a fail-open dual-write with no backfill for files that predate the
+    // feature - so a file can be permanently stamped-ready and permanently absent from the index.
+    // Confirmed residency is the second gate; a file failing it is scanned, exactly as an
+    // unstamped one is.
     const split = partitionByVectorSearchReadiness(rankable, annReadinessNow);
-    annEligible = split.annReady;
     scanEligible = split.scanOnly;
-    if (annEligible.length === 0) annBlockedReason = noAnnReadyFilesReason();
+    // Gated by an explicit opt-in (default OFF): an existing self-host corpus indexed before
+    // `retrievalIndexConfirmedModel` existed has no confirm stamp on any of its chunks, so gating
+    // by default would revert it to scan-only on upgrade with no route back short of a re-chunk.
+    // See selfHostOpenSearchResidencyRequired's docblock.
+    const residentIds = selfHostOpenSearchResidencyRequired()
+      ? await resolveIndexResidency(split.annReady, embeddingModel, args.fabfilechunks, logger)
+      : null;
+    if (residentIds) {
+      const byResidency = partitionByIndexResidency(split.annReady, residentIds);
+      annEligible = byResidency.resident;
+      scanEligible = [...scanEligible, ...byResidency.absent];
+      openSearchResidencyKnown = true;
+      // `byResidency.absent` is always non-empty here: resolveIndexResidency only returns
+      // non-null when `split.annReady` was non-empty, and `annEligible` (=resident) being empty
+      // then means every one of those files landed in `absent` instead.
+      if (annEligible.length === 0) annBlockedReason = 'no-index-resident-files';
+    } else {
+      // No residency port wired, or the lookup failed: fall back to the pre-residency behavior
+      // (stamp-only eligibility, rescued by the absence-keyed rebucket below).
+      annEligible = split.annReady;
+      if (annEligible.length === 0) annBlockedReason = noAnnReadyFilesReason();
+    }
   } else if (args.vectorSearchEnabled) {
     annBlockedReason = 'no-backend';
   }
@@ -1116,8 +1196,9 @@ async function rankChunksForFiles(args: {
     // Atlas: mongot's indexing lag can exceed VECTOR_SEARCH_READY_LAG_MS during a bulk backfill,
     // or a re-embed mid-file can label chunks under the wrong model so mongot never indexes
     // them. On self-host OpenSearch: the file's chunks may simply predate the feature being
-    // enabled (see selfHostSearchIndex.ts - there is no backfill). Such a file returns zero raw
-    // hits and, with no scan fallback, would silently contribute zero results.
+    // enabled (see selfHostSearchIndex.ts - there is no backfill), which the residency split
+    // above now catches up front, but only where the residency port is wired. Such a file returns
+    // zero raw hits and, with no scan fallback, would silently contribute zero results.
     //
     // But zero raw hits ALONE cannot mean "not indexed", because the query is bounded by
     // similarity RANK (`limit: candidatePoolK`), not by a score threshold. At most that many files
@@ -1142,20 +1223,19 @@ async function rankChunksForFiles(args: {
     // was discarded - suppressing the rescue and returning nothing where the scan would have
     // answered. Undercounting is the safe direction: it degrades to the old unconditional rebucket.
     //
-    // Atlas only, deliberately. On self-host OpenSearch the ANN documents live in a separate
-    // cluster fed by a fail-open dual-write, with no backfill for files that predate the feature,
-    // so a stamped file can be permanently absent from the index and the readiness stamp cannot
-    // see it. `retrievalIndexModel` is not the missing residency signal either: it is written
-    // BEFORE the index call on purpose (see IFabFileChunk.retrievalIndexModel - a removal for an
-    // index holding nothing is a no-op, a missed one orphans documents), so it over-claims in
-    // exactly the indexing-failure case that matters. Absence-keyed rescue is therefore still
-    // load-bearing there and stays, holding self-host's benefit at `candidatePoolK / fileCount`
-    // until a signal that actually confirms residency exists. Atlas's analogue is transient rather
-    // than permanent - during a bulk backfill mongot's indexing lag can exceed
-    // VECTOR_SEARCH_READY_LAG_MS and the already-indexed files will fill the request while the
-    // lagging ones wait - which self-heals within one lag window and is accepted.
+    // Applying it needs a reason to believe the queried files ARE indexed, which the two backends
+    // establish differently. Atlas: mongot indexes the chunk collection itself, so the readiness
+    // stamp plus its lag is that reason - the residual gap (a bulk backfill whose indexing lag
+    // exceeds VECTOR_SEARCH_READY_LAG_MS, so the already-indexed files saturate the pool while the
+    // lagging ones wait) is transient and self-heals within one lag window, and is accepted.
+    // Self-host OpenSearch: the stamp proves nothing about the separate cluster, so the split
+    // above gates on CONFIRMED residency (retrievalIndexConfirmedModel) instead, and only a split
+    // that actually resolved it earns the rule - `openSearchResidencyKnown`. Without residency
+    // (no port, or the lookup failed) absence-keyed rescue is still the only protection against a
+    // silently un-indexed file, so that path keeps the old unconditional rebucket and with it the
+    // old `candidatePoolK / fileCount` ceiling.
     const annUsableHits = annResult.hitsReturned - annResult.hitsSkippedUnknownFile;
-    const annSaturated = canUseAtlas && annUsableHits >= candidatePoolK;
+    const annSaturated = (canUseAtlas || openSearchResidencyKnown) && annUsableHits >= candidatePoolK;
     const missedFiles = annSaturated ? [] : annEligible.filter(f => !annResult.filesWithHits.has(f.id));
     if (missedFiles.length > 0) {
       logger?.warn?.('[semanticSearch] ANN vector search returned no hits for ready files, scanning them instead', {

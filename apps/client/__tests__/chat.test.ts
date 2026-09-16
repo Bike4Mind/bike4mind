@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 // Mock dependencies
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services/llm', () => ({
   ChatCompletionInvoke: vi.fn(),
   ChatCompletionProcess: vi.fn(),
   featureNames: {},
@@ -54,7 +54,7 @@ describe.skip('/api/chat', () => {
 
   describe('POST /api/chat', () => {
     it('should process chat request and return quest ID when wait=false', async () => {
-      const { ChatCompletionInvoke } = await import('@bike4mind/services');
+      const { ChatCompletionInvoke } = await import('@bike4mind/services/llm');
       const { User } = await import('@bike4mind/database');
       const handler = (await import('@pages/api/chat')).default;
 
@@ -102,7 +102,7 @@ describe.skip('/api/chat', () => {
     });
 
     it('should process synchronously and return complete response when wait=true', async () => {
-      const { ChatCompletionInvoke, ChatCompletionProcess } = await import('@bike4mind/services');
+      const { ChatCompletionInvoke, ChatCompletionProcess } = await import('@bike4mind/services/llm');
       const { getSettingsMap, getSettingsValue } = await import('@bike4mind/utils');
       const { User } = await import('@bike4mind/database');
       const handler = (await import('@pages/api/chat')).default;
@@ -181,7 +181,7 @@ describe.skip('/api/chat', () => {
 
     it('should find most recent session when sessionId not provided', async () => {
       const { User, Session } = await import('@bike4mind/database');
-      const { ChatCompletionInvoke } = await import('@bike4mind/services');
+      const { ChatCompletionInvoke } = await import('@bike4mind/services/llm');
       const handler = (await import('@pages/api/chat')).default;
 
       (User.findById as any).mockResolvedValue({ lastNotebookId: null });

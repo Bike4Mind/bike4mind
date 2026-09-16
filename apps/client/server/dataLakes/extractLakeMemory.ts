@@ -6,7 +6,8 @@ import {
   fabFileRepository,
 } from '@bike4mind/database';
 import { LAKE_MEMORY_EXTRACTION_LEASE_MS, MEMENTO_EMBEDDING_MODEL, toMementoVector } from '@bike4mind/common';
-import { apiKeyService, dataLakeService, LakeMemoryExtractionService } from '@bike4mind/services';
+import { apiKeyService, dataLakeService } from '@bike4mind/services';
+import { LakeMemoryExtractionService } from '@bike4mind/services/llm';
 import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { EvidenceTier } from '@bike4mind/memory';

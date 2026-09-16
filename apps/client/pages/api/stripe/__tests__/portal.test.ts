@@ -70,8 +70,12 @@ import handler from '../portal';
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
 
 const CALLBACK_URL = 'https://app.example.com/settings/billing';
+// Real ObjectId hex: the handler screens `ownerId` before the lookup, so a placeholder
+// string is a 404 rather than reaching the repository mocks below.
+const USER_OWNER_ID = '507f1f77bcf86cd7994390a1';
+const ORG_OWNER_ID = '507f1f77bcf86cd7994390a2';
 
-function makeReq(callbackUrl = CALLBACK_URL, ownerType = 'User', ownerId = 'user_1') {
+function makeReq(callbackUrl = CALLBACK_URL, ownerType = 'User', ownerId = USER_OWNER_ID) {
   const { req, res } = createMocks({ method: 'POST' });
   (req as Record<string, unknown>).body = { callbackUrl, ownerType, ownerId };
   (req as Record<string, unknown>).user = { id: 'user_1', email: 'buyer@example.com', name: 'Buyer' };
@@ -142,11 +146,11 @@ describe('POST /api/stripe/portal - callbackUrl origin guard', () => {
       billingContact: 'billing@example.com',
       stripeCustomerId: 'cus_org',
     });
-    const { req, res } = makeReq(CALLBACK_URL, 'Organization', 'org_1');
+    const { req, res } = makeReq(CALLBACK_URL, 'Organization', ORG_OWNER_ID);
 
     await (handler as HandlerFn)(req, res);
 
-    expect(mockOrgFindById).toHaveBeenCalledWith('org_1');
+    expect(mockOrgFindById).toHaveBeenCalledWith(ORG_OWNER_ID);
     // 'cus_org', not the User path's 'cus_existing' - that difference is the assertion.
     expect(mockPortalSessionsCreate).toHaveBeenCalledWith({ customer: 'cus_org', return_url: CALLBACK_URL });
     expect(mockCreateCustomer).not.toHaveBeenCalled();
@@ -165,7 +169,7 @@ describe('POST /api/stripe/portal - callbackUrl origin guard', () => {
     });
     mockFindActiveByOwner.mockResolvedValue([{ id: 'sub_1' }]);
     mockResolveSubscriptionSource.mockReturnValue('admin_grant');
-    const { req, res } = makeReq(CALLBACK_URL, 'Organization', 'org_1');
+    const { req, res } = makeReq(CALLBACK_URL, 'Organization', ORG_OWNER_ID);
 
     await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
       constructor: ForbiddenError,

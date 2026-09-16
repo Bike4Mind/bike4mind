@@ -220,7 +220,19 @@ export interface MarkdownSection {
  * - If an H2 section exceeds `maxSectionTokens`, it is re-split at H3
  *   boundaries (H4+ stays with parent H3).
  * - Sections smaller than `minSectionLength` chars merge forward (or backward
- *   if last).
+ *   if last). When a section is the ONLY one an article has, it is kept
+ *   regardless of size rather than dropped - same "never leave the file with
+ *   zero chunks" tradeoff SmartChunker.mergeOrDropNearEmptyChunks makes for
+ *   the fab-pipeline chunker (#2817), since help chunks are `isGlobalRead`
+ *   and losing the only content would be worse than a short passage. This is
+ *   the only OTHER producer that writes to `fabfilechunks`, with its own,
+ *   deliberately more conservative default (100 chars vs. that chunker's
+ *   `MIN_CHUNK_CHARS_FLOOR` of 50) tuned for RAG passage quality, not just a
+ *   near-empty floor - do not casually lower it to match, since
+ *   `help-embeddings.json` is a committed snapshot keyed on the exact section
+ *   boundaries this produces (see help-id-resolution.test.ts) and changing
+ *   the default re-derives that snapshot and needs a real
+ *   `help:regenerate` pass to reconcile.
  *
  * Used at build time (vectorize script) and at runtime (content resolution
  * for vector search results).

@@ -353,4 +353,10 @@ export type SendMessageOptions = {
   isImageEdit?: boolean;
   isVariation?: boolean;
   image?: string; // Image to be edited
+  /**
+   * Correct-and-retry: the quest whose answer the user says was wrong. Unlike `isRetry`, which
+   * re-runs the flagged quest in place, this sends a NEW turn carrying the user's correction and
+   * links it back - the flawed answer has to survive to be half of an evaluation pair.
+   */
+  correctsQuestId?: string;
 };

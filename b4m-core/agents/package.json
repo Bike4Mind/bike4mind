@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/agents",
-  "version": "1.0.2",
+  "version": "1.0.8",
   "publishConfig": {
     "access": "restricted"
   },
@@ -49,7 +49,7 @@
     "@bike4mind/llm-adapters": "workspace:*",
     "@bike4mind/observability": "workspace:*",
     "@bike4mind/utils": "workspace:*",
-    "isolated-vm": "^7.0.0",
+    "isolated-vm": "^7.0.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {

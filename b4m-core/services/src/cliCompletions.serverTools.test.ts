@@ -48,7 +48,15 @@ function buildDb() {
     incrementCredits: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100 }),
     findById: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100 }),
   };
-  const org = { id: 'org1', currentCredits: 500, maxCreditsPerMember: null, userDetails: [] };
+  // executeCompletion re-verifies org membership at use time, so the acting user must be on the
+  // roster for the org-billed cases below to reach the tool loop at all.
+  const org = {
+    id: 'org1',
+    currentCredits: 500,
+    maxCreditsPerMember: null,
+    userDetails: [],
+    users: [{ userId: 'user1' }],
+  };
   const organizations = {
     findById: vi.fn().mockResolvedValue(org),
     incrementCredits: vi.fn().mockResolvedValue({ ...org, currentCredits: 490 }),

@@ -182,6 +182,53 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     return byFile;
   }
 
+  async confirmRetrievalIndexed(chunkIds: string[], model: string): Promise<void> {
+    if (chunkIds.length === 0) return;
+    await this.fabFileChunkModel.updateMany(
+      { _id: { $in: chunkIds } },
+      { $set: { retrievalIndexConfirmedModel: model } }
+    );
+  }
+
+  async clearRetrievalIndexConfirmed(chunkIds: string[], model: string): Promise<void> {
+    if (chunkIds.length === 0) return;
+    await this.fabFileChunkModel.updateMany(
+      { _id: { $in: chunkIds }, retrievalIndexConfirmedModel: model },
+      { $unset: { retrievalIndexConfirmedModel: '' } }
+    );
+  }
+
+  async clearRetrievalIndexConfirmedByFabFileIds(fabFileIds: string[]): Promise<void> {
+    if (fabFileIds.length === 0) return;
+    // Every model, not one: archive/delete removes a file's documents from whatever index they were
+    // ever dispatched to, so any confirmation the file carries is stale afterward.
+    await this.fabFileChunkModel.updateMany(
+      { fabFileId: { $in: fabFileIds }, retrievalIndexConfirmedModel: { $ne: null } },
+      { $unset: { retrievalIndexConfirmedModel: '' } }
+    );
+  }
+
+  async annResidentFabFileIds(fabFileIds: string[], model: string): Promise<string[]> {
+    if (fabFileIds.length === 0) return [];
+    // Denominator is `embeddingModel`, not `retrievalIndexModel` - see the interface docblock for
+    // why the latter can be skipped by a rolling self-host enable. Rides the new
+    // { fabFileId: 1, embeddingModel: 1, retrievalIndexConfirmedModel: 1 } index below for both the
+    // filter and the $cond projection, and touches no `vector` field - this runs on the retrieval
+    // hot path, unlike the removal resolver above.
+    const rows = await this.fabFileChunkModel.aggregate<{ _id: string; dispatched: number; confirmed: number }>([
+      { $match: { fabFileId: { $in: fabFileIds }, embeddingModel: model } },
+      {
+        $group: {
+          _id: '$fabFileId',
+          dispatched: { $sum: 1 },
+          confirmed: { $sum: { $cond: [{ $eq: ['$retrievalIndexConfirmedModel', model] }, 1, 0] } },
+        },
+      },
+      { $match: { $expr: { $eq: ['$confirmed', '$dispatched'] } } },
+    ]);
+    return rows.map(row => String(row._id));
+  }
+
   async bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]) {
     const result = await this.fabFileChunkModel.insertMany(chunks);
 
@@ -648,6 +695,8 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
     // Index residency, NOT readiness - see IFabFileChunk.retrievalIndexModel for why the two
     // cannot be the same field.
     retrievalIndexModel: { type: String, required: false },
+    // Confirmed residency, written after the index write - see IFabFileChunk.retrievalIndexConfirmedModel.
+    retrievalIndexConfirmedModel: { type: String, required: false },
   },
   {
     timestamps: true,
@@ -669,14 +718,21 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
 
 // Equality on the prefix + sort on `_id` lets the planner SORT_MERGE the per-file index scans
 // instead of collecting and sorting them, which is what keeps findVectorsByFabFileIds' keyset
-// paging non-blocking. Deliberately the only declaration: this compound's leftmost prefix already
-// serves the bare `fabFileId` reads (findByFabFileId, findTextsByFabFileId, countByFabFileId,
-// deleteManyByFabFileId, computeChunkVectorRollup),
-// and a `{ _id: 1, fabFileId: 1 }` buys nothing over `_id_` since `vector` is in neither index, so
-// both plans fetch anyway. Environments deployed before this still held those two as orphans;
-// 20260810000000_drop-legacy-fabfilechunk-indexes.ts drops them. Nothing recreates them, because
-// autoIndex only builds what is declared here. fabFileChunkIndexes.test.ts pins the set.
+// paging non-blocking. This compound's leftmost prefix already serves the bare `fabFileId` reads
+// (findByFabFileId, findTextsByFabFileId, countByFabFileId, deleteManyByFabFileId,
+// computeChunkVectorRollup), and a `{ _id: 1, fabFileId: 1 }` buys nothing over `_id_` since
+// `vector` is in neither index, so both plans fetch anyway. Environments deployed before this
+// still held those two as orphans; 20260810000000_drop-legacy-fabfilechunk-indexes.ts drops them.
+// Nothing recreates them, because autoIndex only builds what is declared here.
+// fabFileChunkIndexes.test.ts pins the set (now the two below it, not just this one).
 FabFileChunkSchema.index({ fabFileId: 1, _id: 1 });
+
+// Covers annResidentFabFileIds' aggregate: without it, `retrievalIndexConfirmedModel` is not part
+// of any index, so the { fabFileId: 1, _id: 1 } compound above serves only the `fabFileId` filter
+// and every matching chunk row is FETCHED in full - including `vector`, on the retrieval hot path -
+// before the aggregation ever applies. With this index the match, group and projection are all
+// covered from the index alone.
+FabFileChunkSchema.index({ fabFileId: 1, embeddingModel: 1, retrievalIndexConfirmedModel: 1 });
 
 export const FabFileChunk =
   (mongoose.models.FabFileChunk as IFabFileChunkModel) ??
@@ -729,6 +785,17 @@ const mapBounded = async <T, R>(items: T[], limit: number, task: (item: T) => Pr
   }
   return results;
 };
+
+/**
+ * The write that puts a file into the failed state, shared by the first-failure CAS
+ * (markFailedIfNotAlready) and the superseding write (supersedeFailureError) so the two can never
+ * drift. `isVectorizing: false` beside the error is the load-bearing half: without it a file that
+ * failed mid-vectorize reads as in-flight forever to lakeConvergence.
+ */
+const failedFileFields = (errorMessage: string): { error: string; isVectorizing: boolean } => ({
+  error: errorMessage,
+  isVectorizing: false,
+});
 
 export class FabFileRepository extends BaseRepository<IFabFileDocument> implements IFabFileRepository {
   shareable: IFabFileRepository['shareable'];
@@ -1428,10 +1495,25 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean> {
     const result = await this.fabFileModel.findOneAndUpdate(
       { _id: fabFileId, $or: [{ error: null }, { error: { $exists: false } }, { error: '' }] },
-      { $set: { error: errorMessage, isVectorizing: false } },
+      { $set: failedFileFields(errorMessage) },
       { new: false }
     );
     return result !== null;
+  }
+
+  /**
+   * Unconditional counterpart to markFailedIfNotAlready, for a caller holding a PERMANENT verdict
+   * that outranks whatever error the file already carries. Returns the error it replaced (null if
+   * there was none, or the file is gone) so the caller can keep that text in the log - this write
+   * is the only thing that destroys it.
+   */
+  async supersedeFailureError(fabFileId: string, errorMessage: string): Promise<string | null> {
+    const previous = await this.fabFileModel.findOneAndUpdate(
+      { _id: fabFileId },
+      { $set: failedFileFields(errorMessage) },
+      { new: false }
+    );
+    return previous?.error ?? null;
   }
 
   /**
@@ -3101,6 +3183,11 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // bumps it on any write, so an unrelated edit would reset the staleness clock. Only meaningful
     // while moderationStatus === 'scanning'.
     moderationClaimedAt: { type: Date, required: false },
+    // Failed-attempt bookkeeping for the rescue sweep's fairness ordering and backoff - see
+    // IFabFile.moderationAttempts / .moderationLastAttemptAt. Left unset (not defaulted to 0) so
+    // "never failed" sorts ahead of any attempted row without a backfill.
+    moderationAttempts: { type: Number, required: false },
+    moderationLastAttemptAt: { type: Date, required: false },
     error: { type: String, required: false },
     presignedUrl: { type: String },
     fileUrl: { type: String },
@@ -3256,9 +3343,14 @@ FabFileSchema.index({ batchId: 1 });
 // Moderation queue / audit lookups
 FabFileSchema.index({ userId: 1, moderationStatus: 1 });
 
-// Serves the moderation rescue sweep's stale-'pending' scan (moderationRescueSweep.ts): seeks the
-// status + deletedAt equality and the createdAt range without touching every non-deleted row.
-FabFileSchema.index({ moderationStatus: 1, deletedAt: 1, createdAt: 1 });
+// Serves both moderation rescue sweep queries (moderationRescueSweep.ts): the stale-'pending'
+// selection and the stale-'scanning' reclaim. The status + deletedAt equality prefix is what keeps
+// either off a collection scan - load-bearing on self-host, where the worker runs both every 60s.
+// moderationAttempts sits third so it also SUPPLIES the selection's fairness sort, letting the
+// planner stream in sort order and stop at `limit` instead of a blocking top-K over every pending
+// row; createdAt trails as the tiebreaker. The sweep's remaining predicates (the createdAt age
+// floor, the two $ors) ride along as residual filters. Pinned by fabFileModerationSweep.test.ts.
+FabFileSchema.index({ moderationStatus: 1, deletedAt: 1, moderationAttempts: 1, createdAt: 1 });
 
 // No index currently serves the `fileName` sort's `_id` tiebreaker (buildFabFileSearchQuery).
 // Two things to know before adding one: (a) any future `fileName` sort index would need

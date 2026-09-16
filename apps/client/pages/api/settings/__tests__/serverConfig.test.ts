@@ -16,10 +16,12 @@ vi.mock('@bike4mind/database', () => ({
 const resolveToolAvailability = vi.fn().mockResolvedValue({ weather_info: true });
 const getEffectiveLLMApiKeys = vi.fn();
 vi.mock('@bike4mind/services', () => ({
+  apiKeyService: { getEffectiveLLMApiKeys: (...a: unknown[]) => getEffectiveLLMApiKeys(...a) },
+}));
+vi.mock('@bike4mind/services/llm', () => ({
   resolveToolAvailability: (...a: unknown[]) => resolveToolAvailability(...a),
   isLocalImageBackendAvailable: vi.fn(),
   isLocalEmbedderAvailable: vi.fn(),
-  apiKeyService: { getEffectiveLLMApiKeys: (...a: unknown[]) => getEffectiveLLMApiKeys(...a) },
 }));
 
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: { name: 'getSettingsByNames' } }));

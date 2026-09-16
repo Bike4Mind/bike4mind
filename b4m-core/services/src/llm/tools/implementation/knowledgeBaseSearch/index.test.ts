@@ -1042,7 +1042,10 @@ describe('search_knowledge_base alternate-model billing', () => {
         adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
         apiKeys: {},
         usageEvents: { record: vi.fn() },
-        organizations: { findById: findOrg },
+        // findById stays rejecting (that's this test's own regression target); findMembershipOrgIds
+        // is a separate #2769 read resolveKbBudgets now makes - a verified member here, since this
+        // test is about the org-document lookup's own failure isolation, not membership.
+        organizations: { findById: findOrg, findMembershipOrgIds: vi.fn().mockResolvedValue(['org1']) },
       } as never,
     });
 
@@ -1628,6 +1631,10 @@ describe('search_knowledge_base access-event audit', () => {
             total: 1,
           }),
         },
+        // #2769: resolveKbBudgets now verifies user.organizationId against membership before
+        // trusting it - a verified member here since this test is about audit attribution, not
+        // membership verification.
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(['org1']) },
       } as never,
     });
 
@@ -1743,6 +1750,8 @@ describe('search_knowledge_base access-event audit', () => {
         adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
         apiKeys: {},
         usageEvents: { record: vi.fn() },
+        // #2769: verified member - this test is about audit attribution, not membership.
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(['org1']) },
       } as never,
     });
 
@@ -1823,6 +1832,8 @@ describe('search_knowledge_base access-event audit', () => {
         adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
         apiKeys: {},
         usageEvents: { record: vi.fn() },
+        // #2769: verified member - this test is about audit attribution, not membership.
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(['org1']) },
       } as never,
     });
 
@@ -2855,6 +2866,85 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
       const { context } = contextWithConfiguredDefault(99);
       expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_MAX_RESULTS);
     });
+
+    // #2769: resolveKbBudgets keyed its scope on user.organizationId as-is - a selected-org display
+    // pointer, not proof of membership (#1674). A stale pointer left over from #2607's still-pending
+    // migration must not let a former member read (or be bound by) that org's kbSearchDefaultResults
+    // override.
+    function contextWithMembership(
+      scopedOverrides: Array<{ scopeLevel: string; scopeId: string; settingName: string; settingValue: string }>,
+      membershipOrgIds: string[] | Error
+    ): ToolContext {
+      const findMembershipOrgIds =
+        membershipOrgIds instanceof Error
+          ? vi.fn().mockRejectedValue(membershipOrgIds)
+          : vi.fn().mockResolvedValue(membershipOrgIds);
+      return semanticContext({
+        user: { id: 'u1', groups: [], organizationId: 'org1' } as never,
+        db: {
+          fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+          fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+          adminSettings: {
+            getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002'),
+            findAll: vi.fn().mockResolvedValue([]),
+            findBySettingNames: vi.fn().mockResolvedValue([]),
+          },
+          apiKeys: {},
+          usageEvents: { record: vi.fn() },
+          organizations: { findMembershipOrgIds },
+          scopedSettings: {
+            findOverrides: vi.fn(async (scopes: Array<{ scopeLevel: string; scopeId: string }>, names: string[]) =>
+              scopedOverrides.filter(
+                o =>
+                  names.includes(o.settingName) &&
+                  scopes.some(s => s.scopeLevel === o.scopeLevel && s.scopeId === o.scopeId)
+              )
+            ),
+          },
+        } as never,
+      });
+    }
+
+    it('resolves the org-scoped default when the organizationId pointer is a verified membership', async () => {
+      const context = contextWithMembership(
+        [{ scopeLevel: 'organization', scopeId: 'org1', settingName: 'kbSearchDefaultResults', settingValue: '4' }],
+        ['org1']
+      );
+      expect(passageCount(await runWith({}, context))).toBe(4);
+    });
+
+    it('falls back to personal scope when the organizationId pointer is not a verified membership (stale/non-member org)', async () => {
+      const context = contextWithMembership(
+        [{ scopeLevel: 'organization', scopeId: 'org1', settingName: 'kbSearchDefaultResults', settingValue: '4' }],
+        []
+      );
+      // Not a member of org1 - the org override must not apply, and there is no owner-rung override
+      // for the personal fallback (owner:u1) either, so this lands on the coded platform default.
+      expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+    });
+
+    it('falls back to personal scope, without throwing, when the membership lookup itself fails', async () => {
+      // A transient org-repo outage must not fail the whole search over a budget ceiling that's
+      // tolerable to get wrong (scopeForCaller's own doc comment) - it degrades like a non-member.
+      const context = contextWithMembership(
+        [{ scopeLevel: 'organization', scopeId: 'org1', settingName: 'kbSearchDefaultResults', settingValue: '4' }],
+        new Error('org repo unavailable')
+      );
+      expect(passageCount(await runWith({}, context))).toBe(KB_SEARCH_DEFAULT_RESULTS_DEFAULT);
+    });
+
+    it('resolves the org-scoped default when organizationId arrives as an ObjectId-shaped value, not a string', async () => {
+      // A hydrated Mongoose user document's organizationId is an ObjectId (toHexString()), not a
+      // plain string - normalizeId() must run before comparing it against membershipOrgIds
+      // (string[]), or a strict .includes() silently disables the override for every real member.
+      const objectIdOrgId = { toHexString: () => 'org1' } as unknown as string;
+      const context = contextWithMembership(
+        [{ scopeLevel: 'organization', scopeId: 'org1', settingName: 'kbSearchDefaultResults', settingValue: '4' }],
+        ['org1']
+      );
+      (context.user as { organizationId: unknown }).organizationId = objectIdOrgId;
+      expect(passageCount(await runWith({}, context))).toBe(4);
+    });
   });
 
   /** Context wiring a row-stub adminSettings, and optionally a scoped-overlay store, for #1955's
@@ -2863,6 +2953,10 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
     settings: Record<string, string>,
     opts?: {
       scopedOverrides?: Array<{ scopeLevel: string; scopeId: string; settingName: string; settingValue: string }>;
+      // #2769: resolveKbBudgets verifies user.organizationId against this before trusting it -
+      // defaults to no membership, so a test overriding `user.organizationId` without this must
+      // opt in explicitly rather than silently getting a "verified" org.
+      membershipOrgIds?: string[];
     },
     overrides: Partial<ToolContext> = {}
   ): ToolContext {
@@ -2879,6 +2973,7 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
         },
         apiKeys: {},
         usageEvents: { record: vi.fn() },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(opts?.membershipOrgIds ?? []) },
         ...(opts?.scopedOverrides
           ? {
               scopedSettings: {
@@ -3082,6 +3177,7 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
               settingValue: '40',
             },
           ],
+          membershipOrgIds: ['org-1'],
         },
         { user: { id: 'u1', groups: [], organizationId: 'org-1' } as never }
       );

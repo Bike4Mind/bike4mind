@@ -6,7 +6,7 @@ import {
   UnprocessableEntityError,
   redactSessionForClient,
 } from '@bike4mind/common';
-import { ChatCompletionInvoke } from '@bike4mind/services';
+import { ChatCompletionInvoke } from '@bike4mind/services/llm';
 import { SQSService } from '@bike4mind/utils';
 import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveBillingOrgId } from '@server/utils/orgAccess';

@@ -52,13 +52,14 @@ class OAuthAuthorizationCodeRepository
 
   /**
    * Atomically claim an unused, unexpired code: flip `used` false->true and return
-   * the matched document, or null if it was already used/expired/unknown. Single
-   * DB round-trip so two concurrent token requests can't both redeem one code
-   * (the find-then-mark split had a race that let a leaked code be spent twice).
+   * the post-update document (so the caller reads `used: true`), or null if it was
+   * already used/expired/unknown. Single DB round-trip so two concurrent token
+   * requests can't both redeem one code (the find-then-mark split had a race that
+   * let a leaked code be spent twice).
    */
   consumeValidCode(code: string) {
     return this.model
-      .findOneAndUpdate({ code, used: false, expiresAt: { $gt: new Date() } }, { $set: { used: true } })
+      .findOneAndUpdate({ code, used: false, expiresAt: { $gt: new Date() } }, { $set: { used: true } }, { new: true })
       .exec();
   }
 }

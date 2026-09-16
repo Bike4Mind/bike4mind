@@ -8,7 +8,13 @@ import {
 } from '@bike4mind/common';
 import type { ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
 import omit from 'lodash/omit.js';
-import { DISCOVERY_CONTRIBUTOR, claimedGroups, relativeGap, type CatalogWritePlan } from './catalogWrite';
+import {
+  DISCOVERY_CONTRIBUTOR,
+  claimedGroups,
+  describeSchemaIssues,
+  relativeGap,
+  type CatalogWritePlan,
+} from './catalogWrite';
 import type { PerTokenRates } from './pricePlan';
 import type {
   CatalogDiffEntry,
@@ -486,7 +492,7 @@ function absenceGraduations(input: PlanContext, dropped: DroppedSourceRecord[]):
       dropped.push({
         source: ABSENCE_SOURCE,
         modelId,
-        reason: `absence graduation failed the append schema: ${parsed.error.issues.map(issue => issue.message).join('; ')}`,
+        reason: `absence graduation failed the append schema: ${describeSchemaIssues(parsed.error)}`,
       });
       continue;
     }

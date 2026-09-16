@@ -36,6 +36,8 @@
  * point - but never in a supporting set.
  */
 
+import { z } from 'zod';
+
 export type ProbeQuestion = {
   id: string;
   question: string;
@@ -265,3 +267,53 @@ export const REFERENCED_SLUGS = [...new Set(PROBE_QUESTIONS.flatMap(q => q.suppo
  * are added later.
  */
 export const NEVER_SUPPORTING = ['features/overview', 'features/common-issues'] as const;
+
+/**
+ * Shape of an EXTERNAL question set, supplied to the capture with `--questions <path>`.
+ *
+ * `PROBE_QUESTIONS` describes the `system-help` corpus and nothing else, so against any other lake
+ * every label-dependent column renders `n/a` - including `posTop`/`negTop`, which are the floor
+ * headroom a cosine floor is derived from. That cannot be fixed by adding questions here: `corpus.ts`
+ * is committed to a PUBLIC repo, and a customer lake's ground truth cannot be. So the question set
+ * becomes an input, read from outside the repo, and the capture writes each question's `supporting`
+ * into the fixture - which keeps phase B's "a fixture and nothing else" property intact.
+ */
+const ProbeQuestionSchema = z.object({
+  id: z.string().min(1),
+  question: z.string().min(1),
+  /** Document ids as the capture writes `docId`: a help slug for `system-help`, a FabFile id otherwise. */
+  supporting: z.array(z.string().min(1)),
+  note: z.string().optional(),
+});
+
+/**
+ * Parse an external question file, naming the source in every error - the file is hand-authored
+ * outside the repo, so a schema failure needs to say which file and which entry.
+ *
+ * Duplicate ids are rejected rather than de-duplicated: `resolveQueries` and `assertSameQuerySet`
+ * both key on the id, so a duplicate silently drops one question from the scored set, and an arm
+ * scored on fewer questions reads as a better model.
+ */
+export function parseProbeQuestions(raw: unknown, source: string): ProbeQuestion[] {
+  if (!Array.isArray(raw)) {
+    throw new Error(`Question file "${source}" must contain a JSON array of questions, got ${typeof raw}.`);
+  }
+  if (raw.length === 0) {
+    throw new Error(`Question file "${source}" is empty; a capture with no queries scores nothing.`);
+  }
+  const parsed = raw.map((entry, i) => {
+    const result = ProbeQuestionSchema.safeParse(entry);
+    if (!result.success) {
+      throw new Error(
+        `Question file "${source}" entry ${i}: ${result.error.issues.map(e => `${e.path.join('.')} ${e.message}`).join('; ')}`
+      );
+    }
+    return result.data;
+  });
+  const seen = new Set<string>();
+  const duplicates = [...new Set(parsed.filter(q => (seen.has(q.id) ? true : (seen.add(q.id), false))).map(q => q.id))];
+  if (duplicates.length > 0) {
+    throw new Error(`Question file "${source}" repeats question id(s): ${duplicates.join(', ')}.`);
+  }
+  return parsed;
+}

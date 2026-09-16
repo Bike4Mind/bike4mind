@@ -108,6 +108,75 @@ if (isMonitoredStage) {
       },
     }
   );
+
+  // Out-of-band alarm for DlqAlarmHandlerDlq itself.
+  // Cannot route to dlqAlarmTopic -- that would loop into the same failing Lambda.
+  // Routes to a dedicated SNS topic with a direct email subscription instead.
+  // NOTE: after the first deploy, check your inbox for an SNS confirmation email and click
+  // the link -- subscriptions stay in PendingConfirmation and deliver nothing until confirmed.
+  const oobAlarmTopic = new sst.aws.SnsTopic('OobAlarmTopic');
+  if (process.env.OPS_ALERT_EMAIL) {
+    // retainOnDelete: the AWS provider cannot destroy a PendingConfirmation subscription.
+    // If OPS_ALERT_EMAIL is unset on a later deploy before the confirmation link is clicked,
+    // retain the resource in AWS rather than leaving a dangling subscription outside state.
+    // Note: rotating OPS_ALERT_EMAIL is a replace (endpoint is force-new), so the old
+    // subscription is retained rather than unsubscribed -- manually unsubscribe the old
+    // endpoint from the SNS console after any address change.
+    new aws.sns.TopicSubscription(
+      'OobAlarmTopicEmailSub',
+      {
+        topic: oobAlarmTopic.arn,
+        protocol: 'email',
+        endpoint: process.env.OPS_ALERT_EMAIL,
+      },
+      { retainOnDelete: true }
+    );
+  } else {
+    console.warn(
+      `[WARN] OPS_ALERT_EMAIL is unset on stage '${$app.stage}'. ` +
+        `OobAlarmTopic will be created with no subscriber -- DlqAlarmHandlerDlq alarms ` +
+        `will publish into the void. Set OPS_ALERT_EMAIL in the deploy pipeline variables.`
+    );
+  }
+
+  // Message-count alarm: any message in the DLQ means the Slack Lambda is failing.
+  // evaluationPeriods: 1 is intentional -- any DLQ message here is an immediate failure
+  // signal, not transient noise, so a single breaching period is the right sensitivity.
+  new aws.cloudwatch.MetricAlarm('DlqAlarmHandlerDlqMessages', {
+    name: `${$app.name}-${$app.stage}-dlq-alarm-handler-dlq-messages`,
+    alarmDescription:
+      'DlqAlarmHandlerDlq has messages -- the alarm-to-Slack Lambda is failing; check SLACK_ERROR_REPORTING_WEBHOOK_URL and Lambda errors.',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'ApproximateNumberOfMessagesVisible',
+    namespace: 'AWS/SQS',
+    period: 60,
+    statistic: 'Maximum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { QueueName: dlqAlarmHandlerDlq.name },
+    alarmActions: [oobAlarmTopic.arn],
+    tags: { Application: 'AlarmPipeline', Severity: 'Critical', MonitoringType: 'DLQ' },
+  });
+
+  // Age alarm: same 1-hour threshold as the standard DLQ fleet. period is 60s (vs fleet
+  // 300s) to match the message-count alarm above and keep both alarms on the same cadence.
+  new aws.cloudwatch.MetricAlarm('DlqAlarmHandlerDlqAge', {
+    name: `${$app.name}-${$app.stage}-dlq-alarm-handler-dlq-age`,
+    alarmDescription:
+      'DlqAlarmHandlerDlq oldest message exceeds 1 hour -- the alarm-to-Slack Lambda has been failing for an extended period.',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'ApproximateAgeOfOldestMessage',
+    namespace: 'AWS/SQS',
+    period: 60,
+    statistic: 'Maximum',
+    threshold: 3600,
+    treatMissingData: 'notBreaching',
+    dimensions: { QueueName: dlqAlarmHandlerDlq.name },
+    alarmActions: [oobAlarmTopic.arn],
+    tags: { Application: 'AlarmPipeline', Severity: 'High', MonitoringType: 'DLQ' },
+  });
 }
 
 type InfraDlqDescriptor = DlqDescriptor & {
@@ -438,6 +507,12 @@ if (isMonitoredStage) {
         `arn:aws:cloudwatch:${region}:${accountId}:alarm:${$app.name}-${$app.stage}-dlq-${d.label}-messages`,
         `arn:aws:cloudwatch:${region}:${accountId}:alarm:${$app.name}-${$app.stage}-dlq-${d.label}-age`,
       ]);
+      // Include the OOB alarms for the alarm-pipeline DLQ itself so they appear in the
+      // health overview widget alongside the rest of the fleet.
+      alarmArns.push(
+        `arn:aws:cloudwatch:${region}:${accountId}:alarm:${$app.name}-${$app.stage}-dlq-alarm-handler-dlq-messages`,
+        `arn:aws:cloudwatch:${region}:${accountId}:alarm:${$app.name}-${$app.stage}-dlq-alarm-handler-dlq-age`
+      );
 
       const widgets: Record<string, unknown>[] = [
         // Row 0: Alarm Status Overview

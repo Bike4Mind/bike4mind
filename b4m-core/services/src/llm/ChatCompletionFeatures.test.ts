@@ -7,7 +7,6 @@ import {
   shouldSummarizeSession,
   SUMMARIZATION_CONFIG,
   LakeMemoryFeature,
-  FORCED_RETRIEVAL_SETTING_KEYS,
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
@@ -15,6 +14,7 @@ import {
   UNLIMITED_HISTORY_COUNT,
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+  FORCED_RETRIEVAL_SETTING_KEYS,
   LAKE_RECALL_K_DEFAULT,
   SettingScopeLevel,
 } from '@bike4mind/common';
@@ -2352,7 +2352,9 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
       user: { id: 'u1', organizationId: opts.scoped ? 'org1' : undefined, tags: [], groups: [] },
       db: {
-        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        // #2769: readForcedRetrievalSettings now verifies organizationId against membership before
+        // trusting it - a verified member of 'org1' whenever the fixture claims that pointer.
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(opts.scoped ? ['org1'] : []) },
         fabfiles: {
           search: vi
             .fn()
@@ -2481,6 +2483,19 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
     expect(bodyLen(content)).toBe(9_000);
   });
 
+  it('falls back to the platform value, without throwing, when the membership lookup itself fails (#2769)', async () => {
+    // A transient org-repo outage must not fail the whole turn over a budget that's tolerable to
+    // get wrong - it degrades exactly like a non-member: the org override must not apply.
+    const ctx = makeCtx({
+      getSettingsValue: platformBudgetOnly('2000'),
+      chunkText: 'z'.repeat(30_000),
+      scoped: { orgOverride: '9000' },
+    });
+    ctx.db.organizations.findMembershipOrgIds = vi.fn().mockRejectedValue(new Error('org repo unavailable'));
+    const content = await run(ctx);
+    expect(bodyLen(content)).toBe(2_000);
+  });
+
   it('falls through to the platform value when the overlay holds no override (#2572)', async () => {
     // The common case on a scoped-overlay host: an org with nothing overridden must not lose the
     // platform value, which is what a resolver bug that treated "no override" as "unset" would do.
@@ -2527,7 +2542,9 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
       user: { id: 'u1', organizationId: 'org1', tags: [], groups: [] },
       db: {
-        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        // #2769: readForcedRetrievalSettings now verifies organizationId against membership before
+        // trusting it - every fixture here claims 'org1', so a verified member of it.
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(['org1']) },
         fabfiles: {
           search: vi
             .fn()
@@ -2748,6 +2765,26 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
     });
     const { injected } = await run(ctx);
     // Degrades to FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT rather than to "no floor" or a throw.
+    expect(FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT).toBe(85);
+    expect(injected).toEqual([0, 1]);
+  });
+
+  it('reads a whitespace-only relative floor as unset rather than as a floor of 0', async () => {
+    // An admin who clears the field can leave '   ' behind, and `Number('   ')` is 0 - the
+    // DISABLED value for this floor - so without the trim in `nonNegativeIntOr` a cleared row
+    // removes the floor instead of restoring the default, keeping all four passages rather than the
+    // two that clear 85.
+    //
+    // `withScopedOverlay: false` is load-bearing, not incidental: this pins the PLATFORM read path,
+    // the only one the trim can defend. On the scoped path `z.coerce.number()` has already turned
+    // '   ' into the number 0 before the helper sees it, so no string-level fix reaches that case.
+    const { injected } = await run(
+      makeCtx({
+        scores: [1.0, 0.9, 0.8, 0.76],
+        platform: { forcedRetrievalRelativeFloorPct: '   ' },
+        withScopedOverlay: false,
+      })
+    );
     expect(FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT).toBe(85);
     expect(injected).toEqual([0, 1]);
   });

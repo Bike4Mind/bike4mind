@@ -105,8 +105,18 @@ HOW TO CARRY THIS
  * but if `GROUNDED_NO_INVENTION_RULE` is ever tightened to cover derived figures too, this step stops
  * working and the tests here will NOT catch it (they assert only the router's own text). Nor is there
  * a copy of that rule to keep in step - it is a single shared const, and "in sync" means this split
- * still holds, not that two wordings match. The rule's `derive/capacity-sizing` case in
- * b4m-core/services/src/llm/evals/groundedNoInvention now measures the split from the other side.
+ * still holds, not that two wordings match.
+ *
+ * Labelling is no longer the whole of the reconciliation. That rule also forbids ANSWERING a result
+ * the retrieved content does not contain "from general knowledge, inference, or a plausible-sounding
+ * estimate", and calling a number derived does not rescue an answer it forbids you to give at all.
+ * What keeps the split is the source of the inputs, not the label on the output: this step is licensed
+ * only where the REQUEST supplies the quantities and the corpus supplies the rate, which is arithmetic
+ * the user can check, not an estimate standing in for a figure nobody retrieved. Two cases in
+ * b4m-core/services/src/llm/evals/groundedNoInvention measure the split from the other side -
+ * `derive/capacity-sizing`, and `derive/asked-to-adjudicate`, which sits in the one cell where both
+ * scopes apply at once (an accuracy question about a figure that has to be derived). Both run only in
+ * the live suite, so neither is a merge gate.
  *
  * Measured effect of the split, n=65 paired questions, arm W vs shipped in optihashi-eval:
  * composite +1.14 (CI [+0.05, +2.22]), no_invention +0.0000 (CI [-0.028, +0.028] - flat, so the
