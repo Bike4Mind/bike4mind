@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Box, Button, Chip, CircularProgress, Link, Sheet, Stack, Tooltip, Typography } from '@mui/joy';
 import type { ColorPaletteProp } from '@mui/joy/styles';
 import { api } from '@client/app/contexts/ApiContext';
-import { DiscoveryRunDetailModal } from './DiscoveryRunDetailModal';
+import { DiscoveryRunDetailModal, type DiscoverySkippedSource } from './DiscoveryRunDetailModal';
 
 /** Wire shapes of /api/admin/model-discovery (dates arrive as strings). */
 interface DiscoverySource {
@@ -10,11 +10,6 @@ interface DiscoverySource {
   ok: boolean;
   durationMs: number;
   error?: string;
-}
-
-interface DiscoverySkippedSource {
-  name: string;
-  reason: string;
 }
 
 interface DiscoveryJoinCoverage {
@@ -44,8 +39,11 @@ interface DiscoveryRunListItem {
 
 interface DiscoveryRunSummary extends DiscoveryRunListItem {
   sources: DiscoverySource[];
-  /** Defaulted by the route, so a run written before the field existed reads as []. */
-  skippedSources: DiscoverySkippedSource[];
+  /**
+   * Configured sources the run never attempted. The route always sends an array,
+   * so an absent one only reaches here from a payload cached before the field.
+   */
+  skippedSources?: DiscoverySkippedSource[];
   joinCoverage: DiscoveryJoinCoverage[];
 }
 

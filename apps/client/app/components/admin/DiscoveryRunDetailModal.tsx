@@ -106,6 +106,12 @@ interface DetailTotals {
   catalogDiff?: number;
 }
 
+/** Wire shape of a skipped source; shared with DiscoveryStatusCard so both surfaces read one type. */
+export interface DiscoverySkippedSource {
+  name: string;
+  reason: string;
+}
+
 interface RunDetail {
   id: string;
   startedAt: string;
@@ -124,7 +130,7 @@ interface RunDetail {
    * Configured sources the run never attempted. The route always sends an array,
    * so an absent one only reaches here from a payload cached before the field.
    */
-  skippedSources?: Array<{ name: string; reason: string }>;
+  skippedSources?: DiscoverySkippedSource[];
   joinCoverage: Array<{ aggregator: string; matched: number; total: number }>;
   changes: {
     added: string[];
