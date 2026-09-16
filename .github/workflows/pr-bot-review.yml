@@ -308,7 +308,11 @@ jobs:
 
       - name: Run /bot-review
         id: bot_review
-        if: steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false'
+        # Gated on the skill having been FETCHED, which is what makes `Report skill-fetch
+        # failure` below true when it says no review ran. Without it the review ran against a
+        # missing skill file, and on a run that then posted nothing that comment fired beside
+        # `Report incomplete review` - two comments for one run, neither of them wrong.
+        if: steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false' && steps.skill_fetch.outcome == 'success'
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -1205,10 +1209,24 @@ jobs:
           exit 1
 
       - name: Report skill-fetch failure
-        # Fail loud + visible: if the skill couldn't be fetched we skipped the review
-        # entirely (rather than degrade silently), so surface it on the PR, not just as
-        # a red check. Best-effort comment - never red the job further.
-        if: always() && steps.skill_fetch.outcome == 'failure'
+        # Fail loud + visible: the review step is gated on the fetch above, so a failure here
+        # skipped the review entirely (rather than degrading silently). Surface it on the PR,
+        # not just as a red check. Best-effort comment - never red the job further.
+        #
+        # `!cancelled()`, not `always()`. `always()` is true on cancellation too, so a cancel
+        # landing on a fold run whose fetch had failed fired this beside `Report cancelled fold`
+        # - two comments on one state, which is the one thing the reporting cross-product in the
+        # guard test asserts. The cancellation reporter owns that state: on cancellation the
+        # fetch may have "failed" only because it was killed, while "this run was CANCELLED" is
+        # true either way. An un-cancelled fetch failure still comments here, and nothing else
+        # does - the review step is skipped, so `posted` is empty and every other reporter's
+        # gate is false.
+        # A block scalar rather than one line: a plain YAML scalar may not START with `!`, which
+        # is a tag indicator, so `if: !cancelled() && ...` is not valid YAML at all - it is
+        # parsed as the tag `!cancelled()` and the workflow fails to load. The other `!cancelled()`
+        # gates in this file are block scalars for the same reason.
+        if: |
+          !cancelled() && steps.skill_fetch.outcome == 'failure'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}

