@@ -1,5 +1,15 @@
 # @bike4mind/common
 
+## 7.5.0
+
+### Minor Changes
+
+- [#2720](https://github.com/Bike4Mind/bike4mind/pull/2720) [`40f31bd`](https://github.com/Bike4Mind/bike4mind/commit/40f31bd9c9f63e6a2db9d5569222145c84fa46a0) Thanks [@vinchi777](https://github.com/vinchi777)! - add a /feedback slash command for session-level reports
+
+### Patch Changes
+
+- [#2797](https://github.com/Bike4Mind/bike4mind/pull/2797) [`bf76770`](https://github.com/Bike4Mind/bike4mind/commit/bf7677008efbd820c9d235e1cbad8a7797fbd4b4) Thanks [@juicewaa](https://github.com/juicewaa)! - let non-admin routes own the 404 for a malformed resource id
+
 ## 7.4.0
 
 ### Minor Changes
