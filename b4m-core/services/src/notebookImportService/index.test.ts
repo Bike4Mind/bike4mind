@@ -591,6 +591,30 @@ describe('notebook import: knowledge file admission', () => {
     expect(adapters.fileStorageService.uploadFile).toHaveBeenCalledTimes(1);
   });
 
+  it('does not charge the quota for a file whose upload failed', async () => {
+    const adapters = makeKnowledgeAdapters({ id: 'user-1', storageLimit: 1, currentStorageSize: 0 });
+    (adapters.fileStorageService.uploadFile as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('storage unavailable')
+    );
+
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      {
+        exportVersion: '1.0.0',
+        notebooks: [{ ...NOTEBOOK, knowledge: [embedded('a.pdf', 600_000), embedded('b.pdf', 600_000)] }],
+      } as never,
+      { ...OPTIONS, importKnowledge: true } as never
+    );
+
+    // 1MB of headroom and two 600_000-byte files: b fits only because a's failed upload spent
+    // nothing. Charging before the upload lands refuses b instead, which is the regression this
+    // covers - every other case here resolves uploadFile, so nothing else would catch it.
+    expect(result.warnings).toEqual([expect.stringMatching(/a\.pdf.*storage unavailable/)]);
+    expect(adapters.fileStorageService.uploadFile).toHaveBeenCalledTimes(2);
+    expect(adapters.knowledgeRepository.create).toHaveBeenCalledTimes(1);
+    expect(adapters.knowledgeRepository.create).toHaveBeenCalledWith(expect.objectContaining({ fileName: 'b.pdf' }));
+  });
+
   it('resets the accumulator between imports on one service instance', async () => {
     const adapters = makeKnowledgeAdapters({ id: 'user-1', storageLimit: 1, currentStorageSize: 0 });
 
