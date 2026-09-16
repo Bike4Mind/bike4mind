@@ -46,6 +46,17 @@ describe('GROUNDED_NO_INVENTION_RULE', () => {
     );
   });
 
+  // The licence to leave a claim open was itself exploitable: a reply can decline the yes/no verdict
+  // and still fill the named gap with an invented figure ("results like this typically land around
+  // 20-25%"), which the clauses above never forbid because it isn't a denial or a ruling. This binds
+  // the licence at the point it's granted rather than adding a rule elsewhere.
+  it('binds the leave-it-open licence to not answering, including not answering from general knowledge', () => {
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(/leaving it open means not answering it/);
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(
+      /not\s+answering it from general knowledge, inference, or a plausible-sounding estimate/
+    );
+  });
+
   // The word list alone was measured insufficient: the model reached the same verdict as "No, it is
   // not accurate to say ...", which the list does not contain. These two pins are the clauses that
   // fixed it, and they are about the ACT rather than the vocabulary - so a reword that drops back to
