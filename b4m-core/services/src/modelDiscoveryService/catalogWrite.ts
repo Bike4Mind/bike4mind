@@ -243,6 +243,13 @@ function collectCandidates(
   return candidates;
 }
 
+/** Zod carries the rejected field in `path`, not in `message`, so a bare message names nothing. */
+export function describeSchemaIssues(error: {
+  issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }>;
+}): string {
+  return error.issues.map(i => (i.path.length ? `${i.path.join('.')}: ${i.message}` : i.message)).join('; ');
+}
+
 /** Fields this build knows and a feed is allowed to claim; everything else is dropped. */
 function usableFields(
   patch: Record<string, unknown>,
@@ -396,14 +403,6 @@ function planOne(
   const introducing = !existing && candidate.sawProvider;
   const pinnedGroups = new Set<FieldGroup>();
 
-  // The append schema requires a backend, so this record cannot become a row;
-  // refusing it by name keeps the run report legible, where the schema below
-  // reports it as a bare enum parse failure instead. Ahead of the name guard,
-  // which reads `draft.backend` to decide identity.
-  if (introducing && !(typeof draft.backend === 'string' && draft.backend.length > 0)) {
-    return { reason: 'introduction refused: the record names no backend, so nothing can dispatch it' };
-  }
-
   if (introducing && !(typeof draft.name === 'string' && draft.name.length > 0)) {
     // OpenAI lists every dated snapshot, legacy pin and non-product id it has
     // ever served and publishes a docs page only for what it sells, so a parsed
@@ -460,6 +459,12 @@ function planOne(
     pinnedGroups.add('modalities');
   }
 
+  // No backend means nothing can dispatch the row, so it cannot be introduced.
+  // Saying that plainly beats the append schema's enum rejection below.
+  if (introducing && !(typeof draft.backend === 'string' && draft.backend.length > 0)) {
+    return { reason: 'introduction refused: no usable backend on the record, so nothing can dispatch it' };
+  }
+
   const ownedGroups = new Set<FieldGroup>(pinnedGroups);
   for (const key of contributed.keys()) {
     // A refused lifecycle block is not a claim: an ownedGroups entry no field
@@ -472,7 +477,7 @@ function planOne(
 
   const parsed = ModelRecordWrite.safeParse(draft);
   if (!parsed.success) {
-    return { reason: `record failed the append schema: ${parsed.error.issues.map(issue => issue.message).join('; ')}` };
+    return { reason: `record failed the append schema: ${describeSchemaIssues(parsed.error)}` };
   }
 
   // Discovery only decides for records it introduced and has not promoted yet.

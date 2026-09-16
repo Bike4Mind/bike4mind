@@ -899,7 +899,7 @@ describe('planCatalogWrites', () => {
         {
           source: 'elevenlabs',
           modelId: 'eleven_multilingual_v2',
-          reason: expect.stringContaining('no backend'),
+          reason: expect.stringContaining('no usable backend'),
         },
       ]);
       expect(result.dropped[0].reason).not.toContain('append schema');
@@ -910,7 +910,7 @@ describe('planCatalogWrites', () => {
       const result = introduceSpoken([spoken({ backend: '' as ModelBackend })]);
 
       expect(result.rows).toHaveLength(0);
-      expect(result.dropped[0].reason).toContain('no backend');
+      expect(result.dropped[0].reason).toContain('no usable backend');
     });
 
     it('refuses the legacy pins and non-product ids the chat namespaces classify', () => {
@@ -1000,6 +1000,9 @@ describe('planCatalogWrites', () => {
 
       expect(result.rows).toHaveLength(0);
       expect(result.dropped[0].reason).toContain('record failed the append schema');
+      // Naming the field is the difference between a reader acting on the report
+      // and re-deriving which of six required fields the enum message meant.
+      expect(result.dropped[0].reason).toContain('type: ');
       expect(result.sightedModelIds.has('gpt-audio')).toBe(true);
     });
 
