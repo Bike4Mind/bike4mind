@@ -875,4 +875,104 @@ describe('fetchAndParseURL page-chrome stripping', () => {
     // Generous on purpose - this pins against quadratic blowup, not against a tight budget.
     expect(elapsed).toBeLessThan(3000);
   });
+
+  it('does not drop inline links, and the words between them, out of a sentence', async () => {
+    // A <span> wrapping two short links in the middle of a paragraph is structurally identical to a
+    // toolbar (two controls, little non-control text) - only its prose ancestry tells them apart.
+    const page =
+      '<html><body><main><p>This behaviour is specified in ' +
+      '<span><a href="/rfc">RFC 9110</a> and <a href="/errata">its errata</a></span>' +
+      ', which every conforming client must implement.</p></main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toBe(
+      'This behaviour is specified in RFC 9110 and its errata, which every conforming client must implement.'
+    );
+  });
+
+  it('does not strip a link pair sitting inside a list item, heading, or blockquote', async () => {
+    const page =
+      '<html><body><main>' +
+      '<h2>See also <a href="/a">Alpha</a> and <a href="/b">Beta</a></h2>' +
+      '<li><span><a href="/c">Gamma</a> or <a href="/d">Delta</a></span></li>' +
+      '<blockquote><span><a href="/e">Epsilon</a>, <a href="/f">Zeta</a></span> said so.</blockquote>' +
+      '<p>Enough surrounding prose to keep this page well past the survival floor regardless.</p>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Alpha');
+    expect(text).toContain('Beta');
+    expect(text).toContain('Gamma');
+    expect(text).toContain('Delta');
+    expect(text).toContain('Epsilon');
+    expect(text).toContain('Zeta');
+  });
+
+  it('still strips a toolbar even though it sits next to a <p> rather than inside one', async () => {
+    // The prose-ancestor exclusion only declines a candidate NESTED inside prose - a sibling
+    // toolbar block must still be caught, or the exclusion would swallow genuine chrome too.
+    const page =
+      '<html><body><main>' +
+      '<div><a href="/reload">Reload</a><a href="/clear">Clear</a><a href="/fork">Fork</a></div>' +
+      '<p>Real article prose that has nothing to do with the sandbox toolbar above it.</p>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).not.toContain('Reload');
+    expect(text).not.toContain('Clear');
+    expect(text).not.toContain('Fork');
+    expect(text).toContain('Real article prose that has nothing to do with the sandbox toolbar above it.');
+  });
+
+  it('keeps a two-item content list of links when real prose survives elsewhere on the page', async () => {
+    // Same shape as the earlier "keeps a single short link" rollback case, but with enough OTHER
+    // prose on the page that the rollback never fires - so this is the one place the <ul>/<ol>
+    // control threshold, not the rollback, has to be what protects the list.
+    const page =
+      '<html><body><main>' +
+      '<p>Long enough paragraph of real prose to clear the survival floor easily on its own.</p>' +
+      '<ul><li><a href="/a">Alpha</a></li><li><a href="/b">Beta</a></li></ul>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Alpha');
+    expect(text).toContain('Beta');
+    expect(text).toContain('Long enough paragraph of real prose to clear the survival floor easily on its own.');
+  });
+
+  it('still strips a three-item nav list even with prose surviving elsewhere', async () => {
+    const page =
+      '<html><body><main>' +
+      '<ul><li><a href="/a">Home</a></li><li><a href="/b">Docs</a></li><li><a href="/c">Blog</a></li></ul>' +
+      '<p>Real article prose that must survive the nav-list strip above it.</p>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).not.toContain('Home');
+    expect(text).not.toContain('Docs');
+    expect(text).not.toContain('Blog');
+    expect(text).toContain('Real article prose that must survive the nav-list strip above it.');
+  });
+
+  it('treats 20 surviving characters as enough to trust a prune, and 19 as not', async () => {
+    const pageWith = (remnant: string) =>
+      `<html><body><nav><a href="/a">Home</a><a href="/b">Docs</a></nav><p>${remnant}</p></body></html>`;
+
+    const remnant19 = 'A'.repeat(19);
+    const textAt19 = await fetchText(pageWith(remnant19));
+    expect(textAt19).toContain('Home');
+    expect(textAt19).toContain('Docs');
+    expect(textAt19).toContain(remnant19);
+
+    const remnant20 = 'A'.repeat(20);
+    const textAt20 = await fetchText(pageWith(remnant20));
+    expect(textAt20).not.toContain('Home');
+    expect(textAt20).not.toContain('Docs');
+    expect(textAt20).toContain(remnant20);
+  });
 });

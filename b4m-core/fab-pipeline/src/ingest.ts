@@ -248,6 +248,34 @@ const CONTROL_SELECTOR =
 const STRIP_CONTAINER_SELECTOR = 'div, span, ul, ol, nav, header, footer, aside, section, form';
 
 /**
+ * Ancestor tags that mark "this element sits inside running prose", not "this element is a
+ * standalone block". A `span` wrapping two inline links in the middle of a sentence looks
+ * structurally identical to a toolbar to `isControlStrip` - same tag, same two-control shape - but
+ * removing it deletes words out of a sentence rather than a block of chrome, which reads as fluent,
+ * complete prose with a fact silently missing. A strip candidate found inside one of these is
+ * declined outright, before `isControlStrip` ever runs, since content ancestry is a stronger signal
+ * than anything the candidate's own subtree can show.
+ */
+const PROSE_ANCESTOR_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, li, dt, dd, blockquote, figcaption, caption';
+
+/**
+ * Minimum controls for a `<ul>`/`<ol>` candidate specifically - higher than the general
+ * `MIN_STRIP_CONTROLS` below. A bare two-item list is exactly as likely to be two related content
+ * links (a "see also" pair) as it is a nav, and unlike a `<nav>`/`<header>`/`<footer>` landmark - which
+ * already declares itself as chrome by tag - a plain `<ul>` carries no such signal. Landmark tags and
+ * `<div>`/`<span>` keep the lower threshold: a two-item breadcrumb or tab strip ("Home / Docs") is
+ * common and short by nature.
+ */
+const MIN_LIST_STRIP_CONTROLS = 3;
+
+/**
+ * Minimum controls for any other strip candidate (`div`, `span`, `nav`, `header`, `footer`, `aside`,
+ * `section`, `form`) - what keeps `<li><a>Some page</a></li>` in a real content list and
+ * `<div><a>An article title</a></div>` on a card.
+ */
+const MIN_STRIP_CONTROLS = 2;
+
+/**
  * Longest a single control's label may be before the group stops looking like a control strip.
  * Nav items, tabs and toolbar buttons are a word or three; anything longer is prose in a link.
  */
@@ -314,11 +342,25 @@ function depthWithin(element: DomNode, within: DomNode): number {
 }
 
 /**
+ * True when `element` has an ancestor (below `boundary`, exclusive) that marks it as sitting inside
+ * running prose rather than being a standalone block - see `PROSE_ANCESTOR_SELECTOR`. Walks parent
+ * pointers directly for the same reason `depthWithin` does: this runs once per strip candidate.
+ */
+function hasProseAncestor($: CheerioAPI, element: DomNode, boundary: DomNode): boolean {
+  let current = (element as { parent?: DomNode | null }).parent;
+  while (current && current !== boundary) {
+    if ($(current).is(PROSE_ANCESTOR_SELECTOR)) return true;
+    current = (current as { parent?: DomNode | null }).parent;
+  }
+  return false;
+}
+
+/**
  * True when an element is a group of adjacent controls with no prose of its own - a nav bar, a
  * breadcrumb row, a tab strip, a footer link column, a sandbox toolbar.
  *
- * Needs TWO controls, which is what keeps `<li><a>Some page</a></li>` in a real content list and
- * `<div><a>An article title</a></div>` on a card. It also has to run BEFORE the controls themselves
+ * Needs `MIN_LIST_STRIP_CONTROLS` for a `<ul>`/`<ol>` candidate and `MIN_STRIP_CONTROLS` otherwise -
+ * see those constants for why the two differ. It also has to run BEFORE the controls themselves
  * are removed, or the evidence is gone: react.dev's `Fork` link only reads as chrome because the
  * `Reload` and `Clear` buttons share its toolbar.
  *
@@ -331,7 +373,8 @@ function isControlStrip($: CheerioAPI, element: DomNode): boolean {
   if (!squash($element.text())) return false;
 
   const controls = $element.find(CONTROL_SELECTOR);
-  if (controls.length < 2) return false;
+  const isList = $element.is('ul, ol');
+  if (controls.length < (isList ? MIN_LIST_STRIP_CONTROLS : MIN_STRIP_CONTROLS)) return false;
 
   for (const control of controls.toArray()) {
     const label = squash($(control).text());
@@ -384,6 +427,7 @@ function pruneChromeFromScope($: CheerioAPI, scope: Cheerio<DomNode>): boolean {
     // remaining siblings looking like content, and doing both is wasted work.
     if (strips.some(strip => $.contains(strip, element))) return;
     if (documentRoot && depthWithin(element, documentRoot) > MAX_STRIP_CONTAINER_DEPTH) return;
+    if (documentRoot && hasProseAncestor($, element, documentRoot)) return;
     if (isControlStrip($, element)) strips.push(element);
   });
 
