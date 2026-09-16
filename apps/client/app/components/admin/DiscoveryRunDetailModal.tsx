@@ -166,7 +166,7 @@ interface SourceRow {
 
 // A skipped source is not a failed one; colouring it danger is the misreading
 // this table exists to remove.
-const OUTCOME_COLOR: Record<SourceOutcome, ColorPaletteProp> = {
+export const OUTCOME_COLOR: Record<SourceOutcome, ColorPaletteProp> = {
   ok: 'success',
   failed: 'danger',
   skipped: 'neutral',

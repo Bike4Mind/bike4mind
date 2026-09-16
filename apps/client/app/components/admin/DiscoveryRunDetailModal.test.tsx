@@ -10,7 +10,7 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: (...a: unknown[]) => mockGet(...a), post: (...a: unknown[]) => mockPost(...a) },
 }));
 
-import { DiscoveryRunDetailModal } from './DiscoveryRunDetailModal';
+import { DiscoveryRunDetailModal, OUTCOME_COLOR } from './DiscoveryRunDetailModal';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
 import { useCreditAnalysisStore } from './CreditAnalysis/store';
@@ -187,9 +187,10 @@ describe('DiscoveryRunDetailModal', () => {
     const skipped = screen.getByTestId('discovery-run-skipped-row-xai');
     expect(skipped).toHaveTextContent('skipped');
     // Appending these rows under the old ok/failed chip painted every skipped
-    // source red, which is the misreading this row exists to remove.
-    expect(skipped.querySelector('[class*="MuiChip-colorNeutral"]')).not.toBeNull();
-    expect(skipped.querySelector('[class*="MuiChip-colorDanger"]')).toBeNull();
+    // source red, which is the misreading this row exists to remove. Asserted on
+    // the map rather than a rendered class, which Joy generates.
+    expect(OUTCOME_COLOR.skipped).toBe('neutral');
+    expect(OUTCOME_COLOR.skipped).not.toBe(OUTCOME_COLOR.failed);
     expect(skipped).toHaveTextContent('not-configured');
   });
 
