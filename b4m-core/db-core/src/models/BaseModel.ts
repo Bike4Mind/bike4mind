@@ -35,9 +35,25 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
     const result = await this.model.create(data);
     return result.toObject();
   }
+  /**
+   * Look a row up by `_id`, reporting "no such row" for an id that cannot address one.
+   *
+   * A string that is not an ObjectId hex string can never match, so it is answered with `null`
+   * rather than handed to Mongoose, which would raise a `CastError` from deep inside the driver.
+   * That keeps the 404 with the caller's own `if (!doc) throw new NotFoundError(...)` instead of
+   * an error-handler rule that cannot tell a caller's junk path param from a server-side cast.
+   *
+   * `isObjectIdOrHexString`, not `isValidObjectId` - the latter accepts a number and casts it to a
+   * fabricated id. Same choice, for the same reason, as `usableObjectIds` in ../utils/mongo.
+   *
+   * Both misses report `null`. The row-not-found path used to resolve `undefined` while claiming
+   * `T | null`, so a caller narrowing with `!== null` (queueHandlers/emailBatch.ts) got past the
+   * guard and dereferenced it; two different miss values out of one method would be worse.
+   */
   async findById(id: string) {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
     const result = await this.model.findById(id);
-    return result?.toJSON() as T | null;
+    return (result?.toJSON() ?? null) as T | null;
   }
   /**
    * Update a document by id (last-writer-wins). The whole `data` field set is `$set` unconditionally,

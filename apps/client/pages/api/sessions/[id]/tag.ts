@@ -4,15 +4,18 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Session } from '@bike4mind/database/auth';
 import { SessionEvents } from '@server/utils/eventBus';
+import { isValidObjectId } from '@server/utils/objectId';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
     const sessionId = req.query.id;
 
-    const session = await Session.findOne({
-      _id: sessionId,
-      ...accessibleBy(req.ability!, Permission.update).ofType(Session),
-    });
+    const session = isValidObjectId(sessionId)
+      ? await Session.findOne({
+          _id: sessionId,
+          ...accessibleBy(req.ability!, Permission.update).ofType(Session),
+        })
+      : null;
     if (!session) throw new Error('Cannot update session');
 
     const requestId = await SessionEvents.Tag.publish({ sessionId: session.id });

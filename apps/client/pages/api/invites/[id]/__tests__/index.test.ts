@@ -57,17 +57,17 @@ describe('DELETE /api/invites/[id]', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('delegates to cancelInviteById with the invite id and returns the result', async () => {
-    cancelInviteById.mockResolvedValue({ id: 'inv-1', remaining: 0 });
-    const { req, res } = createMocks({ method: 'DELETE', query: { id: 'inv-1' } });
+    cancelInviteById.mockResolvedValue({ id: '507f1f77bcf86cd799439021', remaining: 0 });
+    const { req, res } = createMocks({ method: 'DELETE', query: { id: '507f1f77bcf86cd799439021' } });
     (req as any).user = { id: 'u1' };
     await mockRefs.deleteHandler!(req, res);
 
     expect(cancelInviteById).toHaveBeenCalledWith(
       req.user,
-      { id: 'inv-1' },
+      { id: '507f1f77bcf86cd799439021' },
       expect.objectContaining({ db: expect.any(Object) })
     );
-    expect(res._getJSONData()).toEqual({ id: 'inv-1', remaining: 0 });
+    expect(res._getJSONData()).toEqual({ id: '507f1f77bcf86cd799439021', remaining: 0 });
   });
 
   it('returns 400 when id is missing', async () => {
@@ -90,7 +90,7 @@ describe('GET /api/invites/[id] - recipient email strip', () => {
       recipients: { pending: ['me@x.com'], accepted: [], refused: [] },
     });
     getInviteDetails.mockResolvedValue({
-      id: 'inv-1',
+      id: '507f1f77bcf86cd799439021',
       type: 'FabFile',
       name: 'Doc',
       username: 'inviter',
@@ -117,12 +117,14 @@ describe('GET /api/invites/[id] - recipient email strip', () => {
 describe('GET /api/invites/[id] - authorization gate', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('rejects a malformed invite id before it reaches findById', async () => {
+  // 404, not 400: a malformed id gets the same answer as a valid-but-unauthorized one, so the
+  // status does not tell a caller which ids exist. findById is still never reached.
+  it('refuses a malformed invite id before it reaches findById', async () => {
     const { req, res } = createMocks({ method: 'GET', query: { id: 'not-an-object-id' } });
     (req as any).user = { id: 'u1', email: 'a@x.com' };
     await mockRefs.getHandler!(req, res);
 
-    expect(res._getStatusCode()).toBe(400);
+    expect(res._getStatusCode()).toBe(404);
     expect(Invite.findById).not.toHaveBeenCalled();
   });
 

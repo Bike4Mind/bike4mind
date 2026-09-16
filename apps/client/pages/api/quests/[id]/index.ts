@@ -94,6 +94,7 @@ const handler = baseApi({
     // A recovered timeout is `status: 'done'` carrying an error message, so a headless client
     // needs `type` to machine-distinguish it from a genuine success.
     type: quest.type,
+    errorCode: quest.errorCode,
     sessionId: quest.sessionId,
     reply: quest.reply,
     replies: quest.replies,

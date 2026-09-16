@@ -28,17 +28,12 @@ const handler = baseApi()
         return res.status(400).json({ message: 'Invite Share request' });
       }
 
-      // Matches the sibling at pages/api/[type]/[id], down to the shared helper: an unvalidated id
-      // reaches findById as a cast error rather than the 404 the rest of this handler is careful to
-      // return. The helper wraps `isObjectIdOrHexString`, not mongoose's exported `isValidObjectId`,
-      // which also accepts a number or a 12-byte Buffer and casts it to a fabricated id.
-      if (!isValidObjectId(id)) {
-        return res.status(400).json({ message: 'Invalid ID format' });
-      }
-
-      const invite = await Invite.findById(id);
-      // A caller who is not a named recipient or share-authorized gets the same 404 as a
-      // missing invite -- a 403 would confirm the id exists.
+      // Validated before findById, which would otherwise take a malformed id as a cast error
+      // rather than the 404 the rest of this handler is careful to return.
+      const invite = isValidObjectId(id) ? await Invite.findById(id) : null;
+      // A caller who is not a named recipient or share-authorized gets the same 404 as a missing
+      // or malformed id: a 403 would confirm the id exists, and splitting 400 from 404 between
+      // malformed and valid-but-unauthorized is the same class of signal.
       if (!invite || !(await canViewInvite(req.user, invite))) {
         return res.status(404).json({ message: 'Invite Not Found' });
       }
