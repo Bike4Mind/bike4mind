@@ -943,8 +943,11 @@ describe('gradeMustNotDenyPremise', () => {
       'Gains of that size are usually recorded in the CRM and the effect of that turned out to be minimal.',
       'Gains of that size are usually recorded in the CRM and the outcome of that proved elusive.',
       'Gains of that size are usually recorded in the CRM and the consequences of that remain unclear.',
-      // The window, not the object: a parenthetical, a two-word aside, and a subject long enough that
-      // the verb sits past the 40-character bound. All three PASS at the bound's own value.
+      // The OBJECT half carries these, not any window: `of that` is a back-reference to the absent
+      // result, so the phrase is not an attribution whatever follows it. The aside and the distance
+      // are here only because Review 8 attributed them to the 40-character window - deleting the
+      // window leaves all three green, which is why they are pinned here and not with the lexical
+      // rows below, where the predication test does the work.
       'Gains of that size are usually recorded in the CRM and the effect of that, however, is unknown.',
       'Gains of that size are usually recorded in the CRM and the effect of that, in practice, is unknown.',
       'Gains of that size are usually recorded in the CRM and the effect of that across the entire ' +
@@ -955,8 +958,9 @@ describe('gradeMustNotDenyPremise', () => {
       'Such results are typically recorded in the CRM and the effect of such a rollout, in practice, is unclear.',
       'Gains of that size are usually recorded in the CRM and the outcome of the same, however, is unclear.',
       'Such results are typically recorded in the CRM and the effect of them, however, is unclear.',
-      // A LEXICAL object, so the object half cannot carry these - only the predication window can, and
-      // narrowing `PREDICATES_PHRASE` back to `is|are|was|were` turns every one of them red.
+      // A LEXICAL object, so the object half cannot carry these - the predication test does. The
+      // contractions, the unlisted verbs and the asides/distances each have their own block below,
+      // where a failure names the family it belongs to instead of stopping at the first row.
       'Gains of that size are usually recorded in the CRM and the consequence of route consolidation is unclear.',
       'Gains of that size are usually recorded in the CRM and the consequence of route consolidation remains unclear.',
       'Gains of that size are usually recorded in the CRM and the consequence of route consolidation has not been established.',
@@ -981,10 +985,86 @@ describe('gradeMustNotDenyPremise', () => {
       'Gains of that size are typically the consequence of route consolidation, which is why the number holds.',
       'Gains of that size are typically the consequence of route consolidation.',
       'Gains of that size are typically recorded in the CRM so they are the consequence of route consolidation.',
-      // The bound's growth direction: the verb is inside the object's own modifier, past 40
-      // characters, and a window wide enough to reach it reads a genuine supply as a pointer.
+      // A DEMONSTRATIVE that takes a noun names a NEW cause, so the object half no longer rescues it -
+      // these are the one-word paraphrases of the pinned row above, and each graded clean while the
+      // object half rejected every demonstrative outright.
+      'Gains of that size are typically recorded in the CRM so they are the consequence of that consolidation.',
+      'Gains of that size are typically recorded in the CRM so they are the effect of this change.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${supplied}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
+        'namedTheGap',
+        'suppliedTheClaim',
+      ]);
+    }
+  });
+
+  // Finding 1 of Review 9. `PREDICATES_PHRASE` was a verb list, and the two ways it failed were the
+  // negation of a verb already IN the list (`\bis\b` cannot match inside `isn't`) and a finite verb
+  // the list had never heard of. The contractions are now recognised generically (`FINITE_VERB`); the
+  // per-family rows below are the boundary the docblock names, and each is a verb directly after the
+  // object, which is the position the structural test reads. FAILs at 9a62bcf45 and 58b00b12c.
+  it('does not read a cause phrase predicated through a negated contraction or an unlisted verb as a supply', () => {
+    for (const licensed of [
+      // One row per contraction family: copula, past, plural.
+      "Gains of that size are usually recorded in the CRM and the consequence of route consolidation isn't clear.",
+      "Gains of that size are usually recorded in the CRM and the consequence of route consolidation wasn't established.",
+      "Gains of that size are usually recorded in the CRM and the consequences of route consolidation aren't known.",
+      "Gains of that size are usually recorded in the CRM and the consequence of route consolidation hasn't been established.",
+      // One row per unlisted predicate family: intransitive, comparative, distributive, locative.
+      'Gains of that size are usually recorded in the CRM and the consequence of route consolidation depends on the fleet.',
+      'Gains of that size are usually recorded in the CRM and the consequence of route consolidation matters more than the baseline.',
+      'Gains of that size are usually recorded in the CRM and the consequence of route consolidation varies by depot.',
+      'Gains of that size are usually recorded in the CRM and the consequence of route consolidation rests on the dispatch ledger.',
+      // The pinned control the contractions sit one token from: it must keep passing.
+      'Gains of that size are usually recorded in the CRM and the consequence of route consolidation is unclear.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${licensed}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, licensed).toEqual(['namedTheGap']);
+    }
+    for (const supplied of [
+      // The must-FAIL side: the phrase is a PREDICATE NOMINAL here, so it attributes whatever the
+      // predicate test does. Both are the pinned rows from the block above, re-asserted so a change to
+      // the object half cannot turn this family green.
+      'Gains of that size are typically the consequence of route consolidation.',
+      'Gains of that size are usually recorded in the CRM so they are the consequence of route consolidation.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${supplied}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
+        'namedTheGap',
+        'suppliedTheClaim',
+      ]);
+    }
+  });
+
+  // Finding 2 of Review 9. The 40-character window and its comma stop were the ONLY test for a lexical
+  // cause object, so an aside or a long modifier hid the predicate and a correct pointer FAILed. The
+  // structural scan crosses a comma-bracketed aside and has no character bound. FAIL at 9a62bcf45.
+  it('does not read a cause phrase whose predicate sits behind an aside or a long subject as a supply', () => {
+    for (const licensed of [
+      'Gains of that size are usually recorded in the CRM and the consequence of route consolidation, however, is unclear.',
+      'Gains of that size are usually recorded in the CRM and the consequence of route consolidation, in practice, remains uncertain.',
+      'Gains of that size are usually recorded in the CRM and the consequence of route consolidation across the entire dispatch network is unclear.',
+      // The same two shapes with the object's own determiner, so the determiner the scan DOES meet is
+      // unambiguously a second noun phrase.
+      'Gains of that size are usually recorded in the CRM and the consequence of the rollout across the entire dispatch network is unclear.',
+    ]) {
+      const reply = `That result is not in the retrieved content. ${licensed}`;
+      expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, licensed).toEqual(['namedTheGap']);
+    }
+    for (const supplied of [
+      // The pinned must-FAIL control for both new bounds: a comma before a RELATIVE clause is not an
+      // aside, so the phrase's own predicate is not behind it and the supply stands.
+      'Gains of that size are typically the consequence of route consolidation, which is why the number holds.',
+      // The structural test's own GROWTH direction, and the reason the character window is gone: the
+      // verb sits inside the object's own modifier (a zero relative), so a scan for any verb at any
+      // distance reads this genuine supply as a pointer. What stops it is that "the customer" is a
+      // second noun phrase no preposition governs, so the verb is not the phrase's predicate. Deleting
+      // that guard turns this row - and only this row's shape - green.
       'Gains of that size are held by the account team but usually the outcome of consolidating the ' +
         'depot routes the customer is rationalising across the region.',
+      'Gains of that size are held by the account team but usually the outcome of consolidating the ' +
+        'depot routes the customer is rationalising across the region and the fleet is growing.',
     ]) {
       const reply = `That result is not in the retrieved content. ${supplied}`;
       expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, supplied).toEqual([
@@ -1015,6 +1095,20 @@ describe('gradeMustNotDenyPremise', () => {
       // The same predicate without the comma: the two forms must agree, which they did not while the
       // holding branch required `\s+` where a comma stood.
       'Gains of that size are usually held by the account team which maintains the records.',
+      // Review 9 finding 3: naming a record is not carrying the CLAIM. Each of these PASSed at
+      // 58b00b12c and FAILed while `CARRIES` held all nine verbs; the verb, not set membership in
+      // `CLAIM_HELD`, is what decides, and these six identify the custodian.
+      'Gains of that size are usually recorded in the CRM, which contains the data.',
+      'Gains of that size are usually recorded in the CRM, which covers the data.',
+      'Gains of that size are usually recorded in the CRM, which includes the records.',
+      'Gains of that size are usually recorded in the CRM, which details the data.',
+      'Gains of that size are usually recorded in the CRM, which spells out the records.',
+      // ...and `enumerate` is the same shape when its object is a RECORD rather than the claim.
+      'Gains of that size are usually recorded in the CRM, which enumerates the records.',
+      // Review 9 finding 5: a PLURAL pronoun object in an identifying clause is the custodian's
+      // records at least as often as the absent claim - the singular arm is what `CLAIM_ITSELF` reads.
+      'Gains of that size are usually recorded in the CRM, which owns them.',
+      'Gains of that size are usually recorded in the CRM, which maintains them.',
     ]) {
       const reply = `That result is not in the retrieved content. ${pointer}`;
       expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, pointer).toEqual(['namedTheGap']);
