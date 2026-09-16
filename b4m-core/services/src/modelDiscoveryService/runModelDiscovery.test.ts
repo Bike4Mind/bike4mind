@@ -218,6 +218,13 @@ describe('runModelDiscovery', () => {
     expect(result.outcome).toBe('ok');
     expect(result.sources).toEqual([]);
     expect(walled.infos.some(message => message.includes('skipped=2(egress-disabled:2)'))).toBe(true);
+    // The run document is the only place the admin can read this back, and an
+    // all-skipped run is exactly the one whose empty source list looks like a bug.
+    expect(walled.runs.docs[0].sources).toEqual([]);
+    expect(walled.runs.docs[0].skippedSources).toEqual([
+      { name: 'openai', reason: 'egress-disabled' },
+      { name: 'models.dev', reason: 'egress-disabled' },
+    ]);
     expect(walled.catalog.rows).toEqual([]);
   });
 
@@ -228,6 +235,7 @@ describe('runModelDiscovery', () => {
     const result = await runModelDiscovery(bench.adapters, { ...bench.options, minSourceIntervalMs: 30 * 60_000 });
 
     expect(result.skippedSources).toEqual([{ name: 'openai', reason: 'recently-fetched' }]);
+    expect(bench.runs.docs.at(-1)?.skippedSources).toEqual([{ name: 'openai', reason: 'recently-fetched' }]);
     // A source skipped as fresh is fresh data, not a degraded run.
     expect(result.outcome).toBe('ok');
   });
@@ -259,6 +267,7 @@ describe('runModelDiscovery', () => {
     // status === 'ok', and without one the startup staleness gate never trips.
     expect(result.outcome).toBe('ok');
     expect(partial.runs.docs[0].status).toBe('ok');
+    expect(partial.runs.docs[0].skippedSources).toEqual([{ name: 'xai', reason: 'not-configured' }]);
     expect(partial.catalog.rows).toHaveLength(1);
   });
 
