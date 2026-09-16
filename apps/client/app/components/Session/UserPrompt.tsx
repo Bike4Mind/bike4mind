@@ -252,7 +252,7 @@ const EditButton: FC<{
         onClick={onEdit}
         variant="plain"
         color="neutral"
-        sx={{ ...chatActionButtonSx, marginBottom: '16px' }}
+        sx={chatActionButtonSx}
       >
         <EditOutlinedIcon />
       </IconButton>

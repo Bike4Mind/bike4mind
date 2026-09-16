@@ -16,7 +16,6 @@ import { elidedReplyWarning } from '@client/app/utils/artifactParser';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import { Menu, MenuItem, ListItemDecorator } from '@mui/joy';
 import Box from '@mui/joy/Box';
-import Divider from '@mui/joy/Divider';
 import Dropdown from '@mui/joy/Dropdown';
 import IconButton from '@mui/joy/IconButton';
 import MenuButton from '@mui/joy/MenuButton';
@@ -560,6 +559,9 @@ const MessageContent: React.FC<ContentProps> = memo(
           gap: 2,
           width: '100%',
           maxWidth: '100%',
+          // The rule that used to separate messages carried the space as well as the line;
+          // the virtualized row around this adds none of its own.
+          ...(index !== 0 && { mt: 6 }),
           px: isMobile ? '0px' : '20px',
           overflow: 'visible',
           // The footer belongs to the reply, and stays out of the way until the pointer is
@@ -627,17 +629,6 @@ const MessageContent: React.FC<ContentProps> = memo(
             forwardButtonText="Confirm"
             backwardButtonText="Cancel"
             loading={snipSession.isPending}
-          />
-        )}
-        {index !== 0 && (
-          <Divider
-            className="message-divider"
-            sx={{
-              mt: 4,
-              mb: 2,
-              width: '100%',
-              opacity: 0.3,
-            }}
           />
         )}
         {messageData.prompt && (

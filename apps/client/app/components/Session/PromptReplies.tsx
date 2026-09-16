@@ -1531,15 +1531,11 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                     component="div"
                     sx={{
                       margin: 0,
-                      // No inline padding: with the frame gone there is no edge for it
-                      // to hold off, and it only indented the reply inside its column.
-                      // Framed children (code, artifact cards) keep their own.
-                      paddingInline: 0,
-                      paddingTop: 2,
-                      // No bottom padding: the stack gap below is then the only distance
-                      // between the last line and the action row, rather than stacking
-                      // on top of it.
-                      paddingBottom: 0,
+                      // No padding at all: with the frame gone there is no edge to hold off,
+                      // and every side of it stacked on top of a gap that was already
+                      // doing the job. The column's own gaps now carry the spacing, and
+                      // framed children (code, artifact cards) keep their own padding.
+                      padding: 0,
                       backgroundColor: 'transparent',
                       borderRadius: '8px',
                       color: 'text.primary',
