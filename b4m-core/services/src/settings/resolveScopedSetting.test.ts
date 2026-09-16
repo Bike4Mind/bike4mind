@@ -137,7 +137,81 @@ describe('computeCandidateRefs (rung gating - the decision-7 seam)', () => {
       logger as never
     );
     expect(refs.map(r => r.scopeLevel)).toEqual([SettingScopeLevel.Organization]);
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('no owner is in scope'));
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining(`'${KEY}' is settable at owner/lake but no such rung is in scope`)
+    );
+  });
+
+  // #2624 regression: the pre-#2709 check only reported a missing OWNER, so a declared Lake rung
+  // resolved through a caller-derived scope (org + owner, never a lakeId) was inert in total silence.
+  it('warns that a declared lake rung is inert when the scope carries owner and org but no lake', () => {
+    const logger = { warn: vi.fn() };
+    const refs = computeCandidateRefs(
+      KEY,
+      [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake],
+      false,
+      { organizationId: 'o1', owner }, // what scopeForCaller/scopeForFileOwner build: no lakeId
+      true,
+      logger as never
+    );
+    expect(refs.map(r => r.scopeLevel)).toEqual([SettingScopeLevel.Owner, SettingScopeLevel.Organization]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining(`'${KEY}' is settable at lake but no such rung is in scope`)
+    );
+  });
+
+  it('stays silent when the scope keys every declared rung', () => {
+    const logger = { warn: vi.fn() };
+    computeCandidateRefs(
+      KEY,
+      [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake],
+      false,
+      fullScope,
+      true,
+      logger as never
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  // The org rung is data-dependent, not structural: scopeForCaller/scopeForFileOwner set
+  // `organizationId` only when the principal has one, and fall the owner rung back to the user. An
+  // org-settable key is therefore NORMAL to resolve without an org rung, and warning here would fire
+  // on every resolve for every personal user across the 10 org/owner-settable settings.
+  it('stays silent for a personal (non-org) caller resolving an org/owner-settable key', () => {
+    const logger = { warn: vi.fn() };
+    const refs = computeCandidateRefs(
+      KEY,
+      [SettingScopeLevel.Organization, SettingScopeLevel.Owner],
+      false,
+      { owner: { id: 'u1', type: CreditHolderType.User } }, // scopeForCaller for a user with no org
+      true,
+      logger as never
+    );
+    expect(refs.map(r => r.scopeLevel)).toEqual([SettingScopeLevel.Owner]);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('stays silent for a deliberate platform-only read of a non-owner-settable key', () => {
+    const logger = { warn: vi.fn() };
+    // `{}` is the documented platform-only idiom (lakeAdmissionGate). It keys no declared rung, so it
+    // reads as deliberate rather than as a forgotten scope.
+    computeCandidateRefs(KEY, [SettingScopeLevel.Organization], false, {}, true, logger as never);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('still reports a missing owner even when the scope keys no rung at all (#1660)', () => {
+    const logger = { warn: vi.fn() };
+    computeCandidateRefs(
+      KEY,
+      [SettingScopeLevel.Organization, SettingScopeLevel.Owner],
+      false,
+      {},
+      true,
+      logger as never
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining(`'${KEY}' is settable at owner but no such rung is in scope`)
+    );
   });
 });
 
@@ -348,6 +422,23 @@ describe('scope builders', () => {
     expect(s.owner).toEqual({ id: 'u1', type: CreditHolderType.User });
     expect(s.organizationId).toBeUndefined();
     expect(s.lakeId).toBeUndefined();
+  });
+
+  // The resolver's STRUCTURAL_RUNGS treats a missing owner or lake rung as a CALLER bug, which is
+  // sound only while these builders guarantee it. The cases above pin each builder on its own; this
+  // pins the cross-builder invariant a FOURTH builder would have to keep, since breaking it would
+  // make computeCandidateRefs warn on correct code.
+  it('every builder populates the owner rung, and only scopeForLake carries a lakeId', () => {
+    const built = [
+      scopeForLake({ id: 'l1', createdByUserId: 'u1', organizationId: 'o1' }),
+      scopeForLake({ id: 'l1', createdByUserId: 'u1' }),
+      scopeForFileOwner({ userId: 'u1', organizationId: 'o1' }),
+      scopeForFileOwner({ userId: 'u1' }),
+      scopeForCaller({ userId: 'u1', organizationId: 'o1' }),
+      scopeForCaller({ userId: 'u1' }),
+    ];
+    for (const scope of built) expect(scope.owner?.id).toBeTruthy();
+    expect(built.filter(s => s.lakeId !== undefined)).toHaveLength(2); // the two scopeForLake cases
   });
 });
 
