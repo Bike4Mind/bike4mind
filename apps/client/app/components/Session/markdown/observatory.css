@@ -199,6 +199,14 @@
   margin: 2em 0;
 }
 
+/* A model that writes `---` before `## Heading` gets two rules: its own, and the
+   one h2 draws above itself. Drop the written one rather than the heading's, so
+   every h2 keeps the same rule and spacing whether or not one was written. Same
+   problem the footnote section solves further down. */
+.b4m-md hr:has(+ h2) {
+  display: none;
+}
+
 /* -- headings -------------------------------------------------------------
    h1-h3 come straight from the comp. h4-h6 extend the same idea: the scale
    stops growing and starts receding, so a deep outline reads as structure
