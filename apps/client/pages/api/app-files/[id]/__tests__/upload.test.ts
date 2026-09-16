@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { settingsMap } from '@bike4mind/common';
 import type { Request, Response } from 'express';
 
 const { findByIdMock, uploadMock, getSettingsValueMock } = vi.hoisted(() => ({
@@ -34,7 +35,7 @@ const makeRes = () => {
 const makeReq = (opts: { id?: string; userId?: string; body?: Buffer[] }) => {
   const chunks = opts.body ?? [Buffer.from('hello')];
   return {
-    query: { id: opts.id ?? 'af1' },
+    query: { id: opts.id ?? '507f1f77bcf86cd7994390a1' },
     user: { id: opts.userId ?? 'u1' },
     headers: { 'content-type': 'image/png' },
     destroy: vi.fn(),
@@ -45,7 +46,7 @@ const makeReq = (opts: { id?: string; userId?: string; body?: Buffer[] }) => {
 };
 
 const makePendingFile = () => ({
-  id: 'af1',
+  id: '507f1f77bcf86cd7994390a1',
   userId: 'u1',
   status: 'pending' as string,
   path: 'organizations/org1/logo.png',
@@ -107,6 +108,18 @@ describe('PUT /api/app-files/[id]/upload (self-host proxy)', () => {
     expect(res.status).toHaveBeenCalledWith(413);
     expect((req as unknown as { destroy: ReturnType<typeof vi.fn> }).destroy).toHaveBeenCalled();
     expect(uploadMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the MaxFileSize schema default rather than its own literal', async () => {
+    await handler(makeReq({}), makeRes());
+
+    // Same guard as the FabFile upload twin: a re-hardcoded fallback here would cap this door
+    // below the one fabFileService/create.ts applies.
+    expect(getSettingsValueMock).toHaveBeenCalledWith(
+      'MaxFileSize',
+      expect.anything(),
+      settingsMap.MaxFileSize.defaultValue
+    );
   });
 
   it("writes the body to the app file's own storage key and returns 200 on success", async () => {

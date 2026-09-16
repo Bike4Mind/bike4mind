@@ -7,6 +7,7 @@ import {
   type PublicUserProfile,
 } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
+import { toSafeOrganizationSubdocument } from '@server/utils/toSafeOrganizationSubdocument';
 import { Request } from 'express';
 
 function toPublicProfile(user: IUserDocument): PublicUserProfile {
@@ -36,10 +37,28 @@ const handler = baseApi().get<Request<{}, unknown, unknown, { id: string }>>(asy
   const isAdmin = req.user.isAdmin;
 
   if (isSelf || isAdmin) {
-    // Self/admin-gated profile view. Strip credentials, but keep securityQuestions +
-    // userNotes: the profile-edit form (ProfileDataForm) loads and round-trips them,
-    // so dropping them here would blank the admin notes on save.
-    return res.json(redactUserSecretsForSelf(user, { keep: ['securityQuestions', 'userNotes'] }));
+    // Self/admin-gated profile view. securityQuestions belong to the subject, so a self view
+    // keeps them. userNotes are admin-authored notes ABOUT the subject and are gated on the
+    // VIEWER: ProfileDataForm excludes them from its save payload (see its field allowlist
+    // and ProfileDataForm.test.tsx), so a non-admin self view cannot blank them on save.
+    const safeSelf = redactUserSecretsForSelf(user, {
+      keep: ['securityQuestions'],
+      ...(isAdmin && { keepAdminOnly: ['userNotes'] as const }),
+    });
+
+    // `.populate('organizationId')` above inlines the WHOLE Organization document, and
+    // redactUserSecretsForSelf is a denylist over the USER's own fields - it never descends into a
+    // populated sub-document. So the org's stripeCustomerId and billingContact rode out to any
+    // plain member fetching their own profile. Route the sub-document through the organization
+    // response-boundary serializer, the same one every other org-returning handler uses.
+    if (safeSelf) {
+      safeSelf.organizationId = toSafeOrganizationSubdocument(safeSelf.organizationId, {
+        userId: req.user.id,
+        isAdmin,
+      });
+    }
+
+    return res.json(safeSelf);
   }
 
   return respond(res, publicUserProfileResponseSchema, toPublicProfile(user));

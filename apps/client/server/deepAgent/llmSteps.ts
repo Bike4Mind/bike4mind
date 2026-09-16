@@ -18,7 +18,7 @@ import {
   type Subgoal,
   type WakeSteps,
 } from '@bike4mind/agents';
-import { createSmallLLMService, type SmallLLMService } from '@bike4mind/services';
+import { createSmallLLMService, type SmallLLMService } from '@bike4mind/services/llm';
 import type { SmallLLMAdapters } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { buildGroomPrompt, buildOrientPrompt, buildReflectPrompt } from './prompts';

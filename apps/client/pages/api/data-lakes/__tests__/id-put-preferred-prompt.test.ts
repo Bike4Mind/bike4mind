@@ -121,7 +121,12 @@ describe('PUT /api/data-lakes/[id] - preferredSystemPromptId allowlist is enforc
    */
   it('attaches the KEY as the audit principal when the caller authenticated with an API key', async () => {
     const { res } = makeRes();
-    await run(put({ name: 'L' }, { user: { id: 'owner' }, apiKeyInfo: { keyId: 'key-abc' } }), res);
+    // A real API key always carries scopes; this test is about auditPrincipal attribution, not the
+    // scope gate, so it holds the write scope this door's PUT handler asserts.
+    await run(
+      put({ name: 'L' }, { user: { id: 'owner' }, apiKeyInfo: { keyId: 'key-abc', scopes: ['datalake:write'] } }),
+      res
+    );
     expect(h.updateDataLake).toHaveBeenCalledWith(
       expect.objectContaining({
         auditPrincipal: { principalKind: 'apiKey', principalId: 'key-abc', onBehalfOfUserId: 'owner' },

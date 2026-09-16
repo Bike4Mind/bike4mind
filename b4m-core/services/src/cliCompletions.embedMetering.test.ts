@@ -41,7 +41,14 @@ import { executeCompletion } from './cliCompletions';
 import { subtractCredits } from './creditService';
 
 function buildDb() {
-  const org = { id: 'org1', currentCredits: 500, maxCreditsPerMember: null, userDetails: [] };
+  // executeCompletion re-verifies org membership at use time; every case here bills org1.
+  const org = {
+    id: 'org1',
+    currentCredits: 500,
+    maxCreditsPerMember: null,
+    userDetails: [],
+    users: [{ userId: 'user1' }],
+  };
   const usageEvents = { record: vi.fn().mockResolvedValue(undefined) };
   return {
     db: {

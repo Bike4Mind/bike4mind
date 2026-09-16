@@ -16,6 +16,7 @@ import {
   DISCOVERY_LEASE_KEY,
   MAX_DISCOVERY_PASSES,
   MAX_PERSISTED_RUN_DETAIL,
+  PROBE_MAX_ATTEMPTS,
   runModelDiscovery,
 } from './runModelDiscovery';
 import type {
@@ -43,6 +44,12 @@ const gpt6: DiscoveredModel = {
 
 const openaiSource = (records: DiscoveredModel[] = [gpt6]) =>
   stubSource({ name: 'openai', kind: 'provider', records, authoritativeFor: [ModelBackend.OpenAI] });
+
+const gpt6mini: DiscoveredModel = {
+  modelId: 'gpt-6-mini',
+  patch: { ...gpt6.patch, id: 'gpt-6-mini', name: 'GPT-6 mini' },
+  pricing: { inputPerMTok: 1, outputPerMTok: 4 },
+};
 
 const dispatchResolver: ModelDiscoveryAdapters['resolveDispatch'] = () => ({
   adapterFamily: 'openai-chat',
@@ -206,12 +213,152 @@ describe('runModelDiscovery', () => {
       { name: 'openai', reason: 'egress-disabled' },
       { name: 'models.dev', reason: 'egress-disabled' },
     ]);
-    // Nothing failed, so nothing degrades the status; the empty source list and
-    // the skip counts in the summary are what say no data was refreshed.
-    expect(result.outcome).toBe('ok');
+    // Nothing failed, so the run is not 'failed'; but nothing was refreshed
+    // either, so it may not report the success that advances lastSuccessfulRun.
+    expect(result.outcome).toBe('partial');
+    expect(walled.runs.docs[0].status).toBe('partial');
     expect(result.sources).toEqual([]);
-    expect(walled.infos.some(message => message.includes('skipped=2(egress-disabled:2)'))).toBe(true);
+    expect(walled.infos.some(message => message.includes('skipped=2(egress-disabled:openai+models.dev)'))).toBe(true);
+    // The run document is what the admin surfaces read, and an all-skipped run is
+    // the one whose empty source list looks like a bug.
+    expect(walled.runs.docs[0].sources).toEqual([]);
+    expect(walled.runs.docs[0].skippedSources).toEqual([
+      { name: 'openai', reason: 'egress-disabled' },
+      { name: 'models.dev', reason: 'egress-disabled' },
+    ]);
     expect(walled.catalog.rows).toEqual([]);
+  });
+
+  it('withholds the success a deployment with nothing configured has not earned', async () => {
+    const bare = harness([
+      stubSource({ name: 'openai', configured: false }),
+      stubSource({ name: 'xai', configured: false }),
+    ]);
+
+    const result = await runModelDiscovery(bare.adapters, bare.options);
+
+    // lastSuccessfulRun is findOne({status:'ok'}), so 'partial' is what stops a
+    // deployment that fetches nothing from advancing it run after run.
+    expect(result.outcome).toBe('partial');
+    // Not 'failed': RunFailures has to keep meaning the sources themselves are
+    // broken, or the consecutive-failure alarm pages for a deliberate config.
+    expect(bare.runs.docs[0].status).toBe('partial');
+    // Degrading the status may not cost the skips their visibility.
+    expect(result.skippedSources).toEqual([
+      { name: 'openai', reason: 'not-configured' },
+      { name: 'xai', reason: 'not-configured' },
+    ]);
+    expect(bare.runs.docs[0].skippedSources).toEqual(result.skippedSources);
+    expect(bare.infos.some(message => message.includes('skipped=2(not-configured:openai+xai)'))).toBe(true);
+  });
+
+  it('withholds it from an empty registry too, which has nothing even to skip', async () => {
+    // Zero attempts with zero skips is the other way to refresh nothing, and the
+    // one a predicate written around the skip list is likeliest to miss.
+    const empty = harness([]);
+
+    const result = await runModelDiscovery(empty.adapters, empty.options);
+
+    expect(result.sources).toEqual([]);
+    expect(result.skippedSources).toEqual([]);
+    expect(result.outcome).toBe('partial');
+    expect(empty.runs.docs[0].status).toBe('partial');
+  });
+
+  it('keeps a zero-attempt run ok when one of its skips was the freshness guard', async () => {
+    // Mixed on purpose: ONE source skipped as fresh is a refresh that happened,
+    // so the unconfigurable sources beside it cannot pull the run down.
+    const fresh = harness([openaiSource(), stubSource({ name: 'xai', configured: false })]);
+    await runModelDiscovery(fresh.adapters, fresh.options);
+    fresh.advance(60_000);
+
+    const result = await runModelDiscovery(fresh.adapters, { ...fresh.options, minSourceIntervalMs: 30 * 60_000 });
+
+    expect(result.sources).toEqual([]);
+    expect([...result.skippedSources].map(skip => skip.reason).sort()).toEqual(['not-configured', 'recently-fetched']);
+    expect(result.outcome).toBe('ok');
+  });
+
+  it('caps the named skips in the summary line so a wide registry cannot blow it up', async () => {
+    const many = harness(
+      Array.from({ length: 7 }, (_, index) => stubSource({ name: `source-${index + 1}` })),
+      { modelDiscoveryAllowEgress: false }
+    );
+
+    await runModelDiscovery(many.adapters, many.options);
+
+    expect(
+      many.infos.some(message =>
+        message.includes('skipped=7(egress-disabled:source-1+source-2+source-3+source-4+source-5+2more)')
+      )
+    ).toBe(true);
+  });
+
+  it('names every skip up to the cap and marks the overflow only past it', async () => {
+    const summaryFor = async (count: number) => {
+      const many = harness(
+        Array.from({ length: count }, (_, index) => stubSource({ name: `source-${index + 1}` })),
+        { modelDiscoveryAllowEgress: false }
+      );
+      await runModelDiscovery(many.adapters, many.options);
+      return many.infos.find(message => message.includes('skipped=')) ?? '';
+    };
+
+    // The cap decides whether a name is dropped, so both sides of it are pinned:
+    // a case well past the boundary passes whether the cap is 5, 4 or 6.
+    expect(await summaryFor(5)).toContain('skipped=5(egress-disabled:source-1+source-2+source-3+source-4+source-5)');
+    expect(await summaryFor(6)).toContain(
+      'skipped=6(egress-disabled:source-1+source-2+source-3+source-4+source-5+1more)'
+    );
+  });
+
+  it('accounts for every skip in the summary when one run skips for more than one reason', async () => {
+    const mixed = harness([
+      openaiSource(),
+      stubSource({ name: 'xai', configured: false }),
+      stubSource({ name: 'models.dev', kind: 'aggregator' }),
+    ]);
+    await runModelDiscovery(mixed.adapters, mixed.options);
+    mixed.advance(60_000);
+
+    const result = await runModelDiscovery(mixed.adapters, { ...mixed.options, minSourceIntervalMs: 30 * 60_000 });
+
+    expect([...result.skippedSources].sort((a, b) => a.name.localeCompare(b.name))).toEqual([
+      { name: 'models.dev', reason: 'recently-fetched' },
+      { name: 'openai', reason: 'recently-fetched' },
+      { name: 'xai', reason: 'not-configured' },
+    ]);
+    const summary = mixed.infos.filter(message => message.includes('skipped=')).at(-1) ?? '';
+    const [, total, named] = /skipped=(\d+)\(([^)]*)\)/.exec(summary) ?? [];
+    // The count before the parentheses is what an operator reads first, so it has
+    // to equal the names that follow however many reasons they are grouped into.
+    expect(Number(total)).toBe(result.skippedSources.length);
+    expect(
+      named
+        .split(',')
+        .flatMap(group => group.split(':')[1].split('+'))
+        .sort()
+    ).toEqual(result.skippedSources.map(skipped => skipped.name).sort());
+  });
+
+  it('partitions the configured registry between attempted and skipped on a mixed run', async () => {
+    const mixed = harness([
+      openaiSource(),
+      stubSource({ name: 'litellm', kind: 'aggregator', result: { ok: false, error: 'HTTP 500' } }),
+      stubSource({ name: 'xai', configured: false }),
+    ]);
+
+    const result = await runModelDiscovery(mixed.adapters, mixed.options);
+
+    expect(result.sources.map(report => report.name).sort()).toEqual(['litellm', 'openai']);
+    expect(result.skippedSources).toEqual([{ name: 'xai', reason: 'not-configured' }]);
+    // Both admin surfaces read the two arrays together, so a name in both would
+    // double-count the source and let a skip read as an attempt as well.
+    const attempted = new Set(result.sources.map(report => report.name));
+    expect(result.skippedSources.filter(skipped => attempted.has(skipped.name))).toEqual([]);
+    const doc = mixed.runs.docs[0];
+    expect((doc.sources ?? []).map(source => source.name).sort()).toEqual(['litellm', 'openai']);
+    expect(doc.skippedSources).toEqual([{ name: 'xai', reason: 'not-configured' }]);
   });
 
   it('skips a source another host fetched successfully within the interval', async () => {
@@ -221,6 +368,7 @@ describe('runModelDiscovery', () => {
     const result = await runModelDiscovery(bench.adapters, { ...bench.options, minSourceIntervalMs: 30 * 60_000 });
 
     expect(result.skippedSources).toEqual([{ name: 'openai', reason: 'recently-fetched' }]);
+    expect(bench.runs.docs.at(-1)?.skippedSources).toEqual([{ name: 'openai', reason: 'recently-fetched' }]);
     // A source skipped as fresh is fresh data, not a degraded run.
     expect(result.outcome).toBe('ok');
   });
@@ -241,6 +389,23 @@ describe('runModelDiscovery', () => {
     expect(result.sources.map(report => report.name)).toEqual(['openai']);
   });
 
+  it('reads credentials past the settings cache for a manual run only', async () => {
+    const resolveCredentials = vi.fn(async () => testCredentials());
+    const adapters = { ...bench.adapters, resolveCredentials };
+
+    for (const trigger of ['manual', 'cron', 'startup'] as const) {
+      await runModelDiscovery(adapters, { ...bench.options, trigger });
+      bench.advance(60_000);
+    }
+
+    // One call per run, so a manual run does not multiply uncached settings reads.
+    expect(resolveCredentials.mock.calls).toEqual([
+      [{ skipCache: true }],
+      [{ skipCache: false }],
+      [{ skipCache: false }],
+    ]);
+  });
+
   it('skips a source with no credential without failing the run', async () => {
     const partial = harness([openaiSource(), stubSource({ name: 'xai', configured: false })]);
 
@@ -252,6 +417,7 @@ describe('runModelDiscovery', () => {
     // status === 'ok', and without one the startup staleness gate never trips.
     expect(result.outcome).toBe('ok');
     expect(partial.runs.docs[0].status).toBe('ok');
+    expect(partial.runs.docs[0].skippedSources).toEqual([{ name: 'xai', reason: 'not-configured' }]);
     expect(partial.catalog.rows).toHaveLength(1);
   });
 
@@ -875,10 +1041,14 @@ describe('runModelDiscovery', () => {
       return { bench, view, aggregatorFetches: () => fetches };
     };
 
-    /** Both aggregators quote the same price, which is what makes it trusted. */
+    /**
+     * Both aggregators quote the same price, which is what makes it trusted. The
+     * capability they enrich is supportsVision rather than supportsTools: an
+     * OpenAI model discovery introduced keeps its tools withheld on purpose.
+     */
     const enriched = (modelId: string): DiscoveredModel => ({
       modelId,
-      patch: { supportsTools: true },
+      patch: { supportsVision: true },
       pricing: { inputPerMTok: 3, outputPerMTok: 9 },
     });
 
@@ -887,12 +1057,12 @@ describe('runModelDiscovery', () => {
 
       const result = await runModelDiscovery(bench.adapters, bench.options);
 
-      // Pass 1 can only write the identity the provider reported: the tools
+      // Pass 1 can only write the identity the provider reported: the capability
       // flag, the price and the promotion all wait on the join it enables.
       expect(result.passes).toBeGreaterThanOrEqual(2);
       expect(view.reads()).toBe(result.passes);
       expect(bench.catalog.rows).toHaveLength(2);
-      expect(bench.catalog.rows[1].patch).toMatchObject({ supportsTools: true, lifecycle: { status: 'active' } });
+      expect(bench.catalog.rows[1].patch).toMatchObject({ supportsVision: true, lifecycle: { status: 'active' } });
       expect(bench.prices.rows).toHaveLength(1);
       expect(bench.prices.rows[0].pricing['0']).toEqual({ input: 3e-6, output: 9e-6 });
       expect(result.metrics).toMatchObject({ ModelsDiscovered: 1, ModelsPromoted: 1, PriceRowsAppended: 1 });
@@ -907,6 +1077,46 @@ describe('runModelDiscovery', () => {
       expect(second.diff).toEqual([]);
       expect(bench.catalog.rows).toHaveLength(2);
       expect(bench.prices.rows).toHaveLength(1);
+    });
+
+    it('adds a model the openai source can only half describe, then completes it', async () => {
+      // What the openai source emits when the docs page states a name but no
+      // window: pass 1 leaves the window unclaimed for the join to fill in.
+      const { bench } = convergent(
+        [
+          {
+            modelId: 'gpt-6-astra',
+            patch: {
+              id: 'gpt-6-astra',
+              vendor: 'openai',
+              backend: ModelBackend.OpenAI,
+              type: 'text',
+              name: 'GPT-6 Astra',
+            },
+          },
+        ],
+        modelId => ({
+          modelId,
+          patch: { contextWindow: 1_050_000 },
+          pricing: { inputPerMTok: 3, outputPerMTok: 9 },
+        })
+      );
+
+      const result = await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(result.passes).toBeGreaterThanOrEqual(2);
+      const introduced = bench.catalog.rows[0];
+      expect(introduced.patch).toMatchObject({ name: 'GPT-6 Astra', contextWindow: 0, supportsTools: false });
+      expect(introduced.ownedGroups).not.toContain('limits');
+      // The join claims the window pass 1 left alone, and the tools pin survives
+      // the pass that promoted the model.
+      const enriched = bench.catalog.rows[bench.catalog.rows.length - 1];
+      expect(enriched.ownedGroups).toContain('limits');
+      expect(enriched.patch).toMatchObject({
+        contextWindow: 1_050_000,
+        supportsTools: false,
+        lifecycle: { status: 'active' },
+      });
     });
 
     it('applies a sunset the re-join reported rather than promoting the model first', async () => {
@@ -1263,5 +1473,228 @@ describe('runModelDiscovery', () => {
 
     expect(second.metrics.AggregatorJoinCoverage).toEqual({ 'models.dev': 0.5 });
     expect(joined.runs.docs[1].unmatchedIds).toEqual(['gpt-6-mini']);
+  });
+  describe('dispatch probe', () => {
+    /** What resolveDispatchForRecord returns for every OpenAI id: a family, no profile. */
+    const familyOnly: ModelDiscoveryAdapters['resolveDispatch'] = () => ({ adapterFamily: 'openai-chat' });
+
+    const responsesAnswer = {
+      adapterFamily: 'openai-responses' as const,
+      dispatchProfile: { maxTokensParam: 'max_completion_tokens' as const, toolTransport: 'responses' as const },
+      maxTokensParamVerified: true,
+    };
+
+    /** The same transport, reached through a 400 that left maxTokensParam untested. */
+    const unverifiedParamAnswer = { ...responsesAnswer, maxTokensParamVerified: false };
+
+    type ProbeAnswer = Awaited<ReturnType<NonNullable<ModelDiscoveryAdapters['probeDispatch']>>>;
+
+    interface ProbeConfig {
+      records?: DiscoveredModel[];
+      /** Settings the SECOND run reads, so the first can still introduce the models. */
+      settingsAfter?: Partial<Record<SettingKey, unknown>>;
+      between?: (bench: Harness) => Promise<void> | void;
+    }
+
+    /**
+     * Two runs: the first introduces the models (one with no catalog row yet is
+     * not a probe candidate), the second probes them.
+     */
+    const probeRuns = async (
+      answer: (modelId: string) => ProbeAnswer,
+      config: ProbeConfig = {}
+    ): Promise<{ bench: Harness; probed: string[] }> => {
+      const probed: string[] = [];
+      const bench = harness([openaiSource(config.records ?? [gpt6])]);
+      bench.adapters.resolveDispatch = familyOnly;
+      bench.adapters.probeDispatch = async modelId => {
+        probed.push(modelId);
+        return answer(modelId);
+      };
+
+      await runModelDiscovery(bench.adapters, bench.options);
+      await config.between?.(bench);
+      if (config.settingsAfter) {
+        bench.adapters.db.adminSettings = new FakeAdminSettingsRepository({
+          modelDiscoveryMode: 'write',
+          ...config.settingsAfter,
+        });
+      }
+      bench.advance(60_000);
+      await runModelDiscovery(bench.adapters, bench.options);
+      return { bench, probed };
+    };
+
+    const newestPatch = (bench: Harness, modelId: string): Record<string, unknown> => {
+      const rows = bench.catalog.rows.filter(row => row.modelId === modelId);
+      return rows[rows.length - 1].patch as Record<string, unknown>;
+    };
+
+    const seedAttempts = (bench: Harness, modelId: string, probeAttempts: number) =>
+      bench.state.states.set(modelId, {
+        modelId,
+        missCount: 0,
+        probeAttempts,
+        createdAt: START,
+        updatedAt: START,
+      });
+
+    it('lands a verified dispatch group with tools on, and asks only once', async () => {
+      const { bench, probed } = await probeRuns(() => ({ answer: responsesAnswer, retryable: false }));
+
+      expect(probed).toEqual(['gpt-6']);
+      expect(newestPatch(bench, 'gpt-6')).toMatchObject({
+        adapterFamily: 'openai-responses',
+        dispatchProfile: { maxTokensParam: 'max_completion_tokens', toolTransport: 'responses' },
+        supportsTools: true,
+        lifecycle: { status: 'active' },
+      });
+
+      // A model with a profile is no longer a candidate, which is what the
+      // supportsTools claim above has to survive.
+      bench.advance(60_000);
+      await runModelDiscovery(bench.adapters, bench.options);
+      expect(probed).toEqual(['gpt-6']);
+      expect(newestPatch(bench, 'gpt-6')).toMatchObject({ supportsTools: true });
+    });
+
+    it('leaves the model as it was when nothing verifies, and counts the attempt', async () => {
+      const { bench, probed } = await probeRuns(() => ({ retryable: false }));
+
+      expect(probed).toEqual(['gpt-6']);
+      expect(newestPatch(bench, 'gpt-6')).toMatchObject({ adapterFamily: 'openai-chat', supportsTools: false });
+      expect(newestPatch(bench, 'gpt-6')).not.toHaveProperty('dispatchProfile');
+      expect(bench.state.states.get('gpt-6')).toMatchObject({ probeAttempts: 1 });
+    });
+
+    it.each([
+      ['the flag is off', { modelDiscoveryProbeNewModels: false }],
+      ['egress is off', { modelDiscoveryAllowEgress: false }],
+      ['the run is reporting', { modelDiscoveryMode: 'report' }],
+    ])('makes no probe call when %s', async (_case, settingsAfter) => {
+      const { bench, probed } = await probeRuns(() => ({ answer: responsesAnswer, retryable: false }), {
+        settingsAfter,
+      });
+
+      expect(probed).toEqual([]);
+      // Positively gated, not merely broken: the model is still a candidate the
+      // probe would have answered, so it kept the row the first run gave it and
+      // spent none of its attempt budget.
+      expect(newestPatch(bench, 'gpt-6')).toMatchObject({ adapterFamily: 'openai-chat', supportsTools: false });
+      expect(newestPatch(bench, 'gpt-6')).not.toHaveProperty('dispatchProfile');
+      expect(bench.state.states.get('gpt-6')?.probeAttempts ?? 0).toBe(0);
+    });
+
+    it('never probes a model an operator owns, whatever the row claims', async () => {
+      const { bench, probed } = await probeRuns(() => ({ answer: responsesAnswer, retryable: false }), {
+        // Owns `presentation` only, so the non-operator resolution the plan
+        // diffs against still reads as a model discovery may decide.
+        between: bench =>
+          bench.catalog.append({
+            modelId: 'gpt-6',
+            source: 'operator',
+            ownedGroups: ['presentation'],
+            patch: { rank: 3 },
+            effectiveFrom: new Date(START.getTime() + 1_000),
+            note: 'pinned by an admin',
+          }),
+      });
+
+      expect(probed).toEqual([]);
+      // The operator row is what held it back, not a candidate list that came out
+      // empty for some other reason: the discovery row is untouched and unbilled.
+      const discoveryRows = bench.catalog.rows.filter(row => row.modelId === 'gpt-6' && row.source !== 'operator');
+      expect(discoveryRows).toHaveLength(1);
+      expect(discoveryRows[0].patch).not.toHaveProperty('dispatchProfile');
+      expect(bench.state.states.get('gpt-6')?.probeAttempts ?? 0).toBe(0);
+    });
+
+    it('asks the never-attempted model first and gives up on one at the cap', async () => {
+      const ordered = await probeRuns(() => ({ retryable: false }), {
+        records: [gpt6, gpt6mini],
+        between: bench => seedAttempts(bench, 'gpt-6', PROBE_MAX_ATTEMPTS - 1),
+      });
+      expect(ordered.probed).toEqual(['gpt-6-mini', 'gpt-6']);
+
+      const capped = await probeRuns(() => ({ retryable: false }), {
+        records: [gpt6, gpt6mini],
+        between: bench => seedAttempts(bench, 'gpt-6', PROBE_MAX_ATTEMPTS),
+      });
+      expect(capped.probed).toEqual(['gpt-6-mini']);
+    });
+
+    it('stops the leg at the run deadline, not only at its own budget', async () => {
+      const bench = harness([openaiSource([gpt6, gpt6mini])]);
+      bench.adapters.resolveDispatch = familyOnly;
+      await runModelDiscovery(bench.adapters, bench.options);
+
+      const probed: string[] = [];
+      bench.adapters.probeDispatch = async modelId => {
+        probed.push(modelId);
+        // Up to three live calls per model, which is what the leg's own budget
+        // does not see: it is checked between models, never during one.
+        bench.advance(20_000);
+        return { retryable: false };
+      };
+      bench.advance(60_000);
+
+      // 70s of budget leaves a 10s global deadline, well inside the leg's 90s.
+      await runModelDiscovery(bench.adapters, { ...bench.options, budgetMs: 70_000 });
+
+      expect(probed).toEqual(['gpt-6']);
+    });
+
+    it('spends neither the queue nor the attempt budget on a retryable upstream', async () => {
+      const { bench, probed } = await probeRuns(() => ({ retryable: true }), { records: [gpt6, gpt6mini] });
+
+      expect(probed).toEqual(['gpt-6']);
+      // probeAttempts is a LIFETIME budget the state model only increments, so a
+      // 429 or a truncated reasoning reply that cost one would exclude the model
+      // after five runs for something the model never said.
+      expect(bench.state.states.get('gpt-6')?.probeAttempts ?? 0).toBe(0);
+      expect(bench.state.states.get('gpt-6-mini')?.probeAttempts).toBeUndefined();
+      expect(bench.warnings.some(message => message.includes('retryable upstream'))).toBe(true);
+    });
+
+    it('keeps the answers it already paid for when a later model throws', async () => {
+      const bench = harness([openaiSource([gpt6, gpt6mini])]);
+      bench.adapters.resolveDispatch = familyOnly;
+      await runModelDiscovery(bench.adapters, bench.options);
+      bench.adapters.probeDispatch = async modelId => {
+        // The queue is ordered by attempt count then id, so gpt-6 answers first.
+        if (modelId === 'gpt-6-mini') throw new Error('probe exploded');
+        return { answer: responsesAnswer, retryable: false };
+      };
+      bench.advance(60_000);
+
+      const result = await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(result.outcome).toBe('ok');
+      expect(bench.warnings.some(message => message.includes('dispatch probe of gpt-6-mini failed'))).toBe(true);
+      // The whole point of containing the throw: a live call was billed for this
+      // answer, and the leg's outer boundary would have discarded it.
+      expect(newestPatch(bench, 'gpt-6')).toMatchObject({
+        adapterFamily: 'openai-responses',
+        dispatchProfile: { toolTransport: 'responses' },
+      });
+    });
+
+    it('writes no profile for a transport whose token parameter no call verified', async () => {
+      const { bench, probed } = await probeRuns(() => ({ answer: unverifiedParamAnswer, retryable: false }));
+
+      expect(probed).toEqual(['gpt-6']);
+      // The family stands - the responses endpoint answered - but maxTokensParam
+      // is still a guess, and the terminal no-tools turn would send it on the
+      // chat path. So no profile, tools still withheld, and no promotion.
+      expect(newestPatch(bench, 'gpt-6')).toMatchObject({
+        adapterFamily: 'openai-responses',
+        supportsTools: false,
+        lifecycle: { status: 'discovered' },
+      });
+      expect(newestPatch(bench, 'gpt-6')).not.toHaveProperty('dispatchProfile');
+      // Charged, unlike a retryable upstream: the model answered, and without the
+      // charge it would be re-probed with live calls every run forever.
+      expect(bench.state.states.get('gpt-6')).toMatchObject({ probeAttempts: 1 });
+    });
   });
 });

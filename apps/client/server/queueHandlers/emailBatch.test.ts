@@ -44,7 +44,7 @@ const mockLogger = {
   updateMetadata: vi.fn(),
 } as never;
 
-import { dispatch } from './emailBatch';
+import { dispatch, renderTemplate } from './emailBatch';
 
 function makeSqsEvent(messages: Array<{ messageId: string; body: Record<string, unknown> }>) {
   return {
@@ -101,5 +101,32 @@ describe('emailBatch dispatch', () => {
 
     expect(result).toEqual({ batchItemFailures: [] });
     expect(mockUpdateJob).not.toHaveBeenCalled();
+  });
+});
+
+describe('renderTemplate variable substitution', () => {
+  const template = (subject: string, htmlContent: string) => ({ subject, htmlContent }) as never;
+
+  beforeEach(() => {
+    process.env.APP_URL = 'https://app.example.com';
+  });
+
+  it('HTML-escapes substituted values', () => {
+    const { html } = renderTemplate(
+      template('hi', '<p>Hello {{userName}}</p>'),
+      { userName: '<img src=x onerror=alert(1)>' },
+      'tok'
+    );
+    expect(html).not.toContain('<img src=x');
+    expect(html).toContain('&lt;img');
+  });
+
+  it('does not expand $-patterns in the value into raw template text', () => {
+    // With a plain string replacement, `$&` in the replacement expands to the matched
+    // substring, so the `{{userName}}` placeholder would be spliced back in verbatim.
+    // A function replacer inserts the (escaped) value literally instead.
+    const { html } = renderTemplate(template('hi', 'A{{userName}}B'), { userName: '$&' }, 'tok');
+    expect(html).not.toContain('{{userName}}');
+    expect(html).toContain('A$&amp;B');
   });
 });

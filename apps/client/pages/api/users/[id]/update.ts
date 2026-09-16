@@ -150,14 +150,21 @@ const handler = baseApi().put(
 
       // Double-check we have the latest state
       const finalUser = await User.findById(userId);
-      // Keep securityQuestions + userNotes so the response stays symmetric with GET
-      // /users/[id] (ProfileDataForm round-trips them); dropping them here would blank
-      // the fields in the query cache the client seeds from this response.
-      return res.json(redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions', 'userNotes'] }));
+      // Admin branch: symmetric with the admin view of GET /users/[id].
+      return res.json(
+        redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions'], keepAdminOnly: ['userNotes'] })
+      );
     } else {
       // Parse with the self-service schema -- excludes isAdmin, tags, email, etc.
       // secureParameters inside the service strips any keys not in this allowlist.
-      const body = userService.updateUserSchema.parse(req.body ?? {});
+      const rawBody = (req.body ?? {}) as Record<string, unknown>;
+      // A non-admin key here (creditDelta, tags, isAdmin, ...) parses away silently
+      // below -- surface it in the response so a 200 can't read as "fully applied"
+      // when part of the request was discarded.
+      const selfServiceKeys = new Set(Object.keys(userService.updateUserSchema.shape));
+      const ignoredFields = Object.keys(rawBody).filter(key => !selfServiceKeys.has(key));
+
+      const body = userService.updateUserSchema.parse(rawBody);
 
       const incomingTelemetryLevel = body.preferences?.contextTelemetryLevel;
       const previousTelemetryLevel = incomingTelemetryLevel
@@ -175,9 +182,13 @@ const handler = baseApi().put(
         await handleTelemetryConsentChange(userId, previousTelemetryLevel, incomingTelemetryLevel, req);
       }
 
-      // Same for non-admin updates (keep GET/PUT symmetric - see the admin branch above)
+      // Non-admin self-update: symmetric with the self view of GET /users/[id], which means
+      // no userNotes. This branch's own schema cannot write them either, so nothing is lost.
       const finalUser = await User.findById(userId);
-      return res.json(redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions', 'userNotes'] }));
+      const safeUser = redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions'] });
+      // safeUser is null when the row vanished mid-request; spreading null there would
+      // turn the response into a bare { ignoredFields } that reads as a user document.
+      return res.json(safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser);
     }
   })
 );

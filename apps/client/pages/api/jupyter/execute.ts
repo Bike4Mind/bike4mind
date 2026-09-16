@@ -21,6 +21,7 @@ import { Resource } from 'sst';
 import { sendToConnection } from '@server/websocket/utils';
 import { Connection } from '@bike4mind/database/social';
 import { Quest } from '@bike4mind/database/content';
+import { isValidObjectId } from '@server/utils/objectId';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 
@@ -88,20 +89,24 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
         return source.trim().length > 0;
       }).length;
 
-      // Use findOneAndUpdate with userId filter to prevent unauthorized quest modification
-      const updatedQuest = await Quest.findOneAndUpdate(
-        { _id: questId, userId },
-        {
-          $set: {
-            'jupyterNotebook.status': 'executing',
-            'jupyterNotebook.kernelName': kernelName,
-            'jupyterNotebook.cellCount': codeCellCount,
-            'jupyterNotebook.executedCells': 0,
-            'jupyterNotebook.startedAt': new Date(),
-          },
-        },
-        { new: true }
-      );
+      // Owner-scoped so a caller cannot drive execution on someone else's quest.
+      // `promptMeta.session.userId` is the Quest's owner field - the schema declares no top-level
+      // `userId`, so the filter this used to carry could never match and the route always 403'd.
+      const updatedQuest = isValidObjectId(questId)
+        ? await Quest.findOneAndUpdate(
+            { _id: questId, 'promptMeta.session.userId': userId },
+            {
+              $set: {
+                'jupyterNotebook.status': 'executing',
+                'jupyterNotebook.kernelName': kernelName,
+                'jupyterNotebook.cellCount': codeCellCount,
+                'jupyterNotebook.executedCells': 0,
+                'jupyterNotebook.startedAt': new Date(),
+              },
+            },
+            { new: true }
+          )
+        : null;
 
       if (!updatedQuest) {
         return res.status(403).json({

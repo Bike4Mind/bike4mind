@@ -5,8 +5,9 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import StorageIcon from '@mui/icons-material/Storage';
 import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
-import { useReprocessFabFile } from '@client/app/hooks/data/dataLakes';
+import { useReprocessFabFile, type DataLakeMemberFile } from '@client/app/hooks/data/dataLakes';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
+import MembershipArmBadge from '@client/app/components/datalake/MembershipArmBadge';
 import PurgeLakeDocumentAction from '@client/app/components/DataLakeWizard/PurgeLakeDocumentAction';
 import RemoveFileFromLakeDialog from './RemoveFileFromLakeDialog';
 import type { IFabFileDocument } from '@bike4mind/common';
@@ -22,7 +23,7 @@ function getMeaningfulTags(file: IFabFileDocument): string[] {
 }
 
 interface DataLakeArticlePanelProps {
-  file: IFabFileDocument | null;
+  file: DataLakeMemberFile | null;
   dataLakeId: string;
   lakeName: string;
   /**
@@ -163,8 +164,9 @@ export default function DataLakeArticlePanel({
             {file.notes}
           </Typography>
         )}
-        {tags.length > 0 && (
+        {(tags.length > 0 || file.membershipArm) && (
           <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+            <MembershipArmBadge arm={file.membershipArm} />
             {tags.map(tag => (
               <Chip key={tag} size="sm" variant="soft" color="neutral" sx={{ fontSize: '11px' }}>
                 {tag}

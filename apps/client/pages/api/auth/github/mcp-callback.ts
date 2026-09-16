@@ -3,9 +3,9 @@ import { mcpServerRepository, userRepository } from '@bike4mind/database';
 import { Config } from '@server/utils/config';
 import { InternalServerError } from '@server/utils/errors';
 import { McpServerName } from '@bike4mind/common';
-import type { Response as ExpressResponse } from 'express';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
+import { readStateNonceHash, clearStateNonce } from '@server/auth/oauthFlowCookie';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
@@ -19,30 +19,6 @@ function getJwtSecret(): string {
   return Config.JWT_SECRET;
 }
 
-/** Parse the Cookie header into a key-value map. */
-function parseCookies(cookieHeader: string | undefined): Record<string, string> {
-  const cookies: Record<string, string> = {};
-  if (!cookieHeader) return cookies;
-  for (const pair of cookieHeader.split(';')) {
-    const idx = pair.indexOf('=');
-    if (idx < 0) continue;
-    cookies[pair.slice(0, idx).trim()] = pair.slice(idx + 1).trim();
-  }
-  return cookies;
-}
-
-/**
- * Clear the session-binding cookie on every exit path. Called unconditionally
- * so success AND failure branches both leave the browser in a clean state.
- * Idempotent - safe to call multiple times.
- */
-function clearOAuthCookie(res: ExpressResponse): void {
-  res.setHeader(
-    'Set-Cookie',
-    'gh_oauth_uid=; HttpOnly; Secure; SameSite=Lax; Max-Age=0; Path=/api/auth/github/mcp-callback'
-  );
-}
-
 // Treat OAuth callbacks within this window as duplicates (prevents browser back/refresh issues)
 const OAUTH_IDEMPOTENCY_WINDOW_SECONDS = 30;
 
@@ -52,9 +28,9 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
 
-  // Clear the session-binding cookie unconditionally so every exit path
+  // Clear the browser-binding nonce cookie unconditionally so every exit path
   // (success or failure) is covered, not just the branches present today.
-  clearOAuthCookie(res);
+  clearStateNonce(res);
 
   const requestId = randomUUID().split('-')[0]; // Use first segment for shorter, secure ID
   const auditLogger = IntegrationAuditLogger.create(
@@ -82,38 +58,40 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       return res.redirect('/profile?tab=integrations&github_oauth=error&error=missing_state#github-integration');
     }
 
-    // Verify state token (contains userId)
+    // Verify state token (contains userId and the browser-binding nonce hash)
     let userId: string;
+    let stateNonceHash: string | undefined;
     try {
-      const decoded = jwt.verify(state, getJwtSecret(), { algorithms: ['HS256'] }) as { userId: string };
+      const decoded = jwt.verify(state, getJwtSecret(), { algorithms: ['HS256'] }) as {
+        userId: string;
+        nh?: string;
+      };
       userId = decoded.userId;
+      stateNonceHash = decoded.nh;
     } catch (error) {
       req.logger.error('Invalid state token', error);
       auditLogger.failure('invalid_state');
       return res.redirect('/profile?tab=integrations&github_oauth=error&error=invalid_state#github-integration');
     }
 
-    // Cross-check the session-binding cookie set by authorize.ts. The gh_oauth_uid
-    // cookie proves the same browser that initiated the OAuth flow is completing it.
-    // Without this check, the state token is the sole identity source: if it leaks,
-    // an attacker can link their GitHub to the victim's account from a different browser.
-    const cookies = parseCookies(req.headers.cookie);
-    const cookieUid = cookies['gh_oauth_uid'];
-    if (!cookieUid) {
-      req.logger.error('Missing gh_oauth_uid session cookie — session expired or different browser', { userId });
+    // Browser-binding: the shared nonce cookie set by authorize.ts must match the
+    // hash carried in the signed state, proving the same browser that started the
+    // flow is completing it. Without this the state token is the sole identity
+    // source: if it leaks, an attacker links their GitHub to the victim from
+    // another browser. Fails closed - no cookie, or a mismatch, is rejected.
+    const presentedNonceHash = readStateNonceHash(req);
+    if (!presentedNonceHash) {
+      req.logger.error('Missing browser-binding nonce cookie - session expired or different browser', { userId });
       auditLogger.failure('session_missing');
       return res.redirect('/profile?tab=integrations&github_oauth=error&error=session_expired#github-integration');
     }
-    if (cookieUid !== userId) {
-      req.logger.error('Session mismatch — cookie userId does not match state token', {
-        cookieUid,
-        stateUserId: userId,
-      });
+    if (!stateNonceHash || presentedNonceHash !== stateNonceHash) {
+      req.logger.error('Session mismatch - nonce cookie does not match state token', { userId });
       auditLogger.failure('session_mismatch');
       return res.redirect('/profile?tab=integrations&github_oauth=error&error=session_mismatch#github-integration');
     }
 
-    // Cookie already cleared at the top of the handler (unconditional).
+    // Nonce cookie already cleared at the top of the handler (unconditional).
     auditLogger.setUserId(userId);
 
     const user = await userRepository.findById(userId);

@@ -76,7 +76,9 @@ export const cloneSession = async (
     // adapters object and the route supplies one. Without both halves a non-owner ends up narrowed
     // to a lake they cannot read, with their personal-corpus fallback off (a non-empty
     // retrievalTags reads as "already lake-scoped") and no way to clear either from the UI.
-    ...(isOwner ? { retrievalTags: session.retrievalTags } : {}),
+    // Same owner-only gate: a non-owner falls back to derivation, which the explicit marker would
+    // otherwise suppress, leaving them with neither a copied scope nor a derived one.
+    ...(isOwner ? { retrievalTags: session.retrievalTags, lakeScopeExplicit: session.lakeScopeExplicit } : {}),
   };
   if (session.summary) buildCloneSession.summary = session.summary;
   if (session.summaryAt) buildCloneSession.summaryAt = session.summaryAt;
@@ -91,7 +93,12 @@ export const cloneSession = async (
 
   // Clone all messages from the session
   await Promise.all(
-    messagesToClone.map(async ({ id, promptMeta, ...messageData }) => {
+    messagesToClone.map(async ({ id, promptMeta, correctsQuestId, ...messageData }) => {
+      // `correctsQuestId` names a quest in the SOURCE session, so it is dropped rather than copied:
+      // a copied chain link would dereference across the session boundary, and the access that
+      // authorized this copy is not rechecked when the pointer is later read. Remap it through an
+      // old-id to new-id table if preserving copied correction chains is ever wanted. Paired with
+      // the session re-check in resolveCorrectionContext (llm/buildCorrectionContext.ts).
       await db.chatHistories.create({
         ...messageData,
         // The clone is a NEW session owned by the caller, so promptMeta.session must name it -

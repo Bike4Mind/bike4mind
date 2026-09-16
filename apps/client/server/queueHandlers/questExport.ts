@@ -1,4 +1,12 @@
-import { QuestMasterPlan, Quest, FabFile, apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
+import {
+  QuestMasterPlan,
+  Quest,
+  FabFile,
+  fabFileRepository,
+  userRepository,
+  apiKeyRepository,
+  adminSettingsRepository,
+} from '@bike4mind/database';
 import { secureParameters, getSettingsByNames } from '@bike4mind/utils';
 import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
@@ -6,6 +14,7 @@ import { S3Storage } from '@bike4mind/fab-pipeline';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { sendToClient } from '@server/websocket/utils';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
+import { filterReadableQuests } from '@server/utils/sessionAccess';
 import { apiKeyService } from '@bike4mind/services';
 import { ChatModels, isImageServeable } from '@bike4mind/common';
 import { getSubQuestStatusIcon } from '@client/app/utils/subQuestStatusPresentation';
@@ -36,7 +45,7 @@ async function sendProgress(
   status: ExportStatus,
   progress: number,
   detail?: string,
-  extras?: { downloadUrl?: string; filename?: string; errorMessage?: string }
+  extras?: { downloadUrl?: string; filename?: string; errorMessage?: string; droppedQuestCount?: number }
 ) {
   await sendToClient(userId, endpoint, {
     action: 'quest_export_progress',
@@ -268,6 +277,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       throw new Error('Access denied');
     }
 
+    // The subject whose entitlements authorize the plan's embedded images: the plan OWNER, not
+    // necessarily the caller. A collaborator reaching the plan via `sharedWith` exports it as the
+    // owner assembled it, so owner-uploaded figures - which are not individually shared with the
+    // collaborator - must be authorized against the owner or every figure degrades to a breadcrumb.
+    // (Owner exporting their own plan is unchanged: owner === caller.) Loaded once for the per-image
+    // check below (its `groups` feed the share predicate); a missing owner doc fails closed.
+    const exportUser = await userRepository.findById(plan.userId || userId);
+
     // Idempotency check: skip if ZIP already exists (must be after plan load to get slug)
     const slug = slugify(plan.goal);
     const finalZipKey = `exports/quest/${exportJobId}/questmaster-${slug}-${dateStr}.zip`;
@@ -303,8 +320,23 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     await sendProgress(userId, websocketEndpoint, exportJobId, planId, 'assembling', 20, 'Loading responses...');
 
-    // Batch fetch all ChatHistoryItems
-    const chatItems = questIds.length > 0 ? await Quest.find({ _id: { $in: questIds } }).lean() : [];
+    // Batch fetch all ChatHistoryItems, then drop any whose session the CALLER cannot read: a
+    // doctored subQuest.questId could otherwise pull another user's quest into this export. Gating
+    // by the caller (not the plan owner) means a sharee sees their own quests, and never the owner's
+    // quests in sessions the sharee cannot reach.
+    // Fetch first, then filter by readability, so droppedQuestCount counts only quests that EXIST
+    // but the caller cannot read - not ids the $in never matched (deleted, or a stale subQuest.questId).
+    const foundQuests = questIds.length > 0 ? await Quest.find({ _id: { $in: questIds } }).lean() : [];
+    // Keep a quest when the CALLER can read its session. The owner arm is applied ONLY when the
+    // caller IS the owner: an owner exporting their own plan still recovers quests in sessions they
+    // soft-deleted (or a collaborator's session they cannot otherwise reach), but a sharee never gets
+    // the owner arm - passing it for a sharee would leak the owner's private (even soft-deleted)
+    // quests, since a sharee can write subQuest.questId. plan.userId is the owner.
+    const chatItems = await filterReadableQuests(foundQuests, userId, userId === plan.userId ? plan.userId : undefined);
+    const droppedQuestCount = foundQuests.length - chatItems.length;
+    if (droppedQuestCount > 0) {
+      logger.info(`[questExport] Dropped ${droppedQuestCount} quest(s) the caller cannot read`);
+    }
     const chatItemMap = new Map<string, Record<string, unknown>>();
     for (const item of chatItems) {
       chatItemMap.set((item._id as { toString(): string }).toString(), item as Record<string, unknown>);
@@ -430,6 +462,20 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             throw new Error('Image is pending moderation review and is not available');
           }
 
+          // Object-level guard: a tracked fab-file key embedded in the plan markdown must be
+          // accessible to the export subject (the plan owner, resolved above), or its bytes would
+          // leak (IDOR). Untracked keys (external/generated-image URLs) have no FabFile owner record
+          // and fall through unaffected - the same limitation the generated-image copy/serve paths
+          // carry. Lake-tag access isn't resolved here (a queue handler has no entitlement context),
+          // so a curated-lake image degrades to the breadcrumb below rather than leaking. Fails
+          // closed: a tracked file with no loadable export user is treated as inaccessible.
+          if (fabFile) {
+            const accessible = exportUser
+              ? await fabFileRepository.shareable.findAccessibleById(exportUser, fabFile.id)
+              : null;
+            if (!accessible) throw new Error('Image is not available');
+          }
+
           const buffer = await storage.download(key);
           imageBuffers.push({ filename, buffer });
         } catch (err) {
@@ -501,10 +547,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       ResponseContentDisposition: `attachment; filename="${filename}"`,
     });
 
-    // Phase 4: Complete
+    // Phase 4: Complete. Surface droppedQuestCount so a sharee holding a partial export (owner-authored
+    // quests filtered out because their sessions were never shared) has a signal it is incomplete.
     await sendProgress(userId, websocketEndpoint, exportJobId, planId, 'completed', 100, 'Export complete!', {
       downloadUrl,
       filename,
+      ...(droppedQuestCount > 0 ? { droppedQuestCount } : {}),
     });
 
     logger.info(

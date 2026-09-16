@@ -59,8 +59,11 @@ export function effectiveContextWindow(modelInfo: Pick<ModelInfo, 'contextWindow
  * budget below - and they must not drift apart.
  *
  * The static catalog tables are held to the positive-budget property by
- * modelCatalogInputBudget.test.ts, and a discovered claim that would break it for a TEXT row is
- * refused in modelDiscoveryService/catalogWrite.
+ * modelCatalogInputBudget.test.ts. A discovered claim is guarded in two places, one per direction:
+ * modelDiscoveryService/catalogWrite refuses a TEXT row whose output cap starves its own window,
+ * and the docs parsers refuse a window or an output cap past MAX_PLAUSIBLE_TOKENS
+ * (modelDiscoveryService/sources/openaiDocs.ts) - an overstated window is not a non-positive
+ * budget, so catalogWrite would never see it, and no aggregator may correct a provider's figure.
  *
  * The buffer figure is imported rather than redeclared here: common owns it, and two copies of the
  * same number is the drift that made it a shared export in the first place.

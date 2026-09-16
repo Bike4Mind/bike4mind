@@ -1,4 +1,4 @@
-import type { ToolDefinition } from '@bike4mind/services';
+import type { ToolDefinition } from '@bike4mind/services/llm';
 
 type ToolFn = (parameters?: unknown, apiKey?: string) => Promise<string>;
 

@@ -55,6 +55,9 @@ const handler = baseApi().get(async (req, res) => {
     })
   );
 
+  // Persist the nonce so the callback can verify it is single-use
+  await userRepository.update({ id: userId, pendingNotionOAuthNonce: csrfToken });
+
   // Notion uses the 'owner' parameter to specify who the integration is for
   const authUrl = new URL(NOTION_OAUTH_AUTHORIZE_URL);
   authUrl.searchParams.set('client_id', clientId);
@@ -63,10 +66,7 @@ const handler = baseApi().get(async (req, res) => {
   authUrl.searchParams.set('owner', 'user'); // Request access to user's workspaces
   authUrl.searchParams.set('state', state);
 
-  console.log('[Notion Connect] OAuth Authorization URL Generated');
-  console.log('clientId:', clientId);
-  console.log('redirectUri:', redirectUri);
-  console.log('Full authUrl:', authUrl.toString());
+  console.log('[Notion Connect] OAuth authorization URL generated');
 
   return res.json({ authUrl: authUrl.toString(), state });
 });

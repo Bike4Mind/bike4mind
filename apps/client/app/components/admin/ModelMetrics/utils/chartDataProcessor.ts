@@ -2,6 +2,72 @@ import dayjs from 'dayjs';
 import { ModelMetric, ChartData } from '../types';
 import { getDisplayName } from './formatters';
 
+const MS_PER_HOUR = 60 * 60 * 1000;
+
+// Beyond this span the charts switch from hourly to daily buckets.
+const MAX_HOURLY_SPAN_MS = 48 * MS_PER_HOUR;
+
+// Bucket labels double as the x-axis ticks, so they stay short and carry no year.
+// That makes them ambiguous between years ('03/04' is two real days), so every bucket
+// is grouped and ordered by sortKey - its start instant - and the label is only shown.
+const HOURLY_LABEL = 'MM/DD HH:00';
+const DAILY_LABEL = 'MM/DD';
+
+interface Bucket {
+  /** Display label for the x-axis. Not unique: two years share one 'MM/DD'. */
+  x: string;
+  /** Start of the bucket, in ms. The grouping and ordering key. */
+  sortKey: number;
+}
+
+const toBucket = (timestamp: string, useHourlyGranularity: boolean): Bucket => {
+  const start = dayjs(timestamp).startOf(useHourlyGranularity ? 'hour' : 'day');
+  return {
+    x: start.format(useHourlyGranularity ? HOURLY_LABEL : DAILY_LABEL),
+    sortKey: start.valueOf(),
+  };
+};
+
+/**
+ * Averages one numeric field per time bucket. `valueOf` returns null/undefined for
+ * metrics that should not contribute to the series at all (not zero, which would
+ * drag the average down).
+ */
+const buildAverageTrend = (
+  filteredMetrics: ModelMetric[],
+  id: string,
+  useHourlyGranularity: boolean,
+  valueOf: (metric: ModelMetric) => number | null | undefined
+) => {
+  const byBucket = filteredMetrics.reduce(
+    (acc, metric) => {
+      const value = valueOf(metric);
+      if (value == null) {
+        return acc;
+      }
+      const { x, sortKey } = toBucket(metric.timestamp, useHourlyGranularity);
+      if (!acc[sortKey]) {
+        acc[sortKey] = { values: [], x, sortKey };
+      }
+      acc[sortKey].values.push(value);
+      return acc;
+    },
+    {} as Record<number, { values: number[]; x: string; sortKey: number }>
+  );
+
+  return [
+    {
+      id,
+      data: Object.values(byBucket)
+        .sort((a, b) => a.sortKey - b.sortKey)
+        .map(({ values, x }) => ({
+          x,
+          y: Math.round(values.reduce((a, b) => a + b, 0) / values.length),
+        })),
+    },
+  ];
+};
+
 export const processChartData = (
   filteredMetrics: ModelMetric[],
   modelInfos: any[] = [],
@@ -47,159 +113,72 @@ export const processChartData = (
     count: times.length,
   }));
 
-  // Determine time granularity based on data range
-  // If data spans <= 48 hours, use hourly granularity; otherwise use daily
-  const timeRange =
-    filteredMetrics.length > 0
-      ? dayjs(filteredMetrics[0].timestamp).diff(dayjs(filteredMetrics[filteredMetrics.length - 1].timestamp), 'hour')
-      : 0;
-  const useHourlyGranularity = Math.abs(timeRange) <= 48;
-  const dateFormat = useHourlyGranularity ? 'MM/DD HH:mm' : 'MM/DD';
-
-  // Daily/Hourly usage trends
-  const dailyUsage = filteredMetrics.reduce(
+  // Granularity comes from the span of the data itself, taken from the extreme
+  // timestamps rather than the array ends: callers pass user-sortable arrays.
+  const span = filteredMetrics.reduce(
     (acc, metric) => {
-      const date = dayjs(metric.timestamp).format(dateFormat);
-      if (!acc[date]) {
-        acc[date] = { x: date, y: 0 };
+      const time = dayjs(metric.timestamp).valueOf();
+      return { min: Math.min(acc.min, time), max: Math.max(acc.max, time) };
+    },
+    { min: Infinity, max: -Infinity }
+  );
+  const useHourlyGranularity = span.max - span.min <= MAX_HOURLY_SPAN_MS;
+
+  // Daily/hourly usage trends
+  const usageByBucket = filteredMetrics.reduce(
+    (acc, metric) => {
+      const { x, sortKey } = toBucket(metric.timestamp, useHourlyGranularity);
+      if (!acc[sortKey]) {
+        acc[sortKey] = { x, y: 0, sortKey };
       }
-      acc[date].y += 1;
+      acc[sortKey].y += 1;
       return acc;
     },
-    {} as Record<string, any>
+    {} as Record<number, { x: string; y: number; sortKey: number }>
   );
 
   const dailyTrends = [
     {
       id: 'requests',
-      data: Object.values(dailyUsage).sort(
-        (a: any, b: any) => dayjs(a.x, dateFormat).unix() - dayjs(b.x, dateFormat).unix()
-      ),
+      data: Object.values(usageByBucket)
+        .sort((a, b) => a.sortKey - b.sortKey)
+        .map(({ x, y }) => ({ x, y })),
     },
   ];
 
-  // Context retrieval time trends - group by date/hour and calculate average context retrieval time
-  const contextRetrievalByDate = filteredMetrics.reduce(
-    (acc, metric) => {
-      const date = dayjs(metric.timestamp).format(dateFormat);
-      const contextTime = metric.performance?.contextRetrievalTime;
-
-      if (contextTime !== undefined && contextTime !== null) {
-        if (!acc[date]) {
-          acc[date] = { times: [], x: date };
-        }
-        acc[date].times.push(contextTime);
-      }
-      return acc;
-    },
-    {} as Record<string, { times: number[]; x: string }>
+  const contextRetrievalTrends = buildAverageTrend(
+    filteredMetrics,
+    'context-retrieval',
+    useHourlyGranularity,
+    metric => metric.performance?.contextRetrievalTime
   );
 
-  const contextRetrievalTrends = [
-    {
-      id: 'context-retrieval',
-      data: Object.values(contextRetrievalByDate)
-        .map(({ times, x }) => ({
-          x,
-          y: times.length > 0 ? Math.round(times.reduce((a, b) => a + b, 0) / times.length) : 0,
-        }))
-        .sort((a, b) => dayjs(a.x, dateFormat).unix() - dayjs(b.x, dateFormat).unix()),
-    },
-  ];
-
-  // First token time trends - group by date/hour and calculate average first token time
-  const firstTokenByDate = filteredMetrics.reduce(
-    (acc, metric) => {
-      const date = dayjs(metric.timestamp).format(dateFormat);
-      const firstTokenTime = metric.performance?.firstTokenTime;
-
-      if (firstTokenTime !== undefined && firstTokenTime !== null) {
-        if (!acc[date]) {
-          acc[date] = { times: [], x: date };
-        }
-        acc[date].times.push(firstTokenTime);
-      }
-      return acc;
-    },
-    {} as Record<string, { times: number[]; x: string }>
+  const firstTokenTrends = buildAverageTrend(
+    filteredMetrics,
+    'first-token',
+    useHourlyGranularity,
+    metric => metric.performance?.firstTokenTime
   );
 
-  const firstTokenTrends = [
-    {
-      id: 'first-token',
-      data: Object.values(firstTokenByDate)
-        .map(({ times, x }) => ({
-          x,
-          y: times.length > 0 ? Math.round(times.reduce((a, b) => a + b, 0) / times.length) : 0,
-        }))
-        .sort((a, b) => dayjs(a.x, dateFormat).unix() - dayjs(b.x, dateFormat).unix()),
-    },
-  ];
-
-  // Characters per second trends - only for text-type models with streaming performance data
-  const charactersPerSecondByDate = filteredMetrics.reduce(
-    (acc, metric) => {
-      const date = dayjs(metric.timestamp).format(dateFormat);
-      const modelType = metric.model?.type;
+  // Streaming speed is only meaningful for text models, and a zero reading means
+  // the stream never reported progress rather than a genuinely slow response.
+  const charactersPerSecondTrends = buildAverageTrend(
+    filteredMetrics,
+    'chars-per-second',
+    useHourlyGranularity,
+    metric => {
       const charsPerSecond = metric.performance?.streamingPerformance?.charsPerSecond;
-
-      // Only include text-type models with valid streaming performance data
-      if (modelType === 'text' && charsPerSecond !== undefined && charsPerSecond !== null && charsPerSecond > 0) {
-        if (!acc[date]) {
-          acc[date] = { speeds: [], x: date };
-        }
-        acc[date].speeds.push(charsPerSecond);
-      }
-      return acc;
-    },
-    {} as Record<string, { speeds: number[]; x: string }>
+      return metric.model?.type === 'text' && charsPerSecond != null && charsPerSecond > 0 ? charsPerSecond : null;
+    }
   );
 
-  const charactersPerSecondTrends = [
-    {
-      id: 'chars-per-second',
-      data:
-        Object.values(charactersPerSecondByDate).length > 0
-          ? Object.values(charactersPerSecondByDate)
-              .map(({ speeds, x }) => ({
-                x,
-                y: speeds.length > 0 ? Math.round(speeds.reduce((a, b) => a + b, 0) / speeds.length) : 0,
-              }))
-              .sort((a, b) => dayjs(a.x, dateFormat).unix() - dayjs(b.x, dateFormat).unix())
-          : [],
-    },
-  ];
-
-  // Process pickup time trends - group by date/hour and calculate average pickup time
-  const processPickupByDate = filteredMetrics.reduce(
-    (acc, metric) => {
-      const date = dayjs(metric.timestamp).format(dateFormat);
-      const pickupTime = metric.performance?.processPickupTime;
-
-      if (pickupTime !== undefined && pickupTime !== null && pickupTime >= 0) {
-        if (!acc[date]) {
-          acc[date] = { times: [], x: date };
-        }
-        acc[date].times.push(pickupTime);
-      }
-      return acc;
-    },
-    {} as Record<string, { times: number[]; x: string }>
-  );
-
-  const processPickupTrends = [
-    {
-      id: 'process-pickup',
-      data: Object.values(processPickupByDate)
-        .map(({ times, x }) => ({
-          x,
-          y: times.length > 0 ? Math.round(times.reduce((a, b) => a + b, 0) / times.length) : 0,
-        }))
-        .sort((a, b) => dayjs(a.x, dateFormat).unix() - dayjs(b.x, dateFormat).unix()),
-    },
-  ];
+  const processPickupTrends = buildAverageTrend(filteredMetrics, 'process-pickup', useHourlyGranularity, metric => {
+    const pickupTime = metric.performance?.processPickupTime;
+    return pickupTime != null && pickupTime >= 0 ? pickupTime : null;
+  });
 
   return {
+    granularity: useHourlyGranularity ? 'hourly' : 'daily',
     modelUsageData,
     performanceData,
     dailyTrends,

@@ -68,7 +68,6 @@
     "no_valid_emails_error": "Por favor, introduce direcciones de correo electrónico válidas",
     "send_referral": "Enviar referencia",
     "send_referral_success": "Referencia enviada con éxito!",
-    "send_referral_skipped": "{{count}} invitación(es) omitida(s) — esas direcciones de correo ya tienen una cuenta.",
     "send_referral_failed": "No se pudo enviar {{count}} invitación(es). Por favor, inténtalo de nuevo.",
     "send_referral_error": "Error al enviar la referencia. Por favor, inténtalo de nuevo.",
     "slack_notification_default": "Referencia enviada por el usuario USER_NAME:USER_ID a FRIEND_EMAIL"

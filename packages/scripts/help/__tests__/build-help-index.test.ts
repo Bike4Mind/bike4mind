@@ -1,6 +1,10 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import type { HelpIndexEntry } from '../types';
-import { buildIndexFromEntries, compareEntries } from '../build-help-index';
+import { buildHelpIndex, buildIndexFromEntries, compareEntries } from '../build-help-index';
+import type { LoadedHelpArticle } from '../loadHelpArticles';
 
 function makeEntry(overrides: Partial<HelpIndexEntry> & Pick<HelpIndexEntry, 'slug'>): HelpIndexEntry {
   return {
@@ -71,5 +75,75 @@ describe('compareEntries', () => {
         .sort(compareEntries)
         .map(e => e.slug)
     ).toEqual(expectedSlugs);
+  });
+});
+
+/**
+ * The empty-corpus guard. The client `prebuild` runs this script, so a docs tree that
+ * is missing from the build context has to redden the build rather than overwrite the
+ * index with an empty one.
+ */
+describe('buildHelpIndex', () => {
+  let root: string;
+
+  const outputPath = () => path.join(root, 'help-index.json');
+
+  function article(overrides: Partial<LoadedHelpArticle> = {}): LoadedHelpArticle {
+    return {
+      filePath: '/docs/features/a.md',
+      relativePath: 'features/a.md',
+      slug: 'features/a',
+      category: 'features',
+      accessLevel: 'public',
+      frontmatter: { title: 'A' },
+      content: '# A\n',
+      headings: [],
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'help-index-test-'));
+    // The builder narrates every step; keep test output quiet.
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('writes an index for a non-empty corpus', async () => {
+    await buildHelpIndex({ outputPath: outputPath(), loadArticles: async () => [article()] });
+
+    const index = JSON.parse(fs.readFileSync(outputPath(), 'utf-8'));
+    expect(index.entries.map((e: { slug: string }) => e.slug)).toEqual(['features/a']);
+  });
+
+  it('throws and writes nothing when the corpus is empty', async () => {
+    await expect(buildHelpIndex({ outputPath: outputPath(), loadArticles: async () => [] })).rejects.toThrow(
+      /No indexable help articles found/
+    );
+
+    expect(fs.existsSync(outputPath())).toBe(false);
+  });
+
+  it('throws when articles are found but none is indexable', async () => {
+    const untitled = article({ frontmatter: {} });
+
+    await expect(buildHelpIndex({ outputPath: outputPath(), loadArticles: async () => [untitled] })).rejects.toThrow(
+      /1 markdown files scanned/
+    );
+
+    expect(fs.existsSync(outputPath())).toBe(false);
+  });
+
+  it('leaves an existing index untouched when it refuses to write', async () => {
+    fs.writeFileSync(outputPath(), 'previous-index');
+
+    await expect(buildHelpIndex({ outputPath: outputPath(), loadArticles: async () => [] })).rejects.toThrow();
+
+    expect(fs.readFileSync(outputPath(), 'utf-8')).toBe('previous-index');
   });
 });

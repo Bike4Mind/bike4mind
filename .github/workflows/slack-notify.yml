@@ -66,8 +66,10 @@ jobs:
     steps:
       - name: Determine notification emoji and text
         id: message
+        env:
+          STATUS: ${{ inputs.status }}
         run: |
-          case "${{ inputs.status }}" in
+          case "$STATUS" in
             success)
               echo "emoji=✅" >> $GITHUB_OUTPUT
               echo "status_text=Succeeded" >> $GITHUB_OUTPUT
@@ -82,7 +84,7 @@ jobs:
               ;;
             *)
               echo "emoji=ℹ️" >> $GITHUB_OUTPUT
-              echo "status_text=${{ inputs.status }}" >> $GITHUB_OUTPUT
+              echo "status_text=$(printf '%s' "$STATUS" | head -n1)" >> $GITHUB_OUTPUT
               ;;
           esac
 
@@ -96,15 +98,13 @@ jobs:
       - name: Prepare commit message for JSON
         id: prepare
         if: inputs.commit_message != ''
+        env:
+          COMMIT_MESSAGE: ${{ inputs.commit_message }}
         run: |
-          COMMIT_MSG=$(cat << 'COMMIT_MSG_EOF'
-          ${{ inputs.commit_message }}
-          COMMIT_MSG_EOF
-          )
           # First line only, truncated to 200 Unicode code points (not bytes, so emoji
           # are preserved intact), then JSON-escaped with outer quotes stripped so we
           # can splice into the payload's mrkdwn string.
-          ESCAPED_MSG=$(printf '%s' "$COMMIT_MSG" | python3 -c '
+          ESCAPED_MSG=$(printf '%s' "$COMMIT_MESSAGE" | python3 -c '
           import json, sys
           lines = sys.stdin.read().strip().splitlines()
           text = lines[0] if lines else ""

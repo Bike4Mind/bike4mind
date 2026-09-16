@@ -37,7 +37,7 @@ The table displays the following columns:
 | Column | Description |
 |--------|-------------|
 | **Username** | The user's login username |
-| **Email** | Current email address. If a pending email change exists, the new email is shown below with an arrow indicator |
+| **Email** | Current email address. If a pending email change exists, the new email is shown below with an arrow indicator. Blank for an account created through an OAuth provider that did not assert a verified email - that account has no email on file and signs in through its provider |
 | **Name** | The user's display name |
 | **Status** | Color-coded chip indicating the current state (see Status Indicators below) |
 | **Verified At** | Date and time the email was verified, or `-` if not yet verified |

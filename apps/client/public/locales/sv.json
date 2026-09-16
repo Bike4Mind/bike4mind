@@ -68,7 +68,6 @@
     "no_valid_emails_error": "Vänligen ange giltiga e-postadresser",
     "send_referral": "Skicka hänvisning",
     "send_referral_success": "Hänvisningen skickades framgångsrikt!",
-    "send_referral_skipped": "{{count}} inbjudan/ar hoppades över — de e-postadresserna har redan ett konto.",
     "send_referral_failed": "{{count}} inbjudan/or kunde inte skickas. Försök igen.",
     "send_referral_error": "Fel vid skickande av hänvisning. Försök igen.",
     "slack_notification_default": "Hänvisning skickad av användare USER_NAME:USER_ID till FRIEND_EMAIL"

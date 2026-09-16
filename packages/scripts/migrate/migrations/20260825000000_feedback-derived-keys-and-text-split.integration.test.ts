@@ -1,11 +1,15 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
 import { Session, Quest, User } from '@bike4mind/database';
-import { createMongoServer } from '../../../database/src/__test__/createMongoServer';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
 
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
 import migration from './20260825000000_feedback-derived-keys-and-text-split';
+
+// Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
+// hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 

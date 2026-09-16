@@ -68,7 +68,6 @@
     "no_valid_emails_error": "Harap masukkan alamat email yang valid",
     "send_referral": "Kirim Referal",
     "send_referral_success": "Referal berhasil dikirim!",
-    "send_referral_skipped": "{{count}} undangan dilewati — alamat email tersebut sudah memiliki akun.",
     "send_referral_failed": "{{count}} undangan gagal dikirim. Silakan coba lagi.",
     "send_referral_error": "Kesalahan mengirim referal. Silakan coba lagi.",
     "slack_notification_default": "Referal dikirim oleh pengguna USER_NAME:USER_ID ke FRIEND_EMAIL"

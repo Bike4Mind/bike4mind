@@ -3,6 +3,7 @@ import { optionalAuth } from '@server/middlewares/optionalAuth';
 import { Annotation, PublishedArtifact } from '@bike4mind/database';
 import { UpdateAnnotationRequestSchema } from '@bike4mind/common';
 import { toAnnotationDto, type AnnotationLean } from '@server/services/publish';
+import { isValidObjectId } from '@server/utils/objectId';
 
 /**
  * /api/publish/annotations/[publicId]/[id] - mutate a single annotation.
@@ -35,7 +36,7 @@ const handler = baseApi({ auth: false })
       return res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
     }
 
-    const ann = await Annotation.findOne({ _id: id, publicId, deletedAt: null });
+    const ann = isValidObjectId(id) ? await Annotation.findOne({ _id: id, publicId, deletedAt: null }) : null;
     if (!ann) return res.status(404).json({ error: 'Not found' });
 
     const userId = String(req.user.id);
@@ -69,7 +70,7 @@ const handler = baseApi({ auth: false })
     const { publicId, id } = req.query as { publicId?: string; id?: string };
     if (!publicId || !id) return res.status(400).json({ error: 'Missing publicId or id' });
 
-    const ann = await Annotation.findOne({ _id: id, publicId, deletedAt: null });
+    const ann = isValidObjectId(id) ? await Annotation.findOne({ _id: id, publicId, deletedAt: null }) : null;
     if (!ann) return res.status(404).json({ error: 'Not found' });
 
     const userId = String(req.user.id);

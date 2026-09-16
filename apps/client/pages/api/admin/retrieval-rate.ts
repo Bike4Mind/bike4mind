@@ -32,6 +32,15 @@ const MAX_TURNS_SCANNED = 50_000;
 const querySchema = z.object({
   startDate: z.string().optional(),
   endDate: z.string().optional(),
+  /**
+   * Cosine cutoff for the answerability split, as a fraction. Sweeping it re-reads the SAME
+   * replayed scores at a different bar, which is the whole reason the probe stores a raw score
+   * instead of a verdict - a caller comparing 0.7 against 0.8 needs no second replay.
+   *
+   * Coerced because it arrives as a query string. Bounded to 0..1 so a caller passing a percentage
+   * (75) fails loudly here rather than silently classifying every turn as not-answerable.
+   */
+  answerableMinScore: z.coerce.number().min(0).max(1).optional(),
 });
 
 /** `<input type="date">` sends this; anything else is treated as a caller-supplied exact instant. */
@@ -123,7 +132,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
     }
 
     const summary = summarizeOptionalPathRetrieval(
-      scanned.map(row => row.promptMeta?.retrieval as RetrievalRateInput | undefined)
+      scanned.map(row => row.promptMeta?.retrieval as RetrievalRateInput | undefined),
+      { answerableMinScore: params.answerableMinScore }
     );
 
     res.json({

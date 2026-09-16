@@ -1,7 +1,7 @@
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { baseApi } from '@server/middlewares/baseApi';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@server/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
@@ -29,8 +29,15 @@ interface UpdateRateLimitRequest {
  * PATCH carrying JSON cannot get past preflight anyway - but it costs the
  * browser client nothing, since the check reads Sec-Fetch and Origin headers
  * and exchanges no token.
+ *
+ * meterAsKeyManagement charges an API-key caller to the separate management
+ * quota: metered on the key's own quota, the escape hatch sat behind the gate
+ * it opens, so a headless client holding one exhausted key had no API path
+ * back until the window rolled. It changes only which counter is charged -
+ * csrfProtection and the findByUserIdAndId scoping above still decide who may
+ * call this.
  */
-const handler = baseApi()
+const handler = baseApi({ meterAsKeyManagement: true })
   .use(csrfProtection())
   .patch(
     asyncHandler<{}, unknown, UpdateRateLimitRequest, { id: string }>(async (req, res) => {
@@ -46,7 +53,7 @@ const handler = baseApi()
         { db: { userApiKeys: userApiKeyRepository } }
       );
 
-      await logEvent(
+      await logEventSafe(
         {
           userId,
           type: UserApiKeyEvents.UPDATED,
@@ -59,7 +66,8 @@ const handler = baseApi()
             ],
           },
         },
-        { ability: req.ability }
+        { ability: req.ability },
+        req.logger
       );
 
       return res.status(200).json(updated);

@@ -21,7 +21,7 @@
  * not answer differently.
  */
 import { ARTIFACT_EMISSION_PROMPT } from '@bike4mind/common';
-import { resolveArtifactsEnabled } from '@bike4mind/services';
+import { resolveArtifactsEnabled } from '@bike4mind/services/llm';
 
 export interface ResolveAgentArtifactGateInput {
   /**

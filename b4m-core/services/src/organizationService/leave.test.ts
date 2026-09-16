@@ -17,6 +17,13 @@ describe('organizationService - leave', () => {
     email: 'member@example.com',
   };
 
+  // Production hands `leave` a hydrated Mongoose doc whose `organizationId` is an ObjectId, NOT the
+  // string the IUserDocument type advertises (UserModel declares Schema.Types.ObjectId with no
+  // stringifying transform). A plain-string fixture makes a strict `===` against the route param
+  // pass and hides the whole class of bug where the service forgets to normalize - which is exactly
+  // how a never-firing pointer clear shipped. Mimic the runtime shape instead.
+  const orgPointer = (id: string) => ({ toString: () => id }) as unknown as IUserDocument['organizationId'];
+
   const memberUserShare = {
     userId: 'user1',
     permissions: [Permission.read, Permission.update],
@@ -65,6 +72,17 @@ describe('organizationService - leave', () => {
         groups: {
           findByOrganization: vi.fn().mockResolvedValue([]),
         },
+        // Same for org lakes: no lakes by default, so the lake-access lapse is a no-op.
+        dataLakes: {
+          findByOrganizationId: vi.fn().mockResolvedValue([]),
+          update: vi.fn().mockImplementation(async (input: { id: string }) => ({ id: input.id })),
+        },
+        dataLakeAccessGrants: {
+          listByPrincipal: vi.fn().mockResolvedValue([]),
+          listActiveByLakes: vi.fn().mockResolvedValue([]),
+          upsertGrant: vi.fn().mockResolvedValue(undefined),
+        },
+        lakeConfigChangeEvents: { record: vi.fn().mockResolvedValue(undefined) },
       },
     };
   });
@@ -85,7 +103,7 @@ describe('organizationService - leave', () => {
   });
 
   it("clears organizationId when the left org was the user's selected org", async () => {
-    const memberWithSelectedOrg = { ...mockMemberUser, organizationId: 'org1' } as IUserDocument;
+    const memberWithSelectedOrg = { ...mockMemberUser, organizationId: orgPointer('org1') } as IUserDocument;
 
     await leave(memberWithSelectedOrg, { id: 'org1' }, mockAdapters);
 
@@ -93,16 +111,16 @@ describe('organizationService - leave', () => {
       expect.objectContaining({ id: 'user1', organizationId: null })
     );
     // leave must NOT mutate the caller-supplied user (retry-safety, see below).
-    expect(memberWithSelectedOrg.organizationId).toBe('org1');
+    expect(memberWithSelectedOrg.organizationId?.toString()).toBe('org1');
   });
 
   it("does NOT clear organizationId when the user's selected org is a different org", async () => {
-    const memberWithOtherOrg = { ...mockMemberUser, organizationId: 'other-org' } as IUserDocument;
+    const memberWithOtherOrg = { ...mockMemberUser, organizationId: orgPointer('other-org') } as IUserDocument;
 
     await leave(memberWithOtherOrg, { id: 'org1' }, mockAdapters);
 
     expect(mockAdapters.db.users.update).not.toHaveBeenCalled();
-    expect(memberWithOtherOrg.organizationId).toBe('other-org');
+    expect(memberWithOtherOrg.organizationId?.toString()).toBe('other-org');
   });
 
   it('re-issues the org-clear write on a withTransaction retry (no in-memory poisoning)', async () => {
@@ -161,6 +179,49 @@ describe('organizationService - leave', () => {
     expect(result.adminUserIds).toEqual(['other-admin']);
     expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(
       expect.objectContaining({ adminUserIds: ['other-admin'] })
+    );
+  });
+
+  it('clears the manager appointment when the departing member held it', async () => {
+    // Same hole as adminUserIds and for the same reason: `findIdsWithAdminRights` matches on
+    // `managerId`, which feeds administeredOrgIds and therefore canManageLake's org rung. A manager
+    // could leave, have their own grants lapse below, and keep authority over every lake in the org.
+    mockAdapters.db.organizations.shareable.findAccessibleById.mockResolvedValue(freshOrg({ managerId: 'user1' }));
+
+    const result = await leave(mockMemberUser as IUserDocument, { id: 'org1' }, mockAdapters);
+
+    expect(result.managerId).toBeNull();
+    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(expect.objectContaining({ managerId: null }));
+  });
+
+  it('leaves a manager appointment held by somebody else alone', async () => {
+    mockAdapters.db.organizations.shareable.findAccessibleById.mockResolvedValue(freshOrg({ managerId: 'manager1' }));
+
+    const result = await leave(mockMemberUser as IUserDocument, { id: 'org1' }, mockAdapters);
+
+    expect(result.managerId).toBe('manager1');
+  });
+
+  // Load-bearing: without it this file merely mocks the lake repos away, and the departure-side
+  // trigger could be deleted from leave.ts with every test here still green.
+  it('lapses the departing user lake grants and passes on a lake they created', async () => {
+    mockAdapters.db.dataLakes.findByOrganizationId.mockResolvedValue([
+      { id: 'lake1', name: 'Team Lake', organizationId: 'org1', createdByUserId: 'user1' },
+    ]);
+    mockAdapters.db.dataLakeAccessGrants.listByPrincipal.mockResolvedValue([
+      { dataLakeId: 'lake1', principalType: 'user', principalId: 'user1', role: 'owner', expiresAt: null },
+    ]);
+
+    await leave(mockMemberUser as IUserDocument, { id: 'org1' }, mockAdapters);
+
+    expect(mockAdapters.db.dataLakes.findByOrganizationId).toHaveBeenCalledWith('org1');
+    expect(mockAdapters.db.dataLakeAccessGrants.upsertGrant).toHaveBeenCalledWith(
+      expect.objectContaining({ principalId: 'user1', expiresAt: expect.any(Date) })
+    );
+    // Expiring the creator's own grant is not enough on its own - it would drop them into the
+    // creator fallback in resolveEffectiveOwnerIds - so the org's billing owner must succeed them.
+    expect(mockAdapters.db.dataLakeAccessGrants.upsertGrant).toHaveBeenCalledWith(
+      expect.objectContaining({ dataLakeId: 'lake1', principalId: 'owner1', role: 'owner', expiresAt: null })
     );
   });
 
