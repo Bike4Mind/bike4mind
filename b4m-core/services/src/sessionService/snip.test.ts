@@ -70,6 +70,21 @@ describe('snipSession', () => {
     expect(created).toEqual([{ sessionId: 'snip-1', prompt: 'later' }]);
   });
 
+  // See forkSession: a copied correction link would name a quest in the source session, and the
+  // access checked at copy time is never rechecked when the pointer is later dereferenced.
+  it('drops correctsQuestId rather than copying a link into the new session', async () => {
+    const { db, created } = makeAdapters();
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+    db.chatHistories.findAllBySessionIdAndGreaterThanOrEqualToTimestamp.mockResolvedValueOnce([
+      { id: 'm2', sessionId: 'session-1', prompt: 'a correction', correctsQuestId: 'quest-in-source-session' },
+    ]);
+
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(created[0]).not.toHaveProperty('correctsQuestId');
+    expect(created[0]).toEqual({ sessionId: 'snip-1', prompt: 'a correction' });
+  });
+
   // Same defect the fork 500 exposed: create() validates promptMeta.session.{id,userId} while the
   // live update() path does not, so a copied quest must bring its own session block.
   it('rebinds promptMeta.session to the snip and its caller, supplying it when absent', async () => {

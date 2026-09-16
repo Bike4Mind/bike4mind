@@ -36,11 +36,13 @@ import StartIcon from '@mui/icons-material/Start';
 import BugReportIcon from '@mui/icons-material/BugReport';
 import { useNavigate } from '@tanstack/react-router';
 import BugReportModal from '@client/app/components/BugReportModal';
+import EditNoteIcon from '@mui/icons-material/EditNote';
+import { CorrectionComposer } from './CorrectionComposer';
 import { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useGetFabFilesByQuestId } from '@client/app/hooks/data/fabFiles';
 import { feedbackSessionQueryKey, useGetFeedbackBySessionId } from '@client/app/hooks/data/feedback';
-import { isOptimisticId } from '@client/app/utils/llm';
+import { isOptimisticId, SendMessageOptions } from '@client/app/utils/llm';
 import { Save as SaveIcon, Add as AddIcon } from '@mui/icons-material';
 import { DataLakeIcon, DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
@@ -117,10 +119,7 @@ export interface ContentProps {
   mode?: string;
   onDelete: (messageData: IChatHistoryItem) => void;
   onPinToggle: (messageData: IChatHistoryItem) => void;
-  onSendMessage: (
-    messageData: Partial<IChatHistoryItem>,
-    { isRetry, isImageEdit, isVariation }: { isRetry?: boolean; isImageEdit?: boolean; isVariation?: boolean }
-  ) => Promise<void>;
+  onSendMessage: (messageData: Partial<IChatHistoryItem>, options: SendMessageOptions) => Promise<void>;
   search?: string;
   isLastMessage: boolean;
   model: string;
@@ -248,6 +247,8 @@ const MessageContent: React.FC<ContentProps> = memo(
     const triggerEdit = useMessageEditMode(s => s.triggerEdit);
 
     const [isBugReportModalOpen, setIsBugReportModalOpen] = useState(false);
+    const [isCorrecting, setIsCorrecting] = useState(false);
+    const [isSubmittingCorrection, setIsSubmittingCorrection] = useState(false);
     const [showBlogPreviewModal, setShowBlogPreviewModal] = useState(false);
     const [blogPreviewContent, setBlogPreviewContent] = useState<string>('');
     const [blogPreviewTitle, setBlogPreviewTitle] = useState<string>('');
@@ -505,6 +506,54 @@ const MessageContent: React.FC<ContentProps> = memo(
     // UI never invites a rejected action (fails closed either way).
     const teamOrg = activeOrg && String(activeOrg.id) === String(currentUser?.organizationId) ? activeOrg : null;
     const hasShareableReply = !!(extractedReplies[0] || messageData.reply);
+
+    // Correct-and-retry. Deliberately NOT the existing `isRetry` path: that re-runs this same quest
+    // in place and overwrites its reply, whereas a correction has to leave the flawed answer intact
+    // so the pair (what it said, what was wrong, what it said next) survives to be read back.
+    const handleSubmitCorrection = useCallback(
+      async (correction: string) => {
+        if (!messageData.id) return;
+        setIsSubmittingCorrection(true);
+        try {
+          await onSendMessage({ prompt: correction }, { correctsQuestId: messageData.id });
+          setIsCorrecting(false);
+        } catch {
+          // handleLLMCommand already toasted the failure and rethrew. Swallow it here so a failed
+          // send is not also an unhandled rejection, and leave the composer open holding the
+          // user's text so they can retry without retyping it.
+        } finally {
+          setIsSubmittingCorrection(false);
+        }
+      },
+      [messageData.id, onSendMessage]
+    );
+
+    const handleCancelCorrection = useCallback(() => setIsCorrecting(false), []);
+
+    // Only offered on a turn that actually produced an answer and was persisted: there is nothing
+    // to correct on a turn still running, and an optimistic id is not a link anything can resolve.
+    const canCorrect = isPersistedMessage && !isProcessingPrompt && hasShareableReply;
+
+    const correctAndRetryButton = canCorrect ? (
+      <Tooltip title="Tell the assistant what was wrong and get a corrected answer">
+        <IconButton
+          data-testid="message-correct-retry-btn"
+          variant="outlined"
+          color={isCorrecting ? 'primary' : 'neutral'}
+          size="sm"
+          onClick={() => setIsCorrecting(open => !open)}
+          sx={{
+            width: '28px',
+            height: '28px',
+            flexShrink: '0',
+            borderRadius: '6px',
+          }}
+        >
+          <EditNoteIcon sx={{ fontSize: 18 }} />
+        </IconButton>
+      </Tooltip>
+    ) : null;
+
     const handleShareReply = useCallback(() => {
       if (!messageData.id || !sessionId) return;
       const markdown = extractedReplies[0] || messageData.reply || undefined;
@@ -835,6 +884,20 @@ const MessageContent: React.FC<ContentProps> = memo(
               <ToolsUsed functionCalls={messageData.promptMeta.functionCalls} size="sm" />
             )}
 
+            {messageData.correctsQuestId && (
+              <Tooltip title="You sent this as a correction of an earlier answer">
+                <Chip
+                  data-testid="message-correction-chip"
+                  size="sm"
+                  variant="soft"
+                  color="primary"
+                  startDecorator={<EditNoteIcon sx={{ fontSize: 14 }} />}
+                >
+                  Correction
+                </Chip>
+              </Tooltip>
+            )}
+
             {!isProcessingPrompt && isReported && (
               <Tooltip title="You reported this message">
                 <Chip
@@ -861,6 +924,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                     fileName={`${messageData.id}.md`}
                   />
                   {reportButton}
+                  {correctAndRetryButton}
                   {hasShareableReply && (
                     <Button
                       data-testid="message-publish-share-btn"
@@ -1036,6 +1100,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                     fileName={`${messageData.id}.md`}
                   />
                   {reportButton}
+                  {correctAndRetryButton}
                   {hasShareableReply && (
                     <Tooltip title="Publish & Share">
                       <IconButton
@@ -1193,6 +1258,14 @@ const MessageContent: React.FC<ContentProps> = memo(
                 </>
               )}
             </Stack>
+          )}
+
+          {isCorrecting && canCorrect && (
+            <CorrectionComposer
+              onCancel={handleCancelCorrection}
+              onSubmit={handleSubmitCorrection}
+              isSubmitting={isSubmittingCorrection}
+            />
           )}
         </Box>
       </Stack>
