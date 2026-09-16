@@ -27,7 +27,9 @@ import {
   BFL_IMAGE_MODELS,
   BFL_SAFETY_TOLERANCE,
   GEMINI_IMAGE_MODELS,
+  fallbackImageSize,
   IMAGE_SIZE_CONSTRAINTS,
+  isSupportedImageSize,
   OpenAIImageQuality,
   OpenAIImageSize,
   OpenAIImageStyle,
@@ -193,14 +195,8 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
       const updates: Parameters<typeof setLLM>[0] = { imageModel: newModel, lastUsedImageModel: newModel };
       // If switching to a GPT model with an incompatible size (e.g. a BFL-only size like '1440x810'),
       // reset to the default GPT size so we don't send an invalid size to the backend.
-      if (
-        isGPTImageModel(newModel) &&
-        _size &&
-        !IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes.includes(
-          _size as (typeof IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes)[number]
-        )
-      ) {
-        updates.size = IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.defaultSize;
+      if (isGPTImageModel(newModel) && _size && !isSupportedImageSize(newModel, _size)) {
+        updates.size = fallbackImageSize(newModel);
       }
       setLLM(updates);
     },
