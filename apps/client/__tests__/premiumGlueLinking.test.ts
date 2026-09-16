@@ -69,6 +69,7 @@ beforeAll(() => {
         routeIndexingExport: `${PKG_NAME}/seo`,
         notebookSidenavExport: `${PKG_NAME}/sidenav`,
         llmToolsExport: `${PKG_NAME}/tools`,
+        systemPromptsExport: `${PKG_NAME}/prompts`,
         migrationsExport: `${PKG_NAME}/server/migrations`,
         apiRouteStubs: [{ generatedPath: 'pages/api/premium-fakeoverlay/ping.ts', exportFrom: `${PKG_NAME}/api/ping` }],
         serverHandlerStubs: [
@@ -109,6 +110,13 @@ describe('hydrated but UNLINKED overlay', () => {
 
     const tools = readFileSync(join(clientRoot, 'server/premium-generated/premiumLlmTools.generated.ts'), 'utf8');
     expect(tools).not.toContain(PKG_NAME);
+
+    const prompts = readFileSync(
+      join(clientRoot, 'server/premium-generated/premiumSystemPrompts.generated.ts'),
+      'utf8'
+    );
+    expect(prompts).not.toContain(PKG_NAME);
+    expect(prompts).toContain('premiumSystemPrompts: DefaultSystemPrompt[] = []');
 
     const nav = readFileSync(join(clientRoot, 'app/premium-generated/premiumNavItems.generated.ts'), 'utf8');
     expect(nav).not.toContain(PKG_NAME);
@@ -171,6 +179,12 @@ describe('hydrated AND linked overlay', () => {
 
     const indexing = readFileSync(join(clientRoot, 'app/premium-generated/premiumRouteIndexing.generated.ts'), 'utf8');
     expect(indexing).toContain(`import { routeIndexing as indexing0 } from '${PKG_NAME}/seo'`);
+
+    const prompts = readFileSync(
+      join(clientRoot, 'server/premium-generated/premiumSystemPrompts.generated.ts'),
+      'utf8'
+    );
+    expect(prompts).toContain(`import { systemPrompts as prompts0 } from '${PKG_NAME}/prompts'`);
 
     const stub = readFileSync(join(clientRoot, 'pages/api/premium-fakeoverlay/ping.ts'), 'utf8');
     expect(stub).toContain(`export { default } from '${PKG_NAME}/api/ping'`);
