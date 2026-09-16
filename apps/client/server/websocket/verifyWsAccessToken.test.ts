@@ -53,6 +53,16 @@ describe('verifyWsAccessToken', () => {
     expect(mockFindById).not.toHaveBeenCalled();
   });
 
+  it('rejects a relying-party OAuth access token (kind=oauth) before touching the user', async () => {
+    // An OAuth access token is scope/audience-bound to OAuth-reachable REST routes, not a session
+    // credential for the socket. oauthRouteGate does not cover this surface, so the default-deny
+    // must live here or the token would ride the socket as a full session.
+    mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'access', kind: 'oauth' });
+
+    await expect(verifyWsAccessToken('token-123')).rejects.toThrow('OAuth access tokens are not accepted');
+    expect(mockFindById).not.toHaveBeenCalled();
+  });
+
   it('accepts a legacy token carrying no typ and no tokenVersion against a default-version user', async () => {
     mockVerifyToken.mockReturnValue({ id: 'user-1' });
     mockFindById.mockResolvedValue({ id: 'user-1' });

@@ -1,10 +1,8 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { admitsOptionalAuthUser } from '@server/middlewares/oauthRouteGate';
+import { optionalJwtAuth } from '@server/middlewares/optionalJwtAuth';
 import type { HelpIndex, HelpIndexEntry, HelpCategory } from '@bike4mind/scripts/help/types';
-import passport from 'passport';
 import fs from 'fs';
 import path from 'path';
-import type { Request, Response, NextFunction } from 'express';
 
 /**
  * Help Index API Endpoint
@@ -12,39 +10,17 @@ import type { Request, Response, NextFunction } from 'express';
  * Serves the help index with proper cache headers to ensure users
  * always get the latest version after deployments.
  *
- * Uses baseApi({ auth: false }) with optional JWT authentication -
- * passport attempts to authenticate but unauthenticated users are not rejected.
- * Admin-only entries are filtered out for non-admin users.
+ * Uses baseApi({ auth: false }) with the shared optionalJwtAuth() shim: a valid Bearer JWT
+ * populates req.user, an unauthenticated request is not rejected, and a pre-MFA or relying-party
+ * OAuth token degrades to anonymous (so it cannot flip isAdmin and leak admin-only entries) -
+ * the same default-deny every optional-auth route shares. Admin-only entries are filtered out for
+ * non-admin (including anonymous) callers.
  *
  * Cache strategy:
  * - no-store disables browser/service worker caching (response varies by auth)
  * - React Query handles client-side caching with session-keyed cache busting
  * - ETag support for conditional requests (role-aware)
  */
-
-/**
- * Middleware that attempts JWT authentication without rejecting unauthenticated requests.
- * If a valid Bearer token is present, req.user is populated. Otherwise, req.user stays undefined.
- *
- * Auth failures are logged with a counter to help diagnose token validation issues
- * (e.g., expired tokens, misconfigured secrets) without blocking unauthenticated access.
- */
-let authFailureCount = 0;
-function optionalAuth(req: Request, res: Response, next: NextFunction) {
-  passport.authenticate('jwt', { session: false }, (err: unknown, user: Express.User | false) => {
-    if (err) {
-      authFailureCount++;
-      console.warn(`[HelpIndex] Optional auth error #${authFailureCount} (proceeding unauthenticated):`, err);
-    }
-    // Only admit a user the shared guard accepts; a pre-MFA session or a relying-party OAuth token
-    // must not be treated as a full user here (it would leak admin-only help entries). This route is
-    // auth:false so it bypasses the normal mfaPending block and oauthRouteGate. See oauthRouteGate.ts.
-    if (admitsOptionalAuthUser(user)) {
-      req.user = user;
-    }
-    next();
-  })(req, res, next);
-}
 
 /**
  * Filter help index entries and categories by access level.
@@ -75,7 +51,7 @@ function filterHelpIndex(helpIndex: HelpIndex, isAdmin: boolean): HelpIndex {
 }
 
 const handler = baseApi({ auth: false })
-  .use(optionalAuth)
+  .use(optionalJwtAuth())
   .get(async (req, res) => {
     try {
       const indexPath = path.join(process.cwd(), 'app/generated/help-index.json');

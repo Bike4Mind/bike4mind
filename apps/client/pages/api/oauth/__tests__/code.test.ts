@@ -15,6 +15,9 @@ import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
 const h = vi.hoisted(() => ({
   validateClient: vi.fn(),
   generateAuthCode: vi.fn(),
+  findGrant: vi.fn(),
+  upsertGrant: vi.fn(),
+  decideConsent: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -30,6 +33,10 @@ vi.mock('@server/auth/oauthServer', () => ({
   validateClient: h.validateClient,
   generateAuthCode: h.generateAuthCode,
 }));
+vi.mock('@bike4mind/database', () => ({
+  oauthGrantRepository: { findGrant: h.findGrant, upsertGrant: h.upsertGrant },
+}));
+vi.mock('@server/auth/oauthConsent', () => ({ decideConsent: h.decideConsent }));
 
 import handler from '../code';
 
@@ -105,6 +112,59 @@ describe('POST /api/oauth/code PKCE hardening', () => {
 
     const res = await call({ ...baseBody });
 
+    expect(res.body?.code).toBe('the-code');
+    expect(h.generateAuthCode).toHaveBeenCalledOnce();
+  });
+});
+
+/**
+ * The relying-party consent gate (code.ts:65-91). Without these it never executes under test, so a
+ * regression that dropped the consent check - and let a relying party mint a code with no recorded
+ * grant - would pass CI green.
+ */
+describe('POST /api/oauth/code relying-party consent gate', () => {
+  const relyingParty = {
+    tokenEndpointAuthMethod: 'client_secret_post',
+    clientType: 'relying-party',
+    name: 'VibesWire',
+    allowedScopes: ['openid', 'email', 'profile'],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (h.generateAuthCode as Mock).mockResolvedValue('the-code');
+  });
+
+  it('returns consent_required and mints no code when consent is needed', async () => {
+    (h.validateClient as Mock).mockResolvedValue(relyingParty);
+    (h.findGrant as Mock).mockResolvedValue(null);
+    (h.decideConsent as Mock).mockReturnValue('consent_required');
+
+    const res = await call({ ...baseBody, scope: 'openid email' });
+
+    expect(res.body).toMatchObject({ consent_required: true, client_name: 'VibesWire', scopes: ['openid', 'email'] });
+    expect(h.generateAuthCode).not.toHaveBeenCalled();
+    expect(h.upsertGrant).not.toHaveBeenCalled();
+  });
+
+  it('on Allow, widens (unions) the stored grant and then mints the code', async () => {
+    (h.validateClient as Mock).mockResolvedValue(relyingParty);
+    (h.findGrant as Mock).mockResolvedValue({ scopes: ['openid'] });
+    (h.decideConsent as Mock).mockReturnValue('ok');
+
+    const res = await call({ ...baseBody, scope: 'openid email', consent: true });
+
+    expect(h.upsertGrant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'u1',
+        clientId: 'client-1',
+        scopes: expect.arrayContaining(['openid', 'email']),
+        source: 'authorize',
+      })
+    );
+    // Never shrinks: a re-consent for a subset keeps the previously approved scope.
+    const merged = (h.upsertGrant as Mock).mock.calls[0][0].scopes as string[];
+    expect(merged).toContain('openid');
     expect(res.body?.code).toBe('the-code');
     expect(h.generateAuthCode).toHaveBeenCalledOnce();
   });
