@@ -430,11 +430,11 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
                   '--Button-paddingBlock': '0.25rem',
                   '--Button-paddingInline': '12px',
                   lineHeight: 1,
-                  transition: 'transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease',
+                  // Colour alone on hover. It sits in a row of still, quiet icons, where a
+                  // button that grows and glows is the only thing moving on the card.
+                  transition: 'background-color 0.15s ease',
                   '&:hover': {
                     backgroundColor: brand[900],
-                    transform: 'scale(1.04)',
-                    boxShadow: '0 0 14px rgba(11, 107, 203, 0.5)',
                   },
                 }}
               >
