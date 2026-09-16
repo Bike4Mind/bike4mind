@@ -87,3 +87,89 @@ describe('verifyCognitoIdToken', () => {
     expect(mockCreate).toHaveBeenCalledTimes(1);
   });
 });
+
+// Shape 2: the app signed its user in against B4M's own OIDC provider, so the token is
+// one B4M issued and the user id is its `sub`. Claim set mirrors generateIdToken.
+const B4M_IDP = {
+  issuer: 'https://app.example-b4m.test',
+  audience: 'b4m_tarot_abcd1234',
+  jwksUri: 'https://app.example-b4m.test/api/oauth/jwks',
+  subjectSource: 'sub' as const,
+};
+
+describe('verifyCognitoIdToken - B4M-issued ID token (subjectSource: sub)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCreate.mockImplementation(() => ({ verify: mockVerify }));
+    __clearVerifierCache();
+  });
+
+  it('resolves the B4M user id from sub, with no token_use claim present', async () => {
+    mockVerify.mockResolvedValue({
+      iss: B4M_IDP.issuer,
+      sub: 'b4m-user-777',
+      aud: B4M_IDP.audience,
+      email: 'u@example.test',
+      name: 'u',
+    });
+
+    const result = await verifyCognitoIdToken('tok', B4M_IDP);
+
+    expect(result.b4mUserId).toBe('b4m-user-777');
+    expect(mockCreate).toHaveBeenCalledWith({
+      issuer: B4M_IDP.issuer,
+      audience: B4M_IDP.audience,
+      jwksUri: B4M_IDP.jwksUri,
+    });
+  });
+
+  it('ignores an identities claim and never requires providerName', async () => {
+    mockVerify.mockResolvedValue({
+      sub: 'b4m-user-777',
+      identities: [{ userId: 'someone-else', providerName: 'B4M' }],
+    });
+
+    const result = await verifyCognitoIdToken('tok', B4M_IDP);
+    expect(result.b4mUserId).toBe('b4m-user-777');
+  });
+
+  it('rejects a wrong-issuer / wrong-audience / expired token (verifier throws)', async () => {
+    mockVerify.mockRejectedValue(new Error('Issuer not allowed'));
+    await expect(verifyCognitoIdToken('tok', B4M_IDP)).rejects.toBeInstanceOf(CognitoIdTokenError);
+  });
+
+  it('rejects a B4M session access token presented as an ID token', async () => {
+    // AuthTokenGeneratorService.signAccessToken's payload shape. In production such a
+    // token never reaches this check (HS256, no iss/aud), so this guards the guard.
+    mockVerify.mockResolvedValue({ id: 'b4m-user-777', sub: 'b4m-user-777', tokenVersion: 0, typ: 'access' });
+    await expect(verifyCognitoIdToken('tok', B4M_IDP)).rejects.toBeInstanceOf(CognitoIdTokenError);
+  });
+
+  it('rejects a refresh token presented as an ID token', async () => {
+    mockVerify.mockResolvedValue({ sub: 'b4m-user-777', typ: 'refresh' });
+    await expect(verifyCognitoIdToken('tok', B4M_IDP)).rejects.toBeInstanceOf(CognitoIdTokenError);
+  });
+
+  it('rejects a token with no usable sub', async () => {
+    mockVerify.mockResolvedValue({ iss: B4M_IDP.issuer, aud: B4M_IDP.audience });
+    await expect(verifyCognitoIdToken('tok', B4M_IDP)).rejects.toBeInstanceOf(CognitoIdTokenError);
+  });
+
+  it("an explicit subjectSource: 'identities' behaves exactly like an absent one", async () => {
+    mockVerify.mockResolvedValue({
+      token_use: 'id',
+      sub: 'cognito-native-sub',
+      identities: [{ userId: 'b4m-user-123', providerName: 'B4M' }],
+    });
+
+    const result = await verifyCognitoIdToken('tok', { ...IDP, subjectSource: 'identities' as const });
+    // sub is the Cognito pool's own subject, NOT the B4M user - the identities entry wins.
+    expect(result.b4mUserId).toBe('b4m-user-123');
+  });
+
+  it("rejects an 'identities' client whose trust config is missing providerName", async () => {
+    mockVerify.mockResolvedValue({ token_use: 'id', identities: [{ userId: 'u', providerName: 'B4M' }] });
+    const { providerName: _omitted, ...withoutProvider } = IDP;
+    await expect(verifyCognitoIdToken('tok', withoutProvider)).rejects.toBeInstanceOf(CognitoIdTokenError);
+  });
+});

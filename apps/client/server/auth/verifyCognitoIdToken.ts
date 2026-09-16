@@ -1,17 +1,22 @@
 /**
- * Verify an *external* AWS Cognito ID token for a Pattern-A federated client.
+ * Verify a federated client's ID token and resolve the B4M user it represents.
  *
- * B4M is the OIDC *provider* everywhere else in this codebase (see oauthServer.ts) -
- * it issues and verifies its own RS256 tokens. This is the one place B4M acts as a
- * *relying party*: a federated app's Cognito pool has already authenticated the user
- * (with B4M as its upstream IdP), and hands us the resulting Cognito ID token so we
- * can mint that user a scoped AI key. We must therefore verify the token against the
- * *client's* Cognito JWKS, not B4M's.
+ * Two issuer shapes, discriminated by the client's `federatedIdp.subjectSource`:
  *
- * Uses `aws-jwt-verify` (AWS-official, zero runtime deps): it fetches and caches the
- * pool JWKS, follows kid rotation, verifies the RS256 signature, and asserts
- * `iss`/`aud`/`exp`/`iat`. We add the `token_use === 'id'` assertion (the generic
- * verifier doesn't) and pull B4M's `sub` out of the Cognito `identities[]` claim.
+ *  - `'identities'` (the default, and what every client registered before this branch
+ *    existed gets): the token comes from the app's *own* AWS Cognito pool, which has
+ *    already authenticated the user with B4M as its upstream IdP. We verify against the
+ *    *client's* pool JWKS, assert the Cognito-specific `token_use === 'id'`, and pull
+ *    B4M's `sub` out of the Cognito `identities[]` claim.
+ *  - `'sub'`: the app signed its user in against B4M's own OIDC provider, so the token
+ *    is one B4M itself issued (see `generateIdToken` in oauthServer.ts). It carries no
+ *    `token_use` and the B4M user id is directly in `sub`. Requires an explicit
+ *    `jwksUri`, since B4M publishes its JWKS at `/api/oauth/jwks`, not at the derived
+ *    `/.well-known/jwks.json`. Enforced at registration time by OAuthClientModel.
+ *
+ * Uses `aws-jwt-verify` (AWS-official, zero runtime deps) for both: it fetches and
+ * caches the JWKS, follows kid rotation, verifies the RS256 signature, and asserts
+ * `iss`/`aud`/`exp`/`iat`.
  */
 
 import { JwtVerifier } from 'aws-jwt-verify';
@@ -29,8 +34,8 @@ export class CognitoIdTokenError extends Error {
  * One verifier instance per distinct trust config. `aws-jwt-verify` holds the JWKS
  * cache *inside* the verifier, so reusing the instance across requests is what keeps
  * us from fetching the pool JWKS on every exchange. Keyed on the fields that change
- * the JWKS/claim expectations; `providerName` is not part of the key because it only
- * affects post-verify extraction, not the verifier itself.
+ * the JWKS/claim expectations; `providerName` and `subjectSource` are not part of the
+ * key because they only affect post-verify extraction, not the verifier itself.
  */
 function verifierCacheKey(idp: IOAuthClientFederatedIdp): string {
   return `${idp.issuer}|${idp.audience}|${idp.jwksUri ?? ''}`;
@@ -38,7 +43,8 @@ function verifierCacheKey(idp: IOAuthClientFederatedIdp): string {
 
 function createVerifier(idp: IOAuthClientFederatedIdp) {
   // When jwksUri is omitted the verifier derives `${issuer}/.well-known/jwks.json`,
-  // which is exactly Cognito's JWKS endpoint - so it's optional for Cognito pools.
+  // which is exactly Cognito's JWKS endpoint - so it's optional for Cognito pools and
+  // required (at registration time) for a B4M issuer, which publishes at /api/oauth/jwks.
   return JwtVerifier.create({
     issuer: idp.issuer,
     audience: idp.audience,
@@ -86,16 +92,35 @@ function extractB4mUserId(payload: Record<string, unknown>, providerName: string
 }
 
 export interface VerifiedCognitoIdentity {
-  /** B4M user id carried by the matching `identities[]` entry's `userId`. */
+  /** B4M user id: the matching `identities[]` entry's `userId`, or the token's `sub`. */
   b4mUserId: string;
   /** The verified token claims (for logging/diagnostics). */
   claims: Record<string, unknown>;
 }
 
 /**
- * Verify a Cognito ID token against the client's federated trust config and resolve
- * the B4M user id it represents. Throws {@link CognitoIdTokenError} on any failure -
- * bad signature, wrong issuer/audience, expired, non-`id` token_use, or no matching
+ * Resolve the B4M user id from a B4M-issued ID token, whose `sub` *is* the user id.
+ *
+ * B4M session access/refresh tokens are HS256-signed with a symmetric secret and carry
+ * no `iss`/`aud`/`sub` at all (AuthTokenGeneratorService), so `aws-jwt-verify` already
+ * rejects one presented here. The `typ` check is a second, positive guard that does not
+ * depend on that continuing to be true.
+ */
+function extractSubUserId(claims: Record<string, unknown>): string {
+  if (claims.typ === 'access' || claims.typ === 'refresh') {
+    throw new CognitoIdTokenError(`Expected an ID token, got a session token (typ='${String(claims.typ)}')`);
+  }
+  const sub = claims.sub;
+  if (typeof sub !== 'string' || sub.length === 0) {
+    throw new CognitoIdTokenError('Token carries no usable sub claim');
+  }
+  return sub;
+}
+
+/**
+ * Verify a federated ID token against the client's trust config and resolve the B4M
+ * user id it represents. Throws {@link CognitoIdTokenError} on any failure - bad
+ * signature, wrong issuer/audience, expired, wrong token type, or no resolvable
  * B4M identity.
  */
 export async function verifyCognitoIdToken(
@@ -106,11 +131,21 @@ export async function verifyCognitoIdToken(
   try {
     claims = (await getVerifier(idp).verify(idToken)) as Record<string, unknown>;
   } catch (cause) {
-    throw new CognitoIdTokenError('Cognito ID token failed signature/claim verification', { cause });
+    throw new CognitoIdTokenError('ID token failed signature/claim verification', { cause });
+  }
+
+  if (idp.subjectSource === 'sub') {
+    return { b4mUserId: extractSubUserId(claims), claims };
   }
 
   if (claims.token_use !== 'id') {
     throw new CognitoIdTokenError(`Expected an ID token (token_use='id'), got token_use='${String(claims.token_use)}'`);
+  }
+
+  // Unreachable for a validly registered client (the model requires providerName
+  // whenever subjectSource is not 'sub'), but the field is optional in the type.
+  if (!idp.providerName) {
+    throw new CognitoIdTokenError("Client trust config has no providerName for the 'identities' subject source");
   }
 
   const b4mUserId = extractB4mUserId(claims, idp.providerName);
