@@ -1102,6 +1102,11 @@ function initializeQuestModel() {
     // lack the field - a dense index would waste space on nulls.
     ChatHistoryItemSchema.index({ agentExecutionId: 1 }, { name: 'agentExecutionId', sparse: true });
 
+    // Serves the correction-chain walk (findCorrectionLinksBySessionId): the corrected turns of one
+    // session, matched on { sessionId, correctsQuestId: { $ne: null } }. Dense on purpose - sparse
+    // keys off the leading field, which every quest has, so it would index the collection anyway.
+    ChatHistoryItemSchema.index({ sessionId: 1, correctsQuestId: 1 }, { name: 'sessionId_correctsQuestId' });
+
     // Serves findStaleRunning (questTimeoutSweep cron). No existing index has a
     // usable `status` prefix - `id_status` is `{_id: 1, status: 1}` - so without
     // this the sweep collection-scans the largest collection every 5 minutes.
