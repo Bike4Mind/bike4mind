@@ -1323,6 +1323,14 @@ describe('gradeMustNotDenyPremise', () => {
       // The committed must-FAIL twins, whole: the boundary is the modifier's CLASS, not its length.
       'across the region.',
       'across the region and the fleet is growing.',
+      // One row per term of the preposition test in `canHeadPredicate`, because neither term is
+      // otherwise reachable: a preposition STACKED behind the modifier's own preposition ("in ... for
+      // over") is what the function-word check on the token after it decides, and a comma inside the
+      // modifier run ("in, say, ...") is what its clause-end punctuation arm decides. Both are
+      // ordinary English, and each goes clean under the mutant that drops the term it pins - which is
+      // why the PR body's earlier "reachable only by malformed prose" was withdrawn.
+      'steadily for over a year.',
+      'quarterly in, say, the eastern region.',
     ]) {
       const reply = `That result is not in the retrieved content. ${relative}${modifier}`;
       expect(gradeMustNotDenyPremise(reply, ASSERTED_QUESTION).claims, modifier).toEqual([
