@@ -708,7 +708,10 @@ export class ToolBuilder {
    * telemetry onto the quest document.
    */
   buildTools({
-    enabledTools = [],
+    // No `= []` default: buildSharedTools treats an empty list ("offer no tools") and an omitted
+    // one ("this caller does not scope tools by name") as different requests, and defaulting here
+    // would collapse the second into the first for any caller that omits it.
+    enabledTools,
     mcpToolsByServer = {},
     quest,
     saveQuest,

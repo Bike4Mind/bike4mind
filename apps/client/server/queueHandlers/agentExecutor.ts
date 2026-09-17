@@ -1807,6 +1807,10 @@ async function processExecution(
 
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       enabledTools: resolvedToolNames,
+      // applySessionToolPolicy above subtracts these from the NATIVE names only; MCP tools are
+      // merged inside buildSharedTools after that filter, so the denylist has to travel with them
+      // to reach a `server__tool` id. The chat path gets this from its own post-build pass.
+      sessionDisabledTools: session.disabledTools ?? undefined,
       externalTools: { ...guardedPremiumTools, ...missionChatTools, ...latticeExternalTools },
       config: subagentToolConfig,
       mcpToolsByServer,
