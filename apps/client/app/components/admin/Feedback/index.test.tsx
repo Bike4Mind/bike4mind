@@ -94,6 +94,7 @@ const defaultFiltersReturn: UseFeedbackFiltersReturn = {
   setSearchTerm: vi.fn(),
   setStatusFilters: vi.fn(),
   setSelectedOrganizations: vi.fn(),
+  setSubject: vi.fn(),
   toggleSortDirection: vi.fn(),
   filterParams: { sort: 'desc' },
 };
@@ -169,5 +170,47 @@ describe('FeedbackTab', () => {
 
     const [csvRows] = mocks.papaUnparse.mock.calls[0] as [Array<Record<string, unknown>>];
     expect(csvRows[0]).toMatchObject({ HelpArticle: 'features/export' });
+  });
+
+  // The hook and the sentinel mapping are unit-tested on their own; what only a mounted render can
+  // show is that the Select is actually wired to the setter, and that its options carry the subject
+  // values rather than the labels an operator reads.
+  describe('subject filter', () => {
+    beforeEach(() => {
+      mocks.useIsMobile.mockReturnValue(false);
+      mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([makeFeedbackItem()]));
+    });
+
+    it('offers every subject the server accepts, plus a way back to all of them', async () => {
+      renderFeedbackTab();
+
+      await userEvent.click(screen.getByTestId('feedback-subject-filter-btn'));
+
+      const options = screen.getAllByRole('option').map(option => option.textContent);
+      expect(options).toEqual(['All Subjects', 'Conversation turn', 'Conversation', 'Product', 'Help']);
+    });
+
+    it('sends the picked subject to the filter hook', async () => {
+      renderFeedbackTab();
+
+      await userEvent.click(screen.getByTestId('feedback-subject-filter-btn'));
+      await userEvent.click(screen.getByRole('option', { name: 'Help' }));
+
+      expect(defaultFiltersReturn.setSubject).toHaveBeenCalledWith('help');
+    });
+
+    it('clears the filter rather than sending the sentinel', async () => {
+      mocks.useFeedbackFilters.mockReturnValue({
+        ...defaultFiltersReturn,
+        filters: { ...defaultFiltersReturn.filters, subject: 'help' },
+      });
+
+      renderFeedbackTab();
+
+      await userEvent.click(screen.getByTestId('feedback-subject-filter-btn'));
+      await userEvent.click(screen.getByRole('option', { name: 'All Subjects' }));
+
+      expect(defaultFiltersReturn.setSubject).toHaveBeenCalledWith(undefined);
+    });
   });
 });
