@@ -23,7 +23,7 @@
  * Drop --dry-run and add --yes once the printed cost is acceptable.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yargs from 'yargs';
@@ -41,14 +41,14 @@ import { apiKeyService } from '@bike4mind/services';
 import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { ApiKeyType, countCodePoints } from '@bike4mind/common';
-import { PROBE_QUESTIONS } from './corpus';
+import { parseProbeQuestions, PROBE_QUESTIONS, type ProbeQuestion } from './corpus';
 import {
   assertOnePerInput,
   chunkTokenCount,
+  collectCapturableFiles,
   embedAll,
   findOversizedChunks,
   formatCapturePlan,
-  isCapturableFile,
   modalLength,
   parseSupportedModels,
   planCapture,
@@ -93,9 +93,50 @@ const argv = await yargs(hideBin(process.argv))
   })
   .option('dry-run', { type: 'boolean', default: false, describe: 'Print the cost and corpus regime, then stop' })
   .option('yes', { type: 'boolean', default: false, describe: 'Approve the printed spend and embed' })
+  .option('questions', {
+    type: 'string',
+    describe:
+      'Path to a JSON question set to use instead of the committed PROBE_QUESTIONS. Required to score ' +
+      'any lake but system-help, whose ground truth cannot live in this public repo',
+  })
   .option('out-dir', { type: 'string', default: path.resolve(SCRIPTS_PACKAGE_DIR, 'out') })
   .strict()
   .parse();
+
+// Both `--questions=` and a bare trailing `--questions` parse to the empty string, which is falsy -
+// so without this the flag reads as absent, the committed set is used, and the mistake surfaces only
+// after the embedding spend, as a fixture whose quality columns are all n/a.
+if (argv.questions !== undefined && argv.questions.trim() === '') {
+  throw new Error(
+    '--questions was given with no path. Supply the question file, or omit the flag to use PROBE_QUESTIONS.'
+  );
+}
+
+/**
+ * Neither `readFileSync` nor `JSON.parse` names the file or the flag, and their messages are the
+ * likeliest ones to hit. The read is its own try: folded into the parse's, a path typo reports as
+ * "could not be read as JSON", blaming the contents for a filename.
+ */
+function readQuestionFile(file: string): ProbeQuestion[] {
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (error) {
+    throw new Error(`Question file "${file}" could not be read: ${(error as Error).message}`);
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`Question file "${file}" could not be read as JSON: ${(error as Error).message}`);
+  }
+  return parseProbeQuestions(raw, file);
+}
+
+// Resolved before the DB connection and before any spend: a malformed question file should fail on
+// the file, not after a capture has been paid for.
+const usingExternalQuestions = Boolean(argv.questions);
+const probeQuestions: ProbeQuestion[] = argv.questions ? readQuestionFile(argv.questions) : PROBE_QUESTIONS;
 
 const models = parseSupportedModels(
   argv.models
@@ -125,7 +166,7 @@ if (lake.status !== 'active') throw new Error(`Lake "${argv.lake}" is ${lake.sta
 // The LIFECYCLE-SWEEP reader: it returns every id the lake has ever held, with no archivedAt or
 // deletedAt condition (see its index docblock in FabFileModel, and the findLakeMemoryExtractionMembers
 // docblock that explains what it deliberately is NOT). Everything it hands back is a candidate, not a
-// member - `isCapturableFile` below is what reduces it to the set the served path can actually reach.
+// member - `collectCapturableFiles` below reduces it to the set the served path can actually reach.
 const fileIds = await fabFileRepository.findIdsByDataLakeTag({ kind: 'registry', datalakeTag: lake.datalakeTag });
 if (fileIds.length === 0) throw new Error(`Lake "${argv.lake}" holds no files.`);
 
@@ -138,36 +179,12 @@ if (fileIds.length === 0) throw new Error(`Lake "${argv.lake}" holds no files.`)
 // returning whole mongoose documents become two paged, lean reads.
 const needStoredVectors = argv['reuse-stored-vectors'];
 
-// Batched, not per file. The lake read hands back every candidate id at once; reading them one at a
-// time was two sequential round-trips per file, which is fine on 49 help files and is not what the
-// runbook points this at.
-type CapturedFile = { fileId: string; docId: string; embeddingModel?: string | null };
-const capturedFiles: CapturedFile[] = [];
-let filesUnreachable = 0;
-for (const batch of toBatches(fileIds, FILE_ID_BATCH)) {
-  const files = await fabFileRepository.findAllByIds(batch);
-  const byId = new Map(files.map(f => [String(f.id), f]));
-  // Iterated in the LAKE's id order rather than the read's, so what lands in the fixture does not
-  // depend on Mongo document order.
-  for (const fileId of batch) {
-    const file = byId.get(fileId);
-    // A tombstone (or a soft-deleted file) and a file the reachability predicate rejects are one
-    // class for this counter: the served path would never have returned either, so scoring their
-    // chunks would move the band by chunks production cannot surface.
-    if (!file || !isCapturableFile(file)) {
-      filesUnreachable++;
-      continue;
-    }
-    // Prefer the help slug so the capture joins to corpus.ts's ground truth; fall back to the file
-    // id, which is the right document identity for any other lake.
-    const helpTag = file.tags?.find(t => t.name.startsWith(HELP_TAG_PREFIX));
-    capturedFiles.push({
-      fileId,
-      docId: helpTag ? helpTag.name.slice(HELP_TAG_PREFIX.length) : fileId,
-      embeddingModel: file.embeddingModel,
-    });
-  }
-}
+const { captured: capturedFiles, filesUnreachable } = await collectCapturableFiles({
+  fabfiles: fabFileRepository,
+  fileIds,
+  batchSize: FILE_ID_BATCH,
+  helpTagPrefix: HELP_TAG_PREFIX,
+});
 
 const stored: StoredChunk[] = [];
 const tokenCounts: number[] = [];
@@ -309,7 +326,7 @@ for (const model of models) {
 
   // Query vectors are always freshly embedded: the corpus stores no vector for a probe question, and
   // a query must live in the same space as the chunks it is scored against.
-  const questions = PROBE_QUESTIONS.map(q => q.question);
+  const questions = probeQuestions.map(q => q.question);
   const queryVectors = await embedAll(service, questions);
   assertOnePerInput(queryVectors, questions.length, `${model} probe queries`);
 
@@ -365,10 +382,14 @@ for (const model of models) {
     filesExcluded,
     filesUnreachable,
     chunks,
-    queries: PROBE_QUESTIONS.map((q, i) => ({
+    // `supporting` is written ONLY for an external set. The committed corpus deliberately joins by id
+    // instead, so that re-wording a question in corpus.ts invalidates old fixtures (see
+    // assertQuestionTextMatches) rather than letting them carry their own stale copy of the answer.
+    queries: probeQuestions.map((q, i) => ({
       id: q.id,
       vector: queryVectors[i],
       questionHash: hashQuestionText(q.question),
+      ...(usingExternalQuestions ? { supporting: q.supporting } : {}),
     })),
   };
 

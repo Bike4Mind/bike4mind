@@ -33,7 +33,11 @@ interface Palette {
 }
 
 const DARK: Palette = {
-  bg: '#0C1218',
+  // Resolved from the `reading` palette group so the code frame is the same well
+  // and the same hairline as every other framed thing in a reply. The literals
+  // are the same values, and are what render before hydration or in a test that
+  // mounts without the app theme.
+  bg: 'var(--joy-palette-reading-surface, #13181C)',
   fg: '#A6B5C1',
   ink: '#E8EDF2',
   ink3: '#8090A0',
@@ -46,7 +50,7 @@ const DARK: Palette = {
 };
 
 const LIGHT: Palette = {
-  bg: '#EDF2F6',
+  bg: 'var(--joy-palette-reading-surface, #F4F7F9)',
   fg: '#425663',
   ink: '#141F28',
   ink3: '#5B6C7A',
@@ -105,7 +109,15 @@ const build = (p: Palette): PrismStyle => {
       margin: '0.5em 0',
       overflow: 'auto',
       borderRadius: '8px',
-      border: '1px solid rgba(128, 150, 170, 0.16)',
+      border: '1px solid var(--joy-palette-reading-cardLine, rgba(59, 130, 246, 0.18))',
+      // A card, not a flat panel: the same fill the prompt bubble uses, under a
+      // brand-blue veil that fades as it falls. The gradient is the first
+      // background layer and the fill the last, so the veil sits ON the fill
+      // rather than replacing it.
+      background:
+        'linear-gradient(180deg, var(--joy-palette-reading-cardTintTop, rgba(59, 130, 246, 0.05)),' +
+        ' var(--joy-palette-reading-cardTintBottom, rgba(59, 130, 246, 0.02))),' +
+        ` ${p.bg}`,
     },
     ':not(pre) > code[class*="language-"]': {
       background: p.bg,

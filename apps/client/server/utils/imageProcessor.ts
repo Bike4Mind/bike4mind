@@ -1,4 +1,5 @@
 import { Jimp } from 'jimp';
+import { imagePixelCount, MAX_IMAGE_PIXELS } from '@bike4mind/utils/imageResize';
 
 export interface ImageProcessRequest {
   imageBuffer: string; // base64 encoded buffer
@@ -24,6 +25,13 @@ export const handler = async (event: ImageProcessRequest): Promise<ImageProcessR
 
     const imageBuffer = Buffer.from(imageBufferBase64, 'base64');
     console.log(`[ImageProcessor] Input buffer size: ${(imageBuffer.length / (1024 * 1024)).toFixed(2)}MB`);
+
+    // Reject a decompression bomb before jimp decodes it: a small file can declare a huge
+    // canvas whose RGBA bitmap (width*height*4) would exhaust the Lambda's memory.
+    const pixels = imagePixelCount(imageBuffer);
+    if (pixels !== null && pixels > MAX_IMAGE_PIXELS) {
+      throw new Error(`Image declares ${pixels} pixels, over the ${MAX_IMAGE_PIXELS}-pixel processing limit`);
+    }
 
     const baseImage: any = await Jimp.read(imageBuffer);
     console.log(`[ImageProcessor] Image loaded: ${baseImage.bitmap.width}x${baseImage.bitmap.height}`);

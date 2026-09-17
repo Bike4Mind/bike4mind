@@ -7,6 +7,7 @@ import {
   KeyboardArrowDown as KeyboardArrowDownIcon,
 } from '@mui/icons-material';
 import { DataLakeIcon, DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
+import { menuSurfaceSx, selectListboxSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 
 interface UploadActionsSelectProps {
   onUploadFiles?: (files: File[]) => void;
@@ -162,32 +163,10 @@ export const UploadActionsSelect: React.FC<UploadActionsSelectProps> = ({
           },
         }}
         slotProps={{
+          // Joy puts a data-testid on Select's root wrapper, which is not the clickable element.
+          button: { 'data-testid': 'upload-actions-select' },
           listbox: {
-            sx: {
-              minWidth: '200px',
-              border: 'none !important',
-              py: '4px !important',
-              backgroundColor: 'var(--joy-palette-background-body)',
-              '& .MuiOption-root': {
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1,
-                justifyContent: 'flex-start',
-                color: 'text.primary',
-                fontSize: '14px',
-                fontWeight: '400',
-                backgroundColor: 'var(--joy-palette-background-body)',
-                transition: 'opacity 0.2s ease-in-out',
-              },
-              '& .MuiOption-highlighted': {
-                backgroundColor: 'transparent !important',
-              },
-              '& .MuiOption-root:hover': {
-                backgroundColor: 'transparent !important',
-                color: 'text.primary',
-                opacity: 0.8,
-              },
-            },
+            sx: theme => ({ ...menuSurfaceSx(theme), ...selectListboxSx(theme), minWidth: '200px' }),
             placement: 'bottom-end',
             modifiers: [
               { name: 'offset', options: { offset: [-0, 4] } },
@@ -197,19 +176,19 @@ export const UploadActionsSelect: React.FC<UploadActionsSelectProps> = ({
         }}
       >
         {onUploadFiles && (
-          <Option value="upload">
+          <Option value="upload" data-testid="upload-actions-device-option">
             <FileUploadOutlinedIcon sx={{ fontSize: '18px', color: theme => `${theme.palette.text.primary}80` }} />
             From device
           </Option>
         )}
         {onAddFromUrl && (
-          <Option value="url">
+          <Option value="url" data-testid="upload-actions-url-option">
             <InsertLinkIcon sx={{ fontSize: '18px', color: theme => `${theme.palette.text.primary}80` }} />
             Add from URL
           </Option>
         )}
         {onCreateKnowledge && (
-          <Option value="knowledge">
+          <Option value="knowledge" data-testid="upload-actions-knowledge-option">
             <AutoFixHighIcon sx={{ fontSize: '18px', color: theme => `${theme.palette.text.primary}80` }} />
             Create Knowledge
           </Option>
@@ -217,7 +196,7 @@ export const UploadActionsSelect: React.FC<UploadActionsSelectProps> = ({
         {onCreateDataLake && (
           // Opens the Data Lakes management panel (list + create + add files + lifecycle),
           // not the create wizard directly. Creation lives behind the panel's Create button.
-          <Option value="datalake">
+          <Option value="datalake" data-testid="upload-actions-datalake-option">
             <DataLakeIcon sx={{ fontSize: '18px', color: theme => `${theme.palette.text.primary}80` }} />
             {DATA_LAKES}
           </Option>

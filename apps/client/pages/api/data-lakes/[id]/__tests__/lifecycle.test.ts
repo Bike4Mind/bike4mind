@@ -87,6 +87,7 @@ vi.mock('@server/integrations/google/drive/common', () => ({
 }));
 
 import handler from '../lifecycle';
+import { fabFileChunkRepository } from '@bike4mind/database';
 
 const makeRes = () => {
   const json = vi.fn();
@@ -298,6 +299,25 @@ describe('POST /api/data-lakes/[id]/lifecycle - retrievalIndex wiring (archive/d
       expect.anything(),
       'lake1',
       expect.objectContaining({ retrievalIndex: expect.objectContaining({ removeForDataLake: expect.anything() }) })
+    );
+  });
+
+  // Pins the IDENTITY of the object, not merely that something truthy rides along: a door that
+  // wired an unrelated stub (or a fresh `{}`) would still pass a shape-only assertion while
+  // leaving bestEffortIndexRemove's residency-confirm clear pointed at nothing real. archive/delete
+  // are the two doors on this route that carry the retrieval index; unarchive/restore have no
+  // removal step to clear a confirm for.
+  it.each([
+    ['archive', 'archiveDataLake'],
+    ['delete', 'deleteDataLake'],
+  ])('%s wires the real fabFileChunkRepository into db.fabFileChunks', async (action, serviceName) => {
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
+
+    expect(h[serviceName as keyof typeof h]).toHaveBeenCalledWith(
+      expect.anything(),
+      'lake1',
+      expect.objectContaining({ db: expect.objectContaining({ fabFileChunks: fabFileChunkRepository }) })
     );
   });
 

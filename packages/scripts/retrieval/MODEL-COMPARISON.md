@@ -45,6 +45,16 @@ that is arithmetic:
 
 ## Running it
 
+`tsx` is a `packages/scripts` dependency, not a root one. `npx` resolves it through the workspace, so
+the `npx sst shell` form below works as written - but under `pnpm sst shell` a bare `tsx` is not on
+PATH and the run dies with `exec: "tsx": executable file not found in $PATH`. Either use `npx` as
+shown, or spell the binary out:
+
+```bash
+pnpm sst shell --stage <stage> -- ./packages/scripts/node_modules/.bin/tsx packages/scripts/retrieval/capture-embeddings.ts ...
+```
+
+
 ### 1. Baseline (ada-002), ~free
 
 Reuses the corpus's existing vectors; only the 30 probe questions are embedded.
@@ -96,6 +106,50 @@ no applicable width at all **aborts** rather than quietly dropping out of the ta
 the ada-002 baseline is scored at its capture width alone whatever `--widths` says, and the report
 notes it.
 
+### Scoring a lake this repo has no ground truth for
+
+`corpus.ts` describes `system-help` and nothing else, so against any other lake the report prints
+`GROUND TRUTH DOES NOT DESCRIBE THIS CORPUS` and every label-dependent column renders `n/a`. That
+includes `posTop`/`negTop`, which are the floor headroom a cosine floor is derived from - so without
+a matching question set a production capture yields geometry (`band`, `spread`) and nothing else.
+
+It cannot be fixed by adding questions to `corpus.ts`: this repo is public, and a customer lake's
+questions and ground truth cannot be committed to it. So the question set is an input instead:
+
+```bash
+npx sst shell --stage <stage> -- tsx packages/scripts/retrieval/capture-embeddings.ts \
+  --lake <datalakeTag> --userId <userId> --questions ../path/to/questions.json \
+  --models text-embedding-3-small,text-embedding-3-large --dry-run
+```
+
+The file is a JSON array of `{ id, question, supporting, note? }`, the same shape `corpus.ts` exports
+as `ProbeQuestion`. `supporting` holds document ids **as the capture writes `docId`** - a help slug
+for `system-help`, a FabFile id for any other lake. An empty `supporting` declares a negative, whose
+correct behavior is to serve nothing; it is not the same as omitting the field.
+
+Keep the same design rules the committed set documents, or the numbers are not comparable to it:
+most questions should need several documents, phrasing should not overlap the document that answers
+it, and negatives should be near-misses rather than nonsense.
+
+The capture writes each question's `supporting` INTO the fixture, so phase B keeps its "a fixture and
+nothing else" property - the scoring step needs no `--questions` flag and no access to the file. Two
+consequences worth knowing:
+
+- Ground truth is pinned at capture time. Editing the question file does not change an existing
+  fixture; re-capture to pick the edit up.
+- Arms are still checked against each other, by two guards that cover two different edits.
+  `assertSameQuerySet` compares question id AND text hash, which catches a question that was reworded
+  or added between captures. `assertSameGroundTruth` compares the resolved answer keys, which catches
+  the edit the first one cannot see: changing only a question's `supporting` leaves its id and its
+  text untouched, so nothing about the question set has changed and the arms would otherwise table
+  together. That second guard also refuses an external arm beside a committed one, which is the same
+  hazard arriving by a different route - identical vectors scored against two answer keys render as a
+  large quality gap with every geometry column agreeing.
+
+`--questions` with no path is rejected rather than treated as absent. Both `--questions=` and a bare
+trailing `--questions` parse to the empty string, and silently falling back to `PROBE_QUESTIONS`
+would surface only after the embedding spend, as a capture whose quality columns are all `n/a`.
+
 ## The corpus-regime gate
 
 The capture prints the chunk char-length distribution and chunks-per-file before spending anything,
@@ -126,6 +180,7 @@ Each arm prints a block shaped like the published prod probe, then one cross-arm
 
 | column | meaning |
 |---|---|
+| `queries` | how many questions the arm was scored over - the denominator of every quality column. Equal across arms by construction (`assertSameQuerySet` rejects a comparison whose fixtures carry different question sets), so it is here to be read, not to be checked. |
 | `band min/max/width` | where the served scores sit, pooled across queries. The collapse this exists to measure. |
 | `spread` | mean rank-1 minus rank-N, where N is the printed `rankDepth` (`RANK_DEPTH`, or fewer on a small corpus). Near zero means the ranking carries no information. |
 | `posTop` / `negTop` | mean rank-1 cosine on answerable vs unanswerable questions. Their **gap** is the floor headroom. |

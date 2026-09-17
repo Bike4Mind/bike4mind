@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { Session } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
+import { isValidObjectId } from '@server/utils/objectId';
 import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
 import { parseMcpResult } from '@server/utils/parseMcpResult';
 import { JiraResource } from '@bike4mind/slack';
@@ -143,7 +144,7 @@ const handler = baseApi().post(async (req, res) => {
   });
 
   // Verify the session belongs to the authenticated user
-  const session = await Session.findById(sessionId);
+  const session = isValidObjectId(sessionId) ? await Session.findById(sessionId) : null;
   if (!session) {
     logger.error('[Web MCP Delete] Session not found', { sessionId });
     return res.status(404).json({ error: 'Session not found' });

@@ -91,9 +91,9 @@ import {
   type ChildExecutionStatus,
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
-} from '@bike4mind/services';
+} from '@bike4mind/services/llm';
 import { creditService, apiKeyService, estimateGeneratedMediaUsd } from '@bike4mind/services';
-import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/services';
+import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/services/llm';
 import { createAttachmentLakeAccess } from './agentExecutor.attachmentLakeAccess';
 // Lattice launch-gate. `resolveLatticeTools` owns the `enableLattice` flag
 // resolution and the Lattice tool contribution (names + `externalTools`
@@ -122,7 +122,7 @@ import {
   onDagNodeTerminal,
 } from './agentExecutorDag';
 import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
-import type { DagHandoffSignal } from '@bike4mind/services';
+import type { DagHandoffSignal } from '@bike4mind/services/llm';
 import type { ModelInfo } from '@bike4mind/common';
 // `buildFirstIterationQuery` lives in its own module so it can be
 // unit-tested without dragging in this file's server-only dependency graph

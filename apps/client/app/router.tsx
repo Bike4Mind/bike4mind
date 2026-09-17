@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState } from 'react';
 import { captureUtmParams } from '@client/app/utils/utmCapture';
+import { beaconVisit } from '@client/app/utils/visitBeacon';
 import {
   createRouter,
   createRoute,
@@ -57,6 +58,7 @@ const VerifyEmailPage = lazy(() => import('./routes/verify-email'));
 const VerifyEmailChangePage = lazy(() => import('./routes/verify-change'));
 const SubscribePage = lazy(() => import('./routes/subscribe'));
 const TutorialsPage = lazy(() => import('./routes/tutorials'));
+const TutorialsExplorePage = lazy(() => import('./components/Tutorials/TutorialsExplorePage'));
 const ArtifactsDemoPage = lazy(() => import('./routes/artifacts-demo'));
 const AdminEmergencyPage = lazy(() => import('./routes/admin-emergency'));
 const GoogleDriveCallbackPage = lazy(() => import('./routes/google-drive/callback'));
@@ -756,6 +758,24 @@ const subscribeRoute = createRoute({
   ),
 });
 
+// Tutorials (new) - the tabbed feature-discovery page. Sits on its own path
+// while the original FTUE slider still owns `/tutorials`; it takes that path
+// over once the slider is retired.
+const tutorialsExploreRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/tutorials/explore',
+  component: () => (
+    // Admin-gated on the ROUTE, not just on the menu row that reaches it: the
+    // gate has to be visible from here, because this is where the follow-ups
+    // that give the page real behaviour will land.
+    <RestrictedPage requireAdmin>
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <TutorialsExplorePage />
+      </Suspense>
+    </RestrictedPage>
+  ),
+});
+
 // Tutorials route (replaces /tutorials.tsx)
 const tutorialsRoute = createRoute({
   getParentRoute: () => layoutRoute,
@@ -1036,6 +1056,7 @@ const routeTree = rootRoute.addChildren([
     organizationsRoute,
     organizationDetailRoute,
     tutorialsRoute,
+    tutorialsExploreRoute,
     artifactsDemoRoute,
     questsRoute,
     questsV5Route,
@@ -1086,6 +1107,10 @@ function createNextCompatibleHistory() {
 // guard redirects an unauthenticated landing to /login (which strips the query string). See
 // captureUtmParams() for why this cannot live in a React effect.
 captureUtmParams();
+
+// Then tell the server a visit is happening. Order matters: the beacon is the request the
+// server reads the campaign cookie from, so it has to follow the line above.
+beaconVisit();
 
 // Create the router
 export const router = createRouter({

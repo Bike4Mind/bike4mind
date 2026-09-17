@@ -1,45 +1,14 @@
-import crypto from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
-import type { OverwatchUtm } from '@bike4mind/common';
+import { OVERWATCH_UNKNOWN_SESSION_ID } from '@bike4mind/common';
 import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { isAnalyticsConfigured, emitActiveEvent, sanitizeReferrer } from './emitActiveEvent';
+import { readUtmCookie } from './cookies';
+import { readVisitId } from './visitSession';
 import { pseudonymizeUserId } from './pseudonymize';
 import { resolveUserType } from './resolveUserType';
 
 function utcDate(): string {
   return new Date().toISOString().substring(0, 10);
-}
-
-function parseCookies(cookieHeader: string | undefined): Record<string, string> {
-  const result: Record<string, string> = {};
-  if (!cookieHeader) return result;
-  for (const pair of cookieHeader.split(';')) {
-    const idx = pair.indexOf('=');
-    if (idx < 0) continue;
-    try {
-      result[pair.slice(0, idx).trim()] = decodeURIComponent(pair.slice(idx + 1).trim());
-    } catch {
-      // malformed percent-encoding - skip pair
-    }
-  }
-  return result;
-}
-
-function readUtmCookie(req: Request): OverwatchUtm | undefined {
-  const cookies = parseCookies(req.headers.cookie);
-  const raw = cookies['b4m_utm'];
-  if (!raw) return undefined;
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const utm: OverwatchUtm = {};
-    if (typeof parsed.source === 'string') utm.source = parsed.source.substring(0, 128);
-    if (typeof parsed.medium === 'string') utm.medium = parsed.medium.substring(0, 128);
-    if (typeof parsed.campaign === 'string') utm.campaign = parsed.campaign.substring(0, 128);
-    if (typeof parsed.content === 'string') utm.content = parsed.content.substring(0, 128);
-    return Object.keys(utm).length > 0 ? utm : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 // In-memory throttle shared across ALL analyticsMiddleware() instances in a Lambda container.
@@ -82,22 +51,23 @@ export function analyticsMiddleware() {
     }
     emitted.set(pseudoUserId, today);
 
-    // Deterministic sessionId: sha256 of the pseudonymous id plus the UTC date, so it is
-    // stable for a whole day rather than scoped to a visit.
+    // The visit this request belongs to, as the visit cookie reports it - the same value
+    // the visit beacon sends, so an active event and the visit it happened during are one
+    // session downstream rather than two.
     //
-    // It IS grouped on downstream: a consumer of OverwatchRawEvent counts distinct
-    // sessionIds per product. An earlier version of this comment said "forensic-only;
-    // downstream never groups on it" - true when written, false once that consumer
-    // shipped, and it went uncorrected long enough to be quoted elsewhere as evidence
-    // the value was not used. Describe what this is, not what nothing does with it: a
-    // claim about the absence of consumers rots the moment one appears, and unlike a
-    // claim about the value itself, nothing here fails when it does.
+    // This value IS grouped on: a consumer of OverwatchRawEvent counts distinct sessionIds
+    // per product as the first stage of an acquisition funnel. It used to be
+    // sha256(pseudoUserId : UTC-date), which is stable for a whole day by construction, so
+    // that count was a count of authenticated user-days wearing the name "sessions" - not
+    // comparable with a product that sends a real per-visit id, and not a funnel stage.
     //
-    // Consequence worth knowing before relying on that grouping: because the input is
-    // (user, day) rather than (user, visit), a distinct-sessionId count is a count of
-    // distinct user-days for this emitter, and of real sessions for a product supplying
-    // its own. The two are not comparable.
-    const sessionId = crypto.createHash('sha256').update(`${pseudoUserId}:${today}`).digest('hex');
+    // When no cookie is present there is no visit to name, and the sentinel says so rather
+    // than inventing one. A request reaches here without one when it did not come from a
+    // browser running this app: a JWT-bearing script, a mobile client, a curl. Inventing a
+    // per-request id for those would add a phantom session per request to the funnel; the
+    // sentinel adds one bucket a consumer can exclude outright. The user is still counted
+    // in DAU either way, which is what this emit is for.
+    const sessionId = readVisitId(req.headers.cookie) ?? OVERWATCH_UNKNOWN_SESSION_ID;
 
     const userType = resolveUserType({ level: req.user.level, subscribedUntil: req.user.subscribedUntil });
     const utm = readUtmCookie(req);

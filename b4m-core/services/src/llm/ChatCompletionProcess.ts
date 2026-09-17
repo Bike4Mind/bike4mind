@@ -100,6 +100,7 @@ import { resolvePersonalCorpusOnly } from './resolvePersonalCorpusOnly';
 import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
 import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedReplyAccumulator';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
+import { resolveCorrectionContext } from './buildCorrectionContext';
 import { LATTICE_TOOL_NAMES } from './tools';
 import {
   getDynamicDataLakeAccess,
@@ -2487,6 +2488,11 @@ export class ChatCompletionProcess {
         );
       }
 
+      // Correct-and-retry framing, including the session re-check that keeps a link copied into
+      // another session from dereferencing here. See resolveCorrectionContext for why the read side
+      // owns that check rather than trusting the writers.
+      const correctionContextMessages = await resolveCorrectionContext(quest, this.db.quests, logger);
+
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Previous messages loaded in ${
           Date.now() - historyStartTime
@@ -3049,6 +3055,7 @@ export class ChatCompletionProcess {
       const taggedContextMessages = buildTaggedContextMessages({
         dateContext: [dateTimeContext], // Always provide current date/time awareness
         extraContext: extraContextMessages, // Extra context messages from external sources, at the top
+        ...correctionContextMessages,
         // Artifact emission guidance. Without this, correct <artifact> usage
         // is left to the model's defaults and large HTML/code can leak into the chat
         // body as raw markup. Gated on the same effective flag as extraction, so a turn is
@@ -4141,7 +4148,7 @@ export class ChatCompletionProcess {
             // prompt contains FORCE_FALLBACK_TEST_MARKER, simulate a provider-wide Anthropic
             // outage: fail every Bedrock- and Anthropic-backed hop so the real loop multi-hops
             // off the Anthropic path entirely and degrades to a cross-provider model (OpenAI/
-            // Gemini), rendering the "Fallback Model Used" badge with the provider-path switch.
+            // Gemini), rendering the "Fallback: <model>" badge with the provider-path switch.
             // Double-gated (E2E-only, never production) and confined to the Anthropic family, so
             // a normal request can never trigger it and the surviving cross-provider hop runs for
             // real. The error mimics a Bedrock capacity outage (ServiceUnavailableException) so it
@@ -4480,6 +4487,7 @@ export class ChatCompletionProcess {
                   forceSwitch: overloadRetriesExhausted,
                   excludeModelIds: triedModelIds,
                   preferUntriedBackend: isFinalHop,
+                  endUserId: this.user.id,
                 }
               );
 

@@ -76,6 +76,9 @@ jobs:
     outputs:
       latest_gpt: ${{ steps.discover.outputs.latest_gpt }}
       latest_claude: ${{ steps.discover.outputs.latest_claude }}
+      # Distinguishes "discovery ran and found nothing" from "discovery could not run
+      # because the preview secret is unset" - setup-matrix reports them differently.
+      discovery_skipped: ${{ steps.discover.outputs.preview_skipped }}
     steps:
       - name: Resolve configuration
         id: config
@@ -182,9 +185,14 @@ jobs:
           case "$STAGE" in
             pr[0-9]*)
               # Preview (cross-account): use the injected repo secret, no sst shell.
+              # Skip rather than `exit 1` so this does not read as a broken discovery
+              # test. A full-matrix run genuinely cannot continue without the discovered
+              # models, so setup-matrix still stops the run - but it names THIS cause,
+              # rather than reporting an unexplained empty discovery result.
               if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
-                echo "::error::E2E_CLEANUP_SECRET repo secret is required for preview runs"
-                exit 1
+                echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured; skipping model discovery (0 tests run)"
+                echo "preview_skipped=true" >> "$GITHUB_OUTPUT"
+                exit 0
               fi
               pnpm --filter client exec playwright test --project=ai-latency-discover e2e/ai-latency-discover.spec.ts \
                 2>&1 | tee apps/client/playwright-output.txt
@@ -226,6 +234,7 @@ jobs:
         env:
           DISCOVERED_GPT: ${{ needs.discover-models.outputs.latest_gpt }}
           DISCOVERED_CLAUDE: ${{ needs.discover-models.outputs.latest_claude }}
+          DISCOVERY_SKIPPED: ${{ needs.discover-models.outputs.discovery_skipped }}
           EVENT_NAME: ${{ github.event_name }}
           RUN_FULL_MATRIX: ${{ inputs.run_full_matrix }}
           RUN_ALL_SPECS: ${{ inputs.run_all_specs }}
@@ -238,7 +247,11 @@ jobs:
           # the target environment's AI Settings modal (see the discover-models job).
           build_full_matrix() {
             if [ -z "$DISCOVERED_GPT" ] || [ -z "$DISCOVERED_CLAUDE" ]; then
-              echo "Full matrix requested but model discovery did not return both models (gpt='$DISCOVERED_GPT', claude='$DISCOVERED_CLAUDE')."
+              if [ "$DISCOVERY_SKIPPED" = "true" ]; then
+                echo "::error::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured, so model discovery could not run. No tests were executed - this is a configuration gap, not a test failure."
+              else
+                echo "Full matrix requested but model discovery did not return both models (gpt='$DISCOVERED_GPT', claude='$DISCOVERED_CLAUDE')."
+              fi
               exit 1
             fi
             echo "spec_files=$ALL_SPECS" >> $GITHUB_OUTPUT
@@ -267,6 +280,12 @@ jobs:
     # skip this job under the default `success()` condition. Gate explicitly on setup-matrix
     # succeeding so the matrix runs whenever it produced a valid spec/model list.
     if: ${{ always() && needs.setup-matrix.result == 'success' }}
+    # Matrix job outputs are last-writer-wins across cells, which is safe here only because
+    # this value is uniform per run: the guard it comes from is reached by every cell on a
+    # preview run (all of them see the same unset repo secret) and by none on dev/staging.
+    # There is no run shape in which some cells skip and others do not.
+    outputs:
+      preview_skipped: ${{ steps.e2e.outputs.preview_skipped }}
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: '${{ matrix.spec_file }} — ${{ matrix.ai_model }}'
     timeout-minutes: 90
@@ -435,9 +454,16 @@ jobs:
           case "$STAGE" in
             pr[0-9]*)
               # Preview (cross-account): use the injected repo secret, no sst shell.
+              # Skip rather than `exit 1` - a red cell here is indistinguishable from a
+              # real latency/quality failure. Exiting 0 alone would only swap that for a
+              # misleading green, so `preview_skipped` is published as a job output and the
+              # aggregate step in `notify` branches its overall status on it AHEAD of
+              # pass/fail. Must stay in sync with that branch: without it, every cell
+              # renders "No Data", whose legend blames Playwright for a config gap.
               if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
-                echo "::error::E2E_CLEANUP_SECRET repo secret is required for preview runs"
-                exit 1
+                echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured; skipping (0 tests run)"
+                echo "preview_skipped=true" >> "$GITHUB_OUTPUT"
+                exit 0
               fi
               pnpm --filter client exec playwright test "e2e/${SPEC_FILE}.spec.ts" \
                 2>&1 | tee apps/client/playwright-output.txt
@@ -477,7 +503,9 @@ jobs:
           find . -type f -name 'pw-results.json' 2>/dev/null | head -20 || true
 
       - name: Upload Playwright report
-        if: always()
+        # Nothing to upload on a skip; without this the upload emits a "No files were
+        # found" warning that reads like the run lost its report.
+        if: always() && steps.e2e.outputs.preview_skipped != 'true'
         uses: actions/upload-artifact@v6
         with:
           name: ai-latency-${{ matrix.spec_file }}-${{ steps.sanitize.outputs.model_safe }}-${{ steps.config.outputs.stage }}${{ inputs.e2e_test_id && format('-{0}', inputs.e2e_test_id) || '' }}
@@ -547,7 +575,11 @@ jobs:
           BRANCH: ${{ github.ref_name }}
           NOTIFY_API_URL: ${{ steps.config.outputs.api_url }}
           ENV_LABEL: ${{ steps.config.outputs.env_label }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts
+          PREVIEW_SKIPPED: ${{ needs.e2e-ai-latency.outputs.preview_skipped }}
+          # No report is uploaded on a skip, so the #artifacts anchor would land the reader on
+          # an empty list. The non-empty branch must come FIRST: GitHub expressions treat '' as
+          # falsy, so `skipped && '' || '#artifacts'` would append the anchor in both states.
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}${{ needs.e2e-ai-latency.outputs.preview_skipped != 'true' && '#artifacts' || '' }}
         run: |
           mapfile -t ALL_PW_RESULTS < <(find downloaded-results -type f -name '*-pw-results.json' 2>/dev/null | sort)
           mapfile -t ALL_LATENCY_JSONS < <(find downloaded-results -type f -name '*-results.json' ! -name '*-pw-results.json' 2>/dev/null | sort)
@@ -566,7 +598,14 @@ jobs:
           mapfile -t AI_MODELS < <(echo "$AI_MODELS_JSON" | jq -r '.[]')
           mapfile -t SPEC_FILES < <(echo "$SPEC_FILES_JSON" | jq -r '.[]')
 
-          if [ "${#ALL_PW_RESULTS[@]}" -gt 0 ]; then
+          # Three states, checked skip-FIRST. A preview run that could not start is neither a
+          # pass nor a failure, and it must not fall through to the no-quality-data branch
+          # either: that string's legend below blames Playwright, which points the #e2e reader
+          # at the suite when the cause is a missing repo secret. The benchmark cells exit 0 on
+          # a skip, so without this branch the whole run renders green.
+          if [ "${PREVIEW_SKIPPED:-}" = "true" ]; then
+            OVERALL_STATUS=":fast_forward: Skipped (E2E_CLEANUP_SECRET not configured)"
+          elif [ "${#ALL_PW_RESULTS[@]}" -gt 0 ]; then
             PASSED=$(jq -rs '[.[].stats.expected] | add // 0' "${ALL_PW_RESULTS[@]}")
             FAILED=$(jq -rs '[.[].stats.unexpected] | add // 0' "${ALL_PW_RESULTS[@]}")
             OVERALL_STATUS=":white_check_mark: Passed"
@@ -688,7 +727,9 @@ jobs:
           done
 
           # Average latency exceeding threshold is a real failure — downgrade overall status.
-          if [ "$EXCEEDED" = "true" ]; then
+          # Never over a skip: no cell produced latency data, so a breach here could only be
+          # stale, and the skip is the honest verdict either way.
+          if [ "$EXCEEDED" = "true" ] && [ "${PREVIEW_SKIPPED:-}" != "true" ]; then
             OVERALL_STATUS=":x: Failed"
           fi
 
@@ -698,8 +739,15 @@ jobs:
 
           LATENCY_SUMMARY=":white_check_mark: ${LATENCY_WITHIN} Within  :x: ${LATENCY_EXCEEDED_COUNT} Exceeded  :fast_forward: ${LATENCY_NO_DATA} No Data"
 
-          FOOTNOTE_1="--- = No quality data: Playwright crashed, timed out, or failed before results were collected"
-          FOOTNOTE_2="No Data = Latency results unavailable: an error was encountered prior to latency data collection"
+          # On a skip every cell is empty for one known reason, so the default legend would
+          # send the reader to debug a suite that never ran. Name the cause instead.
+          if [ "${PREVIEW_SKIPPED:-}" = "true" ]; then
+            FOOTNOTE_1="--- / No Data = preview e2e unavailable: the E2E_CLEANUP_SECRET repo secret is not configured, so no tests ran"
+            FOOTNOTE_2="This is a configuration gap, not a test failure. Set the repo secret; do not debug the suite."
+          else
+            FOOTNOTE_1="--- = No quality data: Playwright crashed, timed out, or failed before results were collected"
+            FOOTNOTE_2="No Data = Latency results unavailable: an error was encountered prior to latency data collection"
+          fi
           NORMAL_PROMPTS_TEXT="*Normal Prompts*${NL}\`\`\`${TABLE_HDR}${NL}${TABLE_SEP}${NL}${TABLE_ROWS}\`\`\`${NL}${FOOTNOTE_1}${NL}${FOOTNOTE_2}"
 
           jq -n \
@@ -739,7 +787,11 @@ jobs:
           payload-file-path: /tmp/slack-payload.json
 
       - name: Send Slack alert for latency threshold breach
-        if: steps.aggregate.outputs.exceeded == 'true' || steps.aggregate.outputs.has_no_data == 'true'
+        # A skip trips has_no_data (no cell produced results), but paging #slow-responses for a
+        # missing repo secret sends people after a latency problem that does not exist. The
+        # parens matter: `&&` binds tighter than `||`, so without them the skip guard would
+        # apply only to the has_no_data arm.
+        if: ${{ (steps.aggregate.outputs.exceeded == 'true' || steps.aggregate.outputs.has_no_data == 'true') && needs.e2e-ai-latency.outputs.preview_skipped != 'true' }}
         uses: slackapi/slack-github-action@v2.1.0
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL_SLOW_RESPONSES }}

@@ -1,3 +1,4 @@
+import type { ComponentProps } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -23,10 +24,10 @@ vi.mock('sonner', () => ({
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
-const renderModal = () =>
+const renderModal = (props: Partial<ComponentProps<typeof BugReportModal>> = {}) =>
   render(
     <CssVarsProvider theme={appTheme}>
-      <BugReportModal open onClose={vi.fn()} promptMeta={null} />
+      <BugReportModal open onClose={vi.fn()} promptMeta={null} {...props} />
     </CssVarsProvider>
   );
 
@@ -105,5 +106,40 @@ describe('BugReportModal', () => {
 
     resolveSubmit({ delivery: { delivered: true, channels: {} } });
     await waitFor(() => expect(button).not.toBeDisabled());
+  });
+
+  it('submits the sessionId/questId it was given as top-level pointers, not just via promptMeta', async () => {
+    h.createFeedbackOnServer.mockResolvedValue({ delivery: { delivered: true, channels: {} } });
+    renderModal({ sessionId: 'session-1', questId: 'quest-1' });
+
+    fireEvent.click(screen.getByTestId('bug-report-modal-submit-btn'));
+
+    await waitFor(() => expect(h.createFeedbackOnServer).toHaveBeenCalledTimes(1));
+    expect(h.createFeedbackOnServer).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-1', questId: 'quest-1' })
+    );
+  });
+
+  it('calls onSubmitted after a successful save, even when delivery failed', async () => {
+    const onSubmitted = vi.fn();
+    h.createFeedbackOnServer.mockResolvedValue({
+      delivery: { delivered: false, channels: { slack: { outcome: 'skipped' }, email: { outcome: 'skipped' } } },
+    });
+    renderModal({ onSubmitted });
+
+    fireEvent.click(screen.getByTestId('bug-report-modal-submit-btn'));
+
+    await waitFor(() => expect(onSubmitted).toHaveBeenCalledTimes(1));
+  });
+
+  it('does not call onSubmitted when the request rejects', async () => {
+    const onSubmitted = vi.fn();
+    h.createFeedbackOnServer.mockRejectedValue(new Error('network down'));
+    renderModal({ onSubmitted });
+
+    fireEvent.click(screen.getByTestId('bug-report-modal-submit-btn'));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(onSubmitted).not.toHaveBeenCalled();
   });
 });

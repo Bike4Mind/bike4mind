@@ -1,5 +1,142 @@
 # @bike4mind/slack
 
+## 2.0.2
+
+### Patch Changes
+
+- Updated dependencies [[`897db4d`](https://github.com/Bike4Mind/bike4mind/commit/897db4d71005adb476705a5e5bc0f59d4a8ccc39), [`718232a`](https://github.com/Bike4Mind/bike4mind/commit/718232ac8b73f441d39cbf74041f3a06316a7248), [`c619705`](https://github.com/Bike4Mind/bike4mind/commit/c619705a92c6cbbb614b893caee446ae868beab2), [`e4263b7`](https://github.com/Bike4Mind/bike4mind/commit/e4263b73e1c24301fe4e9f6414903697bc715bfa), [`7bd1432`](https://github.com/Bike4Mind/bike4mind/commit/7bd143228cbc2b9be3434ad8d795c2ae76623241), [`b9bc64a`](https://github.com/Bike4Mind/bike4mind/commit/b9bc64a4291420be50017fb34c1dc80f92e64c89), [`d6cd7dd`](https://github.com/Bike4Mind/bike4mind/commit/d6cd7dddabe0428fee52db8fc33d045461ae4c79), [`9310a7a`](https://github.com/Bike4Mind/bike4mind/commit/9310a7a4ef4f5348d3ce57495513d6f087d5b4b8), [`b757a71`](https://github.com/Bike4Mind/bike4mind/commit/b757a7120009f60171e04684b4582f13bddf31b0), [`5d79949`](https://github.com/Bike4Mind/bike4mind/commit/5d7994926622a7af9d6aa38d8e547e014d3838ac), [`d6b86bf`](https://github.com/Bike4Mind/bike4mind/commit/d6b86bf0e7c644adb387d17b48e48ee6da58652c), [`d086ed5`](https://github.com/Bike4Mind/bike4mind/commit/d086ed5f0049fea32dd03034fe8f084c600b5bd7), [`b91b853`](https://github.com/Bike4Mind/bike4mind/commit/b91b853a865f8f1cf5ab417ade6fac88184886c2), [`91a73c9`](https://github.com/Bike4Mind/bike4mind/commit/91a73c9b9494408f126d267e859f9a9629e6e126), [`13e0733`](https://github.com/Bike4Mind/bike4mind/commit/13e0733c9faf196143a79225d4bcd74623f36dee), [`897db4d`](https://github.com/Bike4Mind/bike4mind/commit/897db4d71005adb476705a5e5bc0f59d4a8ccc39)]:
+  - @bike4mind/common@8.0.0
+  - @bike4mind/services@10.0.0
+  - @bike4mind/fab-pipeline@1.3.9
+  - @bike4mind/utils@6.0.2
+  - @bike4mind/agents@1.0.9
+  - @bike4mind/llm-adapters@0.15.3
+  - @bike4mind/mcp@2.0.9
+
+## 2.0.1
+
+### Patch Changes
+
+- Updated dependencies [[`40f31bd`](https://github.com/Bike4Mind/bike4mind/commit/40f31bd9c9f63e6a2db9d5569222145c84fa46a0), [`bf76770`](https://github.com/Bike4Mind/bike4mind/commit/bf7677008efbd820c9d235e1cbad8a7797fbd4b4), [`00fb861`](https://github.com/Bike4Mind/bike4mind/commit/00fb8615644725e4936aec459d5dec0bdbac121d)]:
+  - @bike4mind/common@7.5.0
+  - @bike4mind/services@9.1.0
+  - @bike4mind/fab-pipeline@1.3.8
+  - @bike4mind/agents@1.0.8
+  - @bike4mind/llm-adapters@0.15.2
+  - @bike4mind/mcp@2.0.8
+  - @bike4mind/utils@6.0.1
+
+## 2.0.0
+
+### Major Changes
+
+- [#2786](https://github.com/Bike4Mind/bike4mind/pull/2786) [`4f8f445`](https://github.com/Bike4Mind/bike4mind/commit/4f8f445aa1d025a5187158fc0a527f475cefbd91) Thanks [@jarlacut](https://github.com/jarlacut)! - resolve ingest file type by extension, with per-door precedence
+
+  **Breaking change.** `resolveSupportedMimeType`'s third parameter is now an options object instead of
+  a bare predicate function:
+
+  ```ts
+  resolveSupportedMimeType(fileName, claimedMimeType, {
+    isAcceptable?: (mimeType: string | null | undefined) => boolean; // defaults to isSupportedFabFileMimeType
+    precedence?: 'extension-first' | 'claim-first'; // defaults to 'extension-first'
+    extensionlessFallback?: SupportedFabFileMimeTypes;
+  })
+  ```
+
+  A bare predicate passed as the third argument no longer works - wrap it as
+  `{ isAcceptable: yourPredicate }`. `precedence` controls whether the filename
+  extension or the caller-supplied MIME type is consulted first, and
+  `extensionlessFallback` is the type used for a filename that carries no
+  extension at all (and no claim) - omit it to keep a caller strict.
+
+  **Inputs that were previously accepted and are now refused:**
+
+  - A filename with a dot-tail that does not resolve to a known extension is
+    refused outright - a claimed MIME type no longer rescues it. (`deploy.sh` or
+    `malware.exe` claiming `text/plain` is no longer admitted.)
+  - A dotted date or version filename (`Meeting notes 2026.09.07`, `My Report
+v1.2`) is refused, because its tail is read as an unrecognized extension.
+  - A trailing-dot filename (`payload.`) is treated as malformed rather than
+    extension-less, so it no longer receives a plain-text fallback.
+  - A URL import that yields no extractable text is now refused with an error
+    instead of silently creating an empty file.
+  - The Slack ingest door now applies the same extension rule as the other
+    ingest doors: an attachment whose filename has an unrecognized or
+    date-style tail is refused.
+
+- [#2786](https://github.com/Bike4Mind/bike4mind/pull/2786) [`4f8f445`](https://github.com/Bike4Mind/bike4mind/commit/4f8f445aa1d025a5187158fc0a527f475cefbd91) Thanks [@jarlacut](https://github.com/jarlacut)! - resolve ingest file type by extension, with per-door precedence
+
+### Patch Changes
+
+- Updated dependencies [[`4f8f445`](https://github.com/Bike4Mind/bike4mind/commit/4f8f445aa1d025a5187158fc0a527f475cefbd91), [`7a214d5`](https://github.com/Bike4Mind/bike4mind/commit/7a214d5aa0fb5aa65302f887a3fac356ab3dc8ca), [`4f8f445`](https://github.com/Bike4Mind/bike4mind/commit/4f8f445aa1d025a5187158fc0a527f475cefbd91), [`10dd200`](https://github.com/Bike4Mind/bike4mind/commit/10dd2000171021022593d2c20d866f1d38cc30c7), [`6f662d8`](https://github.com/Bike4Mind/bike4mind/commit/6f662d81308d53bb430665ed048607da97c4e9ef), [`46ea8e1`](https://github.com/Bike4Mind/bike4mind/commit/46ea8e1efc42e992ebc0a19c4542f65d2665832c), [`2cfe44d`](https://github.com/Bike4Mind/bike4mind/commit/2cfe44d452803f4be8d6689edfb4ad250b0c881c), [`068e14f`](https://github.com/Bike4Mind/bike4mind/commit/068e14f2ab9e45cb7e7cecbae8a49fca1ce85dc6), [`fa08028`](https://github.com/Bike4Mind/bike4mind/commit/fa08028c91136b4f051a45bc4976a7714677f845), [`6ea0d28`](https://github.com/Bike4Mind/bike4mind/commit/6ea0d28a8a8db0625f81cba61fd7a5f545dc3483), [`0a4253e`](https://github.com/Bike4Mind/bike4mind/commit/0a4253e4f31492b6fea19976a469ffd5e79f4af9), [`8cc4c68`](https://github.com/Bike4Mind/bike4mind/commit/8cc4c68855dcb550815abba6ccbc665bb2b251f0), [`6ce4b99`](https://github.com/Bike4Mind/bike4mind/commit/6ce4b99b9ab5d4fe8142647a9b3dcef6f0c8ebfd)]:
+  - @bike4mind/services@9.0.0
+  - @bike4mind/utils@6.0.0
+  - @bike4mind/common@7.4.0
+  - @bike4mind/fab-pipeline@1.3.7
+  - @bike4mind/llm-adapters@0.15.1
+  - @bike4mind/agents@1.0.7
+  - @bike4mind/mcp@2.0.7
+
+## 1.0.0
+
+### Major Changes
+
+- [#2778](https://github.com/Bike4Mind/bike4mind/pull/2778) [`f3d4563`](https://github.com/Bike4Mind/bike4mind/commit/f3d4563c442e4471fd37d3bf35baac96095f5fc5) Thanks [@onoya](https://github.com/onoya)! - keep the LLM tool closure out of the package barrel
+
+### Patch Changes
+
+- Updated dependencies [[`f3d4563`](https://github.com/Bike4Mind/bike4mind/commit/f3d4563c442e4471fd37d3bf35baac96095f5fc5), [`5e1eee0`](https://github.com/Bike4Mind/bike4mind/commit/5e1eee08f765b93a1c30160c03858e7c5e9fd798), [`fee546f`](https://github.com/Bike4Mind/bike4mind/commit/fee546f162297fbd3cf5acdb41b71906bdabab46), [`a4e980d`](https://github.com/Bike4Mind/bike4mind/commit/a4e980d956c721aa734dde981420adcb4bfaa243), [`d1836db`](https://github.com/Bike4Mind/bike4mind/commit/d1836db1eb4c3d9c738a56b94d01da63f16e325a), [`2922d00`](https://github.com/Bike4Mind/bike4mind/commit/2922d0061d5ee3673da2a3b9bd88f11b7005e5db), [`afba631`](https://github.com/Bike4Mind/bike4mind/commit/afba6315105929e9b39672a2d0d23caad7f8e4aa), [`13322f6`](https://github.com/Bike4Mind/bike4mind/commit/13322f6bcc3473bdc243d1d4e397e069204273a6)]:
+  - @bike4mind/services@8.0.0
+  - @bike4mind/common@7.3.0
+  - @bike4mind/llm-adapters@0.15.0
+  - @bike4mind/utils@5.2.0
+  - @bike4mind/agents@1.0.6
+  - @bike4mind/fab-pipeline@1.3.6
+  - @bike4mind/mcp@2.0.6
+
+## 0.5.2
+
+### Patch Changes
+
+- Updated dependencies [[`2298140`](https://github.com/Bike4Mind/bike4mind/commit/229814036a13097cae1cd3ccc19d052d4d6c17f9)]:
+  - @bike4mind/common@7.2.2
+  - @bike4mind/services@7.2.2
+  - @bike4mind/agents@1.0.5
+  - @bike4mind/fab-pipeline@1.3.5
+  - @bike4mind/llm-adapters@0.14.2
+  - @bike4mind/mcp@2.0.5
+  - @bike4mind/utils@5.1.2
+
+## 0.5.1
+
+### Patch Changes
+
+- Updated dependencies [[`8ef2c17`](https://github.com/Bike4Mind/bike4mind/commit/8ef2c17f7b54b0df8c3809f17a62544784e65029)]:
+  - @bike4mind/common@7.2.1
+  - @bike4mind/services@7.2.1
+  - @bike4mind/agents@1.0.4
+  - @bike4mind/fab-pipeline@1.3.4
+  - @bike4mind/llm-adapters@0.14.1
+  - @bike4mind/mcp@2.0.4
+  - @bike4mind/utils@5.1.1
+
+## 0.5.0
+
+### Minor Changes
+
+- [#2762](https://github.com/Bike4Mind/bike4mind/pull/2762) [`adc900a`](https://github.com/Bike4Mind/bike4mind/commit/adc900ab152e00d3324bc228ac73c98a5cb5e2ef) Thanks [@maconard](https://github.com/maconard)! - add DeepSeek as a first-party provider and close Moonshot gaps
+
+### Patch Changes
+
+- Updated dependencies [[`b5c25db`](https://github.com/Bike4Mind/bike4mind/commit/b5c25db2ff248dd7491f7c263ae69cd1aaf23eca), [`0abc901`](https://github.com/Bike4Mind/bike4mind/commit/0abc9019ce87dc58c96e63273c32eb1310e121fa), [`aedbc31`](https://github.com/Bike4Mind/bike4mind/commit/aedbc312f5c166b52e166d795c7a2c6917134964), [`f6407e2`](https://github.com/Bike4Mind/bike4mind/commit/f6407e27d91175446e28246e1234d4c0a409c694), [`a756c37`](https://github.com/Bike4Mind/bike4mind/commit/a756c379f89401a9cfefc41735df4610dd5da0ce), [`0a931d2`](https://github.com/Bike4Mind/bike4mind/commit/0a931d25ddbfc35963f82f1bb6ea26b89a10f39e), [`671c753`](https://github.com/Bike4Mind/bike4mind/commit/671c753fc81d65561729f591bc7038e4c605126c), [`f72cd4b`](https://github.com/Bike4Mind/bike4mind/commit/f72cd4b612275d641680699cfd4f6e91976903f7), [`adc900a`](https://github.com/Bike4Mind/bike4mind/commit/adc900ab152e00d3324bc228ac73c98a5cb5e2ef), [`e543fe6`](https://github.com/Bike4Mind/bike4mind/commit/e543fe695608f0c4fb9aade7a0be974aa2c44f4e), [`b660460`](https://github.com/Bike4Mind/bike4mind/commit/b6604604904ae62ab4c6745ec4e2335e05706e68), [`36fae3b`](https://github.com/Bike4Mind/bike4mind/commit/36fae3b0e2a448442c65b83735de0406ed233370), [`534d9c6`](https://github.com/Bike4Mind/bike4mind/commit/534d9c69e757aa69d4d68ef713199afbb94d53a5)]:
+  - @bike4mind/common@7.2.0
+  - @bike4mind/mcp@2.0.3
+  - @bike4mind/llm-adapters@0.14.0
+  - @bike4mind/fab-pipeline@1.3.3
+  - @bike4mind/services@7.2.0
+  - @bike4mind/utils@5.1.0
+  - @bike4mind/agents@1.0.3
+
 ## 0.4.2
 
 ### Patch Changes

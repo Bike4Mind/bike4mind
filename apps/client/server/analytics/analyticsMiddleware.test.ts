@@ -20,9 +20,11 @@ vi.mock('./resolveUserType', () => ({
   resolveUserType: vi.fn(() => 'free'),
 }));
 
+import { OVERWATCH_UNKNOWN_SESSION_ID } from '@bike4mind/common';
 import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { emitActiveEvent, isAnalyticsConfigured } from './emitActiveEvent';
 import { analyticsMiddleware, __resetAnalyticsThrottle } from './analyticsMiddleware';
+import { VISIT_COOKIE, mintVisitId } from './visitSession';
 
 function makeReq(overrides: Partial<Request> = {}): Request {
   return {
@@ -138,5 +140,36 @@ describe('analyticsMiddleware — UTM cookie', () => {
     mw(makeReq({ headers: { cookie: 'b4m_utm=not-valid-json' } }), res, next);
     expect(emitActiveEvent).toHaveBeenCalledOnce();
     expect(emitActiveEvent).toHaveBeenCalledWith(expect.objectContaining({ utm: undefined }));
+  });
+});
+
+describe('analyticsMiddleware session identifier', () => {
+  it('reports the visit the request belongs to', () => {
+    const visitId = mintVisitId();
+    const mw = analyticsMiddleware();
+    mw(makeReq({ headers: { cookie: `${VISIT_COOKIE}=${visitId}` } }), res, next);
+
+    // The same value the visit beacon emitted for this visit, so the two events are one
+    // session downstream instead of two.
+    expect(emitActiveEvent).toHaveBeenCalledWith(expect.objectContaining({ sessionId: visitId }));
+  });
+
+  // This is the fix for a first stage that counted authenticated user-days under the name
+  // "sessions": the identifier used to be sha256(pseudoUserId : UTC-date), stable for a
+  // whole day by construction. A per-user-per-day value must never come back here.
+  it('does not fall back to anything derived from the user or the day', () => {
+    const mw = analyticsMiddleware();
+    mw(makeReq(), res, next);
+
+    const emitted = (emitActiveEvent as unknown as { mock: { calls: Array<[{ sessionId: string }]> } }).mock
+      .calls[0][0];
+    expect(emitted.sessionId).toBe(OVERWATCH_UNKNOWN_SESSION_ID);
+  });
+
+  it('treats a visit id it never minted as no visit at all', () => {
+    const mw = analyticsMiddleware();
+    mw(makeReq({ headers: { cookie: `${VISIT_COOKIE}=pick-your-own-session-id` } }), res, next);
+
+    expect(emitActiveEvent).toHaveBeenCalledWith(expect.objectContaining({ sessionId: OVERWATCH_UNKNOWN_SESSION_ID }));
   });
 });

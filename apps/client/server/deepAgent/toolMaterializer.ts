@@ -1,10 +1,10 @@
 import { Resource } from 'sst';
 import {
-  buildSharedTools,
   resolveToolAvailability,
+  buildSharedTools,
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
-} from '@bike4mind/services';
+} from '@bike4mind/services/llm';
 import {
   adminSettingsRepository,
   apiKeyRepository,

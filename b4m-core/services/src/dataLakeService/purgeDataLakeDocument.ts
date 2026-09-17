@@ -23,7 +23,10 @@ interface PurgeDataLakeDocumentAdapters {
     fabFiles: Pick<IFabFileRepository, 'findById' | 'hardDeleteOneById' | 'computeDataLakeStats'>;
     fabFileChunks: Pick<
       IFabFileChunkRepository,
-      'countByFabFileId' | 'deleteManyByFabFileId' | 'distinctRetrievalIndexModelsByFabFileIds'
+      | 'countByFabFileId'
+      | 'deleteManyByFabFileId'
+      | 'distinctRetrievalIndexModelsByFabFileIds'
+      | 'clearRetrievalIndexConfirmedByFabFileIds'
     >;
     /** Chats keep the document in `knowledgeIds`; the purge unlinks it there like file deletion does. */
     sessions: Pick<ISessionRepository, 'findAllWithKnowledgeId' | 'update'>;
@@ -109,6 +112,7 @@ interface PurgeDataLakeDocumentAdapters {
   logger?: {
     info: (msg: string, ...args: unknown[]) => void;
     error: (msg: string, ...args: unknown[]) => void;
+    warn: (msg: string, ...args: unknown[]) => void;
   };
 }
 
@@ -201,7 +205,7 @@ export const purgeDataLakeDocument = async (
   const embeddingModels = await db.fabFileChunks.distinctRetrievalIndexModelsByFabFileIds([file.id]);
 
   const scope = lakeMembershipScope(lake);
-  await strictIndexRemove(retrievalIndex, { scope, fabFileIds: [file.id] });
+  await strictIndexRemove(retrievalIndex, { scope, fabFileIds: [file.id] }, db.fabFileChunks, logger);
 
   // EVERY stored key, not just the current one. An AI-edited file keeps its earlier revisions in
   // `versions[]`, each under its own object key (see appendEditedVersion), and `filePath` names only

@@ -43,6 +43,8 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/database/content', () => ({ Quest: { find: vi.fn(() => ({ lean: async () => [] })) } }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys },
+}));
+vi.mock('@bike4mind/services/llm', () => ({
   // Query expansion is best-effort behind a try/catch; throwing exercises its keyword fallback
   // and keeps these tests on the provider-resolution path.
   SmallLLMService: class {

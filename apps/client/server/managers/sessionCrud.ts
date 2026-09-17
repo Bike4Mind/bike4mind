@@ -1,4 +1,4 @@
-import { Ability } from '@server/auth/ability';
+import defineAbilitiesFor, { Ability } from '@server/auth/ability';
 import { accessibleBy } from '@casl/mongoose';
 import {
   agentRepository,
@@ -276,10 +276,17 @@ export const getSessionsByUser = async (
 
 export const getFavoriteSessionByUser = async (userId: string): Promise<ISessionFavoriteItem[]> => {
   const sessionFavorites = await favoriteRepository.find({ userId, documentType: 'sessions' });
+  const user = await userRepository.findById(userId);
+  // A favorited notebook's share can be revoked after it was favorited; the stored favorite row
+  // is just a pointer, so re-check current access rather than trusting it still holds.
+  const userAbility = defineAbilitiesFor(user ?? undefined);
   const docs = await SessionModel.find(
     {
-      _id: { $in: sessionFavorites.map(favorite => favorite.documentId) },
-      $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }],
+      $and: [
+        accessibleBy(userAbility, Permission.read).ofType(SessionModel),
+        { _id: { $in: sessionFavorites.map(favorite => favorite.documentId) } },
+        { $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }] },
+      ],
     },
     { _id: 1, name: 1, lastUpdated: 1, surface: 1, deletedAt: 1, userId: 1, tags: 1, users: 1 }
   ).lean();

@@ -240,3 +240,82 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     expect(res._getJSONData().error).toBe('invalid_request');
   });
 });
+
+// A client that signs its users in against B4M's own OIDC provider - no Cognito hop.
+// The route itself has no branch for this: it hands the whole trust config to the
+// verifier. These tests pin that every gate keeps firing on the new path.
+const B4M_ISSUER_CLIENT = {
+  name: 'Tarot',
+  federatedIdp: {
+    issuer: 'https://app.example-b4m.test',
+    audience: 'client-1',
+    jwksUri: 'https://app.example-b4m.test/api/oauth/jwks',
+    subjectSource: 'sub',
+  },
+};
+
+describe('POST /api/oauth/ai-token - B4M-issued ID token client', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
+    mockVerifyClientSecret.mockResolvedValue(B4M_ISSUER_CLIENT);
+    mockVerifyCognitoIdToken.mockResolvedValue({ b4mUserId: 'b4m-user-1', claims: { sub: 'b4m-user-1' } });
+    mockUserFindById.mockResolvedValue(CONSENTED_USER);
+    mockFindByUserId.mockResolvedValue([]);
+    mockCreateUserApiKey.mockResolvedValue({ id: 'key-2', key: 'b4m_live_cafebabe', scopes: ['ai:generate'] });
+    mockAuditCreate.mockResolvedValue({});
+    mockRevokeUserApiKey.mockResolvedValue(undefined);
+  });
+
+  it('mints a key billed to the sub-identified user, passing the trust config through verbatim', async () => {
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ api_key: 'b4m_live_cafebabe', scope: 'ai:generate' });
+    expect(mockVerifyCognitoIdToken).toHaveBeenCalledWith('cognito-id-token', B4M_ISSUER_CLIENT.federatedIdp);
+    expect(mockCreateUserApiKey.mock.calls[0][0]).toBe('b4m-user-1');
+  });
+
+  it('SECURITY: the consent gate still fires on this path', async () => {
+    mockUserFindById.mockResolvedValue({ id: 'b4m-user-1', aupAcceptedVersion: null });
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().error).toBe('access_denied');
+    expect(mockCreateUserApiKey).not.toHaveBeenCalled();
+    expect(mockAuditCreate).not.toHaveBeenCalled();
+  });
+
+  it('the per-client rate limit still fires on this path', async () => {
+    mockTryIncrement.mockResolvedValue({ success: false, expiresAt: new Date(Date.now() + 30_000) });
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(429);
+    expect(mockCreateUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('revoke-and-replace and the mint audit entry still fire on this path', async () => {
+    mockFindByUserId.mockResolvedValue([
+      { id: 'old-key', status: 'active', metadata: { createdFrom: 'oauth-exchange', oauthClientId: 'client-1' } },
+    ]);
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRevokeUserApiKey).toHaveBeenCalledTimes(1);
+    expect(mockAuditCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('a token from an issuer not configured on this client → 401 invalid_grant', async () => {
+    mockVerifyCognitoIdToken.mockRejectedValue(new CognitoIdTokenError('Issuer not allowed'));
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(res._getJSONData().error).toBe('invalid_grant');
+    expect(mockCreateUserApiKey).not.toHaveBeenCalled();
+  });
+});

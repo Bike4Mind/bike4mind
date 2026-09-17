@@ -515,6 +515,12 @@ export {
   TitanBedrockBackend,
 };
 
+export {
+  SemaphoreBusyError,
+  MAX_CONCURRENT_ANTHROPIC_CALLS,
+  MAX_QUEUED_PER_TENANT,
+  DEFAULT_ACQUIRE_TIMEOUT_MS,
+} from './_anthropicSemaphore';
 export * from './PipelineTimer';
 export * from './realtimeVoicePricing';
 export * from './resolveDeprecatedModel';

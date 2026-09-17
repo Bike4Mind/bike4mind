@@ -24,6 +24,9 @@ import type { IChatHistoryItem } from '@bike4mind/common';
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { id: 'user-1', organizationId: 'org_42', showCreditsUsed: false } }),
 }));
+vi.mock('@client/app/contexts/UserSettingsContext', () => ({
+  useUserSettings: () => ({ settings: { contextTelemetryLevel: 'basic' } }),
+}));
 vi.mock('@client/app/contexts/SessionsContext', () => ({
   useSessions: () => ({ currentSession: null, setCurrentSession: vi.fn() }),
   useWorkBenchFiles: () => [],
@@ -45,6 +48,15 @@ vi.mock('@client/app/hooks/data/quests', () => ({
   useUpdateQuest: () => Object.assign(vi.fn(), { mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/fabFiles', () => ({ useGetFabFilesByQuestId: () => ({ data: [] }) }));
+vi.mock('@client/app/hooks/data/feedback', () => ({
+  useGetFeedbackBySessionId: () => ({ data: [] }),
+  feedbackSessionQueryKey: (sessionId: string, userId: string | undefined) => [
+    'feedback',
+    'session',
+    sessionId,
+    userId,
+  ],
+}));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({ useModelInfo: () => ({ data: [] }) }));
 vi.mock('@client/app/hooks/data/settings', () => ({ useSettingsFromServer: () => ({ data: [] }) }));
 vi.mock('@client/app/hooks/usePublishShare', () => ({

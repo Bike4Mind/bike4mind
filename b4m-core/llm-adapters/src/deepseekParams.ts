@@ -7,8 +7,8 @@ import { ChatModels, type ReasoningEffort } from '@bike4mind/common';
  * conditional buried in a 400-line complete().
  *
  * DeepSeek is OpenAI-compatible in envelope. What differs is thinking mode -
- * on by default, with its own toggle, its own effort vocabulary, and a sampling
- * group that is IGNORED rather than rejected while it is on.
+ * on by default on both ids, with its own toggle, its own effort vocabulary,
+ * and a sampling group that is IGNORED rather than rejected while it is on.
  * @see https://api-docs.deepseek.com/guides/thinking_mode
  */
 
@@ -22,7 +22,10 @@ export type DeepSeekEffort = (typeof DEEPSEEK_EFFORT_LEVELS)[number];
  * two cannot disagree about which ids the rules apply to; a test pins it against
  * the adapter table and against NO_TEMPERATURE_MODELS.
  */
-export const DEEPSEEK_MODELS: ReadonlySet<string> = new Set<string>([ChatModels.DEEPSEEK_FLASH]);
+export const DEEPSEEK_MODELS: ReadonlySet<string> = new Set<string>([
+  ChatModels.DEEPSEEK_FLASH,
+  ChatModels.DEEPSEEK_V4_PRO,
+]);
 
 /** DeepSeek raises anything below this rather than erroring, so we send what it will use. */
 export const DEEPSEEK_THINKING_TOP_P_FLOOR = 0.95;
@@ -95,7 +98,7 @@ export function deepseekThinkingEnabled(input: DeepSeekReasoningInput = {}): boo
 /**
  * Sampling parameters for one turn.
  *
- * In thinking mode - the default - DeepSeek documents temperature,
+ * In thinking mode - the default on both ids - DeepSeek documents temperature,
  * presence_penalty and frequency_penalty as unsupported. They are accepted and
  * SILENTLY ignored rather than rejected, which is the worse failure of the two:
  * a 400 tells you the knob is dead, a no-op does not. They are dropped here so

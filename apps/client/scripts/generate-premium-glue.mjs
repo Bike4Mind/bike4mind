@@ -7,10 +7,12 @@
  *
  *   app/premium-generated/premiumRoutes.generated.ts   - Tanstack SPA routes
  *   app/premium-generated/premiumNavItems.generated.ts  - nav/HUD slots
+ *   app/premium-generated/premiumRouteIndexing.generated.ts - robots/sitemap policy
  *   app/premium-generated/premiumNotebookSidenav.generated.ts - notebook sidenav slot
  *   pages/api/<stub>.ts (per-package)                  - Next.js API stubs
  *   server/premium-generated/<stub>.ts (per-package)   - SST Lambda handler stubs
  *   server/premium-generated/premiumLlmTools.generated.ts - LLM tool contributions
+ *   server/premium-generated/premiumSystemPrompts.generated.ts - system prompt contributions
  *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
  *
  * Two distinct "empty" forms when no premium packages are present:
@@ -212,6 +214,47 @@ function generateNavItems(packages) {
   writeFile(
     outPath,
     `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumNavItems: PremiumNavDescriptor[] = [\n${exports}\n];\n`
+  );
+}
+
+// --- Generate route indexing (crawler policy) ---
+
+// An overlay declares which of its contributed routes are crawlable
+// (b4mContributions.routeIndexingExport -> a module exporting `routeIndexing`).
+// app/robots.ts and app/sitemap.ts consume the generated array: core cannot derive
+// the policy itself, and must not name an overlay's surface in this repo. Unlike the
+// route/nav glue this is pure data, so the consumers can be server-rendered without
+// dragging the overlay's lazy component graph in behind a `lazyImport` thunk.
+function generateRouteIndexing(packages) {
+  const outPath = join(GENERATED_DIR, 'premiumRouteIndexing.generated.ts');
+  // Same annotate-both-forms rule as routes/nav: an untyped empty array would widen
+  // to `never[]`/`unknown[]` and break the consumers only in the fork build.
+  const typeImport = `import type { PremiumRouteIndexing } from '../premiumContract';`;
+
+  const contributors = packages.filter(p => p.contributions.routeIndexingExport);
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.routeIndexingExport, p.name, 'routeIndexingExport')
+  );
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumRouteIndexing: PremiumRouteIndexing[] = [];\n`
+    );
+    return;
+  }
+
+  const imports = contributors
+    .map(
+      (p, i) => `import { routeIndexing as indexing${i} } from '${p.contributions.routeIndexingExport}';`
+    )
+    .join('\n');
+
+  const exports = contributors.map((_, i) => `  indexing${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumRouteIndexing: PremiumRouteIndexing[] = [\n${exports}\n];\n`
   );
 }
 
@@ -530,7 +573,7 @@ function generateServerHandlerStubs(packages) {
 // server/premium-generated/ dir.
 function generateLlmTools(packages) {
   const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumLlmTools.generated.ts');
-  const typeImport = `import type { ToolDefinition } from '@bike4mind/services';`;
+  const typeImport = `import type { ToolDefinition } from '@bike4mind/services/llm/tools';`;
 
   const contributors = packages.filter(p => p.contributions.llmToolsExport);
 
@@ -553,6 +596,36 @@ function generateLlmTools(packages) {
   writeFile(
     outPath,
     `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumLlmTools: Record<string, ToolDefinition> = {\n${spreads}\n};\n`
+  );
+}
+
+function generateSystemPrompts(packages) {
+  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumSystemPrompts.generated.ts');
+  const typeImport = `import type { DefaultSystemPrompt } from '@server/utils/systemPrompts/defaults';`;
+
+  const contributors = packages.filter(p => p.contributions.systemPromptsExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumSystemPrompts: DefaultSystemPrompt[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.systemPromptsExport, p.name, 'systemPromptsExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => `import { systemPrompts as prompts${i} } from '${p.contributions.systemPromptsExport}';`)
+    .join('\n');
+
+  const spreads = contributors.map((_, i) => `  ...prompts${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumSystemPrompts: DefaultSystemPrompt[] = [\n${spreads}\n];\n`
   );
 }
 
@@ -746,10 +819,12 @@ ensureDir(GENERATED_DIR);
 // Bare-specifier glue: linked packages only (an unresolvable import fails every build).
 generateSpaRoutes(linkedPackages);
 generateNavItems(linkedPackages);
+generateRouteIndexing(linkedPackages);
 generateNotebookSidenav(linkedPackages);
 generateApiStubs(linkedPackages);
 generateServerHandlerStubs(linkedPackages);
 generateLlmTools(linkedPackages);
+generateSystemPrompts(linkedPackages);
 // Relative-import glue: needs no node_modules link, so it gets the full list.
 // Any NEW generator goes in whichever group matches how it imports the overlay.
 generateMigrations(packages);

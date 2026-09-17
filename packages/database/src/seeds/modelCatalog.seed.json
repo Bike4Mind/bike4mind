@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-14T08:54:49.742Z",
+  "generatedAt": "2026-09-14T16:43:31.636Z",
   "notice": "Fallback defaults last maintained on 2026-09-14. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
@@ -744,6 +744,38 @@
           "status": "active"
         },
         "description": "DeepSeek's V4.1-Flash. 1M context with native vision, tool use, and selectable reasoning effort (low/high/max). Always reasons unless thinking is turned off.",
+        "releaseDate": "2026-08-13"
+      }
+    },
+    {
+      "modelId": "deepseek-v4-pro",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "deepseek-v4-pro",
+        "vendor": "deepseek",
+        "backend": "deepseek",
+        "type": "text",
+        "name": "DeepSeek V4 Pro",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 393216,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": false,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "DeepSeek's V4-Pro, the heavier reasoning tier of the V4 line. 1M context, tool use, selectable reasoning effort; no vision.",
         "releaseDate": "2026-08-13"
       }
     },

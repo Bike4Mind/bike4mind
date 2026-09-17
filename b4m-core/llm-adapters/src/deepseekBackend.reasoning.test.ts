@@ -42,7 +42,7 @@ const searchTool = (toolFn: ReturnType<typeof vi.fn>) => [
 describe('DeepSeekBackend reasoning capture', () => {
   it('keeps reasoning_content even when no reasoning parameter was sent', async () => {
     // Gating on "did we send a thinking parameter" drops reasoning on the common
-    // path: Flash reasons by default and deepseekReasoningParams sends nothing
+    // path: both ids reason by default and deepseekReasoningParams sends nothing
     // unless an explicit effort or toggle was set. The monologue is billed as
     // output tokens either way, so discarding it charges for unseen text.
     const { backend } = backendReturning([
@@ -127,10 +127,26 @@ describe('DeepSeekBackend reasoning capture', () => {
     await expect(runTurn(backend, ChatModels.DEEPSEEK_FLASH)).rejects.toThrow(/output budget was exhausted/);
   });
 
+  it('throws when the reasoning monologue alone consumed the whole output budget', async () => {
+    // The guard has to key on prose produced, not on streamedText: the monologue is
+    // wrapped into streamedText as <think>...</think>, so a guard keyed there
+    // declines to fire on exactly the turn it exists for - reasoning only, budget
+    // spent - and the user gets a blank reply instead of the error.
+    const { backend } = backendReturning([
+      {
+        index: 0,
+        message: { content: '', reasoning_content: 'thinking at great length' },
+        finish_reason: 'length',
+      },
+    ]);
+
+    await expect(runTurn(backend, ChatModels.DEEPSEEK_FLASH)).rejects.toThrow(/output budget was exhausted/);
+  });
+
   it('names the finish_reason when a turn produced nothing for some other reason', async () => {
     const { backend } = backendReturning([{ index: 0, message: { content: '' }, finish_reason: 'content_filter' }]);
 
-    await expect(runTurn(backend, ChatModels.DEEPSEEK_FLASH)).rejects.toThrow(/finish_reason: content_filter/);
+    await expect(runTurn(backend, ChatModels.DEEPSEEK_V4_PRO)).rejects.toThrow(/finish_reason: content_filter/);
   });
 
   /**
@@ -349,6 +365,23 @@ describe('DeepSeekBackend streaming reasoning', () => {
     // the chat hangs.
     const { backend } = streamingBackend([
       [
+        {
+          choices: [{ index: 0, delta: {}, finish_reason: 'length' }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        },
+      ],
+    ]);
+
+    await expect(runStream(backend, ChatModels.DEEPSEEK_FLASH)).rejects.toThrow(/output budget was exhausted/);
+  });
+
+  it('throws when a stream spent the whole output budget reasoning and never produced prose', async () => {
+    // One reasoning delta per chunk on purpose: two choices in one chunk at the same
+    // index overwrite each other and a fixture that does it silently looks like a pass.
+    const { backend } = streamingBackend([
+      [
+        { choices: [{ index: 0, delta: { reasoning_content: 'thinking at ' } }] },
+        { choices: [{ index: 0, delta: { reasoning_content: 'great length' } }] },
         {
           choices: [{ index: 0, delta: {}, finish_reason: 'length' }],
           usage: { prompt_tokens: 10, completion_tokens: 5 },

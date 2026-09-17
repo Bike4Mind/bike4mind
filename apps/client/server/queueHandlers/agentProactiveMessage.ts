@@ -17,7 +17,8 @@ import {
 import { ClientMessageSender, getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
-import { apiKeyService, agentProactiveMessagingService } from '@bike4mind/services';
+import { apiKeyService } from '@bike4mind/services';
+import * as agentProactiveMessagingService from '@bike4mind/services/agentProactiveMessagingService';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 
 const agentProactiveMessageQueuePayload = z.object({

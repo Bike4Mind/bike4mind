@@ -1166,6 +1166,24 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     await this.batchModel.updateOne({ _id: batchId, 'files.fabFileId': fabFileId }, { $set: update });
   }
 
+  /**
+   * Replace the error text on an ALREADY-'failed' manifest entry, and nothing else. The manifest
+   * counterpart of FabFileModel's supersedeFailureError; the caller (accountFileFailure in
+   * fabFileChunk.ts) writes both, and documents why the pair must move together and in which order.
+   *
+   * Deliberately NOT updateFileStatus: that also restamps `failureCounted: false`, which is the
+   * per-entry fact attributing the OUTGOING failure's charge, and which revertFileFailure needs
+   * intact to hand those counters back. Scoped to 'failed' for the same reason - an entry in any
+   * other state carries no charge to preserve, and stamping an error on it would only contradict
+   * its status.
+   */
+  async supersedeFileError(batchId: string, fabFileId: string, error: string): Promise<void> {
+    await this.batchModel.updateOne(
+      { _id: batchId, files: { $elemMatch: { fabFileId, status: 'failed' } } },
+      { $set: { 'files.$.error': error } }
+    );
+  }
+
   async appendFiles(batchId: string, files: IDataLakeBatchFile[]): Promise<void> {
     if (files.length === 0) return;
     await this.batchModel.updateOne({ _id: batchId }, { $push: { files: { $each: files } } });

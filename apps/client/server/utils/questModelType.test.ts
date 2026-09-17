@@ -22,9 +22,21 @@ describe('resolveQuestModelType', () => {
     expect(resolveQuestModelType({ promptMeta: { model: {} }, images: ['s3://a.png'] })).toBe('image');
   });
 
+  // Rows written before the completion path was constrained can hold a catalog type promptMeta
+  // never declared. The declared return union would be a lie if such a value were passed through,
+  // so it is treated as "no type recorded" and the images/text fallback decides.
+  it('ignores a stored type outside the declared union', () => {
+    expect(resolveQuestModelType({ promptMeta: { model: { type: 'speech-to-text' } } })).toBe('text');
+    expect(resolveQuestModelType({ promptMeta: { model: { type: 'speech-to-text' } }, images: ['s3://a.png'] })).toBe(
+      'image'
+    );
+    expect(resolveQuestModelType({ promptMeta: { model: { type: 'embedding' } } })).toBe('text');
+  });
+
   it('defaults to text when neither a model type nor images are present', () => {
     expect(resolveQuestModelType({})).toBe('text');
     expect(resolveQuestModelType({ images: [] })).toBe('text');
+    expect(resolveQuestModelType({ promptMeta: { model: { type: '' } } })).toBe('text');
     expect(resolveQuestModelType({ promptMeta: null, images: null })).toBe('text');
   });
 });

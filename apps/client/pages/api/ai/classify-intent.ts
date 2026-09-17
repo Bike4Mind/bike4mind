@@ -1,7 +1,8 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
-import { apiKeyService, classifyIntent, CascadeExhaustedError } from '@bike4mind/services';
+import { apiKeyService } from '@bike4mind/services';
+import { classifyIntent, CascadeExhaustedError } from '@bike4mind/services/llm';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { IntentClassifierConfigSchema } from '@bike4mind/common';

@@ -39,8 +39,8 @@ import { normalizeOpenAIFinishReason } from './stopReason';
  * genuinely differs here:
  *
  * 1. The base URL carries NO `/v1` segment; the SDK appends the path itself.
- * 2. Thinking is on by default and its sampling restrictions are SILENT no-ops
- *    rather than 400s; see deepseekParams.
+ * 2. Thinking is on by default on both ids and its sampling restrictions are
+ *    SILENT no-ops rather than 400s; see deepseekParams.
  * 3. The prior turn's `reasoning_content` has to be replayed on the assistant
  *    tool-call message whenever the request carries `tools`, which is the
  *    opposite of the usual provider rule. See pushToolMessages.
@@ -93,6 +93,28 @@ export class DeepSeekBackend implements ICompletionBackend {
         releaseDate: '2026-08-13',
         description:
           "DeepSeek's V4.1-Flash. 1M context with native vision, tool use, and selectable reasoning effort (low/high/max). Always reasons unless thinking is turned off.",
+      },
+      {
+        id: ChatModels.DEEPSEEK_V4_PRO,
+        type: 'text' as const,
+        name: 'DeepSeek V4 Pro',
+        backend: ModelBackend.DeepSeek,
+        contextWindow: 1000000,
+        max_tokens: 393216,
+        can_stream: true,
+        pricing: {
+          // $1.32 / 1M in on a cache miss, $0.044 / 1M on a hit, $3.96 / 1M out.
+          1000000: { input: 1.32 / 1000000, output: 3.96 / 1000000, cache_read: 0.044 / 1000000 },
+        },
+        can_think: true,
+        // Text only: the multimodal work landed on the Flash line, and the vision
+        // aliases route there rather than here.
+        supportsVision: false,
+        supportsTools: true,
+        supportsImageVariation: false,
+        releaseDate: '2026-08-13',
+        description:
+          "DeepSeek's V4-Pro, the heavier reasoning tier of the V4 line. 1M context, tool use, selectable reasoning effort; no vision.",
       },
     ];
   }
@@ -200,7 +222,7 @@ export class DeepSeekBackend implements ICompletionBackend {
     }
 
     // NO GATE on reasoning capture, deliberately. Deriving this from "did we send a
-    // reasoning parameter" drops reasoning on the common path: Flash reasons by
+    // reasoning parameter" drops reasoning on the common path: both ids reason by
     // default and deepseekReasoningParams sends nothing when no explicit effort or
     // toggle was set, which is the default. Any reasoning_content DeepSeek returns
     // was billed as output tokens, so discarding it would charge the user for text
@@ -216,6 +238,10 @@ export class DeepSeekBackend implements ICompletionBackend {
 
     if (!(response instanceof Stream)) {
       const streamedText: string[] = [];
+      // The empty guard keys on prose produced, not on streamedText: the monologue
+      // is wrapped into streamedText too, so a guard keyed there cannot tell a
+      // budget-exhausted reasoning turn from an answered one.
+      let sawProse = false;
 
       if (!response.choices || response.choices.length === 0) {
         throw new Error('No choices returned from the DeepSeek API');
@@ -373,8 +399,9 @@ export class DeepSeekBackend implements ICompletionBackend {
             return;
           }
         } else {
-          const content = c.message.content || '';
-          streamedText[c.index] = reasoningContent ? `<think>${reasoningContent}</think>${content}` : content;
+          const prose = c.message.content || '';
+          if (prose) sawProse = true;
+          streamedText[c.index] = reasoningContent ? `<think>${reasoningContent}</think>${prose}` : prose;
         }
       }
 
@@ -382,7 +409,7 @@ export class DeepSeekBackend implements ICompletionBackend {
       // empty answer, and the most likely cause is a reasoning model that spent
       // its whole max_tokens budget thinking. Without this the user gets a silent
       // blank reply.
-      if (streamedText.every(text => !text) && toolsUsed.length === 0) {
+      if (!sawProse && toolsUsed.length === 0) {
         const finish = response.choices[0]?.finish_reason;
         throw new Error(
           finish === 'length'
@@ -416,7 +443,9 @@ export class DeepSeekBackend implements ICompletionBackend {
     let streamedReasoning = '';
     let cachedTokensFromStream = 0;
     let streamFinishReason: string | undefined;
-    let sawAnyText = false;
+    // Prose, not streamedText: the monologue is wrapped into streamedText as well,
+    // so only content deltas count as an answer.
+    let sawProse = false;
 
     for await (const chunk of response) {
       const streamedText: string[] = [];
@@ -435,7 +464,7 @@ export class DeepSeekBackend implements ICompletionBackend {
         const deltaReasoning = (c.delta as { reasoning_content?: string }).reasoning_content;
 
         // Ungated, for the same reason as the non-streaming path: reasoning
-        // arrives by default and is billed either way.
+        // arrives by default on both ids and is billed either way.
         if (deltaReasoning) {
           streamedReasoning += deltaReasoning;
           if (!isInThinkingBlock) {
@@ -453,6 +482,7 @@ export class DeepSeekBackend implements ICompletionBackend {
 
         if (isInThinkingBlock && c.delta.content) {
           isInThinkingBlock = false;
+          sawProse = true;
           streamedText[c.index] = (streamedText[c.index] ?? '') + '</think>' + c.delta.content;
           return;
         }
@@ -467,10 +497,9 @@ export class DeepSeekBackend implements ICompletionBackend {
 
         if (func.length > 0) return;
 
+        if (c.delta.content) sawProse = true;
         streamedText[c.index] = c.delta.content || '';
       });
-
-      if (streamedText.some(t => t)) sawAnyText = true;
 
       const normalizedFinishReason = normalizeOpenAIFinishReason(streamFinishReason);
       await callback(streamedText, {
@@ -495,9 +524,9 @@ export class DeepSeekBackend implements ICompletionBackend {
     }
 
     // Empty-stream guard, mirroring the non-streaming path: a turn that emitted no
-    // text and has no tool call to make produced nothing usable. Without this the
+    // prose and has no tool call to make produced nothing usable. Without this the
     // stream returns silently with zero callbacks and the chat hangs.
-    if (!sawAnyText && func.length === 0 && toolsUsed.length === 0) {
+    if (!sawProse && func.length === 0 && toolsUsed.length === 0) {
       throw new Error(
         streamFinishReason === 'length'
           ? `DeepSeek returned no content for ${model}: the output budget was exhausted before any answer was produced (finish_reason: length). Raise maxTokens or lower the reasoning effort.`

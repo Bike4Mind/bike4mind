@@ -26,7 +26,7 @@ import {
   Groups as BobPanelIcon,
 } from '@mui/icons-material';
 import { B4MLLMTools } from '@bike4mind/common';
-import type { SlackLlmTools } from '@bike4mind/services';
+import type { SlackLlmTools } from '@bike4mind/services/llm';
 import type { ToolAvailability } from '@pages/api/settings/serverConfig';
 import React from 'react';
 
