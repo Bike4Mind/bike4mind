@@ -45,12 +45,15 @@ export const generateNewFabFile = (data: IFabFile): IFabFile => {
 
 // Performs no admission checks - not the admin MaxFileSize, not the storage quota. Every caller
 // must gate before calling, or route through fabFileService.createFabFile which gates for you.
-// Current callers and where each one gates:
+// Current callers of THIS function, and where each one gates:
 //   pages/api/files/generate-presigned-url.ts - MaxFileSize and the quota, per file
 //   pages/api/files/generate-presigned-urls-batch.ts - MaxFileSize per file, quota on the batch total
 //   server/queueHandlers/driveLakeIngest.ts - MaxFileSize per file, quota on a running accepted-bytes total
-//   pages/api/files/createFabFileURL.ts - gated above inside fabFileService.createFabFileByUrl; the
-//     call here re-saves the row that service already persisted, so it admits nothing of its own
+//
+// Scoped to this function only - it says nothing about doors that skip it and call
+// fabFileRepository.create (or the FabFile model) directly, such as agent avatar generation, the
+// help datalake ingest, and the supersession probe. Each of those records its own admission
+// reasoning at its own call site.
 export const createFabFile = async (data: IFabFile, ability: Ability) => {
   if (!ability.can(Permission.create, FabFile)) {
     throw new BadRequestError('Unauthorized');
