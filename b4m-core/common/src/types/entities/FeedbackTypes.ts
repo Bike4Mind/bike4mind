@@ -117,3 +117,50 @@ export type CreateFeedbackResponse = IFeedbackDocument & {
   delivery?: FeedbackDeliveryResult;
   contentTruncated?: boolean;
 };
+
+/** One `{ key, count }` row of a report grouping. `key` is the grouped field's value. */
+export interface FeedbackCountBucket {
+  key: string;
+  count: number;
+}
+
+/** A member named in the report, resolved to something a reader recognizes. */
+export interface OrgFeedbackMember {
+  userId: string;
+  /** `name`, else `username`, else `email`, else the raw id - never blank. */
+  displayName: string;
+}
+
+export interface OrgFeedbackMemberCount extends OrgFeedbackMember {
+  count: number;
+}
+
+/**
+ * GET /api/organizations/:id/feedback-report. Declared here rather than beside the route so the
+ * handler, the aggregate that builds it and the client hook that reads it share one shape.
+ *
+ * `membership` is not decoration: the report scopes on the UNION of the org ACL and the
+ * `Feedback.organizationId` stamp population (see `OrgMemberPopulation`), and those two disagree
+ * often enough that a count with no note of the disagreement is a number nobody can check. The
+ * one-sided lists say which members were counted on one source's word alone.
+ */
+export interface OrgFeedbackReport {
+  /** The resolved window, echoed back because the route defaults it when the caller omits it. */
+  range: { from: string; to: string };
+  totals: { count: number };
+  byDay: { day: string; count: number }[];
+  bySubject: FeedbackCountBucket[];
+  byType: FeedbackCountBucket[];
+  byStatus: FeedbackCountBucket[];
+  /** Rows carrying no tag are absent, so these counts do not sum to `totals.count`. */
+  byTag: FeedbackCountBucket[];
+  byMember: OrgFeedbackMemberCount[];
+  membership: {
+    /** Size of the union the report scoped on. */
+    memberCount: number;
+    /** In the org's ACL, but authoring no org-stamped content. */
+    aclOnly: OrgFeedbackMember[];
+    /** Authoring org-stamped content, but holding no ACL row. */
+    stampOnly: OrgFeedbackMember[];
+  };
+}
