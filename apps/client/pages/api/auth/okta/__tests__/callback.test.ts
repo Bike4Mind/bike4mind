@@ -390,22 +390,45 @@ describe('/api/auth/okta/callback - backfill emailless account on later verified
 
   it('adopts the provider email once the same identity re-logs in with email_verified === true', async () => {
     const res = await runCallback({
-      user: emaillessAccount,
+      user: { ...emaillessAccount },
       userInfo: { sub: 'okta-bf', email: 'now-verified@example.com', email_verified: true, preferred_username: 'user' },
     });
 
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
-    // Same-identity refresh: no tokenVersion bump, but the verified email is written.
-    const updateArg = mockUpdateOne.mock.calls[0][1];
-    expect(updateArg.email).toBe('now-verified@example.com');
-    expect(updateArg).not.toHaveProperty('$inc');
+    // Same-identity refresh: the account-link write carries no tokenVersion bump
+    // and no email; the email backfill is a separate, second write.
+    const linkUpdate = mockUpdateOne.mock.calls[0][1];
+    expect(linkUpdate).not.toHaveProperty('email');
+    expect(linkUpdate).not.toHaveProperty('$inc');
+    expect(mockUpdateOne.mock.calls[1][1]).toEqual({ email: 'now-verified@example.com' });
     expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockAuthFailCreate).not.toHaveBeenCalled();
+  });
+
+  it('completes sign-in when the verified email is already owned by another account (skips backfill)', async () => {
+    // The partial unique email index rejects the second (backfill) write; the
+    // account-link write already succeeded. A merged write would abort the whole
+    // callback with an opaque callback_error and permanently lock this identity out.
+    const emailDup = Object.assign(new Error('E11000 dup key: index users.email_1'), {
+      code: 11000,
+      keyPattern: { email: 1 },
+    });
+    mockUpdateOne.mockResolvedValueOnce({}).mockRejectedValueOnce(emailDup);
+
+    const res = await runCallback({
+      user: { ...emaillessAccount },
+      userInfo: { sub: 'okta-bf', email: 'taken@example.com', email_verified: true, preferred_username: 'user' },
+    });
+
+    // Sign-in still completes; the collision is swallowed, not a callback_error.
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(mockUpdateOne.mock.calls[1][1]).toEqual({ email: 'taken@example.com' });
     expect(mockAuthFailCreate).not.toHaveBeenCalled();
   });
 
   it('does NOT backfill when the re-login still does not assert email_verified', async () => {
     const res = await runCallback({
-      user: emaillessAccount,
+      user: { ...emaillessAccount },
       userInfo: {
         sub: 'okta-bf',
         email: 'still-unverified@example.com',

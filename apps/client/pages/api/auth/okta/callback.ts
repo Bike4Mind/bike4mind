@@ -42,6 +42,7 @@ import { decideAutoLink, applyAccountLink } from '@server/utils/auth/oauthAccoun
 import { createUniqueOAuthUser, deriveOAuthUsername } from '@server/utils/auth/createOAuthUser';
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
 import { isLocalAppUrl } from '@server/utils/validators';
+import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 
 /**
  * Type guard to validate query parameter is a non-empty string.
@@ -242,9 +243,9 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     // Stage 1: match by immutable provider identity (sub, oktaIdentityProviderId).
     // This keeps an account created for an unverified-email user - which carries no
     // email login identity - findable on re-login. Without it Stage 2 misses (the
-    // email was dropped and the stored username is the display name, not
-    // preferred_username), the create branch runs again, and the deterministic
-    // username E11000s on its unique index -> callback_error. Mirrors the Stage 1
+    // email was dropped, and the account has no preferred_username to match on when
+    // the provider sent only a display name), the create branch runs again, and the
+    // deterministic username E11000s on its unique index -> callback_error. Mirrors the Stage 1
     // lookup in verifyCallback.ts. The sub guard stops $elemMatch matching legacy falsy-id
     // rows; idpScope is omitted (not queried as null) for the unbound SST fallback,
     // matching the shape the create branch writes.
@@ -391,12 +392,27 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       // this can only adopt an in-tenant address. existingSameIdentity implies a
       // pre-existing provider entry, so `update` is the flat (non-$set) refresh shape.
       // Mirrors the create gate: adopt `email` only, no emailVerified promotion.
-      if (existingSameIdentity && !user.email && userInfo.email_verified === true) {
-        update.email = email;
-        user.email = email;
-      }
-
+      //
+      // The backfill is a SEPARATE, best-effort write, not folded into `update`:
+      // another account may already own this in-tenant address, and the partial
+      // unique email index would then E11000. Merged into the account-link write
+      // that collision would abort the whole update and dead-end the callback with
+      // an opaque callback_error - a deterministic, permanent lockout on every
+      // re-login. Split out, only the backfill's duplicate-key is tolerated (the
+      // account stays emailless this login and re-attempts next time); the
+      // account-link write above still throws on any real failure.
       await User.updateOne({ _id: user._id }, update);
+      if (existingSameIdentity && !user.email && userInfo.email_verified === true) {
+        try {
+          await User.updateOne({ _id: user._id }, { email });
+          user.email = email;
+        } catch (backfillErr) {
+          if (!isDuplicateKeyError(backfillErr)) throw backfillErr;
+          Logger.warn('[Okta Callback] Skipped email backfill: address already owned by another account', {
+            userId: user.id,
+          });
+        }
+      }
       Object.assign(user, reflect);
       // Invariant (mirrors verifyCallback.ts): the new-provider tokenVersion bump must also revoke
       // AuthSessions, else an opaque refresh token -- never checked against tokenVersion -- rotates
