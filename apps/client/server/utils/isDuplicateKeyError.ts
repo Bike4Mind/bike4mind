@@ -16,6 +16,10 @@ export function isDuplicateKeyError(error: unknown): boolean {
   // serialization boundary arrives as a plain object carrying only the text, and an
   // `instanceof Error` check would miss it - sending a genuine duplicate down the generic failure
   // path, which for the insert-race callers means an unrepaired orphan or a lost comment.
+  //
+  // Matched as the driver's full phrase rather than the bare code, because seven unrelated callers
+  // turn a true here into a 400 (and `verifyCallback` into `duplicate_account`): a cast or
+  // validation message that merely quotes `E11000` must not be reclassified as a collision.
   const message = (error as { message?: unknown }).message;
-  return typeof message === 'string' && message.includes('E11000');
+  return typeof message === 'string' && /E11000 duplicate key error/.test(message);
 }

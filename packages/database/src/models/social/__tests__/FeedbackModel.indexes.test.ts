@@ -130,10 +130,23 @@ describe('FeedbackModel indexes', () => {
 
     it.each([
       ['surface', { eventId: 'e1', surface: 'sidebar' }],
-      ['rating', { eventId: 'e1', surface: 'article', rating: 'meh' }],
       ['reportType', { eventId: 'e1', surface: 'article', reportType: 'wrong' }],
     ])('rejects an unknown %s', async (_field, helpContext) => {
       await expect(new FeedbackModel({ ...base, helpContext }).validate()).rejects.toThrow();
+    });
+
+    /**
+     * The verdict lives on the parent's `type`. A `rating` here would be a second copy that no
+     * reader consults and that a concurrent verdict write could leave disagreeing with `type`, so
+     * the sub-schema drops it rather than storing it - pinned because the drop is silent.
+     */
+    it('carries no rating, so one supplied by a stale writer is not stored', async () => {
+      const doc = new FeedbackModel({
+        ...base,
+        helpContext: { eventId: 'e1', surface: 'article', rating: 'not_helpful' },
+      });
+      await doc.validate();
+      expect(doc.helpContext).not.toHaveProperty('rating');
     });
 
     it('requires a surface, and accepts a context carrying nothing else', async () => {

@@ -35,17 +35,42 @@ export async function writeFeedbackText({
   logger: Pick<Logger, 'error'>;
 }): Promise<boolean> {
   try {
-    await FeedbackTextModel.create({
-      _id: feedbackId,
-      content,
-      contentTruncated,
-      expiresAt: feedbackContentExpiresAt(new Date()),
-    });
+    await originateFeedbackText({ feedbackId, content, contentTruncated });
     return true;
   } catch (error) {
     logger.error('Failed to write FeedbackText sibling', error);
     return false;
   }
+}
+
+/**
+ * Mints a sibling and its retention window for a report that has none, and throws if the write
+ * fails rather than reporting it.
+ *
+ * The one place `expiresAt` is ever computed: `writeFeedbackText` wraps this for the submission
+ * paths, where a failed text write is a soft `contentStored: false`, and the admin update handler
+ * calls it directly, where originating text on a report that never had any must surface. A second
+ * hand-rolled `feedbackContentExpiresAt` at a call site is how the two paths drift into different
+ * retention.
+ *
+ * Distinct from `reviseFeedbackText` below, which writes no `expiresAt` at all: originating is a
+ * fresh window, revising must never mint one.
+ */
+export async function originateFeedbackText({
+  feedbackId,
+  content,
+  contentTruncated,
+}: {
+  feedbackId: mongoose.Types.ObjectId;
+  content: string;
+  contentTruncated: boolean;
+}): Promise<void> {
+  await FeedbackTextModel.create({
+    _id: feedbackId,
+    content,
+    contentTruncated,
+    expiresAt: feedbackContentExpiresAt(new Date()),
+  });
 }
 
 /**

@@ -72,13 +72,15 @@ const handler = baseApi()
       await routeHelpCommentToFeedback({
         submitter: { id: userId, username: req.user?.username, email: req.user?.email },
         comment: writtenComment,
-        helpContext: { eventId: event.id, surface: 'chat', rating },
+        // No verdict, for the same reason as the article route: the router reads it off the event
+        // at write time rather than taking this request's older read.
+        helpContext: { eventId: event.id, surface: 'chat' },
         logger: req.logger,
       });
     } else if (rating) {
       // Same two-site verdict as the article route - see syncRoutedVerdict. No reportType: help
       // chat has no article to flag as outdated.
-      await syncRoutedVerdict({ eventId: event.id, userId, rating });
+      await syncRoutedVerdict({ eventId: event.id, userId });
     }
 
     res.status(revised ? 200 : 201).json({ success: true });

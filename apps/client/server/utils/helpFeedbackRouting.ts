@@ -1,4 +1,4 @@
-import { FeedbackModel } from '@bike4mind/database';
+import { FeedbackModel, HelpEventModel } from '@bike4mind/database';
 import {
   FeedbackStatus,
   FeedbackType,
@@ -36,6 +36,31 @@ function feedbackTypeForRating(rating?: HelpFeedbackRating): FeedbackType {
   return FeedbackType.FEEDBACK;
 }
 
+/** What a handler knows about the comment it is routing: which help event it annotates, and where
+ * the reader wrote it. Both are fixed for the life of the event, which is why they are carried in
+ * while the verdict - the one part that changes under the caller - is not. */
+export type RoutedCommentTarget = Pick<IHelpFeedbackContext, 'eventId' | 'surface' | 'slug'>;
+
+/**
+ * The verdict the help event carries right now, read at the moment of the write rather than taken
+ * from the caller.
+ *
+ * The thumbs stay clickable while a note submit is in flight, so the two writers of a report's
+ * verdict race each other. A caller's snapshot is read before its own text round trips, which then
+ * sit between that read and the write - wide enough for a thumb flip to land in the middle and be
+ * written straight back out, putting the permanent report on the verdict the reader moved away
+ * from. Reading here shrinks every writer's window to the single round trip below, so a flip now
+ * has to fit BOTH its event write and its verdict write inside that gap to be lost.
+ *
+ * Narrower, not zero, and worth saying plainly: closing it outright needs a monotonic version on
+ * the help event so a stale write can be rejected outright, and `updatedAt` is millisecond-grained
+ * - too coarse to be that guard without silently failing on same-millisecond writes.
+ */
+async function readEventVerdict(eventId: string): Promise<{ reportType?: HelpFeedbackReportType; type: FeedbackType }> {
+  const event = await HelpEventModel.findById(eventId).select('rating reportType').lean();
+  return { reportType: event?.reportType, type: feedbackTypeForRating(event?.rating) };
+}
+
 /**
  * Creates or revises the `Feedback` report carrying a help comment.
  *
@@ -62,7 +87,7 @@ export async function routeHelpCommentToFeedback({
    * than re-read, matching the create handler, where an authenticated session always wins. */
   submitter: { id: string; username?: string | null; email?: string | null };
   comment: string;
-  helpContext: IHelpFeedbackContext;
+  helpContext: RoutedCommentTarget;
   logger: Pick<Logger, 'error' | 'warn'>;
 }): Promise<void> {
   const userId = submitter.id;
@@ -72,7 +97,7 @@ export async function routeHelpCommentToFeedback({
 
   const existing = await FeedbackModel.findOne({ 'helpContext.eventId': helpContext.eventId, userId });
   if (existing) {
-    await reviseRoutedComment({ feedbackId: existing._id, content, contentTruncated, helpContext, logger });
+    await reviseRoutedComment({ feedbackId: existing._id, userId, content, contentTruncated, helpContext, logger });
     return;
   }
 
@@ -88,6 +113,8 @@ export async function routeHelpCommentToFeedback({
     throw new Error('Failed to store help feedback comment');
   }
 
+  const { reportType, type } = await readEventVerdict(helpContext.eventId);
+
   const feedback = new FeedbackModel({
     _id: feedbackId,
     userId,
@@ -95,13 +122,17 @@ export async function routeHelpCommentToFeedback({
     // `username` is required by the schema, so a submitter carrying neither display field would
     // fail validation on an otherwise valid report. `userId` is the last resort for exactly that
     // case - it is always present, and an opaque id in the admin list beats a dropped comment.
-    username: submitter.username ?? submitter.email ?? userId,
+    //
+    // `||`, not `??`: `username` is `required` in the schema and Mongoose treats '' as missing, so
+    // a session carrying an empty display field has to fall through to the next one or the save
+    // throws - after the HelpEvent was already written, losing the comment this line exists to keep.
+    username: submitter.username || submitter.email || userId,
     userEmail: submitter.email,
     organization,
     organizationId,
-    type: feedbackTypeForRating(helpContext.rating),
+    type,
     subject: 'help',
-    helpContext,
+    helpContext: { ...helpContext, reportType },
     contentStored,
   });
 
@@ -120,8 +151,15 @@ export async function routeHelpCommentToFeedback({
     });
     const winner = await FeedbackModel.findOne({ 'helpContext.eventId': helpContext.eventId, userId });
     if (!winner) throw error;
-    await reviseRoutedComment({ feedbackId: winner._id, content, contentTruncated, helpContext, logger });
+    await reviseRoutedComment({ feedbackId: winner._id, userId, content, contentTruncated, helpContext, logger });
+    return;
   }
+
+  // A verdict that changed while this insert was in flight had no report to land on - the sync is
+  // update-only, by design - so it matched nothing and was dropped. Re-applying it here is what
+  // makes the FIRST submission as safe as every later one; without it a thumb flipped during the
+  // opening note submit is the one flip that never reaches the permanent report.
+  await syncRoutedVerdict({ eventId: helpContext.eventId, userId });
 }
 
 /**
@@ -143,27 +181,20 @@ export async function routeHelpCommentToFeedback({
  *
  * Deliberately update-only: a bare rating is behavior-shaped and belongs in the help event store,
  * so this never creates a report for a user who has not written anything.
+ *
+ * The single writer of a routed report's verdict fields - the comment path calls it too rather
+ * than writing them itself, so there is one place the rule "the verdict is whatever the event says
+ * at write time" is expressed. Takes no verdict from its caller for the reason `readEventVerdict`
+ * gives.
  */
-export async function syncRoutedVerdict({
-  eventId,
-  userId,
-  rating,
-  reportType,
-}: {
-  eventId: string;
-  userId: string;
-  rating?: HelpFeedbackRating;
-  reportType?: HelpFeedbackReportType;
-}): Promise<void> {
+export async function syncRoutedVerdict({ eventId, userId }: { eventId: string; userId: string }): Promise<void> {
+  const { reportType, type } = await readEventVerdict(eventId);
+  // A `reportType` of undefined is stripped by Mongoose's update casting rather than written as
+  // null, so an event with no flag leaves a stored one alone. That is the intended behavior and
+  // not a gap: the flag is only ever set, never cleared, on the event either.
   await FeedbackModel.updateOne(
     { 'helpContext.eventId': eventId, userId },
-    {
-      $set: {
-        'helpContext.rating': rating,
-        'helpContext.reportType': reportType,
-        type: feedbackTypeForRating(rating),
-      },
-    }
+    { $set: { 'helpContext.reportType': reportType, type } }
   );
 }
 
@@ -173,15 +204,17 @@ export async function syncRoutedVerdict({
  */
 async function reviseRoutedComment({
   feedbackId,
+  userId,
   content,
   contentTruncated,
   helpContext,
   logger,
 }: {
   feedbackId: mongoose.Types.ObjectId;
+  userId: string;
   content: string;
   contentTruncated: boolean;
-  helpContext: IHelpFeedbackContext;
+  helpContext: RoutedCommentTarget;
   logger: Pick<Logger, 'warn'>;
 }): Promise<void> {
   // Retention is that helper's contract, not this one's: an edit must never extend the window the
@@ -197,22 +230,15 @@ async function reviseRoutedComment({
     });
   }
 
-  // A dotted $set of only the keys this submission carries, never the whole `helpContext`
-  // subdocument. Writing the subdocument would take the absent keys with it - `reportType` is
-  // optional, and the chat surface never sends one - and it would also revert a `syncRoutedVerdict`
-  // (the other writer of these exact fields) that landed since this path's read, since the thumbs
-  // stay clickable while a note submit is in flight. Both writers are narrow, so they compose.
-  const updates: Record<string, unknown> = { contentStored: true };
-  for (const [key, value] of Object.entries(helpContext)) {
-    if (value !== undefined) updates[`helpContext.${key}`] = value;
-  }
-  // `type` is derived from the rating, so it is rewritten only when this submission actually
-  // carries one - otherwise a snapshot with no rating would flatten a verdict back to FEEDBACK.
-  if (helpContext.rating !== undefined) {
-    updates.type = feedbackTypeForRating(helpContext.rating);
-  }
+  // Only `contentStored` - `eventId`, `surface` and `slug` are fixed for the life of the event
+  // this report is keyed on, so a revision has nothing to say about them. Writing the whole
+  // `helpContext` subdocument instead would take the absent keys with it, dropping the outdated
+  // flag a comment-only revision arrives without.
+  await FeedbackModel.updateOne({ _id: feedbackId }, { $set: { contentStored: true } });
 
-  await FeedbackModel.updateOne({ _id: feedbackId }, { $set: updates });
+  // Last, and through the one writer, so the verdict it applies is read after the text round trips
+  // above rather than before them.
+  await syncRoutedVerdict({ eventId: helpContext.eventId, userId });
 }
 
 /** A help-event row read back for rendering, whatever else the caller projected onto it. */

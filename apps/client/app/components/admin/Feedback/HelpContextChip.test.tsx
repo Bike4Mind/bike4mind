@@ -31,7 +31,7 @@ describe('HelpContextChip', () => {
   });
 
   it('names the article an article-surface report came from', () => {
-    renderChip({ eventId: 'evt-1', surface: 'article', slug: 'features/keyboard-shortcuts', rating: 'not_helpful' });
+    renderChip({ eventId: 'evt-1', surface: 'article', slug: 'features/keyboard-shortcuts' });
 
     expect(chip()).toHaveTextContent('features/keyboard-shortcuts');
   });
@@ -41,7 +41,7 @@ describe('HelpContextChip', () => {
    * HelpEvent - so the chip has to degrade to the surface instead of rendering an empty label.
    */
   it('falls back to the surface when a chat report carries no slug', () => {
-    renderChip({ eventId: 'evt-2', surface: 'chat', rating: 'helpful' });
+    renderChip({ eventId: 'evt-2', surface: 'chat' });
 
     expect(chip()).toHaveTextContent('Help chat');
   });

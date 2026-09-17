@@ -27,9 +27,10 @@ export type FeedbackSubject = (typeof FEEDBACK_SUBJECTS)[number];
 export const HELP_FEEDBACK_SURFACES = ['article', 'chat'] as const;
 export type HelpFeedbackSurface = (typeof HELP_FEEDBACK_SURFACES)[number];
 
-/** The thumbs verdict on a help article or help-chat answer. Single source of truth for the two
- * stores that persist it (`HelpEvent.rating` and `Feedback.helpContext.rating`) and the request
- * schemas that accept it - they have to agree or a valid submission fails one side's validation. */
+/** The thumbs verdict on a help article or help-chat answer. Single source of truth for the store
+ * that persists it (`HelpEvent.rating`), the request schemas that accept it, and the derivation of
+ * a routed report's `FeedbackType` - they have to agree or a valid submission fails one side's
+ * validation. */
 export const HELP_FEEDBACK_RATINGS = ['helpful', 'not_helpful'] as const;
 export type HelpFeedbackRating = (typeof HELP_FEEDBACK_RATINGS)[number];
 
@@ -41,9 +42,13 @@ export type HelpFeedbackReportType = (typeof HELP_FEEDBACK_REPORT_TYPES)[number]
 /**
  * Identifying context copied onto a report routed from the help center, so that a permanent row
  * saying "this help answer was wrong" is still actionable on its own. Deliberately carries no
- * free text: the slug, the thumbs rating and the outdated report are structured signal and are
- * safe to keep permanently, whereas the chat question and answer are not, and stay on the 90-day
- * `HelpEvent` row that `eventId` points at.
+ * free text: the slug and the outdated report are structured signal and are safe to keep
+ * permanently, whereas the chat question and answer are not, and stay on the 90-day `HelpEvent`
+ * row that `eventId` points at.
+ *
+ * The thumbs verdict is deliberately NOT among these fields. It lives on the report as `type`
+ * (see `feedbackTypeForRating`), which is what every reader renders and filters on; a second copy
+ * here would be a field nothing reads that two concurrent writers could still disagree about.
  *
  * These rows carry no `sessionId`/`questId`, so they are invisible to the session-scoped reader
  * by design - `subject: 'help'` plus `organizationId` is how they are found instead.
@@ -56,7 +61,6 @@ export interface IHelpFeedbackContext {
   surface: HelpFeedbackSurface;
   /** Article slug - set for the 'article' surface only; help chat has no slug. */
   slug?: string;
-  rating?: HelpFeedbackRating;
   /** Set for the 'article' surface only; help chat has nothing to report as outdated. */
   reportType?: HelpFeedbackReportType;
 }

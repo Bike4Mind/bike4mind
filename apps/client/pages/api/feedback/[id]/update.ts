@@ -2,9 +2,9 @@ import { FeedbackModel, FeedbackTextModel } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { FeedbackEvents, feedbackContentExpiresAt, truncateFeedbackContent } from '@bike4mind/common';
+import { FeedbackEvents, truncateFeedbackContent } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
-import { reviseFeedbackText } from '@server/utils/feedbackText';
+import { originateFeedbackText, reviseFeedbackText } from '@server/utils/feedbackText';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
 import { isValidObjectId } from '@server/utils/objectId';
 import { z } from 'zod';
@@ -97,12 +97,7 @@ const handler = baseApi().put(
         } else {
           // This report never had text (e.g. a placeholder submission) - originating it now is a
           // fresh write, not a resurrection, so it gets its own full retention window.
-          await FeedbackTextModel.create({
-            _id: id,
-            content: truncated,
-            contentTruncated,
-            expiresAt: feedbackContentExpiresAt(new Date()),
-          });
+          await originateFeedbackText({ feedbackId: feedback._id, content: truncated, contentTruncated });
           contentStoredChange = true;
         }
       }

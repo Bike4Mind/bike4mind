@@ -1,7 +1,6 @@
 import mongoose, { Model, model, Schema } from 'mongoose';
 import {
   FEEDBACK_SUBJECTS,
-  HELP_FEEDBACK_RATINGS,
   HELP_FEEDBACK_REPORT_TYPES,
   HELP_FEEDBACK_SURFACES,
   IFeedbackDocument,
@@ -39,7 +38,8 @@ const feedbackSchema = new Schema<IFeedbackDocument>(
           eventId: { type: String, required: true },
           surface: { type: String, enum: HELP_FEEDBACK_SURFACES, required: true },
           slug: { type: String, required: false },
-          rating: { type: String, required: false, enum: HELP_FEEDBACK_RATINGS },
+          // No `rating`: the thumbs verdict rides `type` on the parent document, which is what the
+          // admin list renders and filters on. See IHelpFeedbackContext.
           reportType: { type: String, required: false, enum: HELP_FEEDBACK_REPORT_TYPES },
         },
         { _id: false }

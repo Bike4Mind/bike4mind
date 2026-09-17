@@ -78,12 +78,12 @@ const handler = baseApi()
       await routeHelpCommentToFeedback({
         submitter: { id: userId, username: req.user?.username, email: req.user?.email },
         comment: writtenComment,
+        // No verdict: the router reads it off the event itself at the moment it writes, so a thumb
+        // flipped while this note was in flight is not overwritten by this request's older read.
         helpContext: {
           eventId: event.id,
           surface: 'article',
           slug,
-          rating: event.rating,
-          reportType: event.reportType,
         },
         logger: req.logger,
       });
@@ -91,12 +91,7 @@ const handler = baseApi()
       // A thumb flipped or an article flagged without retyping the note still has to reach the
       // report that note created, or the permanent record keeps the verdict the user moved away
       // from.
-      await syncRoutedVerdict({
-        eventId: event.id,
-        userId,
-        rating: event.rating,
-        reportType: event.reportType,
-      });
+      await syncRoutedVerdict({ eventId: event.id, userId });
     }
 
     res.status(revised ? 200 : 201).json({ success: true });
