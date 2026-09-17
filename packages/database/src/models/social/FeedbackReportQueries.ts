@@ -2,6 +2,9 @@ import mongoose from 'mongoose';
 import {
   FeedbackCountBucket,
   FeedbackSubject,
+  IFeedbackDocument,
+  OrgFeedbackItem,
+  OrgFeedbackItemPage,
   OrgFeedbackMember,
   OrgFeedbackMemberCount,
   OrgFeedbackReport,
@@ -162,4 +165,102 @@ export async function orgFeedbackReport(params: {
     })),
     membership,
   };
+}
+
+/**
+ * The scope both drill-down reads run under. Every arm is a guard, not a filter: the org stamp
+ * pins the tenant, and the author must still be in the union the counts were scoped on, so a row
+ * written by someone who has since left the org drops out of the drill-down the same way it drops
+ * out of the totals. A row failing either arm simply does not match, which is what lets the routes
+ * answer one identical NotFoundError for missing, foreign-stamped and non-member-authored alike -
+ * the drill-down cannot be used to probe which feedback ids exist.
+ */
+const drilldownScope = (organizationId: string, memberUserIds: string[]) => ({
+  // The stamp is an ObjectId on the schema; a raw string here matches zero rows silently.
+  organizationId: new mongoose.Types.ObjectId(organizationId),
+  userId: { $in: memberUserIds },
+});
+
+type DrilldownRow = Pick<
+  IFeedbackDocument,
+  | 'userId'
+  | 'username'
+  | 'subject'
+  | 'status'
+  | 'type'
+  | 'tags'
+  | 'sessionId'
+  | 'questId'
+  | 'contentStored'
+  | 'createdAt'
+> & { _id: unknown };
+
+/**
+ * Explicit field list, never a document spread: `content` and `promptMeta` live on the same
+ * document and neither may reach an org administrator (see `OrgFeedbackItem`). A field added to
+ * the schema must be added here deliberately or it stays invisible, which is the safe default.
+ */
+const toItem = (row: DrilldownRow): OrgFeedbackItem => ({
+  id: String(row._id),
+  createdAt: row.createdAt.toISOString(),
+  userId: row.userId,
+  username: row.username,
+  subject: row.subject,
+  status: row.status,
+  type: row.type,
+  tags: row.tags ?? [],
+  sessionId: row.sessionId,
+  questId: row.questId,
+  contentStored: row.contentStored ?? false,
+});
+
+/**
+ * The rows behind a report cell, newest first. Same scope and same window as `orgFeedbackReport`,
+ * so a cell's count and the page under it are answers to one question.
+ */
+export async function orgFeedbackItems(params: {
+  organizationId: string;
+  from: Date;
+  to: Date;
+  members: OrgMemberPopulation;
+  subject?: FeedbackSubject;
+  limit: number;
+  offset: number;
+}): Promise<OrgFeedbackItemPage> {
+  const { organizationId, from, to, members, subject, limit, offset } = params;
+  // No members means no authors to match. Also guards `$in: undefined`, which would match
+  // everything rather than nothing.
+  if (members.userIds.length === 0) return { items: [], total: 0, limit, offset };
+
+  const filter = {
+    ...drilldownScope(organizationId, members.userIds),
+    createdAt: { $gte: from, $lte: to },
+    ...(subject ? { subject } : {}),
+  };
+
+  // `_id` breaks the tie: `createdAt` alone is not unique, and an unstable sort silently repeats
+  // or skips rows across pages.
+  const [rows, total] = await Promise.all([
+    FeedbackModel.find(filter).sort({ createdAt: -1, _id: -1 }).skip(offset).limit(limit).lean(),
+    FeedbackModel.countDocuments(filter),
+  ]);
+
+  return { items: rows.map(toItem), total, limit, offset };
+}
+
+/** One row behind a report cell, or null for every denial - see `drilldownScope`. */
+export async function orgFeedbackItem(params: {
+  organizationId: string;
+  feedbackId: string;
+  members: OrgMemberPopulation;
+}): Promise<OrgFeedbackItem | null> {
+  const { organizationId, feedbackId, members } = params;
+  if (members.userIds.length === 0) return null;
+
+  const row = await FeedbackModel.findOne({
+    _id: new mongoose.Types.ObjectId(feedbackId),
+    ...drilldownScope(organizationId, members.userIds),
+  }).lean();
+
+  return row ? toItem(row) : null;
 }

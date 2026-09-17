@@ -164,3 +164,36 @@ export interface OrgFeedbackReport {
     stampOnly: OrgFeedbackMember[];
   };
 }
+
+/**
+ * One row behind a report cell, as the drill-down returns it.
+ *
+ * METADATA ONLY, by rule: no feedback text and no `promptMeta`. Verbatim stays reachable only
+ * through GET /api/feedback/:id/read, whose CASL check grants it to the reporter or a platform
+ * admin - an org owner or manager is neither, and widening that grant is exactly the escalation
+ * this report is built to avoid. Anything added here is visible to every org administrator, so
+ * the mapper that fills it is an explicit field list rather than a document spread.
+ */
+export interface OrgFeedbackItem {
+  id: string;
+  createdAt: string;
+  userId: string;
+  username: string;
+  subject: FeedbackSubject;
+  status: FeedbackStatus;
+  type?: FeedbackType;
+  tags: string[];
+  sessionId?: string;
+  questId?: string;
+  /** Tells "text expired under the 90-day TTL" apart from "this report never had text". */
+  contentStored: boolean;
+}
+
+/** GET /api/organizations/:id/feedback-report/items - one page of `OrgFeedbackItem`. */
+export interface OrgFeedbackItemPage {
+  items: OrgFeedbackItem[];
+  /** Rows matching the whole window, not just this page - the drill-down paginates. */
+  total: number;
+  limit: number;
+  offset: number;
+}
