@@ -93,6 +93,50 @@ describe('ContextBreakdownModal', () => {
     expect(screen.getByText('No retrieval was recorded for this turn.')).toBeTruthy();
   });
 
+  it('surfaces the servers error message when the request was forbidden', () => {
+    mockUseQuestContextBreakdown.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: {
+        isAxiosError: true,
+        response: {
+          data: {
+            error: 'Context breakdowns are off while your telemetry level is None. Change it in Profile > Settings.',
+          },
+        },
+      },
+    });
+    renderModal();
+
+    expect(screen.getByTestId('context-breakdown-error').textContent).toBe(
+      'Context breakdowns are off while your telemetry level is None. Change it in Profile > Settings.'
+    );
+  });
+
+  it('surfaces the servers error message when the quest is not found', () => {
+    mockUseQuestContextBreakdown.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: { isAxiosError: true, response: { data: { error: 'Quest not found' } } },
+    });
+    renderModal();
+
+    expect(screen.getByTestId('context-breakdown-error').textContent).toBe('Quest not found');
+  });
+
+  it('falls back to the generic message when the error carries no server message', () => {
+    mockUseQuestContextBreakdown.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error('Network Error'),
+    });
+    renderModal();
+
+    expect(screen.getByTestId('context-breakdown-error').textContent).toBe(
+      'Could not load the context breakdown for this message.'
+    );
+  });
+
   it('reconciles the billed system-prompt total against the layer sum when they differ', () => {
     renderModal();
 

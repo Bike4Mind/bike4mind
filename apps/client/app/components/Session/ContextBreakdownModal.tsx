@@ -12,6 +12,7 @@ import {
   Table,
   Typography,
 } from '@mui/joy';
+import { isAxiosError } from 'axios';
 import type { ContextBreakdown } from '@bike4mind/services';
 import TokenDistributionBar, { type TokenDistribution } from '@client/app/components/common/TokenDistributionBar';
 import { useQuestContextBreakdown } from '@client/app/hooks/data/quests';
@@ -218,6 +219,7 @@ const Breakdown: FC<{ breakdown: ContextBreakdown }> = ({ breakdown }) => (
  */
 const ContextBreakdownModal: FC<ContextBreakdownModalProps> = ({ questId, open, onClose }) => {
   const { data, isLoading, error } = useQuestContextBreakdown(questId, open);
+  const serverErrorMessage = isAxiosError(error) ? error.response?.data?.error : undefined;
 
   return (
     <Modal open={open} onClose={onClose}>
@@ -228,7 +230,7 @@ const ContextBreakdownModal: FC<ContextBreakdownModalProps> = ({ questId, open, 
         {isLoading && <CircularProgress size="sm" data-testid="context-breakdown-loading" />}
         {error && (
           <Alert color="danger" data-testid="context-breakdown-error">
-            Could not load the context breakdown for this message.
+            {serverErrorMessage || 'Could not load the context breakdown for this message.'}
           </Alert>
         )}
         {data && <Breakdown breakdown={data} />}
