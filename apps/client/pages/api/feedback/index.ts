@@ -211,11 +211,9 @@ export function resolveFeedbackEmailRoute(
 
 const handler = baseApi()
   .get(async (req, res) => {
-    // Defensive: the auth middleware attaches an ability unconditionally, so this is an
-    // invariant check rather than a reachable auth path. Typed anyway - a bare Error carries no
-    // status and errorHandler defaults it to 500, which pages an operator for our own bug. 404
-    // rather than 403 to match the sibling handlers in this directory, which collapse every
-    // denial to one status so a probe cannot tell a forbidden record from a nonexistent one.
+    // Invariant check, not a reachable auth path - the auth middleware attaches an ability
+    // unconditionally. Typed so errorHandler does not default it to a 500 that pages an operator
+    // for our own bug; 404 rather than 403 to match the siblings in this directory.
     if (!req.ability) {
       throw new NotFoundError('Ability not found');
     }

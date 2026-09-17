@@ -284,9 +284,7 @@ describe('GET /api/feedback', () => {
     expect(JSON.stringify(findFilter.$and)).not.toContain('userId');
   });
 
-  // The 500 this pins used to reach production as an untyped error: errorHandler defaults an
-  // unrecognized throw to InternalServerError, which logs at `error` and so pages an operator for
-  // what is our own invariant check. The typed error keeps it a 4xx warning with a JSON body.
+  // Drives the real errorHandler: an untyped throw here would be a 500 logged at `error`.
   it('reports a missing ability as a typed 404 logged at warn, not an untyped 500', async () => {
     const { req, res } = buildRequest({}, undefined);
     await runHandler(req, res);

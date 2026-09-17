@@ -1,7 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import fs from 'node:fs';
 import path from 'node:path';
 
 /**
@@ -11,18 +10,11 @@ import path from 'node:path';
  * 500 instead of the JSON envelope every sibling route returns - and the route's unit tests
  * stay green, because vitest imports the source as ESM and never exercises a real require.
  *
- * Scope is deliberately narrow, and the narrowing is the load-bearing part. An earlier
- * attempt checked every external package reachable from pages/api/**, which is unsound:
- * uuid, p-limit, file-type, openid-client, @octokit/rest and several @bike4mind/* packages
- * are all ESM-only and all reachable from a route, yet production is fine because webpack
- * bundles them. Reachability says nothing about whether a real require() ever happens. Only
- * these two groups are require()d for real:
- *
- *   - serverExternalPackages, read from next.config.mjs rather than duplicated here so the
- *     list cannot drift. Next excludes these from the bundle by definition, so Node loads
- *     them from node_modules at runtime.
- *   - RUNTIME_REQUIRED below: packages observed to reach a real require() in a deployed
- *     stack trace despite not being externals. Add one only with that evidence.
+ * Only packages that reach a real require() at runtime are checked, and that narrowing is
+ * load-bearing: reachability from pages/api/** is not the same property, since most ESM-only
+ * packages a route can reach are bundled by webpack and never require()d. The sound general
+ * form - require each route's BUILT module - needs a `next build` artifact this repo's CI
+ * does not produce; see #2982 rather than rebuilding the reachability version.
  *
  * The probe runs under --no-experimental-require-module, which is how the original failure
  * was reproduced. Passing without require(esm) is the stronger guarantee: a dual-published
@@ -34,17 +26,20 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const NEXT_CONFIG = path.join(REPO_ROOT, 'apps/client/next.config.mjs');
 
 /**
- * sanitize-html is bundled, not external, yet its require('htmlparser2') reached Node at
- * runtime in the deployed stack trace. It is held here because the pnpm override pinning
- * htmlparser2 to the dual-published v10 is otherwise load-bearing and silently removable:
- * nothing in the repo fails when it is dropped until a deployed route 500s again.
+ * sanitize-html sits in transpilePackages (pinned by checkSanitizeHtmlTranspile.test.ts), not in
+ * serverExternalPackages, so the imported list below does not cover it. It is held here because
+ * its require('htmlparser2') reached Node in the deployed stack trace, which makes this probe the
+ * only require()-level pin on the htmlparser2 override at root package.json: drop that override
+ * and nothing in the repo fails until a deployed route 500s again. Add an entry only with the
+ * same kind of evidence.
  */
 const RUNTIME_REQUIRED = ['sanitize-html'];
 
 /**
- * Packages whose declaring workspace package is not apps/client. Under pnpm's strict tree
- * they are unresolvable from the app but resolve fine from their owner, so the probe anchors
- * each one at the workspace package.json that declares it.
+ * Resolves each package from the workspace package.json that declares it. Under pnpm's strict
+ * tree a package declared by a core workspace is unresolvable from apps/client, so anchoring at
+ * the declaring owner is what makes the require() run at all - the check is therefore "loads as
+ * CommonJS", not "loads as CommonJS from apps/client".
  */
 const findAnchor = (pkg: string): string => {
   const candidates = execFileSync(
@@ -57,14 +52,6 @@ const findAnchor = (pkg: string): string => {
     .map(p => path.join(REPO_ROOT, path.dirname(p)));
   const client = path.join(REPO_ROOT, 'apps/client');
   return candidates.includes(client) ? client : (candidates[0] ?? client);
-};
-
-const readServerExternalPackages = (): string[] => {
-  const source = fs.readFileSync(NEXT_CONFIG, 'utf8');
-  const block = /serverExternalPackages:\s*\[([\s\S]*?)\]/.exec(source);
-  // A rename or reshape of the option must fail loudly rather than silently checking nothing.
-  expect(block, `could not find serverExternalPackages in ${NEXT_CONFIG}`).not.toBeNull();
-  return [...block![1].matchAll(/'([^']+)'/g)].map(m => m[1]);
 };
 
 type ProbeResult = { pkg: string; code?: string };
@@ -88,11 +75,27 @@ const probe = (entries: { pkg: string; anchor: string }[]): ProbeResult[] => {
   return JSON.parse(stdout) as ProbeResult[];
 };
 
-describe('packages require()d at runtime by the API routes load as CommonJS', () => {
-  it('resolves every one of them without ERR_REQUIRE_ESM', () => {
-    const packages = [...readServerExternalPackages(), ...RUNTIME_REQUIRED];
-    expect(packages.length).toBeGreaterThan(0);
+describe('packages require()d at runtime load as CommonJS', () => {
+  let serverExternalPackages: string[];
 
+  // Imported rather than text-matched so the RESOLVED value is what gets checked; a regex over
+  // the source passes on `serverExternalPackages: []` just as happily.
+  beforeAll(async () => {
+    const config = await import(NEXT_CONFIG);
+    serverExternalPackages = config.default.serverExternalPackages;
+  });
+
+  it('reads a non-empty serverExternalPackages out of next.config.mjs', () => {
+    // Guards the guard: asserted in isolation because RUNTIME_REQUIRED alone would otherwise
+    // keep the probe below green while the externals list went entirely unchecked.
+    expect(
+      serverExternalPackages,
+      `no serverExternalPackages in ${NEXT_CONFIG} - the probe below would check nothing`
+    ).not.toHaveLength(0);
+  });
+
+  it('resolves every one of them without ERR_REQUIRE_ESM', () => {
+    const packages = [...serverExternalPackages, ...RUNTIME_REQUIRED];
     const failures = probe(packages.map(pkg => ({ pkg, anchor: findAnchor(pkg) })));
 
     expect(
