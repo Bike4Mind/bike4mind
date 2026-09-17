@@ -6,22 +6,28 @@ import AdminGenerateApiKeyModal from './AdminGenerateApiKeyModal';
 
 const h = vi.hoisted(() => ({
   lakes: [
-    { id: 'lakeA', name: 'Lake A' },
-    { id: 'lakeB', name: 'Lake B' },
-  ] as { id: string; name: string }[] | undefined,
+    { id: 'lakeA', name: 'Lake A', canPreauthorize: true },
+    { id: 'lakeB', name: 'Lake B', canPreauthorize: true },
+  ] as { id: string; name: string; canPreauthorize: boolean }[] | undefined,
   lakesLoading: false,
   lakesError: false,
   refetchLakes: vi.fn(),
   mutate: vi.fn(),
+  // Records who the list was scoped to, so a regression back to the caller-scoped hook is caught
+  // here rather than as a 400 at mint time (#2945).
+  askedForUserId: undefined as string | undefined,
 }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
-  useGetDataLakes: () => ({
-    data: h.lakes,
-    isLoading: h.lakesLoading,
-    isError: h.lakesError,
-    refetch: h.refetchLakes,
-  }),
+  useGetPreauthorizableDataLakes: (userId: string) => {
+    h.askedForUserId = userId;
+    return {
+      data: h.lakes,
+      isLoading: h.lakesLoading,
+      isError: h.lakesError,
+      refetch: h.refetchLakes,
+    };
+  },
 }));
 
 vi.mock('@client/app/hooks/data/userApiKeys', () => ({
@@ -42,11 +48,12 @@ const renderModal = () =>
 
 beforeEach(() => {
   h.lakes = [
-    { id: 'lakeA', name: 'Lake A' },
-    { id: 'lakeB', name: 'Lake B' },
+    { id: 'lakeA', name: 'Lake A', canPreauthorize: true },
+    { id: 'lakeB', name: 'Lake B', canPreauthorize: true },
   ];
   h.lakesLoading = false;
   h.lakesError = false;
+  h.askedForUserId = undefined;
   h.refetchLakes.mockClear();
   h.mutate.mockClear();
 });
@@ -66,10 +73,35 @@ describe('AdminGenerateApiKeyModal - pre-authorized lakes', () => {
     expect(h.refetchLakes).toHaveBeenCalled();
   });
 
+  it('scopes the lake list to the TARGET user, not the signed-in admin', () => {
+    renderModal();
+    expect(h.askedForUserId).toBe('u1');
+  });
+
+  it('omits a lake the target cannot pre-authorize, which the mint route would 400', () => {
+    // A platform admin has canManage on every lake but a rung on almost none, so this is the
+    // ordinary case for an admin minting a key for someone else - not an edge case.
+    h.lakes = [
+      { id: 'lakeA', name: 'Lake A', canPreauthorize: true },
+      { id: 'lakeB', name: 'Lake B', canPreauthorize: false },
+    ];
+    renderModal();
+    expect(screen.getByTestId('admin-generate-key-lake-checkbox-lakeA')).toBeTruthy();
+    expect(screen.queryByTestId('admin-generate-key-lake-checkbox-lakeB')).toBeNull();
+  });
+
+  it('shows the empty state when the target manages nothing bindable, even if lakes exist', () => {
+    h.lakes = [{ id: 'lakeA', name: 'Lake A', canPreauthorize: false }];
+    renderModal();
+    expect(screen.getByTestId('admin-generate-key-lakes-empty')).toBeTruthy();
+    expect(screen.queryByTestId('admin-generate-key-lake-checkbox-lakeA')).toBeNull();
+  });
+
   it('shows an empty state when there are no lakes', () => {
     h.lakes = [];
     renderModal();
-    expect(screen.getByText('No lakes yet')).toBeTruthy();
+    // Names the target, so an admin can tell "this user manages nothing" from "the list failed".
+    expect(screen.getByTestId('admin-generate-key-lakes-empty').textContent).toContain('target-user');
   });
 
   it('submits with no preauthorizedLakeIds when none are checked', () => {

@@ -49,8 +49,18 @@ type OrgAdminLookup = Pick<IOrganizationRepository, 'findIdsWithAdminRights'>;
  *
  * Degrades to `[]` when no org repo is wired, which under-reports that one rung rather than
  * over-reporting it: the affordance goes dark, the route stays authoritative.
+ *
+ * `forUserId` resolves the rung for someone OTHER than the caller (see
+ * `ListAllDataLakesOptions.preauthorizeForUserId`). It never falls back to `ctx.administeredOrgIds`
+ * the way the caller arm does - that set belongs to a different user, and reusing it would report
+ * the admin's org rungs as the target's.
  */
-const preauthorizeOrgIdsFor = async (ctx: AccessContext, organizations?: OrgAdminLookup): Promise<string[]> => {
+const preauthorizeOrgIdsFor = async (
+  ctx: AccessContext,
+  organizations?: OrgAdminLookup,
+  forUserId?: string
+): Promise<string[]> => {
+  if (forUserId) return organizations ? organizations.findIdsWithAdminRights(forUserId) : [];
   if (!ctx.isAdmin) return ctx.administeredOrgIds ?? [];
   return organizations ? organizations.findIdsWithAdminRights(ctx.userId) : [];
 };
@@ -159,6 +169,30 @@ interface ListDataLakesOptions extends ListDataLakesAdapters {
    * it satisfies that precondition by construction. Absent -> recomputes exactly as before.
    */
   grantedLakeIds?: string[];
+}
+
+/**
+ * `listAllDataLakes`-only options, scoped to their own type for the same reason as
+ * `ListDataLakesOptions` above: no other list function resolves `canPreauthorize` for anyone but
+ * the caller, so a field that type-checked on the shared adapter type and was then silently
+ * dropped would be worse than not offering it.
+ */
+interface ListAllDataLakesOptions extends ListDataLakesAdapters {
+  /**
+   * Resolve `canPreauthorize` against THIS user instead of the caller.
+   *
+   * The admin key-minting surface needs it: `POST /api/admin/users/[userId]/generate-api-key`
+   * screens a requested binding against the TARGET user's manage rung
+   * (`filterStillManagedLakes(lakes, targetUserId)`), so a picker labelled with the ADMIN's rung
+   * offers lakes that route then rejects with a 400. Platform admin is not a rung on either side,
+   * so an admin listing their own lakes sees no change.
+   *
+   * ONLY `canPreauthorize` moves. The row set stays the caller's, deliberately: the admin still has
+   * to be able to see a lake to bind it, and narrowing a lake list is a file-access change -
+   * `resolveAccessibleLakes` builds the single-file read gate's lake arm from the sibling
+   * `listDataLakes`.
+   */
+  preauthorizeForUserId?: string;
 }
 
 const toConfig = (dl: IDataLakeDocument): DataLakeConfig => toDataLakeConfig(dl);
@@ -468,7 +502,7 @@ export const listDataLakes = async (
  */
 export const listAllDataLakes = async (
   ctx: AccessContext,
-  { db, logger }: ListDataLakesAdapters
+  { db, logger, preauthorizeForUserId }: ListAllDataLakesOptions
 ): Promise<ManageableDataLakeConfig[]> => {
   let dynamicLakes: IDataLakeDocument[] = [];
   try {
@@ -482,10 +516,14 @@ export const listAllDataLakes = async (
   const pendingCounts = await pendingCountsFor(dynamicLakes, db.dataLakeProposals);
   // This is the branch where canManage and canPreauthorize genuinely diverge: the admin manages every
   // DB lake, but may only ADMIT the ones they hold a real rung on (owner/curator/org-admin/org-grant).
+  // Blank-as-absent, and `||` rather than `??` deliberately: preauthorizeOrgIdsFor falls through on a
+  // falsy override, so a '' id would pair NOBODY's identity with the CALLER's org rungs and report an
+  // admission no user holds. The route rejects '' as well; this keeps the service honest on its own.
+  const preauthorizeUserId = preauthorizeForUserId || undefined;
   const preauthorizeActor = {
-    userId: ctx.userId,
+    userId: preauthorizeUserId ?? ctx.userId,
     isAdmin: false,
-    administeredOrgIds: await preauthorizeOrgIdsFor(ctx, db.organizations),
+    administeredOrgIds: await preauthorizeOrgIdsFor(ctx, db.organizations, preauthorizeUserId),
   };
   // Admin manages every DB lake (canManage: true), but isOwn stays the true effective-owner test so
   // the "you" label still means ownership, not the admin's blanket manage power.

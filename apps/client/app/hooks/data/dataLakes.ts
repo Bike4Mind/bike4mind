@@ -121,6 +121,31 @@ export function useGetDataLakes(
 }
 
 /**
+ * The lake list with `canPreauthorize` resolved against `userId` instead of the caller (#2945).
+ * Admin-only server-side; the route 403s a non-admin that asks.
+ *
+ * For the admin key-mint picker: `POST /api/admin/users/[userId]/generate-api-key` screens a
+ * requested binding against the TARGET user's manage rung, so a picker built on the caller's own
+ * labels offers lakes that route then rejects with a 400. Filter the result on `canPreauthorize`,
+ * never on `canManage` - platform admin is `canManage: true` on every lake and a rung on none.
+ */
+export function useGetPreauthorizableDataLakes(userId: string, enabled = true) {
+  return useQuery({
+    queryKey: dataLakeKeys.preauthorizableFor(userId),
+    enabled: enabled && !!userId,
+    retry: false,
+    queryFn: async () => {
+      const response = await api.get<{ data: ManageableDataLakeConfig[] }>(
+        `/api/data-lakes?preauthorizableFor=${encodeURIComponent(userId)}`
+      );
+      return response.data.data;
+    },
+    refetchOnWindowFocus: false,
+    staleTime: 1000 * 60 * 2,
+  });
+}
+
+/**
  * One lake's derived health report (#1666): the four retrievability predicates and the
  * reachable-content headline, computed on demand from per-file rollups. Advisory only.
  *

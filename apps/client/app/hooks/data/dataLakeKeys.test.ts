@@ -16,6 +16,17 @@ describe('dataLakeKeys parity', () => {
     expect(dataLakeKeys.activeBatches).toEqual(['data-lake-batches', 'active']);
   });
 
+  // The target-scoped list must be BOTH distinct from `list` (the two responses disagree on
+  // canPreauthorize, so sharing a key would let one answer the other) and under its prefix (so a
+  // rename or visibility change still refreshes it). Both halves are load-bearing, so both are
+  // pinned here rather than left to the registry's doc comment.
+  it('the preauthorizable-for list is distinct from `list` but under its prefix', () => {
+    expect(dataLakeKeys.preauthorizableFor('u1')).toEqual(['data-lakes', 'preauthorizable-for', 'u1']);
+    expect(dataLakeKeys.preauthorizableFor('u1')).not.toEqual(dataLakeKeys.list);
+    expect(dataLakeKeys.preauthorizableFor('u1').slice(0, 1)).toEqual(dataLakeKeys.list);
+    expect(dataLakeKeys.preauthorizableFor('u1')).not.toEqual(dataLakeKeys.preauthorizableFor('u2'));
+  });
+
   it('per-lake files: query key, per-lake invalidation prefix, global root', () => {
     expect(dataLakeKeys.files('lake1', { limit: 100 })).toEqual(['dataLakeFiles', 'lake1', { limit: 100 }]);
     expect(dataLakeKeys.files('lake1', undefined)).toEqual(['dataLakeFiles', 'lake1', undefined]);

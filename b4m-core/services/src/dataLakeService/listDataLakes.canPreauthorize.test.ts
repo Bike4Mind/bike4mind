@@ -127,3 +127,111 @@ describe('listDataLakes / listAllDataLakes - canPreauthorize', () => {
     expect(result.every(l => l.canPreauthorize === false)).toBe(true);
   });
 });
+
+/**
+ * #2945: the admin key-mint picker asks "which lakes may THIS user be bound to", not "which may I
+ * admit". Without the override the picker labelled every row with the admin's own rung, so it
+ * offered lakes generate-api-key then refused with a 400 ("User does not manage data lake(s)").
+ */
+describe('listAllDataLakes - preauthorizeForUserId', () => {
+  const adminCtx = ctx({ userId: 'admin', isAdmin: true, administeredOrgIds: [] });
+
+  it("resolves the rung against the TARGET, so the target's own lake is bindable", async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'target' });
+    const db = {
+      dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([theirs]) },
+      dataLakeAccessGrants: grantRepo(),
+      organizations: { findIdsWithAdminRights: vi.fn().mockResolvedValue([]) },
+    };
+
+    const result = await listAllDataLakes(adminCtx, { db, preauthorizeForUserId: 'target' });
+    expect(result.find(l => l.id === 'theirs')?.canPreauthorize).toBe(true);
+  });
+
+  it("is FALSE for the ADMIN'S OWN lake when scoped to a target who does not manage it", async () => {
+    // The reported bug in one assertion: this row is the admin's, canManage is true, and the picker
+    // offered it - but the mint route screens it against the target and rejects it.
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'admin' });
+    const db = {
+      dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([mine]) },
+      dataLakeAccessGrants: grantRepo(),
+      organizations: { findIdsWithAdminRights: vi.fn().mockResolvedValue([]) },
+    };
+
+    const result = await listAllDataLakes(adminCtx, { db, preauthorizeForUserId: 'target' });
+    const row = result.find(l => l.id === 'mine');
+    expect(row?.canManage).toBe(true);
+    expect(row?.canPreauthorize).toBe(false);
+  });
+
+  it("resolves the org-admin rung from the TARGET'S org rights, never the caller's", async () => {
+    const orgLake = lake({
+      id: 'org-lake',
+      slug: 'org-lake',
+      createdByUserId: 'someone-else',
+      organizationId: 'org-1',
+    });
+    const findIdsWithAdminRights = vi.fn().mockImplementation((userId: string) =>
+      // Only the target administers org-1. Reusing the caller's set here would report the admin's
+      // org rungs as the target's, which is the mislabeling the option exists to remove.
+      Promise.resolve(userId === 'target' ? ['org-1'] : [])
+    );
+    const db = {
+      dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([orgLake]) },
+      dataLakeAccessGrants: grantRepo(),
+      organizations: { findIdsWithAdminRights },
+    };
+
+    const result = await listAllDataLakes(adminCtx, { db, preauthorizeForUserId: 'target' });
+    expect(findIdsWithAdminRights).toHaveBeenCalledWith('target');
+    expect(findIdsWithAdminRights).not.toHaveBeenCalledWith('admin');
+    expect(result.find(l => l.id === 'org-lake')?.canPreauthorize).toBe(true);
+  });
+
+  it("still refuses a DRAFT lake the target created, matching the mint route's active-only screen", async () => {
+    const draft = lake({ id: 'draft', slug: 'draft', createdByUserId: 'target', status: 'draft' });
+    const db = {
+      dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([draft]) },
+      dataLakeAccessGrants: grantRepo(),
+      organizations: { findIdsWithAdminRights: vi.fn().mockResolvedValue([]) },
+    };
+
+    const result = await listAllDataLakes(adminCtx, { db, preauthorizeForUserId: 'target' });
+    expect(result.find(l => l.id === 'draft')?.canPreauthorize).toBe(false);
+  });
+
+  it("treats a BLANK id as absent rather than pairing nobody with the caller's org rungs", async () => {
+    // preauthorizeOrgIdsFor falls through on a falsy override, so an unnormalized '' would resolve
+    // the admin's own org rights and attribute them to an empty identity - an admission no user has.
+    const orgLake = lake({
+      id: 'org-lake',
+      slug: 'org-lake',
+      createdByUserId: 'someone-else',
+      organizationId: 'org-1',
+    });
+    const findIdsWithAdminRights = vi.fn().mockResolvedValue(['org-1']);
+    const db = {
+      dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([orgLake]) },
+      dataLakeAccessGrants: grantRepo(),
+      organizations: { findIdsWithAdminRights },
+    };
+
+    const result = await listAllDataLakes(adminCtx, { db, preauthorizeForUserId: '' });
+
+    expect(findIdsWithAdminRights).toHaveBeenCalledWith('admin');
+    expect(findIdsWithAdminRights).not.toHaveBeenCalledWith('');
+    expect(result.find(l => l.id === 'org-lake')?.canPreauthorize).toBe(true);
+  });
+
+  it('leaves the caller-scoped behaviour untouched when the option is absent', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'admin' });
+    const db = {
+      dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([mine]) },
+      dataLakeAccessGrants: grantRepo(),
+      organizations: { findIdsWithAdminRights: vi.fn().mockResolvedValue([]) },
+    };
+
+    const result = await listAllDataLakes(adminCtx, { db });
+    expect(result.find(l => l.id === 'mine')?.canPreauthorize).toBe(true);
+  });
+});
