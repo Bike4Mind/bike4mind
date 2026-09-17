@@ -48,6 +48,9 @@ import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStor
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { usePromptMetaInspector } from '@client/app/components/Session/PromptMetaInspector';
 import HiveIcon from '@mui/icons-material/Hive';
+import ContextBreakdownModal from '@client/app/components/Session/ContextBreakdownModal';
+import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
+import DonutSmallIcon from '@mui/icons-material/DonutSmall';
 import ContentPreviewModal from '@client/app/components/ProfileModal/ContentPreviewModal';
 import { Article as ArticleIcon } from '@mui/icons-material';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
@@ -248,11 +251,14 @@ const MessageContent: React.FC<ContentProps> = memo(
     const [showSyntaxHighlight, setShowSyntaxHighlight] = useState<boolean>(false);
     const [showDeleteMessageModal, setShowDeleteMessageModal] = useState<boolean>(false);
     const [showForkModal, setShowForkModal] = useState<boolean>(false);
+    const [showContextBreakdown, setShowContextBreakdown] = useState<boolean>(false);
     const [showSnipModal, setShowSnipModal] = useState<boolean>(false);
     const [messageToDelete, setMessageToDelete] = useState<IChatHistoryItem | null>(null);
     const [isMobile, setIsMobile] = useState<boolean>(false);
     const navigate = useNavigate();
     const openPromptMetaInspector = usePromptMetaInspector(state => state.setPromptMeta);
+    const { settings: userSettings } = useUserSettings();
+    const contextBreakdownAvailable = !!messageData.id && userSettings.contextTelemetryLevel !== 'none';
     const triggerEdit = useMessageEditMode(s => s.triggerEdit);
 
     const [isBugReportModalOpen, setIsBugReportModalOpen] = useState(false);
@@ -674,6 +680,13 @@ const MessageContent: React.FC<ContentProps> = memo(
           <DeleteMessageModal onConfirmDelete={onConfirmDelete} onCancelDelete={onCancelDelete} />
         )}
         {shareModal}
+        {showContextBreakdown && messageData.id && (
+          <ContextBreakdownModal
+            questId={messageData.id}
+            open={showContextBreakdown}
+            onClose={() => setShowContextBreakdown(false)}
+          />
+        )}
         {showForkModal && (
           <ConfirmActionModal
             className="session-middle-fork-modal"
@@ -973,6 +986,17 @@ const MessageContent: React.FC<ContentProps> = memo(
                         </ListItemDecorator>
                         {ANSWER_DIAGNOSIS_TITLE}
                       </MenuItem>
+                      {contextBreakdownAvailable && (
+                        <MenuItem
+                          data-testid="message-context-breakdown-btn"
+                          onClick={() => setShowContextBreakdown(true)}
+                        >
+                          <ListItemDecorator>
+                            <DonutSmallIcon />
+                          </ListItemDecorator>
+                          Context
+                        </MenuItem>
+                      )}
                       <MenuItem onClick={() => onPinToggle(messageData)}>
                         <ListItemDecorator>
                           {messageData.pinned ? <PushPinIcon /> : <PushPinOutlinedIcon />}
@@ -1121,6 +1145,17 @@ const MessageContent: React.FC<ContentProps> = memo(
                         </ListItemDecorator>
                         {ANSWER_DIAGNOSIS_TITLE}
                       </MenuItem>
+                      {contextBreakdownAvailable && (
+                        <MenuItem
+                          data-testid="message-context-breakdown-btn"
+                          onClick={() => setShowContextBreakdown(true)}
+                        >
+                          <ListItemDecorator>
+                            <DonutSmallIcon />
+                          </ListItemDecorator>
+                          Context
+                        </MenuItem>
+                      )}
                       <MenuItem onClick={() => onPinToggle(messageData)}>
                         <ListItemDecorator>
                           {messageData.pinned ? <PushPinIcon /> : <PushPinOutlinedIcon />}

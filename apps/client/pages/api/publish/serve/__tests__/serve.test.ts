@@ -773,19 +773,22 @@ describe('GET /api/publish/serve - inline artifact fallback and lead-artifact he
     expect(data).not.toContain('?a=0');
   });
 
-  it('keeps the placeholder card for a SCRIPTED artifact on a Bearer-gated reply', async () => {
-    // The page's inherited `script-src 'none'` would leave an inlined scripted artifact
-    // half-broken (markup and CSS, dead JS), so it stays a card that points at the app.
+  it('renders a scripted artifact as a code view on a Bearer-gated reply', async () => {
+    // A scripted document cannot be inlined as srcdoc: the page inherits `script-src 'none'`,
+    // which would kill the script while leaving markup and CSS alive -- a half-broken render.
+    // Instead the source is shown as a syntax-highlighted code block (CSP-safe; no <script>
+    // element is emitted, so the JS never executes even though the text is visible).
     mockArtifactFindOne.mockReturnValue(gatedReply({ renderedBody: SCRIPTED_HTML }));
     const { res, promise } = run(['r', 'r-gated-inline'], { raw: true, user: member });
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
     const data = res._getData() as string;
-    expect(data).toContain(CARD_ELEMENT);
+    // Code view shown, not an srcdoc frame.
+    expect(data).toContain('b4m-code');
     expect(data).not.toContain('srcdoc=');
-    expect(data).not.toContain('window.ok=1');
-    expect(data).not.toContain('SCRIPTED_BODY');
+    // The raw script element must not appear -- the content is escaped inside <pre>.
+    expect(data).not.toContain('<script>window.ok=1</script>');
   });
 
   it('leads with a full-bleed hero frame when the reply OPENS with an artifact, prose after it', async () => {

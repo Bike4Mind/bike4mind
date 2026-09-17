@@ -20,7 +20,7 @@ import { type MigrationFile } from './index';
  * build and autoIndex cannot produce an IndexKeySpecsConflict.
  */
 const migration: MigrationFile = {
-  id: 20260917000000,
+  id: 20260917000200,
   name: 'ensure quest corrects index',
 
   up: async () => {

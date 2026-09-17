@@ -303,6 +303,11 @@ const quality = (row: ArmRow, value: number) => (row.groundTruthApplies ? value.
  * Column order puts the geometry first and the quality second on purpose: the geometry is what this
  * comparison is FOR, and the quality columns are the check that a wider band actually bought better
  * retrieval rather than just rescaling the same ordering.
+ *
+ * `queries` sits with the counts because it is the denominator every quality column is measured over,
+ * and a reader comparing two rows needs to see it. It is NOT the drift guard: `assertSameQuerySet`
+ * already makes an arm scored on a different question set unrepresentable, so this column reports a
+ * number rather than defending one.
  */
 export function formatComparisonTable(rows: readonly ArmRow[]): string {
   const header = [
@@ -310,6 +315,7 @@ export function formatComparisonTable(rows: readonly ArmRow[]): string {
     pad('files', 8),
     pad('chunks', 8),
     pad('skipped', 8),
+    pad('queries', 8),
     pad('band min', 10),
     pad('band max', 10),
     pad('width', 8),
@@ -328,6 +334,7 @@ export function formatComparisonTable(rows: readonly ArmRow[]): string {
       pad(String(r.filesInScope), 8),
       pad(String(r.chunksScored), 8),
       pad(String(r.chunksExcluded), 8),
+      pad(String(r.queries), 8),
       pad(num(r.band.min, 4), 10),
       pad(num(r.band.max, 4), 10),
       pad(num(r.band.width, 4), 8),
