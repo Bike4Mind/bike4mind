@@ -21,6 +21,12 @@ import { reembedMementosForUser } from '@server/memory/reembedMementos';
  */
 const BATCH_SIZE = 25;
 
+// failedMementos is a diagnostic sample, not a ledger: `failed` carries the true count, so the
+// omitted number is always `failed - failedMementos.length`. Capped because it has one entry per
+// failed MEMENTO rather than per user - a provider outage during a page of 25 users with a few
+// hundred stale mementos each would otherwise put thousands of strings in one response.
+const MAX_REPORTED_MEMENTO_FAILURES = 50;
+
 const bodySchema = z.object({
   skip: z.number().int().nonnegative().default(0),
   // Defaults to a dry run: reembedMementosForUser makes a provider call per stale memento, so a
@@ -95,7 +101,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       totals.reembedded += stats.reembedded;
       totals.failed += stats.failed;
       totals.skippedEmpty += stats.skippedEmpty;
-      failedMementos.push(...stats.errors.map(error => `user ${userId} ${error}`));
+      for (const error of stats.errors) {
+        if (failedMementos.length >= MAX_REPORTED_MEMENTO_FAILURES) break;
+        failedMementos.push(`user ${userId} ${error}`);
+      }
     } catch (err) {
       // One user with no resolvable credential (reembedMementosForUser throws before its own
       // per-memento try/catch can run) must not abort the rest of the page.
@@ -110,8 +119,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   // against the QUERIED set specifically (a stale-but-unembedded memento can leave it via
   // reembedMementosForUser without this filter ever having seen it), not the repairable set in
   // general - a page only counts as "more to do" if it actually shrank what THIS filter re-queries.
-  // A fully-stuck page stops the loop here instead, with failedUsers/failedMementos telling the
-  // operator who needs a credential fixed or which mementos need attention before retrying.
+  // A fully-stuck page stops the loop here instead, with failedUsers naming who needs a credential
+  // fixed and failed/failedMementos showing how many mementos failed and a sample of which.
   const pageMadeProgress = execute ? totals.reembedded > 0 : true;
 
   return res.json({

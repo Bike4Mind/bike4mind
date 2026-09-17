@@ -278,4 +278,31 @@ describe('/api/admin/mementos/reembed', () => {
     expect(body.failed).toBe(1);
     expect(body.failedMementos).toEqual(['user u1 memento m1: provider rate limited']);
   });
+
+  it('caps failedMementos while keeping failed as the true count', async () => {
+    // One entry per failed MEMENTO, not per user, so a provider outage across a full page is
+    // unbounded without a cap. `failed` stays authoritative; the omitted count is derivable from it.
+    userIdPage = Array.from({ length: 25 }, (_, i) => ({ _id: `u-${i}` }));
+    reembedMock.mockImplementation((userId: string) =>
+      Promise.resolve({
+        total: 40,
+        alreadyCurrent: 0,
+        reembedded: 0,
+        failed: 40,
+        skippedEmpty: 0,
+        errors: Array.from({ length: 40 }, (_, i) => `memento ${userId}-m${i}: 429 rate limited`),
+      })
+    );
+
+    const { req, res } = makeReq({ skip: 0, execute: true });
+    await (handler as any)._post(req, res);
+
+    const body = res._getJSONData();
+    expect(body.failed).toBe(1000);
+    expect(body.failedMementos).toHaveLength(50);
+    // Still a usable sample: the entries that survived carry their owning userId.
+    expect(body.failedMementos[0]).toBe('user u-0 memento u-0-m0: 429 rate limited');
+    // A page that repaired nothing must still halt the loop.
+    expect(body.hasMore).toBe(false);
+  });
 });
