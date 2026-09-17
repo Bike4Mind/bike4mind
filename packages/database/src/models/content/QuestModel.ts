@@ -103,6 +103,9 @@ const RetrievalSummarySchema = subSchema({
   forcedSkipReason: { type: String, required: false },
   surfaces: [{ type: String, required: false }],
   dataLakeTags: [{ type: String, required: false }],
+  // The subset of dataLakeTags that actually contributed files - see the Zod field's doc for why
+  // absent means "attribution inconclusive", not "no lake contributed".
+  dataLakeTagsWithCandidates: [{ type: String, required: false }],
   // default: undefined for the same auto-vivification reason as dataLakeTags above - and here it
   // also preserves the presence contract the offline replay depends on: absence means the turn's
   // scope was never recorded, which a materialized empty array would report as "no lake in scope".
