@@ -105,6 +105,12 @@ describe('OrganizationAnalysisSection', () => {
     expect(screen.getByTestId('org-analysis-by-member')).toHaveTextContent('Alice');
     expect(screen.getByTestId('org-analysis-acl-only')).toHaveTextContent('Bob');
     expect(screen.queryByTestId('org-analysis-stamp-only')).not.toBeInTheDocument();
+
+    // The list is the User.organizationId pointer, not authorship, so someone credited in the
+    // by-member table above can legitimately appear here too. Copy that denies authorship
+    // contradicts that table for any owner whose pointer names their personal org.
+    expect(screen.getByTestId('org-analysis-acl-only')).not.toHaveTextContent(/authoring nothing/i);
+    expect(screen.getByTestId('org-analysis-acl-only')).toHaveTextContent(/points at another organization/i);
   });
 
   it('shows a spinner while fetching and an alert when the read fails', () => {
