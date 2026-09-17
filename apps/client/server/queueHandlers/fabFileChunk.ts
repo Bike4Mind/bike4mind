@@ -200,7 +200,20 @@ async function accountFileFailure(params: {
       });
       // That write is the only thing that destroys the outgoing text, and it is the sole record of
       // why the file was already failing - so it survives here rather than nowhere.
-      if (replaced) logger.warn(`Superseded the stored error on ${fabFileId}: ${replaced}`);
+      if (replaced) {
+        logger.warn(`Superseded the stored error on ${fabFileId}: ${replaced}`);
+        // The client already cleared isChunking/toasted on the first failure (isFirstFailure below
+        // is false here), but a superseding refusal replaces WHY it failed with a different,
+        // terminal reason - notify again so the toast/tooltip text isn't stale until reload.
+        await sendToClient(userId, Resource.websocket.managementEndpoint, {
+          action: 'update_file_chunk_vector_status',
+          fabFileId,
+          ...(action === 'Vectorize enqueue'
+            ? { vectorizeStatus: 'failed' as const }
+            : { chunkStatus: 'failed' as const }),
+          failedMessage: errorMessage,
+        }).catch(err => logger.error(`Error notifying superseded failure for ${fabFileId}: ${err}`));
+      }
     } catch (err) {
       // Swallowed on purpose: the refusal itself is already accounted and about to be rethrown, and
       // the transaction means a failure here left BOTH records untouched - the file keeps the
