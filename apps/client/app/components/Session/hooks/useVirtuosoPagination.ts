@@ -1,4 +1,4 @@
-import { RefObject, useCallback, useEffect, useRef, useState } from 'react';
+import { RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { type VirtuosoHandle } from 'react-virtuoso';
 
 const FIRST_ITEM_START = 100_000;
@@ -64,7 +64,8 @@ export function useVirtuosoPagination({
   // Reset firstItemIndex when session changes.
   // Declared BEFORE the prepend detection effect so that on initial mount,
   // the reset runs first and the prepend detection correctly sets prevLengthRef.
-  useEffect(() => {
+  // Layout effect to stay ordered with that one, which has to run before paint.
+  useLayoutEffect(() => {
     setFirstItemIndex(FIRST_ITEM_START);
     prevLengthRef.current = 0;
     prevOldestIdRef.current = undefined;
@@ -73,7 +74,14 @@ export function useVirtuosoPagination({
   // Only adjust firstItemIndex when OLDER items are prepended (pagination),
   // not when new messages are appended. Detect prepends by checking whether
   // the oldest item (last in filteredChatHistory, first after reversal) changed.
-  useEffect(() => {
+  //
+  // Layout effect, not a passive one: Virtuoso needs firstItemIndex to change in the
+  // same paint as the longer array. A frame that pairs new data with the old index is
+  // read as an APPEND, so every row lands at the wrong offset - older messages paint
+  // over the ones on screen - and the correction then snaps the view. Landing back near
+  // the top re-fires startReached, which loads another page, and the transcript walks
+  // itself to the beginning. Running before paint means that frame is never shown.
+  useLayoutEffect(() => {
     const prevLength = prevLengthRef.current;
     const newLength = filteredChatHistory.length;
     const oldestId = filteredChatHistory[filteredChatHistory.length - 1]?.id;

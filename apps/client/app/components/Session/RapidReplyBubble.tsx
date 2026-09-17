@@ -1,5 +1,6 @@
 import { Box, Typography } from '@mui/joy';
 import type { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
+import './markdown/observatory.css';
 
 interface RapidReplyBubbleProps {
   chatCompletion: ReturnType<typeof useSubscribeChatCompletion>['chatCompletion'];
@@ -22,22 +23,26 @@ const RapidReplyBubble = ({ chatCompletion }: RapidReplyBubbleProps) => {
         width: '100%',
         mt: 2,
         mb: 1,
-        p: 2,
-        backgroundColor: 'chatbox.replyBg',
+        // Unframed like the reply body below, so no inline padding either.
+        py: 2,
+        px: 0,
+        // Unframed, matching the reply body below it: the two are the same voice,
+        // and the spinner under the streaming reply already carries progress.
+        backgroundColor: 'transparent',
         borderRadius: '8px',
         position: 'relative',
       }}
     >
-      <Typography
-        level="body-md"
-        sx={{
-          color: 'text.primary',
-          whiteSpace: 'pre-wrap',
-          lineHeight: 1.5,
-          '& p:last-child': { mb: '0 !important' },
-        }}
-      >
-        {rapidReply.content}
+      {/* Level and color mirror the reply body's wrapper in PromptReplies, so the
+          two set the same base size for observatory.css's em-based scale. */}
+      <Typography level="body-md" component="div" sx={{ color: 'text.primary' }}>
+        {/* Same reading treatment as the reply below. The class goes on a plain
+            <div>, never on the Typography: Joy's emotion class on that element
+            would tie on specificity and win on injection order. Content is plain
+            text, not markdown, so it is a single hand-written <p>. */}
+        <div className="b4m-md">
+          <p style={{ whiteSpace: 'pre-wrap' }}>{rapidReply.content}</p>
+        </div>
       </Typography>
     </Box>
   );

@@ -1,4 +1,5 @@
 import { DISCOVERY_PRICE_NOTE_PREFIX } from '@bike4mind/common';
+import { adapterPriceTiers } from '@bike4mind/llm-adapters';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { collectStaticTextModels, generateModelPriceSeed } from './generateModelPriceSeed';
 import { seedModelPrices, SEED_NOTE } from './seedModelPrices';
@@ -52,6 +53,25 @@ describe('model price seed (no DB)', () => {
     const tier = Object.values(realtime!.pricing)[0] as Record<string, number>;
     expect(tier.audio_input).toBeGreaterThan(0);
     expect(tier.audio_output).toBeGreaterThan(0);
+  });
+
+  it('seeds exactly the models the in-code price carry covers', async () => {
+    // The two share one backend list (staticPriceBackends) but filter it
+    // separately, and only this crosses the package boundary to compare them. A
+    // model seeded with no carried tier loses its cache rate on a first discovery
+    // write, where getTextModelCost then settles cached reads at
+    // input * CACHE_READ_MULTIPLIER - 10% of input, against real rates near 2%.
+    const carried = new Set((await adapterPriceTiers()).keys());
+    const seeded = new Set((await collectStaticTextModels()).filter(m => !m.freeToRun).map(m => String(m.id)));
+
+    expect(
+      [...seeded].filter(id => !carried.has(id)),
+      'seeded with no in-code tier to carry'
+    ).toEqual([]);
+    expect(
+      [...carried].filter(id => !seeded.has(id)),
+      'carried but absent from the seed'
+    ).toEqual([]);
   });
 
   it('every seed entry carries a nonzero price (a zero row would settle calls free)', () => {

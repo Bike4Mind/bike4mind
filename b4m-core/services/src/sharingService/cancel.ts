@@ -98,7 +98,13 @@ export const cancelInvite = async (
       const before = invite.recipients.pending.length;
       invite.recipients.pending = invite.recipients.pending.filter(p => p !== email);
       if (invite.recipients.pending.length < before) {
-        invite.remaining -= 1;
+        // Clamped, not decremented. A named invite can carry a `remaining` larger than its
+        // recipient count (the create body takes `available` at face value), and every gate that
+        // treats an empty `pending` as "nobody named" leans on `remaining` reaching zero when the
+        // last address goes - inviteVisibility's legacy inference, canViewInvite and acceptInvite.
+        // Decrementing left slots behind, so cancelling the only named recipient on such a row
+        // turned it into a redeemable share link. See inviteVisibility.ts's docblock.
+        invite.remaining = Math.max(0, Math.min(invite.remaining - 1, invite.recipients.pending.length));
         changed = true;
       }
     } else if (invite.remaining !== 0) {

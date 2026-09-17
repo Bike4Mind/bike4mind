@@ -4,6 +4,7 @@ import {
   ApiKeyType,
   ImageModels,
   BFL_SAFETY_TOLERANCE,
+  OPENAI_IMAGE_QUALITIES,
   XAI_IMAGE_MODELS,
   GenerateImageToolCall,
   isBflImageModel,
@@ -30,6 +31,7 @@ import { fileTypeFromBuffer } from 'file-type';
 import { v4 as uuidv4 } from 'uuid';
 import { persistGeneratedFileAsFabFile } from '../../helpers/persistGeneratedFile';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
+import { resolveImageArgs } from './resolveImageArgs';
 
 async function downloadImage(url: string) {
   // Handle data URLs (base64 images) from GPT-Image-1
@@ -190,20 +192,26 @@ export const imageGenerationTool: ToolDefinition = {
       const output_format = toolOutputFormat ?? imageConfig?.output_format;
       const background = toolBackground ?? imageConfig?.background;
 
-      // Default to gpt-image-2 (latest model), but step any gpt-image-2 selection -
-      // default or explicit - down to gpt-image-1.5 when transparency is requested:
-      // gpt-image-2 rejects background: 'transparent' outright, so sending it there
-      // would silently turn a valid request into a 400.
+      // imageConfig is a default, not a pin: the tool call wins for n/size/quality,
+      // while the model stays the client's Smart Tools selection.
+      const {
+        model: resolvedModel,
+        n,
+        size,
+        quality,
+      } = resolveImageArgs(imageConfig, {
+        n: toolN,
+        size: toolSize,
+        quality: toolQuality,
+      });
+
+      // Step any gpt-image-2 selection - default or explicit - down to gpt-image-1.5 when
+      // transparency is requested: gpt-image-2 rejects background: 'transparent' outright,
+      // so sending it there would silently turn a valid request into a 400.
       // (OpenAIImageService.resolveGptImageOutputOptions is the last-resort backstop
       // that strips 'transparent' if a gpt-image-2 request reaches it regardless.)
       const wantsTransparent = background === 'transparent';
-      let model = imageConfig?.model || ImageModels.GPT_IMAGE_2;
-      if (wantsTransparent && isGPTImage2Model(model)) {
-        model = ImageModels.GPT_IMAGE_1_5;
-      }
-      const n = toolN ?? imageConfig?.n ?? 1;
-      const quality = imageConfig?.quality || toolQuality;
-      const size = imageConfig?.size || toolSize;
+      const model = wantsTransparent && isGPTImage2Model(resolvedModel) ? ImageModels.GPT_IMAGE_1_5 : resolvedModel;
       const safety_tolerance = imageConfig?.safety_tolerance || toolSafetyTolerance;
       const width = imageConfig?.width;
       const height = imageConfig?.height;
@@ -427,8 +435,9 @@ export const imageGenerationTool: ToolDefinition = {
           },
           quality: {
             type: 'string',
-            description: 'The quality of the image that will be generated (OpenAI only)',
-            enum: ['standard', 'hd'],
+            description:
+              "The quality tier of the image to generate (OpenAI GPT-image models only). If the user states a tier (e.g. 'low', 'medium', 'high'), pass it through. Omit this field when the user does not state one, so their saved preference applies. Legacy values are accepted: 'standard' maps to 'medium' and 'hd' to 'high'.",
+            enum: [...OPENAI_IMAGE_QUALITIES],
           },
           n: {
             type: 'number',

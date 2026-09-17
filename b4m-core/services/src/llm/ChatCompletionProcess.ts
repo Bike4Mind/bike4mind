@@ -4148,7 +4148,7 @@ export class ChatCompletionProcess {
             // prompt contains FORCE_FALLBACK_TEST_MARKER, simulate a provider-wide Anthropic
             // outage: fail every Bedrock- and Anthropic-backed hop so the real loop multi-hops
             // off the Anthropic path entirely and degrades to a cross-provider model (OpenAI/
-            // Gemini), rendering the "Fallback Model Used" badge with the provider-path switch.
+            // Gemini), rendering the "Fallback: <model>" badge with the provider-path switch.
             // Double-gated (E2E-only, never production) and confined to the Anthropic family, so
             // a normal request can never trigger it and the surviving cross-provider hop runs for
             // real. The error mimics a Bedrock capacity outage (ServiceUnavailableException) so it

@@ -12,6 +12,7 @@
  *   pages/api/<stub>.ts (per-package)                  - Next.js API stubs
  *   server/premium-generated/<stub>.ts (per-package)   - SST Lambda handler stubs
  *   server/premium-generated/premiumLlmTools.generated.ts - LLM tool contributions
+ *   server/premium-generated/premiumSystemPrompts.generated.ts - system prompt contributions
  *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
  *
  * Two distinct "empty" forms when no premium packages are present:
@@ -598,6 +599,36 @@ function generateLlmTools(packages) {
   );
 }
 
+function generateSystemPrompts(packages) {
+  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumSystemPrompts.generated.ts');
+  const typeImport = `import type { DefaultSystemPrompt } from '@server/utils/systemPrompts/defaults';`;
+
+  const contributors = packages.filter(p => p.contributions.systemPromptsExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumSystemPrompts: DefaultSystemPrompt[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.systemPromptsExport, p.name, 'systemPromptsExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => `import { systemPrompts as prompts${i} } from '${p.contributions.systemPromptsExport}';`)
+    .join('\n');
+
+  const spreads = contributors.map((_, i) => `  ...prompts${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumSystemPrompts: DefaultSystemPrompt[] = [\n${spreads}\n];\n`
+  );
+}
+
 // --- Generate premium migrations ---
 
 // Premium overlays contribute DB migrations (b4mContributions.migrationsExport -> a module
@@ -793,6 +824,7 @@ generateNotebookSidenav(linkedPackages);
 generateApiStubs(linkedPackages);
 generateServerHandlerStubs(linkedPackages);
 generateLlmTools(linkedPackages);
+generateSystemPrompts(linkedPackages);
 // Relative-import glue: needs no node_modules link, so it gets the full list.
 // Any NEW generator goes in whichever group matches how it imports the overlay.
 generateMigrations(packages);
