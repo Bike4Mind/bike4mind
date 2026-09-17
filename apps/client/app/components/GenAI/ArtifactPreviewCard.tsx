@@ -9,7 +9,6 @@ import {
   ExpandMoreOutlined as ExpandMoreIcon,
   ExpandLessOutlined as ExpandLessIcon,
   CodeOutlined as CodeViewIcon,
-  ShareOutlined as ShareIcon,
 } from '@mui/icons-material';
 import useSessionLayout, {
   setSessionLayout,
@@ -243,22 +242,28 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
     <Card
       variant="outlined"
       data-testid={`${testIdPrefix}-artifact-card`}
-      sx={{
+      sx={theme => ({
         // surface2 is the sidebar/header surface. Joy's background.level1 default is not
         // defined by this theme, so the cards would otherwise sit on an unpicked color.
         backgroundColor: 'background.surface2',
+        // Same card recipe as a fenced code block (markdown/syntaxTheme.ts): the
+        // fill stays the theme's own surface and a brand-blue veil falls across
+        // it, so every framed thing a reply produces is one family. backgroundImage
+        // rather than a background shorthand, so the fill above still resolves per
+        // color scheme.
+        backgroundImage: `linear-gradient(180deg, ${theme.palette.reading.cardTintTop}, ${theme.palette.reading.cardTintBottom})`,
         borderRadius: '8px',
         position: 'relative',
         overflow: 'visible',
         borderWidth: 1,
-        borderColor: isSelected ? 'primary.500' : 'neutral.outlinedBorder',
+        borderColor: isSelected ? 'primary.500' : theme.palette.reading.cardLine,
         transition: 'all 0.2s ease-in-out',
         cursor: collapsible ? 'pointer' : 'default',
         '&:hover': {
           transform: 'translateY(-2px)',
           boxShadow: 'sm',
         },
-      }}
+      })}
       onClick={handleToggleExpand}
     >
       {/* Type badge: the icon and the type label are one pill overhanging the card
@@ -270,7 +275,12 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
         sx={theme => ({
           position: 'absolute',
           top: '-8px',
-          left: '-8px',
+          // Below `sm` the message stack drops its inline padding (Session/MessageContent),
+          // so the card sits flush with the screen edge and a left overhang would be
+          // clipped. Same breakpoint as that padding; there the pill sits inset from the
+          // card edge instead, keeping only the top overhang.
+          left: '16px',
+          [theme.breakpoints.up('sm')]: { left: '-8px' },
           zIndex: 1,
           backgroundColor: brand[800],
           color: 'text.primary',
@@ -402,6 +412,36 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
               <ExpandIcon />
             </IconButton>
           </Tooltip>
+
+          {source && (
+            // The card's own onClick collapses it, so swallow clicks meant for the button.
+            <Box onClick={e => e.stopPropagation()} sx={{ display: 'flex', flexShrink: 0 }}>
+              <Button
+                size="sm"
+                variant="solid"
+                onClick={handleShare}
+                data-testid={`${testIdPrefix}-artifact-share-btn`}
+                sx={{
+                  backgroundColor: brand[800],
+                  color: '#fff',
+                  fontWeight: 600,
+                  // Pin to the same rendered height as the sm IconButtons beside it.
+                  '--Button-minHeight': '2rem',
+                  '--Button-paddingBlock': '0.25rem',
+                  '--Button-paddingInline': '12px',
+                  lineHeight: 1,
+                  // Colour alone on hover. It sits in a row of still, quiet icons, where a
+                  // button that grows and glows is the only thing moving on the card.
+                  transition: 'background-color 0.15s ease',
+                  '&:hover': {
+                    backgroundColor: brand[900],
+                  },
+                }}
+              >
+                Share
+              </Button>
+            </Box>
+          )}
         </Stack>
 
         {stats && (
@@ -447,34 +487,6 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
           )
         ) : null}
 
-        {isExpanded && source && (
-          <Box sx={{ mt: 2 }} onClick={e => e.stopPropagation()}>
-            <Button
-              size="sm"
-              variant="solid"
-              startDecorator={<ShareIcon sx={{ fontSize: 16 }} />}
-              onClick={handleShare}
-              data-testid={`${testIdPrefix}-artifact-share-btn`}
-              sx={{
-                backgroundColor: brand[800],
-                color: '#fff',
-                fontWeight: 600,
-                // Pin to the same rendered height as the sm IconButtons in the card header.
-                '--Button-minHeight': '2rem',
-                '--Button-paddingBlock': '0.25rem',
-                lineHeight: 1,
-                transition: 'transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease',
-                '&:hover': {
-                  backgroundColor: brand[900],
-                  transform: 'scale(1.04)',
-                  boxShadow: '0 0 14px rgba(11, 107, 203, 0.5)',
-                },
-              }}
-            >
-              Share
-            </Button>
-          </Box>
-        )}
         {/* Stop propagation so clicks inside the modal don't reach the Card's
             handleToggleExpand and toggle the expand state behind the open dialog. */}
         <Box onClick={e => e.stopPropagation()}>{artifactShareModal}</Box>
