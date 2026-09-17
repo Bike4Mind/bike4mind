@@ -90,6 +90,7 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     expect(findActive).toHaveBeenCalledWith([], [], ['org-a', 'org-b'], 'u1', {
       grantedLakeIds: [],
       orgGrantedLakes: {},
+      supersededOwnLakeIds: [],
     });
   });
 
@@ -102,7 +103,11 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
       entitlementKeys: ['k:pro'],
     });
     expect(findMembershipOrgIds).toHaveBeenCalledWith('u1');
-    expect(spy).toHaveBeenCalledWith(['x'], ['k:pro'], ['org123'], 'u1', { grantedLakeIds: [], orgGrantedLakes: {} });
+    expect(spy).toHaveBeenCalledWith(['x'], ['k:pro'], ['org123'], 'u1', {
+      grantedLakeIds: [],
+      orgGrantedLakes: {},
+      supersededOwnLakeIds: [],
+    });
   });
 
   it('resolves an empty membership set (never calling db.organizations) for an id-less caller', async () => {
@@ -115,7 +120,11 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     // An id-less caller is a member of nothing - the resolver must not even ask, since there is
     // no id to resolve membership for.
     expect(findMembershipOrgIds).not.toHaveBeenCalled();
-    expect(spy).toHaveBeenCalledWith([], [], [], undefined, { grantedLakeIds: [], orgGrantedLakes: {} });
+    expect(spy).toHaveBeenCalledWith([], [], [], undefined, {
+      grantedLakeIds: [],
+      orgGrantedLakes: {},
+      supersededOwnLakeIds: [],
+    });
   });
 
   it('string-coerces an ObjectId-like id before resolving membership and querying', async () => {
@@ -127,7 +136,11 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
       user: { id: { toString: () => 'user-oid' }, tags: [] },
     });
     expect(findMembershipOrgIds).toHaveBeenCalledWith('user-oid');
-    expect(spy).toHaveBeenCalledWith([], [], [], 'user-oid', { grantedLakeIds: [], orgGrantedLakes: {} });
+    expect(spy).toHaveBeenCalledWith([], [], [], 'user-oid', {
+      grantedLakeIds: [],
+      orgGrantedLakes: {},
+      supersededOwnLakeIds: [],
+    });
   });
 
   it('passes the resolved membership set through to the collection query unchanged', async () => {
@@ -142,6 +155,7 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     expect(spy).toHaveBeenCalledWith([], [], ['org-hex', 'org-hex-2'], 'u1', {
       grantedLakeIds: [],
       orgGrantedLakes: {},
+      supersededOwnLakeIds: [],
     });
   });
 
@@ -463,7 +477,13 @@ describe('getDynamicDataLakeAccess - the persisted access-grant rung', () => {
     over: { enforce?: boolean | undefined; organizationIds?: string[]; orgRows?: Record<string, unknown[]> } = {}
   ): DataLakeAccessContext => ({
     db: {
-      dataLakes: { findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue(lakes) } as never,
+      dataLakes: {
+        findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue(lakes),
+        // The caller created none of these lakes, so the supersession read resolves to an empty
+        // exclusion without ever reaching the grant collection. Wired rather than left off so these
+        // tests exercise the real path instead of its degrade-open catch.
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+      } as never,
       organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(over.organizationIds ?? []) },
       // Dispatches on the principal it was asked about. A mock that answers every query with the
       // USER fixture would hand user-shaped rows back to the `('organization', orgId)` lookup, so an
@@ -495,6 +515,7 @@ describe('getDynamicDataLakeAccess - the persisted access-grant rung', () => {
     expect(ctxWithGrant.db.dataLakes!.findActiveByUserTagsAndEntitlements).toHaveBeenCalledWith([], [], [], 'grantee', {
       grantedLakeIds: ['theirs'],
       orgGrantedLakes: {},
+      supersededOwnLakeIds: [],
     });
   });
 
@@ -548,7 +569,7 @@ describe('getDynamicDataLakeAccess - the persisted access-grant rung', () => {
       [],
       ['orgA', 'orgB'],
       'grantee',
-      { grantedLakeIds: [], orgGrantedLakes: { orgA: ['theirs-in-a'] } }
+      { grantedLakeIds: [], orgGrantedLakes: { orgA: ['theirs-in-a'] }, supersededOwnLakeIds: [] }
     );
     // And the in-memory pass restores it past its own gate, as the id arm's counterpart.
     expect(res.dataLakeTags).toEqual(['datalake:theirs-in-a']);
@@ -571,7 +592,7 @@ describe('getDynamicDataLakeAccess - the persisted access-grant rung', () => {
       [],
       ['orgB'],
       'grantee',
-      { grantedLakeIds: [], orgGrantedLakes: {} }
+      { grantedLakeIds: [], orgGrantedLakes: {}, supersededOwnLakeIds: [] }
     );
   });
 

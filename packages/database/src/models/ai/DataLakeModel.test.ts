@@ -271,6 +271,43 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
   });
 });
 
+describe('DataLakeRepository.findIdsCreatedBy', () => {
+  setupMongoTest();
+
+  it('returns the ids of every lake the user created, in any status, and nothing else', async () => {
+    // Any status on purpose: it is the candidate set for the owner-arm exclusion, and the archived,
+    // deleted and transitional views each query a different one.
+    const active = await dataLakeRepository.create(baseLake({ slug: 'active', createdByUserId: 'alice' }));
+    const archived = await dataLakeRepository.create(
+      baseLake({ slug: 'archived', createdByUserId: 'alice', status: 'archived' })
+    );
+    await dataLakeRepository.create(baseLake({ slug: 'bobs', createdByUserId: 'bob' }));
+
+    expect((await dataLakeRepository.findIdsCreatedBy('alice')).sort()).toEqual([active.id, archived.id].sort());
+    expect(await dataLakeRepository.findIdsCreatedBy('nobody')).toEqual([]);
+  });
+
+  it('returns plain id strings, comparable to the ids the rest of the service layer passes around', async () => {
+    // The exclusion set is compared against `lake.id` (a string) in the service layer and cast back
+    // to `_id` in the query, so an ObjectId leaking out here would break the first and not the second.
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'mine', createdByUserId: 'alice' }));
+    const ids = await dataLakeRepository.findIdsCreatedBy('alice');
+
+    expect(ids).toEqual([lake.id]);
+    expect(typeof ids[0]).toBe('string');
+  });
+
+  it('never treats a blank caller id as a creator', async () => {
+    // Inserted past the model, because `createdByUserId` is `required` and so rejects '' today. A
+    // row like this is what a legacy write or a repair script leaves behind, and without the guard
+    // `{ createdByUserId: '' }` is a perfectly good query that hands every one of them to a caller
+    // who has no id at all.
+    await DataLakeModel.collection.insertOne({ ...baseLake({ slug: 'orphan' }), createdByUserId: '' });
+
+    expect(await dataLakeRepository.findIdsCreatedBy('')).toEqual([]);
+  });
+});
+
 describe('DataLakeRepository.findAccessible — Private-by-default (HTTP/management path)', () => {
   setupMongoTest();
 
@@ -304,6 +341,60 @@ describe('DataLakeRepository.findAccessible — Private-by-default (HTTP/managem
     expect(
       (await dataLakeRepository.findAccessible(ctx({ userId: 'bob' }), { grantedLakeIds: [lake.id] })).map(l => l.slug)
     ).toEqual(['transferred']);
+  });
+
+  it('the owner arm stops at creator provenance once ownership has moved off the creator', async () => {
+    // Alice creates an org lake, then leaves orgA. The departure
+    // hand-off mints an owner grant for a successor and lapses hers, so she is no longer the
+    // EFFECTIVE owner (resolveEffectiveOwnerIds) - but `createdByUserId` never changes, which is
+    // what kept the row in her list after the by-id gate had started refusing her.
+    const lake = await dataLakeRepository.create(
+      baseLake({ slug: 'handed-on', createdByUserId: 'alice', organizationId: 'orgA' })
+    );
+    const departedAlice = ctx({ userId: 'alice', organizationIds: [] });
+
+    // The bug, pinned: with no exclusion set the bare provenance arm still hands her the row, so a
+    // caller that forgets to resolve one gets the old behavior rather than a silent pass.
+    expect((await dataLakeRepository.findAccessible(departedAlice)).map(l => l.slug)).toEqual(['handed-on']);
+
+    expect(await dataLakeRepository.findAccessible(departedAlice, { supersededOwnLakeIds: [lake.id] })).toEqual([]);
+  });
+
+  it('supersession narrows the owner arm alone - every other claim on the same lake survives it', async () => {
+    const lake = await dataLakeRepository.create(
+      baseLake({ slug: 'handed-on', createdByUserId: 'alice', organizationId: 'orgA' })
+    );
+
+    // Demoted, not evicted: `transferLakeOwnership` leaves the prior owner a curator grant, and a
+    // curator must keep seeing the lake. The grant arm is an $or sibling, so the exclusion on the
+    // owner arm cannot reach it.
+    expect(
+      (
+        await dataLakeRepository.findAccessible(ctx({ userId: 'alice' }), {
+          supersededOwnLakeIds: [lake.id],
+          grantedLakeIds: [lake.id],
+        })
+      ).map(l => l.slug)
+    ).toEqual(['handed-on']);
+
+    // Still in the org: the org arm carries her, exactly as it carries any other orgA member.
+    expect(
+      (
+        await dataLakeRepository.findAccessible(ctx({ userId: 'alice', organizationIds: ['orgA'] }), {
+          supersededOwnLakeIds: [lake.id],
+        })
+      ).map(l => l.slug)
+    ).toEqual(['handed-on']);
+
+    // And it narrows nobody else: the exclusion is ANDed onto `createdByUserId`, so an id in the
+    // set that the caller did not create is inert rather than a hole punched in their access.
+    expect(
+      (
+        await dataLakeRepository.findAccessible(ctx({ userId: 'bob', organizationIds: ['orgA'] }), {
+          supersededOwnLakeIds: [lake.id],
+        })
+      ).map(l => l.slug)
+    ).toEqual(['handed-on']);
   });
 
   it('the ORG-grant arm lifts the gate only inside the GRANTING org, for a caller in both orgs', async () => {

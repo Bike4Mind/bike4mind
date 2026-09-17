@@ -33,7 +33,11 @@ describe('listDataLakes / listAllDataLakes - canPreauthorize', () => {
     // rung is platform-admin. The affordance must go dark rather than send an id session-create 403s.
     const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'someone-else' });
     const db = {
-      dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([theirs]) },
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn(),
+        find: vi.fn().mockResolvedValue([theirs]),
+      },
       dataLakeAccessGrants: grantRepo(),
       organizations: { findIdsWithAdminRights: vi.fn().mockResolvedValue([]) },
     };
@@ -48,7 +52,11 @@ describe('listDataLakes / listAllDataLakes - canPreauthorize', () => {
   it('is TRUE for the lake creator', async () => {
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
     const db = {
-      dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() },
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([mine]),
+        find: vi.fn(),
+      },
       dataLakeAccessGrants: grantRepo(),
     };
 
@@ -61,7 +69,11 @@ describe('listDataLakes / listAllDataLakes - canPreauthorize', () => {
     // upload lands - otherwise "test this lake" is offered on exactly the lake it cannot serve.
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me', status: 'draft' });
     const db = {
-      dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() },
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([mine]),
+        find: vi.fn(),
+      },
       dataLakeAccessGrants: grantRepo(),
     };
 
@@ -74,7 +86,11 @@ describe('listDataLakes / listAllDataLakes - canPreauthorize', () => {
   it('is TRUE for a platform admin who ALSO holds a curator grant - the no-code unblock', async () => {
     const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'someone-else' });
     const db = {
-      dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([theirs]) },
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn(),
+        find: vi.fn().mockResolvedValue([theirs]),
+      },
       dataLakeAccessGrants: grantRepo([
         { dataLakeId: 'theirs', principalType: 'user', principalId: 'admin', role: 'curator' },
       ]),
@@ -95,7 +111,11 @@ describe('listDataLakes / listAllDataLakes - canPreauthorize', () => {
       organizationId: 'org-1',
     });
     const db = {
-      dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([orgLake]) },
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn(),
+        find: vi.fn().mockResolvedValue([orgLake]),
+      },
       dataLakeAccessGrants: grantRepo(),
       organizations: { findIdsWithAdminRights: vi.fn().mockResolvedValue(['org-1']) },
     };
@@ -112,7 +132,11 @@ describe('listDataLakes / listAllDataLakes - canPreauthorize', () => {
       organizationId: 'org-1',
     });
     const db = {
-      dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([orgLake]) },
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn(),
+        find: vi.fn().mockResolvedValue([orgLake]),
+      },
       dataLakeAccessGrants: grantRepo(),
     };
 
@@ -121,7 +145,13 @@ describe('listDataLakes / listAllDataLakes - canPreauthorize', () => {
   });
 
   it('is FALSE for every built-in fallback lake, which session-create could only 404', async () => {
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([]),
+        find: vi.fn(),
+      },
+    };
     const result = await listDataLakes(ctx({ userId: 'me', userTags: ['Opti'] }), { db });
     expect(result.length).toBeGreaterThan(0);
     expect(result.every(l => l.canPreauthorize === false)).toBe(true);

@@ -64,7 +64,14 @@ interface ResearchTaskProcessAdapters {
     // 'find' is forwarded straight to createFabFile, for its fallback tagger's prefix-overlap check.
     dataLakes: Pick<
       IDataLakeRepository,
-      'findByDatalakeTag' | 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findById' | 'find'
+      | 'findByDatalakeTag'
+      | 'findActiveByUserTags'
+      | 'findActiveByUserTagsAndEntitlements'
+      | 'findById'
+      | 'find'
+      // Anchors the ownership-supersession read that narrows the retrieval creator arm - see
+      // the identical pick on ToolContext (llm/tools/base/types.ts) and ChatCompletionFeatures.
+      | 'findIdsCreatedBy'
     >;
     // Required: this whole `db` object is passed through to ToolContext.db below, whose
     // `organizations` field is itself required (#1674 - the data-lake retrieval resolver reads

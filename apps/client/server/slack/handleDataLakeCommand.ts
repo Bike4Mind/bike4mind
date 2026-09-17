@@ -33,7 +33,7 @@ import { ingestSlackLinkIntoLake, type SlackLinkIngestDeps, type SlackLinkIngest
 /** DataLake repository surface the command needs (injected for testability). */
 export type DataLakeCommandRepo = Pick<
   IDataLakeRepository,
-  'findById' | 'findBySlug' | 'findByDatalakeTag' | 'find' | 'findAccessible'
+  'findById' | 'findBySlug' | 'findByDatalakeTag' | 'find' | 'findAccessible' | 'findIdsCreatedBy'
 >;
 
 export interface HandleDataLakeCommandParams {
