@@ -25,14 +25,17 @@ export const chatContract = defineEndpoint({
     'machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` ' +
     'entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` ' +
     'body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as ' +
-    '`type: "error"`, since the ACK was already sent. `type` is the failure signal for every failure ' +
-    'class (an abort, a provider timeout, a recovered stuck quest, credit exhaustion); `errorCode` ' +
-    'is an optional refinement present only when the failure is a classified billing reason - ' +
-    'currently `insufficient_credits`, `type: "error"` with the failure text in `reply`. A caller ' +
-    'must treat `type: "error"` as failure even when `errorCode` is absent, and must not read ' +
-    '`reply` as an answer without checking `type` first. A spend-cap-exceeded rejection is ' +
-    'checked before a quest exists and never reaches the poll path; it surfaces as a synchronous ' +
-    '422 on `/api/embed/chat` instead. Authenticate with an API key (`b4m_live_`) or a JWT.',
+    '`type: "error"`, since the ACK was already sent. A terminal `status: "stopped"` (a missing ' +
+    'session, a user-cancelled turn) is ALSO a failure even without `type: "error"` - it carries ' +
+    'an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure ' +
+    'signal for every classified failure class (an abort, a provider timeout, a recovered stuck ' +
+    'quest, credit exhaustion); `errorCode` is an optional refinement present only when the ' +
+    'failure is a classified billing reason. `QUEST_ERROR_CODES` has two members, but only ' +
+    '`insufficient_credits` reaches this poll path - a spend-cap-exceeded rejection is checked ' +
+    'before a quest exists and surfaces as a synchronous 422 on `/api/embed/chat` instead. A ' +
+    'caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when ' +
+    '`errorCode` is absent, and must not read `reply` as an answer without checking those first. ' +
+    'Authenticate with an API key (`b4m_live_`) or a JWT.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
@@ -57,14 +60,16 @@ export const chatContract = defineEndpoint({
           'Outcome fields of the quest polled at `GET /api/quests/{id}` after this ACK. A finished ' +
           'turn that failed is `status: "done"` with `type: "error"` and the failure text in ' +
           '`reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check ' +
-          '`type` first. `errorCode` is an optional refinement of `type: "error"`, present only for ' +
-          'a classified billing failure; credit exhaustion arrives here as `insufficient_credits`, ' +
-          'the same vocabulary the synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and ' +
-          '`/api/ai/tts` use. Most `type: "error"` turns - an abort, a provider timeout or overload, ' +
-          'a recovered stuck quest - have NO `errorCode`; its absence does not mean success, only ' +
-          'that the failure is unclassified. (A spend-cap-exceeded rejection is caught before a ' +
-          'quest exists and surfaces as a synchronous 422 on `/api/embed/chat` instead - it never ' +
-          'reaches this poll.) `type`/`errorCode` separate a classified failure only: a run ' +
+          '`type` first, and also treat a terminal `status: "stopped"` (a missing session, a ' +
+          'user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an ' +
+          'optional refinement of `type: "error"`, present only for a classified billing failure; ' +
+          'credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the ' +
+          'synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use. ' +
+          '`QUEST_ERROR_CODES` publishes a second member, `spend_cap_exceeded`, but that rejection ' +
+          'is caught before a quest exists and surfaces as a synchronous 422 on `/api/embed/chat` ' +
+          'instead - it can never appear here. Most `type: "error"` turns - an abort, a provider ' +
+          'timeout or overload, a recovered stuck quest - have NO `errorCode`; its absence does ' +
+          'not mean success, only that the failure is unclassified. `type`/`errorCode` separate a ' +
           'recovered from a timeout with partial content keeps `type: "message"` even though it did ' +
           'not finish. The poll body carries further fields not modelled here, including `images`, ' +
           '`files`, `toolPayloads`, `promptMeta`, and the attachment report ' +

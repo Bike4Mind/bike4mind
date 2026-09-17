@@ -181,11 +181,14 @@ export type ChatAck = z.infer<typeof ChatAckSchema>;
  * `toolPayloads`, `promptMeta`, ...). Must stay in sync with that handler's
  * `res.json` shape (apps/client/pages/api/quests/[id]/index.ts) - unlike a
  * contract-registered request/response schema, nothing validates this at
- * runtime, so the "parses against the published ChatQuestPollResultSchema"
- * integration test (index.integration.test.ts) is what actually pins the two
- * together; a field added to the handler without this schema keeps that test
- * green (it only rejects an UNEXPECTED shape), so a shape addition still needs
- * a schema update by hand.
+ * runtime. The "parses against the published ChatQuestPollResultSchema"
+ * integration test (index.integration.test.ts) only proves the handler's
+ * CURRENT response satisfies this schema - a non-strict `z.object` strips
+ * unknown keys rather than rejecting them, and only `id` is required, so a
+ * field the handler starts returning without a matching addition here keeps
+ * that test green. The real per-field coverage lives in the sibling
+ * assertions in that same test file; a shape addition still needs a schema
+ * update by hand.
  *
  * A failed turn is still `status: 'done'` with the failure text in `reply`, so
  * `reply` alone cannot tell an answer from a failure - `type` and `errorCode` are
