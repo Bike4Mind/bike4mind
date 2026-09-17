@@ -118,6 +118,7 @@ const CreateKnowledgeFromUrl: React.FC<CreateKnowledgeFromUrlProps> = ({
       )}
       <Modal open={modalOpen} onClose={() => modalHandler(false)}>
         <ModalDialog
+          data-testid="create-knowledge-url-modal"
           sx={theme => ({
             width: { xs: '90%', sm: '80%', md: '60%', lg: '50%' },
             minWidth: { xs: '90%', sm: '35rem' },
@@ -136,6 +137,8 @@ const CreateKnowledgeFromUrl: React.FC<CreateKnowledgeFromUrlProps> = ({
 
           <Stack spacing={2}>
             <Input
+              // Joy puts a data-testid on Input's root wrapper, not the typable input element.
+              slotProps={{ input: { 'data-testid': 'create-knowledge-url-input' } }}
               placeholder={t('file_browser.enter_url')}
               value={url}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => setUrl(e.target.value)}
@@ -149,6 +152,7 @@ const CreateKnowledgeFromUrl: React.FC<CreateKnowledgeFromUrlProps> = ({
 
             <Stack direction="row" spacing={2} justifyContent="flex-end">
               <Button
+                data-testid="create-knowledge-url-cancel-btn"
                 variant="plain"
                 color="neutral"
                 onClick={() => {
@@ -159,6 +163,7 @@ const CreateKnowledgeFromUrl: React.FC<CreateKnowledgeFromUrlProps> = ({
                 {t('common.cancel')}
               </Button>
               <Button
+                data-testid="create-knowledge-url-submit-btn"
                 onClick={handleSubmit}
                 loading={uploadKnowledgeFromUrl.isPending}
                 disabled={!url.trim() || uploadKnowledgeFromUrl.isPending}
