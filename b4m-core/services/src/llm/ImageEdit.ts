@@ -79,6 +79,9 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
     .prefault(BFL_SAFETY_TOLERANCE.DEFAULT),
   prompt_upsampling: z.boolean().optional().prefault(false),
   seed: z.number().nullable().optional(),
+  // Deliberately narrower than ImageOutputFormatSchema (no 'webp'): nothing on this path
+  // calls toNonWebpOutputFormat before forwarding to BFL/Gemini, so a webp value here
+  // would reach those APIs raw and be rejected.
   output_format: z.enum(['jpeg', 'png']).optional().prefault('png'),
   width: z.number().optional(),
   height: z.number().optional(),

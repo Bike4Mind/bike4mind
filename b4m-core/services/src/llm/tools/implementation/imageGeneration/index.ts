@@ -186,9 +186,16 @@ export const imageGenerationTool: ToolDefinition = {
       };
 
       // Use imageConfig settings as defaults, allow tool call to override
-      // Auto-upgrade gpt-image-1 to gpt-image-2 (latest model)
-      let model = imageConfig?.model || ImageModels.GPT_IMAGE_2;
-      if (model === ImageModels.GPT_IMAGE_1) {
+      const output_format = toolOutputFormat ?? imageConfig?.output_format;
+      const background = toolBackground ?? imageConfig?.background;
+
+      // Default to, and auto-upgrade gpt-image-1 into, gpt-image-2 (latest model) -
+      // unless the caller requested a transparent background. gpt-image-2 rejects
+      // background: 'transparent', so both the default and the upgrade would
+      // silently turn a valid request into a 400; fall back to gpt-image-1 instead.
+      const wantsTransparent = background === 'transparent';
+      let model = imageConfig?.model || (wantsTransparent ? ImageModels.GPT_IMAGE_1 : ImageModels.GPT_IMAGE_2);
+      if (model === ImageModels.GPT_IMAGE_1 && !wantsTransparent) {
         model = ImageModels.GPT_IMAGE_2;
       }
       const n = toolN ?? imageConfig?.n ?? 1;
@@ -198,8 +205,6 @@ export const imageGenerationTool: ToolDefinition = {
       const width = imageConfig?.width;
       const height = imageConfig?.height;
       const aspect_ratio = imageConfig?.aspect_ratio;
-      const output_format = toolOutputFormat ?? imageConfig?.output_format;
-      const background = toolBackground ?? imageConfig?.background;
       const prompt_upsampling = imageConfig?.prompt_upsampling;
       const seed = imageConfig?.seed;
       // BFL and Gemini reject webp; only the OpenAI branch gets the raw value.

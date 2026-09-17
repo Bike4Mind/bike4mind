@@ -213,11 +213,12 @@ export class OpenAIImageService extends AIImageService {
 
       const parameterWarnings: string[] = [];
       let gptImageOutputOptions: ReturnType<typeof resolveGptImageOutputOptions> = {};
+      // Declared here (not inside the if-block below) so the debug-log flush after the
+      // if/else can report it for both branches.
+      const modelName = options.model || ImageModels.GPT_IMAGE_1_5;
 
       // GPT-Image specific parameter validation and graceful fallback
       if (isGPTImageModel(options.model)) {
-        const modelName = options.model || ImageModels.GPT_IMAGE_1_5;
-
         openaiOptions.model = modelName;
 
         gptImageOutputOptions = resolveGptImageOutputOptions(background, output_format, parameterWarnings);
@@ -281,11 +282,6 @@ export class OpenAIImageService extends AIImageService {
           delete dims.height;
           parameterWarnings.push(`Custom width/height not supported by ${modelName}, using standard sizes`);
         }
-
-        if (parameterWarnings.length > 0) {
-          Logger.globalInstance.debug(`[DEBUG] ⚠️ ${modelName} parameter adjustments:`, parameterWarnings);
-          // These warnings could be sent to the client via WebSocket for user notification
-        }
       } else {
         // For other OpenAI models (legacy support)
         openaiOptions.response_format = 'url';
@@ -310,6 +306,11 @@ export class OpenAIImageService extends AIImageService {
           openaiOptions.size = '1024x1024';
           parameterWarnings.push(`Size '${originalSize}' is not supported by legacy models, changed to '1024x1024'`);
         }
+      }
+
+      if (parameterWarnings.length > 0) {
+        Logger.globalInstance.debug(`[DEBUG] ⚠️ ${modelName} parameter adjustments:`, parameterWarnings);
+        // These warnings could be sent to the client via WebSocket for user notification
       }
 
       // Map seed parameter if provided (OpenAI uses 'seed' directly)

@@ -13,6 +13,8 @@ import {
   supportsImageEdit,
   EDIT_SUPPORTED_IMAGE_MODELS,
   toNonWebpOutputFormat,
+  type ImageOutputFormat,
+  type OpenAIImageBackground,
 } from '@bike4mind/common';
 import {
   OpenAIImageService,
@@ -268,6 +270,8 @@ export const imageEditTool: ToolDefinition = {
         safety_tolerance: toolSafetyTolerance,
         steps: toolSteps,
         guidance: toolGuidance,
+        background: toolBackground,
+        output_format: toolOutputFormat,
       } = val as {
         image: string; // URL or file ID
         prompt: string;
@@ -277,6 +281,8 @@ export const imageEditTool: ToolDefinition = {
         safety_tolerance?: number;
         steps?: number; // BFL-specific, not in imageConfig
         guidance?: number; // BFL-specific, not in imageConfig
+        background?: OpenAIImageBackground;
+        output_format?: ImageOutputFormat;
       };
 
       if (!toolImage) {
@@ -325,9 +331,9 @@ Please select a supported edit model in your image settings modal.`;
       const n = toolN ?? imageConfig?.n ?? 1;
       const size = imageConfig?.size || toolSize;
       const safety_tolerance = imageConfig?.safety_tolerance || toolSafetyTolerance;
-      const output_format = imageConfig?.output_format ?? 'png';
-      const background = imageConfig?.background;
-      // BFL and Gemini reject webp; only the OpenAI branch below takes the raw value.
+      const output_format = toolOutputFormat ?? imageConfig?.output_format ?? 'png';
+      const background = toolBackground ?? imageConfig?.background;
+      // BFL and Gemini reject webp; only the OpenAI branch below sends the raw value.
       const nonWebpOutputFormat = toNonWebpOutputFormat(output_format);
       const prompt_upsampling = imageConfig?.prompt_upsampling ?? false;
       const seed = imageConfig?.seed;
@@ -488,7 +494,7 @@ Please check your BFL API key in settings and ensure it is configured correctly.
             response_format: 'url',
             user: context.userId,
             background,
-            output_format: nonWebpOutputFormat,
+            output_format,
           });
 
           if (editResponse.type === 'success') {
@@ -564,6 +570,17 @@ Please check your BFL API key in settings and ensure it is configured correctly.
           guidance: {
             type: 'number',
             description: 'Guidance scale for BFL models (default: 60)',
+          },
+          background: {
+            type: 'string',
+            description:
+              'Background handling (gpt-image only). Use "transparent" when the user asks for a cutout, sprite, icon, sticker or a logo with no backdrop; it needs an alpha-capable output_format (png or webp).',
+            enum: ['transparent', 'opaque', 'auto'],
+          },
+          output_format: {
+            type: 'string',
+            description: 'Output container. "webp" is gpt-image only; other providers fall back to png.',
+            enum: ['png', 'jpeg', 'webp'],
           },
         },
         additionalProperties: false,

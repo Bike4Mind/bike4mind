@@ -154,8 +154,9 @@ describe('OpenAIImageService.generate output controls', () => {
   const service = () => new OpenAIImageService('test-key', new Logger());
 
   it('sends background and output_format to gpt-image so a cutout PNG is possible', async () => {
+    // gpt-image-2 rejects background: 'transparent', so this must use gpt-image-1.
     await service().generate('an inventory icon', {
-      model: ImageModels.GPT_IMAGE_2,
+      model: ImageModels.GPT_IMAGE_1,
       background: 'transparent',
       output_format: 'png',
     });

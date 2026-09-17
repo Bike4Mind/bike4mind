@@ -1,7 +1,7 @@
 import { AIImageService, AIImageGenerationOptions, ImageEditOptions, ImageEditResponse } from './AIImageService';
 import { GoogleGenAI, type GenerateImagesConfig, type GenerateImagesResponse, type Part } from '@google/genai';
 import { Logger } from '@bike4mind/observability';
-import { ImageModels } from '@bike4mind/common';
+import { ImageModels, type ImageOutputFormat } from '@bike4mind/common';
 import { v4 as uuidv4 } from 'uuid';
 
 export class GeminiImageService extends AIImageService {
@@ -256,7 +256,10 @@ export class GeminiImageService extends AIImageService {
     return `${widthRatio}:${heightRatio}`;
   }
 
-  private resolveMimeType(format?: 'jpeg' | 'png' | null): string {
+  // Callers always pass output_format through toNonWebpOutputFormat before reaching here,
+  // so 'webp' never actually arrives; the type is widened to ImageOutputFormat only to
+  // match AIImageGenerationOptions after that field was widened for other providers.
+  private resolveMimeType(format?: ImageOutputFormat | null): string {
     if (format === 'jpeg') {
       return 'image/jpeg';
     }

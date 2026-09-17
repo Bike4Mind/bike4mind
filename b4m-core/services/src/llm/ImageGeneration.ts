@@ -856,7 +856,7 @@ export class ImageGenerationService {
           promptLength: truncatedPrompt.length,
           n,
           aspect_ratio,
-          output_format,
+          output_format: nonWebpOutputFormat,
           safety_tolerance,
         });
 
@@ -902,7 +902,7 @@ export class ImageGenerationService {
             model,
             n,
             aspect_ratio,
-            output_format,
+            output_format: nonWebpOutputFormat,
             safety_tolerance,
           });
           const editPromises = Array.from({ length: n }, () =>
@@ -991,7 +991,7 @@ export class ImageGenerationService {
           width,
           height,
           aspect_ratio,
-          output_format,
+          output_format: nonWebpOutputFormat,
           safety_tolerance,
           prompt_upsampling,
           seed,
