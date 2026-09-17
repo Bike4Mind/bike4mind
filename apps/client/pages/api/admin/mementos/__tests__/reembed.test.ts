@@ -47,7 +47,7 @@ function makeReq(body: Record<string, unknown> = {}, user: Record<string, unknow
   return { req: req as any, res: res as any };
 }
 
-const emptyStats = { total: 0, alreadyCurrent: 0, reembedded: 0, failed: 0, skippedEmpty: 0 };
+const emptyStats = { total: 0, alreadyCurrent: 0, reembedded: 0, failed: 0, skippedEmpty: 0, errors: [] };
 
 describe('/api/admin/mementos/reembed', () => {
   beforeEach(() => {
@@ -96,8 +96,8 @@ describe('/api/admin/mementos/reembed', () => {
   it('sums per-user stats across the page and reports pagination', async () => {
     userIdPage = [{ _id: 'u1' }, { _id: 'u2' }];
     reembedMock
-      .mockResolvedValueOnce({ total: 5, alreadyCurrent: 1, reembedded: 3, failed: 1, skippedEmpty: 0 })
-      .mockResolvedValueOnce({ total: 2, alreadyCurrent: 0, reembedded: 2, failed: 0, skippedEmpty: 0 });
+      .mockResolvedValueOnce({ total: 5, alreadyCurrent: 1, reembedded: 3, failed: 1, skippedEmpty: 0, errors: [] })
+      .mockResolvedValueOnce({ total: 2, alreadyCurrent: 0, reembedded: 2, failed: 0, skippedEmpty: 0, errors: [] });
 
     const { req, res } = makeReq({ skip: 0, execute: true });
     await (handler as any)._post(req, res);
@@ -134,7 +134,7 @@ describe('/api/admin/mementos/reembed', () => {
     reembedMock.mockImplementation((userId: string) => {
       reembeddedUserIds.push(userId);
       staleUserIds = staleUserIds.filter(id => id !== userId);
-      return Promise.resolve({ total: 1, alreadyCurrent: 0, reembedded: 1, failed: 0, skippedEmpty: 0 });
+      return Promise.resolve({ total: 1, alreadyCurrent: 0, reembedded: 1, failed: 0, skippedEmpty: 0, errors: [] });
     });
 
     let skip = 0;
@@ -158,7 +158,7 @@ describe('/api/admin/mementos/reembed', () => {
     userIdPage = [{ _id: 'bad-user' }, { _id: 'good-user' }];
     reembedMock
       .mockRejectedValueOnce(new Error('OpenAI API key required to re-embed memory, but none is available'))
-      .mockResolvedValueOnce({ total: 4, alreadyCurrent: 0, reembedded: 4, failed: 0, skippedEmpty: 0 });
+      .mockResolvedValueOnce({ total: 4, alreadyCurrent: 0, reembedded: 4, failed: 0, skippedEmpty: 0, errors: [] });
 
     const { req, res } = makeReq({ skip: 0, execute: true });
     await (handler as any)._post(req, res);
@@ -172,18 +172,39 @@ describe('/api/admin/mementos/reembed', () => {
     ]);
   });
 
-  it('excludes blank-summary mementos from the stale set at the query level', async () => {
+  it('excludes blank-summary mementos, ASCII and Unicode alike, from the stale set at the query level', async () => {
     userIdPage = [{ _id: 'u1' }];
     const { req, res } = makeReq({ skip: 0, execute: true });
     await (handler as any)._post(req, res);
 
     expect(res._getStatusCode()).toBe(200);
     const pipeline = mockAggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
-    const matchStage = pipeline.find(stage => '$match' in stage) as { $match: Record<string, unknown> };
-    // A memento reembedMementosForUser can never repair (blank/whitespace summary) must not count as
-    // "stale" here - otherwise, since execute mode always re-queries skip=0, its user would sit at the
-    // head of the sort order and block every user behind them forever.
-    expect(matchStage.$match.summary).toEqual({ $regex: /\S/ });
+    const matchStage = pipeline.find(stage => '$match' in stage) as { $match: { summary: { $regex: string } } };
+    const filterRegex = new RegExp(matchStage.$match.summary.$regex);
+
+    // Asserting behavior against the case table, not the regex literal: MongoDB's own \S treats
+    // whitespace as ASCII-only, so a summary of nothing but a Unicode space character (NBSP, an em
+    // space, the BOM) matches \S there while .trim() renders it empty - reembedMementosForUser would
+    // then skippedEmpty it forever, and since execute mode always re-queries skip=0, its user would
+    // block everyone behind them. The filter must agree with .trim() truthiness on every case here,
+    // not just the ASCII ones (verified separately against a real mongod, since this is a JS RegExp
+    // test and can't observe MongoDB's own \S semantics).
+    const cases: Array<[string, string]> = [
+      ['normal', 'abc'],
+      ['padded', '  abc  '],
+      ['empty', ''],
+      ['ascii spaces', '   '],
+      ['ascii tab/newline', '\t\n\r\v\f'],
+      ['nbsp only', '\u00a0'],
+      ['em space only', '\u2003'],
+      ['ideographic space only', '\u3000'],
+      ['bom only', '\ufeff'],
+      ['line separator only', '\u2028'],
+      ['mixed unicode padding', '\u00a0abc\u3000'],
+    ];
+    for (const [name, summary] of cases) {
+      expect(filterRegex.test(summary), `${name} (${JSON.stringify(summary)})`).toBe(Boolean(summary.trim()));
+    }
   });
 
   it('stops the loop once a full page makes zero progress, instead of retrying forever', async () => {
@@ -211,7 +232,7 @@ describe('/api/admin/mementos/reembed', () => {
     userIdPage = userIds.map(id => ({ _id: id }));
     // One success is enough to prove the loop reached a genuinely different page next call.
     reembedMock
-      .mockResolvedValueOnce({ total: 1, alreadyCurrent: 0, reembedded: 1, failed: 0, skippedEmpty: 0 })
+      .mockResolvedValueOnce({ total: 1, alreadyCurrent: 0, reembedded: 1, failed: 0, skippedEmpty: 0, errors: [] })
       .mockRejectedValue(new Error('OpenAI API key required to re-embed memory, but none is available'));
 
     const { req, res } = makeReq({ skip: 0, execute: true });
@@ -233,5 +254,28 @@ describe('/api/admin/mementos/reembed', () => {
     await (handler as any)._post(req, res);
 
     expect(res._getJSONData().hasMore).toBe(true);
+  });
+
+  it('surfaces per-memento failures with the owning userId, not just a count', async () => {
+    // totals.failed already told the operator a memento failed somewhere; without this, finding WHICH
+    // one meant reading server logs. Mirrors migrateLedgerVectorsForUser's own errors: string[].
+    userIdPage = [{ _id: 'u1' }, { _id: 'u2' }];
+    reembedMock
+      .mockResolvedValueOnce({
+        total: 2,
+        alreadyCurrent: 0,
+        reembedded: 1,
+        failed: 1,
+        skippedEmpty: 0,
+        errors: ['memento m1: provider rate limited'],
+      })
+      .mockResolvedValueOnce({ total: 1, alreadyCurrent: 0, reembedded: 1, failed: 0, skippedEmpty: 0, errors: [] });
+
+    const { req, res } = makeReq({ skip: 0, execute: true });
+    await (handler as any)._post(req, res);
+
+    const body = res._getJSONData();
+    expect(body.failed).toBe(1);
+    expect(body.failedMementos).toEqual(['user u1 memento m1: provider rate limited']);
   });
 });

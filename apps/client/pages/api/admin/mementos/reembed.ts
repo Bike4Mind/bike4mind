@@ -28,6 +28,16 @@ const bodySchema = z.object({
   execute: z.boolean().default(false),
 });
 
+// Unicode whitespace set that JS's String.prototype.trim() strips (the ECMA-262 WhiteSpace and
+// LineTerminator productions). Spelled out as literal code points rather than \s/\S: MongoDB's regex
+// engine treats \S as "not ASCII whitespace", so a summary of nothing but NBSP or another Unicode
+// space character MATCHES \S there while .trim() below renders it empty - the query would then admit
+// a memento reembedMementosForUser can never repair, which is exactly the permanent blocker this
+// filter exists to keep out. Verified against a real mongod that this class agrees with .trim()
+// truthiness on every case in this set, ASCII and Unicode alike.
+const JS_TRIM_WHITESPACE =
+  '\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff';
+
 // A memento is stale for this pass only if it both carries a vector AND that vector is not in the
 // pinned space - an un-embedded memento has nothing to repair, and re-running excludes what the
 // previous pass already fixed (embeddingModel: MEMENTO_EMBEDDING_ID). The summary condition mirrors
@@ -38,7 +48,7 @@ const bodySchema = z.object({
 const staleWithVectorFilter = {
   embeddingModel: { $ne: MEMENTO_EMBEDDING_ID },
   'embedding.0': { $exists: true },
-  summary: { $regex: /\S/ },
+  summary: { $regex: `[^${JS_TRIM_WHITESPACE}]` },
 };
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
@@ -75,6 +85,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
 
   const totals = { total: 0, alreadyCurrent: 0, reembedded: 0, failed: 0, skippedEmpty: 0 };
   const failedUsers: Array<{ userId: string; error: string }> = [];
+  const failedMementos: string[] = [];
 
   for (const { _id: userId } of page) {
     try {
@@ -84,6 +95,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       totals.reembedded += stats.reembedded;
       totals.failed += stats.failed;
       totals.skippedEmpty += stats.skippedEmpty;
+      failedMementos.push(...stats.errors.map(error => `user ${userId} ${error}`));
     } catch (err) {
       // One user with no resolvable credential (reembedMementosForUser throws before its own
       // per-memento try/catch can run) must not abort the rest of the page.
@@ -94,9 +106,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   // The remaining ways a user can fail (no resolvable credential, a transient provider error) can't
   // be excluded at the query level - they're worth retrying. But since execute mode always re-queries
   // skip=0, a page that reembeds nothing would otherwise repeat identically forever: same users, same
-  // failures, no way for the loop to ever reach whoever sorts behind them. A page only counts as
-  // "more to do" if it actually shrank the stale set; a fully-stuck page stops the loop here instead,
-  // with failedUsers/failed telling the operator who needs a credential fixed before retrying.
+  // failures, no way for the loop to ever reach whoever sorts behind them. Progress is measured
+  // against the QUERIED set specifically (a stale-but-unembedded memento can leave it via
+  // reembedMementosForUser without this filter ever having seen it), not the repairable set in
+  // general - a page only counts as "more to do" if it actually shrank what THIS filter re-queries.
+  // A fully-stuck page stops the loop here instead, with failedUsers/failedMementos telling the
+  // operator who needs a credential fixed or which mementos need attention before retrying.
   const pageMadeProgress = execute ? totals.reembedded > 0 : true;
 
   return res.json({
@@ -104,6 +119,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     dryRun: !execute,
     ...totals,
     failedUsers,
+    failedMementos,
     hasMore: page.length === BATCH_SIZE && pageMadeProgress,
     // Always 0 in execute mode - see effectiveSkip above. The caller's loop is simply "keep
     // posting execute:true until hasMore is false", no cursor bookkeeping required.
