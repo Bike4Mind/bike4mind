@@ -18,6 +18,7 @@ export interface RotateSessionAuditEvent {
   type: 'session_reuse_revoked' | 'session_recovered' | 'refresh_replay_capped' | 'refresh_recovery_capped';
   sid: string;
   userId: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface RotateSessionAdapters {
@@ -177,9 +178,9 @@ export const rotateSession = async (
   // adapter (which type-checks against a `=> void` signature and would otherwise escape a bare
   // try/catch as an unhandled rejection). Callers that are about to throw await this so the row is
   // flushed; everyone else drops the promise.
-  const emit = (type: RotateSessionAuditEvent['type']): Promise<void> => {
+  const emit = (type: RotateSessionAuditEvent['type'], extraMetadata?: Record<string, unknown>): Promise<void> => {
     try {
-      return Promise.resolve(audit?.({ type, sid, userId: session.userId })).catch(() => {});
+      return Promise.resolve(audit?.({ type, sid, userId: session.userId, ...(extraMetadata && { metadata: extraMetadata }) })).catch(() => {});
     } catch {
       return Promise.resolve();
     }
@@ -269,14 +270,18 @@ export const rotateSession = async (
     if (!isLive(current, after)) throw invalid();
     // (a) A sibling's recovery re-opened the window for this same hash: coalesce behind it.
     if (isReplayable(current, presentedHash, after)) return finish(null);
-    // (b) Still the pinned previous hash with the window elapsed - so either the allowance is
-    // spent, or this call stalled past the whole window between the CAS and this re-read. Both are
-    // ambiguous, and this file's rule for ambiguity is "try again", not "your session is gone"
-    // (see the replay-allowance branch above). Revoking here would be worse than a spurious
-    // logout: it would also stamp `session_reuse_revoked` on a benign transport stall, teaching
-    // the forensic log to report theft for the one failure mode it exists to explain.
+    // (b) Still the pinned previous hash with the window elapsed. The allowance check is the CAS
+    // gate, so a refused CAS AND an unchanged previous hash means the allowance is genuinely spent
+    // (`current.recoveries >= maxRecoveries`). The stall disjunct (this call slept past
+    // REFRESH_REPLAY_WINDOW_MS between the CAS attempt and this re-read) is unreachable while the
+    // server function timeout stays below REFRESH_REPLAY_WINDOW_MS. Cross-module invariant:
+    // infra/web.ts Lambda timeout = 60 s < constants.ts REFRESH_REPLAY_WINDOW_MS = 120 s.
+    // Grep both files when changing either value - if that invariant breaks, this branch becomes live.
+    // Either way: "try again", not "your session is gone" (same reasoning as the replay-allowance
+    // branch; revoking would also stamp `session_reuse_revoked` on a benign transport stall).
     if (presentedHash === current.previousRefreshTokenHash) {
-      await emit('refresh_recovery_capped');
+      const terminal = (current.recoveries ?? 0) >= maxRecoveries;
+      await emit('refresh_recovery_capped', { terminal });
       logger?.log('Recovery allowance exhausted or lost for session', sid);
       throw new TooManyRequestsError('Too many refresh attempts');
     }
