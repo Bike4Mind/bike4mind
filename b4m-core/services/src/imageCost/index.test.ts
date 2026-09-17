@@ -21,6 +21,14 @@ describe('computeImageUsdCostPerImage', () => {
     );
   });
 
+  // Fill is the only BFL model EDIT_SUPPORTED_IMAGE_MODELS allows, so every BFL edit -
+  // from ImageEdit.ts and from the chat edit_image tool - prices through this branch.
+  // It was missing from the Flux guard, which made those edits throw "Model not supported"
+  // the moment the billed model became the model that actually renders.
+  it('prices FLUX_PRO_FILL, the only BFL edit model, instead of throwing', () => {
+    expect(computeImageUsdCostPerImage(ImageModels.FLUX_PRO_FILL, { model: ImageModels.FLUX_PRO_FILL })).toBe(0.05);
+  });
+
   it('still throws for a genuinely unknown model', () => {
     expect(() => computeImageUsdCostPerImage('totally-made-up-model', { model: 'totally-made-up-model' })).toThrow(
       UnsupportedImageModelError

@@ -25,12 +25,16 @@ vi.mock('@bike4mind/utils/imageModeration', async importOriginal => {
 // Mocks for the edit_image toolFn's OpenAI branch - see the 'imageEditTool - OpenAI branch'
 // describe below. Same constructor-function pattern as RekognitionImageModerationService above.
 const mockEditSpy = vi.fn();
+const mockBflEditSpy = vi.fn();
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
   return {
     ...actual,
     OpenAIImageService: vi.fn().mockImplementation(function () {
       return { edit: mockEditSpy };
+    }),
+    BFLImageService: vi.fn().mockImplementation(function () {
+      return { edit: mockBflEditSpy };
     }),
   };
 });
@@ -204,6 +208,84 @@ describe('imageEditTool - OpenAI branch', () => {
       expect.anything(),
       expect.anything(),
       expect.objectContaining({ quality: 'high' })
+    );
+  });
+});
+
+// Billing must name the model that actually renders. `editModel` is resolved
+// independently of the configured generation model and falls back to a hardcoded
+// default when imageConfig.editModel is unset, so the two routinely diverge - and the
+// provider invoice follows `editModel`. Same invariant as the queue path (ImageEdit.ts).
+describe('imageEditTool - credit reservation names the rendered model', () => {
+  beforeEach(() => {
+    mockEditSpy.mockReset();
+    mockBflEditSpy.mockReset();
+    // Stop right after dispatch: these assertions are about the onStart payload, which
+    // is emitted before the provider call, not about the post-edit storage pipeline.
+    mockEditSpy.mockRejectedValue(new Error('stop-after-dispatch'));
+    mockBflEditSpy.mockRejectedValue(new Error('stop-after-dispatch'));
+  });
+
+  it('bills FLUX_PRO_FILL for a BFL generation model with no explicit editModel', async () => {
+    const context = createFakeContext();
+    context.onStart = vi.fn();
+
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.FLUX_PRO_1_1,
+    } as GenerateImageToolCall);
+
+    // A mask is supplied so the BFL branch skips generateFullMask (sharp) and goes
+    // straight to the provider call.
+    await toolFn({ image: PNG_DATA_URL, mask: PNG_DATA_URL, prompt: 'make it warmer' });
+
+    expect(context.onStart).toHaveBeenCalledWith(
+      'edit_image',
+      expect.objectContaining({ model: ImageModels.FLUX_PRO_FILL })
+    );
+    expect(mockBflEditSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ model: ImageModels.FLUX_PRO_FILL })
+    );
+  });
+
+  it('bills GPT_IMAGE_1_5 for a non-editable OpenAI generation model with no explicit editModel', async () => {
+    const context = createFakeContext();
+    context.onStart = vi.fn();
+
+    // DALL-E 3 cannot edit at all, so the fallback lands on GPT_IMAGE_1_5 - the widest
+    // possible gap between the configured generation model and what actually renders.
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: 'dall-e-3',
+    } as unknown as GenerateImageToolCall);
+
+    await toolFn({ image: PNG_DATA_URL, prompt: 'make it warmer' });
+
+    expect(context.onStart).toHaveBeenCalledWith(
+      'edit_image',
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5 })
+    );
+    expect(mockEditSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5 })
+    );
+  });
+
+  it('bills the explicitly configured editModel when one is set', async () => {
+    const context = createFakeContext();
+    context.onStart = vi.fn();
+
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.FLUX_PRO_1_1,
+      editModel: ImageModels.GPT_IMAGE_1_MINI,
+    } as GenerateImageToolCall);
+
+    await toolFn({ image: PNG_DATA_URL, prompt: 'make it warmer' });
+
+    expect(context.onStart).toHaveBeenCalledWith(
+      'edit_image',
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_MINI })
     );
   });
 });
