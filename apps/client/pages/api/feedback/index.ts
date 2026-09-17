@@ -24,6 +24,7 @@ import { adminSettingsRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { EmailEvents } from '@server/utils/eventBus';
 import { postFeedbackToSlack } from '@server/integrations/slack/slack';
+import { NotFoundError } from '@server/utils/errors';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
 import { Config } from '@server/utils/config';
 import { resolveFeedbackContext } from '@server/utils/feedbackContext';
@@ -210,8 +211,13 @@ export function resolveFeedbackEmailRoute(
 
 const handler = baseApi()
   .get(async (req, res) => {
+    // Defensive: the auth middleware attaches an ability unconditionally, so this is an
+    // invariant check rather than a reachable auth path. Typed anyway - a bare Error carries no
+    // status and errorHandler defaults it to 500, which pages an operator for our own bug. 404
+    // rather than 403 to match the sibling handlers in this directory, which collapse every
+    // denial to one status so a probe cannot tell a forbidden record from a nonexistent one.
     if (!req.ability) {
-      throw new Error('Ability not found');
+      throw new NotFoundError('Ability not found');
     }
 
     const query = ListFeedbackQuerySchema.parse(qs.parse(req.query as Record<string, string>));
