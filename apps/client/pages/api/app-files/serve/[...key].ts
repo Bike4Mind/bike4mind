@@ -65,9 +65,10 @@ const handler = baseApi({ auth: false }).get(
       // "profile photo") could otherwise run in the app origin on direct navigation.
       // Deny all script/subresource capability so served assets are inert as documents,
       // and nosniff so a mislabeled content type can't be sniffed into an executable one;
-      // <img>/<link> embedding by the app is unaffected. Kept in sync with the CDN
-      // backstop in infra/router.ts (userFileCspInjection).
-      res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+      // <img>/<link> embedding by the app is unaffected. allow-downloads keeps legitimate
+      // downloads of non-executable generated files (PDF, xlsx) working without granting any
+      // script capability. Kept in sync with the CDN backstop in infra/router.ts (USER_FILE_CSP).
+      res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox allow-downloads");
       res.setHeader('X-Content-Type-Options', 'nosniff');
       if (out.ContentRange) {
         res.setHeader('Content-Range', out.ContentRange);

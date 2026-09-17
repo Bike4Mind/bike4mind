@@ -104,7 +104,10 @@ const userFileCdnPrefixes = [
 
 // Same inert-document CSP the self-host proxy sets (apps/client/pages/api/app-files/serve/
 // [...key].ts). KEEP THE TWO IN SYNC - both serve these prefixes same-origin with the app.
-const USER_FILE_CSP = "default-src 'none'; sandbox";
+// allow-downloads keeps legitimate downloads of non-executable generated files (PDF, xlsx)
+// working; it grants no script/form/same-origin/popup capability, so the inertness the
+// backstop exists for is unchanged.
+const USER_FILE_CSP = "default-src 'none'; sandbox allow-downloads";
 // Request header stamped in the viewer-REQUEST function to mark a user-file request; read
 // back in the viewer-response function (see below). Spoofable but harmless: a spoofed marker
 // can only ADD the restrictive CSP to the attacker's own response, never remove it.
