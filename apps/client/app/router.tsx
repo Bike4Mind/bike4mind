@@ -24,6 +24,7 @@ import NotFound from './components/NotFound';
 import ExperimentalFeatureGate from './components/common/ExperimentalFeatureGate';
 import { ProviderBundle } from './contexts/ProviderBundle';
 import { premiumRoutes } from './premium-generated/premiumRoutes.generated';
+import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 
 // Lazy load all route components for code splitting
 const NewNotebookPage = lazy(() => import('./routes/notebooks/new'));
@@ -43,6 +44,7 @@ const NewSkillPage = lazy(() => import('./routes/skills/new'));
 const SkillDetailPage = lazy(() => import('./routes/skills/$id'));
 const EditSkillPage = lazy(() => import('./routes/skills/$id/edit'));
 const AgentExecutionHistoryPage = lazy(() => import('./routes/agent-executions'));
+const FeedbackRollupPage = lazy(() => import('./routes/feedback/rollup'));
 const MissionDossierPage = lazy(() => import('./routes/agents/$id/missions/$missionId'));
 const DeepAgentConsolePage = lazy(() => import('./routes/deep-agents'));
 const SharePage = lazy(() => import('./routes/share/$id'));
@@ -355,6 +357,28 @@ const profileRoute = createRoute({
       section: search.section ? String(search.section) : undefined,
     };
   },
+});
+
+// Personal feedback rollup. Exported so the page reads its window with
+// `feedbackRollupRoute.useSearch()` rather than an untyped `{ strict: false }` cast.
+export const feedbackRollupRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/feedback/rollup',
+  // The default window is resolved HERE, not in the component: the bounds are part of the rollup
+  // query key, so a default recomputed per render would refetch without end, and leaving them
+  // undefined would keep a bare /feedback/rollup permanently disabled behind the hook's guard.
+  validateSearch: (search: Record<string, unknown>): { from: string; to: string } => {
+    const fallback = defaultFeedbackRollupWindow();
+    return {
+      from: typeof search.from === 'string' && search.from.length > 0 ? search.from : fallback.from,
+      to: typeof search.to === 'string' && search.to.length > 0 ? search.to : fallback.to,
+    };
+  },
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <FeedbackRollupPage />
+    </Suspense>
+  ),
 });
 
 // Profile route with dynamic ID (replaces /profile/[id].tsx)
@@ -1039,6 +1063,7 @@ const routeTree = rootRoute.addChildren([
     projectRoute,
     profileRoute,
     profileDetailRoute,
+    feedbackRollupRoute,
     subscriptionsCheckoutRoute,
     agentsRoute,
     newAgentRoute,

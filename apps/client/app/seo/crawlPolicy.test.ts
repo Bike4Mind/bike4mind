@@ -34,6 +34,7 @@ const EXPECTED_CORE_DISALLOWED = [
   '/artifacts-demo',
   '/deep-agents',
   '/email',
+  '/feedback',
   '/gears',
   '/google-drive',
   '/hearth',

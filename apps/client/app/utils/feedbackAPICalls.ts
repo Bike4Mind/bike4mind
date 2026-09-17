@@ -1,6 +1,6 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { FEEDBACK_LIST_MAX_LIMIT } from '@bike4mind/common';
-import type { IFeedbackDocument, CreateFeedbackResponse } from '@bike4mind/common';
+import type { IFeedbackDocument, CreateFeedbackResponse, FeedbackRollupResponse } from '@bike4mind/common';
 import type {
   FeedbackListParams,
   FeedbackListResponse,
@@ -42,6 +42,19 @@ export const getAllFeedbackForExport = async (
     }
     page += 1;
   }
+};
+
+/**
+ * Counts of the caller's own reports over a date window. There is deliberately no `userId` param:
+ * the endpoint derives the principal from the session, and sending one would be both ignored and
+ * misleading about who this read is scoped to.
+ */
+export const getFeedbackRollupFromServer = async (params: {
+  from: string;
+  to: string;
+}): Promise<FeedbackRollupResponse> => {
+  const response = await api.get<FeedbackRollupResponse>('/api/feedback/rollup', { params });
+  return response.data;
 };
 
 export const createFeedbackOnServer = async (

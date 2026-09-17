@@ -147,6 +147,9 @@ const nextConfig = {
     // ESM-only packages that need transpilation for API routes
     'p-limit',
     'yocto-queue',
+    // sanitize-html require()s ESM-only htmlparser2; Turbopack externalizes rather than bundles
+    // that pair, and the hoisted copy cannot resolve its own deps, so every importer 500s.
+    'sanitize-html',
     // Nivo packages
     '@nivo/pie',
     '@nivo/line',

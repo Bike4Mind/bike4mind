@@ -64,6 +64,7 @@ export const CORE_DISALLOWED_PATHS: readonly string[] = [
   '/artifacts-demo',
   '/deep-agents',
   '/email',
+  '/feedback',
   '/gears',
   '/google-drive',
   '/hearth',
