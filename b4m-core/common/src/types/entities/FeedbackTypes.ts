@@ -121,8 +121,8 @@ export type CreateFeedbackResponse = IFeedbackDocument & {
 
 /**
  * Feedback rollup: counts only, never content and never a username. The window is capped in DAYS
- * because the aggregate materializes every arm into a single $facet document (Mongo's 16MB
- * document limit), and the day cap is what bounds the rows that document is built from.
+ * because every $facet arm groups the whole matched set in memory before its own top-N cut, so
+ * the day cap is what bounds the rows those groupings accumulate over.
  */
 export const FEEDBACK_ROLLUP_MAX_WINDOW_DAYS = 366;
 

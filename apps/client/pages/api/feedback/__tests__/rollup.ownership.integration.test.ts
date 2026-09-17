@@ -156,6 +156,29 @@ describe('GET /api/feedback/rollup against a real collection', () => {
     expect(body.buckets.tags.buckets).toEqual([]);
   });
 
+  it('survives a report stored without a tags field at all', async () => {
+    // Mongoose defaults an array path to [], so only a raw write reproduces a document written
+    // before `tags` existed. Pins that the $setUnion/$unwind arm drops it instead of failing the
+    // aggregate, which would cost the caller the whole response rather than one dimension.
+    await FeedbackModel.collection.insertOne({
+      userId: USER_A,
+      username: 'seed user',
+      status: FeedbackStatus.New,
+      subject: 'product',
+      contentStored: false,
+      sessionId: 'a1',
+      createdAt: INSIDE,
+      updatedAt: INSIDE,
+    } as unknown as Parameters<typeof FeedbackModel.collection.insertOne>[0]);
+
+    const { status, body } = await callAs(USER_A);
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(1);
+    expect(body.buckets.tags.buckets).toEqual([]);
+    expect(body.buckets.sessionId.buckets).toEqual([{ key: 'a1', count: 1 }]);
+  });
+
   it('truncates at the shared ceiling when one user has far more sessions than it', async () => {
     const many = 2000;
     await FeedbackModel.insertMany(

@@ -147,13 +147,13 @@ describe('feedback rollup against a real collection', () => {
     expect(keys).not.toContain('a-session-excluded');
     expect(keys).not.toContain('a-session-before');
 
-    // The same report IS counted by the adjoining window, so nothing is lost at the seam.
-    const next = await runRollup({ userId: USER_A });
-    expect(next.total).toBe(19);
+    // The half-open bound moves that report into the adjoining window instead of dropping it,
+    // which is what keeps consecutive windows summing to the same total as one wide one.
+    const nextTo = new Date('2026-03-01T00:00:00.000Z');
     const [adjoining] = await FeedbackModel.aggregate<FeedbackRollupFacet>(
-      buildFeedbackRollupPipeline({ userId: USER_A }, TO, new Date('2026-03-01T00:00:00.000Z'), NOW)
+      buildFeedbackRollupPipeline({ userId: USER_A }, TO, nextTo, NOW)
     );
-    expect(toFeedbackRollupResponse(adjoining, TO, TO).total).toBe(1);
+    expect(toFeedbackRollupResponse(adjoining, TO, nextTo).total).toBe(1);
   });
 
   it('splits text availability by the retention cutoff and ignores reports that never had text', async () => {
