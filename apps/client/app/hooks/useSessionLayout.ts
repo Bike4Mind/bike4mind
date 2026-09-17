@@ -91,6 +91,9 @@ interface SessionLayoutControlState {
   floatingChatPosition: { x: number; y: number };
   floatingChatSize: { width: number; height: number };
   floatingChatMinimized: boolean;
+  // Docked chat panel sizing (percentage)
+  dockChatWidth: number; // Width % for dockRight mode (default 40)
+  dockChatHeight: number; // Height % for dockBottom mode (default 40)
   // Which dock "Hide chat" sent the panel to the launcher pill from, so expanding the pill
   // puts it back there instead of leaving it floating where it never was. Written only by
   // the hide action; every other layout write clears it (see setSessionLayout), because
@@ -105,23 +108,6 @@ interface SessionLayoutControlState {
   // Not persisted.
   pendingOptimisticId: string | null;
 }
-
-/**
- * Migrates a persisted `layout-control` blob, keyed by the version it is being upgraded FROM
- * (zustand treats a blob written before `version` existed as version 0).
- *
- * v0 -> v1 drops `dockChatWidth`/`dockChatHeight`. They were defaulted and persisted for
- * every user who ever loaded the app but read by nothing, and without this they would keep
- * being merged back onto the store as orphan fields.
- */
-export const migrateLayoutControl = (persisted: unknown, version: number): unknown => {
-  if (version >= 1 || typeof persisted !== 'object' || persisted === null) return persisted;
-
-  const next = { ...(persisted as Record<string, unknown>) };
-  delete next.dockChatWidth;
-  delete next.dockChatHeight;
-  return next;
-};
 
 const useSessionLayout = create<SessionLayoutControlState>()(
   persist(
@@ -139,11 +125,11 @@ const useSessionLayout = create<SessionLayoutControlState>()(
       floatingChatPosition: { x: -1, y: -1 }, // -1 indicates "center on first use"
       floatingChatSize: { width: 450, height: 600 },
       floatingChatMinimized: false,
+      dockChatWidth: 40,
+      dockChatHeight: 40,
     }),
     {
       name: 'layout-control',
-      version: 1,
-      migrate: migrateLayoutControl,
       // Exclude recentArtifacts and pendingMessageFiles from persistence to prevent stale data
       partialize: state => ({
         layout: state.layout,
@@ -157,6 +143,9 @@ const useSessionLayout = create<SessionLayoutControlState>()(
         floatingChatSize: state.floatingChatSize,
         // floatingChatMinimized intentionally excluded - controlled at mount time
         // to avoid hydration race where persisted false overwrites auto-minimize on mobile
+        // Docked chat panel sizing persisted for cross-session memory
+        dockChatWidth: state.dockChatWidth,
+        dockChatHeight: state.dockChatHeight,
         // recentArtifacts, pendingMessageFiles, and pendingModerationEvents intentionally excluded
       }),
     }
