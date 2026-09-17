@@ -42,8 +42,16 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   },
 }));
 
+// The options each route asks for, because a missing `bucket` is invisible under a mock that
+// ignores them: the limiter would key off the raw pathname, so `/organizations/<id>/...` would
+// give every org - and for the single-item route every feedback id - its own private budget.
+const rateLimitOptions = vi.hoisted(() => [] as { limit: number; windowMs: number; bucket?: string }[]);
+
 vi.mock('@server/middlewares/rateLimit', () => ({
-  rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  rateLimit: (options: { limit: number; windowMs: number; bucket?: string }) => {
+    rateLimitOptions.push(options);
+    return (_req: unknown, _res: unknown, next: () => void) => next();
+  },
 }));
 
 const verifyOrgAccess = vi.hoisted(() => vi.fn(async () => ({ id: 'org1' })));
@@ -218,5 +226,17 @@ describe('GET /api/organizations/:id/feedback-summary', () => {
 
     await expect(runGet()).rejects.toThrow('Organization not found');
     expect(jobFindOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('rate limiting', () => {
+  it('caps by a stable per-route bucket, never by the id in the path', () => {
+    expect(rateLimitOptions).toHaveLength(2);
+    for (const options of rateLimitOptions) {
+      expect(typeof options.bucket).toBe('string');
+      expect(options.bucket).not.toBe('');
+      expect(options.limit).toBeGreaterThan(0);
+    }
+    expect(new Set(rateLimitOptions.map(o => o.bucket)).size).toBe(rateLimitOptions.length);
   });
 });
