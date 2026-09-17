@@ -1,4 +1,5 @@
 import { AxiosError, isAxiosError } from 'axios';
+import type { ApiErrorCode } from '@bike4mind/common';
 
 export interface ErrorResponse {
   message?: string;
@@ -29,6 +30,24 @@ function handleAxiosError(error: AxiosError<ErrorResponse>) {
   } else {
     return error.message || 'An error occurred while making the request.';
   }
+}
+
+/**
+ * The server's own explanation for a 422 tagged `insufficient_credits` - which balance ran out,
+ * how much it was short by, and whether the remediation is buying credits or asking an org admin
+ * to raise a per-member cap. None of that survives a caller's generic "request failed" toast, and
+ * it is the only actionable part of the refusal.
+ *
+ * Returns undefined for every other error, so a caller keeps its own message: `?? fallback`.
+ */
+export function getInsufficientCreditsMessage(error: unknown): string | undefined {
+  if (!isAxiosError(error)) return undefined;
+  const data = error.response?.data as (ErrorResponse & { errorCode?: string }) | undefined;
+  // `satisfies` ties the literal to the shared vocabulary in apiErrorCodes.ts, the same guard
+  // InsufficientCreditsErrorSchema uses (schemas/chat.ts:200): a rename there must break this
+  // reader rather than leave it quietly matching a code the server no longer sends.
+  if (data?.errorCode !== ('insufficient_credits' satisfies ApiErrorCode)) return undefined;
+  return data.error || data.message || undefined;
 }
 
 /**
