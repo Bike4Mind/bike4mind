@@ -17,10 +17,10 @@ import {
   DefaultLLMParams,
   isValidEnumValue,
   KnowledgeType,
-  MAX_FILE_SIZE_DEFAULT_MB,
   remintArtifactId,
 } from '@bike4mind/common';
 import type { ArtifactType } from '@bike4mind/common';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '../fabFileService/create';
 import { checkStorageLimit, getSettingsMap, getSettingsValue, normalizeId } from '@bike4mind/utils';
 import type { IAdminSettingsRepository, IChatHistoryItem, IUserDocument } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
