@@ -855,10 +855,12 @@ describe('fetchAndParseURL page-chrome stripping', () => {
     expect(textPastCap).toContain('Real prose paragraph describing the article content in detail.');
   });
 
-  it('extracts a deeply nested document without the cost blowing up with depth', async () => {
-    // Each level is a plain qualifying STRIP_CONTAINER_SELECTOR tag with no controls of its own, so
-    // without the depth cap every one of the 500 levels pays for a full-subtree scan of everything
-    // beneath it - quadratic in nesting depth on an input whose shape is entirely user-supplied.
+  it('extracts a deeply nested document without throwing or hanging', async () => {
+    // Regression guard only: pins that a 500-level document still completes within a generous
+    // budget, so a future change that reintroduces unbounded recursion or a pathological loop
+    // fails loudly. It is NOT a measurement of the depth cap's benefit - the bound is loose enough
+    // that the uncapped implementation also clears it; `MAX_STRIP_CONTAINER_DEPTH`'s own cost
+    // tradeoff is pinned by the depth-cap boundary test above instead.
     const depth = 500;
     const page =
       '<html><body>' +
@@ -872,7 +874,6 @@ describe('fetchAndParseURL page-chrome stripping', () => {
     const elapsed = Date.now() - start;
 
     expect(text).toContain('Deeply nested real content.');
-    // Generous on purpose - this pins against quadratic blowup, not against a tight budget.
     expect(elapsed).toBeLessThan(3000);
   });
 
@@ -889,6 +890,29 @@ describe('fetchAndParseURL page-chrome stripping', () => {
     expect(text).toBe(
       'This behaviour is specified in RFC 9110 and its errata, which every conforming client must implement.'
     );
+  });
+
+  it('does not drop inline links out of a sentence wrapped in a non-prose tag', async () => {
+    // Same shape as the <p>-wrapped case above, but the sentence's own container is a <div>,
+    // <section> or <td> - none of which is in PROSE_ANCESTOR_SELECTOR. Only the tag-agnostic
+    // adjacent-text-node check (hasAdjacentProseText) protects these; the ancestor-tag check alone
+    // does not see them.
+    const sentence = (open: string, close: string) =>
+      `${open}This behaviour is specified in ` +
+      '<span><a href="/rfc">RFC 9110</a> and <a href="/errata">its errata</a></span>' +
+      `, which every conforming client must implement.${close}`;
+    const expected =
+      'This behaviour is specified in RFC 9110 and its errata, which every conforming client must implement.';
+
+    const divPage = `<html><body><main>${sentence('<div>', '</div>')}</main></body></html>`;
+    expect(await fetchText(divPage)).toBe(expected);
+
+    const sectionPage = `<html><body><main>${sentence('<section>', '</section>')}</main></body></html>`;
+    expect(await fetchText(sectionPage)).toBe(expected);
+
+    const tablePage =
+      '<html><body><main><table><tr><td>' + sentence('', '') + '</td></tr></table></main></body></html>';
+    expect(await fetchText(tablePage)).toContain(expected);
   });
 
   it('does not strip a link pair sitting inside a list item, heading, or blockquote', async () => {
@@ -957,6 +981,21 @@ describe('fetchAndParseURL page-chrome stripping', () => {
     expect(text).not.toContain('Docs');
     expect(text).not.toContain('Blog');
     expect(text).toContain('Real article prose that must survive the nav-list strip above it.');
+  });
+
+  it('treats one control as too few to strip a div, and two as enough', async () => {
+    const pageWith = (links: string) =>
+      `<html><body><main><div>${links}</div>` +
+      '<p>Real prose paragraph describing the article content in detail.</p></main></body></html>';
+
+    const oneLink = await fetchText(pageWith('<a href="/a">Home</a>'));
+    expect(oneLink).toContain('Home');
+    expect(oneLink).toContain('Real prose paragraph describing the article content in detail.');
+
+    const twoLinks = await fetchText(pageWith('<a href="/a">Home</a><a href="/b">Docs</a>'));
+    expect(twoLinks).not.toContain('Home');
+    expect(twoLinks).not.toContain('Docs');
+    expect(twoLinks).toContain('Real prose paragraph describing the article content in detail.');
   });
 
   it('treats 20 surviving characters as enough to trust a prune, and 19 as not', async () => {

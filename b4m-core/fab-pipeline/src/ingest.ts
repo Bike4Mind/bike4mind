@@ -270,8 +270,10 @@ const MIN_LIST_STRIP_CONTROLS = 3;
 
 /**
  * Minimum controls for any other strip candidate (`div`, `span`, `nav`, `header`, `footer`, `aside`,
- * `section`, `form`) - what keeps `<li><a>Some page</a></li>` in a real content list and
- * `<div><a>An article title</a></div>` on a card.
+ * `section`, `form`) - what keeps `<div><a>An article title</a></div>` on a card, a single link
+ * card being indistinguishable in shape from a one-item nav. `<li>` is not itself a
+ * `STRIP_CONTAINER_SELECTOR` tag, so a list item is never a candidate this constant adjudicates at
+ * all; a list is judged as a whole at the `<ul>`/`<ol>` level via `MIN_LIST_STRIP_CONTROLS` instead.
  */
 const MIN_STRIP_CONTROLS = 2;
 
@@ -356,6 +358,26 @@ function hasProseAncestor($: CheerioAPI, element: DomNode, boundary: DomNode): b
 }
 
 /**
+ * True when `element` sits directly between two pieces of running text - a non-whitespace text
+ * node as its immediately preceding or following sibling. That is the tag-agnostic version of
+ * "this element sits inside running prose": `PROSE_ANCESTOR_SELECTOR` only protects a candidate
+ * whose ANCESTOR is one of a fixed list of tags (`p`, headings, `li`, ...), so the same inline
+ * `<span>` wrapping two links reads as protected prose inside a `<p>` but as a standalone chrome
+ * candidate inside a `<div>`, `<section>` or `<td>` - none of which are prose landmarks, but all of
+ * which routinely hold hand-written or CMS-rendered sentences. A text-node sibling is the
+ * strongest tag-independent signal that removing `element` would leave a dangling sentence rather
+ * than delete a block of chrome, regardless of what its parent is called.
+ */
+function hasAdjacentProseText(element: DomNode): boolean {
+  const node = element as { prev?: DomNode | null; next?: DomNode | null };
+  const isNonWhitespaceText = (sibling: DomNode | null | undefined): boolean => {
+    const candidate = sibling as { type?: string; data?: string } | null | undefined;
+    return !!candidate && candidate.type === 'text' && squash(candidate.data ?? '').length > 0;
+  };
+  return isNonWhitespaceText(node.prev) || isNonWhitespaceText(node.next);
+}
+
+/**
  * True when an element is a group of adjacent controls with no prose of its own - a nav bar, a
  * breadcrumb row, a tab strip, a footer link column, a sandbox toolbar.
  *
@@ -428,6 +450,7 @@ function pruneChromeFromScope($: CheerioAPI, scope: Cheerio<DomNode>): boolean {
     if (strips.some(strip => $.contains(strip, element))) return;
     if (documentRoot && depthWithin(element, documentRoot) > MAX_STRIP_CONTAINER_DEPTH) return;
     if (documentRoot && hasProseAncestor($, element, documentRoot)) return;
+    if (hasAdjacentProseText(element)) return;
     if (isControlStrip($, element)) strips.push(element);
   });
 
