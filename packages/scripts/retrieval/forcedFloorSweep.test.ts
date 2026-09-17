@@ -367,13 +367,25 @@ describe('buildFloorSweepRow', () => {
     expect(row.relativeBoundShare).toBe(0);
   });
 
-  it('counts a query the floors emptied, which only the absolute floor can do', () => {
+  it('counts an emptied POSITIVE as a cost, which only the absolute floor can do', () => {
     const row = buildFloorSweepRow({
       config: { relativeFloorPct: 85, minSimilarityPct: 95 },
       chunks,
       queries,
     });
-    expect(row.emptiedQueries).toBe(1);
+    expect(row.emptiedPositives).toBe(1);
+    expect(row.emptiedNegatives).toBe(0);
+  });
+
+  it('counts an emptied NEGATIVE separately from an emptied positive', () => {
+    const negativeQuery = [{ id: 'q01', vector: [1, 0], supporting: [] }];
+    const row = buildFloorSweepRow({
+      config: { relativeFloorPct: 85, minSimilarityPct: 95 },
+      chunks,
+      queries: negativeQuery,
+    });
+    expect(row.emptiedNegatives).toBe(1);
+    expect(row.emptiedPositives).toBe(0);
   });
 
   it('scores the accepted set against the committed ground truth', () => {
@@ -498,5 +510,29 @@ describe('formatFloorSweepTable', () => {
 
   it('renders a header even with no rows, so an empty run is visibly empty', () => {
     expect(formatFloorSweepTable([]).split('\n')).toHaveLength(2);
+  });
+
+  it('reports "n/a (n=0)" for the false-positive rate with no negatives', () => {
+    const lines = formatFloorSweepTable([row(ZERO_FLOOR_CONFIG)]).split('\n');
+    expect(lines[0]).toContain('false-positive rate');
+    expect(lines[2]).toContain('n/a (n=0)');
+  });
+
+  it('prints the false-positive rate with its negatives denominator once one exists', () => {
+    const mixedQueries = [
+      { id: 'q01', vector: [1, 0], supporting: ['docA'] },
+      // Diametrically opposite the reference direction, so its cosine to every chunk is negative -
+      // ZERO_FLOOR_CONFIG's absolute floor is 0, which still rejects negatives (see FloorConfig).
+      { id: 'q02', vector: [-1, 0], supporting: [] },
+    ];
+    const mixedRow = buildFloorSweepRow({ config: ZERO_FLOOR_CONFIG, chunks, queries: mixedQueries });
+    const lines = formatFloorSweepTable([mixedRow]).split('\n');
+    expect(lines[2]).toContain('0.0% (n=1)');
+  });
+
+  it('prints the emptied positive and negative counts as separate columns', () => {
+    const lines = formatFloorSweepTable([row(SHIPPED_CONFIG)]).split('\n');
+    expect(lines[0]).toContain('emptied (pos)');
+    expect(lines[0]).toContain('emptied (neg)');
   });
 });

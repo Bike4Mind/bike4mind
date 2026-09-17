@@ -344,15 +344,18 @@ sit ABOVE the whole band in either space, so after the flip they would have reje
 every query - the silent outage `b4m-core/common/src/schemas/embedding.ts` records this codebase
 hitting twice already.
 
-**Those three literals are gone** (#2572 item 4a). Both floors now resolve per embedding space from
-`FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE` / `MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE` in
-`b4m-core/common/src/constants/embeddingSpaceFloors.ts`, keyed on the space the scores were actually
-produced in - for forced retrieval that is the candidate files' MAJORITY model, not the admin
-default, so a lake still on ada-002 mid-migration keeps its own floor on the same deployment where a
-migrated one gets 3-small's. A space with no measured entry applies no absolute floor and logs at
-error level, leaving the scale-free relative floor as the only gate: less precise, and recoverable,
-where a blackout is not. So the numbers below are still what a floor DOES to recall in each space,
-but the shipped 85:75 row is no longer what a 3-small deployment would run.
+**Those three literals are gone** (#2572 item 4a). The forced-retrieval floor now resolves per
+embedding space from `FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE` in
+`b4m-core/common/src/constants/embeddingSpaceFloors.ts`, keyed on the candidate files' MAJORITY
+model, not the admin default, so a lake still on ada-002 mid-migration keeps its own floor on the
+same deployment where a migrated one gets 3-small's. A space with no measured entry applies no
+absolute floor and logs at error level, leaving the scale-free relative floor as the only gate: less
+precise, and recoverable, where a blackout is not. So the numbers below are still what a floor DOES
+to recall in each space, but the shipped 85:75 row is no longer what a 3-small deployment would run.
+
+V1 mementos moved off the per-space table entirely in a later change: they now embed in a
+compile-time-pinned space (`MEMENTO_EMBEDDING_ID`) the same way V2 always did, so their floor is a
+single literal (`MEMENTO_MIN_SIMILARITY`, see below) rather than something resolved per space.
 
 A FAB replacement floor is bracketed by `posTop` and `negTop`: roughly 0.38-0.40 for `3-small@1536`.
 That is NOT `MEMENTO_MIN_SIMILARITY` (0.25), which sits below this corpus's `negTop` of 0.3615 and would
@@ -497,7 +500,42 @@ application, and the budget walk - is hand-mirrored here and pinned only by comm
 the served scan today, and the budget walk is the one place it knowingly does not (see the
 pre-defang caveat above).
 
-### NEW: the gate neither floor can be - retrieval volume that responds to the question
+### REFIT: 49 replaces 35 for 3-small, off a 35-file eval lake capture
+
+The 35 above was measured on the `system-help` fixture, which the caveats right above name as the
+wrong regime for this - median chunk 638 chars against a production reference of 2182. This refit
+re-derives the number on a capture of the right shape: a 35-file eval lake capture, median chunk
+1424 chars, p90 2180.
+
+The curve, with the emptied count split into decoys suppressed (negatives, the false-positive-rate
+column `forcedFloorSweep.ts` now prints) and real answers lost (positives):
+
+| floor | emptied | decoys suppressed | real answers lost | recall | MRR |
+|---|---:|---:|---:|---:|---:|
+| 85:35 | 0 | 0 | 0 | 93.8% | 0.774 |
+| 85:41 | 3 | 0 | 3 | 89.6% | 0.743 |
+| 85:45 | 5 | 1 | 4 | 87.5% | 0.722 |
+| 85:47 | 6 | 2 | 4 | 87.5% | 0.722 |
+| **85:49** | **8** | **4** | **4** | **87.5%** | **0.722** |
+| 85:53 | 11 | 5 | 6 | 83.3% | 0.680 |
+
+Real losses saturate at 4 by floor 45 and stay flat through 49, while decoy suppression climbs 1 to
+4 over the same range: 49 is free against 45 and 47 (identical recall and MRR, strictly more decoys
+suppressed) and is the last point before real losses resume at 53. Against 35, it costs 6.3 points
+of recall to suppress 4 of the corpus's 6 decoys - paying recall for false-positive suppression on
+purpose. That trade is only sound because an emptied question is now an honest miss rather than a
+fabrication: `forcedRetrievalAbstention.ts` instructs the model to name what is missing and ask for
+it, and its own docblock records the old answer-ungrounded behaviour as the bug that motivated it.
+
+**Still PROVISIONAL, and here is why the marker stays.** The decoy column is the whole argument for
+49 over 45, and its denominator is 6 negatives against 48 positives - four of six is a strong signal
+on six observations, not a population rate. The recall side is the better-supported half. 49 is the
+right number to ship off this table, but it is not yet a measured floor in the sense 75 is for
+ada-002: a re-measure on a live lake with a larger negative set is the evidence this n=6 cannot
+supply. Re-running `forcedFloorSweep.ts` against a re-embedded production lake (once one exists) is
+what earns the marker's removal, not another eval-lake capture.
+
+
 
 Both floors above answer "how high is high enough" with a line whose position depends on knowing
 where the band sits. Neither can answer a different question: **does the amount retrieved respond to

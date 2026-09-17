@@ -17,11 +17,15 @@
  * missing the field, so stamping a file removes it from every later page and a rerun after a
  * partial failure picks up exactly where it left off.
  *
+ * `--model` is required and names the model same-width legacy chunks tiebreak to - see
+ * `resolveMajorityEmbeddingModel` in backfillPlan.ts for why this cannot be inferred from the
+ * deployment's current default.
+ *
  * Dry-run by default; pass --execute to write.
  *
  * Usage (needs DB, provided by `sst shell`):
- *   npx sst shell --stage dev        -- tsx packages/scripts/datalake/backfill-chunk-embedding-model.ts
- *   npx sst shell --stage production -- tsx packages/scripts/datalake/backfill-chunk-embedding-model.ts --execute
+ *   npx sst shell --stage dev        -- tsx packages/scripts/datalake/backfill-chunk-embedding-model.ts --model text-embedding-ada-002
+ *   npx sst shell --stage production -- tsx packages/scripts/datalake/backfill-chunk-embedding-model.ts --model text-embedding-ada-002 --execute
  */
 
 import yargs from 'yargs';
@@ -35,6 +39,7 @@ import { planFileBackfills } from './backfillPlan.js';
 interface Options {
   execute: boolean;
   batchSize: number;
+  model: string;
 }
 
 async function main(opts: Options): Promise<number> {
@@ -76,7 +81,7 @@ async function main(opts: Options): Promise<number> {
     const files = await Promise.all(lookupIds.map(id => fabFileRepository.findById(id)));
     const fileEmbeddingModels = new Map(lookupIds.map((id, i) => [id, files[i]?.embeddingModel]));
 
-    const { plans, unresolved } = planFileBackfills(stampable, fileEmbeddingModels);
+    const { plans, unresolved } = planFileBackfills(stampable, fileEmbeddingModels, opts.model);
 
     for (const plan of plans) {
       if (opts.execute) {
@@ -120,9 +125,16 @@ async function main(opts: Options): Promise<number> {
 const argv = yargs(hideBin(process.argv))
   .option('execute', { type: 'boolean', default: false, describe: 'Actually write (default: dry-run)' })
   .option('batch-size', { type: 'number', default: 5_000, describe: 'Chunks read per page' })
+  .option('model', {
+    type: 'string',
+    demandOption: true,
+    describe:
+      'Embedding model to tiebreak same-width legacy chunks to (e.g. text-embedding-ada-002). ' +
+      'Required: see resolveMajorityEmbeddingModel in backfillPlan.ts for why this is not inferred.',
+  })
   .parseSync();
 
-main({ execute: argv.execute, batchSize: argv['batch-size'] })
+main({ execute: argv.execute, batchSize: argv['batch-size'], model: argv.model })
   .then(code => process.exit(code))
   .catch(err => {
     console.error(err);

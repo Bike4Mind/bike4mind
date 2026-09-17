@@ -608,20 +608,21 @@ export class MementoFeature implements ChatCompletionFeature {
     this.logger.log('📚 Retrieving relevant mementos using vector similarity');
 
     // Neither `minSimilarity` nor `embeddingModel`: BOTH are properties of the embedding space, and
-    // `getRelevantMementos` is the single place that resolves it (from the `defaultEmbeddingModel`
-    // setting). The 0.75 that used to sit here was fitted to ada-002 and would have rejected every
-    // memento in existence the moment that setting moved.
+    // `getRelevantMementos` is the single place that resolves it - now a compile-time pin
+    // (`MEMENTO_EMBEDDING_ID`), not the `defaultEmbeddingModel` admin setting. The 0.75 that used to
+    // sit here was fitted to ada-002 and would have rejected every memento in existence the moment
+    // that setting moved.
     //
     // MUST STAY IN SYNC with `getFirstIterationMementosPreamble.ts` (agent mode), which also passes
-    // neither. Passing `embeddingFactory.getDefaultEmbeddingModel()` here is what made the two modes
-    // disagree: the factory resolves by CREDENTIAL PRIORITY (an OpenAI key alone returns ada-002) and
-    // never reads the setting - see `resolveEmbeddingModelFallback` below, which says the same thing
-    // about naming a space. That argument does not merely pick a floor, it picks the space the QUERY
-    // is embedded in, so with the setting on 3-small and an OpenAI key present this embedded the
-    // query in ada-002, scored it against 3-small memento vectors, and then gated the resulting
-    // cross-space noise on ada-002's 75. Memory went dark on the exact path this table exists to keep
-    // lit. Resolving in one place makes the comparison in-space and the two modes agree by
-    // construction.
+    // neither. Passing `embeddingFactory.getDefaultEmbeddingModel()` here used to be what made the
+    // two modes disagree: the factory resolved by CREDENTIAL PRIORITY (an OpenAI key alone returns
+    // ada-002) and never read the setting - see `resolveEmbeddingModelFallback` below, which says the
+    // same thing about naming a space. That argument did not merely pick a floor, it picked the space
+    // the QUERY was embedded in, so with the setting on 3-small and an OpenAI key present this
+    // embedded the query in ada-002, scored it against 3-small memento vectors, and then gated the
+    // resulting cross-space noise on ada-002's 75. Memory went dark on the exact path this table
+    // exists to keep lit. Resolving in one pinned place makes the comparison in-space and the two
+    // modes agree by construction, independent of whatever the admin setting says.
     const relevantMementos = await getRelevantMementos(
       this.user.id,
       message,

@@ -152,13 +152,12 @@ export function resolveEmbeddingConfig(
  * admin setting. A caller that must hit one specific vector space MUST keep using
  * `resolveEmbeddingConfig` and fail, because a fallback there would silently compare or write
  * across incompatible spaces:
- *   - V2 mementos are pinned to MEMENTO_EMBEDDING_MODEL at 512 truncated dims (see embedding.ts);
- *   - V1 mementos (mementoEmbedding.ts, getRelevantMementos.ts) read the admin default and so LOOK
- *     free to choose, but neither live write path stamps `Memento.embeddingModel` - only the
- *     reembedMementos backfill does. Their vectors are ranked by in-process cosine with no width
- *     guard and no Atlas index, so a substitution here would drop 1024-dim vectors into a field
- *     holding 1536-dim ones with nothing recording which is which, and nothing able to tell them
- *     apart afterwards. Stamping V1 is the prerequisite for including it, not this helper.
+ *   - V1 and V2 mementos are BOTH now pinned to MEMENTO_EMBEDDING_MODEL at 512 truncated dims (see
+ *     mementoEmbedding.ts, getRelevantMementos.ts, embedding.ts) - V1 used to read the admin default
+ *     instead, which is exactly the substitution this bullet warns against, so this helper must
+ *     never be reintroduced on that path. Their vectors are ranked by in-process cosine with no
+ *     width guard and no Atlas index, so nothing here would catch a wrong-space substitution before
+ *     it silently corrupted the comparison.
  *   - alternateModelAnn embeds one query per model bucket to match each chunk's recorded stamp.
  *
  * Returns the model actually used, so callers stamp what they embedded with rather than what they
