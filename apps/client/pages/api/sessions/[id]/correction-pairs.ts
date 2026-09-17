@@ -47,7 +47,8 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
         const quest = await questRepository.findById(questId);
         if (!quest || quest.deletedAt) return null;
         // Projected field by field rather than spread: the walk needs prose and identity only, so
-        // promptMeta, toolResults and attachments never enter the export path at all.
+        // promptMeta, toolResults and images never enter the export path at all. Same field set as
+        // findCorrectionLinksBySessionId's projection (QuestModel.ts) - the two must stay in sync.
         return {
           id: quest.id ?? questId,
           sessionId: quest.sessionId,

@@ -67,6 +67,21 @@ describe('buildCorrectionPairs', () => {
     await expect(buildCorrectionPairs(SESSION, reader)).resolves.toEqual([]);
   });
 
+  // Built by hand rather than through fakeReader, whose findCorrectionLinks filters on sessionId
+  // and so can never hand back a link that has none. This is the row a reject-on-mismatch guard
+  // (`target.sessionId !== current.sessionId`) would let through, which is what the positive form
+  // in buildCorrectionPairs exists to stop; invert that guard and this test is the one that fails.
+  it('drops a hop when neither turn records a session', async () => {
+    const orphan = { id: 'orphan', prompt: 'p', reply: 'a' } as unknown as CorrectionTurnRecord;
+    const link = { id: 'B', correctsQuestId: 'orphan', prompt: 'p', reply: 'a' } as unknown as CorrectionTurnRecord;
+    const reader: CorrectionPairReader = {
+      findCorrectionLinks: async () => [link],
+      findById: async id => (id === 'orphan' ? orphan : null),
+    };
+
+    await expect(buildCorrectionPairs(SESSION, reader)).resolves.toEqual([]);
+  });
+
   it('skips a hop whose corrected turn never recorded an answer, and keeps walking past it', async () => {
     const reader = fakeReader([
       turn({ id: 'A', reply: null }),
