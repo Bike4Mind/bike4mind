@@ -112,6 +112,8 @@ import BackfillInviteInviterId from './20260913000000_backfill-invite-inviter-id
 import EnsureFabFileChunkResidencyIndex from './20260914000000_ensure-fabfilechunk-residency-index';
 import DeleteNearEmptyVectorizedFabFileChunks from './20260915120000_delete-near-empty-vectorized-fabfilechunks';
 import ReplaceFabFileModerationSweepIndex from './20260915130000_replace-fabfile-moderation-sweep-index';
+import CapLegacyInviteLinkExpiry from './20260917000000_cap-legacy-invite-link-expiry';
+import EnsureInviteTokenIndex from './20260917000100_ensure-invite-token-index';
 import EnsureFeedbackOrgCreatedAtIndex from './20260918000000_ensure-feedback-org-createdat-index';
 import EnsureUserOrganizationIdIndex from './20260918010000_ensure-user-organizationid-index';
 
@@ -220,6 +222,8 @@ const coreMigrations: MigrationFile[] = [
   EnsureFabFileChunkResidencyIndex,
   DeleteNearEmptyVectorizedFabFileChunks,
   ReplaceFabFileModerationSweepIndex,
+  CapLegacyInviteLinkExpiry,
+  EnsureInviteTokenIndex,
   EnsureFeedbackOrgCreatedAtIndex,
   EnsureUserOrganizationIdIndex,
 ];

@@ -140,6 +140,63 @@ describe('OpenAIBackend /v1/responses routing for GPT-5 narrator family + tools'
     expect(input.some(i => i.role === 'user')).toBe(true);
   });
 
+  it('carries image parts into the Responses input instead of stringifying them away', async () => {
+    const { backend, responsesCreate } = buildBackend();
+    const url = 'data:image/png;base64,iVBORw0KGgo=';
+
+    await backend.complete(
+      ChatModels.GPT5,
+      [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'what is this?' },
+            { type: 'image_url', image_url: { url } },
+          ] as never,
+        },
+      ],
+      { tools: [sampleTool] },
+      async () => {}
+    );
+
+    const input = (responsesCreate.mock.calls[0][0] as AnyRecord).input as Array<AnyRecord>;
+    const user = input.find(i => i.role === 'user')!;
+    expect(user.content).toEqual([
+      { type: 'input_text', text: 'what is this?' },
+      { type: 'input_image', image_url: url, detail: 'auto' },
+    ]);
+  });
+
+  it('falls back an unrecognized caller-supplied detail value to auto', async () => {
+    const { backend, responsesCreate } = buildBackend();
+    const url = 'data:image/png;base64,iVBORw0KGgo=';
+
+    await backend.complete(
+      ChatModels.GPT5,
+      [
+        {
+          role: 'user',
+          content: [{ type: 'image_url', image_url: { url, detail: 'ultra' } }] as never,
+        },
+      ],
+      { tools: [sampleTool] },
+      async () => {}
+    );
+
+    const input = (responsesCreate.mock.calls[0][0] as AnyRecord).input as Array<AnyRecord>;
+    const user = input.find(i => i.role === 'user')!;
+    expect(user.content).toEqual([{ type: 'input_image', image_url: url, detail: 'auto' }]);
+  });
+
+  it('keeps a plain string input for a text-only user turn', async () => {
+    const { backend, responsesCreate } = buildBackend();
+
+    await run(backend, ChatModels.GPT5, { tools: [sampleTool] });
+
+    const input = (responsesCreate.mock.calls[0][0] as AnyRecord).input as Array<AnyRecord>;
+    expect(input.find(i => i.role === 'user')!.content).toBe('hi');
+  });
+
   it('streams terminal text token-by-token via responses.create with stream:true', async () => {
     const { backend, responsesCreate, chatCreate } = buildBackend({
       responses: [terminalResponse('Here is your answer now')],
