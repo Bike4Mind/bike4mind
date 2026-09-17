@@ -31,13 +31,18 @@ You can also explicitly ask the AI to use a specific tool (e.g., "search the web
 
 Besides the tools you switch on, the assistant sometimes adds one of its own when a message looks
 like it needs it - searching your files, navigating the app, or drafting a blog post. Turn on
-**Only tools I pick**, at the bottom of the tool list, to stop that. Tools you enabled yourself are
-unaffected, and so is knowledge retrieval: a notebook set up to search your documents still does.
+**Only tools I pick**, at the bottom of the tool list, to stop that. Unlike the per-notebook tools
+above, this is a standing preference that applies across every notebook. Tools you enabled yourself
+are unaffected, and so is knowledge retrieval: a notebook set up to search your documents still does.
 
 It is off by default. Turning it on also trims the tool instructions sent with each message, saving
 roughly 800 to 1,950 tokens on the turns where those extra tools would have been offered - about 800
 when only the file-search offer was in play, and the full amount when the navigation and blog tools
 would have come too.
+
+It does not yet cover every send path: an Agent-mode run resolves its own tools separately, and
+resending a message (retry, correction, or a Quest Master follow-up) does not currently carry the
+setting either.
 
 ---
 

@@ -88,15 +88,10 @@ export interface LLMContextProps {
   toolMode: 'fast' | 'smart';
   tools: Array<B4MLLMTools>;
   /**
-   * Asks the server to withhold the tools it would otherwise attach on its own for the turn -
-   * the knowledge-search offer, `navigate_view`, and the blog/skill trio - leaving the model
-   * only the tools selected above. Sent as `skipAutoOffers`, which the server unions with
-   * `promptMode` in resolveSkipAutoOffers.
-   *
-   * Withholds the OFFER, not knowledge: a session with forced retrieval still retrieves, and
-   * already-attached files are still inlined. Persisted, unlike `disableAutoRouteForThisSession`
-   * below - this is a standing preference, and the toggle lives in the tool picker a user would
-   * reopen to undo it.
+   * "Only tools I pick" - suppresses tools added automatically rather than selected above
+   * (the server's own offers, and the client's Smart-mode recommendations). Withholds the
+   * OFFER, not knowledge already in scope: forced retrieval and already-attached files are
+   * unaffected. Persisted, unlike `disableAutoRouteForThisSession` below.
    */
   skipAutoOffers: boolean;
   researchMode: ResearchModeState;

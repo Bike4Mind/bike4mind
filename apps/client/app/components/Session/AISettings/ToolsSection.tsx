@@ -1400,9 +1400,8 @@ const ToolsSection = ({
               </Box>
             </ToolContainer>
           </Grid>
-          {/* Suppresses the tools the SERVER adds on its own (knowledge-search offer,
-              navigate_view, the blog/skill trio) - not a tool itself, so no toolId: there is
-              nothing here to pin or gate. Last in the list because it qualifies the list, not one tool. */}
+          {/* Suppresses auto-added tools (server offers + the Smart-mode recommender) - not a
+              tool itself, so no toolId: there is nothing here to pin or gate. */}
           <Grid xs={12} className="tool-item tool-item-skip-auto-offers">
             <ToolContainer sx={toolContainerSx}>
               <Box

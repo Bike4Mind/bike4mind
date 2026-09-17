@@ -682,6 +682,7 @@ export function useSendMessage({
       prompt,
       supportsTools: !!currentModelInfo?.supportsTools,
       toolsOverride: options?.toolsOverride,
+      skipAutoOffers,
     });
     if (refused) {
       setSubmitting(false);

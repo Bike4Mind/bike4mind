@@ -38,9 +38,6 @@ vi.mock('@client/app/contexts/LLMContext', () => ({ useLLM: mocks.useLLM }));
 vi.mock('@client/app/components/Session/AdvancedAISettings', () => ({
   useAdvancedAISettings: (selector: (s: { liveAI: boolean }) => unknown) => selector({ liveAI: true }),
 }));
-vi.mock('@client/app/hooks/useChatInput', () => ({
-  useChatInput: (selector: (s: { chatInputValue: string }) => unknown) => selector({ chatInputValue: '' }),
-}));
 vi.mock('@client/app/contexts/UserSettingsContext', () => ({
   useUserSettings: () => ({
     settings: {
@@ -85,7 +82,6 @@ beforeEach(() => {
 describe('ToolsSection - "Only tools I pick" row', () => {
   it('renders the row', () => {
     const { container } = render(<ToolsSection />, { wrapper: Wrapper });
-    expect(container.querySelector('.tool-item-skip-auto-offers')).toBeTruthy();
     expect(toggleOf(container)).toBeTruthy();
   });
 
