@@ -14,6 +14,11 @@ import { UserApiKeyEvents } from '@bike4mind/common';
  * Admin-only: clear a key's minute and day rate-limit counters so the next
  * request opens a fresh window. Deliberately no ownership filter - support/ops
  * unblock any user's wedged key. [id] is the userApiKey document id.
+ *
+ * Also clears the management counter (see resetApiKeyRateLimit): this is the
+ * only operator override for a client that has exhausted its own management
+ * quota and locked itself out of the self-service rate-limit PATCH, its only
+ * other path back.
  */
 const handler = baseApi({ auth: true })
   .use(csrfProtection())
@@ -33,7 +38,7 @@ const handler = baseApi({ auth: true })
         throw new NotFoundError('API key not found');
       }
 
-      await resetApiKeyRateLimit(apiKey.id);
+      await resetApiKeyRateLimit(apiKey.id, { alsoResetManagement: true });
 
       // Attributed to the key owner; resetBy records the acting admin.
       // Best-effort: the reset already happened, and the counter write throws

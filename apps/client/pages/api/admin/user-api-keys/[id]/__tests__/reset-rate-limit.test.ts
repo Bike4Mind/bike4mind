@@ -102,8 +102,10 @@ describe('POST /api/admin/user-api-keys/[id]/reset-rate-limit', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ success: true, id: 'key-1' });
-    // The stored doc id (what the enforcer keys on), not the raw param.
-    expect(resetApiKeyRateLimit).toHaveBeenCalledWith(storedKey.id);
+    // The stored doc id (what the enforcer keys on), not the raw param. Admin
+    // resets also clear the management counter - it's the only override for
+    // a client that has locked itself out of the self-service PATCH (#2883).
+    expect(resetApiKeyRateLimit).toHaveBeenCalledWith(storedKey.id, { alsoResetManagement: true });
     expect(logEvent).toHaveBeenCalledWith(
       {
         userId: 'owner-1',
@@ -122,7 +124,7 @@ describe('POST /api/admin/user-api-keys/[id]/reset-rate-limit', () => {
     await mockRefs.postHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(resetApiKeyRateLimit).toHaveBeenCalledWith(storedKey.id);
+    expect(resetApiKeyRateLimit).toHaveBeenCalledWith(storedKey.id, { alsoResetManagement: true });
     expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('key-1'));
   });
 

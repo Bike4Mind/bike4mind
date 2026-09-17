@@ -355,7 +355,12 @@ describe('apiKeyRateLimitCheck', () => {
           .mockResolvedValueOnce({ success: true, count: 1, expiresAt: future(MINUTE_MS) })
           .mockResolvedValueOnce({ success: true, count: 1, expiresAt: future(DAY_MS) });
 
-        const result = await checkApiKeyRateLimit(mockKeyId, mockRateLimit, mockContext, { counter: 'management' });
+        // Configured ABOVE the management ceiling on both axes, so the header
+        // assertions below can actually fail if a reported limit ever
+        // regresses to the enforced one (mockRateLimit's per-minute value is
+        // 5, identical to the management ceiling, and would hide that).
+        const configured = { requestsPerMinute: 30, requestsPerDay: 100 };
+        const result = await checkApiKeyRateLimit(mockKeyId, configured, mockContext, { counter: 'management' });
 
         expect(result.allowed).toBe(true);
         const keys = vi.mocked(cacheRepository.tryIncrementWithinLimitFixedWindow).mock.calls.map(call => call[0]);
@@ -363,10 +368,43 @@ describe('apiKeyRateLimitCheck', () => {
           `api-key-rate-limit:${mockKeyId}:management:minute`,
           `api-key-rate-limit:${mockKeyId}:management:day`,
         ]);
-        // Ceilings are the management ones, not the key's configured 5/100.
+        // Ceilings enforced (and consumed) are the management ones, not the
+        // key's configured 30/100.
         const limits = vi.mocked(cacheRepository.tryIncrementWithinLimitFixedWindow).mock.calls.map(call => call[1]);
         expect(limits).toEqual([MANAGEMENT_RATE_LIMIT.requestsPerMinute, MANAGEMENT_RATE_LIMIT.requestsPerDay]);
-        expect(result.headers['X-RateLimit-Limit-Day']).toBe(MANAGEMENT_RATE_LIMIT.requestsPerDay);
+        // But the advertised Limit header is the key's own configured value -
+        // a caller reading this back after mutating its own quota should see
+        // what it configured, not the fixed management ceiling that actually
+        // paid for the request.
+        expect(result.headers['X-RateLimit-Limit-Day']).toBe(configured.requestsPerDay);
+        expect(result.headers['X-RateLimit-Limit-Minute']).toBe(configured.requestsPerMinute);
+        // Remaining still reflects the enforced ceiling, since that's what
+        // actually governs the next 429.
+        expect(result.headers['X-RateLimit-Remaining-Day']).toBe(MANAGEMENT_RATE_LIMIT.requestsPerDay - 1);
+        expect(result.headers['X-RateLimit-Remaining-Minute']).toBe(MANAGEMENT_RATE_LIMIT.requestsPerMinute - 1);
+      });
+
+      it('never advertises more remaining than the limit it reports', async () => {
+        // A key configured BELOW the management ceiling (limits validate at
+        // min 1): without clamping, the enforced 5/50 headroom would be
+        // reported against an advertised 2/10.
+        const tightlyConfigured = { requestsPerMinute: 2, requestsPerDay: 10 };
+        vi.mocked(cacheRepository.tryIncrementWithinLimitFixedWindow)
+          .mockResolvedValueOnce({ success: true, count: 1, expiresAt: future(MINUTE_MS) })
+          .mockResolvedValueOnce({ success: true, count: 1, expiresAt: future(DAY_MS) });
+
+        const result = await checkApiKeyRateLimit(mockKeyId, tightlyConfigured, mockContext, {
+          counter: 'management',
+        });
+
+        expect(result.headers['X-RateLimit-Remaining-Minute']).toBe(tightlyConfigured.requestsPerMinute);
+        expect(result.headers['X-RateLimit-Remaining-Day']).toBe(tightlyConfigured.requestsPerDay);
+        expect(result.headers['X-RateLimit-Remaining-Minute']).toBeLessThanOrEqual(
+          result.headers['X-RateLimit-Limit-Minute']
+        );
+        expect(result.headers['X-RateLimit-Remaining-Day']).toBeLessThanOrEqual(
+          result.headers['X-RateLimit-Limit-Day']
+        );
       });
 
       it('still rejects once the management quota itself is exhausted', async () => {
@@ -441,6 +479,31 @@ describe('apiKeyRateLimitCheck', () => {
         .mocked(cacheRepository.tryIncrementWithinLimitFixedWindow)
         .mock.calls.map(call => call[0]);
       expect(enforcerKeys).toEqual([minuteKey, dayKey]);
+    });
+
+    it('leaves the management counter untouched by default', async () => {
+      vi.mocked(cacheRepository.deleteByKey).mockResolvedValue(undefined);
+
+      await resetApiKeyRateLimit(mockKeyId);
+
+      expect(cacheRepository.deleteByKey).toHaveBeenCalledTimes(2);
+      const { minuteKey, dayKey } = buildRateLimitKeys(mockKeyId, 'management');
+      expect(cacheRepository.deleteByKey).not.toHaveBeenCalledWith(minuteKey);
+      expect(cacheRepository.deleteByKey).not.toHaveBeenCalledWith(dayKey);
+    });
+
+    it('also clears the management counter when alsoResetManagement is set', async () => {
+      vi.mocked(cacheRepository.deleteByKey).mockResolvedValue(undefined);
+
+      await resetApiKeyRateLimit(mockKeyId, { alsoResetManagement: true });
+
+      expect(cacheRepository.deleteByKey).toHaveBeenCalledTimes(4);
+      const request = buildRateLimitKeys(mockKeyId);
+      const management = buildRateLimitKeys(mockKeyId, 'management');
+      expect(cacheRepository.deleteByKey).toHaveBeenCalledWith(request.minuteKey);
+      expect(cacheRepository.deleteByKey).toHaveBeenCalledWith(request.dayKey);
+      expect(cacheRepository.deleteByKey).toHaveBeenCalledWith(management.minuteKey);
+      expect(cacheRepository.deleteByKey).toHaveBeenCalledWith(management.dayKey);
     });
   });
 
