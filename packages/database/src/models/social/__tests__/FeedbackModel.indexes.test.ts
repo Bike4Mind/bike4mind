@@ -26,12 +26,13 @@ describe('FeedbackModel indexes', () => {
     return FeedbackModel.schema.indexes() as unknown as DeclaredIndex[];
   }
 
-  it('declares exactly the four expected performance indexes, by name', () => {
+  it('declares exactly the five expected performance indexes, by name', () => {
     const names = declaredIndexes()
       .map(([, options]) => options?.name)
       .sort();
     expect(names).toEqual(
       [
+        'feedback_org_createdAt',
         'feedback_org_subject_createdAt',
         'feedback_questId_createdAt',
         'feedback_sessionId_createdAt',
@@ -40,7 +41,7 @@ describe('FeedbackModel indexes', () => {
     );
   });
 
-  it('builds all four indexes live in Mongo under the expected names', async () => {
+  it('builds all five indexes live in Mongo under the expected names', async () => {
     await FeedbackModel.createIndexes();
     const live = await FeedbackModel.collection.indexes();
     const liveNames = new Set(live.map(idx => idx.name));
@@ -48,6 +49,7 @@ describe('FeedbackModel indexes', () => {
     expect(liveNames).toContain('feedback_questId_createdAt');
     expect(liveNames).toContain('feedback_sessionId_createdAt');
     expect(liveNames).toContain('feedback_org_subject_createdAt');
+    expect(liveNames).toContain('feedback_org_createdAt');
   });
 
   it('declares zero TTL indexes - the permanent document must never expire', () => {
