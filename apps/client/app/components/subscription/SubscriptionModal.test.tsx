@@ -120,4 +120,21 @@ describe('SubscriptionModal', () => {
     expect(screen.queryByText('subscriptions.payment_issue')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Subscribe' })).toBeEnabled();
   });
+
+  it.each([
+    ['stale delinquent row first', 'stale-first'],
+    ['active row first', 'active-first'],
+  ])('does not paint a healthy plan as payment-failed (%s)', (_label, order) => {
+    // A re-subscribe after a failed renewal leaves the old past_due row behind at the
+    // same price, and the subscription list is unsorted. First-match would show the
+    // paying user a red payment-failure banner on their own plan.
+    const stale = subRow({ status: 'past_due', subscriptionId: 'sub_stale' });
+    const live = subRow({ status: 'active', subscriptionId: 'sub_live' });
+    subscriptions = order === 'stale-first' ? [stale, live] : [live, stale];
+
+    renderModal();
+
+    expect(screen.queryByText('subscriptions.payment_issue')).not.toBeInTheDocument();
+    expect(screen.getByText('subscription_modal.subscription_renewal')).toBeInTheDocument();
+  });
 });

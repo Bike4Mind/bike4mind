@@ -2,7 +2,11 @@ import { useCreateTeamModal } from '@client/app/components/organizations/CreateT
 import { useGetSettingsValue, useConfig } from '@client/app/hooks/data/settings';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
-import { isCancellableSubscriptionStatus, isDelinquentSubscriptionStatus } from '@client/lib/subscriptions/types';
+import {
+  isCancellableSubscriptionStatus,
+  isDelinquentSubscriptionStatus,
+  pickSubscriptionByPrice,
+} from '@client/lib/subscriptions/types';
 import {
   SubscriptionPlanInterval,
   UserSubscriptionTier,
@@ -212,7 +216,9 @@ const SubscriptionModalContent = () => {
         {activeTab === SubscriptionModalTabs.Personal && (
           <>
             {availablePlans.map(plan => {
-              const isCurrentPlan = cancellableSubscriptions.find(sub => sub.priceId === plan.priceId);
+              // Active-first per price: a stale delinquent row at this price must not
+              // mark the plan the user is actually paying for as payment-failed.
+              const isCurrentPlan = pickSubscriptionByPrice(cancellableSubscriptions, plan.priceId);
               return (
                 <PlanCard
                   key={plan.priceId}

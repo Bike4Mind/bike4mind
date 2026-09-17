@@ -661,7 +661,12 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
 
       expect(mockUpdateByStripeSubscriptionId).toHaveBeenCalledWith(
         'sub_deleted',
-        expect.objectContaining({ status: 'canceled' })
+        expect.objectContaining({ status: 'canceled', canceledAt: new Date(1700000000 * 1000) })
+      );
+      expect(mockSendToClient).toHaveBeenCalledWith(
+        'user_xyz',
+        expect.anything(),
+        expect.objectContaining({ action: 'invalidate_query', queryKey: ['subscriptions'] })
       );
       expect(mockVoidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_deleted');
     });
@@ -683,7 +688,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
 
       expect(mockUpdateByStripeSubscriptionId).toHaveBeenCalledWith(
         'sub_deleted',
-        expect.objectContaining({ status: 'canceled' })
+        expect.objectContaining({ status: 'canceled', canceledAt: new Date(1700000000 * 1000) })
       );
     });
   });

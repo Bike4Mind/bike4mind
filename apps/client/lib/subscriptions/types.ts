@@ -53,6 +53,19 @@ export function pickDisplayedSubscription<T extends { status: Stripe.Subscriptio
 }
 
 /**
+ * The row to act on for one price: `pickDisplayedSubscription`'s active-first rule,
+ * narrowed to a single price. Callers select a specific plan's row out of the whole
+ * list, so a stale delinquent row at that price must not outrank the live one - the
+ * same ambiguity `pickDisplayedSubscription` resolves for the list as a whole.
+ */
+export function pickSubscriptionByPrice<T extends { priceId: string; status: Stripe.Subscription.Status }>(
+  subscriptions: readonly T[],
+  priceId: string
+): T | undefined {
+  return pickDisplayedSubscription(subscriptions.filter(sub => sub.priceId === priceId));
+}
+
+/**
  * Statuses where Stripe's billing is stuck: the current period is unpaid and
  * retries (and dunning email) keep running. Cancelling at period end would only
  * buy the customer more email for access they have not paid for, so these are

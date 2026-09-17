@@ -162,7 +162,10 @@ const buildUserSub = (
       {
         quantity: 1,
         price: { id: overrides.priceId ?? 'price_pro' },
-        current_period_start: 1700000000,
+        // Deliberately distinct from the `canceled_at` literals the cancel-path tests
+        // use: those assert the cutoff came from canceled_at, and an equal
+        // current_period_start would let the wrong source pass.
+        current_period_start: 1699999000,
         current_period_end: 1702592000,
       },
     ],

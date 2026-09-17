@@ -1,5 +1,5 @@
 import { useCancelSubscription, useChangeSubscription, useSubscribePlan } from '@client/app/hooks/data/subscriptions';
-import { isDelinquentSubscriptionStatus } from '@client/lib/subscriptions/types';
+import { isDelinquentSubscriptionStatus, pickSubscriptionByPrice } from '@client/lib/subscriptions/types';
 import { IUserSubscription } from '@client/lib/userSubscriptions/types';
 import { Button } from '@mui/joy';
 import dayjs from 'dayjs';
@@ -20,8 +20,14 @@ const SubscribeButton = ({ priceId, cancellableSubscriptions }: SubscribeButtonP
   const cancelSubscription = useCancelSubscription();
   const changeSubscription = useChangeSubscription();
 
+  // Active-first per price, so a stale delinquent row at this price cannot shadow the
+  // plan the user is paying for and show them a stale "ends on" date instead.
+  const activeSubscription = useMemo(
+    () => pickSubscriptionByPrice(cancellableSubscriptions, priceId),
+    [cancellableSubscriptions, priceId]
+  );
+
   const type: 'subscribe' | 'cancel' | 'change' = useMemo(() => {
-    const activeSubscription = cancellableSubscriptions.find(subscription => subscription.priceId === priceId);
     if (activeSubscription) {
       return 'cancel';
     } else if (cancellableSubscriptions.some(sub => !isDelinquentSubscriptionStatus(sub.status))) {
@@ -34,9 +40,7 @@ const SubscribeButton = ({ priceId, cancellableSubscriptions }: SubscribeButtonP
     } else {
       return 'subscribe';
     }
-  }, [cancellableSubscriptions, priceId]);
-
-  const activeSubscription = cancellableSubscriptions.find(subscription => subscription.priceId === priceId);
+  }, [activeSubscription, cancellableSubscriptions]);
 
   const handleClick = () => {
     switch (type) {

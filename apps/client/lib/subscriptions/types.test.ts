@@ -5,6 +5,7 @@ import {
   isCancellableSubscriptionStatus,
   isDelinquentSubscriptionStatus,
   pickDisplayedSubscription,
+  pickSubscriptionByPrice,
 } from './types';
 
 // Every status Stripe can report on a subscription, so the partition below covers
@@ -87,5 +88,37 @@ describe('pickDisplayedSubscription', () => {
   it('ignores terminal rows, so a finished plan is not shown as current', () => {
     expect(pickDisplayedSubscription([row('canceled', 'sub_dead')])).toBeUndefined();
     expect(pickDisplayedSubscription([row('incomplete_expired', 'sub_dead')])).toBeUndefined();
+  });
+});
+
+describe('pickSubscriptionByPrice', () => {
+  const row = (status: Stripe.Subscription.Status, priceId: string, subscriptionId: string) => ({
+    status,
+    priceId,
+    subscriptionId,
+  });
+
+  it('prefers the active row at that price over a stale delinquent one regardless of order', () => {
+    // Nothing blocks a second checkout while the first row is past_due, and
+    // /api/subscriptions/own does not sort, so the stale row can arrive first.
+    const stale = row('past_due', 'price_pro', 'sub_stale');
+    const live = row('active', 'price_pro', 'sub_live');
+
+    expect(pickSubscriptionByPrice([stale, live], 'price_pro')?.subscriptionId).toBe('sub_live');
+    expect(pickSubscriptionByPrice([live, stale], 'price_pro')?.subscriptionId).toBe('sub_live');
+  });
+
+  it('falls back to a non-terminal row at that price when there is no active one', () => {
+    expect(pickSubscriptionByPrice([row('past_due', 'price_pro', 'sub_dunned')], 'price_pro')?.subscriptionId).toBe(
+      'sub_dunned'
+    );
+  });
+
+  it('ignores rows at another price', () => {
+    expect(pickSubscriptionByPrice([row('active', 'price_other', 'sub_other')], 'price_pro')).toBeUndefined();
+  });
+
+  it('ignores terminal rows at that price', () => {
+    expect(pickSubscriptionByPrice([row('canceled', 'price_pro', 'sub_dead')], 'price_pro')).toBeUndefined();
   });
 });

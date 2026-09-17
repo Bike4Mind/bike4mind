@@ -87,4 +87,18 @@ describe('SubscribeButton', () => {
 
     expect(screen.getByRole('button', { name: /Subscription ends on February 1, 2026/ })).toBeDisabled();
   });
+
+  it("cancels the live plan rather than showing the stale row's end date", async () => {
+    // A period-end cancel followed by a re-subscribe can leave a canceledAt-bearing
+    // past_due row beside the active one at the same price. First-match would render
+    // that old row's end date and hide the cancel action from a paying user.
+    renderButton([
+      subRow({ status: 'past_due', subscriptionId: 'sub_stale', canceledAt: new Date('2026-01-10T00:00:00Z') }),
+      subRow({ status: 'active', subscriptionId: 'sub_live' }),
+    ]);
+
+    await userEvent.setup({ delay: null }).click(screen.getByRole('button', { name: 'Cancel Subscription' }));
+
+    expect(cancelMutate).toHaveBeenCalledWith('price_pro');
+  });
 });

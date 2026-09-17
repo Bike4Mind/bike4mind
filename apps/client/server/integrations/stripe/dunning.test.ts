@@ -76,6 +76,16 @@ describe('voidOpenSubscriptionInvoices', () => {
     expect(result).toEqual({ voided: [], failed: [] });
   });
 
+  it('propagates a list failure instead of reporting an empty cleanup', async () => {
+    // The callers rely on this throw to log and count a failed cleanup. Swallowing it
+    // here would make a Stripe outage indistinguishable from "nothing was open".
+    const listError = new Error('stripe unavailable');
+    mockList.mockRejectedValue(listError);
+
+    await expect(voidOpenSubscriptionInvoices('sub_1')).rejects.toBe(listError);
+    expect(mockVoidInvoice).not.toHaveBeenCalled();
+  });
+
   it('does not abandon the remaining invoices when one void fails', async () => {
     mockList.mockResolvedValue({ data: [openInvoice('in_a'), openInvoice('in_b'), openInvoice('in_c')] });
     mockVoidInvoice.mockImplementation(async (id: string) => {
