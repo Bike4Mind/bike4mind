@@ -297,17 +297,12 @@ export default function ExperimentalFeatureToggle() {
           </Typography>
           {!telemetryAdminEnabled && (
             <Typography level={TYPE.caption} sx={{ mt: 0.5, color: 'warning.500', fontStyle: 'italic' }}>
-              Telemetry is not enabled by administrator
+              Sharing with us is off (your administrator has not enabled it). Your level below still controls whether
+              you can view the context breakdown for your own messages.
             </Typography>
           )}
         </Box>
-        <ButtonGroup
-          data-testid="telemetry-level-button-group"
-          size="sm"
-          variant="outlined"
-          disabled={!telemetryAdminEnabled}
-          sx={{ flexShrink: 0 }}
-        >
+        <ButtonGroup data-testid="telemetry-level-button-group" size="sm" variant="outlined" sx={{ flexShrink: 0 }}>
           <Button
             data-testid="telemetry-level-none"
             variant={telemetryLevel === 'none' ? 'solid' : 'outlined'}
