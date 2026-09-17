@@ -260,12 +260,30 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
       const isWorkbenchFile = workBenchFiles.some(f => f.id === msg.fabFileId);
       if (!isSystemFile && !isWorkbenchFile) return;
 
+      // Membership, not either/or, mirrors handleReprocessFile above: a file can be in BOTH the
+      // system and workbench lists at once, and each list renders its own row that markPending set
+      // pending independently. Reconciling only one store here would leave the other stuck.
+      const clearPending = (f: IFabFileDocument) =>
+        f.id === msg.fabFileId ? { ...f, isChunking: false, isVectorizing: false } : f;
+
       if (msg.vectorizeStatus === 'complete') {
         let freshFile: IFabFileDocument;
         try {
           freshFile = await getFabFileByIdFromServer(msg.fabFileId);
         } catch (error) {
           console.error(`Failed to refresh fabFile ${msg.fabFileId} after reprocess`, error);
+          toast.error('Failed to refresh file after reprocess');
+          if (isSystemFile) {
+            queryClient.setQueriesData({ queryKey: ['system-prompt-files'], exact: false }, (oldData: any) => {
+              if (Array.isArray(oldData)) {
+                return oldData.map(clearPending);
+              }
+              return oldData;
+            });
+          }
+          if (isWorkbenchFile && currentSessionId) {
+            setWorkBenchFiles(currentSessionId, prevFiles => prevFiles.map(clearPending));
+          }
           return;
         }
 
@@ -276,14 +294,12 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
             }
             return oldData;
           });
-        } else if (currentSessionId) {
+        }
+        if (isWorkbenchFile && currentSessionId) {
           setWorkBenchFiles(currentSessionId, prevFiles => prevFiles.map(f => (f.id === freshFile.id ? freshFile : f)));
         }
       } else if (msg.chunkStatus === 'failed' || msg.vectorizeStatus === 'failed') {
         toast.error(msg.failedMessage || 'Failed to reprocess file');
-
-        const clearPending = (f: IFabFileDocument) =>
-          f.id === msg.fabFileId ? { ...f, isChunking: false, isVectorizing: false } : f;
 
         if (isSystemFile) {
           queryClient.setQueriesData({ queryKey: ['system-prompt-files'], exact: false }, (oldData: any) => {
@@ -292,7 +308,8 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
             }
             return oldData;
           });
-        } else if (currentSessionId) {
+        }
+        if (isWorkbenchFile && currentSessionId) {
           setWorkBenchFiles(currentSessionId, prevFiles => prevFiles.map(clearPending));
         }
       }
