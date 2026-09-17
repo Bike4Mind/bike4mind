@@ -574,7 +574,11 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     entitlementKeys: string[],
     organizationIds?: string[] | null,
     userId?: string | null,
-    opts?: { grantedLakeIds?: string[]; orgGrantedLakes?: Record<string, string[]> }
+    opts?: {
+      grantedLakeIds?: string[];
+      orgGrantedLakes?: Record<string, string[]>;
+      supersededOwnLakeIds?: string[];
+    }
   ): Promise<IDataLakeDocument[]> {
     const normalizedTags = userTags.map(t => t.toLowerCase());
     const allTags = Array.from(new Set(userTags.concat(normalizedTags)));
@@ -629,9 +633,25 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // it needs no separate org prerequisite - see `orgGrantArms`.
     accessArms.push(...orgGrantArms(opts?.orgGrantedLakes));
 
-    // Owner bypass (mirrors findAccessible): the creator always retrieves their own lakes,
-    // including private gateless ones. Only when a userId is supplied.
-    if (userId) accessArms.unshift({ createdByUserId: userId });
+    // Owner bypass (mirrors findAccessible): the creator retrieves their own lakes, including
+    // private gateless ones - EXCEPT any whose ownership has since moved off them. `createdByUserId`
+    // is immutable, so a transferred or departed creator keeps matching this arm long after the
+    // single-lake gate stopped opening for them; the exclusion set is pre-resolved app-side
+    // (`supersededOwnLakeIdsForTurn`) because the answer lives in the grant collection, which Mongo
+    // cannot join to here. Excluding on THIS arm only is the point - a superseded creator who still
+    // holds a reader grant, or who holds the lake's tag, keeps reaching it through the arm that
+    // actually authorizes them. Only when a userId is supplied.
+    if (userId) {
+      const supersededOwnLakeIds = usableObjectIds(
+        opts?.supersededOwnLakeIds,
+        'DataLakeModel.findActiveByUserTagsAndEntitlements'
+      );
+      accessArms.unshift(
+        supersededOwnLakeIds.length > 0
+          ? { createdByUserId: userId, _id: { $nin: supersededOwnLakeIds } }
+          : { createdByUserId: userId }
+      );
+    }
 
     const results = await this.dataLakeModel.find({ status: 'active', $or: accessArms }).select(LIST_PROJECTION);
     return results.map(r => r.toJSON() as IDataLakeDocument);
@@ -710,6 +730,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       offset?: number;
       grantedLakeIds?: string[];
       orgGrantedLakes?: Record<string, string[]>;
+      supersededOwnLakeIds?: string[];
     }
   ): Promise<{ lakes: IDataLakeDocument[]; total: number }> {
     // Clamp paging here (defense in depth) even though the route also validates: a caller
@@ -732,8 +753,15 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     };
     if (!viewer.isAdmin) {
       const grantedLakeIds = usableObjectIds(opts?.grantedLakeIds, 'DataLakeModel.findPublicLakes');
+      // Same narrowing as the two find paths: creator provenance is immutable, so the arm that
+      // lifts a published lake's post-publish gate for "its owner" has to mean EFFECTIVE owner or a
+      // creator transferred off the lake keeps the gate lifted forever. Pre-resolved app-side; the
+      // requirement arm below still admits them if they actually hold the gate.
+      const supersededOwnLakeIds = usableObjectIds(opts?.supersededOwnLakeIds, 'DataLakeModel.findPublicLakes');
       const reachArms: Record<string, unknown>[] = [
-        { createdByUserId: viewer.userId },
+        supersededOwnLakeIds.length > 0
+          ? { createdByUserId: viewer.userId, _id: { $nin: supersededOwnLakeIds } }
+          : { createdByUserId: viewer.userId },
         requirementConstraint(viewer.userTags, viewer.entitlementKeys),
       ];
       if (grantedLakeIds.length > 0) reachArms.push({ _id: { $in: grantedLakeIds } });

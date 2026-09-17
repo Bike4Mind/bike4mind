@@ -423,3 +423,32 @@ export const supersededOwnLakeIdsFor = async (
     lakeId => !resolveEffectiveOwnerIds({ createdByUserId: userId }, grantsByLakeId.get(lakeId) ?? []).includes(userId)
   );
 };
+
+/** Backing store for `supersededOwnLakeIdsForTurn` - see its doc for what the key has to cover. */
+const supersededByTurn = createScopedAsyncMemo<string[]>();
+
+/**
+ * `supersededOwnLakeIdsFor`, resolved at most ONCE per turn - the retrieval-path twin of
+ * `grantedLakeReachForTurn`, and for the same reason: the knowledge tools resolve lake access per
+ * TOOL CALL, so a turn that grounds through forced retrieval and then calls `search` and `retrieve`
+ * would otherwise pay these two reads four times over. Same `turnScope` contract: an object whose
+ * lifetime IS the turn (the shared `ToolContext`).
+ *
+ * THE RETURNED ARRAY IS SHARED between every caller that hits the entry - read-only, like the reach.
+ *
+ * THE KEY COVERS `isAdmin` as well as the user, because the admin answer is a hardcoded `[]` rather
+ * than the same query: keying on the user alone would let one arm's short circuit answer the other.
+ * A NEW PARAMETER HERE MUST BE ADDED TO THIS MEMO KEY. Nothing else about the actor is read.
+ *
+ * The lakes repo is NOT in the key - being an object, it cannot be - so `turnScope` has to be the
+ * object that OWNS both repos, exactly as for the reach memo above.
+ */
+export const supersededOwnLakeIdsForTurn = (
+  turnScope: object,
+  actor: Pick<AccessContext, 'userId' | 'isAdmin'>,
+  dataLakes: CreatedLakeLookup,
+  grants?: LakeGrantLookup
+): Promise<string[]> =>
+  supersededByTurn(turnScope, JSON.stringify([actor.userId, actor.isAdmin === true]), () =>
+    supersededOwnLakeIdsFor(actor, dataLakes, grants)
+  );

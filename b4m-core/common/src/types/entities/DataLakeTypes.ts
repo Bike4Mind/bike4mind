@@ -573,7 +573,20 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     entitlementKeys: string[],
     organizationIds?: string[] | null,
     userId?: string | null,
-    opts?: { grantedLakeIds?: string[]; orgGrantedLakes?: Record<string, string[]> }
+    opts?: {
+      grantedLakeIds?: string[];
+      orgGrantedLakes?: Record<string, string[]>;
+      /**
+       * Lakes to withhold from the CREATOR arm: ones the caller created but no longer effectively
+       * owns (`resolveEffectiveOwnerIds`). Pre-resolved by the caller via
+       * `supersededOwnLakeIdsForTurn`, the same seam `grantedLakeIds` uses, because the answer
+       * lives in the grant collection. It narrows ONLY that arm - a superseded creator who still
+       * holds a grant, the lake's tag, or its entitlement keeps reaching it through the arm that
+       * actually authorizes them. Absent leaves the arm at bare creator provenance, which
+       * over-matches once ownership has moved.
+       */
+      supersededOwnLakeIds?: string[];
+    }
   ): Promise<IDataLakeDocument[]>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
   /**
@@ -634,6 +647,16 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
       offset?: number;
       grantedLakeIds?: string[];
       orgGrantedLakes?: Record<string, string[]>;
+      /**
+       * Lakes to withhold from the CREATOR arm: ones the caller created but no longer effectively
+       * owns (`resolveEffectiveOwnerIds`). Pre-resolved by the caller via
+       * `supersededOwnLakeIdsForTurn`, the same seam `grantedLakeIds` uses, because the answer
+       * lives in the grant collection. It narrows ONLY that arm - a superseded creator who still
+       * holds a grant, the lake's tag, or its entitlement keeps reaching it through the arm that
+       * actually authorizes them. Absent leaves the arm at bare creator provenance, which
+       * over-matches once ownership has moved.
+       */
+      supersededOwnLakeIds?: string[];
     }
   ): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */

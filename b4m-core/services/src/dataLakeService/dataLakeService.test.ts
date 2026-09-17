@@ -4806,7 +4806,12 @@ describe('browsePublicDataLakes - public discover catalog projection', () => {
     });
 
   const makeDb = (lakes: IDataLakeDocument[], total = lakes.length) => ({
-    dataLakes: { findPublicLakes: vi.fn().mockResolvedValue({ lakes, total }) },
+    dataLakes: {
+      findPublicLakes: vi.fn().mockResolvedValue({ lakes, total }),
+      // The caller created none of these, so supersession resolves empty without reaching the
+      // grant collection - wired so the tests below run the real path, not its degrade-open catch.
+      findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+    },
     users: {
       findByIds: vi.fn().mockResolvedValue([
         { id: 'owner1', name: 'Ada Owner', username: 'ada', email: 'ada@example.com' },
@@ -4879,6 +4884,7 @@ describe('browsePublicDataLakes - public discover catalog projection', () => {
       offset: 20,
       grantedLakeIds: [],
       orgGrantedLakes: {},
+      supersededOwnLakeIds: [],
     });
   });
 
