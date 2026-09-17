@@ -29,7 +29,10 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 const cancelInviteById = vi.hoisted(() => vi.fn());
 const authorizeByInviteType = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/services', () => ({ sharingService: { cancelInviteById, authorizeByInviteType } }));
+const resolveRedeemableInvite = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/services', () => ({
+  sharingService: { cancelInviteById, authorizeByInviteType, resolveRedeemableInvite },
+}));
 vi.mock('@bike4mind/database', () => ({
   Invite: { findById: vi.fn() },
   inviteRepository: {},
@@ -46,12 +49,12 @@ vi.mock('@server/managers/inviteManager', async importOriginal => {
   return { ...actual, getInviteDetails };
 });
 
-import { Invite } from '@bike4mind/database';
 import '@pages/api/invites/[id]/index';
 
-// GET validates the id shape before findById (matching pages/api/[type]/[id]), so the fixture
-// id has to be ObjectId-shaped or the handler answers 400 before any of this is exercised.
+// GET no longer resolves the invite itself - it hands the raw key to resolveRedeemableInvite,
+// which decides whether a token or a legacy id addresses anything. Both shapes appear below.
 const VALID_INVITE_ID = '507f1f77bcf86cd799439011';
+const INVITE_TOKEN = 'wVvJ0hEr1sKq7nQ9YpB2fL4dXz8TcMuGaSiN3ROZjkw';
 
 describe('DELETE /api/invites/[id]', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -83,7 +86,7 @@ describe('GET /api/invites/[id] - recipient email strip', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("keeps only the caller's own recipient entry, dropping co-invitees", async () => {
-    (Invite.findById as any).mockResolvedValue({
+    resolveRedeemableInvite.mockResolvedValue({
       id: 'inv-1',
       type: 'FabFile',
       documentId: 'doc-1',
@@ -117,19 +120,41 @@ describe('GET /api/invites/[id] - recipient email strip', () => {
 describe('GET /api/invites/[id] - authorization gate', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  // 404, not 400: a malformed id gets the same answer as a valid-but-unauthorized one, so the
-  // status does not tell a caller which ids exist. findById is still never reached.
-  it('refuses a malformed invite id before it reaches findById', async () => {
+  // 404, not 400: an unresolvable key gets the same answer as a valid-but-unauthorized one, so the
+  // status does not tell a caller which invites exist.
+  it('returns 404 for a key the resolver does not admit', async () => {
+    resolveRedeemableInvite.mockResolvedValue(null);
     const { req, res } = createMocks({ method: 'GET', query: { id: 'not-an-object-id' } });
     (req as any).user = { id: 'u1', email: 'a@x.com' };
     await mockRefs.getHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(404);
-    expect(Invite.findById).not.toHaveBeenCalled();
+    expect(getInviteDetails).not.toHaveBeenCalled();
+  });
+
+  // The route must not pre-judge the key's shape: a share link now carries a token, and narrowing
+  // to ObjectIds here would 404 every new invite before the resolver ever saw it.
+  it('passes a token through to the resolver untouched', async () => {
+    resolveRedeemableInvite.mockResolvedValue({
+      id: 'inv-1',
+      type: 'FabFile',
+      documentId: 'doc-1',
+      isLinkOnly: true,
+      remaining: 1,
+      recipients: { pending: [], accepted: [], refused: [] },
+    });
+    getInviteDetails.mockResolvedValue({ id: 'inv-1', type: 'FabFile' });
+
+    const { req, res } = createMocks({ method: 'GET', query: { id: INVITE_TOKEN } });
+    (req as any).user = { id: 'u1', email: 'a@x.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(resolveRedeemableInvite).toHaveBeenCalledWith(INVITE_TOKEN, expect.objectContaining({ db: expect.any(Object) }));
+    expect(res._getStatusCode()).toBe(200);
   });
 
   it('returns 404 (not 403) for a caller who is neither a recipient nor share-authorized', async () => {
-    (Invite.findById as any).mockResolvedValue({
+    resolveRedeemableInvite.mockResolvedValue({
       id: 'inv-1',
       type: 'FabFile',
       documentId: 'doc-1',
@@ -146,7 +171,7 @@ describe('GET /api/invites/[id] - authorization gate', () => {
   });
 
   it('allows a caller with share authority on the underlying document even when not a named recipient', async () => {
-    (Invite.findById as any).mockResolvedValue({
+    resolveRedeemableInvite.mockResolvedValue({
       id: 'inv-1',
       type: 'FabFile',
       documentId: 'doc-1',

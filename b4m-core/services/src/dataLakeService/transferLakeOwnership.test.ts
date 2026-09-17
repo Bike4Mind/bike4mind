@@ -235,6 +235,27 @@ describe('transferLakeOwnership', () => {
     );
   });
 
+  // Ownership cannot be PUSHED onto an arbitrary principal. There is no recipient-acceptance step,
+  // so an existing relationship is what stands in for consent, and both shapes of lake have one:
+  // an org lake requires the target to be a member of the owning org, and a personal lake refuses
+  // transfer outright for every non-platform-admin. Neither leaves a bare unilateral write.
+  it('cannot push ownership onto an unrelated user id, whatever the lake shape', async () => {
+    const orgLake = makeAdapters({
+      lakeDoc: lake({ organizationId: 'org1' }),
+      org: { userId: 'billing', adminUserIds: [], users: [{ userId: 'creator' }] },
+    });
+    await expect(transferLakeOwnership(owner, ...orgLake.lakeArgs, 'unrelated', orgLake.adapters)).rejects.toThrow(
+      /must belong to the organization/i
+    );
+    expect(orgLake.upsertGrant).not.toHaveBeenCalled();
+
+    const personalLake = makeAdapters({ lakeDoc: lake({ organizationId: undefined }) });
+    await expect(
+      transferLakeOwnership(owner, ...personalLake.lakeArgs, 'unrelated', personalLake.adapters)
+    ).rejects.toThrow(/personal data lake cannot be transferred/i);
+    expect(personalLake.upsertGrant).not.toHaveBeenCalled();
+  });
+
   it('org lake: allows an org admin to transfer to an org member (orphaned-creator succession)', async () => {
     const { adapters, lakeArgs, upsertGrant } = makeAdapters({
       lakeDoc: lake({ organizationId: 'org1', createdByUserId: 'departed' }),
