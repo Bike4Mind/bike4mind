@@ -79,8 +79,8 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
     });
 
     // Stop accumulating once the serialized body would cross MAX_EXPORTED_BYTES. The first pair
-    // always ships even if it alone exceeds the budget, so a single oversized hop empties the
-    // export instead of just capping it. `.length` is UTF-16 code units, not bytes, hence Buffer.
+    // always ships even if it alone exceeds the budget, so a single oversized hop still exports
+    // rather than coming back empty. `.length` is UTF-16 code units, not bytes, hence Buffer.
     const pairs: typeof walked = [];
     let bytes = 0;
     for (const pair of walked) {

@@ -78,10 +78,12 @@ export async function buildCorrectionPairs(
   const resolvedById = new Map<string, CorrectionTurnRecord>();
   if (idsToFetch.size > 0) {
     const fetched = await reader.findByIds([...idsToFetch]);
+    // Keyed on lowercased hex: the requested id may be a non-canonical spelling of a returned
+    // record's id, so match on that rather than on exact string equality. Indexed once instead
+    // of rescanned per requested id.
+    const fetchedByLowerId = new Map(fetched.map(record => [record.id.toLowerCase(), record]));
     for (const id of idsToFetch) {
-      // Case-insensitive hex compare: the requested id may be a non-canonical spelling of a
-      // returned record's id, so match on that rather than on exact string equality.
-      const match = fetched.find(r => r.id.toLowerCase() === id.toLowerCase());
+      const match = fetchedByLowerId.get(id.toLowerCase());
       if (match) {
         resolvedById.set(match.id, match);
         resolvedById.set(id, match);
