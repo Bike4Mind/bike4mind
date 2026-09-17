@@ -33,7 +33,7 @@ describe('cosineFloorPctForSpace', () => {
     ).toBe(75);
     expect(
       cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL)
-    ).toBe(35);
+    ).toBe(49);
   });
 
   // The whole contract. `noUncheckedIndexedAccess` is off in this repo, so a bare `TABLE[space]`
@@ -66,7 +66,7 @@ describe('cosineFloorPctForSpace', () => {
     ).toBeUndefined();
     expect(
       cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL)
-    ).toBe(35);
+    ).toBe(49);
   });
 });
 

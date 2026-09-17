@@ -76,7 +76,7 @@ export const ZERO_FLOOR_CONFIG: FloorConfig = { relativeFloorPct: 0, minSimilari
  * The ADA-002 rung of the shipped defaults, deliberately behavior-preserving rather than tuned.
  *
  * Not "the" shipped pair any more: the absolute floor resolves per embedding space
- * (FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE), so a 3-small deployment runs 85:35, not 85:75.
+ * (FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE), so a 3-small deployment runs 85:49, not 85:75.
  * Used here as a fixture and a familiar reference point - a sweep is driven by `--floors`, which
  * is the only honest way to grade a fixture whose arm this constant knows nothing about.
  */
@@ -379,11 +379,19 @@ export type FloorSweepRow = FloorConfig & {
    */
   budgetBoundShare: number;
   /**
-   * Queries the floors emptied outright. Neither per-turn floor can starve a turn that scored
-   * anything (see `forcedRetrievalRelativeCutoff` and `forcedRetrievalSpreadCutoff`), so a non-zero
-   * count here is the absolute floor's doing.
+   * POSITIVE queries the floors emptied outright - a real cost, since a positive had something to
+   * find and none of it was served. Split from `emptiedNegatives` because the two read oppositely,
+   * the same reason `quality.recall` and `quality.falsePositiveRate` are never pooled: neither per-
+   * turn floor can starve a turn that scored anything (see `forcedRetrievalRelativeCutoff` and
+   * `forcedRetrievalSpreadCutoff`), so a non-zero count on either is the absolute floor's doing.
    */
-  emptiedQueries: number;
+  emptiedPositives: number;
+  /**
+   * NEGATIVE queries the floors emptied outright - the absolute floor working as intended, not a
+   * cost. The same fact `quality.falsePositiveRate` states as a rate over `quality.negatives`; kept
+   * as its own count here because the table prints both floor-emptied splits side by side.
+   */
+  emptiedNegatives: number;
   /**
    * Queries whose pool the cap truncated before either floor ran. Non-zero invalidates nothing, but
    * the floors were measured over the top `FORCED_RETRIEVAL_MAX_SCORED_CHUNKS` rather than the whole
@@ -444,7 +452,12 @@ export function buildFloorSweepRow(args: {
     acceptedStdDev: stdDev(acceptedCounts),
     budgetBoundShare:
       outcomes.length === 0 ? 0 : outcomes.filter(o => o.budgetStopRank !== null).length / outcomes.length,
-    emptiedQueries: outcomes.filter(o => o.scoredCount > 0 && o.accepted === 0).length,
+    emptiedPositives: outcomes.filter(
+      (o, i) => o.scoredCount > 0 && o.accepted === 0 && args.queries[i].supporting.length > 0
+    ).length,
+    emptiedNegatives: outcomes.filter(
+      (o, i) => o.scoredCount > 0 && o.accepted === 0 && args.queries[i].supporting.length === 0
+    ).length,
     cappedQueries: outcomes.filter(o => o.cappedOut > 0).length,
     quality: aggregate(outcomes.map((o, i) => scoreQuestion(o.acceptedDocIds, new Set(args.queries[i].supporting)))),
   };
@@ -455,6 +468,19 @@ const pct = (n: number): string => `${(n * 100).toFixed(1)}%`;
 /** See `sweep.ts`' `precisionCell`: precision's denominator moves with the configuration. */
 const precisionCell = (a: Aggregate): string =>
   a.precisionScored === 0 ? 'n/a (n=0)' : `${pct(a.precision)} (n=${a.precisionScored})`;
+
+/**
+ * `falsePositiveRate` over its own `negatives` denominator, same pattern as `precisionCell` and
+ * `sweep.ts`' `unverifiableCell`. THIS IS NOT the "deliberately not a column" metric
+ * `MODEL-COMPARISON.md` and `scoreDistribution.test.ts` describe - that note is about the offline
+ * top-k distribution, which applies no floor and is structurally 1.0 for every arm. This sweep
+ * applies the two forced-retrieval floors, so the rate is the point: it is the metric that decides
+ * whether a floor buys anything on a negative question. Printing `n` alongside it matters more here
+ * than in `sweep.ts` - a hand-authored eval corpus can carry a single-digit negative count, and a
+ * percentage over that few observations reads very differently once the denominator is visible.
+ */
+const falsePositiveCell = (a: Aggregate): string =>
+  a.negatives === 0 ? 'n/a (n=0)' : `${pct(a.falsePositiveRate)} (n=${a.negatives})`;
 
 /**
  * Render the sweep as a Markdown table for pasting into the ticket.
@@ -471,13 +497,34 @@ const precisionCell = (a: Aggregate): string =>
  * to answer: every other column here is about HOW MUCH retrieval admits, and `sd` is the only one
  * about whether that amount responds to the question at all. A configuration with a healthy recall
  * and `sd` at 0.0 is serving a fixed-size dump.
+ *
+ * `false-positive rate` is the metric that actually decides a floor's value on a negative question -
+ * see `falsePositiveCell`. `emptied (pos)` and `emptied (neg)` used to be one `emptied` column; split
+ * because the two read oppositely, the same reason `recall` and `false-positive rate` are never
+ * pooled - an emptied positive is lost recall, an emptied negative is the floor doing its job.
  */
 export function formatFloorSweepTable(rows: readonly FloorSweepRow[]): string {
-  const header = [
-    '| relative | absolute | spread | accepted/q | sd | served/q | pre-rel | bound | cut @ | ' +
-      'spread-bound | spread cut @ | budget-bound | emptied | recall | precision | MRR |',
-    '|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
+  const columns = [
+    'relative',
+    'absolute',
+    'spread',
+    'accepted/q',
+    'sd',
+    'served/q',
+    'pre-rel',
+    'bound',
+    'cut @',
+    'spread-bound',
+    'spread cut @',
+    'budget-bound',
+    'false-positive rate',
+    'emptied (pos)',
+    'emptied (neg)',
+    'recall',
+    'precision',
+    'MRR',
   ];
+  const header = [`| ${columns.join(' | ')} |`, `|${columns.map(() => '---:|').join('')}`];
   const body = rows.map(r =>
     [
       '',
@@ -497,7 +544,9 @@ export function formatFloorSweepTable(rows: readonly FloorSweepRow[]): string {
       pct(r.spreadBoundShare),
       r.meanSpreadCutRank === null ? 'never' : r.meanSpreadCutRank.toFixed(1),
       pct(r.budgetBoundShare),
-      String(r.emptiedQueries),
+      falsePositiveCell(r.quality),
+      String(r.emptiedPositives),
+      String(r.emptiedNegatives),
       pct(r.quality.recall),
       precisionCell(r.quality),
       r.quality.mrr.toFixed(3),

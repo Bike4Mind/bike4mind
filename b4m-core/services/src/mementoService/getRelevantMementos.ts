@@ -3,22 +3,14 @@ import {
   IApiKeyRepository,
   IMementoDocument,
   IMementoRepository,
-  MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE,
+  MEMENTO_MIN_SIMILARITY,
   MementoTier,
-  SupportedEmbeddingModel,
-  cosineFloorPctForSpace,
-  isSupportedEmbeddingModel,
+  mementoEmbeddingIsCurrent,
 } from '@bike4mind/common';
-import {
-  computeCosineSimilarity,
-  EmbeddingFactory,
-  getProviderFromModel,
-  getSettingsByNames,
-  resolveEmbeddingConfig,
-} from '@bike4mind/utils';
+import { computeCosineSimilarity } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { BoundedTopK } from '../dataLakeService';
+import { embedMementoQuery } from './embedMementoQuery';
 
 /**
  * Page size for the memento walk, and a sanity bound on how many pages it may take.
@@ -74,10 +66,10 @@ export interface GetRelevantMementosOptions {
   /**
    * Minimum similarity threshold (0-1 scale). Only mementos scoring at or above it are returned.
    *
-   * Omit it. A raw cosine only means something inside one vector space, and this function is the
-   * one place that knows which space it just embedded in, so it resolves the floor itself from
-   * `MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE`. Passing a number here asserts you know the space you
-   * are in - which tests do, and callers generally do not.
+   * Omit it. Retrieval is pinned to the memento embedding space (`MEMENTO_EMBEDDING_ID`), so the
+   * floor is `MEMENTO_MIN_SIMILARITY` - a single measured constant, not a per-space lookup. Passing
+   * a number here asserts you know better than that measurement, which tests do and callers
+   * generally do not.
    */
   minSimilarity?: number;
 
@@ -87,22 +79,6 @@ export interface GetRelevantMementosOptions {
    * - 'all': Search all tiers
    */
   tier?: MementoTier | 'all';
-
-  /**
-   * Optional embedding model to use (if not provided, will fetch from admin settings)
-   */
-  embeddingModel?: SupportedEmbeddingModel;
-
-  /**
-   * Optional API key table (if not provided, will fetch for user)
-   */
-  apiKeyTable?: {
-    openai?: string | null;
-    anthropic?: string | null;
-    gemini?: string | null;
-    voyageai?: string | null;
-    ollama?: string | null;
-  };
 
   /**
    * Optional logger for debugging
@@ -150,97 +126,31 @@ export async function getRelevantMementos(
   options: GetRelevantMementosOptions = {},
   adapters: GetRelevantMementosAdapters
 ): Promise<RelevantMemento[]> {
-  const {
-    topK = 5,
-    minSimilarity: providedMinSimilarity,
-    tier = MementoTier.HOT,
-    embeddingModel: providedEmbeddingModel,
-    apiKeyTable: providedApiKeyTable,
-    logger,
-  } = options;
+  const { topK = 5, minSimilarity: providedMinSimilarity, tier = MementoTier.HOT, logger } = options;
 
   logger?.updateMetadata({
     promptLength: prompt.length,
   });
 
-  // STEP 1: Get API keys (if not provided)
-  const apiKeyTable =
-    providedApiKeyTable ||
-    (await getEffectiveLLMApiKeys(
-      userId,
-      {
-        db: {
-          apiKeys: adapters.db.apiKeys,
-          adminSettings: adapters.db.adminSettings,
-        },
-        getSettingsByNames,
-      },
-      { logger }
-    ));
+  const minSimilarity = providedMinSimilarity ?? MEMENTO_MIN_SIMILARITY;
 
-  // STEP 2: Get embedding model (if not provided)
-  let embeddingModel = providedEmbeddingModel;
-  if (!embeddingModel) {
-    const defaultModel = await adapters.db.adminSettings.getSettingsValue('defaultEmbeddingModel');
-    if (!defaultModel || !isSupportedEmbeddingModel(defaultModel)) {
-      throw new Error('Default embedding model not configured. Please configure it in admin settings.');
-    }
-    embeddingModel = defaultModel as SupportedEmbeddingModel;
-  }
-
-  logger?.debug?.('Using embedding model for memento retrieval:', embeddingModel);
-
-  // STEP 2b: Resolve the topicality floor for the space we just picked, NOT from a literal.
-  // The old 0.7/0.75 defaults were fitted to ada-002, and a cosine floor does not survive a change
-  // of embedding model: above the new band it rejects every memento in existence, which reads to
-  // the user as the assistant having forgotten them. An unmeasured space keeps the top K by
-  // similarity with no floor - less precise, but recoverable, where a blackout is not.
-  //
-  // WHY NO RELATIVE RUNG HERE, unlike forced retrieval. That path degrades to
-  // `forcedRetrievalRelativeFloorPct` (a fraction of the turn's top score) rather than to nothing, so
-  // the obvious symmetry would be to do the same with these. It would not buy what it looks like it
-  // buys. A relative floor is scale-free WITHIN a turn, so it cannot tell a turn whose best memento
-  // scores 0.91 from one whose best scores 0.25 - and the failure worth preventing here is the second
-  // one, where nothing is topical and the top K are injected as KNOWN FACTS anyway. At 85% of a 0.25
-  // top, everything from 0.21 up still lands: fewer unrelated facts asserted, same failure. It trims
-  // the tail while reading like a fix for the head.
-  //
-  // So the decision, deliberately and not by omission: an unmeasured space gets no gate, the damage
-  // stays bounded by MEMENTO_V1_TOP_K (a handful of lines, not a corpus), and the real remedy is
-  // measuring a floor into MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE. The forced path differs because
-  // its relative floor also does its RANKING over a large candidate pool; here top-K is the ranking.
-  const spaceFloorPct = cosineFloorPctForSpace(MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE, embeddingModel);
-  if (providedMinSimilarity === undefined && spaceFloorPct === undefined) {
-    // warn, not error: an unmeasured space is the designed resolution for any model outside the
-    // table, not a fault, and no operator can clear it from the console.
-    logger?.warn?.(
-      `[getRelevantMementos] no measured topicality floor for embedding space "${embeddingModel}"; ` +
-        `returning the top ${topK} by similarity with no floor. Measure one into ` +
-        `MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE rather than borrowing another space's number.`
-    );
-  }
-  const minSimilarity = providedMinSimilarity ?? (spaceFloorPct ?? 0) / 100;
-
-  // STEP 3: Setup embedding service
-  const requiredProvider = getProviderFromModel(embeddingModel);
-  const { config: embeddingConfig, missing } = resolveEmbeddingConfig(requiredProvider, apiKeyTable);
-  if (missing) {
-    throw new Error(
-      missing === 'ollama'
-        ? 'Ollama base URL is required for memento retrieval but not found.'
-        : `${missing === 'openai' ? 'OpenAI' : 'VoyageAI'} API key is required for memento retrieval but not found.`
-    );
-  }
-
-  const embeddingFactory = new EmbeddingFactory(embeddingConfig);
-  const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
-
-  // STEP 4: Generate embedding for user prompt
-  logger?.debug?.('Generating embedding for prompt:', prompt.substring(0, 100));
   try {
-    const promptEmbedding = await embeddingService.generateEmbedding(prompt);
+    // STEP 1: Embed the query in the memento space. Converge on the memento space rather than
+    // resolving it dynamically per-user - see MEMENTO_EMBEDDING_ID's docblock. A missing credential
+    // or provider error comes back as the empty sentinel, not a throw: memory is enrichment, not a
+    // requirement, so a keyless stage returns no mementos rather than failing the turn.
+    const { vector: promptEmbedding } = await embedMementoQuery(
+      userId,
+      prompt,
+      { db: { apiKeys: adapters.db.apiKeys, adminSettings: adapters.db.adminSettings } },
+      { logger }
+    );
+    if (promptEmbedding.length === 0) {
+      logger?.warn?.('[getRelevantMementos] could not embed the query (no credential or provider error); skipping');
+      return [];
+    }
 
-    // STEP 5+6: Walk the user's mementos a page at a time, scoring into a fixed-size top-K.
+    // STEP 2+3: Walk the user's mementos a page at a time, scoring into a fixed-size top-K.
     //
     // Every memento carries an embedding and its full original prompt, so reading them all at once
     // made peak memory a function of how long the user has been using the product. Paging bounds that
@@ -251,6 +161,7 @@ export async function getRelevantMementos(
     // a Mongoose virtual that a lean object does not carry.
     const ranked = new BoundedTopK<RelevantMemento>(topK, compareMementosBySimilarity);
     let scanned = 0;
+    let staleSkipped = 0;
     let cursor: string | undefined;
 
     for (let page = 0; ; page++) {
@@ -262,7 +173,7 @@ export async function getRelevantMementos(
       }
       const mementos = await adapters.db.mementos.findByUserId(userId, {
         tier: tier === 'all' ? undefined : tier,
-        select: 'summary embedding weight tags fullContent lastAccessedAt',
+        select: 'summary embedding embeddingModel weight tags fullContent lastAccessedAt',
         limit: MEMENTO_PAGE_SIZE,
         afterId: cursor,
       });
@@ -280,12 +191,20 @@ export async function getRelevantMementos(
           logger?.warn?.(`Memento ${memento.id} missing embedding, skipping`);
           continue;
         }
+        // Pre-migration mementos carry a vector from a different embedding space; cosine against
+        // them is meaningless, not just stale, so they are excluded rather than scored low.
+        if (!mementoEmbeddingIsCurrent(memento)) {
+          staleSkipped++;
+          continue;
+        }
 
         const similarity = computeCosineSimilarity(promptEmbedding, memento.embedding);
         // A zero-magnitude embedding makes cosine NaN, and NaN fails every comparison - it would slip
-        // past the floor below and then sort ahead of every real match.
-        if (!Number.isFinite(similarity)) {
-          logger?.warn?.(`Memento ${memento.id} scored a non-finite similarity, skipping`);
+        // past the floor below and then sort ahead of every real match. An exact 0 is also suspect
+        // here: computeCosineSimilarity returns exactly 0 (not NaN) on a vector-width mismatch, which
+        // the embeddingModel gate above should already have ruled out for anything reaching this line.
+        if (!Number.isFinite(similarity) || similarity === 0) {
+          logger?.warn?.(`Memento ${memento.id} scored a non-finite or exact-zero similarity, skipping`);
           continue;
         }
         if (similarity < minSimilarity) continue;
@@ -296,14 +215,14 @@ export async function getRelevantMementos(
       if (mementos.length < MEMENTO_PAGE_SIZE) break;
     }
 
-    logger?.debug?.(`Scanned ${scanned} mementos (tier: ${tier})`);
+    logger?.debug?.(`Scanned ${scanned} mementos (tier: ${tier}), ${staleSkipped} excluded as pre-migration`);
 
     if (scanned === 0) {
       logger?.debug?.('No mementos found for user');
       return [];
     }
 
-    // STEP 7: Highest similarity first
+    // Highest similarity first
     const sortedMementos = ranked.drain();
 
     logger?.debug?.(

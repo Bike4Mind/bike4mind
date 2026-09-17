@@ -1,5 +1,4 @@
 import { modelsWithDimensions } from '@bike4mind/fab-pipeline';
-import { defaultEmbeddingModelForEnv } from '@bike4mind/common';
 
 export interface MissingEmbeddingChunk {
   id: string;
@@ -20,12 +19,17 @@ export interface FileBackfillPlan {
  * A file whose model can't be determined is returned as `unresolved` rather than guessed at -
  * stamping the wrong model would make that file's chunks silently invisible to a
  * model-scoped $vectorSearch query forever.
+ *
+ * `tiebreakModel` is the operator's explicit answer to "which model do same-width legacy chunks
+ * belong to" - see `resolveMajorityEmbeddingModel` for why this can no longer be inferred from
+ * the environment.
  */
 export const planFileBackfills = (
   chunks: MissingEmbeddingChunk[],
   // Nullable, not just optional: stampChunkEmbeddingModel clears a FILE label whose chunks span
   // two embedding spaces, and `??` below already falls through to the width guess for that file.
-  fileEmbeddingModels: Map<string, string | null | undefined>
+  fileEmbeddingModels: Map<string, string | null | undefined>,
+  tiebreakModel: string
 ): { plans: FileBackfillPlan[]; unresolved: string[] } => {
   const byFile = new Map<string, MissingEmbeddingChunk[]>();
   for (const chunk of chunks) {
@@ -42,7 +46,11 @@ export const planFileBackfills = (
 
   for (const [fabFileId, fileChunks] of byFile) {
     const model =
-      fileEmbeddingModels.get(fabFileId) ?? resolveMajorityEmbeddingModel(fileChunks.map(c => c.vectorLength));
+      fileEmbeddingModels.get(fabFileId) ??
+      resolveMajorityEmbeddingModel(
+        fileChunks.map(c => c.vectorLength),
+        tiebreakModel
+      );
     if (!model) {
       unresolved.push(fabFileId);
       continue;
@@ -57,11 +65,22 @@ export const planFileBackfills = (
  * Guesses a legacy file's embedding model from the width its chunk vectors actually are, for
  * files with no `FabFile.embeddingModel` at all. Requires a clear (>50%) majority width - a
  * mixed-width sample means the file was re-embedded under more than one model and guessing
- * would silently mislabel some chunks. Ties between same-width models resolve to the
- * deployment's current default when it's a candidate (the overwhelmingly likely case for an
- * old file), else the first candidate alphabetically, for reproducibility.
+ * would silently mislabel some chunks. Ties between same-width models resolve to `tiebreakModel`
+ * when it's a candidate, else the first candidate alphabetically, for reproducibility.
+ *
+ * `tiebreakModel` is a REQUIRED caller-supplied argument, not `defaultEmbeddingModelForEnv()`.
+ * ada-002 and 3-small share width 1536, so the two-candidate arm fires on every legacy 1536-wide
+ * file; deriving the tiebreak from the environment default meant a post-migration deploy of this
+ * script would silently relabel legacy ada-002 chunks as 3-small, and a default outside the
+ * candidate set fell through to `candidates[0]`, which sorts 3-small first alphabetically -
+ * wrong either way. This script runs standalone against a point-in-time snapshot of legacy data,
+ * so the caller must say out loud which model that snapshot's ties belong to.
+ *
+ * Enforced at runtime, not just in the type signature: an empty `tiebreakModel` reaching the
+ * ambiguous-width branch throws rather than falling through to the same alphabetical guess this
+ * change exists to remove. A single-candidate width needs no tiebreak and does not check it.
  */
-export const resolveMajorityEmbeddingModel = (vectorLengths: number[]): string | null => {
+export const resolveMajorityEmbeddingModel = (vectorLengths: number[], tiebreakModel: string): string | null => {
   const nonEmpty = vectorLengths.filter(len => len > 0);
   if (nonEmpty.length === 0) return null;
 
@@ -82,6 +101,11 @@ export const resolveMajorityEmbeddingModel = (vectorLengths: number[]): string |
   if (candidates.length === 0) return null;
   if (candidates.length === 1) return candidates[0];
 
-  const envDefault = defaultEmbeddingModelForEnv();
-  return candidates.includes(envDefault) ? envDefault : candidates[0];
+  if (!tiebreakModel) {
+    throw new Error(
+      `resolveMajorityEmbeddingModel: width ${majorityWidth} is ambiguous between [${candidates.join(', ')}] ` +
+        'and requires an explicit tiebreakModel - it is not inferred from the deployment default.'
+    );
+  }
+  return candidates.includes(tiebreakModel) ? tiebreakModel : candidates[0];
 };
