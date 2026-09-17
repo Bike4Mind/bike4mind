@@ -32,18 +32,18 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 
 const mockSessionFindById = vi.fn();
 const mockFindCorrectionLinks = vi.fn();
-const mockQuestFindBySessionIdAndId = vi.fn();
+const mockFindCorrectionTurnsByIds = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   sessionRepository: { findById: (...a: any[]) => mockSessionFindById(...a) },
   questRepository: {
     findCorrectionLinksBySessionId: (...a: any[]) => mockFindCorrectionLinks(...a),
-    findBySessionIdAndId: (...a: any[]) => mockQuestFindBySessionIdAndId(...a),
+    findCorrectionTurnsByIds: (...a: any[]) => mockFindCorrectionTurnsByIds(...a),
   },
 }));
 
 // buildCorrectionPairs is deliberately NOT mocked: what this route contributes over the service is
 // the wiring, so the assertions run the real walk over seeded repository reads.
-import handler from '@pages/api/sessions/[id]/correction-pairs';
+import handler, { MAX_EXPORTED_LINKS, MAX_EXPORTED_BYTES } from '@pages/api/sessions/[id]/correction-pairs';
 
 const OWNER = 'jwt-user';
 // Real 24-hex ids: the repository reads short-circuit to null on anything else
@@ -52,6 +52,7 @@ const SESSION_ID = '65000000000000000000e001';
 const QUEST_A = '6500000000000000000000aa';
 const QUEST_B = '6500000000000000000000bb';
 const QUEST_C = '6500000000000000000000cc';
+const QUEST_D = '6500000000000000000000dd';
 
 // `noId`/`anonymous` rather than `id: undefined`, because a destructuring default would put the
 // happy-path value back and quietly turn the 400/401 cases into owner requests.
@@ -88,8 +89,8 @@ describe('GET /api/sessions/[id]/correction-pairs', () => {
     vi.clearAllMocks();
     mockSessionFindById.mockResolvedValue({ id: SESSION_ID, userId: OWNER, users: [] });
     mockFindCorrectionLinks.mockResolvedValue([questB, questC]);
-    mockQuestFindBySessionIdAndId.mockImplementation(async (_sessionId: string, id: string) =>
-      id === QUEST_A ? questA : null
+    mockFindCorrectionTurnsByIds.mockImplementation(async (_sessionId: string, ids: string[]) =>
+      ids.includes(QUEST_A) ? [questA] : []
     );
   });
 
@@ -99,13 +100,15 @@ describe('GET /api/sessions/[id]/correction-pairs', () => {
     expect(baseApiOptions).toContainEqual({ auth: 'jwtOnly' });
   });
 
-  it('returns one triple per hop, oldest first, for the session owner', async () => {
+  it('returns one triple per hop, oldest first, for the session owner, and reports it complete', async () => {
     const { req, res } = fire();
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
     expect(mockFindCorrectionLinks).toHaveBeenCalledWith(SESSION_ID, expect.any(Number));
-    expect(res._getJSONData().pairs).toMatchObject([
+    const body = res._getJSONData();
+    expect(body.truncated).toBe(false);
+    expect(body.pairs).toMatchObject([
       {
         correctedQuestId: QUEST_A,
         originalAnswer: 'first answer',
@@ -121,12 +124,12 @@ describe('GET /api/sessions/[id]/correction-pairs', () => {
     ]);
   });
 
-  it('reads the chain root scoped to the session, not by bare id', async () => {
+  it('reads the chain roots scoped to the session, batched in one call', async () => {
     const { req, res } = fire();
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockQuestFindBySessionIdAndId).toHaveBeenCalledWith(SESSION_ID, QUEST_A);
+    expect(mockFindCorrectionTurnsByIds).toHaveBeenCalledWith(SESSION_ID, [QUEST_A]);
   });
 
   // The session's own id, not the raw query string: findById resolves the id through the ObjectId
@@ -140,7 +143,7 @@ describe('GET /api/sessions/[id]/correction-pairs', () => {
     expect(res._getJSONData().pairs).toHaveLength(2);
   });
 
-  it('caps the export and says so rather than returning a silently partial list', async () => {
+  it('caps the export at the real MAX_EXPORTED_LINKS value and says so', async () => {
     const link = (n: number) => ({
       id: `${n}`.padStart(24, '0'),
       sessionId: SESSION_ID,
@@ -148,30 +151,62 @@ describe('GET /api/sessions/[id]/correction-pairs', () => {
       prompt: `critique ${n}`,
       reply: `answer ${n}`,
     });
-    const requested = mockFindCorrectionLinks.mock.calls;
     mockFindCorrectionLinks.mockImplementation(async (_id: string, limit: number) =>
       Array.from({ length: limit }, (_, i) => link(i + 1))
     );
-    mockQuestFindBySessionIdAndId.mockResolvedValue(null);
+    mockFindCorrectionTurnsByIds.mockResolvedValue([]);
 
     const { req, res } = fire();
     await handler(req, res);
 
-    const limit = requested[0][1];
-    expect(limit).toBeGreaterThan(1);
-    expect(res._getJSONData().truncated).toBe(true);
-    expect(res._getJSONData().pairs.length).toBe(limit - 2);
+    // Pinned against the literal cap, not "limit - 2": that assertion held for any cap >= 1 and
+    // proved nothing about MAX_EXPORTED_LINKS itself.
+    expect(mockFindCorrectionLinks).toHaveBeenCalledWith(SESSION_ID, MAX_EXPORTED_LINKS + 1);
+    const body = res._getJSONData();
+    expect(body.truncated).toBe(true);
+    // Only the oldest link's root (id "0") is unresolvable; every other hop chains to a link
+    // already in the batch, so exactly one hop is dropped off the capped set of MAX_EXPORTED_LINKS.
+    expect(body.pairs.length).toBe(MAX_EXPORTED_LINKS - 1);
+  });
+
+  it('sets truncated when the byte budget - not the hop cap - is what stops the export', async () => {
+    // Far below MAX_EXPORTED_LINKS (3 hops), so truncation here can only come from the byte
+    // budget. Each turn's prompt/reply is ~300KB; each pair strings together an original answer,
+    // a critique, and a corrected answer, so two pairs stay under MAX_EXPORTED_BYTES and a third
+    // does not.
+    const BIG = 'x'.repeat(300_000);
+    const bigA = { id: QUEST_A, sessionId: SESSION_ID, prompt: 'root', reply: BIG };
+    const bigB = { id: QUEST_B, sessionId: SESSION_ID, correctsQuestId: QUEST_A, prompt: BIG, reply: BIG };
+    const bigC = { id: QUEST_C, sessionId: SESSION_ID, correctsQuestId: QUEST_B, prompt: BIG, reply: BIG };
+    const bigD = { id: QUEST_D, sessionId: SESSION_ID, correctsQuestId: QUEST_C, prompt: BIG, reply: BIG };
+    mockFindCorrectionLinks.mockResolvedValue([bigB, bigC, bigD]);
+    mockFindCorrectionTurnsByIds.mockImplementation(async (_sessionId: string, ids: string[]) =>
+      ids.includes(QUEST_A) ? [bigA] : []
+    );
+
+    const { req, res } = fire();
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    const body = res._getJSONData();
+    expect(body.truncated).toBe(true);
+    // A prefix, not all three possible hops and not zero.
+    expect(body.pairs.length).toBeGreaterThan(0);
+    expect(body.pairs.length).toBeLessThan(3);
+    expect(MAX_EXPORTED_BYTES).toBeGreaterThan(0);
   });
 
   it('emits prose only - no promptMeta or toolResults reach the response', async () => {
-    mockQuestFindBySessionIdAndId.mockImplementation(async (_sessionId: string, id: string) =>
-      id === QUEST_A
-        ? {
-            ...questA,
-            promptMeta: { functionCalls: [{ returnValue: 'PRIVATE TOOL OUTPUT' }] },
-            toolResults: ['SECRET'],
-          }
-        : null
+    mockFindCorrectionTurnsByIds.mockImplementation(async (_sessionId: string, ids: string[]) =>
+      ids.includes(QUEST_A)
+        ? [
+            {
+              ...questA,
+              promptMeta: { functionCalls: [{ returnValue: 'PRIVATE TOOL OUTPUT' }] },
+              toolResults: ['SECRET'],
+            },
+          ]
+        : []
     );
     const { req, res } = fire();
     await handler(req, res);
@@ -205,11 +240,11 @@ describe('GET /api/sessions/[id]/correction-pairs', () => {
   });
 
   // What a soft-deleted or foreign chain root actually looks like through the scoped read: the
-  // session-bound findOne matches nothing (softDeletePlugin adds `deletedAt: null`), so the hop is
-  // dropped for want of a target rather than by a check on the returned document.
+  // session-bound batch read matches nothing (softDeletePlugin excludes it), so the hop is dropped
+  // for want of a target rather than by a check on the returned document.
   it('drops a hop whose chain root the scoped read cannot see', async () => {
     mockFindCorrectionLinks.mockResolvedValue([questB]);
-    mockQuestFindBySessionIdAndId.mockResolvedValue(null);
+    mockFindCorrectionTurnsByIds.mockResolvedValue([]);
     const { req, res } = fire();
     await handler(req, res);
 
@@ -240,5 +275,22 @@ describe('GET /api/sessions/[id]/correction-pairs', () => {
 
     expect(res._getStatusCode()).toBe(400);
     expect(mockSessionFindById).not.toHaveBeenCalled();
+  });
+
+  // F1: the handler's only failure mode is a repository read rejecting. Nothing here mocks
+  // asyncHandler as anything but identity, so a thrown rejection must surface, not collapse into
+  // a 200 with an empty (or partial) pairs list.
+  it('surfaces a rejection from the correction-link read rather than swallowing it into a 200', async () => {
+    mockFindCorrectionLinks.mockRejectedValue(new Error('link read failed'));
+    const { req, res } = fire();
+
+    await expect(handler(req, res)).rejects.toThrow('link read failed');
+  });
+
+  it('surfaces a rejection from the session lookup rather than a 404', async () => {
+    mockSessionFindById.mockRejectedValue(new Error('session lookup failed'));
+    const { req, res } = fire();
+
+    await expect(handler(req, res)).rejects.toThrow('session lookup failed');
   });
 });

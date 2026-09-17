@@ -11,13 +11,22 @@ const sessionIdSchema = z.string().min(1);
  * chain leaves out the api-key rate limiter (baseApi.ts). A session past the cap exports
  * its oldest corrections and says so, rather than returning a silently partial list.
  */
-const MAX_EXPORTED_LINKS = 500;
+export const MAX_EXPORTED_LINKS = 500;
+
+/**
+ * Serialized-response budget in bytes: consecutive pairs repeat the same answer (pair N's
+ * correctedAnswer is pair N+1's originalAnswer), so long answers can blow past a reasonable
+ * body size well before MAX_EXPORTED_LINKS hops are reached. `truncated` below is true if
+ * either bound is what stopped the export.
+ */
+export const MAX_EXPORTED_BYTES = 2_000_000;
 
 /**
  * GET /api/sessions/[id]/correction-pairs
  *
  * The session's correction hops as eval triples (original answer, critique, corrected answer),
- * for exporting a user's own retries as evaluation data.
+ * for exporting a user's own retries as evaluation data. Bounded by hop count and response size
+ * (MAX_EXPORTED_LINKS, MAX_EXPORTED_BYTES).
  *
  * `jwtOnly`: the payload is verbatim user prompts and model answers, so the api-key credential
  * chain is deliberately not installed - keeping this off the API-key surface is also what keeps
@@ -56,34 +65,33 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
 
     let truncated = false;
     const logger = { warn: (message: string) => req.logger?.warn?.(message) };
-    const pairs = await buildCorrectionPairs(sessionId, {
+    const walked = await buildCorrectionPairs(sessionId, {
       findCorrectionLinks: async id => {
         const links = await questRepository.findCorrectionLinksBySessionId(id, MAX_EXPORTED_LINKS + 1);
         truncated = links.length > MAX_EXPORTED_LINKS;
         return truncated ? links.slice(0, MAX_EXPORTED_LINKS) : links;
       },
-      findById: async questId => {
-        // Session-scoped, not a bare findById: containment is enforced at the query here as well
-        // as per-hop in the walk, matching sessions/[id]/chat/[messageId]. Soft-deleted rows are
-        // filtered by softDeletePlugin's findOne hook, so a deleted root reads as gone.
-        const quest = await questRepository.findBySessionIdAndId(sessionId, questId);
-        if (!quest) return null;
-        // Projected field by field rather than spread: the walk needs prose and identity only, so
-        // promptMeta, toolResults and images never enter the export path at all. Same field set as
-        // findCorrectionLinksBySessionId's projection (QuestModel.ts) - the two must stay in sync.
-        return {
-          id: quest.id ?? questId,
-          sessionId: quest.sessionId,
-          correctsQuestId: quest.correctsQuestId,
-          prompt: quest.prompt,
-          reply: quest.reply,
-          replies: quest.replies,
-          structuredReplies: quest.structuredReplies,
-          timestamp: quest.timestamp,
-        };
-      },
+      // Session-scoped and batched: containment is enforced at the query here as well as
+      // per-hop in the walk (matching sessions/[id]/chat/[messageId]), and one call resolves
+      // every chain root the hop cap admits instead of one round trip per root.
+      findByIds: async ids => questRepository.findCorrectionTurnsByIds(sessionId, ids),
       logger,
     });
+
+    // Stop accumulating once the serialized body would cross MAX_EXPORTED_BYTES. The first pair
+    // always ships even if it alone exceeds the budget, so a single oversized hop empties the
+    // export instead of just capping it. `.length` is UTF-16 code units, not bytes, hence Buffer.
+    const pairs: typeof walked = [];
+    let bytes = 0;
+    for (const pair of walked) {
+      const size = Buffer.byteLength(JSON.stringify(pair));
+      if (pairs.length > 0 && bytes + size > MAX_EXPORTED_BYTES) {
+        truncated = true;
+        break;
+      }
+      pairs.push(pair);
+      bytes += size;
+    }
 
     // A session with no corrections is an empty export, not a missing one.
     return res.json({ pairs, truncated });

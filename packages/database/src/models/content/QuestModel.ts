@@ -28,6 +28,19 @@ export type CorrectionLinkView = {
   timestamp?: Date;
 };
 
+// Single source of truth for the CorrectionLinkView projection - shared by
+// findCorrectionLinksBySessionId and findCorrectionTurnsByIds so the two reads cannot drift apart.
+const CORRECTION_LINK_PROJECTION = {
+  _id: 1,
+  sessionId: 1,
+  correctsQuestId: 1,
+  prompt: 1,
+  reply: 1,
+  replies: 1,
+  structuredReplies: 1,
+  timestamp: 1,
+} as const;
+
 // PromptMetaSchema must cover every path in PromptMetaZodSchema (@bike4mind/common), minus a
 // short deliberate exclusion list. Mongoose runs strict, so an undeclared subpath is dropped in
 // silence on both save() and the findOneAndUpdate + $set path production actually uses.
@@ -757,25 +770,35 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    * consumer's redaction decision.
    */
   async findCorrectionLinksBySessionId(sessionId: string, limit?: number): Promise<CorrectionLinkView[]> {
+    // limit: 0 means "return nothing" to the caller, but Mongo's .limit(0) means "no limit" -
+    // so it must be short-circuited before the query runs rather than passed through.
+    if (limit === 0) return [];
     const query = this.model
-      .find(
-        { sessionId, correctsQuestId: { $ne: null }, deletedAt: null },
-        {
-          _id: 1,
-          sessionId: 1,
-          correctsQuestId: 1,
-          prompt: 1,
-          reply: 1,
-          replies: 1,
-          structuredReplies: 1,
-          timestamp: 1,
-        }
-      )
+      .find({ sessionId, correctsQuestId: { $nin: [null, ''] }, deletedAt: null }, CORRECTION_LINK_PROJECTION)
       // Stable oldest-first: the walk emits one pair per hop in the order the corrections happened,
       // and turns can share a millisecond.
       .sort({ timestamp: 1, _id: 1 })
       .lean<Array<Omit<CorrectionLinkView, 'id'> & { _id: mongoose.Types.ObjectId }>>();
-    const docs = await (limit === undefined ? query : query.limit(limit));
+    const docs = await ((limit ?? 0) > 0 ? query.limit(limit as number) : query);
+    return docs.map(({ _id, ...rest }) => ({ ...rest, id: _id.toString() }));
+  }
+
+  /**
+   * Batched, session-scoped read of specific corrected turns by id - the chain-root lookup a
+   * correction-pairs walk needs for each hop, sharing CORRECTION_LINK_PROJECTION with
+   * findCorrectionLinksBySessionId so the two cannot drift apart. Soft-deleted rows are excluded.
+   * An empty/undefined `ids` and any id that is not a valid ObjectId are both skipped rather than
+   * letting a cast throw on caller-controlled input.
+   */
+  async findCorrectionTurnsByIds(sessionId: string, ids: string[]): Promise<CorrectionLinkView[]> {
+    const objectIds = (ids ?? [])
+      .filter(id => mongoose.isObjectIdOrHexString(id))
+      .map(id => new mongoose.Types.ObjectId(id));
+    if (objectIds.length === 0) return [];
+
+    const docs = await this.model
+      .find({ sessionId, _id: { $in: objectIds }, deletedAt: null }, CORRECTION_LINK_PROJECTION)
+      .lean<Array<Omit<CorrectionLinkView, 'id'> & { _id: mongoose.Types.ObjectId }>>();
     return docs.map(({ _id, ...rest }) => ({ ...rest, id: _id.toString() }));
   }
 

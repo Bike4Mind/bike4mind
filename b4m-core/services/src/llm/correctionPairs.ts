@@ -16,8 +16,12 @@ export type CorrectionTurnRecord = CorrectedTurn & {
 export type CorrectionPairReader = {
   /** The session's corrected turns, oldest first. */
   findCorrectionLinks: (sessionId: string) => Promise<CorrectionTurnRecord[]>;
-  /** The chain root, which carries no `correctsQuestId` and so is not in the link list. */
-  findById: (id: string) => Promise<CorrectionTurnRecord | null | undefined>;
+  /**
+   * The chain roots, which carry no `correctsQuestId` and so are not in the link list, resolved
+   * in one read. Batched rather than per-id: a session with many single-hop corrections would
+   * otherwise cost one round trip per root inside a single request.
+   */
+  findByIds: (ids: string[]) => Promise<CorrectionTurnRecord[]>;
   /**
    * Optional, but a dropped hop is invisible without it: the only symptom is a shorter export,
    * which reads as "this session had fewer retries" rather than as a link that could not be read.
@@ -62,6 +66,29 @@ export async function buildCorrectionPairs(
   if (links.length === 0) return [];
 
   const linksById = new Map(links.map(link => [link.id, link]));
+
+  // Chain roots (and any link pointing at a non-canonical spelling of another id) are not in
+  // linksById by an exact string key, so batch-resolve everything a string lookup would miss in
+  // one read before the walk starts, rather than awaiting inside it.
+  const idsToFetch = new Set<string>();
+  for (const link of links) {
+    const targetId = link.correctsQuestId;
+    if (targetId && !linksById.has(targetId)) idsToFetch.add(targetId);
+  }
+  const resolvedById = new Map<string, CorrectionTurnRecord>();
+  if (idsToFetch.size > 0) {
+    const fetched = await reader.findByIds([...idsToFetch]);
+    for (const id of idsToFetch) {
+      // Case-insensitive hex compare: the requested id may be a non-canonical spelling of a
+      // returned record's id, so match on that rather than on exact string equality.
+      const match = fetched.find(r => r.id.toLowerCase() === id.toLowerCase());
+      if (match) {
+        resolvedById.set(match.id, match);
+        resolvedById.set(id, match);
+      }
+    }
+  }
+
   const pairs: EvalPair[] = [];
   const visited = new Set<string>();
 
@@ -70,7 +97,9 @@ export async function buildCorrectionPairs(
 
     // Scoped to this walk, unlike `visited`: a hop pointing back into the chain we are currently
     // walking is corrupt data, not a retry, and emitting it would present one answer as both the
-    // original and the correction. Subsumes the self-referential case (`a` corrects `a`).
+    // original and the correction. Checked again below once the target is resolved to its
+    // canonical id, so a non-canonical spelling of an id already in the path (including the
+    // self-referential `a` corrects `a` case) is caught too, not just an exact string match.
     const path = new Set<string>();
     // Terminates without a depth cap: every step marks its turn visited and only advances to an
     // unvisited link, and the link list is finite. A cap would not bound the work anyway - the
@@ -88,9 +117,21 @@ export async function buildCorrectionPairs(
         break;
       }
 
-      const target = linksById.get(targetId) ?? (await reader.findById(targetId)) ?? undefined;
+      const target = linksById.get(targetId) ?? resolvedById.get(targetId);
       if (!target) {
         reader.logger?.warn(`[CORRECTION-PAIRS] Dropping hop whose corrected turn is gone: ${targetId}`);
+        break;
+      }
+
+      // Re-checked on the canonical id: targetId above may be a non-canonical spelling that
+      // slipped past the raw path.has(targetId) check, and this is what stops it fabricating a
+      // pair from a turn corrected by itself.
+      if (target.id === current.id) {
+        reader.logger?.warn(`[CORRECTION-PAIRS] Dropping cyclic correction link: ${current.id} -> ${targetId}`);
+        break;
+      }
+      if (path.has(target.id)) {
+        reader.logger?.warn(`[CORRECTION-PAIRS] Dropping cyclic correction link: ${current.id} -> ${targetId}`);
         break;
       }
 
@@ -111,7 +152,7 @@ export async function buildCorrectionPairs(
         reader.logger?.warn(`[CORRECTION-PAIRS] Dropping hop with an empty leg: ${targetId} -> ${current.id}`);
       }
 
-      const next = linksById.get(targetId);
+      const next = linksById.get(target.id);
       if (!next || visited.has(next.id)) break;
       current = next;
     }

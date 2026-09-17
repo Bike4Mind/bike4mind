@@ -3,16 +3,29 @@ import { buildCorrectionPairs, type CorrectionPairReader, type CorrectionTurnRec
 
 const SESSION = 'session-1';
 
+// Realistic 24-char hex ids so uppercase-hex spellings exercise the same cast Mongo does; a
+// bare letter id (used by the other cases below) never round-trips through a case-fold.
+const ID_A = '507f1f77bcf86cd799439011';
+const ID_A_UPPER = ID_A.toUpperCase();
+const ID_B = '507f191e810c19729de860ea';
+
 function turn(over: Partial<CorrectionTurnRecord> & { id: string }): CorrectionTurnRecord {
   return { sessionId: SESSION, prompt: `prompt ${over.id}`, reply: `answer ${over.id}`, ...over };
 }
 
-/** In-memory stand-in for QuestRepository: links come back oldest first, as the query sorts them. */
-function fakeReader(records: CorrectionTurnRecord[]): CorrectionPairReader & { findById: ReturnType<typeof vi.fn> } {
-  const byId = new Map(records.map(r => [r.id, r]));
+/**
+ * In-memory stand-in for QuestRepository: links come back oldest first, as the query sorts them.
+ * `findByIds` resolves case-insensitively on the hex, mirroring how an ObjectId cast resolves a
+ * non-canonical spelling to the same stored document.
+ */
+function fakeReader(records: CorrectionTurnRecord[]): CorrectionPairReader & { findByIds: ReturnType<typeof vi.fn> } {
   return {
     findCorrectionLinks: async sessionId => records.filter(r => r.sessionId === sessionId && r.correctsQuestId),
-    findById: vi.fn(async (id: string) => byId.get(id) ?? null),
+    findByIds: vi.fn(async (ids: string[]) =>
+      ids
+        .map(id => records.find(r => r.id.toLowerCase() === id.toLowerCase()))
+        .filter((r): r is CorrectionTurnRecord => Boolean(r))
+    ),
   };
 }
 
@@ -79,6 +92,35 @@ describe('buildCorrectionPairs', () => {
     await expect(buildCorrectionPairs(SESSION, reader)).resolves.toEqual([]);
   });
 
+  // The raw path.has(targetId) fast check never fires here (different case), so this is the
+  // canonical-id re-check after resolution that has to catch it instead.
+  it('drops an uppercase-hex self-link rather than pairing a turn with itself', async () => {
+    const warn = vi.fn();
+    const reader = {
+      ...fakeReader([turn({ id: ID_A, correctsQuestId: ID_A_UPPER })]),
+      logger: { warn },
+    };
+
+    await expect(buildCorrectionPairs(SESSION, reader)).resolves.toEqual([]);
+    expect(warn.mock.calls.some(c => String(c[0]).includes('cyclic'))).toBe(true);
+  });
+
+  it('resolves an uppercase-hex link to a different turn and still emits its pair', async () => {
+    const reader = fakeReader([turn({ id: ID_A }), turn({ id: ID_B, correctsQuestId: ID_A_UPPER })]);
+
+    const pairs = await buildCorrectionPairs(SESSION, reader);
+
+    expect(pairs).toEqual([
+      {
+        correctedQuestId: ID_A,
+        originalAnswer: `answer ${ID_A}`,
+        critique: `prompt ${ID_B}`,
+        correctedAnswer: `answer ${ID_B}`,
+        timestamp: undefined,
+      },
+    ]);
+  });
+
   it('drops a hop whose target belongs to another session', async () => {
     const reader = fakeReader([
       turn({ id: 'other', sessionId: 'session-2' }),
@@ -97,7 +139,7 @@ describe('buildCorrectionPairs', () => {
     const link = { id: 'B', correctsQuestId: 'orphan', prompt: 'p', reply: 'a' } as unknown as CorrectionTurnRecord;
     const reader: CorrectionPairReader = {
       findCorrectionLinks: async () => [link],
-      findById: async id => (id === 'orphan' ? orphan : null),
+      findByIds: async ids => (ids.includes('orphan') ? [orphan] : []),
     };
 
     await expect(buildCorrectionPairs(SESSION, reader)).resolves.toEqual([]);
@@ -133,7 +175,7 @@ describe('buildCorrectionPairs', () => {
     const reader = fakeReader([turn({ id: 'A' })]);
 
     await expect(buildCorrectionPairs(SESSION, reader)).resolves.toEqual([]);
-    expect(reader.findById).not.toHaveBeenCalled();
+    expect(reader.findByIds).not.toHaveBeenCalled();
   });
 
   it('returns an empty list for an absent session id', async () => {
@@ -141,5 +183,34 @@ describe('buildCorrectionPairs', () => {
 
     await expect(buildCorrectionPairs(undefined, reader)).resolves.toEqual([]);
     await expect(buildCorrectionPairs('', reader)).resolves.toEqual([]);
+  });
+
+  // Regression guard for the N-round-trip bug: every chain root gets resolved off one batched
+  // read, not one read per root awaited inside the walk.
+  it('calls findByIds at most once across a whole build, even with several distinct roots', async () => {
+    const reader = fakeReader([
+      turn({ id: 'root1' }),
+      turn({ id: 'link1', correctsQuestId: 'root1' }),
+      turn({ id: 'root2' }),
+      turn({ id: 'link2', correctsQuestId: 'root2' }),
+      turn({ id: 'root3' }),
+      turn({ id: 'link3', correctsQuestId: 'root3' }),
+    ]);
+
+    const pairs = await buildCorrectionPairs(SESSION, reader);
+
+    expect(pairs).toHaveLength(3);
+    expect(reader.findByIds).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops a hop whose chain root findByIds does not return', async () => {
+    const warn = vi.fn();
+    const reader = {
+      ...fakeReader([turn({ id: 'B', correctsQuestId: 'missing-root' })]),
+      logger: { warn },
+    };
+
+    await expect(buildCorrectionPairs(SESSION, reader)).resolves.toEqual([]);
+    expect(warn.mock.calls.some(c => String(c[0]).includes('gone'))).toBe(true);
   });
 });
