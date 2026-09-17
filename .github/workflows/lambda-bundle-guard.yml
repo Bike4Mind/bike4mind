@@ -1,0 +1,94 @@
+name: Lambda Bundle Guard
+
+# Runs esbuild over every Lambda handler infra/ declares, so a dependency change
+# that breaks the bundle is caught here instead of on a real deploy.
+#
+# Nothing else in CI does this. `sst build` is not a command (sst 4.17.1), and
+# `sst diff` reads the state passphrase out of SSM before it evaluates a single
+# resource, so no sst path bundles a handler without AWS credentials and a state
+# lock. That left exactly one thing running esbuild over the handlers: a deploy.
+# sst-infra-preview-gate.yml forces a preview for infra/ and sst-pin changes, but
+# a pnpm-lock.yaml change is a deploy-surface change it does not cover, and
+# widening it to the lockfile would put a ~20 minute throwaway preview deploy
+# behind every Dependabot PR. This job is the ~2 minute version of that coverage.
+#
+# scripts/check-lambda-bundle.mjs has the fidelity notes: it replicates sst's
+# bundling step rather than calling it, which covers module resolution and
+# ESM/CJS linking - the part a dependency change breaks.
+#
+# Path-filtered, so it is NOT eligible to be a required check: a filtered
+# workflow reports nothing on a PR it skips, and a required check that never
+# reports hangs the PR pending. Making it required means moving the applicability
+# decision inside the job, the way sst-infra-preview-gate.yml does.
+
+on:
+  pull_request:
+    branches-ignore: [prod]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '**/package.json'
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      # The guard itself, because nothing else in CI reaches it: root `scripts/`
+      # is not a workspace package so `pnpm -r test` skips it, ci.yml runs only
+      # `--dir infra` and `--dir scripts/codemods`, and audit-gate.yml filters
+      # its own run to `audit-gate`. Without these three, a PR that edits the
+      # guard gets no signal from the 16 tests that are the reason to trust it.
+      - scripts/check-lambda-bundle.mjs
+      - scripts/__tests__/check-lambda-bundle.test.mjs
+      - .github/workflows/lambda-bundle-guard.yml
+  # Also run on the merge queue so the check reports there if it later becomes a
+  # required check. It earns its keep in the queue specifically: two dependency
+  # PRs that each bundle fine alone can resolve to a version neither one tested
+  # once they are combined, and a push to main auto-deploys staging.
+  merge_group:
+    branches: [main]
+
+env:
+  NODE_VERSION: '24'
+
+concurrency:
+  group: lambda-bundle-guard-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  bundle:
+    name: Lambda handlers bundle
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: '**/pnpm-lock.yaml'
+
+      # Caching the pnpm store rather than node_modules is what keeps the guard
+      # honest: a restored node_modules can hold a virtual-store entry for a
+      # version pnpm no longer resolves, and esbuild would bundle it happily.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Every handler reaches @bike4mind/* through a dist/ entry point, so an
+      # unbuilt core package is an unresolvable import rather than a missing
+      # guard. A real deploy builds core first for the same reason.
+      - name: Build core packages
+        run: pnpm turbo:core:build
+
+      - name: Bundle every Lambda handler
+        run: node scripts/check-lambda-bundle.mjs
+
+      - name: Run bundle guard tests
+        run: pnpm exec vitest run --dir scripts/__tests__ --reporter=verbose check-lambda-bundle
