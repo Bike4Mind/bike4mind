@@ -209,6 +209,19 @@ async function accountFileFailure(params: {
       logger.error(`Failed to supersede the stored error on ${fabFileId}: ${err}`);
     }
   }
+  if (isFirstFailure) {
+    // Best-effort, mirrors the chunk-complete push below (~line 1021): FilesSection's
+    // update_file_chunk_vector_status subscriber needs this to reconcile a stuck row, and unlike
+    // the data_lake_batch_progress push further down this one applies to a non-batch (single-file
+    // reprocess) failure too, so it fires regardless of batchId.
+    await sendToClient(userId, Resource.websocket.managementEndpoint, {
+      action: 'update_file_chunk_vector_status',
+      fabFileId,
+      ...(action === 'Vectorize enqueue' ? { vectorizeStatus: 'failed' as const } : { chunkStatus: 'failed' as const }),
+      failedMessage: errorMessage,
+    }).catch(err => logger.error(`Error notifying chunk/vectorize failure for ${fabFileId}: ${err}`));
+  }
+
   if (!batchId || !isFirstFailure) return;
 
   try {
