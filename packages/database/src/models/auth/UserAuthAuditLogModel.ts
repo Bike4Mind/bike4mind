@@ -14,7 +14,8 @@ import BaseRepository from '@bike4mind/db-core';
  * `refresh_recovery_capped` record the refresh endpoint's involuntary-session outcomes (theft
  * detection, lost-response recovery, and the two allowance caps); emitted by rotateSession's audit
  * hook. They exist so a "user was logged out" report can be answered from one query instead of
- * code archaeology. NOTE: recorded, not alarmed - nothing consumes these yet.
+ * code archaeology. session_reuse_revoked and session_recovered also emit CloudWatch metrics
+ * in Lumina5/AuthSecurity and drive the alarms in infra/alarms.ts.
  */
 export type UserAuthAuditEvent =
   | 'login_success'
@@ -33,7 +34,7 @@ export type UserAuthAuditEvent =
   | 'trusted_device_used'
   | 'trusted_device_revoked';
 
-const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
+export const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'login_success',
   'logout',
   'password_reset',
@@ -139,6 +140,10 @@ class UserAuthAuditLogRepository extends BaseRepository<IUserAuthAuditLogDocumen
 
   async findByUser(userId: string, limit = 50): Promise<IUserAuthAuditLogDocument[]> {
     return this.model.find({ userId }).sort({ createdAt: -1 }).limit(limit);
+  }
+
+  async findByUserAndEvent(userId: string, event: UserAuthAuditEvent, limit = 50): Promise<IUserAuthAuditLogDocument[]> {
+    return this.model.find({ userId, event }).sort({ createdAt: -1 }).limit(limit);
   }
 }
 

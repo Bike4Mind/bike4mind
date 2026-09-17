@@ -1,6 +1,7 @@
 import type { Request } from 'express';
 import { userAuthAuditLogRepository, type UserAuthAuditEvent } from '@bike4mind/database';
 import { getClientIp } from '@server/utils/ip';
+import { recordSessionReuseRevoked, recordSessionRecovered } from '@server/utils/cloudwatch';
 
 /**
  * Write an account-level authentication event to the forensic audit log.
@@ -38,4 +39,7 @@ export async function logAuthAudit(
   } catch (err) {
     console.debug(`Failed to write UserAuthAuditLog (${params.event}):`, err);
   }
+  // Fire-and-forget: metric emission must never block or fail the auth hot path.
+  if (params.event === 'session_reuse_revoked') void recordSessionReuseRevoked();
+  else if (params.event === 'session_recovered') void recordSessionRecovered();
 }

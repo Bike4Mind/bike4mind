@@ -750,3 +750,26 @@ export async function recordFeedbackDeliverySkipped(
 ): Promise<void> {
   return emitFeedbackDeliveryMetrics(buildFeedbackDeliverySkippedMetrics(channel, stageClass, reason, stage));
 }
+
+// Auth Security Metrics - Namespace: Lumina5/AuthSecurity
+// SessionReuseRevoked: a refresh token was presented after its rotation window, indicating
+// a possible stolen token (the session is revoked and both parties are logged out).
+// SessionRecovered: a stale token was accepted under the benign-recovery allowance
+// (lost response on a transient network failure).
+
+const AUTH_SECURITY_NAMESPACE = 'Lumina5/AuthSecurity';
+
+export const AuthSecurityMetrics = {
+  SESSION_REUSE_REVOKED: 'SessionReuseRevoked',
+  SESSION_RECOVERED: 'SessionRecovered',
+} as const;
+
+/** Emits one count when a refresh token reuse revokes a session (presumed theft). */
+export async function recordSessionReuseRevoked(): Promise<void> {
+  return emitMetric(AUTH_SECURITY_NAMESPACE, AuthSecurityMetrics.SESSION_REUSE_REVOKED, 1, {}, StandardUnit.Count);
+}
+
+/** Emits one count when a stale token is accepted under the recovery allowance (benign retry). */
+export async function recordSessionRecovered(): Promise<void> {
+  return emitMetric(AUTH_SECURITY_NAMESPACE, AuthSecurityMetrics.SESSION_RECOVERED, 1, {}, StandardUnit.Count);
+}
