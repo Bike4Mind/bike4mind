@@ -36,7 +36,6 @@ import {
   ListItemDecorator,
   FormHelperText,
 } from '@mui/joy';
-import { styled } from '@mui/system';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import ErrorIcon from '@mui/icons-material/Error';
@@ -50,6 +49,7 @@ import LightbulbIcon from '@mui/icons-material/Lightbulb';
 import ReportProblemIcon from '@mui/icons-material/ReportProblem';
 import LinkIcon from '@mui/icons-material/Link';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import TokenDistributionBar from '@client/app/components/common/TokenDistributionBar';
 import {
   ContextTelemetryAlertsSchema,
   type ContextTelemetry,
@@ -86,31 +86,6 @@ interface SlackWorkspace {
 // Default settings derived from schema (module-level to avoid re-parsing on every render)
 const DEFAULT_ALERT_SETTINGS = ContextTelemetryAlertsSchema.parse({});
 
-// Token distribution bar segment
-const TokenSegment = styled('div')<{ width: number; color: string }>(({ width, color }) => ({
-  width: `${width}%`,
-  height: '100%',
-  backgroundColor: color,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  fontSize: '10px',
-  color: 'white',
-  overflow: 'hidden',
-  whiteSpace: 'nowrap',
-}));
-
-// Color mapping for token sources
-const TOKEN_SOURCE_COLORS: Record<string, string> = {
-  systemPrompts: '#3f51b5',
-  conversationHistory: '#2196f3',
-  mementos: '#00bcd4',
-  fabFiles: '#009688',
-  urlContent: '#8bc34a',
-  toolSchemas: '#4caf50',
-  userPrompt: '#ff9800',
-};
-
 // Severity colors
 const SEVERITY_COLORS: Record<AnomalySeverity, string> = {
   low: '#4caf50',
@@ -137,77 +112,6 @@ const SeverityIcon = ({ severity, benign }: { severity: AnomalySeverity; benign?
     default:
       return <InfoIcon />;
   }
-};
-
-// Token Distribution Visualization
-const TokenDistributionBar = ({
-  tokensBySource,
-}: {
-  tokensBySource: NonNullable<ContextTelemetry['contextWindow']['tokensBySource']>;
-}) => {
-  const total =
-    tokensBySource.systemPrompts +
-    tokensBySource.conversationHistory +
-    tokensBySource.mementos +
-    tokensBySource.fabFiles +
-    tokensBySource.urlContent +
-    tokensBySource.toolSchemas +
-    tokensBySource.userPrompt;
-
-  if (total === 0) return <Typography level="body-sm">No token data</Typography>;
-
-  const segments = [
-    { key: 'systemPrompts', label: 'System', value: tokensBySource.systemPrompts },
-    { key: 'conversationHistory', label: 'History', value: tokensBySource.conversationHistory },
-    { key: 'mementos', label: 'Mementos', value: tokensBySource.mementos },
-    { key: 'fabFiles', label: 'Files', value: tokensBySource.fabFiles },
-    { key: 'urlContent', label: 'URLs', value: tokensBySource.urlContent },
-    { key: 'toolSchemas', label: 'Tools', value: tokensBySource.toolSchemas },
-    { key: 'userPrompt', label: 'User', value: tokensBySource.userPrompt },
-  ].filter(s => s.value > 0);
-
-  return (
-    <Box>
-      <Box
-        sx={{
-          display: 'flex',
-          height: 24,
-          borderRadius: 'sm',
-          overflow: 'hidden',
-          border: '1px solid',
-          borderColor: 'divider',
-        }}
-      >
-        {segments.map(segment => (
-          <Tooltip
-            key={segment.key}
-            title={`${segment.label}: ${segment.value.toLocaleString()} tokens (${((segment.value / total) * 100).toFixed(1)}%)`}
-          >
-            <TokenSegment width={(segment.value / total) * 100} color={TOKEN_SOURCE_COLORS[segment.key]}>
-              {(segment.value / total) * 100 > 8 ? segment.label : ''}
-            </TokenSegment>
-          </Tooltip>
-        ))}
-      </Box>
-      <Stack direction="row" spacing={2} sx={{ mt: 1, flexWrap: 'wrap' }}>
-        {segments.map(segment => (
-          <Stack key={segment.key} direction="row" alignItems="center" spacing={0.5}>
-            <Box
-              sx={{
-                width: 12,
-                height: 12,
-                borderRadius: 'xs',
-                bgcolor: TOKEN_SOURCE_COLORS[segment.key],
-              }}
-            />
-            <Typography level="body-xs">
-              {segment.label}: {segment.value.toLocaleString()}
-            </Typography>
-          </Stack>
-        ))}
-      </Stack>
-    </Box>
-  );
 };
 
 // Anomaly Indicators
