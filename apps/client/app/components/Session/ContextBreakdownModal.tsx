@@ -73,52 +73,56 @@ const CategoryTable: FC<{ breakdown: ContextBreakdown }> = ({ breakdown }) => {
 };
 
 const LayerTable: FC<{ layers: ContextBreakdown['layers'] }> = ({ layers }) => (
-  <Table size="sm" data-testid="context-breakdown-layers-table">
-    <thead>
-      <tr>
-        <th>Layer</th>
-        <th style={{ width: 110 }}>Origin</th>
-        <th style={{ width: 100 }}>Tokens</th>
-        <th style={{ width: 130 }}>Delivered</th>
-      </tr>
-    </thead>
-    <tbody>
-      {layers.map((layer, index) => (
-        <tr key={`${layer.name}-${index}`} style={layer.wasIncluded ? undefined : { opacity: 0.6 }}>
-          <td>{layer.name}</td>
-          <td>{layer.source}</td>
-          <td>{format(layer.tokenCount)}</td>
-          <td>{layer.wasIncluded ? 'yes' : `no (${layer.exclusionReason ?? 'unknown'})`}</td>
+  <Box sx={{ overflowX: 'auto' }}>
+    <Table size="sm" data-testid="context-breakdown-layers-table" sx={{ minWidth: 520 }}>
+      <thead>
+        <tr>
+          <th>Layer</th>
+          <th style={{ width: 110 }}>Origin</th>
+          <th style={{ width: 100 }}>Tokens</th>
+          <th style={{ width: 130 }}>Delivered</th>
         </tr>
-      ))}
-    </tbody>
-  </Table>
+      </thead>
+      <tbody>
+        {layers.map((layer, index) => (
+          <tr key={`${layer.name}-${index}`} style={layer.wasIncluded ? undefined : { opacity: 0.6 }}>
+            <td>{layer.name}</td>
+            <td>{layer.source}</td>
+            <td>{format(layer.tokenCount)}</td>
+            <td>{layer.wasIncluded ? 'yes' : `no (${layer.exclusionReason ?? 'unknown'})`}</td>
+          </tr>
+        ))}
+      </tbody>
+    </Table>
+  </Box>
 );
 
 const ToolTable: FC<{ tools: ContextBreakdown['tools'] }> = ({ tools }) => (
-  <Table size="sm" data-testid="context-breakdown-tools-table">
-    <thead>
-      <tr>
-        <th>Tool</th>
-        <th style={{ width: 90 }}>Calls</th>
-        <th style={{ width: 90 }}>Failed</th>
-        <th style={{ width: 110 }}>Time</th>
-      </tr>
-    </thead>
-    <tbody>
-      {tools.map(tool => (
-        <tr key={tool.name}>
-          <td>
-            {tool.name}
-            {tool.offered ? '' : ' (not offered)'}
-          </td>
-          <td>{format(tool.invocations)}</td>
-          <td>{format(tool.failures)}</td>
-          <td>{tool.durationMs == null ? '-' : `${tool.durationMs.toLocaleString()} ms`}</td>
+  <Box sx={{ overflowX: 'auto' }}>
+    <Table size="sm" data-testid="context-breakdown-tools-table" sx={{ minWidth: 480 }}>
+      <thead>
+        <tr>
+          <th>Tool</th>
+          <th style={{ width: 90 }}>Calls</th>
+          <th style={{ width: 90 }}>Failed</th>
+          <th style={{ width: 110 }}>Time</th>
         </tr>
-      ))}
-    </tbody>
-  </Table>
+      </thead>
+      <tbody>
+        {tools.map(tool => (
+          <tr key={tool.name}>
+            <td>
+              {tool.name}
+              {tool.offered ? '' : ' (not offered)'}
+            </td>
+            <td>{format(tool.invocations)}</td>
+            <td>{format(tool.failures)}</td>
+            <td>{tool.durationMs == null ? '-' : `${tool.durationMs.toLocaleString()} ms`}</td>
+          </tr>
+        ))}
+      </tbody>
+    </Table>
+  </Box>
 );
 
 const RetrievalSummary: FC<{ retrieval: NonNullable<ContextBreakdown['retrieval']> }> = ({ retrieval }) => (
