@@ -31,7 +31,10 @@ export const useCancelSubscription = () => {
     onSuccess: userSubscription => {
       queryClient.setQueryData<IUserSubscription[]>(['subscriptions'], oldData => {
         return (oldData ?? []).map(subscription => {
-          if (subscription.priceId === userSubscription.priceId) {
+          // Match on identity, not priceId: a user can hold two rows at one price (a
+          // stale delinquent row beside the active one), and patching on priceId would
+          // write the same status onto both.
+          if (userSubscription.subscriptionId && subscription.subscriptionId === userSubscription.subscriptionId) {
             // `status` matters as much as `canceledAt`: an immediate cancel returns
             // Stripe's 'canceled', and that is what drops the row out of the
             // "still cancellable" filters. Re-fetching here instead would race the

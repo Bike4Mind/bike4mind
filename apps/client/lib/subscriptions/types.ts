@@ -16,10 +16,14 @@ export enum SubscriptionSource {
 
 /**
  * Statuses Stripe will not move a subscription out of. A row in one of these is
- * finished: there is nothing left to cancel and Stripe rejects further updates,
- * so every "does this user have a plan" check wants the complement of this set
- * rather than `status === 'active'` - which hides the past_due row of the very
- * user trying to stop dunning.
+ * finished: there is nothing left to cancel and Stripe rejects further updates.
+ *
+ * Scoped to the cancel path: its complement is what
+ * `findCancelableUserSubscriptionByPriceId` and the cancel affordance filter on,
+ * so a delinquent user can still stop their own dunning. Do NOT widen "does this
+ * user have a plan" checks to that complement - entitlement, rate-tier and
+ * plan-change checks are deliberately `status === 'active'`-only, and
+ * `server/entitlements/index.ts` records why.
  */
 export const TERMINAL_SUBSCRIPTION_STATUSES: ReadonlySet<Stripe.Subscription.Status> = new Set([
   'canceled',
@@ -28,6 +32,25 @@ export const TERMINAL_SUBSCRIPTION_STATUSES: ReadonlySet<Stripe.Subscription.Sta
 
 export const isCancellableSubscriptionStatus = (status: Stripe.Subscription.Status): boolean =>
   !TERMINAL_SUBSCRIPTION_STATUSES.has(status);
+
+/**
+ * The subscription to show a user as their current plan: their active one, else the
+ * first cancellable row. `/api/subscriptions/own` returns an unsorted `find`, so
+ * without the active-first rule a stale delinquent row left behind by a re-subscribe
+ * can be displayed as the current plan.
+ *
+ * Mirrors the precedence in `findCancelableUserSubscriptionByPriceId`
+ * (`server/models/Subscription.ts`); the two must agree on which row is "the" plan.
+ * Entitlement and rate-tier checks must not use this - see the docblock above.
+ */
+export function pickDisplayedSubscription<T extends { status: Stripe.Subscription.Status }>(
+  subscriptions: readonly T[]
+): T | undefined {
+  return (
+    subscriptions.find(sub => sub.status === 'active') ??
+    subscriptions.find(sub => isCancellableSubscriptionStatus(sub.status))
+  );
+}
 
 /**
  * Statuses where Stripe's billing is stuck: the current period is unpaid and

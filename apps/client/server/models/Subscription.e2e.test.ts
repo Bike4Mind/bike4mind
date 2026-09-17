@@ -4,7 +4,7 @@ import type Stripe from 'stripe';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { mongoose } from '@bike4mind/database';
-import { SubscriptionOwnerType, TERMINAL_SUBSCRIPTION_STATUSES } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { Subscription, subscriptionRepository } from './Subscription';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND hooks.
@@ -77,7 +77,9 @@ describe('findCancelableUserSubscriptionByPriceId', () => {
     expect(found?.status).toBe(status);
   });
 
-  it.each([...TERMINAL_SUBSCRIPTION_STATUSES])('does not return a %s row', async status => {
+  // Spelled out rather than derived from TERMINAL_SUBSCRIPTION_STATUSES: generating the
+  // cases from the set under test means narrowing it only drops cases, never fails one.
+  it.each(['canceled', 'incomplete_expired'] as const)('does not return a %s row', async status => {
     await Subscription.create(row({ status }));
 
     const found = await subscriptionRepository.findCancelableUserSubscriptionByPriceId('price_pro', 'user_1');

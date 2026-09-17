@@ -123,6 +123,8 @@ describe('POST /api/subscriptions/cancel', () => {
         // Stripe's status, which the client patches into its cache - the local row
         // is only synced later by the webhook.
         status: 'canceled',
+        // The client matches the cached row on this: priceId is not unique per user.
+        subscriptionId: 'sub_1',
       });
     }
   );
@@ -174,6 +176,7 @@ describe('POST /api/subscriptions/cancel', () => {
       priceId: 'price_pro',
       canceledAt: '2023-11-14T22:13:20.000Z',
       status: 'canceled',
+      subscriptionId: 'sub_1',
     });
   });
 

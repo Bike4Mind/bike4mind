@@ -161,10 +161,19 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       const subscription = event.data.object;
 
       // Update subscription status in unified Subscription model
-      await subscriptionRepository.updateByStripeSubscriptionId(subscription.id, {
+      const updated = await subscriptionRepository.updateByStripeSubscriptionId(subscription.id, {
         status: 'canceled',
         canceledAt: subscription.canceled_at ? dayjs.unix(subscription.canceled_at).toDate() : null,
       });
+
+      // Ownership guard, and the only thing standing between a misrouted event and an
+      // irreversible void: a stage with no row for this subscription does not own it
+      // (the update above is then a no-op), so it must not run the money-affecting
+      // cleanup below. Fails closed; the owning stage handles the same event itself.
+      if (!updated) {
+        req.logger.warn(`Ignoring deleted subscription ${subscription.id}: no matching row in this stage`);
+        break;
+      }
 
       // Safely access userId from metadata (may be missing for legacy subscriptions)
       const userId = subscription.metadata?.userId;

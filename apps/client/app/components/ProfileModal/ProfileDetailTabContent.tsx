@@ -23,8 +23,8 @@ import { useGetSubscriptionPlans, useStripePortal } from '@client/app/hooks/data
 import dayjs from 'dayjs';
 import { useTheme } from '@mui/joy';
 import {
-  isCancellableSubscriptionStatus,
   isDelinquentSubscriptionStatus,
+  pickDisplayedSubscription,
   SubscriptionOwnerType,
 } from '@client/lib/subscriptions/types';
 import { useToggleShowCreditsUsed } from '@client/app/hooks/data/user';
@@ -185,15 +185,8 @@ const SubscriptionCard = () => {
   // Non-terminal, not just active: a past_due user still holds this plan, and this
   // is the gate that decides whether the corner button opens Stripe's portal (where
   // they fix the card or cancel) or the upgrade modal.
-  //
-  // Active first, then any cancellable row: /api/subscriptions/own returns rows in
-  // whatever order the query plan picked, so a stale delinquent row left behind by a
-  // re-subscribe would otherwise be shown as the user's current plan (the server-side
-  // lookup resolves the same ambiguity the same way).
   const userSubscriptions = subscriptions.data || [];
-  const subscription =
-    userSubscriptions.find(sub => sub.status === 'active') ??
-    userSubscriptions.find(sub => isCancellableSubscriptionStatus(sub.status));
+  const subscription = pickDisplayedSubscription(userSubscriptions);
   const subscriptionPlan = SUBSCRIPTION_PLANS.find(plan => plan.priceId === subscription?.priceId);
   const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
   const plans = useGetSubscriptionPlans();

@@ -4,6 +4,7 @@ import {
   TERMINAL_SUBSCRIPTION_STATUSES,
   isCancellableSubscriptionStatus,
   isDelinquentSubscriptionStatus,
+  pickDisplayedSubscription,
 } from './types';
 
 // Every status Stripe can report on a subscription, so the partition below covers
@@ -19,13 +20,22 @@ const ALL_STATUSES: Stripe.Subscription.Status[] = [
   'paused',
 ];
 
+// Spelled out rather than derived from isCancellableSubscriptionStatus: generating the
+// cases from the function under test means moving a status into the terminal set only
+// drops cases, it never fails one.
+const CANCELLABLE_STATUSES: Stripe.Subscription.Status[] = [
+  'active',
+  'trialing',
+  'past_due',
+  'unpaid',
+  'incomplete',
+  'paused',
+];
+
 describe('subscription status predicates', () => {
-  it.each(ALL_STATUSES.filter(isCancellableSubscriptionStatus))(
-    'treats %s as cancellable, so the user can still stop it',
-    status => {
-      expect(isCancellableSubscriptionStatus(status)).toBe(true);
-    }
-  );
+  it.each(CANCELLABLE_STATUSES)('treats %s as cancellable, so the user can still stop it', status => {
+    expect(isCancellableSubscriptionStatus(status)).toBe(true);
+  });
 
   it('leaves exactly the terminal statuses uncancellable', () => {
     // A status Stripe adds later must fall on the cancellable side: reaching Stripe
@@ -53,5 +63,29 @@ describe('subscription status predicates', () => {
         expect(TERMINAL_SUBSCRIPTION_STATUSES.has(status)).toBe(false);
       }
     }
+  });
+});
+
+describe('pickDisplayedSubscription', () => {
+  const row = (status: Stripe.Subscription.Status, subscriptionId: string) => ({ status, subscriptionId });
+
+  it('prefers the active row over a stale non-terminal one regardless of order', () => {
+    // /api/subscriptions/own is an unsorted find, so the leftover delinquent row from a
+    // failed renewal can arrive first. Showing it would label the user's current plan
+    // with the old row's name, price and renewal date.
+    const stale = row('past_due', 'sub_stale');
+    const live = row('active', 'sub_live');
+
+    expect(pickDisplayedSubscription([stale, live])?.subscriptionId).toBe('sub_live');
+    expect(pickDisplayedSubscription([live, stale])?.subscriptionId).toBe('sub_live');
+  });
+
+  it('falls back to a non-terminal row when the user has no active one', () => {
+    expect(pickDisplayedSubscription([row('past_due', 'sub_dunned')])?.subscriptionId).toBe('sub_dunned');
+  });
+
+  it('ignores terminal rows, so a finished plan is not shown as current', () => {
+    expect(pickDisplayedSubscription([row('canceled', 'sub_dead')])).toBeUndefined();
+    expect(pickDisplayedSubscription([row('incomplete_expired', 'sub_dead')])).toBeUndefined();
   });
 });

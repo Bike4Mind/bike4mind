@@ -47,8 +47,11 @@ describe('SubscribeButton', () => {
     cancelMutate.mockReset();
   });
 
-  // The issue's repro: a dunned user who could only ever see "Subscribe", because
-  // the row feeding this list was filtered to status === 'active'.
+  // The issue's repro, as far as this component is concerned: a dunned row in the list
+  // has to offer Cancel. The button is deliberately status-agnostic - it decides on
+  // priceId alone, and it is the parent that filters the list down to non-terminal rows.
+  // So this pins "the button does the right thing GIVEN a dunned row"; that the modal
+  // actually supplies one is pinned in SubscriptionModal.test.tsx.
   it.each(['past_due', 'unpaid'] as const)('offers Cancel for a %s row and cancels that plan', async status => {
     renderButton([subRow({ status })]);
 
@@ -64,10 +67,19 @@ describe('SubscribeButton', () => {
   });
 
   it('offers Change for another plan while the user keeps theirs', () => {
-    renderButton([subRow({ status: 'past_due' })], 'price_other');
+    renderButton([subRow({ status: 'active' })], 'price_other');
 
     expect(screen.getByRole('button', { name: 'Change Subscription' })).toBeEnabled();
     expect(cancelMutate).not.toHaveBeenCalled();
+  });
+
+  it('offers Subscribe, not Change, when the only plan the user holds is delinquent', () => {
+    // /api/subscriptions/change resolves through the active-only lookup, so Change would
+    // 400 for this user. Subscribe is the truth - and is what they saw before the
+    // delinquent row was included in this list.
+    renderButton([subRow({ status: 'past_due' })], 'price_other');
+
+    expect(screen.getByRole('button', { name: 'Subscribe' })).toBeEnabled();
   });
 
   it('shows when a scheduled cancellation ends the plan instead of offering to cancel again', () => {

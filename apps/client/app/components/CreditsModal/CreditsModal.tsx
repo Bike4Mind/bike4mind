@@ -3,10 +3,9 @@ import SubscribeButton from '@client/app/components/Credits/SubscribeButton';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
-import { useCancelSubscription, useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
+import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
 import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
 import { TransactionType } from '@client/lib/credits/types';
-import { isCancellableSubscriptionStatus } from '@client/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS_GROUPED_BY_INTERVAL } from '@client/lib/userSubscriptions/constants';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import { Box, Button, Card, IconButton, Modal, ModalDialog, Tab, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
@@ -47,7 +46,6 @@ const CreditsModal = () => {
   const { t } = useTranslation();
   const isCreditsEnabled = useGetSettingsValue('enforceCredits');
   const subscriptions = useGetSubscriptions({ enabled: isOpen });
-  const cancelSubscription = useCancelSubscription();
   const { subscribeToAction } = useWebsocket();
   const queryClient = useQueryClient();
   const plans = useGetSubscriptionPlans();
@@ -84,29 +82,9 @@ const CreditsModal = () => {
     [subscriptions.data]
   );
 
-  // The plan cards must see a delinquent row too - it is still cancellable, and it
-  // is the row a user with payment issues needs to cancel. The tabs above stay on
-  // `activeSubscriptions`: a user with payment issues should still land on the tab
-  // that carries the Payment Issues card rather than on Pay As You Go.
-  const cancellableSubscriptions = useMemo(
-    () => (subscriptions.data ?? []).filter(sub => isCancellableSubscriptionStatus(sub.status)),
-    [subscriptions.data]
-  );
-
-  // The row the Payment Issues card is about, so its Cancel button has a target.
-  // Deliberately narrower than the card's own display predicate: an
-  // `incomplete_expired` row shows the card but is terminal, and the cancel route
-  // will not return it - so the button would only ever produce a 400.
-  const paymentIssueSubscription = useMemo(
-    () =>
-      (subscriptions.data ?? []).find(sub => sub.status !== 'active' && isCancellableSubscriptionStatus(sub.status)),
-    [subscriptions.data]
-  );
-
-  const hasPaymentIssues = useMemo(
-    () => (subscriptions.data ?? []).some(sub => sub.status !== 'active' && sub.status !== 'canceled'),
-    [subscriptions.data]
-  );
+  const hasPaymentIssues = useMemo(() => {
+    return (subscriptions.data ?? []).some(sub => sub.status !== 'active' && sub.status !== 'canceled');
+  }, [subscriptions.data]);
 
   // Hide Pay As You Go tab when selected account is an organization
   const showPayAsYouGoTab = useMemo(() => {
@@ -210,17 +188,6 @@ const CreditsModal = () => {
                       <Typography level="body-md">
                         {t('You have payment issues with your current subscription.')}
                       </Typography>
-                      {paymentIssueSubscription && (
-                        <Button
-                          data-testid="payment-issues-cancel-btn"
-                          color="danger"
-                          loading={cancelSubscription.isPending}
-                          onClick={() => cancelSubscription.mutate(paymentIssueSubscription.priceId)}
-                          sx={{ mt: 2 }}
-                        >
-                          {t('Cancel Subscription')}
-                        </Button>
-                      )}
                       <Button onClick={() => setOpen(false)} sx={{ mt: 2 }}>
                         Close
                       </Button>
@@ -249,7 +216,7 @@ const CreditsModal = () => {
                       <Typography level="body-sm" sx={{ textAlign: 'center', mb: 1 }}>
                         {(plan.credits / 30000).toFixed(0)} conversations per day
                       </Typography>
-                      <SubscribeButton priceId={plan.priceId} cancellableSubscriptions={cancellableSubscriptions} />
+                      <SubscribeButton priceId={plan.priceId} cancellableSubscriptions={activeSubscriptions} />
                     </Card>
                   ))}
                 </Box>
@@ -278,7 +245,7 @@ const CreditsModal = () => {
                       <Typography level="body-sm" sx={{ textAlign: 'center', mb: 1 }}>
                         {(plan.credits / 365000).toFixed(0)} conversations per day
                       </Typography>
-                      <SubscribeButton priceId={plan.priceId} cancellableSubscriptions={cancellableSubscriptions} />
+                      <SubscribeButton priceId={plan.priceId} cancellableSubscriptions={activeSubscriptions} />
                     </Card>
                   ))}
                 </Box>

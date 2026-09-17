@@ -1,4 +1,5 @@
 import { useCancelSubscription, useChangeSubscription, useSubscribePlan } from '@client/app/hooks/data/subscriptions';
+import { isDelinquentSubscriptionStatus } from '@client/lib/subscriptions/types';
 import { IUserSubscription } from '@client/lib/userSubscriptions/types';
 import { Button } from '@mui/joy';
 import dayjs from 'dayjs';
@@ -23,7 +24,12 @@ const SubscribeButton = ({ priceId, cancellableSubscriptions }: SubscribeButtonP
     const activeSubscription = cancellableSubscriptions.find(subscription => subscription.priceId === priceId);
     if (activeSubscription) {
       return 'cancel';
-    } else if (cancellableSubscriptions.length > 0) {
+    } else if (cancellableSubscriptions.some(sub => !isDelinquentSubscriptionStatus(sub.status))) {
+      // A plan change resolves through the active-only lookup in
+      // /api/subscriptions/change, so it is only on offer when the user actually
+      // holds a plan in good standing to change from. A user whose only row is
+      // delinquent falls through to Subscribe - the action they had before their
+      // dunning row was included in this list.
       return 'change';
     } else {
       return 'subscribe';

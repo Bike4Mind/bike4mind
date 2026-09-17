@@ -3,6 +3,7 @@ import {
   SubscriptionSource,
   TERMINAL_SUBSCRIPTION_STATUSES,
   isDelinquentSubscriptionStatus,
+  resolveSubscriptionSource,
 } from '@client/lib/subscriptions/types';
 import { IUserSubscription } from '@client/lib/userSubscriptions/types';
 import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
@@ -10,7 +11,6 @@ import { stripe } from '@server/integrations/stripe/stripe';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { subscriptionRepository } from '@server/models/Subscription';
-import { resolveSubscriptionSource } from '@server/services/organizationService';
 import Stripe from 'stripe';
 import { z } from 'zod';
 
@@ -96,9 +96,12 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
     // `status` is Stripe's, not the lagging local row's: the client patches it into
     // its cache so an immediate cancel stops showing as a live plan right away.
+    // `subscriptionId` is what the client matches the cached row on - `priceId` is
+    // not unique per user, so two rows at one price would both get patched.
     const result: Partial<IUserSubscription> = {
       canceledAt: subscription.canceled_at ? new Date(subscription.canceled_at * 1000) : null,
       priceId,
+      subscriptionId,
       status: subscription.status,
     };
 

@@ -648,6 +648,12 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       },
     };
 
+    beforeEach(() => {
+      // The branch runs the irreversible invoice cleanup only for a subscription this
+      // stage owns, and the row is the evidence of ownership.
+      mockUpdateByStripeSubscriptionId.mockResolvedValue({ subscriptionId: 'sub_deleted' });
+    });
+
     it('voids the open invoices for the deleted subscription', async () => {
       // A Billing Portal "cancel immediately" arrives only as this event, so it is
       // the last chance to close the invoice that is still dunning the customer.
@@ -658,6 +664,16 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
         expect.objectContaining({ status: 'canceled' })
       );
       expect(mockVoidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_deleted');
+    });
+
+    it('does not touch Stripe when this stage has no row for the subscription', async () => {
+      // A cross-stage misroute. The status write is a harmless no-op, but voiding
+      // invoices on a subscription this stage does not own cannot be undone.
+      mockUpdateByStripeSubscriptionId.mockResolvedValue(null);
+
+      await invokeWebhookWithEvent(deletedEvent);
+
+      expect(mockVoidOpenSubscriptionInvoices).not.toHaveBeenCalled();
     });
 
     it('still records the deletion when the invoice cleanup fails', async () => {
