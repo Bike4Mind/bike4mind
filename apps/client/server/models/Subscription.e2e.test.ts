@@ -20,6 +20,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
  */
 
 type RowOverrides = Partial<{
+  ownerType: SubscriptionOwnerType;
   ownerId: string;
   subscriptionId: string;
   priceId: string;
@@ -233,5 +234,83 @@ describe('findChangeableUserSubscription', () => {
     const found = await subscriptionRepository.findChangeableUserSubscription('user_1');
 
     expect(found?.subscriptionId).toBe('sub_new');
+  });
+});
+
+/**
+ * Real-query guard for the org display/duplicate-guard read. The route, the billing
+ * section and the webhook guard all mock the repository, so reverting this to the
+ * active-only predicate would leave every one of those suites green - only a real
+ * `find` against a real collection pins it.
+ */
+describe('findNonTerminalSubscriptionsByOwner', () => {
+  const orgRow = (overrides: RowOverrides = {}) =>
+    row({ ownerType: SubscriptionOwnerType.Organization, ownerId: 'org_1', ...overrides });
+
+  it('returns a past_due org row, which the active-only lookup hides', async () => {
+    await Subscription.create(orgRow({ status: 'past_due' }));
+
+    const found = await subscriptionRepository.findNonTerminalSubscriptionsByOwner(
+      SubscriptionOwnerType.Organization,
+      'org_1'
+    );
+
+    expect(found.map(s => s.status)).toEqual(['past_due']);
+    // The whole point: the two reads diverge on this row, so the org has a billing
+    // screen to act on while entitlement checks still see nothing.
+    expect(
+      await subscriptionRepository.findActiveSubscriptionsByOwner(SubscriptionOwnerType.Organization, 'org_1')
+    ).toEqual([]);
+  });
+
+  it.each(['active', 'trialing', 'past_due', 'unpaid', 'incomplete', 'paused'] as const)(
+    'returns a %s row',
+    async status => {
+      await Subscription.create(orgRow({ status }));
+
+      const found = await subscriptionRepository.findNonTerminalSubscriptionsByOwner(
+        SubscriptionOwnerType.Organization,
+        'org_1'
+      );
+
+      expect(found.map(s => s.status)).toEqual([status]);
+    }
+  );
+
+  // Spelled out rather than derived from TERMINAL_SUBSCRIPTION_STATUSES: generating the
+  // cases from the set under test means narrowing it only drops cases, never fails one.
+  it.each(['canceled', 'incomplete_expired'] as const)('excludes a %s row', async status => {
+    await Subscription.create(orgRow({ status }));
+
+    const found = await subscriptionRepository.findNonTerminalSubscriptionsByOwner(
+      SubscriptionOwnerType.Organization,
+      'org_1'
+    );
+
+    expect(found).toEqual([]);
+  });
+
+  it('still returns the live row for a canceled-then-resubscribed org, so it is not locked out', async () => {
+    await Subscription.create(orgRow({ status: 'canceled', subscriptionId: 'sub_old' }));
+    await Subscription.create(orgRow({ status: 'active', subscriptionId: 'sub_new' }));
+
+    const found = await subscriptionRepository.findNonTerminalSubscriptionsByOwner(
+      SubscriptionOwnerType.Organization,
+      'org_1'
+    );
+
+    expect(found.map(s => s.subscriptionId)).toEqual(['sub_new']);
+  });
+
+  it('does not match another owner or another owner type', async () => {
+    await Subscription.create(orgRow({ ownerId: 'org_2', status: 'past_due' }));
+    await Subscription.create(row({ ownerId: 'org_1', status: 'past_due' }));
+
+    const found = await subscriptionRepository.findNonTerminalSubscriptionsByOwner(
+      SubscriptionOwnerType.Organization,
+      'org_1'
+    );
+
+    expect(found).toEqual([]);
   });
 });
