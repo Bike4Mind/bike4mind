@@ -553,9 +553,9 @@ describe('sharingService - revoke on a project', () => {
     const project = aProject();
     adapters.db.projects.shareable.findAccessibleById.mockResolvedValue(project);
 
-    await expect(
-      revoke(coMemberId, { id: projectId, type: 'projects', userId: memberId }, adapters)
-    ).rejects.toThrow(UnauthorizedError);
+    await expect(revoke(coMemberId, { id: projectId, type: 'projects', userId: memberId }, adapters)).rejects.toThrow(
+      UnauthorizedError
+    );
     expect(adapters.db.projects.updateGuarded).not.toHaveBeenCalled();
   });
 });

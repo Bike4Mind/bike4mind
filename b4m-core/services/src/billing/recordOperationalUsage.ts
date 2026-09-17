@@ -12,9 +12,9 @@ import {
   usdToCreditsStochastic,
   type CompletionSource,
 } from '@bike4mind/common';
-import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import { deductCreditsWithOrgSupport } from '../creditService';
+import { isOperationalBillingEnabled } from './isOperationalBillingEnabled';
 
 /** The non-chat AI spend this helper records: operational-model calls and query embeddings. */
 export type OperationalUsageFeature = Extract<UsageEventFeature, 'operations' | 'embedding'>;
@@ -91,12 +91,14 @@ export interface RecordOperationalUsageAdapters {
  * knowledge-base callers pass a narrowed db with no billing repos, so they can never reach the
  * deduct path at all - their safety comes from the adapter shape, not from a gated caller. The two
  * debit-capable callers are `server/events/recordSessionOperationalUsage` and
- * `pages/api/data-lakes/semantic-search`. Only the latter is gated today: semantic-search runs its
- * own per-member-cap and pool pre-flight before embedding. Session ops are still queued with
- * no pre-flight by at least `POST /api/sessions/[id]/tag`, `POST /api/sessions/[id]/summary`, the
- * project-attach fan-out (`pages/api/projects/[id]/sessions.ts`) and the admin spider (#1852;
- * other `SessionEvents` publishers do sit behind gated primary actions). Gating belongs at those
- * entry points, not in a measurement helper.
+ * `pages/api/data-lakes/semantic-search`; both are gated at their entry points, not here.
+ * semantic-search runs its own per-member-cap and pool pre-flight before embedding, and the
+ * session-event publishers run `server/utils/sessionOperationalCreditPreflight` (#1852) - the
+ * ungated `SessionEvents` publishers are `POST /api/sessions/[id]/tag`,
+ * `POST /api/sessions/[id]/summary`, the project-attach fan-out
+ * (`pages/api/projects/[id]/sessions.ts`) and the admin spider; the rest already sit behind gated
+ * primary actions. A NEW publisher of those events inherits no gate: add the pre-flight at its
+ * entry point, not in this measurement helper.
  */
 export async function recordOperationalUsage(
   params: RecordOperationalUsageParams,
@@ -108,13 +110,7 @@ export async function recordOperationalUsage(
 
   let creditsCharged = 0;
   try {
-    const settings = await getSettingsMap(db);
-    // Both gates must be on to debit: billOperationalUsage opts this spend in,
-    // enforceCredits is the platform-wide metering master switch (off on self-host).
-    const shouldBill =
-      !params.bypassCreditBilling &&
-      (getSettingsValue('billOperationalUsage', settings) ?? false) &&
-      (getSettingsValue('enforceCredits', settings) ?? false);
+    const shouldBill = !params.bypassCreditBilling && (await isOperationalBillingEnabled(db, logger));
 
     if (shouldBill && db.creditTransactions && db.users && db.organizations) {
       const credits = usdToCreditsStochastic(params.costUsd);
