@@ -14,8 +14,9 @@ const handler = baseApi().delete(
     const id = req.query.id;
     if (!id) throw new BadRequestError('Invalid ID');
 
+    // Matches read.ts/update.ts in this directory; see the note in ../index.ts.
     if (!req.ability) {
-      throw new Error('Ability not found');
+      throw new NotFoundError('Ability not found');
     }
 
     // Read before deleting so the ownership condition can be evaluated. Authorizing by class

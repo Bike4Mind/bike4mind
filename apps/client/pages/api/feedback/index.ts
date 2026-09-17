@@ -24,6 +24,7 @@ import { adminSettingsRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { EmailEvents } from '@server/utils/eventBus';
 import { postFeedbackToSlack } from '@server/integrations/slack/slack';
+import { NotFoundError } from '@server/utils/errors';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
 import { Config } from '@server/utils/config';
 import { resolveFeedbackContext } from '@server/utils/feedbackContext';
@@ -210,8 +211,11 @@ export function resolveFeedbackEmailRoute(
 
 const handler = baseApi()
   .get(async (req, res) => {
+    // Invariant check, not a reachable auth path - the auth middleware attaches an ability
+    // unconditionally. Typed so errorHandler does not default it to a 500 that pages an operator
+    // for our own bug; 404 rather than 403 to match the siblings in this directory.
     if (!req.ability) {
-      throw new Error('Ability not found');
+      throw new NotFoundError('Ability not found');
     }
 
     const query = ListFeedbackQuerySchema.parse(qs.parse(req.query as Record<string, string>));
