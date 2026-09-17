@@ -7,6 +7,7 @@ import {
 } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { ApiKeyScope } from '@bike4mind/common';
 
 interface RecipientWithStatus {
   id: string;
@@ -23,7 +24,7 @@ interface RecipientWithStatus {
  * Get list of recipients for a job based on its recipientFilter.
  * Includes send status for each recipient.
  */
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
   }
