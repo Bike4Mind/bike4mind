@@ -1,23 +1,22 @@
 /**
- * MCP tools must obey the same "offer nothing" request that native tools obey.
+ * MCP tools must obey the same narrowing the caller applied to everything else.
  *
- * Every narrowing lever the product exposes (`toolMode: 'fast'`, `skip_auto_offers`,
- * `disabledTools`) resolves down to `enabledTools` before it reaches the builder, so the empty
- * list is the only representation of "offer no tools" the builder ever sees. The MCP merge used
- * to run unconditionally after the native filter, which made that empty case unreachable for
- * anyone with a server connected (#2960).
+ * MCP tools are merged into the outgoing list AFTER the native `enabledTools` filter and were
+ * never subject to it, so no narrowing lever could reach them: a caller asking for a minimal tool
+ * profile still paid for every schema its servers expose (#2960).
  *
- * The distinction these tests pin is empty-vs-omitted, and it is load-bearing in BOTH directions:
- * collapsing them either way regresses a real call site. The subagent dispatch path in
- * `agentExecutor.ts` passes no `enabledTools` at all and relies on MCP tools arriving anyway
- * (its own `allowedTools` does the scoping), so an over-eager fix that treats "omitted" as
- * "empty" hands that path zero tools.
+ * The gate is `offerOnlyNamedTools`, an EXPLICIT caller signal. The distinction these tests pin is
+ * that it is not inferred from `enabledTools` being empty, and that matters in both directions:
+ * an empty list is the ordinary chat payload (the web client defaults to `toolMode: 'smart'` with
+ * an empty `tools` array), and the subagent dispatch path in `agentExecutor.ts` passes no
+ * `enabledTools` at all. Inferring intent from either shape strips MCP tools from a caller that
+ * never asked for that.
  *
  * Deps are build-only stubs: `buildSharedTools` materialises every tool's schema and `toolFn`
  * closure up front, but a tool only touches its backing adapters when the closure is EXECUTED.
  * These tests never execute one, so the stubs reject loudly rather than returning undefined.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { Logger } from '@bike4mind/observability';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { IUserDocument } from '@bike4mind/common';
@@ -82,41 +81,53 @@ const mcpToolsByServer = {
 const build = (options: Parameters<typeof buildSharedTools>[2]) =>
   (buildSharedTools(deps, callbacks, options) ?? []).map(tool => tool.toolSchema.name);
 
-describe('buildSharedTools: an empty tool profile withholds MCP tools', () => {
-  it('offers nothing at all when enabledTools is empty and MCP servers are connected', () => {
+const mcpNames = (names: string[]) => names.filter(name => name.includes('__'));
+
+describe('buildSharedTools: offerOnlyNamedTools withholds unnamed MCP tools', () => {
+  it('offers nothing at all when the caller named no tools and MCP servers are connected', () => {
     // The regression case, stated exactly as the bug was: the caller asked for zero tools, and
     // three MCP tool schemas shipped anyway. Asserted as a full equality rather than a
     // `not.toContain` per tool so a newly added server cannot slip past the assertion.
-    expect(build({ enabledTools: [], mcpToolsByServer })).toEqual([]);
+    expect(build({ enabledTools: [], offerOnlyNamedTools: true, mcpToolsByServer })).toEqual([]);
   });
 
   it('withholds MCP tools from every connected server, not just the first', () => {
-    const names = build({ enabledTools: [], mcpToolsByServer });
+    const names = build({ enabledTools: [], offerOnlyNamedTools: true, mcpToolsByServer });
     expect(names).not.toContain('atlassian__jira_search');
     expect(names).not.toContain('slack__send_message');
   });
 
-  it('still offers nothing when enabledTools is empty and no MCP server is connected', () => {
-    // Pins that the native path survives `enabledTools` no longer defaulting to [].
-    expect(build({ enabledTools: [] })).toEqual([]);
+  it('keeps an MCP tool the caller named while withholding its unnamed siblings', () => {
+    // "Only what I named" is per tool, not all-or-nothing: naming an MCP tool by its namespaced
+    // id must still reach the model.
+    const names = build({
+      enabledTools: ['dice_roll', 'atlassian__jira_search'],
+      offerOnlyNamedTools: true,
+      mcpToolsByServer,
+    });
+    expect(names).toEqual(expect.arrayContaining(['dice_roll', 'atlassian__jira_search']));
+    expect(names).not.toContain('atlassian__jira_create_issue');
+    expect(names).not.toContain('slack__send_message');
   });
 });
 
-describe('buildSharedTools: omitting enabledTools is NOT a request for zero tools', () => {
-  it('offers MCP tools when the caller passes no enabledTools at all', () => {
-    // The subagent dispatch call site (agentExecutor.ts) depends on this: it deliberately passes
-    // no `enabledTools` because the dispatched agent's own allowedTools does the scoping. If this
-    // ever collapses into the empty case, that path silently builds a zero-tool subagent.
-    const names = build({ mcpToolsByServer });
+describe('buildSharedTools: the gate is never inferred from the shape of enabledTools', () => {
+  it('offers MCP tools when enabledTools is empty but the caller did not set the flag', () => {
+    // The load-bearing one. `tools: []` is the DEFAULT web payload (toolMode 'smart' with no
+    // keyword match), not a request for silence - treating it as one strips MCP from normal chat.
+    const names = build({ enabledTools: [], mcpToolsByServer });
     expect(names).toEqual(
       expect.arrayContaining(['atlassian__jira_search', 'atlassian__jira_create_issue', 'slack__send_message'])
     );
   });
 
-  it('offers no native tools when enabledTools is omitted', () => {
-    // Omitted means "this caller does not scope tools by name here", not "offer everything":
-    // only the MCP tools it passed come back.
-    expect(build({ mcpToolsByServer })).toHaveLength(3);
+  it('offers MCP tools when the caller passes no enabledTools at all', () => {
+    // The subagent dispatch call site (agentExecutor.ts) depends on this: it deliberately passes
+    // no `enabledTools` because the dispatched agent's own allowedTools does the scoping.
+    const names = build({ mcpToolsByServer });
+    expect(mcpNames(names)).toEqual(
+      expect.arrayContaining(['atlassian__jira_search', 'atlassian__jira_create_issue', 'slack__send_message'])
+    );
   });
 });
 
@@ -139,6 +150,32 @@ describe('buildSharedTools: a non-empty tool profile is unchanged', () => {
     const names = build({ enabledTools: ['dice_roll'], mcpToolsByServer, agentOnlyMcpServers: ['atlassian'] });
     expect(names).toEqual(expect.arrayContaining(['dice_roll', 'slack__send_message']));
     expect(names).not.toContain('atlassian__jira_search');
+  });
+
+  it('routes agent-only servers to the delegation pool even under offerOnlyNamedTools', () => {
+    // Exempt on purpose: agent-only tools are already withheld from the main model's schemas, so
+    // they cost the caller nothing - dropping them here would remove delegation reach instead.
+    //
+    // Asserted through the log rather than the return value because both outcomes look identical
+    // from outside: an agent-only tool never appears in the returned array whether it was routed
+    // to the delegation pool or dropped. This line is the only observable that separates them
+    // without an agentStore, so it is deliberately matched loosely (the count, not the wording).
+    const info = vi.fn();
+    const names = (
+      buildSharedTools(
+        { ...deps, logger: { ...new Logger(), info, debug: () => {} } as unknown as Logger },
+        callbacks,
+        {
+          enabledTools: [],
+          offerOnlyNamedTools: true,
+          mcpToolsByServer,
+          agentOnlyMcpServers: ['atlassian'],
+        }
+      ) ?? []
+    ).map(tool => tool.toolSchema.name);
+
+    expect(names).toEqual([]);
+    expect(info.mock.calls.flat().join(' ')).toMatch(/2 agent-only MCP tools/);
   });
 });
 
@@ -163,8 +200,22 @@ describe('buildSharedTools: the session denylist reaches MCP tools by name', () 
     expect(names).toEqual(expect.arrayContaining(['atlassian__jira_search']));
   });
 
+  it('outranks an explicit name: a denied tool stays denied even when the caller names it', () => {
+    const names = build({
+      enabledTools: ['atlassian__jira_search'],
+      offerOnlyNamedTools: true,
+      mcpToolsByServer,
+      sessionDisabledTools: ['atlassian__jira_search'],
+    });
+    expect(names).toEqual([]);
+  });
+
   it('drops nothing when the denylist is empty or absent', () => {
-    expect(build({ enabledTools: ['dice_roll'], mcpToolsByServer, sessionDisabledTools: [] })).toHaveLength(4);
-    expect(build({ enabledTools: ['dice_roll'], mcpToolsByServer })).toHaveLength(4);
+    // Counted by namespace rather than by total so an unrelated auto-added native tool cannot
+    // silently absorb a dropped MCP tool and keep the count green.
+    expect(mcpNames(build({ enabledTools: ['dice_roll'], mcpToolsByServer, sessionDisabledTools: [] }))).toHaveLength(
+      3
+    );
+    expect(mcpNames(build({ enabledTools: ['dice_roll'], mcpToolsByServer }))).toHaveLength(3);
   });
 });

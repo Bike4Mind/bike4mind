@@ -216,20 +216,27 @@ export interface ToolBuilderCallbacks {
 
 /** Options passed to buildSharedTools */
 export interface BuildSharedToolsOptions {
-  /**
-   * The tool names to offer. An EMPTY array and an OMITTED value are different requests and are
-   * deliberately not collapsed:
-   * - `[]` means "offer no tools". It is honored for MCP tools too (see the MCP merge below).
-   * - omitted means "this caller does not express tool scope through names here" - it offers no
-   *   native tools but leaves MCP tools alone, which is what the subagent dispatch path relies on.
-   */
   enabledTools?: string[];
   /**
+   * The caller asked to be offered ONLY the tools it named, so server-side additions it never
+   * named are withheld - today that means MCP tools, which are merged after the `enabledTools`
+   * filter and are not part of it.
+   *
+   * This must be driven by an EXPLICIT caller signal, never inferred from `enabledTools` being
+   * empty: an empty list is the ordinary chat payload (the web client defaults to `toolMode:
+   * 'smart'` with an empty `tools` array), so treating it as a request for silence would strip
+   * MCP tools from normal chat. Agent-only servers are exempt - they are never in the main
+   * model's schemas, so withholding them would remove delegation capability rather than save the
+   * caller anything.
+   */
+  offerOnlyNamedTools?: boolean;
+  /**
    * Tool names the session forbids, in the same namespace the tool answers to - so an MCP tool is
-   * named by its namespaced `server__tool` id. Applied to MCP tools here because they are merged
-   * AFTER the native `enabledTools` filter and so cannot be subtracted upstream. The chat path
-   * enforces the same denylist over the built list instead (ChatCompletionProcess's final
-   * denylist pass), so it does not need to pass this; the agent path has no such pass and does.
+   * named by its namespaced `server__tool` id.
+   *
+   * Every caller with a denylist should pass it, even one that also filters the returned array:
+   * two things this function produces are unreachable from that array - MCP tools, merged after
+   * the native `enabledTools` filter, and `parentTools`, captured by the delegate tool's closure.
    */
   sessionDisabledTools?: readonly string[];
   mcpToolsByServer?: Record<string, Array<{ name: string } & ICompletionOptionTools>>;
@@ -285,7 +292,8 @@ export function buildSharedTools(
   options: BuildSharedToolsOptions = {}
 ): ICompletionOptionTools[] | undefined {
   const {
-    enabledTools,
+    enabledTools = [],
+    offerOnlyNamedTools = false,
     sessionDisabledTools,
     mcpToolsByServer = {},
     config = {},
@@ -359,7 +367,7 @@ export function buildSharedTools(
 
   // Filter to enabled tools only
   let tools: ICompletionOptionTools[] | undefined = undefined;
-  if (enabledTools && enabledTools.length > 0) {
+  if (enabledTools.length > 0) {
     const mappedTools = enabledTools
       .filter(tool => tool in llmToolDefinitions && isToolOfferable(tool, toolAvailability))
       .map(tool => llmToolDefinitions[tool]);
@@ -391,43 +399,33 @@ export function buildSharedTools(
 
   // Merge MCP tools.
   //
-  // An explicitly empty `enabledTools` is a request for NO tools, and MCP tools are tools. Every
-  // narrowing lever we expose resolves through that list, so merging MCP tools in unconditionally
-  // made the empty tool profile unreachable for anyone with a server connected - the single case
-  // the whole narrowing story rests on, and the one that costs the most when it fails (the schemas
-  // shipped scale with whatever the user's servers expose, and nothing the caller sent asked for
-  // them). See #2960.
+  // MCP tools are merged AFTER the native `enabledTools` filter and were never subject to it, so
+  // no narrowing lever could reach them and a caller asking for a minimal tool profile still paid
+  // for every schema its servers expose (#2960).
   //
-  // An OMITTED `enabledTools` is a different request and must not collapse into the empty one: it
-  // means the caller scopes MCP some other way. The subagent dispatch path depends on this - it
-  // passes no `enabledTools` and lets the dispatched agent's own `allowedTools` do the scoping.
-  // Same shape as the `delegate_to_agent` gate in agentExecutor.sessionToolPolicy.ts: a tool
-  // injected outside `enabledTools` has exactly one enforcement point, and this is it.
-  const withholdMcpForEmptyProfile = enabledTools?.length === 0;
-  const mcpServerEntries = withholdMcpForEmptyProfile ? [] : Object.entries(mcpToolsByServer);
-  const allMcpTools = mcpServerEntries.flatMap(([, serverTools]) => serverTools);
-
-  if (withholdMcpForEmptyProfile) {
-    const withheldCount = Object.values(mcpToolsByServer).flat().length;
-    if (withheldCount > 0) {
-      // Logged rather than dropped in silence: this is the one branch where a connected server
-      // contributes nothing, and without a line here that reads as the server being broken.
-      logger.info(`[MCP] Withholding ${withheldCount} MCP tools - the caller requested an empty tool profile`);
-    }
-  }
-
+  // The gate is `offerOnlyNamedTools`, an explicit caller signal - NOT `enabledTools` being empty.
+  // An empty list is the ordinary chat payload (the web client defaults to `toolMode: 'smart'`
+  // with an empty `tools` array and scopes MCP through `mcpServers` instead), so inferring intent
+  // from it would strip MCP tools from normal chat.
+  //
+  // Agent-only servers are exempt on purpose: they are withheld from the main model's schemas
+  // anyway, so they cost nothing the caller is trying to avoid, and dropping them here would
+  // quietly remove delegation capability instead.
+  const allMcpTools = Object.values(mcpToolsByServer).flat();
   logger.debug('[MCP] Merging MCP tools:', {
     mcpToolsCount: allMcpTools.length,
     mcpToolNames: allMcpTools.map(t => t.name),
-    enabledToolsCount: enabledTools?.length ?? 'unspecified',
-    withheldForEmptyToolProfile: withholdMcpForEmptyProfile,
+    enabledToolsCount: enabledTools.length,
+    offerOnlyNamedTools,
   });
 
   const agentOnlyMcpTools: ICompletionOptionTools[] = [];
+  const namedToolNames = new Set(enabledTools);
   const deniedToolNames = new Set(sessionDisabledTools ?? []);
   const deniedMcpToolNames: string[] = [];
+  const unnamedMcpToolNames: string[] = [];
 
-  for (const [serverName, serverTools] of mcpServerEntries) {
+  for (const [serverName, serverTools] of Object.entries(mcpToolsByServer)) {
     const isAgentOnly = agentOnlyMcpServers.includes(serverName);
 
     for (const item of serverTools) {
@@ -437,6 +435,10 @@ export function buildSharedTools(
       // speaks and the one the model would have seen.
       if (deniedToolNames.has(name)) {
         deniedMcpToolNames.push(name);
+        continue;
+      }
+      if (offerOnlyNamedTools && !isAgentOnly && !namedToolNames.has(name)) {
+        unnamedMcpToolNames.push(name);
         continue;
       }
       tools ??= [];
@@ -449,6 +451,14 @@ export function buildSharedTools(
         tools.push({ ...rest, toolFn: wrappedToolFn });
       }
     }
+  }
+
+  if (unnamedMcpToolNames.length > 0) {
+    // Logged rather than dropped in silence: this is the branch where a connected server
+    // contributes nothing, which otherwise reads as the server being broken.
+    logger.info(
+      `[MCP] Withholding ${unnamedMcpToolNames.length} unnamed MCP tools - the caller asked to be offered only the tools it named`
+    );
   }
 
   if (deniedMcpToolNames.length > 0) {
@@ -469,7 +479,11 @@ export function buildSharedTools(
     return tools;
   }
 
-  const parentTools = [...tools, ...agentOnlyMcpTools];
+  // Filtered here rather than left to a caller's post-build pass: `parentTools` is captured by the
+  // delegate tool's closure below, so it never appears in the array this function returns and a
+  // denylist applied to that array cannot reach it. Without this, a session-forbidden tool stays
+  // callable by a dispatched subagent - the same loophole the delegate gate exists to close.
+  const parentTools = [...tools, ...agentOnlyMcpTools].filter(tool => !deniedToolNames.has(tool.toolSchema.name));
 
   const subagentModelInfo = deps.precomputed?.models.find(m => m.id === model);
   const subagentLlm = getLlmByModel(deps.apiKeyTable!, {

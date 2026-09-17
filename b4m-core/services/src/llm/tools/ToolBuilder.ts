@@ -304,6 +304,10 @@ export interface BuildMcpToolsArgs {
 
 export interface BuildToolsArgs {
   enabledTools?: z.infer<typeof QuestStartBodySchema>['tools'];
+  /** See `BuildSharedToolsOptions.offerOnlyNamedTools` - must come from an explicit caller signal. */
+  offerOnlyNamedTools?: boolean;
+  /** See `BuildSharedToolsOptions.sessionDisabledTools`. */
+  sessionDisabledTools?: readonly string[];
   mcpToolsByServer?: Record<string, Array<{ name: string } & ICompletionOptionTools>>;
   quest: IChatHistoryItemDocument;
   saveQuest: (quest: IChatHistoryItemDocument) => Promise<IChatHistoryItemDocument | null>;
@@ -708,10 +712,9 @@ export class ToolBuilder {
    * telemetry onto the quest document.
    */
   buildTools({
-    // No `= []` default: buildSharedTools treats an empty list ("offer no tools") and an omitted
-    // one ("this caller does not scope tools by name") as different requests, and defaulting here
-    // would collapse the second into the first for any caller that omits it.
-    enabledTools,
+    enabledTools = [],
+    offerOnlyNamedTools,
+    sessionDisabledTools,
     mcpToolsByServer = {},
     quest,
     saveQuest,
@@ -936,6 +939,8 @@ export class ToolBuilder {
       },
       {
         enabledTools,
+        offerOnlyNamedTools,
+        sessionDisabledTools,
         mcpToolsByServer,
         config,
         agentOnlyMcpServers,
