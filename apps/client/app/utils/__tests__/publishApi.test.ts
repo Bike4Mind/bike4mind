@@ -8,6 +8,7 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 }));
 vi.mock('@client/app/utils/shareFooter', () => ({
   buildShareFooterHtml: () => '<!--footer-->',
+  buildSignupGateHtml: () => ({ styles: '', html: '' }),
 }));
 
 import { api } from '@client/app/contexts/ApiContext';
