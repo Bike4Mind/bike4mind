@@ -140,6 +140,14 @@ export const replSandboxUnavailableAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('ReplSandboxUnavailableAlarm')
   : undefined;
 
+export const sessionReuseRevokedAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('SessionReuseRevokedAlarm')
+  : undefined;
+
+export const sessionRecoveredHighRateAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('SessionRecoveredHighRateAlarm')
+  : undefined;
+
 // --- MetricAlarm definitions (only created for monitored stages) ---
 
 if (isMonitoredStage) {
@@ -1487,6 +1495,64 @@ if (isMonitoredStage) {
     tags: {
       Application: 'Quests',
       Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Session Reuse Revoked
+   *
+   * Fires on any occurrence of a refresh token being presented after its rotation window,
+   * which causes the session to be revoked. Each event is a presumed token theft: both
+   * the legitimate user and any attacker are logged out. Any single occurrence warrants
+   * investigation.
+   *
+   * Metric emitted by: server/utils/authAudit.ts -> recordSessionReuseRevoked()
+   * Namespace: Lumina5/AuthSecurity / SessionReuseRevoked
+   */
+  new aws.cloudwatch.MetricAlarm('sessionReuseRevoked', {
+    name: `${$app.name}-${$app.stage}-session-reuse-revoked`,
+    alarmDescription: 'Refresh token reuse detected outside recovery window - presumed token theft; session revoked',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'SessionReuseRevoked',
+    namespace: 'Lumina5/AuthSecurity',
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0, // Any occurrence is worth investigating
+    treatMissingData: 'notBreaching',
+    alarmActions: [sessionReuseRevokedAlarm!.arn],
+    tags: {
+      Application: 'Auth',
+      Severity: 'Critical',
+    },
+  });
+
+  /**
+   * Alarm: Session Recovered High Rate
+   *
+   * Fires when more than 10 benign token-reuse recoveries occur in a 30-minute window.
+   * A small number is normal (lost-response retries on transient network failures); a
+   * sustained spike may indicate a misconfigured client replaying stale tokens or a
+   * broader connectivity issue draining the recovery allowance.
+   *
+   * Metric emitted by: server/utils/authAudit.ts -> recordSessionRecovered()
+   * Namespace: Lumina5/AuthSecurity / SessionRecovered
+   */
+  new aws.cloudwatch.MetricAlarm('sessionRecoveredHighRate', {
+    name: `${$app.name}-${$app.stage}-session-recovered-high-rate`,
+    alarmDescription: 'Unusually high benign session-recovery rate (>10 in 30 min) - possible client misconfiguration',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'SessionRecovered',
+    namespace: 'Lumina5/AuthSecurity',
+    period: 1800, // 30 minutes
+    statistic: 'Sum',
+    threshold: 10,
+    treatMissingData: 'notBreaching',
+    alarmActions: [sessionRecoveredHighRateAlarm!.arn],
+    tags: {
+      Application: 'Auth',
+      Severity: 'Warning',
     },
   });
 }
