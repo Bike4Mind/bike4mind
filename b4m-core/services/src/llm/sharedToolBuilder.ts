@@ -235,8 +235,11 @@ export interface BuildSharedToolsOptions {
    * named by its namespaced `server__tool` id.
    *
    * Every caller with a denylist should pass it, even one that also filters the returned array:
-   * two things this function produces are unreachable from that array - MCP tools, merged after
-   * the native `enabledTools` filter, and `parentTools`, captured by the delegate tool's closure.
+   * two things this function produces are unreachable from that array - agent-only MCP tools,
+   * routed to the delegation pool instead of being returned, and `parentTools`, captured by the
+   * delegate tool's closure. An offered (non-agent-only) MCP tool DOES appear in the returned
+   * array, so a caller's own post-build filter reaches that one too - passing this option is
+   * still required to close the other two.
    */
   sessionDisabledTools?: readonly string[];
   mcpToolsByServer?: Record<string, Array<{ name: string } & ICompletionOptionTools>>;
@@ -372,7 +375,11 @@ export function buildSharedTools(
       .filter(tool => tool in llmToolDefinitions && isToolOfferable(tool, toolAvailability))
       .map(tool => llmToolDefinitions[tool]);
 
-    const undefinedTools = enabledTools.filter(tool => !llmToolDefinitions[tool]);
+    // Namespaced `server__tool` ids are excluded here even though they're not native tools: they
+    // are handled by the MCP merge loop below, not skipped, so warning about them as "undefined"
+    // would be a false positive on the one route (`session.enabledTools`) that can name an MCP
+    // tool under `offerOnlyNamedTools`.
+    const undefinedTools = enabledTools.filter(tool => !llmToolDefinitions[tool] && !tool.includes('__'));
     if (undefinedTools.length > 0) {
       logger.warn(`Undefined tools requested (will be skipped): ${undefinedTools.join(', ')}`);
     }
@@ -457,7 +464,8 @@ export function buildSharedTools(
     // Logged rather than dropped in silence: this is the branch where a connected server
     // contributes nothing, which otherwise reads as the server being broken.
     logger.info(
-      `[MCP] Withholding ${unnamedMcpToolNames.length} unnamed MCP tools - the caller asked to be offered only the tools it named`
+      `[MCP] Withholding ${unnamedMcpToolNames.length} unnamed MCP tools - the caller asked to be offered only ` +
+        `the tools it named: ${unnamedMcpToolNames.join(', ')}`
     );
   }
 

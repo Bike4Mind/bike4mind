@@ -3800,6 +3800,88 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  // MCP tools are merged into buildSharedTools' outgoing list AFTER its native `enabledTools`
+  // filter, so `offerOnlyNamedTools`/`sessionDisabledTools` are the only levers that reach them -
+  // and sharedToolBuilder.mcpNarrowing.test.ts only exercises buildSharedTools directly. It cannot
+  // prove ChatCompletionProcess actually passes these options on a real turn; deleting the four
+  // lines that wire them at this call site would leave that suite green.
+  describe('MCP narrowing options threaded into buildTools', () => {
+    const runWithOptions = async (opts: {
+      promptMode?: 'raw' | 'grounded' | 'surface';
+      skipAutoOffers?: boolean;
+      disabledTools?: string[];
+    }) => {
+      mockSession.disabledTools = opts.disabledTools;
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([]);
+      buildToolsSpy.mockClear();
+      const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!'])),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      const body = {
+        ...startQuestParams,
+        ...(opts.promptMode ? { promptMode: opts.promptMode } : {}),
+        ...(opts.skipAutoOffers ? { skipAutoOffers: true } : {}),
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
+
+      await service.process({ body, logger: mockLogger });
+
+      const passedOptions = buildToolsSpy.mock.calls[0]?.[0] as any;
+      buildToolsSpy.mockRestore();
+      buildToolPromptSpy.mockRestore();
+      return passedOptions;
+    };
+
+    it('passes offerOnlyNamedTools: true on a promptMode turn', async () => {
+      const options = await runWithOptions({ promptMode: 'raw' });
+      expect(options?.offerOnlyNamedTools).toBe(true);
+    });
+
+    it('passes offerOnlyNamedTools: true on an explicit skipAutoOffers turn', async () => {
+      const options = await runWithOptions({ skipAutoOffers: true });
+      expect(options?.offerOnlyNamedTools).toBe(true);
+    });
+
+    // The default web payload (no promptMode, no skipAutoOffers) must keep reaching MCP tools -
+    // this is the regression sharedToolBuilder.mcpNarrowing.test.ts guards from the pure-function
+    // side; this pins that ChatCompletionProcess never flips the flag on for an ordinary turn.
+    it('passes offerOnlyNamedTools: false on a default turn', async () => {
+      const options = await runWithOptions({});
+      expect(options?.offerOnlyNamedTools).toBe(false);
+    });
+
+    it('threads session.disabledTools through as sessionDisabledTools', async () => {
+      const options = await runWithOptions({ disabledTools: ['notion__notion_search'] });
+      expect(options?.sessionDisabledTools).toEqual(['notion__notion_search']);
+    });
+  });
+
   // SkillsFeature computes a catalog + expanded `/skill-name` body, but the drop (#1344) was in the
   // ASSEMBLY: the `skills` key was never spread into contextAndSystemMessages, so the model never saw
   // it. A unit test on getContextMessages passes without the spread, so this asserts against the

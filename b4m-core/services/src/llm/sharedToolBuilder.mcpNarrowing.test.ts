@@ -21,6 +21,27 @@ import { Logger } from '@bike4mind/observability';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { IUserDocument } from '@bike4mind/common';
 import { buildSharedTools, type ToolBuilderDeps, type ToolBuilderCallbacks } from './sharedToolBuilder';
+import { createDelegateToAgentTool } from './tools/implementation/delegateToAgent';
+
+// The `deps.agentStore` branch (sharedToolBuilder.ts:478-486) is where parentTools - the array
+// captured by the delegate tool's closure, never part of the array buildSharedTools returns -
+// gets its own denylist pass. None of the tests above reach it: with no agentStore, the early
+// `if (!deps.agentStore) return tools;` fires first. Mocked rather than exercised for real: a real
+// createDelegateToAgentTool call needs a working subagent LLM backend, which is out of scope for
+// a build-only test.
+vi.mock('./tools/implementation/delegateToAgent', () => ({
+  createDelegateToAgentTool: vi.fn(() => ({
+    toolFn: () => {
+      throw new Error('delegate_to_agent stub was called - this test is build-only.');
+    },
+    toolSchema: { name: 'delegate_to_agent', description: 'stub', parameters: { type: 'object', properties: {} } },
+  })),
+}));
+
+vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
+  getLlmByModel: vi.fn(() => ({ complete: vi.fn(), currentModel: '' })),
+}));
 
 const rejectIfExecuted = (surface: string) => () => {
   throw new Error(`${surface} was called - these tests are build-only and must never execute a tool.`);
@@ -217,5 +238,70 @@ describe('buildSharedTools: the session denylist reaches MCP tools by name', () 
       3
     );
     expect(mcpNames(build({ enabledTools: ['dice_roll'], mcpToolsByServer }))).toHaveLength(3);
+  });
+});
+
+describe('buildSharedTools: the denylist also reaches parentTools, which the returned array cannot', () => {
+  // `agentStore` truthy is the only way past the early return at sharedToolBuilder.ts:478-480,
+  // so this is the sole place in this suite that reaches the parentTools filter at :486.
+  const agentStore = { hasAgent: () => false } as unknown as ToolBuilderDeps['agentStore'];
+
+  it('keeps a session-denied MCP tool out of parentTools, not just out of the returned array', () => {
+    buildSharedTools(
+      { ...deps, agentStore, apiKeyTable: {} as ToolBuilderDeps['apiKeyTable'], model: 'm' },
+      callbacks,
+      {
+        enabledTools: ['dice_roll'],
+        mcpToolsByServer,
+        sessionDisabledTools: ['atlassian__jira_create_issue'],
+      }
+    );
+
+    const parentTools = (vi.mocked(createDelegateToAgentTool).mock.calls.at(-1)?.[0]?.parentTools ??
+      []) as ICompletionOptionTools[];
+    const names = parentTools.map(t => t.toolSchema.name);
+    expect(names).not.toContain('atlassian__jira_create_issue');
+    expect(names).toEqual(expect.arrayContaining(['dice_roll', 'atlassian__jira_search', 'slack__send_message']));
+  });
+
+  it('keeps a session-denied NATIVE tool out of parentTools even though the returned array still carries it', () => {
+    // Native tools aren't checked against the denylist by the "filter to enabled tools" step
+    // above (only `isToolOfferable` is) - the caller's own post-build pass is what strips a
+    // denied native tool from the RETURNED array. That pass can't reach parentTools (a separate
+    // reference captured by the closure), so this line is what keeps a dispatched subagent from
+    // getting a native tool the session forbade before that external pass ever runs.
+    const tools = buildSharedTools(
+      { ...deps, agentStore, apiKeyTable: {} as ToolBuilderDeps['apiKeyTable'], model: 'm' },
+      callbacks,
+      {
+        enabledTools: ['dice_roll', 'current_datetime'],
+        sessionDisabledTools: ['current_datetime'],
+      }
+    );
+
+    expect((tools ?? []).map(t => t.toolSchema.name)).toContain('current_datetime');
+
+    const parentTools = (vi.mocked(createDelegateToAgentTool).mock.calls.at(-1)?.[0]?.parentTools ??
+      []) as ICompletionOptionTools[];
+    expect(parentTools.map(t => t.toolSchema.name)).not.toContain('current_datetime');
+  });
+
+  it('routes an agent-only MCP tool into parentTools for delegation, denylist still applied', () => {
+    buildSharedTools(
+      { ...deps, agentStore, apiKeyTable: {} as ToolBuilderDeps['apiKeyTable'], model: 'm' },
+      callbacks,
+      {
+        enabledTools: ['dice_roll'],
+        mcpToolsByServer,
+        agentOnlyMcpServers: ['atlassian'],
+        sessionDisabledTools: ['atlassian__jira_create_issue'],
+      }
+    );
+
+    const parentTools = (vi.mocked(createDelegateToAgentTool).mock.calls.at(-1)?.[0]?.parentTools ??
+      []) as ICompletionOptionTools[];
+    const names = parentTools.map(t => t.toolSchema.name);
+    expect(names).toContain('atlassian__jira_search');
+    expect(names).not.toContain('atlassian__jira_create_issue');
   });
 });

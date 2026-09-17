@@ -284,7 +284,8 @@ export function resolveForcedRetrieval(mode: PromptMode | undefined, sessionFlag
  * Whether this turn withholds OUR server-side tool auto-offers. Two independent triggers: any
  * `promptMode` (an eval/passthrough surface), or the caller's explicit `skipAutoOffers`. Unioned
  * here rather than at each gate because the rule was previously spelled out per-site and a site was
- * missed - all three auto-add sites in ChatCompletionProcess must agree, and a fourth trigger
+ * missed - the three auto-add sites in ChatCompletionProcess, plus `buildSharedTools`' MCP merge
+ * gate (`offerOnlyNamedTools`, see sharedToolBuilder.ts), must all agree, and a new trigger
  * should mean editing this function and nothing else.
  *
  * A force-on, not an override: `skipAutoOffers: false` under a promptMode still suppresses, because

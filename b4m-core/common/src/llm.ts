@@ -243,6 +243,13 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    * resolveSkipAutoOffers. A force-on, not an override: `false` under a promptMode still suppresses.
    * Withholding navigate_view also drops the viewRegistry system block, which only describes it.
    *
+   * A fourth site reads the same union: `buildSharedTools`' `offerOnlyNamedTools` (see
+   * sharedToolBuilder.ts), which withholds every MCP tool the caller didn't name by its namespaced
+   * `server__tool` id. Unlike the three auto-add sites, this one can still be reached per-tool - a
+   * caller with `session.enabledTools` (not the public `tools` field, which `filterKnownTools`
+   * strips non-native ids from before this flag is even consulted) can name one MCP tool and keep
+   * it while every unnamed sibling is withheld.
+   *
    * Withholds the OFFER, not knowledge: `session.forceKnowledgeRetrieval` is untouched, and an
    * already-attached corpus is inlined rather than deferred to the tool. An arm that must see no
    * knowledge at all also needs a session with no attachments and forced retrieval off.
