@@ -69,6 +69,8 @@ const InjectedVolumeSchema = subSchema({
   topScore: { type: Number, required: false },
   preRelativeFloorCandidates: { type: Number, required: false },
   postRelativeFloorCandidates: { type: Number, required: false },
+  postSpreadFloorCandidates: { type: Number, required: false },
+  backgroundScore: { type: Number, required: false },
 });
 
 // Written by the offline answerability replay, not by the turn - see the field's comment in

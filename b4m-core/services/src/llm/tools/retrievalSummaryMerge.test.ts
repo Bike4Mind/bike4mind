@@ -275,6 +275,60 @@ describe('mergeRetrievalSummary', () => {
       });
     });
 
+    describe('postSpreadFloorCandidates', () => {
+      it('sums both counts across surfaces, same as the relative-floor pair', () => {
+        const merged = mergeRetrievalSummary(
+          base({ injected: { chunks: 2, chars: 400, postSpreadFloorCandidates: 3 } }),
+          base({ injected: { chunks: 1, chars: 200, postSpreadFloorCandidates: 1 } })
+        );
+        expect(merged?.injected?.postSpreadFloorCandidates).toBe(4);
+      });
+
+      it('passes a one-sided count through without treating the other side as zero', () => {
+        const merged = mergeRetrievalSummary(
+          base({ injected: { chunks: 2, chars: 400, postSpreadFloorCandidates: 3 } }),
+          base({ injected: { chunks: 1, chars: 200 } })
+        );
+        expect(merged?.injected?.postSpreadFloorCandidates).toBe(3);
+      });
+
+      it('omits the field entirely when neither side reports one', () => {
+        const merged = mergeRetrievalSummary(
+          base({ injected: { chunks: 1, chars: 100 } }),
+          base({ injected: { chunks: 0, chars: 0 } })
+        );
+        expect(merged?.injected && 'postSpreadFloorCandidates' in merged.injected).toBe(false);
+      });
+    });
+
+    describe('backgroundScore', () => {
+      // A median, not a volume - summing two medians is not a meaningful quantity, so this is
+      // existing-wins pass-through rather than the sum-of-completions the counts above use.
+      it('keeps the existing side when both are present', () => {
+        const merged = mergeRetrievalSummary(
+          base({ injected: { chunks: 2, chars: 400, backgroundScore: 0.4 } }),
+          base({ injected: { chunks: 1, chars: 200, backgroundScore: 0.9 } })
+        );
+        expect(merged?.injected?.backgroundScore).toBe(0.4);
+      });
+
+      it('passes a one-sided value through without treating the other side as zero', () => {
+        const merged = mergeRetrievalSummary(
+          base({ injected: { chunks: 2, chars: 400 } }),
+          base({ injected: { chunks: 1, chars: 200, backgroundScore: 0.6 } })
+        );
+        expect(merged?.injected?.backgroundScore).toBe(0.6);
+      });
+
+      it('omits the field entirely when neither side reports one', () => {
+        const merged = mergeRetrievalSummary(
+          base({ injected: { chunks: 1, chars: 100 } }),
+          base({ injected: { chunks: 0, chars: 0 } })
+        );
+        expect(merged?.injected && 'backgroundScore' in merged.injected).toBe(false);
+      });
+    });
+
     it('keeps volume alongside a worse outcome from another surface', () => {
       const merged = mergeRetrievalSummary(
         base({ outcome: 'ok', surfaces: ['forced-retrieval'], injected: { chunks: 12, chars: 4000 } }),

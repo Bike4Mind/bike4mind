@@ -30,8 +30,11 @@ import {
   FORCED_RETRIEVAL_MAX_SCORED_CHUNKS,
   FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+  FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT,
+  backgroundScoreOf,
   compareForcedRetrievalRank,
   forcedRetrievalRelativeCutoff,
+  forcedRetrievalSpreadCutoff,
 } from '@bike4mind/common';
 import { computeCosineSimilarity } from '@bike4mind/utils';
 import { aggregate, scoreQuestion, type Aggregate } from './metrics';
@@ -52,13 +55,22 @@ import type { ScorableChunk } from './scoreDistribution';
 export type FloorConfig = {
   relativeFloorPct: number;
   minSimilarityPct: number;
+  /**
+   * The SPREAD floor, measured down from the turn's top score in units of its top-to-median span.
+   * Optional on the type so a two-component `--floors` entry stays valid and every existing caller
+   * keeps compiling; `applyFloors` reads an absent value as 0, the shipped default, which is off.
+   *
+   * Zero here is off in the same sense as the relative floor's zero, not the absolute floor's: the
+   * cutoff is 0 and the filter branch is skipped. See `FloorConfig`'s note on the other two zeroes.
+   */
+  spreadFloorPct?: number;
 };
 
 /**
  * Both floors at zero: the baseline a floor's cost is measured against. Not named "ungated" because
  * it is not - a zero absolute floor still rejects negative cosines. See `FloorConfig`.
  */
-export const ZERO_FLOOR_CONFIG: FloorConfig = { relativeFloorPct: 0, minSimilarityPct: 0 };
+export const ZERO_FLOOR_CONFIG: FloorConfig = { relativeFloorPct: 0, minSimilarityPct: 0, spreadFloorPct: 0 };
 
 /**
  * The ADA-002 rung of the shipped defaults, deliberately behavior-preserving rather than tuned.
@@ -71,13 +83,22 @@ export const ZERO_FLOOR_CONFIG: FloorConfig = { relativeFloorPct: 0, minSimilari
 export const SHIPPED_CONFIG: FloorConfig = {
   relativeFloorPct: FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
   minSimilarityPct: FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
+  spreadFloorPct: FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT,
 };
 
+/**
+ * Always prints all three, including a spread floor left off. The dedupe below keys on this string,
+ * so omitting an absent third component would make `85:75` and `85:75:40` collide as one point.
+ */
 export const formatFloorConfig = (c: FloorConfig): string =>
-  `relative=${c.relativeFloorPct}% absolute=${c.minSimilarityPct}%`;
+  `relative=${c.relativeFloorPct}% absolute=${c.minSimilarityPct}% spread=${c.spreadFloorPct ?? 0}%`;
 
 /**
- * Parse `--floors=0:0,85:75,90:75` into sweep points ("relativeFloorPct:minSimilarityPct").
+ * Parse `--floors=0:0,85:75,90:75:40` into sweep points
+ * ("relativeFloorPct:minSimilarityPct[:spreadFloorPct]").
+ *
+ * The third component is optional so every `--floors` string written before the spread floor
+ * existed still parses, and omitting it means 0 - the floor off, which is what those runs measured.
  *
  * Throws rather than skipping a malformed entry, for the reason `parseConfigs` does: a silently
  * dropped point leaves a results table that looks complete and is missing the row someone asked
@@ -92,15 +113,18 @@ export function parseFloorConfigs(spec: string): FloorConfig[] {
     .filter(Boolean)
     .map(part => {
       const components = part.split(':');
-      if (components.length !== 2) {
+      if (components.length !== 2 && components.length !== 3) {
         throw new Error(
-          `Bad floor pair "${part}": expected exactly "relativeFloorPct:minSimilarityPct", ` +
-            `got ${components.length} component(s)`
+          `Bad floor pair "${part}": expected "relativeFloorPct:minSimilarityPct" or ` +
+            `"relativeFloorPct:minSimilarityPct:spreadFloorPct", got ${components.length} component(s)`
         );
       }
-      const [relative, absolute] = components;
+      // '0' rather than '' for the omitted third: the emptiness checks below reject '', which is the
+      // right answer for a written-but-blank component ("85:75:") and the wrong one for an absent.
+      const [relative, absolute, spread = '0'] = components;
       const relativeFloorPct = Number(relative);
       const minSimilarityPct = Number(absolute);
+      const spreadFloorPct = Number(spread);
       if (
         relative.trim() === '' ||
         !Number.isInteger(relativeFloorPct) ||
@@ -117,7 +141,10 @@ export function parseFloorConfigs(spec: string): FloorConfig[] {
       ) {
         throw new Error(`Bad absolute floor in "${part}": expected an integer percent 0-100, got "${absolute}"`);
       }
-      return { relativeFloorPct, minSimilarityPct };
+      if (spread.trim() === '' || !Number.isInteger(spreadFloorPct) || spreadFloorPct < 0 || spreadFloorPct > 100) {
+        throw new Error(`Bad spread floor in "${part}": expected an integer percent 0-100, got "${spread}"`);
+      }
+      return { relativeFloorPct, minSimilarityPct, spreadFloorPct };
     });
   if (configs.length === 0) throw new Error('--floors listed no configurations');
 
@@ -135,8 +162,17 @@ export function parseFloorConfigs(spec: string): FloorConfig[] {
 /** A chunk to gate. `charLength` is carried so the sweep can say whether the budget bound first. */
 export type FloorScorableChunk = ScorableChunk & { charLength: number };
 
-/** Which gate actually removed something on one query. `budget` means neither floor was reached. */
-export type BindingGate = 'none' | 'absolute' | 'relative' | 'both';
+/** One of the three relevance gates. The char budget is not one of them - it is not a floor. */
+export type FloorGate = 'absolute' | 'relative' | 'spread';
+
+/**
+ * Which gates actually removed something on one query, in application order. Empty means none did,
+ * so the char budget (or nothing) was the only thing that trimmed.
+ *
+ * A LIST rather than the `'none' | 'absolute' | 'relative' | 'both'` enum this replaced: with three
+ * gates that enum would need seven members to stay expressive, and "both" would stop naming a pair.
+ */
+export type BindingGates = readonly FloorGate[];
 
 /** One query's pass through both floors, with the diagnostics a tuning decision reads. */
 export type FloorOutcome = {
@@ -146,6 +182,14 @@ export type FloorOutcome = {
   /** The turn's best score across the whole pool. -1 when nothing scored, matching the served sentinel. */
   topScore: number;
   relativeCutoff: number;
+  /**
+   * Median of every finite score compared, the spread floor's reference point. `undefined` when
+   * nothing scored. Worth reading even at `spreadFloorPct` 0: `topScore - backgroundScore` is the
+   * turn's signal spread, and a corpus whose spread is near zero is one where NO fraction-of-top
+   * floor can discriminate, which is the finding that motivated this gate.
+   */
+  backgroundScore: number | undefined;
+  spreadCutoff: number;
   /** Survivors of the absolute floor and the pool cap: the served path's `preRelativeFloorCandidates`. */
   aboveAbsolute: number;
   /**
@@ -154,7 +198,9 @@ export type FloorOutcome = {
    * measured over a truncated pool, which is a caveat on the row and not a property of either floor.
    */
   cappedOut: number;
-  /** Survivors of both floors: the served path's `postRelativeFloorCandidates`. */
+  /** Survivors of the absolute and relative floors: the served path's `postRelativeFloorCandidates`. */
+  aboveRelative: number;
+  /** Survivors of all three floors: the served path's `postSpreadFloorCandidates`. */
   accepted: number;
   /** Distinct parent documents of the accepted set, best-first - what `metrics.ts` scores. */
   acceptedDocIds: string[];
@@ -164,15 +210,17 @@ export type FloorOutcome = {
    * stopped is dormant, however strict it looks.
    */
   cutRank: number | null;
+  /** The same, for the spread floor: 1-based rank at which it starts cutting, or null. */
+  spreadCutRank: number | null;
   /** Chars the budget walk would admit from the accepted set, in rank order. */
   charsAdmitted: number;
   /** Rank the char budget stops at, or null when the accepted set fits inside it. */
   budgetStopRank: number | null;
-  binding: BindingGate;
+  binding: BindingGates;
 };
 
 /**
- * Gate one query's chunks through both floors, in the served path's order.
+ * Gate one query's chunks through all three floors, in the served path's order.
  *
  * MIRRORS `KnowledgeRetrievalFeature`'s scan step for step, and shares its arithmetic rather than
  * restating it: `computeCosineSimilarity` for the scores, `compareForcedRetrievalRank` for the tie
@@ -180,8 +228,9 @@ export type FloorOutcome = {
  * remains local is the absolute floor's single `>=` comparison and the cap's `slice`.
  *
  * The order is not interchangeable. The absolute floor runs DURING the scan, so the pool is capped
- * to the top `FORCED_RETRIEVAL_MAX_SCORED_CHUNKS` of what cleared it; the relative floor runs after,
- * because it needs the turn's final top score. `topScore` therefore tracks every finite scored
+ * to the top `FORCED_RETRIEVAL_MAX_SCORED_CHUNKS` of what cleared it; the relative and spread floors
+ * run after, because both need statistics of the turn that the last batch can still change - the
+ * final top score, and the median of every score compared. `topScore` therefore tracks every finite scored
  * candidate, including ones the absolute floor rejected - it is read one line before that
  * `continue`. That only matters when nothing clears the absolute floor at all, since the global
  * maximum is itself in the pool whenever the pool is non-empty.
@@ -194,6 +243,7 @@ export function applyFloors(
 ): FloorOutcome {
   const minSimilarity = config.minSimilarityPct / 100;
   const relativeFloor = config.relativeFloorPct / 100;
+  const spreadFloor = (config.spreadFloorPct ?? 0) / 100;
 
   const scored = chunks
     .map(chunk => ({ chunk, score: computeCosineSimilarity(query.vector, chunk.vector) }))
@@ -221,7 +271,14 @@ export function applyFloors(
   const ranked = aboveAbsolute.slice(0, FORCED_RETRIEVAL_MAX_SCORED_CHUNKS);
 
   const relativeCutoff = forcedRetrievalRelativeCutoff(topScore, relativeFloor);
-  const accepted = relativeCutoff > 0 ? ranked.filter(c => c.score >= relativeCutoff) : ranked;
+  const aboveRelative = relativeCutoff > 0 ? ranked.filter(c => c.score >= relativeCutoff) : ranked;
+
+  // Over `scored`, not `ranked`: the background has to be independent of the absolute floor and of
+  // the pool cap, both of which have already reshaped `ranked`. This is the same population the
+  // served path collects in `scannedScores`.
+  const backgroundScore = backgroundScoreOf(scored.map(c => c.score));
+  const spreadCutoff = forcedRetrievalSpreadCutoff(topScore, backgroundScore, spreadFloor);
+  const accepted = spreadCutoff > 0 ? aboveRelative.filter(c => c.score >= spreadCutoff) : aboveRelative;
 
   const seen = new Set<string>();
   const acceptedDocIds = accepted
@@ -250,34 +307,36 @@ export function applyFloors(
   // The single definition of "the relative floor bound on this query". `buildFloorSweepRow` reads it
   // back off `cutRank` rather than recomputing, so the row's `relativeBoundShare` and the outcome's
   // `binding` cannot disagree about whether the floor did anything.
-  const cutRank = accepted.length < ranked.length ? accepted.length + 1 : null;
+  const cutRank = aboveRelative.length < ranked.length ? aboveRelative.length + 1 : null;
+  const spreadCutRank = accepted.length < aboveRelative.length ? accepted.length + 1 : null;
   return {
     queryId: query.id,
     scoredCount: scored.length,
     topScore,
     relativeCutoff,
+    backgroundScore,
+    spreadCutoff,
     aboveAbsolute: ranked.length,
     cappedOut: aboveAbsolute.length - ranked.length,
+    aboveRelative: aboveRelative.length,
     accepted: accepted.length,
     acceptedDocIds,
     cutRank,
+    spreadCutRank,
     charsAdmitted,
     budgetStopRank,
-    binding:
-      absoluteCut > 0 && cutRank !== null
-        ? 'both'
-        : absoluteCut > 0
-          ? 'absolute'
-          : cutRank !== null
-            ? 'relative'
-            : 'none',
+    binding: [
+      ...(absoluteCut > 0 ? (['absolute'] as const) : []),
+      ...(cutRank !== null ? (['relative'] as const) : []),
+      ...(spreadCutRank !== null ? (['spread'] as const) : []),
+    ],
   };
 }
 
-/** One floor pair's row: what the gate admitted, what it cost, and whether it bound at all. */
+/** One floor point's row: what the gates admitted, what they cost, and whether each bound at all. */
 export type FloorSweepRow = FloorConfig & {
   queries: number;
-  /** Mean chunks surviving both floors. The pool the char-budget walk then spends. */
+  /** Mean chunks surviving all three floors. The pool the char-budget walk then spends. */
   meanAccepted: number;
   /**
    * Mean chunks the budget walk actually injects, which is what reaches the model. Reported beside
@@ -296,14 +355,33 @@ export type FloorSweepRow = FloorConfig & {
   relativeBoundShare: number;
   /** Mean 1-based rank the relative floor cuts at, over the queries where it cut anything. */
   meanCutRank: number | null;
+  /** The relative floor's two columns, for the SPREAD floor. Read them the same way. */
+  spreadBoundShare: number;
+  meanSpreadCutRank: number | null;
+  /**
+   * SPREAD of the accepted count across queries, as the sample standard deviation of `accepted`.
+   *
+   * THE COLUMN THIS SWEEP GAINED THE SPREAD FLOOR FOR. The complaint that motivated the gate is not
+   * that volume is too high, it is that volume is CONSTANT - the same chunk count for a narrow
+   * question and a broad one, because the char budget is the only thing that ever stops. A gate that
+   * varies with the question shows up here and nowhere else in this table: `accepted/q` can be
+   * identical between a configuration that admits the same 6 chunks every time and one that admits
+   * 2 on a sharp question and 10 on a diffuse one.
+   *
+   * Zero means every query accepted the same count, which is the degenerate case. Read it against
+   * `accepted/q`: the ratio of the two is what compares across configurations that admit different
+   * volumes.
+   */
+  acceptedStdDev: number;
   /**
    * Share of queries whose accepted set the char budget truncates. Read against `meanCutRank`: a
    * floor cutting past where the budget already stopped changes nothing that reaches the model.
    */
   budgetBoundShare: number;
   /**
-   * Queries the floors emptied outright. A floor cannot starve a turn that scored anything (see
-   * `forcedRetrievalRelativeCutoff`), so a non-zero count here is the absolute floor's doing.
+   * Queries the floors emptied outright. Neither per-turn floor can starve a turn that scored
+   * anything (see `forcedRetrievalRelativeCutoff` and `forcedRetrievalSpreadCutoff`), so a non-zero
+   * count here is the absolute floor's doing.
    */
   emptiedQueries: number;
   /**
@@ -325,6 +403,16 @@ export type FloorSweepRow = FloorConfig & {
 const mean = (xs: readonly number[]): number => (xs.length === 0 ? 0 : xs.reduce((a, b) => a + b, 0) / xs.length);
 
 /**
+ * Sample standard deviation (n-1). 0 for fewer than two values - one query cannot vary, and the
+ * population formula would report 0 for it as though that were a measured constancy.
+ */
+const stdDev = (xs: readonly number[]): number => {
+  if (xs.length < 2) return 0;
+  const m = mean(xs);
+  return Math.sqrt(xs.reduce((acc, x) => acc + (x - m) ** 2, 0) / (xs.length - 1));
+};
+
+/**
  * Gate every query at one floor pair and roll it up.
  *
  * `supporting` is the hand-authored ground truth keyed by query id (`corpus.ts`); a query with an
@@ -338,6 +426,8 @@ export function buildFloorSweepRow(args: {
 }): FloorSweepRow {
   const outcomes = args.queries.map(q => applyFloors(q, args.chunks, args.config, args.charBudget));
   const cutRanks = outcomes.map(o => o.cutRank).filter((r): r is number => r !== null);
+  const spreadCutRanks = outcomes.map(o => o.spreadCutRank).filter((r): r is number => r !== null);
+  const acceptedCounts = outcomes.map(o => o.accepted);
   return {
     ...args.config,
     queries: outcomes.length,
@@ -348,6 +438,10 @@ export function buildFloorSweepRow(args: {
     meanAboveAbsolute: mean(outcomes.map(o => o.aboveAbsolute)),
     relativeBoundShare: outcomes.length === 0 ? 0 : outcomes.filter(o => o.cutRank !== null).length / outcomes.length,
     meanCutRank: cutRanks.length === 0 ? null : mean(cutRanks),
+    spreadBoundShare:
+      outcomes.length === 0 ? 0 : outcomes.filter(o => o.spreadCutRank !== null).length / outcomes.length,
+    meanSpreadCutRank: spreadCutRanks.length === 0 ? null : mean(spreadCutRanks),
+    acceptedStdDev: stdDev(acceptedCounts),
     budgetBoundShare:
       outcomes.length === 0 ? 0 : outcomes.filter(o => o.budgetStopRank !== null).length / outcomes.length,
     emptiedQueries: outcomes.filter(o => o.scoredCount > 0 && o.accepted === 0).length,
@@ -372,11 +466,17 @@ const precisionCell = (a: Aggregate): string =>
  * stopped shorter than the floor does. `accepted/q` against `served/q` is the same warning as a
  * ratio rather than a share: recall and precision are over `accepted`, so the wider that gap, the
  * more of the measured set never reached the model.
+ *
+ * `sd` is the odd one out and the most important column for the question the spread floor was added
+ * to answer: every other column here is about HOW MUCH retrieval admits, and `sd` is the only one
+ * about whether that amount responds to the question at all. A configuration with a healthy recall
+ * and `sd` at 0.0 is serving a fixed-size dump.
  */
 export function formatFloorSweepTable(rows: readonly FloorSweepRow[]): string {
   const header = [
-    '| relative | absolute | accepted/q | served/q | pre-rel | bound | cut @ | budget-bound | emptied | recall | precision | MRR |',
-    '|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
+    '| relative | absolute | spread | accepted/q | sd | served/q | pre-rel | bound | cut @ | ' +
+      'spread-bound | spread cut @ | budget-bound | emptied | recall | precision | MRR |',
+    '|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
   ];
   const body = rows.map(r =>
     [
@@ -385,11 +485,17 @@ export function formatFloorSweepTable(rows: readonly FloorSweepRow[]): string {
       // space - it rejects negatives - so printing it as "off" would overstate the baseline row.
       r.relativeFloorPct === 0 ? 'off' : `${r.relativeFloorPct}%`,
       `${r.minSimilarityPct}%`,
+      // Off for the same reason as the relative floor and unlike the absolute one: a 0 spread floor
+      // skips the filter branch entirely rather than drawing a line at zero.
+      (r.spreadFloorPct ?? 0) === 0 ? 'off' : `${r.spreadFloorPct}%`,
       r.meanAccepted.toFixed(1),
+      r.acceptedStdDev.toFixed(1),
       r.meanServed.toFixed(1),
       r.meanAboveAbsolute.toFixed(1),
       pct(r.relativeBoundShare),
       r.meanCutRank === null ? 'never' : r.meanCutRank.toFixed(1),
+      pct(r.spreadBoundShare),
+      r.meanSpreadCutRank === null ? 'never' : r.meanSpreadCutRank.toFixed(1),
       pct(r.budgetBoundShare),
       String(r.emptiedQueries),
       pct(r.quality.recall),
