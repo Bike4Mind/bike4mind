@@ -1,5 +1,7 @@
 import { IAdminSystemPrompt, AdminSystemPromptCategory } from '@bike4mind/common';
 
+import { premiumSystemPrompts } from '@server/premium-generated/premiumSystemPrompts.generated';
+
 /**
  * Default system prompts defined in code.
  * These can be overridden in the database via the Admin UI.
@@ -222,6 +224,7 @@ export function getDefaultSystemPrompts(): DefaultSystemPrompt[] {
     ...(brand ? [buildIdentityPrompt(brand, hostedHost)] : []),
     // Brand-independent: the triage router is pure routing logic, so it seeds for every deploy.
     buildTriageRouterPrompt(),
+    ...premiumSystemPrompts,
   ];
 }
 
