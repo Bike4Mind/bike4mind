@@ -726,6 +726,23 @@ export function toShareTokenUrl(shareToken: string): string {
   return path;
 }
 
+export interface ShareTokenState {
+  hasShareToken: boolean;
+  shareToken: string | null;
+  shareUrl: string | null;
+  shareTokenUpdatedAt: string | null;
+}
+
+/**
+ * Read whether a no-sign-in share link is live, WITHOUT minting one (owner/admin).
+ * Use this - not `createOrGetShareToken` - to decide which controls to render, so
+ * that merely opening a surface never creates a link (#278).
+ */
+export async function getShareTokenState(publicId: string): Promise<ShareTokenState> {
+  const { data } = await api.get<ShareTokenState>(`/api/publish/${publicId}/share-token`);
+  return data;
+}
+
 /**
  * Mint (idempotent) or fetch the no-sign-in share token for a published artifact
  * (owner/admin). Pass `regenerate: true` to rotate it, which immediately revokes
