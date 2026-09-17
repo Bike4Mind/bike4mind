@@ -317,5 +317,32 @@ describe('resolveOutputMaxTokens', () => {
     it('still honors an explicit budget on DeepSeek V4 Pro', () => {
       expect(resolve(8192, deepseekV4Pro)).toBe(8192);
     });
+
+    // Bedrock DeepSeek R1 also inlines its monologue into the output budget
+    // (bedrockBackend/deepseek.ts) and matches no shape check either: no
+    // thinkingStyle, absent from REASONING_SUPPORTED_MODELS, and its profile
+    // declares plain max_tokens. Its cap is 32K, so the floor resolves to that cap -
+    // the value that actually leaves room for an answer after a long trace.
+    const deepseekR1Bedrock: ModelInfo = {
+      ...baseModelInfo,
+      id: ChatModels.DEEPSEEK_R1_BEDROCK,
+      name: 'DeepSeek R1',
+      backend: ModelBackend.Bedrock,
+      max_tokens: 32_768,
+      can_stream: true,
+      supportsVision: false,
+    };
+
+    it('reports Bedrock DeepSeek R1 as reasoning within the output budget', () => {
+      expect(reasonsWithinOutputBudget(deepseekR1Bedrock)).toBe(true);
+    });
+
+    it('defaults Bedrock DeepSeek R1 to its own cap rather than the 4096 fallback', () => {
+      expect(resolve(undefined, deepseekR1Bedrock)).toBe(32_768);
+    });
+
+    it('still honors an explicit budget on Bedrock DeepSeek R1', () => {
+      expect(resolve(8192, deepseekR1Bedrock)).toBe(8192);
+    });
   });
 });

@@ -238,6 +238,10 @@ export class DeepSeekBackend implements ICompletionBackend {
 
     if (!(response instanceof Stream)) {
       const streamedText: string[] = [];
+      // The empty guard keys on prose produced, not on streamedText: the monologue
+      // is wrapped into streamedText too, so a guard keyed there cannot tell a
+      // budget-exhausted reasoning turn from an answered one.
+      let sawProse = false;
 
       if (!response.choices || response.choices.length === 0) {
         throw new Error('No choices returned from the DeepSeek API');
@@ -395,8 +399,9 @@ export class DeepSeekBackend implements ICompletionBackend {
             return;
           }
         } else {
-          const content = c.message.content || '';
-          streamedText[c.index] = reasoningContent ? `<think>${reasoningContent}</think>${content}` : content;
+          const prose = c.message.content || '';
+          if (prose) sawProse = true;
+          streamedText[c.index] = reasoningContent ? `<think>${reasoningContent}</think>${prose}` : prose;
         }
       }
 
@@ -404,7 +409,7 @@ export class DeepSeekBackend implements ICompletionBackend {
       // empty answer, and the most likely cause is a reasoning model that spent
       // its whole max_tokens budget thinking. Without this the user gets a silent
       // blank reply.
-      if (streamedText.every(text => !text) && toolsUsed.length === 0) {
+      if (!sawProse && toolsUsed.length === 0) {
         const finish = response.choices[0]?.finish_reason;
         throw new Error(
           finish === 'length'
@@ -438,7 +443,9 @@ export class DeepSeekBackend implements ICompletionBackend {
     let streamedReasoning = '';
     let cachedTokensFromStream = 0;
     let streamFinishReason: string | undefined;
-    let sawAnyText = false;
+    // Prose, not streamedText: the monologue is wrapped into streamedText as well,
+    // so only content deltas count as an answer.
+    let sawProse = false;
 
     for await (const chunk of response) {
       const streamedText: string[] = [];
@@ -475,6 +482,7 @@ export class DeepSeekBackend implements ICompletionBackend {
 
         if (isInThinkingBlock && c.delta.content) {
           isInThinkingBlock = false;
+          sawProse = true;
           streamedText[c.index] = (streamedText[c.index] ?? '') + '</think>' + c.delta.content;
           return;
         }
@@ -489,10 +497,9 @@ export class DeepSeekBackend implements ICompletionBackend {
 
         if (func.length > 0) return;
 
+        if (c.delta.content) sawProse = true;
         streamedText[c.index] = c.delta.content || '';
       });
-
-      if (streamedText.some(t => t)) sawAnyText = true;
 
       const normalizedFinishReason = normalizeOpenAIFinishReason(streamFinishReason);
       await callback(streamedText, {
@@ -517,9 +524,9 @@ export class DeepSeekBackend implements ICompletionBackend {
     }
 
     // Empty-stream guard, mirroring the non-streaming path: a turn that emitted no
-    // text and has no tool call to make produced nothing usable. Without this the
+    // prose and has no tool call to make produced nothing usable. Without this the
     // stream returns silently with zero callbacks and the chat hangs.
-    if (!sawAnyText && func.length === 0 && toolsUsed.length === 0) {
+    if (!sawProse && func.length === 0 && toolsUsed.length === 0) {
       throw new Error(
         streamFinishReason === 'length'
           ? `DeepSeek returned no content for ${model}: the output budget was exhausted before any answer was produced (finish_reason: length). Raise maxTokens or lower the reasoning effort.`

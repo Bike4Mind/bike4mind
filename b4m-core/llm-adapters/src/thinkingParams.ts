@@ -39,6 +39,10 @@ export const THINKING_ANSWER_HEADROOM_TOKENS = 1000;
  * resolves to that entire cap, which is the only value leaving room for an answer
  * after a long trace.
  *
+ * Bedrock DeepSeek R1 is the same shape: its monologue is inlined into `content`
+ * (see bedrockBackend/deepseek.ts), it matches no shape check, and its 32K cap
+ * becomes the floor for the same reason.
+ *
  * DeepSeek Flash and V4 Pro miss every clause for their own set of reasons: no
  * `thinkingStyle` (that field is Anthropic's), absent from the OpenAI-only
  * REASONING_SUPPORTED_MODELS, and DEEPSEEK_PROFILE declares plain `max_tokens`
@@ -51,6 +55,7 @@ export const THINKING_ANSWER_HEADROOM_TOKENS = 1000;
 const REASONS_WITHIN_OUTPUT_BUDGET_IDS: ReadonlySet<string> = new Set<string>([
   ChatModels.KIMI_K2_THINKING_BEDROCK,
   ChatModels.KIMI_K2_5_BEDROCK,
+  ChatModels.DEEPSEEK_R1_BEDROCK,
   ChatModels.DEEPSEEK_FLASH,
   ChatModels.DEEPSEEK_V4_PRO,
 ]);
