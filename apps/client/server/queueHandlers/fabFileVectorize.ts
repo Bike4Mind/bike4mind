@@ -718,6 +718,18 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // markFailedIfNotAlready is the file-level idempotency guard: only the first
     // failure increments the counter, so SQS redelivery of a failed message is a no-op.
     const isFirstFailure = await fabFileRepository.markFailedIfNotAlready(fabFileId, storedError);
+    if (isFirstFailure) {
+      // Best-effort, mirrors the vectorize-complete push above: FilesSection's
+      // update_file_chunk_vector_status subscriber needs this to reconcile a stuck row, and unlike
+      // the data_lake_batch_progress push below this one applies to a non-batch (single-file
+      // reprocess) failure too, so it fires regardless of batchId.
+      await sendToClient(userId, Resource.websocket.managementEndpoint, {
+        action: 'update_file_chunk_vector_status',
+        fabFileId,
+        vectorizeStatus: 'failed',
+        failedMessage: storedError,
+      }).catch(err => logger.error(`Error notifying vectorize failure for ${fabFileId}: ${err}`));
+    }
     if (existingFabFile.batchId && isFirstFailure) {
       try {
         await dataLakeBatchRepository.updateFileStatus(existingFabFile.batchId, fabFileId, 'failed', storedError);

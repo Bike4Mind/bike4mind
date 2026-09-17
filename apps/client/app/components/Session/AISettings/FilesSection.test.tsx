@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -10,11 +10,18 @@ const mockRemove = vi.fn().mockResolvedValue(undefined);
 const mockIsPending = vi.fn().mockReturnValue(false);
 const mockChunkMutate = vi.fn();
 const mockReprocessMutate = vi.fn();
-const { mockToastSuccess } = vi.hoisted(() => ({ mockToastSuccess: vi.fn() }));
+const { mockToastSuccess, mockToastError } = vi.hoisted(() => ({
+  mockToastSuccess: vi.fn(),
+  mockToastError: vi.fn(),
+}));
 const mockSetWorkBenchFiles = vi.fn();
 const { mockSetQueriesData, mockInvalidateQueries } = vi.hoisted(() => ({
   mockSetQueriesData: vi.fn(),
   mockInvalidateQueries: vi.fn(),
+}));
+const { mockSubscribeToAction, mockGetFabFileByIdFromServer } = vi.hoisted(() => ({
+  mockSubscribeToAction: vi.fn(() => vi.fn()),
+  mockGetFabFileByIdFromServer: vi.fn(),
 }));
 
 let messageFiles: IFabFileDocument[] = [];
@@ -45,8 +52,14 @@ vi.mock('@client/app/contexts/SessionsContext', () => ({
   useWorkBenchFiles: () => workBenchFiles,
 }));
 
-vi.mock('sonner', () => ({ toast: { success: mockToastSuccess, error: vi.fn() } }));
+vi.mock('sonner', () => ({ toast: { success: mockToastSuccess, error: mockToastError } }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { id: currentUserId } }) }));
+vi.mock('@client/app/contexts/WebsocketContext', () => ({
+  useWebsocket: () => ({ subscribeToAction: mockSubscribeToAction }),
+}));
+vi.mock('@client/app/utils/filesAPICalls', () => ({
+  getFabFileByIdFromServer: (...args: unknown[]) => mockGetFabFileByIdFromServer(...args),
+}));
 vi.mock('@client/app/hooks/useMessageFiles', () => ({ useMessageFiles: () => messageFiles }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({ useModelInfo: () => ({ data: undefined }) }));
 vi.mock('@client/app/hooks/data/settings', () => ({
@@ -85,6 +98,13 @@ const renderPanel = () =>
 const fab = (id: string, name: string, userId = 'me', mimeType = 'application/pdf'): IFabFileDocument =>
   ({ id, fileName: name, userId, mimeType }) as IFabFileDocument;
 
+// The subscriber effect passes its callback as subscribeToAction's second argument; grab
+// the most recent registration so a test can drive it like a real incoming ws message.
+const getSubscribedHandler = () =>
+  mockSubscribeToAction.mock.calls[mockSubscribeToAction.mock.calls.length - 1][1] as (
+    msg: Record<string, unknown>
+  ) => Promise<void>;
+
 describe('FilesSection message-scoped files', () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -97,6 +117,7 @@ describe('FilesSection message-scoped files', () => {
     sessionUserId = 'me';
     settingsValues = {};
     effectiveEmbeddingModel = undefined;
+    mockGetFabFileByIdFromServer.mockReset();
   });
 
   it('renders when the notebook has ONLY message-scoped files', () => {
@@ -255,6 +276,166 @@ describe('FilesSection message-scoped files', () => {
 
     expect(screen.getByTestId('files-section-reprocess-btn-system-dup1')).toBeTruthy();
     expect(screen.getByTestId('files-section-reprocess-btn-workbench-dup1')).toBeTruthy();
+  });
+
+  it('shows the spinner, not the dead error icon, while a rebuild is still chunking', () => {
+    // reprocessingFiles[file.id] flips false on the queue ack, long before the rebuild is
+    // actually done - file.isChunking is what stays true for the rest of it.
+    effectiveEmbeddingModel = 'model-b';
+    workBenchFiles = [{ ...fab('w1', 'roster.pdf'), embeddingModel: 'model-a', isChunking: true } as IFabFileDocument];
+
+    renderPanel();
+
+    expect(screen.getByTestId('files-section-reprocess-btn-workbench-w1').querySelector('svg')).toBeTruthy();
+    // MUI's CircularProgress renders as role="progressbar"; the dead ErrorIcon does not.
+    expect(
+      screen.getByTestId('files-section-reprocess-btn-workbench-w1').querySelector('[role="progressbar"]')
+    ).toBeTruthy();
+  });
+
+  it('reconciles a workbench file from a fresh fetch once vectorizeStatus reports complete', async () => {
+    // The ws message carries no embeddingModel (UpdateFabFileChunkVectorStatusAction), so
+    // clearing the mismatch badge needs the real fetched doc, not a field copy off msg.
+    effectiveEmbeddingModel = 'model-b';
+    workBenchFiles = [{ ...fab('w1', 'roster.pdf'), embeddingModel: 'model-a', isChunking: true } as IFabFileDocument];
+    const freshFile = { ...fab('w1', 'roster.pdf'), embeddingModel: 'model-b', vectorized: true, chunked: true };
+    mockGetFabFileByIdFromServer.mockResolvedValue(freshFile);
+
+    renderPanel();
+    const handler = getSubscribedHandler();
+    await act(async () => {
+      await handler({ action: 'update_file_chunk_vector_status', fabFileId: 'w1', vectorizeStatus: 'complete' });
+    });
+
+    expect(mockGetFabFileByIdFromServer).toHaveBeenCalledWith('w1');
+    expect(mockSetWorkBenchFiles).toHaveBeenCalledOnce();
+    expect(mockSetWorkBenchFiles.mock.calls[0][0]).toBe('s1');
+    const updated = mockSetWorkBenchFiles.mock.calls[0][1](workBenchFiles);
+    expect(updated[0]).toEqual(freshFile);
+  });
+
+  it('reconciles a system file in the system-prompt-files cache once vectorizeStatus reports complete', async () => {
+    effectiveEmbeddingModel = 'model-b';
+    systemFiles = [{ ...fab('sys1', 'policy.pdf'), embeddingModel: 'model-a', isChunking: true } as IFabFileDocument];
+    const freshFile = { ...fab('sys1', 'policy.pdf'), embeddingModel: 'model-b', vectorized: true, chunked: true };
+    mockGetFabFileByIdFromServer.mockResolvedValue(freshFile);
+
+    renderPanel();
+    const handler = getSubscribedHandler();
+    await act(async () => {
+      await handler({ action: 'update_file_chunk_vector_status', fabFileId: 'sys1', vectorizeStatus: 'complete' });
+    });
+
+    expect(mockSetWorkBenchFiles).not.toHaveBeenCalled();
+    expect(mockSetQueriesData).toHaveBeenCalledOnce();
+    expect(mockSetQueriesData.mock.calls[0][0]).toMatchObject({ queryKey: ['system-prompt-files'] });
+    const updated = mockSetQueriesData.mock.calls[0][1](systemFiles);
+    expect(updated[0]).toEqual(freshFile);
+  });
+
+  it('clears the pending flags and toasts on a failed rebuild instead of leaving the row stuck', async () => {
+    effectiveEmbeddingModel = 'model-b';
+    workBenchFiles = [{ ...fab('w1', 'roster.pdf'), embeddingModel: 'model-a', isChunking: true } as IFabFileDocument];
+
+    renderPanel();
+    const handler = getSubscribedHandler();
+    await act(async () => {
+      await handler({
+        action: 'update_file_chunk_vector_status',
+        fabFileId: 'w1',
+        vectorizeStatus: 'failed',
+        failedMessage: 'embedding service unavailable',
+      });
+    });
+
+    expect(mockGetFabFileByIdFromServer).not.toHaveBeenCalled();
+    expect(mockToastError).toHaveBeenCalledWith('embedding service unavailable');
+    expect(mockSetWorkBenchFiles).toHaveBeenCalledOnce();
+    const updated = mockSetWorkBenchFiles.mock.calls[0][1](workBenchFiles);
+    expect(updated[0]).toMatchObject({ isChunking: false, isVectorizing: false });
+  });
+
+  it('ignores an update_file_chunk_vector_status message for a file this panel does not render', async () => {
+    effectiveEmbeddingModel = 'model-b';
+    workBenchFiles = [{ ...fab('w1', 'roster.pdf'), embeddingModel: 'model-a' } as IFabFileDocument];
+
+    renderPanel();
+    const handler = getSubscribedHandler();
+    await act(async () => {
+      await handler({ action: 'update_file_chunk_vector_status', fabFileId: 'unrelated', vectorizeStatus: 'complete' });
+    });
+
+    expect(mockGetFabFileByIdFromServer).not.toHaveBeenCalled();
+    expect(mockSetWorkBenchFiles).not.toHaveBeenCalled();
+    expect(mockSetQueriesData).not.toHaveBeenCalled();
+  });
+
+  it('reconciles BOTH stores on completion for a file in the system and workbench lists', async () => {
+    // Membership, not either/or: handleReprocessFile marks both rows pending for a dual-membership
+    // file, so the reconcile subscriber must clear both too, or the store it skips stays stuck.
+    effectiveEmbeddingModel = 'model-b';
+    const dual = { ...fab('dup1', 'shared.pdf'), embeddingModel: 'model-a', isChunking: true } as IFabFileDocument;
+    systemFiles = [dual];
+    workBenchFiles = [dual];
+    const freshFile = { ...dual, embeddingModel: 'model-b', vectorized: true, chunked: true };
+    mockGetFabFileByIdFromServer.mockResolvedValue(freshFile);
+
+    renderPanel();
+    const handler = getSubscribedHandler();
+    await act(async () => {
+      await handler({ action: 'update_file_chunk_vector_status', fabFileId: 'dup1', vectorizeStatus: 'complete' });
+    });
+
+    expect(mockSetQueriesData).toHaveBeenCalledOnce();
+    expect(mockSetQueriesData.mock.calls[0][1](systemFiles)[0]).toEqual(freshFile);
+    expect(mockSetWorkBenchFiles).toHaveBeenCalledOnce();
+    expect(mockSetWorkBenchFiles.mock.calls[0][1](workBenchFiles)[0]).toEqual(freshFile);
+  });
+
+  it('clears pending flags in BOTH stores on a failed rebuild for a dual-membership file', async () => {
+    effectiveEmbeddingModel = 'model-b';
+    const dual = { ...fab('dup1', 'shared.pdf'), embeddingModel: 'model-a', isChunking: true } as IFabFileDocument;
+    systemFiles = [dual];
+    workBenchFiles = [dual];
+
+    renderPanel();
+    const handler = getSubscribedHandler();
+    await act(async () => {
+      await handler({
+        action: 'update_file_chunk_vector_status',
+        fabFileId: 'dup1',
+        vectorizeStatus: 'failed',
+        failedMessage: 'embedding service unavailable',
+      });
+    });
+
+    expect(mockSetQueriesData).toHaveBeenCalledOnce();
+    expect(mockSetQueriesData.mock.calls[0][1](systemFiles)[0]).toMatchObject({
+      isChunking: false,
+      isVectorizing: false,
+    });
+    expect(mockSetWorkBenchFiles).toHaveBeenCalledOnce();
+    expect(mockSetWorkBenchFiles.mock.calls[0][1](workBenchFiles)[0]).toMatchObject({
+      isChunking: false,
+      isVectorizing: false,
+    });
+  });
+
+  it('clears the pending flags and toasts instead of stranding the row when the refresh fetch fails', async () => {
+    effectiveEmbeddingModel = 'model-b';
+    workBenchFiles = [{ ...fab('w1', 'roster.pdf'), embeddingModel: 'model-a', isChunking: true } as IFabFileDocument];
+    mockGetFabFileByIdFromServer.mockRejectedValue(new Error('network error'));
+
+    renderPanel();
+    const handler = getSubscribedHandler();
+    await act(async () => {
+      await handler({ action: 'update_file_chunk_vector_status', fabFileId: 'w1', vectorizeStatus: 'complete' });
+    });
+
+    expect(mockToastError).toHaveBeenCalled();
+    expect(mockSetWorkBenchFiles).toHaveBeenCalledOnce();
+    const updated = mockSetWorkBenchFiles.mock.calls[0][1](workBenchFiles);
+    expect(updated[0]).toMatchObject({ isChunking: false, isVectorizing: false });
   });
 
   it('marks BOTH rows pending when the reprocessed file is in the system and workbench lists', () => {
