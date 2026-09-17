@@ -102,7 +102,7 @@ describe('GET /api/quests/[id]/context', () => {
       questId: 'quest-1',
       capturedAt: '2026-09-16T10:00:00.000Z',
       model: { id: 'claude-opus-4-8' },
-      categories: { systemPrompt: 2882, systemPromptResidual: 4000, toolDefinitions: 900 },
+      categories: { systemPrompt: 2882, systemPromptBilled: 4000, toolDefinitions: 900 },
       layers: [
         { source: 'hardcoded', name: 'date_time_context', tokenCount: 60, wasIncluded: true },
         { source: 'admin', name: 'artifact_emission', tokenCount: 2822, wasIncluded: true },
@@ -184,7 +184,7 @@ describe('GET /api/quests/[id]/context', () => {
       layers: [],
       tools: [],
       retrieval: null,
-      categories: { systemPrompt: 0, systemPromptResidual: 0 },
+      categories: { systemPrompt: 0, systemPromptBilled: 0 },
       window: { contextWindow: null, freeSpace: null },
       promptFingerprint: '',
     });

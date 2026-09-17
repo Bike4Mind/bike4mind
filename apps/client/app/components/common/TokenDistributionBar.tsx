@@ -1,21 +1,14 @@
 import { Box, Stack, Tooltip, Typography } from '@mui/joy';
 import { styled } from '@mui/system';
+import type { ContextTelemetry } from '@bike4mind/common';
 
 /**
- * The seven token buckets an assembled turn is billed against, matching
- * `promptMeta.context.tokensBySource` and `contextTelemetry.contextWindow.tokensBySource` - shared
- * by the admin Context Inspector and the user's own context breakdown, which must colour and label
- * the same buckets identically.
+ * The seven token buckets an assembled turn is billed against, derived from the telemetry schema
+ * itself so a bucket added there is a compile error here rather than a silently dropped segment -
+ * shared by the admin Context Inspector and the user's own context breakdown, which must colour
+ * and label the same buckets identically.
  */
-export type TokenDistribution = {
-  systemPrompts: number;
-  conversationHistory: number;
-  mementos: number;
-  fabFiles: number;
-  urlContent: number;
-  toolSchemas: number;
-  userPrompt: number;
-};
+export type TokenDistribution = NonNullable<ContextTelemetry['contextWindow']['tokensBySource']>;
 
 const TokenSegment = styled('div')<{ width: number; color: string }>(({ width, color }) => ({
   width: `${width}%`,
@@ -30,7 +23,7 @@ const TokenSegment = styled('div')<{ width: number; color: string }>(({ width, c
   whiteSpace: 'nowrap',
 }));
 
-export const TOKEN_SOURCE_COLORS: Record<string, string> = {
+export const TOKEN_SOURCE_COLORS: Record<keyof TokenDistribution, string> = {
   systemPrompts: '#3f51b5',
   conversationHistory: '#2196f3',
   mementos: '#00bcd4',
@@ -52,7 +45,7 @@ export const TokenDistributionBar = ({ tokensBySource }: { tokensBySource: Token
 
   if (total === 0) return <Typography level="body-sm">No token data</Typography>;
 
-  const segments = [
+  const allSegments: Array<{ key: keyof TokenDistribution; label: string; value: number }> = [
     { key: 'systemPrompts', label: 'System', value: tokensBySource.systemPrompts },
     { key: 'conversationHistory', label: 'History', value: tokensBySource.conversationHistory },
     { key: 'mementos', label: 'Mementos', value: tokensBySource.mementos },
@@ -60,7 +53,8 @@ export const TokenDistributionBar = ({ tokensBySource }: { tokensBySource: Token
     { key: 'urlContent', label: 'URLs', value: tokensBySource.urlContent },
     { key: 'toolSchemas', label: 'Tools', value: tokensBySource.toolSchemas },
     { key: 'userPrompt', label: 'User', value: tokensBySource.userPrompt },
-  ].filter(s => s.value > 0);
+  ];
+  const segments = allSegments.filter(s => s.value > 0);
 
   return (
     <Box>

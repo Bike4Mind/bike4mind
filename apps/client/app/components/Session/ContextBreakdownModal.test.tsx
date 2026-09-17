@@ -23,7 +23,7 @@ const breakdown: ContextBreakdown = {
   model: { id: 'claude-opus-4-8', backend: 'bedrock' },
   categories: {
     systemPrompt: 2882,
-    systemPromptResidual: 4000,
+    systemPromptBilled: 4000,
     toolDefinitions: 900,
     attachedFiles: 0,
     conversationHistory: 1200,
@@ -149,7 +149,7 @@ describe('ContextBreakdownModal', () => {
     mockUseQuestContextBreakdown.mockReturnValue({
       data: {
         ...breakdown,
-        categories: { ...breakdown.categories, systemPromptResidual: breakdown.categories.systemPrompt },
+        categories: { ...breakdown.categories, systemPromptBilled: breakdown.categories.systemPrompt },
       },
       isLoading: false,
       error: null,

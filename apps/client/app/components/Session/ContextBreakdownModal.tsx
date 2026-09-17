@@ -28,7 +28,7 @@ const format = (value: number | null | undefined) => (value == null ? '-' : valu
 // The assembler's own system-prompt total, not the itemized sum: this is what the input was
 // actually billed as, and the layer rows (categories.systemPrompt) do not always add up to it.
 const billedSystemPrompt = (categories: ContextBreakdown['categories']): number =>
-  categories.systemPromptResidual || categories.systemPrompt;
+  categories.systemPromptBilled || categories.systemPrompt;
 
 const toDistribution = (categories: ContextBreakdown['categories']): TokenDistribution => ({
   systemPrompts: billedSystemPrompt(categories),

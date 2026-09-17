@@ -143,7 +143,7 @@ describe('buildContextBreakdown', () => {
 
     expect(breakdown.categories).toEqual({
       systemPrompt: 2822 + 60 + 38,
-      systemPromptResidual: 4000,
+      systemPromptBilled: 4000,
       toolDefinitions: 900,
       attachedFiles: 500,
       conversationHistory: 1200,
@@ -221,7 +221,7 @@ describe('buildContextBreakdown', () => {
       model: { id: null, backend: null },
       categories: {
         systemPrompt: 0,
-        systemPromptResidual: 0,
+        systemPromptBilled: 0,
         toolDefinitions: 0,
         attachedFiles: 0,
         conversationHistory: 0,
@@ -233,7 +233,7 @@ describe('buildContextBreakdown', () => {
       tools: [],
       retrieval: null,
       cache: { readTokens: 0, writeTokens: 0, hitRate: 0, settledBasis: null },
-      window: { contextWindow: null, inputTokens: 0, outputTokens: 0, maxOutputTokens: 0, freeSpace: null },
+      window: { contextWindow: null, inputTokens: 0, outputTokens: 0, maxOutputTokens: null, freeSpace: null },
       promptFingerprint: '',
     });
   });
@@ -245,6 +245,32 @@ describe('buildContextBreakdown', () => {
     const breakdown = buildContextBreakdown(noBuckets, { questId: 'quest-1' });
     expect(breakdown.layers).toHaveLength(4);
     expect(breakdown.categories.systemPrompt).toBe(2822 + 60 + 38);
-    expect(breakdown.categories.systemPromptResidual).toBe(0);
+    expect(breakdown.categories.systemPromptBilled).toBe(0);
+  });
+
+  it('prefers the recorded reservation over the requested value when both are present', () => {
+    const withReservation = fullPromptMeta();
+    withReservation.context!.contextWindowUsage = {
+      contextLimit: 200000,
+      maxOutputTokens: 6000,
+      safeMaxInputTokens: 194000,
+      actualInputTokens: 7040,
+      bufferTokens: 0,
+      utilizationPercentage: 3.5,
+    };
+
+    const breakdown = buildContextBreakdown(withReservation, { questId: 'quest-1' });
+    expect(breakdown.window.maxOutputTokens).toBe(6000);
+    expect(breakdown.window.freeSpace).toBe(200000 - 7040 - 6000);
+  });
+
+  it('does not fall back to the model catalog ceiling when neither reservation is recorded', () => {
+    const catalogOnly = fullPromptMeta();
+    delete catalogOnly.context!.contextWindowUsage;
+    delete catalogOnly.model!.parameters;
+
+    const breakdown = buildContextBreakdown(catalogOnly, { questId: 'quest-1' });
+    expect(breakdown.window.maxOutputTokens).toBeNull();
+    expect(breakdown.window.freeSpace).toBeNull();
   });
 });

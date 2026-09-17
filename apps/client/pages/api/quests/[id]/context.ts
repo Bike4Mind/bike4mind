@@ -13,7 +13,8 @@ import type { Request } from 'express';
  * conversation, not auditing how the owner's context was assembled. Non-owners get the same 404 a
  * stranger gets, so the route cannot be used to probe which quest ids exist.
  */
-const handler = baseApi().get(async (req: Request<{}, {}, {}, { id: string }>, res) => {
+// Browser-only self-view: no api-contract backs this route, so no API key should reach it.
+const handler = baseApi({ auth: 'jwtOnly' }).get(async (req: Request<{}, {}, {}, { id: string }>, res) => {
   const { id: questId } = req.query;
   const userId = req.user?.id;
 
@@ -41,8 +42,8 @@ const handler = baseApi().get(async (req: Request<{}, {}, {}, { id: string }>, r
     throw new NotFoundError('Quest not found');
   }
 
-  // A pass-through while the gate above is owner-only; it stays so the functionCalls denylist
-  // applies for free if that gate is ever widened.
+  // No-op for an owner. If this gate is ever widened, note the denylist would NOT cover this
+  // response - buildContextBreakdown never emits the two fields it strips.
   const promptMeta = redactPromptMetaForViewer(quest.promptMeta, isOwner);
 
   return res.json(buildContextBreakdown(promptMeta, { questId: quest.id }));

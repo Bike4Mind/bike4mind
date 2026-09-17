@@ -2,11 +2,16 @@ import { createHash } from 'crypto';
 import type { PromptMeta, SystemPromptDetail } from '@bike4mind/common';
 import { sortDetailsByDeliveryOrder } from '../llm/systemPromptFloorTelemetry';
 
-/** Per-turn retrieval verdict, passed through verbatim - it holds counts and enums, no content. */
+/**
+ * Per-turn retrieval verdict, passed through verbatim - holds no chunk or document text, but it
+ * DOES carry free-string lake identifiers (dataLakeTags, surfaces, lakeScope), so it is owner-only
+ * rather than generally safe to expose.
+ */
 export type ContextBreakdownRetrieval = NonNullable<PromptMeta['retrieval']>;
 
 export type ContextBreakdownLayer = {
   source: SystemPromptDetail['source'];
+  /** Free text with an admin/org `source`, so this is owner-only for the same reason as retrieval. */
   name: string;
   tokenCount: number;
   wasIncluded: boolean;
@@ -28,7 +33,7 @@ export type ContextBreakdownCategories = {
   /** Sum of the included layers, which is what the model was actually handed. */
   systemPrompt: number;
   /** The assembler's own system-prompt total, for reconciling against `systemPrompt`. */
-  systemPromptResidual: number;
+  systemPromptBilled: number;
   toolDefinitions: number;
   attachedFiles: number;
   conversationHistory: number;
@@ -56,8 +61,9 @@ export type ContextBreakdown = {
     contextWindow: number | null;
     inputTokens: number;
     outputTokens: number;
-    maxOutputTokens: number;
-    /** Null when the model's window is unknown. Negative means the turn overflowed its reservation. */
+    /** Null when the turn recorded no reservation. */
+    maxOutputTokens: number | null;
+    /** Null when the window or the reservation is unknown. Negative means the turn overflowed it. */
     freeSpace: number | null;
   };
   /** sha256 over `source:name:tokenCount` of the included layers in delivery order, first 12 hex. */
@@ -66,7 +72,7 @@ export type ContextBreakdown = {
 
 const EMPTY_CATEGORIES: ContextBreakdownCategories = {
   systemPrompt: 0,
-  systemPromptResidual: 0,
+  systemPromptBilled: 0,
   toolDefinitions: 0,
   attachedFiles: 0,
   conversationHistory: 0,
@@ -150,7 +156,7 @@ export function buildContextBreakdown(
   const categories: ContextBreakdownCategories = tokensBySource
     ? {
         systemPrompt: layers.reduce((sum, layer) => sum + (layer.wasIncluded ? layer.tokenCount : 0), 0),
-        systemPromptResidual: tokensBySource.systemPrompts,
+        systemPromptBilled: tokensBySource.systemPrompts,
         toolDefinitions: tokensBySource.toolSchemas,
         attachedFiles: tokensBySource.fabFiles,
         conversationHistory: tokensBySource.conversationHistory,
@@ -169,8 +175,9 @@ export function buildContextBreakdown(
 
   const contextWindow = model?.contextWindow ?? null;
   const inputTokens = tokenUsage?.inputTokens ?? 0;
-  // The turn's own reservation, not the model's ceiling: that is what was withheld from the input.
-  const maxOutputTokens = model?.parameters?.maxTokens ?? model?.maxTokens ?? 0;
+  // The reservation the assembler actually made, then the requested value. The model's catalog
+  // ceiling is deliberately NOT a fallback - it is not what was withheld from the input.
+  const maxOutputTokens = context?.contextWindowUsage?.maxOutputTokens ?? model?.parameters?.maxTokens ?? null;
 
   return {
     questId: options.questId,
@@ -191,7 +198,8 @@ export function buildContextBreakdown(
       inputTokens,
       outputTokens: tokenUsage?.outputTokens ?? 0,
       maxOutputTokens,
-      freeSpace: contextWindow === null ? null : contextWindow - inputTokens - maxOutputTokens,
+      freeSpace:
+        contextWindow === null || maxOutputTokens === null ? null : contextWindow - inputTokens - maxOutputTokens,
     },
     promptFingerprint: fingerprintLayers(layers),
   };
