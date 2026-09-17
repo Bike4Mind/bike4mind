@@ -1202,6 +1202,28 @@ export class GeminiBackend implements ICompletionBackend {
           };
         }
 
+        // normalizeMultimodalMessages canonicalizes every dialect's image (including an
+        // Anthropic url-source one, which used to hit the branch above and loudly error)
+        // to `image_url`, so this backend needs its own reader or that turn silently
+        // vanishes below (content[0].type matching no branch -> `return null`).
+        if (!hasToolUse && message.content?.[0].type === 'image_url') {
+          const imageUrl = (message.content[0] as MessageContentImageUrl).image_url.url;
+          const dataUrlMatch = /^data:([^;,]+)(?:;[^,]*)?;base64,(.+)$/s.exec(imageUrl);
+          if (dataUrlMatch) {
+            return {
+              role: mapRole(message.role),
+              parts: [{ inlineData: { mimeType: dataUrlMatch[1], data: dataUrlMatch[2] } }],
+            };
+          }
+          if (/^https?:\/\//i.test(imageUrl)) {
+            return {
+              role: mapRole(message.role),
+              parts: [{ fileData: { fileUri: imageUrl } }],
+            };
+          }
+          return null;
+        }
+
         if (hasToolUse) {
           // CRITICAL: Handle multiple tool_use items in one message (parallel function calls)
           // Per Gemini API docs: only the FIRST part gets thought_signature in parallel calls

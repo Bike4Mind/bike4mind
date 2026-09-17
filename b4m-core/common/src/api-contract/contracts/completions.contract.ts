@@ -26,6 +26,9 @@ export const createCompletionContract = defineEndpoint({
     '`stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note ' +
     'that omitting `max_tokens` on the request lets the server size the output ceiling for the ' +
     'model (recommended for reasoning models, which spend thinking tokens inside that ceiling). ' +
+    'A message `content` may be a string or an array of parts; image parts are accepted in ' +
+    'OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a ' +
+    '`source`) form and are translated to whatever the target model speaks. ' +
     'Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
     'BILLING FAILURES. Headers are flushed before authentication or pricing, so unlike the JSON ' +
     'surfaces this endpoint has no pre-stream `422` + `errorCode: "insufficient_credits"` to pair ' +

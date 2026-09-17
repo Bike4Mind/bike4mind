@@ -22,6 +22,7 @@ import type {
   Response as OpenAIResponse,
   ResponseCreateParamsStreaming,
   ResponseInputItem,
+  ResponseInputMessageContentList,
   ResponseOutputItem,
   Tool as ResponsesTool,
 } from 'openai/resources/responses/responses';
@@ -1979,7 +1980,7 @@ export class OpenAIBackend implements ICompletionBackend {
       if (m.role === 'system' || m.role === 'developer') {
         items.push({ role: 'system', content: chatContentToString(m.content) });
       } else if (m.role === 'user') {
-        items.push({ role: 'user', content: chatContentToString(m.content) });
+        items.push({ role: 'user', content: chatContentToResponsesInput(m.content) });
       } else if (m.role === 'assistant') {
         const text = chatContentToString(m.content);
         if (text) items.push({ role: 'assistant', content: text });
@@ -2258,8 +2259,9 @@ export class OpenAIBackend implements ICompletionBackend {
 
 /**
  * Coerce a Chat Completions message `content` (string | content-part array | null)
- * to a plain string for Responses input items. Text parts are concatenated; other
- * parts (images/files) are dropped - the Responses path is used for text+tools turns.
+ * to a plain string for Responses input items that accept text only (system,
+ * assistant, tool output). Text parts are concatenated; other parts are dropped.
+ * User messages go through chatContentToResponsesInput instead, which keeps images.
  */
 function chatContentToString(content: unknown): string {
   if (typeof content === 'string') return content;
@@ -2280,6 +2282,46 @@ function chatContentToString(content: unknown): string {
       .join('');
   }
   return '';
+}
+
+/**
+ * Build a Responses user-message `content` from Chat-Completions-shaped content,
+ * keeping image parts as `input_image` items instead of stringifying them away.
+ * Returns a plain string when there is nothing but text, so text-only turns keep
+ * producing exactly the input they did before.
+ */
+const RESPONSES_IMAGE_DETAIL = new Set(['low', 'high', 'auto', 'original']);
+
+function chatContentToResponsesInput(content: unknown): string | ResponseInputMessageContentList {
+  if (!Array.isArray(content)) return chatContentToString(content);
+
+  const parts: ResponseInputMessageContentList = [];
+  let sawImage = false;
+  for (const part of content) {
+    if (typeof part === 'string') {
+      parts.push({ type: 'input_text', text: part });
+      continue;
+    }
+    if (!part || typeof part !== 'object') continue;
+    const typed = part as { type?: string; text?: unknown; image_url?: { url?: string; detail?: string } };
+    if (typed.type === 'image_url' && typed.image_url?.url) {
+      sawImage = true;
+      const detail = typed.image_url.detail;
+      parts.push({
+        type: 'input_image',
+        image_url: typed.image_url.url,
+        // Required by the Responses type; an unrecognized caller-supplied value
+        // would otherwise ride through unchecked and get a 400 from the API.
+        detail: RESPONSES_IMAGE_DETAIL.has(detail as string)
+          ? (detail as 'low' | 'high' | 'auto' | 'original')
+          : 'auto',
+      });
+    } else if (typeof typed.text === 'string') {
+      parts.push({ type: 'input_text', text: typed.text });
+    }
+  }
+
+  return sawImage ? parts : chatContentToString(content);
 }
 
 /**
