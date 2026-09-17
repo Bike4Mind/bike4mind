@@ -179,6 +179,29 @@ describe('GET /api/feedback/rollup against a real collection', () => {
     expect(body.buckets.sessionId.buckets).toEqual([{ key: 'a1', count: 1 }]);
   });
 
+  it('drops a non-array tags value instead of failing every arm', async () => {
+    // $setUnion hard-errors on a non-array operand, and inside $facet that costs the caller
+    // `total` and all five dimensions rather than the tags bucket alone.
+    await FeedbackModel.collection.insertOne({
+      userId: USER_A,
+      username: 'seed user',
+      status: FeedbackStatus.New,
+      subject: 'product',
+      contentStored: false,
+      sessionId: 'a1',
+      tags: 'not-an-array',
+      createdAt: INSIDE,
+      updatedAt: INSIDE,
+    } as unknown as Parameters<typeof FeedbackModel.collection.insertOne>[0]);
+
+    const { status, body } = await callAs(USER_A);
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(1);
+    expect(body.buckets.tags.buckets).toEqual([]);
+    expect(body.buckets.sessionId.buckets).toEqual([{ key: 'a1', count: 1 }]);
+  });
+
   it('truncates at the shared ceiling when one user has far more sessions than it', async () => {
     const many = 2000;
     await FeedbackModel.insertMany(
