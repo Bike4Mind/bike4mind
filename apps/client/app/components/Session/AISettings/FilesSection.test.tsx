@@ -370,6 +370,74 @@ describe('FilesSection message-scoped files', () => {
     expect(mockSetQueriesData).not.toHaveBeenCalled();
   });
 
+  it('reconciles BOTH stores on completion for a file in the system and workbench lists', async () => {
+    // Membership, not either/or: handleReprocessFile marks both rows pending for a dual-membership
+    // file, so the reconcile subscriber must clear both too, or the store it skips stays stuck.
+    effectiveEmbeddingModel = 'model-b';
+    const dual = { ...fab('dup1', 'shared.pdf'), embeddingModel: 'model-a', isChunking: true } as IFabFileDocument;
+    systemFiles = [dual];
+    workBenchFiles = [dual];
+    const freshFile = { ...dual, embeddingModel: 'model-b', vectorized: true, chunked: true };
+    mockGetFabFileByIdFromServer.mockResolvedValue(freshFile);
+
+    renderPanel();
+    const handler = getSubscribedHandler();
+    await act(async () => {
+      await handler({ action: 'update_file_chunk_vector_status', fabFileId: 'dup1', vectorizeStatus: 'complete' });
+    });
+
+    expect(mockSetQueriesData).toHaveBeenCalledOnce();
+    expect(mockSetQueriesData.mock.calls[0][1](systemFiles)[0]).toEqual(freshFile);
+    expect(mockSetWorkBenchFiles).toHaveBeenCalledOnce();
+    expect(mockSetWorkBenchFiles.mock.calls[0][1](workBenchFiles)[0]).toEqual(freshFile);
+  });
+
+  it('clears pending flags in BOTH stores on a failed rebuild for a dual-membership file', async () => {
+    effectiveEmbeddingModel = 'model-b';
+    const dual = { ...fab('dup1', 'shared.pdf'), embeddingModel: 'model-a', isChunking: true } as IFabFileDocument;
+    systemFiles = [dual];
+    workBenchFiles = [dual];
+
+    renderPanel();
+    const handler = getSubscribedHandler();
+    await act(async () => {
+      await handler({
+        action: 'update_file_chunk_vector_status',
+        fabFileId: 'dup1',
+        vectorizeStatus: 'failed',
+        failedMessage: 'embedding service unavailable',
+      });
+    });
+
+    expect(mockSetQueriesData).toHaveBeenCalledOnce();
+    expect(mockSetQueriesData.mock.calls[0][1](systemFiles)[0]).toMatchObject({
+      isChunking: false,
+      isVectorizing: false,
+    });
+    expect(mockSetWorkBenchFiles).toHaveBeenCalledOnce();
+    expect(mockSetWorkBenchFiles.mock.calls[0][1](workBenchFiles)[0]).toMatchObject({
+      isChunking: false,
+      isVectorizing: false,
+    });
+  });
+
+  it('clears the pending flags and toasts instead of stranding the row when the refresh fetch fails', async () => {
+    effectiveEmbeddingModel = 'model-b';
+    workBenchFiles = [{ ...fab('w1', 'roster.pdf'), embeddingModel: 'model-a', isChunking: true } as IFabFileDocument];
+    mockGetFabFileByIdFromServer.mockRejectedValue(new Error('network error'));
+
+    renderPanel();
+    const handler = getSubscribedHandler();
+    await act(async () => {
+      await handler({ action: 'update_file_chunk_vector_status', fabFileId: 'w1', vectorizeStatus: 'complete' });
+    });
+
+    expect(mockToastError).toHaveBeenCalled();
+    expect(mockSetWorkBenchFiles).toHaveBeenCalledOnce();
+    const updated = mockSetWorkBenchFiles.mock.calls[0][1](workBenchFiles);
+    expect(updated[0]).toMatchObject({ isChunking: false, isVectorizing: false });
+  });
+
   it('marks BOTH rows pending when the reprocessed file is in the system and workbench lists', () => {
     // Both rows are doors to the same unthrottled /api/files/reprocess, so marking only the store
     // the file id happens to resolve to leaves the other button armed mid-rebuild and a stray
