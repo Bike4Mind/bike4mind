@@ -16,6 +16,9 @@ const mockRefs = vi.hoisted(() => ({
   jwtVerifier: vi.fn((_req: unknown, res: { status: (code: number) => { json: (body: unknown) => unknown } }) =>
     res.status(401).json({ error: 'Unauthorized' })
   ),
+  // The options the ROUTE ITSELF hands to baseApi, captured below - not a literal this file
+  // makes up, so a route that stops passing `auth: 'jwtOnly'` is caught here.
+  capturedOptions: undefined as unknown,
 }));
 
 vi.mock('@server/services/gears/toolGearObserver', () => ({ registerToolGearObserver: vi.fn() }));
@@ -47,8 +50,21 @@ vi.mock('@server/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://localhost/%STAGE%', STAGE: 'test' },
   isDevelopment: () => true,
 }));
+vi.mock('@server/middlewares/baseApi', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/middlewares/baseApi')>();
+  return {
+    ...actual,
+    baseApi: (options: Parameters<typeof actual.baseApi>[0]) => {
+      mockRefs.capturedOptions = options;
+      return actual.baseApi(options);
+    },
+  };
+});
 
 import { baseApi } from '@server/middlewares/baseApi';
+// Importing the real route is what makes `capturedOptions` the route's own value rather than
+// something this file asserts against itself.
+import '@pages/api/feedback/rollup';
 
 const runWithApiKey = async (options: Record<string, unknown>) => {
   const routeHandler = vi.fn((_req: unknown, res: { status: (code: number) => { json: (body: unknown) => unknown } }) =>
@@ -74,8 +90,12 @@ describe('GET /api/feedback/rollup - auth mode against the real baseApi', () => 
     vi.clearAllMocks();
   });
 
+  it('captures jwtOnly as the option the route itself passes to baseApi', () => {
+    expect(mockRefs.capturedOptions).toEqual({ auth: 'jwtOnly' });
+  });
+
   it('never installs the api-key chain, so a key-bearing request is rejected before the handler', async () => {
-    const { res, routeHandler } = await runWithApiKey({ auth: 'jwtOnly' });
+    const { res, routeHandler } = await runWithApiKey(mockRefs.capturedOptions as Record<string, unknown>);
 
     expect(mockRefs.apiKeyAuthFactory).not.toHaveBeenCalled();
     expect(mockRefs.rateLimitFactory).not.toHaveBeenCalled();

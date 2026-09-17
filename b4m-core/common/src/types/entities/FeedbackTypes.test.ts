@@ -79,13 +79,15 @@ describe('FeedbackRollupQuerySchema', () => {
     expect(FeedbackRollupQuerySchema.safeParse({ from: at(0), to: at(120) }).success).toBe(true);
   });
 
+  // Pinned so a change to the constant's value is caught here rather than silently rescaling
+  // the assertions below, which derive their window from a literal day count, not the constant.
+  it('pins the window cap at 366 days', () => {
+    expect(FEEDBACK_ROLLUP_MAX_WINDOW_DAYS).toBe(366);
+  });
+
   it('accepts a window at exactly the cap and rejects one past it', () => {
-    expect(FeedbackRollupQuerySchema.safeParse({ from: at(0), to: at(FEEDBACK_ROLLUP_MAX_WINDOW_DAYS) }).success).toBe(
-      true
-    );
-    expect(
-      FeedbackRollupQuerySchema.safeParse({ from: at(0), to: at(FEEDBACK_ROLLUP_MAX_WINDOW_DAYS + 1) }).success
-    ).toBe(false);
+    expect(FeedbackRollupQuerySchema.safeParse({ from: at(0), to: at(366) }).success).toBe(true);
+    expect(FeedbackRollupQuerySchema.safeParse({ from: at(0), to: at(367) }).success).toBe(false);
   });
 
   it('strips a userId the caller tried to smuggle in - the principal is never taken from the query', () => {

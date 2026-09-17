@@ -31,10 +31,11 @@ vi.mock('@server/middlewares/baseApi', () => {
   };
 });
 
-const mockAggregate = vi.fn<(pipeline: unknown) => Promise<unknown[]>>(() => Promise.resolve([]));
+const mockAggregate = vi.fn<(pipeline: unknown, options?: unknown) => Promise<unknown[]>>(() => Promise.resolve([]));
 
 vi.mock('@bike4mind/database', () => ({
-  FeedbackModel: { aggregate: (pipeline: unknown) => mockAggregate(pipeline) },
+  FeedbackModel: { aggregate: (pipeline: unknown, options: unknown) => mockAggregate(pipeline, options) },
+  FeedbackTextModel: { collection: { name: 'feedbacktexts' } },
 }));
 
 import '@pages/api/feedback/rollup';
@@ -108,6 +109,13 @@ describe('GET /api/feedback/rollup', () => {
     expect(body.to).toBe(at(7));
   });
 
+  it('marks the response private and uncacheable - a per-principal aggregate must never be shared', async () => {
+    const { req, res } = buildRequest({ from: at(0), to: at(7) }, 'session-user');
+    await runHandler(req, res);
+
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+  });
+
   // 422, not 400: errorHandler is the router's onError and maps a ZodError onto
   // UnprocessableEntityError, so that is the envelope a bad window actually comes back in.
   it.each([
@@ -116,12 +124,20 @@ describe('GET /api/feedback/rollup', () => {
     ['a reversed window', { from: at(7), to: at(0) }],
     ['an empty window', { from: at(0), to: at(0) }],
     ['a non-date bound', { from: 'last tuesday', to: at(7) }],
-    ['a window past the day cap', { from: at(0), to: at(FEEDBACK_ROLLUP_MAX_WINDOW_DAYS + 1) }],
+    // 367, not FEEDBACK_ROLLUP_MAX_WINDOW_DAYS + 1: the over-cap window must be pinned to a
+    // literal so this fails if the constant is ever widened, rather than scaling with it.
+    ['a window past the day cap', { from: at(0), to: at(367) }],
   ])('rejects %s', async (_label, query) => {
     const { req, res } = buildRequest(query, 'session-user');
     await runHandler(req, res);
 
     expect(res._getStatusCode()).toBe(422);
     expect(mockAggregate).not.toHaveBeenCalled();
+  });
+
+  // Pinned so a widened constant is caught here rather than silently rescaling the literal
+  // window above.
+  it('pins the window cap at 366 days', () => {
+    expect(FEEDBACK_ROLLUP_MAX_WINDOW_DAYS).toBe(366);
   });
 });

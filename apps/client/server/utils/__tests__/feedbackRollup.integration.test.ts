@@ -5,17 +5,14 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
-import { FeedbackModel } from '@bike4mind/database';
-import { FeedbackStatus, type IFeedback } from '@bike4mind/common';
+import { FeedbackModel, FeedbackTextModel } from '@bike4mind/database';
+import { FeedbackStatus, FEEDBACK_ROLLUP_TOP_N, type IFeedback } from '@bike4mind/common';
 import { buildFeedbackRollupPipeline, toFeedbackRollupResponse, type FeedbackRollupFacet } from '../feedbackRollup';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const FROM = new Date('2026-01-01T00:00:00.000Z');
 const TO = new Date('2026-02-01T00:00:00.000Z');
-// Chosen so the 90-day text cutoff lands mid-window: reports before 2026-01-15 have lost their
-// text, reports after it still have it.
-const NOW = new Date('2026-04-15T00:00:00.000Z');
 
 const USER_A = 'user-a';
 const USER_B = 'user-b';
@@ -47,23 +44,31 @@ afterAll(async () => {
   await mongoServer?.stop();
 });
 
+const textStoredIds = Array.from({ length: 10 }, () => new mongoose.Types.ObjectId());
+
 beforeEach(async () => {
   await FeedbackModel.deleteMany({});
+  await FeedbackTextModel.deleteMany({});
   await FeedbackModel.insertMany(
     [
-      // Text still readable: after the cutoff, and the sibling row was written.
-      ...seed(10, new Date('2026-01-20T00:00:00.000Z'), {
-        userId: USER_A,
-        sessionId: 'a-session-1',
-        questId: 'a-quest-1',
-        subject: 'turn',
-        status: FeedbackStatus.New,
-        // The same tag twice: the create contract does not dedupe, so this is what a real row
-        // can look like and it must still count once.
-        tags: ['ux', 'ux'],
-        contentStored: true,
-      }),
-      // Text expired: before the cutoff. No questId at all.
+      // Text still readable: each of these carries a live FeedbackText sibling row.
+      ...textStoredIds.map(_id => ({
+        _id,
+        ...seed(1, new Date('2026-01-20T00:00:00.000Z'), {
+          userId: USER_A,
+          sessionId: 'a-session-1',
+          questId: 'a-quest-1',
+          subject: 'turn',
+          status: FeedbackStatus.New,
+          // The same tag twice: the create contract does not dedupe, so this is what a real row
+          // can look like and it must still count once.
+          tags: ['ux', 'ux'],
+          contentStored: true,
+        })[0],
+      })),
+      // Text expired: contentStored is set but no sibling row exists and no inline content
+      // remains - the report itself being "old" is irrelevant to the new derivation. No questId
+      // at all.
       ...seed(5, new Date('2026-01-10T00:00:00.000Z'), {
         userId: USER_A,
         sessionId: 'a-session-2',
@@ -98,10 +103,13 @@ beforeEach(async () => {
     // "now", which would make the bound assertions below vacuous.
     { timestamps: false }
   );
+  await FeedbackTextModel.insertMany(
+    textStoredIds.map(_id => ({ _id, content: 'still readable', expiresAt: new Date('2099-01-01T00:00:00.000Z') }))
+  );
 });
 
 const runRollup = async (scope: Record<string, unknown>) => {
-  const [facet] = await FeedbackModel.aggregate<FeedbackRollupFacet>(buildFeedbackRollupPipeline(scope, FROM, TO, NOW));
+  const [facet] = await FeedbackModel.aggregate<FeedbackRollupFacet>(buildFeedbackRollupPipeline(scope, FROM, TO));
   return toFeedbackRollupResponse(facet, FROM, TO);
 };
 
@@ -151,12 +159,12 @@ describe('feedback rollup against a real collection', () => {
     // which is what keeps consecutive windows summing to the same total as one wide one.
     const nextTo = new Date('2026-03-01T00:00:00.000Z');
     const [adjoining] = await FeedbackModel.aggregate<FeedbackRollupFacet>(
-      buildFeedbackRollupPipeline({ userId: USER_A }, TO, nextTo, NOW)
+      buildFeedbackRollupPipeline({ userId: USER_A }, TO, nextTo)
     );
     expect(toFeedbackRollupResponse(adjoining, TO, nextTo).total).toBe(1);
   });
 
-  it('splits text availability by the retention cutoff and ignores reports that never had text', async () => {
+  it('splits text availability by the FeedbackText sibling and ignores reports that never had text', async () => {
     const response = await runRollup({ userId: USER_A });
 
     expect(response.textAvailability).toEqual({ stored: 10, expired: 5 });
@@ -173,10 +181,101 @@ describe('feedback rollup against a real collection', () => {
   });
 
   it('walks the userId/createdAt index rather than scanning the collection', async () => {
-    const plan = await FeedbackModel.aggregate(
-      buildFeedbackRollupPipeline({ userId: USER_A }, FROM, TO, NOW)
-    ).explain();
+    const plan = await FeedbackModel.aggregate(buildFeedbackRollupPipeline({ userId: USER_A }, FROM, TO)).explain();
 
     expect(JSON.stringify(plan)).toContain('feedback_userId_createdAt');
+  });
+
+  it('sorts a dimension back into descending count regardless of insertion order', async () => {
+    const userId = 'sort-order-user';
+    await FeedbackModel.insertMany(
+      [
+        // Inserted lowest-count-first: only the aggregation's own $sort can make the response
+        // descending, since insertion order alone would not.
+        ...seed(1, new Date('2026-01-05T00:00:00.000Z'), { userId, subject: 'session' }),
+        ...seed(3, new Date('2026-01-05T00:00:00.000Z'), { userId, subject: 'turn' }),
+      ],
+      { timestamps: false }
+    );
+
+    const response = await runRollup({ userId });
+
+    expect(response.buckets.subject.buckets).toEqual([
+      { key: 'turn', count: 3 },
+      { key: 'session', count: 1 },
+    ]);
+  });
+
+  it('does not truncate a dimension holding exactly the top-N ceiling', async () => {
+    const userId = 'exact-ceiling-user';
+    await FeedbackModel.insertMany(
+      Array.from({ length: FEEDBACK_ROLLUP_TOP_N }, (_, index) =>
+        seed(1, new Date('2026-01-05T00:00:00.000Z'), { userId, sessionId: `session-${index}` })
+      ).flat(),
+      { timestamps: false }
+    );
+
+    const response = await runRollup({ userId });
+
+    expect(response.buckets.sessionId.buckets).toHaveLength(FEEDBACK_ROLLUP_TOP_N);
+    expect(response.buckets.sessionId.truncated).toBe(false);
+  });
+
+  it('ignores contextQuestId in the questId dimension - only questId itself counts', async () => {
+    const userId = 'context-quest-user';
+    await FeedbackModel.insertMany(
+      seed(1, new Date('2026-01-05T00:00:00.000Z'), { userId, contextQuestId: 'ctx-quest-1' }),
+      {
+        timestamps: false,
+      }
+    );
+
+    const response = await runRollup({ userId });
+
+    expect(response.total).toBe(1);
+    expect(response.buckets.questId.buckets).toEqual([]);
+  });
+
+  it('ties every subject bucket and every status bucket back to the same total', async () => {
+    const response = await runRollup({ userId: USER_A });
+
+    const subjectSum = response.buckets.subject.buckets.reduce((sum, bucket) => sum + bucket.count, 0);
+    const statusSum = response.buckets.status.buckets.reduce((sum, bucket) => sum + bucket.count, 0);
+
+    expect(subjectSum).toBe(response.total);
+    expect(statusSum).toBe(response.total);
+  });
+
+  it('derives text availability from the sibling row and $content type, per hydrateFeedbackText', async () => {
+    const userId = 'text-derivation-user';
+    const liveSiblingId = new mongoose.Types.ObjectId();
+
+    await FeedbackModel.insertMany(
+      [
+        // Pre-split legacy shape: inline content, no sibling row -> STORED.
+        ...seed(1, new Date('2026-01-05T00:00:00.000Z'), {
+          userId,
+          contentStored: true,
+          content: 'legacy inline text',
+        }),
+        // contentStored true, no sibling, no inline content -> EXPIRED.
+        ...seed(1, new Date('2026-01-05T00:00:00.000Z'), { userId, contentStored: true }),
+        // contentStored false -> counted in neither arm, regardless of content.
+        ...seed(1, new Date('2026-01-05T00:00:00.000Z'), { userId, contentStored: false }),
+        // A live sibling row -> STORED.
+        { _id: liveSiblingId, ...seed(1, new Date('2026-01-05T00:00:00.000Z'), { userId, contentStored: true })[0] },
+      ],
+      { timestamps: false }
+    );
+    await FeedbackTextModel.create({
+      _id: liveSiblingId,
+      content: 'still readable',
+      expiresAt: new Date('2099-01-01T00:00:00.000Z'),
+    });
+
+    const response = await runRollup({ userId });
+
+    expect(response.total).toBe(4);
+    expect(response.textAvailability).toEqual({ stored: 2, expired: 1 });
   });
 });

@@ -20,10 +20,16 @@ import {
  * into an aggregate over everybody's reports. An admin gets their own rollup here like anyone
  * else; an organization-wide rollup is a separate, separately-authorized route.
  *
- * The aggregate is uncached and heavier than the paged list. It carries no rate-limit option of
- * its own: the window cap in FeedbackRollupQuerySchema and the shared per-dimension top-N are
- * what bound the work a single request can ask for.
+ * The aggregate is uncached and heavier than the paged list. The window cap in
+ * FeedbackRollupQuerySchema and the shared per-dimension top-N bound the MATCHED set and the
+ * RESPONSE size respectively - top-N is applied per arm only after $group has already
+ * accumulated the whole matched set, so it never bounds the work a request can ask for. This
+ * route carries no rate-limit option of its own (no JWT-path limiter exists), so `maxTimeMS`
+ * below is the actual per-request work bound.
  */
+// Same value/shape as apps/client/pages/api/users/counterLogs.ts's own aggregate timeout.
+const FEEDBACK_ROLLUP_MAX_TIME_MS = 45000;
+
 const handler = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
   // Explicit rather than inherited: `jwtOnly` already rejects an unauthenticated request, but a
   // rollup that fell through to an undefined scope would aggregate the whole collection.
@@ -38,8 +44,13 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
   const from = parseFeedbackRollupBound(query.from);
   const to = parseFeedbackRollupBound(query.to);
 
-  const [facet] = await FeedbackModel.aggregate<FeedbackRollupFacet>(buildFeedbackRollupPipeline({ userId }, from, to));
+  const [facet] = await FeedbackModel.aggregate<FeedbackRollupFacet>(
+    buildFeedbackRollupPipeline({ userId }, from, to),
+    { maxTimeMS: FEEDBACK_ROLLUP_MAX_TIME_MS }
+  );
 
+  // A per-principal aggregate: never a shared cache entry, and never stored by an intermediary.
+  res.setHeader('Cache-Control', 'private, no-store');
   return res.json(toFeedbackRollupResponse(facet, from, to));
 });
 
