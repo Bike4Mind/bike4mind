@@ -19,7 +19,7 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 
 // Matches the counts route: an owner can re-run this with one date-picker drag.
-const ITEMS_RATE_LIMIT = { limit: 10, windowMs: 60 * 1000 } as const;
+const ITEMS_RATE_LIMIT = { limit: 10, windowMs: 60 * 1000, bucket: 'organizations/feedback-report-items' } as const;
 
 // Deep paging past this is a sign the caller wants the window narrowed, not the offset raised,
 // and an unbounded `skip` is a full-collection walk per request.

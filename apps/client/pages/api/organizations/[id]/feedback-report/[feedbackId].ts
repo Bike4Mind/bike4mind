@@ -12,7 +12,9 @@ import { isValidObjectId } from '@server/utils/objectId';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { Request, Response } from 'express';
 
-const DRILLDOWN_RATE_LIMIT = { limit: 60, windowMs: 60 * 1000 } as const;
+// Bucketed explicitly: the pathname embeds the feedback id, so the default would give every row
+// its own counter and leave enumeration effectively uncapped.
+const DRILLDOWN_RATE_LIMIT = { limit: 60, windowMs: 60 * 1000, bucket: 'organizations/feedback-report-item' } as const;
 
 // One message for every denial - unknown id, malformed id, foreign org stamp, author no longer in
 // the org. A caller who may administer the org still must not learn which feedback ids exist

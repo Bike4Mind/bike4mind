@@ -182,6 +182,8 @@ export async function runOrgFeedbackSummary(message: OrgFeedbackSummaryMessage, 
   }
 
   try {
+    // A redelivery re-running a failed job works against a window that job already released, so
+    // the status moves without re-taking `activeKey`: a newer job may hold the window by now.
     await OrgFeedbackSummaryJob.updateOne({ summaryJobId }, { status: 'processing' });
     await sendProgress(userId, summaryJobId, organizationId, 'processing', 10);
 
@@ -220,7 +222,7 @@ export async function runOrgFeedbackSummary(message: OrgFeedbackSummaryMessage, 
     });
 
     // `activeKey` moves to the job's own id at every terminal state, which is what releases this
-    // (org, window) for a later re-run - see the model's note. Nothing else may write it.
+    // (org, window) for a later re-run - see the model's note.
     await OrgFeedbackSummaryJob.updateOne(
       { summaryJobId },
       { status: 'completed', s3Key: key, activeKey: summaryJobId }

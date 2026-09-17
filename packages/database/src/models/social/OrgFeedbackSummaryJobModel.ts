@@ -20,7 +20,8 @@ export const ORG_FEEDBACK_SUMMARY_ACTIVE_KEY = 'active';
  * processing" is not expressible, and DocumentDB restricts partial indexes further still. Instead
  * `activeKey` holds a constant while the job is in flight and switches to the job's own id when it
  * reaches a terminal state, which makes every finished row unique on its own and frees the window
- * for a re-run. Keep the field in lockstep with `status`; nothing else may write it.
+ * for a re-run. Only the route's create and enqueue-failure paths and the worker's terminal writes
+ * set it; a redelivery re-running a failed job deliberately does not re-take it.
  */
 export interface IOrgFeedbackSummaryJobDoc {
   _id: string;
@@ -31,7 +32,7 @@ export interface IOrgFeedbackSummaryJobDoc {
   endDate: Date;
   status: OrgFeedbackSummaryJobStatus;
   activeKey: string;
-  /** Set once the artifact is written; the signed URL is minted per read, never stored. */
+  /** Set once the artifact is written; the read route fetches the object itself, so no URL is handed out. */
   s3Key?: string;
   errorMessage?: string;
   createdAt: Date;

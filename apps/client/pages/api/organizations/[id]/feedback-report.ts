@@ -15,7 +15,7 @@ import { z } from 'zod';
 // Session-only, like every sibling under organizations/[id]/ - no api-contract, no API key.
 // A $facet over the feedback collection is the most expensive read in this area and an owner can
 // re-run it with one date-picker drag, so it is capped where the sibling reads are not.
-const REPORT_RATE_LIMIT = { limit: 10, windowMs: 60 * 1000 } as const;
+const REPORT_RATE_LIMIT = { limit: 10, windowMs: 60 * 1000, bucket: 'organizations/feedback-report' } as const;
 
 const subjectSchema = z.enum(FEEDBACK_SUBJECTS).optional();
 

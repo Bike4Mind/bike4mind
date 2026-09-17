@@ -250,10 +250,10 @@ export const OrgFeedbackSummaryProgressAction = z.object({
   organizationId: z.string(),
   status: z.enum(['processing', 'completed', 'failed']),
   progress: z.number(),
+  // No summary content or artifact location rides this frame on purpose: the client re-reads
+  // GET /api/organizations/:id/feedback-summary, which re-checks the org gate before it hands the
+  // artifact over. Anything pushed down the socket would skip that check.
   errorMessage: z.string().optional(),
-  // No summary URL rides this frame on purpose: the artifact's signed URL expires, so the client
-  // re-reads GET /api/organizations/:id/feedback-summary, which re-signs and re-checks the org
-  // gate. A URL pushed down the socket would do neither.
   clientId: z.string().optional(),
 });
 export type IOrgFeedbackSummaryProgressAction = z.infer<typeof OrgFeedbackSummaryProgressAction>;

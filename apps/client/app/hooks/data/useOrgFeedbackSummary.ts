@@ -60,7 +60,7 @@ export function useOrgFeedbackSummary(orgId: string, range: OrgFeedbackRange) {
     });
     return unsubscribe;
 
-    // is a new reference every render; its contents are the real dependency.
+    // `queryKey` is a new reference every render; its contents are the real dependency.
   }, [orgId, startDate, endDate, subscribeToAction, queryClient]);
 
   return { ...query, generate };
