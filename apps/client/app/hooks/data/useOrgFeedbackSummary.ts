@@ -11,6 +11,21 @@ export const summaryWindow = (range: OrgFeedbackRange) => ({
   endDate: new Date(`${range.to}T23:59:59.999Z`).toISOString(),
 });
 
+/**
+ * How often to re-read a job that is still running.
+ *
+ * The websocket frame only reaches the requester the job was created for, and the dedup path hands
+ * a second owner the FIRST requester's job id without enqueuing anything - so whoever joins an
+ * in-flight window gets no frame at all and would otherwise sit on 'processing' forever. Polling
+ * is the floor under that, and under a dropped socket; the frame is still what makes the common
+ * case feel immediate.
+ */
+const ACTIVE_POLL_MS = 5000;
+
+/** `false` is react-query's "stop polling", so a finished job costs nothing. */
+export const summaryPollInterval = (status?: OrgFeedbackSummaryView['status']): number | false =>
+  status === 'pending' || status === 'processing' ? ACTIVE_POLL_MS : false;
+
 export const orgFeedbackSummaryQueryKeys = {
   summary: (orgId: string, startDate: string, endDate: string) =>
     ['org-feedback-summary', orgId, startDate, endDate] as const,
@@ -19,9 +34,10 @@ export const orgFeedbackSummaryQueryKeys = {
 /**
  * The LLM summary for one window: what exists now, plus the button that asks for one.
  *
- * The worker owns the job, so this hook does not poll it. The completion frame arrives over the
- * websocket and only invalidates the query - the route is what re-reads the artifact, because it
- * is also what re-checks the org gate.
+ * The completion frame arrives over the websocket and only invalidates the query - the route is
+ * what re-reads the artifact, because it is also what re-checks the org gate. A running job is
+ * also polled, because the frame does not reach everyone who is watching the window (see
+ * `summaryPollInterval`).
  */
 export function useOrgFeedbackSummary(orgId: string, range: OrgFeedbackRange) {
   const queryClient = useQueryClient();
@@ -37,6 +53,7 @@ export function useOrgFeedbackSummary(orgId: string, range: OrgFeedbackRange) {
       });
       return response.data;
     },
+    refetchInterval: query => summaryPollInterval(query.state.data?.status),
   });
 
   const generate = useMutation({

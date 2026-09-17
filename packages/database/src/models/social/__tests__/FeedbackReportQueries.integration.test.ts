@@ -176,6 +176,27 @@ describe('orgFeedbackReport', () => {
     expect(report.membership.memberCount).toBe(0);
   });
 
+  it('narrows every bucket to the requested subject, not just the bySubject one', async () => {
+    // The route forwards `subject` to the aggregate; nothing until here proved the aggregate
+    // actually matches on it rather than quietly counting the whole window.
+    const orgId = oid();
+    const author = oid();
+    await makeUser(author, 'Author');
+    await makeFeedback({ userId: author, organizationId: orgId, createdAt: JAN_10, subject: 'product' });
+    await makeFeedback({ userId: author, organizationId: orgId, createdAt: JAN_11, subject: 'session' });
+
+    const report = await orgFeedbackReport({
+      organizationId: orgId,
+      ...WINDOW,
+      members: population([author]),
+      subject: 'session',
+    });
+
+    expect(report.totals).toEqual({ count: 1 });
+    expect(report.bySubject).toEqual([{ key: 'session', count: 1 }]);
+    expect(report.byDay).toEqual([{ day: '2026-01-11', count: 1 }]);
+  });
+
   it('buckets a row whose optional type was never set rather than dropping it', async () => {
     const orgId = oid();
     const author = oid();

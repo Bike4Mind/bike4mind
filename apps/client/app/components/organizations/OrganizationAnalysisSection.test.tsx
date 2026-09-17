@@ -5,7 +5,13 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const useOrgFeedbackReport = vi.hoisted(() => vi.fn());
-vi.mock('@client/app/hooks/data/orgFeedbackReport', () => ({ useOrgFeedbackReport }));
+// The drill-down hooks come along transitively through the counts panel; the drill-down has its
+// own test, and a mock factory that omits an export the module graph imports fails at load.
+vi.mock('@client/app/hooks/data/orgFeedbackReport', () => ({
+  useOrgFeedbackReport,
+  useOrgFeedbackItems: vi.fn(() => ({ data: undefined, isFetching: false, isError: false, error: null })),
+  useOrgFeedbackItem: vi.fn(() => ({ data: undefined, isFetching: false, isError: false, error: null })),
+}));
 // Stubbed to a marker: the panel has its own test, and it reaches the api and websocket contexts.
 vi.mock('@client/app/components/organizations/OrgFeedbackSummaryPanel', () => ({
   default: () => <div data-testid="feedback-summary-panel" />,

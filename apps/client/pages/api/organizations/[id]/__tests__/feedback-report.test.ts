@@ -89,6 +89,16 @@ describe('GET /api/organizations/[id]/feedback-report', () => {
     expect(orgFeedbackReport).not.toHaveBeenCalled();
   });
 
+  it('refuses a window longer than a year, the same ceiling the summary route enforces', async () => {
+    await expect(invoke({ from: '2024-01-01', to: '2026-01-01' })).rejects.toThrow(/must not exceed 365 days/);
+    expect(orgFeedbackReport).not.toHaveBeenCalled();
+  });
+
+  it('allows a window right at the ceiling', async () => {
+    await invoke({ from: '2026-01-02', to: '2027-01-01' });
+    expect(orgFeedbackReport).toHaveBeenCalled();
+  });
+
   it('hands the aggregate the population the repository returned, discrepancy lists included', async () => {
     const res = await invoke({ from: '2026-01-05', to: '2026-01-06', subject: 'session' });
 

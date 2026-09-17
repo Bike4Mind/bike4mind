@@ -66,7 +66,7 @@ describe('ensure-feedback-org-createdAt-index migration (real DB)', () => {
     // the report actually landing on it rather than on feedback_org_subject_createdAt, which would
     // serve the same read behind a blocking sort.
     await migration.up();
-    const subjects = ['product', 'session', 'quest'];
+    const subjects = ['product', 'session', 'turn'];
     await FeedbackModel.collection.insertMany(
       Array.from({ length: 90 }, (_, i) => ({
         userId: `u${i}`,
@@ -81,7 +81,10 @@ describe('ensure-feedback-org-createdAt-index migration (real DB)', () => {
     );
 
     const plan = await FeedbackModel.collection
-      .find({ organizationId: ORG_ID, createdAt: { $gte: new Date(Date.UTC(2026, 0, 5)), $lt: new Date(Date.UTC(2026, 0, 20)) } })
+      .find({
+        organizationId: ORG_ID,
+        createdAt: { $gte: new Date(Date.UTC(2026, 0, 5)), $lt: new Date(Date.UTC(2026, 0, 20)) },
+      })
       .sort({ createdAt: -1 })
       .explain('queryPlanner');
 

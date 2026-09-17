@@ -1,14 +1,22 @@
 import { FeedbackCountBucket, OrgFeedbackReport } from '@bike4mind/common';
+import OrgFeedbackDrilldownPanel from '@client/app/components/organizations/OrgFeedbackDrilldownPanel';
 import { useOrgFeedbackReport, type OrgFeedbackRange } from '@client/app/hooks/data/orgFeedbackReport';
 import { getErrorMessage } from '@client/app/utils/error';
-import { Alert, Box, CircularProgress, Sheet, Stack, Typography } from '@mui/joy';
-import { FC } from 'react';
+import { Alert, Box, Button, CircularProgress, Sheet, Stack, Typography } from '@mui/joy';
+import { FC, useState } from 'react';
 
-const CountTable: FC<{ title: string; testId: string; rows: { key: string; count: number }[] }> = ({
-  title,
-  testId,
-  rows,
-}) => (
+/**
+ * A grouping's rows. `onSelect` is what makes a count drillable; only the groupings the list route
+ * can actually filter by get one, because a cell that opened an unfiltered list would be lying
+ * about which rows are behind it.
+ */
+const CountTable: FC<{
+  title: string;
+  testId: string;
+  rows: { key: string; count: number }[];
+  onSelect?: (key: string) => void;
+  selectedKey?: string | null;
+}> = ({ title, testId, rows, onSelect, selectedKey }) => (
   <Sheet variant="soft" sx={{ p: 2, borderRadius: 'sm', minWidth: 220, flex: 1 }} data-testid={testId}>
     <Typography level="title-sm" sx={{ mb: 1 }}>
       {title}
@@ -17,12 +25,26 @@ const CountTable: FC<{ title: string; testId: string; rows: { key: string; count
       <Typography level="body-sm">None</Typography>
     ) : (
       <Stack spacing={0.5}>
-        {rows.map(row => (
-          <Box key={row.key} sx={{ display: 'flex', justifyContent: 'space-between', gap: 2 }}>
-            <Typography level="body-sm">{row.key}</Typography>
-            <Typography level="body-sm">{row.count}</Typography>
-          </Box>
-        ))}
+        {rows.map(row =>
+          onSelect ? (
+            <Button
+              key={row.key}
+              variant={selectedKey === row.key ? 'soft' : 'plain'}
+              size="sm"
+              data-testid={`${testId}-row-${row.key}`}
+              onClick={() => onSelect(row.key)}
+              sx={{ justifyContent: 'space-between', gap: 2, fontWeight: 'normal' }}
+            >
+              <Typography level="body-sm">{row.key}</Typography>
+              <Typography level="body-sm">{row.count}</Typography>
+            </Button>
+          ) : (
+            <Box key={row.key} sx={{ display: 'flex', justifyContent: 'space-between', gap: 2 }}>
+              <Typography level="body-sm">{row.key}</Typography>
+              <Typography level="body-sm">{row.count}</Typography>
+            </Box>
+          )
+        )}
       </Stack>
     )}
   </Sheet>
@@ -35,6 +57,7 @@ const asRows = (buckets: FeedbackCountBucket[]) => buckets.map(bucket => ({ key:
  * does, so a second panel reading the same window is an added sibling rather than a rewrite.
  */
 const FeedbackCountsPanel: FC<{ organizationId: string; range: OrgFeedbackRange }> = ({ organizationId, range }) => {
+  const [openSubject, setOpenSubject] = useState<string | null>(null);
   const { data, isFetching, isError, error } = useOrgFeedbackReport(organizationId, range, { enabled: true });
 
   if (isFetching) {
@@ -72,7 +95,13 @@ const FeedbackCountsPanel: FC<{ organizationId: string; range: OrgFeedbackRange 
       </Typography>
 
       <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
-        <CountTable title="By subject" testId="org-analysis-by-subject" rows={asRows(report.bySubject)} />
+        <CountTable
+          title="By subject"
+          testId="org-analysis-by-subject"
+          rows={asRows(report.bySubject)}
+          selectedKey={openSubject}
+          onSelect={key => setOpenSubject(current => (current === key ? null : key))}
+        />
         <CountTable title="By type" testId="org-analysis-by-type" rows={asRows(report.byType)} />
         <CountTable title="By status" testId="org-analysis-by-status" rows={asRows(report.byStatus)} />
       </Stack>
@@ -91,6 +120,10 @@ const FeedbackCountsPanel: FC<{ organizationId: string; range: OrgFeedbackRange 
         {/* Rows carrying no tag are absent here, so these do not sum to the total. */}
         <CountTable title="By tag" testId="org-analysis-by-tag" rows={asRows(report.byTag)} />
       </Stack>
+
+      {openSubject !== null && (
+        <OrgFeedbackDrilldownPanel organizationId={organizationId} range={range} subject={openSubject} />
+      )}
 
       {(membership.aclOnly.length > 0 || membership.stampOnly.length > 0) && (
         <Alert color="neutral" data-testid="org-analysis-membership-note">

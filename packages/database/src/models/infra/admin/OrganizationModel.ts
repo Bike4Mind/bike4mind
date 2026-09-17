@@ -458,8 +458,8 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
       this.organizationModel.findOne({ _id: organizationId }, { userId: 1, users: 1 }).lean(),
       User.find({ organizationId }, { _id: 1 }).lean(),
     ]);
-    // Includes soft-deleted (the plugin filters the find), which is the same answer the reverse
-    // lookup gives. The route has already 404'd by the time this runs.
+    // softDeletePlugin hooks the find, so a soft-deleted org answers empty here - the same answer
+    // the reverse lookup gives. The route has already 404'd by the time this runs.
     if (!org) return empty;
 
     // The owner holds a seat without a users[] row of their own, so the ACL arm is never empty.

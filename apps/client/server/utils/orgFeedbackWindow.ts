@@ -8,6 +8,13 @@ import { z } from 'zod';
 
 const DEFAULT_WINDOW_DAYS = 30;
 
+// The same ceiling the LLM summary route puts on its own window. These two routes run the $facet
+// aggregate and its paged sibling, which are the most expensive reads in this area, so leaving
+// them unbounded while the cheaper path is capped gets it backwards: byDay alone emits one row
+// per day of whatever range the caller asks for.
+export const MAX_WINDOW_DAYS = 365;
+const MAX_WINDOW_MS = MAX_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
 const windowSchema = z.object({
   from: dateParam.optional(),
   to: dateParam.optional(),
@@ -35,6 +42,9 @@ export function resolveReportWindow(query: { from?: string; to?: string }): { fr
       : dayjs(toDate).subtract(DEFAULT_WINDOW_DAYS, 'days').startOf('day').toDate()
   );
   if (fromDate > toDate) throw new BadRequestError('Invalid range: from must not be after to');
+  if (toDate.getTime() - fromDate.getTime() > MAX_WINDOW_MS) {
+    throw new BadRequestError(`Range must not exceed ${MAX_WINDOW_DAYS} days`);
+  }
 
   return { from: fromDate, to: toDate };
 }

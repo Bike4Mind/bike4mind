@@ -54,7 +54,7 @@ const ITEM = {
   userId: 'u1',
   username: 'user-u1',
   subject: 'turn',
-  status: 'new',
+  status: 'New',
   tags: [],
   contentStored: true,
 };
