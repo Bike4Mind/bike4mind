@@ -1,5 +1,61 @@
 # @bike4mind/services
 
+## 11.0.0
+
+### Major Changes
+
+- [#2932](https://github.com/Bike4Mind/bike4mind/pull/2932) [`4717962`](https://github.com/Bike4Mind/bike4mind/commit/4717962ddba858b806befe85578d29ac59c41e2f) Thanks [@jasonbdaro](https://github.com/jasonbdaro)! - owner-gate lake access widening and replace the invite bearer secret
+
+- [#2389](https://github.com/Bike4Mind/bike4mind/pull/2389) [`9f936cd`](https://github.com/Bike4Mind/bike4mind/commit/9f936cd95670f4e4a254e457ccd5156da26e8242) Thanks [@julsanchez](https://github.com/julsanchez)! - Require the `agents` adapter on the `createUserApiKey` and `updateEmbedKey` service inputs. It was typed optional but threw at runtime when minting or rebinding an `embed:chat` key, so a consumer could compile clean and then fail at runtime; the requirement is now enforced at the type level (the runtime guard remains as defense in depth). Because it is now required on the input, every caller of these two services must pass `db.agents` (a repository exposing `findById`) to compile, not only the ones that mint or configure embed keys.
+
+### Minor Changes
+
+- [#2916](https://github.com/Bike4Mind/bike4mind/pull/2916) [`1f4cf3e`](https://github.com/Bike4Mind/bike4mind/commit/1f4cf3e673a53ab86e7710e20a1bf031751aaf8f) Thanks [@onoya](https://github.com/onoya)! - lock the lake-reachability clause set and close two capture-harness gaps
+
+- [#2921](https://github.com/Bike4Mind/bike4mind/pull/2921) [`c29a80d`](https://github.com/Bike4Mind/bike4mind/commit/c29a80d73048693e57572b20ba281185f795e5b6) Thanks [@vinchi777](https://github.com/vinchi777)! - pass background and output_format through for gpt-image
+
+- [#2933](https://github.com/Bike4Mind/bike4mind/pull/2933) [`be523ac`](https://github.com/Bike4Mind/bike4mind/commit/be523ac69c05c884f17b8f222898f931f23800a2) Thanks [@ken-b4m](https://github.com/ken-b4m)! - add a premium system-prompt registry contribution to codegen
+
+- [#2935](https://github.com/Bike4Mind/bike4mind/pull/2935) [`fee23c5`](https://github.com/Bike4Mind/bike4mind/commit/fee23c53d6c72f083d96dc6664f2294cbecb0b51) Thanks [@maconard](https://github.com/maconard)! - let a user see the context breakdown for their own message
+
+- [#2941](https://github.com/Bike4Mind/bike4mind/pull/2941) [`6db0ddc`](https://github.com/Bike4Mind/bike4mind/commit/6db0ddce9e850b148e6ab9bd5243122a454a6fe6) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - export a session's correction chain as evaluation triples
+
+### Patch Changes
+
+- [#2727](https://github.com/Bike4Mind/bike4mind/pull/2727) [`aa70a4a`](https://github.com/Bike4Mind/bike4mind/commit/aa70a4abe4a87af1a1966d55c20b450d457ac2b3) Thanks [@onoya](https://github.com/onoya)! - gate session-event operational spend behind a credit pre-flight
+
+- [#2919](https://github.com/Bike4Mind/bike4mind/pull/2919) [`7fb76ae`](https://github.com/Bike4Mind/bike4mind/commit/7fb76aee29b002f205b26e0cae13fbfd83c5ba27) Thanks [@jjmarfa](https://github.com/jjmarfa)! - bill chat image generation by the requested quality tier
+
+- [#2920](https://github.com/Bike4Mind/bike4mind/pull/2920) [`abfce42`](https://github.com/Bike4Mind/bike4mind/commit/abfce420f22de9373d1104d88d3648b5281ac9c1) Thanks [@vinchi777](https://github.com/vinchi777)! - normalize multimodal content across providers
+
+- [#2925](https://github.com/Bike4Mind/bike4mind/pull/2925) [`0404fe3`](https://github.com/Bike4Mind/bike4mind/commit/0404fe3d3c75c1f3f47242487375cbf645396b2f) Thanks [@jjmarfa](https://github.com/jjmarfa)! - catch a supplied absent fact in the groundedNoInvention eval
+
+- [#2938](https://github.com/Bike4Mind/bike4mind/pull/2938) [`c7e2540`](https://github.com/Bike4Mind/bike4mind/commit/c7e2540741a46e6d3e0454d28d3a77e6b89b77b0) Thanks [@MattTan257](https://github.com/MattTan257)! - keep the fallback-model badge visible until dismissed
+
+- [#2939](https://github.com/Bike4Mind/bike4mind/pull/2939) [`e477588`](https://github.com/Bike4Mind/bike4mind/commit/e477588bdee7ffa298f9a38e1b32dd2267a29430) Thanks [@allan-gar2x](https://github.com/allan-gar2x)! - surface terminal flag on refresh_recovery_capped audit event
+
+- [#2940](https://github.com/Bike4Mind/bike4mind/pull/2940) [`9030863`](https://github.com/Bike4Mind/bike4mind/commit/9030863d3f86bad75e00767b6d76254b2508daee) Thanks [@dea0030](https://github.com/dea0030)! - bill the chat edit_image tool against the model that renders
+
+- [#2950](https://github.com/Bike4Mind/bike4mind/pull/2950) [`8c3870b`](https://github.com/Bike4Mind/bike4mind/commit/8c3870b58e57fa98f97672ea8c2dbedd4d4348a3) Thanks [@vinchi777](https://github.com/vinchi777)! - spend the search budget fairly across a session's lakes
+
+- [#2951](https://github.com/Bike4Mind/bike4mind/pull/2951) [`d0ad77c`](https://github.com/Bike4Mind/bike4mind/commit/d0ad77cecbdace4bb0bdeb109aa754f76f1ee9f1) Thanks [@onoya](https://github.com/onoya)! - resolve every creator-provenance access arm through effective ownership
+
+- [#2953](https://github.com/Bike4Mind/bike4mind/pull/2953) [`a09600c`](https://github.com/Bike4Mind/bike4mind/commit/a09600c89f6366a45990afa6cb45c789ba672c4d) Thanks [@vinchi777](https://github.com/vinchi777)! - gate forced retrieval on the turn's own score spread
+
+- [#2959](https://github.com/Bike4Mind/bike4mind/pull/2959) [`145215c`](https://github.com/Bike4Mind/bike4mind/commit/145215cc4c3acd67a1921c10137e0c70576bf251) Thanks [@onoya](https://github.com/onoya)! - trim the three fattest tool schemas and guard the budget
+
+- [#2967](https://github.com/Bike4Mind/bike4mind/pull/2967) [`efe48c1`](https://github.com/Bike4Mind/bike4mind/commit/efe48c1d12ea20cc7759f61c2dc6f0ba6f1d52ee) Thanks [@onoya](https://github.com/onoya)! - scope the admin key-mint lake picker to the target user
+
+- Updated dependencies [[`9f936cd`](https://github.com/Bike4Mind/bike4mind/commit/9f936cd95670f4e4a254e457ccd5156da26e8242), [`a5dddf3`](https://github.com/Bike4Mind/bike4mind/commit/a5dddf329c18fb52da5c0b69ecb164c22cd006b6), [`17daf4c`](https://github.com/Bike4Mind/bike4mind/commit/17daf4cfae91f1b83887ce05816446c5d4834ea3), [`1f4cf3e`](https://github.com/Bike4Mind/bike4mind/commit/1f4cf3e673a53ab86e7710e20a1bf031751aaf8f), [`8edb070`](https://github.com/Bike4Mind/bike4mind/commit/8edb070c37947550d9f1fcc2b06eda15069e93a4), [`abfce42`](https://github.com/Bike4Mind/bike4mind/commit/abfce420f22de9373d1104d88d3648b5281ac9c1), [`c29a80d`](https://github.com/Bike4Mind/bike4mind/commit/c29a80d73048693e57572b20ba281185f795e5b6), [`45469bd`](https://github.com/Bike4Mind/bike4mind/commit/45469bd8142119d63393cb5fc353914633acbe88), [`4717962`](https://github.com/Bike4Mind/bike4mind/commit/4717962ddba858b806befe85578d29ac59c41e2f), [`2c9221c`](https://github.com/Bike4Mind/bike4mind/commit/2c9221c0fca6903ff823b064627bb2100c696697), [`8c3870b`](https://github.com/Bike4Mind/bike4mind/commit/8c3870b58e57fa98f97672ea8c2dbedd4d4348a3), [`d0ad77c`](https://github.com/Bike4Mind/bike4mind/commit/d0ad77cecbdace4bb0bdeb109aa754f76f1ee9f1), [`a09600c`](https://github.com/Bike4Mind/bike4mind/commit/a09600c89f6366a45990afa6cb45c789ba672c4d)]:
+  - @bike4mind/common@9.0.0
+  - @bike4mind/llm-adapters@0.15.4
+  - @bike4mind/utils@6.1.0
+  - @bike4mind/agents@1.0.10
+  - @bike4mind/auth@0.8.7
+  - @bike4mind/db-core@0.6.2
+  - @bike4mind/fab-pipeline@1.3.10
+  - @bike4mind/mcp@2.0.10
+
 ## 10.0.0
 
 ### Major Changes
