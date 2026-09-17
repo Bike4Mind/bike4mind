@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { HtmlArtifact } from '@bike4mind/common';
@@ -26,9 +26,12 @@ vi.mock('@client/app/hooks/useSessionLayout', () => {
   };
 });
 
+// Mutable so both arms of the artifacts flag get exercised. The card no longer reads it -- the
+// parameterized mount test below is the guard against seeding the expand state from it again,
+// which is what #534 was.
+const featureFlag = vi.hoisted(() => ({ artifactsEnabled: false }));
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
-  // Artifacts disabled => card mounts expanded, which is the state the bug reported (raw source).
-  useFeatureEnabled: () => ({ isFeatureEnabled: () => false }),
+  useFeatureEnabled: () => ({ isFeatureEnabled: () => featureFlag.artifactsEnabled }),
 }));
 
 vi.mock('@tanstack/react-query', () => ({
@@ -54,14 +57,38 @@ const artifact = {
 } as unknown as HtmlArtifact;
 
 describe('HtmlArtifactPreviewCard', () => {
-  it('defaults an expanded artifact to the rendered preview, not raw source', () => {
+  // Plain hoisted state, not a mock, so nothing resets it between tests -- do it here so the
+  // flag arms cannot leak into the cases below.
+  beforeEach(() => {
+    featureFlag.artifactsEnabled = false;
+  });
+
+  it.each([false, true])(
+    'mounts on the rendered preview, not raw source, with enableArtifacts=%s',
+    artifactsEnabled => {
+      featureFlag.artifactsEnabled = artifactsEnabled;
+      render(
+        <TestWrapper>
+          <HtmlArtifactPreviewCard artifact={artifact} />
+        </TestWrapper>
+      );
+      expect(screen.getByTestId('inline-artifact-preview')).toBeInTheDocument();
+      expect(screen.queryByTestId('html-artifact-source')).not.toBeInTheDocument();
+      expect(screen.queryByText(new RegExp(SENTINEL))).not.toBeInTheDocument();
+    }
+  );
+
+  it('shows no raw-source teaser once the card is collapsed', () => {
     render(
       <TestWrapper>
         <HtmlArtifactPreviewCard artifact={artifact} />
       </TestWrapper>
     );
-    expect(screen.getByTestId('inline-artifact-preview')).toBeInTheDocument();
-    expect(screen.queryByText(new RegExp(SENTINEL))).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('html-artifact-toggle-btn'));
+    expect(screen.queryByTestId('inline-artifact-preview')).not.toBeInTheDocument();
+    // The teaser was the first three lines of the file -- DOCTYPE boilerplate on every artifact.
+    expect(screen.queryByTestId('html-artifact-source')).not.toBeInTheDocument();
+    expect(screen.queryByText(/DOCTYPE/)).not.toBeInTheDocument();
   });
 
   it('shows source when the code segment of the preview toggle is selected', () => {
