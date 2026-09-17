@@ -45,6 +45,25 @@ function evictOldestCacheEntries(cache: Map<string, string>, maxSize: number): v
   }
 }
 
+/** Cache key for a resolved artifact id. Session-scoped, so one session's ids never
+ *  answer for another's. */
+const artifactCacheKey = (type: string, identifier: string, sessionId?: string) =>
+  `${sessionId ?? 'no-session'}_${type}_${identifier}`;
+
+/**
+ * Synchronous read of the module cache, for the first render rather than an effect.
+ *
+ * Resolution is async, so a component that always starts at `null` renders a placeholder
+ * for one frame on EVERY mount - including the remounts a virtualized transcript performs
+ * constantly as messages scroll in and out. The placeholder is shorter than the card that
+ * replaces it, so react-virtuoso measures the short frame and then has to correct the
+ * scroll position: the list jumps under the reader. Seeding state from here means an
+ * artifact that has been resolved once renders at its real height immediately.
+ */
+export function getCachedArtifactId(type: string, identifier: string, sessionId?: string): string | null {
+  return getArtifactIdCache().get(artifactCacheKey(type, identifier, sessionId)) ?? null;
+}
+
 /**
  * Resolve artifact IDs with caching and deduplication.
  *
@@ -68,7 +87,7 @@ export function useArtifactIdResolver() {
       sessionId?: string
     ): Promise<string> => {
       // Include sessionId in cache key to prevent cross-session contamination
-      const cacheKey = `${sessionId ?? 'no-session'}_${type}_${identifier}`;
+      const cacheKey = artifactCacheKey(type, identifier, sessionId);
 
       const artifactIdCache = getArtifactIdCache();
       const pendingResolutions = getPendingResolutions();

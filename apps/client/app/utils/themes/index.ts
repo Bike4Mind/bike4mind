@@ -59,6 +59,26 @@ declare module '@mui/joy/styles' {
       messageInputDivider: string;
       messageInputColor: string;
     };
+    /**
+     * Rendered reply markdown. Consumed by markdown/observatory.css through the
+     * `--joy-palette-reading-*` CSS variables Joy emits for this group.
+     */
+    reading: {
+      surface: string;
+      surface2: string;
+      cardTintTop: string;
+      cardTintBottom: string;
+      cardLine: string;
+      line: string;
+      line2: string;
+      ink: string;
+      ink2: string;
+      ink3: string;
+      accent: string;
+      accentSoft: string;
+      accentLine: string;
+      warnSoft: string;
+    };
     aiSettings: {
       background: string;
       cardBackground: string;

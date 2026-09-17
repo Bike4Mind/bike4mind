@@ -10,7 +10,7 @@ import { GetFileIcon } from '@client/app/utils/fabFileUtils';
 import { FC, useState, useEffect, ComponentProps, Children } from 'react';
 import { useMessageEditMode } from '@client/app/hooks/useMessageEditMode';
 import { highlightTextSearch } from '@client/app/components/GenAI/highlight';
-import { Edit as EditIcon, KeyboardArrowDown, KeyboardArrowUp } from '@mui/icons-material';
+import { EditOutlined as EditOutlinedIcon, KeyboardArrowDown, KeyboardArrowUp } from '@mui/icons-material';
 import { useContentTruncation } from '@client/app/hooks/useContentTruncation';
 import remarkBreaks from 'remark-breaks';
 import remarkMath from 'remark-math';
@@ -19,8 +19,8 @@ import { promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
 import { Components } from 'react-markdown';
 import { extractSnippetMeta } from '@bike4mind/common';
 import EditModeContent from './EditModeContent';
-import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
+import { chatActionButtonSx } from './chatActionButtonSx';
 
 const isCodeContent = (content: string): { isCode: boolean; language: string } => {
   try {
@@ -116,7 +116,6 @@ const PromptContent: FC<{
   search?: string;
 }> = ({ content, search }) => {
   const { isCode, language } = isCodeContent(content);
-  const isMobile = useIsMobile();
 
   const markdownComponents: Components = {
     p: ({ node, children, ...props }: ComponentProps<'p'> & ExtraProps) => {
@@ -138,7 +137,7 @@ const PromptContent: FC<{
       return (
         <Typography
           component="p"
-          level={isMobile ? 'body-sm' : 'body-md'}
+          level="body-md"
           gutterBottom={false}
           sx={{ display: 'block', color: 'text.primary', mb: isLast ? '0 !important' : '8px !important' }}
         >
@@ -201,7 +200,6 @@ const TruncatablePromptContent: FC<{
   search?: string;
   isEnabled?: boolean;
 }> = ({ content, search, isEnabled = true }) => {
-  const isMobile = useIsMobile();
   const { needsTruncation, isExpanded, toggleExpanded, displayContent } = useContentTruncation({
     content,
     isEnabled,
@@ -212,12 +210,22 @@ const TruncatablePromptContent: FC<{
       <Typography
         className="prompt-content"
         variant="soft"
-        level={isMobile ? 'body-sm' : 'body-md'}
+        level="body-md"
         component="div"
+        // The bubble is fill + hairline, as in the mockup: with a defined edge the
+        // fill only has to sit slightly off the page, so the existing panel token
+        // carries it and no new colour enters the palette. `border.soft` is the
+        // palette's own lightest stroke and lands within a point of the reply
+        // treatment's --b4m-md-line (markdown/observatory.css), so bubble and
+        // reply read as one system without a second hand-written rgba.
         sx={theme => ({
           margin: 0,
-          padding: 2,
+          // More horizontal than vertical: line-height already gives the text
+          // vertical relief, so equal padding reads tighter at the sides.
+          padding: '12px 16px',
           backgroundColor: theme.palette.mode === 'light' ? '#F4F7F9' : 'background.panel',
+          border: '1px solid',
+          borderColor: 'border.soft',
           borderRadius: '8px',
           color: 'text.primary',
           overflowX: 'auto',
@@ -242,21 +250,11 @@ const EditButton: FC<{
         className="edit-button"
         size="sm"
         onClick={onEdit}
-        variant="outlined"
+        variant="plain"
         color="neutral"
-        sx={{
-          width: '28px',
-          height: '28px',
-          borderRadius: '6px',
-          flexShrink: 0,
-          marginBottom: '16px',
-          '& svg': {
-            width: '16px',
-            height: '16px',
-          },
-        }}
+        sx={chatActionButtonSx}
       >
-        <EditIcon />
+        <EditOutlinedIcon />
       </IconButton>
     </Tooltip>
   );
@@ -283,7 +281,22 @@ const UserPrompt: FC<UserPromptProps> = ({ prompt, messageFiles = [], search, on
 
   if (sections.length > 0) {
     return (
-      <Box sx={{ display: 'flex', flexDirection: 'column', width: '100%', gap: 2 }}>
+      <Box
+        className="user-prompt-block"
+        sx={{
+          display: 'flex',
+          flexDirection: 'column',
+          width: '100%',
+          gap: 2,
+          // Edit belongs to the prompt, so the prompt is its hover target: reading the
+          // reply below should not summon an affordance for the message above it. Gated on
+          // a real pointer, since on touch there is no hover to reveal it with.
+          '@media (hover: hover)': {
+            '& .prompt-actions': { opacity: 0, transition: 'opacity 150ms ease' },
+            '&:hover .prompt-actions, &:focus-within .prompt-actions': { opacity: 1 },
+          },
+        }}
+      >
         <Box
           sx={{
             display: 'flex',
@@ -312,7 +325,10 @@ const UserPrompt: FC<UserPromptProps> = ({ prompt, messageFiles = [], search, on
               <Box
                 key={index}
                 sx={{
-                  maxWidth: '100%',
+                  // 78% from the mockup: the bubble hugs its content and stops
+                  // well short of the column, so a long prompt never reads as
+                  // wide as the reply under it.
+                  maxWidth: isEditMode ? '100%' : '78%',
                   minWidth: isEditMode ? '100%' : undefined,
                   alignSelf: 'end',
                   borderRadius: '8px',
@@ -407,12 +423,16 @@ const UserPrompt: FC<UserPromptProps> = ({ prompt, messageFiles = [], search, on
               )}
             </Box>
           )}
+          {/* Wrapper, not the button: MessageContent reveals .prompt-actions on message hover,
+              and the button's own resting opacity has to compose with that. */}
           {!!onEdit && !isEditMode && (
-            <EditButton
-              onEdit={() => {
-                setIsEditMode(true);
-              }}
-            />
+            <Box className="prompt-actions">
+              <EditButton
+                onEdit={() => {
+                  setIsEditMode(true);
+                }}
+              />
+            </Box>
           )}
         </Box>
       </Box>
@@ -479,8 +499,6 @@ const SnippetSection: FC<{
   search?: string;
   isEditMode: boolean;
 }> = ({ section, isExpanded, onToggle, search, isEditMode }) => {
-  const isMobile = useIsMobile();
-
   const {
     needsTruncation,
     isExpanded: isTruncationExpanded,
@@ -515,7 +533,7 @@ const SnippetSection: FC<{
           <Typography
             className="prompt-content"
             variant="soft"
-            level={isMobile ? 'body-sm' : 'body-md'}
+            level="body-md"
             component="div"
             sx={theme => ({
               margin: 0,

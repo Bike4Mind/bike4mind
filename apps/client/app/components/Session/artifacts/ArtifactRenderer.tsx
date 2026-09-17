@@ -1,7 +1,7 @@
 import React, { FC, useState, useEffect } from 'react';
 import { Box, Typography } from '@mui/joy';
 import { generateCompleteArtifactId, getArtifactTimestamp } from '@client/app/utils/artifactParser';
-import { useArtifactIdResolver } from './ArtifactIdResolver';
+import { getCachedArtifactId, useArtifactIdResolver } from './ArtifactIdResolver';
 import { getArtifactHandler, type ParsedArtifact } from './registry';
 
 // Ensure all handlers are registered
@@ -20,10 +20,17 @@ type ArtifactRendererProps = {
  */
 const ArtifactRenderer: FC<ArtifactRendererProps> = ({ artifact, index, messageId, sessionId }) => {
   const { resolveArtifactId } = useArtifactIdResolver();
-  const [resolvedId, setResolvedId] = useState<string | null>(null);
-  const [isResolving, setIsResolving] = useState(true);
+  // Seeded from the module cache rather than starting at null: resolution is async, so a
+  // null start renders the loading placeholder for a frame on every mount. In a virtualized
+  // transcript that is every time the message scrolls back into view, and since the
+  // placeholder is shorter than the card, the list measures the short frame and then jumps
+  // to correct itself. A resolved artifact now renders at its real height straight away.
+  const cachedId = getCachedArtifactId(artifact.type, artifact.identifier ?? '', sessionId);
+  const [resolvedId, setResolvedId] = useState<string | null>(cachedId);
+  const [isResolving, setIsResolving] = useState(!cachedId);
 
   useEffect(() => {
+    if (cachedId) return;
     let isCancelled = false;
 
     const resolveId = async () => {
@@ -58,7 +65,7 @@ const ArtifactRenderer: FC<ArtifactRendererProps> = ({ artifact, index, messageI
     return () => {
       isCancelled = true;
     };
-  }, [artifact.type, artifact.identifier, artifact.content, messageId, index, sessionId, resolveArtifactId]);
+  }, [artifact.type, artifact.identifier, artifact.content, messageId, index, sessionId, resolveArtifactId, cachedId]);
 
   if (isResolving || !resolvedId) {
     return (

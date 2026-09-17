@@ -1,4 +1,5 @@
 import { Chip, Tooltip, Box, Stack, Typography, Modal, ModalDialog, ModalClose, IconButton } from '@mui/joy';
+import { messageMetaChipSx } from './messageMetaChipSx';
 import { Construction as ConstructionIcon, Info as InfoIcon } from '@mui/icons-material';
 import { memo, useMemo, useState } from 'react';
 import { getToolInfo, getToolDisplayName, PublicTools } from '@client/app/utils/toolMapping';
@@ -87,18 +88,12 @@ const ToolsUsed = memo<ToolsUsedProps>(({ functionCalls = [], size = 'sm' }) => 
           size={size}
           variant="soft"
           sx={theme => ({
-            bgcolor: theme.palette.fileBrowser.statusChip.backgroundColor,
-            color: theme.palette.fileBrowser.statusChip.textColor,
-            fontSize: '13px',
-            height: '24px',
-            border: `1px solid ${theme.palette.fileBrowser.statusChip.borderColor}`,
-            gap: '4px',
-            px: '8px',
-            fontWeight: 500,
+            ...messageMetaChipSx(theme),
+            // The one chip in the row that opens something, so it keeps a hover fill.
             cursor: 'pointer',
             '&:hover': {
-              bgcolor: theme.palette.fileBrowser.statusChip.backgroundColor,
-              opacity: 0.8,
+              bgcolor: theme.palette.notebooklist.hoverBg,
+              color: theme.vars.palette.text.primary,
             },
           })}
           startDecorator={<ConstructionIcon sx={{ fontSize: 14 }} />}

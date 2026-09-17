@@ -1,6 +1,7 @@
 import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
-import { brand } from '@client/app/utils/themes/colors';
 import CopyTextButton from '@client/app/components/Session/CopyTextButton';
+import { chatActionButtonSx } from '@client/app/components/Session/chatActionButtonSx';
+import { messageMetaChipSx } from '@client/app/components/Session/messageMetaChipSx';
 import DownloadMenu from '../common/DownloadMenu';
 import PromptReplies from '@client/app/components/Session/PromptReplies';
 import RapidReplyBubble from '@client/app/components/Session/RapidReplyBubble';
@@ -15,8 +16,6 @@ import { elidedReplyWarning } from '@client/app/utils/artifactParser';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import { Menu, MenuItem, ListItemDecorator } from '@mui/joy';
 import Box from '@mui/joy/Box';
-import Button from '@mui/joy/Button';
-import Divider from '@mui/joy/Divider';
 import Dropdown from '@mui/joy/Dropdown';
 import IconButton from '@mui/joy/IconButton';
 import MenuButton from '@mui/joy/MenuButton';
@@ -33,7 +32,7 @@ import { useLLM } from '@client/app/contexts/LLMContext';
 import CodeIcon from '@mui/icons-material/Code';
 import ForkRightIcon from '@mui/icons-material/ForkRight';
 import StartIcon from '@mui/icons-material/Start';
-import BugReportIcon from '@mui/icons-material/BugReport';
+import BugReportOutlinedIcon from '@mui/icons-material/BugReportOutlined';
 import { useNavigate } from '@tanstack/react-router';
 import BugReportModal from '@client/app/components/BugReportModal';
 import EditNoteIcon from '@mui/icons-material/EditNote';
@@ -56,7 +55,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
 import { APP_NAME } from '@client/config/general';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
-import ShareIcon from '@mui/icons-material/Share';
+import ShareOutlinedIcon from '@mui/icons-material/ShareOutlined';
 import { usePublishShare } from '@client/app/hooks/usePublishShare';
 import { replyPublisher } from '@client/app/utils/publishApi';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
@@ -73,21 +72,31 @@ import ToolsUsed from '@client/app/components/Session/ToolsUsed';
 import { useMessageEditMode } from '@client/app/hooks/useMessageEditMode';
 
 const ModelChip: React.FC<{ displayName: string }> = ({ displayName }) => (
-  <Chip
-    className="model-chip-web"
-    size="sm"
-    variant="soft"
-    sx={theme => ({
-      bgcolor: theme.palette.fileBrowser.statusChip.backgroundColor,
-      color: theme.palette.fileBrowser.statusChip.textColor,
-      fontSize: '13px',
-      height: '24px',
-      border: `1px solid ${theme.palette.fileBrowser.statusChip.borderColor}`,
-      px: '8px',
-    })}
-  >
-    {displayName}
-  </Chip>
+  // The only item in the footer with no natural width limit: model names run from "GPT-4.1"
+  // to a long vendor string, and on a phone one of those pushes the row onto a second line
+  // or crowds out the actions opposite it. Capped and ellipsized, with the full name on the
+  // tooltip so nothing is lost.
+  <Tooltip title={displayName}>
+    <Chip
+      className="model-chip-web"
+      size="sm"
+      variant="soft"
+      sx={theme => ({
+        ...messageMetaChipSx(theme),
+        minWidth: 0,
+        maxWidth: { xs: '110px', sm: '220px' },
+        '& .MuiChip-label': {
+          display: 'block',
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        },
+      })}
+    >
+      {displayName}
+    </Chip>
+  </Tooltip>
 );
 
 const DeleteMessageModal = ({
@@ -318,18 +327,26 @@ const MessageContent: React.FC<ContentProps> = memo(
       >
         <IconButton
           data-testid="message-report-btn"
-          variant="outlined"
+          variant="plain"
           color={isReported ? 'warning' : 'neutral'}
           size="sm"
           onClick={handleOpenBugReportModal}
-          sx={{
-            width: '28px',
-            height: '28px',
-            flexShrink: '0',
-            borderRadius: '6px',
-          }}
+          sx={theme => ({
+            ...chatActionButtonSx,
+            // The theme overrides warning.softColor but leaves Joy's own plainColor in
+            // place, so a plain warning icon is a different orange from the soft chips.
+            // Reported state is carried by this glyph alone, so take the chip's colour.
+            ...(isReported
+              ? {
+                  '--Icon-color': theme.vars.palette.warning.softColor,
+                  // Full strength while the rest of the row rests at half: this one is
+                  // reporting a state, not just offering an action.
+                  opacity: 1,
+                }
+              : {}),
+          })}
         >
-          <BugReportIcon sx={{ fontSize: 16 }} />
+          <BugReportOutlinedIcon />
         </IconButton>
       </Tooltip>
     );
@@ -538,18 +555,18 @@ const MessageContent: React.FC<ContentProps> = memo(
       <Tooltip title="Tell the assistant what was wrong and get a corrected answer">
         <IconButton
           data-testid="message-correct-retry-btn"
-          variant="outlined"
+          variant="plain"
           color={isCorrecting ? 'primary' : 'neutral'}
           size="sm"
           onClick={() => setIsCorrecting(open => !open)}
           sx={{
-            width: '28px',
-            height: '28px',
-            flexShrink: '0',
-            borderRadius: '6px',
+            ...chatActionButtonSx,
+            // Full strength while the composer is open, like the reported glyph: the row
+            // rests at half, and this one is reporting a state rather than offering an action.
+            ...(isCorrecting ? { opacity: 1 } : {}),
           }}
         >
-          <EditNoteIcon sx={{ fontSize: 18 }} />
+          <EditNoteIcon />
         </IconButton>
       </Tooltip>
     ) : null;
@@ -580,6 +597,24 @@ const MessageContent: React.FC<ContentProps> = memo(
       publishAndShareReply,
     ]);
 
+    // One element in both action rows, like reportButton above. Icon-only: the row is
+    // otherwise all icons, and a solid CTA under every single reply outshouted them.
+    const shareButton = (
+      <Tooltip title="Publish & Share">
+        <IconButton
+          data-testid="message-publish-share-btn"
+          aria-label="Publish & Share"
+          variant="plain"
+          color="neutral"
+          size="sm"
+          onClick={handleShareReply}
+          sx={chatActionButtonSx}
+        >
+          <ShareOutlinedIcon />
+        </IconButton>
+      </Tooltip>
+    );
+
     // Get friendly model name from modelInfo repository
     const getModelDisplayName = (modelName: string): string => {
       if (!modelInfoRepo) return modelName;
@@ -595,8 +630,43 @@ const MessageContent: React.FC<ContentProps> = memo(
           gap: 2,
           width: '100%',
           maxWidth: '100%',
+          // The rule that used to separate messages carried the space as well as the line;
+          // the virtualized row around this adds none of its own.
+          ...(index !== 0 && { mt: 6 }),
           px: isMobile ? '0px' : '20px',
           overflow: 'visible',
+          // The footer belongs to the reply, and stays out of the way until the pointer is
+          // over it: this Stack spans the reply, the footer and the gap between them, so
+          // crossing that gap keeps it open. Opacity rather than display, so the row holds
+          // its space and the thread never reflows under the cursor. Buttons keep their own
+          // 50%/100% treatment on top of this, since that lives on a different element.
+          // Gated on a real pointer rather than a breakpoint - a touch device has no hover
+          // to reveal anything with, and there the rows stay visible.
+          '@media (hover: hover)': {
+            // Only older messages hide their footer. The newest one keeps its actions and
+            // metadata on screen: it is the reply most likely to be acted on, and it is what
+            // teaches the pattern - a reader who never hovers would otherwise never learn
+            // the row exists.
+            ...(!isLastMessage && {
+              '& .action-buttons-web, & .message-info': {
+                opacity: 0,
+                transition: 'opacity 200ms ease-out',
+              },
+              '&:hover, &:focus-within': {
+                '& .action-buttons-web, & .message-info': { opacity: 1 },
+              },
+              // Inverse of the row it stands in for.
+              '& .reported-badge': { opacity: 1, transition: 'opacity 200ms ease-out' },
+              '&:hover .reported-badge, &:focus-within .reported-badge': { opacity: 0 },
+              // The prompt owns its own edit affordance, so hovering it must not also summon
+              // the reply's row. It precedes the footer in the stack, so a sibling rule can
+              // undo the reveal above; it outranks it on specificity.
+              '& .user-prompt-block:hover ~ .message-footer': {
+                '& .action-buttons-web, & .message-info': { opacity: 0 },
+                '& .reported-badge': { opacity: 1 },
+              },
+            }),
+          },
         }}
         data-testid={`message-${messageData.id}`}
       >
@@ -630,17 +700,6 @@ const MessageContent: React.FC<ContentProps> = memo(
             forwardButtonText="Confirm"
             backwardButtonText="Cancel"
             loading={snipSession.isPending}
-          />
-        )}
-        {index !== 0 && (
-          <Divider
-            className="message-divider"
-            sx={{
-              mt: 4,
-              mb: 2,
-              width: '100%',
-              opacity: 0.3,
-            }}
           />
         )}
         {messageData.prompt && (
@@ -845,132 +904,48 @@ const MessageContent: React.FC<ContentProps> = memo(
             justifyContent: 'space-between',
             flexWrap: 'wrap',
             gap: '10px',
+            position: 'relative',
           }}
         >
-          <Box className="message-info" sx={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-            {adminSettings.enforceCredits &&
-            currentUser?.showCreditsUsed &&
-            !isProcessingPrompt &&
-            messageData.creditsUsed !== undefined ? (
-              <Tooltip title={`Credits Used: ${messageData.creditsUsed ?? 0}`}>
-                <Chip
-                  data-testid="credits-used"
-                  size="sm"
-                  variant="soft"
-                  sx={theme => ({
-                    bgcolor: theme.palette.fileBrowser.statusChip.backgroundColor,
-                    color: theme.palette.fileBrowser.statusChip.textColor,
-                    fontSize: '13px',
-                    height: '24px',
-                    border: `1px solid ${theme.palette.fileBrowser.statusChip.borderColor}`,
-                    gap: '4px',
-                    px: '8px',
-                    fontWeight: 500,
-                  })}
-                  startDecorator={<Bike4MindIcon size="12" fill="currentColor" />}
-                >
-                  {messageData.creditsUsed ?? 0}
-                </Chip>
-              </Tooltip>
-            ) : null}
-
-            {!isProcessingPrompt &&
-              messageData.promptMeta?.model?.name &&
-              !(messageData.researchModeResults && messageData.researchModeResults.length > 0) && (
-                <ModelChip displayName={getModelDisplayName(messageData.promptMeta.model.name)} />
-              )}
-
-            {!isProcessingPrompt && messageData.promptMeta?.functionCalls && (
-              <ToolsUsed functionCalls={messageData.promptMeta.functionCalls} size="sm" />
-            )}
-
-            {messageData.correctsQuestId && (
-              <Tooltip title="You sent this as a correction of an earlier answer">
-                <Chip
-                  data-testid="message-correction-chip"
-                  size="sm"
-                  variant="soft"
-                  color="primary"
-                  startDecorator={<EditNoteIcon sx={{ fontSize: 14 }} />}
-                >
-                  Correction
-                </Chip>
-              </Tooltip>
-            )}
-
-            {!isProcessingPrompt && isReported && (
-              <Tooltip title="You reported this message">
-                <Chip
-                  data-testid="message-reported-chip"
-                  size="sm"
-                  variant="soft"
-                  color="warning"
-                  startDecorator={<BugReportIcon sx={{ fontSize: 14 }} />}
-                >
-                  Reported
-                </Chip>
-              </Tooltip>
-            )}
-          </Box>
-
+          {/* Sits outside the action row, not in it: the row is hidden until the message is
+              hovered, and a child cannot be more opaque than its parent. Out of flow, so it
+              takes the row's resting place without displacing it. Desktop only - the mobile
+              row is always visible, where the orange glyph is already the marker. */}
+          {!isMobile && isReported && !isProcessingPrompt && !isLastMessage && (
+            <Typography
+              className="reported-badge"
+              data-testid="message-reported-badge"
+              level="body-xs"
+              sx={theme => ({
+                position: 'absolute',
+                left: 0,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                pointerEvents: 'none',
+                color: theme.vars.palette.warning.softColor,
+              })}
+            >
+              Reported
+            </Typography>
+          )}
           {!isMobile ? (
-            <Stack className="action-buttons-web" direction={'row'} gap="10px" alignItems="center">
+            <Stack className="action-buttons-web" direction={'row'} gap="8px" alignItems="center">
               {!isProcessingPrompt && (
                 <>
-                  {/* Always visible primary action */}
-                  <CopyTextButton text={extractedReplies ? extractedReplies[0] : ''} />
-                  <DownloadMenu
-                    content={extractedReplies ? extractedReplies[0] : ''}
-                    fileName={`${messageData.id}.md`}
-                  />
-                  {reportButton}
-                  {correctAndRetryButton}
-                  {hasShareableReply && (
-                    <Button
-                      data-testid="message-publish-share-btn"
-                      variant="solid"
-                      size="sm"
-                      startDecorator={<ShareIcon sx={{ fontSize: 16 }} />}
-                      onClick={handleShareReply}
-                      sx={{
-                        minHeight: '28px',
-                        flexShrink: '0',
-                        borderRadius: '6px',
-                        fontSize: '13px',
-                        backgroundColor: brand[800],
-                        color: '#fff',
-                        fontWeight: 600,
-                        transition: 'transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease',
-                        '&:hover': {
-                          backgroundColor: brand[900],
-                          transform: 'scale(1.04)',
-                          boxShadow: '0 0 14px rgba(11, 107, 203, 0.5)',
-                        },
-                      }}
-                    >
-                      Publish &amp; Share
-                    </Button>
-                  )}
-
                   {/* Advanced actions in menu */}
                   <Dropdown>
                     <Tooltip title="More options">
                       <MenuButton
                         data-testid="message-actions-menu-btn"
                         slots={{ root: IconButton }}
-                        slotProps={{ root: { variant: 'outlined', color: 'neutral', size: 'sm' } }}
-                        sx={{
-                          width: '28px',
-                          height: '28px',
-                          flexShrink: '0',
-                          borderRadius: '6px',
-                        }}
+                        slotProps={{ root: { variant: 'plain', color: 'neutral', size: 'sm' } }}
+                        sx={chatActionButtonSx}
                       >
                         <MoreVertIcon />
                       </MenuButton>
                     </Tooltip>
                     <Menu
-                      placement="bottom-end"
+                      placement="bottom-start"
                       className="menuSurface advanced-menu-web"
                       sx={_theme => ({
                         minWidth: '180px',
@@ -1068,6 +1043,18 @@ const MessageContent: React.FC<ContentProps> = memo(
                     </Menu>
                   </Dropdown>
 
+                  {/* Always visible primary action */}
+                  <CopyTextButton text={extractedReplies ? extractedReplies[0] : ''} />
+                  <DownloadMenu
+                    content={extractedReplies ? extractedReplies[0] : ''}
+                    fileName={`${messageData.id}.md`}
+                    variant="plain"
+                    triggerSx={chatActionButtonSx}
+                  />
+                  {reportButton}
+                  {correctAndRetryButton}
+                  {hasShareableReply && shareButton}
+
                   {/* Keep the modals */}
                   <BugReportModal
                     className="session-middle-bug-report-modal"
@@ -1090,56 +1077,23 @@ const MessageContent: React.FC<ContentProps> = memo(
               )}
             </Stack>
           ) : (
-            <Stack className="action-buttons-mobile" direction={'row'} gap="10px" alignItems="center">
+            <Stack className="action-buttons-mobile" direction={'row'} gap="8px" alignItems="center">
               {!isProcessingPrompt && (
                 <>
-                  {/* Always visible primary action */}
-                  <CopyTextButton text={extractedReplies ? extractedReplies[0] : ''} />
-                  <DownloadMenu
-                    content={extractedReplies ? extractedReplies[0] : ''}
-                    fileName={`${messageData.id}.md`}
-                  />
-                  {reportButton}
-                  {correctAndRetryButton}
-                  {hasShareableReply && (
-                    <Tooltip title="Publish & Share">
-                      <IconButton
-                        data-testid="message-publish-share-btn"
-                        variant="outlined"
-                        color="neutral"
-                        size="sm"
-                        onClick={handleShareReply}
-                        sx={{
-                          width: '28px',
-                          height: '28px',
-                          flexShrink: '0',
-                          borderRadius: '6px',
-                        }}
-                      >
-                        <ShareIcon sx={{ fontSize: 16 }} />
-                      </IconButton>
-                    </Tooltip>
-                  )}
-
                   {/* Advanced actions in menu */}
                   <Dropdown>
                     <Tooltip title="More options">
                       <MenuButton
                         data-testid="message-actions-menu-btn"
                         slots={{ root: IconButton }}
-                        slotProps={{ root: { variant: 'outlined', color: 'neutral', size: 'sm' } }}
-                        sx={{
-                          width: '28px',
-                          height: '28px',
-                          flexShrink: '0',
-                          borderRadius: '6px',
-                        }}
+                        slotProps={{ root: { variant: 'plain', color: 'neutral', size: 'sm' } }}
+                        sx={chatActionButtonSx}
                       >
                         <MoreVertIcon />
                       </MenuButton>
                     </Tooltip>
                     <Menu
-                      placement="bottom-end"
+                      placement="bottom-start"
                       className="menuSurface advanced-menu-mobile"
                       sx={_theme => ({
                         minWidth: '180px',
@@ -1237,6 +1191,18 @@ const MessageContent: React.FC<ContentProps> = memo(
                     </Menu>
                   </Dropdown>
 
+                  {/* Always visible primary action */}
+                  <CopyTextButton text={extractedReplies ? extractedReplies[0] : ''} />
+                  <DownloadMenu
+                    content={extractedReplies ? extractedReplies[0] : ''}
+                    fileName={`${messageData.id}.md`}
+                    variant="plain"
+                    triggerSx={chatActionButtonSx}
+                  />
+                  {reportButton}
+                  {correctAndRetryButton}
+                  {hasShareableReply && shareButton}
+
                   {/* Keep the modals */}
                   <BugReportModal
                     className="session-middle-bug-report-modal"
@@ -1259,6 +1225,49 @@ const MessageContent: React.FC<ContentProps> = memo(
               )}
             </Stack>
           )}
+
+          <Box className="message-info" sx={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            {!isProcessingPrompt && messageData.promptMeta?.functionCalls && (
+              <ToolsUsed functionCalls={messageData.promptMeta.functionCalls} size="sm" />
+            )}
+
+            {adminSettings.enforceCredits &&
+            currentUser?.showCreditsUsed &&
+            !isProcessingPrompt &&
+            messageData.creditsUsed !== undefined ? (
+              <Tooltip title={`Credits Used: ${messageData.creditsUsed ?? 0}`}>
+                <Chip
+                  data-testid="credits-used"
+                  size="sm"
+                  variant="soft"
+                  sx={messageMetaChipSx}
+                  startDecorator={<Bike4MindIcon size="12" fill="currentColor" />}
+                >
+                  {messageData.creditsUsed ?? 0}
+                </Chip>
+              </Tooltip>
+            ) : null}
+
+            {!isProcessingPrompt &&
+              messageData.promptMeta?.model?.name &&
+              !(messageData.researchModeResults && messageData.researchModeResults.length > 0) && (
+                <ModelChip displayName={getModelDisplayName(messageData.promptMeta.model.name)} />
+              )}
+
+            {messageData.correctsQuestId && (
+              <Tooltip title="You sent this as a correction of an earlier answer">
+                <Chip
+                  data-testid="message-correction-chip"
+                  size="sm"
+                  variant="soft"
+                  sx={messageMetaChipSx}
+                  startDecorator={<EditNoteIcon sx={{ fontSize: 14 }} />}
+                >
+                  Correction
+                </Chip>
+              </Tooltip>
+            )}
+          </Box>
 
           {isCorrecting && canCorrect && (
             <CorrectionComposer

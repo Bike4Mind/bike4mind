@@ -2,6 +2,7 @@ import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { IconButton, Tooltip } from '@mui/joy';
 import LibraryAddCheckIcon from '@mui/icons-material/LibraryAddCheck';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import { chatActionButtonSx } from './chatActionButtonSx';
 
 const CopyTextButton: React.FC<{ text: string }> = ({ text }) => {
   const { copied, handleCopyToClipboard } = useCopyToClipboard();
@@ -10,19 +11,18 @@ const CopyTextButton: React.FC<{ text: string }> = ({ text }) => {
     <Tooltip title={copied ? 'Copied to Clipboard!' : 'Copy to Clipboard'}>
       <IconButton
         sx={{
-          flexShrink: '0',
-          borderRadius: '6px',
-          '& svg': {
-            width: '16px',
-            height: '16px',
-          },
+          ...chatActionButtonSx,
+          // 14px, not the row's 16: the copy glyph is two filled sheets and reads larger
+          // than the open outlines beside it at the same box size.
+          '--Icon-fontSize': '14px',
+          '& svg': { width: '14px', height: '14px' },
         }}
         size="sm"
-        variant={'outlined'}
+        variant="plain"
         color={copied ? 'success' : 'neutral'}
         onClick={() => handleCopyToClipboard(text)}
       >
-        {copied ? <LibraryAddCheckIcon sx={{ fontSize: 16 }} /> : <ContentCopyIcon sx={{ fontSize: 16 }} />}
+        {copied ? <LibraryAddCheckIcon /> : <ContentCopyIcon />}
       </IconButton>
     </Tooltip>
   );

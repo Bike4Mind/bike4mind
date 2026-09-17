@@ -49,10 +49,13 @@ const ContentTransformPreviewCard: React.FC<ContentTransformPreviewCardProps> = 
       <Card
         variant="outlined"
         data-testid="blog-draft-card"
-        sx={{
+        sx={theme => ({
           backgroundColor: 'background.level1',
+          // Same card recipe as the artifact cards and fenced code blocks: the fill
+          // stays the theme's own surface, with a brand-blue veil falling across it.
+          backgroundImage: `linear-gradient(180deg, ${theme.palette.reading.cardTintTop}, ${theme.palette.reading.cardTintBottom})`,
           borderRadius: '10px',
-          borderColor: 'neutral.outlinedBorder',
+          borderColor: theme.palette.reading.cardLine,
           position: 'relative',
           overflow: 'hidden', // clip the accent rail to the radius
           p: 0, // inner Box owns padding (avoids doubling Card's default)
@@ -77,7 +80,7 @@ const ContentTransformPreviewCard: React.FC<ContentTransformPreviewCardProps> = 
             borderColor: 'success.outlinedBorder',
             '&::before': { opacity: 1 },
           },
-        }}
+        })}
       >
         <Box sx={{ p: 1.5, pl: 2 }}>
           {/* Eyebrow: type + word count on the left, type chip on the right */}

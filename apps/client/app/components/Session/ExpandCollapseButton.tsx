@@ -19,7 +19,7 @@ export const ExpandCollapseButton: FC<ExpandCollapseButtonProps> = ({ needsTrunc
       sx={{
         display: 'flex',
         justifyContent: 'center',
-        mt: -2,
+        mt: '8px',
         position: 'relative',
         '&::before': {
           content: '""',
