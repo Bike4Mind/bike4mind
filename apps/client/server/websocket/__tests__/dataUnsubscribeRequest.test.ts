@@ -21,7 +21,7 @@ vi.mock('@server/websocket/utils', () => ({
 
 const mockFindByKeyName = vi.fn();
 vi.mock('@bike4mind/database/infra', () => ({
-  secretRotationRepository: { findByKeyName: (...args: unknown[]) => mockFindByKeyName(...args) },
+  secretRotationRepository: { findByKeyNameWithSecret: (...args: unknown[]) => mockFindByKeyName(...args) },
 }));
 
 const mockIsWithinGraceWindow = vi.fn();

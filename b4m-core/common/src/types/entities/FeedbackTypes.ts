@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { IMongoDocument } from '.';
 import { PromptMeta } from './PromptMetaTypes';
 import { IOrganizationDocument } from './OrganizationTypes';
@@ -16,9 +17,53 @@ export enum FeedbackType {
 }
 
 /** What a feedback report is about - server-derived from what the submission actually resolved
- * to, never client-set (see the create handler). */
-export const FEEDBACK_SUBJECTS = ['turn', 'session', 'product'] as const;
+ * to, never client-set (see the create handler). 'help' is derived from the route that wrote the
+ * report rather than from a resolved quest/session, so `resolveFeedbackContext` never returns it;
+ * the help handlers set it directly. */
+export const FEEDBACK_SUBJECTS = ['turn', 'session', 'product', 'help'] as const;
 export type FeedbackSubject = (typeof FEEDBACK_SUBJECTS)[number];
+
+/** Which help-center surface a routed comment was written on. */
+export const HELP_FEEDBACK_SURFACES = ['article', 'chat'] as const;
+export type HelpFeedbackSurface = (typeof HELP_FEEDBACK_SURFACES)[number];
+
+/** The thumbs verdict on a help article or help-chat answer. Single source of truth for the store
+ * that persists it (`HelpEvent.rating`), the request schemas that accept it, and the derivation of
+ * a routed report's `FeedbackType` - they have to agree or a valid submission fails one side's
+ * validation. */
+export const HELP_FEEDBACK_RATINGS = ['helpful', 'not_helpful'] as const;
+export type HelpFeedbackRating = (typeof HELP_FEEDBACK_RATINGS)[number];
+
+/** Structured problem reports a reader can file against an article, alongside the thumbs. Single
+ * source of truth for the same three consumers `HELP_FEEDBACK_RATINGS` serves. */
+export const HELP_FEEDBACK_REPORT_TYPES = ['outdated'] as const;
+export type HelpFeedbackReportType = (typeof HELP_FEEDBACK_REPORT_TYPES)[number];
+
+/**
+ * Identifying context copied onto a report routed from the help center, so that a permanent row
+ * saying "this help answer was wrong" is still actionable on its own. Deliberately carries no
+ * free text: the slug and the outdated report are structured signal and are safe to keep
+ * permanently, whereas the chat question and answer are not, and stay on the 90-day `HelpEvent`
+ * row that `eventId` points at.
+ *
+ * The thumbs verdict is deliberately NOT among these fields. It lives on the report as `type`
+ * (see `feedbackTypeForRating`), which is what every reader renders and filters on; a second copy
+ * here would be a field nothing reads that two concurrent writers could still disagree about.
+ *
+ * These rows carry no `sessionId`/`questId`, so they are invisible to the session-scoped reader
+ * by design - `subject: 'help'` plus `organizationId` is how they are found instead.
+ */
+export interface IHelpFeedbackContext {
+  /** The `HelpEvent` row this comment annotates. The event expires on a 90-day TTL and this
+   * report does not, so the join goes dead while the row lives on - which is exactly why the
+   * fields below are copied rather than read through it. */
+  eventId: string;
+  surface: HelpFeedbackSurface;
+  /** Article slug - set for the 'article' surface only; help chat has no slug. */
+  slug?: string;
+  /** Set for the 'article' surface only; help chat has nothing to report as outdated. */
+  reportType?: HelpFeedbackReportType;
+}
 
 /**
  * Page bounds for the feedback list endpoint. Shared rather than mirrored on each side: the
@@ -53,6 +98,8 @@ export interface IFeedback {
   contextQuestId?: string;
   organizationId?: IOrganizationDocument['id'] | null;
   subject: FeedbackSubject;
+  /** Set only on reports routed from the help center (`subject: 'help'`). */
+  helpContext?: IHelpFeedbackContext;
   /** True iff the sibling `IFeedbackText` document was successfully written - lets a reader tell
    * "text expired under the 90-day TTL" apart from "this report never had text". */
   contentStored: boolean;
@@ -120,6 +167,64 @@ export type CreateFeedbackResponse = IFeedbackDocument & {
 
 /** One `{ key, count }` row of a report grouping. `key` is the grouped field's value. */
 export interface FeedbackCountBucket {
+  key: string;
+  count: number;
+}
+
+/**
+ * Feedback rollup: counts only, never content and never a username. The window is capped in DAYS
+ * because every $facet arm groups the whole matched set in memory before its own top-N cut, so
+ * the day cap is what bounds the rows those groupings accumulate over.
+ */
+export const FEEDBACK_ROLLUP_MAX_WINDOW_DAYS = 366;
+
+/**
+ * Keys kept per rollup dimension. The day cap bounds rows scanned, not DISTINCT keys, so an
+ * unbounded dimension (sessionId, questId, tags) needs its own ceiling. Shared so a client caption naming the
+ * ceiling reads the same number the server applied.
+ */
+export const FEEDBACK_ROLLUP_TOP_N = 25;
+
+const ROLLUP_DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Reads a rollup bound as a UTC instant. The schema below accepts an offset-less value (what a
+ * date picker emits), and a bare `new Date` would read that in the host's local zone - so the
+ * same query would cover a different window depending on where it ran.
+ */
+export function parseFeedbackRollupBound(value: string): Date {
+  return new Date(/([Zz]|[+-]\d{2}:?\d{2})$/.test(value) ? value : `${value}Z`);
+}
+
+/**
+ * GET /api/feedback/rollup query contract. There is deliberately no `userId` key: the server
+ * derives the principal from the session, so `?userId=<someone-else>` is stripped here rather
+ * than trusted. The window is half-open in UTC (`$gte from`, `$lt to`); buildFeedbackRollupPipeline
+ * in apps/client/server/utils/feedbackRollup.ts must keep that convention, or an organization
+ * rollup and the personal rollups under it disagree on the documents sitting exactly on a bound.
+ */
+export const FeedbackRollupQuerySchema = z
+  .object({
+    from: z.iso.datetime({ offset: true, local: true }),
+    to: z.iso.datetime({ offset: true, local: true }),
+  })
+  .refine(query => parseFeedbackRollupBound(query.from) < parseFeedbackRollupBound(query.to), {
+    message: 'from must be strictly before to',
+    path: ['from'],
+  })
+  .refine(
+    query =>
+      parseFeedbackRollupBound(query.to).getTime() - parseFeedbackRollupBound(query.from).getTime() <=
+      FEEDBACK_ROLLUP_MAX_WINDOW_DAYS * ROLLUP_DAY_MS,
+    {
+      message: `window must not exceed ${FEEDBACK_ROLLUP_MAX_WINDOW_DAYS} days`,
+      path: ['to'],
+    }
+  );
+
+export type FeedbackRollupQuery = z.infer<typeof FeedbackRollupQuerySchema>;
+
+export interface FeedbackRollupBucket {
   key: string;
   count: number;
 }
@@ -196,4 +301,35 @@ export interface OrgFeedbackItemPage {
   total: number;
   limit: number;
   offset: number;
+}
+/** One rollup dimension: its top keys by count, and whether keys were dropped to get there. */
+export interface FeedbackRollupDimension {
+  buckets: FeedbackRollupBucket[];
+  truncated: boolean;
+}
+
+/**
+ * GET /api/feedback/rollup response. Every bucket value is a count over the matched set; nothing
+ * here carries report text, an email, or a display name.
+ */
+export interface FeedbackRollupResponse {
+  /** Echoed back as the normalized UTC bounds actually queried, not the raw query strings. */
+  from: string;
+  to: string;
+  total: number;
+  topN: number;
+  textRetentionDays: number;
+  /**
+   * Whether the matched reports still have their free text, derived per document from
+   * `contentStored` and the retention cutoff. A report that never stored text is in neither arm,
+   * since "never had text" and "text expired" are different facts (see IFeedback.contentStored).
+   */
+  textAvailability: { stored: number; expired: number };
+  buckets: {
+    sessionId: FeedbackRollupDimension;
+    questId: FeedbackRollupDimension;
+    subject: FeedbackRollupDimension;
+    status: FeedbackRollupDimension;
+    tags: FeedbackRollupDimension;
+  };
 }

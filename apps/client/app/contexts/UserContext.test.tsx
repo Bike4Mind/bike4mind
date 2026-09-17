@@ -189,8 +189,8 @@ describe('shouldRevokeForTokenVersion — JWT kill switch (legacy-token gap fix)
 
 describe('applyUserPush - merge a users WS push onto the store user (#1632)', () => {
   it('preserves fields absent from the push (the projection-wipe bug)', () => {
-    // A full document from /api/identify, then a push that omits some of its fields (the real
-    // push carries the full user doc minus the server's security exclusions).
+    // A full document from /api/identify, then a push that omits some of its fields (a real push
+    // omits the server's security exclusions plus anything never written to the stored document).
     const existing = fakeUser({
       lastNotebookId: 'nb-1',
       blogIntegration: { enabled: true },
@@ -227,8 +227,10 @@ describe('applyUserPush - merge a users WS push onto the store user (#1632)', ()
   });
 
   it('keeps store-derived flags (isBanned/isModerated) intact when the push omits them', () => {
-    // The blast-radius trap: these flags are absent from the push, so a replace reset them to
-    // false. Fed through setCurrentUser, the merged object must keep the real values.
+    // The blast-radius trap: setCurrentUser derives the store's own isBanned/isModerated from
+    // these, so a replace reset them to false. Both carry a schema default, so a real push
+    // usually does include them; the fixture omits them to pin the behavior for any field a
+    // push leaves out.
     useUser.setState({ currentUser: null, isHydrated: false });
     const existing = fakeUser({ isBanned: true, isModerated: true } as Partial<IUserDocument>);
     const pushed = { id: 'u1', currentCredits: 1 } as unknown as IUserDocument;
