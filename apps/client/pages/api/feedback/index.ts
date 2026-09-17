@@ -1,4 +1,4 @@
-import { FeedbackModel, FeedbackTextModel, User } from '@bike4mind/database';
+import { FeedbackModel, FeedbackTextModel } from '@bike4mind/database';
 import {
   classifyStage,
   FEEDBACK_LIST_DEFAULT_LIMIT,
@@ -6,7 +6,6 @@ import {
   FEEDBACK_SUBJECTS,
   FeedbackEvents,
   FeedbackStatus,
-  IOrganizationDocument,
   Permission,
   PromptMetaZodSchema,
   redactFunctionCallsForViewer,
@@ -28,6 +27,7 @@ import { postFeedbackToSlack } from '@server/integrations/slack/slack';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
 import { Config } from '@server/utils/config';
 import { resolveFeedbackContext } from '@server/utils/feedbackContext';
+import { resolveFeedbackOrganization } from '@server/utils/feedbackOrganization';
 import { saveFeedbackOrRollbackText, writeFeedbackText } from '@server/utils/feedbackText';
 import { buildFeedbackDeepLinks, FEEDBACK_LINK_LABELS, type FeedbackDeepLinks } from '@server/utils/feedbackDeepLinks';
 import {
@@ -300,12 +300,9 @@ const handler = baseApi()
     // The org lookup must key off the resolved identity too, not the raw body userEmail -- otherwise
     // two authenticated submissions from the same account can be stamped with different organizations
     // depending on whatever email string the client happened to send.
-    const existingUser = authenticated
-      ? await User.findById(req.user.id).populate('organizationId')
-      : await User.findOne({ email: userEmail }).populate('organizationId');
-
-    const organizationDoc = existingUser?.organizationId as unknown as IOrganizationDocument | undefined;
-    const organization = organizationDoc?.name || 'Unknown';
+    const { organization, organizationId } = await resolveFeedbackOrganization(
+      authenticated ? { userId: req.user.id } : { email: userEmail }
+    );
 
     const feedbackId = new mongoose.Types.ObjectId();
     // Computed once, outside the write, so the response below can echo the same truncated string
@@ -322,7 +319,7 @@ const handler = baseApi()
     const [feedbackContext, contentStored] = await Promise.all([
       resolveFeedbackContext({
         authenticatedUserId: authenticated ? req.user.id : undefined,
-        organizationId: organizationDoc?.id ?? null,
+        organizationId,
         claims: {
           questId: questId ?? promptMeta?.questId,
           sessionId: sessionId ?? promptMeta?.session?.id,

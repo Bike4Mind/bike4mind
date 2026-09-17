@@ -23,7 +23,10 @@ A `/feedback` report is filed against the **session**, not a single turn. The ne
 
 Help-center comments are written by readers in the help article and help chat panels. Only the
 comment itself becomes a feedback report; what the reader *did* -- views, searches, the thumbs
-rating, the "report outdated" flag -- stays in the help event store and expires after 90 days. Each
+rating, the "report outdated" flag -- stays in the help event store. The comment text follows the
+same 90-day retention as every other report (see Data Retention below); the article slug, the
+thumbs rating and the "outdated" flag are copied onto the report itself and are kept permanently,
+so an expired report still says which article it was about and what the reader's verdict was. Each
 of these reports carries a **help context chip** in the list showing the surface it came from, the
 article slug where there is one, and the thumbs verdict, so it can be triaged without opening it.
 The thumbs verdict also sets the report type (Thumbs Up / Thumbs Down), and a later change to it

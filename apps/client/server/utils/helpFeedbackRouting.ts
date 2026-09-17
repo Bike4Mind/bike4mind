@@ -1,17 +1,17 @@
-import { FeedbackModel, User } from '@bike4mind/database';
+import { FeedbackModel } from '@bike4mind/database';
 import {
   FeedbackStatus,
   FeedbackType,
-  IFeedbackDocument,
   HelpFeedbackRating,
   HelpFeedbackReportType,
   IHelpFeedbackContext,
-  IOrganizationDocument,
   truncateFeedbackContent,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import mongoose from 'mongoose';
 import { reviseFeedbackText, saveFeedbackOrRollbackText, writeFeedbackText } from '@server/utils/feedbackText';
+import { resolveFeedbackOrganization } from '@server/utils/feedbackOrganization';
+import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { hydrateFeedbackText } from '@server/utils/redactedFeedback';
 
 /**
@@ -34,16 +34,6 @@ function feedbackTypeForRating(rating?: HelpFeedbackRating): FeedbackType {
   if (rating === 'helpful') return FeedbackType.THUMBS_UP;
   if (rating === 'not_helpful') return FeedbackType.THUMBS_DOWN;
   return FeedbackType.FEEDBACK;
-}
-
-/** E11000 off the unique partial index on `helpContext.eventId`. Both error shapes are checked for
- * the reason spelled out on the same helper in persistAgentArtifacts.ts: a driver error that
- * crossed a serialization boundary arrives as a plain object carrying only the message. */
-function isDuplicateKeyError(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null) return false;
-  if ((error as { code?: unknown }).code === 11000) return true;
-  const message = (error as { message?: unknown }).message;
-  return typeof message === 'string' && message.includes('E11000');
 }
 
 /**
@@ -82,14 +72,11 @@ export async function routeHelpCommentToFeedback({
 
   const existing = await FeedbackModel.findOne({ 'helpContext.eventId': helpContext.eventId, userId });
   if (existing) {
-    await reviseRoutedComment({ existing, content, contentTruncated, helpContext, logger });
+    await reviseRoutedComment({ feedbackId: existing._id, content, contentTruncated, helpContext, logger });
     return;
   }
 
-  // Looked up for the same reason the create handler does it: organizationId is the authorization
-  // key a scoped reader filters on, and `organization` is the display label an admin triages by.
-  const user = await User.findById(userId).populate('organizationId');
-  const organizationDoc = user?.organizationId as unknown as IOrganizationDocument | undefined;
+  const { organization, organizationId } = await resolveFeedbackOrganization({ userId });
 
   const feedbackId = new mongoose.Types.ObjectId();
   const contentStored = await writeFeedbackText({ feedbackId, content, contentTruncated, logger });
@@ -110,8 +97,8 @@ export async function routeHelpCommentToFeedback({
     // case - it is always present, and an opaque id in the admin list beats a dropped comment.
     username: submitter.username ?? submitter.email ?? userId,
     userEmail: submitter.email,
-    organization: organizationDoc?.name || 'Unknown',
-    organizationId: organizationDoc?.id ?? null,
+    organization,
+    organizationId,
     type: feedbackTypeForRating(helpContext.rating),
     subject: 'help',
     helpContext,
@@ -133,7 +120,7 @@ export async function routeHelpCommentToFeedback({
     });
     const winner = await FeedbackModel.findOne({ 'helpContext.eventId': helpContext.eventId, userId });
     if (!winner) throw error;
-    await reviseRoutedComment({ existing: winner, content, contentTruncated, helpContext, logger });
+    await reviseRoutedComment({ feedbackId: winner._id, content, contentTruncated, helpContext, logger });
   }
 }
 
@@ -185,13 +172,13 @@ export async function syncRoutedVerdict({
  * user changed while editing onto the report with it.
  */
 async function reviseRoutedComment({
-  existing,
+  feedbackId,
   content,
   contentTruncated,
   helpContext,
   logger,
 }: {
-  existing: mongoose.HydratedDocument<IFeedbackDocument>;
+  feedbackId: mongoose.Types.ObjectId;
   content: string;
   contentTruncated: boolean;
   helpContext: IHelpFeedbackContext;
@@ -199,26 +186,33 @@ async function reviseRoutedComment({
 }): Promise<void> {
   // Retention is that helper's contract, not this one's: an edit must never extend the window the
   // sibling was created with, nor re-create one the TTL has already swept.
-  const revised = await reviseFeedbackText({ feedbackId: existing._id, content, contentTruncated });
+  const revised = await reviseFeedbackText({ feedbackId, content, contentTruncated });
   if (!revised) {
     // Unreachable while both handlers only ever hand over an event from inside their 10-minute
     // dedup window, which is far short of the sibling's 90 days. Logged rather than asserted so
     // the day that stops holding is visible instead of silently dropping the user's revision.
     logger.warn('Revised a help report whose text sibling was already gone', {
-      feedbackId: existing._id.toString(),
+      feedbackId: feedbackId.toString(),
       eventId: helpContext.eventId,
     });
   }
 
-  // The rating can change within the dedup window (a user flipping thumbs while editing their
-  // note), so the stored context and the derived type must follow it rather than stay at the
-  // value the first submission happened to carry.
-  existing.set({
-    helpContext,
-    type: feedbackTypeForRating(helpContext.rating),
-    contentStored: true,
-  });
-  await existing.save();
+  // A dotted $set of only the keys this submission carries, never the whole `helpContext`
+  // subdocument. Writing the subdocument would take the absent keys with it - `reportType` is
+  // optional, and the chat surface never sends one - and it would also revert a `syncRoutedVerdict`
+  // (the other writer of these exact fields) that landed since this path's read, since the thumbs
+  // stay clickable while a note submit is in flight. Both writers are narrow, so they compose.
+  const updates: Record<string, unknown> = { contentStored: true };
+  for (const [key, value] of Object.entries(helpContext)) {
+    if (value !== undefined) updates[`helpContext.${key}`] = value;
+  }
+  // `type` is derived from the rating, so it is rewritten only when this submission actually
+  // carries one - otherwise a snapshot with no rating would flatten a verdict back to FEEDBACK.
+  if (helpContext.rating !== undefined) {
+    updates.type = feedbackTypeForRating(helpContext.rating);
+  }
+
+  await FeedbackModel.updateOne({ _id: feedbackId }, { $set: updates });
 }
 
 /** A help-event row read back for rendering, whatever else the caller projected onto it. */

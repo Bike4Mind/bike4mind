@@ -4,6 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { FeedbackEvents, feedbackContentExpiresAt, truncateFeedbackContent } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { reviseFeedbackText } from '@server/utils/feedbackText';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
 import { isValidObjectId } from '@server/utils/objectId';
 import { z } from 'zod';
@@ -80,18 +81,19 @@ const handler = baseApi().put(
       } else {
         const { content: truncated, contentTruncated } = truncateFeedbackContent(content);
         if (feedback.contentStored) {
-          // upsert:false is deliberate: expiresAt is immutable, so a report whose text already
-          // expired must not be resurrected by editing it back in.
+          // Through the shared helper so this and the help router cannot drift on the rule it
+          // enforces: no expiresAt is written and nothing is upserted, because expiresAt is
+          // immutable and a report whose text already expired must not be resurrected by an edit.
           //
           // Not rolled back if the status/username update below then fails: the sibling would keep
           // the caller's edited text while the rest of the document reverts. Left as-is rather than
           // adding a compensating write - the sibling holding what the caller actually submitted is
           // arguably closer to correct than reverting it, and the update failing at all is rare.
-          const result = await FeedbackTextModel.updateOne(
-            { _id: id },
-            { $set: { content: truncated, contentTruncated } }
-          );
-          contentApplied = result.matchedCount > 0;
+          contentApplied = await reviseFeedbackText({
+            feedbackId: feedback._id,
+            content: truncated,
+            contentTruncated,
+          });
         } else {
           // This report never had text (e.g. a placeholder submission) - originating it now is a
           // fresh write, not a resurrection, so it gets its own full retention window.

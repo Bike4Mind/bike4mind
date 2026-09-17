@@ -4,10 +4,10 @@ import { Logger } from '@bike4mind/observability';
 import mongoose, { HydratedDocument } from 'mongoose';
 
 /**
- * The two halves of writing a Feedback report and its TTL'd text sibling, shared by every
- * producer of Feedback rows (the create handler and both help-center routes). Extracted because
- * the ordering and the rollback below are the whole correctness argument for the split, and three
- * hand-copies of it would drift.
+ * The halves of writing and editing a Feedback report's TTL'd text sibling, shared by every
+ * writer of that collection (the create handler, the admin update handler, and both help-center
+ * routes). Extracted because the ordering, the rollback and the retention rule below are the whole
+ * correctness argument for the permanent/TTL split, and hand-copies of them would drift.
  *
  * Text-first (mirrors LakeAccessEventModel.record()): a FeedbackText write failure just leaves
  * `contentStored` false rather than failing the submission, but a Feedback save failure after a
@@ -52,17 +52,18 @@ export async function writeFeedbackText({
  * Replaces the text of a report whose sibling already exists, leaving its retention window alone.
  * Returns whether the sibling was still there to revise.
  *
- * Writes no `expiresAt` at all, and does not upsert. Both halves are the same rule the other
- * writer of this collection states inline (`pages/api/feedback/[id]/update.ts`): `expiresAt` is
+ * Writes no `expiresAt` at all, and does not upsert. Both halves are one rule: `expiresAt` is
  * immutable, so a report whose text has already expired must not be resurrected by editing it
  * back in - an insert here would mint a fresh 90-day window from now, which is precisely the
- * retention extension the permanent/TTL split exists to make impossible. Two writers of one
- * collection have to agree on that, or retention depends on which path a caller happened to take.
+ * retention extension the permanent/TTL split exists to make impossible. This is the only edit
+ * site for that reason: the help router and the admin update handler both come through here, so
+ * retention cannot depend on which path a caller happened to take.
  *
- * Every caller revises inside a short dedup window where the sibling is minutes old, so a `false`
- * return means that assumption has stopped holding - worth a log line at the call site rather than
- * a silent no-op. A real write failure is left to throw: a revision the user cannot see fail is a
- * revision they believe was saved.
+ * A `false` return means the sibling was gone - for the help router, which only ever revises
+ * inside a 10-minute dedup window, that means an assumption has stopped holding and is worth a log
+ * line; for the admin handler, where an edit can arrive any time, it is the ordinary expired case
+ * the response reports. A real write failure is left to throw: a revision the user cannot see fail
+ * is a revision they believe was saved.
  */
 export async function reviseFeedbackText({
   feedbackId,

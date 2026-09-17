@@ -10,7 +10,7 @@ import {
 import { FeedbackModel, FeedbackTextModel, HelpEventModel, Organization, User } from '@bike4mind/database';
 import { FEEDBACK_CONTENT_RETENTION_DAYS } from '@bike4mind/common';
 import errorHandler from '@server/middlewares/errorHandler';
-import { routeHelpCommentToFeedback, stitchRoutedComments } from '@server/utils/helpFeedbackRouting';
+import { routeHelpCommentToFeedback, stitchRoutedComments, syncRoutedVerdict } from '@server/utils/helpFeedbackRouting';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
 // hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
@@ -663,6 +663,115 @@ describe('help feedback consolidation', () => {
     const [unscoped] = await stitchRoutedComments([events, []]);
     expect(unscoped.map(event => event.comment).sort()).toEqual(['my note', 'their note']);
   });
+  /**
+   * A revision writes only the fields its own submission carries. Writing the whole `helpContext`
+   * subdocument from the read snapshot instead would take the absent keys with it - and
+   * `reportType` is exactly the key a comment-only revision can arrive without, so the outdated
+   * chip the admin list renders would silently disappear on the user's next edit.
+   */
+  it('keeps a stored flag that the revising submission does not carry', async () => {
+    const user = await makeUser();
+    await call(articleHandler, 'POST', user, {
+      slug: 'a',
+      rating: 'not_helpful',
+      reportType: 'outdated',
+      comment: 'first note',
+    });
+    const before = await FeedbackModel.findOne({}).lean();
+    expect(before?.helpContext?.reportType).toBe('outdated');
+
+    // The router called directly with a context that omits reportType - the shape the chat surface
+    // always sends, and the shape an article revision takes if the flag ever stops round-tripping
+    // through the event.
+    await routeHelpCommentToFeedback({
+      submitter: { id: user.id, username: user.username, email: user.email },
+      comment: 'second note',
+      helpContext: { eventId: before!.helpContext!.eventId, surface: 'article', slug: 'a', rating: 'not_helpful' },
+      logger: stubLogger() as Parameters<typeof routeHelpCommentToFeedback>[0]['logger'],
+    });
+
+    const after = await FeedbackModel.findOne({}).lean();
+    expect(after?.helpContext?.reportType).toBe('outdated');
+    const text = await FeedbackTextModel.findById(after!._id).lean();
+    expect(text?.content).toBe('second note');
+  });
+
+  /**
+   * The thumbs stay clickable while a note submit is in flight, so a verdict sync can land between
+   * the revise path's read and its write. A whole-subdocument write from that stale snapshot would
+   * put the report back on the verdict the user just moved away from; a dotted $set composes.
+   */
+  it('does not revert a verdict sync that landed mid-revision', async () => {
+    const user = await makeUser();
+    // No thumb yet - the note came first, which is what leaves the revising submission carrying no
+    // rating of its own. A field both writers set stays last-writer-wins by design.
+    await call(articleHandler, 'POST', user, { slug: 'a', comment: 'first note' });
+    const report = await FeedbackModel.findOne({}).lean();
+    const eventId = report!.helpContext!.eventId;
+    expect(report?.helpContext?.rating).toBeUndefined();
+
+    // Deterministic interleave: the revise path writes the text sibling between its read of the
+    // report and its write of it, so landing the sync inside that call puts it exactly in the
+    // window the race occupies.
+    const realUpdateOne = FeedbackTextModel.updateOne.bind(FeedbackTextModel);
+    vi.spyOn(FeedbackTextModel, 'updateOne').mockImplementationOnce((async (
+      ...args: Parameters<typeof FeedbackTextModel.updateOne>
+    ) => {
+      const result = await realUpdateOne(...args);
+      await syncRoutedVerdict({ eventId, userId: user.id, rating: 'helpful' });
+      return result;
+    }) as never);
+
+    await routeHelpCommentToFeedback({
+      submitter: { id: user.id, username: user.username, email: user.email },
+      comment: 'second note',
+      helpContext: { eventId, surface: 'article', slug: 'a' },
+      logger: stubLogger() as Parameters<typeof routeHelpCommentToFeedback>[0]['logger'],
+    });
+
+    const after = await FeedbackModel.findOne({}).lean();
+    expect(after?.helpContext?.rating).toBe('helpful');
+    expect(after?.type).toBe('Thumbs Up');
+    const text = await FeedbackTextModel.findById(after!._id).lean();
+    expect(text?.content).toBe('second note');
+  });
+
+  /**
+   * Both handlers trim the comment before branching, and the trim is load-bearing rather than
+   * cosmetic: an untrimmed whitespace note is truthy, so it would take the comment branch, be
+   * dropped by the router's own blank guard, and leave the verdict sync unrun - the event would
+   * take the new rating while the permanent report kept the old one.
+   */
+  it('syncs a flipped article rating submitted alongside a whitespace-only note', async () => {
+    const user = await makeUser();
+    await call(articleHandler, 'POST', user, { slug: 'a', rating: 'not_helpful', comment: 'this is wrong' });
+
+    await call(articleHandler, 'POST', user, { slug: 'a', rating: 'helpful', comment: '   \n  ' });
+
+    const reports = await FeedbackModel.find({}).lean();
+    expect(reports).toHaveLength(1);
+    expect(reports[0].helpContext?.rating).toBe('helpful');
+    expect(reports[0].type).toBe('Thumbs Up');
+    // The blank submission must not overwrite the note the user actually wrote.
+    const text = await FeedbackTextModel.findById(reports[0]._id).lean();
+    expect(text?.content).toBe('this is wrong');
+  });
+
+  it('syncs a flipped chat rating submitted alongside a whitespace-only note', async () => {
+    const user = await makeUser();
+    const chat = { chatQuestion: 'q', chatAnswer: 'a' };
+    await call(chatHandler, 'POST', user, { ...chat, rating: 'helpful', comment: 'actually incomplete' });
+
+    await call(chatHandler, 'POST', user, { ...chat, rating: 'not_helpful', comment: '\t \n' });
+
+    const reports = await FeedbackModel.find({}).lean();
+    expect(reports).toHaveLength(1);
+    expect(reports[0].helpContext?.rating).toBe('not_helpful');
+    expect(reports[0].type).toBe('Thumbs Down');
+    const text = await FeedbackTextModel.findById(reports[0]._id).lean();
+    expect(text?.content).toBe('actually incomplete');
+  });
+
   /**
    * The "collapses two concurrent submissions" test above asserts outcomes that hold whichever way
    * the two calls interleave - through the catch, or serialized through the `existing` revise -
