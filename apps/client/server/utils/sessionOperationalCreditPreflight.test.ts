@@ -1,0 +1,526 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Hoisted so the vi.mock factories (hoisted above imports) can reference them.
+const { mockFindUserById, mockFindOrgById, mockBillingEnabled, mockGetOperationsModel } = vi.hoisted(() => ({
+  mockFindUserById: vi.fn(),
+  mockFindOrgById: vi.fn(),
+  mockBillingEnabled: vi.fn(async () => false),
+  mockGetOperationsModel: vi.fn(),
+}));
+
+vi.mock('@bike4mind/database', () => ({
+  adminSettingsRepository: {},
+  organizationRepository: { findById: mockFindOrgById },
+  userRepository: { findById: mockFindUserById },
+}));
+// The pair semantics of the two toggles are this helper's own contract, covered by
+// b4m-core/services/src/billing/isOperationalBillingEnabled.test.ts; here it is the gate.
+vi.mock('@bike4mind/services', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/services')>()),
+  isOperationalBillingEnabled: mockBillingEnabled,
+}));
+// Reached only on a would-be refusal, and mocked rather than imported for real because the
+// service resolves system API keys and builds the whole model catalog.
+vi.mock('@client/services/operationsModelService', () => ({
+  OperationsModelService: { getOperationsModel: mockGetOperationsModel },
+}));
+
+import {
+  checkSessionOperationalCredits,
+  assertSessionOperationalCredits,
+  filterSessionIdsByOperationalCredits,
+} from './sessionOperationalCreditPreflight';
+import { getQuestErrorCode } from '@bike4mind/common';
+
+const USER_ID = 'user-1';
+const ORG_ID = 'org-1';
+
+/** Both gates on - the only configuration in which recordOperationalUsage can debit. */
+const billingOn = () => mockBillingEnabled.mockResolvedValue(true);
+
+/** The priced default (`gpt-4o-mini`), so a refusal in these tests stands as a refusal. */
+const PRICED_OPERATIONS_MODEL = {
+  modelInfo: { id: 'gpt-4o-mini', pricing: { 128000: { input: 0.15, output: 0.6 } } },
+};
+
+const preflight = (overrides: Partial<Parameters<typeof checkSessionOperationalCredits>[0]> = {}) =>
+  checkSessionOperationalCredits({ userId: USER_ID, operationCount: 1, operation: 'session tagging', ...overrides });
+
+describe('checkSessionOperationalCredits', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetOperationsModel.mockResolvedValue(PRICED_OPERATIONS_MODEL);
+    mockBillingEnabled.mockResolvedValue(false);
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 1000 });
+    mockFindOrgById.mockResolvedValue(null);
+  });
+
+  // The gap this gate closes is latent: operational billing defaults OFF, so a deployment that
+  // records-but-never-bills must keep queueing this work. A pre-flight stricter than the
+  // settlement would take a working feature away from every deploy that never pays for it.
+  it('allows, and reads no billing state, when operational billing is off', async () => {
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0 });
+
+    await expect(preflight()).resolves.toEqual({ allowed: true });
+    expect(mockFindUserById).not.toHaveBeenCalled();
+  });
+
+  // The settings read is inside the same fail-open boundary as the user/org reads.
+  // AdminSettingsCache awaits findAll() on a cache miss with no error handling of its own, so a
+  // cold container is enough to reach this - and on the project-attach path a throw here lands
+  // after withTransaction has committed, 500ing an action that already succeeded.
+  it('allows when the settings read throws, and says so at error level', async () => {
+    mockBillingEnabled.mockRejectedValue(new Error('mongo down'));
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0 });
+    const logger = { warn: vi.fn(), error: vi.fn() };
+
+    await expect(preflight({ logger: logger as never })).resolves.toEqual({ allowed: true });
+    expect(mockFindUserById).not.toHaveBeenCalled();
+    // The level is the alarm channel, so it is asserted, not incidental: a silent fail-open is
+    // indistinguishable from the ungated behavior this gate replaced.
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('gate disabled'), expect.any(Error));
+  });
+
+  it('allows a funded holder when billing is on', async () => {
+    billingOn();
+
+    await expect(preflight()).resolves.toEqual({ allowed: true });
+  });
+
+  it('refuses a user whose personal balance cannot cover the batch', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 3 });
+
+    const verdict = await preflight({ operationCount: 4 });
+
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.allowed === false && verdict.reason).toContain('currently have 3 credits');
+  });
+
+  // The batch is what makes the fan-out paths dangerous: a 1-credit check would wave through an
+  // unbounded spider run against an org holding a single credit.
+  it('sizes the requirement by operationCount, not per request', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 4 });
+
+    await expect(preflight({ operationCount: 4 })).resolves.toEqual({ allowed: true });
+    await expect(preflight({ operationCount: 5 })).resolves.toMatchObject({ allowed: false });
+  });
+
+  it('refuses an org member over the per-member cap even when the org pool is flush', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0, organizationId: ORG_ID });
+    mockFindOrgById.mockResolvedValue({
+      id: ORG_ID,
+      currentCredits: 1_000_000,
+      maxCreditsPerMember: 10,
+      userDetails: [{ id: USER_ID, usedCredits: 10 }],
+    });
+
+    const verdict = await preflight();
+
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.allowed === false && verdict.reason).toContain('member credit limit');
+  });
+
+  // The holder is the org, not the member: reading the member's own (zero) balance here would
+  // refuse every org user on a deployment that bills the pool.
+  it('checks the org pool, not the member balance, for an org user', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0, organizationId: ORG_ID });
+    mockFindOrgById.mockResolvedValue({ id: ORG_ID, currentCredits: 50, userDetails: [] });
+
+    await expect(preflight()).resolves.toEqual({ allowed: true });
+  });
+
+  it('refuses when the org pool cannot cover the batch', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 999, organizationId: ORG_ID });
+    mockFindOrgById.mockResolvedValue({ id: ORG_ID, currentCredits: 2, userDetails: [] });
+
+    const verdict = await preflight({ operationCount: 3 });
+
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.allowed === false && verdict.reason).toContain('organization does not have enough credits');
+  });
+
+  // Fails OPEN by design: a mongo blip must not turn "attach a notebook" or "tag this session"
+  // into an error. The settlement is still guarded by the balance it debits against.
+  it('allows when the billing store throws, and says so at error level', async () => {
+    billingOn();
+    mockFindUserById.mockRejectedValue(new Error('mongo down'));
+    const logger = { warn: vi.fn(), error: vi.fn() };
+
+    await expect(preflight({ logger: logger as never })).resolves.toEqual({ allowed: true });
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('gate disabled'), expect.any(Error));
+  });
+
+  it('allows when the owner no longer exists', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue(null);
+
+    await expect(preflight()).resolves.toEqual({ allowed: true });
+  });
+
+  it('short-circuits a zero-operation request without reading settings', async () => {
+    billingOn();
+
+    await expect(preflight({ operationCount: 0 })).resolves.toEqual({ allowed: true });
+    expect(mockBillingEnabled).not.toHaveBeenCalled();
+  });
+
+  // `pushShareable` shares by bare userId with no org constraint, so a requester holding update
+  // on a shared session can sit outside the holder's org entirely. Second person plus a figure
+  // would address the wrong party and disclose another tenant's balance.
+  it('gives a non-holder requester an impersonal refusal with no balance', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0, organizationId: ORG_ID });
+    mockFindOrgById.mockResolvedValue({ id: ORG_ID, currentCredits: 37, userDetails: [] });
+
+    // Underfunded but non-zero, so there is a real balance the message could have leaked.
+    const verdict = await preflight({ requesterId: 'someone-else', operationCount: 40 });
+
+    expect(verdict.allowed).toBe(false);
+    const reason = verdict.allowed === false ? verdict.reason : '';
+    expect(reason).toBe('The owner of this notebook does not have enough credits for session tagging.');
+    expect(reason).not.toContain('37');
+    expect(reason).not.toContain('Your organization');
+  });
+
+  // The cap message tells the reader to contact an administrator they may have no relationship
+  // with, so it is withheld from a non-holder too.
+  it('withholds the per-member cap wording from a non-holder requester', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0, organizationId: ORG_ID });
+    mockFindOrgById.mockResolvedValue({
+      id: ORG_ID,
+      currentCredits: 1_000_000,
+      maxCreditsPerMember: 10,
+      userDetails: [{ id: USER_ID, usedCredits: 10 }],
+    });
+
+    const verdict = await preflight({ requesterId: 'someone-else' });
+
+    // The refusal is asserted before its wording: a negative assertion alone would pass just as
+    // happily if the cap stopped refusing at all, which is the regression worth catching here.
+    expect(verdict.allowed).toBe(false);
+    const reason = verdict.allowed === false ? verdict.reason : '';
+    expect(reason).toBe('The owner of this notebook does not have enough credits for session tagging.');
+    expect(reason).not.toContain('administrator');
+  });
+
+  // The common case is requester == owner, where the actionable detail is the whole point.
+  it('keeps the detailed refusal when the requester is the holder', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0 });
+
+    const verdict = await preflight({ requesterId: USER_ID });
+
+    expect(verdict.allowed === false && verdict.reason).toContain('currently have 0 credits');
+  });
+
+  // A half-resolved pair would skip the cap and bill the member personally for org usage.
+  it('allows when the org read fails, rather than falling back to the member balance', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 1000, organizationId: ORG_ID });
+    mockFindOrgById.mockRejectedValue(new Error('mongo down'));
+
+    await expect(preflight()).resolves.toEqual({ allowed: true });
+  });
+
+  // The MIN_CREDITS_PER_OPERATION floor is a proxy for a cost that can be structurally zero.
+  // Refusing free work is a regression against the ungated behavior this gate replaced, so the
+  // model gets the last word on a would-be refusal.
+  describe('zero-settlement carve-out', () => {
+    const brokeHolder = () => {
+      billingOn();
+      mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0 });
+    };
+
+    // The real shape of a freeToRun model: the flag plus no price rows, because
+    // generateModelPriceSeed.ts:49 skips seeding them. Not tautological despite the empty map -
+    // its pair below feeds the SAME empty map with the flag off and gets a refusal, so the flag
+    // is demonstrably the thing doing the work.
+    it('allows a broke holder when the operations model is freeToRun', async () => {
+      brokeHolder();
+      mockGetOperationsModel.mockResolvedValue({ modelInfo: { id: 'llama3', freeToRun: true, pricing: {} } });
+
+      await expect(preflight()).resolves.toEqual({ allowed: true });
+    });
+
+    // The flag is a declaration of intent, not a billing switch: getTextModelCost reads it only
+    // to suppress [UNPRICED_MODEL] (models.ts:678-686) and no write path stops a freeToRun model
+    // from carrying a priced tier (runModelDiscovery.ts:999 appends without the admin route's
+    // known-model gate). Waiving on the flag alone would hand this work through while settlement
+    // charged those tokens at full rate, so the price map has to agree with the flag.
+    it('keeps the refusal when a freeToRun model still carries a priced tier', async () => {
+      brokeHolder();
+      mockGetOperationsModel.mockResolvedValue({
+        modelInfo: { id: 'llama3-mislabelled', freeToRun: true, pricing: { 128000: { input: 0.15, output: 0.6 } } },
+      });
+
+      await expect(preflight()).resolves.toMatchObject({ allowed: false });
+    });
+
+    // Sampling one large volume would pass this: tierForTokens selects by input tokens and falls
+    // back to the WIDEST tier (models.ts:692-697), so a 1M sample reads the zero-rate 2M tier
+    // while a real 10k operational call is priced by the 128k one. Both write paths accept this
+    // map, because each gates on SOME tier being nonzero (ModelPriceModel.ts:93,
+    // admin/model-prices.ts:213), so one priced tier is enough to pass them.
+    it('keeps the refusal when a freeToRun model prices a narrow tier and zeroes a wider one', async () => {
+      brokeHolder();
+      mockGetOperationsModel.mockResolvedValue({
+        modelInfo: {
+          id: 'llama3-mixed-tiers',
+          freeToRun: true,
+          pricing: { 128000: { input: 0.15, output: 0.6 }, 2000000: { input: 0, output: 0 } },
+        },
+      });
+
+      await expect(preflight()).resolves.toMatchObject({ allowed: false });
+    });
+
+    // Settlement passes real cache token counts (recordSessionOperationalUsage.ts:63), so a tier
+    // that charges only for cache still charges. Zero input/output is not zero cost.
+    it('keeps the refusal when a freeToRun model carries cache-only rates', async () => {
+      brokeHolder();
+      mockGetOperationsModel.mockResolvedValue({
+        modelInfo: {
+          id: 'llama3-cache-priced',
+          freeToRun: true,
+          pricing: { 128000: { input: 0, output: 0, cache_read: 0.01, cache_write: 0.1 } },
+        },
+      });
+
+      await expect(preflight()).resolves.toMatchObject({ allowed: false });
+    });
+
+    // An empty map is a GAP, not a declaration of free: both write paths reject it outright
+    // ("mark the model freeToRun instead" - ModelPriceModel.ts:91-98, model-prices.ts:213-216),
+    // so it only reaches a reader through price-seed lag or a stale per-process catalog cache.
+    // Waiving here while the SessionEvents process prices normally would drop the only
+    // maxCreditsPerMember enforcement these paths have.
+    it('keeps the refusal when the operations model has no pricing rows at all', async () => {
+      brokeHolder();
+      mockGetOperationsModel.mockResolvedValue({ modelInfo: { id: 'mystery-model', pricing: {} } });
+
+      await expect(preflight()).resolves.toMatchObject({ allowed: false });
+    });
+
+    // Same gap, spelled with tiers present: an all-zero map is equally unwritable, so it means a
+    // stale or half-applied price row rather than a costless model.
+    it('keeps the refusal when every pricing tier is zero-rate but the model is not freeToRun', async () => {
+      brokeHolder();
+      mockGetOperationsModel.mockResolvedValue({
+        modelInfo: { id: 'zero-rate', pricing: { 128000: { input: 0, output: 0 } } },
+      });
+
+      await expect(preflight()).resolves.toMatchObject({ allowed: false });
+    });
+
+    it('keeps the refusal for the priced default', async () => {
+      brokeHolder();
+
+      await expect(preflight()).resolves.toMatchObject({ allowed: false });
+    });
+
+    // Deliberately NOT fail-open like the reads above: a verdict already exists at this point,
+    // and "priced" is the accurate default for every model but the handful carved out here.
+    it('keeps the refusal when the operations model cannot be resolved', async () => {
+      brokeHolder();
+      mockGetOperationsModel.mockRejectedValue(new Error('catalog unavailable'));
+      const logger = { warn: vi.fn(), info: vi.fn() };
+
+      await expect(preflight({ logger: logger as never })).resolves.toMatchObject({ allowed: false });
+      expect(logger.warn).toHaveBeenCalled();
+    });
+
+    // The resolution reads an admin setting and builds the model catalog, so it must never run
+    // for the overwhelming majority of requests that are funded anyway.
+    it('never resolves the model on the happy path', async () => {
+      billingOn();
+
+      await expect(preflight()).resolves.toEqual({ allowed: true });
+      expect(mockGetOperationsModel).not.toHaveBeenCalled();
+    });
+
+    it('waives the per-member cap refusal too, not just the pool refusal', async () => {
+      billingOn();
+      mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0, organizationId: ORG_ID });
+      mockFindOrgById.mockResolvedValue({
+        id: ORG_ID,
+        currentCredits: 1_000_000,
+        maxCreditsPerMember: 10,
+        userDetails: [{ id: USER_ID, usedCredits: 10 }],
+      });
+      mockGetOperationsModel.mockResolvedValue({ modelInfo: { id: 'llama3', freeToRun: true, pricing: {} } });
+
+      await expect(preflight()).resolves.toEqual({ allowed: true });
+    });
+  });
+});
+
+describe('assertSessionOperationalCredits', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetOperationsModel.mockResolvedValue(PRICED_OPERATIONS_MODEL);
+    mockFindOrgById.mockResolvedValue(null);
+  });
+
+  it('resolves when the holder can pay', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 10 });
+
+    await expect(
+      assertSessionOperationalCredits({ userId: USER_ID, operationCount: 1, operation: 'session tagging' })
+    ).resolves.toBeUndefined();
+  });
+
+  // The 422 `insufficient_credits` classification is what a caller matches on; a plain Error
+  // would render as a 500 and read as a bug rather than a billing state.
+  it('throws a 422 tagged insufficient_credits when the holder cannot pay', async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 0 });
+
+    const error = await assertSessionOperationalCredits({
+      userId: USER_ID,
+      operationCount: 1,
+      operation: 'session tagging',
+    }).catch((err: unknown) => err);
+
+    expect(getQuestErrorCode(error)).toBe('insufficient_credits');
+    expect((error as { statusCode?: number }).statusCode).toBe(422);
+  });
+});
+
+describe('filterSessionIdsByOperationalCredits', () => {
+  const OTHER_USER_ID = 'user-2';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetOperationsModel.mockResolvedValue(PRICED_OPERATIONS_MODEL);
+    mockFindOrgById.mockResolvedValue(null);
+  });
+
+  const filter = (sessions: { id: string; userId: string }[], logger?: { warn: ReturnType<typeof vi.fn> }) =>
+    filterSessionIdsByOperationalCredits(sessions as never, {
+      operationsPerSession: 2,
+      operation: 'session summarization',
+      logger: logger as never,
+    });
+
+  it('passes every session through when operational billing is off', async () => {
+    mockBillingEnabled.mockResolvedValue(false);
+
+    const allowed = await filter([
+      { id: 's1', userId: USER_ID },
+      { id: 's2', userId: OTHER_USER_ID },
+    ]);
+
+    expect(allowed).toEqual(new Set(['s1', 's2']));
+  });
+
+  // A project holds sessions shared in from other users, and the Summarize handler bills the
+  // session OWNER. Checking the requester instead would gate the wrong balance in both
+  // directions: a broke requester blocking a funded owner's summary, and vice versa.
+  it("checks each distinct owner once, sized to that owner's share of the batch", async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 1000 });
+
+    await filter([
+      { id: 's1', userId: USER_ID },
+      { id: 's2', userId: USER_ID },
+      { id: 's3', userId: OTHER_USER_ID },
+    ]);
+
+    expect(mockFindUserById).toHaveBeenCalledTimes(2);
+    expect(mockFindUserById).toHaveBeenCalledWith(USER_ID);
+    expect(mockFindUserById).toHaveBeenCalledWith(OTHER_USER_ID);
+  });
+
+  it("drops only the refused owner's sessions, and logs why", async () => {
+    billingOn();
+    mockFindUserById.mockImplementation(async (id: string) =>
+      id === USER_ID ? { id, currentCredits: 0 } : { id, currentCredits: 1000 }
+    );
+    const logger = { warn: vi.fn() };
+
+    const allowed = await filter(
+      [
+        { id: 's1', userId: USER_ID },
+        { id: 's2', userId: OTHER_USER_ID },
+      ],
+      logger
+    );
+
+    expect(allowed).toEqual(new Set(['s2']));
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn.mock.calls[0][1]).toMatchObject({ ownerId: USER_ID, sessionCount: 1 });
+  });
+
+  // Two sessions at 2 operations each is 4 credits, so a 3-credit owner must be refused - the
+  // per-session floor would have waved this through.
+  it("multiplies the per-session operation count across the owner's sessions", async () => {
+    billingOn();
+    mockFindUserById.mockResolvedValue({ id: USER_ID, currentCredits: 3 });
+
+    const allowed = await filter([
+      { id: 's1', userId: USER_ID },
+      { id: 's2', userId: USER_ID },
+    ]);
+
+    expect(allowed).toEqual(new Set());
+  });
+
+  it('passes through an ownerless session without a billing read', async () => {
+    billingOn();
+
+    const allowed = await filter([{ id: 's1', userId: '' }]);
+
+    expect(allowed).toEqual(new Set(['s1']));
+    expect(mockFindUserById).not.toHaveBeenCalled();
+  });
+
+  // Each owner is sized to THEIR share of the batch, not to the batch. The mixed shape is what
+  // makes this assertable: owner 1 holds one of the three sessions and exactly the 2 credits it
+  // needs, so sizing the check against the batch (3 x 2 = 6) would refuse a holder who can pay.
+  // Every other case in this block has one session per owner or one owner for all of them, where
+  // the two sizings agree.
+  it("sizes each owner's check to their own sessions, not to the whole batch", async () => {
+    billingOn();
+    mockFindUserById.mockImplementation(async (id: string) =>
+      id === USER_ID ? { id, currentCredits: 2 } : { id, currentCredits: 1000 }
+    );
+    const logger = { warn: vi.fn(), info: vi.fn() };
+
+    const allowed = await filter(
+      [
+        { id: 's1', userId: USER_ID },
+        { id: 's2', userId: OTHER_USER_ID },
+        { id: 's3', userId: OTHER_USER_ID },
+      ],
+      logger
+    );
+
+    expect(allowed).toEqual(new Set(['s1', 's2', 's3']));
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  // The same discrimination in the other direction: the owner holding the larger share is the one
+  // who must be refused, and a batch-sized check would have refused the wrong owner as well.
+  it('refuses the owner whose own share outruns their balance, not the batch as a whole', async () => {
+    billingOn();
+    mockFindUserById.mockImplementation(async (id: string) =>
+      id === USER_ID ? { id, currentCredits: 2 } : { id, currentCredits: 3 }
+    );
+
+    const allowed = await filter([
+      { id: 's1', userId: USER_ID },
+      { id: 's2', userId: OTHER_USER_ID },
+      { id: 's3', userId: OTHER_USER_ID },
+    ]);
+
+    // Owner 1: 1 session x 2 ops = 2 against 2 credits, allowed. Owner 2: 2 x 2 = 4 against 3.
+    expect(allowed).toEqual(new Set(['s1']));
+  });
+});
