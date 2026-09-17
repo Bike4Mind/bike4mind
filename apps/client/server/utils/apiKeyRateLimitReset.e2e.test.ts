@@ -94,4 +94,19 @@ describe('resetApiKeyRateLimit (end-to-end, real cache repo + Mongo)', () => {
     await resetApiKeyRateLimit(keyId);
     await expect(resetApiKeyRateLimit(keyId)).resolves.toBeUndefined();
   });
+
+  it('alsoResetManagement additionally clears the management counter (#2883)', async () => {
+    await checkApiKeyRateLimit(keyId, rateLimit, undefined, { counter: 'management' });
+
+    await resetApiKeyRateLimit(keyId); // routine reset: request counter only
+
+    const management = buildRateLimitKeys(keyId, 'management');
+    expect(await cacheRepository.findByKey(management.minuteKey)).toBeTruthy();
+    expect(await cacheRepository.findByKey(management.dayKey)).toBeTruthy();
+
+    await resetApiKeyRateLimit(keyId, { alsoResetManagement: true });
+
+    expect(await cacheRepository.findByKey(management.minuteKey)).toBeFalsy();
+    expect(await cacheRepository.findByKey(management.dayKey)).toBeFalsy();
+  });
 });
