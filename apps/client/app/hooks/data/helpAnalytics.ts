@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
+import type { HelpFeedbackRating, HelpFeedbackReportType } from '@bike4mind/common';
 
 export interface HelpAnalyticsFilters {
   dateFrom?: string;
@@ -43,8 +44,8 @@ export interface HelpAnalyticsOverview {
 
 export interface HelpAnalyticsRecentFeedback {
   slug: string;
-  rating?: 'helpful' | 'not_helpful';
-  reportType?: 'outdated';
+  rating?: HelpFeedbackRating;
+  reportType?: HelpFeedbackReportType;
   comment?: string;
   userId: string;
   createdAt: string;
@@ -53,7 +54,7 @@ export interface HelpAnalyticsRecentFeedback {
 export interface HelpAnalyticsChatFeedback {
   chatQuestion: string;
   chatAnswer: string;
-  rating: 'helpful' | 'not_helpful';
+  rating: HelpFeedbackRating;
   comment?: string;
   userId: string;
   createdAt: string;
