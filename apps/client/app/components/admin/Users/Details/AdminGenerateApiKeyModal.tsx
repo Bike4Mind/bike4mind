@@ -1,6 +1,6 @@
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useAdminGenerateApiKey, AdminCreateUserApiKeyRequest } from '@client/app/hooks/data/userApiKeys';
-import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
+import { useGetPreauthorizableDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
@@ -21,7 +21,7 @@ import {
   Stack,
   Typography,
 } from '@mui/joy';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
 
@@ -45,7 +45,18 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
   const [expirationDays, setExpirationDays] = useState<string>('never');
   const [generatedKey, setGeneratedKey] = useState<string | null>(null);
   const { handleCopyToClipboard, copied } = useCopyToClipboard({ showToast: true });
-  const { data: lakes, isLoading: lakesLoading, isError: lakesError, refetch: refetchLakes } = useGetDataLakes(open);
+  const {
+    data: allLakes,
+    isLoading: lakesLoading,
+    isError: lakesError,
+    refetch: refetchLakes,
+  } = useGetPreauthorizableDataLakes(user.id, open);
+  // Gate on canPreauthorize, never canManage. A platform admin has canManage on every lake but a
+  // real rung on almost none, and the mint route screens the binding against THIS user
+  // (generate-api-key.ts -> filterStillManagedLakes(lakes, targetUserId)). Offering a lake the
+  // target does not manage only buys a 400 on submit. canPreauthorize already folds in the
+  // active-status requirement the route applies separately (see toManageableConfig).
+  const lakes = useMemo(() => (allLakes ?? []).filter(lake => lake.canPreauthorize), [allLakes]);
   const preauthorizedLakeIds = formData.preauthorizedLakeIds ?? [];
 
   const generateMutation = useAdminGenerateApiKey({
@@ -202,7 +213,8 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
             </FormLabel>
             <Typography level="body-xs" color="neutral" sx={{ mb: 1 }}>
               Lets this key admit any of the checked lakes into a session it manages but is not a member of, on top of
-              the caller&apos;s ordinary access. Leave empty for a key with no such widening.
+              the caller&apos;s ordinary access. Leave empty for a key with no such widening. Only active lakes{' '}
+              {user.username} manages are listed - a key cannot be bound to a lake its owner has no authority over.
             </Typography>
             <Box
               sx={{
@@ -230,12 +242,16 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
                     Retry
                   </Button>
                 </Stack>
-              ) : (lakes?.length ?? 0) === 0 ? (
-                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                  No lakes yet
+              ) : lakes.length === 0 ? (
+                <Typography
+                  level="body-xs"
+                  sx={{ color: 'text.tertiary' }}
+                  data-testid="admin-generate-key-lakes-empty"
+                >
+                  {user.username} manages no active data lakes, so this key cannot be bound to one.
                 </Typography>
               ) : (
-                lakes!.map(lake => (
+                lakes.map(lake => (
                   <Checkbox
                     key={lake.id}
                     size="sm"
