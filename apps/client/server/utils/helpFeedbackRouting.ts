@@ -103,6 +103,13 @@ export async function routeHelpCommentToFeedback({
 
   const { organization, organizationId } = await resolveFeedbackOrganization({ userId });
 
+  // Read before anything is persisted. This is the only statement that could throw between the
+  // text write and the guarded save below, and a rejection there would answer 500 with the
+  // sibling already written and no report pointing at it - the orphan `feedbackText.ts` states
+  // must never exist. Reading it here costs nothing in freshness: the values below are only the
+  // insert's seed, and the trailing sync re-derives both after the row lands.
+  const { reportType, type } = await readEventVerdict(helpContext.eventId);
+
   const feedbackId = new mongoose.Types.ObjectId();
   const contentStored = await writeFeedbackText({ feedbackId, content, contentTruncated, logger });
   // Unlike a bug report - which still carries a type, a subject and promptMeta once its text is
@@ -112,8 +119,6 @@ export async function routeHelpCommentToFeedback({
   if (!contentStored) {
     throw new Error('Failed to store help feedback comment');
   }
-
-  const { reportType, type } = await readEventVerdict(helpContext.eventId);
 
   const feedback = new FeedbackModel({
     _id: feedbackId,
@@ -182,10 +187,11 @@ export async function routeHelpCommentToFeedback({
  * Deliberately update-only: a bare rating is behavior-shaped and belongs in the help event store,
  * so this never creates a report for a user who has not written anything.
  *
- * The single writer of a routed report's verdict fields - the comment path calls it too rather
- * than writing them itself, so there is one place the rule "the verdict is whatever the event says
- * at write time" is expressed. Takes no verdict from its caller for the reason `readEventVerdict`
- * gives.
+ * The last and authoritative writer of a routed report's verdict fields. The insert path seeds
+ * `type`/`reportType` too - the schema requires `type`, and a report must render correctly in the
+ * window between its insert and this call - but it seeds from a read taken before its own text
+ * round trips, so this is what settles the values. Every other path writes them only through
+ * here. Takes no verdict from its caller for the reason `readEventVerdict` gives.
  */
 export async function syncRoutedVerdict({ eventId, userId }: { eventId: string; userId: string }): Promise<void> {
   const { reportType, type } = await readEventVerdict(eventId);

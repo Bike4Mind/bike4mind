@@ -8,7 +8,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { FeedbackModel, FeedbackTextModel, HelpEventModel, Organization, User } from '@bike4mind/database';
-import { FEEDBACK_CONTENT_RETENTION_DAYS } from '@bike4mind/common';
+import { FEEDBACK_CONTENT_RETENTION_DAYS, FeedbackType } from '@bike4mind/common';
 import errorHandler from '@server/middlewares/errorHandler';
 import { routeHelpCommentToFeedback, stitchRoutedComments, syncRoutedVerdict } from '@server/utils/helpFeedbackRouting';
 import { saveFeedbackOrRollbackText } from '@server/utils/feedbackText';
@@ -756,9 +756,30 @@ describe('help feedback consolidation', () => {
     });
     expect((await FeedbackModel.findOne({}).lean())?.helpContext?.reportType).toBe('outdated');
 
+    // The stored outcome alone cannot say the revision behaved: the trailing sync re-reads
+    // `reportType` off the event and writes it back, so a build that replaced the whole
+    // `helpContext` subdocument would be repaired before anything below could see it. Capture the
+    // revision's own update and assert on that instead.
+    const updates: Array<{ filter: Record<string, unknown>; update: Record<string, unknown> }> = [];
+    const realUpdateOne = FeedbackModel.updateOne.bind(FeedbackModel);
+    vi.spyOn(FeedbackModel, 'updateOne').mockImplementation((async (
+      ...args: Parameters<typeof FeedbackModel.updateOne>
+    ) => {
+      updates.push({
+        filter: args[0] as Record<string, unknown>,
+        update: args[1] as Record<string, unknown>,
+      });
+      return realUpdateOne(...args);
+    }) as never);
+
     // The revision the widget actually sends once the reader clears the checkbox: no reportType at
     // all. The flag stays on the event, so it has to stay on the report.
     await call(articleHandler, 'POST', user, { slug: 'a', rating: 'not_helpful', comment: 'second note' });
+
+    // The revision is the one keyed by `_id`; the trailing sync keys on the event instead.
+    const revision = updates.find(entry => '_id' in entry.filter);
+    expect(revision).toBeDefined();
+    expect(Object.keys(revision!.update.$set as Record<string, unknown>)).toEqual(['contentStored']);
 
     const after = await FeedbackModel.findOne({}).lean();
     expect(after?.helpContext?.reportType).toBe('outdated');
@@ -767,11 +788,18 @@ describe('help feedback consolidation', () => {
   });
 
   /**
-   * The thumbs stay clickable while a note submit is in flight, so a whole concurrent flip - its
-   * event write AND its verdict sync - can land in the middle of a revision. The revising request
-   * arrived carrying the OLD thumb (the widget always posts its current rating alongside the note),
-   * so a verdict derived from that request would put the report back on the verdict the reader just
-   * moved away from. Reading the event at write time is what makes the last write the last read.
+   * The thumbs stay clickable while a note submit is in flight, so a concurrent flip can land in
+   * the middle of a revision. The revising request arrived carrying the OLD thumb (the widget
+   * always posts its current rating alongside the note), so a verdict derived from that request
+   * would put the report back on the verdict the reader just moved away from. Reading the event at
+   * write time is what makes the last write the last read.
+   *
+   * Only the flip's EVENT write is injected, not its own `syncRoutedVerdict`. That is a real
+   * interleave - the thumb handler issues those as two separate round trips
+   * (`api/help/feedback.ts`), so a revision can land between them - and it is the one that leaves
+   * the revision's trailing sync as the only thing that can move the report. Replaying the flip's
+   * sync as well would reach the assertion with the report already correct, and the test would
+   * then pass against a build with that trailing sync deleted.
    *
    * Driven through the real handler on purpose: a direct router call cannot carry the rating the
    * handlers always send, which is the whole shape under test.
@@ -785,18 +813,18 @@ describe('help feedback consolidation', () => {
 
     // Deterministic interleave: the revise path writes the text sibling before it writes the
     // verdict, so landing the flip inside that call puts it exactly in the window the race occupies.
-    // Both halves of the concurrent request are replayed - the event write and the sync - because
-    // the sync alone would leave the event disagreeing with the report for reasons of the test's
-    // own making.
     const realUpdateOne = FeedbackTextModel.updateOne.bind(FeedbackTextModel);
     vi.spyOn(FeedbackTextModel, 'updateOne').mockImplementationOnce((async (
       ...args: Parameters<typeof FeedbackTextModel.updateOne>
     ) => {
       const result = await realUpdateOne(...args);
       await HelpEventModel.findOneAndUpdate({ _id: eventId }, { $set: { rating: 'helpful' } });
-      await syncRoutedVerdict({ eventId, userId: user.id });
       return result;
     }) as never);
+
+    // The report still says what it said before the flip, so nothing but the revision's own
+    // trailing sync can bring it in line with the event.
+    expect((await FeedbackModel.findOne({}).lean())?.type).toBe('Thumbs Down');
 
     // Still posting 'not_helpful': this is the reader's stale client state, which is exactly what
     // made the old snapshot path revert the flip.
@@ -874,6 +902,89 @@ describe('help feedback consolidation', () => {
   });
 
   /**
+   * `readEventVerdict` is a round trip, so it can fail. It runs before the text sibling is written
+   * for exactly that reason: a rejection after that write would answer 500 with a `FeedbackText`
+   * row nothing points at, which is the one state `feedbackText.ts` promises cannot happen.
+   */
+  it('writes no text sibling when the verdict read fails', async () => {
+    const user = await makeUser();
+    vi.spyOn(HelpEventModel, 'findById').mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.reject(new Error('verdict read failed')) }),
+    } as never);
+
+    const res = await call(articleHandler, 'POST', user, { slug: 'a', rating: 'helpful', comment: 'orphan me' });
+
+    expect(res._getStatusCode()).toBe(500);
+    expect(await FeedbackModel.countDocuments({})).toBe(0);
+    expect(await FeedbackTextModel.countDocuments({})).toBe(0);
+  });
+
+  /**
+   * The one shape that reaches `feedbackTypeForRating(undefined)`: a reader who writes a note
+   * without touching the thumbs. It is a real report and has to triage as plain feedback rather
+   * than inheriting a verdict nobody gave.
+   */
+  it('routes a comment left without a rating as plain feedback', async () => {
+    const user = await makeUser();
+
+    await call(articleHandler, 'POST', user, { slug: 'a', comment: 'no thumb, just a note' });
+
+    const report = await FeedbackModel.findOne({}).lean();
+    expect(report?.type).toBe(FeedbackType.FEEDBACK);
+    const text = await FeedbackTextModel.findById(report!._id).lean();
+    expect(text?.content).toBe('no thumb, just a note');
+  });
+
+  /**
+   * The handlers only call the router when their own `writtenComment` is non-blank, so the
+   * handler-driven whitespace test above never reaches the router's guard. Called directly, which
+   * is what binds it: the router is exported and a second caller would arrive without that filter.
+   */
+  it('creates nothing for a blank comment handed straight to the router', async () => {
+    const user = await makeUser();
+    const event = await HelpEventModel.create({ type: 'article_feedback', userId: user.id, slug: 'a' });
+    const logger = stubLogger();
+
+    await routeHelpCommentToFeedback({
+      submitter: { id: user.id, username: user.username, email: user.email },
+      comment: '   \n\t ',
+      helpContext: { eventId: event.id, surface: 'article', slug: 'a' },
+      logger: logger as Parameters<typeof routeHelpCommentToFeedback>[0]['logger'],
+    });
+
+    expect(await FeedbackModel.countDocuments({})).toBe(0);
+    expect(await FeedbackTextModel.countDocuments({})).toBe(0);
+  });
+
+  /**
+   * Pins the residual window `syncRoutedVerdict` documents rather than leaving it to be rediscovered
+   * as a bug. Its read and its write are two round trips, so a flip landing between them is still
+   * lost - the fix upstream shrank the window to this, it did not close it. If this ever starts
+   * failing, the guarantee got stronger (a version stamp on the help event would do it) and the
+   * docstring at `syncRoutedVerdict` needs to say so.
+   */
+  it('still loses a flip that lands inside the sync read-to-write window', async () => {
+    const user = await makeUser();
+    await call(articleHandler, 'POST', user, { slug: 'a', rating: 'not_helpful', comment: 'a note' });
+    const eventId = (await FeedbackModel.findOne({}).lean())!.helpContext!.eventId;
+
+    // Between the sync's own read and its own write - the only gap left.
+    const realUpdateOne = FeedbackModel.updateOne.bind(FeedbackModel);
+    vi.spyOn(FeedbackModel, 'updateOne').mockImplementationOnce((async (
+      ...args: Parameters<typeof FeedbackModel.updateOne>
+    ) => {
+      await HelpEventModel.findOneAndUpdate({ _id: eventId }, { $set: { rating: 'helpful' } });
+      return realUpdateOne(...args);
+    }) as never);
+
+    await syncRoutedVerdict({ eventId, userId: user.id });
+
+    // The accepted loss, stated: the event moved on and the report did not.
+    expect((await HelpEventModel.findById(eventId).lean())?.rating).toBe('helpful');
+    expect((await FeedbackModel.findOne({}).lean())?.type).toBe('Thumbs Down');
+  });
+
+  /**
    * The "collapses two concurrent submissions" test above asserts outcomes that hold whichever way
    * the two calls interleave - through the catch, or serialized through the `existing` revise -
    * so it cannot say the E11000 recovery actually ran. These two force the loser's path directly:
@@ -889,7 +1000,7 @@ describe('help feedback consolidation', () => {
         run: routeHelpCommentToFeedback({
           submitter: { id: user.id, username: user.username, email: user.email },
           comment,
-          helpContext: { eventId, surface: 'article', slug: 'a', rating: 'helpful' },
+          helpContext: { eventId, surface: 'article', slug: 'a' },
           logger: logger as Parameters<typeof routeHelpCommentToFeedback>[0]['logger'],
         }),
       };
