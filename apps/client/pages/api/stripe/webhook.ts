@@ -10,6 +10,7 @@ import { CreditHolderType, CreditPurchaseStatus, isPlaceholderValue } from '@bik
 import { baseApi } from '@server/middlewares/baseApi';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { Config, isDevelopment } from '@server/utils/config';
+import { emitMetric } from '@server/utils/cloudwatch';
 import { StripeEvents } from '@server/utils/eventBus';
 import { BadRequestError } from '@server/utils/errors';
 import { customerExists, CustomerType, isStripeConfigured, stripe } from '@server/integrations/stripe/stripe';
@@ -188,6 +189,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       // without a cancel_at_period_end update. Void anything still open so Stripe
       // stops retrying the invoice and emailing the customer. A no-op when nothing
       // is open, and it must not fail the delivery - the status write above stands.
+      let cleanupFailed = false;
       try {
         const { voided, failed } = await voidOpenSubscriptionInvoices(subscription.id);
         if (voided.length) {
@@ -195,9 +197,17 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         }
         if (failed.length) {
           req.logger.error(`Could not void every open invoice on deleted subscription ${subscription.id}`, { failed });
+          cleanupFailed = true;
         }
       } catch (error) {
         req.logger.error(`Failed to clean up open invoices for deleted subscription ${subscription.id}`, { error });
+        cleanupFailed = true;
+      }
+      // A half-voided subscription keeps dunning with no other signal to on-call, so
+      // this emits the same metric as customerSubscriptionUpdated.ts. `emitMetric`
+      // swallows its own failures, so it cannot fail a delivery that already landed.
+      if (cleanupFailed) {
+        await emitMetric('Lumina5/Entitlements', 'DunningCleanupFailed', 1, { reason: 'void_failed' });
       }
 
       break;

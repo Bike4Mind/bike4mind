@@ -340,6 +340,22 @@ describe('customerSubscriptionUpdated - stops dunning on a cancel Stripe recorde
     expect(voidOpenSubscriptionInvoices).not.toHaveBeenCalled();
   });
 
+  it('does not void invoices for a subscription this stage has no row for', async () => {
+    // A Dashboard-created subscription, or the same event delivered to another
+    // stage's endpoint: the status sync is a no-op, and the void is irreversible, so
+    // the ownership check has to fail closed. The `deleted` branch in
+    // pages/api/stripe/webhook.ts guards the identical call the same way.
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(
+      buildUserSub({ status: 'canceled', canceledAt: 1700000000 })
+    );
+    (subscriptionRepository.updateByStripeSubscriptionId as any).mockResolvedValueOnce(null);
+
+    await handler({ properties: { subscriptionId: 'sub_stripe_u' } } as any, logger as any);
+
+    expect(voidOpenSubscriptionInvoices).not.toHaveBeenCalled();
+    expect(emitMetric).not.toHaveBeenCalledWith('Lumina5/Entitlements', 'DunningCleanupFailed', 1, expect.anything());
+  });
+
   it('still completes the status sync when the invoice cleanup fails', async () => {
     (stripe.subscriptions.retrieve as any).mockResolvedValue(buildUserSub({ cancelAtPeriodEnd: true }));
     (voidOpenSubscriptionInvoices as any).mockRejectedValue(new Error('stripe unavailable'));

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type Stripe from 'stripe';
 import {
+  SubscriptionSource,
   TERMINAL_SUBSCRIPTION_STATUSES,
   isCancellableSubscriptionStatus,
   isDelinquentSubscriptionStatus,
@@ -89,6 +90,27 @@ describe('pickDisplayedSubscription', () => {
     expect(pickDisplayedSubscription([row('canceled', 'sub_dead')])).toBeUndefined();
     expect(pickDisplayedSubscription([row('incomplete_expired', 'sub_dead')])).toBeUndefined();
   });
+
+  it('prefers the Stripe-managed row over an admin grant, so a comp cannot hide dunning', () => {
+    // grant-subscription.ts only refuses a comp when an *active* row exists, so a
+    // support agent comping a user whose Stripe row is past_due leaves an active grant
+    // beside it. Picking the grant would show a healthy plan while Stripe keeps dunning
+    // the real subscription - the server picker prefers Stripe here, so this one must too.
+    const grant = { status: 'active' as const, source: SubscriptionSource.AdminGrant, subscriptionId: 'admin_grant_1' };
+    const dunned = { status: 'past_due' as const, source: SubscriptionSource.Stripe, subscriptionId: 'sub_dunned' };
+
+    expect(pickDisplayedSubscription([grant, dunned])?.subscriptionId).toBe('sub_dunned');
+    expect(pickDisplayedSubscription([dunned, grant])?.subscriptionId).toBe('sub_dunned');
+  });
+
+  it('still shows an active grant when the only Stripe row is terminal', () => {
+    // The Stripe preference is within the cancellable rows, not over all of them:
+    // a comped user whose old Stripe row is finished has a plan, and must keep seeing it.
+    const grant = { status: 'active' as const, source: SubscriptionSource.AdminGrant, subscriptionId: 'admin_grant_1' };
+    const dead = { status: 'canceled' as const, source: SubscriptionSource.Stripe, subscriptionId: 'sub_dead' };
+
+    expect(pickDisplayedSubscription([dead, grant])?.subscriptionId).toBe('admin_grant_1');
+  });
 });
 
 describe('pickSubscriptionByPrice', () => {
@@ -120,5 +142,25 @@ describe('pickSubscriptionByPrice', () => {
 
   it('ignores terminal rows at that price', () => {
     expect(pickSubscriptionByPrice([row('canceled', 'price_pro', 'sub_dead')], 'price_pro')).toBeUndefined();
+  });
+
+  it('prefers the Stripe row at that price over an active admin grant', () => {
+    // The per-price caller drives both the cancel button and its "ends on" copy, so
+    // picking the grant here would hide a dunned Stripe subscription behind a comp.
+    const grant = {
+      status: 'active' as const,
+      priceId: 'price_pro',
+      source: SubscriptionSource.AdminGrant,
+      subscriptionId: 'admin_grant_1',
+    };
+    const dunned = {
+      status: 'past_due' as const,
+      priceId: 'price_pro',
+      source: SubscriptionSource.Stripe,
+      subscriptionId: 'sub_dunned',
+    };
+
+    expect(pickSubscriptionByPrice([grant, dunned], 'price_pro')?.subscriptionId).toBe('sub_dunned');
+    expect(pickSubscriptionByPrice([dunned, grant], 'price_pro')?.subscriptionId).toBe('sub_dunned');
   });
 });

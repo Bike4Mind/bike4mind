@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { IUserSubscription } from '@client/lib/userSubscriptions/types';
@@ -100,5 +101,30 @@ describe('ProfileDetailTabContent subscription line', () => {
 
     expect(screen.queryByText('subscriptions.payment_issue')).not.toBeInTheDocument();
     expect(screen.getByText('subscriptions.renews_on')).toBeInTheDocument();
+  });
+
+  it('sends a delinquent user to the Stripe portal, where they can fix the card or cancel', async () => {
+    // The whole reason the picker is non-terminal: this button is the only route to
+    // the portal, and the portal is the only place a delinquent user can act. If the
+    // selection went back to active-only, `subscription` would be undefined and the
+    // click would open the upgrade modal instead - so assert the mutation, not the copy.
+    subscriptions = [subRow({ status: 'past_due' })];
+
+    renderTab();
+    await userEvent.setup({ delay: null }).click(screen.getByTestId('subscription-corner-btn'));
+
+    expect(stripePortalMutate).toHaveBeenCalledWith(
+      { ownerType: 'User', ownerId: 'user_1' },
+      expect.objectContaining({ onSuccess: expect.any(Function) })
+    );
+  });
+
+  it('opens the upgrade modal instead of the portal when the user has no plan', async () => {
+    subscriptions = [];
+
+    renderTab();
+    await userEvent.setup({ delay: null }).click(screen.getByTestId('subscription-corner-btn'));
+
+    expect(stripePortalMutate).not.toHaveBeenCalled();
   });
 });

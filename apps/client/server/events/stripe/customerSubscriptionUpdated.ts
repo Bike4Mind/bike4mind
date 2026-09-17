@@ -54,35 +54,12 @@ export const handler = withEventContext(async (event, logger) => {
     return;
   }
 
-  // A cancel recorded at Stripe - the Billing Portal path, where Stripe is the
-  // only actor and none of our API routes are called - leaves the unpaid invoice
-  // that triggered the dunning still open, and Stripe keeps retrying it and
-  // emailing the customer. Close it here. Cleanup must not break the status sync
-  // below, so failures are swallowed and surfaced.
-  //
-  // Bounded to invoices that already existed when the cancel was requested: this
-  // event fires on every later update too, and a subscriber can still spend while
-  // a period-end cancellation is pending. A fresh proration invoice from such a
-  // change is a real charge, not the stale dunning one this is here to close.
-  if (subscription.cancel_at_period_end || subscription.canceled_at) {
-    let cleanupFailed = false;
-    try {
-      const { voided, failed } = await voidOpenSubscriptionInvoices(subscription.id, {
-        createdBefore: subscription.canceled_at,
-      });
-      if (voided.length) logger.info(`Voided open invoices on cancelled subscription ${subscription.id}`, { voided });
-      if (failed.length) {
-        logger.error(`Could not void every open invoice on cancelled subscription ${subscription.id}`, { failed });
-        cleanupFailed = true;
-      }
-    } catch (error) {
-      logger.error(`Failed to clean up open invoices for cancelled subscription ${subscription.id}`, { error });
-      cleanupFailed = true;
-    }
-    if (cleanupFailed) {
-      await emitMetric('Lumina5/Entitlements', 'DunningCleanupFailed', 1, { reason: 'void_failed' });
-    }
-  }
+  // Ownership: `updateByStripeSubscriptionId` returning a row is the only evidence
+  // this stage owns the subscription, and the invoice cleanup is an irreversible
+  // money-affecting write - so it must not run for an event this stage has no row
+  // for (a Dashboard-created subscription, or an event fanned out to several stage
+  // endpoints). Same guard as the `deleted` branch in pages/api/stripe/webhook.ts.
+  let owned = false;
 
   // Update subscription in unified Subscription model
   const shouldInvalidateOrgs = await withTransaction(async () => {
@@ -95,6 +72,7 @@ export const handler = withEventContext(async (event, logger) => {
       priceId: item.price.id,
       quantity: item.quantity ?? 1,
     });
+    owned = updatedSubscription !== null;
 
     if (metadata.ownerType === SubscriptionOwnerType.Organization) {
       // Keep organization.seats and the active Subscription.quantity in sync
@@ -129,6 +107,37 @@ export const handler = withEventContext(async (event, logger) => {
 
     return false;
   });
+
+  // A cancel recorded at Stripe - the Billing Portal path, where Stripe is the
+  // only actor and none of our API routes are called - leaves the unpaid invoice
+  // that triggered the dunning still open, and Stripe keeps retrying it and
+  // emailing the customer. Close it here, once the sync above has confirmed the
+  // row is ours. Cleanup must not break the delivery, so failures are swallowed
+  // and surfaced.
+  //
+  // Bounded to invoices that already existed when the cancel was requested: this
+  // event fires on every later update too, and a subscriber can still spend while
+  // a period-end cancellation is pending. A fresh proration invoice from such a
+  // change is a real charge, not the stale dunning one this is here to close.
+  if (owned && (subscription.cancel_at_period_end || subscription.canceled_at)) {
+    let cleanupFailed = false;
+    try {
+      const { voided, failed } = await voidOpenSubscriptionInvoices(subscription.id, {
+        createdBefore: subscription.canceled_at,
+      });
+      if (voided.length) logger.info(`Voided open invoices on cancelled subscription ${subscription.id}`, { voided });
+      if (failed.length) {
+        logger.error(`Could not void every open invoice on cancelled subscription ${subscription.id}`, { failed });
+        cleanupFailed = true;
+      }
+    } catch (error) {
+      logger.error(`Failed to clean up open invoices for cancelled subscription ${subscription.id}`, { error });
+      cleanupFailed = true;
+    }
+    if (cleanupFailed) {
+      await emitMetric('Lumina5/Entitlements', 'DunningCleanupFailed', 1, { reason: 'void_failed' });
+    }
+  }
 
   // sendToClient calls must be outside the transaction to avoid
   // Connection.find() inheriting a committed transaction session.

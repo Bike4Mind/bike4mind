@@ -59,6 +59,11 @@ vi.mock('@server/integrations/stripe/dunning', () => ({
   voidOpenSubscriptionInvoices: (...args: unknown[]) => mockVoidOpenSubscriptionInvoices(...args),
 }));
 
+const mockEmitMetric = vi.fn();
+vi.mock('@server/utils/cloudwatch', () => ({
+  emitMetric: (...args: unknown[]) => mockEmitMetric(...args),
+}));
+
 import handler from '../cancel';
 
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
@@ -238,6 +243,38 @@ describe('POST /api/subscriptions/cancel', () => {
     expect(res.statusCode).toBe(200);
     expect(res._getJSONData()).toMatchObject({ priceId: 'price_pro' });
     expect(logger.error).toHaveBeenCalled();
+    // A subscription whose invoices could not be closed keeps dunning, so on-call
+    // needs the metric - the log line alone is invisible to it.
+    expect(mockEmitMetric).toHaveBeenCalledWith('Lumina5/Entitlements', 'DunningCleanupFailed', 1, {
+      reason: 'void_failed',
+    });
+  });
+
+  it('emits the cleanup-failed metric when only some invoices could not be voided', async () => {
+    mockFindCancelable.mockResolvedValue(subscriptionRow());
+    mockRetrieve.mockResolvedValue({ id: 'sub_1', status: 'past_due' });
+    mockCancel.mockResolvedValue({ id: 'sub_1', canceled_at: 1700000000 });
+    mockVoidOpenSubscriptionInvoices.mockResolvedValue({ voided: ['in_a'], failed: ['in_b'] });
+    const { req, res } = makeReq();
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(mockEmitMetric).toHaveBeenCalledWith('Lumina5/Entitlements', 'DunningCleanupFailed', 1, {
+      reason: 'void_failed',
+    });
+  });
+
+  it('stays quiet when every open invoice was voided', async () => {
+    mockFindCancelable.mockResolvedValue(subscriptionRow());
+    mockRetrieve.mockResolvedValue({ id: 'sub_1', status: 'past_due' });
+    mockCancel.mockResolvedValue({ id: 'sub_1', canceled_at: 1700000000 });
+    mockVoidOpenSubscriptionInvoices.mockResolvedValue({ voided: ['in_a'], failed: [] });
+    const { req, res } = makeReq();
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockEmitMetric).not.toHaveBeenCalled();
   });
 
   it('rejects an admin-granted row without calling Stripe', async () => {

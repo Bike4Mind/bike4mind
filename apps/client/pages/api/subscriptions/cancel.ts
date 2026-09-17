@@ -11,6 +11,7 @@ import { stripe } from '@server/integrations/stripe/stripe';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { subscriptionRepository } from '@server/models/Subscription';
+import { emitMetric } from '@server/utils/cloudwatch';
 import Stripe from 'stripe';
 import { z } from 'zod';
 
@@ -83,15 +84,24 @@ const handler = baseApi({ auth: 'jwtOnly' })
     // an open invoice keeps Stripe's dunning retries (and emails) running. Cleanup
     // must never fail the request: the cancellation has already happened at Stripe,
     // so a 5xx would tell the user nothing happened when the opposite is true.
+    let cleanupFailed = false;
     try {
       const { voided, failed } = await voidOpenSubscriptionInvoices(subscriptionId);
       if (voided.length)
         req.logger.info(`Voided open invoices on cancelled subscription ${subscriptionId}`, { voided });
       if (failed.length) {
         req.logger.error(`Failed to void some open invoices on cancelled subscription ${subscriptionId}`, { failed });
+        cleanupFailed = true;
       }
     } catch (error) {
       req.logger.error(`Failed to list open invoices on cancelled subscription ${subscriptionId}`, { error });
+      cleanupFailed = true;
+    }
+    // A half-voided subscription keeps dunning with no other signal to on-call, so
+    // this emits the same metric as customerSubscriptionUpdated.ts. `emitMetric`
+    // swallows its own failures, so it cannot fail a cancel that already happened.
+    if (cleanupFailed) {
+      await emitMetric('Lumina5/Entitlements', 'DunningCleanupFailed', 1, { reason: 'void_failed' });
     }
 
     // `status` is Stripe's, not the lagging local row's: the client patches it into

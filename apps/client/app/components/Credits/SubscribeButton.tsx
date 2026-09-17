@@ -1,5 +1,5 @@
 import { useCancelSubscription, useChangeSubscription, useSubscribePlan } from '@client/app/hooks/data/subscriptions';
-import { isDelinquentSubscriptionStatus, pickSubscriptionByPrice } from '@client/lib/subscriptions/types';
+import { pickSubscriptionByPrice } from '@client/lib/subscriptions/types';
 import { IUserSubscription } from '@client/lib/userSubscriptions/types';
 import { Button } from '@mui/joy';
 import dayjs from 'dayjs';
@@ -30,12 +30,12 @@ const SubscribeButton = ({ priceId, cancellableSubscriptions }: SubscribeButtonP
   const type: 'subscribe' | 'cancel' | 'change' = useMemo(() => {
     if (activeSubscription) {
       return 'cancel';
-    } else if (cancellableSubscriptions.some(sub => !isDelinquentSubscriptionStatus(sub.status))) {
+    } else if (cancellableSubscriptions.some(sub => sub.status === 'active')) {
       // A plan change resolves through the active-only lookup in
       // /api/subscriptions/change, so it is only on offer when the user actually
-      // holds a plan in good standing to change from. A user whose only row is
-      // delinquent falls through to Subscribe - the action they had before their
-      // dunning row was included in this list.
+      // holds an active plan to change from - a delinquent, trialing or paused row
+      // would 400 there. Those users fall through to Subscribe, the action they had
+      // before this list was widened to non-terminal rows.
       return 'change';
     } else {
       return 'subscribe';

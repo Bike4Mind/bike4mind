@@ -88,6 +88,11 @@ vi.mock('@server/integrations/stripe/dunning', () => ({
   voidOpenSubscriptionInvoices: (...args: unknown[]) => mockVoidOpenSubscriptionInvoices(...args),
 }));
 
+const mockEmitMetric = vi.fn();
+vi.mock('@server/utils/cloudwatch', () => ({
+  emitMetric: (...args: unknown[]) => mockEmitMetric(...args),
+}));
+
 vi.mock('@server/utils/config', () => ({
   Config: {
     MONGODB_URI: 'mongodb://localhost/test',
@@ -690,6 +695,28 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
         'sub_deleted',
         expect.objectContaining({ status: 'canceled', canceledAt: new Date(1700000000 * 1000) })
       );
+      // Still-dunning invoices need the on-call metric, not just a log line.
+      expect(mockEmitMetric).toHaveBeenCalledWith('Lumina5/Entitlements', 'DunningCleanupFailed', 1, {
+        reason: 'void_failed',
+      });
+    });
+
+    it('emits the cleanup-failed metric when only some invoices could not be voided', async () => {
+      mockVoidOpenSubscriptionInvoices.mockResolvedValue({ voided: ['in_a'], failed: ['in_b'] });
+
+      await invokeWebhookWithEvent(deletedEvent);
+
+      expect(mockEmitMetric).toHaveBeenCalledWith('Lumina5/Entitlements', 'DunningCleanupFailed', 1, {
+        reason: 'void_failed',
+      });
+    });
+
+    it('stays quiet when every open invoice was voided', async () => {
+      mockVoidOpenSubscriptionInvoices.mockResolvedValue({ voided: ['in_a'], failed: [] });
+
+      await invokeWebhookWithEvent(deletedEvent);
+
+      expect(mockEmitMetric).not.toHaveBeenCalled();
     });
   });
 });

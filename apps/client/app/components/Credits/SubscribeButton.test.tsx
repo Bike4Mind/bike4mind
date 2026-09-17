@@ -82,6 +82,18 @@ describe('SubscribeButton', () => {
     expect(screen.getByRole('button', { name: 'Subscribe' })).toBeEnabled();
   });
 
+  it.each(['trialing', 'paused'] as const)(
+    'offers Subscribe, not Change, when the only plan the user holds is %s',
+    status => {
+      // Same trap as the delinquent row: these are cancellable but not active, and
+      // change.ts still resolves through findActiveUserSubscriptions, so Change is a
+      // guaranteed 400 for them.
+      renderButton([subRow({ status })], 'price_other');
+
+      expect(screen.getByRole('button', { name: 'Subscribe' })).toBeEnabled();
+    }
+  );
+
   it('shows when a scheduled cancellation ends the plan instead of offering to cancel again', () => {
     renderButton([subRow({ status: 'active', canceledAt: new Date('2026-01-10T00:00:00Z') })]);
 

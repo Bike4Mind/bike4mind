@@ -34,6 +34,17 @@ export const isCancellableSubscriptionStatus = (status: Stripe.Subscription.Stat
   !TERMINAL_SUBSCRIPTION_STATUSES.has(status);
 
 /**
+ * The minimum a client-side row must expose for the display pickers below.
+ * `source` is optional because it only reaches the client as a leaked field of the
+ * repository row, and rows written before that field existed read back without it.
+ */
+type DisplayableSubscription = {
+  status: Stripe.Subscription.Status;
+  source?: SubscriptionSource;
+  subscriptionId?: string;
+};
+
+/**
  * The subscription to show a user as their current plan: their active one, else the
  * first cancellable row. `/api/subscriptions/own` returns an unsorted `find`, so
  * without the active-first rule a stale delinquent row left behind by a re-subscribe
@@ -41,24 +52,31 @@ export const isCancellableSubscriptionStatus = (status: Stripe.Subscription.Stat
  *
  * Mirrors the precedence in `findCancelableUserSubscriptionByPriceId`
  * (`server/models/Subscription.ts`); the two must agree on which row is "the" plan.
+ * That includes the Stripe-managed-first rule: an admin grant is not what Stripe is
+ * billing or dunning, and a grant can sit beside the real delinquent Stripe row at
+ * the same price (`grant-subscription.ts` only refuses a comp when an *active* row
+ * exists), so preferring the grant would paint a dunned plan as healthy.
  * Entitlement and rate-tier checks must not use this - see the docblock above.
  */
-export function pickDisplayedSubscription<T extends { status: Stripe.Subscription.Status }>(
+export function pickDisplayedSubscription<T extends DisplayableSubscription>(
   subscriptions: readonly T[]
 ): T | undefined {
-  return (
-    subscriptions.find(sub => sub.status === 'active') ??
-    subscriptions.find(sub => isCancellableSubscriptionStatus(sub.status))
-  );
+  // Cancellable first, then Stripe-managed, then active-first - the same three
+  // filters `findCancelableUserSubscriptionByPriceId` applies to its candidates.
+  const cancellable = subscriptions.filter(sub => isCancellableSubscriptionStatus(sub.status));
+  const stripeManaged = cancellable.filter(sub => resolveSubscriptionSource(sub) === SubscriptionSource.Stripe);
+  const pool = stripeManaged.length ? stripeManaged : cancellable;
+
+  return pool.find(sub => sub.status === 'active') ?? pool[0];
 }
 
 /**
- * The row to act on for one price: `pickDisplayedSubscription`'s active-first rule,
- * narrowed to a single price. Callers select a specific plan's row out of the whole
- * list, so a stale delinquent row at that price must not outrank the live one - the
- * same ambiguity `pickDisplayedSubscription` resolves for the list as a whole.
+ * The row to act on for one price: `pickDisplayedSubscription`'s rule, narrowed to a
+ * single price. Callers select a specific plan's row out of the whole list, so a
+ * stale delinquent row at that price must not outrank the live one - the same
+ * ambiguity `pickDisplayedSubscription` resolves for the list as a whole.
  */
-export function pickSubscriptionByPrice<T extends { priceId: string; status: Stripe.Subscription.Status }>(
+export function pickSubscriptionByPrice<T extends DisplayableSubscription & { priceId: string }>(
   subscriptions: readonly T[],
   priceId: string
 ): T | undefined {
@@ -137,7 +155,10 @@ export interface ISubscription {
  * Lives here rather than in a service because the repository needs it too, and
  * the repository must not import a service that imports the repository.
  */
-export function resolveSubscriptionSource(sub: Pick<ISubscription, 'source' | 'subscriptionId'>): SubscriptionSource {
+export function resolveSubscriptionSource(sub: {
+  source?: SubscriptionSource;
+  subscriptionId?: string;
+}): SubscriptionSource {
   if (sub.source) return sub.source;
   if (sub.subscriptionId?.startsWith('admin_granted_')) return SubscriptionSource.AdminGrant;
   return SubscriptionSource.Stripe;

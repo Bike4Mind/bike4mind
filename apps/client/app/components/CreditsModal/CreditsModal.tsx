@@ -4,6 +4,7 @@ import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
+import { isCancellableSubscriptionStatus } from '@client/lib/subscriptions/types';
 import { CREDIT_PACKAGES } from '@client/lib/credits/constants';
 import { TransactionType } from '@client/lib/credits/types';
 import { SUBSCRIPTION_PLANS_GROUPED_BY_INTERVAL } from '@client/lib/userSubscriptions/constants';
@@ -79,6 +80,14 @@ const CreditsModal = () => {
 
   const activeSubscriptions = useMemo(
     () => (subscriptions.data ?? []).filter(sub => sub.status === 'active'),
+    [subscriptions.data]
+  );
+
+  // What SubscribeButton needs: non-terminal, not just active - a delinquent row is
+  // still the subscription its owner has to cancel. Keep `activeSubscriptions` above
+  // for the pay-as-you-go tab gate, which is a "does this user have a plan" check.
+  const cancellableSubscriptions = useMemo(
+    () => (subscriptions.data ?? []).filter(sub => isCancellableSubscriptionStatus(sub.status)),
     [subscriptions.data]
   );
 
@@ -216,7 +225,7 @@ const CreditsModal = () => {
                       <Typography level="body-sm" sx={{ textAlign: 'center', mb: 1 }}>
                         {(plan.credits / 30000).toFixed(0)} conversations per day
                       </Typography>
-                      <SubscribeButton priceId={plan.priceId} cancellableSubscriptions={activeSubscriptions} />
+                      <SubscribeButton priceId={plan.priceId} cancellableSubscriptions={cancellableSubscriptions} />
                     </Card>
                   ))}
                 </Box>
@@ -245,7 +254,7 @@ const CreditsModal = () => {
                       <Typography level="body-sm" sx={{ textAlign: 'center', mb: 1 }}>
                         {(plan.credits / 365000).toFixed(0)} conversations per day
                       </Typography>
-                      <SubscribeButton priceId={plan.priceId} cancellableSubscriptions={activeSubscriptions} />
+                      <SubscribeButton priceId={plan.priceId} cancellableSubscriptions={cancellableSubscriptions} />
                     </Card>
                   ))}
                 </Box>
