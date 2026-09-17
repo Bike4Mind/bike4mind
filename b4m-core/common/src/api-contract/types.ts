@@ -64,6 +64,19 @@ export type ResponseSpec = {
    */
   headers?: Readonly<Record<string, string>>;
   /**
+   * Shape of the job resource this response hands off to, for an endpoint whose
+   * real outcome arrives on a poll rather than in this body (CONVENTIONS.md
+   * section 4). Declared here because the ACK is not the result: without it the
+   * spec documents the handoff and nothing about how the work can end, which is
+   * how a failure that polls back as prose gets consumed as an answer.
+   *
+   * Published as a `<operationId>PollResult` component that the response points
+   * at with an `x-poll-result` extension, NOT as a body of this status - it is
+   * returned by a different operation, so putting it in `content` here would be a
+   * lie a generated client would act on.
+   */
+  pollResult?: { schema: z.ZodTypeAny; description: string; example?: unknown };
+  /**
    * Documented exemption from the shared `ApiErrorSchema` envelope for a >= 400
    * response, carrying the REASON it cannot conform. Deliberately a string, not a
    * boolean: the exemptions must be greppable and justified in place, since every
