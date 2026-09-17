@@ -120,6 +120,22 @@ describe('OrgFeedbackSummaryPanel', () => {
     );
   });
 
+  it('renders the summary as markdown instead of printing the raw syntax', async () => {
+    h.get.mockResolvedValue({
+      data: {
+        status: 'completed',
+        summaryJobId: 'sum-1',
+        artifact: { ...ARTIFACT, summary: '# Feedback Summary\n\n## Volume and Trend\n\nSteady week.' },
+      },
+    });
+
+    renderPanel();
+
+    const result = await screen.findByTestId('feedback-summary-result-text');
+    expect(result.querySelector('h2')).toHaveTextContent('Volume and Trend');
+    expect(result.textContent).not.toContain('##');
+  });
+
   it('ignores a frame for a different organization', async () => {
     h.get.mockResolvedValue({ data: { status: 'processing', summaryJobId: 'sum-1' } });
 

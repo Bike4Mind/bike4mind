@@ -1,7 +1,39 @@
 import { type OrgFeedbackRange, useOrgFeedbackReport } from '@client/app/hooks/data/orgFeedbackReport';
 import { useOrgFeedbackSummary } from '@client/app/hooks/data/useOrgFeedbackSummary';
-import { Alert, Button, Card, CircularProgress, Stack, Typography } from '@mui/joy';
-import { FC } from 'react';
+import { promoteInlineLatexDollars, remarkGfmNoSingleTilde } from '@client/app/utils/remarkPlugins';
+import { Alert, Box, Button, Card, CircularProgress, Stack, Typography } from '@mui/joy';
+import { FC, ReactNode } from 'react';
+import ReactMarkdown from 'react-markdown';
+import rehypeKatex from 'rehype-katex';
+import remarkMath from 'remark-math';
+
+/**
+ * Heading/paragraph mapping mirrors MarkdownViewer's, minus the code-block and Mermaid chrome
+ * a written summary never needs. Keep the LLM-markdown plugin choices (remarkGfmNoSingleTilde,
+ * promoteInlineLatexDollars) in sync with Knowledge/MarkdownViewer.tsx.
+ */
+const summaryMarkdownComponents = {
+  p: ({ children }: { children?: ReactNode }) => (
+    <Typography component="p" level="body-md" sx={{ mb: 1 }}>
+      {children}
+    </Typography>
+  ),
+  h1: ({ children }: { children?: ReactNode }) => (
+    <Typography component="h1" level="title-lg" sx={{ mb: 1 }}>
+      {children}
+    </Typography>
+  ),
+  h2: ({ children }: { children?: ReactNode }) => (
+    <Typography component="h2" level="title-md" sx={{ mb: 1 }}>
+      {children}
+    </Typography>
+  ),
+  h3: ({ children }: { children?: ReactNode }) => (
+    <Typography component="h3" level="title-sm" sx={{ mb: 1 }}>
+      {children}
+    </Typography>
+  ),
+};
 
 /**
  * The written summary for the window the Analysis shell has applied.
@@ -50,9 +82,15 @@ const OrgFeedbackSummaryPanel: FC<{ organizationId: string; range: OrgFeedbackRa
           <Typography level="body-xs">
             Covering {data.artifact.range.from.slice(0, 10)} to {data.artifact.range.to.slice(0, 10)}
           </Typography>
-          <Typography level="body-md" whiteSpace="pre-wrap" data-testid="feedback-summary-result-text">
-            {data.artifact.summary}
-          </Typography>
+          <Box data-testid="feedback-summary-result-text">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfmNoSingleTilde, [remarkMath, { singleDollarTextMath: false }]]}
+              rehypePlugins={[rehypeKatex]}
+              components={summaryMarkdownComponents}
+            >
+              {promoteInlineLatexDollars(data.artifact.summary)}
+            </ReactMarkdown>
+          </Box>
         </Stack>
       );
     }
