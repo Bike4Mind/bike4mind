@@ -168,12 +168,18 @@ export type OpenAIImageGenerationOptions = Omit<ImageGenerateParams, 'prompt'> &
  * Resolve the alpha/container pair gpt-image accepts. OpenAI rejects
  * `background: 'transparent'` together with jpeg (no alpha channel), so a transparent
  * request promotes the container to png rather than failing the whole render.
+ * gpt-image-2 rejects `background: 'transparent'` outright, so it is dropped there
+ * (falling back to OpenAI's own default) with a warning instead of 400-ing the whole
+ * request - this is the single backstop for every call site (generate/edit, tool call
+ * or queue handler, explicit model selection or default), so `model` must be the
+ * fully-resolved model actually sent to OpenAI, not a pre-fallback value.
  * Returns the fields to spread onto the request; absent keys mean "let OpenAI default".
  */
 export function resolveGptImageOutputOptions(
   background: OpenAIImageBackground | null | undefined,
   outputFormat: ImageOutputFormat | null | undefined,
-  warnings: string[]
+  warnings: string[],
+  model?: string | null
 ): { background?: OpenAIImageBackground; output_format?: ImageOutputFormat } {
   const resolved: { background?: OpenAIImageBackground; output_format?: ImageOutputFormat } = {};
   if (background) {
@@ -182,7 +188,11 @@ export function resolveGptImageOutputOptions(
   if (outputFormat) {
     resolved.output_format = outputFormat;
   }
-  if (background === 'transparent' && outputFormat === 'jpeg') {
+  if (background === 'transparent' && isGPTImage2Model(model)) {
+    delete resolved.background;
+    warnings.push("gpt-image-2 does not support background: 'transparent'; background parameter removed");
+  }
+  if (resolved.background === 'transparent' && outputFormat === 'jpeg') {
     resolved.output_format = 'png';
     warnings.push(
       "Transparent background requires an alpha-capable format; output_format changed from 'jpeg' to 'png'"
@@ -221,7 +231,7 @@ export class OpenAIImageService extends AIImageService {
       if (isGPTImageModel(options.model)) {
         openaiOptions.model = modelName;
 
-        gptImageOutputOptions = resolveGptImageOutputOptions(background, output_format, parameterWarnings);
+        gptImageOutputOptions = resolveGptImageOutputOptions(background, output_format, parameterWarnings, modelName);
 
         // Remove unsupported parameters with warnings
         if (openaiOptions.style) {
@@ -512,7 +522,7 @@ export class OpenAIImageService extends AIImageService {
       }
 
       const editWarnings: string[] = [];
-      const gptImageOutputOptions = resolveGptImageOutputOptions(background, output_format, editWarnings);
+      const gptImageOutputOptions = resolveGptImageOutputOptions(background, output_format, editWarnings, editModel);
       if (editWarnings.length > 0) {
         Logger.globalInstance.debug(`[DEBUG] ⚠️ ${editModel} parameter adjustments:`, editWarnings);
       }

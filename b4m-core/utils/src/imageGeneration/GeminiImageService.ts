@@ -256,9 +256,11 @@ export class GeminiImageService extends AIImageService {
     return `${widthRatio}:${heightRatio}`;
   }
 
-  // Callers always pass output_format through toNonWebpOutputFormat before reaching here,
-  // so 'webp' never actually arrives; the type is widened to ImageOutputFormat only to
-  // match AIImageGenerationOptions after that field was widened for other providers.
+  // 'webp' never actually arrives here: every schema on the paths that reach Gemini
+  // (ImageEditBodySchema, the tool schemas) excludes it from output_format's enum. The
+  // type is widened to ImageOutputFormat only to match AIImageGenerationOptions after
+  // that field was widened for other providers - not every caller runs it through
+  // toNonWebpOutputFormat first (ImageEdit.ts's Gemini branch does not).
   private resolveMimeType(format?: ImageOutputFormat | null): string {
     if (format === 'jpeg') {
       return 'image/jpeg';

@@ -8,6 +8,7 @@ import {
   GenerateImageToolCall,
   isBflImageModel,
   isGeminiImageModel,
+  isGPTImage2Model,
   toNonWebpOutputFormat,
   type ImageOutputFormat,
   type OpenAIImageBackground,
@@ -189,14 +190,16 @@ export const imageGenerationTool: ToolDefinition = {
       const output_format = toolOutputFormat ?? imageConfig?.output_format;
       const background = toolBackground ?? imageConfig?.background;
 
-      // Default to, and auto-upgrade gpt-image-1 into, gpt-image-2 (latest model) -
-      // unless the caller requested a transparent background. gpt-image-2 rejects
-      // background: 'transparent', so both the default and the upgrade would
-      // silently turn a valid request into a 400; fall back to gpt-image-1 instead.
+      // Default to gpt-image-2 (latest model), but step any gpt-image-2 selection -
+      // default or explicit - down to gpt-image-1.5 when transparency is requested:
+      // gpt-image-2 rejects background: 'transparent' outright, so sending it there
+      // would silently turn a valid request into a 400.
+      // (OpenAIImageService.resolveGptImageOutputOptions is the last-resort backstop
+      // that strips 'transparent' if a gpt-image-2 request reaches it regardless.)
       const wantsTransparent = background === 'transparent';
-      let model = imageConfig?.model || (wantsTransparent ? ImageModels.GPT_IMAGE_1 : ImageModels.GPT_IMAGE_2);
-      if (model === ImageModels.GPT_IMAGE_1 && !wantsTransparent) {
-        model = ImageModels.GPT_IMAGE_2;
+      let model = imageConfig?.model || ImageModels.GPT_IMAGE_2;
+      if (wantsTransparent && isGPTImage2Model(model)) {
+        model = ImageModels.GPT_IMAGE_1_5;
       }
       const n = toolN ?? imageConfig?.n ?? 1;
       const quality = imageConfig?.quality || toolQuality;

@@ -280,6 +280,7 @@ export class ImageEditService {
       prompt_upsampling,
       seed,
       output_format = 'jpeg',
+      background,
       aspect_ratio,
       fabFileIds,
       size,
@@ -470,6 +471,8 @@ export class ImageEditService {
           quality,
           response_format: 'url',
           user: userId,
+          background,
+          output_format,
         });
       }
 

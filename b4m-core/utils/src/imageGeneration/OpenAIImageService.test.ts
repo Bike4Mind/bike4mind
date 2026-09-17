@@ -143,6 +143,26 @@ describe('resolveGptImageOutputOptions', () => {
     expect(resolveGptImageOutputOptions(undefined, undefined, [])).toEqual({});
     expect(resolveGptImageOutputOptions(null, null, [])).toEqual({});
   });
+
+  it('drops a transparent background for gpt-image-2, which rejects it outright', () => {
+    const warnings: string[] = [];
+
+    expect(resolveGptImageOutputOptions('transparent', 'png', warnings, 'gpt-image-2')).toEqual({
+      output_format: 'png',
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('gpt-image-2');
+  });
+
+  it('keeps a transparent background for gpt-image-1.5, which supports it', () => {
+    const warnings: string[] = [];
+
+    expect(resolveGptImageOutputOptions('transparent', 'png', warnings, 'gpt-image-1.5')).toEqual({
+      background: 'transparent',
+      output_format: 'png',
+    });
+    expect(warnings).toEqual([]);
+  });
 });
 
 describe('OpenAIImageService.generate output controls', () => {
@@ -163,6 +183,18 @@ describe('OpenAIImageService.generate output controls', () => {
 
     expect(imagesGenerate).toHaveBeenCalledTimes(1);
     expect(imagesGenerate.mock.calls[0][0]).toMatchObject({ background: 'transparent', output_format: 'png' });
+  });
+
+  it('drops a transparent background for an explicitly-selected gpt-image-2, which would 400', async () => {
+    await service().generate('an inventory icon', {
+      model: ImageModels.GPT_IMAGE_2,
+      background: 'transparent',
+      output_format: 'png',
+    });
+
+    const sent = imagesGenerate.mock.calls[0][0];
+    expect(sent.background).toBeUndefined();
+    expect(sent.output_format).toBe('png');
   });
 
   it('drops both for a legacy (non gpt-image) model, which would reject them', async () => {
@@ -331,6 +363,18 @@ describe('OpenAIImageService.edit', () => {
     const params = await editParams({ model: ImageModels.GPT_IMAGE_2 });
 
     expect(params).not.toHaveProperty('quality');
+  });
+
+  it('drops a transparent background for gpt-image-2 on the edit endpoint, which would 400', async () => {
+    const params = await editParams({ model: ImageModels.GPT_IMAGE_2, background: 'transparent' });
+
+    expect(params).not.toHaveProperty('background');
+  });
+
+  it('keeps a transparent background for gpt-image-1.5 on the edit endpoint', async () => {
+    const params = await editParams({ model: ImageModels.GPT_IMAGE_1_5, background: 'transparent' });
+
+    expect(params.background).toBe('transparent');
   });
 
   it('leaves the dall-e-2 request shape unchanged', async () => {

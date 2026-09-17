@@ -23,12 +23,16 @@ vi.mock('@bike4mind/utils/imageModeration', async importOriginal => {
 });
 
 const mockGeminiGenerate = vi.fn();
+const mockOpenAIGenerate = vi.fn();
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
   return {
     ...actual,
     GeminiImageService: vi.fn().mockImplementation(function () {
       return { generate: mockGeminiGenerate };
+    }),
+    OpenAIImageService: vi.fn().mockImplementation(function () {
+      return { generate: mockOpenAIGenerate };
     }),
   };
 });
@@ -160,6 +164,52 @@ describe('image_generation Gemini branch parameter passthrough', () => {
         safety_tolerance: 1,
         output_format: 'jpeg',
       })
+    );
+  });
+});
+
+describe('image_generation OpenAI model selection for transparent backgrounds', () => {
+  beforeEach(() => {
+    mockOpenAIGenerate.mockReset();
+    mockOpenAIGenerate.mockResolvedValue([]);
+  });
+
+  it('steps a default gpt-image-2 selection down to gpt-image-1.5 when transparency is requested', async () => {
+    const context = createFakeContext();
+
+    const { toolFn } = imageGenerationTool.implementation(context, {});
+
+    await toolFn({ prompt: 'an inventory icon', background: 'transparent' });
+
+    expect(mockOpenAIGenerate).toHaveBeenCalledWith(
+      'an inventory icon',
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5, background: 'transparent' })
+    );
+  });
+
+  it('steps an explicitly-selected gpt-image-2 down to gpt-image-1.5 when transparency is requested', async () => {
+    const context = createFakeContext();
+
+    const { toolFn } = imageGenerationTool.implementation(context, { model: ImageModels.GPT_IMAGE_2 });
+
+    await toolFn({ prompt: 'an inventory icon', background: 'transparent' });
+
+    expect(mockOpenAIGenerate).toHaveBeenCalledWith(
+      'an inventory icon',
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5, background: 'transparent' })
+    );
+  });
+
+  it('keeps the gpt-image-2 default when no transparency is requested', async () => {
+    const context = createFakeContext();
+
+    const { toolFn } = imageGenerationTool.implementation(context, {});
+
+    await toolFn({ prompt: 'an inventory icon' });
+
+    expect(mockOpenAIGenerate).toHaveBeenCalledWith(
+      'an inventory icon',
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_2 })
     );
   });
 });
