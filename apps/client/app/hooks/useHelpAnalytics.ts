@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
+import type { HelpFeedbackRating, HelpFeedbackReportType } from '@bike4mind/common';
 
 type HelpEventPayload = {
   type: 'article_view' | 'search' | 'chat_query';
@@ -76,8 +77,8 @@ export function useHelpAnalytics() {
 
 export interface MyRecentArticleFeedback {
   slug: string;
-  rating?: 'helpful' | 'not_helpful';
-  reportType?: 'outdated';
+  rating?: HelpFeedbackRating;
+  reportType?: HelpFeedbackReportType;
   comment?: string;
   createdAt: string;
 }
@@ -85,7 +86,7 @@ export interface MyRecentArticleFeedback {
 export interface MyRecentChatFeedback {
   chatQuestion: string;
   chatAnswer: string;
-  rating: 'helpful' | 'not_helpful';
+  rating: HelpFeedbackRating;
   comment?: string;
   createdAt: string;
 }
@@ -143,8 +144,8 @@ export function useHelpFeedback() {
   const feedbackMutation = useMutation({
     mutationFn: async (payload: {
       slug: string;
-      rating?: 'helpful' | 'not_helpful';
-      reportType?: 'outdated';
+      rating?: HelpFeedbackRating;
+      reportType?: HelpFeedbackReportType;
       comment?: string;
     }) => {
       const { data } = await api.post('/api/help/feedback', payload);
@@ -159,7 +160,7 @@ export function useHelpFeedback() {
     mutationFn: async (payload: {
       chatQuestion: string;
       chatAnswer: string;
-      rating: 'helpful' | 'not_helpful';
+      rating: HelpFeedbackRating;
       comment?: string;
     }) => {
       const { data } = await api.post('/api/help/chat-feedback', payload);

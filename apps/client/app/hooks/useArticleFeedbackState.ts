@@ -1,9 +1,10 @@
 import { useCallback, useEffect } from 'react';
 import { create } from 'zustand';
 import { useHelpFeedback, useMyRecentFeedback } from './useHelpAnalytics';
+import type { HelpFeedbackRating, HelpFeedbackReportType } from '@bike4mind/common';
 
 interface ArticleFeedbackEntry {
-  rating: 'helpful' | 'not_helpful' | null;
+  rating: HelpFeedbackRating | null;
   comment: string;
   reportOutdated: boolean;
   commentSent: boolean;
@@ -22,14 +23,14 @@ interface ArticleFeedbackStore {
   /** Slugs that have already been populated from server data */
   populatedSlugs: Set<string>;
 
-  setRating: (slug: string, rating: 'helpful' | 'not_helpful') => void;
+  setRating: (slug: string, rating: HelpFeedbackRating) => void;
   setComment: (slug: string, comment: string) => void;
   setReportOutdated: (slug: string, value: boolean) => void;
   setCommentSent: (slug: string, value: boolean) => void;
   /** Populate from server data; runs once per slug */
   populateFromServer: (
     slug: string,
-    data: { rating?: 'helpful' | 'not_helpful'; comment?: string; reportType?: 'outdated' }
+    data: { rating?: HelpFeedbackRating; comment?: string; reportType?: HelpFeedbackReportType }
   ) => void;
   /** Mark slug as populated even when no server data exists (prevents re-checking) */
   markPopulated: (slug: string) => void;
@@ -117,7 +118,7 @@ export function useArticleFeedbackState(slug: string) {
   }, [recentFeedback, slug, populatedSlugs]);
 
   const handleRating = useCallback(
-    (value: 'helpful' | 'not_helpful') => {
+    (value: HelpFeedbackRating) => {
       if (value === entry.rating) return;
       useArticleFeedbackStore.getState().setRating(slug, value);
       submitFeedback.mutate({ slug, rating: value });

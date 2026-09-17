@@ -112,6 +112,7 @@ import BackfillInviteInviterId from './20260913000000_backfill-invite-inviter-id
 import EnsureFabFileChunkResidencyIndex from './20260914000000_ensure-fabfilechunk-residency-index';
 import DeleteNearEmptyVectorizedFabFileChunks from './20260915120000_delete-near-empty-vectorized-fabfilechunks';
 import ReplaceFabFileModerationSweepIndex from './20260915130000_replace-fabfile-moderation-sweep-index';
+import EnsureFeedbackHelpContextIndex from './20260916000000_ensure-feedback-helpcontext-index';
 import CapLegacyInviteLinkExpiry from './20260917000000_cap-legacy-invite-link-expiry';
 import EnsureInviteTokenIndex from './20260917000100_ensure-invite-token-index';
 // Renamed from 20260917000000 to 20260917000200 to resolve an id collision with
@@ -223,6 +224,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureFabFileChunkResidencyIndex,
   DeleteNearEmptyVectorizedFabFileChunks,
   ReplaceFabFileModerationSweepIndex,
+  EnsureFeedbackHelpContextIndex,
   CapLegacyInviteLinkExpiry,
   EnsureInviteTokenIndex,
   EnsureQuestCorrectsIndex,

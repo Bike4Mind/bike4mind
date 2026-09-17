@@ -1,4 +1,5 @@
 import { IBaseEvent } from '../../../types';
+import { HelpFeedbackRating, HelpFeedbackReportType } from '../../../types/entities/FeedbackTypes';
 
 export enum HelpEvents {
   HELP_ARTICLE_VIEW = 'Help Article Viewed',
@@ -28,8 +29,8 @@ interface IHelpArticleFeedbackEvent extends IBaseEvent {
   type: HelpEvents.HELP_ARTICLE_FEEDBACK;
   metadata: {
     slug: string;
-    rating?: 'helpful' | 'not_helpful';
-    reportType?: 'outdated';
+    rating?: HelpFeedbackRating;
+    reportType?: HelpFeedbackReportType;
     comment?: string;
   };
 }
@@ -46,14 +47,10 @@ interface IHelpChatFeedbackEvent extends IBaseEvent {
   metadata: {
     chatQuestion: string;
     chatAnswer: string;
-    rating: 'helpful' | 'not_helpful';
+    rating: HelpFeedbackRating;
     comment?: string;
   };
 }
 
 export type HelpEventPayload =
-  | IHelpArticleViewEvent
-  | IHelpSearchEvent
-  | IHelpArticleFeedbackEvent
-  | IHelpChatQueryEvent
-  | IHelpChatFeedbackEvent;
+  IHelpArticleViewEvent | IHelpSearchEvent | IHelpArticleFeedbackEvent | IHelpChatQueryEvent | IHelpChatFeedbackEvent;
