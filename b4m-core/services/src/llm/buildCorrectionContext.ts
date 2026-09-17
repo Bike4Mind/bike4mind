@@ -76,7 +76,7 @@ function readStructuredText(turn: CorrectedTurn): string {
  * ChatCompletionInvoke.ts clears `reply`/`replies` but not `structuredReplies`, so a retried turn
  * would be quoted from its pre-retry answer; and toolResults pairing lives in a sibling field.
  */
-function readAnswerText(turn: CorrectedTurn): string {
+export function readAnswerText(turn: CorrectedTurn): string {
   const fromStructured = readStructuredText(turn);
   if (fromStructured) return fromStructured;
   const fromReplies = turn.replies?.filter(Boolean).join('\n').trim();
