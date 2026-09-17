@@ -55,6 +55,15 @@ You can choose your telemetry level at any time in **Profile > Settings > Help I
 - Requires your explicit opt-in consent
 - Helps us diagnose complex issues faster
 
+## Your Own Context Breakdown
+
+Every message you send has a **Context** entry in its message menu. It opens a breakdown of that one turn: how many tokens each system-prompt layer, tool definition, attached file and conversation-history entry used, which layers were dropped and why, what retrieval found, how much of the model's context window was left over, and the cache read/write split.
+
+- **Your own turns only.** People you share a notebook with cannot open it, and neither can Bike4Mind administrators - their inspector reads only the pseudonymized telemetry described above.
+- **Counts and names, never content.** No prompt text, no reply text, no tool output.
+- **Available at Basic and Enhanced.** At None the entry is hidden and the request behind it is refused.
+- **Computed on demand, never stored.** It is derived from the message in your notebook rather than from your telemetry record, so it lasts exactly as long as that message does and disappears when you delete it. Telemetry records are still deleted at 90 days.
+
 ## Data Retention
 
 All telemetry data is **automatically deleted after 90 days**. There is no way to extend this — the cleanup runs daily.
