@@ -423,7 +423,9 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    */
   requiredPassageTokenTarget?: number;
   /**
-   * Whether the requesting caller CREATED this lake (createdByUserId === caller). Server-computed
+   * Whether the requesting caller effectively OWNS this lake - `isEffectiveOwner`, not raw
+   * `createdByUserId`, so a creator whose ownership has been transferred or handed off reads
+   * `false` and the owner-grant holder it moved to reads `true`. Server-computed
    * per request. The manager list is "lakes I can reach", not "lakes I own": it also surfaces org
    * lakes, strangers' public lakes, and - for a global admin - every tenant's lakes. So the UI
    * marks a not-own lake to keep an admin from mistaking someone else's (even private) lake for

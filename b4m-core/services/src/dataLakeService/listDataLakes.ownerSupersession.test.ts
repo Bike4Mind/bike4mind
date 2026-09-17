@@ -94,6 +94,22 @@ describe('list paths - a creator superseded as owner loses the listing', () => {
     );
   });
 
+  it('degrades to the static registry instead of 500ing when the supersession read throws', async () => {
+    // The resolution sits INSIDE the try that guards `findAccessible`, because it reads the same
+    // two collections: on a deployment that has neither, hoisting it out turns the documented
+    // silent fall-through to the hardcoded registry into an unhandled throw at the route. Pinned
+    // here because nothing else would go red if a later edit moved it back out.
+    const { dataLakes, dataLakeAccessGrants } = handedOnRepos([lake()]);
+    dataLakes.findIdsCreatedBy.mockRejectedValue(new Error('ns not found'));
+
+    const result = await listDataLakes(ctx(), { db: { dataLakes, dataLakeAccessGrants } });
+
+    expect(result.map(l => l.id)).not.toContain('handed-on');
+    // Not merely "did not throw": the throw has to land before the row set is read, or a failed
+    // narrowing would hand back the UNnarrowed rows - the exact leak this file exists to close.
+    expect(dataLakes.findAccessible).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['archived', listArchivedDataLakes, 'archived'],
     ['deleted', listDeletedDataLakes, 'deleted'],

@@ -367,13 +367,24 @@ const toFallbackConfig = (
  * Lists data lakes accessible to the user (org-aware datastore filter + hardcoded
  * fallbacks). Uses the same owner/org/(tag-or-entitlement) rule as the single access
  * gate, so a non-owner never receives lakes outside their org or whose required tag AND
- * required entitlement they both lack. Each result carries `canManage` (admin or creator)
- * so the UI can gate management affordances - the list surfaces other users' public lakes,
- * which are read-only. Fallback (built-in) lakes are read-only for everyone.
+ * required entitlement they both lack. Each result carries `canManage` - true outright for a
+ * platform admin, and otherwise `canManageLake`, which resolves EFFECTIVE ownership plus the
+ * curator/org rungs rather than bare creator provenance - so the UI can gate management
+ * affordances. The list surfaces other users' public lakes, which are read-only, and fallback
+ * (built-in) lakes are read-only for everyone.
  *
- * Each result also carries `isOwn` (did the caller create it) and, when a `users` lookup is
- * supplied (the manager route), `ownerDisplayName` for lakes the caller does NOT own - so the
- * UI can flag someone else's lake and not let it be managed by mistake.
+ * Each result also carries `isOwn`, resolved through `isEffectiveOwner` (so a creator whose
+ * ownership has since moved off gets `false`, and the grant holder it moved to gets `true`) and,
+ * when a `users` lookup is supplied (the manager route), `ownerDisplayName` for lakes the caller
+ * does NOT own - so the UI can flag someone else's lake and not let it be managed by mistake.
+ *
+ * Wider blast radius than its name suggests: `resolveAccessibleLakes`
+ * (`apps/client/server/dataLakes/index.ts`) builds the content-scope lake set from this same
+ * function, and that set is the lake arm of the single-file read gate behind `/api/files/[id]`,
+ * `/api/files/byIds` and `/api/files/presigned-url`, plus the scope for `/api/data-lakes/articles`,
+ * `/api/data-lakes/tag-counts` and the `rlm-answer` has-any-lake precondition. A row this function
+ * stops returning is a lake that stops granting file reads too - intended, and the reason the
+ * narrowing below has to be ownership and not a display filter.
  */
 export const listDataLakes = async (
   ctx: AccessContext,
