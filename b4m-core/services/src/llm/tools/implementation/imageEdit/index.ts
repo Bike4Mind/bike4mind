@@ -291,7 +291,9 @@ export const imageEditTool: ToolDefinition = {
       // NOTE: DALL-E 3 does NOT support image editing at all. Use GPT-Image models for editing.
       // @see https://platform.openai.com/docs/guides/image-generation#edit-images
 
-      // Determine edit model from imageConfig, with smart fallbacks
+      // Determine edit model from imageConfig, with smart fallbacks.
+      // `generationModel` is only the starting point for that fallback and the model
+      // recorded on a moderation incident; billing and dispatch both use `editModel`.
       const generationModel = imageConfig?.model || ImageModels.GPT_IMAGE_1_5;
       let editModel = imageConfig?.editModel as ImageModels | undefined;
 
@@ -320,7 +322,6 @@ export const imageEditTool: ToolDefinition = {
 Please select a supported edit model in your image settings modal.`;
       }
 
-      const model = generationModel; // Keep for backwards compatibility
       const n = toolN ?? imageConfig?.n ?? 1;
       const size = imageConfig?.size || toolSize;
       const safety_tolerance = imageConfig?.safety_tolerance || toolSafetyTolerance;
@@ -336,11 +337,19 @@ Please select a supported edit model in your image settings modal.`;
       const isGeminiModel = isGeminiImageModel(editModel);
       // Real provider for the moderation incident audit record - more accurate
       // than a generic lookup since the branch below already knows which backend is used.
+      // NOTE: this is the EDIT provider, while the `model` recorded alongside it is
+      // `generationModel`, so an incident can pair a provider and a model from different
+      // vendors. Left as-is deliberately - which of the two an incident should name is a
+      // separate question from billing, and is not settled here.
       const provider = isBFLModel ? 'bfl' : isGeminiModel ? 'gemini' : 'openai';
 
-      // Call onStart callback for credit validation
+      // Call onStart callback for credit validation. Bills `editModel`, NOT the
+      // configured generation model: `editModel` is what the render below actually
+      // dispatches to (and what BFL/Gemini/OpenAI charges us for), and the two diverge
+      // whenever imageConfig.editModel is unset and the fallback above picks a default.
+      // Same billed-model-vs-rendered-model invariant the queue path holds in ImageEdit.ts.
       await context.onStart?.('edit_image', {
-        model,
+        model: editModel,
         n,
         size,
         quality: imageConfig?.quality,
@@ -393,7 +402,12 @@ Please select a supported edit model in your image settings modal.`;
           });
 
           if (editResponse.type === 'success') {
-            const storedImagePath = await processAndStoreImage(editResponse.dataUrl, context, model, provider);
+            const storedImagePath = await processAndStoreImage(
+              editResponse.dataUrl,
+              context,
+              generationModel,
+              provider
+            );
 
             return updateQuestAndReturnMarkdown(storedImagePath, context);
           }
@@ -444,7 +458,12 @@ Please check your BFL API key in settings and ensure it is configured correctly.
           });
 
           if (editResponse.type === 'success') {
-            const storedImagePath = await processAndStoreImage(editResponse.dataUrl, context, model, provider);
+            const storedImagePath = await processAndStoreImage(
+              editResponse.dataUrl,
+              context,
+              generationModel,
+              provider
+            );
 
             return updateQuestAndReturnMarkdown(storedImagePath, context);
           }
@@ -486,7 +505,12 @@ Please check your BFL API key in settings and ensure it is configured correctly.
           });
 
           if (editResponse.type === 'success') {
-            const storedImagePath = await processAndStoreImage(editResponse.dataUrl, context, model, provider);
+            const storedImagePath = await processAndStoreImage(
+              editResponse.dataUrl,
+              context,
+              generationModel,
+              provider
+            );
 
             return updateQuestAndReturnMarkdown(storedImagePath, context);
           }
