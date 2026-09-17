@@ -257,6 +257,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
         prompt_upsampling: { type: Boolean, required: false },
         seed: { type: Number, required: false },
         output_format: { type: String, required: false },
+        background: { type: String, required: false },
         response_format: { type: String, required: false },
         seconds: { type: Number, required: false },
         model: { type: String, required: false },

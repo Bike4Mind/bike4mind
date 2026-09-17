@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ChatCompletionCreateInputSchema, OpenAIImageGenerationInput } from './schemas/openai';
+import { ChatCompletionCreateInputSchema, ImageOutputFormatSchema, OpenAIImageGenerationInput } from './schemas/openai';
 import { b4mLLMTools, B4MLLMTools } from './schemas/llm';
 import { supportedVoiceGenerationVendor, voiceOutputFormatSchema } from './voiceGeneration';
 import { BFLSafetyToleranceSchema } from './schemas/bfl';
@@ -64,7 +64,7 @@ export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend(
   safety_tolerance: BFLSafetyToleranceSchema,
   prompt_upsampling: z.boolean().optional(),
   seed: z.number().nullable().optional(),
-  output_format: z.enum(['jpeg', 'png']).nullable().optional(),
+  output_format: ImageOutputFormatSchema.nullable().optional(),
   /** Resolved by the API route's prompt resolver. Defaults to 'fresh' for first-turn or sessions with no prior image. */
   intent: PromptIntentSchema.optional(),
   promptEnhancement: z
@@ -89,7 +89,7 @@ export type GenerateImageRequestBody = z.infer<typeof GenerateImageRequestBodySc
 export const GenerateImageToolCallSchema = OpenAIImageGenerationInput.extend({
   safety_tolerance: z.number().optional(),
   prompt_upsampling: z.boolean().optional(),
-  output_format: z.enum(['jpeg', 'png']).nullable().optional(),
+  output_format: ImageOutputFormatSchema.nullable().optional(),
   seed: z.number().nullable().optional(),
   editModel: z.string().optional(), // Model to use for image editing operations (separate from generation model)
 }).omit({
@@ -133,6 +133,10 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   aspect_ratio: z.string().optional(),
   fabFileIds: z.array(z.string()).prefault([]),
   image: z.string(),
+  // OpenAIImageGenerationInput doesn't declare this; without it here, ImageEdit.ts's
+  // `...rest` spread silently strips any client-sent output_format before it ever reaches
+  // ImageEditBodySchema's own (narrower) field.
+  output_format: ImageOutputFormatSchema.nullable().optional(),
 });
 
 /**
