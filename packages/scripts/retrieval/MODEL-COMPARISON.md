@@ -344,15 +344,18 @@ sit ABOVE the whole band in either space, so after the flip they would have reje
 every query - the silent outage `b4m-core/common/src/schemas/embedding.ts` records this codebase
 hitting twice already.
 
-**Those three literals are gone** (#2572 item 4a). Both floors now resolve per embedding space from
-`FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE` / `MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE` in
-`b4m-core/common/src/constants/embeddingSpaceFloors.ts`, keyed on the space the scores were actually
-produced in - for forced retrieval that is the candidate files' MAJORITY model, not the admin
-default, so a lake still on ada-002 mid-migration keeps its own floor on the same deployment where a
-migrated one gets 3-small's. A space with no measured entry applies no absolute floor and logs at
-error level, leaving the scale-free relative floor as the only gate: less precise, and recoverable,
-where a blackout is not. So the numbers below are still what a floor DOES to recall in each space,
-but the shipped 85:75 row is no longer what a 3-small deployment would run.
+**Those three literals are gone** (#2572 item 4a). The forced-retrieval floor now resolves per
+embedding space from `FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE` in
+`b4m-core/common/src/constants/embeddingSpaceFloors.ts`, keyed on the candidate files' MAJORITY
+model, not the admin default, so a lake still on ada-002 mid-migration keeps its own floor on the
+same deployment where a migrated one gets 3-small's. A space with no measured entry applies no
+absolute floor and logs at error level, leaving the scale-free relative floor as the only gate: less
+precise, and recoverable, where a blackout is not. So the numbers below are still what a floor DOES
+to recall in each space, but the shipped 85:75 row is no longer what a 3-small deployment would run.
+
+V1 mementos moved off the per-space table entirely in a later change: they now embed in a
+compile-time-pinned space (`MEMENTO_EMBEDDING_ID`) the same way V2 always did, so their floor is a
+single literal (`MEMENTO_MIN_SIMILARITY`, see below) rather than something resolved per space.
 
 A FAB replacement floor is bracketed by `posTop` and `negTop`: roughly 0.38-0.40 for `3-small@1536`.
 That is NOT `MEMENTO_MIN_SIMILARITY` (0.25), which sits below this corpus's `negTop` of 0.3615 and would

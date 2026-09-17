@@ -1,10 +1,19 @@
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
+import { ApiKeyScope, MEMENTO_EMBEDDING_ID } from '@bike4mind/common';
 import { Memento } from '@bike4mind/database';
 import { ForbiddenError } from '@server/utils/errors';
-import { MEMENTO_EMBEDDING_ID } from '@bike4mind/common';
 import { reembedMementosForUser } from '@server/memory/reembedMementos';
 
+/**
+ * Admin-only, dry-run-by-default repair for V1 mementos left in a pre-pin embedding space (see
+ * `mementoEmbeddingIsCurrent` in `@bike4mind/common`, and `getRelevantMementos`'s exclusion gate).
+ *
+ * Operator loop: POST repeatedly with `{ execute: true }` until the response's `hasMore` is
+ * false. No `skip` bookkeeping needed - in execute mode the route always re-queries the head of
+ * the still-stale set, since repairing a page removes those users from it. `skip` only matters
+ * for a dry-run preview, where nothing is written and the set stays stable across calls.
+ */
 const BATCH_SIZE = 25;
 
 const bodySchema = z.object({
@@ -22,7 +31,7 @@ const staleWithVectorFilter = {
   'embedding.0': { $exists: true },
 };
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Admin access required');
   }
@@ -33,17 +42,25 @@ const handler = baseApi().post(async (req, res) => {
   }
   const { skip, execute } = parsed.data;
 
+  // In execute mode staleWithVectorFilter is self-advancing: repairing a user's mementos removes
+  // them from it immediately, so walking a caller-supplied `skip` offset into that shrinking set
+  // silently drops roughly half the corpus (each page pushes the next page's start past users the
+  // previous page never saw). Execute mode always re-queries the head of the set instead - a
+  // retried/failed user simply reappears next call, which is the retry behaviour already wanted.
+  // `skip` keeps its ordinary meaning for dry runs, where nothing is written and the set is stable.
+  const effectiveSkip = execute ? 0 : skip;
+
   // reembedMementosForUser repairs one user; enumerating who still needs it is this door's own job.
   const page = await Memento.aggregate<{ _id: string }>([
     { $match: staleWithVectorFilter },
     { $group: { _id: '$userId' } },
     { $sort: { _id: 1 } },
-    { $skip: skip },
+    { $skip: effectiveSkip },
     { $limit: BATCH_SIZE },
   ]);
 
   if (page.length === 0) {
-    return res.json({ processedUsers: 0, dryRun: !execute, hasMore: false, nextSkip: skip });
+    return res.json({ processedUsers: 0, dryRun: !execute, hasMore: false, nextSkip: effectiveSkip });
   }
 
   const totals = { total: 0, alreadyCurrent: 0, reembedded: 0, failed: 0, skippedEmpty: 0 };
@@ -70,7 +87,9 @@ const handler = baseApi().post(async (req, res) => {
     ...totals,
     failedUsers,
     hasMore: page.length === BATCH_SIZE,
-    nextSkip: skip + page.length,
+    // Always 0 in execute mode - see effectiveSkip above. The caller's loop is simply "keep
+    // posting execute:true until hasMore is false", no cursor bookkeeping required.
+    nextSkip: execute ? 0 : skip + page.length,
   });
 });
 

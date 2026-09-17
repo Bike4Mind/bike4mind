@@ -39,9 +39,10 @@ export interface RelevantMemento {
 }
 
 /**
- * Total order for the top-K. The id tiebreaker is load-bearing, not cosmetic: mementos now arrive
- * page by page, so leaving equal-similarity mementos to arrival order would make the result depend
- * on where a page boundary fell.
+ * Total order for the top-K. The id tiebreaker is load-bearing, not cosmetic: `BoundedTopK` requires
+ * a total order and explicitly disclaims leaving ties to arrival order (see its own contract comment),
+ * so a comparator that returns 0 on equal scores is a correctness bug in that structure regardless of
+ * what arrival order happens to be today.
  *
  * Byte comparison, NOT localeCompare, matching `compareRankedChunks` in `@bike4mind/utils`: the cursor
  * check and Mongo's `_id` ascending sort both order these ids bytewise, and a collation-aware

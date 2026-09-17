@@ -35,10 +35,15 @@ describe('resolveMajorityEmbeddingModel', () => {
     );
   });
 
-  it('falls back to the first candidate alphabetically when the tiebreak model is not a candidate', () => {
-    const result = resolveMajorityEmbeddingModel([1536, 1536], 'some-other-model');
-    expect([OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL, OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002]).toContain(
-      result
+  it('refuses to resolve when the tiebreak model is not a candidate for the resolved width', () => {
+    // A wrong-but-real model name (e.g. the 3072-wide 3-large against 1536-wide legacy vectors)
+    // must not silently substitute a guess - that is the same silent mislabel this required
+    // argument exists to close, just moved one input later.
+    expect(() => resolveMajorityEmbeddingModel([1536, 1536], 'some-other-model')).toThrow(
+      /not a candidate for width 1536/
+    );
+    expect(() => resolveMajorityEmbeddingModel([1536, 1536], OpenAIEmbeddingModel.TEXT_EMBEDDING_3_LARGE)).toThrow(
+      /not a candidate for width 1536/
     );
   });
 

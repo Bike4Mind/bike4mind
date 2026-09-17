@@ -106,25 +106,7 @@ export const FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE = {
   [OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL]: 49,
 } as const satisfies CosineFloorPctByEmbeddingSpace;
 
-/**
- * Topicality floors for the V1 memento corpus, by embedding space.
- *
- * Separate from the file table above because the two corpora are different populations, not
- * different sizes of one: a memento is a single short sentence and a chunk is a passage of a
- * document, so their score distributions differ even inside one vector space. Sharing a table would
- * be the same category error as reusing `MEMENTO_MIN_SIMILARITY` on files, which the measurement
- * rejects outright.
- *
- * V1 mementos embed with whatever `defaultEmbeddingModel` names - unlike V2, which pins
- * `MEMENTO_EMBEDDING_MODEL` precisely so memory can migrate independently - which is what puts this
- * legacy path in the blast radius of a setting change it has no say in.
- *
- * Only ada-002 has a number, and it is the 0.75 both V1 call sites hardcoded rather than anything
- * measured. No other space has been measured for this corpus at all, so every other one resolves to
- * absent and the callers fall back to ranking alone. That is a real loss of precision and it is
- * still the right default: V1's floor is the whole reason it stays quiet on an off-topic question,
- * but a floor above the band does not keep it quiet, it makes memory vanish.
- */
-export const MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE = {
-  [OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002]: 75,
-} as const satisfies CosineFloorPctByEmbeddingSpace;
+// The per-space V1 memento floor table this file used to keep alongside the one above was retired
+// when V1 mementos moved to a compile-time embedding pin: the floor is now a single literal,
+// MEMENTO_MIN_SIMILARITY (schemas/embedding.ts), the same way V2's always was. See
+// getRelevantMementos.ts for the current call site.

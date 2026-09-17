@@ -51,8 +51,13 @@ const emptyStats = { total: 0, alreadyCurrent: 0, reembedded: 0, failed: 0, skip
 
 describe('/api/admin/mementos/reembed', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    // Reset (not just clearAllMocks) because it also drops an override installed via
+    // mockImplementation - otherwise the self-shrinking-filter test's custom implementation
+    // leaks into every test that runs after it.
+    mockAggregate.mockReset();
+    reembedMock.mockReset();
     userIdPage = [];
+    mockAggregate.mockImplementation(() => Promise.resolve(userIdPage));
     reembedMock.mockResolvedValue(emptyStats);
   });
 
@@ -107,8 +112,46 @@ describe('/api/admin/mementos/reembed', () => {
       skippedEmpty: 0,
       failedUsers: [],
       hasMore: false,
-      nextSkip: 2,
+      nextSkip: 0,
     });
+  });
+
+  it('repairs the full corpus across multiple execute calls despite the self-shrinking filter', async () => {
+    // Models the real bug directly instead of asserting on internals: reembedding a user removes
+    // them from the same filter the next page queries, so this backing set shrinks exactly like
+    // staleWithVectorFilter does in production. Walking a caller-supplied `skip` offset into it
+    // drops the second half of the corpus; this test fails against that code and passes against
+    // the fix (execute mode always re-queries skip=0).
+    let staleUserIds = Array.from({ length: 50 }, (_, i) => `u${String(i).padStart(3, '0')}`);
+    mockAggregate.mockImplementation((pipeline: Array<Record<string, unknown>>) => {
+      const skipStage = pipeline.find(stage => '$skip' in stage) as { $skip: number } | undefined;
+      const limitStage = pipeline.find(stage => '$limit' in stage) as { $limit: number } | undefined;
+      const skip = skipStage?.$skip ?? 0;
+      const limit = limitStage?.$limit ?? staleUserIds.length;
+      return Promise.resolve(staleUserIds.slice(skip, skip + limit).map(id => ({ _id: id })));
+    });
+    const reembeddedUserIds: string[] = [];
+    reembedMock.mockImplementation((userId: string) => {
+      reembeddedUserIds.push(userId);
+      staleUserIds = staleUserIds.filter(id => id !== userId);
+      return Promise.resolve({ total: 1, alreadyCurrent: 0, reembedded: 1, failed: 0, skippedEmpty: 0 });
+    });
+
+    let skip = 0;
+    let hasMore = true;
+    let calls = 0;
+    while (hasMore && calls < 10) {
+      const { req, res } = makeReq({ skip, execute: true });
+      await (handler as any)._post(req, res);
+      const body = res._getJSONData();
+      hasMore = body.hasMore;
+      skip = body.nextSkip;
+      calls++;
+    }
+
+    expect(reembeddedUserIds.sort()).toEqual(
+      Array.from({ length: 50 }, (_, i) => `u${String(i).padStart(3, '0')}`).sort()
+    );
   });
 
   it('isolates a per-user failure so the rest of the page still completes', async () => {

@@ -65,20 +65,20 @@ export const planFileBackfills = (
  * Guesses a legacy file's embedding model from the width its chunk vectors actually are, for
  * files with no `FabFile.embeddingModel` at all. Requires a clear (>50%) majority width - a
  * mixed-width sample means the file was re-embedded under more than one model and guessing
- * would silently mislabel some chunks. Ties between same-width models resolve to `tiebreakModel`
- * when it's a candidate, else the first candidate alphabetically, for reproducibility.
+ * would silently mislabel some chunks. Ties between same-width models resolve to `tiebreakModel`,
+ * which must name one of the candidates for that width.
  *
  * `tiebreakModel` is a REQUIRED caller-supplied argument, not `defaultEmbeddingModelForEnv()`.
  * ada-002 and 3-small share width 1536, so the two-candidate arm fires on every legacy 1536-wide
  * file; deriving the tiebreak from the environment default meant a post-migration deploy of this
- * script would silently relabel legacy ada-002 chunks as 3-small, and a default outside the
- * candidate set fell through to `candidates[0]`, which sorts 3-small first alphabetically -
- * wrong either way. This script runs standalone against a point-in-time snapshot of legacy data,
- * so the caller must say out loud which model that snapshot's ties belong to.
+ * script would silently relabel legacy ada-002 chunks as 3-small. This script runs standalone
+ * against a point-in-time snapshot of legacy data, so the caller must say out loud which model
+ * that snapshot's ties belong to.
  *
  * Enforced at runtime, not just in the type signature: an empty `tiebreakModel` reaching the
- * ambiguous-width branch throws rather than falling through to the same alphabetical guess this
- * change exists to remove. A single-candidate width needs no tiebreak and does not check it.
+ * ambiguous-width branch throws, and so does one that names a real model that is simply the
+ * wrong one for this width - neither falls through to a guess. A single-candidate width needs
+ * no tiebreak and does not check it.
  */
 export const resolveMajorityEmbeddingModel = (vectorLengths: number[], tiebreakModel: string): string | null => {
   const nonEmpty = vectorLengths.filter(len => len > 0);
@@ -107,5 +107,16 @@ export const resolveMajorityEmbeddingModel = (vectorLengths: number[], tiebreakM
         'and requires an explicit tiebreakModel - it is not inferred from the deployment default.'
     );
   }
-  return candidates.includes(tiebreakModel) ? tiebreakModel : candidates[0];
+  if (!candidates.includes(tiebreakModel)) {
+    // A --model that names a real embedding model but the WRONG one for this width (e.g.
+    // text-embedding-3-large against 1536-wide legacy vectors) must not fall through to a guess -
+    // that silently mislabels files exactly the way an unset tiebreak used to, and it is not
+    // self-healing: findChunksMissingEmbeddingModel only returns still-unlabeled chunks, so a
+    // corrective rerun would skip the damaged files entirely.
+    throw new Error(
+      `resolveMajorityEmbeddingModel: tiebreakModel "${tiebreakModel}" is not a candidate for width ` +
+        `${majorityWidth} (expected one of [${candidates.join(', ')}]).`
+    );
+  }
+  return tiebreakModel;
 };
