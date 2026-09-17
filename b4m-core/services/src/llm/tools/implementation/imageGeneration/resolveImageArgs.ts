@@ -32,7 +32,7 @@ export interface ResolvedImageArgs {
  *
  * Both the credit reservation (`ToolBuilder.reserveImageCredits` reads the `onStart`
  * payload) and the provider dispatch read this output, so the two can never disagree about
- * which args an image ran with. Note that is an agreement about args, not about price: a
+ * which args an image ran with. Note that this is an agreement about args, not about price: a
  * panel-selected gpt-image-2 size outside the priced set (e.g. `2048x2048`) is honored here
  * and still estimated at the `1024x1024` row.
  */
