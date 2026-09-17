@@ -229,6 +229,11 @@ const toScanPayload = (scan: dataLakeService.SemanticSearchScanAccounting) => ({
   ann_files_queried: scan.annFilesQueried,
   ann_hits: scan.annHits,
   ann_models_queried: scan.annModelsQueried,
+  // Scoped files per lake. Without it `files_scoped` is a single number over the union and a
+  // caller cannot tell a lake that contributed nothing from one that contributed most of the
+  // scope - the gap that let a multi-lake search report every lake as searched. The empty-string
+  // key holds files attributable to no lake (the caller's own and shared files).
+  files_by_lake: scan.filesByLake,
   // The ANN share of latency_ms, so a slow search can be attributed from the response itself
   // rather than from CloudWatch minutes later. The counters above cannot tell a 49s search from a
   // 2s one, and this route runs under a 60s Lambda ceiling - a first production search spent 45.4s

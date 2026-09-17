@@ -18,7 +18,9 @@ import { isDatalakeTagWellFormed } from './createDataLake';
  */
 export function datalakeTagsFrom(tagNames: Iterable<string>): string[] {
   const out = new Set<string>();
-  for (const name of tagNames) if (name.startsWith(DATALAKE_TAG_PREFIX)) out.add(name);
+  // `tags` is a schema-less Mongo array; a legacy row can carry a tag object with no `name`, so a
+  // caller's `.map(t => t.name)` can hand this an iterable containing non-string entries.
+  for (const name of tagNames) if (typeof name === 'string' && name.startsWith(DATALAKE_TAG_PREFIX)) out.add(name);
   return [...out];
 }
 
