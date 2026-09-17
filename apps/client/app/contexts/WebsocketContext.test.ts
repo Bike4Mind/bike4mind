@@ -380,6 +380,64 @@ describe('WebsocketProvider - self-armed recovery after budget exhaustion', () =
     expect(h.capturedUrls).toContain(null);
     expect(typeof h.capturedUrls[h.capturedUrls.length - 1]).toBe('function');
   });
+
+  it('does not pulse during a healthy backoff (budget not yet exhausted)', async () => {
+    mount(); // no onReconnectStop - a reconnect attempt may still be pending its own backoff
+    h.capturedUrls = [];
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(90_000);
+    });
+
+    expect(h.capturedUrls).not.toContain(null);
+  });
+
+  it('does not pulse a healthy open socket (onOpen clears the exhausted flag)', async () => {
+    const opts = mount();
+    await act(async () => {
+      opts.onReconnectStop(20);
+      opts.onOpen({});
+    });
+    h.capturedUrls = [];
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(90_000);
+    });
+
+    expect(h.capturedUrls).not.toContain(null);
+  });
+
+  it('does not pulse in a hidden tab (the return to visible pulses instead)', async () => {
+    const opts = mount();
+    await act(async () => {
+      opts.onReconnectStop(20);
+    });
+    h.capturedUrls = [];
+    stubVisibility('hidden');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(90_000);
+    });
+
+    expect(h.capturedUrls).not.toContain(null);
+  });
+
+  // One exhaustion buys exactly one pulse: the pulse clears the exhausted flag as it fires, so
+  // the ticks that follow are no-ops until a whole fresh budget has been spent. Without that,
+  // this would re-pulse every tick and cancel the library's own jittered backoff on each one.
+  it('pulses once per exhausted budget, however many intervals elapse', async () => {
+    const opts = mount();
+    await act(async () => {
+      opts.onReconnectStop(20);
+    });
+    h.capturedUrls = [];
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300_000);
+    });
+
+    expect(h.capturedUrls.filter(passedUrl => passedUrl === null)).toHaveLength(1);
+  });
 });
 
 describe('WebsocketProvider - connect URL carries a single-use ticket, never the JWT', () => {
