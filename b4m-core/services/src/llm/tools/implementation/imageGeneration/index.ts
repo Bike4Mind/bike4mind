@@ -409,7 +409,10 @@ export const imageGenerationTool: ToolDefinition = {
             type: 'string',
             description:
               "The quality tier of the image to generate (OpenAI GPT-image models only). If the user states a tier (e.g. 'low', 'medium', 'high'), pass it through. Omit this field when the user does not state one, so their saved preference applies. Legacy values are accepted: 'standard' maps to 'medium' and 'hd' to 'high'.",
-            enum: [...OPENAI_IMAGE_QUALITIES],
+            // 'auto' is deliberately excluded: OpenAI chooses the render effort per request, so
+            // an 'auto' call is billed at the ceiling tier (OpenAIImageCostCalculator.AUTO_TIER).
+            // Omitting the field already defers to the user's saved preference, at a known price.
+            enum: OPENAI_IMAGE_QUALITIES.filter(q => q !== 'auto'),
           },
           n: {
             type: 'number',

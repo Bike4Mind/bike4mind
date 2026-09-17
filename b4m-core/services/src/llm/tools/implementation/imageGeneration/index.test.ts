@@ -186,7 +186,16 @@ describe('image_generation effective-arg precedence (tool call vs client imageCo
   it('exposes the real GPT-image quality tiers in the tool schema', () => {
     const { toolSchema } = imageGenerationTool.implementation(createFakeContext(), { model: ImageModels.GPT_IMAGE_2 });
     const quality = toolSchema.parameters.properties.quality;
-    expect(quality.enum).toEqual(expect.arrayContaining(['low', 'medium', 'high', 'auto']));
+    expect(quality.enum).toEqual(expect.arrayContaining(['low', 'medium', 'high']));
+  });
+
+  // #2899: 'auto' bills at the ceiling tier because OpenAI picks the effort per request, so the
+  // model must not be able to reach for it - omitting the field is the way to defer to the
+  // user's saved preference, and that costs whatever that preference costs.
+  it('does not offer "auto" quality in the tool schema', () => {
+    const { toolSchema } = imageGenerationTool.implementation(createFakeContext(), { model: ImageModels.GPT_IMAGE_2 });
+    const quality = toolSchema.parameters.properties.quality;
+    expect(quality.enum).not.toContain('auto');
   });
 });
 

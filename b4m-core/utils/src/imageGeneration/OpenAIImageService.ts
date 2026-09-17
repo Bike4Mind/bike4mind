@@ -45,6 +45,10 @@ function isGptImageQuality(value: unknown): value is GptImageQuality {
  * in step with OpenAIImageCostCalculator.normalizeInput (services) and
  * ImageGeneration's mapQualityForModel, which bill against the mapped tier - if they
  * diverge, the user is charged one tier and rendered another.
+ *
+ * 'auto' is the one value deliberately forwarded unresolved: OpenAI picks the effort per
+ * request, so the calculator prices it at its AUTO_TIER ceiling rather than pretending to
+ * know the tier. Do not "fix" that by pinning 'auto' here without repricing it there.
  */
 export function toGptImageQuality(quality?: string | null): GptImageQuality | undefined {
   const mapped = quality === 'standard' ? 'medium' : quality === 'hd' ? 'high' : quality;
