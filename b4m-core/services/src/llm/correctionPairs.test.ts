@@ -44,12 +44,33 @@ describe('buildCorrectionPairs', () => {
     ]);
   });
 
-  it('terminates on a cyclic chain', async () => {
+  // The closing hop is dropped rather than emitted: in a cycle the same answer would appear as
+  // both the original and the correction, which is fabricated eval data, not a retry.
+  it('stops a cyclic chain at the hop that would close it', async () => {
     const reader = fakeReader([turn({ id: 'X', correctsQuestId: 'Y' }), turn({ id: 'Y', correctsQuestId: 'X' })]);
 
     const pairs = await buildCorrectionPairs(SESSION, reader);
 
-    expect(pairs.map(p => p.correctedQuestId)).toEqual(['Y', 'X']);
+    expect(pairs.map(p => p.correctedQuestId)).toEqual(['Y']);
+  });
+
+  it('drops a hop whose correction says nothing about what was wrong', async () => {
+    const reader = fakeReader([turn({ id: 'A' }), turn({ id: 'B', correctsQuestId: 'A', prompt: '   ' })]);
+
+    await expect(buildCorrectionPairs(SESSION, reader)).resolves.toEqual([]);
+  });
+
+  it('warns on every dropped hop, since the only other symptom is a shorter export', async () => {
+    const warn = vi.fn();
+    const reader = {
+      ...fakeReader([turn({ id: 'other', sessionId: 'session-2' }), turn({ id: 'B', correctsQuestId: 'other' })]),
+      logger: { warn },
+    };
+
+    await buildCorrectionPairs(SESSION, reader);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('cross-session');
   });
 
   it('drops a self-referential link rather than pairing a turn with itself', async () => {

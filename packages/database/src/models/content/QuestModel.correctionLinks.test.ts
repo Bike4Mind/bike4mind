@@ -89,6 +89,29 @@ describe('questRepository.findCorrectionLinksBySessionId', () => {
     expect(links.map(l => l.prompt)).toEqual(['earlier', 'later']);
   });
 
+  // Two turns can share a millisecond, and the walk pairs hops in the order it reads them, so the
+  // `_id` tiebreak is the only thing making that order deterministic.
+  it('breaks a timestamp tie on _id rather than leaving the order to the engine', async () => {
+    const sameMoment = new Date('2026-01-02T00:00:00Z');
+    const first = await Quest.create(seed({ correctsQuestId: 'earlier', prompt: 'first', timestamp: sameMoment }));
+    const second = await Quest.create(seed({ correctsQuestId: 'earlier', prompt: 'second', timestamp: sameMoment }));
+
+    const links = await questRepository.findCorrectionLinksBySessionId(SESSION);
+
+    expect(first._id.toString() < second._id.toString()).toBe(true);
+    expect(links.map(l => l.prompt)).toEqual(['first', 'second']);
+  });
+
+  it('caps the read at the caller limit, so one export cannot pull a whole session', async () => {
+    for (let i = 0; i < 4; i++) {
+      await Quest.create(seed({ correctsQuestId: 'earlier', prompt: `c${i}`, timestamp: new Date(2026, 0, i + 1) }));
+    }
+
+    const links = await questRepository.findCorrectionLinksBySessionId(SESSION, 2);
+
+    expect(links.map(l => l.prompt)).toEqual(['c0', 'c1']);
+  });
+
   it('exposes _id as a string id the walk can match correctsQuestId against', async () => {
     const root = await Quest.create(seed({ prompt: 'first ask' }));
     await Quest.create(seed({ correctsQuestId: root._id.toString(), prompt: 'the retry' }));

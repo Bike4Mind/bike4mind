@@ -7,6 +7,13 @@ import { z } from 'zod';
 const sessionIdSchema = z.string().min(1);
 
 /**
+ * Bounds one export: the walk reads a prompt and an answer per corrected turn, and the jwtOnly
+ * chain leaves out the api-key rate limiter (baseApi.ts). A session past the cap exports
+ * its oldest corrections and says so, rather than returning a silently partial list.
+ */
+const MAX_EXPORTED_LINKS = 500;
+
+/**
  * GET /api/sessions/[id]/correction-pairs
  *
  * The session's correction hops as eval triples (original answer, critique, corrected answer),
@@ -27,25 +34,40 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
     if (!parsedId.success) {
       return res.status(400).json({ error: 'Session id is required' });
     }
-    const sessionId = parsedId.data;
 
+    // Narrows `userId` to a non-empty string for the ownership compare below. The api layer
+    // (baseApi's jwtOnly chain) is what actually rejects an anonymous caller.
     const userId = req.user?.id;
     if (!userId) {
       return res.status(401).json({ error: 'Not authenticated' });
     }
 
-    const session = await sessionRepository.findById(sessionId);
+    const session = await sessionRepository.findById(parsedId.data);
     // Positive ownership: userId is a non-empty string by the guard above, so this matches only
     // when the session records that same owner - an ownerless row cannot pass it.
     if (!session || session.userId !== userId) {
       return res.status(404).json({ error: 'Session not found' });
     }
 
+    // The session's own id, not the raw query string: `findById` casts the id to an ObjectId, so it
+    // can resolve a spelling that quests, which store `sessionId` as a string, never match literally.
+    // Such an id would otherwise pass ownership and then find no corrections.
+    const sessionId = session.id ?? parsedId.data;
+
+    let truncated = false;
+    const logger = { warn: (message: string) => req.logger?.warn?.(message) };
     const pairs = await buildCorrectionPairs(sessionId, {
-      findCorrectionLinks: id => questRepository.findCorrectionLinksBySessionId(id),
+      findCorrectionLinks: async id => {
+        const links = await questRepository.findCorrectionLinksBySessionId(id, MAX_EXPORTED_LINKS + 1);
+        truncated = links.length > MAX_EXPORTED_LINKS;
+        return truncated ? links.slice(0, MAX_EXPORTED_LINKS) : links;
+      },
       findById: async questId => {
-        const quest = await questRepository.findById(questId);
-        if (!quest || quest.deletedAt) return null;
+        // Session-scoped, not a bare findById: containment is enforced at the query here as well
+        // as per-hop in the walk, matching sessions/[id]/chat/[messageId]. Soft-deleted rows are
+        // filtered by softDeletePlugin's findOne hook, so a deleted root reads as gone.
+        const quest = await questRepository.findBySessionIdAndId(sessionId, questId);
+        if (!quest) return null;
         // Projected field by field rather than spread: the walk needs prose and identity only, so
         // promptMeta, toolResults and images never enter the export path at all. Same field set as
         // findCorrectionLinksBySessionId's projection (QuestModel.ts) - the two must stay in sync.
@@ -60,10 +82,11 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
           timestamp: quest.timestamp,
         };
       },
+      logger,
     });
 
     // A session with no corrections is an empty export, not a missing one.
-    return res.json({ pairs });
+    return res.json({ pairs, truncated });
   })
 );
 

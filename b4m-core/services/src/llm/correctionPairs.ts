@@ -18,6 +18,11 @@ export type CorrectionPairReader = {
   findCorrectionLinks: (sessionId: string) => Promise<CorrectionTurnRecord[]>;
   /** The chain root, which carries no `correctsQuestId` and so is not in the link list. */
   findById: (id: string) => Promise<CorrectionTurnRecord | null | undefined>;
+  /**
+   * Optional, but a dropped hop is invisible without it: the only symptom is a shorter export,
+   * which reads as "this session had fewer retries" rather than as a link that could not be read.
+   */
+  logger?: { warn: (message: string) => void };
 };
 
 /**
@@ -34,12 +39,6 @@ export type EvalPair = {
 };
 
 /**
- * Backstop on a single walk. `visited` already terminates a cycle; this bounds the pathological
- * case where a chain is legitimately long enough that the reads are no longer worth serving.
- */
-const MAX_CHAIN_DEPTH = 50;
-
-/**
  * The correction hops of a session that can be paired soundly, oldest first.
  *
  * Walks backwards from each corrected turn through `correctsQuestId` and pairs each turn with the
@@ -48,9 +47,10 @@ const MAX_CHAIN_DEPTH = 50;
  * re-walking them would emit the same hop twice.
  *
  * A hop is dropped rather than repaired when it cannot be trusted: the target is gone, lives in
- * another session, or either turn never recorded an answer. The caller gets a shorter list instead
- * of a triple with an empty answer on it, because this feeds an eval export, where an empty
- * "original answer" reads as the model having said nothing rather than as a missing read.
+ * another session, closes a cycle, or either side of the triple has no prose. The caller gets a
+ * shorter list instead of a triple with an empty leg on it, because this feeds an eval export,
+ * where an empty "original answer" reads as the model having said nothing rather than as a
+ * missing read.
  */
 export async function buildCorrectionPairs(
   sessionId: string | undefined,
@@ -68,23 +68,48 @@ export async function buildCorrectionPairs(
   for (const link of links) {
     if (visited.has(link.id)) continue;
 
+    // Scoped to this walk, unlike `visited`: a hop pointing back into the chain we are currently
+    // walking is corrupt data, not a retry, and emitting it would present one answer as both the
+    // original and the correction. Subsumes the self-referential case (`a` corrects `a`).
+    const path = new Set<string>();
+    // Terminates without a depth cap: every step marks its turn visited and only advances to an
+    // unvisited link, and the link list is finite. A cap would not bound the work anyway - the
+    // outer loop picks the same chain back up at the link the cap stopped on. The per-request
+    // bound is the caller's (see MAX_EXPORTED_LINKS in the route).
     let current: CorrectionTurnRecord | undefined = link;
-    for (let depth = 0; current && depth < MAX_CHAIN_DEPTH; depth++) {
+    while (current) {
       visited.add(current.id);
+      path.add(current.id);
 
       const targetId = current.correctsQuestId;
-      if (!targetId || targetId === current.id) break;
+      if (!targetId) break;
+      if (path.has(targetId)) {
+        reader.logger?.warn(`[CORRECTION-PAIRS] Dropping cyclic correction link: ${current.id} -> ${targetId}`);
+        break;
+      }
 
       const target = linksById.get(targetId) ?? (await reader.findById(targetId)) ?? undefined;
-      if (!target) break;
+      if (!target) {
+        reader.logger?.warn(`[CORRECTION-PAIRS] Dropping hop whose corrected turn is gone: ${targetId}`);
+        break;
+      }
 
       // Positive check, matching resolveCorrectionContext: a reject-on-mismatch form lets a hop
       // through when BOTH ids are absent, and this walk feeds an export, so a stale pointer into
       // another session would carry that session's prose out.
-      if (!(target.sessionId && current.sessionId && target.sessionId === current.sessionId)) break;
+      if (!(target.sessionId && current.sessionId && target.sessionId === current.sessionId)) {
+        reader.logger?.warn(
+          `[CORRECTION-PAIRS] Dropping cross-session correction link: ${targetId} is not in ${sessionId}`
+        );
+        break;
+      }
 
       const pair = toEvalPair(target, current);
-      if (pair) pairs.push(pair);
+      if (pair) {
+        pairs.push(pair);
+      } else {
+        reader.logger?.warn(`[CORRECTION-PAIRS] Dropping hop with an empty leg: ${targetId} -> ${current.id}`);
+      }
 
       const next = linksById.get(targetId);
       if (!next || visited.has(next.id)) break;
@@ -95,16 +120,21 @@ export async function buildCorrectionPairs(
   return pairs;
 }
 
-/** Null when either side of the hop has no prose to compare - see the drop rule above. */
+/**
+ * Null when any leg of the triple has no prose - see the drop rule above. The critique is held to
+ * the same bar as the two answers: it is the "what was wrong" the export exists to carry, and a
+ * blank one leaves a pair that cannot be graded.
+ */
 function toEvalPair(corrected: CorrectionTurnRecord, correction: CorrectionTurnRecord): EvalPair | null {
   const originalAnswer = readAnswerText(corrected);
   const correctedAnswer = readAnswerText(correction);
-  if (!originalAnswer || !correctedAnswer) return null;
+  const critique = correction.prompt?.trim() ?? '';
+  if (!originalAnswer || !correctedAnswer || !critique) return null;
 
   return {
     correctedQuestId: corrected.id,
     originalAnswer,
-    critique: correction.prompt?.trim() ?? '',
+    critique,
     correctedAnswer,
     timestamp: correction.timestamp,
   };

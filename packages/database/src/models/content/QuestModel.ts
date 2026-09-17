@@ -744,16 +744,20 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
 
   /**
    * The live corrected turns of one session, oldest first: the quests that point at an earlier
-   * attempt through `correctsQuestId`, soft-deleted ones excluded. Served by the
-   * `sessionId_correctsQuestId` index.
+   * attempt through `correctsQuestId`, soft-deleted ones excluded. `limit` caps the export the
+   * route serves; omitted, the whole session comes back.
+   *
+   * The `sessionId_correctsQuestId` index serves the match, not the sort: `correctsQuestId` is a
+   * range bound ahead of `timestamp`, so the sort runs in memory over the corrected turns of one
+   * session, which is what the index keeps small.
    *
    * Projected to the prose the eval-pair walk quotes (`buildCorrectionPairs` in
    * @bike4mind/services). promptMeta, toolResults and images are left out on purpose: this feeds
    * an export of verbatim prompts and answers, so widen the projection only together with the
    * consumer's redaction decision.
    */
-  async findCorrectionLinksBySessionId(sessionId: string): Promise<CorrectionLinkView[]> {
-    const docs = await this.model
+  async findCorrectionLinksBySessionId(sessionId: string, limit?: number): Promise<CorrectionLinkView[]> {
+    const query = this.model
       .find(
         { sessionId, correctsQuestId: { $ne: null }, deletedAt: null },
         {
@@ -771,6 +775,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       // and turns can share a millisecond.
       .sort({ timestamp: 1, _id: 1 })
       .lean<Array<Omit<CorrectionLinkView, 'id'> & { _id: mongoose.Types.ObjectId }>>();
+    const docs = await (limit === undefined ? query : query.limit(limit));
     return docs.map(({ _id, ...rest }) => ({ ...rest, id: _id.toString() }));
   }
 

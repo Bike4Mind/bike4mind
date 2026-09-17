@@ -31,6 +31,28 @@ describe('Quest sessionId+correctsQuestId index', () => {
     expect(idx?.unique).toBeFalsy();
   });
 
+  // The index existing is not the claim worth guarding - several existing indexes lead on
+  // sessionId, so the planner could serve this query without it and leave the test above green.
+  it('is the index the correction-link query is planned onto', async () => {
+    await Quest.syncIndexes();
+    for (let i = 0; i < 60; i++) {
+      await Quest.create({
+        sessionId: 'plan-1',
+        type: 'chat',
+        timestamp: new Date(),
+        correctsQuestId: i % 2 ? 'x' : null,
+      });
+    }
+
+    const plan = await Quest.find({ sessionId: 'plan-1', correctsQuestId: { $ne: null }, deletedAt: null })
+      .sort({ timestamp: 1, _id: 1 })
+      .explain('queryPlanner');
+
+    expect(JSON.stringify((plan as Record<string, any>).queryPlanner?.winningPlan)).toContain(
+      '"indexName":"sessionId_correctsQuestId"'
+    );
+  });
+
   it('does not duplicate an existing index key pattern', () => {
     const patterns = Quest.schema.indexes().map(([key]) => JSON.stringify(key));
     expect(new Set(patterns).size).toBe(patterns.length);
