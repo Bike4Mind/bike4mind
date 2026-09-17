@@ -45,5 +45,11 @@ export function toAnthropicContent(content: MessageContent, logger?: ContentLogg
     }
   }
 
+  // Anthropic rejects an empty `content` array outright; a dropped image should
+  // degrade to a visible note, not an opaque 400 with nothing left to explain it.
+  if (blocks.length === 0 && content.length > 0) {
+    blocks.push({ type: 'text', text: '[image omitted: unsupported image format]' });
+  }
+
   return blocks as MessageParam['content'];
 }

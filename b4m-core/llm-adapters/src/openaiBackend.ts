@@ -2290,6 +2290,8 @@ function chatContentToString(content: unknown): string {
  * Returns a plain string when there is nothing but text, so text-only turns keep
  * producing exactly the input they did before.
  */
+const RESPONSES_IMAGE_DETAIL = new Set(['low', 'high', 'auto', 'original']);
+
 function chatContentToResponsesInput(content: unknown): string | ResponseInputMessageContentList {
   if (!Array.isArray(content)) return chatContentToString(content);
 
@@ -2304,11 +2306,15 @@ function chatContentToResponsesInput(content: unknown): string | ResponseInputMe
     const typed = part as { type?: string; text?: unknown; image_url?: { url?: string; detail?: string } };
     if (typed.type === 'image_url' && typed.image_url?.url) {
       sawImage = true;
+      const detail = typed.image_url.detail;
       parts.push({
         type: 'input_image',
         image_url: typed.image_url.url,
-        // Required by the Responses type; 'auto' is the API's own default.
-        detail: (typed.image_url.detail as 'low' | 'high' | 'auto' | 'original') ?? 'auto',
+        // Required by the Responses type; an unrecognized caller-supplied value
+        // would otherwise ride through unchecked and get a 400 from the API.
+        detail: RESPONSES_IMAGE_DETAIL.has(detail as string)
+          ? (detail as 'low' | 'high' | 'auto' | 'original')
+          : 'auto',
       });
     } else if (typeof typed.text === 'string') {
       parts.push({ type: 'input_text', text: typed.text });

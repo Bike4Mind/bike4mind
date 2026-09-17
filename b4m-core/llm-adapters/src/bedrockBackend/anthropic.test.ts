@@ -174,3 +174,34 @@ describe('AnthropicBedrockBackend control-field stripping', () => {
     expect(payload.body).toContain('Hello');
   });
 });
+
+// This body is a native Anthropic request shape (image/source blocks), so a canonical
+// `image_url` block - guaranteed by normalizeMultimodalMessages for wire-API callers,
+// but also possible from any caller that forwards it unnormalized - needs translation
+// here the same way anthropicBackend.ts translates it for the direct API.
+describe('AnthropicBedrockBackend image content translation', () => {
+  it('translates a canonical image_url block into a native image/source block', () => {
+    const withImage: IMessage[] = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'what is this?' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgo=' } },
+        ] as never,
+      },
+    ];
+    const body = bodyOfMessages(ChatModels.CLAUDE_3_5_HAIKU_BEDROCK, withImage);
+    const message = (body.messages as Array<Record<string, unknown>>)[0];
+    const content = message.content as Array<Record<string, unknown>>;
+    expect(content[0]).toEqual({ type: 'text', text: 'what is this?' });
+    expect(content[1]).toMatchObject({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' },
+    });
+  });
+
+  function bodyOfMessages(model: string, msgs: IMessage[]) {
+    const payload = backend.getPayload(model, msgs, { cacheStrategy, tools, maxTokens: 1024 });
+    return JSON.parse(payload.body) as Record<string, unknown>;
+  }
+});

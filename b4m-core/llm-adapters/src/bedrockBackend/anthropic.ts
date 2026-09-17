@@ -24,6 +24,7 @@ import { getCachingAdapter } from '../caching/adapters';
 import { systemContentToText } from '../systemContent';
 import { DispatchModel } from '../dispatchModel';
 import { buildThinkingParams } from '../thinkingParams';
+import { toAnthropicContent } from '../anthropicContent';
 
 enum ClaudeChunkTypes {
   MESSAGE_START = 'message_start',
@@ -707,7 +708,12 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
         // Handle array content - filter out empty text blocks
         if (Array.isArray(m.content)) {
-          const sanitizedContent = m.content
+          // This body takes the native Anthropic request shape (image/source blocks),
+          // so a canonical `image_url` block (guaranteed by normalizeMultimodalMessages
+          // upstream, or forwarded as-is by any caller that skips it) needs the same
+          // translation anthropicBackend.ts applies to the direct API.
+          const translatedContent = toAnthropicContent(m.content) as unknown[];
+          const sanitizedContent = translatedContent
             .map(block => {
               // For text blocks, check if text is empty/whitespace-only
               if (isRecord(block) && block.type === 'text') {

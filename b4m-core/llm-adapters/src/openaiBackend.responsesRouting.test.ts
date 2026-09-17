@@ -167,6 +167,27 @@ describe('OpenAIBackend /v1/responses routing for GPT-5 narrator family + tools'
     ]);
   });
 
+  it('falls back an unrecognized caller-supplied detail value to auto', async () => {
+    const { backend, responsesCreate } = buildBackend();
+    const url = 'data:image/png;base64,iVBORw0KGgo=';
+
+    await backend.complete(
+      ChatModels.GPT5,
+      [
+        {
+          role: 'user',
+          content: [{ type: 'image_url', image_url: { url, detail: 'ultra' } }] as never,
+        },
+      ],
+      { tools: [sampleTool] },
+      async () => {}
+    );
+
+    const input = (responsesCreate.mock.calls[0][0] as AnyRecord).input as Array<AnyRecord>;
+    const user = input.find(i => i.role === 'user')!;
+    expect(user.content).toEqual([{ type: 'input_image', image_url: url, detail: 'auto' }]);
+  });
+
   it('keeps a plain string input for a text-only user turn', async () => {
     const { backend, responsesCreate } = buildBackend();
 

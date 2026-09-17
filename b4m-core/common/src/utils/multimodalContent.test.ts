@@ -44,9 +44,11 @@ describe('normalizeMessageContent', () => {
     ).toEqual([{ type: 'image_url', image_url: { url: 'https://x.test/a.png' } }]);
   });
 
-  it('leaves an inline base64 image untouched', () => {
+  it('folds an inline base64 image into a data URL', () => {
     const block = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBOR' } };
-    expect(normalizeMessageContent([block] as never)[0]).toBe(block);
+    expect(normalizeMessageContent([block] as never)).toEqual([
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBOR' } },
+    ]);
   });
 
   it('wraps a bare string part as a text block', () => {

@@ -58,6 +58,13 @@ describe('toAnthropicContent', () => {
     expect(logger.warn).toHaveBeenCalledOnce();
   });
 
+  it('replaces a sole untranslatable image with a visible placeholder instead of empty content', () => {
+    const logger = { warn: vi.fn() };
+    expect(
+      toAnthropicContent([{ type: 'image_url', image_url: { url: 'ftp://x.test/a.png' } }] as never, logger)
+    ).toEqual([{ type: 'text', text: '[image omitted: unsupported image format]' }]);
+  });
+
   it('leaves inline images and tool blocks untouched', () => {
     const content = [
       { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG } },

@@ -9,8 +9,10 @@ import type { IMessage, MessageContent, MessageContentObject } from '../types/en
  * (CompletionMessageSchema's `z.array(z.any())`) and callers write it in
  * whichever dialect their SDK speaks: OpenAI Chat (`image_url`), OpenAI
  * Responses (`input_text`/`input_image`), or Anthropic (`image` + `source`).
- * Images canonicalize to `image_url` unless they already carry base64 bytes,
- * which have no URL to canonicalize to.
+ * Images always canonicalize to `image_url`, folding an Anthropic base64
+ * source into a `data:` URL so every OpenAI-family translator (which reads
+ * `image_url` only) sees the bytes too; `toAnthropicContent` reconstructs the
+ * identical base64 source from that same data URL for the Anthropic target.
  *
  * Parts we do not recognize pass through untouched: a provider rejecting an
  * unknown block is a better failure than a silently missing one.
@@ -29,6 +31,9 @@ function imageUrlOf(part: UnknownPart): string | undefined {
   if (nested && typeof nested.url === 'string') return nested.url;
   const source = asRecord(part.source);
   if (source && source.type === 'url' && typeof source.url === 'string') return source.url;
+  if (source && source.type === 'base64' && typeof source.data === 'string' && typeof source.media_type === 'string') {
+    return `data:${source.media_type};base64,${source.data}`;
+  }
   return undefined;
 }
 
@@ -48,10 +53,6 @@ function normalizeContentPart(part: unknown): unknown {
     case 'image':
     case 'image_url':
     case 'input_image': {
-      // Inline base64 is already the richest form; there is no URL to fold it into.
-      const source = asRecord(record.source);
-      if (source?.type === 'base64') return part;
-
       const url = imageUrlOf(record);
       if (!url) return part;
       // `detail` rides inside image_url, which is where OpenAI Chat puts it and
