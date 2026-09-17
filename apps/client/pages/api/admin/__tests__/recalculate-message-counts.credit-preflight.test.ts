@@ -50,10 +50,8 @@ describe('POST /api/admin/recalculate-message-counts credit pre-flight', () => {
     // The total is the first call (progress reporting); each spending operation then counts
     // only the notebooks it would actually groom.
     //
-    // These are the counts the handler ASKS for, which is what this file is about. Against a real
-    // collection the `taggedAt` filter currently matches everything, because `taggedAt` is not a
-    // declared Session schema path and so is never persisted - see SPENDING_SPIDER_OPERATIONS in
-    // the handler. That is a defect in the field, not in the query this asserts.
+    // These are the counts the handler ASKS for, which is what this file is about; what they
+    // match against a real collection is SPENDING_SPIDER_OPERATIONS' concern, not this file's.
     mockCount.mockImplementation(async (filter: Record<string, unknown>) =>
       'summaryAt' in filter || 'taggedAt' in filter ? UNGROOMED_PER_OPERATION : TOTAL_NOTEBOOKS
     );
@@ -93,11 +91,8 @@ describe('POST /api/admin/recalculate-message-counts credit pre-flight', () => {
   // pricing a re-run at totalNotebooks would refuse a large account credits for work it will not
   // do - the gate would make the spider unusable above a few hundred notebooks.
   //
-  // `summarize` on purpose: it is the only leg whose narrowing actually bites today. `taggedAt`
-  // is written but is not a declared Session path, so mongoose strict mode strips it and
-  // `{ taggedAt: null }` matches the whole collection (#2798). The count stays truthful about the
-  // spend either way, because the same missing field makes spider.ts:98 re-tag every notebook -
-  // but a `tags` run here would not distinguish ungroomed sizing from totalNotebooks sizing.
+  // `summarize` on purpose: one leg is enough to pin the sizing, and both narrow identically now
+  // that `taggedAt` is a declared Session path.
   it('sizes the summarize leg to the ungroomed notebooks, not to every notebook the admin owns', async () => {
     await run({ operations: ['summarize'] });
 
