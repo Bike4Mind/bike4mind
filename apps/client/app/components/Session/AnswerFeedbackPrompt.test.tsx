@@ -13,18 +13,31 @@ const Wrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-/** Verdict 'fail': a recorded tool failure is the cheapest of the two fail arms to construct. */
+/** Verdict 'fail': a recorded tool failure is the cheapest fail arm to construct. */
 const failing: PromptMeta = {
   functionCalls: [{ name: 'search_knowledge_base', success: false }],
 };
 
 /**
- * Verdict 'fail' via the OTHER arm: the knowledge base was searched and returned nothing. Covered
+ * Verdict 'fail' via a second arm: the knowledge base was searched and returned nothing. Covered
  * separately from the tool-failure fixture because this is the trigger the issue leads with, and a
  * component that only ever saw one arm would not prove it reads the verdict rather than one check.
  */
 const starved: PromptMeta = {
   retrieval: { attempted: true, outcome: 'ok', injected: { chunks: 0, chars: 0 } },
+  context: { messageTruncation: { wasTruncated: false, originalMessageCount: 4, truncatedMessageCount: 4 } },
+  functionCalls: [{ name: 'search_knowledge_base', success: true }],
+};
+
+/**
+ * Verdict 'fail' via a third arm: retrieval ran against a corpus that was never indexed, so it
+ * compared nothing. Worth its own case because this arm is deterministic where the zero-chunk one
+ * is a similarity-noise draw, which makes it the arm most likely to fire in real use - and because
+ * the gate reads `verdict.status` rather than enumerating arms, so a new arm must flow through
+ * untouched.
+ */
+const notIndexed: PromptMeta = {
+  retrieval: { attempted: true, outcome: 'not_indexed', injected: { chunks: 0, chars: 0 } },
   context: { messageTruncation: { wasTruncated: false, originalMessageCount: 4, truncatedMessageCount: 4 } },
   functionCalls: [{ name: 'search_knowledge_base', success: true }],
 };
@@ -74,6 +87,11 @@ describe('AnswerFeedbackPrompt', () => {
 
     it('asks on a turn where the knowledge base came back empty', () => {
       renderPrompt({ promptMeta: starved });
+      expect(prompt()).toBeTruthy();
+    });
+
+    it('asks on a turn whose corpus was never indexed', () => {
+      renderPrompt({ promptMeta: notIndexed });
       expect(prompt()).toBeTruthy();
     });
 

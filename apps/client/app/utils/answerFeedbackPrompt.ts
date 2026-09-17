@@ -8,8 +8,8 @@ import { z } from 'zod';
  * affordance cannot be un-tuned-out by fixing the detector later. So the caps are deliberately
  * tighter than the detector is accurate.
  *
- * Two layers live here; the third - only ever prompting under the newest turn - is the caller's,
- * because "newest" is render state rather than something to persist.
+ * Two layers live here; the third - only ever prompting under one turn, the last one rendered - is
+ * the caller's, because which turn that is depends on render state rather than anything to persist.
  *
  *  1. Per turn. A waved-off turn stays waved off across reloads and remounts, so the prompt never
  *     re-asks about an answer the user already declined to talk about.
@@ -37,7 +37,12 @@ const MAX_DISMISSED_TURNS = 200;
  */
 export const DAILY_DISMISSAL_BUDGET = 3;
 
-const dismissedTurnsSchema = z.array(z.string()).catch([]);
+// Filtered element-wise rather than validated whole-list: one corrupt entry must not discard the
+// other 199 and re-ask about every turn the user already waved off. Matches staleModelPrompt.ts.
+const dismissedTurnsSchema = z
+  .array(z.unknown())
+  .catch([])
+  .transform(entries => entries.filter((entry): entry is string => typeof entry === 'string'));
 
 const dailyDismissalsSchema = z
   .object({ date: z.string(), count: z.number().int().nonnegative() })

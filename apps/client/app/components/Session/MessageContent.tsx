@@ -910,11 +910,15 @@ const MessageContent: React.FC<ContentProps> = memo(
               </Box>
             );
           })()}
-        {/* Proactive feedback ask, gated on the turn's own diagnosis (#1873). Restricted to the
-            newest turn: that is the frequency cap that matters, since a notebook whose retrieval is
-            broken produces a whole column of failing turns, and it is also the only turn the user
-            is still thinking about. Rendered here rather than inside either action row so the
-            desktop/mobile branches below cannot drift into showing it twice or not at all. */}
+        {/* Proactive feedback ask, gated on the turn's own diagnosis (#1873). Restricted to one
+            turn: that is the frequency cap that matters, since a notebook whose retrieval is broken
+            produces a whole column of failing turns. Note `isLastMessage` is last of the RENDERED
+            list, which buildChatHistory has already filtered by search text and the pinned-only
+            toggle - so under an active filter this can be an older turn rather than the newest one.
+            Still exactly one banner either way, and still a genuinely failing turn, so the cap
+            holds; it is only the "the turn you are still thinking about" part that weakens.
+            Rendered here rather than inside either action row so the desktop/mobile branches below
+            cannot drift into showing it twice or not at all. */}
         {!isProcessingPrompt && isLastMessage && (
           <AnswerFeedbackPrompt
             promptMeta={messageData.promptMeta}

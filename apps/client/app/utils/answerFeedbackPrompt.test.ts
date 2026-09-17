@@ -108,6 +108,15 @@ describe('answerFeedbackPrompt frequency control', () => {
       expect(() => dismissAnswerFeedbackPrompt('quest-1')).not.toThrow();
     });
 
+    it('drops only the corrupt entries, keeping the dismissals either side of them', () => {
+      // Whole-list rejection would re-ask about every turn the user had already waved off,
+      // turning one bad entry into a burst of prompts.
+      localStorage.setItem(ANSWER_FEEDBACK_DISMISSED_TURNS_KEY, JSON.stringify(['quest-1', 42, null, 'quest-2']));
+
+      expect(isAnswerFeedbackPromptDismissed('quest-1')).toBe(true);
+      expect(isAnswerFeedbackPromptDismissed('quest-2')).toBe(true);
+    });
+
     it('ignores a corrupt payload rather than throwing', () => {
       localStorage.setItem(ANSWER_FEEDBACK_DISMISSED_TURNS_KEY, '{"not":"an array"}');
       localStorage.setItem(ANSWER_FEEDBACK_DAILY_DISMISSALS_KEY, 'not json at all');

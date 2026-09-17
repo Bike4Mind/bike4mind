@@ -37,9 +37,10 @@ type AnswerFeedbackPromptProps = {
  *
  * RELATIONSHIP TO AnswerDiagnosisPanel: same fold, opposite direction. The panel is opened by
  * someone who already suspects the answer and wants all four buckets; this is unsolicited and
- * carries one sentence. Both render `diagnoseAnswer`'s own verdict copy rather than paraphrasing
- * it, so the proactive line and the panel a curious user then opens cannot describe the same turn
- * two different ways.
+ * carries one sentence. Both render `diagnoseAnswer`'s own `verdict.headline` verbatim rather than
+ * paraphrasing it, so the proactive line and the panel a curious user then opens cannot describe
+ * the same turn two different ways. Only the second line differs: the panel shows `verdict.body`
+ * (what broke), this shows the ask (what we need from the user).
  *
  * GATED ON 'fail' ALONE, not on "not ok". The other two non-ok arms would each be a false positive
  * generator, and the issue's own warning is that false positives train users to ignore this:
@@ -47,7 +48,10 @@ type AnswerFeedbackPromptProps = {
  *     explaining exactly what happened. There is nothing for the user to tell us.
  *   - 'unknown' means the turn went unrecorded. Prompting on "we did not measure this" asks the
  *     user to explain our own instrumentation gap.
- * 'fail' is zero retrieval or a failed tool call: a turn that really did break, where what the
+ * We gate on the STATUS, not on an enumeration of the arms that produce it, so an arm added to
+ * diagnoseAnswer later is picked up here without a change. Today it grades 'fail' for retrieval
+ * that errored or was never wired up, a corpus that was never indexed, a search that ran and
+ * compared nothing, and a tool call that failed - turns that really did break, where what the
  * user was trying to get is the part we cannot recover from telemetry.
  */
 export function AnswerFeedbackPrompt({ promptMeta, questId, isReported, onReport }: AnswerFeedbackPromptProps) {
