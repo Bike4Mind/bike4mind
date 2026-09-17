@@ -5,12 +5,15 @@ import {
   IUserShare,
   ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
   ORG_MEMBERSHIP_ACL_PERMISSIONS,
+  OrgMemberPopulation,
+  orgAclRowConfersMembership,
 } from '@bike4mind/common';
 import mongoose, { HydratedDocument, Model, Schema } from 'mongoose';
 import { softDeletePlugin } from '../../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from '../../content/SharableDocumentModel';
+import User from '../../auth/UserModel';
 
 export interface IOrganizationObject extends HydratedDocument<IOrganizationDocument> {}
 
@@ -432,6 +435,46 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   async findMembershipOrgIds(userId: string): Promise<string[]> {
     const docs = await this.organizationModel.find(orgMembershipFilter(userId), { _id: 1 }).lean();
     return docs.map(d => String(d._id));
+  }
+
+  /**
+   * The forward direction of findMembershipOrgIds: who the org's members are, for scoping a report
+   * over content those members authored. Reconciles the two populations rather than choosing one -
+   * see OrgMemberPopulation for why they differ and what each one-sided list means.
+   *
+   * The ACL arm reuses orgAclRowConfersMembership, the in-memory twin of orgMembershipFilter's
+   * $elemMatch, so this method and the reverse lookup read one definition of what a users[] row has
+   * to grant. Both exclusions the predicate documents (no groups arm, no managerId/adminUserIds arm)
+   * are inherited as-is: a managerId-only manager reaches the report through the stamp arm, as
+   * stampOnly, not by widening what membership means.
+   */
+  async findMemberUserIds(organizationId: string): Promise<OrgMemberPopulation> {
+    const empty: OrgMemberPopulation = { userIds: [], aclOnly: [], stampOnly: [] };
+    // Guarded rather than cast: a non-ObjectId id would otherwise raise a Mongoose CastError out
+    // of the findOne below.
+    if (!mongoose.isValidObjectId(organizationId)) return empty;
+
+    const [org, stampedAuthors] = await Promise.all([
+      this.organizationModel.findOne({ _id: organizationId }, { userId: 1, users: 1 }).lean(),
+      User.find({ organizationId }, { _id: 1 }).lean(),
+    ]);
+    // Includes soft-deleted (the plugin filters the find), which is the same answer the reverse
+    // lookup gives. The route has already 404'd by the time this runs.
+    if (!org) return empty;
+
+    // The owner holds a seat without a users[] row of their own, so the ACL arm is never empty.
+    const aclIds = new Set<string>([
+      String(org.userId),
+      ...((org.users ?? []) as IUserShare[]).filter(orgAclRowConfersMembership).map(u => String(u.userId)),
+    ]);
+    // Feedback.userId is a string, so both arms normalize to strings before they meet.
+    const stampIds = new Set<string>(stampedAuthors.map(u => String(u._id)));
+
+    return {
+      userIds: [...new Set<string>([...aclIds, ...stampIds])],
+      aclOnly: [...aclIds].filter(id => !stampIds.has(id)),
+      stampOnly: [...stampIds].filter(id => !aclIds.has(id)),
+    };
   }
 
   async findIdsWithAdminRights(userId: string): Promise<string[]> {
