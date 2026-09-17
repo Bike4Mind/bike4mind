@@ -2,6 +2,7 @@ import { ChatModels, type IMessage } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
 import { ChoiceEndReason, ChoiceStatus } from '../backend';
 import MoonshotBedrockBackend from './moonshot';
+import { parseNativeToolSection } from './kimiNativeTools';
 
 const backend = new MoonshotBedrockBackend();
 const messages: IMessage[] = [{ role: 'user', content: 'hello' } as IMessage];
@@ -529,9 +530,19 @@ describe('MoonshotBedrockBackend native tool-call tokens', () => {
     // The partial failure is worse than the total one: a cut inside the section leaves the
     // calls before it parseable and the straddling one not, so the turn runs a SUBSET of
     // what the model asked for, with nothing to signal it.
-    const monologue = 'Reasoning at length about the request. '.repeat(1_000);
+    // The cut has to land INSIDE the second call. A monologue long enough to push the
+    // whole section past the cap only reproduces the total loss above, which is the
+    // easier half: unfixed, the parser sees no section and returns nothing either way.
+    const CAP = 32_000; // mirrors NATIVE_TOOL_SECTION_PARSE_CAP in kimiNativeTools.ts
     const call = (name: string, index: number) =>
       `<|tool_call_begin|> functions.${name}:${index} <|tool_call_argument_begin|> {"q":"${name}"} <|tool_call_end|> `;
+    // `<reasoning>` is stripped before the parse; the leading space and the section-begin
+    // marker around it are not, so they count toward the cap.
+    const preamble = ' '.length + ' <|tool_calls_section_begin|> '.length;
+    const monologueLength =
+      CAP - preamble - call('math_evaluate', 0).length - Math.floor(call('get_weather', 1).length / 2);
+    expect(monologueLength).toBeGreaterThan(0);
+    const monologue = 'Reasoning at length about the request. '.repeat(1_000).slice(0, monologueLength);
     const { chunk } = backend.translateChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
       choices: [
         {
@@ -549,5 +560,9 @@ describe('MoonshotBedrockBackend native tool-call tokens', () => {
     });
     const tools = chunk.choices.filter(c => c.statusEndReason === ChoiceEndReason.TOOL_USE);
     expect(tools.map(t => t.tool?.name)).toEqual(['math_evaluate', 'get_weather']);
+    // Pin that this input really does cut mid-call: handed the whole message, as the
+    // unfixed caller did, the parser returns a SUBSET rather than nothing.
+    const whole = `<reasoning> ${monologue} <|tool_calls_section_begin|> ${call('math_evaluate', 0)}${call('get_weather', 1)}<|tool_calls_section_end|></reasoning>`;
+    expect(parseNativeToolSection(whole.replace(/<\/?reasoning>/g, '')).map(c => c.name)).toEqual(['math_evaluate']);
   });
 });

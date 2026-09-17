@@ -486,6 +486,17 @@ describe('SmartChunker', () => {
       return Buffer.from(await zip.generateAsync({ type: 'nodebuffer' }));
     }
 
+    it('strips run markup nested inside a run body rather than emitting it as text', async () => {
+      // The regex this replaced stripped every `<a:t...>` in its match; slicing to the
+      // first `</a:t>` keeps the ones inside the body, and the literal markup then lands
+      // in the chunk text and in the embedding built from it.
+      const pptx = await buildPptx(['<a:t>Quarterly <a:t xml:space="preserve">revenue</a:t>', '<a:t>Summary</a:t>']);
+      const chunks = await chunker.chunkFile(pptx, PPTX_MIME);
+      const allText = chunks.map(c => c.text).join(' ');
+      expect(allText).toContain('Quarterly revenue');
+      expect(allText).not.toContain('<a:t');
+    });
+
     it('extracts text from <a:t> runs that carry attributes (e.g. xml:space)', async () => {
       // Regression: the matcher previously only matched bare <a:t>, silently dropping
       // attributed runs - which are common in real PPTX files - yielding 0 chunks.

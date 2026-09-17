@@ -28,12 +28,32 @@ export type ParsedNativeToolCall = { id: string; name: string; index: number; ar
 // model output, which a prompt injection can steer, so the constant matters.
 const NATIVE_TOOL_SECTION_PARSE_CAP = 32_000;
 
-const SECTION_BEGIN = '<|tool_calls_section_begin|>';
-const SECTION_END = '<|tool_calls_section_end|>';
+export const SECTION_BEGIN = '<|tool_calls_section_begin|>';
+export const SECTION_END = '<|tool_calls_section_end|>';
+/**
+ * Per-call markers. The section wrapper is not always present - a call can arrive bare -
+ * so anything that scopes input to the calls has to fall back to these.
+ */
+export const CALL_BEGIN = '<|tool_call_begin|>';
+const CALL_END = '<|tool_call_end|>';
 
 /** Cheap gate: is there any native tool-call marker in this text at all? */
 export function hasNativeToolMarker(text: string): boolean {
-  return text.includes(SECTION_BEGIN) || text.includes('<|tool_call_begin|>');
+  return text.includes(SECTION_BEGIN) || text.includes(CALL_BEGIN);
+}
+
+/**
+ * Offset of the first tool call in `text`, preferring the section wrapper when present,
+ * or -1 when there is none.
+ *
+ * This is how a caller meets parseNativeToolSection's section-scoping contract. It is a
+ * function rather than an inline indexOf because the wrapper is optional: scoping only on
+ * SECTION_BEGIN leaves the bare shape falling through to the whole message, which is the
+ * exact input the cap then truncates.
+ */
+export function nativeToolCallsBegin(text: string): number {
+  const section = text.indexOf(SECTION_BEGIN);
+  return section >= 0 ? section : text.indexOf(CALL_BEGIN);
 }
 
 /** `functions.math_evaluate:0` -> { name: 'math_evaluate', index: 0 }. */
@@ -58,6 +78,14 @@ function splitNativeToolId(rawId: string, fallbackIndex: number): { name: string
  * (the stream below, and the non-streaming branch in moonshot.ts) slice first.
  */
 export function parseNativeToolSection(section: string): ParsedNativeToolCall[] {
+  if (section.length > NATIVE_TOOL_SECTION_PARSE_CAP) {
+    // Say so: this parser's output drives execution, so a truncated parse means a call
+    // set that runs in part or not at all. Without a line here that is indistinguishable
+    // from a turn where the model asked for no tools.
+    console.warn(
+      `[KimiNativeTools] tool-call section is ${section.length} chars, over the ${NATIVE_TOOL_SECTION_PARSE_CAP} parse cap; calls past the cut will not run`
+    );
+  }
   section = capForParse(section, NATIVE_TOOL_SECTION_PARSE_CAP);
   const calls: ParsedNativeToolCall[] = [];
   const re = /<\|tool_call_begin\|>\s*([\s\S]+?)\s*<\|tool_call_argument_begin\|>\s*([\s\S]*?)\s*<\|tool_call_end\|>/g;
@@ -92,6 +120,8 @@ function partialMarkerTail(buf: string, marker: string): number {
 export class KimiNativeToolStream {
   private buffer = '';
   private inSection = false;
+  /** Inside a bare call (no section wrapper), which ends at CALL_END rather than SECTION_END. */
+  private inBareCall = false;
 
   push(chunk: string): { text: string; toolCalls: ParsedNativeToolCall[] } {
     this.buffer += chunk;
@@ -99,17 +129,40 @@ export class KimiNativeToolStream {
     const toolCalls: ParsedNativeToolCall[] = [];
 
     for (;;) {
+      if (this.inBareCall) {
+        const end = this.buffer.indexOf(CALL_END);
+        if (end === -1) break; // call still open: keep buffering, surface nothing
+        const through = end + CALL_END.length;
+        toolCalls.push(...parseNativeToolSection(this.buffer.slice(0, through)));
+        this.buffer = this.buffer.slice(through);
+        this.inBareCall = false;
+        continue;
+      }
+
       if (!this.inSection) {
         const start = this.buffer.indexOf(SECTION_BEGIN);
-        if (start >= 0) {
+        const bare = this.buffer.indexOf(CALL_BEGIN);
+        if (start >= 0 && (bare === -1 || start <= bare)) {
           text += this.buffer.slice(0, start);
           this.buffer = this.buffer.slice(start + SECTION_BEGIN.length);
           this.inSection = true;
           continue;
         }
-        // No section start in view: surface everything except a tail that might be a
-        // section-begin marker split across the next chunk.
-        const hold = partialMarkerTail(this.buffer, SECTION_BEGIN);
+        // A call can arrive with no section wrapper. Holding back only SECTION_BEGIN
+        // surfaced those raw `<|tool_call_begin|>` tokens to the user as text, which is
+        // the leak this class exists to prevent.
+        if (bare >= 0) {
+          text += this.buffer.slice(0, bare);
+          this.buffer = this.buffer.slice(bare);
+          this.inBareCall = true;
+          continue;
+        }
+        // Neither marker in view: surface everything except a tail that might be either
+        // marker split across the next chunk.
+        const hold = Math.max(
+          partialMarkerTail(this.buffer, SECTION_BEGIN),
+          partialMarkerTail(this.buffer, CALL_BEGIN)
+        );
         text += this.buffer.slice(0, this.buffer.length - hold);
         this.buffer = hold > 0 ? this.buffer.slice(this.buffer.length - hold) : '';
         break;
@@ -130,13 +183,13 @@ export class KimiNativeToolStream {
   }
 
   /**
-   * Surface any held-back tail at end of stream. Non-empty only when a section-begin
+   * Surface any held-back tail at end of stream. Non-empty only when a begin-marker
    * prefix was held but never completed (i.e. it was ordinary text ending in `<|...`),
-   * so it is safe to emit. A genuinely unterminated section is dropped rather than
-   * leaked.
+   * so it is safe to emit. A genuinely unterminated section or call is dropped rather
+   * than leaked.
    */
   flush(): string {
-    if (this.inSection) return '';
+    if (this.inSection || this.inBareCall) return '';
     const remaining = this.buffer;
     this.buffer = '';
     return remaining;

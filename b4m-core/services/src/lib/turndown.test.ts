@@ -80,6 +80,42 @@ describe('cleanEmailHtml', () => {
     expect(cleanEmailHtml(html)).toBe(html);
   });
 
+  it('ignores a close tag with nothing open rather than pairing it with a later element', () => {
+    const html = '<p>a</p></div><div class="signature">Jane</div><p>b</p>';
+    expect(cleanEmailHtml(html)).toBe('<p>a</p></div><p>b</p>');
+  });
+
+  // `</script` is only a close tag when the next character ends the name. Accepting any
+  // character let a `</scriptish` inside a JS string stand in for the real close, and the
+  // element then ended at the next `>` anywhere downstream - which either leaked the tail
+  // of the script body into the cleaned output or deleted real text after it.
+  it('does not end a raw-text element on a close-tag name that only shares a prefix', () => {
+    expect(cleanEmailHtml('<p>a</p><script>x = "</scriptZ"; y = 1;</script><p>keep</p>')).toBe('<p>a</p><p>keep</p>');
+    expect(cleanEmailHtml('<p>a</p><style>a{content:"</styleZ"}</style><p>keep</p>')).toBe('<p>a</p><p>keep</p>');
+  });
+
+  it('ends a raw-text element on the terminators the spec allows after the name', () => {
+    expect(cleanEmailHtml('<style>a{}</style ><p>A</p><script>x</script/><p>B</p>')).toBe('<p>A</p><p>B</p>');
+  });
+
+  it('closes a raw-text element that never closes at end of input', () => {
+    expect(cleanEmailHtml('<p>keep</p><style>a{color:red}<p>tail</p>')).toBe('<p>keep</p>');
+  });
+
+  // A stray unclosed quote used to end the scan, so nothing after it was tokenized and no
+  // cleaner fired on the tail. The scan recovers at the first raw `>` instead.
+  it('recovers from an unterminated tag and still cleans the tail', () => {
+    const html = '<a href="unclosed<p>tail</p><img width="1" height="1" src="https://t.example/o.gif"><p>after</p>';
+    expect(cleanEmailHtml(html)).toBe('<a href="unclosed<p>tail</p><p>after</p>');
+  });
+
+  // Pins the isSelfClosing guard on the table stack: a void `<table/>` must not become the
+  // innermost enclosing table, or the social-icon row below it stops being removed.
+  it('does not treat a self-closing table as an enclosing element', () => {
+    const html = '<p>a</p><table><tr><td><table/><a href="https://twitter.com/x">t</a></td></tr></table><p>b</p>';
+    expect(cleanEmailHtml(html)).toBe('<p>a</p><p>b</p>');
+  });
+
   // Behaviour lock. These are the well-formed shapes real mail is made of; the cleaners
   // are a heuristic, so the point is that the exact output is pinned and a future edit
   // has to state the change rather than drift into it.

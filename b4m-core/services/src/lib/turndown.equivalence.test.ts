@@ -73,6 +73,14 @@ const AGREES: Array<[string, string]> = [
     'signature table whose name block closes before the icon row',
     '<table class="sig"><tr><td><table><tr><td>Jane, CEO</td></tr></table></td></tr><tr><td><a href="https://linkedin.com/in/x">li</a></td></tr></table>',
   ],
+  // Malformed shapes the regexes handled correctly and the tokenizer had to be taught:
+  // a close-tag name that only shares a prefix, and a scan that used to stop at a stray
+  // unclosed quote and leave the whole tail uncleaned.
+  ['close-tag name sharing a prefix with the real close', '<p>a</p><script>x = "</scriptZ";</script><p>b</p>'],
+  [
+    'tracking pixel after an unterminated tag',
+    '<a href="unclosed<p>tail</p><img width="1" height="1" src="https://t.example/o.gif"><p>after</p>',
+  ],
 ];
 
 // Shapes where the two DISAGREE, deliberately. Each one is a defect in the regex pass that
@@ -89,6 +97,18 @@ const DIVERGES: Array<[string, string, string, string]> = [
     'the regex stopped at the FIRST </div>, leaving the signature half-removed',
     '<p>a</p><div class="signature"><div>inner</div></div><p>b</p>',
     '<p>a</p><p>b</p>',
+  ],
+  [
+    'noise markup inside an HTML comment',
+    'the regexes had no notion of comments and edited their interior; the tokenizer skips a comment to its --> and leaves commented-out markup alone, which is what the HTML parser downstream does with it',
+    '<p>a</p><!-- <div class="signature">Jane</div> --><p>b</p>',
+    '<p>a</p><!-- <div class="signature">Jane</div> --><p>b</p>',
+  ],
+  [
+    'raw-text element that never closes',
+    'the regex needed a close tag and so left the whole style block in the body; the tokenizer closes it at end of input, matching the HTML parser downstream',
+    '<p>keep</p><style>a{color:red}<p>tail</p>',
+    '<p>keep</p>',
   ],
 ];
 

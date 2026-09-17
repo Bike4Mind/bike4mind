@@ -106,6 +106,57 @@ const isSelfClosing = (html: string, tag: ScannedTag): boolean => html[tag.end -
 const RAW_TEXT_ELEMENTS = new Set(['script', 'style']);
 
 /**
+ * Offset just past the `>` that ends the tag whose attributes begin at `from`, or -1 when
+ * the input ends first. Quote-aware, so a `>` inside an attribute value does not end it.
+ */
+function scanToTagEnd(html: string, from: number): number {
+  let quote = '';
+  for (let j = from; j < html.length; j++) {
+    const c = html[j];
+    if (quote) {
+      if (c === quote) quote = '';
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === '>') {
+      return j + 1;
+    }
+  }
+  return -1;
+}
+
+/**
+ * The close tag of the raw-text element whose body begins at `from`, or null when it never
+ * closes.
+ *
+ * `</name` only closes the element when the next character ends the name - `>`, `/` or
+ * whitespace - which is what the HTML spec requires. Accepting any character let a
+ * `</scriptish` inside a JS string stand in for the real close, and the tag then ended at
+ * the next `>` anywhere downstream. Both directions were wrong: the span could stop short
+ * and leak the tail of a script body into the cleaned output, or run past the element and
+ * delete real text after it. The search resumes one character past each near-miss, so the
+ * cursor only moves forward and the walk stays linear.
+ */
+function findRawTextClose(
+  html: string,
+  lower: string,
+  name: string,
+  from: number
+): { start: number; end: number } | null {
+  let at = from;
+  for (;;) {
+    const close = lower.indexOf(`</${name}`, at);
+    if (close === -1) return null;
+    const afterName = close + name.length + 2;
+    const next = html[afterName];
+    if (next === '>' || next === '/' || (next !== undefined && /\s/.test(next))) {
+      const end = scanToTagEnd(html, afterName);
+      return end === -1 ? null : { start: close, end };
+    }
+    at = close + 1;
+  }
+}
+
+/**
  * Tokenize every tag in the document in ONE left-to-right pass.
  *
  * This replaces the per-cleaner regexes that used to drive cleanEmailHtml. Each of those
@@ -120,6 +171,13 @@ const RAW_TEXT_ELEMENTS = new Set(['script', 'style']);
  * Quoted attribute values are respected, so a `>` inside an attribute does not end a tag.
  * `<script>`/`<style>` bodies are taken as raw text to their own close tag, which is what
  * a real parser does and what keeps a `<` in CSS or JS from being read as markup.
+ *
+ * Malformed markup RECOVERS rather than ending the scan, so noise in the tail is still
+ * found: an unterminated tag falls back to the first raw `>`, and a raw-text element that
+ * never closes is closed at end of input. Only two things stop the walk early, and neither
+ * leaves anything to clean behind it - a `<!--` with no `-->`, which extends to end of
+ * input as comment text that the HTML parser downstream renders as nothing, and running
+ * out of `>` entirely, after which no complete tag can exist.
  */
 function scanTags(html: string): ScannedTag[] {
   const lower = html.toLowerCase();
@@ -149,32 +207,25 @@ function scanTags(html: string): ScannedTag[] {
       continue;
     }
 
-    let quote = '';
-    while (j < html.length) {
-      const c = html[j];
-      if (quote) {
-        if (c === quote) quote = '';
-      } else if (c === '"' || c === "'") {
-        quote = c;
-      } else if (c === '>') {
-        break;
-      }
-      j++;
+    let end = scanToTagEnd(html, j);
+    if (end === -1) {
+      // A quote opened inside this tag and never closed, so the quote-aware scan ran to
+      // end of input. Recover at the first raw `>` the way a browser does rather than
+      // abandoning the rest of the document: one stray `"` in an href would otherwise
+      // leave every later tracking pixel and signature in place.
+      const raw = html.indexOf('>', j);
+      if (raw === -1) break;
+      end = raw + 1;
     }
-    // An unterminated tag ends the scan: no later tag can close either.
-    if (j >= html.length) break;
-
-    const end = j + 1;
     tags.push({ name, isClose, start: lt, end });
     i = end;
 
     if (!isClose && RAW_TEXT_ELEMENTS.has(name) && html[end - 2] !== '/') {
-      const close = lower.indexOf(`</${name}`, end);
-      if (close === -1) break;
-      const closeEnd = html.indexOf('>', close);
-      if (closeEnd === -1) break;
-      tags.push({ name, isClose: true, start: close, end: closeEnd + 1 });
-      i = closeEnd + 1;
+      // An unterminated raw-text element runs to end of input, which is what the HTML
+      // parser downstream does with it too, so close it there instead of stopping.
+      const close = findRawTextClose(html, lower, name, end) ?? { start: html.length, end: html.length };
+      tags.push({ name, isClose: true, start: close.start, end: close.end });
+      i = close.end;
     }
   }
 
@@ -186,6 +237,13 @@ function scanTags(html: string): ScannedTag[] {
  * never closes, or for a close/void tag). Computed with one stack pass so a caller can
  * ask for any element's extent in O(1) - asking per element would be quadratic in the
  * tag count, which is the cost shape this rewrite exists to remove.
+ *
+ * Matching is per element NAME and last-in-first-out, so mis-nested markup
+ * (`<div><span></div></span>`) pairs a close with the nearest open of its own name rather
+ * than rejecting the document. That is the deliberate side of the trade: real mail is
+ * mis-nested often enough that a strict matcher would stop removing signatures, and the
+ * worst case here is an extent ending at the wrong close tag OF THE SAME NAME, never at
+ * another element's.
  */
 function matchElementEnds(html: string, tags: ScannedTag[]): number[] {
   const ends = new Array<number>(tags.length).fill(-1);
@@ -254,6 +312,8 @@ const EMAIL_SIGNATURE_CLOSE_RE = /<!--\s*\/email signature\s*-->/gi;
  *
  * Linear in the document length, and scans the whole document - there is no parse cap and
  * no span bound, so the contract holds for the entire input rather than a capped prefix.
+ * The one construct that is not walked is the interior of an unterminated `<!--`: it is
+ * comment text to end of input and renders as nothing downstream. See scanTags.
  *
  * @param html - Raw HTML string
  * @returns Cleaned HTML string

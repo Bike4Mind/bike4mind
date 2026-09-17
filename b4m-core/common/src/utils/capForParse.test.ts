@@ -2,6 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { capForParse, DEFAULT_PARSE_CAP } from './capForParse';
 
 describe('capForParse', () => {
+  // NaN fails every comparison, so without a finite check this returned '' - and a caller
+  // that re-appends the uncapped tail then scrubs nothing at all, failing open.
+  it.each([[NaN], [Infinity], [-Infinity]])('rejects a non-finite max: %s', max => {
+    expect(() => capForParse('abc', max)).toThrow(RangeError);
+  });
+
   it('returns short input unchanged', () => {
     const input = 'hello world';
     expect(capForParse(input, 100)).toBe(input);

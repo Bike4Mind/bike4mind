@@ -56,6 +56,12 @@ const MAX_PPTX_TEXT_CHARS = 2_000_000;
 // A .pptx is a zip, so the uploader picks the decompressed size, which made that a CPU
 // sink up to the per-slide byte cap. Scanning with indexOf is linear in the XML length,
 // so the cost is bounded without a parse cap that would truncate a real slide's markup.
+// A run body can hold further `<a:t...>` opens when the XML nests runs or leaves one
+// unclosed. Slicing to the first `</a:t>` keeps them where the regex this replaced
+// stripped them, and the literal markup would otherwise reach the chunk text and the
+// embedding built from it.
+const RUN_OPEN_TAG_RE = /<a:t(?:\s[^>]*)?>/g;
+
 const extractSlideRunTexts = (xml: string): string[] => {
   const CLOSE = '</a:t>';
   const texts: string[] = [];
@@ -74,7 +80,7 @@ const extractSlideRunTexts = (xml: string): string[] => {
     if (openEnd === -1) break;
     const close = xml.indexOf(CLOSE, openEnd + 1);
     if (close === -1) break;
-    texts.push(xml.slice(openEnd + 1, close));
+    texts.push(xml.slice(openEnd + 1, close).replace(RUN_OPEN_TAG_RE, ''));
     cursor = close + CLOSE.length;
   }
   return texts;

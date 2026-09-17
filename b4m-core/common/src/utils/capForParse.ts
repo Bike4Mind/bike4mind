@@ -29,7 +29,7 @@ export const DEFAULT_PARSE_CAP = 100_000;
  * still ran for minutes. Measure the worst-case shape at the cap you intend to ship and
  * make sure the number of milliseconds is one you can defend.
  *
- * Two further traps this helper cannot solve for you:
+ * Four further traps this helper cannot solve for you:
  * - A per-item cap is not a total bound when the item count is also attacker-chosen
  *   (a .pptx picks its own slide count). Carry a running budget across the loop.
  * - Cap what is SCANNED, not what is returned. Where the result is rendered or
@@ -50,8 +50,10 @@ export const DEFAULT_PARSE_CAP = 100_000;
  * @returns the input unchanged when within budget, otherwise its first `max` chars.
  */
 export function capForParse(input: string, max: number = DEFAULT_PARSE_CAP): string {
-  if (max < 0) {
-    throw new RangeError(`capForParse: max must be non-negative, got ${max}`);
+  // Finite, not just non-negative: NaN fails every comparison, so an unchecked NaN cap
+  // makes this return '' and a caller that re-appends the tail scrub nothing at all.
+  if (!Number.isFinite(max) || max < 0) {
+    throw new RangeError(`capForParse: max must be a non-negative finite number, got ${max}`);
   }
   return input.length <= max ? input : input.slice(0, max);
 }
