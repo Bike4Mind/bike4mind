@@ -108,14 +108,14 @@ export async function resetApiKeyRateLimit(
   options: { alsoResetManagement?: boolean } = {}
 ): Promise<void> {
   const { minuteKey, dayKey } = buildRateLimitKeys(keyId);
-  await cacheRepository.deleteByKey(minuteKey);
-  await cacheRepository.deleteByKey(dayKey);
+  const deletes = [cacheRepository.deleteByKey(minuteKey), cacheRepository.deleteByKey(dayKey)];
 
   if (options.alsoResetManagement) {
     const { minuteKey: managementMinuteKey, dayKey: managementDayKey } = buildRateLimitKeys(keyId, 'management');
-    await cacheRepository.deleteByKey(managementMinuteKey);
-    await cacheRepository.deleteByKey(managementDayKey);
+    deletes.push(cacheRepository.deleteByKey(managementMinuteKey), cacheRepository.deleteByKey(managementDayKey));
   }
+
+  await Promise.all(deletes);
 }
 
 export interface RateLimitUsage {
@@ -380,7 +380,12 @@ function buildHeaders(params: BuildHeadersParams): RateLimitResult['headers'] {
   // Remaining is clamped to the advertised limit as well as the enforced one:
   // a key may be configured BELOW the management ceiling (limits validate at
   // min 1), and reporting more headroom than the advertised limit allows is
-  // the same class of confusion the reported limit exists to remove.
+  // the same class of confusion the reported limit exists to remove. Accepted
+  // tradeoff: for such a key, Remaining holds flat at the reported limit
+  // across the first several management-metered calls and only drops once
+  // the enforced counter nears its own ceiling - it does not decrement 1:1
+  // with usage in that band. Remaining <= Limit still always holds, and the
+  // enforced counter (not this header) is what actually gates the 429.
   return {
     'X-RateLimit-Limit-Minute': reportedMinuteLimit,
     'X-RateLimit-Remaining-Minute': Math.min(reportedMinuteLimit, Math.max(0, minuteLimit - minuteCount)),
