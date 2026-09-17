@@ -128,19 +128,22 @@ const FeedbackCountsPanel: FC<{ organizationId: string; range: OrgFeedbackRange 
       {(membership.aclOnly.length > 0 || membership.stampOnly.length > 0) && (
         <Alert color="neutral" data-testid="org-analysis-membership-note">
           <Stack spacing={0.5}>
+            {/* Both lists are about User.organizationId, not about who has authored anything - see
+                OrgMemberPopulation. Wording that claimed authorship contradicted the by-member
+                table above, because an owner whose pointer names their personal org lands here. */}
             <Typography level="body-sm">
-              The organization roster and the feedback stamped to this organization do not agree, so some of these
+              The organization roster and the accounts pointed at this organization do not agree, so some of these
               counts rest on one source alone.
             </Typography>
             {membership.aclOnly.length > 0 && (
               <Typography level="body-sm" data-testid="org-analysis-acl-only">
-                On the roster, authoring nothing stamped here:{' '}
-                {membership.aclOnly.map(member => member.displayName).join(', ')}
+                On the roster, but their account points at another organization, so new feedback they write is not
+                stamped here: {membership.aclOnly.map(member => member.displayName).join(', ')}
               </Typography>
             )}
             {membership.stampOnly.length > 0 && (
               <Typography level="body-sm" data-testid="org-analysis-stamp-only">
-                Authoring stamped feedback, but off the roster:{' '}
+                Their account points at this organization, but they are off the roster:{' '}
                 {membership.stampOnly.map(member => member.displayName).join(', ')}
               </Typography>
             )}

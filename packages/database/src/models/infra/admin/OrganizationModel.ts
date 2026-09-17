@@ -454,7 +454,9 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     // of the findOne below.
     if (!mongoose.isValidObjectId(organizationId)) return empty;
 
-    const [org, stampedAuthors] = await Promise.all([
+    // Not "authors": this is the User.organizationId pointer set, which is what a future write
+    // would stamp. Someone can author rows stamped here and still be absent from it.
+    const [org, pointedAtOrg] = await Promise.all([
       this.organizationModel.findOne({ _id: organizationId }, { userId: 1, users: 1 }).lean(),
       User.find({ organizationId }, { _id: 1 }).lean(),
     ]);
@@ -468,7 +470,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
       ...((org.users ?? []) as IUserShare[]).filter(orgAclRowConfersMembership).map(u => String(u.userId)),
     ]);
     // Feedback.userId is a string, so both arms normalize to strings before they meet.
-    const stampIds = new Set<string>(stampedAuthors.map(u => String(u._id)));
+    const stampIds = new Set<string>(pointedAtOrg.map(u => String(u._id)));
 
     return {
       userIds: [...new Set<string>([...aclIds, ...stampIds])],
