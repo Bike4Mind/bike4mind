@@ -252,7 +252,7 @@ export const handleOrganizationSubscriptionInvoice = async (
           const existingStripeSub = liveSubs.find(s => resolveSubscriptionSource(s) === SubscriptionSource.Stripe);
           if (existingStripeSub) {
             logger.warn(
-              `Org ${org.id} already has a live (non-terminal) Stripe subscription ${existingStripeSub.subscriptionId ?? '(no stripe id)'} — refusing to create duplicate from ${subscription.id}. Manual reconciliation required.`
+              `Org ${org.id} already has a live (non-terminal) Stripe subscription ${existingStripeSub.subscriptionId ?? '(no stripe id)'} \u2014 refusing to create duplicate from ${subscription.id}. Manual reconciliation required.`
             );
             break;
           }
