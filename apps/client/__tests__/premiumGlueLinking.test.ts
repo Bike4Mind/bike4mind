@@ -180,6 +180,9 @@ describe('hydrated AND linked overlay', () => {
     const indexing = readFileSync(join(clientRoot, 'app/premium-generated/premiumRouteIndexing.generated.ts'), 'utf8');
     expect(indexing).toContain(`import { routeIndexing as indexing0 } from '${PKG_NAME}/seo'`);
 
+    const tools = readFileSync(join(clientRoot, 'server/premium-generated/premiumLlmTools.generated.ts'), 'utf8');
+    expect(tools).toContain(`import { llmTools as tools0 } from '${PKG_NAME}/tools'`);
+
     const prompts = readFileSync(
       join(clientRoot, 'server/premium-generated/premiumSystemPrompts.generated.ts'),
       'utf8'
