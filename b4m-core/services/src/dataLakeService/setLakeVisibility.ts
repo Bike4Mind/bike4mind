@@ -1,5 +1,5 @@
 import type { IDataLakeAccessGrantRepository, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
 import { canManageLake, isEffectiveOwner, type ManageActor } from './manageRule';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { findCollidingPrefixLakes } from './tagPrefixCollision';
@@ -83,6 +83,22 @@ export const setLakeVisibility = async (
   // genuinely new reach, and the gated-lake refusal below still blocks the PHI case.
   if (exposes && !isEffectiveOwner(existing, actor, grants)) {
     throw new BadRequestError('Only the lake’s owner can change how it is shared.');
+  }
+  // Demotion to private normally only REMOVES exposure, which is why it stays on the full manage
+  // set - but not while the lake carries a gate. An org-scoped gated lake admits org members
+  // holding the gate; the same lake org-less admits every holder app-wide and cross-org, because
+  // classifyLakeAccess skips private-deny while a gate is present and then finds no org to require.
+  // So demoting a gated org lake drops the org prerequisite and publishes it: the same exposure
+  // updateDataLake's widening gate refuses, reached by moving the SCOPE instead of the gate.
+  // Owner-only for the same reason, and the owner can still clear the gate first and then demote.
+  const dropsOrgPrerequisiteOntoAGate =
+    visibility === 'private' &&
+    !!normalizeId(existing.organizationId) &&
+    !!(existing.requiredUserTag || existing.requiredEntitlement);
+  if (dropsOrgPrerequisiteOntoAGate && !isEffectiveOwner(existing, actor, grants)) {
+    throw new BadRequestError(
+      'Only the owner of this data lake can make it private while it carries a gate, because that opens it to every holder of the tag or entitlement. Remove the gate first.'
+    );
   }
   if (visibility === 'organization' && !actor.organizationId) {
     throw new BadRequestError('You are not part of an organization, so this lake can’t be shared to one.');

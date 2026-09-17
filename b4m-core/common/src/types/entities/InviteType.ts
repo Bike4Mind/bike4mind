@@ -13,6 +13,8 @@ export interface IInviteModelAdapter {
 }
 
 export interface IInviteRepository extends IBaseRepository<IInviteDocument> {
+  /** Resolve an invite by its bearer token. Null for an unknown token or a legacy, tokenless invite. */
+  findByToken: (token: string) => Promise<IInviteDocument | null>;
   findAllByDocumentId: (documentId: string) => Promise<IInviteDocument[]>;
   findAllByPendingUserIdOrEmail: (
     userId: string,
@@ -67,6 +69,14 @@ export type IBaseInvite = {
   username?: string;
   // Who minted the invite. Absent on invites created before this field existed.
   inviterId?: string;
+
+  // The bearer secret a share link actually carries, and the ONLY key redemption accepts for an
+  // invite that has one. The `_id` was the bearer secret before this field existed, which made a
+  // link guessable: an ObjectId is only partially random (timestamp + per-process counter) and is
+  // disclosed by every surface that lists invites. Absent on invites minted before the cutover -
+  // `resolveRedeemableInvite` keys the legacy `_id` door on exactly that absence, so the old door
+  // closes for every new invite without a clock constant to maintain.
+  token?: string;
 
   expiresAt: undefined | Date;
 };

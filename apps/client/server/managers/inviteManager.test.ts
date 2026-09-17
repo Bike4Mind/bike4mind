@@ -17,7 +17,7 @@ vi.mock('@bike4mind/database', () => ({
 const { authorizeByInviteType } = vi.hoisted(() => ({ authorizeByInviteType: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({ sharingService: { authorizeByInviteType } }));
 
-import { canViewInvite, filterInviteRecipientsToSelf } from './inviteManager';
+import { canViewInvite, filterInviteRecipientsToSelf, omitInviteToken } from './inviteManager';
 
 const baseInvite = () => ({
   id: 'inv1',
@@ -51,6 +51,55 @@ describe('filterInviteRecipientsToSelf', () => {
     const out = filterInviteRecipientsToSelf({ id: 'i2', type: 'Session' }, 'a@x.com') as any;
     expect('recipients' in out).toBe(false);
     expect(out.id).toBe('i2');
+  });
+
+  // This serializer is the last thing between an invite row and an invitee-facing body, and the
+  // token is a redeemable secret: anyone who legitimately reaches one of those routes addressed the
+  // request with it already, so echoing it back only widens where it can leak from.
+  const TOKEN = 'wVvJ0hEr1sKq7nQ9YpB2fL4dXz8TcMuGaSiN3ROZjkw';
+
+  it('strips the bearer token, and the key survives nothing else about the invite', () => {
+    const out = filterInviteRecipientsToSelf({ ...baseInvite(), token: TOKEN }, 'a@x.com') as any;
+    expect('token' in out).toBe(false);
+    expect(JSON.stringify(out)).not.toContain(TOKEN);
+    expect(out.id).toBe('inv1');
+  });
+
+  it('strips it through the toJSON path too, which is how a Mongoose doc arrives', () => {
+    const out = filterInviteRecipientsToSelf({ toJSON: () => ({ ...baseInvite(), token: TOKEN }) }, 'a@x.com') as any;
+    expect(JSON.stringify(out)).not.toContain(TOKEN);
+  });
+
+  it('strips it on an invite with no recipients, which skips the filtering branch entirely', () => {
+    const out = filterInviteRecipientsToSelf({ id: 'i2', type: 'Session', token: TOKEN }, 'a@x.com') as any;
+    expect('token' in out).toBe(false);
+  });
+
+  // The input must not be mutated: callers pass a document they go on to use, and `toJSON`/spread
+  // are what keep the deletion local to the response body.
+  it("does not delete the token from the caller's own object", () => {
+    const invite = { ...baseInvite(), token: TOKEN };
+    filterInviteRecipientsToSelf(invite, 'a@x.com');
+    expect(invite.token).toBe(TOKEN);
+  });
+});
+
+describe('omitInviteToken', () => {
+  const TOKEN = 'wVvJ0hEr1sKq7nQ9YpB2fL4dXz8TcMuGaSiN3ROZjkw';
+
+  // The sharer-facing counterpart: unlike filterInviteRecipientsToSelf it keeps the full recipient
+  // set, which is the whole reason the two are separate functions.
+  it('drops the token and keeps everything else, recipients included', () => {
+    const out = omitInviteToken({ ...baseInvite(), token: TOKEN }) as any;
+    expect('token' in out).toBe(false);
+    expect(out.recipients).toEqual(baseInvite().recipients);
+  });
+
+  it('normalizes a Mongoose-style doc via toJSON, and leaves the caller object alone', () => {
+    const source = { ...baseInvite(), token: TOKEN };
+    const out = omitInviteToken({ toJSON: () => ({ ...source }) }) as any;
+    expect('token' in out).toBe(false);
+    expect(source.token).toBe(TOKEN);
   });
 });
 

@@ -1,8 +1,9 @@
 import type { IDataLakeAccessGrantRepository, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { UpdateDataLakeRequestInput, normalizeEntitlementKey } from '@bike4mind/common';
 import { secureParameters, BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { canManageLake, type ManageActor } from './manageRule';
+import { canManageLake, isEffectiveOwner, type ManageActor } from './manageRule';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
+import { gateWriteWidensReadership } from './lakeGateWideningRule';
 import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import { diffLakeConfig } from './diffLakeConfig';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
@@ -62,6 +63,20 @@ export const updateDataLake = async (
     throw new BadRequestError(
       'A public data lake cannot have an access tag or required entitlement. Make it private first, then add the gate.'
     );
+  }
+
+  // The gate fields are a sharing control, so widening through them is owner-only - the same rule
+  // `setLakeVisibility` applies to its expose branch, which this door would otherwise route around:
+  // stamping a requiredUserTag on a private, org-less lake moves it off the private-deny arm and
+  // makes it readable by every holder of that tag, app-wide and across orgs, without ever touching
+  // `isPublic`/`organizationId`. Narrowing stays open to the full manage set, so a curator can still
+  // tighten a gate or clear one back to owner-only.
+  //
+  // Deliberately isEffectiveOwner, matching setLakeVisibility exactly: the grant-aware owner check
+  // WITHOUT the platform-admin, curator and org-admin bypasses, because an admin must not widen
+  // someone else's lake on their behalf any more than a curator may.
+  if (gateWriteWidensReadership(existing, params) && !isEffectiveOwner(existing, actor, grants)) {
+    throw new BadRequestError('Only the owner of this data lake can change who it is shared with.');
   }
 
   // Normalize the entitlement key at write time (Mongo $in is case-sensitive; the

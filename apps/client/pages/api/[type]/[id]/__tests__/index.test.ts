@@ -27,12 +27,14 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-const findById = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/database/social', () => ({ Invite: { findById } }));
+const resolveRedeemableInvite = vi.hoisted(() => vi.fn());
 
 const authorizeByInviteType = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/services', () => ({ sharingService: { authorizeByInviteType } }));
+vi.mock('@bike4mind/services', () => ({
+  sharingService: { authorizeByInviteType, resolveRedeemableInvite },
+}));
 vi.mock('@bike4mind/database', () => ({
+  inviteRepository: {},
   fabFileRepository: {},
   sessionRepository: {},
   projectRepository: {},
@@ -57,7 +59,7 @@ describe('GET /api/[type]/[id] - authorization gate', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('returns 404 (not 403) for a caller who is neither a recipient nor share-authorized', async () => {
-    findById.mockResolvedValue({
+    resolveRedeemableInvite.mockResolvedValue({
       id: 'inv-1',
       type: 'FabFile',
       documentId: 'doc-1',
@@ -74,7 +76,7 @@ describe('GET /api/[type]/[id] - authorization gate', () => {
   });
 
   it('allows a named pending recipient', async () => {
-    findById.mockResolvedValue({
+    resolveRedeemableInvite.mockResolvedValue({
       id: 'inv-1',
       type: 'FabFile',
       documentId: 'doc-1',
@@ -92,7 +94,7 @@ describe('GET /api/[type]/[id] - authorization gate', () => {
   });
 
   it('allows a caller with share authority on the underlying document even when not a named recipient', async () => {
-    findById.mockResolvedValue({
+    resolveRedeemableInvite.mockResolvedValue({
       id: 'inv-1',
       type: 'FabFile',
       documentId: 'doc-1',
@@ -110,7 +112,7 @@ describe('GET /api/[type]/[id] - authorization gate', () => {
   });
 
   it('returns 404 when the invite does not exist', async () => {
-    findById.mockResolvedValue(null);
+    resolveRedeemableInvite.mockResolvedValue(null);
 
     const { req, res } = createMocks({ method: 'GET', query: { type: 'files', id: VALID_ID } });
     (req as any).user = { id: 'u1', email: 'stranger@x.com' };
@@ -119,10 +121,44 @@ describe('GET /api/[type]/[id] - authorization gate', () => {
     expect(res._getStatusCode()).toBe(404);
   });
 
+  // This route used to read the model directly, which left the whole bearer-token narrowing behind
+  // on a URL shape that answers for any `[type]`. It resolves through the same door as the sibling
+  // now, so a tokenized link invite addressed by its _id is refused here too.
+  it('resolves through the redeemable door rather than reading the invite by id', async () => {
+    resolveRedeemableInvite.mockResolvedValue(null);
+
+    const { req, res } = createMocks({ method: 'GET', query: { type: 'files', id: VALID_ID } });
+    (req as any).user = { id: 'u1', email: 'me@x.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(resolveRedeemableInvite).toHaveBeenCalledWith(VALID_ID, expect.anything());
+    expect(res._getStatusCode()).toBe(404);
+  });
+
+  // The guard that used to sit in front of the lookup rejected anything that was not ObjectId-shaped,
+  // which is every bearer token the share link now carries.
+  it('accepts a bearer-token key instead of 400-ing on its shape', async () => {
+    resolveRedeemableInvite.mockResolvedValue({
+      id: 'inv-1',
+      type: 'FabFile',
+      documentId: 'doc-1',
+      recipients: { pending: ['me@x.com'], accepted: [], refused: [] },
+    });
+    getInviteDetails.mockResolvedValue({ id: 'inv-1', name: 'Doc' });
+
+    const token = 'wVvJ0hEr1sKq7nQ9YpB2fL4dXz8TcMuGaSiN3ROZjkw';
+    const { req, res } = createMocks({ method: 'GET', query: { type: 'files', id: token } });
+    (req as any).user = { id: 'u1', email: 'me@x.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(resolveRedeemableInvite).toHaveBeenCalledWith(token, expect.anything());
+  });
+
   // Passing the gate means the caller is ONE named recipient, not that they may read the rest of
   // the list. Same filter the sibling invitee-facing routes apply.
   it('strips the other recipients addresses from a named recipient response', async () => {
-    findById.mockResolvedValue({
+    resolveRedeemableInvite.mockResolvedValue({
       id: 'inv-1',
       type: 'FabFile',
       documentId: 'doc-1',
@@ -144,7 +180,7 @@ describe('GET /api/[type]/[id] - authorization gate', () => {
   });
 
   it('strips every recipient for a share-authorized caller who is not one of them', async () => {
-    findById.mockResolvedValue({
+    resolveRedeemableInvite.mockResolvedValue({
       id: 'inv-1',
       type: 'FabFile',
       documentId: 'doc-1',

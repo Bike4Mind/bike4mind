@@ -11,3 +11,4 @@ export * from './refuse';
 export * from './refuseWholeInvite';
 export * from './revoke';
 export * from './updateDocumentSharing';
+export * from './resolveRedeemableInvite';

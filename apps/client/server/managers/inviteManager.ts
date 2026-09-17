@@ -129,5 +129,25 @@ export function filterInviteRecipientsToSelf<T>(invite: T, userEmail?: string | 
       refused: keepSelf(recipients.refused),
     };
   }
+  // The bearer token never travels in an invitee-facing body. Whoever legitimately reaches one of
+  // these routes already holds it (it is the key they addressed the request with), so echoing it
+  // buys nothing and would hand a redeemable secret to any future caller of this serializer.
+  delete plain.token;
+  return plain;
+}
+
+/**
+ * Sharer-facing serialization: drops the bearer token and nothing else.
+ *
+ * The create response carries a ready-made `link` that already contains the token, and the
+ * document invite list has no consumer for it at all, so the bare field is a redeemable secret
+ * sitting in a body for no one. Keeping it out means a share link can only be obtained from the
+ * response that mints it, rather than re-read later from a cached list. Normalizes a Mongoose doc
+ * via toJSON first, like its invitee-facing counterpart.
+ */
+export function omitInviteToken<T>(invite: T): Record<string, unknown> {
+  const raw = invite as unknown as { toJSON?: () => Record<string, unknown> } & Record<string, unknown>;
+  const plain: Record<string, unknown> = typeof raw.toJSON === 'function' ? raw.toJSON() : { ...raw };
+  delete plain.token;
   return plain;
 }

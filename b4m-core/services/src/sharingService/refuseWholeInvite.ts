@@ -2,6 +2,7 @@ import { IInviteDocument, IInviteRepository, IUserDocument } from '@bike4mind/co
 import { NotFoundError, secureParameters, UnprocessableEntityError } from '@bike4mind/utils';
 import { z } from 'zod';
 import { authorizeByInviteType, InviteTypeAuthAdapters } from './authorizeByInviteType';
+import { resolveAddressedInvite } from './resolveRedeemableInvite';
 
 const refuseWholeInviteSchema = z.object({
   id: z.string(),
@@ -11,7 +12,7 @@ type RefuseWholeInviteParameters = z.infer<typeof refuseWholeInviteSchema>;
 
 interface RefuseWholeInviteAdapters {
   db: InviteTypeAuthAdapters & {
-    invites: Pick<IInviteRepository, 'findById' | 'update'>;
+    invites: Pick<IInviteRepository, 'findById' | 'findByToken' | 'update'>;
   };
 }
 
@@ -33,7 +34,14 @@ export const refuseWholeInvite = async (
 ): Promise<IInviteDocument | null> => {
   const { id } = secureParameters(parameters, refuseWholeInviteSchema);
 
-  const invite = await db.invites.findById(id);
+  // Three surfaces reach this with three different keys: the share URL carries the bearer token, the
+  // inbox lists invites through a projection carrying no token and can only pass the `_id`, and the
+  // document's invite list revokes by `_id` as well. So the key is an ADDRESS here, not a credential,
+  // and the address door is the right one - holding it grants nothing, because both arms below
+  // re-derive authority from the caller: the decline arm from their own email in `recipients.pending`
+  // and the revoke arm from share authority on the underlying document. Routing this through the
+  // REDEEMABLE door instead would 404 the sharer revoking their own link invite from that list.
+  const invite = await resolveAddressedInvite(id, { db });
   if (!invite) throw new NotFoundError('Invite not found');
 
   // createInvite defaults expiresAt 100 years out, so this only bites a real expiration.
