@@ -10,7 +10,8 @@ import { reembedMementosForUser } from '@server/memory/reembedMementos';
  * `mementoEmbeddingIsCurrent` in `@bike4mind/common`, and `getRelevantMementos`'s exclusion gate).
  *
  * Operator loop: POST repeatedly with `{ execute: true }` until the response's `hasMore` is
- * false. No `skip` bookkeeping needed - in execute mode the route always re-queries the head of
+ * false. A single call is bounded by MAX_MEMENTOS_PER_REQUEST as well as by BATCH_SIZE, so a page
+ * can come back truncated with users left unwalked; `hasMore` covers both cases. No `skip` bookkeeping needed - in execute mode the route always re-queries the head of
  * the still-stale set, since repairing a page removes those users from it. `skip` only matters
  * for a dry-run preview, where nothing is written and the set stays stable across calls.
  *
@@ -20,6 +21,16 @@ import { reembedMementosForUser } from '@server/memory/reembedMementos';
  * since execute mode always re-queries skip=0 - see `hasMore` below for the other half of this.
  */
 const BATCH_SIZE = 25;
+
+// Ceiling on provider calls per request, and the companion BATCH_SIZE needs: that one caps USERS,
+// which bounds nothing, because a single user's stale set is unbounded. The edge cuts an origin
+// response at 60s while this route embeds one memento at a time, so an uncapped page times out
+// there and keeps writing at the origin - the caller cannot distinguish that from a failure and
+// gets no totals back either way. Measured at 3-5 mementos/sec against the live corpus, so 100
+// lands around 20-35s with room for a slow provider. A page cut short reports hasMore: true and
+// the operator loop simply calls again; execute mode already re-queries the head of the set, so
+// there is no cursor to keep.
+const MAX_MEMENTOS_PER_REQUEST = 100;
 
 // failedMementos is a diagnostic sample, not a ledger: `failed` carries the true count, so the
 // omitted number is always `failed - failedMementos.length`. Capped because it has one entry per
@@ -76,6 +87,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   // `skip` keeps its ordinary meaning for dry runs, where nothing is written and the set is stable.
   const effectiveSkip = execute ? 0 : skip;
 
+  // Declared before the empty-page exit below so BOTH returns answer the same shape. Kept as two
+  // hand-written field lists they drift, and the drift bites at the worst moment: a caller tracking
+  // progress as `total - alreadyCurrent` throws on the missing key exactly when the pass succeeds
+  // and the stale set finally empties, which reads as a crash rather than as completion.
+  const totals = { total: 0, alreadyCurrent: 0, reembedded: 0, failed: 0, skippedEmpty: 0 };
+  const failedUsers: Array<{ userId: string; error: string }> = [];
+  const failedMementos: string[] = [];
+
   // reembedMementosForUser repairs one user; enumerating who still needs it is this door's own job.
   const page = await Memento.aggregate<{ _id: string }>([
     { $match: staleWithVectorFilter },
@@ -86,21 +105,44 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   ]);
 
   if (page.length === 0) {
-    return res.json({ processedUsers: 0, dryRun: !execute, hasMore: false, nextSkip: effectiveSkip });
+    return res.json({
+      processedUsers: 0,
+      dryRun: !execute,
+      ...totals,
+      failedUsers,
+      failedMementos,
+      hasMore: false,
+      nextSkip: effectiveSkip,
+    });
   }
 
-  const totals = { total: 0, alreadyCurrent: 0, reembedded: 0, failed: 0, skippedEmpty: 0 };
-  const failedUsers: Array<{ userId: string; error: string }> = [];
-  const failedMementos: string[] = [];
+  // Provider calls already spent by this request, against MAX_MEMENTOS_PER_REQUEST. Counted from
+  // the stats rather than tracked inside the service so one ceiling covers the whole page: users
+  // are walked sequentially, so a budget applied per user would multiply by the page size.
+  let spent = 0;
+  let truncated = false;
+  let processedUsers = 0;
 
   for (const { _id: userId } of page) {
+    if (execute && spent >= MAX_MEMENTOS_PER_REQUEST) {
+      truncated = true;
+      break;
+    }
+    processedUsers += 1;
     try {
-      const stats = await reembedMementosForUser(userId, { dryRun: !execute });
+      // A dry run makes no provider call, so the ceiling is inert there and the preview still
+      // reports the whole page.
+      const stats = await reembedMementosForUser(userId, {
+        dryRun: !execute,
+        limit: MAX_MEMENTOS_PER_REQUEST - spent,
+      });
       totals.total += stats.total;
       totals.alreadyCurrent += stats.alreadyCurrent;
       totals.reembedded += stats.reembedded;
       totals.failed += stats.failed;
       totals.skippedEmpty += stats.skippedEmpty;
+      spent += stats.reembedded + stats.failed;
+      if (stats.stoppedAtLimit) truncated = true;
       for (const error of stats.errors) {
         if (failedMementos.length >= MAX_REPORTED_MEMENTO_FAILURES) break;
         failedMementos.push(`user ${userId} ${error}`);
@@ -124,15 +166,22 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   const pageMadeProgress = execute ? totals.reembedded > 0 : true;
 
   return res.json({
-    processedUsers: page.length,
+    // What this request actually walked, which is below page.length when the provider-call ceiling
+    // cut it short - reporting the queried page size there would claim work that never ran.
+    processedUsers,
     dryRun: !execute,
     ...totals,
     failedUsers,
     failedMementos,
-    hasMore: page.length === BATCH_SIZE && pageMadeProgress,
+    // Two independent reasons there is more to do: the page filled BATCH_SIZE users, or the
+    // provider-call ceiling truncated it. Without the second a truncated page reports false (it is
+    // not a full page of users) and the operator loop stops with work left. Both stay gated on real
+    // progress, so a page whose every call failed still ends the loop rather than re-queueing the
+    // same failures forever - see pageMadeProgress above.
+    hasMore: pageMadeProgress && (truncated || page.length === BATCH_SIZE),
     // Always 0 in execute mode - see effectiveSkip above. The caller's loop is simply "keep
     // posting execute:true until hasMore is false", no cursor bookkeeping required.
-    nextSkip: execute ? 0 : skip + page.length,
+    nextSkip: execute ? 0 : skip + processedUsers,
   });
 });
 
