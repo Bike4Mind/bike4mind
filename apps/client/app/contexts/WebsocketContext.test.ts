@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { render, act } from '@testing-library/react';
 
@@ -334,6 +334,51 @@ describe('WebsocketProvider - reconnect recovery on a token change (no focus eve
     });
 
     expect(h.capturedUrls).not.toContain(null);
+  });
+});
+
+describe('WebsocketProvider - self-armed recovery after budget exhaustion', () => {
+  beforeEach(() => {
+    // The watchdog is a real interval, so the fake clock has to be installed BEFORE mount -
+    // an interval armed with the real timer is not the one these tests advance.
+    vi.useFakeTimers();
+    h.probeIdentity.mockReset();
+    h.probeIdentity.mockResolvedValue(undefined);
+    h.capturedOptions.current = null as unknown as Record<string, (arg: unknown) => void>;
+    h.capturedUrls = [];
+    h.readyState = 1;
+    h.accessTokenState.accessToken = 'tok';
+    h.accessTokenState.mfaPending = false;
+    stubVisibility('visible');
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const mount = () => {
+    render(React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div')));
+    return h.capturedOptions.current;
+  };
+
+  // The gap both triggers above leave open: a tab that stays focused AND holds a still-valid
+  // token produces neither a focus/visibilitychange event nor a token change - the exhausting
+  // attempt's own /api/identify probe gets the unchanged token back. Without a third,
+  // self-armed trigger such a tab stayed dead until its token happened to rotate (up to the
+  // 30-minute TTL).
+  it('pulses the url itself once the budget is exhausted, with no focus event and no token change', async () => {
+    const opts = mount();
+    await act(async () => {
+      opts.onReconnectStop(20); // the budget genuinely ran out - no pending backoff timer left
+    });
+    h.capturedUrls = [];
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(90_000);
+    });
+
+    expect(h.capturedUrls).toContain(null);
+    expect(typeof h.capturedUrls[h.capturedUrls.length - 1]).toBe('function');
   });
 });
 
