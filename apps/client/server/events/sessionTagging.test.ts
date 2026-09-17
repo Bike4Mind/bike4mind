@@ -105,6 +105,8 @@ describe('sessionTagging', () => {
 
   // The three inputs below all land in the same failure branch. Each is transient: none of them
   // is a verdict that the notebook has no tags, so none may clear tags or close the spider gate.
+  // Asserting on the absence of the write, not on `h.session.tags`: the fixture object is what the
+  // mocked `findById` handed back, so asserting it still holds its tags cannot fail.
   it.each([
     ['an unparseable response', ['I was unable to produce tags for this notebook.']],
     ['an empty completion', ['']],
@@ -115,7 +117,6 @@ describe('sessionTagging', () => {
     await run();
 
     expect(h.sessionUpdate).not.toHaveBeenCalled();
-    expect(h.session.tags).toEqual([{ name: 'inherited', strength: 5 }]);
   });
 
   // A notebook with no quests never reached the model, so it has earned neither a stamp nor a
@@ -131,6 +132,5 @@ describe('sessionTagging', () => {
     await run();
 
     expect(h.sessionUpdate).not.toHaveBeenCalled();
-    expect(h.session.tags).toEqual(tags);
   });
 });
