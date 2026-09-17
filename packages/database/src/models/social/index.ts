@@ -7,6 +7,7 @@ export * from './GroupModel';
 export * from './InboxModel';
 export * from './InviteModel';
 export * from './ModalModel';
+export * from './OrgFeedbackSummaryJobModel';
 export * from './OverwatchSocialConnectionModel';
 export * from './OverwatchAmplifyPostModel';
 export * from './QuerySubscriptionModel';
