@@ -18,7 +18,7 @@ vi.mock('@server/utils/errors', () => ({
   },
 }));
 
-import { isDevelopment } from '@server/utils/config';
+import { Config, isDevelopment } from '@server/utils/config';
 import { requireStripeWebhook } from '../requireStripeWebhook';
 
 describe('requireStripeWebhook middleware', () => {
@@ -59,24 +59,43 @@ describe('requireStripeWebhook middleware', () => {
   describe('Production Mode', () => {
     beforeEach(() => {
       (isDevelopment as any).mockReturnValue(false);
+      (Config as any).STRIPE_WEBHOOK_SECRET = 'whsec_test123';
+      (Config as any).STRIPE_PUBLISHABLE_KEY = 'pk_test_123';
+      (Config as any).STRIPE_SECRET_KEY = 'sk_test_123';
     });
 
-    it('should validate webhook secret exists in production', async () => {
+    it('should call next with no arguments when all Stripe config is present', async () => {
       const middleware = requireStripeWebhook();
-
-      // Mock empty webhook secret
-      vi.doMock('@server/utils/config', () => ({
-        Config: {
-          STRIPE_WEBHOOK_SECRET: '',
-          STRIPE_PUBLISHABLE_KEY: 'pk_test_123',
-          STRIPE_SECRET_KEY: 'sk_test_123',
-        },
-        isDevelopment: vi.fn().mockReturnValue(false),
-      }));
-
       await middleware(mockReq as any, mockRes as any, mockNext);
 
-      expect(mockNext).toHaveBeenCalled();
+      expect(mockNext).toHaveBeenCalledTimes(1);
+      expect(mockNext).toHaveBeenCalledWith();
+    });
+
+    it('should call next exactly once with an error when the webhook secret is missing', async () => {
+      (Config as any).STRIPE_WEBHOOK_SECRET = '';
+
+      const middleware = requireStripeWebhook();
+      await middleware(mockReq as any, mockRes as any, mockNext);
+
+      // Regression guard: a bare next(err) with no return, followed by an unconditional
+      // next(), used to call next twice here, racing the error handler.
+      expect(mockNext).toHaveBeenCalledTimes(1);
+      expect(mockNext).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Stripe webhook secret is not configured' })
+      );
+    });
+
+    it('should call next exactly once with an error when the publishable or secret key is missing', async () => {
+      (Config as any).STRIPE_PUBLISHABLE_KEY = '';
+
+      const middleware = requireStripeWebhook();
+      await middleware(mockReq as any, mockRes as any, mockNext);
+
+      expect(mockNext).toHaveBeenCalledTimes(1);
+      expect(mockNext).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Stripe publishable or secret key is not configured' })
+      );
     });
 
     it('should not log warning in production mode', async () => {

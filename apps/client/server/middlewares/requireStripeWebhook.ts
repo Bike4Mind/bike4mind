@@ -26,11 +26,11 @@ export const requireStripeWebhook =
 
     const webhookSecret = webhookSecretSchema.parse(Config.STRIPE_WEBHOOK_SECRET);
     if (!webhookSecret) {
-      next(new InternalServerError('Stripe webhook secret is not configured'));
+      return next(new InternalServerError('Stripe webhook secret is not configured'));
     }
 
     if (!Config.STRIPE_PUBLISHABLE_KEY || !Config.STRIPE_SECRET_KEY) {
-      next(new InternalServerError('Stripe publishable or secret key is not configured'));
+      return next(new InternalServerError('Stripe publishable or secret key is not configured'));
     }
 
     next();
