@@ -27,6 +27,9 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   // the Team option is gated on the selected org matching it.
   useUser: () => ({ currentUser: { id: 'user-1', organizationId: 'org_42', showCreditsUsed: mocks.showCreditsUsed } }),
 }));
+vi.mock('@client/app/contexts/UserSettingsContext', () => ({
+  useUserSettings: () => ({ settings: { contextTelemetryLevel: 'basic' } }),
+}));
 vi.mock('@client/app/contexts/SessionsContext', () => ({
   useSessions: () => ({ currentSession: null, setCurrentSession: vi.fn() }),
   useWorkBenchFiles: () => [],
