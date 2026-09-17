@@ -497,6 +497,66 @@ application, and the budget walk - is hand-mirrored here and pinned only by comm
 the served scan today, and the budget walk is the one place it knowingly does not (see the
 pre-defang caveat above).
 
+### NEW: the gate neither floor can be - retrieval volume that responds to the question
+
+Both floors above answer "how high is high enough" with a line whose position depends on knowing
+where the band sits. Neither can answer a different question: **does the amount retrieved respond to
+what was asked?** Measured on production, it does not - the injected chunk count was 30 or 31 on
+every turn against a given lake set across ~250 turns, for narrow single-fact questions and broad
+multi-part ones alike. The count tracked the character budget, because the budget was the only thing
+that ever stopped.
+
+The arithmetic in point 2 above says why, and it is not a tuning miss. A relative floor is a
+fraction of the top score, so it can only cut when `topScore * relativeFloor` lands inside the band.
+On the ada-002 production lake the per-turn spread is ~0.0279 against a top near 0.77, putting rank
+10 at ~96% of rank 1 - no setting of a fraction-of-top floor discriminates inside a band that tight
+without also discarding rank 2. The absolute floor has the same problem from the other side, and
+#471 moves the band out from under any value fitted today.
+
+`forcedRetrievalSpreadFloorPct` is a third gate with a different shape. It measures DOWN from the
+turn's top score in units of that turn's own top-to-median span:
+
+    cutoff = topScore - spreadFloor * (topScore - median of every score compared)
+
+Two properties follow, and they are why it exists rather than being a fourth number to tune:
+
+- **It is affine-invariant.** "Keep what is within half the distance from the best score to a
+  typical one" is the same cut whether the band is ada-002's 0.80-0.91 or 3-small's 0.23-0.56. It
+  needs no `FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE` entry and no re-tune after #471, which is
+  what every other floor in this document has needed.
+- **Its survivor count is a property of the question.** A question one passage answers sharply
+  leaves that passage far above the median and admits few; a question the corpus answers diffusely
+  leaves many passages bunched near the top and admits many. Both other floors are functions of the
+  top score alone, so at a fixed setting they cut the same fraction of any band - they cannot tell
+  those two turns apart.
+
+The median is taken over EVERY score compared, not over the pool that cleared the absolute floor:
+gating the population first would make the background a function of the floor this gate exists to be
+independent of. One consequence for anyone reading a small fixture: the statistic only behaves like a
+background when most of what was scanned is irrelevant, which is true of a real scan (thousands of
+chunks, a handful of hits) and false of a 4-chunk toy, where the median lands inside the hit cluster.
+
+It cannot black out a space, which is what makes it safe to key on a statistic of the turn's own
+pool: the cutoff interpolates between two scores that both came from the pool, so it never exceeds
+the top score, and the best candidate always clears its own cutoff. Worst case at any setting is one
+passage, never none.
+
+**It ships OFF (`FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT` = 0) and no magnitude is claimed here.**
+The mechanism is scale-free; a specific percent is not, and picking one needs the same captured
+production lake that #2572 item 4b needs for the other two. What ships alongside it is the
+instrument: `--floors` takes an optional third component (`85:75:40`, omitted meaning off), and the
+sweep prints `spread-bound` and `spread cut @` beside the relative floor's columns.
+
+The column to read for this question is **`sd`**, the standard deviation of the accepted count across
+queries - new, and the only column in the table that is not about how much retrieval admits. A
+configuration can post a healthy recall, a healthy precision and `sd` of 0.0, and that configuration
+is a fixed-size dump that happens to be sized well on average. That is what production is doing
+today, and `sd` is how a candidate floor is judged to have fixed it.
+
+Production turns now record `injected.backgroundScore` beside `injected.topScore`, so the spread
+distribution a value has to be chosen from is collected on live traffic whether or not the floor is
+ever switched on.
+
 ## Out of scope
 
 This harness measures. It does not change anything. Flipping `defaultEmbeddingModel`, re-embedding the

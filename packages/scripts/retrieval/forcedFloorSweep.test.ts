@@ -24,41 +24,67 @@ const chunkAt = (cosine: number, chunkId: string, docId = chunkId, charLength = 
 
 const QUERY = { id: 'q01', vector: [1, 0] };
 
+/**
+ * A mass of off-topic chunks, so the median score is a background and not one of the hits. Every
+ * spread-floor case needs one: that gate reads the turn's own distribution, and a pool where the
+ * relevant chunks are a large fraction of the whole is not the distribution a real scan produces.
+ */
+const BACKGROUND: FloorScorableChunk[] = Array.from({ length: 15 }, (_, i) =>
+  chunkAt(0.2 + i * 0.01, `bg${String(i).padStart(2, '0')}`)
+);
+
 describe('parseFloorConfigs', () => {
   it('parses a sweep of relativeFloorPct:minSimilarityPct points', () => {
     expect(parseFloorConfigs('0:0,85:75,95:0')).toEqual([
-      { relativeFloorPct: 0, minSimilarityPct: 0 },
-      { relativeFloorPct: 85, minSimilarityPct: 75 },
-      { relativeFloorPct: 95, minSimilarityPct: 0 },
+      { relativeFloorPct: 0, minSimilarityPct: 0, spreadFloorPct: 0 },
+      { relativeFloorPct: 85, minSimilarityPct: 75, spreadFloorPct: 0 },
+      { relativeFloorPct: 95, minSimilarityPct: 0, spreadFloorPct: 0 },
     ]);
+  });
+
+  it('reads an optional third component as the spread floor', () => {
+    expect(parseFloorConfigs('85:75:40,0:35:60')).toEqual([
+      { relativeFloorPct: 85, minSimilarityPct: 75, spreadFloorPct: 40 },
+      { relativeFloorPct: 0, minSimilarityPct: 35, spreadFloorPct: 60 },
+    ]);
+  });
+
+  it('defaults an omitted spread floor to 0, so a pre-existing --floors string measures what it did', () => {
+    expect(parseFloorConfigs('85:75')).toEqual([{ relativeFloorPct: 85, minSimilarityPct: 75, spreadFloorPct: 0 }]);
   });
 
   it('tolerates whitespace and trailing separators', () => {
     expect(parseFloorConfigs(' 0:0 , 90:75 ,')).toEqual([
-      { relativeFloorPct: 0, minSimilarityPct: 0 },
-      { relativeFloorPct: 90, minSimilarityPct: 75 },
+      { relativeFloorPct: 0, minSimilarityPct: 0, spreadFloorPct: 0 },
+      { relativeFloorPct: 90, minSimilarityPct: 75, spreadFloorPct: 0 },
     ]);
   });
 
-  it('requires exactly two components, since a missing one parses as a silent 0', () => {
+  it('requires two or three components, since a written-but-blank one parses as a silent 0', () => {
     // Number('') is 0 and Number.isInteger(0) is true, so "85:" would otherwise run an ungated
-    // absolute floor under the name of the 75 that was asked for.
+    // absolute floor under the name of the 75 that was asked for. An ABSENT third component is a
+    // different case and legitimately means 0 - see the default test above.
     expect(() => parseFloorConfigs('85:')).toThrow(/absolute floor/i);
     expect(() => parseFloorConfigs(':75')).toThrow(/relative floor/i);
-    expect(() => parseFloorConfigs('85:75:60')).toThrow(/exactly/i);
-    expect(() => parseFloorConfigs('85')).toThrow(/exactly/i);
+    expect(() => parseFloorConfigs('85:75:')).toThrow(/spread floor/i);
+    expect(() => parseFloorConfigs('85:75:60:5')).toThrow(/expected/i);
+    expect(() => parseFloorConfigs('85')).toThrow(/expected/i);
   });
 
-  it('rejects a floor outside 0-100, the unit both settings store', () => {
+  it('rejects a floor outside 0-100, the unit all three settings store', () => {
     expect(() => parseFloorConfigs('101:75')).toThrow(/relative floor/i);
     expect(() => parseFloorConfigs('85:101')).toThrow(/absolute floor/i);
     expect(() => parseFloorConfigs('-5:75')).toThrow(/relative floor/i);
     expect(() => parseFloorConfigs('85:0.75')).toThrow(/absolute floor/i);
+    expect(() => parseFloorConfigs('85:75:101')).toThrow(/spread floor/i);
+    expect(() => parseFloorConfigs('85:75:-1')).toThrow(/spread floor/i);
   });
 
   it('rejects an empty spec and a duplicated point', () => {
     expect(() => parseFloorConfigs('')).toThrow(/no configurations/i);
     expect(() => parseFloorConfigs('85:75,85:75')).toThrow(/duplicate/i);
+    // The dedupe key names all three floors, so these are two distinct points and not a duplicate.
+    expect(() => parseFloorConfigs('85:75,85:75:40')).not.toThrow();
   });
 
   it('accepts the shipped defaults and the zero-floor baseline', () => {
@@ -68,8 +94,16 @@ describe('parseFloorConfigs', () => {
 });
 
 describe('formatFloorConfig', () => {
-  it('labels a point with both floors named', () => {
-    expect(formatFloorConfig({ relativeFloorPct: 90, minSimilarityPct: 75 })).toBe('relative=90% absolute=75%');
+  it('labels a point with all three floors named', () => {
+    expect(formatFloorConfig({ relativeFloorPct: 90, minSimilarityPct: 75, spreadFloorPct: 40 })).toBe(
+      'relative=90% absolute=75% spread=40%'
+    );
+  });
+
+  it('prints an absent spread floor as 0 rather than omitting it, so two points cannot collide', () => {
+    expect(formatFloorConfig({ relativeFloorPct: 90, minSimilarityPct: 75 })).toBe(
+      'relative=90% absolute=75% spread=0%'
+    );
   });
 });
 
@@ -77,7 +111,7 @@ describe('applyFloors', () => {
   it('admits every non-negative candidate at the zero-floor baseline', () => {
     const outcome = applyFloors(QUERY, [chunkAt(0.9, 'a'), chunkAt(0.4, 'b')], ZERO_FLOOR_CONFIG);
     expect(outcome.accepted).toBe(2);
-    expect(outcome.binding).toBe('none');
+    expect(outcome.binding).toEqual([]);
     expect(outcome.cutRank).toBeNull();
   });
 
@@ -87,7 +121,7 @@ describe('applyFloors', () => {
     const outcome = applyFloors(QUERY, [chunkAt(0.9, 'a'), chunkAt(-0.3, 'b')], ZERO_FLOOR_CONFIG);
     expect(outcome.scoredCount).toBe(2);
     expect(outcome.accepted).toBe(1);
-    expect(outcome.binding).toBe('absolute');
+    expect(outcome.binding).toEqual(['absolute']);
   });
 
   it('cuts at a fraction of the turn top score, not at an absolute line', () => {
@@ -99,7 +133,7 @@ describe('applyFloors', () => {
     expect(outcome.relativeCutoff).toBeCloseTo(0.765, 4);
     expect(outcome.accepted).toBe(2);
     expect(outcome.cutRank).toBe(3);
-    expect(outcome.binding).toBe('relative');
+    expect(outcome.binding).toEqual(['relative']);
   });
 
   it('is inert when the whole band sits inside the floor, which is what the sweep exists to show', () => {
@@ -107,7 +141,7 @@ describe('applyFloors', () => {
     const outcome = applyFloors(QUERY, [chunkAt(0.914, 'a'), chunkAt(0.8025, 'b')], SHIPPED_CONFIG);
     expect(outcome.accepted).toBe(2);
     expect(outcome.cutRank).toBeNull();
-    expect(outcome.binding).toBe('none');
+    expect(outcome.binding).toEqual([]);
   });
 
   it('applies the absolute floor before the relative one, so the top score can outrank the pool', () => {
@@ -120,7 +154,7 @@ describe('applyFloors', () => {
     expect(outcome.topScore).toBeCloseTo(0.9, 4);
     expect(outcome.aboveAbsolute).toBe(1);
     expect(outcome.accepted).toBe(1);
-    expect(outcome.binding).toBe('absolute');
+    expect(outcome.binding).toEqual(['absolute']);
   });
 
   it('reads topScore across every scored candidate, including ones the absolute floor rejected', () => {
@@ -184,6 +218,99 @@ describe('applyFloors', () => {
     const outcome = applyFloors(QUERY, [chunkAt(0.9, 'a', 'a', 10)], ZERO_FLOOR_CONFIG, 10_000);
     expect(outcome.budgetStopRank).toBeNull();
     expect(outcome.charsAdmitted).toBe(10);
+  });
+
+  it('cuts on the spread floor where the relative floor is inert, which is the point of the gate', () => {
+    // The measured ada-002 shape, and the reason no background mass appears here: on that corpus
+    // the whole band sat at 0.8025-0.9140, so there IS no low tail for a median to fall into. Every
+    // score is within 15% of the top, putting 85% of top (0.777) below all of it. The top-to-median
+    // span is 0.005, and cutting 40% of the way down it lands at 0.912 - which still separates the
+    // two leaders from the rest, on a distribution where a fraction-of-top floor cannot.
+    const collapsed = [chunkAt(0.914, 'a'), chunkAt(0.912, 'b'), chunkAt(0.906, 'c'), chunkAt(0.904, 'd')];
+    const withoutSpread = applyFloors(QUERY, collapsed, { relativeFloorPct: 85, minSimilarityPct: 0 });
+    expect(withoutSpread.accepted).toBe(4);
+    expect(withoutSpread.binding).toEqual([]);
+
+    const withSpread = applyFloors(QUERY, collapsed, {
+      relativeFloorPct: 85,
+      minSimilarityPct: 0,
+      spreadFloorPct: 40,
+    });
+    expect(withSpread.backgroundScore).toBeCloseTo(0.909, 4);
+    expect(withSpread.spreadCutoff).toBeCloseTo(0.912, 4);
+    expect(withSpread.accepted).toBe(2);
+    expect(withSpread.spreadCutRank).toBe(3);
+    expect(withSpread.binding).toEqual(['spread']);
+  });
+
+  it('admits more on a diffuse question than a sharp one at the same floor, which no fixed line does', () => {
+    // Same floor, same corpus size, same top score, same background mass. The only difference is
+    // the SHAPE near the top: one question has a single standout, the other has four near-equals.
+    // A fraction-of-top floor cannot tell those apart, and a fixed cosine line certainly cannot.
+    //
+    // The background mass is what makes this realistic rather than a toy. A scan reaches thousands
+    // of chunks of which a handful are relevant, so the median sits deep in the irrelevant tail.
+    // Over a pool small enough that the relevant chunks ARE half of it, the median lands inside the
+    // relevant cluster and the gate reads the corpus, not the question - see the pool-cap caveat in
+    // MODEL-COMPARISON.md for the same distinction in the live measurement.
+    const config = { relativeFloorPct: 0, minSimilarityPct: 0, spreadFloorPct: 50 };
+    const sharp = applyFloors(QUERY, [chunkAt(0.9, 'top'), ...BACKGROUND], config);
+    const diffuse = applyFloors(
+      QUERY,
+      [chunkAt(0.9, 'n1'), chunkAt(0.88, 'n2'), chunkAt(0.86, 'n3'), chunkAt(0.84, 'n4'), ...BACKGROUND],
+      config
+    );
+    expect(sharp.accepted).toBe(1);
+    expect(diffuse.accepted).toBe(4);
+  });
+
+  it('never empties a pool, at any spread floor, because the cutoff cannot exceed the top score', () => {
+    for (const spreadFloorPct of [1, 25, 50, 85, 99, 100]) {
+      const outcome = applyFloors(QUERY, [chunkAt(0.9, 'a'), chunkAt(0.1, 'b')], {
+        relativeFloorPct: 0,
+        minSimilarityPct: 0,
+        spreadFloorPct,
+      });
+      expect(outcome.accepted).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it('reads the background over every scored chunk, not over the pool the absolute floor left', () => {
+    // If the background were read off the surviving pool it would move with the absolute floor -
+    // making the spread floor a function of the very gate it exists to be independent of.
+    const chunks = [chunkAt(0.9, 'a'), chunkAt(0.8, 'b'), chunkAt(0.2, 'c'), chunkAt(0.1, 'd')];
+    const ungated = applyFloors(QUERY, chunks, { relativeFloorPct: 0, minSimilarityPct: 0, spreadFloorPct: 50 });
+    const gated = applyFloors(QUERY, chunks, { relativeFloorPct: 0, minSimilarityPct: 75, spreadFloorPct: 50 });
+    // Median of all four scores either way: (0.8 + 0.2) / 2.
+    expect(ungated.backgroundScore).toBeCloseTo(0.5, 4);
+    expect(gated.backgroundScore).toBeCloseTo(0.5, 4);
+    expect(gated.spreadCutoff).toBeCloseTo(ungated.spreadCutoff, 4);
+  });
+
+  it('does not cut when every score is identical, since a zero span measures no signal', () => {
+    const outcome = applyFloors(QUERY, [chunkAt(0.9, 'a'), chunkAt(0.9, 'b'), chunkAt(0.9, 'c')], {
+      relativeFloorPct: 0,
+      minSimilarityPct: 0,
+      spreadFloorPct: 10,
+    });
+    expect(outcome.spreadCutoff).toBe(0);
+    expect(outcome.accepted).toBe(3);
+    expect(outcome.spreadCutRank).toBeNull();
+  });
+
+  it('leaves the spread floor off at 0, rather than cutting at the top score', () => {
+    const outcome = applyFloors(QUERY, [chunkAt(0.9, 'a'), chunkAt(0.1, 'b')], ZERO_FLOOR_CONFIG);
+    expect(outcome.spreadCutoff).toBe(0);
+    expect(outcome.accepted).toBe(2);
+  });
+
+  it('reports a background even while the floor is off, since that is what a value is chosen from', () => {
+    const outcome = applyFloors(QUERY, [chunkAt(0.9, 'a'), chunkAt(0.8, 'b'), chunkAt(0.1, 'c')], ZERO_FLOOR_CONFIG);
+    expect(outcome.backgroundScore).toBeCloseTo(0.8, 4);
+  });
+
+  it('reports no background when nothing scored', () => {
+    expect(applyFloors(QUERY, [], SHIPPED_CONFIG).backgroundScore).toBeUndefined();
   });
 });
 
@@ -261,13 +388,75 @@ describe('buildFloorSweepRow', () => {
     expect(row.relativeBoundShare).toBe(0);
     expect(row.budgetBoundShare).toBe(0);
     expect(row.meanCutRank).toBeNull();
+    expect(row.spreadBoundShare).toBe(0);
+    expect(row.meanSpreadCutRank).toBeNull();
+    expect(row.acceptedStdDev).toBe(0);
+  });
+
+  it('reports the spread floor as unbound when it is off', () => {
+    const row = buildFloorSweepRow({ config: ZERO_FLOOR_CONFIG, chunks, queries });
+    expect(row.spreadBoundShare).toBe(0);
+    expect(row.meanSpreadCutRank).toBeNull();
+  });
+
+  it('separates the spread floor cost from the other two', () => {
+    // top 0.90, scores 0.90/0.76/0.60, median 0.76 -> span 0.14, 50% down = 0.83: only 0.90 clears.
+    const row = buildFloorSweepRow({
+      config: { relativeFloorPct: 0, minSimilarityPct: 0, spreadFloorPct: 50 },
+      chunks,
+      queries,
+    });
+    expect(row.meanAboveAbsolute).toBe(3);
+    expect(row.meanAccepted).toBe(1);
+    expect(row.spreadBoundShare).toBe(1);
+    expect(row.meanSpreadCutRank).toBe(2);
+    expect(row.relativeBoundShare).toBe(0);
+  });
+
+  it('reports a zero accepted standard deviation for the constant-volume case this ticket is about', () => {
+    // Two questions, same corpus, no gate that responds to either: both accept the whole pool. That
+    // is a fixed-size dump, and `sd` is the only column in the row that says so.
+    const twoQueries = [
+      { id: 'q01', vector: [1, 0], supporting: ['docA'] },
+      { id: 'q02', vector: [0, 1], supporting: ['docB'] },
+    ];
+    const row = buildFloorSweepRow({ config: ZERO_FLOOR_CONFIG, chunks, queries: twoQueries });
+    expect(row.meanAccepted).toBe(3);
+    expect(row.acceptedStdDev).toBe(0);
+  });
+
+  it('reports a non-zero accepted standard deviation once a gate responds to the question', () => {
+    // The pair this ticket turns on, over ONE corpus: the ungated row admits the whole pool on both
+    // questions (sd 0, a fixed-size dump), and the same corpus under a spread floor admits a
+    // different count per question. Two 2-dim queries at right angles see the same chunks with
+    // differently-shaped score distributions, which is the cheapest honest way to vary the shape.
+    const shaped = [
+      chunkAt(0.9, 'n1', 'docA'),
+      chunkAt(0.88, 'n2', 'docB'),
+      chunkAt(0.86, 'n3', 'docC'),
+      chunkAt(0.84, 'n4', 'docD'),
+      ...BACKGROUND,
+    ];
+    const twoQueries = [
+      { id: 'q01', vector: [1, 0], supporting: ['docA'] },
+      { id: 'q02', vector: [0, 1], supporting: ['docB'] },
+    ];
+    const ungated = buildFloorSweepRow({ config: ZERO_FLOOR_CONFIG, chunks: shaped, queries: twoQueries });
+    expect(ungated.acceptedStdDev).toBe(0);
+
+    const gated = buildFloorSweepRow({
+      config: { relativeFloorPct: 0, minSimilarityPct: 0, spreadFloorPct: 50 },
+      chunks: shaped,
+      queries: twoQueries,
+    });
+    expect(gated.acceptedStdDev).toBeGreaterThan(0);
   });
 });
 
 describe('formatFloorSweepTable', () => {
   const chunks = [chunkAt(0.9, 'a', 'docA'), chunkAt(0.8, 'b', 'docB')];
   const queries = [{ id: 'q01', vector: [1, 0], supporting: ['docA'] }];
-  const row = (config: { relativeFloorPct: number; minSimilarityPct: number }) =>
+  const row = (config: { relativeFloorPct: number; minSimilarityPct: number; spreadFloorPct?: number }) =>
     buildFloorSweepRow({ config, chunks, queries });
 
   it('renders one row per floor pair under a Markdown header', () => {
@@ -289,7 +478,7 @@ describe('formatFloorSweepTable', () => {
     // A 0 relative floor skips the filter entirely. A 0 ABSOLUTE floor is a real line - it rejects
     // negative cosines - so labelling it "off" would claim the baseline row is the whole scored
     // pool when it is not.
-    expect(formatFloorSweepTable([row(ZERO_FLOOR_CONFIG)]).split('\n')[2]).toContain('| off | 0% |');
+    expect(formatFloorSweepTable([row(ZERO_FLOOR_CONFIG)]).split('\n')[2]).toContain('| off | 0% | off |');
   });
 
   it('prints "never" rather than a rank when the floor cuts nothing', () => {
@@ -297,10 +486,14 @@ describe('formatFloorSweepTable', () => {
     expect(formatFloorSweepTable([row(ZERO_FLOOR_CONFIG)]).split('\n')[2]).toContain('never');
   });
 
-  it('shows both floors with their units', () => {
-    expect(formatFloorSweepTable([row({ relativeFloorPct: 90, minSimilarityPct: 75 })]).split('\n')[2]).toContain(
-      '| 90% | 75% |'
-    );
+  it('shows all three floors with their units', () => {
+    expect(
+      formatFloorSweepTable([row({ relativeFloorPct: 90, minSimilarityPct: 75, spreadFloorPct: 40 })]).split('\n')[2]
+    ).toContain('| 90% | 75% | 40% |');
+  });
+
+  it('prints the accepted-count standard deviation, the column that says volume responds at all', () => {
+    expect(formatFloorSweepTable([row(ZERO_FLOOR_CONFIG)]).split('\n')[0]).toContain('| sd |');
   });
 
   it('renders a header even with no rows, so an empty run is visibly empty', () => {
