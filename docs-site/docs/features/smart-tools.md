@@ -27,6 +27,16 @@ The composer dropdown also exposes a **Smart / Fast** toggle:
 
 You can also explicitly ask the AI to use a specific tool (e.g., "search the web for..." or "generate an image of...").
 
+### Only tools I pick
+
+Besides the tools you switch on, the assistant sometimes adds one of its own when a message looks
+like it needs it - searching your files, navigating the app, or drafting a blog post. Turn on
+**Only tools I pick**, at the bottom of the tool list, to stop that. Tools you enabled yourself are
+unaffected, and so is knowledge retrieval: a notebook set up to search your documents still does.
+
+It is off by default. Turning it on also trims the tool instructions sent with each message, saving
+up to roughly 1,900 tokens on the turns where those extra tools would have been offered.
+
 ---
 
 ## Web & Research Tools

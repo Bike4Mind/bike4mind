@@ -6467,6 +6467,11 @@
           "anchor": "smart-vs-fast-mode"
         },
         {
+          "level": 3,
+          "text": "Only tools I pick",
+          "anchor": "only-tools-i-pick"
+        },
+        {
           "level": 2,
           "text": "Web & Research Tools",
           "anchor": "web-research-tools"
@@ -16156,6 +16161,11 @@
               "anchor": "smart-vs-fast-mode"
             },
             {
+              "level": 3,
+              "text": "Only tools I pick",
+              "anchor": "only-tools-i-pick"
+            },
+            {
               "level": 2,
               "text": "Web & Research Tools",
               "anchor": "web-research-tools"
@@ -19369,5 +19379,5 @@
       "accessLevel": "public"
     }
   ],
-  "version": "c17998030c4acb0a"
+  "version": "74db01922ebc9225"
 }
