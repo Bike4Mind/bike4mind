@@ -34,7 +34,7 @@
 import { renderRetrievedContentBlock } from '../../../dataLakeService/renderRetrievedContentBlock';
 import { GROUNDED_NO_INVENTION_RULE } from '../../prompts';
 
-const FIXTURE_SECTIONS: string[] = [
+export const FIXTURE_SECTIONS: string[] = [
   [
     '### Customer story - Larkfield Logistics (ID: fixture-customer-larkfield)',
     'Larkfield Logistics rolled the routing product out across their regional fleet in 2024. Across',
@@ -62,6 +62,22 @@ const FIXTURE_SECTIONS: string[] = [
     'shipment volume by 400 and rounding up. Nodes beyond that count buy redundancy, not throughput.',
   ].join('\n'),
 ];
+
+const NUMBER_TOKEN = /\d+(?:,\d{3})*(?:\.\d+)?/g;
+const CUSTOMER_STORY_NAME = /Customer story - ([^(]+?)\s*\(ID:/;
+
+/**
+ * Every figure and named customer this corpus actually documents, derived from `FIXTURE_SECTIONS`
+ * rather than hand-maintained beside it - so an edit to the sections cannot desynchronize this from
+ * what they say. `./grade`'s fourth claim (`inventedSpecific`) reads this to tell a reply that cites a
+ * real corpus figure apart from one that invents a new one.
+ */
+export const CORPUS_GROUND_TRUTH: { figures: string[]; entities: string[] } = {
+  figures: Array.from(new Set(FIXTURE_SECTIONS.flatMap(section => section.match(NUMBER_TOKEN) ?? []))),
+  entities: FIXTURE_SECTIONS.map(section => section.match(CUSTOMER_STORY_NAME)?.[1]).filter((name): name is string =>
+    Boolean(name)
+  ),
+};
 
 /**
  * Mirrors `ChatCompletionFeatures.ts` KnowledgeRetrievalFeature, default citation arm. The em dash is

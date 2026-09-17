@@ -14,6 +14,8 @@ import {
   IUserDocument,
   IUserRepository,
   Permission,
+  ShareableAccessShape,
+  grantablePermissions,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -38,7 +40,7 @@ interface CreateInviteAdapters {
   db: {
     // TODO: Use Invite model create type def
     invites: IInviteRepository;
-    users: Pick<IUserRepository, 'findAllByEmailsOrUsernames' | 'findById'>;
+    users: Pick<IUserRepository, 'findAllByEmailsOrUsernames' | 'findById' | 'findByIds'>;
     // add findShareAccessById to fabFiles
     fabFiles: Pick<IFabFileRepository, 'findByIdAndUserId' | 'shareable'>;
     sessions: Pick<ISessionRepository, 'findByIdAndUserId'>;
@@ -123,16 +125,46 @@ export const createInvite = async (
   if (!doc) throw new BadRequestError('Document not found');
   if (!name) throw new NotFoundError('no name');
 
+  // An invite must never carry a permission its minter does not hold, or a sharee with `share`
+  // could mint themselves `update`/`delete` and redeem the link. Scoped to the three shareable
+  // types: Organization and Group invites are membership grants gated by their own authority
+  // checks above, and their `users[]` means seats, not permission entries. The owner holds
+  // everything, so this is a no-op on the common path.
+  if (type === InviteType.FabFile || type === InviteType.Session || type === InviteType.Project) {
+    const held = grantablePermissions(doc as ShareableAccessShape, user.id, user.groups ?? []);
+    const overreach = rest.permissions.filter(permission => !held.has(permission));
+    if (overreach.length) {
+      throw new BadRequestError(`Cannot grant permissions you do not hold: ${overreach.join(', ')}`);
+    }
+  }
+
   const recipientsArray = recipients ?? [];
   const users = await db.users.findAllByEmailsOrUsernames(recipientsArray, recipientsArray);
   const isLinkOnlyInvite = recipients?.length === 0;
+  // Persisted so the view and accept gates can tell "names nobody by design" from "named somebody
+  // who did not resolve". `recipients` omitted entirely names nobody just as `[]` does, which is
+  // why this is not simply isLinkOnlyInvite (that one sizes `available` and is left as it was).
+  // Type-aware so it agrees with `isLinkOnlyInvite`'s legacy inference in @bike4mind/common: only
+  // FabFile and Session are shareable by link. A recipientless invite of any other type is a
+  // mistake, not a share link, and is refused below - this keeps the flag fail-closed regardless.
+  const namesNobody = recipientsArray.length === 0 && (type === InviteType.FabFile || type === InviteType.Session);
+
+  // Every other type always names people, so a recipientless invite there is a mistake, and one
+  // that persists: it stores isLinkOnly false with an empty `pending`, which both the view gate and
+  // the accept gate then refuse, leaving a row nobody can ever redeem. Refused at mint instead.
+  // Expressed against `namesNobody` rather than a second type list so the flag and the refusal
+  // cannot drift apart. InviteType.Tool has no arm in the switch above and dies on 'Document not
+  // found' long before this.
+  if (recipientsArray.length === 0 && !namesNobody) {
+    throw new BadRequestError('Recipients are required for this invite type');
+  }
 
   // By-Users sharing (FabFile/Session) sends real emails/usernames and must not silently
   // create a share nobody can see. Organization/Project invites send raw user ids through
-  // this same recipients array (Organization resolves them separately via inviteToOrg
-  // above); Group invites do not use recipients at all (membership authority is checked via
-  // assertCanManageOrgGroups above, and the join itself happens on accept - see accept.ts).
-  // None of that is this check's concern, so it stays scoped to FabFile/Session only.
+  // this same recipients array (Organization resolves them separately via inviteToOrg above);
+  // Group invites send emails/usernames but take their authority from assertCanManageOrgGroups,
+  // with the join itself happening on accept - see accept.ts. None of that is this check's
+  // concern, so it stays scoped to FabFile/Session only.
   let pending: string[];
   if ((type === InviteType.FabFile || type === InviteType.Session) && recipientsArray.length > 0) {
     // Per-recipient, not a shared matched-set: (1) a username match with no email is not
@@ -145,7 +177,12 @@ export const createInvite = async (
     const resolvable = users.filter((u): u is IUserDocument & { email: string } => Boolean(u.email));
     const resolved = recipientsArray.map(recipient => {
       const lower = recipient.toLowerCase();
-      const matches = resolvable.filter(u => u.email.toLowerCase() === lower || u.username.toLowerCase() === lower);
+      // A string containing '@' is an email address and resolves against the email field only.
+      // Usernames are self-set and unvalidated, so matching them against an email-shaped input
+      // lets someone claim another person's address and receive shares meant for them.
+      const matches = resolvable.filter(u =>
+        recipient.includes('@') ? u.email.toLowerCase() === lower : u.username.toLowerCase() === lower
+      );
       if (matches.length === 0) throw new BadRequestError(`Could not find a user for: ${recipient}`);
       if (matches.length > 1) throw new BadRequestError(`More than one user matches: ${recipient}`);
       return matches[0].email;
@@ -153,8 +190,31 @@ export const createInvite = async (
     // Dedupe: two recipient strings (an email and that same person's username) can resolve to
     // the same one user, and pending.length below counts unique resolved users, not raw entries.
     pending = Array.from(new Set(resolved));
+  } else if (type === InviteType.Project || type === InviteType.Organization) {
+    // Project and Organization invites carry raw user ids (the add-members modals send
+    // `recipients: [userId]`), which findAllByEmailsOrUsernames cannot resolve - it queries email
+    // and username only, never _id. Left unresolved, `pending` stayed empty and every gate keyed
+    // on it fell open: the invite read as "names nobody", so any authenticated holder of the id
+    // could view it and accept it. Emails/usernames are accepted here too so a caller that sends
+    // those instead of ids keeps working.
+    const byId = await db.users.findByIds(recipientsArray);
+    pending = Array.from(
+      new Set([...users, ...byId].map(u => u.email).filter((email): email is string => Boolean(email)))
+    );
+    // An invite naming only unresolvable recipients can never be viewed or accepted by anyone now
+    // that those gates key on `pending`, so fail loudly at mint time instead of persisting a row
+    // that silently does nothing.
+    if (pending.length === 0) throw new BadRequestError('Could not find a user for any recipient');
   } else {
     pending = users.map(user => user.email).filter((email): email is string => Boolean(email));
+    // Same refusal as the arm above, for the same reason - a Group invite naming only unresolvable
+    // recipients persists isLinkOnly false against an empty `pending`, which both gates then refuse,
+    // so the sharer is told it worked and nobody can ever redeem it. Conditioned on having named
+    // somebody: this arm also carries recipientless FabFile/Session share links, where an empty
+    // `pending` is the point.
+    if (recipientsArray.length > 0 && pending.length === 0) {
+      throw new BadRequestError('Could not find a user for any recipient');
+    }
   }
 
   // No caller sets `available` explicitly today. Defaulting it to a flat 1 regardless of
@@ -177,9 +237,14 @@ export const createInvite = async (
       refused: [],
     },
     accepted: 0,
+    isLinkOnly: namesNobody,
     name,
     // username of the user who is sharing instead of owner of the file
     username: user.username,
+    // Who minted the invite -- accept.ts's Session arm caps propagated file grants to
+    // what this user actually holds, so an attached file the inviter cannot share
+    // does not silently inherit the invite's permissions.
+    inviterId: user.id,
   };
 
   const invite = await db.invites.create(build);

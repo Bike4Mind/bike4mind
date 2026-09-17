@@ -27,6 +27,9 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   // the Team option is gated on the selected org matching it.
   useUser: () => ({ currentUser: { id: 'user-1', organizationId: 'org_42', showCreditsUsed: mocks.showCreditsUsed } }),
 }));
+vi.mock('@client/app/contexts/UserSettingsContext', () => ({
+  useUserSettings: () => ({ settings: { contextTelemetryLevel: 'basic' } }),
+}));
 vi.mock('@client/app/contexts/SessionsContext', () => ({
   useSessions: () => ({ currentSession: null, setCurrentSession: vi.fn() }),
   useWorkBenchFiles: () => [],
@@ -310,12 +313,13 @@ describe('MessageContent publish-and-share - visible action-bar button', () => {
     selectedAccountValue = null;
   });
 
-  it('renders the labeled button without opening any menu', () => {
+  it('renders the button without opening any menu', () => {
     renderMessageContent();
 
     const button = screen.getByTestId('message-publish-share-btn');
     expect(button).toBeInTheDocument();
-    expect(button).toHaveTextContent('Publish & Share');
+    // Icon-only, so the accessible name is what carries the label.
+    expect(button).toHaveAccessibleName('Publish & Share');
   });
 
   it('hides the button when the reply has no shareable content', () => {
@@ -394,20 +398,38 @@ describe('MessageContent report action - persistent affordance (#1869)', () => {
     expect(modal).toHaveAttribute('data-quest-id', 'quest-1');
   });
 
-  it('renders no "Reported" annotation when this message has no feedback on record', () => {
+  it('leaves the report button unannotated when this message has no feedback on record', () => {
     mocks.sessionFeedback = [];
 
     renderMessageContent();
 
-    expect(screen.queryByTestId('message-reported-chip')).not.toBeInTheDocument();
+    // The reported state lives on the button itself; the tooltip title is its
+    // accessible name, so that is what says which state it is in.
+    expect(screen.getByTestId('message-report-btn')).toHaveAccessibleName('Report an issue with this message');
   });
 
-  it('renders the "Reported" annotation when this message has a recorded report', () => {
+  it('marks the report button when this message has a recorded report', () => {
     mocks.sessionFeedback = [{ questId: 'quest-1' }];
 
     renderMessageContent();
 
-    expect(screen.getByTestId('message-reported-chip')).toBeInTheDocument();
+    expect(screen.getByTestId('message-report-btn')).toHaveAccessibleName('You already reported this message');
+  });
+
+  it('rests a reported message on the word, with the actions behind hover', () => {
+    mocks.sessionFeedback = [{ questId: 'quest-1' }];
+
+    renderMessageContent();
+
+    expect(screen.getByTestId('message-reported-badge')).toHaveTextContent('Reported');
+  });
+
+  it('shows no reported word when this message has no feedback on record', () => {
+    mocks.sessionFeedback = [];
+
+    renderMessageContent();
+
+    expect(screen.queryByTestId('message-reported-badge')).not.toBeInTheDocument();
   });
 
   it('does not annotate a message that was not itself reported', () => {
@@ -415,7 +437,7 @@ describe('MessageContent report action - persistent affordance (#1869)', () => {
 
     renderMessageContent();
 
-    expect(screen.queryByTestId('message-reported-chip')).not.toBeInTheDocument();
+    expect(screen.getByTestId('message-report-btn')).toHaveAccessibleName('Report an issue with this message');
   });
 
   // A send that failed leaves the bubble on its optimistic id with status 'done', so the action
@@ -453,7 +475,7 @@ describe('MessageContent report action - persistent affordance (#1869)', () => {
 
     renderMessageContent(optimisticMessageData);
 
-    expect(screen.queryByTestId('message-reported-chip')).not.toBeInTheDocument();
+    expect(screen.getByTestId('message-report-btn')).toHaveAccessibleName('Report an issue with this notebook');
   });
 
   it('invalidates the session-scoped feedback cache once the modal reports a successful submit', () => {

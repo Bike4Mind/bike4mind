@@ -50,8 +50,12 @@ const QuestMasterPreviewCard: React.FC<QuestMasterPreviewCardProps> = memo(({ on
 
       <Card
         variant="outlined"
-        sx={{
+        sx={theme => ({
           backgroundColor: 'background.level1',
+          // Same card recipe as the artifact cards and fenced code blocks: the fill
+          // stays the theme's own surface, with a brand-blue veil falling across it.
+          backgroundImage: `linear-gradient(180deg, ${theme.palette.reading.cardTintTop}, ${theme.palette.reading.cardTintBottom})`,
+          borderColor: theme.palette.reading.cardLine,
           borderRadius: '8px',
           position: 'relative',
           py: 1,
@@ -64,7 +68,7 @@ const QuestMasterPreviewCard: React.FC<QuestMasterPreviewCardProps> = memo(({ on
             transform: 'translateY(-2px)',
             boxShadow: 'sm',
           },
-        }}
+        })}
         onClick={handleOpenInViewer}
       >
         <Stack direction="row" spacing={1} alignItems="center" sx={{ width: '100%' }}>
