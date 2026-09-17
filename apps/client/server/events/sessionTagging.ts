@@ -118,11 +118,11 @@ export const handler = withEventContext(async (event, logger) => {
   // Find the first Quest document submitted by the user from the Session
   const quest = await questRepository.findOne({ sessionId: session.id });
   if (!quest) {
-    // This is expected for empty notebooks - mark as tagged with empty tags and return gracefully
-    logger.info(`No quests found for session ${sessionId} - marking as tagged with empty tags`);
-    session.tags = [];
-    session.taggedAt = new Date();
-    await sessionRepository.update({ id: session.id, tags: session.tags, taggedAt: session.taggedAt });
+    // Deliberately writes nothing. `taggedAt` records that tags were derived from a notebook's
+    // content, and none was read here - stamping it would close the spider's `!taggedAt` gate
+    // (spider.ts) forever on a notebook that was never tagged. `tags` is left alone because a
+    // clone or an import can legitimately carry tags into a notebook with no quests of its own.
+    logger.info(`No quests found for session ${sessionId} - nothing to tag yet`);
     return;
   }
 
@@ -187,16 +187,11 @@ export const handler = withEventContext(async (event, logger) => {
     // visibility change or soft-delete the owner made during it.
     await sessionRepository.update({ id: session.id, tags: session.tags, taggedAt: session.taggedAt });
   } else {
-    // Log the failure but don't throw - mark as attempted
+    // Logged, not thrown, and deliberately writes nothing. This branch fires on an empty as well
+    // as an unparseable completion, both transient, so neither the tags already on the session nor
+    // the spider's `!taggedAt` gate may be touched: a stamp would turn one bad completion into a
+    // permanent "already tagged", and a wipe would destroy tags a clone or an import carried in.
     logger.warn(`Failed to parse tags from LLM response for session ${sessionId}`);
     logger.debug(`Raw LLM response: ${tagsText?.substring(0, 500)}${(tagsText?.length || 0) > 500 ? '...' : ''}`);
-
-    // Stamp the attempt so the spider's `!taggedAt` gate stops retrying, but leave `tags` alone.
-    // Clearing them was invisible while strict mode dropped `taggedAt` - the spider re-tagged
-    // every notebook regardless, so a wipe healed itself on the next run. The stamp sticks now,
-    // and this branch also fires on an empty or unparseable completion, so wiping here would be
-    // permanent, silent loss of tags a clone or an import legitimately carried.
-    session.taggedAt = new Date();
-    await sessionRepository.update({ id: session.id, taggedAt: session.taggedAt });
   }
 });

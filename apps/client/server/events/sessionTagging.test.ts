@@ -1,8 +1,10 @@
 /**
  * `taggedAt` is a declared Session schema path, so every write in this handler now actually lands.
- * That makes the failure branch's bookkeeping load-bearing: while strict mode dropped the field,
- * the spider re-tagged every notebook on every run, so anything this handler got wrong healed
- * itself on the next pass. It no longer does, which is what these tests pin down.
+ * While strict mode dropped the field, the spider re-tagged every notebook on every run and
+ * anything this handler got wrong healed itself on the next pass; it no longer does. These tests
+ * pin the resulting invariant: the success branch is the handler's ONLY writer. Stamping
+ * `taggedAt` closes the spider's `!taggedAt` gate (spider.ts) for good, so only a branch that
+ * actually derived tags from the notebook's content may do it.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -87,49 +89,48 @@ describe('sessionTagging', () => {
     };
   });
 
-  it('writes tags and taggedAt together when the model returns usable tags', async () => {
+  it('writes tags, taggedAt and the identifying id when the model returns usable tags', async () => {
     h.completionText = ['[{"name": "pulsars", "strength": 9}]'];
 
     await run();
 
     expect(h.sessionUpdate).toHaveBeenCalledTimes(1);
     const written = h.sessionUpdate.mock.calls[0][0];
+    // `BaseModel.update` throws without it (b4m-core/db-core/src/models/BaseModel.ts), and the
+    // repository is mocked here, so nothing else in this file would catch a dropped id.
+    expect(written.id).toBe(SESSION_ID);
     expect(written.tags).toEqual([{ name: 'pulsars', strength: 9 }]);
     expect(written.taggedAt).toBeInstanceOf(Date);
   });
 
-  it('stamps taggedAt but leaves existing tags untouched when the response cannot be parsed', async () => {
-    h.completionText = ['I was unable to produce tags for this notebook.'];
+  // The three inputs below all land in the same failure branch. Each is transient: none of them
+  // is a verdict that the notebook has no tags, so none may clear tags or close the spider gate.
+  it.each([
+    ['an unparseable response', ['I was unable to produce tags for this notebook.']],
+    ['an empty completion', ['']],
+    ['a valid but empty JSON array', ['[]']],
+  ])('writes nothing on %s', async (_label, completion) => {
+    h.completionText = completion as string[];
 
     await run();
 
-    expect(h.sessionUpdate).toHaveBeenCalledTimes(1);
-    const written = h.sessionUpdate.mock.calls[0][0];
-    expect(written.taggedAt).toBeInstanceOf(Date);
-    expect(written).not.toHaveProperty('tags');
+    expect(h.sessionUpdate).not.toHaveBeenCalled();
     expect(h.session.tags).toEqual([{ name: 'inherited', strength: 5 }]);
   });
 
-  // An empty completion is a transient provider failure, not a verdict that the notebook has no
-  // tags - it must not be allowed to clear tags the session already carries.
-  it('does not clear tags when the completion comes back empty', async () => {
-    h.completionText = [''];
-
-    await run();
-
-    const written = h.sessionUpdate.mock.calls[0][0];
-    expect(written).not.toHaveProperty('tags');
-    expect(h.session.tags).toEqual([{ name: 'inherited', strength: 5 }]);
-  });
-
-  it('marks an empty notebook as tagged with no tags', async () => {
+  // A notebook with no quests never reached the model, so it has earned neither a stamp nor a
+  // tag wipe. Inherited tags are the destructive case: a clone or an import leaves them on a
+  // session that carries no quests of its own.
+  it.each([
+    ['inherited tags', [{ name: 'inherited', strength: 5 }]],
+    ['no tags', []],
+  ])('writes nothing for a notebook with no quests and %s', async (_label, tags) => {
     h.questFindOne.mockResolvedValue(null);
-    h.session.tags = [];
+    h.session.tags = tags;
 
     await run();
 
-    const written = h.sessionUpdate.mock.calls[0][0];
-    expect(written.tags).toEqual([]);
-    expect(written.taggedAt).toBeInstanceOf(Date);
+    expect(h.sessionUpdate).not.toHaveBeenCalled();
+    expect(h.session.tags).toEqual(tags);
   });
 });
