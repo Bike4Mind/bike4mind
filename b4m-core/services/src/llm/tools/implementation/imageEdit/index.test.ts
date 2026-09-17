@@ -223,5 +223,9 @@ describe('imageEditTool - OpenAI branch', () => {
       expect.anything(),
       expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5, background: 'transparent' })
     );
+    expect(context.onStart).toHaveBeenCalledWith(
+      'edit_image',
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5 })
+    );
   });
 });

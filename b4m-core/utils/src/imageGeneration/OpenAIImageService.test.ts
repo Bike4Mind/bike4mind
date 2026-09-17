@@ -521,6 +521,17 @@ describe('OpenAIImageService.generate gpt-image quality forwarding (#2742)', () 
     expect(params).not.toHaveProperty('quality');
   });
 
+  it('forwards background and output_format on the image-to-image branch too', async () => {
+    const params = await imageToImageParams({
+      model: ImageModels.GPT_IMAGE_1_5,
+      background: 'transparent',
+      output_format: 'png',
+    });
+
+    expect(params.background).toBe('transparent');
+    expect(params.output_format).toBe('png');
+  });
+
   it('logs a warning when a quality value is dropped, so the drop is observable', async () => {
     const debugSpy = vi.spyOn(Logger.globalInstance, 'debug');
 

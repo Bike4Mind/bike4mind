@@ -738,14 +738,22 @@ export class ImageGenerationService {
 
       // For GPT image models (except gpt-image-2 which supports flexible sizes),
       // normalize size to a valid GPT size. BFL sizes like '1440x810'
-      // can reach here if the user switched models without resetting their size selection.
-      const effectiveSize =
+      // can reach here if the user switched models without resetting their size selection,
+      // or if the transparent-background step-down above moved a gpt-image-2-only size
+      // (e.g. 2048x2048, 3840x2160) onto gpt-image-1.5.
+      const needsSizeNormalization =
         isGPTImageModel(model) &&
         !isGPTImage2Model(model) &&
         size &&
-        !(OPENAI_IMAGE_SIZES as readonly string[]).includes(size)
-          ? (OPENAI_IMAGE_SIZES[0] as string)
-          : size;
+        !(OPENAI_IMAGE_SIZES as readonly string[]).includes(size);
+      if (needsSizeNormalization) {
+        logger.debug('Normalizing image size not supported by the resolved model', {
+          resolvedModel: model,
+          requestedSize: size,
+          normalizedSize: OPENAI_IMAGE_SIZES[0],
+        });
+      }
+      const effectiveSize = needsSizeNormalization ? (OPENAI_IMAGE_SIZES[0] as string) : size;
 
       // Validate credits before proceeding
       let usageCostUsd = 0;

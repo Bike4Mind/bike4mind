@@ -21,6 +21,7 @@ import {
   IOrganizationDocument,
   ImageModerationIncident as ImageModerationIncidentInput,
   insufficientCreditsError,
+  ImageOutputFormatSchema,
 } from '@bike4mind/common';
 import {
   isImageServeable,
@@ -81,10 +82,7 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
     .prefault(BFL_SAFETY_TOLERANCE.DEFAULT),
   prompt_upsampling: z.boolean().optional().prefault(false),
   seed: z.number().nullable().optional(),
-  // Deliberately narrower than ImageOutputFormatSchema (no 'webp'): nothing on this path
-  // calls toNonWebpOutputFormat before forwarding to BFL/Gemini, so a webp value here
-  // would reach those APIs raw and be rejected.
-  output_format: z.enum(['jpeg', 'png']).optional().prefault('png'),
+  output_format: ImageOutputFormatSchema.nullable().optional().prefault('png'),
   width: z.number().optional(),
   height: z.number().optional(),
   aspect_ratio: z.string().optional(),
@@ -167,9 +165,24 @@ export class ImageEditService {
   public async invoke({ body, userId }: { body: z.infer<typeof EditImageRequestBodySchema>; userId: string }) {
     const now = new Date();
 
-    const { sessionId, prompt, model, questId, fabFileIds, organizationId, ...rest } =
-      EditImageRequestBodySchema.parse(body);
+    const {
+      sessionId,
+      prompt,
+      model: requestedModel,
+      questId,
+      fabFileIds,
+      organizationId,
+      ...rest
+    } = EditImageRequestBodySchema.parse(body);
     if (fabFileIds.length === 0) throw new BadRequestError('No fabFileIds provided');
+
+    // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
+    // gpt-image-2 rejects background: 'transparent' outright. Resolved here, before
+    // promptMeta is built, so the persisted model matches what actually renders and bills.
+    const model =
+      rest.background === 'transparent' && isGPTImage2Model(requestedModel)
+        ? ImageModels.GPT_IMAGE_1_5
+        : requestedModel;
 
     const session = await this.db.sessions.findById(sessionId);
     if (!session) throw new NotFoundError('Session not found');

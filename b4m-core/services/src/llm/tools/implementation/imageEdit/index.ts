@@ -357,7 +357,7 @@ Please select a supported edit model in your image settings modal.`;
 
       // Call onStart callback for credit validation
       await context.onStart?.('edit_image', {
-        model,
+        model: editModel,
         n,
         size,
         quality: imageConfig?.quality,
