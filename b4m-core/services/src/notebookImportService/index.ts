@@ -527,14 +527,20 @@ export class NotebookImportService {
         // path, and the only size available for it is the client-declared `file.size`, so gating on
         // it would blame the size or quota limit for what is really an unimplemented import.
         if (!file.content && file.contentUrl) {
+          // Never returns - see copyFileFromUrl. Whoever implements it has to gate and store there
+          // and then continue past this block, not fall into the "no content" throw below.
           await this.copyFileFromUrl(file.contentUrl, targetUserId, storageKeySuffix);
         }
         if (!file.content) {
           throw new Error('No content or URL provided for file');
         }
 
-        // Derived from string length alone, so nothing is allocated for a file the gates refuse.
-        // It over-counts malformed base64, which is the safe direction to refuse on but not to bill.
+        // Derived from string length alone, so nothing is allocated for a file the gates refuse -
+        // decoding first would allocate the buffer for exactly the payloads this gate exists to
+        // reject. The cost is that it counts characters that decode to nothing: line-wrapped base64
+        // (valid MIME, though our own exporter emits it unwrapped) measures ~2.6% over its decoded
+        // size and is refused that much early. Over-counting is the safe direction to refuse on but
+        // not to bill, hence the separate storedSize below.
         const gatedSize = Buffer.byteLength(file.content, 'base64');
 
         // `>=` and the MB-to-bytes conversion match fabFileService/create.ts. The measurement does
@@ -567,8 +573,10 @@ export class NotebookImportService {
         const filePath = `knowledge/${targetUserId}/${storageKeySuffix}`;
         await this.adapters.fileStorageService.uploadFile(filePath, bytes);
 
-        // Charged only once the bytes are in storage, so a file that fails to store cannot spend
-        // another file's headroom.
+        // Charged once the upload returns, so a file that fails to store cannot spend another file's
+        // headroom. Deliberately above the row write rather than below it: the bytes are in the
+        // bucket either way, so a file whose row write fails has still consumed storage and must
+        // still count against the files behind it.
         this.admittedBytes += storedSize;
 
         // No `id`: FabFile has no such path, so the store assigns one.
