@@ -7,6 +7,7 @@ import {
 } from '@client/lib/subscriptions/types';
 import { IUserSubscription } from '@client/lib/userSubscriptions/types';
 import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
+import { rethrowStripeRejection } from '@server/integrations/stripe/errors';
 import { stripe } from '@server/integrations/stripe/stripe';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
@@ -39,14 +40,7 @@ async function cancelAtStripe(subscriptionId: string): Promise<Stripe.Subscripti
       ? await stripe.subscriptions.cancel(subscriptionId)
       : await stripe.subscriptions.update(subscriptionId, { cancel_at_period_end: true });
   } catch (error) {
-    // StripeError exposes `statusCode`, not `status`, so the shared error handler
-    // cannot map it and reports a 500 - which trips the LiveOps alarm for what is
-    // a user-facing rejection. Only a real rejection is remapped: an auth, rate
-    // limit or Stripe-side fault keeps its 5xx so it still alarms.
-    if (error instanceof Stripe.errors.StripeInvalidRequestError) {
-      throw new BadRequestError(`Stripe rejected the cancellation: ${error.message}`);
-    }
-    throw error;
+    rethrowStripeRejection(error, 'Stripe rejected the cancellation');
   }
 }
 

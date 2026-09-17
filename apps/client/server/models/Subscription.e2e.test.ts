@@ -150,3 +150,88 @@ describe('findCancelableUserSubscriptionByPriceId', () => {
     expect(found?.subscriptionId).toBe('admin_grant_abc');
   });
 });
+
+/**
+ * Real-query guard for findChangeableUserSubscription.
+ *
+ * The change route's own suite mocks the repository wholesale, so only a real
+ * `find` against a real collection pins that the deny-list is applied (reverting
+ * it to `status: 'active'` would re-hide a trialing/past_due caller) and that the
+ * pick is the same one the UI displays as "the" plan.
+ */
+describe('findChangeableUserSubscription', () => {
+  it.each(['active', 'trialing', 'past_due', 'unpaid', 'incomplete', 'paused'] as const)(
+    'returns a %s row, which the active-only lookup hid',
+    async status => {
+      await Subscription.create(row({ status }));
+
+      const found = await subscriptionRepository.findChangeableUserSubscription('user_1');
+
+      expect(found?.status).toBe(status);
+    }
+  );
+
+  // Spelled out rather than derived from TERMINAL_SUBSCRIPTION_STATUSES: generating
+  // the cases from the set under test means narrowing it only drops cases, never
+  // fails one.
+  it.each(['canceled', 'incomplete_expired'] as const)('does not return a %s row', async status => {
+    await Subscription.create(row({ status }));
+
+    const found = await subscriptionRepository.findChangeableUserSubscription('user_1');
+
+    expect(found).toBeNull();
+  });
+
+  it('does not match another owner', async () => {
+    await Subscription.create(row({ ownerId: 'user_2', status: 'trialing' }));
+
+    const found = await subscriptionRepository.findChangeableUserSubscription('user_1');
+
+    expect(found).toBeNull();
+  });
+
+  it('prefers the Stripe row over an active admin grant', async () => {
+    // The displayed-row rule: an admin grant is not what Stripe is billing, so a
+    // comp landing beside a real row must not become the thing the route mutates.
+    await Subscription.create(row({ status: 'active', source: 'admin_grant', subscriptionId: 'admin_grant_abc' }));
+    await Subscription.create(row({ status: 'past_due', source: 'stripe', subscriptionId: 'sub_dunned' }));
+
+    const found = await subscriptionRepository.findChangeableUserSubscription('user_1');
+
+    expect(found?.subscriptionId).toBe('sub_dunned');
+  });
+
+  it('still returns an admin grant when it is the only row, so the route can reject it', async () => {
+    await Subscription.create(row({ status: 'active', source: 'admin_grant', subscriptionId: 'admin_grant_abc' }));
+
+    const found = await subscriptionRepository.findChangeableUserSubscription('user_1');
+
+    expect(found?.subscriptionId).toBe('admin_grant_abc');
+  });
+
+  it('prefers the active row over a stale delinquent one', async () => {
+    // The active row is created FIRST, so the newest-first tie-break would pick the
+    // stale row and only the active-first rule passes. The reverse order passed
+    // either way and pinned nothing.
+    await Subscription.create(row({ status: 'active', subscriptionId: 'sub_live' }));
+    await new Promise(resolve => setTimeout(resolve, 5));
+    await Subscription.create(row({ status: 'unpaid', subscriptionId: 'sub_stale' }));
+
+    const found = await subscriptionRepository.findChangeableUserSubscription('user_1');
+
+    expect(found?.subscriptionId).toBe('sub_live');
+  });
+
+  it('breaks a tie between two non-terminal rows by newest first', async () => {
+    // `past_due` sorts before `unpaid` in the status index, so inserting the
+    // past_due row first makes the index scan and createdAt disagree - the test only
+    // passes if the sort is actually applied.
+    await Subscription.create(row({ status: 'past_due', subscriptionId: 'sub_old' }));
+    await new Promise(resolve => setTimeout(resolve, 5));
+    await Subscription.create(row({ status: 'unpaid', subscriptionId: 'sub_new' }));
+
+    const found = await subscriptionRepository.findChangeableUserSubscription('user_1');
+
+    expect(found?.subscriptionId).toBe('sub_new');
+  });
+});

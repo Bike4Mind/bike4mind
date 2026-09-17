@@ -18,12 +18,12 @@ export enum SubscriptionSource {
  * Statuses Stripe will not move a subscription out of. A row in one of these is
  * finished: there is nothing left to cancel and Stripe rejects further updates.
  *
- * Scoped to the cancel path: its complement is what
- * `findCancelableUserSubscriptionByPriceId` and the cancel affordance filter on,
- * so a delinquent user can still stop their own dunning. Do NOT widen "does this
- * user have a plan" checks to that complement - entitlement, rate-tier and
- * plan-change checks are deliberately `status === 'active'`-only, and
- * `server/entitlements/index.ts` records why.
+ * Scoped to the rows a route may act on: its complement is what
+ * `findCancelableUserSubscriptionByPriceId` and `findChangeableUserSubscription`
+ * filter on, so a delinquent user can still stop their own dunning or move plan.
+ * Do NOT widen "does this user have a plan" checks to that complement -
+ * entitlement, rate-tier and the change affordance are deliberately
+ * `status === 'active'`-only, and `server/entitlements/index.ts` records why.
  */
 export const TERMINAL_SUBSCRIPTION_STATUSES: ReadonlySet<Stripe.Subscription.Status> = new Set([
   'canceled',
@@ -51,7 +51,8 @@ type DisplayableSubscription = {
  * can be displayed as the current plan.
  *
  * Mirrors the precedence in `findCancelableUserSubscriptionByPriceId`
- * (`server/models/Subscription.ts`); the two must agree on which row is "the" plan.
+ * (`server/models/Subscription.ts`), and `findChangeableUserSubscription`
+ * delegates to it - the three must agree on which row is "the" plan.
  * That includes the Stripe-managed-first rule: an admin grant is not what Stripe is
  * billing or dunning, and a grant can sit beside the real delinquent Stripe row at
  * the same price (`grant-subscription.ts` only refuses a comp when an *active* row
@@ -210,6 +211,14 @@ export interface ISubscriptionRepository extends BaseRepository<ISubscription & 
    * A Stripe-managed row wins over an admin grant, then active over stale.
    */
   findCancelableUserSubscriptionByPriceId(priceId: string, userId: string): Promise<ISubscription | null>;
+
+  /**
+   * Find the user subscription a plan change should act on: the displayed plan
+   * (`pickDisplayedSubscription`), out of the non-terminal rows. Unlike
+   * findActiveUserSubscriptions this surfaces a trialing/past_due/paused row,
+   * which Stripe still accepts a price change on.
+   */
+  findChangeableUserSubscription(userId: string): Promise<ISubscription | null>;
 
   updateByStripeSubscriptionId(subscriptionId: string, data: Partial<ISubscription>): Promise<ISubscription | null>;
 }
