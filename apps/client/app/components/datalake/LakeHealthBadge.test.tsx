@@ -22,6 +22,8 @@ const predicates = (over?: Partial<Record<string, unknown>>) => ({
   ...over,
 });
 
+const serving = (status = 'active') => ({ status, servesRetrieval: status === 'active' });
+
 describe('deriveLakeHealthBadge', () => {
   it('is unknown when nothing is measured (share null), never a false low score', () => {
     expect(deriveLakeHealthBadge({ reachableShare: null, predicates: predicates() })).toBe('unknown');
@@ -77,9 +79,36 @@ describe('deriveLakeHealthBadge', () => {
   it('stays "unknown" only for a genuinely clean, unmeasured lake', () => {
     expect(deriveLakeHealthBadge({ reachableShare: null, predicates: predicates() })).toBe('unknown');
   });
+
+  it('is notServing for a non-active lake however good its corpus is', () => {
+    // The lake is perfectly ingested and serves nothing: retrieval is gated on status === 'active'
+    // in the tag pre-filter and at session binding, neither of which any predicate can see.
+    expect(deriveLakeHealthBadge({ reachableShare: 1, predicates: predicates(), serving: serving('draft') })).toBe(
+      'notServing'
+    );
+    expect(deriveLakeHealthBadge({ reachableShare: 1, predicates: predicates(), serving: serving('archived') })).toBe(
+      'notServing'
+    );
+  });
+
+  it('outranks a corpus defect, which is not why the lake is silent', () => {
+    expect(
+      deriveLakeHealthBadge({
+        reachableShare: 0.1,
+        predicates: predicates({ serveCapMeetsPolicy: 'fail' }),
+        serving: serving('archived'),
+      })
+    ).toBe('notServing');
+  });
+
+  it('grades normally for an active lake, and for a cached response with no serving field', () => {
+    expect(deriveLakeHealthBadge({ reachableShare: 1, predicates: predicates(), serving: serving() })).toBe('healthy');
+    expect(deriveLakeHealthBadge({ reachableShare: 1, predicates: predicates() })).toBe('healthy');
+  });
 });
 
 const health = (over?: Record<string, unknown>) => ({
+  serving: serving(),
   policy: { chunkTokenTarget: 512, source: 'inherited', policyChars: 3072, serveCap: 3072, serveCapBelowPolicy: false },
   predicates: predicates(),
   reachableShare: 1,
@@ -195,6 +224,18 @@ describe('LakeHealthBadge render', () => {
     const badge = screen.getByTestId('datalake-health-badge-l1');
     expect(badge).toHaveTextContent('needs attention');
     expect(badge).not.toHaveTextContent('not measured');
+    expect(badge).not.toHaveTextContent('Reachable');
+  });
+
+  it('labels a non-active lake with the status that is keeping it silent', () => {
+    useGetDataLakeHealth.mockReturnValue({ data: health({ serving: serving('draft') }), isLoading: false });
+    render(
+      <Wrapper>
+        <LakeHealthBadge lakeId="l1" />
+      </Wrapper>
+    );
+    const badge = screen.getByTestId('datalake-health-badge-l1');
+    expect(badge).toHaveTextContent('Not serving: draft');
     expect(badge).not.toHaveTextContent('Reachable');
   });
 });

@@ -9,7 +9,7 @@ import {
   Connection,
 } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
-import { StatusManager } from '@bike4mind/services';
+import { StatusManager } from '@bike4mind/services/llm';
 import { ClientMessageSender, getSettingsByNames } from '@bike4mind/utils';
 import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
 import { resolveRapidModel } from '@server/rapidReply/resolveRapidModel';

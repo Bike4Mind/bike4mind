@@ -31,10 +31,15 @@
  * answer live in different sentences - "that is not in the retrieved content" then "that does not mean
  * it did not happen" - and the second must not be read as the denial the first avoided.
  *
- * `suppliedTheClaim` is the fourth class and the newest. Denial and supply are the two halves of ONE
- * instruction - "report the gap and leave the claim open" - so they live in one grader: a grader that
- * scores only the denial half lets a reword trade one for the other invisibly, which is exactly how
- * the supply failure shipped. Only `gradeMustNotDenyPremise` reads it; see `gradeMustAnswer`.
+ * `suppliedTheClaim` and `inventedSpecific` are the two supply classes, reached from opposite ends:
+ * `inventedSpecific` sees a NOVEL token (a percentage, a money amount, a capitalized name) that neither
+ * the corpus nor the question attests, and `suppliedTheClaim` sees the STRUCTURE the token is wrapped
+ * in - a generalisation, an outside-knowledge frame, a cause phrase - which reaches a qualitative
+ * elaboration carrying no novel token at all. Neither subsumes the other; see `GROUNDED_CLAIMS`. Denial
+ * and supply are the two halves of ONE instruction - "report the gap and leave the claim open" - so
+ * they live in one grader: a grader that scores only the denial half lets a reword trade one for the
+ * other invisibly, which is exactly how the supply failure shipped. Only `gradeMustNotDenyPremise`
+ * reads either; see `gradeMustAnswer`.
  *
  * WHAT IT MISSES, stated plainly because the set is narrow on purpose. It reads two signals: a
  * PERCENTAGE in neither the corpus nor the user's own question, and a general-knowledge FRAME. A
@@ -135,9 +140,15 @@
  */
 
 import { sentences } from '../harness';
-import { CORPUS_FIGURES, figuresIn, normaliseFigure } from './corpus';
+import { CORPUS_FIGURES, CORPUS_GROUND_TRUTH, figuresIn, normaliseFigure } from './corpus';
 
-const GROUNDED_CLAIMS = ['deniedPremise', 'namedTheGap', 'declined', 'suppliedTheClaim'] as const;
+// Two fourth classes, arrived at independently and kept as a union: `inventedSpecific` catches a novel
+// figure or named entity (a percentage or money amount, or a capitalized name) and `suppliedTheClaim`
+// catches the same failure by the STRUCTURAL shape it is written in - a generalisation, a frame, a
+// cause phrase, a percentage outside the corpus. Neither contains the other: the entity/figure check
+// sees a supply carrying no frame phrase, and the structural check sees a qualitative elaboration
+// carrying no novel token. A reply can carry both.
+const GROUNDED_CLAIMS = ['deniedPremise', 'namedTheGap', 'declined', 'inventedSpecific', 'suppliedTheClaim'] as const;
 export type GroundedClaim = (typeof GROUNDED_CLAIMS)[number];
 
 /**
@@ -817,8 +828,12 @@ function isNonFiniteVerb(word: string): boolean {
  *    in `grade.test.ts` at their current verdict, and measured in the report;
  *  - the same reading opens the modifier run whose preposition governs a BARE content word
  *    ("...RATIONALISING daily ACROSS depot routes."), which is graded clean for the reason the
- *    multi-word bare object is. The determiner-led run ("...daily ACROSS THE region.") stays caught,
- *    and both spellings are pinned in `grade.test.ts`.
+ *    multi-word bare object is. The run stays caught only when the preposition opens a noun phrase
+ *    headed by one of `PHRASE_HEAD`'s determiners ("...daily ACROSS THE region."), which is what that
+ *    set is: a quantifier or a numeral head ("across SEVERAL depots", "across TWO depots") is read as
+ *    the predicate and grades clean, the same class as the bare head above. All three spellings are
+ *    pinned in `grade.test.ts` at their current verdict; the comment here and the test's used to say
+ *    "the determiner-led run stays caught", which read as the whole class.
  */
 function canHeadPredicate(tokens: string[], i: number): boolean {
   const next = tokens[i + 1];
@@ -1060,9 +1075,23 @@ function causePhraseSegments(clause: string): Array<[number, number]> {
  *
  * `outside` and `beyond` are negators here for the same reason `not` is: "are typically OUTSIDE what I
  * am able to verify" refuses without a negative particle anywhere in it.
+ *
+ * TWO OF THE FOUR ARMS ARE GRAMMATICAL CLASSES, not vocabulary, and the arm that was a list of
+ * first-person frames was read by a reviewer as the defect this module states seven rounds running: a
+ * closed set asked to carry a role, firing on a mention of its vocabulary. The reviewer's five rows all
+ * refuse an outside source and all failed, because the complement happened to be spelled somewhere the
+ * list did not reach - "outside WHAT THE REGISTER COVERS", "not AMONG THE SOURCES I HAVE". What
+ * separates a refusal from a hedge is not which words the complement uses but what KIND of thing it is:
+ * a refusal denies the source's membership of, or availability to, the evidence base, and its
+ * complement is a wh-clause ("what the register covers") or a boundary preposition ("among", "outside",
+ * "beyond", "within", "part of"). A hedge denies a QUALITY and its complement is a bare adjective or
+ * measure ("not far off", "not unusual") - so it matches neither arm and keeps failing, which is the
+ * direction `grade.test.ts` pins. Neither class is extendable by thought of a paraphrase the way a verb
+ * list is; that is the point.
  */
 const REFUSED_COMPLEMENT =
-  String.raw`(?:(?:something|anything|nothing|what|things?|one|ones)\s+(?:I|we)\b|(?:mine|ours)\b` +
+  String.raw`(?:(?:something|anything|nothing|what|which|things?|one|ones)\b|(?:mine|ours)\b` +
+  String.raw`|(?:outside|beyond|among|amongst|within|part\s+of|one\s+of|included\s+in)\b` +
   String.raw`|(?:\w+\s+){0,2}?(?:consulted|used|drawn\s+on|relied\s+on|quoted|cited|sourced|available\s+to\s+(?:me|us))\b)`;
 
 const SUBJECT_REFUSED = new RegExp(
@@ -1238,23 +1267,113 @@ function claimsInSentence(sentence: string): GroundedClaim[] {
   return claims;
 }
 
+const NUMBER_TOKEN = /\d+(?:,\d{3})*(?:\.\d+)?/g;
+// Only a CLAIM-shaped figure: a percentage or a money amount. The rule's own enumeration is "deal,
+// price, or figure", and every result this corpus documents is one of those - so a bare count ("5
+// documents"), a year, or a list ordinal is ordinary prose and must not read as a fabricated result.
+// Scoping the detector rather than its call sites is also what keeps the `derive/` cases clean: a
+// correct "2,000 / 400 = 5 nodes" supplies no percentage and no price, so it registers nothing.
+const CLAIM_FIGURE = /\$\s*\d+(?:,\d{3})*(?:\.\d+)?|\d+(?:,\d{3})*(?:\.\d+)?\s*%/g;
+// A coarse two-or-more-consecutive-capitalized-word heuristic, not real NER: good enough to catch an
+// invented customer or organization name without a corpus of its own to check against, and cheap
+// enough to false-positive on this eval's own vocabulary rather than a real name - which is exactly
+// what STRUCTURAL_PHRASES exists to absorb.
+//
+// The phrase may not START on a capitalized function word, which is a narrowing and not a word list.
+// Without it `The CRM is usually where a pilot like that gets recorded` - an honest pointer, and the
+// fixture the structural supply class is written around - matched on `The CRM`, so the union of the two
+// supply classes failed a correct reply the structural class alone passes. A determiner or coordinator
+// is not part of a name; the entity behind it still matches on its own, and STRUCTURAL_PHRASES still
+// absorbs the phrases this eval writes itself.
+const PROPER_NOUN_PHRASE =
+  /\b(?!(?:The|This|That|These|Those|A|An|Our|Your|Their|Its|But|And|So)\s)[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)+\b/g;
+const STRUCTURAL_PHRASES = new Set([
+  'Knowledge Base',
+  'Retrieved Context',
+  'Retrieved Content',
+  'Reference Facts',
+  'Customer Story',
+  'Deployment Guide',
+  'Competitive Comparison',
+]);
+
+function matchAll(pattern: RegExp, text: string): string[] {
+  return text.match(pattern) ?? [];
+}
+
+// "8.0%" and "8%" are the same claim about the same corpus figure, so compare numerically rather than
+// as text - an exact string lookup read the restatement as an invention.
+function figureValue(token: string): number {
+  return Number(token.replace(/[^0-9.]/g, ''));
+}
+
+/**
+ * Redact every phrase the reply is ALLOWED to use, then look at what capitalized phrases remain.
+ * Extracting first and comparing after is what made this unusable: `PROPER_NOUN_PHRASE` is greedy, so
+ * a leading capitalized word fuses onto an allowed phrase ("But Meridian Foods", "The Knowledge
+ * Base") and the exact-match lookup misses it. That flagged correct replies for repeating the name
+ * the case itself supplied - the very thing the corpus-union allowance exists to permit - and it
+ * defeated STRUCTURAL_PHRASES in the position those phrases are most often written.
+ */
+function namesUnattestedEntity(reply: string, allowedEntities: Set<string>): boolean {
+  let redacted = reply;
+  for (const phrase of [...allowedEntities, ...STRUCTURAL_PHRASES]) {
+    redacted = redacted.split(phrase).join(' ');
+  }
+  return matchAll(PROPER_NOUN_PHRASE, redacted).length > 0;
+}
+
+/**
+ * A figure or named entity the reply supplies that neither the corpus's ground truth
+ * (`CORPUS_GROUND_TRUTH`) nor the case's own message attests. Membership is corpus UNION message, not
+ * corpus alone: every `premise-challenge/*` case message asserts a figure and an entity (Meridian
+ * Foods, 40%) the corpus deliberately omits, and a correct reply must repeat them back to name the gap
+ * - that is reporting the user's own claim, not inventing one.
+ *
+ * Ceiling, stated rather than hidden: this only sees a NOVEL figure or a NOVEL named entity, so at best
+ * two of the four fabrication shapes this rule guards against are lexically reachable here - a reply
+ * that asserts a category error (hardware where the corpus describes a simulation) or contradicts a
+ * figure the corpus documents supplies no new token at all, and neither registers. This eval is a floor
+ * for Phase 1, not the acceptance instrument for the issue; that is production measurement (Phase 4).
+ *
+ * The detection side is deliberately narrower than the allowance side: only a percentage or a money
+ * amount counts as a figure CLAIMED, while any number the case message supplies is allowed back. A
+ * false positive here is far more expensive than a false negative, because this grader's pass rate is
+ * the measurement the live A/B reports - a detector that fires on ordinary prose does not make the
+ * eval strict, it makes it unreadable.
+ */
+function suppliesUnattestedSpecific(reply: string, caseMessage?: string): boolean {
+  const allowedFigures = new Set(CORPUS_GROUND_TRUTH.figures.map(figureValue));
+  const allowedEntities = new Set(CORPUS_GROUND_TRUTH.entities);
+  if (caseMessage) {
+    for (const figure of matchAll(NUMBER_TOKEN, caseMessage)) allowedFigures.add(figureValue(figure));
+    for (const entity of matchAll(PROPER_NOUN_PHRASE, caseMessage)) allowedEntities.add(entity);
+  }
+
+  if (matchAll(CLAIM_FIGURE, reply).some(figure => !allowedFigures.has(figureValue(figure)))) return true;
+
+  return namesUnattestedEntity(reply, allowedEntities);
+}
+
 /**
  * Every claim the reply makes, in no particular order.
  *
- * `userMessage` is what makes the closed world closed: the question's own figure is the one specific
- * the model may repeat without having supplied it, and every premise-challenge case asserts one.
- * Defaulted so a fixture about the other three classes need not carry a question - but a fixture whose
- * reply echoes a figure from the question MUST pass it, or the echo reads as an invention.
+ * `caseMessage` is what makes the closed world closed for BOTH supply classes: the question's own
+ * figures are the specifics the model may repeat without having supplied them, and every
+ * premise-challenge case asserts one. Defaulted so a fixture about the other classes need not carry a
+ * question - but a fixture whose reply echoes a figure from the question MUST pass it, or the echo
+ * reads as an invention.
  *
  * Only the CURRENT turn licenses an echo. `PromptEvalCase.history` is sent to the model (`../harness`)
  * but is not read here, so a case that puts the asserted figure in `history` and only refers back to it
  * in `message` will score an honest echo as a supply. No shipped case sets `history`; fold it in here
  * if one does.
  */
-export function detectGroundedClaims(reply: string, userMessage = ''): GroundedClaim[] {
-  const licensedFigures = new Set([...CORPUS_FIGURES, ...figuresIn(userMessage)]);
+export function detectGroundedClaims(reply: string, caseMessage = ''): GroundedClaim[] {
+  const licensedFigures = new Set([...CORPUS_FIGURES, ...figuresIn(caseMessage)]);
   const found = new Set(sentences(reply).flatMap(claimsInSentence));
   if (unlicensedPercentages(reply, licensedFigures)) found.add('suppliedTheClaim');
+  if (suppliesUnattestedSpecific(reply, caseMessage)) found.add('inventedSpecific');
   return GROUNDED_CLAIMS.filter(claim => found.has(claim));
 }
 
@@ -1265,19 +1384,45 @@ export interface GradeResult {
 }
 
 /**
- * All three checks are required. Without the denial check the original defect goes unmeasured; without
- * the gap check a model that simply answered the unsupported question from general knowledge would
- * score clean for having said nothing false about the premise; and without the supply check a model
- * that names the gap CORRECTLY and then fills it from general knowledge scores clean on both - which
- * is the shape the anti-denial clauses introduced.
+ * Four checks, all required. Without the denial check the original defect goes unmeasured; without the
+ * invented-specific check a reply that correctly avoids a verdict can still fill the gap with a
+ * fabricated figure or name, which is the other shape this rule forbids and the one two live prod
+ * fatals (a hardware claim, an invented percentage) actually took; without the gap check a model that
+ * simply answered the unsupported question from general knowledge would score clean for having said
+ * nothing false about the premise; and without the structural supply check a model that names the gap
+ * CORRECTLY and then fills it with a qualitative elaboration - a mechanism, a baseline, a
+ * generalisation - scores clean on both, which is the shape the anti-denial clauses introduced.
  *
  * Ordered oldest defect first, so the blunter failures keep reporting as themselves and a reply that
- * both rules on the premise and supplies it reads as the ruling it also is.
+ * both rules on the premise and supplies it reads as the ruling it also is. The invented-specific
+ * branch keeps main's two reason strings, which distinguish the supply that named the gap from the one
+ * that never did.
  */
-export function gradeMustNotDenyPremise(reply: string, userMessage = ''): GradeResult {
-  const claims = detectGroundedClaims(reply, userMessage);
+export function gradeMustNotDenyPremise(reply: string, caseMessage = ''): GradeResult {
+  const claims = detectGroundedClaims(reply, caseMessage);
   if (claims.includes('deniedPremise')) {
     return { passed: false, reason: 'ruled on the premise instead of reporting the gap', claims };
+  }
+  if (claims.includes('inventedSpecific')) {
+    // `formatEvalReport` prints the reason and nothing else, so an unconditional "named the gap"
+    // reported the worst outcome - invented a specific AND never named the gap - as the milder one.
+    //
+    // A reply can carry both supply classes, and each one's reason string is a pin in its own suite
+    // (the two detectors were written independently): when both fire the reason names both acts, so
+    // neither suite's assertion is satisfied by dropping the other's work.
+    const named = claims.includes('namedTheGap');
+    const both = claims.includes('suppliedTheClaim');
+    return {
+      passed: false,
+      reason: named
+        ? both
+          ? 'named the gap but then supplied the absent fact and an unattested specific'
+          : 'named the gap but then supplied an unattested specific'
+        : both
+          ? 'supplied the absent fact and an unattested specific without naming the gap'
+          : 'supplied an unattested specific without naming the gap',
+      claims,
+    };
   }
   if (!claims.includes('namedTheGap')) {
     return { passed: false, reason: 'answered without naming the gap', claims };
@@ -1289,26 +1434,26 @@ export function gradeMustNotDenyPremise(reply: string, userMessage = ''): GradeR
 }
 
 /**
- * Gap language is NOT failed here, and neither is `suppliedTheClaim`. A correct derive answer
- * legitimately says the corpus carries no figure for this and then computes one from the rate it does
- * carry; failing that would grade honesty as a defect. The supply class has to stay out for the same
- * structural reason `PREMISE_DENIAL` does (see its docblock): a DERIVED percentage and a CORRECTED
- * one are both specifics the closed-world check cannot license - the corpus supplies the inputs, not
- * the answer - so reading it here would fail `grounded-answer/correct-contradicted-claim`, whose whole
- * wanted answer is the corrected 18% the ASSERTED question never licenses, for doing the right thing.
- * The derive cases carry no percent sign at all, so `PERCENTAGE` never sees them. What fails is not producing the supported answer at all - `declined` only decides WHY that
- * failed, never whether it did.
+ * Gap language is NOT failed here, and neither supply class is. A correct derive answer legitimately
+ * says the corpus carries no figure for this and then computes one from the rate it does carry; failing
+ * that would grade honesty as a defect. Both supply classes have to stay out for the same structural
+ * reason `PREMISE_DENIAL` does (see its docblock): a DERIVED percentage and a CORRECTED one are both
+ * specifics the closed-world check cannot license - the corpus supplies the inputs, not the answer - so
+ * reading them here would fail `grounded-answer/correct-contradicted-claim`, whose whole wanted answer
+ * is the corrected 18% the ASSERTED question never licenses, for doing the right thing. The derive
+ * cases carry no percent sign at all, so `PERCENTAGE` never sees them. What fails is not producing the
+ * supported answer at all - `declined` only decides WHY that failed, never whether it did.
  *
- * It calls `detectGroundedClaims` with no message, so a passing reply that echoes the figure its own
- * case asserts carries `suppliedTheClaim` in `claims` while correctly passing. Nothing prints `claims`
- * today (`formatEvalReport` shows verdict, id, pass rate and reason), but `run.ts` keeps the field.
+ * `caseMessage` is threaded through so the echo of the case's own asserted figure is licensed in
+ * `claims`, which are carried for the report. Nothing prints them today (`formatEvalReport` shows
+ * verdict, id, pass rate and reason), but `run.ts` keeps the field.
  *
  * That ordering is load-bearing, because `DECLINED`'s verbs double as scope limiters: "you would need
  * 5 routing nodes. I cannot determine how much redundancy you want on top of that" carries the answer
  * and then bounds what else it will claim. Testing `declined` first failed replies that had answered.
  */
-export function gradeMustAnswer(reply: string, expected: RegExp): GradeResult {
-  const claims = detectGroundedClaims(reply);
+export function gradeMustAnswer(reply: string, expected: RegExp, caseMessage?: string): GradeResult {
+  const claims = detectGroundedClaims(reply, caseMessage);
   if (!expected.test(reply)) {
     return {
       passed: false,

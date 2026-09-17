@@ -198,7 +198,15 @@ describe('resolveFeedbackSlackRoute', () => {
 });
 
 describe('postFeedbackToSlack', () => {
-  const args = ['Bug', 'Acme', 'jdoe', 'jdoe@example.com', 'user-1', 'it broke', undefined] as const;
+  const args = {
+    type: 'Bug',
+    organization: 'Acme',
+    username: 'jdoe',
+    userEmail: 'jdoe@example.com',
+    userId: 'user-1',
+    content: 'it broke',
+    promptMeta: undefined,
+  } as const;
 
   beforeEach(() => {
     mocks.config.STAGE = 'production';
@@ -213,7 +221,7 @@ describe('postFeedbackToSlack', () => {
 
   it('posts to the feedback channel on production with a configured webhook', async () => {
     mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
-    const result = await postFeedbackToSlack(...args);
+    const result = await postFeedbackToSlack(args);
     expect(mocks.post).toHaveBeenCalledTimes(1);
     const [url, body] = mocks.post.mock.calls[0];
     expect(url).toBe('https://hooks.slack.com/services/feedback');
@@ -228,7 +236,7 @@ describe('postFeedbackToSlack', () => {
       SlackNonProdFeedbackWebhookUrl: 'https://hooks.slack.com/services/nonprod',
       SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback',
     });
-    await postFeedbackToSlack(...args);
+    await postFeedbackToSlack(args);
     expect(mocks.post).toHaveBeenCalledTimes(1);
     const [url, body] = mocks.post.mock.calls[0];
     expect(url).toBe('https://hooks.slack.com/services/nonprod');
@@ -239,7 +247,7 @@ describe('postFeedbackToSlack', () => {
   it('does not post when the non-prod stage has no non-prod webhook configured', async () => {
     mocks.config.STAGE = 'pr-1234';
     mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
-    const result = await postFeedbackToSlack(...args);
+    const result = await postFeedbackToSlack(args);
     expect(mocks.post).not.toHaveBeenCalled();
     expect(recordFeedbackDeliverySkipped).toHaveBeenCalledWith('slack', 'nonprod', 'nonprod_unconfigured', 'pr-1234');
     expect(result).toEqual({ outcome: 'skipped', reason: 'nonprod_unconfigured' });
@@ -253,7 +261,7 @@ describe('postFeedbackToSlack', () => {
       mocks.getSettingsMap.mockResolvedValue({
         SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback',
       });
-      const result = await postFeedbackToSlack(...args);
+      const result = await postFeedbackToSlack(args);
       expect(mocks.post).toHaveBeenCalledTimes(1);
       const [url] = mocks.post.mock.calls[0];
       expect(url).toBe('https://hooks.slack.com/services/feedback');
@@ -266,7 +274,7 @@ describe('postFeedbackToSlack', () => {
 
   it('records a skip with unconfigured_webhook when production has no webhook configured', async () => {
     mocks.getSettingsMap.mockResolvedValue({});
-    const result = await postFeedbackToSlack(...args);
+    const result = await postFeedbackToSlack(args);
     expect(mocks.post).not.toHaveBeenCalled();
     expect(recordFeedbackDeliverySkipped).toHaveBeenCalledWith(
       'slack',
@@ -282,7 +290,7 @@ describe('postFeedbackToSlack', () => {
     process.env.NODE_ENV = 'test';
     try {
       mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
-      await postFeedbackToSlack(...args);
+      await postFeedbackToSlack(args);
       expect(mocks.post).toHaveBeenCalledTimes(1);
     } finally {
       process.env.NODE_ENV = previousNodeEnv;
@@ -292,7 +300,7 @@ describe('postFeedbackToSlack', () => {
   it('resolves without throwing on a network-level rejection, logs the error, and records a "network" failure metric', async () => {
     mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
     mocks.post.mockRejectedValue(Object.assign(new Error('network down'), { isAxiosError: true }));
-    const result = await postFeedbackToSlack(...args);
+    const result = await postFeedbackToSlack(args);
     expect(Logger.error).toHaveBeenCalled();
     expect(recordFeedbackDeliveryFailure).toHaveBeenCalledWith('slack', 'production', 'network', 'production');
     expect(result).toEqual({ outcome: 'failed', reason: 'error' });
@@ -301,7 +309,7 @@ describe('postFeedbackToSlack', () => {
   it('records an "unknown" failure metric when the rejection is not an axios error', async () => {
     mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
     mocks.post.mockRejectedValue(new Error('unexpected'));
-    const result = await postFeedbackToSlack(...args);
+    const result = await postFeedbackToSlack(args);
     expect(recordFeedbackDeliveryFailure).toHaveBeenCalledWith('slack', 'production', 'unknown', 'production');
     expect(result).toEqual({ outcome: 'failed', reason: 'error' });
   });
@@ -311,14 +319,14 @@ describe('postFeedbackToSlack', () => {
     mocks.post.mockRejectedValue(
       Object.assign(new Error('bad request'), { isAxiosError: true, response: { status: 400 } })
     );
-    const result = await postFeedbackToSlack(...args);
+    const result = await postFeedbackToSlack(args);
     expect(recordFeedbackDeliveryFailure).toHaveBeenCalledWith('slack', 'production', '400', 'production');
     expect(result).toEqual({ outcome: 'failed', reason: 'error' });
   });
 
   it('records a failure metric when the settings load itself rejects (e.g. a Mongo timeout), before any route is resolved', async () => {
     mocks.getSettingsMap.mockRejectedValue(new Error('mongo timeout'));
-    const result = await postFeedbackToSlack(...args);
+    const result = await postFeedbackToSlack(args);
     expect(recordFeedbackDeliveryFailure).toHaveBeenCalledWith('slack', 'production', 'unhandled', 'production');
     expect(result).toEqual({ outcome: 'failed', reason: 'error' });
   });
@@ -330,8 +338,11 @@ describe('postFeedbackToSlack', () => {
     });
     // A caller that failed to redact still can't leak returnValue through the summary -
     // buildPromptMetaSummary's read allowlist doesn't read that field at all.
-    await postFeedbackToSlack('Bug', 'Acme', 'jdoe', 'jdoe@example.com', 'user-1', 'it broke', {
-      functionCalls: [{ name: 'web_search', returnValue: 'PRIVATE TOOL OUTPUT' } as { name?: string }],
+    await postFeedbackToSlack({
+      ...args,
+      promptMeta: {
+        functionCalls: [{ name: 'web_search', returnValue: 'PRIVATE TOOL OUTPUT' } as { name?: string }],
+      },
     });
     const [, body] = mocks.post.mock.calls[0];
     const promptMetaSection = body.text.split('*Prompt Meta:*')[1];
@@ -343,7 +354,15 @@ describe('postFeedbackToSlack', () => {
   it('escapes Slack mrkdwn special characters in every user-influenced field, not just content', async () => {
     mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
     const injected = '<https://evil.example/|Open record>';
-    await postFeedbackToSlack(injected, injected, injected, injected, injected, injected, undefined);
+    await postFeedbackToSlack({
+      type: injected,
+      organization: injected,
+      username: injected,
+      userEmail: injected,
+      userId: injected,
+      content: injected,
+      promptMeta: undefined,
+    });
     const [, body] = mocks.post.mock.calls[0];
     expect(body.text).not.toContain(injected);
     expect(body.text).toContain('&lt;https://evil.example/|Open record&gt;');

@@ -15,8 +15,9 @@ import type { Logger } from '@bike4mind/observability';
 /** Sentinel alias map, so "the seed export reaches the aggregators" is an identity check. */
 const MODEL_ID_ALIASES = { 'grok-3-fast': { litellm: 'xai/grok-3-fast-latest' } };
 
-const { rowsInForce, createBedrockControlPlane } = vi.hoisted(() => ({
+const { rowsInForce, createBedrockControlPlane, getDiscoveryCredentials } = vi.hoisted(() => ({
   rowsInForce: vi.fn(),
+  getDiscoveryCredentials: vi.fn(async () => ({})),
   createBedrockControlPlane: vi.fn(() => ({
     listFoundationModels: vi.fn(),
     getFoundationModelAvailability: vi.fn(),
@@ -67,6 +68,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
         captured.litellm = options;
         return real.createLiteLlmSource(options);
       },
+      getDiscoveryCredentials,
     },
   };
 });
@@ -249,5 +251,17 @@ describe('the shared catalog read', () => {
     await expect(captured.modelsDev!.targets()).resolves.toEqual([]);
     await expect(captured.bedrock!.activeModelIds!()).resolves.toEqual(new Set());
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('catalog read failed'));
+  });
+});
+
+describe('credential wiring', () => {
+  it('forwards the runner options, so a manual run reaches the uncached settings read', async () => {
+    const { resolveCredentials } = buildModelDiscoveryAdapters(logger);
+
+    await resolveCredentials({ skipCache: true });
+    await resolveCredentials();
+
+    expect(getDiscoveryCredentials.mock.calls[0][2]).toEqual({ skipCache: true });
+    expect(getDiscoveryCredentials.mock.calls[1][2]).toBeUndefined();
   });
 });

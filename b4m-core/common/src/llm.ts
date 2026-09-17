@@ -198,6 +198,13 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   message: z.string(),
   messageFileIds: z.array(z.string()).prefault([]),
   questId: z.string().optional(),
+  /**
+   * Correct-and-retry: the quest whose answer the user says was wrong. Produces a NEW quest
+   * carrying the user's correction, rather than overwriting the flagged one the way `questId`
+   * (retry) does - the original answer has to survive for the evaluation-pair export to read it.
+   * Validated server-side against the resolved session before it is persisted.
+   */
+  correctsQuestId: z.string().optional(),
   /** Extra context messages to include in the conversation from external sources */
   extraContextMessages: z
     .array(

@@ -24,7 +24,14 @@ vi.mock('@server/middlewares/baseApi', () => {
 const refuseWholeInvite = vi.hoisted(() => vi.fn());
 const sendToClient = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@bike4mind/services', () => ({ sharingService: { refuseWholeInvite } }));
-vi.mock('@bike4mind/database', () => ({ inviteRepository: {} }));
+vi.mock('@bike4mind/database', () => ({
+  inviteRepository: {},
+  fabFileRepository: {},
+  sessionRepository: {},
+  projectRepository: {},
+  organizationRepository: {},
+  Group: {},
+}));
 vi.mock('@server/websocket/utils', () => ({ sendToClient }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws://test' } } }));
 

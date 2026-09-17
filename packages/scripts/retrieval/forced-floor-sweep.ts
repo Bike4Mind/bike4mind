@@ -84,13 +84,15 @@ if (!Number.isInteger(argv['char-budget']) || argv['char-budget'] < 1) {
   throw new Error(`--char-budget must be a positive integer, got "${argv['char-budget']}"`);
 }
 
-// `loadEmbeddingFixture` also checks each query's `questionHash`, which matters here: a floor
-// measured against a reworded question is measured against ground truth that no longer describes
-// it, and the id alone cannot say which text was embedded under it.
+// `loadEmbeddingFixture` also checks each COMMITTED query's `questionHash`, which matters here: a
+// floor measured against a reworded question is measured against ground truth that no longer
+// describes it, and the id alone cannot say which text was embedded under it. An external capture
+// (`--questions`) is exempt - it carries its own ground truth, written in the same pass as the text,
+// so the two cannot drift apart the way an id join can.
 const fixture = loadEmbeddingFixture(JSON.parse(readFileSync(argv.fixture, 'utf8')) as unknown);
 
 // Reuses the model comparison's resolver rather than looking the ground truth up here, because it
-// makes an id `corpus.ts` does not know an ERROR. Defaulting such an id to an empty supporting set
+// makes an id neither source knows an ERROR. Defaulting such an id to an empty supporting set
 // would score it as a deliberate NEGATIVE, quietly inflating the false-positive rate and moving
 // precision's denominator - a complete, confident, wrong table.
 const queries = resolveQueries(fixture);

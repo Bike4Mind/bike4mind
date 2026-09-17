@@ -194,6 +194,20 @@ to a question it cannot see.
    `datalake:write`, not just the callers that explicitly reference a lake.
 
 3. Set `API_KEY_SCOPE_STAGING` to the new scope(s) on the target stage.
+
+   Check first whether the scope already enforces somewhere. Staging is per-scope, not
+   per-route, so adding a scope back to the list to grandfather a late-arriving door also
+   re-opens every door already gating on it - a rollout that reached step 6 months ago is
+   silently un-enforced for the whole window. That is worst at an in-handler assert
+   (`assertScope` in `dataLakeScopes.ts`), which unlike `apiKeyAuth`'s door gate logs
+   nothing on a staged pass, so step 5's cross-check never sees those keys at all.
+
+   When a new route joins a family whose scope has already finished its rollout, weigh
+   that against step 2's population. A handful of keys is usually cheaper to re-mint with
+   their owners before landing the gate than it is to un-enforce the family; a large one
+   is not, and then staging is still the right lever - just know you are trading the
+   existing doors' enforcement for the new one's grace period, and keep the window short.
+
 4. Land `requiredScopes` on the routes. Nothing breaks - misses are logged, not rejected.
 5. Re-mint the keys from step 2 with their owners. Watch
    `API key scope check missed but staged - allowing` as a cross-check that the list was

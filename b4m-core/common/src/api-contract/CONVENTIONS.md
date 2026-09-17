@@ -151,10 +151,35 @@ re-deciding per endpoint:
 | Rate limit exceeded | `429` | - |
 | Response payload exceeds the platform ceiling | `413` | - (the body carries `fileUrl`) |
 | Referenced resource does not exist | `404` | - |
+| Malformed path/query resource id | `404` | - |
 
 **[gated]** A contract may only declare statuses from the allowed set (`200`, `201`,
 `202`, `204`, `400`, `401`, `403`, `404`, `409`, `413`, `422`, `429`, `500`, `502`,
 `503`).
+
+A **malformed** resource id is a `404`, not a `400`: a string that is not an ObjectId names a
+resource that cannot exist, and telling a caller apart-from-404 that their id was the wrong
+*shape* leaks nothing they need. It is the same answer they already got, since an id-shaped cast
+failure used to be remapped to `404` by the error handler.
+
+This row describes the target, not the whole deployed surface. Roughly 27 files guard a malformed
+id with a `400` today and have **not** been converged - most inherit it from one of the three
+shared access helpers (`server/utils/orgAccess.ts`, `sessionAccess.ts`,
+`questMasterPlanAccess.ts`), the rest are their own guards, concentrated in `quest-plans/[id]/*`,
+`business-links/*`, `sre/*`, `users/[id]/slack-settings.ts`, `fabfiles/[id]/*`,
+`admin/liveops-triage-configs/*`, `[type]/[id]/index.ts` and
+`data-lakes/[id]/files/[fabFileId]/purge.ts`. Enumerate the current set rather than trusting this
+paragraph to stay current:
+
+```
+grep -rn --include='*.ts' -A3 'isValidObjectId\|isObjectIdOrHexString\|ObjectId.isValid' \
+  apps/client/pages/api apps/client/server | grep -iE 'status\(400\)|BadRequestError'
+```
+
+One split is worth knowing about because a client meets it directly: `/api/[type]/[id]` answers
+`400` for a malformed id while its child `/api/[type]/[id]/invites` answers `404`. That predates
+this row - the child's `404` came from the error handler's cast remap before it was made explicit
+- so converging the pair is a behaviour change to schedule, not a regression to chase.
 
 The gate checks only that a status is **in the set**, not that a given *condition* maps
 to the status this table says. That half is review-only - see
@@ -197,6 +222,30 @@ build. A narrowing is fine; a second union that merely shares the field name is 
 rule forbids, and is what the TTS provider codes were before they were folded in.
 
 Adding a classifier means adding it to `API_ERROR_CODES`, not inventing a local one.
+
+### Streaming surfaces classify in-band
+
+A streaming endpoint flushes its headers before it authenticates or prices anything, so
+once the stream is open the status is pinned at `200` and every failure past that point
+is reported as an in-band `error` event. That event is the endpoint's whole error
+surface: the status table and the envelope gate above never see it.
+
+**[gated]** A contract with `streaming: true` must publish, in its `200` event schema, a
+`type: "error"` variant carrying a required `message` string and an **optional**
+classifier (`code` or `errorCode`) whose values come from `API_ERROR_CODES` or a
+narrowing of it. The gate probes the schema with `safeParse`: it must accept
+`insufficient_credits`, accept `undefined` (an unclassified crash has no billing code to
+report), and reject a code outside the shared vocabulary. A bare `z.string()` therefore
+fails - which is the point, because an untyped classifier is what left callers
+regex-matching the prose `message` to detect mid-generation credit exhaustion.
+
+The field is `code` rather than `errorCode` on the SSE frames: they shipped that way and
+are published wire shapes, so what had to be shared was the vocabulary, not the key.
+
+The pairing a caller needs is worth stating in the contract `description`, because it
+differs per surface: `/api/chat` and `/api/embed/chat` can still refuse pre-stream with a
+classified `422`, whereas `/api/ai/v1/completions` cannot and reports even a pre-token
+refusal in-band.
 
 ### Why RFC 9457 is not the answer here
 

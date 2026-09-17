@@ -5,6 +5,7 @@ import { convertIds, Organization, User, UserActivityCounter, convertPipelineFor
 import { NotFoundError } from '@server/utils/errors';
 import { mongoose } from '@bike4mind/database';
 import { isValidObjectId } from '@server/utils/objectId';
+import { verifyOrgAccess } from '@server/utils/orgAccess';
 import qs from 'qs';
 import { Pagination } from '@bike4mind/utils';
 
@@ -23,6 +24,18 @@ const handler = baseApi().get(
           orgId = filters?.orgId;
         }
       }
+
+      // The `!` above is a lie for a user with no organization: guard before touching orgId, or a
+      // caller who belongs to no org gets a TypeError 500 instead of the 404 this route has always
+      // answered.
+      if (!orgId) throw new NotFoundError('Organization not found');
+
+      // This report names individual members and their login/export/download counts, so it is an
+      // owner/manager view, not a members' one - any plain member could previously read their
+      // colleagues' activity. verifyOrgAccess answers NotFoundError identically for a missing org
+      // and one the caller may not administer, and admits platform admins (who also supply orgId
+      // above). It re-reads the org, so fetch the projected copy only once past the gate.
+      await verifyOrgAccess(req.user, orgId.toString());
 
       const organization = await Organization.findById(orgId).select('users -_id');
       if (!organization) throw new NotFoundError('Organization not found');
@@ -307,6 +320,17 @@ const handler = baseApi().get(
 
       return res.status(200).json({ data, meta });
     } catch (error) {
+      // Let deliberate HTTP errors keep their status. This catch-all used to turn every throw into
+      // a 500, which would report the authorization refusal above as a server fault - alarming
+      // monitoring on every unauthorized read, and answering 500 while the serialized body still
+      // carried statusCode 404. Unexpected failures still collapse to a 500 as before.
+      //
+      // Duck-typed rather than `instanceof HTTPError`: verifyOrgAccess throws the copy re-exported
+      // through @bike4mind/utils, and the two package dists need not share one class identity at
+      // runtime (resolveBillingOrgId matches these by name for the same reason). An instanceof
+      // check could pass in a test that constructs the error locally and still fall through to the
+      // 500 in production.
+      if (typeof (error as { statusCode?: unknown })?.statusCode === 'number') throw error;
       return res.status(500).json({ message: 'Internal Server Error', error });
     }
   })

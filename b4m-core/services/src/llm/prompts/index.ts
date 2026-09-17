@@ -40,6 +40,11 @@
  * name that case directly. It is the worst-travelling form of the failure: it reads as adjudicated
  * rather than merely unknown, and a rep repeats it to the prospect it was about.
  *
+ * A further failure sits inside "leave the claim open" itself: a model that avoids a yes/no verdict
+ * can still answer the named gap with an invented figure or name, which passes as compliant since it
+ * never denies the premise. The clause below binds the licence at the point it is granted: leaving a
+ * claim open means declining to answer it, not only declining to rule on it.
+ *
  * DO NOT REPAIR THIS BY EXTENDING THE WORD LIST. The first fix for the shape above did exactly that,
  * adding "false, fabricated, invented, made up" - and measured against the full retrieval stack the
  * model simply answered "No, it is not accurate to say <vendor> saw <N>%", reaching the same verdict
@@ -97,7 +102,8 @@ export const GROUNDED_NO_INVENTION_RULE =
   'retrieved content (and, where useful, where it might be confirmed) rather than denying it. ' +
   'That holds for a claim the question itself asserts. When the user asks about a specific result, ' +
   'engagement, or event the retrieved content does not contain, report that it is not in the retrieved ' +
-  'content and leave the claim itself open. Leaving it open means not answering it: do not explain how ' +
+  'content and leave the claim itself open, and leaving it open means not answering it, including not ' +
+  'answering it from general knowledge, inference, or a plausible-sounding estimate; do not explain how ' +
   'the asserted result was reached, what it was measured against, or what figures it involved, and do ' +
   'not supply any of that from general knowledge, published results, or what is typically the case. ' +
   'What you may offer instead is what the retrieved content does cover and where the claim could be ' +

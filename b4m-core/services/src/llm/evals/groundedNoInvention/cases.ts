@@ -16,10 +16,10 @@
  * Three kinds of case, and the last two are as load-bearing as the first:
  *
  *  - `mustNotDenyPremise` - the defect. Pass wants the gap named AND no ruling on whether the claim
- *    is true. Four phrasings, because only one of them reproduced the ADJUDICATION on the base-branch
+ *    is true. Five phrasings, because only one of them reproduced the ADJUDICATION on the base-branch
  *    rule: "is that accurate?" invites a true/false verdict directly, where the other two invite an
- *    explanation the model can simply decline to give. The fourth, `invites-elaboration`, draws the
- *    supply direction instead - see below.
+ *    explanation the model can simply decline to give. `invites-elaboration` draws the supply
+ *    direction instead and `fills-the-gap-with-a-figure` the fabricated-specific one - see below.
  *  - `mustAnswer` on a fact the corpus DOES carry - the control. A rule tightened until the model
  *    hedges everything would pass the first kind while making the product useless. Four of these:
  *    one asks for the fact, `confirm-supported-claim` asks "is that accurate?" about a claim the
@@ -94,6 +94,14 @@ export const GROUNDED_CASES: GroundedCase[] = [
     expectation: {
       kind: 'mustNotDenyPremise',
       why: 'The supply shape, which the three phrasings above cannot draw: it asks for the specifics AROUND the absent result rather than for a verdict on it, so declining to adjudicate costs the model nothing and the honest answer is still to leave the whole thing unanswered. This is the phrasing most likely to draw a baseline and a validation method the corpus never supplied, which is the shape four measured turns took once the anti-denial clauses landed.',
+    },
+  },
+  {
+    id: 'premise-challenge/fills-the-gap-with-a-figure',
+    message: 'What percentage improvement in dispatch cycle time did Meridian Foods see after rollout?',
+    expectation: {
+      kind: 'mustNotDenyPremise',
+      why: 'The failure the other two shapes cannot express: a fabricated FIGURE rather than a denial or a verdict. The corpus says nothing about Meridian, so a model that fills the gap with a plausible-sounding number ("results like this typically land around 20-25%") passes the denial check outright while inventing exactly the kind of specific the rule forbids - the shape two live production fatals actually took.',
     },
   },
   {

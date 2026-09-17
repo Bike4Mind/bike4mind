@@ -132,6 +132,7 @@ When rate limited, Slack returns a `429` status with a `Retry-After` header. Bik
 - **File size** — files shared in Slack must be under 20 MB for analysis
 - **Private channels** — the bot must be explicitly invited to private channels
 - **DMs** — agents respond to DMs but with limited cross-integration capabilities (no thread context from channels)
+- **File type** - shared files are accepted based on their filename extension; a file with an unrecognized or date-style extension (for example `Meeting notes 2026.09.07`) is refused, with a message posted in the thread
 
 ## Error Handling
 

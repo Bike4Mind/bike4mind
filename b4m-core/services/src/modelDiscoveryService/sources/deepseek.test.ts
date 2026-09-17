@@ -7,9 +7,9 @@ import { expectDegradesOnFailure, makeContext, stubFetch } from './__fixtures__/
 import { createDeepSeekSource, DEEPSEEK_MODELS_URL, normalizeDeepSeekModels } from './deepseek';
 
 describe('deepseek source normalization', () => {
-  it('emits one text record per listed model', () => {
+  it('emits one text record per listed model, sorted by id', () => {
     const records = normalizeDeepSeekModels(models);
-    expect(records.map(r => r.modelId)).toEqual(['deepseek-flash']);
+    expect(records.map(r => r.modelId)).toEqual(['deepseek-flash', 'deepseek-v4-pro']);
     for (const record of records) {
       expect(record.patch.backend).toBe('deepseek');
       expect(record.patch.vendor).toBe('deepseek');
@@ -84,7 +84,7 @@ describe('deepseek source fetch', () => {
         // One endpoint lists everything, so a 200 IS exhaustive - which is what
         // lets absence bookkeeping eventually deprecate a withdrawn model.
         expect(result.authoritativeFor).toEqual(['deepseek']);
-        expect(result.records).toHaveLength(1);
+        expect(result.records).toHaveLength(2);
       }
     } finally {
       restore();

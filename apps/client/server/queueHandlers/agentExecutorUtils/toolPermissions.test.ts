@@ -41,6 +41,39 @@ describe('classifyToolPermission', () => {
     expect(classifyToolPermission('deep_research', [], [])).toBe('allowed');
   });
 
+  it('returns allowed for every read-only tool, not just the ones someone remembered to list', () => {
+    // Regression: these all declare `none` side effects and used to be gated purely because
+    // they were missing from a hand-kept Set - which is what made agent mode stop and ask
+    // "may I check what time it is?" once per turn.
+    for (const tool of [
+      'current_datetime',
+      'sunrise_sunset',
+      'planet_visibility',
+      'wikipedia_on_this_day',
+      'moon_phase',
+      'iss_tracker',
+      'mission_status',
+      'math_evaluate',
+      'wolfram_alpha',
+      'search_knowledge_base',
+      'retrieve_knowledge_content',
+      'count_knowledge_base',
+      'fmp_financial_data',
+    ]) {
+      expect(classifyToolPermission(tool, [], []), tool).toBe('allowed');
+    }
+  });
+
+  it('gates a read-only tool the user explicitly denied', () => {
+    expect(classifyToolPermission('current_datetime', [], ['current_datetime'])).toBe('denied');
+  });
+
+  it('gates an MCP tool even though it could ship its own declaration', () => {
+    // Rule 3 runs before the declaration lookup: an MCP tool is third-party, so a
+    // side-effect claim travelling with it is not evidence of anything.
+    expect(classifyToolPermission('mcp__clock__now', [], [])).toBe('needs_approval');
+  });
+
   it('treats both inline visualization tools (recharts, mermaid_chart) as always-safe', () => {
     // Artifact-only tools must stay paired - otherwise agent mode runs one chart
     // tool silently while pausing the other for approval.

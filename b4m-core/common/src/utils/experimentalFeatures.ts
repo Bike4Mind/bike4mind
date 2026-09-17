@@ -22,10 +22,14 @@ export interface HasExperimentalFeatures {
   preferences?: { experimentalFeatures?: unknown } | null;
 }
 
-const readBag = (bag: unknown, flag: string): boolean => {
-  if (bag instanceof Map) return bag.get(flag) === true; // hydrated Mongoose document
-  if (bag && typeof bag === 'object') return (bag as Record<string, unknown>)[flag] === true; // .lean()/plain JSON
-  return false;
+const readBag = (bag: unknown, flag: string): boolean | undefined => {
+  const raw =
+    bag instanceof Map
+      ? bag.get(flag) // hydrated Mongoose document
+      : bag && typeof bag === 'object'
+        ? (bag as Record<string, unknown>)[flag] // .lean()/plain JSON
+        : undefined;
+  return typeof raw === 'boolean' ? raw : undefined;
 };
 
 /**
@@ -34,5 +38,24 @@ const readBag = (bag: unknown, flag: string): boolean => {
  */
 export function isExperimentalFeatureEnabled(user: HasExperimentalFeatures | null | undefined, flag: string): boolean {
   if (!user) return false;
-  return readBag(user.preferences?.experimentalFeatures, flag) || readBag(user.experimentalFeatures, flag);
+  return (
+    readBag(user.preferences?.experimentalFeatures, flag) === true || readBag(user.experimentalFeatures, flag) === true
+  );
+}
+
+/**
+ * The user's EXPLICIT setting for `flag`, or `undefined` when they have never toggled it.
+ *
+ * Distinct from `isExperimentalFeatureEnabled`, which collapses "never set" to false. A flag whose
+ * unset state falls back to an admin-settable default (the `*Default` settings keys) must be able
+ * to tell "off" from "never expressed", or every never-toggled user is read as opted out and the
+ * admin default stops meaning anything. The preferences bag wins over the legacy top-level one even
+ * when it says `false` - an explicit opt-out is the newer signal.
+ */
+export function readExperimentalFeaturePreference(
+  user: HasExperimentalFeatures | null | undefined,
+  flag: string
+): boolean | undefined {
+  if (!user) return undefined;
+  return readBag(user.preferences?.experimentalFeatures, flag) ?? readBag(user.experimentalFeatures, flag);
 }

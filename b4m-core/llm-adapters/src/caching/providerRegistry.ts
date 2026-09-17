@@ -91,8 +91,9 @@ export const CACHING_CAPABILITIES: Record<ModelBackend, ProviderCachingCapabilit
     // repeated prefixes without a documented minimum.
     minTokens: 0,
     maxTTL: 'auto',
-    // A cache hit is ~2% of the miss rate ($0.006 against $0.30 per 1M), so the
-    // saving on the cached portion is ~98%.
+    // A cache hit is 2.0% of the miss rate on Flash and 3.3% on V4 Pro, so the
+    // saving on the cached portion is ~98% either way; this single flat score
+    // uses Flash's figure as the estimate for both.
     costSavings: 98,
   },
   [ModelBackend.Ollama]: {

@@ -895,7 +895,7 @@ function QuestsPage() {
           aria-describedby="archive-confirm-description"
         >
           <DialogTitle id="archive-confirm-title">
-            <WarningIcon sx={{ mr: 1, color: 'warning.main' }} />
+            <WarningIcon sx={{ mr: 1, color: 'warning.plainColor' }} />
             Archive Quest?
           </DialogTitle>
           <Divider />

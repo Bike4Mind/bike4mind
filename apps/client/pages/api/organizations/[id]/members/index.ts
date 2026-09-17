@@ -1,7 +1,10 @@
 import { z } from 'zod';
 import { organizationService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
-import { withTransaction } from '@bike4mind/database';
+import { assertDataLakeShareScope } from '@server/dataLakes/dataLakeScopes';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
+import { withTransaction, dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { BadRequestError } from '@server/utils/errors';
 import { logEvent } from '@server/utils/analyticsLog';
 import {
@@ -18,10 +21,17 @@ import { organizationRepository } from '@bike4mind/database/infra';
 import { userRepository } from '@bike4mind/database/auth';
 import { groupRepository } from '@bike4mind/database/social';
 
+// No `force` here, deliberately. The service still accepts a seat-ceiling override for the
+// platform-admin migration path, but a client must never be able to set it and enroll past the
+// seats the org has paid for. Zod strips unknown keys, so a request body carrying `force` has it
+// dropped here and it never reaches the service.
+//
+// Not `.strict()`: this route's declared body type is `{name, email, level}`, so rejecting unknown
+// keys would 400 callers sending fields the route has always ignored. Stripping is what closes the
+// bypass; rejecting would only change who else breaks.
 const addMemberBodySchema = z.object({
   userId: z.string().optional(),
   email: z.string().optional(),
-  force: z.boolean().optional(),
 });
 
 const handler = baseApi()
@@ -75,8 +85,17 @@ const handler = baseApi()
     return respond(res, safeUserResponseSchema, toSafeUser(newMember, 'same-org'));
   })
   .delete(async (req, res) => {
-    // Transaction: org-membership removal and clearing the user's organizationId must
-    // commit atomically, or a failure between the two leaves a stale organizationId. Mirrors addMember above.
+    // In-handler rather than on `baseApi()`, so GET and POST above keep their current scope
+    // behaviour: only this method changes who can reach a data lake. Leaving an org expires the
+    // departing member's grants on its lakes and can pass ownership of lakes they created to the
+    // billing owner, which is what `datalake:share` is defined for. A scope-less route is
+    // fail-OPEN, so any valid key satisfied it before. No-ops for a session caller.
+    assertDataLakeShareScope(req);
+
+    // Transaction: org-membership removal, lapsing the member's data-lake grants on this org's
+    // lakes, and clearing the user's organizationId must commit atomically, or a failure between
+    // them leaves a stale organizationId or live grants on an org the user has left. Mirrors
+    // addMember above.
     const organization = await withTransaction(() =>
       organizationService.leave(
         req.user,
@@ -86,7 +105,14 @@ const handler = baseApi()
             organizations: organizationRepository,
             users: userRepository,
             groups: groupRepository,
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            ...lakeConfigAuditDb,
           },
+          // See the sibling removal route: a key-driven departure must be attributed to the KEY,
+          // with the human kept findable, not recorded as a direct user action.
+          auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
+          logger: req.logger,
         }
       )
     );

@@ -162,7 +162,8 @@ export async function getSettingByName(
 ): Promise<string | null> {
   const logger = options?.logger;
 
-  // Allow bypassing cache for testing
+  // Bypass the cache for a read that must be fresher than the TTL - production
+  // callers take this branch too, not just tests (e.g. a live admin toggle).
   if (options?.skipCache) {
     const setting = await db.adminSettings.findBySettingName(settingName);
     // `?? null` (not `|| null`) so a stored boolean `false` survives - see AdminSettingsCache.
@@ -189,7 +190,9 @@ export async function getSettingsByNames(
 ): Promise<Record<string, string | null>> {
   const logger = options?.logger;
 
-  // Allow bypassing cache for testing
+  // Bypass the cache for a caller that needs a read fresher than the TTL: a
+  // manual model-discovery run reads a key an admin saved seconds earlier in
+  // another process, which this process's cached map has not picked up.
   if (options?.skipCache) {
     const settings = await db.adminSettings.findBySettingNames(settingNames);
     const result: Record<string, string | null> = {};
@@ -199,9 +202,10 @@ export async function getSettingsByNames(
       result[name] = null;
     });
 
-    // Set values for found settings
+    // `?? null` keeps this branch's contract identical to the cached branch below:
+    // a row with no stored value reads as absent, never as undefined.
     settings.forEach(setting => {
-      result[setting.settingName] = setting.settingValue;
+      result[setting.settingName] = setting.settingValue ?? null;
     });
 
     return result;

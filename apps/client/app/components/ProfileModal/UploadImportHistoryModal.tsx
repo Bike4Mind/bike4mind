@@ -292,15 +292,15 @@ const UploadImportHistoryModal: FC<IUploadImportHistoryModalProps> = ({
               onDrop={handleDrop}
               sx={{
                 border: '2px dashed',
-                borderColor: isDragging ? 'primary.main' : 'neutral.outlinedBorder',
+                borderColor: isDragging ? 'primary.plainColor' : 'neutral.outlinedBorder',
                 borderRadius: 'sm',
                 p: 2,
                 textAlign: 'center',
                 transition: 'border-color 0.3s, background-color 0.3s',
                 '&:hover': {
-                  bgcolor: 'action.hover',
+                  bgcolor: 'neutral.softBg',
                 },
-                bgcolor: isDragging ? 'action.hover' : 'background.surface',
+                bgcolor: isDragging ? 'neutral.softBg' : 'background.surface',
               }}
             >
               <Button

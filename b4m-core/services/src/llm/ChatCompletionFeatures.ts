@@ -34,12 +34,6 @@ import {
   IUsageEventRepository,
   IMementoRepository,
   IOrganizationRepository,
-  DashboardParamsSchema,
-  PromptMetaZodSchema,
-  b4mLLMTools,
-  ResearchModeParamsSchema,
-  GenerateImageToolCallSchema,
-  AudioGenerationToolCallSchema,
   ILatticeModel,
   IDataLakeAccessGrantRepository,
   IDataLakeRepository,
@@ -60,12 +54,12 @@ import {
   FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE,
   FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+  FORCED_RETRIEVAL_SETTING_KEYS,
   compareForcedRetrievalRank,
   cosineFloorPctForSpace,
   forcedRetrievalRelativeCutoff,
   LAKE_RECALL_K_DEFAULT,
   DATALAKE_TAG_PREFIX,
-  PROMPT_TEXT_MAX,
   materializePromptMetaSession,
   ModelBackend,
   type SupportedEmbeddingModel,
@@ -100,6 +94,7 @@ import {
   grantedLakeIdsUsedFor,
 } from '../dataLakeService/getDataLakePrompts';
 import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
+import { membershipOrgIdsForTurn } from '../dataLakeService/membershipOrgIdsForTurn';
 import { attributeAccessedLakeIds } from '../dataLakeService/attributeAccessedLakes';
 import { recordLakeAccessEvent } from '../dataLakeService/recordLakeAccessEvent';
 import { defangBlockMarkers, renderDataLakePromptSection } from '../dataLakeService/renderDataLakePromptBlock';
@@ -137,6 +132,7 @@ import {
   DEFAULT_VERBATIM_WINDOW_FRACTION,
   SYSTEM_PROMPT_RESERVE_TOKENS,
 } from './ChatCompletionProcess';
+import { QuestStartBodySchema } from './questStartBody';
 import { forcedRetrievalNoContextPrompt, type ForcedRetrievalNoContextFinding } from './forcedRetrievalAbstention';
 import { resolveLakeMemoryScope } from './resolveLakeMemoryScope';
 import { MCPClient } from '@bike4mind/mcp';
@@ -166,6 +162,11 @@ interface DatabaseAdapters {
     | 'countByFabFileId'
     // Must stay a superset of ToolContext.db.fabfilechunks - this is what feeds it (ToolBuilder).
     | 'distinctRetrievalIndexModelsByFabFileIds'
+    // Optional on semanticDataLakeSearch's adapter shape (resolveIndexResidency treats a missing
+    // method the same as a failed lookup - pre-residency behavior, not an error). Declared here so
+    // a future literal replacing this repo cannot silently drop it with no type error; every
+    // current call site already wires the real repository, which has it.
+    | 'annResidentFabFileIds'
   >;
   mementos: IMementoRepository;
   projects: IProjectRepository;
@@ -445,70 +446,7 @@ export interface IChatCompletionServiceOptions {
   gpcSignalDetected?: boolean;
 }
 
-export const QuestStartBodySchema = z.object({
-  userId: z.string(),
-  sessionId: z.string(),
-  questId: z.string(),
-  message: z.string().min(1, 'Message cannot be empty'),
-  messageFileIds: z.array(z.string()),
-  historyCount: z.number(),
-  fabFileIds: z.array(z.string()),
-  params: ChatCompletionCreateInputSchema,
-  dashboardParams: DashboardParamsSchema.optional(),
-  enableQuestMaster: z.boolean().optional(),
-  enableMementos: z.boolean().optional(),
-  enableArtifacts: z.boolean().optional(),
-  /** See ChatCompletionInvokeParamsSchema.promptMode - must stay in sync with it. */
-  promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
-  /** See ChatCompletionInvokeParamsSchema.skipAutoOffers - must stay in sync with it. */
-  skipAutoOffers: z.boolean().optional(),
-  /** See ChatCompletionInvokeParamsSchema.systemPrompt - must stay in sync with it. */
-  systemPrompt: z.string().max(PROMPT_TEXT_MAX).optional(),
-  enableAgents: z.boolean().optional(),
-  enableLattice: z.boolean().optional(),
-  promptMeta: PromptMetaZodSchema,
-  tools: z.array(z.union([b4mLLMTools, z.string()])).optional(),
-  mcpServers: z.array(z.string()).optional(),
-  projectId: z.string().optional(),
-  organizationId: z.string().nullable().optional(),
-  questMaster: QuestMasterParamsSchema.optional(),
-  toolPromptId: z.string().optional(),
-  researchMode: ResearchModeParamsSchema.optional(),
-  fallbackModel: z.string().optional(),
-  embeddingModel: z.string().optional(),
-  queryComplexity: z.string(),
-  imageConfig: GenerateImageToolCallSchema.optional(),
-  audioConfig: AudioGenerationToolCallSchema.optional(),
-  deepResearchConfig: z
-    .object({
-      maxDepth: z.number().optional(),
-      duration: z.number().optional(),
-      // searchers are passed via ToolContext, not through this API schema
-      searchers: z.array(z.any()).optional(),
-    })
-    .optional(),
-  extraContextMessages: z
-    .array(
-      z.object({
-        role: z.enum(['user', 'assistant', 'system', 'function', 'tool']),
-        content: z.union([z.string(), z.array(z.any())]),
-        fabFileIds: z.array(z.string()).optional(),
-      })
-    )
-    .optional(),
-  /** User's timezone (IANA format, e.g., "America/New_York") */
-  timezone: z.string().optional(),
-  /** Persona-based sub-agent filter - only these agent names are available for delegation */
-  allowedAgents: z.array(z.string()).optional(),
-  /** When true, Quest Processor injects Slack-specific tool configs (help, notebooks, curated files) */
-  enableSlackTools: z.boolean().optional(),
-  /**
-   * Disclose the system prompt text this completion was assembled from. Exposed on the process
-   * instance for the direct response of the request that asked for it, and never persisted -
-   * the derived breakdown (`promptMeta.context.systemPromptDetails`) is the persisted half.
-   */
-  includeSystemPrompt: z.boolean().optional(),
-});
+export { QuestStartBodySchema } from './questStartBody';
 
 // Type for what features need from the chat completion service
 export type ChatCompletionContext = Pick<
@@ -1740,16 +1678,9 @@ const FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS = 4000;
 // resolveForcedRetrievalConfig below), so none is a module constant - every former
 // FORCED_RETRIEVAL_CHAR_BUDGET and FORCED_RETRIEVAL_MIN_SIMILARITY reference is a resolved local
 // instead. When nothing clears the floors, no chunk is injected and the turn falls back to
-// forcedRetrievalNoContextPrompt.
-//
-// Exported so a test's admin-settings fixture can serve exactly the keys the read asks for: a
-// fixture that enumerated them itself would keep passing (on coded defaults) if a fourth key were
-// added here, which is the one way these tests could go quiet without failing.
-export const FORCED_RETRIEVAL_SETTING_KEYS = [
-  'forcedRetrievalCharBudget',
-  'forcedRetrievalRelativeFloorPct',
-  'forcedRetrievalMinSimilarityPct',
-] as const;
+// forcedRetrievalNoContextPrompt. The key list itself lives in @bike4mind/common
+// (FORCED_RETRIEVAL_SETTING_KEYS) so the scoped-settings guard can loop it - `common` cannot import
+// from `services`, and a guard that re-enumerated the keys would not cover a fourth one.
 
 /**
  * One of the two floor settings as a 0-1 cosine fraction, or `fallback` when the stored value is
@@ -1763,10 +1694,11 @@ export const FORCED_RETRIEVAL_SETTING_KEYS = [
  * a floor of 20.0, which no similarity can clear, starving every Data-Lake turn with nothing in the
  * output to say why. Cheap guard, unbounded downside.
  *
- * Falls back rather than clamping to 100, which is where this deliberately diverges from
- * `resolveRelevancePct`'s handling of the same hazard: clamping a fat-fingered value to "admit only
- * a perfect match" is itself the retrieval starvation this floor exists to prevent, so the coded
- * default - known-good, behavior-preserving - is the safer landing place.
+ * Falls back rather than clamping to 100: clamping a fat-fingered value to "admit only a perfect
+ * match" is itself the retrieval starvation this floor exists to prevent, so the coded default -
+ * known-good, behavior-preserving - is the safer landing place. `resolveRelevancePct` in
+ * `resolveSearchBudgets.ts` now guards `kbSearchMinRelevancePct` identically; the two must stay in
+ * sync, since they are the same hazard on the two retrieval paths.
  */
 function forcedRetrievalFloorPct(raw: unknown, fallbackPct: number, label: string, logger: Logger): number {
   const pct = nonNegativeIntOr(raw as string | number | null | undefined, fallbackPct, label, logger);
@@ -2399,10 +2331,18 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    *
    * The scoped branch is wrapped defensively, NOT because production takes the fallback:
    * `resolveScopedSettingValues` documents that it never throws and wraps both of its own reads, so
-   * the only thing the catch can realistically see is an argument-evaluation error. The corollary is
-   * worth knowing rather than assuming away - when the resolver's OWN platform read fails it
-   * resolves the coded default internally and returns normally, so a settings outage lands on coded
-   * defaults whether or not this guard is here.
+   * the only thing the catch can realistically see is an argument-evaluation error - now including
+   * the membership read below, which has its own real failure mode. The corollary is worth knowing
+   * rather than assuming away - when the resolver's OWN platform read fails it resolves the coded
+   * default internally and returns normally, so a settings outage lands on coded defaults whether or
+   * not this guard is here.
+   *
+   * `user.organizationId` is a selected-org display pointer, not proof of membership (#1674) -
+   * verified via `membershipOrgIdsForTurn` before it reaches `scopeForCaller`, same fix and same
+   * fail-closed-to-personal-scope direction as the sibling `search_knowledge_base` fix (#2769).
+   * Not actually a shared cache hit with the data-lake resolvers, though: the memo keys on
+   * `turnScope` object identity, and `this.chatCompletion` here is never the same object as a
+   * tool's `ToolContext` - this always issues its own membership read.
    */
   private async readForcedRetrievalSettings(): Promise<{
     charBudget: unknown;
@@ -2412,9 +2352,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     const { db, user } = this.chatCompletion;
     if (db.scopedSettings) {
       try {
+        const pointerOrgId = normalizeId(user.organizationId);
+        const membershipOrgIds = pointerOrgId
+          ? await membershipOrgIdsForTurn(this.chatCompletion, user.id, db.organizations)
+          : [];
+        const verifiedOrgId = pointerOrgId && membershipOrgIds.includes(pointerOrgId) ? pointerOrgId : undefined;
         const values = await resolveScopedSettingValues(
           FORCED_RETRIEVAL_SETTING_KEYS,
-          scopeForCaller({ userId: user.id, organizationId: normalizeId(user.organizationId) }),
+          scopeForCaller({ userId: user.id, organizationId: verifiedOrgId }),
           { adminSettings: db.adminSettings, scopedSettings: db.scopedSettings },
           { logger: this.logger }
         );
@@ -2425,7 +2370,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         };
       } catch (err) {
         // Fall THROUGH rather than rethrow: the outer catch lands on coded defaults, which would
-        // discard a platform-wide override for the duration of a transient scoped-read failure.
+        // discard a platform-wide override for the duration of a transient scoped-read or
+        // membership-lookup failure.
         this.logger.warn(
           '\u{1F512} Forced retrieval: scoped settings read failed; falling back to the platform values',
           err

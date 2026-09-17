@@ -104,8 +104,16 @@ const handler = baseApi().put(
 
     if (currentUser.isAdmin) {
       // Parse with the admin schema -- includes email, isAdmin, tags, credits, etc.
+      const rawBody = (req.body ?? {}) as Record<string, unknown>;
+      // Zod strips unknown keys, so a misnamed admin field (the `adminNote` vs
+      // `creditReason` mix-up in useUpdateUserCredits was exactly this) parses away
+      // and the 200 reads as "fully applied" when a credit grant, tag, or role
+      // change never happened. Report them instead. Mirrors the self-service branch.
+      const adminKeys = new Set(Object.keys(userService.adminUpdateUserSchema.shape));
+      const ignoredFields = Object.keys(rawBody).filter(key => !adminKeys.has(key));
+
       // id comes from the route param; the spread ensures it wins over any id in the body.
-      const body = userService.adminUpdateUserSchema.parse({ ...(req.body as Record<string, unknown>), id: userId });
+      const body = userService.adminUpdateUserSchema.parse({ ...rawBody, id: userId });
 
       // Lockout guard: an explicit demote (isAdmin -> false) must not remove the
       // ONLY remaining Super Admin, and an admin must not remove their OWN Super
@@ -151,13 +159,24 @@ const handler = baseApi().put(
       // Double-check we have the latest state
       const finalUser = await User.findById(userId);
       // Admin branch: symmetric with the admin view of GET /users/[id].
-      return res.json(
-        redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions'], keepAdminOnly: ['userNotes'] })
-      );
+      const safeUser = redactUserSecretsForSelf(finalUser, {
+        keep: ['securityQuestions'],
+        keepAdminOnly: ['userNotes'],
+      });
+      // safeUser is null when the row vanished mid-request; spreading null there would
+      // turn the response into a bare { ignoredFields } that reads as a user document.
+      return res.json(safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser);
     } else {
       // Parse with the self-service schema -- excludes isAdmin, tags, email, etc.
       // secureParameters inside the service strips any keys not in this allowlist.
-      const body = userService.updateUserSchema.parse(req.body ?? {});
+      const rawBody = (req.body ?? {}) as Record<string, unknown>;
+      // A non-admin key here (creditDelta, tags, isAdmin, ...) parses away silently
+      // below -- surface it in the response so a 200 can't read as "fully applied"
+      // when part of the request was discarded.
+      const selfServiceKeys = new Set(Object.keys(userService.updateUserSchema.shape));
+      const ignoredFields = Object.keys(rawBody).filter(key => !selfServiceKeys.has(key));
+
+      const body = userService.updateUserSchema.parse(rawBody);
 
       const incomingTelemetryLevel = body.preferences?.contextTelemetryLevel;
       const previousTelemetryLevel = incomingTelemetryLevel
@@ -178,7 +197,10 @@ const handler = baseApi().put(
       // Non-admin self-update: symmetric with the self view of GET /users/[id], which means
       // no userNotes. This branch's own schema cannot write them either, so nothing is lost.
       const finalUser = await User.findById(userId);
-      return res.json(redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions'] }));
+      const safeUser = redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions'] });
+      // safeUser is null when the row vanished mid-request; spreading null there would
+      // turn the response into a bare { ignoredFields } that reads as a user document.
+      return res.json(safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser);
     }
   })
 );

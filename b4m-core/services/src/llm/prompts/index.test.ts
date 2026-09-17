@@ -10,6 +10,24 @@ describe('GROUNDED_NO_INVENTION_RULE', () => {
     expect(GROUNDED_NO_INVENTION_RULE).toMatch(/never attach a\s+citation/);
   });
 
+  // Pins the enumeration itself (not just the "not covered" sentence that follows it) and the
+  // "already given" qualifier - without this, the enumeration could collapse to "a specific fact" and
+  // every test in this file would still pass, silently dropping the #1598 guard.
+  it('names the specific kinds of claim the enumeration covers, even when the question presents one as given', () => {
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(
+      /specific customer, organization, person, competitive win or\s+comparison, deal, price, or\s+figure/
+    );
+    expect(GROUNDED_NO_INVENTION_RULE).toContain('even if the question presents it as already given');
+  });
+
+  // The derive licence (triage_router STEP 1) depends on this rule staying scoped to facts asserted as
+  // RETRIEVED, not to arithmetic on figures the request supplies inputs for - worth +25.2 composite,
+  // and it regresses silently if this rule is ever widened to cover derived/computed figures. Negative
+  // assertion so a reword that adds "derived" or "computed" language here fails loudly instead.
+  it('does not extend to derived or computed figures - that licence lives in triage_router, not here', () => {
+    expect(GROUNDED_NO_INVENTION_RULE).not.toMatch(/derive|derived|deriving|computed|computation/i);
+  });
+
   it('forbids fabricated absence - never deny a real offering just because retrieval missed it', () => {
     expect(GROUNDED_NO_INVENTION_RULE).toMatch(
       /never state or imply that .*(does not exist|is not real|is not provided)/i
@@ -25,6 +43,17 @@ describe('GROUNDED_NO_INVENTION_RULE', () => {
     expect(GROUNDED_NO_INVENTION_RULE).toMatch(/specific result,\s+engagement, or event/);
     expect(GROUNDED_NO_INVENTION_RULE).toMatch(
       /report that it is not in the retrieved\s+content and leave the claim itself open/
+    );
+  });
+
+  // The licence to leave a claim open was itself exploitable: a reply can decline the yes/no verdict
+  // and still fill the named gap with an invented figure ("results like this typically land around
+  // 20-25%"), which the clauses above never forbid because it isn't a denial or a ruling. This binds
+  // the licence at the point it's granted rather than adding a rule elsewhere.
+  it('binds the leave-it-open licence to not answering, including not answering from general knowledge', () => {
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(/leaving it open means not answering it/);
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(
+      /not\s+answering it from general knowledge, inference, or a plausible-sounding estimate/
     );
   });
 
@@ -48,7 +77,11 @@ describe('GROUNDED_NO_INVENTION_RULE', () => {
   // licensed alternative - the same act-not-vocabulary shape as the clauses above, for the same
   // reason. Text only; the behaviour is measured in evals/groundedNoInvention.
   it('defines leaving a claim open as not answering it, and names what may be offered instead', () => {
-    expect(GROUNDED_NO_INVENTION_RULE).toContain('Leaving it open means not answering it');
+    // Case-insensitive because the two wordings this rule merges stated the clause once each and the
+    // union states it once: the phrase sits mid-sentence ("...and leaving it open means not answering
+    // it, including not answering it from general knowledge, inference, or a plausible-sounding
+    // estimate"), so the pin is on the clause, not on its sentence-initial capital.
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(/leaving it open means not answering it/i);
     expect(GROUNDED_NO_INVENTION_RULE).toMatch(
       /do not explain how the asserted result was reached, what it was measured against, or what figures it involved/
     );

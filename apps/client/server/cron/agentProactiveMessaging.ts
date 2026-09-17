@@ -5,7 +5,7 @@ import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { connectDB } from '@bike4mind/database';
 import { Resource } from 'sst';
-import { agentProactiveMessagingService } from '@bike4mind/services';
+import * as agentProactiveMessagingService from '@bike4mind/services/agentProactiveMessagingService';
 import { sendToQueue } from '@server/utils/sqs';
 
 const contextToLogs = (context: Context) => ({

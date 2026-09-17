@@ -216,6 +216,9 @@ class IdentityProviderRepository
    * response - use `findById`, which cannot carry the secrets at all.
    */
   async findByIdWithSecrets(id: string): Promise<IIdentityProviderDocument | null> {
+    // A non-ObjectId id can never address a row - report no such row, not a CastError the
+    // calling route cannot attribute. Same contract as `BaseRepository.findById`.
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
     const doc = await this.model.findById(id).select(SECRET_SELECT);
     if (!doc) return null;
     return decryptDoc(doc);

@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { Resource } from 'sst';
-import { QuestStartBodySchema } from '@bike4mind/services';
+// Leaf subpath, not the ./llm barrel: eventBus is imported by hundreds of API
+// routes, and the barrel would trace the tool registry into every one of them.
+import { QuestStartBodySchema } from '@bike4mind/services/llm/questStartBody';
 import {
   ContextTelemetrySchema,
   ContextTelemetryAlertsSchema,
