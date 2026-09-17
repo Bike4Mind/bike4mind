@@ -77,6 +77,7 @@ export type { ToolDefinition, ToolContext } from './llm/tools/base/types';
 // (ChatCompletionProcess, b4mTools, generateTools, ...) stays behind './llm'.
 export { firecrawlFetch } from './llm/tools/implementation/webfetch';
 export { createSmallLLMService } from './llm/SmallLLMService';
+export { buildCorrectionPairs, type EvalPair, type CorrectionPairReader } from './llm/correctionPairs';
 export * as cliTools from './cliTools';
 export * from './latticeService';
 export * from './telemetry';

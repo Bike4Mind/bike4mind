@@ -5,11 +5,28 @@ import {
   IChatHistoryItemDocument,
   PromptMeta,
   IAttachmentDelivery,
+  MessageContentObject,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 
 export interface IChatHistoryItemModel extends Model<IChatHistoryItemDocument> {}
+
+/**
+ * One corrected turn as the correction-chain walk reads it. Structurally the `CorrectedTurn` shape
+ * in @bike4mind/services' buildCorrectionContext.ts plus identity - the two must stay assignable,
+ * which is what lets the service take this repository as a plain reader and stay DB-free.
+ */
+export type CorrectionLinkView = {
+  id: string;
+  sessionId: string;
+  correctsQuestId?: string | null;
+  prompt?: string;
+  reply?: string | null;
+  replies?: string[];
+  structuredReplies?: Array<{ role?: string; content?: MessageContentObject[] } | null | undefined> | null;
+  timestamp?: Date;
+};
 
 // PromptMetaSchema must cover every path in PromptMetaZodSchema (@bike4mind/common), minus a
 // short deliberate exclusion list. Mongoose runs strict, so an undeclared subpath is dropped in
@@ -723,6 +740,38 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     if (!result) return null;
     const doc = result.toJSON();
     return { ...doc } as IChatHistoryItemDocument;
+  }
+
+  /**
+   * The live corrected turns of one session, oldest first: the quests that point at an earlier
+   * attempt through `correctsQuestId`, soft-deleted ones excluded. Served by the
+   * `sessionId_correctsQuestId` index.
+   *
+   * Projected to the prose the eval-pair walk quotes (`buildCorrectionPairs` in
+   * @bike4mind/services). promptMeta, toolResults and images are left out on purpose: this feeds
+   * an export of verbatim prompts and answers, so widen the projection only together with the
+   * consumer's redaction decision.
+   */
+  async findCorrectionLinksBySessionId(sessionId: string): Promise<CorrectionLinkView[]> {
+    const docs = await this.model
+      .find(
+        { sessionId, correctsQuestId: { $ne: null }, deletedAt: null },
+        {
+          _id: 1,
+          sessionId: 1,
+          correctsQuestId: 1,
+          prompt: 1,
+          reply: 1,
+          replies: 1,
+          structuredReplies: 1,
+          timestamp: 1,
+        }
+      )
+      // Stable oldest-first: the walk emits one pair per hop in the order the corrections happened,
+      // and turns can share a millisecond.
+      .sort({ timestamp: 1, _id: 1 })
+      .lean<Array<Omit<CorrectionLinkView, 'id'> & { _id: mongoose.Types.ObjectId }>>();
+    return docs.map(({ _id, ...rest }) => ({ ...rest, id: _id.toString() }));
   }
 
   async findAllBySessionId(sessionId: string) {
