@@ -1,5 +1,37 @@
 # @bike4mind/common
 
+## 9.0.0
+
+### Major Changes
+
+- [#2932](https://github.com/Bike4Mind/bike4mind/pull/2932) [`4717962`](https://github.com/Bike4Mind/bike4mind/commit/4717962ddba858b806befe85578d29ac59c41e2f) Thanks [@jasonbdaro](https://github.com/jasonbdaro)! - owner-gate lake access widening and replace the invite bearer secret
+
+### Minor Changes
+
+- [#2916](https://github.com/Bike4Mind/bike4mind/pull/2916) [`1f4cf3e`](https://github.com/Bike4Mind/bike4mind/commit/1f4cf3e673a53ab86e7710e20a1bf031751aaf8f) Thanks [@onoya](https://github.com/onoya)! - lock the lake-reachability clause set and close two capture-harness gaps
+
+- [#2921](https://github.com/Bike4Mind/bike4mind/pull/2921) [`c29a80d`](https://github.com/Bike4Mind/bike4mind/commit/c29a80d73048693e57572b20ba281185f795e5b6) Thanks [@vinchi777](https://github.com/vinchi777)! - pass background and output_format through for gpt-image
+
+- [#2947](https://github.com/Bike4Mind/bike4mind/pull/2947) [`2c9221c`](https://github.com/Bike4Mind/bike4mind/commit/2c9221c0fca6903ff823b064627bb2100c696697) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - add a personal, owner-scoped feedback rollup
+
+### Patch Changes
+
+- [#2389](https://github.com/Bike4Mind/bike4mind/pull/2389) [`9f936cd`](https://github.com/Bike4Mind/bike4mind/commit/9f936cd95670f4e4a254e457ccd5156da26e8242) Thanks [@julsanchez](https://github.com/julsanchez)! - confine dedicated-flow API keys to the routes that name their scope
+
+- [#2866](https://github.com/Bike4Mind/bike4mind/pull/2866) [`a5dddf3`](https://github.com/Bike4Mind/bike4mind/commit/a5dddf329c18fb52da5c0b69ecb164c22cd006b6) Thanks [@vinchi777](https://github.com/vinchi777)! - document the chat quest error classifier
+
+- [#2908](https://github.com/Bike4Mind/bike4mind/pull/2908) [`17daf4c`](https://github.com/Bike4Mind/bike4mind/commit/17daf4cfae91f1b83887ce05816446c5d4834ea3) Thanks [@aflordelis](https://github.com/aflordelis)! - declare taggedAt on the Session schema so it persists
+
+- [#2917](https://github.com/Bike4Mind/bike4mind/pull/2917) [`8edb070`](https://github.com/Bike4Mind/bike4mind/commit/8edb070c37947550d9f1fcc2b06eda15069e93a4) Thanks [@onoya](https://github.com/onoya)! - route human-written help feedback into Feedback
+
+- [#2920](https://github.com/Bike4Mind/bike4mind/pull/2920) [`abfce42`](https://github.com/Bike4Mind/bike4mind/commit/abfce420f22de9373d1104d88d3648b5281ac9c1) Thanks [@vinchi777](https://github.com/vinchi777)! - normalize multimodal content across providers
+
+- [#2950](https://github.com/Bike4Mind/bike4mind/pull/2950) [`8c3870b`](https://github.com/Bike4Mind/bike4mind/commit/8c3870b58e57fa98f97672ea8c2dbedd4d4348a3) Thanks [@vinchi777](https://github.com/vinchi777)! - spend the search budget fairly across a session's lakes
+
+- [#2951](https://github.com/Bike4Mind/bike4mind/pull/2951) [`d0ad77c`](https://github.com/Bike4Mind/bike4mind/commit/d0ad77cecbdace4bb0bdeb109aa754f76f1ee9f1) Thanks [@onoya](https://github.com/onoya)! - resolve every creator-provenance access arm through effective ownership
+
+- [#2953](https://github.com/Bike4Mind/bike4mind/pull/2953) [`a09600c`](https://github.com/Bike4Mind/bike4mind/commit/a09600c89f6366a45990afa6cb45c789ba672c4d) Thanks [@vinchi777](https://github.com/vinchi777)! - gate forced retrieval on the turn's own score spread
+
 ## 8.0.0
 
 ### Major Changes
