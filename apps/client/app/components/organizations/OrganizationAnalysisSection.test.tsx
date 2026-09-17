@@ -6,6 +6,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const useOrgFeedbackReport = vi.hoisted(() => vi.fn());
 vi.mock('@client/app/hooks/data/orgFeedbackReport', () => ({ useOrgFeedbackReport }));
+// Stubbed to a marker: the panel has its own test, and it reaches the api and websocket contexts.
+vi.mock('@client/app/components/organizations/OrgFeedbackSummaryPanel', () => ({
+  default: () => <div data-testid="feedback-summary-panel" />,
+}));
 
 import OrganizationAnalysisSection from './OrganizationAnalysisSection';
 

@@ -8,20 +8,39 @@ import { createMocks } from 'node-mocks-http';
 
 const mockRefs = vi.hoisted(() => ({
   postHandler: null as null | ((req: unknown, res: unknown) => unknown),
+  getHandler: null as null | ((req: unknown, res: unknown) => unknown),
+  getContentAsString: null as null | (() => Promise<string>),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {
     use: () => chain,
+
+    // The route registers its rate limit per method, so the handler is the LAST argument.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    post: (fn: any) => {
-      mockRefs.postHandler = fn;
+    post: (...fns: any[]) => {
+      mockRefs.postHandler = fns[fns.length - 1];
+      return chain;
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    get: (...fns: any[]) => {
+      mockRefs.getHandler = fns[fns.length - 1];
       return chain;
     },
   };
   return { baseApi: () => chain };
 });
+
+vi.mock('sst', () => ({
+  Resource: new Proxy({} as Record<string, unknown>, { get: () => new Proxy({}, { get: () => 'mock' }) }),
+}));
+
+vi.mock('@bike4mind/fab-pipeline', () => ({
+  S3Storage: class {
+    getContentAsString = async () => (mockRefs.getContentAsString ? mockRefs.getContentAsString() : '{}');
+  },
+}));
 
 vi.mock('@server/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
@@ -46,10 +65,12 @@ vi.mock('@bike4mind/database', () => ({
 const WINDOW = { startDate: '2026-01-01T00:00:00.000Z', endDate: '2026-01-31T00:00:00.000Z' };
 
 let handler: (req: unknown, res: unknown) => unknown;
+let getHandler: (req: unknown, res: unknown) => unknown;
 
 beforeAll(async () => {
   await import('../feedback-summary');
   handler = mockRefs.postHandler!;
+  getHandler = mockRefs.getHandler!;
 });
 
 const invoke = async (body: unknown, user: unknown = { id: 'owner1', isAdmin: false }) => {
@@ -142,5 +163,60 @@ describe('POST /api/organizations/:id/feedback-summary', () => {
     expect(update.status).toBe('failed');
     // Swapped off the shared constant, or the window stays held until the TTL expires.
     expect(update.activeKey).not.toBe('active');
+  });
+});
+
+/**
+ * The read the panel polls after a completion frame. It re-runs the same org gate as the enqueue -
+ * a signed URL handed out once would not.
+ */
+describe('GET /api/organizations/:id/feedback-summary', () => {
+  const runGet = async () => {
+    const { req, res } = createMocks({ method: 'GET', query: { id: 'org1', ...WINDOW } });
+    (req as unknown as { user: unknown }).user = { id: 'owner1', isAdmin: false };
+    await getHandler(req, res);
+    return res;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    verifyOrgAccess.mockResolvedValue({ id: 'org1' } as never);
+    jobFindOne.mockReturnValue({ sort: () => ({ lean: async () => null }) } as never);
+  });
+
+  it('answers "none" for a window nobody has asked about', async () => {
+    const res = await runGet();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ status: 'none' });
+  });
+
+  it('reads the artifact back for a completed job', async () => {
+    const artifact = { summaryJobId: 'sum-1', summary: 'Steady week.' };
+    jobFindOne.mockReturnValue({
+      sort: () => ({ lean: async () => ({ summaryJobId: 'sum-1', status: 'completed', s3Key: 'k' }) }),
+    } as never);
+    mockRefs.getContentAsString = async () => JSON.stringify(artifact);
+
+    const res = await runGet();
+
+    expect(res._getJSONData()).toEqual({ status: 'completed', summaryJobId: 'sum-1', artifact });
+  });
+
+  it('reports a failed job with its reason instead of an artifact', async () => {
+    jobFindOne.mockReturnValue({
+      sort: () => ({ lean: async () => ({ summaryJobId: 'sum-1', status: 'failed', errorMessage: 'no model' }) }),
+    } as never);
+
+    const res = await runGet();
+
+    expect(res._getJSONData()).toEqual({ status: 'failed', summaryJobId: 'sum-1', errorMessage: 'no model' });
+  });
+
+  it('refuses a caller who may not administer the org', async () => {
+    verifyOrgAccess.mockRejectedValue(notFound() as never);
+
+    await expect(runGet()).rejects.toThrow('Organization not found');
+    expect(jobFindOne).not.toHaveBeenCalled();
   });
 });

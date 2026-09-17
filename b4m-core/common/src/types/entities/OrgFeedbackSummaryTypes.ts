@@ -33,3 +33,17 @@ export interface OrgFeedbackSummaryArtifact {
   summary: string;
   counts: OrgFeedbackSummaryCounts;
 }
+
+/**
+ * GET /api/organizations/:id/feedback-summary for one window.
+ *
+ * 'none' is a real answer, not an error: nobody has asked for this window yet. The artifact is
+ * inlined rather than handed over as a signed URL because the panel renders the prose itself, and
+ * a URL would expire between the job finishing and the tab being opened.
+ */
+export interface OrgFeedbackSummaryView {
+  status: 'none' | 'pending' | 'processing' | 'completed' | 'failed';
+  summaryJobId?: string;
+  errorMessage?: string;
+  artifact?: OrgFeedbackSummaryArtifact;
+}

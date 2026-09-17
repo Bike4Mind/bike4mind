@@ -1,5 +1,6 @@
 import { IOrganizationDocument } from '@bike4mind/common';
 import FeedbackCountsPanel from '@client/app/components/organizations/FeedbackCountsPanel';
+import OrgFeedbackSummaryPanel from '@client/app/components/organizations/OrgFeedbackSummaryPanel';
 import type { OrgFeedbackRange } from '@client/app/hooks/data/orgFeedbackReport';
 import { Button, FormControl, FormLabel, Input, Stack, Typography } from '@mui/joy';
 import { FC, useState } from 'react';
@@ -65,7 +66,10 @@ const OrganizationAnalysisSection: FC<{ organization: IOrganizationDocument }> =
           Choose a window and run the report to see what this organization has been reporting.
         </Typography>
       ) : (
-        <FeedbackCountsPanel organizationId={organization.id} range={applied} />
+        <Stack spacing={3}>
+          <FeedbackCountsPanel organizationId={organization.id} range={applied} />
+          <OrgFeedbackSummaryPanel organizationId={organization.id} range={applied} />
+        </Stack>
       )}
     </Stack>
   );
