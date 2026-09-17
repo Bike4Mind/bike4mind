@@ -13,6 +13,11 @@ import { reembedMementosForUser } from '@server/memory/reembedMementos';
  * false. No `skip` bookkeeping needed - in execute mode the route always re-queries the head of
  * the still-stale set, since repairing a page removes those users from it. `skip` only matters
  * for a dry-run preview, where nothing is written and the set stays stable across calls.
+ *
+ * Convergence depends on every page eventually making progress. A user who can never be repaired
+ * (see `staleWithVectorFilter`'s summary condition for the one case excluded at the query level)
+ * would otherwise sit at the head of the sort order forever and block every user behind them,
+ * since execute mode always re-queries skip=0 - see `hasMore` below for the other half of this.
  */
 const BATCH_SIZE = 25;
 
@@ -25,10 +30,15 @@ const bodySchema = z.object({
 
 // A memento is stale for this pass only if it both carries a vector AND that vector is not in the
 // pinned space - an un-embedded memento has nothing to repair, and re-running excludes what the
-// previous pass already fixed (embeddingModel: MEMENTO_EMBEDDING_ID).
+// previous pass already fixed (embeddingModel: MEMENTO_EMBEDDING_ID). The summary condition mirrors
+// reembedMementosForUser's own `!memento.summary?.trim()` skip: a blank summary can never be
+// repaired by this route no matter how many times it's retried, so counting it as "stale" here
+// would pin its user at the head of the sort order permanently once execute mode always re-queries
+// skip=0 (see the docblock above).
 const staleWithVectorFilter = {
   embeddingModel: { $ne: MEMENTO_EMBEDDING_ID },
   'embedding.0': { $exists: true },
+  summary: { $regex: /\S/ },
 };
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
@@ -81,12 +91,20 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     }
   }
 
+  // The remaining ways a user can fail (no resolvable credential, a transient provider error) can't
+  // be excluded at the query level - they're worth retrying. But since execute mode always re-queries
+  // skip=0, a page that reembeds nothing would otherwise repeat identically forever: same users, same
+  // failures, no way for the loop to ever reach whoever sorts behind them. A page only counts as
+  // "more to do" if it actually shrank the stale set; a fully-stuck page stops the loop here instead,
+  // with failedUsers/failed telling the operator who needs a credential fixed before retrying.
+  const pageMadeProgress = execute ? totals.reembedded > 0 : true;
+
   return res.json({
     processedUsers: page.length,
     dryRun: !execute,
     ...totals,
     failedUsers,
-    hasMore: page.length === BATCH_SIZE,
+    hasMore: page.length === BATCH_SIZE && pageMadeProgress,
     // Always 0 in execute mode - see effectiveSkip above. The caller's loop is simply "keep
     // posting execute:true until hasMore is false", no cursor bookkeeping required.
     nextSkip: execute ? 0 : skip + page.length,

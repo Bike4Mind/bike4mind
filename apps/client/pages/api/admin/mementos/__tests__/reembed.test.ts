@@ -171,4 +171,67 @@ describe('/api/admin/mementos/reembed', () => {
       { userId: 'bad-user', error: 'OpenAI API key required to re-embed memory, but none is available' },
     ]);
   });
+
+  it('excludes blank-summary mementos from the stale set at the query level', async () => {
+    userIdPage = [{ _id: 'u1' }];
+    const { req, res } = makeReq({ skip: 0, execute: true });
+    await (handler as any)._post(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    const pipeline = mockAggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
+    const matchStage = pipeline.find(stage => '$match' in stage) as { $match: Record<string, unknown> };
+    // A memento reembedMementosForUser can never repair (blank/whitespace summary) must not count as
+    // "stale" here - otherwise, since execute mode always re-queries skip=0, its user would sit at the
+    // head of the sort order and block every user behind them forever.
+    expect(matchStage.$match.summary).toEqual({ $regex: /\S/ });
+  });
+
+  it('stops the loop once a full page makes zero progress, instead of retrying forever', async () => {
+    // Models a page entirely made of users no retry can ever fix (e.g. no resolvable credential) -
+    // the same page would be re-queried identically on every call, since execute mode always resets
+    // to skip=0. Before the progress gate, hasMore stayed true forever and the corpus behind this
+    // page was never reached; the fix must halt the loop and still surface every failure.
+    const stuckUserIds = Array.from({ length: 25 }, (_, i) => `stuck-${i}`);
+    userIdPage = stuckUserIds.map(id => ({ _id: id }));
+    reembedMock.mockRejectedValue(new Error('OpenAI API key required to re-embed memory, but none is available'));
+
+    const { req, res } = makeReq({ skip: 0, execute: true });
+    await (handler as any)._post(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    const body = res._getJSONData();
+    expect(body.processedUsers).toBe(25);
+    expect(body.reembedded).toBe(0);
+    expect(body.failedUsers).toHaveLength(25);
+    expect(body.hasMore).toBe(false);
+  });
+
+  it('keeps hasMore true for a full page that made partial progress', async () => {
+    const userIds = Array.from({ length: 25 }, (_, i) => `u-${i}`);
+    userIdPage = userIds.map(id => ({ _id: id }));
+    // One success is enough to prove the loop reached a genuinely different page next call.
+    reembedMock
+      .mockResolvedValueOnce({ total: 1, alreadyCurrent: 0, reembedded: 1, failed: 0, skippedEmpty: 0 })
+      .mockRejectedValue(new Error('OpenAI API key required to re-embed memory, but none is available'));
+
+    const { req, res } = makeReq({ skip: 0, execute: true });
+    await (handler as any)._post(req, res);
+
+    const body = res._getJSONData();
+    expect(body.reembedded).toBe(1);
+    expect(body.hasMore).toBe(true);
+  });
+
+  it('a stuck page does not gate hasMore in dry-run mode, where reembedded is always 0', async () => {
+    userIdPage = Array.from({ length: 25 }, (_, i) => ({ _id: `u-${i}` }));
+    // Dry run never writes, so reembedMementosForUser's real implementation always returns
+    // reembedded: 0 - the progress gate must not apply here, or every dry-run preview page would
+    // wrongly report hasMore: false after its first call.
+    reembedMock.mockResolvedValue(emptyStats);
+
+    const { req, res } = makeReq({ skip: 0, execute: false });
+    await (handler as any)._post(req, res);
+
+    expect(res._getJSONData().hasMore).toBe(true);
+  });
 });
