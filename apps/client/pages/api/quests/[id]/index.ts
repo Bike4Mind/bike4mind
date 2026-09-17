@@ -94,7 +94,12 @@ const handler = baseApi({
     // A recovered timeout is `status: 'done'` carrying an error message, so a headless client
     // needs `type` to machine-distinguish it from a genuine success.
     type: quest.type,
-    errorCode: quest.errorCode,
+    // Reason for a `type: 'error'` quest, when there is a machine-readable one (credit
+    // exhaustion today) - see chatContract's 200 description. Gated on `type` (mirrors
+    // chat.ts) because `errorCode` is persisted on the quest and a retry does not clear it;
+    // an ungated read would resurface a stale code from a prior failed attempt on a quest
+    // that has since succeeded.
+    ...(quest.type === 'error' && { errorCode: quest.errorCode }),
     sessionId: quest.sessionId,
     reply: quest.reply,
     replies: quest.replies,

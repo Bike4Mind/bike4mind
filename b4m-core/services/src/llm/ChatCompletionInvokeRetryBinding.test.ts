@@ -83,4 +83,19 @@ describe('ChatCompletionInvoke retry path session binding', () => {
     // guard let it through: the retry overwrite ran (status flipped to running)
     expect(questsUpdate).toHaveBeenCalledWith(expect.objectContaining({ status: 'running' }));
   });
+
+  it('clears a stale errorCode from a prior failed attempt on retry', async () => {
+    const { invoke, questsUpdate } = makeHarness({
+      id: 'quest-1',
+      sessionId: SESSION,
+      type: 'error',
+      errorCode: 'insufficient_credits',
+    });
+
+    await invoke.invoke({ body: body as never, userId: 'user-A' });
+
+    // Without this, a retry that succeeds (or fails for an unrelated, uncoded reason) would
+    // still report the credit-exhaustion code from the attempt being retried.
+    expect(questsUpdate).toHaveBeenCalledWith(expect.objectContaining({ errorCode: undefined }));
+  });
 });

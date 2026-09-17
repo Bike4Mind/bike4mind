@@ -801,6 +801,7 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     mockInvoke.mockResolvedValue({
       id: 'quest-2',
       status: 'done',
+      type: 'message',
       reply: 'hi',
       replies: ['hi'],
       createdAt: new Date('2026-08-03T00:00:00Z'),
@@ -914,5 +915,69 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', promptMode: 'nonsense' } });
     await handler(req, res);
     expect(res._getStatusCode()).toBe(422);
+  });
+
+  describe('credit-exhaustion classifier', () => {
+    // Models ChatCompletionProcess's real error path: it mutates the in-memory quest with
+    // reply/type/errorCode rather than throwing, so the route always sees status 200.
+    const processErroringWith = (errorCode: 'insufficient_credits' | 'spend_cap_exceeded') =>
+      mockProcess.mockImplementation(async ({ prefetchedQuest }: { prefetchedQuest: Record<string, unknown> }) => {
+        prefetchedQuest.reply = "You're out of credits. This request needs about 10 credits, but only 2 are available.";
+        prefetchedQuest.replies = [prefetchedQuest.reply as string];
+        prefetchedQuest.type = 'error';
+        prefetchedQuest.errorCode = errorCode;
+        prefetchedQuest.status = 'done';
+      });
+
+    it('still returns 200 on credit exhaustion (documented async-quest behaviour, not a silent failure)', async () => {
+      processErroringWith('insufficient_credits');
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+    });
+
+    it('carries type: "error" and errorCode: "insufficient_credits" alongside the credit-copy reply', async () => {
+      processErroringWith('insufficient_credits');
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      const body = res._getJSONData();
+      expect(body.response).toMatch(/out of credits/i);
+      expect(body.type).toBe('error');
+      expect(body.errorCode).toBe('insufficient_credits');
+    });
+
+    // This endpoint's process path does not itself raise spend_cap_exceeded today (its only
+    // throw site is embedRoute's pre-flight 422, outside this try/catch) - this test only
+    // confirms the pass-through is not hardcoded to insufficient_credits.
+    it('passes through errorCode: "spend_cap_exceeded" the same way, if the quest ever carried it', async () => {
+      processErroringWith('spend_cap_exceeded');
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      expect(res._getJSONData().errorCode).toBe('spend_cap_exceeded');
+    });
+
+    it('is a failure with no errorCode at all - never read its absence as success', async () => {
+      mockProcess.mockImplementation(async ({ prefetchedQuest }: { prefetchedQuest: Record<string, unknown> }) => {
+        prefetchedQuest.reply = 'The provider timed out.';
+        prefetchedQuest.replies = [prefetchedQuest.reply as string];
+        prefetchedQuest.type = 'error';
+        prefetchedQuest.status = 'done';
+      });
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      const body = res._getJSONData();
+      expect(body.type).toBe('error');
+      expect(body).not.toHaveProperty('errorCode');
+    });
+
+    it('carries type unconditionally on a real answer, matching the polled quest, and omits errorCode', async () => {
+      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+      await handler(req, res);
+      const body = res._getJSONData();
+      // Same field, same value GET /api/quests/{id} returns for a successful quest
+      // (see the quests/[id] integration suite) - a caller uses one branch for both surfaces.
+      expect(body.type).toBe('message');
+      expect(body).not.toHaveProperty('errorCode');
+    });
   });
 });

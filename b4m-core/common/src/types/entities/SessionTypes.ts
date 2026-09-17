@@ -99,6 +99,15 @@ export const QUEST_ERROR_CODES = [
 export type QuestErrorCode = (typeof QUEST_ERROR_CODES)[number];
 
 /**
+ * Single source of truth for `IChatHistoryItem.type` / quest `type`. Restated by hand in
+ * `schemas/actions.ts`, `schemas/chat.ts`, and `notebookExportService/types.ts` before this
+ * const existed, which is exactly how `voice_transcript` went missing from the export contract
+ * once already - derive from this tuple instead of retyping the union.
+ */
+export const CHAT_HISTORY_ITEM_TYPES = ['message', 'oob', 'error', 'system', 'voice_transcript'] as const;
+export type ChatHistoryItemType = (typeof CHAT_HISTORY_ITEM_TYPES)[number];
+
+/**
  * Requested-vs-delivered counts for one turn's attachments. `IChatHistoryItem.attachmentNotices`
  * explains the failures; this is the affirmative half, and it is the only thing that separates
  * "nothing was attached" from "everything attached was refused" - a distinction
@@ -138,7 +147,7 @@ export interface IChatHistoryItem {
    * - oob: Out-of-band data such as a link to a website
    * - error: An error message
    */
-  type: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
+  type: ChatHistoryItemType;
 
   /** When the prompt was captured/generated */
   timestamp: Date;
