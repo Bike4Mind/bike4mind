@@ -59,6 +59,7 @@ const makeModelInfo = (id: string): ModelInfo =>
 
 const kontextPro = makeModelInfo(ImageModels.FLUX_KONTEXT_PRO);
 const unsupportedImageModel = makeModelInfo('made-up-image-model');
+const gptImage = makeModelInfo(ImageModels.GPT_IMAGE_1_5);
 
 const richUser = { id: 'user1', currentCredits: 1_000_000 } as unknown as IUserDocument;
 
@@ -74,7 +75,7 @@ const validate = (
 
 describe('ImageEditService.validateUserCredits', () => {
   beforeEach(() => {
-    vi.mocked(getAvailableModels).mockResolvedValue([kontextPro, unsupportedImageModel]);
+    vi.mocked(getAvailableModels).mockResolvedValue([kontextPro, unsupportedImageModel, gptImage]);
   });
 
   it('scales with n instead of billing a flat 1 credit', async () => {
@@ -101,6 +102,13 @@ describe('ImageEditService.validateUserCredits', () => {
 
   it('surfaces "Model not supported" for an image model with no cost calculator', async () => {
     await expect(validate(1, 'made-up-image-model')).rejects.toThrow('Model not supported');
+  });
+
+  it('bills a GPT-Image model at the requested tier - high costs more than low', async () => {
+    const low = await validate(1, ImageModels.GPT_IMAGE_1_5, { quality: 'low' });
+    const high = await validate(1, ImageModels.GPT_IMAGE_1_5, { quality: 'high' });
+
+    expect(high.requiredCredits).toBeGreaterThan(low.requiredCredits);
   });
 
   it('still rejects a model that is not in the available list', async () => {
@@ -155,7 +163,7 @@ describe('ImageEditService.process model dispatch', () => {
     return { service, quest };
   };
 
-  const run = async (model: string) => {
+  const run = async (model: string, bodyOverride: Record<string, unknown> = {}) => {
     const { service, quest } = makeService();
     await service.process({
       body: {
@@ -166,6 +174,7 @@ describe('ImageEditService.process model dispatch', () => {
         model,
         image: 'https://example.invalid/source.png',
         fabFileIds: ['mask1'],
+        ...bodyOverride,
       } as never,
       logger: silentLogger,
     });
@@ -201,6 +210,12 @@ describe('ImageEditService.process model dispatch', () => {
 
     expect(vi.mocked(aiImageService).mock.calls[0][0]).toBe('gemini');
     expect(editSpy.mock.calls[0][2]).toMatchObject({ model: ImageModels.GEMINI_2_5_FLASH_IMAGE });
+  });
+
+  it('forwards the requested quality to the OpenAI edit service', async () => {
+    await run(ImageModels.GPT_IMAGE_1_5, { quality: 'high' });
+
+    expect(editSpy.mock.calls[0][2]).toMatchObject({ model: ImageModels.GPT_IMAGE_1_5, quality: 'high' });
   });
 
   it('rejects a model that cannot edit instead of silently substituting one', async () => {

@@ -27,7 +27,7 @@ import { toast } from 'sonner';
 import { useNotebookSearch } from '@client/app/contexts/NotebookSearchContext';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useQuestPreparation } from '@client/app/hooks/useQuestPreparation';
-import KeyboardDoubleArrowDownTwoToneIcon from '@mui/icons-material/KeyboardDoubleArrowDownTwoTone';
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import { useAdminTools } from '@client/app/hooks/useAdminTools';
 import { useStableCallback } from '@client/app/hooks/useStableCallback';
 import ChatHistory from '@client/app/components/Session/ChatHistory';
@@ -72,20 +72,41 @@ const ScrollToBottomButton = memo(
       >
         <IconButton
           size="sm"
-          variant="outlined"
-          sx={{
-            backgroundColor: 'background.body',
-            animation: 'bounce 4s ease-in-out infinite',
-            '&:hover': {
-              animation: 'none',
-              backgroundColor: 'background.body',
-              backgroundImage: theme =>
-                `linear-gradient(${theme.palette.session.hoverBackground}, ${theme.palette.session.hoverBackground})`,
-            },
-            transition: 'transform 0.2s, background-color 0.2s, background-image 0.2s',
+          // plain, not outlined: the surface below is drawn by hand, and Joy's own
+          // variant background would sit opaquely on top of the blur.
+          variant="plain"
+          sx={theme => ({
+            borderRadius: '50%',
+            '--IconButton-size': '34px',
+            minWidth: '34px',
+            minHeight: '34px',
+            '--Icon-fontSize': '18px',
+            color: 'text.primary',
+            // Glass: the transcript stays visible through the button, blurred. The solid
+            // `background` is the fallback wherever color-mix is unsupported - it is a
+            // separate property, so an invalid color-mix drops back to it rather than to
+            // nothing. saturate keeps the blurred content from going grey.
+            background: theme.vars.palette.background.surface,
+            backgroundColor: `color-mix(in srgb, ${theme.vars.palette.background.surface} 55%, transparent)`,
+            backdropFilter: 'blur(12px) saturate(160%)',
+            WebkitBackdropFilter: 'blur(12px) saturate(160%)',
+            border: '1px solid',
+            borderColor: 'border.soft',
+            boxShadow: theme.palette.session.shadowSoft,
+            // Joy's own hover fill would win over a plain `&:hover` here, so cancel it and
+            // let the rule below do the work.
+            '--variant-plainHoverBg': 'transparent',
+            transition: 'background-color 0.2s, border-color 0.2s',
             pointerEvents: 'auto',
-            boxShadow: (theme: { palette: { session: { shadowSoft: string } } }) => theme.palette.session.shadowSoft,
-          }}
+            '&:hover': {
+              backgroundColor: `color-mix(in srgb, ${theme.vars.palette.background.surface} 78%, transparent)`,
+              // The scheme's own hover tint laid over the glass, rather than a second
+              // colour invented here. An image, not a colour, so it stacks on the mix
+              // above instead of replacing it - the blur survives.
+              backgroundImage: `linear-gradient(${theme.palette.session.hoverBackground}, ${theme.palette.session.hoverBackground})`,
+              borderColor: 'border.muted',
+            },
+          })}
           onClick={() => {
             const scroller = scrollerRef.current;
             if (scroller) {
@@ -93,7 +114,7 @@ const ScrollToBottomButton = memo(
             }
           }}
         >
-          <KeyboardDoubleArrowDownTwoToneIcon />
+          <ArrowDownwardIcon />
         </IconButton>
       </Box>
     );
@@ -256,7 +277,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
   // reason ChatHistory re-rendered on every streaming chunk.)
   const sendMessage = useStableCallback(
     async (messageData: Partial<IChatHistoryItem>, options: SendMessageOptions = { isRetry: false }) => {
-      const { isRetry, isImageEdit, isVariation } = options;
+      const { isRetry, isImageEdit, isVariation, correctsQuestId } = options;
       if (!sessionId) return;
       if (!messageData.prompt) return;
       if (isRetry && !messageData.id) return;
@@ -314,7 +335,17 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
           enableQuestMaster: isQuestMasterEnabled,
           enableMementos: isMementosEnabled,
           enableArtifacts: isArtifactsEnabled,
-          questId: isVariation ? undefined : messageData?.id,
+          // A correction is a new turn, never a re-run of the flagged quest: passing its id as
+          // `questId` would overwrite the very answer the correction chain has to preserve. The
+          // `correctsQuestId` arm is defense in depth for a future call site, not today's gate -
+          // the only caller that sets the field passes a message with no `id` at all
+          // (MessageContent's handleSubmitCorrection), and the server refuses the combination
+          // outright with a BadRequestError. Both are pinned: MessageContent.gating.test.tsx
+          // 'sends a new turn linked to the corrected quest' and
+          // ChatCompletionInvokeCorrectionBinding.test.ts 'refuses to combine a correction with an
+          // in-place retry'.
+          questId: isVariation || correctsQuestId ? undefined : messageData?.id,
+          correctsQuestId,
           image: options?.image,
           queryClient,
           tools,
@@ -473,8 +504,11 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
                       Previously this lived in a fixed block above SessionBottom,
                       which created a large visual gap between the user prompt
                       (top) and the agent activity (bottom of viewport).
-                      Constrain to the same 950px column the chat bubbles and
-                      input box use — `width: 100%` matters here because the
+                      Constrain to the same 950px column the chat bubbles use.
+                      The prompt bar intentionally widens beyond this (up to
+                      1200px) when both side panels are closed; the asymmetry
+                      is deliberate - the transcript column stays narrow for
+                      readability. `width: 100%` matters here because the
                       footer slot in ChatHistory passes its full container to
                       us; without it, `maxWidth: 950px` alone would let the
                       flex children collapse to their natural width and the
@@ -568,6 +602,11 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
                       <CircularProgress />
                     </Box>
                   )}
+                  {/* Clearance under the last message, whose action row is always on screen and
+                      was landing right on top of the composer. Inside the scroll area rather
+                      than on SessionBottom, so it costs no fixed chrome height and the list
+                      keeps the room it has. */}
+                  <Box sx={{ height: '40px', flexShrink: 0 }} />
                 </>
               }
             />

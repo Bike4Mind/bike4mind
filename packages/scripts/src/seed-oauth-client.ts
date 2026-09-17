@@ -10,21 +10,22 @@
  *
  * To register a Pattern-A *federated* client (one allowed to mint per-user
  * `ai:generate` keys via POST /api/oauth/ai-token), also set the trust config.
- * FEDERATED_ISSUER and FEDERATED_AUDIENCE are always required together; the rest
- * depends on who issued the ID token the app will present.
  *
- * (a) An external Cognito pool that federates B4M upstream - FEDERATED_JWKS_URI is
- *     optional there, since `${issuer}/.well-known/jwks.json` is the pool endpoint:
+ * Shape 1 - the app's own Cognito pool federates B4M upstream (the default;
+ * all three are required together, JWKS URI is optional because the endpoint
+ * derives Cognito's `${issuer}/.well-known/jwks.json`):
  *   FEDERATED_ISSUER="https://cognito-idp.<region>.amazonaws.com/<poolId>" \
  *   FEDERATED_AUDIENCE="<cognito-app-client-id>" \
  *   FEDERATED_PROVIDER_NAME="B4M" \
  *   [FEDERATED_JWKS_URI="https://.../.well-known/jwks.json"]
  *
- * (b) B4M itself, for an app that signs users in directly against B4M. The issuer is
- *     B4M's APP_URL, the JWKS URI must be given explicitly, and there is no provider
- *     name (the user id is the token's `sub`):
+ * Shape 2 - the app signs users in against B4M's OIDC provider directly, so the
+ * B4M user id is the token's `sub`. FEDERATED_PROVIDER_NAME is meaningless here
+ * and FEDERATED_JWKS_URI is REQUIRED: B4M publishes its JWKS at /api/oauth/jwks,
+ * which the derived default would never find.
+ *   FEDERATED_SUBJECT_SOURCE=sub \
  *   FEDERATED_ISSUER="https://<b4m-app-url>" \
- *   FEDERATED_AUDIENCE="<the client_id this script prints>" \
+ *   FEDERATED_AUDIENCE="<this client_id>" \
  *   FEDERATED_JWKS_URI="https://<b4m-app-url>/api/oauth/jwks"
  */
 
@@ -32,6 +33,9 @@ import crypto from 'crypto';
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 
+// Hand-duplicated from packages/database/src/models/auth/OAuthClientModel.ts (this
+// script has no dependency on that package). MUST STAY IN SYNC: a field added there
+// and not mirrored here is silently stripped at seed time.
 const OAuthClientSchema = new mongoose.Schema(
   {
     clientId: { type: String, required: true, unique: true },
@@ -45,9 +49,20 @@ const OAuthClientSchema = new mongoose.Schema(
       type: new mongoose.Schema(
         {
           issuer: { type: String, required: true },
-          jwksUri: { type: String },
+          jwksUri: {
+            type: String,
+            required: function (this: { subjectSource?: string }) {
+              return this.subjectSource === 'sub';
+            },
+          },
           audience: { type: String, required: true },
-          providerName: { type: String },
+          providerName: {
+            type: String,
+            required: function (this: { subjectSource?: string }) {
+              return this.subjectSource !== 'sub';
+            },
+          },
+          subjectSource: { type: String, enum: ['identities', 'sub'] },
         },
         { _id: false }
       ),
@@ -57,32 +72,51 @@ const OAuthClientSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+interface FederatedIdpConfig {
+  issuer: string;
+  audience: string;
+  jwksUri?: string;
+  providerName?: string;
+  subjectSource?: 'identities' | 'sub';
+}
+
 /**
- * Build the federated trust config from env, if provided. Issuer + audience are
- * required together; then either providerName (external Cognito pool, whose jwksUri
- * can be derived) or jwksUri (B4M as issuer, where it must be explicit). Neither ->
- * the config is valid for no issuer shape, so reject it here rather than seed a
- * client the exchange will always turn away.
+ * Build the federated trust config from env, if provided. See the header for the two
+ * shapes. `clientId` is the just-generated id, used as the default audience for the
+ * `sub` shape because a B4M-issued ID token sets `aud` to the OAuth client it was
+ * issued to (generateIdToken in apps/client/server/auth/oauthServer.ts).
  */
-function resolveFederatedIdp() {
+function resolveFederatedIdp(clientId: string): FederatedIdpConfig | undefined {
   const issuer = process.env.FEDERATED_ISSUER;
-  const audience = process.env.FEDERATED_AUDIENCE;
   const providerName = process.env.FEDERATED_PROVIDER_NAME;
   const jwksUri = process.env.FEDERATED_JWKS_URI;
+  const subjectSource = process.env.FEDERATED_SUBJECT_SOURCE;
 
-  if (!issuer && !audience && !providerName && !jwksUri) return undefined; // not a federated client
-
-  if (!issuer || !audience) {
-    throw new Error('Federated client requires FEDERATED_ISSUER and FEDERATED_AUDIENCE together');
+  if (subjectSource && subjectSource !== 'identities' && subjectSource !== 'sub') {
+    throw new Error(`FEDERATED_SUBJECT_SOURCE must be 'identities' or 'sub', got '${subjectSource}'`);
   }
 
-  if (!providerName && !jwksUri) {
+  if (subjectSource === 'sub') {
+    if (!issuer) throw new Error('FEDERATED_SUBJECT_SOURCE=sub requires FEDERATED_ISSUER');
+    if (!jwksUri) {
+      throw new Error(
+        'FEDERATED_SUBJECT_SOURCE=sub requires an explicit FEDERATED_JWKS_URI: B4M publishes its JWKS at ' +
+          '<issuer>/api/oauth/jwks, and the derived /.well-known/jwks.json default would 404'
+      );
+    }
+    return { issuer, audience: process.env.FEDERATED_AUDIENCE || clientId, jwksUri, subjectSource };
+  }
+
+  const audience = process.env.FEDERATED_AUDIENCE;
+  if (!issuer && !audience && !providerName) return undefined; // not a federated client
+
+  if (!issuer || !audience || !providerName) {
     throw new Error(
-      'Federated client requires FEDERATED_PROVIDER_NAME (external IdP) or FEDERATED_JWKS_URI (B4M as issuer)'
+      'Federated client requires FEDERATED_ISSUER, FEDERATED_AUDIENCE, and FEDERATED_PROVIDER_NAME together'
     );
   }
 
-  return { issuer, audience, ...(providerName ? { providerName } : {}), ...(jwksUri ? { jwksUri } : {}) };
+  return { issuer, audience, providerName, ...(jwksUri ? { jwksUri } : {}) };
 }
 
 const OAuthClient = mongoose.model('OAuthClient', OAuthClientSchema);
@@ -113,7 +147,7 @@ async function main() {
   const clientSecret = crypto.randomBytes(32).toString('base64url');
   const clientSecretHash = await bcrypt.hash(clientSecret, 10);
 
-  const federatedIdp = resolveFederatedIdp();
+  const federatedIdp = resolveFederatedIdp(clientId);
 
   await OAuthClient.create({
     clientId,
@@ -133,8 +167,9 @@ async function main() {
     console.log('  federated    : yes (may mint per-user ai:generate keys via /api/oauth/ai-token)');
     console.log('    issuer      :', federatedIdp.issuer);
     console.log('    audience    :', federatedIdp.audience);
-    console.log('    jwks uri    :', federatedIdp.jwksUri ?? '(derived from issuer)');
-    console.log('    provider    :', federatedIdp.providerName ?? '(none - B4M-issued tokens use sub)');
+    console.log('    subject from:', federatedIdp.subjectSource ?? 'identities');
+    if (federatedIdp.providerName) console.log('    provider    :', federatedIdp.providerName);
+    if (federatedIdp.jwksUri) console.log('    jwks uri    :', federatedIdp.jwksUri);
   }
   console.log(`\nSet these SST secrets in ${clientName}:`);
   console.log(`  sst secret set B4mOAuthClientId "${clientId}"`);

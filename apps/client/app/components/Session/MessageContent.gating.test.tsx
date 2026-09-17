@@ -27,6 +27,9 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   // the Team option is gated on the selected org matching it.
   useUser: () => ({ currentUser: { id: 'user-1', organizationId: 'org_42', showCreditsUsed: mocks.showCreditsUsed } }),
 }));
+vi.mock('@client/app/contexts/UserSettingsContext', () => ({
+  useUserSettings: () => ({ settings: { contextTelemetryLevel: 'basic' } }),
+}));
 vi.mock('@client/app/contexts/SessionsContext', () => ({
   useSessions: () => ({ currentSession: null, setCurrentSession: vi.fn() }),
   useWorkBenchFiles: () => [],
@@ -164,7 +167,11 @@ const messageData = {
 
 // Accepts an explicit queryClient so a test can spy on it (e.g. asserting invalidateQueries is
 // called with the right key) rather than only observing DOM effects.
-function renderMessageContent(data: IChatHistoryItem = messageData, queryClient?: QueryClient) {
+function renderMessageContent(
+  data: IChatHistoryItem = messageData,
+  queryClient?: QueryClient,
+  onSendMessage: (...args: never[]) => Promise<void> = vi.fn()
+) {
   render(
     <TestWrapper queryClient={queryClient}>
       <MessageContent
@@ -173,7 +180,7 @@ function renderMessageContent(data: IChatHistoryItem = messageData, queryClient?
         index={0}
         onDelete={vi.fn()}
         onPinToggle={vi.fn()}
-        onSendMessage={vi.fn()}
+        onSendMessage={onSendMessage as never}
         isLastMessage={false}
         model="gpt-4o"
         totalMessages={1}
@@ -306,12 +313,13 @@ describe('MessageContent publish-and-share - visible action-bar button', () => {
     selectedAccountValue = null;
   });
 
-  it('renders the labeled button without opening any menu', () => {
+  it('renders the button without opening any menu', () => {
     renderMessageContent();
 
     const button = screen.getByTestId('message-publish-share-btn');
     expect(button).toBeInTheDocument();
-    expect(button).toHaveTextContent('Publish & Share');
+    // Icon-only, so the accessible name is what carries the label.
+    expect(button).toHaveAccessibleName('Publish & Share');
   });
 
   it('hides the button when the reply has no shareable content', () => {
@@ -390,20 +398,38 @@ describe('MessageContent report action - persistent affordance (#1869)', () => {
     expect(modal).toHaveAttribute('data-quest-id', 'quest-1');
   });
 
-  it('renders no "Reported" annotation when this message has no feedback on record', () => {
+  it('leaves the report button unannotated when this message has no feedback on record', () => {
     mocks.sessionFeedback = [];
 
     renderMessageContent();
 
-    expect(screen.queryByTestId('message-reported-chip')).not.toBeInTheDocument();
+    // The reported state lives on the button itself; the tooltip title is its
+    // accessible name, so that is what says which state it is in.
+    expect(screen.getByTestId('message-report-btn')).toHaveAccessibleName('Report an issue with this message');
   });
 
-  it('renders the "Reported" annotation when this message has a recorded report', () => {
+  it('marks the report button when this message has a recorded report', () => {
     mocks.sessionFeedback = [{ questId: 'quest-1' }];
 
     renderMessageContent();
 
-    expect(screen.getByTestId('message-reported-chip')).toBeInTheDocument();
+    expect(screen.getByTestId('message-report-btn')).toHaveAccessibleName('You already reported this message');
+  });
+
+  it('rests a reported message on the word, with the actions behind hover', () => {
+    mocks.sessionFeedback = [{ questId: 'quest-1' }];
+
+    renderMessageContent();
+
+    expect(screen.getByTestId('message-reported-badge')).toHaveTextContent('Reported');
+  });
+
+  it('shows no reported word when this message has no feedback on record', () => {
+    mocks.sessionFeedback = [];
+
+    renderMessageContent();
+
+    expect(screen.queryByTestId('message-reported-badge')).not.toBeInTheDocument();
   });
 
   it('does not annotate a message that was not itself reported', () => {
@@ -411,7 +437,7 @@ describe('MessageContent report action - persistent affordance (#1869)', () => {
 
     renderMessageContent();
 
-    expect(screen.queryByTestId('message-reported-chip')).not.toBeInTheDocument();
+    expect(screen.getByTestId('message-report-btn')).toHaveAccessibleName('Report an issue with this message');
   });
 
   // A send that failed leaves the bubble on its optimistic id with status 'done', so the action
@@ -449,7 +475,7 @@ describe('MessageContent report action - persistent affordance (#1869)', () => {
 
     renderMessageContent(optimisticMessageData);
 
-    expect(screen.queryByTestId('message-reported-chip')).not.toBeInTheDocument();
+    expect(screen.getByTestId('message-report-btn')).toHaveAccessibleName('Report an issue with this notebook');
   });
 
   it('invalidates the session-scoped feedback cache once the modal reports a successful submit', () => {
@@ -480,6 +506,111 @@ describe('MessageContent report action - persistent affordance (#1869)', () => {
       expect(document.querySelector('.action-buttons-mobile')).not.toBeNull();
       expect(screen.getByTestId('message-report-btn')).toBeInTheDocument();
     });
+  });
+});
+
+describe('MessageContent correct-and-retry (#1871)', () => {
+  const unpersisted = { ...messageData, id: 'optimistic-quest-abc' } as unknown as IChatHistoryItem;
+  const stillRunning = { ...messageData, status: 'running' } as unknown as IChatHistoryItem;
+  const noAnswer = { ...messageData, replies: [], reply: undefined } as unknown as IChatHistoryItem;
+
+  const openComposer = (data: IChatHistoryItem, onSendMessage = vi.fn()) => {
+    renderMessageContent(data, undefined, onSendMessage);
+    fireEvent.click(screen.getByTestId('message-correct-retry-btn'));
+    return onSendMessage;
+  };
+
+  it('offers the affordance on an answered, persisted turn', () => {
+    renderMessageContent();
+
+    expect(screen.getByTestId('message-correct-retry-btn')).toBeInTheDocument();
+  });
+
+  it('opens the inline composer beneath the message rather than a modal', () => {
+    renderMessageContent();
+    expect(screen.queryByTestId('message-correction-composer')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('message-correct-retry-btn'));
+
+    expect(screen.getByTestId('message-correction-composer')).toBeInTheDocument();
+  });
+
+  it('closes the composer when the button is clicked again', () => {
+    renderMessageContent();
+    fireEvent.click(screen.getByTestId('message-correct-retry-btn'));
+    fireEvent.click(screen.getByTestId('message-correct-retry-btn'));
+
+    expect(screen.queryByTestId('message-correction-composer')).not.toBeInTheDocument();
+  });
+
+  // The link has to resolve to something, and an optimistic id resolves to nothing.
+  it('hides the affordance on a turn that was never persisted', () => {
+    renderMessageContent(unpersisted);
+
+    expect(screen.queryByTestId('message-correct-retry-btn')).not.toBeInTheDocument();
+  });
+
+  it('hides the affordance while the turn is still running', () => {
+    renderMessageContent(stillRunning);
+
+    expect(screen.queryByTestId('message-correct-retry-btn')).not.toBeInTheDocument();
+  });
+
+  it('hides the affordance on a turn that produced no answer to correct', () => {
+    renderMessageContent(noAnswer);
+
+    expect(screen.queryByTestId('message-correct-retry-btn')).not.toBeInTheDocument();
+  });
+
+  // The load-bearing assertion: a NEW turn carrying correctsQuestId, never an in-place retry.
+  // `isRetry` would overwrite the flagged quest and destroy the answer the chain exists to keep.
+  it('sends a new turn linked to the corrected quest, not an in-place retry', async () => {
+    const onSendMessage = openComposer(messageData);
+
+    fireEvent.change(screen.getByTestId('message-correction-input'), {
+      target: { value: 'the figure is Q3, not Q2' },
+    });
+    fireEvent.click(screen.getByTestId('message-correction-submit-btn'));
+
+    await waitFor(() => expect(onSendMessage).toHaveBeenCalled());
+    const [sentMessage, options] = onSendMessage.mock.calls[0];
+    expect(sentMessage).toEqual({ prompt: 'the figure is Q3, not Q2' });
+    expect(options).toEqual({ correctsQuestId: 'quest-1' });
+    expect(options.isRetry).toBeUndefined();
+  });
+
+  it('closes the composer once the correction is sent', async () => {
+    const onSendMessage = openComposer(messageData, vi.fn().mockResolvedValue(undefined));
+
+    fireEvent.change(screen.getByTestId('message-correction-input'), { target: { value: 'wrong quarter' } });
+    fireEvent.click(screen.getByTestId('message-correction-submit-btn'));
+
+    await waitFor(() => expect(screen.queryByTestId('message-correction-composer')).not.toBeInTheDocument());
+    expect(onSendMessage).toHaveBeenCalled();
+  });
+
+  // A failed send must not eat the user's text - they would have to retype the correction.
+  it('keeps the composer and its text open when the send fails', async () => {
+    openComposer(messageData, vi.fn().mockRejectedValue(new Error('network')));
+
+    fireEvent.change(screen.getByTestId('message-correction-input'), { target: { value: 'wrong quarter' } });
+    fireEvent.click(screen.getByTestId('message-correction-submit-btn'));
+
+    await waitFor(() => expect(screen.getByTestId('message-correction-submit-btn')).not.toBeDisabled());
+    expect(screen.getByTestId('message-correction-composer')).toBeInTheDocument();
+    expect(screen.getByTestId('message-correction-input')).toHaveValue('wrong quarter');
+  });
+
+  it('annotates a turn that was itself sent as a correction', () => {
+    renderMessageContent({ ...messageData, correctsQuestId: 'quest-0' } as unknown as IChatHistoryItem);
+
+    expect(screen.getByTestId('message-correction-chip')).toBeInTheDocument();
+  });
+
+  it('leaves an ordinary turn unannotated', () => {
+    renderMessageContent();
+
+    expect(screen.queryByTestId('message-correction-chip')).not.toBeInTheDocument();
   });
 });
 

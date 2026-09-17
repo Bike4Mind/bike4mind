@@ -249,6 +249,43 @@ describe('ModelDiscoveryRunRepository', () => {
     expect(recent[0].startedAt).toEqual((await modelDiscoveryRunRepository.latestRun())?.startedAt);
   });
 
+  it('round-trips the sources a run never attempted, and reads a run written before the field', async () => {
+    await ModelDiscoveryRun.create(
+      run({
+        startedAt: new Date('2026-07-05T00:00:00Z'),
+        skippedSources: [
+          { name: 'xai', reason: 'not-configured' },
+          { name: 'models.dev', reason: 'egress-disabled' },
+        ],
+      })
+    );
+
+    expect((await modelDiscoveryRunRepository.latestRun())?.skippedSources).toEqual([
+      { name: 'xai', reason: 'not-configured' },
+      { name: 'models.dev', reason: 'egress-disabled' },
+    ]);
+
+    // A run that skipped nothing and a run written before the field existed are
+    // different answers, so neither may collapse into the other.
+    const empty = await ModelDiscoveryRun.create(
+      run({ startedAt: new Date('2026-07-06T00:00:00Z'), skippedSources: [] })
+    );
+    expect((await modelDiscoveryRunRepository.latestRun())?.skippedSources).toEqual([]);
+
+    await ModelDiscoveryRun.collection.updateOne({ _id: empty._id }, { $unset: { skippedSources: 1 } });
+    expect((await modelDiscoveryRunRepository.latestRun())?.skippedSources).toBeUndefined();
+  });
+
+  it('reads the placeholder a run writes before its fan-out as having skipped nothing', async () => {
+    // The runner creates this doc before it knows what it will skip, so the field
+    // is absent on the write and mongoose defaults the array. Every other detail
+    // array on that placeholder reads the same way, which is why no surface may
+    // treat an empty skip list as evidence the fan-out completed.
+    await ModelDiscoveryRun.create(run({ status: 'failed' }));
+
+    expect((await modelDiscoveryRunRepository.latestRun())?.skippedSources).toEqual([]);
+  });
+
   it('has no run to open for an unknown or malformed id', async () => {
     // A runId out of a query string is whatever the caller typed: a CastError
     // here would be a 500 on what is really a 404.

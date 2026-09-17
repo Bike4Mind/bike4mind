@@ -11,9 +11,9 @@ reuse-or-replace of the prior key, mint audit entry) is common to every client.
 
 ## The two issuer shapes
 
-The `federatedIdp.issuer` decides how the presented token is verified.
+The client's `federatedIdp.subjectSource` decides how the presented token is verified.
 
-| | External IdP | B4M as issuer |
+| | `'identities'` (default) | `'sub'` |
 |---|---|---|
 | Who signed the token | the app's own AWS Cognito pool, which federates B4M upstream | B4M's OIDC provider |
 | `issuer` | `https://cognito-idp.<region>.amazonaws.com/<poolId>` | B4M's `APP_URL` |
@@ -23,10 +23,10 @@ The `federatedIdp.issuer` decides how the presented token is verified.
 | `token_use` | must be `id` | absent; not asserted |
 | B4M user id comes from | `identities[].userId` of the matching provider | `sub` |
 
-An app is on the second row when it signs users in directly against B4M rather than
-standing up a Cognito pool in front of it. The discriminator is the issuer matching
-B4M's own, not a config flag, so a client cannot opt a foreign issuer into the
-sub-reading claim shape.
+An app is on the `'sub'` row when it signs users in directly against B4M rather than
+standing up a Cognito pool in front of it. `subjectSource` is absent (`'identities'`)
+by default, which is what keeps every already-registered client on its existing code
+path; the field is set explicitly at registration time, not inferred from the token.
 
 Both shapes verify through `aws-jwt-verify`, which checks the RS256 signature against
 the JWKS and asserts `iss`, `aud`, `exp` and `iat`. That is also what rejects a B4M
@@ -58,6 +58,7 @@ on it would break if the alias ever moved.
 MONGODB_URI=<uri> \
 CLIENT_NAME=<name> \
 REDIRECT_URIS="https://..." \
+FEDERATED_SUBJECT_SOURCE=sub \
 FEDERATED_ISSUER="https://<b4m-app-url>" \
 FEDERATED_AUDIENCE="<the client_id the script prints>" \
 FEDERATED_JWKS_URI="https://<b4m-app-url>/api/oauth/jwks" \
@@ -66,8 +67,9 @@ FEDERATED_JWKS_URI="https://<b4m-app-url>/api/oauth/jwks" \
 
 `FEDERATED_AUDIENCE` is the `client_id` B4M mints for the app, so this is a two-pass
 registration: seed without the federated env vars to obtain the id, then update the
-document with the trust config. For an external Cognito pool, set
-`FEDERATED_PROVIDER_NAME` instead and leave `FEDERATED_JWKS_URI` unset.
+document with the trust config. For an external Cognito pool, omit
+`FEDERATED_SUBJECT_SOURCE` (defaults to `'identities'`), set `FEDERATED_PROVIDER_NAME`
+instead, and leave `FEDERATED_JWKS_URI` unset.
 
 ## Failure modes
 
@@ -76,6 +78,6 @@ document with the trust config. For an external Cognito pool, set
 | unknown client or bad `client_secret` | 401 `invalid_client` |
 | client has no `federatedIdp` | 403 `access_denied` |
 | per-client mint budget exhausted | 429 `temporarily_unavailable` |
-| wrong issuer, wrong audience, expired, bad signature, access token in place of an ID token, B4M-issued config without `jwksUri`, external config without `providerName` | 401 `invalid_grant` |
+| wrong issuer, wrong audience, expired, bad signature, access token in place of an ID token, non-`id` `token_use` on an `'identities'` config, a `'sub'` config without `jwksUri`, an `'identities'` config without `providerName` | 401 `invalid_grant` |
 | subject resolves to no B4M user | 401 `invalid_grant` |
 | user has not accepted the AUP/ToS | 403 `access_denied` |

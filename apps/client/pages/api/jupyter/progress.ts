@@ -69,7 +69,11 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
   // `promptMeta.session.userId`, not `userId`: the Quest schema declares no top-level owner
   // field, so the filter this used to carry could never match and the route always 403'd.
   const updated = isValidObjectId(questId)
-    ? await Quest.findOneAndUpdate({ _id: questId, 'promptMeta.session.userId': userId }, { $set: updateData }, { new: true })
+    ? await Quest.findOneAndUpdate(
+        { _id: questId, 'promptMeta.session.userId': userId },
+        { $set: updateData },
+        { new: true }
+      )
     : null;
 
   if (!updated) {

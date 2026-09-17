@@ -76,13 +76,14 @@ const FEDERATED_CLIENT = {
   },
 };
 
-// A client that signs users in directly against B4M: no providerName, explicit jwksUri.
+// A client that signs users in directly against B4M: subjectSource 'sub', no providerName, explicit jwksUri.
 const B4M_ISSUED_CLIENT = {
   name: 'Tarot',
   federatedIdp: {
     issuer: 'https://app.example.com',
     audience: 'b4m-oauth-client-id',
     jwksUri: 'https://app.example.com/api/oauth/jwks',
+    subjectSource: 'sub',
   },
 };
 
@@ -250,7 +251,11 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     expect(res._getJSONData().error).toBe('invalid_request');
   });
 
-  describe('client whose trust issuer is B4M itself', () => {
+  // A client that signs its users in against B4M's own OIDC provider directly
+  // (subjectSource: 'sub') - no Cognito hop. The route itself has no branch for
+  // this: it hands the whole trust config to the verifier. These tests pin that
+  // every gate keeps firing on the new path.
+  describe('client whose trust config is subjectSource: sub (B4M-issued token)', () => {
     beforeEach(() => {
       mockVerifyClientSecret.mockResolvedValue(B4M_ISSUED_CLIENT);
       mockVerifyIdToken.mockResolvedValue({ b4mUserId: 'b4m-user-1', claims: { sub: 'b4m-user-1' } });
@@ -293,6 +298,27 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
       expect(mockAuditCreate).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'mint', actorUserId: 'b4m-user-1' })
       );
+    });
+
+    it('still enforces reuse-or-replace before minting', async () => {
+      mockFindByUserId.mockResolvedValue([
+        { id: 'old-key', status: 'active', metadata: { createdFrom: 'oauth-exchange', oauthClientId: 'client-1' } },
+      ]);
+      const { req, res } = makeReq();
+      await handler(req as any, res as any);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRevokeUserApiKey).toHaveBeenCalledTimes(1);
+    });
+
+    it('a rejected ID token → 401 invalid_grant, no mint', async () => {
+      mockVerifyIdToken.mockRejectedValue(new FederatedIdTokenError('Issuer not allowed'));
+      const { req, res } = makeReq();
+      await handler(req as any, res as any);
+
+      expect(res._getStatusCode()).toBe(401);
+      expect(res._getJSONData().error).toBe('invalid_grant');
+      expect(mockCreateUserApiKey).not.toHaveBeenCalled();
     });
   });
 });

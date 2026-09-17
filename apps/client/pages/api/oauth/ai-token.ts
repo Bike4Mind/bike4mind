@@ -1,16 +1,15 @@
 /**
  * POST /api/oauth/ai-token
  *
- * Federated AI-token exchange for Pattern-A ("user-pays") apps. The app's *server*
- * calls this endpoint with its OAuth `client_secret` and an ID token for its
- * logged-in user, and receives a short-lived, revocable `ai:generate` key scoped
- * to that user. The app then sends the key as `X-API-Key` to
- * `/api/ai/v1/completions`, so completions bill the resolved user's B4M credits
- * with no manual API-key paste.
- *
- * The ID token may come from an external Cognito pool that federates B4M upstream,
- * or from B4M itself when the app signs users in directly against B4M; the client's
- * `federatedIdp` issuer decides which (see server/auth/verifyFederatedIdToken.ts).
+ * Federated AI-token exchange for Pattern-A ("user-pays") apps. The app's
+ * *server* calls this endpoint with its OAuth `client_secret` and an ID token for
+ * its logged-in user, and receives a short-lived, revocable `ai:generate` key
+ * scoped to that user. The ID token is either one the app's own Cognito pool
+ * issued (with B4M federated upstream) or one B4M issued directly, per the
+ * client's registered `federatedIdp.subjectSource` (see
+ * server/auth/verifyFederatedIdToken.ts). The app then sends the key
+ * as `X-API-Key` to `/api/ai/v1/completions`, so completions bill the resolved
+ * user's B4M credits with no manual API-key paste.
  *
  * This is the only surface that mints an API key *outside* the consent-gated
  * REST path, so it enforces the consent gate itself (step 5) - see the
@@ -43,7 +42,7 @@ const RATE_WINDOW_MS = 60_000;
 const AiTokenRequestSchema = z.object({
   client_id: z.string().min(1),
   client_secret: z.string().min(1),
-  /** The app's ID token for its logged-in user, issued by its configured trust issuer. */
+  /** The federated app's ID token for its logged-in user (Cognito- or B4M-issued). */
   id_token: z.string().min(1),
 });
 
@@ -116,7 +115,9 @@ const handler = baseApi({ auth: false })
       });
     }
 
-    // 4. Verify the ID token against the *client's* configured JWKS and resolve the B4M user id.
+    // 4. Verify the ID token against the *client's* configured JWKS and resolve the B4M
+    //    user id. The verifier handles both trust shapes (external Cognito pool, or a
+    //    token B4M issued itself); every gate above and below is identical either way.
     let b4mUserId: string;
     try {
       ({ b4mUserId } = await verifyFederatedIdToken(id_token, federatedIdp));

@@ -71,6 +71,23 @@ describe('forkSession', () => {
     expect(created).toEqual([{ sessionId: 'fork-1', prompt: 'earlier' }]);
   });
 
+  // A correction link names a quest in the SOURCE session, so a copied one would dereference across
+  // the session boundary - and the access that authorized this fork is never rechecked when the
+  // pointer is later read. Same strip in clone.ts and snip.ts; read side re-checks in
+  // resolveCorrectionContext (llm/buildCorrectionContext.ts).
+  it('drops correctsQuestId rather than copying a link into the new session', async () => {
+    const { db, created } = makeAdapters();
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+    db.chatHistories.findAllBySessionIdAndLessThanOrEqualToTimestamp.mockResolvedValueOnce([
+      { id: 'm0', sessionId: 'session-1', prompt: 'a correction', correctsQuestId: 'quest-in-source-session' },
+    ]);
+
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(created[0]).not.toHaveProperty('correctsQuestId');
+    expect(created[0]).toEqual({ sessionId: 'fork-1', prompt: 'a correction' });
+  });
+
   // Prod 500: "Quest validation failed: promptMeta.session.userId: Path `session.userId` is
   // required". Quests carrying promptMeta with no session block exist on disk (update() runs no
   // validators, several writers materialize promptMeta from nothing), and create() - the copy
