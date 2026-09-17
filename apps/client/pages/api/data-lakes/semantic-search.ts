@@ -172,6 +172,11 @@ const toScanPayload = (scan: dataLakeService.SemanticSearchScanAccounting) => ({
   ann_files_queried: scan.annFilesQueried,
   ann_hits: scan.annHits,
   ann_models_queried: scan.annModelsQueried,
+  // Scoped files per lake. Without it `files_scoped` is a single number over the union and a
+  // caller cannot tell a lake that contributed nothing from one that contributed most of the
+  // scope - the gap that let a multi-lake search report every lake as searched. The empty-string
+  // key holds files attributable to no lake (the caller's own and shared files).
+  files_by_lake: scan.filesByLake,
   budgets: { max_files: scan.budgets.maxFiles, max_chunks: scan.budgets.maxChunks },
 });
 

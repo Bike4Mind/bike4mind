@@ -29,6 +29,7 @@ import {
   type EmbeddingMismatchReport,
 } from './embeddingMismatch';
 import { BoundedTopK } from './boundedTopK';
+import { lakeOrderScopes, orderFilesFairlyAcrossLakes } from './lakeFairOrder';
 import { partitionByVectorSearchReadiness } from './vectorSearchEligibility';
 import {
   buildRetrievalUnavailableReport,
@@ -168,6 +169,17 @@ export interface SemanticSearchScanAccounting {
    * operator needs to see cap pressure.
    */
   annModelsQueried: number;
+  /**
+   * Scoped files per lake, keyed by the lake's `datalake:<slug>` meta-tag (or `prefix:<p>` for a
+   * registry lake that stamps none); the empty-string key holds files attributable to no lake -
+   * the caller's own and shared files, which `collectScopedFiles` admits via `includeShared`.
+   *
+   * This is what makes "which lakes were searched" checkable rather than assumed: the caller's
+   * `dataLakeTags` says which lakes were REQUESTED, and a lake missing here (or present with 0)
+   * contributed no candidate at all. Counts files SCOPED, not files that scored - a lake can be
+   * fairly searched and still lose every passage to the top-K on relevance.
+   */
+  filesByLake: Record<string, number>;
   /** Budgets in force, echoed so a caller can explain a truncation without guessing. */
   budgets: { maxFiles: number; maxChunks: number };
 }
@@ -379,6 +391,7 @@ export function emptyScanAccounting(budgets?: SemanticSearchBudgets): SemanticSe
     annFilesQueried: 0,
     annHits: 0,
     annModelsQueried: 0,
+    filesByLake: {},
     budgets: { maxFiles: resolved.maxFiles, maxChunks: resolved.maxChunks },
   };
 }
@@ -630,6 +643,8 @@ async function rankChunksForFiles(args: {
   budgets: ResolvedBudgets;
   filesMatching: number;
   fileBudgetHit: boolean;
+  /** Per-lake scoped-file counts for `scan.filesByLake`; `{}` for the file-scoped entrypoint, which has no lakes. */
+  filesByLake?: Record<string, number>;
   vectorSearchEnabled: boolean;
   logger?: Logger;
   fabfilechunks: FabFileChunksAdapter;
@@ -919,6 +934,7 @@ async function rankChunksForFiles(args: {
     annFilesQueried: annEligible.length + outcomes.reduce((sum, o) => sum + o.filesWithHits.size, 0),
     annHits: annResult.hitsReturned + alternateHitsReturned,
     annModelsQueried: (primaryAnnQueried ? 1 : 0) + alternateModelsQueried,
+    filesByLake: args.filesByLake ?? {},
     budgets: { maxFiles: budgets.maxFiles, maxChunks: budgets.maxChunks },
   };
 
@@ -1034,7 +1050,33 @@ export async function semanticDataLakeSearch(
 
   // Authoritative post-filter: never load vectors for or rank a file the caller excludes,
   // regardless of the DB regex engine or fileNameLower presence (see filterRetrievalExcluded).
-  const scopedFiles = filterRetrievalExcluded(scoped.files, retrievalFilter);
+  const admitted = filterRetrievalExcluded(scoped.files, retrievalFilter);
+
+  // Round-robin the scope across its lakes before ranking. `fabfiles.search` returns one global
+  // `fileName asc` sort over the union, and the chunk budget below is spent sequentially down
+  // this order - so without the interleave a lake sorting late contributes nothing, and adding it
+  // to a session leaves retrieval byte-identical. See lakeFairOrder.ts.
+  const orderScopes = lakeOrderScopes({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships });
+  const { ordered: scopedFiles, filesByLake } = orderFilesFairlyAcrossLakes(
+    admitted,
+    orderScopes,
+    f => f.tags?.map(t => t.name) ?? []
+  );
+  // A lake the caller resolved but that contributed no file: `dataLakeTags` would report it as
+  // searched while nothing of it was ever in scope. Gated on some OTHER lake having attributed,
+  // because attribution is best-effort - a file matched by a lake's prefix/membership arm can
+  // carry no reversible `datalake:` tag (see attributeAccessedLakes), and on a scope where NOTHING
+  // attributed the right reading is "attribution was inconclusive", not "every lake was empty".
+  const anyLakeAttributed = orderScopes.some(scope => !!filesByLake[scope.key]);
+  const emptyLakes = anyLakeAttributed ? orderScopes.filter(scope => !filesByLake[scope.key]).map(s => s.key) : [];
+  if (emptyLakes.length > 0) {
+    logger?.warn?.('[semanticSearch] scoped lakes contributed no files', {
+      emptyLakes,
+      scopedLakes: orderScopes.length,
+      fileBudgetHit: scoped.fileBudgetHit,
+    });
+  }
+
   const fileIds = scopedFiles.map(f => f.id);
   if (fileIds.length === 0) {
     return emptyResult(embeddingModel, budgets, {
@@ -1081,6 +1123,7 @@ export async function semanticDataLakeSearch(
     budgets,
     filesMatching: scoped.filesMatching,
     fileBudgetHit: scoped.fileBudgetHit,
+    filesByLake,
     vectorSearchEnabled: params.vectorSearchEnabled ?? false,
     logger,
     fabfilechunks: adapters.db.fabfilechunks,

@@ -1696,3 +1696,123 @@ describe('comparedNoPassages', () => {
     expect(comparedNoPassages({ chunksScored: 0, scan: scanOf({ annHits: 1 }) })).toBe(false);
   });
 });
+
+/**
+ * A session scoped to several lakes used to retrieve from only the first of them: fabfiles.search
+ * returns one global `fileName asc` sort over the union, and the chunk budget is spent
+ * sequentially down that order, so a lake sorting late was never reached. Adding it to a session
+ * left retrieval byte-identical while telemetry still reported it as searched.
+ */
+describe('semanticDataLakeSearch multi-lake budget fairness', () => {
+  const lakeFile = (id: string, lake: string) => ({
+    id,
+    fileName: `${id}.pdf`,
+    tags: [{ name: `datalake:${lake}` }],
+  });
+
+  // Filename-sorted exactly as the DB would return it: both large lakes ahead of the small one.
+  const corpus = [
+    lakeFile('a1', 'a'),
+    lakeFile('a2', 'a'),
+    lakeFile('a3', 'a'),
+    lakeFile('b1', 'b'),
+    lakeFile('b2', 'b'),
+    lakeFile('b3', 'b'),
+    lakeFile('c1', 'c'),
+  ];
+  const allChunks = corpus.flatMap(f => chunkRows(f.id, 2));
+  // A budget that covers the first three groups and no more. Group ITERATION order is what decides
+  // which lakes are reached (see the chunk walk's `break groups`), so this is the configuration the
+  // ticket describes: before the interleave the three groups were a1, a2, a3 and lake C was never
+  // queried at all.
+  const budgets = { fileGroupSize: 1, maxChunks: 6 };
+
+  const run = (tags: string[], files = corpus) =>
+    semanticDataLakeSearch({ ...baseParams(), dataLakeTags: tags, budgets }, {
+      db: {
+        fabfiles: { search: skipAwareFilesAdapter(files) },
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(allChunks) },
+      },
+    } as never);
+
+  it('spends the chunk budget across all three lakes instead of exhausting it on the first', async () => {
+    const findVectors = pagingChunkMock(allChunks);
+    await semanticDataLakeSearch(
+      { ...baseParams(), dataLakeTags: ['datalake:a', 'datalake:b', 'datalake:c'], budgets },
+      {
+        db: {
+          fabfiles: { search: skipAwareFilesAdapter(corpus) },
+          fabfilechunks: { findVectorsByFabFileIds: findVectors },
+        },
+      } as never
+    );
+    // The groups the budget actually paid for: one file per lake, not the first three of lake A.
+    expect(findVectors.mock.calls.map(c => c[0]).flat()).toEqual(['a1', 'b1', 'c1']);
+  });
+
+  it('interleaves the scoped order so a larger group also carries every lake', async () => {
+    const findVectors = pagingChunkMock(allChunks);
+    await semanticDataLakeSearch(
+      {
+        ...baseParams(),
+        dataLakeTags: ['datalake:a', 'datalake:b', 'datalake:c'],
+        budgets: { fileGroupSize: 3, maxChunks: 100 },
+      },
+      {
+        db: {
+          fabfiles: { search: skipAwareFilesAdapter(corpus) },
+          fabfilechunks: { findVectorsByFabFileIds: findVectors },
+        },
+      } as never
+    );
+    expect(findVectors.mock.calls[0][0]).toEqual(['a1', 'b1', 'c1']);
+  });
+
+  it('adding a lake changes the retrieved passage set', async () => {
+    const twoLakes = corpus.filter(f => f.id !== 'c1');
+    const ab = await run(['datalake:a', 'datalake:b'], twoLakes);
+    const abc = await run(['datalake:a', 'datalake:b', 'datalake:c']);
+
+    // The ticket's repro: these used to be byte-identical.
+    expect(abc.results.map(r => r.fileId)).not.toEqual(ab.results.map(r => r.fileId));
+    expect(abc.results.some(r => r.fileId === 'c1')).toBe(true);
+    expect(ab.results.some(r => r.fileId === 'c1')).toBe(false);
+  });
+
+  it('reports which lakes actually contributed files, so telemetry and reality agree', async () => {
+    const result = await run(['datalake:a', 'datalake:b', 'datalake:c']);
+    expect(result.scan.filesByLake).toEqual({ 'datalake:a': 3, 'datalake:b': 3, 'datalake:c': 1 });
+  });
+
+  it('names a scoped lake that contributed nothing rather than reporting it as searched', async () => {
+    const logger = makeLogger();
+    await semanticDataLakeSearch(
+      { ...baseParams(), dataLakeTags: ['datalake:a', 'datalake:empty'], logger: logger as never, budgets },
+      {
+        db: {
+          fabfiles: { search: skipAwareFilesAdapter(corpus.filter(f => f.id.startsWith('a'))) },
+          fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(allChunks) },
+        },
+      } as never
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[semanticSearch] scoped lakes contributed no files',
+      expect.objectContaining({ emptyLakes: ['datalake:empty'] })
+    );
+  });
+
+  it('a single-lake session is unchanged - no interleave to apply', async () => {
+    const onlyA = corpus.filter(f => f.id.startsWith('a'));
+    const findVectors = pagingChunkMock(allChunks);
+    await semanticDataLakeSearch(
+      { ...baseParams(), dataLakeTags: ['datalake:a'], budgets: { fileGroupSize: 3, maxChunks: 100 } },
+      {
+        db: {
+          fabfiles: { search: skipAwareFilesAdapter(onlyA) },
+          fabfilechunks: { findVectorsByFabFileIds: findVectors },
+        },
+      } as never
+    );
+    expect(findVectors.mock.calls[0][0]).toEqual(['a1', 'a2', 'a3']);
+  });
+});

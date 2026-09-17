@@ -304,7 +304,9 @@ async function emitSemanticCitables(
   ranked: SemanticChunkResult[],
   corpusLabel: string,
   skipNotice?: string | null,
-  dataLakeTags: string[] = []
+  dataLakeTags: string[] = [],
+  /** Undefined when attribution was inconclusive - see the schema field's own doc. */
+  dataLakeTagsWithCandidates?: string[]
 ): Promise<void> {
   // Citables - dedup to one chip per file (multiple chunks can match the same article)
   const seenFile = new Set<string>();
@@ -339,7 +341,13 @@ async function emitSemanticCitables(
       promptMeta: {
         citables,
         ...(skipNotice ? { warnings: [skipNotice] } : {}),
-        retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseSearch'], dataLakeTags },
+        retrieval: {
+          attempted: true,
+          outcome: 'ok',
+          surfaces: ['knowledgeBaseSearch'],
+          dataLakeTags,
+          ...(dataLakeTagsWithCandidates ? { dataLakeTagsWithCandidates } : {}),
+        },
       },
     } as any,
     `📄 Found ${citables.length} relevant doc(s) in ${corpusLabel}: ${names.join(', ')}${more}${partial}`
@@ -573,7 +581,20 @@ async function trySemanticKbSearch(
     });
     const ranked = bound.kept;
 
-    await emitSemanticCitables(context, ranked, 'the data lake', skipNotice, dataLakeTags);
+    // Only the lakes that actually put files in scope, so the stamped telemetry is checkable
+    // rather than a restatement of what was requested. Omitted when nothing attributed at all -
+    // that is "inconclusive", not "no lake contributed".
+    // `scan?.` for the same reason `alternateModelsEmbedded ?? []` above needs a fallback: a test
+    // double built from a partial result object carries no scan block.
+    const lakesWithCandidates = dataLakeTags.filter(tag => !!search.scan?.filesByLake?.[tag]);
+    await emitSemanticCitables(
+      context,
+      ranked,
+      'the data lake',
+      skipNotice,
+      dataLakeTags,
+      lakesWithCandidates.length > 0 ? lakesWithCandidates : undefined
+    );
     context.logger.log(
       `📚 [semantic] returning ${ranked.length}/${search.results.length} passages from ${new Set(ranked.map(r => r.fileId)).size} files (top score ${search.results[0].score.toFixed(3)}${budgets.kbResultTokenBudget > 0 ? `, ${bound.tokensUsed} tokens` : ''}${bound.budgetBound ? ', budget-bound' : ''})`
     );

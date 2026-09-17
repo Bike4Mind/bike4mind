@@ -70,5 +70,17 @@ export function mergeRetrievalSummary(
     ...(forcedSkipReason !== undefined ? { forcedSkipReason } : {}),
     surfaces: [...new Set([...existing.surfaces, ...incoming.surfaces])],
     dataLakeTags: [...new Set([...existing.dataLakeTags, ...incoming.dataLakeTags])],
+    // Union of the two ARMS' contributing lakes, and absent only when neither arm could attribute
+    // - merging an absent side as empty would turn "unknown" into "contributed nothing".
+    ...(existing.dataLakeTagsWithCandidates || incoming.dataLakeTagsWithCandidates
+      ? {
+          dataLakeTagsWithCandidates: [
+            ...new Set([
+              ...(existing.dataLakeTagsWithCandidates ?? []),
+              ...(incoming.dataLakeTagsWithCandidates ?? []),
+            ]),
+          ],
+        }
+      : {}),
   };
 }

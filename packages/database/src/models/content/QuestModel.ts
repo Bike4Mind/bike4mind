@@ -57,6 +57,9 @@ const RetrievalSummarySchema = subSchema({
   forcedSkipReason: { type: String, required: false },
   surfaces: [{ type: String, required: false }],
   dataLakeTags: [{ type: String, required: false }],
+  // The subset of dataLakeTags that actually contributed files - see the Zod field's doc for why
+  // absent means "attribution inconclusive", not "no lake contributed".
+  dataLakeTagsWithCandidates: [{ type: String, required: false }],
 });
 
 // Partial-grounding-coverage detail. subSchema + default:undefined for the same reason as

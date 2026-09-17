@@ -415,6 +415,18 @@ export const RetrievalSummarySchema = z.object({
   surfaces: z.array(z.string()),
   /** Lakes resolved at the moment retrieval ran, stamped point-in-time (not read live from the session). */
   dataLakeTags: z.array(z.string()),
+  /**
+   * The subset of `dataLakeTags` that actually put files into the ranked scope. `dataLakeTags`
+   * alone says which lakes were REQUESTED, which read as "searched" while a lake could contribute
+   * nothing - the retrieval budget used to be spent in file order and starved whichever lake
+   * sorted last.
+   *
+   * Optional because attribution is best-effort: a file matched by a lake's prefix/membership arm
+   * can carry no reversible `datalake:` tag (see attributeAccessedLakes), and the producer omits
+   * this rather than reporting an inconclusive scope as "no lake contributed". Absent means
+   * unknown, NOT none.
+   */
+  dataLakeTagsWithCandidates: z.array(z.string()).optional(),
 });
 
 /**
