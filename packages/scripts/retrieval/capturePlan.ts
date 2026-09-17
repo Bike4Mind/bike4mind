@@ -6,8 +6,10 @@
  * has to connect to Mongo and hold a provider key, so nothing in it can run in CI - which is
  * exactly why every judgement that can silently corrupt a result lives here instead: the cost
  * preflight (which decides whether to spend), the stored-vector stamp gate and `modalLength` (which
- * together decide what gets scored and what is reported as a width mismatch), and the two guards on
- * what the provider hands back. What stays over there is the orchestration: connect, read, write.
+ * together decide what gets scored and what is reported as a width mismatch), the corpus admission
+ * loop (which decides which files are scored at all, and which reader answers that), and the two
+ * guards on what the provider hands back. What stays over there is the rest of the orchestration:
+ * connect, embed, write.
  * Same split the rest of this directory already uses - pure modules plus one credentialed entrypoint.
  */
 
@@ -15,6 +17,8 @@ import {
   getEmbeddingModelCost,
   hasPublishedEmbeddingRate,
   isSupportedEmbeddingModel,
+  type CitableFabFileFieldsWithTags,
+  type IFabFileRepository,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import {
@@ -298,12 +302,76 @@ export type CapturableFileFields = {
  * `opts` is empty in practice: a capture has no session, so there is no retrieval filter to apply and
  * that arm is a no-op today. The call stays because the shipped predicate makes it, and a filter that
  * silently omits one of the four conditions is how these two drift.
+ *
+ * `vectorizedOnly` is excluded from the type rather than merely unused. The rows this runs on come
+ * from `findCitableFieldsWithTagsByIds`, whose projection (CITABLE_PROJECTION in FabFileModel) does
+ * not carry `chunkStallReason`, `notes` or `chunkRebuildRequestedAt` - and all three are OPTIONAL, so
+ * a projected row type-checks against `isRetrievalExcluded` and simply reads them as absent. That
+ * turns the convergence-stall exemption off silently, which on a `vectorizedOnly` filter would drop
+ * stalled files out of the scored corpus. Nothing downstream can catch that, so the type is where it
+ * has to be caught: a row this narrow cannot answer the question, so it may not be asked.
  */
-export function isCapturableFile(file: CapturableFileFields, opts: RetrievalExclusionOptions = {}): boolean {
+export function isCapturableFile(
+  file: CapturableFileFields,
+  opts: Omit<RetrievalExclusionOptions, 'vectorizedOnly'> = {}
+): boolean {
   if (file.deletedAt || file.archivedAt) return false;
   if (isRetrievalExcluded(file, opts)) return false;
   const chunks = file.chunkCount ?? 0;
   return chunks > 0 && (file.vectorizedChunkCount ?? 0) >= chunks;
+}
+
+/** One file admitted to the capture: its id, the document it belongs to, and the stamp it carries. */
+export type CapturedFile = { fileId: string; docId: string; embeddingModel?: string | null };
+
+/**
+ * The capture's corpus admission: which of a lake's file ids are scored, and under which document.
+ *
+ * Reads through `findCitableFieldsWithTagsByIds` and takes the repository as a dependency rather than
+ * a bare loader, because WHICH reader answers is part of what this pins. The unprojected reader
+ * satisfies the same predicate, so swapping back to it is invisible in the result and costs a full
+ * mongoose document per candidate id (`versions`, Mixed `sourceMetadata` and all) to decide a question
+ * about eight scalars and a tag list.
+ *
+ * Batched, not per file: the lake read hands back every candidate id at once, and reading them one at
+ * a time was two sequential round trips per file.
+ *
+ * Iterated in the LAKE's id order rather than the read's, so what lands in the fixture does not depend
+ * on Mongo document order. A tombstone and a file the reachability predicate rejects are one class for
+ * `filesUnreachable`: the served path would never have returned either, so scoring their chunks would
+ * move the band by chunks production cannot surface.
+ */
+export async function collectCapturableFiles(deps: {
+  fabfiles: Pick<IFabFileRepository, 'findCitableFieldsWithTagsByIds'>;
+  fileIds: readonly string[];
+  batchSize: number;
+  /** Tag prefix carrying the document slug; a file without one is its own document. */
+  helpTagPrefix: string;
+}): Promise<{ captured: CapturedFile[]; filesUnreachable: number }> {
+  const captured: CapturedFile[] = [];
+  let filesUnreachable = 0;
+
+  for (const batch of toBatches(deps.fileIds, deps.batchSize)) {
+    const files: CitableFabFileFieldsWithTags[] = await deps.fabfiles.findCitableFieldsWithTagsByIds(batch);
+    const byId = new Map(files.map(file => [String(file.id), file]));
+    for (const fileId of batch) {
+      const file = byId.get(fileId);
+      if (!file || !isCapturableFile(file)) {
+        filesUnreachable++;
+        continue;
+      }
+      // Prefer the document slug so the capture joins to corpus.ts's ground truth; fall back to the
+      // file id, which is the right document identity for any other lake.
+      const helpTag = file.tags?.find(tag => tag.name.startsWith(deps.helpTagPrefix));
+      captured.push({
+        fileId,
+        docId: helpTag ? helpTag.name.slice(deps.helpTagPrefix.length) : fileId,
+        embeddingModel: file.embeddingModel,
+      });
+    }
+  }
+
+  return { captured, filesUnreachable };
 }
 
 /** An embedding service that also exposes the provider's batch path (OpenAI's does). */
