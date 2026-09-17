@@ -51,6 +51,11 @@ describe('normalizeMessageContent', () => {
     ]);
   });
 
+  it('passes an inline base64 image through untouched when media_type is not a valid MIME type', () => {
+    const block = { type: 'image', source: { type: 'base64', media_type: '', data: 'iVBOR' } };
+    expect(normalizeMessageContent([block] as never)).toEqual([block]);
+  });
+
   it('wraps a bare string part as a text block', () => {
     expect(normalizeMessageContent(['hi'] as never)).toEqual([{ type: 'text', text: 'hi' }]);
   });

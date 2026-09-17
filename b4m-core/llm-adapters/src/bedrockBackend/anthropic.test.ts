@@ -200,6 +200,25 @@ describe('AnthropicBedrockBackend image content translation', () => {
     });
   });
 
+  it('survives as a placeholder rather than vanishing when an empty text block accompanies an untranslatable image', () => {
+    const withUntranslatableImage: IMessage[] = [
+      { role: 'user', content: 'What is 2+2?' },
+      { role: 'assistant', content: '4' },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: '' },
+          { type: 'image_url', image_url: { url: 'ftp://x.test/a.png' } },
+        ] as never,
+      },
+    ];
+    const body = bodyOfMessages(ChatModels.CLAUDE_3_5_HAIKU_BEDROCK, withUntranslatableImage);
+    const messages = body.messages as Array<Record<string, unknown>>;
+    const last = messages[messages.length - 1];
+    expect(last.role).toBe('user');
+    expect(last.content).toMatchObject([{ type: 'text', text: '[image omitted: unsupported image format]' }]);
+  });
+
   function bodyOfMessages(model: string, msgs: IMessage[]) {
     const payload = backend.getPayload(model, msgs, { cacheStrategy, tools, maxTokens: 1024 });
     return JSON.parse(payload.body) as Record<string, unknown>;

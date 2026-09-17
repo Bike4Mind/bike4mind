@@ -20,6 +20,11 @@ import type { IMessage, MessageContent, MessageContentObject } from '../types/en
 
 type UnknownPart = Record<string, unknown>;
 
+/** A base64 source with no valid MIME type would fold into a `data:` URL that no
+ * downstream translator's regex recognizes (neither Anthropic's nor Gemini's),
+ * so it must be rejected here rather than passed through as unparseable bytes. */
+const MIME_TYPE = /^[\w.+-]+\/[\w.+-]+$/;
+
 function asRecord(value: unknown): UnknownPart | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as UnknownPart) : null;
 }
@@ -31,7 +36,13 @@ function imageUrlOf(part: UnknownPart): string | undefined {
   if (nested && typeof nested.url === 'string') return nested.url;
   const source = asRecord(part.source);
   if (source && source.type === 'url' && typeof source.url === 'string') return source.url;
-  if (source && source.type === 'base64' && typeof source.data === 'string' && typeof source.media_type === 'string') {
+  if (
+    source &&
+    source.type === 'base64' &&
+    typeof source.data === 'string' &&
+    typeof source.media_type === 'string' &&
+    MIME_TYPE.test(source.media_type)
+  ) {
     return `data:${source.media_type};base64,${source.data}`;
   }
   return undefined;
