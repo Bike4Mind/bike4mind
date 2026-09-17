@@ -244,6 +244,20 @@ export const QuestExportProgressAction = z.object({
 });
 export type IQuestExportProgressAction = z.infer<typeof QuestExportProgressAction>;
 
+export const OrgFeedbackSummaryProgressAction = z.object({
+  action: z.literal('org_feedback_summary_progress'),
+  summaryJobId: z.string(),
+  organizationId: z.string(),
+  status: z.enum(['processing', 'completed', 'failed']),
+  progress: z.number(),
+  errorMessage: z.string().optional(),
+  // No summary URL rides this frame on purpose: the artifact's signed URL expires, so the client
+  // re-reads GET /api/organizations/:id/feedback-summary, which re-signs and re-checks the org
+  // gate. A URL pushed down the socket would do neither.
+  clientId: z.string().optional(),
+});
+export type IOrgFeedbackSummaryProgressAction = z.infer<typeof OrgFeedbackSummaryProgressAction>;
+
 export const SpiderProgressUpdateAction = z.object({
   action: z.literal('spider_progress'),
   spiderJobId: z.string(),
@@ -1541,6 +1555,7 @@ export const MessageDataToClient = z.discriminatedUnion('action', [
   ResearchTaskStatusUpdateAction,
   NotebookCurationProgressUpdateAction,
   QuestExportProgressAction,
+  OrgFeedbackSummaryProgressAction,
   SpiderProgressUpdateAction,
   SpiderCompleteAction,
   SpiderErrorAction,
