@@ -133,6 +133,10 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   aspect_ratio: z.string().optional(),
   fabFileIds: z.array(z.string()).prefault([]),
   image: z.string(),
+  // OpenAIImageGenerationInput doesn't declare this; without it here, ImageEdit.ts's
+  // `...rest` spread silently strips any client-sent output_format before it ever reaches
+  // ImageEditBodySchema's own (narrower) field.
+  output_format: ImageOutputFormatSchema.nullable().optional(),
 });
 
 /**

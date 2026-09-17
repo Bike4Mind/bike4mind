@@ -206,4 +206,22 @@ describe('imageEditTool - OpenAI branch', () => {
       expect.objectContaining({ quality: 'high' })
     );
   });
+
+  it('steps a gpt-image-2 edit model down to gpt-image-1.5 when background is transparent', async () => {
+    const context = createFakeContext();
+    context.onStart = vi.fn();
+
+    const { toolFn } = imageEditTool.implementation(context, {
+      editModel: ImageModels.GPT_IMAGE_2,
+      background: 'transparent',
+    } as GenerateImageToolCall);
+
+    await toolFn({ image: PNG_DATA_URL, prompt: 'remove the background' });
+
+    expect(mockEditSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5, background: 'transparent' })
+    );
+  });
 });

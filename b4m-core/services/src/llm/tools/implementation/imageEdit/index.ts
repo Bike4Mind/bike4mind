@@ -10,6 +10,7 @@ import {
   isImageServeable,
   isBflImageModel,
   isGeminiImageModel,
+  isGPTImage2Model,
   supportsImageEdit,
   EDIT_SUPPORTED_IMAGE_MODELS,
   toNonWebpOutputFormat,
@@ -333,6 +334,12 @@ Please select a supported edit model in your image settings modal.`;
       const safety_tolerance = imageConfig?.safety_tolerance || toolSafetyTolerance;
       const output_format = toolOutputFormat ?? imageConfig?.output_format ?? 'png';
       const background = toolBackground ?? imageConfig?.background;
+      // Step any gpt-image-2 edit model down to gpt-image-1.5 when transparency is
+      // requested: gpt-image-2 rejects background: 'transparent' outright, and the
+      // client's own default edit model is gpt-image-2, so this is reachable by default.
+      if (background === 'transparent' && isGPTImage2Model(editModel)) {
+        editModel = ImageModels.GPT_IMAGE_1_5;
+      }
       // BFL and Gemini reject webp; only the OpenAI branch below sends the raw value.
       const nonWebpOutputFormat = toNonWebpOutputFormat(output_format);
       const prompt_upsampling = imageConfig?.prompt_upsampling ?? false;

@@ -26,8 +26,10 @@ import {
   isImageServeable,
   isBflImageModel,
   isGeminiImageModel,
+  isGPTImage2Model,
   supportsImageEdit,
   EDIT_SUPPORTED_IMAGE_MODELS,
+  ImageModels,
 } from '@bike4mind/common';
 import {
   aiImageService,
@@ -274,7 +276,7 @@ export class ImageEditService {
       questId,
       userId,
       prompt,
-      model,
+      model: requestedModel,
       n = 1,
       safety_tolerance,
       prompt_upsampling,
@@ -288,6 +290,12 @@ export class ImageEditService {
       image: sourceImageUrl,
       organizationId,
     } = ImageEditBodySchema.parse(body);
+    // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
+    // gpt-image-2 rejects background: 'transparent' outright, so sending it there would
+    // silently turn a valid request into an opaque image. Resolved before billing so
+    // credits key off the model actually used.
+    const model =
+      background === 'transparent' && isGPTImage2Model(requestedModel) ? ImageModels.GPT_IMAGE_1_5 : requestedModel;
 
     logger.updateMetadata({ notebookId: sessionId, questId, userId });
 

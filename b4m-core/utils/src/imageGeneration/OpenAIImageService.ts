@@ -302,6 +302,12 @@ export class OpenAIImageService extends AIImageService {
           );
         }
 
+        if (output_format) {
+          parameterWarnings.push(
+            `Output format parameter ('${output_format}') is only supported by gpt-image models and was removed`
+          );
+        }
+
         if (openaiOptions.quality && !['standard', 'hd'].includes(openaiOptions.quality)) {
           const originalQuality = openaiOptions.quality;
           openaiOptions.quality = 'standard';
