@@ -73,7 +73,6 @@ const FallbackModelBadge: React.FC<FallbackModelBadgeProps> = ({ sessionId, size
   const { subscribeToAction } = useWebsocket();
 
   const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const dismissTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const MAX_RETRIES = 3;
 
   const setFallbackInfoDebounced = useCallback((info: FallbackInfo | null) => {
@@ -99,8 +98,10 @@ const FallbackModelBadge: React.FC<FallbackModelBadgeProps> = ({ sessionId, size
         return;
       }
 
-      const isRecent = Date.now() - info.timestamp < 5 * 60 * 1000;
-      setFallbackInfoDebounced(isRecent ? info : null);
+      // No recency window: a fallback the user has not dismissed stays visible for as long as
+      // they are in the session it happened in, so checking the reply later still tells them
+      // which model actually answered. Dismissal is the only thing that clears it.
+      setFallbackInfoDebounced(info);
       setRetryCount(0); // Reset on success
     } catch (error) {
       if (retryCount < MAX_RETRIES) {
@@ -182,32 +183,11 @@ const FallbackModelBadge: React.FC<FallbackModelBadgeProps> = ({ sessionId, size
     return unsubscribe;
   }, [sessionId, subscribeToAction, setFallbackInfoDebounced]);
 
-  // Auto-dismiss after 5 minutes
-  useEffect(() => {
-    if (!fallbackInfo) return;
-
-    const timeRemaining = 5 * 60 * 1000 - (Date.now() - fallbackInfo.timestamp);
-    if (timeRemaining <= 0) {
-      dismissFallback();
-      return;
-    }
-
-    dismissTimeoutRef.current = setTimeout(dismissFallback, timeRemaining);
-    return () => {
-      if (dismissTimeoutRef.current) {
-        clearTimeout(dismissTimeoutRef.current);
-      }
-    };
-  }, [fallbackInfo, dismissFallback]);
-
-  // Cleanup timeouts on unmount
+  // Cleanup the pending debounce on unmount
   useEffect(() => {
     return () => {
       if (updateTimeoutRef.current) {
         clearTimeout(updateTimeoutRef.current);
-      }
-      if (dismissTimeoutRef.current) {
-        clearTimeout(dismissTimeoutRef.current);
       }
     };
   }, []);
@@ -216,8 +196,10 @@ const FallbackModelBadge: React.FC<FallbackModelBadgeProps> = ({ sessionId, size
 
   // Open downward: the badge lives in the chat-list header at the top of the view, so a
   // top-placed tooltip overflowed into the toolbar chrome above (QA-reported overlap).
+  // The dismiss hint is appended here rather than in formatFallbackTooltip because clicking
+  // is now the only way to clear the badge, so the affordance has to be discoverable.
   return (
-    <Tooltip title={formatFallbackTooltip(fallbackInfo)} placement="bottom">
+    <Tooltip title={`${formatFallbackTooltip(fallbackInfo)}. Click to dismiss.`} placement="bottom">
       <Chip
         data-testid="fallback-model-badge-chip"
         variant="soft"
@@ -233,7 +215,7 @@ const FallbackModelBadge: React.FC<FallbackModelBadgeProps> = ({ sessionId, size
         }}
         onClick={dismissFallback}
       >
-        Fallback Model Used
+        {`Fallback: ${fallbackInfo.fallbackModelName}`}
       </Chip>
     </Tooltip>
   );
