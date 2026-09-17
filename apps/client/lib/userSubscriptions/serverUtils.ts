@@ -130,7 +130,7 @@ export const handleOrganizationSubscriptionInvoice = async (
     // Handle different billing scenarios
     switch (invoice.billing_reason) {
       case 'subscription_create': {
-        let activeSubs: Awaited<ReturnType<typeof subscriptionRepository.findActiveSubscriptionsByOwner>> = [];
+        let liveSubs: Awaited<ReturnType<typeof subscriptionRepository.findNonTerminalSubscriptionsByOwner>> = [];
 
         // For new subscriptions, handle organization creation or use existing one
         if (metadata.organizationId) {
@@ -140,7 +140,7 @@ export const handleOrganizationSubscriptionInvoice = async (
             return;
           }
 
-          activeSubs = await subscriptionRepository.findActiveSubscriptionsByOwner(
+          liveSubs = await subscriptionRepository.findNonTerminalSubscriptionsByOwner(
             SubscriptionOwnerType.Organization,
             organization.id
           );
@@ -148,10 +148,10 @@ export const handleOrganizationSubscriptionInvoice = async (
           // Sync seats to the billed quantity (the new-org branch sets this at
           // creation). Written directly, not via setSeats, so a paid quantity can
           // never be rejected, and placed above the idempotency break so a webhook
-          // resend re-heals seats. Skipped when a DIFFERENT active Stripe sub exists:
-          // that sub is about to be refused below, so adopting its quantity would
-          // desync seats from what is actually billed.
-          const strayStripeSub = activeSubs.find(
+          // resend re-heals seats. Skipped when a DIFFERENT live (non-terminal) Stripe
+          // sub exists: that sub is about to be refused below, so adopting its quantity
+          // would desync seats from what is actually billed.
+          const strayStripeSub = liveSubs.find(
             s =>
               resolveSubscriptionSource(s) === SubscriptionSource.Stripe &&
               s.subscriptionId &&
@@ -210,15 +210,15 @@ export const handleOrganizationSubscriptionInvoice = async (
         // Conversion flip: if an admin_grant sub already exists for this org,
         // upgrade it to Stripe in place rather than inserting a duplicate row.
         // Keeps a single Subscription row across the grant->paid lifecycle.
-        // The existing-org branch already loaded activeSubs above; a freshly
+        // The existing-org branch already loaded liveSubs above; a freshly
         // created org has none yet, so only the new-org path looks them up.
         if (!metadata.organizationId) {
-          activeSubs = await subscriptionRepository.findActiveSubscriptionsByOwner(
+          liveSubs = await subscriptionRepository.findNonTerminalSubscriptionsByOwner(
             SubscriptionOwnerType.Organization,
             org.id
           );
         }
-        const adminGrant = activeSubs.find(s => resolveSubscriptionSource(s) === SubscriptionSource.AdminGrant);
+        const adminGrant = liveSubs.find(s => resolveSubscriptionSource(s) === SubscriptionSource.AdminGrant);
 
         if (adminGrant) {
           // Atomic flip: findOneAndUpdate with `source: 'admin_grant'` in the
@@ -243,14 +243,16 @@ export const handleOrganizationSubscriptionInvoice = async (
           }
           logger.info(`Flipped admin_grant subscription ${adminGrant.id} → stripe for org ${org.id}`);
         } else {
-          // Defense against double-Convert-to-paid races: if another active
-          // Stripe subscription already exists for this org, do NOT create a
-          // second one - that would result in the customer being billed twice.
+          // Defense against double-Convert-to-paid races: if another live
+          // (non-terminal) Stripe subscription already exists for this org, do NOT
+          // create a second one - that would result in the customer being billed
+          // twice. Non-terminal, not active-only: a past_due row is exactly the
+          // subscription this must not duplicate.
           // The admin should reconcile in Stripe Dashboard.
-          const existingStripeSub = activeSubs.find(s => resolveSubscriptionSource(s) === SubscriptionSource.Stripe);
+          const existingStripeSub = liveSubs.find(s => resolveSubscriptionSource(s) === SubscriptionSource.Stripe);
           if (existingStripeSub) {
             logger.warn(
-              `Org ${org.id} already has an active Stripe subscription ${existingStripeSub.subscriptionId ?? '(no stripe id)'} — refusing to create duplicate from ${subscription.id}. Manual reconciliation required.`
+              `Org ${org.id} already has a live (non-terminal) Stripe subscription ${existingStripeSub.subscriptionId ?? '(no stripe id)'} — refusing to create duplicate from ${subscription.id}. Manual reconciliation required.`
             );
             break;
           }
