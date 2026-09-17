@@ -62,6 +62,7 @@ Every message you send has a **Context** entry in its message menu. It opens a b
 - **Your own turns only.** People you share a notebook with cannot open it, and neither can Bike4Mind administrators - their inspector reads only the pseudonymized telemetry described above.
 - **Counts and names, never content.** No prompt text, no reply text, no tool output.
 - **Available at Basic and Enhanced.** At None the entry is hidden and the request behind it is refused.
+- **Independent of the administrator's sharing setting.** If your administrator has not enabled telemetry sharing, nothing is sent to us, but your level still decides whether you can open this view.
 - **Computed on demand, never stored.** It is derived from the message in your notebook rather than from your telemetry record, so it lasts exactly as long as that message does and disappears when you delete it. Telemetry records are still deleted at 90 days.
 
 ## Data Retention

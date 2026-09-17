@@ -297,8 +297,8 @@ export default function ExperimentalFeatureToggle() {
           </Typography>
           {!telemetryAdminEnabled && (
             <Typography level={TYPE.caption} sx={{ mt: 0.5, color: 'warning.500', fontStyle: 'italic' }}>
-              Sharing with us is off (your administrator has not enabled it). Your level below still controls whether
-              you can view the context breakdown for your own messages.
+              Sharing with us is off (your administrator has not enabled it). Your level still controls whether you can
+              view the context breakdown for your own messages.
             </Typography>
           )}
         </Box>

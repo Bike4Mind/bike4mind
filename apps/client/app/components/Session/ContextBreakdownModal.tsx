@@ -165,12 +165,13 @@ const Breakdown: FC<{ breakdown: ContextBreakdown }> = ({ breakdown }) => (
       <Typography level="body-sm" fontWeight="md" sx={{ mb: 1 }}>
         System prompt layers, in delivery order
       </Typography>
-      {billedSystemPrompt(breakdown.categories) !== breakdown.categories.systemPrompt && (
-        <Typography level="body-xs" sx={{ mb: 1 }} data-testid="context-breakdown-system-prompt-reconciliation">
-          Layers below sum to {format(breakdown.categories.systemPrompt)}; the model was billed for{' '}
-          {format(billedSystemPrompt(breakdown.categories))} system-prompt tokens.
-        </Typography>
-      )}
+      {breakdown.layers.length > 0 &&
+        billedSystemPrompt(breakdown.categories) !== breakdown.categories.systemPrompt && (
+          <Typography level="body-xs" sx={{ mb: 1 }} data-testid="context-breakdown-system-prompt-reconciliation">
+            Included layers sum to {format(breakdown.categories.systemPrompt)}; the model was billed for{' '}
+            {format(billedSystemPrompt(breakdown.categories))} system-prompt tokens.
+          </Typography>
+        )}
       {breakdown.layers.length > 0 ? (
         <LayerTable layers={breakdown.layers} />
       ) : (

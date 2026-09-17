@@ -158,4 +158,16 @@ describe('ContextBreakdownModal', () => {
 
     expect(screen.queryByTestId('context-breakdown-system-prompt-reconciliation')).toBeNull();
   });
+
+  it('omits the reconciliation line on a turn that recorded no layers', () => {
+    mockUseQuestContextBreakdown.mockReturnValue({
+      data: { ...breakdown, layers: [], categories: { ...breakdown.categories, systemPrompt: 0 } },
+      isLoading: false,
+      error: null,
+    });
+    renderModal();
+
+    expect(screen.queryByTestId('context-breakdown-system-prompt-reconciliation')).toBeNull();
+    expect(screen.getByText('This turn recorded no per-layer detail.')).toBeTruthy();
+  });
 });
