@@ -180,6 +180,7 @@ Each arm prints a block shaped like the published prod probe, then one cross-arm
 
 | column | meaning |
 |---|---|
+| `queries` | how many questions the arm was scored over - the denominator of every quality column. Equal across arms by construction (`assertSameQuerySet` rejects a comparison whose fixtures carry different question sets), so it is here to be read, not to be checked. |
 | `band min/max/width` | where the served scores sit, pooled across queries. The collapse this exists to measure. |
 | `spread` | mean rank-1 minus rank-N, where N is the printed `rankDepth` (`RANK_DEPTH`, or fewer on a small corpus). Near zero means the ranking carries no information. |
 | `posTop` / `negTop` | mean rank-1 cosine on answerable vs unanswerable questions. Their **gap** is the floor headroom. |

@@ -198,6 +198,31 @@ describe('formatComparisonTable', () => {
     // Fixed-width, so the same column starts at the same offset on every row.
     expect(new Set(lines.map(l => l.length)).size).toBe(1);
   });
+
+  it('prints the query count each arm was scored over', () => {
+    const rows = [1, 3].map(count =>
+      buildArmRow({
+        arm: `arm-${count}`,
+        chunks: [chunk('c1', 'docA', AT(0)), chunk('c2', 'docB', AT(60))],
+        filesInScope: 2,
+        chunksExcluded: 0,
+        filesExcluded: 0,
+        filesUnreachable: 0,
+        queries: Array.from({ length: count }, (_, i) => ({ id: `q${i}`, vector: QUERY, supporting: ['docA'] })),
+        depth: 2,
+      })
+    );
+    const lines = formatComparisonTable(rows).split('\n');
+
+    // Read the cell by column offset rather than substring-matching the whole row: a bare `toContain('3')`
+    // would pass on any other column that happened to render a 3, which is most of them.
+    const start = lines[0].indexOf('queries');
+    const cell = (line: string) => line.slice(start, start + 'queries'.length).trim();
+
+    expect(start).toBeGreaterThan(-1);
+    expect(cell(lines[2])).toBe('1');
+    expect(cell(lines[3])).toBe('3');
+  });
 });
 
 describe('formatArmSummary', () => {

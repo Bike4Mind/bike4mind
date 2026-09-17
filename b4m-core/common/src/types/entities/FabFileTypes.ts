@@ -896,6 +896,18 @@ export type CitableFabFileFields = Pick<
 > &
   Partial<Pick<IFabFileDocument, 'createdAt'>>;
 
+/**
+ * The citability projection plus `tags`, for a reader that must decide reachability AND identify
+ * which lake document a file is - the embedding-comparison capture joins its corpus to ground truth
+ * by a tag on the file, so it cannot answer with the scalars alone.
+ *
+ * Deliberately NOT folded into `CitableFabFileFields`. `tags` is the array of arbitrary objects that
+ * projection exists to leave behind, and its caller is the lake-memory recall path, which reads a row
+ * per cited source on every chat turn that touches a lake. Widening it to serve a script that runs
+ * once per capture would move that cost onto the hot path.
+ */
+export type CitableFabFileFieldsWithTags = CitableFabFileFields & Pick<IFabFileDocument, 'tags'>;
+
 export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   shareable: IShareableStaticMethods<IFabFileDocument>;
   getAccessibleFiles: (
@@ -1024,6 +1036,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   findExistingIdsByIds(ids: string[]): Promise<string[]>;
   /** Just the projected lake-memory fields - the citability predicate's, plus the date - see `CitableFabFileFields`. */
   findCitableFieldsByIds(ids: string[]): Promise<CitableFabFileFields[]>;
+  /** The same projection plus `tags`, for a caller that also needs lake identity - see `CitableFabFileFieldsWithTags`. */
+  findCitableFieldsWithTagsByIds(ids: string[]): Promise<CitableFabFileFieldsWithTags[]>;
 
   /** Find every non-deleted file belonging to a data-lake ingest batch (source for the post-upload taxonomy analysis job). */
   findByBatchId(batchId: string): Promise<IFabFileDocument[]>;
