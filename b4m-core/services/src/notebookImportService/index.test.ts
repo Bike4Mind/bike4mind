@@ -204,6 +204,103 @@ describe('attachment ids come from the store, not from this service', () => {
   });
 });
 
+/**
+ * `tags`/`taggedAt` and `summary`/`summaryAt` are pairs, and an overwrite is where they get split.
+ * The payload used to carry `undefined` for a value the file lacked, and mongoose deletes every
+ * `undefined` from a `$set` - so the target's stale stamp survived a write that looked correct, and
+ * `spider.ts` re-tags only when `!session.taggedAt`. The split was permanent.
+ */
+describe('notebook import: an overwrite writes what the file owns, and clears the rest', () => {
+  /** Runs an overwrite over an existing session and returns the metadata update payload. */
+  async function runOverwrite(notebookOverrides: Record<string, unknown> = {}) {
+    const { adapters } = makeAdapters([EXISTING]);
+    await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      {
+        exportVersion: '1.0.0',
+        notebooks: [{ ...NOTEBOOK, ...notebookOverrides }],
+      } as never,
+      { ...OPTIONS, conflictResolution: 'overwrite' } as never
+    );
+    const updateById = adapters.sessionRepository.updateById as ReturnType<typeof vi.fn>;
+    expect(updateById).toHaveBeenCalledTimes(1);
+    return updateById.mock.calls[0][1] as Record<string, unknown>;
+  }
+
+  it('writes taggedAt: null for an untagged file, so the notebook can be tagged again', async () => {
+    const payload = await runOverwrite();
+
+    expect(payload.tags).toEqual([]);
+    // `toBeNull`, never `toBeUndefined`: the key has to carry a clearable value, because mongoose
+    // drops an `undefined` from the `$set` and the target's stamp then survives the write.
+    expect(payload.taggedAt).toBeNull();
+  });
+
+  it('carries the file stamp when it has one, so the spider need not pay to re-tag', async () => {
+    const payload = await runOverwrite({
+      tags: [{ name: 'carried', strength: 7 }],
+      taggedAt: '2026-05-06T07:08:09.000Z',
+    });
+
+    expect(payload.tags).toEqual([{ name: 'carried', strength: 7 }]);
+    expect(payload.taggedAt).toEqual(new Date('2026-05-06T07:08:09.000Z'));
+  });
+
+  it('clears summary and summaryAt as a pair, for the same reason', async () => {
+    // A summary left next to content it no longer describes is the same silent inconsistency.
+    const payload = await runOverwrite();
+
+    expect(payload.summary).toBeNull();
+    expect(payload.summaryAt).toBeNull();
+  });
+
+  it('sends no undefined value, which is what a silently-dropped field looks like', async () => {
+    const payload = await runOverwrite();
+
+    expect(Object.values(payload)).not.toContain(undefined);
+    expect(Object.keys(payload)).toEqual(
+      expect.arrayContaining(['lastUpdated', 'summary', 'summaryAt', 'tags', 'taggedAt'])
+    );
+  });
+
+  it('leaves lastUsedModel out of the write when the file omits it, so the target keeps its own', async () => {
+    // Deliberate asymmetry: no gate keys off this field, so clearing it loses information for
+    // nothing. Omitting the key is how "leave it" is expressed to `$set`.
+    const payload = await runOverwrite();
+
+    expect('lastUsedModel' in payload).toBe(false);
+  });
+});
+
+describe('notebook import: the create branch stamps a tagged file', () => {
+  async function runCreate(notebookOverrides: Record<string, unknown> = {}) {
+    const { adapters } = makeAdapters();
+    await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      {
+        exportVersion: '1.0.0',
+        notebooks: [{ ...NOTEBOOK, ...notebookOverrides }],
+      } as never,
+      OPTIONS as never
+    );
+    return (adapters.sessionRepository.create as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<string, unknown>;
+  }
+
+  it('carries the stamp the file carries', async () => {
+    const created = await runCreate({ taggedAt: '2026-05-06T07:08:09.000Z' });
+
+    expect(created.taggedAt).toEqual(new Date('2026-05-06T07:08:09.000Z'));
+  });
+
+  it('leaves the stamp unset for a file with none, rather than claiming one', async () => {
+    const created = await runCreate();
+
+    // `undefined` and not `null` here: on an insert there is nothing to clear, and a `null` would
+    // claim a stamp state a never-tagged notebook never had.
+    expect(created.taggedAt).toBeUndefined();
+  });
+});
+
 /** A store that returns no id must skip the attachment, not record a stringified `undefined`. */
 describe('an attachment store that returns no id is not recorded', () => {
   it('warns and records nothing rather than storing the string "undefined"', async () => {
