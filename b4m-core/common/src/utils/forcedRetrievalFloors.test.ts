@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  backgroundScoreOf,
   compareForcedRetrievalRank,
   forcedRetrievalRelativeCutoff,
+  forcedRetrievalSpreadCutoff,
   type ForcedRetrievalRankable,
 } from './forcedRetrievalFloors';
 
@@ -144,5 +146,81 @@ describe('parity with the pre-extraction served path', () => {
       );
       expect(Math.sign(shared)).toBe(Math.sign(legacy));
     }
+  });
+});
+
+describe('backgroundScoreOf', () => {
+  it('is the middle score of an odd-length pool', () => {
+    expect(backgroundScoreOf([0.9, 0.1, 0.5])).toBeCloseTo(0.5, 6);
+  });
+
+  it('averages the two middle scores of an even-length pool', () => {
+    expect(backgroundScoreOf([0.9, 0.8, 0.2, 0.1])).toBeCloseTo(0.5, 6);
+  });
+
+  it('is undefined for an empty pool rather than a number that reads as a measurement', () => {
+    expect(backgroundScoreOf([])).toBeUndefined();
+  });
+
+  it('does not reorder the caller array, which the served path keeps in scan order', () => {
+    const scores = [0.9, 0.1, 0.5];
+    backgroundScoreOf(scores);
+    expect(scores).toEqual([0.9, 0.1, 0.5]);
+  });
+
+  it('resists an outlier the way the minimum would not, which is why it is the median', () => {
+    // One pathological chunk moves the minimum by 0.6 and the median not at all. On a partial scan
+    // the minimum is not even stable between two identical turns.
+    expect(backgroundScoreOf([0.9, 0.5, 0.4])).toBeCloseTo(0.5, 6);
+    expect(backgroundScoreOf([0.9, 0.5, -0.2])).toBeCloseTo(0.5, 6);
+  });
+});
+
+describe('forcedRetrievalSpreadCutoff', () => {
+  it('lands the requested fraction of the way from the top score down to the background', () => {
+    // top 0.90, background 0.30, span 0.60: half of the way down is 0.60.
+    expect(forcedRetrievalSpreadCutoff(0.9, 0.3, 0.5)).toBeCloseTo(0.6, 6);
+    expect(forcedRetrievalSpreadCutoff(0.9, 0.3, 0.25)).toBeCloseTo(0.75, 6);
+    expect(forcedRetrievalSpreadCutoff(0.9, 0.3, 1)).toBeCloseTo(0.3, 6);
+  });
+
+  it('returns 0 when the floor is off, so the caller takes its unfiltered branch', () => {
+    expect(forcedRetrievalSpreadCutoff(0.9, 0.3, 0)).toBe(0);
+  });
+
+  it('returns 0 when nothing scored, since there is no span to measure', () => {
+    expect(forcedRetrievalSpreadCutoff(0.9, undefined, 0.5)).toBe(0);
+  });
+
+  it('returns 0 on a non-positive span rather than cutting at the top score', () => {
+    // Every chunk scoring identically is a turn with no measured signal, not a turn to gate hard.
+    expect(forcedRetrievalSpreadCutoff(0.9, 0.9, 0.5)).toBe(0);
+    expect(forcedRetrievalSpreadCutoff(0.5, 0.9, 0.5)).toBe(0);
+  });
+
+  it('never cuts the head of the ranking, at any floor up to 100%', () => {
+    // The bound that makes this gate unable to empty a turn: the cutoff interpolates between two
+    // scores from the pool, so it never exceeds the top one, and the call sites compare with `>=`.
+    for (const floor of [0.01, 0.25, 0.5, 0.85, 0.99, 1]) {
+      expect(forcedRetrievalSpreadCutoff(0.914, 0.31, floor)).toBeLessThanOrEqual(0.914);
+    }
+  });
+
+  it('holds that bound in a negative band, where the relative floor needs an explicit guard', () => {
+    // A multiplicative floor inverts across zero (0.85 * -0.2 = -0.17, ABOVE its own input), which
+    // is why `forcedRetrievalRelativeCutoff` carries a `topScore > 0` guard. Interpolation does not
+    // invert, so this needs none and stays correct on a corpus with negative cosines.
+    expect(forcedRetrievalSpreadCutoff(-0.2, -0.6, 0.5)).toBeCloseTo(-0.4, 6);
+    expect(forcedRetrievalSpreadCutoff(-0.2, -0.6, 0.5)).toBeLessThanOrEqual(-0.2);
+  });
+
+  it('cuts on a collapsed band where a fraction-of-top floor cannot', () => {
+    // The measured ada-002 production band, 0.8025-0.9140. A relative floor of 85% puts its cutoff
+    // at 0.777, below the entire band, so it rejects nothing - the inertness this gate exists for.
+    // The spread floor measures the band itself and lands inside it.
+    expect(forcedRetrievalRelativeCutoff(0.914, 0.85)).toBeLessThan(0.8025);
+    const spreadCutoff = forcedRetrievalSpreadCutoff(0.914, 0.86, 0.5);
+    expect(spreadCutoff).toBeGreaterThan(0.8025);
+    expect(spreadCutoff).toBeLessThan(0.914);
   });
 });

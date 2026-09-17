@@ -53,12 +53,22 @@ function mergeInjected(
   // The pre/post pair is written and absent together at every write site, so they merge identically.
   const preFloor = sumDefined(existing.preRelativeFloorCandidates, incoming.preRelativeFloorCandidates);
   const postFloor = sumDefined(existing.postRelativeFloorCandidates, incoming.postRelativeFloorCandidates);
+  // Same volume treatment as postRelativeFloorCandidates: a candidate count sums like chunks.
+  const postSpreadFloor = sumDefined(existing.postSpreadFloorCandidates, incoming.postSpreadFloorCandidates);
+  // NOT summed like the counts above: backgroundScore is a median, and summing two medians is not
+  // a meaningful quantity. Existing-wins pass-through instead, same convention as forcedSkipReason
+  // and lakeScope. A genuine two-sided merge is not reachable today - only the forced arm computes
+  // a backgroundScore, and it writes `injected` at most once per turn - so this only decides which
+  // side survives a seeded/re-merged turn, not how to combine two real measurements.
+  const backgroundScore = existing.backgroundScore ?? incoming.backgroundScore;
   return {
     chunks: existing.chunks + incoming.chunks,
     chars: existing.chars + incoming.chars,
     ...(scores.length ? { topScore: Math.max(...scores) } : {}),
     ...(preFloor !== undefined ? { preRelativeFloorCandidates: preFloor } : {}),
     ...(postFloor !== undefined ? { postRelativeFloorCandidates: postFloor } : {}),
+    ...(postSpreadFloor !== undefined ? { postSpreadFloorCandidates: postSpreadFloor } : {}),
+    ...(backgroundScore !== undefined ? { backgroundScore } : {}),
   };
 }
 
@@ -104,9 +114,11 @@ function mergeInjected(
  *   union, deduped.
  *   injectedLakePromptCount is derived from the merged injectedLakePromptIds, not merged
  *   independently, so a two-sided merge can never leave the two disagreeing.
- * - injected: chunks and chars SUM, topScore is the max, and the pre/post relative-floor candidate
- *   counts SUM like chunks (only over the sides that have one - see mergeInjected). NOTE that the
- *   pair is forced-retrieval-only while chunks/chars sum across every surface, so on a mixed turn
+ * - injected: chunks and chars SUM, topScore is the max, and the pre/post relative-floor and
+ *   post-spread-floor candidate counts SUM like chunks (only over the sides that have one - see
+ *   mergeInjected). backgroundScore is existing-wins, NOT summed - it is a median, and summing two
+ *   medians is not a meaningful quantity (see mergeInjected). NOTE that the floor-candidate counts
+ *   are forced-retrieval-only while chunks/chars sum across every surface, so on a mixed turn
  *   chunks can exceed preRelativeFloorCandidates - compare the pair to itself, never to chunks.
  *   See the pair's comment on RetrievalSummarySchema. The only NON-IDEMPOTENT rule
  *   here, and safe only because every write site emits a delta once per completed search - merging

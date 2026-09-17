@@ -80,3 +80,41 @@ export const FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT = 85;
  * cut the served path does not make.
  */
 export const FORCED_RETRIEVAL_MAX_SCORED_CHUNKS = 256;
+
+/**
+ * How far down the turn's own top-to-background span a chunk may fall and still be injected, as a
+ * percent of that span. 0 disables the gate.
+ *
+ * WHY A THIRD FLOOR. The other two both answer "how high is high enough" with a number that has to
+ * know where the band sits. The absolute one knows it per embedding space
+ * (`FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE`); the relative one assumes the band reaches down
+ * far enough from its top that a fraction OF that top lands inside it. That second assumption is
+ * the one that fails on a collapsed band, and it is why retrieved volume tracks the char budget
+ * rather than the question: measured on ada-002 the per-turn spread is ~0.0279 against a top near
+ * 0.77, so rank 10 scores ~96% of rank 1 and an 85% relative floor cannot reach it. Both gates
+ * admit everything, the budget is the only thing that stops, and the injected count is a constant
+ * per lake set.
+ *
+ * This floor measures from the top DOWNWARD in units of the turn's own spread instead of upward
+ * from zero, so it is affine-invariant: "keep what is within 60% of the way from the best score to
+ * a typical one" means the same cut whether the band is ada-002's 0.80-0.91 or 3-small's
+ * 0.23-0.56. It therefore needs no per-space table and survives the embedding migration (#471)
+ * without re-tuning, which neither other floor does.
+ *
+ * It is also the only one of the three whose survivor count is a property of the QUESTION. A narrow
+ * question puts one or two chunks far above the background and the cut admits few; a broad one
+ * leaves many chunks bunched near the top and the cut admits many. A fixed line, absolute or
+ * relative, cannot tell those two turns apart.
+ *
+ * It cannot empty a turn at any setting: the cutoff is at most `topScore`, which the best candidate
+ * meets by definition. That bounded worst case is why it is safe to key on a statistic of the
+ * turn's own pool, where an absolute floor above the band goes dark silently.
+ *
+ * DEFAULT 0 (OFF), DELIBERATELY. The mechanism is scale-free but its magnitude is not yet measured:
+ * picking one needs a captured production lake through
+ * `packages/scripts/retrieval/forcedFloorSweep.ts`, the same prerequisite #2572 item 4b records for
+ * the other two. Shipping an unmeasured live default into the always-on retrieval path is the
+ * failure mode this file's other comments exist to prevent, so the gate ships inert and the sweep
+ * ships able to grade it.
+ */
+export const FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT = 0;

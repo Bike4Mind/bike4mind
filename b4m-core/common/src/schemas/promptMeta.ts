@@ -546,16 +546,25 @@ export const RetrievalSummarySchema = z.object({
    * not "what reached the model": `ranked.length` and `scored.length` in KnowledgeRetrievalFeature
    * - the candidates left after the absolute similarity floor, and after the relative floor
    * trims them. `chunks` is what survived the char budget on top of that, so the three
-   * numbers bracket two independent trimmers:
+   * numbers bracket three independent trimmers:
    *
-   *   pre -> [relative floor] -> post -> [char budget] -> chunks
+   *   pre -> [relative floor] -> post -> [spread floor] -> postSpread -> [char budget] -> chunks
    *
    * They exist so a low `chunks` is diagnosable - a small corpus and a floor that trimmed a large
-   * pool end in the same `chunks`. `pre - post` is the floor's own effect and nothing else;
+   * pool end in the same `chunks`. `pre - post` is the relative floor's own effect and nothing
+   * else, and `post - postSpread` the spread floor's;
    * `pre - chunks` is NOT, because the budget trims the same walk. Both optional: only forced
    * retrieval computes a ranked pool, a surface without one (lake memory, the knowledge tools)
-   * never writes either, and absence must not read as zero candidates. SUMMED like `chunks`, with
-   * the same absent-is-not-zero handling as `topScore`.
+   * never writes any of them, and absence must not read as zero candidates. SUMMED like `chunks`,
+   * with the same absent-is-not-zero handling as `topScore`.
+   *
+   * `backgroundScore` is the median of every score the turn compared, and `postSpreadFloorCandidates`
+   * what is left once the spread floor cuts against it. Recorded even while that floor is OFF (its
+   * shipped default), in which case `postSpread` equals `post` and the pair degenerates to a
+   * diagnostic: `topScore - backgroundScore` is the turn's signal spread, and the distribution of
+   * that quantity over production traffic is what a value for `forcedRetrievalSpreadFloorPct` has to
+   * be chosen from. NOT comparable across embedding spaces as an absolute number, for the same
+   * reason `topScore` is not; the RATIO of the two floors' cuts is.
    *
    * COMPARE THE PAIR ONLY TO ITSELF, never to `chunks`, unless `surfaces` is forced retrieval
    * alone. `chunks` and `chars` sum across ALL surfaces while this pair is forced-only, so a mixed
@@ -579,6 +588,8 @@ export const RetrievalSummarySchema = z.object({
       topScore: z.number().optional(),
       preRelativeFloorCandidates: z.number().optional(),
       postRelativeFloorCandidates: z.number().optional(),
+      postSpreadFloorCandidates: z.number().optional(),
+      backgroundScore: z.number().optional(),
     })
     .optional(),
   /**

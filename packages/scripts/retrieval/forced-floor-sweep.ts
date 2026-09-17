@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Sweep the two forced-retrieval relevance floors over captured embedding fixtures (#2572, item 2).
+ * Sweep the three forced-retrieval relevance floors over captured embedding fixtures (#2572, item 2).
  *
  * Pure: no database, no provider key, no network, no stage. Everything it needs was already paid
  * for by `capture-embeddings.ts`, so a floor pair costs nothing to try and the whole sweep can be
@@ -16,15 +16,25 @@
  *     --fixture out/text-embedding-3-small.system-help.fixture.json \
  *     --floors 0:0,85:75,85:0,90:0,95:0
  *
- * READ THE TABLE IN THIS ORDER. `bound` first: a relative floor with 0.0% there is inert on this
- * corpus, which is the failure the relative floor was introduced to fix in the absolute one and is
- * just as possible for the relative one at the wrong value. Then `cut @` against `budget-bound` - a
- * floor cutting past where the char budget already stopped changes nothing that reaches the model.
+ * A third component sweeps the SPREAD floor - `85:75:40` is the shipped pair plus a 40% spread
+ * floor - and omitting it leaves that floor off, which is its shipped default.
+ *
+ * READ THE TABLE IN THIS ORDER. `bound` and `spread-bound` first: a floor with 0.0% there is inert
+ * on this corpus, which is the failure the relative floor was introduced to fix in the absolute one
+ * and is just as possible for either of the per-turn floors at the wrong value. Then `cut @` and
+ * `spread cut @` against `budget-bound` - a floor cutting past where the char budget already
+ * stopped changes nothing that reaches the model.
  * Only then recall and precision, which are the cost of a floor that does bind - and read those
  * against `accepted/q` vs `served/q`, because they score the accepted set and only `served/q`
  * reached the model. At a floor low enough to leave hundreds accepted on a corpus of short chunks
  * the two differ by an order of magnitude, and the baseline row's flattering recall is mostly
  * chunks no turn ever saw.
+ *
+ * `sd` answers a different question from all of them and is the reason the spread floor exists: it
+ * is the standard deviation of the accepted count ACROSS queries, so it says whether retrieval
+ * volume responds to the question or is a constant the char budget picked. A row can have good
+ * recall, good precision and `sd` at 0.0, and that row is a fixed-size dump that happens to be
+ * sized well on average.
  *
  * ONE CAVEAT THE WRITE-UP MUST CARRY: this is a full scan over every captured chunk, and the served
  * forced path is not. The divergence is NOT ANN vs exact kNN - forced retrieval never touches Atlas
@@ -66,8 +76,9 @@ const argv = await yargs(hideBin(process.argv))
     type: 'string',
     default: '0:0,85:75',
     describe:
-      'Comma-separated "relativeFloorPct:minSimilarityPct" pairs. 0 turns the relative floor off; ' +
-      '0 on the absolute floor is a floor AT zero, which still rejects negative cosines',
+      'Comma-separated "relativeFloorPct:minSimilarityPct[:spreadFloorPct]" points. 0 turns the ' +
+      'relative and spread floors off, and omitting the third component means 0; 0 on the absolute ' +
+      'floor is a floor AT zero, which still rejects negative cosines',
   })
   .option('char-budget', {
     type: 'number',
