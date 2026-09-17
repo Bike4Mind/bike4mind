@@ -111,6 +111,7 @@
     "x_seats": "{{count}} seats",
     "active_subscription": "Active Subscription",
     "no_subscription": "No Subscription",
+    "payment_issue": "Payment Issue",
     "x_members": "{{count}} members",
     "x_credits": "{{count}} credits",
     "owner": "Owner"

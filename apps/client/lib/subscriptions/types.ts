@@ -204,10 +204,7 @@ export interface ISubscriptionRepository extends BaseRepository<ISubscription & 
    * design (see TERMINAL_SUBSCRIPTION_STATUSES above). Unordered: callers pick with
    * `pickDisplayedSubscription`.
    */
-  findNonTerminalSubscriptionsByOwner(
-    ownerType: SubscriptionOwnerType,
-    ownerId: string
-  ): Promise<ISubscription[]>;
+  findNonTerminalSubscriptionsByOwner(ownerType: SubscriptionOwnerType, ownerId: string): Promise<ISubscription[]>;
 
   /**
    * Find a subscription by price ID and owner.
