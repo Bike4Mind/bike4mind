@@ -211,5 +211,13 @@ export interface ISubscriptionRepository extends BaseRepository<ISubscription & 
    */
   findCancelableUserSubscriptionByPriceId(priceId: string, userId: string): Promise<ISubscription | null>;
 
+  /**
+   * Find the user subscription a plan change should act on: the displayed plan
+   * (`pickDisplayedSubscription`), out of the non-terminal rows. Unlike
+   * findActiveUserSubscriptions this surfaces a trialing/past_due/paused row,
+   * which Stripe still accepts a price change on.
+   */
+  findChangeableUserSubscription(userId: string): Promise<ISubscription | null>;
+
   updateByStripeSubscriptionId(subscriptionId: string, data: Partial<ISubscription>): Promise<ISubscription | null>;
 }
