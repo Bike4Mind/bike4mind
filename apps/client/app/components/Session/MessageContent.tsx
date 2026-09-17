@@ -187,7 +187,7 @@ const MessageContent: React.FC<ContentProps> = memo(
     // Backs the persistent Report button's "already reported" state and the in-thread
     // "Reported" annotation - see hooks/data/feedback.ts for why this is safe to call once per
     // rendered message.
-    const { data: sessionFeedback = [] } = useGetFeedbackBySessionId(sessionId);
+    const { data: sessionFeedback = [], isLoading: isFeedbackLoading } = useGetFeedbackBySessionId(sessionId);
     const isReported = useMemo(
       () => isPersistedMessage && sessionFeedback.some(item => item.questId === messageData.id),
       [isPersistedMessage, sessionFeedback, messageData.id]
@@ -923,7 +923,10 @@ const MessageContent: React.FC<ContentProps> = memo(
           <AnswerFeedbackPrompt
             promptMeta={messageData.promptMeta}
             questId={isPersistedMessage ? messageData.id : undefined}
-            isReported={isReported}
+            // Fail-closed while the feedback read is still in flight: an already-reported turn
+            // must never flash this banner on a fresh page load just because `isReported`
+            // resolved from "unknown" to "false" before the real read landed.
+            isReported={isReported || isFeedbackLoading}
             onReport={handleOpenBugReportModal}
           />
         )}

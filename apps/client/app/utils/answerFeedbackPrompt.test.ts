@@ -3,6 +3,7 @@ import {
   ANSWER_FEEDBACK_DAILY_DISMISSALS_KEY,
   ANSWER_FEEDBACK_DISMISSED_TURNS_KEY,
   DAILY_DISMISSAL_BUDGET,
+  MAX_DISMISSED_TURNS,
   dismissAnswerFeedbackPrompt,
   isAnswerFeedbackPromptCapped,
   isAnswerFeedbackPromptDismissed,
@@ -37,12 +38,12 @@ describe('answerFeedbackPrompt frequency control', () => {
     });
 
     it('caps stored turns and drops the oldest first', () => {
-      for (let i = 0; i < 205; i++) {
+      for (let i = 0; i < MAX_DISMISSED_TURNS + 5; i++) {
         dismissAnswerFeedbackPrompt(`quest-${i}`);
       }
-      expect(JSON.parse(localStorage.getItem(ANSWER_FEEDBACK_DISMISSED_TURNS_KEY)!)).toHaveLength(200);
+      expect(JSON.parse(localStorage.getItem(ANSWER_FEEDBACK_DISMISSED_TURNS_KEY)!)).toHaveLength(MAX_DISMISSED_TURNS);
       expect(isAnswerFeedbackPromptDismissed('quest-0')).toBe(false);
-      expect(isAnswerFeedbackPromptDismissed('quest-204')).toBe(true);
+      expect(isAnswerFeedbackPromptDismissed(`quest-${MAX_DISMISSED_TURNS + 4}`)).toBe(true);
     });
   });
 
@@ -76,6 +77,18 @@ describe('answerFeedbackPrompt frequency control', () => {
 
       vi.setSystemTime(new Date(2026, 8, 17, 0, 30));
       expect(isAnswerFeedbackPromptCapped()).toBe(false);
+    });
+
+    it('starts the new day at a decline count of one, not carried over from the day before', () => {
+      // Pins the rollover arm itself (record.date === date ? count + 1 : 1): a stale date must
+      // restart the counter rather than increment a count left over from the day before.
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 8, 16, 23, 30));
+      spendBudget();
+
+      vi.setSystemTime(new Date(2026, 8, 17, 0, 30));
+      dismissAnswerFeedbackPrompt('quest-new-day');
+      expect(JSON.parse(localStorage.getItem(ANSWER_FEEDBACK_DAILY_DISMISSALS_KEY)!).count).toBe(1);
     });
 
     it('keeps a turn dismissed across the day rollover', () => {

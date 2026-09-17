@@ -5,7 +5,11 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 import type { PromptMeta } from '@bike4mind/common';
 
-import { DAILY_DISMISSAL_BUDGET, dismissAnswerFeedbackPrompt } from '@client/app/utils/answerFeedbackPrompt';
+import {
+  ANSWER_FEEDBACK_DAILY_DISMISSALS_KEY,
+  DAILY_DISMISSAL_BUDGET,
+  dismissAnswerFeedbackPrompt,
+} from '@client/app/utils/answerFeedbackPrompt';
 import { AnswerFeedbackPrompt } from './AnswerFeedbackPrompt';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -153,9 +157,12 @@ describe('AnswerFeedbackPrompt', () => {
 
     it('does not spend a dismissal when the user engages', () => {
       // Charging engagement to the budget would make the feature quietest for the users
-      // most willing to use it.
+      // most willing to use it. A second render still showing the prompt is not enough to prove
+      // that - it would hold whether the CTA spent 0 or 1 of the daily budget - so assert the
+      // stored counter directly.
       renderPrompt();
       fireEvent.click(screen.getByTestId('answer-feedback-prompt-report-btn'));
+      expect(localStorage.getItem(ANSWER_FEEDBACK_DAILY_DISMISSALS_KEY)).toBeNull();
       cleanup();
 
       renderPrompt({ questId: 'quest-2' });

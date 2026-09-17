@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   showCreditsUsed: true,
   serverSettings: [] as Array<{ settingName: string; settingValue: unknown }>,
   sessionFeedback: [] as Array<{ questId?: string }>,
+  sessionFeedbackLoading: false,
 }));
 
 // --- context / data hooks -------------------------------------------------
@@ -54,7 +55,7 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({
   useGetFabFilesByQuestId: () => ({ data: [] }),
 }));
 vi.mock('@client/app/hooks/data/feedback', () => ({
-  useGetFeedbackBySessionId: () => ({ data: mocks.sessionFeedback }),
+  useGetFeedbackBySessionId: () => ({ data: mocks.sessionFeedback, isLoading: mocks.sessionFeedbackLoading }),
   feedbackSessionQueryKey: (sessionId: string, userId: string | undefined) => [
     'feedback',
     'session',
@@ -209,6 +210,7 @@ beforeEach(() => {
   mocks.showCreditsUsed = true;
   mocks.serverSettings = [];
   mocks.sessionFeedback = [];
+  mocks.sessionFeedbackLoading = false;
   localStorage.clear();
 });
 
@@ -700,6 +702,17 @@ describe('MessageContent - proactive answer feedback prompt', () => {
 
   it('never nags about a turn the user already reported', () => {
     mocks.sessionFeedback = [{ questId: 'quest-1' }];
+
+    renderMessageContent(brokenTurn, undefined, { isLastMessage: true });
+
+    expect(screen.queryByTestId('answer-feedback-prompt')).not.toBeInTheDocument();
+  });
+
+  // Fail-closed: the feedback read has no placeholderData, so `isReported` would otherwise resolve
+  // from "unknown" to "false" for one round trip on every fresh load. Without this, an
+  // already-reported failing turn would flash the banner it promises never to show.
+  it('stays silent on a failing turn while the report-status read is still in flight', () => {
+    mocks.sessionFeedbackLoading = true;
 
     renderMessageContent(brokenTurn, undefined, { isLastMessage: true });
 

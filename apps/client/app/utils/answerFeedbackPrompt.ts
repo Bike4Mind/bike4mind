@@ -28,7 +28,7 @@ export const ANSWER_FEEDBACK_DAILY_DISMISSALS_KEY = 'b4m:answerFeedbackPrompt:da
 
 // Bounded so a long-lived browser profile cannot grow this without limit. Oldest entries fall off
 // first, and the worst case is one extra prompt on a turn declined a very long time ago.
-const MAX_DISMISSED_TURNS = 200;
+export const MAX_DISMISSED_TURNS = 200;
 
 /**
  * Three declines in a day is an unambiguous "not interested right now". Kept low on purpose: one

@@ -81,6 +81,9 @@ export function AnswerFeedbackPrompt({ promptMeta, questId, isReported, onReport
       data-testid="answer-feedback-prompt"
       color="warning"
       variant="soft"
+      // Joy's Alert defaults to role="alert" (assertive), which interrupts a screen reader on
+      // mount. This is an unsolicited ask, not an urgent one - role="status" fits.
+      role="status"
       // No vertical margin: unlike the PromptReplies banners this sits in the message stack,
       // which already spaces its children.
       sx={{ flexDirection: 'column', alignItems: 'flex-start', gap: 1 }}
