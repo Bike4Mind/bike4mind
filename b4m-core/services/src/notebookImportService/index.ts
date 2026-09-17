@@ -529,7 +529,9 @@ export class NotebookImportService {
         // `>=` and the MB-to-bytes conversion match fabFileService/create.ts. The measurement does
         // not: that door gates on a caller-declared fileSize, this one on bytes it holds.
         if (gatedSize >= this.maxFileSize) {
-          throw new Error(`exceeds the ${Math.round(this.maxFileSize / (1024 * 1024))}MB maximum file size`);
+          // Floor, not round: MaxFileSize has no `int: true`, so a 30.5MB limit would otherwise be
+          // reported as 31MB - a size this gate refuses.
+          throw new Error(`exceeds the ${Math.floor(this.maxFileSize / (1024 * 1024))}MB maximum file size`);
         }
 
         // Per-user quota, not checkStorageLimitForFile: no organizationId is plumbed through this
