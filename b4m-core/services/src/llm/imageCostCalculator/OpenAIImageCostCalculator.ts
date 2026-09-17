@@ -2,11 +2,7 @@ import { ImageModels } from '@bike4mind/common';
 import { CostCalculator } from './types';
 
 export type OpenAIModel =
-  | ImageModels.GPT_IMAGE_1
-  | ImageModels.GPT_IMAGE_1_5
-  | ImageModels.GPT_IMAGE_1_MINI
-  | ImageModels.GPT_IMAGE_2
-  | string;
+  ImageModels.GPT_IMAGE_1 | ImageModels.GPT_IMAGE_1_5 | ImageModels.GPT_IMAGE_1_MINI | ImageModels.GPT_IMAGE_2 | string;
 
 export interface BaseOpenAIInput {
   model: OpenAIModel;
@@ -30,7 +26,17 @@ type PriceKey = `${Tier}_${KnownSize}`;
 const DEFAULT_TIER: Tier = 'medium';
 const DEFAULT_SIZE: KnownSize = '1024x1024';
 
-const KNOWN_SIZES: readonly KnownSize[] = ['1024x1024', '1024x1536', '1536x1024'] as const;
+/**
+ * The only sizes with a real price row; anything else is estimated at DEFAULT_SIZE.
+ * The image_generation tool schema advertises exactly this set to the model so the
+ * ledger is never asked to price a size it does not know - must stay in sync with
+ * `resolveImageArgs` / the tool's `size` enum, which import it from here.
+ */
+export const PRICEABLE_IMAGE_SIZES: readonly KnownSize[] = ['1024x1024', '1024x1536', '1536x1024'] as const;
+
+export function isPriceableImageSize(size: unknown): size is KnownSize {
+  return typeof size === 'string' && PRICEABLE_IMAGE_SIZES.includes(size as KnownSize);
+}
 
 const GPT_IMAGE_1_PRICES: Record<PriceKey, number> = {
   low_1024x1024: 0.011,
@@ -126,7 +132,7 @@ function normalizeInput(input: OpenAIGPTImageInput): { tier: Tier; size: KnownSi
     }
   })();
 
-  const size: KnownSize = KNOWN_SIZES.includes(input.size as KnownSize) ? (input.size as KnownSize) : DEFAULT_SIZE;
+  const size: KnownSize = isPriceableImageSize(input.size) ? input.size : DEFAULT_SIZE;
 
   return { tier, size };
 }
