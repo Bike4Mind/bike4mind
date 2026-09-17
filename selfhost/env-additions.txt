@@ -18,6 +18,15 @@ B4M_DOMAIN=chat.example.com
 #   { email you@example.com }
 # B4M_ACME_EMAIL=you@example.com
 
+# -- Public origin the browser hits (required change) --
+# APP_URL is the CSRF origin allow-list (apps/client/server/middlewares/csrfProtection.ts): it must
+# equal the origin in your browser's address bar. Left at the template's localhost default, every
+# state-changing request (saving settings, generating an API key, uploading) returns 403 "Invalid
+# request origin. CSRF protection triggered (expected http://localhost:3000)." Reads keep working,
+# so it presents as a permissions bug. Scheme + host + optional port only - no trailing slash, no path.
+# (Old default was: APP_URL=http://localhost:3000)
+APP_URL=https://chat.example.com
+
 # -- Realtime WebSocket over TLS (required change) --
 # The browser now reaches the ws gateway THROUGH Caddy at wss://<domain>/ws
 # (Caddy proxies the /ws path to the ws service). Change this from the default

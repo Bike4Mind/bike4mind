@@ -51,7 +51,7 @@ openssl rand -hex 32   # -> SECRET_ENCRYPTION_KEY
 
 **Minimum required to boot:** the defaults in the template already point everything (MongoDB, MinIO object storage, ElasticMQ queues, Mailpit mail catcher) at the bundled services - you only need to set the three secrets above.
 
-> **Serving on anything other than `http://localhost:3000`?** Set `APP_URL` to the origin your browser actually hits - a remapped `APP_HOST_PORT`, a LAN hostname, or the public `https` origin of a reverse proxy in front of the app. `APP_URL` is the CSRF origin allow-list, and it fails closed: if it is unset or does not match the origin you browse from, every state-changing request (saving settings, generating an API key, uploading) returns `403 CSRF: APP_URL is not configured on this deployment.` Reads keep working, which makes this look like a permissions bug rather than a config one.
+> **Serving on anything other than `http://localhost:3000`?** Set `APP_URL` to the origin your browser actually hits - a remapped `APP_HOST_PORT`, a LAN hostname, a tailnet name, or the public `https` origin of a reverse proxy in front of the app. `APP_URL` is the CSRF origin allow-list, and it fails closed: every state-changing request (saving settings, generating an API key, uploading) returns a 403, with a different message per cause. Unset, it is `CSRF: APP_URL is not configured on this deployment.`; set to an origin you do not browse from, it is `Invalid request origin. CSRF protection triggered (expected <your APP_URL>).` Reads keep working either way, which makes both look like a permissions bug rather than a config one.
 
 **LLM keys** - set the ones you'll use; blank disables that provider. Only models for providers with a key appear in the model picker. You can also add or override keys per-user later, in the app under Settings > API Keys.
 
@@ -639,6 +639,7 @@ Discovery uses the provider keys already in `.env.selfhost` (or a user's own key
 - **MongoDB crashes on first boot with `WT_PANIC` / `Too many open files`** - WiredTiger opens a file per collection and index and needs a high open-files limit; Docker's default (1024) is far below MongoDB's documented minimum. The bundled `mongo` service raises `nofile` to 64000 via `ulimits`. If you've customized the compose file or run mongo outside it, set that limit yourself, then wipe the half-initialized volume and restart: `docker compose -f compose.selfhost.yaml --env-file .env.selfhost down -v && ... up -d`.
 - **App can't reach Mongo / "no primary" errors** - MongoDB must run as a replica set (`--replSet rs0`) for transactions; the bundled `mongo` service is configured for this. Give it a few seconds to elect a primary on first boot.
 - **No sign-in email arrives** - check Mailpit at `http://localhost:8025`; if it's empty, check `docker compose -f compose.selfhost.yaml logs app` for mail errors and verify the `MAIL_*` values.
+- **Saving settings / generating an API key / uploading returns `403`, but reading works** - `APP_URL` does not match the origin in your browser's address bar. It is the CSRF origin allow-list and it fails closed, so only state-changing requests break; `GET` is exempt, which is why the app looks fine until you try to save something. Unset, the response is `CSRF: APP_URL is not configured on this deployment.`; set to an origin you do not browse from, it is `Invalid request origin. CSRF protection triggered (expected ...)`, which names the value it is comparing against. `APP_URL` was added to the template after the initial release, so an **upgraded install may be missing it entirely** - an existing `.env.selfhost` does not gain it. Add `APP_URL=<the origin you browse>` (scheme + host + optional port, no trailing slash) and recreate the `app` container. Reaching the stack over Tailscale or the Caddy proxy? It must be the tailnet or public origin, not `http://localhost:3000` - see "Share your instance with friends".
 - **A model returns "unauthorized"** - that provider's API key is missing or wrong in `.env.selfhost`. Only the providers you set keys for are available.
 - **The model picker is empty / "no models" warning** - no provider key is configured and no local Ollama is set up. Set at least one provider key in `.env.selfhost`, or enable local models (see "Local models with Ollama"), then restart with `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`.
 - **Local models don't appear under "Local / Self-Hosted"** - make sure you started the stack with `--profile ollama` and that `OLLAMA_BASE_URL` is uncommented in `.env.selfhost`. Confirm the model pulled: `docker compose -f compose.selfhost.yaml exec ollama ollama list`. The picker caches models for ~60s after a pull.
@@ -718,11 +719,14 @@ docker compose -f compose.selfhost.yaml -f compose.tailscale.yaml \
 
 The sidecar runs in userspace mode (no extra host capabilities), joins your tailnet, and serves `/` -> the app and `/ws` -> the realtime gateway over HTTPS (see `selfhost/tailscale/serve.json`).
 
-**4. Point the app's WebSocket URL at the tailnet name.** Find the node's MagicDNS name (`docker compose -f compose.selfhost.yaml -f compose.tailscale.yaml logs tailscale`, or the admin console), then in `.env.selfhost` set `WEBSOCKET_URL` to it over `wss` with the `/ws` path and re-up so browsers get it:
+**4. Point the app at the tailnet name.** Find the node's MagicDNS name (`docker compose -f compose.selfhost.yaml -f compose.tailscale.yaml logs tailscale`, or the admin console), then in `.env.selfhost` set both of these to it and re-up so browsers get them:
 
 ```bash
+APP_URL=https://<your-node>.tailXXXX.ts.net
 WEBSOCKET_URL=wss://<your-node>.tailXXXX.ts.net/ws
 ```
+
+`APP_URL` is the CSRF origin allow-list and it is **not** optional here: left at the template's `http://localhost:3000`, it will not match the tailnet origin your friends browse from, and every state-changing request 403s with `Invalid request origin. CSRF protection triggered (expected http://localhost:3000).` while reads keep working.
 
 **5. Invite your friends.** They install the Tailscale client, sign in, and accept your invite to the tailnet (or you share the specific node from the admin console). They open `https://<your-node>.tailXXXX.ts.net` in a browser.
 
@@ -760,7 +764,7 @@ TS_AUTHKEY=<the pre-auth key from step 3>
 TS_EXTRA_ARGS=--login-server=https://<your-headscale-domain>
 ```
 
-Set `WEBSOCKET_URL` to the node's tailnet name as in Path A. Friends install the Tailscale client and run `tailscale up --login-server=https://<your-headscale-domain>` with a pre-auth key you issue them. The published-artifact CSP caveat from Path A applies here too.
+Set `APP_URL` and `WEBSOCKET_URL` to the node's tailnet name as in Path A - the CSRF allow-list applies here identically. Friends install the Tailscale client and run `tailscale up --login-server=https://<your-headscale-domain>` with a pre-auth key you issue them. The published-artifact CSP caveat from Path A applies here too.
 
 ### Path B: public domain with the bundled Caddy proxy
 
@@ -774,8 +778,11 @@ For a real public address, the repo ships an opt-in Caddy reverse proxy (`compos
 
 ```bash
 B4M_DOMAIN=chat.example.com
+APP_URL=https://chat.example.com
 WEBSOCKET_URL=wss://chat.example.com/ws
 ```
+
+`APP_URL` is the CSRF origin allow-list and must be the public `https` origin, not the container address: left at the template's `http://localhost:3000` it cannot match the origin your visitors browse from, so every state-changing request 403s with `Invalid request origin. CSRF protection triggered (expected http://localhost:3000).` while reads keep working.
 
 The `WEBSOCKET_URL` path must be `/ws` to match the Caddyfile route: the browser uses `WEBSOCKET_URL` verbatim (plus a `?token=` query), and Caddy proxies `/ws` to the ws gateway, which accepts the upgrade on any path. No app-side change is needed.
 

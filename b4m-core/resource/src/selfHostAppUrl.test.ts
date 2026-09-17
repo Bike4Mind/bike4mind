@@ -18,26 +18,37 @@ import { fileURLToPath } from 'node:url';
  */
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
-function envTemplateValue(key: string): string | undefined {
-  const contents = fs.readFileSync(path.join(REPO_ROOT, '.env.selfhost.example'), 'utf8');
+function envValue(file: string, key: string): string | undefined {
+  const contents = fs.readFileSync(path.join(REPO_ROOT, file), 'utf8');
   return new RegExp(`^${key}=(.*)$`, 'm').exec(contents)?.[1];
+}
+
+function expectBareOrigin(value: string | undefined) {
+  expect(value).toBeDefined();
+  // csrfProtection compares request origins against `new URL(APP_URL).origin`, so anything that is
+  // not already a bare origin yields an allow-list entry no request can ever match - a 403 on every
+  // mutation, indistinguishable from the unset case until you read the middleware. That covers a
+  // trailing slash or a path, and equally a scheme whose origin serializes to the string "null"
+  // (e.g. `file:`), which `origin === value` already excludes since `new URL('null')` throws.
+  expect(() => new URL(value!)).not.toThrow();
+  expect(new URL(value!).origin).toBe(value);
 }
 
 describe('self-host APP_URL', () => {
   it('is declared in .env.selfhost.example', () => {
-    expect(envTemplateValue('APP_URL')).toBeDefined();
+    expect(envValue('.env.selfhost.example', 'APP_URL')).toBeDefined();
   });
 
   it('is a bare absolute origin, the only shape csrfProtection can match', () => {
-    const value = envTemplateValue('APP_URL');
-    expect(value).toBeDefined();
-    // csrfProtection compares request origins against `new URL(APP_URL).origin`, so a trailing
-    // slash or a path yields an allow-list entry no request can ever match - a 403 on every
-    // mutation, indistinguishable from the unset case until you read the middleware.
-    expect(() => new URL(value!)).not.toThrow();
-    expect(new URL(value!).origin).toBe(value);
-    // `new URL()` accepts schemes whose origin serializes to the string "null" (e.g. `file:`),
-    // which the middleware rejects for the same reason.
-    expect(new URL(value!).origin).not.toBe('null');
+    expectBareOrigin(envValue('.env.selfhost.example', 'APP_URL'));
+  });
+
+  // SELF_HOST.md Path B points operators at this block as "the full copy-pasteable" set of exposure
+  // vars. An APP_URL missing here leaves a public deployment on the template's localhost default,
+  // which is the same 403 relocated to the origin they actually browse from.
+  it('is overridden in the public-exposure block, not left at the localhost default', () => {
+    const exposed = envValue('selfhost/env-additions.txt', 'APP_URL');
+    expectBareOrigin(exposed);
+    expect(exposed).not.toBe(envValue('.env.selfhost.example', 'APP_URL'));
   });
 });
