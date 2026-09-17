@@ -21,7 +21,6 @@ import { KnowledgeType } from '@bike4mind/common';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { brand } from '@client/app/utils/themes/colors';
 import SwitchSelector from '@client/app/components/common/fields/SwitchSelector';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -127,8 +126,6 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   const workBenchFiles = useWorkBenchFiles(currentSessionId);
   const { setWorkBenchFiles } = useWorkBenchActions();
   const queryClient = useQueryClient();
-  const { isFeatureEnabled } = useFeatureEnabled();
-  const artifactsEnabled = isFeatureEnabled('enableArtifacts');
 
   const shareUser = useUser(s => s.currentUser);
   const selectedAccount = useSelectedAccount(s => s.selectedAccount);
@@ -141,15 +138,24 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   // A code toggle only means something when there are two views to flip between.
   const showCodeToggle = !!actions.codeToggle && hasPreview && hasSource;
 
-  const [collapsedState, setIsExpanded] = useState(!artifactsEnabled);
+  // Cards mount expanded: the body is the thing the reader asked for. This used to seed from
+  // the `enableArtifacts` flag, which gates artifact GENERATION and has never gated their
+  // display -- so it only ever hid the artifact behind a click for the users who had the
+  // feature switched on, which is the admin default.
+  const [expandedState, setIsExpanded] = useState(true);
   const [showRenderedPreview, setShowRenderedPreview] = useState(defaultRenderedView);
 
-  const isExpanded = collapsible ? collapsedState : true;
+  const isExpanded = collapsible ? expandedState : true;
 
   const isSelected = useSessionLayout(s => s.selectedArtifactId) === artifactId;
 
   // With no source to fall back to, the live render is the only body there is.
   const renderedView = hasPreview && (hasSource ? showRenderedPreview : true);
+
+  // A card that expands into a live render shows no body at all once collapsed. Its source
+  // teaser is the first three lines of the file, which for HTML is DOCTYPE boilerplate that
+  // reads identically on every artifact; source-primary types (React, code, Python) keep it.
+  const showSourceBody = hasSource && !renderedView;
 
   // Clicking anywhere on the card means exactly one thing: expand/collapse, same as the
   // chevron. Switching between the render and the source is the code/preview button's job
@@ -456,7 +462,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
           <Box sx={{ mt: 2 }} onClick={e => e.stopPropagation()}>
             {renderPreview?.()}
           </Box>
-        ) : hasSource ? (
+        ) : showSourceBody ? (
           renderSource ? (
             <Box sx={{ mt: 2 }}>{renderSource()}</Box>
           ) : (
