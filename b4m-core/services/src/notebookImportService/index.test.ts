@@ -449,6 +449,27 @@ describe('notebook import: knowledge file admission', () => {
     expect(adapters.sessionRepository.create).not.toHaveBeenCalled();
   });
 
+  it('gates on the setting default when no MaxFileSize row is stored', async () => {
+    const adapters = makeKnowledgeAdapters();
+    adapters.adminSettings.findAll = vi.fn().mockResolvedValue([]);
+
+    // The only case that exercises the fallback: every other fixture here supplies a row, and the
+    // e2e lane that stubs findAll to [] never asserts the resulting limit. A fallback that resolved
+    // to NaN would admit every file, since `size >= NaN` is false.
+    // Plain characters rather than an encoded buffer - the gate measures string length and refuses
+    // before decoding, which is the only reason a fixture this size is affordable.
+    const huge = { id: 'x', name: 'huge.pdf', mimeType: 'application/pdf', size: 1, content: 'A'.repeat(42_000_000) };
+
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      { exportVersion: '1.0.0', notebooks: [{ ...NOTEBOOK, knowledge: [huge] }] } as never,
+      { ...OPTIONS, importKnowledge: true } as never
+    );
+
+    expect(result.warnings).toEqual([expect.stringMatching(/huge\.pdf.*exceeds the 30MB maximum file size/)]);
+    expect(adapters.fileStorageService.uploadFile).not.toHaveBeenCalled();
+  });
+
   it('skips a knowledge file over MaxFileSize and warns rather than aborting the import', async () => {
     // Exactly at the limit, which the upload door also refuses (`>=`).
     const { adapters, result, importedIds } = await importKnowledge([
@@ -613,6 +634,30 @@ describe('notebook import: knowledge file admission', () => {
     expect(adapters.fileStorageService.uploadFile).toHaveBeenCalledTimes(2);
     expect(adapters.knowledgeRepository.create).toHaveBeenCalledTimes(1);
     expect(adapters.knowledgeRepository.create).toHaveBeenCalledWith(expect.objectContaining({ fileName: 'b.pdf' }));
+  });
+
+  it('keeps charging the quota for a stored file whose row write failed', async () => {
+    const adapters = makeKnowledgeAdapters({ id: 'user-1', storageLimit: 1, currentStorageSize: 0 });
+    (adapters.knowledgeRepository.create as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('write failed'));
+
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      {
+        exportVersion: '1.0.0',
+        notebooks: [{ ...NOTEBOOK, knowledge: [embedded('a.pdf', 600_000), embedded('b.pdf', 600_000)] }],
+      } as never,
+      { ...OPTIONS, importKnowledge: true } as never
+    );
+
+    // The mirror of the upload-failure case above, and the reason the charge sits above the row
+    // write rather than below it: a.pdf's bytes are in the bucket even though its row never landed,
+    // so b.pdf must not be handed headroom those bytes already occupy. Moving the charge below the
+    // create admits b.
+    expect(result.warnings).toEqual([
+      expect.stringMatching(/a\.pdf.*write failed/),
+      expect.stringMatching(/b\.pdf.*storage limit/),
+    ]);
+    expect(adapters.fileStorageService.uploadFile).toHaveBeenCalledTimes(1);
   });
 
   it('resets the accumulator between imports on one service instance', async () => {
