@@ -277,30 +277,7 @@ export const mathTool: ToolDefinition = {
       name: 'math_evaluate',
       description: `Evaluate mathematical expressions using mathjs syntax. Supports arithmetic, algebra, trigonometry, calculus, and statistics. Supports multi-step calculations with semicolon-separated statements sharing a scope (e.g., "x = 5; y = 10; x * y" returns 50). IMPORTANT: Use simple mathematical notation only - no loops or programming constructs.
 
-**LaTeX Rendering Support:**
-When showing mathematical work, equations, or formulas in your response, use LaTeX syntax for professional rendering:
-
-- **Inline math:** Use $equation$ for math within text
-  Example: "The solution is $x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$ from the quadratic formula."
-
-- **Display math:** Use $$equation$$ for centered block equations
-  Example:
-  $$
-  \\int_0^\\infty e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}
-  $$
-
-**Common LaTeX commands:**
-- Fractions: \\frac{numerator}{denominator}
-- Square roots: \\sqrt{x} or \\sqrt[n]{x}
-- Superscripts: x^2 or x^{10}
-- Subscripts: x_i or x_{ij}
-- Greek: \\alpha, \\beta, \\gamma, \\Delta, \\Sigma
-- Integrals: \\int_a^b, \\iint, \\oint
-- Summations: \\sum_{i=1}^n
-- Limits: \\lim_{x \\to \\infty}
-- Matrices: \\begin{bmatrix} a & b \\\\ c & d \\end{bmatrix}
-
-Always use LaTeX for mathematical notation to ensure clear, professional presentation. The LaTeX syntax is part of your response text - no tool call needed for rendering.`,
+Present mathematical work in your response using LaTeX: $...$ inline, $$...$$ for display equations. Inline spans are only rendered as math when they contain a backslash command, so write $\\int_0^3 x^2 dx = 9$ rather than $x^2 = 9$. That rendering is part of your response text, not a tool call.`,
       parameters: {
         type: 'object',
         properties: {

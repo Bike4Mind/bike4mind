@@ -102,60 +102,25 @@ export const rechartsTool: ToolDefinition = {
     },
     toolSchema: {
       name: 'recharts',
-      description: `ALWAYS use this tool when the user asks for ANY chart, graph, or data visualization.
-      
-      PURPOSE:
-      - This tool creates interactive charts using the Recharts React library.
-      - Charts are always returned as <artifact> blocks that render in the user interface.
-      - DO NOT generate images (PNG, JPG, SVG, base64, or URLs). The ONLY valid way to produce charts is by invoking this tool.
+      description: `Create an interactive chart. Use for any request for a chart, graph, plot or data visualization ("show data", "visualize", "compare ..."), and for dashboard-style or analytics displays.
 
-      MANDATORY USAGE FOR:
-      - Any request containing words: chart, graph, plot, visualization, bar chart, line chart, pie chart, scatter plot, area chart
-      - When the user says "show data", "visualize", "create a chart", "make a graph"
-      - Any request to display data visually or compare data points
-      - Dashboard-style data presentations or analytics displays
+This is the ONLY valid way to produce a chart. Never emit an image (PNG/JPG/SVG/base64/URL) or a hand-written React component.
 
-      CAPABILITIES:
-      - Supports multiple chart types but not limited to: bar, line, area, pie, scatter, composed charts
-      - Generates responsive charts with tooltips, legends, and grid lines
-      - Returns properly formatted artifacts for frontend rendering
-      - Handles data validation and chart configuration
+Rules:
+- Supply "data" yourself as an array of objects holding real NUMERIC values. The tool does not generate data; calling without it fails. Nothing validates the value types, so a quoted number like "4,000" renders as garbage.
+- "yAxis" is the value field: a string, or an array of strings for multiple series. PieChart/FunnelChart take a single string.
+- "xAxis" is the label field. Required for LineChart/BarChart/AreaChart, and for PieChart/FunnelChart too, where it labels the slices/stages.
+- Return the <artifact> output unmodified, then add a brief explanation of what it shows.
 
-      CRITICAL USAGE RULES - YOU MUST FOLLOW THESE:
-      1. ⚠️ MANDATORY: You MUST provide the "data" parameter with actual chart data as an array of objects. DO NOT call this tool without data. Example: [{"stage": "Awareness", "count": 10000}, {"stage": "Interest", "count": 5000}]
-      2. ⚠️ MANDATORY: You MUST specify the "yAxis" parameter with the field name for values (e.g., "count", "value", "revenue")
-      3. For FunnelChart and PieChart: MUST specify both xAxis (label field) and yAxis (value field)
-      4. You MUST generate or use real numerical data - never call the tool expecting it to generate data for you
-      5. ALWAYS return charts as artifacts, never as images
-      6. Use the complete <artifact> output returned by this tool without modification
-      7. Never create React components manually - always use this tool for charts
-      8. Add a brief explanation AFTER the tool output to help users understand the visualization
-      9. NEVER return inline SVG, PNG, or other image renderings of charts. Only artifacts.
-      
-      EXAMPLE 1 — Single series:
-      {
-        "data": [{"month": "Jan", "sales": 4000}, {"month": "Feb", "sales": 3000}, {"month": "Mar", "sales": 5000}],
-        "chartType": "LineChart",
-        "xAxis": "month",
-        "yAxis": "sales",
-        "title": "Monthly Sales"
-      }
-
-      EXAMPLE 2 — Multiple series (yAxis as array):
-      {
-        "data": [{"month": "Jan", "revenue": 4000, "profit": 1200}, {"month": "Feb", "revenue": 3000, "profit": 900}, {"month": "Mar", "revenue": 5000, "profit": 1800}],
-        "chartType": "LineChart",
-        "xAxis": "month",
-        "yAxis": ["revenue", "profit"],
-        "title": "Revenue vs Profit"
-      }`,
+Example:
+{"data":[{"month":"Jan","revenue":4000,"profit":1200},{"month":"Feb","revenue":3000,"profit":900}],"chartType":"LineChart","xAxis":"month","yAxis":["revenue","profit"],"title":"Revenue vs Profit"}`,
       parameters: {
         type: 'object',
         properties: {
           data: {
             type: 'array',
             description:
-              '⚠️ ABSOLUTELY REQUIRED - YOU MUST PROVIDE THIS: Array of data objects with actual numerical values for the chart. Each object must have keys corresponding to chart axes/values. DO NOT call this tool without providing data. You must generate or provide real data values. Example: [{"stage": "Awareness", "count": 10000}, {"stage": "Interest", "count": 5000}, {"stage": "Purchase", "count": 1000}] or [{"month": "Jan", "sales": 4000}, {"month": "Feb", "sales": 3000}].',
+              'Required. Array of data objects holding the real values to plot, keyed by the axis/value field names. Example: [{"month":"Jan","sales":4000},{"month":"Feb","sales":3000}].',
             items: {
               type: 'object',
             },
@@ -168,12 +133,12 @@ export const rechartsTool: ToolDefinition = {
           xAxis: {
             type: 'string',
             description:
-              'Key from data objects to use for X-axis or labels. REQUIRED for: LineChart, BarChart, AreaChart. For PieChart: use for slice labels (nameKey). For FunnelChart: use for stage labels.',
+              'Label field. Needed for LineChart/BarChart/AreaChart, and for PieChart/FunnelChart where it labels the slices/stages.',
           },
           yAxis: {
             oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
             description:
-              'REQUIRED: Key(s) from data objects to use for Y-axis values. Pass a single string for one series (e.g. "sales") or an ARRAY of strings for multiple series (e.g. ["revenue", "profit"]). For PieChart/FunnelChart: must be a single string for the value field like "count" or "value". ALWAYS specify this parameter.',
+              'Required. Value field: a string for one series, or an array of strings for several. PieChart and FunnelChart take a single string.',
           },
           title: {
             type: 'string',
