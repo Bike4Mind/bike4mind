@@ -51,6 +51,8 @@ openssl rand -hex 32   # -> SECRET_ENCRYPTION_KEY
 
 **Minimum required to boot:** the defaults in the template already point everything (MongoDB, MinIO object storage, ElasticMQ queues, Mailpit mail catcher) at the bundled services - you only need to set the three secrets above.
 
+> **Serving on anything other than `http://localhost:3000`?** Set `APP_URL` to the origin your browser actually hits - a remapped `APP_HOST_PORT`, a LAN hostname, or the public `https` origin of a reverse proxy in front of the app. `APP_URL` is the CSRF origin allow-list, and it fails closed: if it is unset or does not match the origin you browse from, every state-changing request (saving settings, generating an API key, uploading) returns `403 CSRF: APP_URL is not configured on this deployment.` Reads keep working, which makes this look like a permissions bug rather than a config one.
+
 **LLM keys** - set the ones you'll use; blank disables that provider. Only models for providers with a key appear in the model picker. You can also add or override keys per-user later, in the app under Settings > API Keys.
 
 ```bash
